@@ -1,0 +1,2942 @@
+diff --git a/plugins/bond-histogram/__pycache__/plugin.cpython-311.pyc b/plugins/bond-histogram/__pycache__/plugin.cpython-311.pyc
+index 1de4163..2db9963 100644
+Binary files a/plugins/bond-histogram/__pycache__/plugin.cpython-311.pyc and b/plugins/bond-histogram/__pycache__/plugin.cpython-311.pyc differ
+diff --git a/plugins/cp2k-dos-reader/__pycache__/plugin.cpython-311.pyc b/plugins/cp2k-dos-reader/__pycache__/plugin.cpython-311.pyc
+index 3a1e46d..017ca2f 100644
+Binary files a/plugins/cp2k-dos-reader/__pycache__/plugin.cpython-311.pyc and b/plugins/cp2k-dos-reader/__pycache__/plugin.cpython-311.pyc differ
+diff --git a/plugins/lammps-workflow/__pycache__/plugin.cpython-311.pyc b/plugins/lammps-workflow/__pycache__/plugin.cpython-311.pyc
+index f027817..f3b709d 100644
+Binary files a/plugins/lammps-workflow/__pycache__/plugin.cpython-311.pyc and b/plugins/lammps-workflow/__pycache__/plugin.cpython-311.pyc differ
+diff --git a/plugins/lennard-jones-calculator/__pycache__/plugin.cpython-311.pyc b/plugins/lennard-jones-calculator/__pycache__/plugin.cpython-311.pyc
+index bd61477..438a788 100644
+Binary files a/plugins/lennard-jones-calculator/__pycache__/plugin.cpython-311.pyc and b/plugins/lennard-jones-calculator/__pycache__/plugin.cpython-311.pyc differ
+diff --git a/server/models/hpc.py b/server/models/hpc.py
+index d8a9f11..5b1c82b 100644
+--- a/server/models/hpc.py
++++ b/server/models/hpc.py
+@@ -336,7 +336,7 @@ class FileReadRequest(BaseModel):
+ 
+     session_id: str
+     file_path: str
+-    max_bytes: int | None = None  # Override default 2MB limit (e.g. 100MB for vasprun.xml)
++    max_bytes: int | None = None  # Override default 2MB limit (0 = unlimited, e.g. for trajectory files)
+ 
+ 
+ class FileReadResponse(BaseModel):
+diff --git a/server/models/vasp.py b/server/models/vasp.py
+index c301089..8ef6afc 100644
+--- a/server/models/vasp.py
++++ b/server/models/vasp.py
+@@ -18,6 +18,16 @@ class VASPCalculationType(str, Enum):
+     DOS = "dos"  # Density of states
+     DDEC = "ddec"  # DDEC charge analysis
+     ELF = "elf"  # Electron localization function
++    MD = "md"  # Molecular dynamics (NVT/NVE/NPT)
++    SLOW_GROWTH = "slow_growth"  # Slow-growth MD (thermodynamic integration)
++
++
++class ConstantPotentialMethod(str, Enum):
++    """Constant-potential method overlay for any VASP calculation."""
++
++    NONE = "none"
++    TPOT = "tpot"  # TPOT patch (comet-group/tpot)
++    CPVASP = "cpvasp"  # CP-VASP patch (yuanyue-liu-group/CP-VASP) + VASPsol++
+ 
+ 
+ class VASPOptimizerType(str, Enum):
+@@ -37,6 +47,12 @@ class VASPInputRequest(BaseModel):
+         description="Type of VASP calculation",
+     )
+ 
++    # Constant-potential method (overlays on any calculation type)
++    constant_potential: ConstantPotentialMethod = Field(
++        default=ConstantPotentialMethod.NONE,
++        description="Constant-potential method: none, tpot, or cpvasp",
++    )
++
+     # Optimizer preset
+     optimizer: Optional[VASPOptimizerType] = Field(
+         default=None,
+@@ -152,6 +168,57 @@ class VASPInputRequest(BaseModel):
+         description="Freeze all atoms with z coordinate below this value (Angstrom).",
+     )
+ 
++    # Slow-growth MD parameters
++    mdalgo: Optional[int] = Field(default=None, description="MD algorithm (2=Nose-Hoover, 3=Langevin)")
++    smass: Optional[float] = Field(default=None, description="SMASS for Nose-Hoover thermostat")
++    tebeg: Optional[float] = Field(default=None, description="Start temperature (K)")
++    teend: Optional[float] = Field(default=None, description="End temperature (K)")
++    nblock: Optional[int] = Field(default=None, description="NBLOCK parameter")
++    lblueout: Optional[bool] = Field(default=None, description="Write free energy gradient to REPORT")
++    increm: Optional[str] = Field(
++        default=None,
++        description="INCREM values: CV change rate per step for each constraint (space-separated)"
++    )
++    iconst_content: Optional[str] = Field(
++        default=None,
++        description="Content of the ICONST file defining geometric constraints"
++    )
++
++    # TPOT (constant potential MD) parameters
++    tpot_vtarget: Optional[float] = Field(default=None, description="Target potential (V, vacuum scale)")
++    tpot_vdiff: Optional[float] = Field(default=None, description="Potential convergence threshold (V)")
++    tpot_vrate: Optional[float] = Field(default=None, description="Initial rate of NELECT change (V/electron)")
++    tpot_vratelim: Optional[float] = Field(default=None, description="Lower limit for TPOTVRATE magnitude")
++    tpot_vratedamp: Optional[float] = Field(default=None, description="Damping factor for TPOTVRATE updates")
++    tpot_vediff: Optional[float] = Field(default=None, description="Energy convergence before NELECT update (eV)")
++    tpot_electstep: Optional[float] = Field(default=None, description="Max electron change per step")
++    tpot_dynvrate: Optional[bool] = Field(default=None, description="Dynamic TPOTVRATE adjustment")
++    tpot_truevaclevel: Optional[bool] = Field(default=None, description="Use true vacuum level for potential")
++    tpot_gcenergy: Optional[bool] = Field(default=None, description="Calculate grand canonical energy")
++    tpot_gcionic: Optional[bool] = Field(default=None, description="GC energy only at end of ionic step")
++    # TPOT VASPsol solvation
++    tpot_eb_k: Optional[float] = Field(default=None, description="Bulk dielectric constant (78.4 for water)")
++    tpot_lambda_d_k: Optional[float] = Field(default=None, description="Debye screening length (Angstrom)")
++    tpot_core_c: Optional[float] = Field(default=None, description="Number of core electrons")
++    tpot_tau: Optional[float] = Field(default=None, description="Cavity parameter (0 = default)")
++
++    # CP-VASP (constant potential with VASPsol) parameters
++    cpvasp_targetmu: Optional[float] = Field(default=None, description="Target chemical potential (eV, e.g. -4.57 for 0V vs SHE)")
++    cpvasp_nescheme: Optional[int] = Field(default=None, description="Electron update scheme (2=exact, 5=exact+eta)")
++    cpvasp_neadjust: Optional[int] = Field(default=None, description="Electron adjustment frequency (ionic steps)")
++    cpvasp_fermiconverge: Optional[float] = Field(default=None, description="Fermi level convergence threshold (eV)")
++    cpvasp_cap_max: Optional[float] = Field(default=None, description="Maximum capacitance for electron update")
++    cpvasp_t_eta: Optional[float] = Field(default=None, description="Electronic temperature for grand canonical (K)")
++    cpvasp_eta_length: Optional[int] = Field(default=None, description="Eta parameter length")
++    # VASPsol++ solvation
++    cpvasp_lsol: Optional[bool] = Field(default=None, description="Enable implicit solvation (VASPsol)")
++    cpvasp_isol: Optional[int] = Field(default=None, description="Solvation model (2=VASPsol++)")
++    cpvasp_c_molar: Optional[float] = Field(default=None, description="Molar concentration of electrolyte (mol/L)")
++    cpvasp_r_ion: Optional[float] = Field(default=None, description="Ion radius for solvation (Angstrom)")
++
++    # NELECT (number of electrons — needed for constant-potential step 2)
++    nelect: Optional[float] = Field(default=None, description="Number of electrons (from constant-potential step 1)")
++
+     # Custom INCAR parameters (for anything not covered above)
+     custom_incar: Optional[dict[str, str | int | float | bool]] = Field(
+         default=None,
+@@ -171,6 +238,65 @@ class VASPInputFiles(BaseModel):
+     incar: str
+     poscar: str
+     kpoints: str
++    iconst: Optional[str] = None  # ICONST file for slow-growth / constrained MD
++    incar_nelect: Optional[str] = None  # INCAR for NELECT determination (TPOT step 1)
+     potcar_info: dict  # Information about POTCAR (not generated, user must provide)
+     calculation_type: VASPCalculationType
+     notes: Optional[str] = None
++
++
++# --- Slow-growth REPORT post-processing models ---
++
++
++class SlowGrowthUploadResponse(BaseModel):
++    """Response after uploading a REPORT file."""
++    session_id: str
++    total_steps: int
++    num_constraints: int
++    constraints: list[int]  # list of b_cnt values
++    has_blue_moon: bool = False  # True if Blue Moon b_m> data found
++
++
++class SlowGrowthConstraintData(BaseModel):
++    """Time-series data for one constraint."""
++    b_cnt: int
++    step: list[int]
++    cv: list[float]
++    dcv: list[float]
++    dA_dxsi: list[float]
++    delta_F: list[float]
++    # Blue Moon specific fields
++    cv_target: list[float] = []
++    cv_actual: list[float] = []
++    cv_diff: list[float] = []
++    lambda_val: list[float] = []
++    z_inv_sqrt: list[float] = []
++    GkT: list[float] = []
++    mean_force: list[float] = []
++
++
++class SlowGrowthBarrierAnalysis(BaseModel):
++    """Free energy barrier analysis results."""
++    total_delta_F: float = 0.0
++    total_delta_F_kcal: float = 0.0
++    max_F: float = 0.0
++    max_F_cv: float = 0.0
++    min_F: float = 0.0
++    min_F_cv: float = 0.0
++    barrier_forward: float = 0.0
++    barrier_forward_kcal: float = 0.0
++    barrier_reverse: float = 0.0
++    barrier_reverse_kcal: float = 0.0
++    cv_start: float = 0.0
++    cv_end: float = 0.0
++    num_steps: int = 0
++
++
++class SlowGrowthAnalysisResponse(BaseModel):
++    """Full analysis response for slow-growth post-processing."""
++    session_id: str
++    total_steps: int
++    num_constraints: int
++    has_blue_moon: bool = False
++    constraints: list[SlowGrowthConstraintData]
++    barriers: list[SlowGrowthBarrierAnalysis] = []
+diff --git a/server/routers/cp2k.py b/server/routers/cp2k.py
+index 018600f..ad704f0 100644
+--- a/server/routers/cp2k.py
++++ b/server/routers/cp2k.py
+@@ -42,13 +42,13 @@ class CP2KInputRequest(BaseModel):
+ 
+     structure: PymatgenStructure
+     prefix: str = Field(default="calc", description="Project name for output files")
+-    run_type: str = Field(default="ENERGY", description="Run type")
++    run_type: str = Field(default="MD", description="Run type")
+     functional: str = Field(default="PBE", description="XC functional")
+     basis_set: str = Field(default="DZVP-MOLOPT-SR-GTH", description="Basis set name")
+-    cutoff: float = Field(default=400, description="Plane-wave cutoff in Ry")
+-    rel_cutoff: float = Field(default=50, description="Relative cutoff in Ry")
++    cutoff: float = Field(default=450, description="Plane-wave cutoff in Ry")
++    rel_cutoff: float = Field(default=40, description="Relative cutoff in Ry")
+     # SCF method
+-    scf_method: str = Field(default="OT", description="SCF method: OT or DIAG")
++    scf_method: str = Field(default="DIAG", description="SCF method: OT or DIAG")
+     scf_eps: float = Field(default=1e-5, description="SCF convergence criterion")
+     max_scf: int = Field(default=300, description="Maximum SCF iterations")
+     ot_preconditioner: str = Field(default="FULL_KINETIC", description="OT preconditioner")
+@@ -57,7 +57,7 @@ class CP2KInputRequest(BaseModel):
+     outer_max_scf: int = Field(default=20, description="Maximum outer SCF iterations")
+     outer_eps: float = Field(default=1e-5, description="Outer SCF convergence criterion")
+     # Diagonalization + Smearing
+-    smearing: bool = Field(default=False, description="Enable smearing (DIAG only)")
++    smearing: bool = Field(default=True, description="Enable smearing (DIAG only)")
+     smearing_method: str = Field(default="FERMI_DIRAC", description="Smearing method")
+     electronic_temperature: float = Field(default=300, description="Electronic temperature in K")
+     added_mos: int = Field(default=50, description="Number of added MOs for DIAG")
+@@ -86,11 +86,11 @@ class CP2KInputRequest(BaseModel):
+     cell_opt_pressure: float = Field(default=0.0, description="External pressure (GPa)")
+     # MD
+     md_ensemble: str = Field(default="NVT", description="MD ensemble")
+-    md_steps: int = Field(default=1000, description="Number of MD steps")
+-    md_timestep: float = Field(default=0.5, description="MD timestep in fs")
++    md_steps: int = Field(default=10000, description="Number of MD steps")
++    md_timestep: float = Field(default=1.0, description="MD timestep in fs")
+     md_temperature: float = Field(default=300, description="MD temperature in K")
+     md_thermostat: str = Field(default="CSVR", description="MD thermostat type")
+-    md_timecon: float = Field(default=100, description="Thermostat time constant in fs")
++    md_timecon: float = Field(default=80, description="Thermostat time constant in fs")
+     # Fixed atoms
+     fixed_indices: Optional[list[int]] = Field(default=None, description="0-indexed atom indices to fix")
+     fixed_z_below: Optional[float] = Field(default=None, description="Fix atoms with z below this value (Angstrom)")
+@@ -721,11 +721,6 @@ def generate_cp2k_input(request: CP2KInputRequest, info: dict) -> str:
+         if run_type == "MD":
+             lines.append("    &RESTART OFF")
+             lines.append("    &END RESTART")
+-            lines.append("    &RESTART_HISTORY")
+-            lines.append("      &EACH")
+-            lines.append("        MD 500")
+-            lines.append("      &END EACH")
+-            lines.append("    &END RESTART_HISTORY")
+         else:
+             lines.append("    &RESTART")
+             lines.append("      BACKUP_COPIES 0")
+diff --git a/server/routers/hpc.py b/server/routers/hpc.py
+index ea60721..3e2bcd2 100644
+--- a/server/routers/hpc.py
++++ b/server/routers/hpc.py
+@@ -408,6 +408,7 @@ async def read_file_content(request: FileReadRequest) -> FileReadResponse:
+     hpc = _get_hpc(request.session_id)
+     try:
+         # Determine max_bytes: explicit request > extension heuristic > default 2MB
++        # max_bytes=0 means unlimited (for trajectory files like XDATCAR)
+         max_bytes = request.max_bytes
+         if max_bytes is None:
+             ext = "." + request.file_path.rsplit(".", 1)[-1].lower() if "." in request.file_path else ""
+@@ -415,10 +416,16 @@ async def read_file_content(request: FileReadRequest) -> FileReadResponse:
+                 max_bytes = _LARGE_FILE_DEFAULT_BYTES
+         # LocalFileConnection: use pure Python reading (cross-platform, no shell)
+         if isinstance(hpc, LocalFileConnection):
+-            effective_max = min(max_bytes, MAX_TEXT_FILE_SIZE) if max_bytes is not None else 2 * 1024 * 1024
++            if max_bytes is not None and max_bytes > 0:
++                effective_max = min(max_bytes, MAX_TEXT_FILE_SIZE)
++            elif max_bytes == 0:
++                effective_max = 0  # unlimited
++            else:
++                effective_max = 2 * 1024 * 1024
+             content, total = await hpc.read_file_content(request.file_path, max_bytes=effective_max)
+         elif max_bytes is not None:
+-            max_bytes = min(max_bytes, MAX_TEXT_FILE_SIZE)
++            if max_bytes > 0:
++                max_bytes = min(max_bytes, MAX_TEXT_FILE_SIZE)
+             content, total = await read_remote_file(hpc.conn, request.file_path, max_bytes=max_bytes)
+         else:
+             content, total = await read_remote_file(hpc.conn, request.file_path)
+diff --git a/server/routers/vasp.py b/server/routers/vasp.py
+index 0f26430..55f5178 100644
+--- a/server/routers/vasp.py
++++ b/server/routers/vasp.py
+@@ -1,14 +1,43 @@
+-"""VASP input file generation API endpoints."""
++"""VASP input file generation and post-processing API endpoints."""
+ 
+-from fastapi import APIRouter, HTTPException
++import time
++import uuid
++
++from fastapi import APIRouter, HTTPException, UploadFile, File
+ from pydantic import BaseModel
+ from typing import Optional
+ 
+-from models.vasp import VASPInputFiles, VASPInputRequest
++from models.vasp import (
++    VASPInputFiles, VASPInputRequest,
++    SlowGrowthUploadResponse, SlowGrowthAnalysisResponse,
++    SlowGrowthConstraintData, SlowGrowthBarrierAnalysis,
++)
+ from utils.vasp_input import generate_vasp_inputs
++from utils.vasp_report import parse_report, SlowGrowthData
+ 
+ router = APIRouter(prefix="/vasp", tags=["vasp"])
+ 
++# --- Slow-growth REPORT session store ---
++_SESSION_TTL = 1800  # 30 minutes
++
++_sessions: dict[str, dict] = {}  # session_id → {"data": SlowGrowthData, "ts": float}
++
++
++def _cleanup_sessions():
++    now = time.time()
++    expired = [k for k, v in _sessions.items() if now - v["ts"] > _SESSION_TTL]
++    for k in expired:
++        del _sessions[k]
++
++
++def _get_session(session_id: str) -> SlowGrowthData:
++    _cleanup_sessions()
++    entry = _sessions.get(session_id)
++    if not entry:
++        raise HTTPException(status_code=404, detail="Session not found or expired")
++    entry["ts"] = time.time()
++    return entry["data"]
++
+ 
+ class ParseStructureRequest(BaseModel):
+     content: str
+@@ -112,6 +141,8 @@ async def list_calculation_types() -> dict:
+             "dos": "Density of states calculation",
+             "ddec": "DDEC charge analysis (requires CHGCAR and AECCAR)",
+             "elf": "Electron localization function calculation",
++            "md": "Molecular dynamics (NVT/NVE/NPT)",
++            "slow_growth": "Slow-growth MD (thermodynamic integration with ICONST constraints)",
+         }
+         types[calc_type.value] = descriptions.get(calc_type.value, "VASP calculation")
+ 
+@@ -133,3 +164,112 @@ async def list_optimizer_types() -> dict:
+         optimizers[opt_type.value] = descriptions.get(opt_type.value, "VASP optimizer")
+ 
+     return optimizers
++
++
++# --- Slow-growth REPORT post-processing endpoints ---
++
++
++@router.post("/report/upload", response_model=SlowGrowthUploadResponse)
++async def upload_report_file(file: UploadFile = File(...)):
++    """Upload a VASP REPORT file for slow-growth post-processing.
++
++    Parses the file and returns a session_id for subsequent analysis requests.
++    """
++    try:
++        content = await file.read()
++        text = content.decode("utf-8", errors="replace")
++    except Exception as e:
++        raise HTTPException(status_code=400, detail=f"Failed to read file: {e}")
++
++    data = parse_report(text)
++    if not data.steps:
++        raise HTTPException(
++            status_code=422,
++            detail="No slow-growth data found in REPORT file. "
++            "Ensure LBLUEOUT=.TRUE. was set and the file contains 'cc>' lines.",
++        )
++
++    session_id = str(uuid.uuid4())
++    _sessions[session_id] = {"data": data, "ts": time.time()}
++
++    return SlowGrowthUploadResponse(
++        session_id=session_id,
++        total_steps=data.total_steps,
++        num_constraints=data.num_constraints,
++        constraints=data.get_all_constraints(),
++        has_blue_moon=data.has_blue_moon,
++    )
++
++
++@router.post("/report/upload-text", response_model=SlowGrowthUploadResponse)
++async def upload_report_text(request: ParseStructureRequest):
++    """Upload REPORT content as text (for HPC remote file content)."""
++    data = parse_report(request.content)
++    if not data.steps:
++        raise HTTPException(
++            status_code=422,
++            detail="No slow-growth data found. Ensure LBLUEOUT=.TRUE. was set.",
++        )
++
++    session_id = str(uuid.uuid4())
++    _sessions[session_id] = {"data": data, "ts": time.time()}
++
++    return SlowGrowthUploadResponse(
++        session_id=session_id,
++        total_steps=data.total_steps,
++        num_constraints=data.num_constraints,
++        constraints=data.get_all_constraints(),
++        has_blue_moon=data.has_blue_moon,
++    )
++
++
++@router.get("/report/{session_id}", response_model=SlowGrowthAnalysisResponse)
++async def get_report_analysis(session_id: str):
++    """Get full slow-growth analysis data for all constraints."""
++    data = _get_session(session_id)
++
++    constraints = []
++    barriers = []
++    for b_cnt in data.get_all_constraints():
++        cd = data.get_constraint_data(b_cnt)
++        constraints.append(SlowGrowthConstraintData(
++            b_cnt=b_cnt,
++            step=cd["step"],
++            cv=cd["cv"],
++            dcv=cd["dcv"],
++            dA_dxsi=cd["dA_dxsi"],
++            delta_F=cd["delta_F"],
++            cv_target=cd["cv_target"],
++            cv_actual=cd["cv_actual"],
++            cv_diff=cd["cv_diff"],
++            lambda_val=cd["lambda_val"],
++            z_inv_sqrt=cd["z_inv_sqrt"],
++            GkT=cd["GkT"],
++            mean_force=cd["mean_force"],
++        ))
++        # Barrier analysis
++        ba = data.get_barrier_analysis(b_cnt)
++        barriers.append(SlowGrowthBarrierAnalysis(
++            total_delta_F=ba.total_delta_F,
++            total_delta_F_kcal=ba.total_delta_F_kcal,
++            max_F=ba.max_F,
++            max_F_cv=ba.max_F_cv,
++            min_F=ba.min_F,
++            min_F_cv=ba.min_F_cv,
++            barrier_forward=ba.barrier_forward,
++            barrier_forward_kcal=ba.barrier_forward_kcal,
++            barrier_reverse=ba.barrier_reverse,
++            barrier_reverse_kcal=ba.barrier_reverse_kcal,
++            cv_start=ba.cv_start,
++            cv_end=ba.cv_end,
++            num_steps=ba.num_steps,
++        ))
++
++    return SlowGrowthAnalysisResponse(
++        session_id=session_id,
++        total_steps=data.total_steps,
++        num_constraints=data.num_constraints,
++        has_blue_moon=data.has_blue_moon,
++        constraints=constraints,
++        barriers=barriers,
++    )
+diff --git a/server/utils/hpc_client.py b/server/utils/hpc_client.py
+index d1bc3dd..c3a3c16 100644
+--- a/server/utils/hpc_client.py
++++ b/server/utils/hpc_client.py
+@@ -245,6 +245,16 @@ class KbdintSSHClient(asyncssh.SSHClient):
+             hpc_ref._alive = False
+             logger.info(f"Marked session {hpc_ref.session_id} as dead (connection_lost)")
+ 
++    def password_auth_requested(self) -> Optional[str]:
++        """Handle 'password' auth (used by servers like Shaheen that don't
++        support keyboard-interactive)."""
++        return self._password
++
++    def password_change_requested(self, prompt: str, lang: str) -> tuple[str, str]:
++        """Handle password change request — some servers use this for OTP
++        after initial password auth."""
++        return (self._otp_code or self._password, self._otp_code or self._password)
++
+     def kbdint_auth_requested(self) -> Optional[str]:
+         return ""  # accept any submethods
+ 
+@@ -1939,6 +1949,23 @@ class HPCConnectionPool:
+                     f"(e.g. ~/.ssh/id_rsa_myhost) to avoid trying wrong keys."
+                 )
+                 raise ConnectionError(hint) from exc
++            if "getaddrinfo" in msg.lower():
++                # DNS resolution failed — identify which host
++                # Try resolving each host to pinpoint the failure
++                failed_host = config.host
++                for test_host in [config.proxy_host, config.jump_host, config.host]:
++                    if not test_host:
++                        continue
++                    try:
++                        socket.getaddrinfo(test_host, 22)
++                    except socket.gaierror:
++                        failed_host = test_host
++                        break
++                hint = (
++                    f"DNS resolution failed for '{failed_host}'. "
++                    f"Check that the hostname is correct and your network/VPN can reach it."
++                )
++                raise ConnectionError(hint) from exc
+             raise
+ 
+     async def connect_ssh_config(
+diff --git a/server/utils/job_parser.py b/server/utils/job_parser.py
+index a242c8c..2f17d97 100644
+--- a/server/utils/job_parser.py
++++ b/server/utils/job_parser.py
+@@ -579,7 +579,7 @@ async def tail_remote_file(
+ async def read_remote_file(
+     conn: Any, file_path: str, max_bytes: int = 2 * 1024 * 1024
+ ) -> tuple[str, int]:
+-    """Read full content of a remote file (up to max_bytes).
++    """Read full content of a remote file (up to max_bytes, 0 = unlimited).
+ 
+     Returns (content, total_lines).
+     """
+@@ -594,10 +594,12 @@ async def read_remote_file(
+         except ValueError:
+             pass
+ 
+-    # Read content (size-limited)
+-    result = await conn.run(
+-        f"head -c {max_bytes} {safe_path} 2>/dev/null", check=False
+-    )
++    # Read content (max_bytes=0 means unlimited)
++    if max_bytes > 0:
++        cmd = f"head -c {max_bytes} {safe_path} 2>/dev/null"
++    else:
++        cmd = f"cat {safe_path} 2>/dev/null"
++    result = await conn.run(cmd, check=False)
+     content = ""
+     if result.exit_status == 0:
+         content = result.stdout or ""
+diff --git a/server/utils/vasp_input.py b/server/utils/vasp_input.py
+index 6d48f73..78b08d5 100644
+--- a/server/utils/vasp_input.py
++++ b/server/utils/vasp_input.py
+@@ -8,7 +8,7 @@ from pymatgen.core import Structure
+ from pymatgen.io.vasp import Incar, Kpoints, Poscar
+ 
+ from models.structure import PymatgenStructure
+-from models.vasp import VASPCalculationType, VASPInputRequest, VASPOptimizerType
++from models.vasp import ConstantPotentialMethod, VASPCalculationType, VASPInputRequest, VASPOptimizerType
+ 
+ 
+ def generate_incar(
+@@ -217,6 +217,122 @@ def generate_incar(
+             "NPAR": request.npar if request.npar is not None else 1,  # Required for LELF
+             **{k: v for k, v in common_defaults.items() if k not in ["NCORE"]},
+         })
++    elif request.calculation_type == VASPCalculationType.MD:
++        # Standard molecular dynamics (NVT by default: SMASS=1, MDALGO=2)
++        incar_params.update({
++            "ENCUT": request.encut,
++            "GGA": request.gga,
++            "EDIFF": request.ediff if request.ediff != 1e-6 else 1e-5,
++            "ISMEAR": request.ismear if request.ismear is not None else 0,
++            "SIGMA": request.sigma if request.sigma is not None else 0.05,
++            "ISPIN": request.ispin if request.ispin is not None else 2,
++            "IBRION": 0,
++            "NSW": request.nsw if request.nsw is not None else 10000,
++            "POTIM": request.potim if request.potim is not None else 1,
++            "SMASS": request.smass if request.smass is not None else 1,
++            "MDALGO": request.mdalgo if request.mdalgo is not None else 2,
++            "TEBEG": request.tebeg if request.tebeg is not None else 300,
++            "TEEND": request.teend if request.teend is not None else 300,
++            "NBLOCK": request.nblock if request.nblock is not None else 10,
++            "ISYM": 0,
++            "LREAL": "Auto",
++            "LWAVE": False,
++            "LCHARG": False,
++            "LVTOT": False,
++            "LVHAR": False,
++            "LELF": False,
++            "ISTART": 1,
++            "ICHARG": 1,
++            "NELMIN": request.nelmin if request.nelmin is not None else 5,
++            "NELM": request.nelm if request.nelm is not None else 100,
++            "NCORE": request.ncore if request.ncore is not None else 48,
++        })
++
++    elif request.calculation_type == VASPCalculationType.SLOW_GROWTH:
++        # Slow-growth thermodynamic integration MD
++        incar_params.update({
++            "PREC": request.prec if request.prec else "Accurate",
++            "ENCUT": request.encut,
++            "GGA": request.gga,
++            "EDIFF": request.ediff if request.ediff != 1e-6 else 1e-6,
++            "ISMEAR": request.ismear if request.ismear is not None else 0,
++            "SIGMA": request.sigma if request.sigma is not None else 0.05,
++            "ISPIN": request.ispin if request.ispin is not None else 2,
++            "IBRION": 0,  # MD mode required for slow-growth
++            "NSW": request.nsw if request.nsw is not None else 10000,
++            "POTIM": request.potim if request.potim is not None else 1,
++            "SMASS": request.smass if request.smass is not None else 0,
++            "MDALGO": request.mdalgo if request.mdalgo is not None else 2,
++            "TEBEG": request.tebeg if request.tebeg is not None else 300,
++            "TEEND": request.teend if request.teend is not None else 300,
++            "NBLOCK": request.nblock if request.nblock is not None else 1,
++            "LBLUEOUT": request.lblueout if request.lblueout is not None else True,
++            "ISYM": 0,
++            "LREAL": "Auto",
++            "LWAVE": False,
++            "LCHARG": False,
++            "ISTART": request.icharg if request.icharg is not None else 1,
++            "ICHARG": 1,
++            "NELMIN": request.nelmin if request.nelmin is not None else 5,
++            "NELM": request.nelm if request.nelm is not None else 300,
++            "NCORE": request.ncore if request.ncore is not None else 12,
++        })
++        # INCREM: CV change rate(s) — can be single or multiple values
++        if request.increm:
++            # Parse space-separated values
++            increm_vals = request.increm.strip().split()
++            if len(increm_vals) == 1:
++                incar_params["INCREM"] = float(increm_vals[0])
++            else:
++                incar_params["INCREM"] = " ".join(increm_vals)
++
++    # ====== Constant-potential overlay (appended to any calc type) ======
++    if request.constant_potential == ConstantPotentialMethod.TPOT:
++        # VASPsol implicit solvation (required for TPOT)
++        incar_params.update({
++            "LSOL": True,
++            "EB_k": request.tpot_eb_k if request.tpot_eb_k is not None else 78.4,
++            "LAMBDA_D_K": request.tpot_lambda_d_k if request.tpot_lambda_d_k is not None else 3.04,
++            "TAU": request.tpot_tau if request.tpot_tau is not None else 0,
++        })
++        incar_params["CORE_C"] = (
++            request.tpot_core_c if request.tpot_core_c is not None
++            else _calculate_core_c(structure)
++        )
++        # TPOT constant-potential control
++        incar_params.update({
++            "LTPOT": True,
++            "TPOTMETHOD": 2,
++            "TPOTVTARGET": request.tpot_vtarget if request.tpot_vtarget is not None else 4.6,
++            "TPOTVDIFF": request.tpot_vdiff if request.tpot_vdiff is not None else 0.001,
++            "TPOTVRATE": request.tpot_vrate if request.tpot_vrate is not None else -1.6,
++            "TPOTVRATELIM": request.tpot_vratelim if request.tpot_vratelim is not None else 0.05,
++            "TPOTELECTSTEP": request.tpot_electstep if request.tpot_electstep is not None else 0.05,
++            "TPOTDYNVRATE": request.tpot_dynvrate if request.tpot_dynvrate is not None else True,
++            "TPOTTRUEVACLEVEL": request.tpot_truevaclevel if request.tpot_truevaclevel is not None else True,
++            "TPOTGCENERGY": request.tpot_gcenergy if request.tpot_gcenergy is not None else True,
++            "TPOTGCIONIC": request.tpot_gcionic if request.tpot_gcionic is not None else True,
++        })
++    elif request.constant_potential == ConstantPotentialMethod.CPVASP:
++        nescheme = request.cpvasp_nescheme if request.cpvasp_nescheme is not None else 5
++        incar_params.update({
++            # VASPsol++ implicit solvation
++            "LSOL": request.cpvasp_lsol if request.cpvasp_lsol is not None else True,
++            "ISOL": request.cpvasp_isol if request.cpvasp_isol is not None else 2,
++            "C_MOLAR": request.cpvasp_c_molar if request.cpvasp_c_molar is not None else 1.0,
++            "R_ION": request.cpvasp_r_ion if request.cpvasp_r_ion is not None else 4.0,
++            # CP-VASP constant potential
++            "LCEP": True,
++            "NESCHEME": nescheme,
++            "NEADJUST": request.cpvasp_neadjust if request.cpvasp_neadjust is not None else 1,
++            "TARGETMU": request.cpvasp_targetmu if request.cpvasp_targetmu is not None else -4.44,
++            "FERMICONVERGE": request.cpvasp_fermiconverge if request.cpvasp_fermiconverge is not None else 0.01,
++        })
++        if nescheme == 2:
++            incar_params["CAP_MAX"] = request.cpvasp_cap_max if request.cpvasp_cap_max is not None else 2.0
++        elif nescheme == 5:
++            incar_params["T_eta"] = request.cpvasp_t_eta if request.cpvasp_t_eta is not None else 300
++            incar_params["eta_length"] = request.cpvasp_eta_length if request.cpvasp_eta_length is not None else 1
+ 
+     # Apply user-provided overrides (these override defaults)
+     if request.algo is not None:
+@@ -299,6 +415,61 @@ def generate_incar(
+         incar_params["NEDOS"] = request.nedos
+     if request.nbands is not None:
+         incar_params["NBANDS"] = request.nbands
++    if request.mdalgo is not None:
++        incar_params["MDALGO"] = request.mdalgo
++    if request.smass is not None:
++        incar_params["SMASS"] = request.smass
++    if request.tebeg is not None:
++        incar_params["TEBEG"] = request.tebeg
++    if request.teend is not None:
++        incar_params["TEEND"] = request.teend
++    if request.nblock is not None:
++        incar_params["NBLOCK"] = request.nblock
++    if request.lblueout is not None:
++        incar_params["LBLUEOUT"] = request.lblueout
++    # TPOT overrides
++    if request.tpot_vtarget is not None:
++        incar_params["TPOTVTARGET"] = request.tpot_vtarget
++    if request.tpot_vdiff is not None:
++        incar_params["TPOTVDIFF"] = request.tpot_vdiff
++    if request.tpot_vrate is not None:
++        incar_params["TPOTVRATE"] = request.tpot_vrate
++    if request.tpot_vratelim is not None:
++        incar_params["TPOTVRATELIM"] = request.tpot_vratelim
++    if request.tpot_vratedamp is not None:
++        incar_params["TPOTVRATEDAMP"] = request.tpot_vratedamp
++    if request.tpot_vediff is not None:
++        incar_params["TPOTVEDIFF"] = request.tpot_vediff
++    if request.tpot_electstep is not None:
++        incar_params["TPOTELECTSTEP"] = request.tpot_electstep
++    if request.tpot_dynvrate is not None:
++        incar_params["TPOTDYNVRATE"] = request.tpot_dynvrate
++    if request.tpot_truevaclevel is not None:
++        incar_params["TPOTTRUEVACLEVEL"] = request.tpot_truevaclevel
++    if request.tpot_gcenergy is not None:
++        incar_params["TPOTGCENERGY"] = request.tpot_gcenergy
++    if request.tpot_gcionic is not None:
++        incar_params["TPOTGCIONIC"] = request.tpot_gcionic
++
++    # CP-VASP overrides
++    if request.cpvasp_targetmu is not None:
++        incar_params["TARGETMU"] = request.cpvasp_targetmu
++    if request.cpvasp_nescheme is not None:
++        incar_params["NESCHEME"] = request.cpvasp_nescheme
++    if request.cpvasp_neadjust is not None:
++        incar_params["NEADJUST"] = request.cpvasp_neadjust
++    if request.cpvasp_fermiconverge is not None:
++        incar_params["FERMICONVERGE"] = request.cpvasp_fermiconverge
++    if request.cpvasp_cap_max is not None:
++        incar_params["CAP_MAX"] = request.cpvasp_cap_max
++    if request.cpvasp_t_eta is not None:
++        incar_params["T_eta"] = request.cpvasp_t_eta
++    if request.cpvasp_eta_length is not None:
++        incar_params["eta_length"] = request.cpvasp_eta_length
++
++    # NELECT (from constant-potential step 1)
++    if request.nelect is not None:
++        incar_params["NELECT"] = request.nelect
+ 
+     # Custom INCAR parameters (override everything else)
+     if request.custom_incar:
+@@ -307,6 +478,67 @@ def generate_incar(
+     return Incar(incar_params)
+ 
+ 
++# Parameter grouping for readable INCAR output
++_INCAR_SECTIONS: list[tuple[str, set[str]]] = [
++    ("General", {"SYSTEM", "PREC", "ENCUT", "GGA", "ALGO", "LREAL", "ISYM", "ADDGRID"}),
++    ("Electronic convergence", {"EDIFF", "NELM", "NELMIN", "NELMDL", "ICHARG", "ISTART",
++                                 "AMIX", "BMIX", "AMIX_MAG", "BMIX_MAG", "LMAXMIX"}),
++    ("Smearing", {"ISMEAR", "SIGMA"}),
++    ("Spin", {"ISPIN", "MAGMOM"}),
++    ("Ionic relaxation / MD", {"IBRION", "NSW", "ISIF", "EDIFFG", "POTIM", "NFREE",
++                                "MDALGO", "SMASS", "TEBEG", "TEEND", "NBLOCK",
++                                "LBLUEOUT", "INCREM",
++                                "IOPT", "LVTST"}),
++    ("Output", {"LWAVE", "LCHARG", "LORBIT", "LELF", "LAECHG", "LVTOT", "LVHAR", "NWRITE",
++                "NEDOS", "NBANDS"}),
++    ("vdW correction", {"IVDW"}),
++    ("Dipole correction", {"IDIPOL"}),
++    ("NELECT", {"NELECT"}),
++    ("Parallelization", {"NCORE", "NPAR"}),
++    ("VASPsol Solvent Model", {"LSOL", "EB_k", "LAMBDA_D_K", "CORE_C", "TAU",
++                                "ISOL", "C_MOLAR", "R_ION",
++                                "LSOLHYBRID", "METHOD_SH", "SIGMA_SH", "ALPHA_SH"}),
++    ("TPOT", {"LTPOT", "TPOTMETHOD", "TPOTVTARGET", "TPOTVDIFF", "TPOTELECTSTEP",
++              "TPOTDYNVRATE", "TPOTVRATE", "TPOTVRATELIM", "TPOTVRATEDAMP", "TPOTVEDIFF",
++              "TPOTTRUEVACLEVEL", "TPOTGCENERGY", "TPOTGCIONIC"}),
++    ("CP-VASP", {"LCEP", "NESCHEME", "NEADJUST", "TARGETMU", "FERMICONVERGE",
++                 "CAP_MAX", "T_eta", "eta_length"}),
++]
++
++
++def _format_incar_grouped(params: dict, request: VASPInputRequest) -> str:
++    """Format INCAR params dict into grouped sections with comments."""
++    remaining = dict(params)
++    lines: list[str] = []
++
++    for section_name, keys in _INCAR_SECTIONS:
++        section_params = {}
++        for k in list(keys):
++            if k in remaining:
++                section_params[k] = remaining.pop(k)
++        if not section_params:
++            continue
++        lines.append(f"# {section_name}")
++        for key, val in section_params.items():
++            if isinstance(val, bool):
++                lines.append(f"{key:20s} = {'  .TRUE.' if val else '  .FALSE.'}")
++            else:
++                lines.append(f"{key:20s} = {val}")
++        lines.append("")
++
++    # Any remaining params not in known sections
++    if remaining:
++        lines.append("# Other")
++        for key, val in remaining.items():
++            if isinstance(val, bool):
++                lines.append(f"{key:20s} = {'  .TRUE.' if val else '  .FALSE.'}")
++            else:
++                lines.append(f"{key:20s} = {val}")
++        lines.append("")
++
++    return "\n".join(lines)
++
++
+ def generate_kpoints(
+     request: VASPInputRequest, structure: Structure
+ ) -> Kpoints:
+@@ -388,7 +620,7 @@ def generate_vasp_inputs(request: VASPInputRequest) -> dict:
+ 
+     # Generate INCAR
+     incar = generate_incar(request, pymatgen_structure)
+-    incar_str = str(incar)
++    incar_str = _format_incar_grouped(dict(incar), request)
+ 
+     # Generate KPOINTS
+     kpoints = generate_kpoints(request, pymatgen_structure)
+@@ -411,10 +643,22 @@ def generate_vasp_inputs(request: VASPInputRequest) -> dict:
+         "note": "POTCAR file must be generated separately using VASP POTCAR generation tools",
+     }
+ 
++    # Generate ICONST for slow-growth
++    iconst_str = None
++    if request.calculation_type == VASPCalculationType.SLOW_GROWTH and request.iconst_content:
++        iconst_str = request.iconst_content.strip() + "\n"
++
++    # Generate INCAR_NELECT for constant-potential (Step 1: SCF to determine NELECT)
++    incar_nelect_str = None
++    if request.constant_potential == ConstantPotentialMethod.TPOT:
++        incar_nelect_str = _generate_tpot_nelect_incar(request, pymatgen_structure)
++    elif request.constant_potential == ConstantPotentialMethod.CPVASP:
++        incar_nelect_str = _generate_cpvasp_nelect_incar(request, pymatgen_structure)
++
+     # Generate notes
+     notes = _generate_notes(request, pymatgen_structure)
+ 
+-    return {
++    result = {
+         "incar": incar_str,
+         "poscar": poscar_str,
+         "kpoints": kpoints_str,
+@@ -422,6 +666,224 @@ def generate_vasp_inputs(request: VASPInputRequest) -> dict:
+         "calculation_type": request.calculation_type,
+         "notes": notes,
+     }
++    if iconst_str:
++        result["iconst"] = iconst_str
++    if incar_nelect_str:
++        result["incar_nelect"] = incar_nelect_str
++
++    return result
++
++
++# ZVAL for recommended POTCARs (PBE PAW, VASP wiki recommended set)
++# CORE_C = sum(Z - ZVAL) for all atoms
++_RECOMMENDED_ZVAL: dict[str, float] = {
++    "H": 1, "He": 2,
++    "Li": 3, "Be": 4, "B": 3, "C": 4, "N": 5, "O": 6, "F": 7, "Ne": 8,
++    "Na": 7, "Mg": 8, "Al": 3, "Si": 4, "P": 5, "S": 6, "Cl": 7, "Ar": 8,
++    "K": 9, "Ca": 10,
++    "Sc": 11, "Ti": 12, "V": 13, "Cr": 12, "Mn": 13, "Fe": 14,
++    "Co": 9, "Ni": 16, "Cu": 17, "Zn": 12,
++    "Ga": 13, "Ge": 14, "As": 5, "Se": 6, "Br": 7, "Kr": 8,
++    "Rb": 9, "Sr": 10,
++    "Y": 11, "Zr": 12, "Nb": 13, "Mo": 14, "Tc": 13, "Ru": 14,
++    "Rh": 15, "Pd": 16, "Ag": 17, "Cd": 12,
++    "In": 13, "Sn": 14, "Sb": 5, "Te": 6, "I": 7, "Xe": 8,
++    "Cs": 9, "Ba": 10,
++    "La": 11, "Ce": 12, "Pr": 13, "Nd": 14,
++    "Hf": 10, "Ta": 11, "W": 12, "Re": 13, "Os": 14,
++    "Ir": 15, "Pt": 16, "Au": 17, "Hg": 12,
++    "Tl": 13, "Pb": 14, "Bi": 15,
++}
++
++
++def _calculate_core_c(structure: Structure) -> int:
++    """Calculate CORE_C = total core electrons = sum(Z - ZVAL) for all atoms.
++
++    Uses recommended POTCAR ZVAL values. Falls back to Z/2 for unknown elements.
++    """
++    from pymatgen.core import Element as PmgElement
++
++    core_c = 0
++    for site in structure:
++        el = str(max(site.species, key=lambda s: s.occu))
++        # Clean element symbol (e.g. "C0+" -> "C")
++        el_clean = "".join(c for c in el if c.isalpha())
++        z = PmgElement(el_clean).Z
++        zval = _RECOMMENDED_ZVAL.get(el_clean, z // 2)
++        core_c += z - zval
++    return core_c
++
++
++def _format_incar_str(sections: list[tuple[str, dict]],
++                      system_title: str | None = None) -> str:
++    """Format INCAR as grouped sections with comments.
++
++    Args:
++        sections: list of (section_comment, params_dict) tuples
++        system_title: optional SYSTEM tag
++    """
++    lines: list[str] = []
++    if system_title:
++        lines.append(f"SYSTEM = {system_title}")
++        lines.append("")
++
++    for comment, params in sections:
++        if not params:
++            continue
++        lines.append(f"# {comment}")
++        for key, val in params.items():
++            if isinstance(val, bool):
++                lines.append(f"{key:20s} = {'  .TRUE.' if val else '  .FALSE.'}")
++            elif isinstance(val, float):
++                lines.append(f"{key:20s} = {val}")
++            else:
++                lines.append(f"{key:20s} = {val}")
++        lines.append("")
++
++    return "\n".join(lines)
++
++
++def _generate_tpot_nelect_incar(request: VASPInputRequest,
++                                structure: Structure) -> str:
++    """Generate INCAR for TPOT Step 1: static SCF to determine NELECT.
++
++    Uses TPOTMETHOD=1 (electronic-step updates) with NSW=1 and high NELM
++    so VASP converges to the target potential and reports the final NELECT.
++    """
++    core_c = request.tpot_core_c if request.tpot_core_c is not None else _calculate_core_c(structure)
++    vtarget = request.tpot_vtarget if request.tpot_vtarget is not None else 4.6
++
++    sections = [
++        ("General", {
++            "PREC": request.prec or "Accurate",
++            "ENCUT": request.encut,
++            "GGA": request.gga,
++            "ALGO": request.algo or "Fast",
++            "LREAL": "Auto",
++            "ISYM": 0,
++        }),
++        ("Electronic convergence", {
++            "EDIFF": request.ediff if request.ediff != 1e-6 else 1e-5,
++            "NELM": 200,
++            "NELMIN": request.nelmin if request.nelmin is not None else 6,
++            "ISMEAR": request.ismear if request.ismear is not None else 0,
++            "SIGMA": request.sigma if request.sigma is not None else 0.05,
++        }),
++        ("Spin", {
++            "ISPIN": request.ispin if request.ispin is not None else 2,
++            **({"MAGMOM": request.magmom} if request.magmom else {}),
++        }),
++        ("Static calculation (single point)", {
++            "IBRION": -1,
++            "NSW": 1,
++        }),
++        ("Output", {
++            "LWAVE": True,
++            "LCHARG": True,
++            "LORBIT": 11,
++        }),
++        ("vdW correction", {
++            "IVDW": request.ivdw if request.ivdw is not None else 12,
++        }),
++        ("Parallelization", {
++            "NCORE": request.ncore if request.ncore is not None else 48,
++        }),
++        ("VASPsol Solvent Model", {
++            "LSOL": True,
++            "EB_k": request.tpot_eb_k if request.tpot_eb_k is not None else 78.4,
++            "LAMBDA_D_K": request.tpot_lambda_d_k if request.tpot_lambda_d_k is not None else 3.04,
++            "CORE_C": core_c,
++            "TAU": request.tpot_tau if request.tpot_tau is not None else 0,
++        }),
++        ("TPOT - Method 1: determine NELECT", {
++            "LTPOT": True,
++            "TPOTMETHOD": 1,
++            "TPOTVTARGET": vtarget,
++            "TPOTVDIFF": request.tpot_vdiff if request.tpot_vdiff is not None else 0.01,
++            "TPOTELECTSTEP": request.tpot_electstep if request.tpot_electstep is not None else 0.05,
++            "TPOTDYNVRATE": request.tpot_dynvrate if request.tpot_dynvrate is not None else True,
++            "TPOTVRATE": request.tpot_vrate if request.tpot_vrate is not None else -1.6,
++            "TPOTVRATELIM": request.tpot_vratelim if request.tpot_vratelim is not None else 0.2,
++            "TPOTVRATEDAMP": 2.0,
++        }),
++    ]
++
++    title = f"{request.system_title} - NELECT determination" if request.system_title else "NELECT determination (TPOT step 1)"
++    return _format_incar_str(sections, title)
++
++
++def _generate_cpvasp_nelect_incar(request: VASPInputRequest,
++                                  structure: Structure) -> str:
++    """Generate INCAR for CP-VASP Step 1: static SCF to determine NELECT.
++
++    Runs a static calculation with CP-VASP + VASPsol++ to converge to the target
++    potential and determine the equilibrium NELECT. LWAVE=.TRUE. for wavefunction
++    continuation in the MD step.
++    """
++    targetmu = request.cpvasp_targetmu if request.cpvasp_targetmu is not None else -4.6
++    nescheme = request.cpvasp_nescheme if request.cpvasp_nescheme is not None else 5
++
++    # Scheme-dependent params
++    cp_scheme_params: dict = {}
++    if nescheme == 2:
++        cp_scheme_params["CAP_MAX"] = request.cpvasp_cap_max if request.cpvasp_cap_max is not None else 2.0
++    elif nescheme == 5:
++        cp_scheme_params["T_eta"] = request.cpvasp_t_eta if request.cpvasp_t_eta is not None else 300
++        cp_scheme_params["eta_length"] = request.cpvasp_eta_length if request.cpvasp_eta_length is not None else 1
++
++    sections = [
++        ("General", {
++            "PREC": request.prec or "Accurate",
++            "ENCUT": request.encut,
++            "GGA": request.gga,
++            "ALGO": request.algo or "Normal",
++            "LREAL": "Auto",
++            "ISYM": 0,
++        }),
++        ("Electronic convergence", {
++            "EDIFF": request.ediff if request.ediff != 1e-6 else 1e-6,
++            "NELM": 200,
++            "NELMIN": request.nelmin if request.nelmin is not None else 6,
++            "ISMEAR": request.ismear if request.ismear is not None else 1,
++            "SIGMA": request.sigma if request.sigma is not None else 0.2,
++        }),
++        ("Spin", {
++            "ISPIN": request.ispin if request.ispin is not None else 1,
++            **({"MAGMOM": request.magmom} if request.magmom else {}),
++        }),
++        ("Static calculation (single point)", {
++            "IBRION": -1,
++            "NSW": 0,
++        }),
++        ("Output", {
++            "LWAVE": True,
++            "LCHARG": True,
++            "LORBIT": 11,
++        }),
++        ("vdW correction", {
++            "IVDW": request.ivdw if request.ivdw is not None else 12,
++        }),
++        ("Parallelization", {
++            "NCORE": request.ncore if request.ncore is not None else 48,
++        }),
++        ("VASPsol++ Solvent Model", {
++            "LSOL": request.cpvasp_lsol if request.cpvasp_lsol is not None else True,
++            "ISOL": request.cpvasp_isol if request.cpvasp_isol is not None else 2,
++            "C_MOLAR": request.cpvasp_c_molar if request.cpvasp_c_molar is not None else 1.0,
++            "R_ION": request.cpvasp_r_ion if request.cpvasp_r_ion is not None else 4.0,
++        }),
++        ("CP-VASP - determine NELECT", {
++            "LCEP": True,
++            "NESCHEME": nescheme,
++            "NEADJUST": 1,
++            "TARGETMU": targetmu,
++            "FERMICONVERGE": request.cpvasp_fermiconverge if request.cpvasp_fermiconverge is not None else 0.01,
++            **cp_scheme_params,
++        }),
++    ]
++
++    title = f"{request.system_title} - NELECT determination" if request.system_title else "NELECT determination (CP-VASP step 1)"
++    return _format_incar_str(sections, title)
+ 
+ 
+ def _generate_poscar_with_pseudo_h(structure: Structure) -> str:
+@@ -623,6 +1085,34 @@ def _generate_notes(request: VASPInputRequest, structure: Structure) -> str:
+     elif request.calculation_type == VASPCalculationType.ELF:
+         notes_lines.append("Note: ELF calculation will generate ELFCAR file.")
+         notes_lines.append("Visualize ELFCAR using VESTA or similar tools.")
++    elif request.calculation_type == VASPCalculationType.SLOW_GROWTH:
++        notes_lines.append("Note: Slow-growth thermodynamic integration MD.")
++        notes_lines.append("Place ICONST file in the same directory as INCAR/POSCAR.")
++        notes_lines.append("Free energy gradient is written to REPORT file (LBLUEOUT=.TRUE.).")
++        notes_lines.append("INCREM controls the CV change rate per step.")
++        notes_lines.append("Use a well-equilibrated structure as starting point.")
++
++    # Constant-potential notes (appended to any calc type)
++    if request.constant_potential == ConstantPotentialMethod.TPOT:
++        notes_lines.append("")
++        notes_lines.append("=== Constant-Potential: TPOT ===")
++        notes_lines.append("Two-step workflow:")
++        notes_lines.append("  Step 1: Run with INCAR_NELECT to determine NELECT at target potential.")
++        notes_lines.append("          Uses TPOTMETHOD=1 (electronic-step updates), NSW=1, NELM=200.")
++        notes_lines.append("          After convergence, read NELECT from OUTCAR.")
++        notes_lines.append("  Step 2: Run with the main INCAR (TPOTMETHOD=2).")
++        notes_lines.append("          Set NELECT in INCAR to the value from Step 1.")
++        notes_lines.append("Requires: VASP compiled with TPOT patch (github.com/comet-group/tpot).")
++    elif request.constant_potential == ConstantPotentialMethod.CPVASP:
++        notes_lines.append("")
++        notes_lines.append("=== Constant-Potential: CP-VASP ===")
++        notes_lines.append("Two-step workflow:")
++        notes_lines.append("  Step 1: Run with INCAR_NELECT (static SCF) to converge to target potential.")
++        notes_lines.append("          Read final NELECT from OUTCAR after convergence.")
++        notes_lines.append("  Step 2: Run with the main INCAR.")
++        notes_lines.append("          CP-VASP dynamically adjusts NELECT during the calculation.")
++        notes_lines.append("Requires: VASP + CP-VASP patch (github.com/yuanyue-liu-group/CP-VASP)")
++        notes_lines.append("          + VASPsol++ for implicit solvation.")
+ 
+     notes_lines.append("")
+     notes_lines.append("POTCAR: Generate using VASP POTCAR generation tools.")
+diff --git a/server/workflow/engines/cp2k.py b/server/workflow/engines/cp2k.py
+index e095016..6487b20 100644
+--- a/server/workflow/engines/cp2k.py
++++ b/server/workflow/engines/cp2k.py
+@@ -440,11 +440,6 @@ async def generate_cp2k_inputs(
+         lines.append("    &END TRAJECTORY")
+         lines.append("    &RESTART OFF")
+         lines.append("    &END RESTART")
+-        lines.append("    &RESTART_HISTORY")
+-        lines.append("      &EACH")
+-        lines.append("        MD 500")
+-        lines.append("      &END EACH")
+-        lines.append("    &END RESTART_HISTORY")
+         lines.append("  &END PRINT")
+         lines.append("&END MOTION")
+         lines.append("")
+diff --git a/src/lib/api/compute.ts b/src/lib/api/compute.ts
+index e86f041..42df4bf 100644
+--- a/src/lib/api/compute.ts
++++ b/src/lib/api/compute.ts
+@@ -391,11 +391,16 @@ export type VASPCalculationType =
+   | 'dos'
+   | 'ddec'
+   | 'elf'
++  | 'md'
++  | 'slow_growth'
+ export type VASPOptimizerType = 'standard' | 'vtst_fire' | 'quasi_newton'
+ 
++export type ConstantPotentialMethod = 'none' | 'tpot' | 'cpvasp'
++
+ export interface VASPInputRequest {
+   structure: PymatgenStructure
+   calculation_type?: VASPCalculationType
++  constant_potential?: ConstantPotentialMethod
+   optimizer?: VASPOptimizerType
+   encut?: number
+   prec?: string
+@@ -418,15 +423,56 @@ export interface VASPInputRequest {
+   kpoints?: number[][]
+   kspacing?: number
+   system_title?: string
++  nelect?: number
+   custom_incar?: Record<string, string | number | boolean>
+   fixed_indices?: number[]
+   fixed_z_below?: number
++  // Slow-growth MD
++  mdalgo?: number
++  smass?: number
++  tebeg?: number
++  teend?: number
++  nblock?: number
++  lblueout?: boolean
++  increm?: string
++  iconst_content?: string
++  // TPOT (constant potential)
++  tpot_vtarget?: number
++  tpot_vdiff?: number
++  tpot_vrate?: number
++  tpot_vratelim?: number
++  tpot_vratedamp?: number
++  tpot_vediff?: number
++  tpot_electstep?: number
++  tpot_dynvrate?: boolean
++  tpot_truevaclevel?: boolean
++  tpot_gcenergy?: boolean
++  tpot_gcionic?: boolean
++  // TPOT VASPsol solvation
++  tpot_eb_k?: number
++  tpot_lambda_d_k?: number
++  tpot_core_c?: number
++  tpot_tau?: number
++  // CP-VASP (constant potential + VASPsol)
++  cpvasp_targetmu?: number
++  cpvasp_nescheme?: number
++  cpvasp_neadjust?: number
++  cpvasp_fermiconverge?: number
++  cpvasp_cap_max?: number
++  cpvasp_t_eta?: number
++  cpvasp_eta_length?: number
++  cpvasp_lsol?: boolean
++  cpvasp_isol?: number
++  cpvasp_c_molar?: number
++  cpvasp_r_ion?: number
+ }
+ 
+ export interface VASPInputFiles {
+   incar: string
+   poscar: string
+   kpoints: string
++  iconst?: string
++  incar_nelect?: string
+   potcar_info: {
+     elements: string[]
+     note: string
+@@ -473,6 +519,109 @@ export async function getVASPOptimizerTypes(): Promise<Record<string, string>> {
+   return response.json()
+ }
+ 
++// ====== Slow-growth REPORT post-processing ======
++
++export interface SlowGrowthUploadResponse {
++  session_id: string
++  total_steps: number
++  num_constraints: number
++  constraints: number[]
++  has_blue_moon: boolean
++}
++
++export interface SlowGrowthConstraintData {
++  b_cnt: number
++  step: number[]
++  cv: number[]
++  dcv: number[]
++  dA_dxsi: number[]
++  delta_F: number[]
++  // Blue Moon fields
++  cv_target: number[]
++  cv_actual: number[]
++  cv_diff: number[]
++  lambda_val: number[]
++  z_inv_sqrt: number[]
++  GkT: number[]
++  mean_force: number[]
++}
++
++export interface SlowGrowthBarrierAnalysis {
++  total_delta_F: number
++  total_delta_F_kcal: number
++  max_F: number
++  max_F_cv: number
++  min_F: number
++  min_F_cv: number
++  barrier_forward: number
++  barrier_forward_kcal: number
++  barrier_reverse: number
++  barrier_reverse_kcal: number
++  cv_start: number
++  cv_end: number
++  num_steps: number
++}
++
++export interface SlowGrowthAnalysisResponse {
++  session_id: string
++  total_steps: number
++  num_constraints: number
++  has_blue_moon: boolean
++  constraints: SlowGrowthConstraintData[]
++  barriers: SlowGrowthBarrierAnalysis[]
++}
++
++/**
++ * Upload a VASP REPORT file for slow-growth post-processing.
++ */
++export async function uploadSlowGrowthReport(
++  file: File,
++): Promise<SlowGrowthUploadResponse> {
++  const formData = new FormData()
++  formData.append(`file`, file)
++  const response = await fetch(`${API_BASE}/vasp/report/upload`, {
++    method: `POST`,
++    body: formData,
++  })
++  if (!response.ok) {
++    const error = await response.text()
++    throw new Error(`REPORT upload failed: ${error}`)
++  }
++  return response.json()
++}
++
++/**
++ * Upload REPORT content as text (for HPC remote files).
++ */
++export async function uploadSlowGrowthReportText(
++  content: string,
++): Promise<SlowGrowthUploadResponse> {
++  const response = await fetch(`${API_BASE}/vasp/report/upload-text`, {
++    method: `POST`,
++    headers: { 'Content-Type': `application/json` },
++    body: JSON.stringify({ content }),
++  })
++  if (!response.ok) {
++    const error = await response.text()
++    throw new Error(`REPORT upload failed: ${error}`)
++  }
++  return response.json()
++}
++
++/**
++ * Get slow-growth analysis data for all constraints.
++ */
++export async function getSlowGrowthAnalysis(
++  session_id: string,
++): Promise<SlowGrowthAnalysisResponse> {
++  const response = await fetch(`${API_BASE}/vasp/report/${session_id}`)
++  if (!response.ok) {
++    const error = await response.text()
++    throw new Error(`Analysis failed: ${error}`)
++  }
++  return response.json()
++}
++
+ // ====== ORCA Input Generation ======
+ 
+ export type ORCAMethod = 'HF' | 'B3LYP' | 'PBE' | 'CCSD' | 'MP2'
+diff --git a/src/lib/io/export.ts b/src/lib/io/export.ts
+index c6a827d..cc7425d 100644
+--- a/src/lib/io/export.ts
++++ b/src/lib/io/export.ts
+@@ -4,11 +4,191 @@ import { download } from '$lib/io/fetch'
+ import { create_structure_filename } from '$lib/structure/export'
+ import { zipSync } from 'fflate'
+ import type * as THREE from 'three'
+-import { Vector2, WebGLRenderer } from 'three'
++import { Color, Vector2, WebGLRenderer } from 'three'
+ 
+ // Crop region in CSS pixels relative to canvas wrapper
+ export type CropRegion = { x: number; y: number; width: number; height: number }
+ 
++// Supported image export formats
++export type ImageExportFormat = `png` | `jpg` | `tiff`
++
++// Render scene at specified resolution and read pixels synchronously via gl.readPixels.
++// This avoids preserveDrawingBuffer issues that cause blank exports on WebGL canvases.
++// Returns RGBA pixel data (top-to-bottom row order) and actual dimensions.
++function render_and_read_pixels(
++  renderer: WebGLRenderer,
++  scene: THREE.Scene,
++  camera: THREE.Camera,
++  target_width: number,
++  target_height: number,
++  crop_region?: CropRegion | null,
++): { pixels: Uint8Array; width: number; height: number } {
++  const gl = renderer.getContext()
++  const max_size = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number
++
++  // Clamp to GL max renderbuffer size to prevent silent render failure
++  let w = Math.round(target_width)
++  let h = Math.round(target_height)
++  if (w > max_size || h > max_size) {
++    const scale = max_size / Math.max(w, h)
++    w = Math.floor(w * scale)
++    h = Math.floor(h * scale)
++  }
++
++  // Save original state
++  const orig_pixel_ratio = renderer.getPixelRatio()
++  const orig_size = renderer.getSize(new Vector2())
++
++  try {
++    // Render at target resolution (pixelRatio=1, exact pixel dimensions)
++    renderer.setPixelRatio(1)
++    renderer.setSize(w, h, false)
++    renderer.render(scene, camera)
++
++    // Read pixels synchronously — works regardless of preserveDrawingBuffer
++    let read_x = 0
++    let read_y = 0
++    let read_w = w
++    let read_h = h
++
++    if (crop_region) {
++      // Scale crop region from CSS pixels to render pixels
++      const scale_x = w / orig_size.width
++      const scale_y = h / orig_size.height
++      read_x = Math.round(crop_region.x * scale_x)
++      // OpenGL origin is bottom-left, so flip y
++      read_y = Math.round(h - (crop_region.y + crop_region.height) * scale_y)
++      read_w = Math.round(crop_region.width * scale_x)
++      read_h = Math.round(crop_region.height * scale_y)
++      // Clamp to buffer bounds
++      read_x = Math.max(0, Math.min(read_x, w - 1))
++      read_y = Math.max(0, Math.min(read_y, h - 1))
++      read_w = Math.min(read_w, w - read_x)
++      read_h = Math.min(read_h, h - read_y)
++    }
++
++    const pixels = new Uint8Array(read_w * read_h * 4)
++    gl.readPixels(read_x, read_y, read_w, read_h, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
++
++    // Flip vertically (OpenGL reads bottom-to-top)
++    const row_size = read_w * 4
++    const temp = new Uint8Array(row_size)
++    for (let y = 0; y < Math.floor(read_h / 2); y++) {
++      const top = y * row_size
++      const bottom = (read_h - 1 - y) * row_size
++      temp.set(pixels.subarray(top, top + row_size))
++      pixels.copyWithin(top, bottom, bottom + row_size)
++      pixels.set(temp, bottom)
++    }
++
++    return { pixels, width: read_w, height: read_h }
++  } finally {
++    // Always restore original renderer state
++    renderer.setPixelRatio(orig_pixel_ratio)
++    renderer.setSize(orig_size.width, orig_size.height, false)
++  }
++}
++
++// Convert RGBA pixel data to a PNG or JPEG blob via a temporary 2D canvas
++function pixels_to_image_blob(
++  pixels: Uint8Array,
++  width: number,
++  height: number,
++  mime: `image/png` | `image/jpeg`,
++  quality = 1.0,
++): Promise<Blob> {
++  const canvas = document.createElement(`canvas`)
++  canvas.width = width
++  canvas.height = height
++  const ctx = canvas.getContext(`2d`)
++  if (!ctx) return Promise.reject(new Error(`Failed to get 2D context`))
++  const clamped = new Uint8ClampedArray(width * height * 4)
++  clamped.set(pixels)
++  const image_data = new ImageData(clamped, width, height)
++  ctx.putImageData(image_data, 0, 0)
++  return new Promise<Blob>((resolve, reject) => {
++    canvas.toBlob(
++      (blob) => (blob ? resolve(blob) : reject(new Error(`Failed to create ${mime} blob`))),
++      mime,
++      quality,
++    )
++  })
++}
++
++// Encode RGBA pixel data as an uncompressed TIFF file with correct DPI metadata
++function encode_tiff(pixels: Uint8Array, width: number, height: number, dpi = 150): Blob {
++  const num_pixels = width * height
++  // Convert RGBA → RGB
++  const rgb = new Uint8Array(num_pixels * 3)
++  for (let i = 0; i < num_pixels; i++) {
++    rgb[i * 3] = pixels[i * 4]
++    rgb[i * 3 + 1] = pixels[i * 4 + 1]
++    rgb[i * 3 + 2] = pixels[i * 4 + 2]
++  }
++
++  const num_tags = 12
++  const ifd_size = 2 + num_tags * 12 + 4 // tag count + entries + next IFD pointer
++  const header_size = 8
++  const bits_per_sample_offset = header_size + ifd_size
++  const x_res_offset = bits_per_sample_offset + 6 // 3 × SHORT (6 bytes)
++  const y_res_offset = x_res_offset + 8 // RATIONAL (2 × LONG = 8 bytes)
++  const image_data_offset = y_res_offset + 8
++
++  const total_size = image_data_offset + rgb.length
++  const buf = new ArrayBuffer(total_size)
++  const view = new DataView(buf)
++
++  // TIFF header — little-endian
++  view.setUint16(0, 0x4949) // 'II' byte order
++  view.setUint16(2, 42, true) // magic
++  view.setUint32(4, header_size, true) // offset to first IFD
++
++  // IFD entries (tags must be in ascending order)
++  let off = header_size
++  view.setUint16(off, num_tags, true); off += 2
++
++  const write_tag = (tag: number, type: number, count: number, value: number) => {
++    view.setUint16(off, tag, true); off += 2
++    view.setUint16(off, type, true); off += 2
++    view.setUint32(off, count, true); off += 4
++    view.setUint32(off, value, true); off += 4
++  }
++
++  write_tag(256, 4, 1, width)                    // ImageWidth (LONG)
++  write_tag(257, 4, 1, height)                   // ImageLength (LONG)
++  write_tag(258, 3, 3, bits_per_sample_offset)   // BitsPerSample → offset to [8,8,8]
++  write_tag(259, 3, 1, 1)                        // Compression: None
++  write_tag(262, 3, 1, 2)                        // PhotometricInterpretation: RGB
++  write_tag(273, 4, 1, image_data_offset)        // StripOffsets
++  write_tag(277, 3, 1, 3)                        // SamplesPerPixel
++  write_tag(278, 4, 1, height)                   // RowsPerStrip (single strip)
++  write_tag(279, 4, 1, rgb.length)               // StripByteCounts
++  write_tag(282, 5, 1, x_res_offset)             // XResolution → RATIONAL
++  write_tag(283, 5, 1, y_res_offset)             // YResolution → RATIONAL
++  write_tag(296, 3, 1, 2)                        // ResolutionUnit: inch
++
++  // Next IFD = 0 (no more IFDs)
++  view.setUint32(off, 0, true)
++
++  // BitsPerSample: [8, 8, 8]
++  view.setUint16(bits_per_sample_offset, 8, true)
++  view.setUint16(bits_per_sample_offset + 2, 8, true)
++  view.setUint16(bits_per_sample_offset + 4, 8, true)
++
++  // XResolution: dpi/1 (RATIONAL = numerator + denominator, each LONG)
++  view.setUint32(x_res_offset, dpi, true)
++  view.setUint32(x_res_offset + 4, 1, true)
++
++  // YResolution: dpi/1
++  view.setUint32(y_res_offset, dpi, true)
++  view.setUint32(y_res_offset + 4, 1, true)
++
++  // Image data
++  new Uint8Array(buf).set(rgb, image_data_offset)
++
++  return new Blob([buf], { type: `image/tiff` })
++}
++
+ // Capture a canvas frame as a PNG blob, optionally cropping to a region
+ export async function capture_canvas_as_png_blob(
+   canvas: HTMLCanvasElement,
+@@ -50,10 +230,12 @@ export async function capture_canvas_as_png_blob(
+   })
+ }
+ 
+-// Export structure as PNG image from canvas
+-export function export_canvas_as_png(
++// Export canvas as image (PNG, JPEG, or TIFF) with DPI scaling.
++// Uses gl.readPixels for reliable high-DPI capture (no preserveDrawingBuffer dependency).
++export function export_canvas_as_image(
+   canvas: HTMLCanvasElement | null,
+   structure_or_filename: AnyStructure | string | undefined,
++  format: ImageExportFormat = `png`,
+   png_dpi = 150,
+   scene: THREE.Scene | null = null,
+   camera: THREE.Camera | null = null,
+@@ -61,81 +243,87 @@ export function export_canvas_as_png(
+ ): void {
+   try {
+     if (!canvas) {
+-      if (typeof window !== `undefined`) {
+-        console.warn(`Canvas not found for PNG export`)
+-      }
++      console.warn(`Canvas not found for image export`)
+       return
+     }
+ 
+-    // Determine filename from either structure or direct filename
++    const ext = format === `jpg` ? `jpg` : format === `tiff` ? `tif` : `png`
+     let filename = typeof structure_or_filename === `string`
+       ? structure_or_filename
+-      : create_structure_filename(structure_or_filename, `png`)
++      : create_structure_filename(structure_or_filename, ext)
+ 
+     // Inject DPI into filename
+     const suffix = `-${Math.round(png_dpi)}dpi`
+-    if (filename.toLowerCase().endsWith(`.png`)) {
+-      filename = filename.replace(/\.png$/i, `${suffix}.png`)
++    const ext_re = new RegExp(`\\.${ext}$`, `i`)
++    if (ext_re.test(filename)) {
++      filename = filename.replace(ext_re, `${suffix}.${ext}`)
+     } else {
+-      filename = `${filename}${suffix}.png`
++      filename = `${filename}${suffix}.${ext}`
+     }
+ 
+-    // Convert DPI to multiplier (72 DPI is baseline web resolution)
+-    // Cap to a reasonable upper bound to avoid excessive memory use
+-    const resolution_multiplier = Math.min(png_dpi / 72, 10)
+     const renderer = (canvas as { __renderer?: WebGLRenderer }).__renderer
++    const resolution_multiplier = Math.min(png_dpi / 72, 10)
+ 
+-    // Force render to populate buffer before capture
+-    if (renderer && scene && camera) renderer.render(scene, camera)
+-
+-    if (resolution_multiplier <= 1.1 || !renderer) {
+-      // Direct capture at current resolution (if DPI is close to 72 or renderer not available)
++    if (!renderer || !scene || !camera) {
++      // Fallback: direct canvas capture (only works for PNG at current resolution)
+       capture_canvas_as_png_blob(canvas, crop_region)
+         .then((blob) => download(blob, filename, `image/png`))
+-        .catch((error) => console.error(`Error during PNG export:`, error))
++        .catch((error) => console.error(`Error during image export:`, error))
+       return
+     }
+ 
+-    // Temporarily modify the renderer's pixel ratio for high-res capture
+-    const orig_pixel_ratio = renderer.getPixelRatio()
+-    const orig_size = renderer.getSize(new Vector2())
+-
+-    try {
+-      // Set higher pixel ratio to increase rendering resolution
+-      renderer.setPixelRatio(resolution_multiplier)
+-
+-      // Force the canvas to update its resolution
+-      renderer.setSize(orig_size.width, orig_size.height, false)
+-
+-      if (scene && camera) {
+-        renderer.render(scene, camera)
+-      }
++    // Compute target pixel dimensions
++    const css_size = renderer.getSize(new Vector2())
++    const target_w = css_size.width * resolution_multiplier
++    const target_h = css_size.height * resolution_multiplier
++
++    // Temporarily set white background for export
++    const orig_clear_color = new Color()
++    const orig_clear_alpha = renderer.getClearAlpha()
++    renderer.getClearColor(orig_clear_color)
++    renderer.setClearColor(0xffffff, 1)
++
++    // Render at target resolution and read pixels synchronously
++    const { pixels, width, height } = render_and_read_pixels(
++      renderer, scene, camera, target_w, target_h, crop_region,
++    )
++
++    // Restore original clear color and re-render so the viewport isn't left dirty
++    renderer.setClearColor(orig_clear_color, orig_clear_alpha)
++    renderer.render(scene, camera)
++
++    const mime_map: Record<ImageExportFormat, string> = {
++      png: `image/png`,
++      jpg: `image/jpeg`,
++      tiff: `image/tiff`,
++    }
++    const mime = mime_map[format]
+ 
+-      // Capture the high-resolution render after paint completion
+-      // When crop_region is provided, scale it by the resolution_multiplier for the high-res render
+-      const scaled_crop = crop_region ? {
+-        x: crop_region.x,
+-        y: crop_region.y,
+-        width: crop_region.width,
+-        height: crop_region.height,
+-      } : null
+-      capture_canvas_as_png_blob(canvas, scaled_crop, resolution_multiplier)
+-        .then((blob) => download(blob, filename, `image/png`))
+-        .catch((error) => console.warn(`Failed to generate high-resolution PNG:`, error))
+-        .finally(() => {
+-          renderer.setPixelRatio(orig_pixel_ratio)
+-          renderer.setSize(orig_size.width, orig_size.height, false)
+-        })
+-    } catch (error) {
+-      console.error(`Error during high-res rendering:`, error)
+-      renderer.setPixelRatio(orig_pixel_ratio)
+-      renderer.setSize(orig_size.width, orig_size.height, false)
++    if (format === `tiff`) {
++      const blob = encode_tiff(pixels, width, height, Math.round(png_dpi))
++      download(blob, filename, mime)
++    } else {
++      pixels_to_image_blob(pixels, width, height, format === `jpg` ? `image/jpeg` : `image/png`)
++        .then((blob) => download(blob, filename, mime))
++        .catch((error) => console.error(`Error during ${format.toUpperCase()} export:`, error))
+     }
+   } catch (error) {
+-    console.error(`Error exporting PNG:`, error)
++    console.error(`Error exporting image:`, error)
+   }
+ }
+ 
++// Export structure as PNG image from canvas (convenience wrapper)
++export function export_canvas_as_png(
++  canvas: HTMLCanvasElement | null,
++  structure_or_filename: AnyStructure | string | undefined,
++  png_dpi = 150,
++  scene: THREE.Scene | null = null,
++  camera: THREE.Camera | null = null,
++  crop_region?: CropRegion | null,
++): void {
++  export_canvas_as_image(canvas, structure_or_filename, `png`, png_dpi, scene, camera, crop_region)
++}
++
+ // Helper to ensure font-family is set on SVG root
+ function set_svg_font_family(svg: SVGElement) {
+   const style = svg.getAttribute(`style`) || ``
+@@ -469,21 +657,36 @@ export async function export_trajectory_png_sequence(
+   const renderer = (canvas as { __renderer?: WebGLRenderer }).__renderer
+   const resolution_multiplier = Math.min(png_dpi / 72, 10)
+ 
+-  // Save/restore renderer pixel ratio and size for DPI scaling
++  const files: Record<string, Uint8Array> = {}
++  const max_frame = Math.max(...frame_indices)
++  const pad_len = String(max_frame + 1).length // 1-based in filename
++
++  // Use readPixels approach for reliable high-DPI capture
++  const use_readpixels = renderer && scene && camera && resolution_multiplier > 1.1
++
++  // For readPixels path, compute target pixel dimensions once
++  const css_size = renderer ? renderer.getSize(new Vector2()) : undefined
++
++  // Temporarily set white background for export
++  let orig_clear_color: Color | undefined
++  let orig_clear_alpha: number | undefined
++  if (renderer) {
++    orig_clear_color = new Color()
++    orig_clear_alpha = renderer.getClearAlpha()
++    renderer.getClearColor(orig_clear_color)
++    renderer.setClearColor(0xffffff, 1)
++  }
++
++  // Legacy path: modify renderer pixel ratio for the entire export
+   let orig_pixel_ratio: number | undefined
+   let orig_size: THREE.Vector2 | undefined
+-
+-  if (resolution_multiplier > 1.1 && renderer) {
++  if (!use_readpixels && resolution_multiplier > 1.1 && renderer) {
+     orig_pixel_ratio = renderer.getPixelRatio()
+     orig_size = renderer.getSize(new Vector2())
+     renderer.setPixelRatio(resolution_multiplier)
+     renderer.setSize(orig_size.width, orig_size.height, false)
+   }
+ 
+-  const files: Record<string, Uint8Array> = {}
+-  const max_frame = Math.max(...frame_indices)
+-  const pad_len = String(max_frame + 1).length // 1-based in filename
+-
+   try {
+     for (let i = 0; i < frame_indices.length; i++) {
+       const frame_idx = frame_indices[i]
+@@ -491,19 +694,28 @@ export async function export_trajectory_png_sequence(
+ 
+       if (on_step) await on_step(frame_idx)
+ 
+-      // Wait for frame to load reactively, then force explicit render
++      // Wait for frame to load reactively
+       await new Promise((resolve) =>
+         requestAnimationFrame(() => requestAnimationFrame(resolve))
+       )
+ 
+-      // Explicit render to populate the WebGL drawing buffer before capture
+-      // (without this, crop region reads an empty/cleared buffer)
+-      if (renderer && scene && camera) {
+-        renderer.render(scene, camera)
++      let blob: Blob
++
++      if (use_readpixels && css_size) {
++        // Render at target res and read pixels synchronously (reliable at high DPI)
++        const target_w = css_size.width * resolution_multiplier
++        const target_h = css_size.height * resolution_multiplier
++        const { pixels, width, height } = render_and_read_pixels(
++          renderer!, scene!, camera!, target_w, target_h, crop_region,
++        )
++        blob = await pixels_to_image_blob(pixels, width, height, `image/png`)
++      } else {
++        // Fallback: render + toBlob
++        if (renderer && scene && camera) renderer.render(scene, camera)
++        const pixel_ratio = renderer?.getPixelRatio() ?? window.devicePixelRatio ?? 1
++        blob = await capture_canvas_as_png_blob(canvas, crop_region, pixel_ratio)
+       }
+ 
+-      const pixel_ratio = renderer?.getPixelRatio() ?? window.devicePixelRatio ?? 1
+-      const blob = await capture_canvas_as_png_blob(canvas, crop_region, pixel_ratio)
+       const arr = new Uint8Array(await blob.arrayBuffer())
+       const frame_num = String(frame_idx + 1).padStart(pad_len, `0`) // 1-based in filename
+       files[`${filename_prefix}_frame_${frame_num}.png`] = arr
+@@ -513,6 +725,10 @@ export async function export_trajectory_png_sequence(
+       renderer.setPixelRatio(orig_pixel_ratio)
+       renderer.setSize(orig_size.width, orig_size.height, false)
+     }
++    // Restore original clear color
++    if (renderer && orig_clear_color !== undefined && orig_clear_alpha !== undefined) {
++      renderer.setClearColor(orig_clear_color, orig_clear_alpha)
++    }
+   }
+ 
+   on_progress?.(95)
+diff --git a/src/lib/io/fetch.ts b/src/lib/io/fetch.ts
+index 7d01b0c..b4557b5 100644
+--- a/src/lib/io/fetch.ts
++++ b/src/lib/io/fetch.ts
+@@ -25,6 +25,8 @@ const mime_to_ext: Record<string, { description: string; accept: Record<string,
+   'chemical/x-cif': { description: `CIF File`, accept: { 'chemical/x-cif': [`.cif`] } },
+   'application/zip': { description: `ZIP Archive`, accept: { 'application/zip': [`.zip`] } },
+   'video/webm': { description: `WebM Video`, accept: { 'video/webm': [`.webm`] } },
++  'image/tiff': { description: `TIFF Image`, accept: { 'image/tiff': [`.tif`, `.tiff`] } },
++  'image/jpeg': { description: `JPEG Image`, accept: { 'image/jpeg': [`.jpg`, `.jpeg`] } },
+ }
+ 
+ // Try using File System Access API (shows Save As dialog), fall back to <a> download
+diff --git a/src/lib/settings.ts b/src/lib/settings.ts
+index a2d1369..b279f85 100644
+--- a/src/lib/settings.ts
++++ b/src/lib/settings.ts
+@@ -167,6 +167,7 @@ export interface SettingsConfig {
+     force_color_mode: SettingType<`element` | `custom`>
+     show_cell: SettingType<boolean>
+     show_cell_vectors: SettingType<boolean>
++    show_scale_bar: SettingType<boolean>
+     cell_edge_opacity: SettingType<number>
+     cell_surface_opacity: SettingType<number>
+     cell_edge_color: SettingType<string>
+@@ -687,6 +688,10 @@ export const SETTINGS_CONFIG: SettingsConfig = {
+       value: true,
+       description: `Display cell vectors`,
+     },
++    show_scale_bar: {
++      value: false,
++      description: `Display a scale bar with distance reference in Angstroms`,
++    },
+     cell_edge_opacity: {
+       value: 0.3,
+       description: `Opacity of cell edge lines`,
+@@ -694,7 +699,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
+       maximum: 1,
+     },
+     cell_surface_opacity: {
+-      value: 0.1,
++      value: 0.03,
+       description: `Opacity of cell surfaces`,
+       minimum: 0,
+       maximum: 1,
+@@ -704,7 +709,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
+       description: `Color of cell edges`,
+     },
+     cell_surface_color: {
+-      value: `#e0e0e0`,
++      value: `#ffffff`,
+       description: `Color of cell surfaces`,
+     },
+     cell_edge_width: {
+diff --git a/src/lib/structure/ExportPane.svelte b/src/lib/structure/ExportPane.svelte
+index df0dc3e..46960a0 100644
+--- a/src/lib/structure/ExportPane.svelte
++++ b/src/lib/structure/ExportPane.svelte
+@@ -3,7 +3,7 @@
+   import { DraggablePane, Icon } from '$lib'
+   import { atom_radii as detect_bonds_atom_radii } from '$lib/structure/bonding'
+   import { API_BASE } from '$lib/api/config'
+-  import { export_canvas_as_png, export_trajectory_png_sequence, parse_frame_spec, type CropRegion } from '$lib/io/export'
++  import { export_canvas_as_image, export_trajectory_png_sequence, parse_frame_spec, type CropRegion, type ImageExportFormat } from '$lib/io/export'
+   import * as exports from '$lib/structure/export'
+   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
+   import type { ComponentProps } from 'svelte'
+@@ -66,6 +66,9 @@
+     trajectory_context ? parse_frame_spec(frame_spec, trajectory_context.total_frames) : []
+   )
+ 
++  // Image export format
++  let image_format = $state<ImageExportFormat>(`png`)
++
+   // Copy button feedback state
+   let copy_status = $state<Record<string, boolean>>({})
+ 
+@@ -124,7 +127,7 @@
+       gjf: `plaintext`, com: `plaintext`,
+     }
+     const base = name.toUpperCase()
+-    if ([`INCAR`, `POSCAR`, `CONTCAR`, `KPOINTS`, `POTCAR`, `OUTCAR`].includes(base)) {
++    if ([`INCAR`, `POSCAR`, `CONTCAR`, `KPOINTS`, `POTCAR`, `OUTCAR`, `ICONST`].includes(base)) {
+       return `plaintext`
+     }
+     return map[ext] || `plaintext`
+@@ -366,6 +369,8 @@
+   }
+ 
+   // ====== VASP Settings ======
++  type ConstantPotentialMethod = 'none' | 'tpot' | 'cpvasp'
++  let vasp_constant_potential = $state<ConstantPotentialMethod>('none')
+   let vasp_calculation = $state<VASPCalculationType>('scf')
+   let vasp_optimizer = $state<VASPOptimizerType | ''>('')
+   let vasp_encut = $state(450)
+@@ -394,6 +399,62 @@
+   let vasp_magmom_custom = $state('')
+   let vasp_magmom_overrides = $state<Record<string, number>>({})
+ 
++  // VASP MD settings
++  let vasp_md_nsw = $state(10000)
++  let vasp_md_potim = $state(1)
++  let vasp_md_mdalgo = $state(2)
++  let vasp_md_smass = $state(1)
++  let vasp_md_tebeg = $state(300)
++  let vasp_md_teend = $state(300)
++  let vasp_md_nblock = $state(10)
++
++  // Slow-growth MD settings
++  let vasp_sg_nsw = $state(10000)
++  let vasp_sg_potim = $state(1)
++  let vasp_sg_mdalgo = $state(2)
++  let vasp_sg_smass = $state(0)
++  let vasp_sg_tebeg = $state(300)
++  let vasp_sg_teend = $state(300)
++  let vasp_sg_nblock = $state(1)
++  let vasp_sg_increm = $state('-0.0008')
++
++  // TPOT (constant-potential) settings
++  let vasp_tpot_vdiff = $state(0.001)
++  let vasp_tpot_vrate = $state(-1.6)
++  let vasp_tpot_vratelim = $state(0.05)
++  let vasp_tpot_electstep = $state(0.05)
++  // TPOT VASPsol solvation
++  let vasp_tpot_eb_k = $state(78.4)
++  let vasp_tpot_lambda_d_k = $state(3.04)
++  let vasp_tpot_core_c = $state<number | null>(null)
++  let vasp_tpot_tau = $state(0)
++
++  // CP-VASP (constant-potential + VASPsol) settings
++  let vasp_cpvasp_nescheme = $state(5)
++  let vasp_cpvasp_neadjust = $state(1)
++  let vasp_cpvasp_fermiconverge = $state(0.01)
++  let vasp_cpvasp_cap_max = $state(2.0)
++  let vasp_cpvasp_t_eta = $state(300)
++  let vasp_cpvasp_eta_length = $state(1)
++  // VASPsol++ solvation
++  let vasp_cpvasp_c_molar = $state(1.0)
++  let vasp_cpvasp_r_ion = $state(4.0)
++
++  // Shared: target voltage (V vs SHE) — converted to TPOTVTARGET or TARGETMU
++  // SHE vacuum level reference: 4.6 V (computational, common with implicit solvation)
++  // Alternative: 4.44 V (IUPAC thermodynamic value, Trasatti 1986)
++  let vasp_cp_she_ref = $state(4.6)
++  let vasp_cp_voltage_she = $state(0)  // V vs SHE
++  let vasp_cp_nelect = $state<number | null>(null)  // NELECT from step 1
++
++  // ICONST constraint builder
++  type IconstPrimitive = { type: 'R' | 'A' | 'T'; atoms: number[]; status: 0 | 7 }
++  type IconstComplex = { coeffs: number[]; status: 0 | 7 }
++  let vasp_sg_primitives = $state<IconstPrimitive[]>([{ type: 'R', atoms: [1, 2], status: 0 }])
++  let vasp_sg_complexes = $state<IconstComplex[]>([])
++  let vasp_sg_iconst_manual = $state(false)
++  let vasp_sg_iconst_text = $state('')
++
+   // ====== ORCA Settings ======
+   let orca_run_type = $state('Energy')
+   let orca_method = $state('HF')
+@@ -441,13 +502,13 @@
+   const MAGMOM_DEFAULT = 0.6 // Default for elements not in database
+ 
+   // ====== CP2K Settings ======
+-  let cp2k_run_type = $state<'energy' | 'energy_force' | 'geo_opt' | 'cell_opt' | 'md' | 'vibrational_analysis' | 'linear_response'>('geo_opt')
++  let cp2k_run_type = $state<'energy' | 'energy_force' | 'geo_opt' | 'cell_opt' | 'md' | 'vibrational_analysis' | 'linear_response'>('md')
+   let cp2k_functional = $state<'PBE' | 'BLYP' | 'SCAN' | 'PBE0' | 'B3LYP' | 'revPBE' | 'PBEsol' | 'BP86' | 'RPBE' | 'TPSS' | 'revTPSS' | 'r2SCAN' | 'HSE06' | 'BHandHLYP'>('PBE')
+   let cp2k_basis_set = $state('DZVP-MOLOPT-SR-GTH')
+-  let cp2k_cutoff = $state(400)
+-  let cp2k_rel_cutoff = $state(50)
++  let cp2k_cutoff = $state(450)
++  let cp2k_rel_cutoff = $state(40)
+   // SCF method: OT or Diagonalization
+-  let cp2k_scf_method = $state<'OT' | 'DIAG'>('OT')
++  let cp2k_scf_method = $state<'OT' | 'DIAG'>('DIAG')
+   let cp2k_scf_eps = $state(1e-5)
+   let cp2k_max_scf = $state(300)
+   let cp2k_ot_precond = $state<'FULL_KINETIC' | 'FULL_ALL' | 'FULL_SINGLE_INVERSE'>('FULL_KINETIC')
+@@ -456,7 +517,7 @@
+   let cp2k_outer_max_scf = $state(20)
+   let cp2k_outer_eps = $state(1e-5)
+   // Diagonalization + Smearing
+-  let cp2k_smearing = $state(false)
++  let cp2k_smearing = $state(true)
+   let cp2k_smearing_method = $state<'FERMI_DIRAC' | 'ENERGY_WINDOW'>('FERMI_DIRAC')
+   let cp2k_electronic_temperature = $state(300)
+   let cp2k_added_mos = $state(50)
+@@ -479,11 +540,13 @@
+     const is_odd = electrons % 2 !== 0
+     return { electrons, is_odd }
+   })
+-  // UKS logic: OT → no UKS; only DIAG + smearing allows UKS toggle
+-  // Exception: odd electrons always require UKS
++  // UKS logic: OT → no UKS; DIAG without smearing → no UKS
++  // DIAG + smearing → UKS freely toggleable (smearing handles odd electrons)
++  // Odd electrons without DIAG+smearing still require UKS
+   $effect(() => {
+     if (!cp2k_spin_auto) return
+-    if (cp2k_spin_auto.is_odd) {
++    const diag_smearing = cp2k_scf_method === 'DIAG' && cp2k_smearing
++    if (cp2k_spin_auto.is_odd && !diag_smearing) {
+       cp2k_uks = true
+       if (cp2k_multiplicity < 2) cp2k_multiplicity = 2
+     } else if (cp2k_scf_method === 'OT') {
+@@ -547,11 +610,11 @@
+   let cp2k_cell_opt_pressure = $state(0.0)
+   // MD
+   let cp2k_md_ensemble = $state<'NVE' | 'NVT' | 'NPT_I'>('NVT')
+-  let cp2k_md_steps = $state(1000)
+-  let cp2k_md_timestep = $state(0.5)
++  let cp2k_md_steps = $state(10000)
++  let cp2k_md_timestep = $state(1.0)
+   let cp2k_md_temperature = $state(300)
+   let cp2k_md_thermostat = $state<'NOSE' | 'CSVR'>('CSVR')
+-  let cp2k_md_timecon = $state(100)
++  let cp2k_md_timecon = $state(80)
+ 
+   // ====== Gaussian state ======
+   let gauss_job_type = $state<'sp' | 'opt' | 'opt_freq' | 'freq' | 'td' | 'ts'>('opt')
+@@ -1289,9 +1352,10 @@
+       // MAGMOM if enabled
+       const magmom_value = (vasp_ispin === 2 && vasp_magmom_enabled) ? vasp_magmom_value : undefined
+ 
+-      const request = {
++      const request: Record<string, unknown> = {
+         structure: structure as PymatgenStructure,
+         calculation_type: vasp_calculation,
++        constant_potential: vasp_constant_potential !== 'none' ? vasp_constant_potential : undefined,
+         optimizer: vasp_optimizer || undefined,
+         encut: vasp_encut,
+         prec: vasp_prec,
+@@ -1307,14 +1371,88 @@
+         fixed_indices: fixed_indices,
+         fixed_z_below: fixed_z_below,
+       }
+-      const files = await generateVASPInputs(request)
++
++      // MD specific parameters
++      if (vasp_calculation === 'md') {
++        request.nsw = vasp_md_nsw
++        request.potim = vasp_md_potim
++        request.mdalgo = vasp_md_mdalgo
++        request.smass = vasp_md_smass
++        request.tebeg = vasp_md_tebeg
++        request.teend = vasp_md_teend
++        request.nblock = vasp_md_nblock
++      }
++
++      // Slow-growth specific parameters
++      if (vasp_calculation === 'slow_growth') {
++        request.nsw = vasp_sg_nsw
++        request.potim = vasp_sg_potim
++        request.mdalgo = vasp_sg_mdalgo
++        request.smass = vasp_sg_smass
++        request.tebeg = vasp_sg_tebeg
++        request.teend = vasp_sg_teend
++        request.nblock = vasp_sg_nblock
++        request.lblueout = true
++        request.increm = vasp_sg_increm
++
++        // Build ICONST content
++        if (vasp_sg_iconst_manual) {
++          request.iconst_content = vasp_sg_iconst_text
++        } else {
++          const lines: string[] = []
++          for (const p of vasp_sg_primitives) {
++            lines.push(`${p.type} ${p.atoms.join(' ')} ${p.status}`)
++          }
++          for (const c of vasp_sg_complexes) {
++            lines.push(`S ${c.coeffs.join(' ')} ${c.status}`)
++          }
++          if (lines.length > 0) request.iconst_content = lines.join('\n')
++        }
++      }
++
++      // Constant-potential parameters (overlay on any calc type)
++      if (vasp_constant_potential === 'tpot') {
++        request.tpot_vtarget = vasp_cp_voltage_she + vasp_cp_she_ref
++        request.tpot_vdiff = vasp_tpot_vdiff
++        request.tpot_vrate = vasp_tpot_vrate
++        request.tpot_vratelim = vasp_tpot_vratelim
++        request.tpot_electstep = vasp_tpot_electstep
++        // VASPsol solvation
++        request.tpot_eb_k = vasp_tpot_eb_k
++        request.tpot_lambda_d_k = vasp_tpot_lambda_d_k
++        if (vasp_tpot_core_c != null) request.tpot_core_c = vasp_tpot_core_c
++        request.tpot_tau = vasp_tpot_tau
++        if (vasp_cp_nelect != null) request.nelect = vasp_cp_nelect
++      } else if (vasp_constant_potential === 'cpvasp') {
++        request.cpvasp_targetmu = -(vasp_cp_voltage_she + vasp_cp_she_ref)
++        request.cpvasp_nescheme = vasp_cpvasp_nescheme
++        request.cpvasp_neadjust = vasp_cpvasp_neadjust
++        request.cpvasp_fermiconverge = vasp_cpvasp_fermiconverge
++        if (vasp_cpvasp_nescheme === 2) {
++          request.cpvasp_cap_max = vasp_cpvasp_cap_max
++        } else if (vasp_cpvasp_nescheme === 5) {
++          request.cpvasp_t_eta = vasp_cpvasp_t_eta
++          request.cpvasp_eta_length = vasp_cpvasp_eta_length
++        }
++        request.cpvasp_c_molar = vasp_cpvasp_c_molar
++        request.cpvasp_r_ion = vasp_cpvasp_r_ion
++        if (vasp_cp_nelect != null) request.nelect = vasp_cp_nelect
++      }
++
++      const files = await generateVASPInputs(request as any)
+       vasp_files = files
+       generated_output = {
+         'INCAR': files.incar,
+         'POSCAR': files.poscar,
+         'KPOINTS': files.kpoints,
+       }
+-      active_file = 'INCAR'
++      if (files.iconst) {
++        generated_output['ICONST'] = files.iconst
++      }
++      if (files.incar_nelect) {
++        generated_output['INCAR_NELECT'] = files.incar_nelect
++      }
++      active_file = vasp_constant_potential !== 'none' ? 'INCAR_NELECT' : 'INCAR'
+     } catch (e) {
+       generation_error = e instanceof Error ? e.message : 'Failed to generate VASP inputs'
+     } finally {
+@@ -2728,11 +2866,15 @@
+     <div class="section-content">
+       <label class="section-label">Image</label>
+       <div class="export-buttons">
+-        <div class="export-item">
+-          <span>PNG</span>
++        <div class="export-item" style="flex: 1">
++          <select bind:value={image_format} style="width: 5em; padding: 2px 4px; font-size: 0.85em; border-radius: 3px; border: 1px solid var(--border-color); background: var(--bg-color); color: inherit">
++            <option value="png">PNG</option>
++            <option value="jpg">JPG</option>
++            <option value="tiff">TIFF</option>
++          </select>
+           <button disabled={!has_canvas} onclick={() => {
+             const canvas = wrapper?.querySelector('canvas') as HTMLCanvasElement
+-            if (canvas) export_canvas_as_png(canvas, structure, png_dpi, scene, camera, crop_region)
++            if (canvas) export_canvas_as_image(canvas, structure, image_format, png_dpi, scene, camera, crop_region)
+           }}>⬇</button>
+           <span class="dpi-input">DPI: <input type="number" min={50} max={500} bind:value={png_dpi} /></span>
+         </div>
+@@ -3237,6 +3379,17 @@
+           <option value="bader">BADER (Charge Analysis)</option>
+           <option value="ddec">DDEC (Charge Analysis)</option>
+           <option value="elf">ELF (Electron Localization)</option>
++          <option value="md">MD (Molecular Dynamics)</option>
++          <option value="slow_growth">Slow-Growth MD (Thermodynamic Integration)</option>
++        </select>
++      </div>
++
++      <div class="param-row">
++        <span>Constant Potential <span class="param-help" title="Constant-potential method overlay. TPOT: comet-group/tpot patch. CP-VASP: yuanyue-liu-group/CP-VASP + VASPsol++. Generates INCAR_NELECT (step 1) + INCAR (step 2)">?</span></span>
++        <select bind:value={vasp_constant_potential} onchange={() => { generated_output = {}; vasp_files = null }}>
++          <option value="none">None</option>
++          <option value="tpot">TPOT</option>
++          <option value="cpvasp">CP-VASP + VASPsol++</option>
+         </select>
+       </div>
+ 
+@@ -3421,6 +3574,331 @@
+         </select>
+       </div>
+ 
++      {#if vasp_calculation === 'md'}
++        <label class="section-label" style="margin-top: 0.8em">MD Settings</label>
++        <div class="param-row">
++          <span>NSW <span class="param-help" title="Number of MD steps">?</span></span>
++          <input type="number" min="100" step="1000" bind:value={vasp_md_nsw} />
++        </div>
++        <div class="param-row">
++          <span>POTIM (fs) <span class="param-help" title="MD timestep in femtoseconds">?</span></span>
++          <input type="number" min="0.1" step="0.5" bind:value={vasp_md_potim} />
++        </div>
++        <div class="param-row">
++          <span>MDALGO <span class="param-help" title="MD thermostat: 1=Andersen, 2=Nose-Hoover, 3=Langevin, 4=Multiple Andersen">?</span></span>
++          <select bind:value={vasp_md_mdalgo}>
++            <option value={1}>1 (Andersen)</option>
++            <option value={2}>2 (Nose-Hoover)</option>
++            <option value={3}>3 (Langevin)</option>
++          </select>
++        </div>
++        <div class="param-row">
++          <span>SMASS <span class="param-help" title="Nose-Hoover mass parameter. -1=NVE, 0=NVE-like (weak coupling), >0=NVT (1.0 recommended for NVT)">?</span></span>
++          <input type="number" step="0.5" bind:value={vasp_md_smass} />
++        </div>
++        <div class="param-row">
++          <span>TEBEG (K) <span class="param-help" title="Starting temperature">?</span></span>
++          <input type="number" min="0" step="50" bind:value={vasp_md_tebeg} />
++        </div>
++        <div class="param-row">
++          <span>TEEND (K) <span class="param-help" title="Ending temperature (same as TEBEG for constant T)">?</span></span>
++          <input type="number" min="0" step="50" bind:value={vasp_md_teend} />
++        </div>
++        <div class="param-row">
++          <span>NBLOCK <span class="param-help" title="Write structure every NBLOCK steps to XDATCAR">?</span></span>
++          <input type="number" min="1" step="1" bind:value={vasp_md_nblock} />
++        </div>
++      {/if}
++
++      {#if vasp_calculation === 'slow_growth'}
++        <label class="section-label" style="margin-top: 0.8em">MD Settings</label>
++        <div class="param-row">
++          <span>NSW <span class="param-help" title="Number of MD steps. Typical: 5000-20000 for slow-growth">?</span></span>
++          <input type="number" min="100" step="1000" bind:value={vasp_sg_nsw} />
++        </div>
++        <div class="param-row">
++          <span>POTIM (fs) <span class="param-help" title="MD timestep in femtoseconds. 1 fs is typical for slow-growth">?</span></span>
++          <input type="number" min="0.1" step="0.5" bind:value={vasp_sg_potim} />
++        </div>
++        <div class="param-row">
++          <span>MDALGO <span class="param-help" title="MD thermostat algorithm. 2=Nose-Hoover (recommended), 3=Langevin">?</span></span>
++          <select bind:value={vasp_sg_mdalgo}>
++            <option value={2}>2 (Nose-Hoover)</option>
++            <option value={3}>3 (Langevin)</option>
++          </select>
++        </div>
++        <div class="param-row">
++          <span>SMASS <span class="param-help" title="Nose-Hoover mass parameter. 0 = NVE-like (minimal thermostat coupling). Positive values increase coupling">?</span></span>
++          <input type="number" step="0.5" bind:value={vasp_sg_smass} />
++        </div>
++        <div class="param-row">
++          <span>TEBEG (K) <span class="param-help" title="Starting temperature for MD simulation">?</span></span>
++          <input type="number" min="0" step="50" bind:value={vasp_sg_tebeg} />
++        </div>
++        <div class="param-row">
++          <span>TEEND (K) <span class="param-help" title="Ending temperature for MD simulation">?</span></span>
++          <input type="number" min="0" step="50" bind:value={vasp_sg_teend} />
++        </div>
++        <div class="param-row">
++          <span>INCREM <span class="param-help" title="CV change rate per MD step. Negative = decrease, positive = increase. Use space-separated values for multiple CVs. Typical: ±0.0008 for smooth PES">?</span></span>
++          <input type="text" bind:value={vasp_sg_increm} class="text-input" placeholder="-0.0008" style="font-family: monospace;" />
++        </div>
++
++        <label class="section-label" style="margin-top: 0.8em">ICONST (Constraints)</label>
++        <div class="param-row" style="align-items: center; gap: 0.5rem;">
++          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
++            <input type="checkbox" bind:checked={vasp_sg_iconst_manual} />
++            <span>Edit manually</span>
++          </label>
++        </div>
++
++        {#if vasp_sg_iconst_manual}
++          <textarea
++            bind:value={vasp_sg_iconst_text}
++            placeholder={"R 1 2 0\nR 1 3 0\nS 1 -1 0"}
++            rows="6"
++            style="width: 100%; font-family: monospace; font-size: 0.85em; resize: vertical; padding: 0.4em; border: 1px solid var(--border-color, #555); border-radius: 4px; background: light-dark(rgba(0,0,0,0.04), rgba(30,35,40,0.5)); color: inherit;"
++          ></textarea>
++          <span style="font-size: 0.75em; opacity: 0.7;">
++            R=bond, A=angle, T=torsion. Status: 0=constrained, 7=monitored. S=linear combination.
++          </span>
++        {:else}
++          <!-- Primitive constraints builder -->
++          <div style="font-size: 0.8em; color: var(--text-color-muted); margin-bottom: 0.3em;">
++            Primitive constraints (R=bond distance, A=angle, T=torsion):
++          </div>
++          {#each vasp_sg_primitives as prim, pi}
++            <div class="param-row" style="gap: 4px; align-items: center;">
++              <select
++                value={prim.type}
++                style="width: 50px;"
++                onchange={(e) => {
++                  const t = e.currentTarget.value as 'R' | 'A' | 'T'
++                  const n = t === 'R' ? 2 : t === 'A' ? 3 : 4
++                  const atoms = prim.atoms.slice(0, n)
++                  while (atoms.length < n) atoms.push(1)
++                  vasp_sg_primitives[pi] = { ...prim, type: t, atoms }
++                }}
++              >
++                <option value="R">R</option>
++                <option value="A">A</option>
++                <option value="T">T</option>
++              </select>
++              {#each { length: prim.type === 'R' ? 2 : prim.type === 'A' ? 3 : 4 } as _, ai}
++                <input
++                  type="number"
++                  min="1"
++                  style="width: 44px;"
++                  value={prim.atoms[ai] ?? 1}
++                  onchange={(e) => {
++                    const val = parseInt(e.currentTarget.value)
++                    if (!isNaN(val)) {
++                      const newAtoms = [...prim.atoms]
++                      newAtoms[ai] = val
++                      vasp_sg_primitives[pi] = { ...prim, atoms: newAtoms }
++                    }
++                  }}
++                />
++              {/each}
++              <select bind:value={prim.status} style="width: 52px;" title="0=constrained, 7=monitored">
++                <option value={0}>0</option>
++                <option value={7}>7</option>
++              </select>
++              <button
++                style="width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; border: none; background: none; color: var(--text-color-dim); cursor: pointer;"
++                onclick={() => { vasp_sg_primitives = vasp_sg_primitives.filter((_, i) => i !== pi) }}
++                title="Remove"
++                disabled={vasp_sg_primitives.length <= 1}
++              >×</button>
++            </div>
++          {/each}
++          <div style="display: flex; gap: 4px; margin-top: 2px;">
++            <button class="preset-btn" onclick={() => {
++              const nAtoms = 2
++              vasp_sg_primitives = [...vasp_sg_primitives, { type: 'R', atoms: Array(nAtoms).fill(1), status: 0 }]
++            }}>+ R</button>
++            <button class="preset-btn" onclick={() => {
++              vasp_sg_primitives = [...vasp_sg_primitives, { type: 'A', atoms: [1, 1, 1], status: 0 }]
++            }}>+ A</button>
++            <button class="preset-btn" onclick={() => {
++              vasp_sg_primitives = [...vasp_sg_primitives, { type: 'T', atoms: [1, 1, 1, 1], status: 0 }]
++            }}>+ T</button>
++          </div>
++
++          <!-- Complex coordinates (S = linear combination) -->
++          {#if vasp_sg_primitives.length >= 2}
++            <div style="font-size: 0.8em; color: var(--text-color-muted); margin-top: 0.6em; margin-bottom: 0.3em;">
++              Linear combinations (S): coefficients for each primitive above
++            </div>
++            {#each vasp_sg_complexes as cplx, ci}
++              <div class="param-row" style="gap: 4px; align-items: center;">
++                <span style="font-size: 0.85em; font-weight: 500; min-width: 14px;">S</span>
++                {#each vasp_sg_primitives as _, pi2}
++                  <input
++                    type="number"
++                    step="1"
++                    style="width: 44px; font-family: monospace;"
++                    value={cplx.coeffs[pi2] ?? 0}
++                    onchange={(e) => {
++                      const val = parseFloat(e.currentTarget.value)
++                      if (!isNaN(val)) {
++                        const newCoeffs = [...cplx.coeffs]
++                        while (newCoeffs.length < vasp_sg_primitives.length) newCoeffs.push(0)
++                        newCoeffs[pi2] = val
++                        vasp_sg_complexes[ci] = { ...cplx, coeffs: newCoeffs }
++                      }
++                    }}
++                  />
++                {/each}
++                <select bind:value={cplx.status} style="width: 52px;">
++                  <option value={0}>0</option>
++                  <option value={7}>7</option>
++                </select>
++                <button
++                  style="width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; font-size: 14px; border: none; background: none; color: var(--text-color-dim); cursor: pointer;"
++                  onclick={() => { vasp_sg_complexes = vasp_sg_complexes.filter((_, i) => i !== ci) }}
++                  title="Remove"
++                >×</button>
++              </div>
++            {/each}
++            <button class="preset-btn" style="margin-top: 2px;" onclick={() => {
++              const coeffs = vasp_sg_primitives.map((_, i) => i === 0 ? 1 : i === 1 ? -1 : 0)
++              vasp_sg_complexes = [...vasp_sg_complexes, { coeffs, status: 0 }]
++            }}>+ S (Linear Combination)</button>
++          {/if}
++        {/if}
++      {/if}
++
++      {#if vasp_constant_potential === 'tpot'}
++        <label class="section-label" style="margin-top: 0.8em">Target Potential</label>
++        <div class="param-row">
++          <span>V vs SHE <span class="param-help" title="Target electrode potential (e.g. -1, 0, 0.5). Converted to vacuum scale: TPOTVTARGET = V_SHE + SHE_ref">?</span></span>
++          <input type="number" step="0.1" bind:value={vasp_cp_voltage_she} />
++        </div>
++        <div class="param-row">
++          <span>SHE ref (V) <span class="param-help" title="Absolute SHE potential. 4.6 V = computational (implicit solvation). 4.44 V = IUPAC thermodynamic (Trasatti 1986)">?</span></span>
++          <input type="number" step="0.01" bind:value={vasp_cp_she_ref} />
++        </div>
++        <div style="font-size: 0.75em; opacity: 0.7; margin: 2px 0 6px;">
++          TPOTVTARGET = {(vasp_cp_voltage_she + vasp_cp_she_ref).toFixed(3)} V (vacuum scale)
++        </div>
++
++        <div class="param-row">
++          <span>NELECT <span class="param-help" title="Number of electrons. Run INCAR_NELECT (step 1) first, then read NELECT from OUTCAR and fill in here for step 2. Leave empty to omit">?</span></span>
++          <input type="number" step="0.01" placeholder="from step 1" bind:value={vasp_cp_nelect} />
++        </div>
++
++        <label class="section-label" style="margin-top: 0.8em">VASPsol Solvation</label>
++        <div class="param-row">
++          <span>EB_k <span class="param-help" title="Bulk dielectric constant. 78.4 for water at 25°C">?</span></span>
++          <input type="number" step="0.1" bind:value={vasp_tpot_eb_k} />
++        </div>
++        <div class="param-row">
++          <span>LAMBDA_D_K (Å) <span class="param-help" title="Debye screening length. 3.04 Å for 0.1 M electrolyte">?</span></span>
++          <input type="number" step="0.01" bind:value={vasp_tpot_lambda_d_k} />
++        </div>
++        <div class="param-row">
++          <span>CORE_C <span class="param-help" title="Total core electrons = Σ(Z - ZVAL). Auto-calculated from recommended POTCARs. Override if using non-standard POTCAR variants">?</span></span>
++          <input type="number" step="1" placeholder="auto" bind:value={vasp_tpot_core_c} />
++        </div>
++        <div class="param-row">
++          <span>TAU <span class="param-help" title="Cavity parameter. 0 = default">?</span></span>
++          <input type="number" step="0.001" bind:value={vasp_tpot_tau} />
++        </div>
++
++        <label class="section-label" style="margin-top: 0.4em">TPOT Settings</label>
++        <div class="param-row">
++          <span>TPOTVDIFF (V) <span class="param-help" title="Convergence threshold: |V - Vtarget| < TPOTVDIFF">?</span></span>
++          <input type="number" step="0.001" min="0.0001" bind:value={vasp_tpot_vdiff} />
++        </div>
++        <div class="param-row">
++          <span>TPOTELECTSTEP <span class="param-help" title="Maximum electron count change per update step">?</span></span>
++          <input type="number" step="0.01" min="0.001" bind:value={vasp_tpot_electstep} />
++        </div>
++        <div class="param-row">
++          <span>TPOTVRATE <span class="param-help" title="Initial rate of NELECT change (V/electron). Negative = adding electrons lowers potential">?</span></span>
++          <input type="number" step="0.1" bind:value={vasp_tpot_vrate} />
++        </div>
++        <div class="param-row">
++          <span>TPOTVRATELIM <span class="param-help" title="Lower limit for |TPOTVRATE| magnitude">?</span></span>
++          <input type="number" step="0.01" min="0.01" bind:value={vasp_tpot_vratelim} />
++        </div>
++
++        <div style="margin-top: 0.6em; padding: 0.5em; background: light-dark(rgba(0,120,200,0.08), rgba(100,180,255,0.08)); border-radius: 4px; font-size: 0.78em; line-height: 1.5;">
++          <strong>Two-step workflow:</strong><br/>
++          1. Run INCAR_NELECT (TPOTMETHOD=1) to determine NELECT<br/>
++          2. Fill in NELECT above, then generate INCAR (TPOTMETHOD=2)
++        </div>
++      {/if}
++
++      {#if vasp_constant_potential === 'cpvasp'}
++        <label class="section-label" style="margin-top: 0.8em">Target Potential</label>
++        <div class="param-row">
++          <span>V vs SHE <span class="param-help" title="Target electrode potential relative to Standard Hydrogen Electrode">?</span></span>
++          <input type="number" step="0.1" bind:value={vasp_cp_voltage_she} />
++        </div>
++        <div class="param-row">
++          <span>SHE ref (V) <span class="param-help" title="Absolute SHE potential. 4.6 V = computational (common with implicit solvation). 4.44 V = IUPAC thermodynamic (Trasatti 1986)">?</span></span>
++          <input type="number" step="0.01" bind:value={vasp_cp_she_ref} />
++        </div>
++        <div style="font-size: 0.75em; opacity: 0.7; margin: 2px 0 6px;">
++          TARGETMU = {(-(vasp_cp_voltage_she + vasp_cp_she_ref)).toFixed(2)} eV (chemical potential)
++        </div>
++
++        <div class="param-row">
++          <span>NELECT <span class="param-help" title="Number of electrons. Run INCAR_NELECT (step 1) first, then read NELECT from OUTCAR. Leave empty to omit (CP-VASP adjusts dynamically)">?</span></span>
++          <input type="number" step="0.01" placeholder="optional" bind:value={vasp_cp_nelect} />
++        </div>
++
++        <label class="section-label" style="margin-top: 0.4em">CP-VASP Settings</label>
++        <div class="param-row">
++          <span>NESCHEME <span class="param-help" title="Electron update scheme. 2=Exact potential (uses CAP_MAX). 5=Exact potential + eta (uses T_eta, eta_length)">?</span></span>
++          <select bind:value={vasp_cpvasp_nescheme}>
++            <option value={2}>2 (Exact potential)</option>
++            <option value={5}>5 (Exact + eta)</option>
++          </select>
++        </div>
++        <div class="param-row">
++          <span>NEADJUST <span class="param-help" title="Adjust electron count every N ionic steps">?</span></span>
++          <input type="number" min="1" step="1" bind:value={vasp_cpvasp_neadjust} />
++        </div>
++        <div class="param-row">
++          <span>FERMICONVERGE (eV) <span class="param-help" title="Convergence threshold for Fermi level vs target potential">?</span></span>
++          <input type="number" step="0.001" min="0.001" bind:value={vasp_cpvasp_fermiconverge} />
++        </div>
++        {#if vasp_cpvasp_nescheme === 2}
++          <div class="param-row">
++            <span>CAP_MAX <span class="param-help" title="Maximum capacitance for electron update (scheme 2)">?</span></span>
++            <input type="number" step="0.5" min="0.1" bind:value={vasp_cpvasp_cap_max} />
++          </div>
++        {:else if vasp_cpvasp_nescheme === 5}
++          <div class="param-row">
++            <span>T_eta (K) <span class="param-help" title="Electronic temperature for grand canonical ensemble (scheme 5)">?</span></span>
++            <input type="number" step="50" min="1" bind:value={vasp_cpvasp_t_eta} />
++          </div>
++          <div class="param-row">
++            <span>eta_length <span class="param-help" title="Eta parameter length (scheme 5)">?</span></span>
++            <input type="number" step="1" min="1" bind:value={vasp_cpvasp_eta_length} />
++          </div>
++        {/if}
++
++        <label class="section-label" style="margin-top: 0.8em">VASPsol++ Solvation</label>
++        <div class="param-row">
++          <span>C_MOLAR (mol/L) <span class="param-help" title="Molar concentration of electrolyte. 1.0 for standard aqueous electrolyte">?</span></span>
++          <input type="number" step="0.1" min="0" bind:value={vasp_cpvasp_c_molar} />
++        </div>
++        <div class="param-row">
++          <span>R_ION (Å) <span class="param-help" title="Ion radius for Debye-Hückel solvation model">?</span></span>
++          <input type="number" step="0.5" min="0.5" bind:value={vasp_cpvasp_r_ion} />
++        </div>
++
++        <div style="margin-top: 0.6em; padding: 0.5em; background: light-dark(rgba(0,120,200,0.08), rgba(100,180,255,0.08)); border-radius: 4px; font-size: 0.78em; line-height: 1.5;">
++          <strong>Two-step workflow:</strong><br/>
++          1. INCAR_NELECT: Static SCF to converge to target potential<br/>
++          2. INCAR: MD with CP-VASP, reads WAVECAR from step 1
++        </div>
++      {/if}
++
+       <label class="section-label" style="margin-top: 0.8em">K-Points</label>
+       <div class="param-row">
+         <span>Mode</span>
+@@ -3702,25 +4180,29 @@
+         <div class="param-row" style="align-items: center;">
+           <label class="checkbox-inline">
+             <input type="checkbox" bind:checked={cp2k_uks}
+-              disabled={cp2k_spin_auto?.is_odd || cp2k_scf_method === 'OT' || (cp2k_scf_method === 'DIAG' && !cp2k_smearing)} /> UKS
++              disabled={(cp2k_spin_auto?.is_odd && !(cp2k_scf_method === 'DIAG' && cp2k_smearing)) || cp2k_scf_method === 'OT' || (cp2k_scf_method === 'DIAG' && !cp2k_smearing)} /> UKS
+           </label>
+           {#if cp2k_spin_auto}
+             <span style="margin-left: auto; font-size: 0.78em; color: var(--text-color-muted);">{cp2k_spin_auto.electrons}e<sup>-</sup></span>
+           {/if}
+         </div>
+-        {#if cp2k_scf_method === 'OT' && !cp2k_spin_auto?.is_odd}
++        {#if cp2k_scf_method === 'OT'}
+           <div style="font-size: 0.75em; color: var(--text-color-muted); padding: 0.2em 0;">
+             UKS requires Diagonalization + Smearing. Switch SCF method to enable.
+           </div>
+-        {:else if cp2k_scf_method === 'DIAG' && !cp2k_smearing && !cp2k_spin_auto?.is_odd}
++        {:else if cp2k_scf_method === 'DIAG' && !cp2k_smearing}
+           <div style="font-size: 0.75em; color: var(--text-color-muted); padding: 0.2em 0;">
+             Enable Smearing to unlock UKS with Diagonalization.
+           </div>
+         {/if}
+-        {#if cp2k_spin_auto?.is_odd}
++        {#if cp2k_spin_auto?.is_odd && !(cp2k_scf_method === 'DIAG' && cp2k_smearing)}
+           <div style="font-size: 0.78em; color: var(--warning-color, #e89a3c); padding: 0.2em 0;">
+             Odd electron count ({cp2k_spin_auto.electrons}) — UKS and multiplicity >= 2 required.
+           </div>
++        {:else if cp2k_spin_auto?.is_odd && cp2k_scf_method === 'DIAG' && cp2k_smearing}
++          <div style="font-size: 0.75em; color: var(--text-color-muted); padding: 0.2em 0;">
++            Odd electron count ({cp2k_spin_auto.electrons}) — smearing handles fractional occupation, UKS optional.
++          </div>
+         {/if}
+       </details>
+ 
+diff --git a/src/lib/structure/FileTree.svelte b/src/lib/structure/FileTree.svelte
+index 93d552e..c804d8c 100644
+--- a/src/lib/structure/FileTree.svelte
++++ b/src/lib/structure/FileTree.svelte
+@@ -19,6 +19,7 @@
+     on_copy_file,
+     on_move_file,
+     on_upload,
++    on_analyze_report,
+     merging_dir = null,
+     merge_status = null,
+   }: {
+@@ -38,6 +39,8 @@
+     on_move_file?: (source: RemoteFile, dest_path: string) => Promise<void>
+     /** Upload local files to a remote directory. */
+     on_upload?: (files: File[], dest_path: string) => Promise<void>
++    /** Analyze a REPORT file for slow-growth post-processing. */
++    on_analyze_report?: (file: RemoteFile) => void
+     /** Directory name currently being merged (null = idle). */
+     merging_dir?: string | null
+     /** Status message after merge attempt (null = idle). */
+@@ -289,7 +292,16 @@
+   // Extensions that might be trajectory/structure files (need content-based detection)
+   const MAYBE_LOADABLE_EXTS = [`.out`, `.log`]
+ 
++  function is_report_file(name: string): boolean {
++    return name === `REPORT` || name.toLowerCase() === `report`
++  }
++
+   function handle_file_click(node: TreeNode) {
++    // VASP REPORT file → slow-growth analysis
++    if (is_report_file(node.file.name) && on_analyze_report) {
++      on_analyze_report(node.file)
++      return
++    }
+     const action = get_file_action(node.file.name)
+     if (action === `load` && on_load_structure) {
+       on_load_structure(node.file)
+@@ -640,6 +652,9 @@
+       {#if on_copy_path}
+         <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_copy_path?.(ctx_menu.node.file); close_ctx_menu() }}>Copy Path</button>
+       {/if}
++      {#if on_analyze_report && !ctx_menu.node.file.is_dir && is_report_file(ctx_menu.node.file.name)}
++        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_analyze_report?.(ctx_menu.node.file); close_ctx_menu() }}>Slow-Growth Analysis</button>
++      {/if}
+       <hr class="ft-ctx-divider" />
+       {#if on_delete}
+         <button class="ft-ctx-item danger" onclick={() => { delete_confirm_file = ctx_menu?.node.file ?? null; close_ctx_menu() }}>Delete</button>
+diff --git a/src/lib/structure/ServerPane.svelte b/src/lib/structure/ServerPane.svelte
+index cff464d..2260cfd 100644
+--- a/src/lib/structure/ServerPane.svelte
++++ b/src/lib/structure/ServerPane.svelte
+@@ -51,6 +51,7 @@
+     on_open_editor,
+     on_preview_file,
+     on_load_trajectory,
++    on_analyze_report,
+     external_navigate_path = $bindable<string | undefined>(undefined),
+   }: {
+     show?: boolean
+@@ -62,6 +63,7 @@
+     on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
+     on_preview_file?: (mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) => void
+     on_load_trajectory?: (content: string, filename: string, remote_origin?: { session_id: string; dir_path: string }) => void
++    on_analyze_report?: (content: string, filename: string) => void
+     external_navigate_path?: string | undefined
+   } = $props()
+ 
+@@ -911,7 +913,11 @@
+     loading_file = { name: file.name, size: file.size_bytes }
+     loading_error = null
+     try {
+-      const result = await readRemoteFile(active_session.session_id, file.path)
++      // Detect trajectory files early — default 2MB limit truncates large XDATCAR etc.
++      const { is_trajectory_file } = await import('$lib/trajectory/parse')
++      const likely_traj = on_load_trajectory && is_trajectory_file(file.name)
++      const max_bytes = likely_traj ? 0 : undefined  // 0 = unlimited for trajectories
++      const result = await readRemoteFile(active_session.session_id, file.path, max_bytes)
+       if (!result.success) {
+         loading_error = `Failed to load ${file.name}: ${result.message || 'Unknown error'}`
+         return
+@@ -921,7 +927,6 @@
+         return
+       }
+       // Auto-detect multi-frame files and route to trajectory viewer
+-      const { is_trajectory_file } = await import('$lib/trajectory/parse')
+       if (on_load_trajectory && is_trajectory_file(file.name, result.content)) {
+         on_load_trajectory(result.content, file.name)
+       } else {
+@@ -941,6 +946,23 @@
+     }
+   }
+ 
++  // ====== REPORT file analysis (slow-growth) ======
++
++  async function analyze_remote_report(file: RemoteFile) {
++    if (!active_session || !on_analyze_report) return
++    loading_file = file.name
++    try {
++      const result = await readRemoteFile(active_session.session_id, file.path)
++      if (result.success && result.content) {
++        on_analyze_report(result.content, file.name)
++      }
++    } catch (e: any) {
++      console.error(`Failed to load REPORT file:`, e)
++    } finally {
++      loading_file = null
++    }
++  }
++
+   // ====== Text file editing ======
+ 
+   async function open_remote_editor(file: RemoteFile) {
+@@ -1759,6 +1781,7 @@
+               on_open_editor={(file) => open_remote_editor(file)}
+               on_preview_file={(file, type) => open_remote_preview(file, type)}
+               on_load_trajectory={(dir, pattern) => merge_dir_as_trajectory(dir, pattern)}
++              on_analyze_report={on_analyze_report ? (file) => analyze_remote_report(file) : undefined}
+               on_navigate={(path) => { if (active_session) active_session.current_path = path }}
+               {merging_dir}
+               {merge_status}
+diff --git a/src/lib/structure/Structure.svelte b/src/lib/structure/Structure.svelte
+index e6c3516..9577b5f 100644
+--- a/src/lib/structure/Structure.svelte
++++ b/src/lib/structure/Structure.svelte
+@@ -84,6 +84,8 @@
+   import { create_settings_controller } from './controllers/settings.svelte'
+   import StructureToolbar from './StructureToolbar.svelte'
+   import { MdAnalysisPane, MdPlot } from '$lib/md'
++  import SlowGrowthPane from '$lib/structure/SlowGrowthPane.svelte'
++  import ScaleBar from '$lib/structure/ScaleBar.svelte'
+ 
+   import type { AtomColorConfig } from './atom-properties'
+   import { get_property_colors, expand_structure_for_pbc, coordination_colors_from_bonds } from './atom-properties'
+@@ -1157,6 +1159,7 @@
+   let cohp_plot_ref: CohpPlot | undefined = $state()
+   let show_cohp_panel = $derived(cohp_state.cohp_result !== null)
+   let workflow_pane_open = $state(false)  // Workflow pane
++  let slow_growth_pane_open = $state(false)  // Slow-growth post-processing
+   let io_pane_open = $state(false)  // IO (import/export) pane
+   let server_pane_open = $state(false)  // Server (HPC) pane
+   let chat_pane_open = $state(false)
+@@ -1877,6 +1880,7 @@
+   let camera_is_moving = $state(false)
+   let scene = $state<any>(undefined)
+   let camera = $state<any>(undefined)
++  let pixels_per_angstrom = $state(0)
+   let orbit_controls = $state<any>(undefined)
+   let rotation_target_ref = $state<[number, number, number] | undefined>(undefined)
+   let initial_computed_zoom = $state<number | undefined>(undefined)
+@@ -2931,6 +2935,35 @@
+                   }
+                 }}
+               />
++              <!-- Slow-Growth inline trigger -->
++              <section class="sg-section">
++                <h5 class="sg-section-title">Slow-Growth Post-Processing</h5>
++                <div class="sg-upload-row">
++                  <label class="sg-upload-btn">
++                    Upload REPORT
++                    <input type="file" accept="*" onchange={(e) => {
++                      slow_growth_pane_open = true
++                      const input = e.target as HTMLInputElement
++                      const file = input.files?.[0]
++                      if (file) {
++                        window.dispatchEvent(new CustomEvent(`catgo-sg-upload`, { detail: { file } }))
++                      }
++                      input.value = ``
++                    }} hidden />
++                  </label>
++                  <button class="sg-upload-btn" onclick={() => {
++                    slow_growth_pane_open = true
++                    window.dispatchEvent(new CustomEvent(`catgo-sg-paste`))
++                  }}>Paste REPORT</button>
++                  <button class="sg-upload-btn" onclick={() => {
++                    slow_growth_pane_open = true
++                    window.dispatchEvent(new CustomEvent(`catgo-sg-detect-report`))
++                  }} title="Auto-detect REPORT file in current HPC directory">Detect REPORT</button>
++                  {#if slow_growth_pane_open}
++                    <button class="sg-upload-btn sg-close" onclick={() => slow_growth_pane_open = false}>Close</button>
++                  {/if}
++                </div>
++              </section>
+             {:else if analysis.active_analysis_tab ==='electronic'}
+               <div class="electronic-sub-tabs">
+                 <button
+@@ -3072,6 +3105,9 @@
+               if (parsed) {
+                 structure = parsed
+                 remote_origin = (file_path && sid) ? { session_id: sid, file_path } : null
++                // Close editor/preview panels so the 3D structure is immediately visible
++                show_editor = false
++                show_preview = false
+               }
+             }}
+             on_open_editor={(content, filename, file_path, sid) => {
+@@ -3093,6 +3129,14 @@
+               show_preview = true
+               show_editor = false
+             }}
++            on_analyze_report={(content, filename) => {
++              // Open SlowGrowthPane and send REPORT content
++              slow_growth_pane_open = true
++              // Switch to MD analysis tab
++              analysis.active_analysis_tab = `md`
++              // Dispatch event to SlowGrowthPane with the text content
++              window.dispatchEvent(new CustomEvent(`catgo-sg-upload-text`, { detail: { content } }))
++            }}
+             on_load_trajectory={async (content, filename, remote_origin) => {
+               // Route through on_file_load so App.svelte can open in Trajectory viewer
+               try {
+@@ -3223,7 +3267,7 @@
+             structure={displayed_structure}
+             {trajectory_frame_positions}
+             {...scene_props}
+-            background_color={background_color ?? `#ffffff`}
++            background_color={background_color}
+             {element_radius_overrides}
+             {site_radius_overrides}
+             {site_color_overrides}
+@@ -3235,6 +3279,7 @@
+             bind:selected_measurement_id
+             bind:scene
+             bind:camera
++            bind:pixels_per_angstrom
+             bind:orbit_controls
+             bind:rotation_target_ref
+             bind:initial_computed_zoom
+@@ -3364,6 +3409,7 @@
+           />
+         </Canvas>
+         </div>
++        <ScaleBar {pixels_per_angstrom} show={scene_props.show_scale_bar ?? false} />
+       </div>
+     {/if}
+ 
+@@ -4291,6 +4337,8 @@
+       {/if}
+     </div>
+   {/if}
++  <!-- Slow-Growth Analysis — top-level floating pane, resizable, not constrained by AnalysisPane -->
++  <SlowGrowthPane bind:show={slow_growth_pane_open} />
+ </div>
+ 
+ <style>
+@@ -4472,6 +4520,40 @@
+   }
+ 
+   /* Electronic sub-tabs (DOS / COHP) inside Analysis pane */
++  .sg-section {
++    margin-top: 8px;
++    padding: 8px;
++    background: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.04));
++    border: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
++    border-radius: 6px;
++  }
++  .sg-section-title {
++    margin: 0 0 6px;
++    font-size: 0.82em;
++    font-weight: 600;
++    color: var(--text-color, #fff);
++  }
++  .sg-upload-row {
++    display: flex;
++    gap: 4px;
++    flex-wrap: wrap;
++  }
++  .sg-upload-btn {
++    padding: 4px 10px;
++    font-size: 0.78em;
++    border: 1px solid light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
++    border-radius: 4px;
++    background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08));
++    color: var(--text-color, #fff);
++    cursor: pointer;
++  }
++  .sg-upload-btn:hover {
++    background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.14));
++  }
++  .sg-close {
++    color: var(--error-color, #f55);
++    margin-left: auto;
++  }
+   .electronic-sub-tabs {
+     display: flex;
+     gap: 2px;
+diff --git a/src/lib/structure/StructureControls.svelte b/src/lib/structure/StructureControls.svelte
+index 8e1667f..9630661 100644
+--- a/src/lib/structure/StructureControls.svelte
++++ b/src/lib/structure/StructureControls.svelte
+@@ -261,6 +261,12 @@
+         <input type="checkbox" bind:checked={lattice_props.show_cell_vectors} />
+         Lattice Vectors
+       </label>
++      <label
++        {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_scale_bar?.description })}
++      >
++        <input type="checkbox" bind:checked={scene_props.show_scale_bar} />
++        Scale Bar
++      </label>
+     </div>
+     <label
+       {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_bonds.description })}
+diff --git a/src/lib/structure/StructureScene.svelte b/src/lib/structure/StructureScene.svelte
+index 867938b..7f7bdad 100644
+--- a/src/lib/structure/StructureScene.svelte
++++ b/src/lib/structure/StructureScene.svelte
+@@ -37,6 +37,7 @@
+   import { GPUPicker } from './gpu-picker'
+   import { get_orig_site_idx, type AtomPropertyColors } from './atom-properties'
+   import { CanvasTooltip } from './index'
++  import ScaleBar from './ScaleBar.svelte'
+   import { pluginManager } from '$lib/plugins'
+ 
+   let pulse_time = $state(0)
+@@ -441,6 +442,7 @@
+     zoom_to_cursor = DEFAULTS.structure.zoom_to_cursor,
+     show_atoms = DEFAULTS.structure.show_atoms,
+     show_cell = DEFAULTS.structure.show_cell,
++    show_scale_bar = DEFAULTS.structure.show_scale_bar,
+     show_bonds = DEFAULTS.structure.show_bonds,
+     show_site_labels = DEFAULTS.structure.show_site_labels,
+     show_site_indices = DEFAULTS.structure.show_site_indices,
+@@ -475,11 +477,12 @@
+     depth_cueing = DEFAULTS.structure.depth_cueing,
+     depth_cue_start = DEFAULTS.structure.depth_cue_start,
+     depth_cue_end = DEFAULTS.structure.depth_cue_end,
+-    background_color = `#ffffff`,
++    background_color = undefined as string | undefined,
+     sphere_segments = DEFAULTS.structure.sphere_segments,
+     lattice_props = {},
+     atom_label,
+     camera_is_moving = $bindable(false),
++    pixels_per_angstrom = $bindable(0),
+     width = 0,
+     height = 0,
+     measure_mode = `distance`,
+@@ -613,6 +616,7 @@
+     zoom_to_cursor?: boolean // zoom toward cursor position instead of scene center
+     show_atoms?: boolean
+     show_cell?: boolean
++    show_scale_bar?: boolean
+     show_bonds?: ShowBonds
+     show_site_labels?: boolean
+     show_site_indices?: boolean
+@@ -642,7 +646,7 @@
+     depth_cueing?: number
+     depth_cue_start?: number
+     depth_cue_end?: number
+-    background_color?: string
++    background_color?: string | undefined
+     sphere_segments?: number
+     lattice_props?: ComponentProps<typeof Lattice>
+     atom_label?: Snippet<[Site, number]>
+@@ -652,6 +656,7 @@
+     site_label_color?: string
+     site_label_padding?: number
+     camera_is_moving?: boolean // used to prevent tooltip from showing while camera is moving
++    pixels_per_angstrom?: number // scale bar: Å-to-pixel ratio, updated per frame
+     width?: number // Viewer dimensions for responsive zoom
+     height?: number
+     // measurement props
+@@ -797,7 +802,7 @@
+     if (!r) return
+ 
+     // If background_color is explicitly set by user, use it directly
+-    if (background_color && background_color !== `#ffffff`) {
++    if (background_color !== undefined) {
+       r.setClearColor(new Color(background_color), 1)
+       threlte.invalidate()
+       return
+@@ -1449,6 +1454,14 @@
+     }
+     // Keep depth cueing in sync with camera distance
+     if (depth_cueing > 0) update_depth_cue_uniforms()
++
++    // Update scale bar projection (camera is mutable, so we do this per-frame)
++    if (show_scale_bar && width > 0) {
++      const center = rotation_target ?? [0, 0, 0]
++      const p1 = new Vector3(...center).project(cam)
++      const p2 = new Vector3(center[0] + 1, center[1], center[2]).project(cam)
++      pixels_per_angstrom = Math.abs(p2.x - p1.x) * width / 2
++    }
+   }, { autoInvalidate: false })
+ 
+   // Per-atom charge label rendering
+@@ -1540,7 +1553,7 @@
+   // Also called per-frame via useTask below to track camera distance changes.
+   function update_depth_cue_uniforms() {
+     depth_cue_uniforms.uDepthCueing.value = depth_cueing
+-    depth_cue_uniforms.uDepthCueBgColor.value.set(background_color)
++    depth_cue_uniforms.uDepthCueBgColor.value.set(background_color ?? `#ffffff`)
+     if (depth_cueing > 0) {
+       const cam = threlte.camera.current
+       if (cam) {
+@@ -1575,6 +1588,8 @@
+     computed_zoom = new_zoom
+   })
+ 
++  // Pixels-per-Angstrom for scale bar — updated per-frame in useTask
++
+   $effect.pre(() => { // Simple initial camera auto-position: Z-up, looking along +Y
+     if (camera_position.every((v) => v === 0) && structure) {
+       const distance = Math.max(1, structure_size) * (60 / fov)
+diff --git a/src/lib/trajectory/parse.ts b/src/lib/trajectory/parse.ts
+index 35f38a1..85c48c5 100644
+--- a/src/lib/trajectory/parse.ts
++++ b/src/lib/trajectory/parse.ts
+@@ -445,10 +445,11 @@ const parse_vasp_xdatcar = (content: string, filename?: string): TrajectoryType
+   const lines = content.trim().split(/\r?\n/)
+   if (lines.length < 10) throw new Error(`XDATCAR file too short`)
+ 
+-  const scale = parseFloat(lines[1])
++  // Parse initial header
++  let scale = parseFloat(lines[1])
+   if (isNaN(scale)) throw new Error(`Invalid scale factor`)
+ 
+-  const lattice_matrix = lines.slice(2, 5).map((line) =>
++  let lattice_matrix = lines.slice(2, 5).map((line) =>
+     line.trim().split(/\s+/).map((x) => parseFloat(x) * scale)
+   ) as Matrix3x3
+ 
+@@ -457,22 +458,56 @@ const parse_vasp_xdatcar = (content: string, filename?: string): TrajectoryType
+   const elements: ElementSymbol[] = element_names.flatMap((name, idx) =>
+     Array(element_counts[idx]).fill(name as ElementSymbol)
+   )
++  const n_atoms = elements.length
+ 
+   const frames: TrajectoryFrame[] = []
+   let line_idx = 7
+ 
+   while (line_idx < lines.length) {
+-    const config_line = lines.find((line, idx) =>
+-      idx >= line_idx && line.includes(`Direct configuration=`)
+-    )
+-    if (!config_line) break
++    // Linear scan from current position (O(n) total, not O(n²))
++    while (line_idx < lines.length) {
++      const line = lines[line_idx]
++      if (line.includes(`Direct configuration=`) || line.trim() === `Direct`) {
++        break
++      }
++      // Handle variable-cell XDATCAR (NPT): header repeats between frame groups
++      // Detect by checking if this looks like a scale factor + 3 lattice lines + elements
++      const maybe_scale = parseFloat(line)
++      if (!isNaN(maybe_scale) && maybe_scale > 0 && maybe_scale < 100 &&
++          line_idx + 5 < lines.length) {
++        const next3 = lines.slice(line_idx + 1, line_idx + 4)
++        const looks_like_lattice = next3.every((l) =>
++          l.trim().split(/\s+/).length === 3 && !l.trim().split(/\s+/).some((v) => isNaN(Number(v)))
++        )
++        if (looks_like_lattice) {
++          // Re-read lattice from repeated header
++          scale = maybe_scale
++          lattice_matrix = next3.map((l) =>
++            l.trim().split(/\s+/).map((x) => parseFloat(x) * scale)
++          ) as Matrix3x3
++          line_idx += 4 // skip scale + 3 lattice lines
++          // Skip element names + counts lines (2 lines)
++          if (line_idx + 1 < lines.length) {
++            const maybe_counts = lines[line_idx + 1].trim().split(/\s+/)
++            if (maybe_counts.every((v) => !isNaN(Number(v)) && Number(v) > 0)) {
++              line_idx += 2
++            }
++          }
++          continue
++        }
++      }
++      line_idx++
++    }
++    if (line_idx >= lines.length) break
++
++    const config_line = lines[line_idx]
++    line_idx++ // move past config line
+ 
+-    line_idx = lines.indexOf(config_line) + 1
+     const step_match = config_line.match(/configuration=\s*(\d+)/)
+     const step = step_match ? parseInt(step_match[1]) : frames.length + 1
+ 
+     const positions = []
+-    for (let idx = 0; idx < elements.length && line_idx < lines.length; idx++) {
++    for (let idx = 0; idx < n_atoms && line_idx < lines.length; idx++) {
+       const coords = lines[line_idx].trim().split(/\s+/).slice(0, 3).map(Number)
+       if (coords.length === 3 && !coords.some(isNaN)) {
+         positions.push(
+@@ -485,7 +520,7 @@ const parse_vasp_xdatcar = (content: string, filename?: string): TrajectoryType
+       line_idx++
+     }
+ 
+-    if (positions.length === elements.length) {
++    if (positions.length === n_atoms) {
+       frames.push(create_trajectory_frame(
+         positions,
+         elements,

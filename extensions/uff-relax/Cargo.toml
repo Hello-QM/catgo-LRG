@@ -1,0 +1,20 @@
+[package]
+name = "uff-relax"
+version = "1.0.0"
+edition = "2024"
+authors = ["Forblaze Project <forblazeproject@gmail.com>"]
+description = "A high-performance, parallelized molecular structure optimizer using the Universal Force Field (UFF)."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ForblazeProject/uff-relax.git"
+keywords = ["chemistry", "molecule", "uff", "geometry", "simulation"]
+categories = ["science", "simulation"]
+readme = "README.md"
+
+[dependencies]
+glam = { version = "0.31.0", features = ["serde"] }
+rayon = { version = "1.11.0", optional = true }
+serde = { version = "1.0.228", features = ["derive"] }
+
+[features]
+default = ["parallel"]
+parallel = ["dep:rayon"]

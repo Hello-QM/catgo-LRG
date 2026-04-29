@@ -1,0 +1,67 @@
+You are continuing the implementation of the CatGo Graph Runtime in Rust.
+
+Use the design document below as the architectural source of truth:
+
+docs/catgo_rust_runtime_architecture.md
+
+I want you to refine the implementation into a maintainable workflow kernel.
+
+Please enforce the following requirements:
+
+1. Separate workflow definition from workflow execution:
+   - GraphTemplate
+   - GraphRun
+
+2. Implement an explicit node lifecycle state machine:
+   Pending -> Ready -> Running -> Repairing -> Succeeded / Failed / Blocked / Skipped / Cancelled
+
+3. Add persistent execution records so the engine can recover after process restart.
+
+4. Add an input resolver that supports:
+   - ${inputs.xxx}
+   - ${nodes.node_id.outputs.xxx}
+
+5. Add a typed artifact abstraction supporting:
+   - file
+   - json
+   - numeric result
+   - table
+   - image
+   - directory
+
+6. Add retry semantics:
+   - max attempts
+   - retryable error categories
+   - backoff policy
+
+7. Prepare repair hook integration:
+   - repair handler trait
+   - repair outcome
+   - runtime-level repair entry point
+
+8. Keep the runtime domain-agnostic:
+   - no OER logic
+   - no NRR logic
+   - no chemistry-specific assumptions in runtime
+
+9. Use modular Rust code with clear file separation.
+
+Please work in this order:
+1. file/module layout
+2. core structs and enums
+3. validator
+4. resolver
+5. tool abstraction
+6. scheduler
+7. executor
+8. persistence
+9. resume logic
+10. test example
+
+Please avoid:
+- single-file implementations
+- pseudocode-only responses
+- overengineering with unnecessary generics
+- embedding chemistry logic into the runtime
+
+I want real Rust code, not just design discussion.

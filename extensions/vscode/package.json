@@ -1,0 +1,1326 @@
+{
+  "name": "catgo",
+  "displayName": "CatGo",
+  "description": "Visualize crystal structures and MD trajectories in VSCode",
+  "version": "0.0.1",
+  "publisher": "Guangsheng",
+  "icon": "icon.png",
+  "repository": "https://github.com/janosh/catgo",
+  "categories": [
+    "Data Science",
+    "Machine Learning",
+    "Visualization",
+    "Notebooks",
+    "Education"
+  ],
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "catgo.render_structure",
+        "title": "Render",
+        "category": "CatGo"
+      },
+      {
+        "command": "catgo.report_bug",
+        "title": "Report Bug",
+        "category": "CatGo"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "catgo.render_structure",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "catgo.supported_resource && editorLangId != 'markdown'"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "catgo.render_structure",
+          "when": "catgo.supported_resource"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "catgo.viewer",
+        "displayName": "CatGo Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.{traj,h5,hdf5,dcd,xtc,trr}"
+          },
+          {
+            "filenamePattern": "*.{cif,xyz,extxyz,poscar}.gz"
+          },
+          {
+            "filenamePattern": "*{structure,material,crystal,lattice,geometry}.{json,yaml,yml}.gz"
+          },
+          {
+            "filenamePattern": "*{xdatcar,contcar,outcar}"
+          },
+          {
+            "filenamePattern": "*{trajectory,relax,npt,nvt,nve}*"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "configuration": {
+      "title": "CatGo",
+      "properties": {
+        "catgo.theme": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "light",
+            "dark",
+            "white",
+            "black"
+          ],
+          "default": "auto",
+          "description": "Theme for CatGo visualizations. 'auto' follows VSCode's theme."
+        },
+        "catgo.auto_render": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically render supported file types (structures and trajectories) when opening them. If rendering fails, falls back to regular editor."
+        },
+        "catgo.color_scheme": {
+          "type": "string",
+          "default": "Vesta",
+          "description": "Color scheme for atoms and bonds",
+          "enum": [
+            "Vesta",
+            "Jmol",
+            "Alloy",
+            "Pastel",
+            "Muted",
+            "Dark Mode"
+          ]
+        },
+        "catgo.background_color": {
+          "type": "string",
+          "default": "#000000",
+          "description": "Background color of the 3D viewport"
+        },
+        "catgo.background_opacity": {
+          "type": "number",
+          "default": 0,
+          "description": "Opacity of the background (0.0 = transparent, 1.0 = opaque)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.structure.atom_radius": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Radius multiplier for atoms (1.0 = standard atomic radii)",
+          "minimum": 0.1,
+          "maximum": 3
+        },
+        "catgo.structure.same_size_atoms": {
+          "type": "boolean",
+          "default": false,
+          "description": "Render all atoms with the same size regardless of element"
+        },
+        "catgo.structure.show_atoms": {
+          "type": "boolean",
+          "default": true,
+          "description": "Display atoms in the structure"
+        },
+        "catgo.structure.show_image_atoms": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show atoms on the edge of the cell that are not part of the primitive basis"
+        },
+        "catgo.structure.sphere_segments": {
+          "type": "number",
+          "default": 20,
+          "description": "Number of segments for sphere rendering (higher = smoother)",
+          "minimum": 8,
+          "maximum": 64
+        },
+        "catgo.structure.bond_thickness": {
+          "type": "number",
+          "default": 0.07,
+          "description": "Thickness of bonds relative to atom radius",
+          "minimum": 0.01,
+          "maximum": 1
+        },
+        "catgo.structure.show_bonds": {
+          "type": "string",
+          "default": "always",
+          "description": "When to display bonds between atoms",
+          "enum": [
+            "never",
+            "always",
+            "crystals",
+            "molecules"
+          ]
+        },
+        "catgo.structure.bond_color": {
+          "type": "string",
+          "default": "#666666",
+          "description": "Color for bonds (hex color code)"
+        },
+        "catgo.structure.bonding_strategy": {
+          "type": "string",
+          "default": "electroneg_ratio",
+          "description": "Method for determining bonds between atoms",
+          "enum": [
+            "electroneg_ratio",
+            "solid_angle",
+            "atom_radii"
+          ]
+        },
+        "catgo.structure.show_gizmo": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show orientation gizmo in the corner of structure viewer"
+        },
+        "catgo.structure.camera_position": {
+          "type": "array",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Initial camera position [x, y, z]",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "catgo.structure.camera_projection": {
+          "type": "string",
+          "default": "orthographic",
+          "description": "Camera projection type",
+          "enum": [
+            "perspective",
+            "orthographic"
+          ]
+        },
+        "catgo.structure.initial_zoom": {
+          "type": "number",
+          "default": 35,
+          "description": "Initial zoom level for orthographic projection (ignored for perspective)",
+          "minimum": 0.1,
+          "maximum": 200
+        },
+        "catgo.structure.fov": {
+          "type": "number",
+          "default": 10,
+          "description": "Field of view in degrees for perspective projection",
+          "minimum": 10,
+          "maximum": 150
+        },
+        "catgo.structure.rotation_damping": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Camera rotation damping factor (0 = no damping, 1 = heavy damping)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.structure.rotate_speed": {
+          "type": "number",
+          "default": 1,
+          "description": "Mouse rotation sensitivity (set to 0 to disable rotation)",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.structure.zoom_speed": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Mouse wheel zoom sensitivity",
+          "minimum": 0.1,
+          "maximum": 2
+        },
+        "catgo.structure.pan_speed": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Mouse pan sensitivity",
+          "minimum": 0.1,
+          "maximum": 2
+        },
+        "catgo.structure.zoom_to_cursor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Zoom toward cursor position instead of scene center (double click canvas to reset camera)"
+        },
+        "catgo.structure.max_zoom": {
+          "type": "number",
+          "default": 500,
+          "description": "Maximum zoom level (orthographic: larger = more zoomed out, perspective: larger = further away)"
+        },
+        "catgo.structure.min_zoom": {
+          "type": "number",
+          "default": 10,
+          "description": "Minimum zoom level (orthographic: smaller = more zoomed in, perspective: smaller = closer)"
+        },
+        "catgo.structure.auto_rotate": {
+          "type": "number",
+          "default": 0,
+          "description": "Automatic rotation speed (0 = disabled, positive = clockwise)",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "catgo.structure.rotation": {
+          "type": "array",
+          "default": [
+            0,
+            0,
+            0
+          ],
+          "description": "Manual rotation around X, Y, Z axes, displayed in degrees [0, 360] but normalized as radians to [-π, π] for each of [x, y, z]. Combines additively with auto-rotation when both are active.",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "catgo.structure.show_site_labels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show element labels on atoms"
+        },
+        "catgo.structure.show_site_indices": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show site index numbers on atoms"
+        },
+        "catgo.structure.site_label_size": {
+          "type": "number",
+          "default": 1,
+          "description": "Font size for atom labels",
+          "minimum": 0.5,
+          "maximum": 5
+        },
+        "catgo.structure.site_label_color": {
+          "type": "string",
+          "default": "#ffffff",
+          "description": "Text color for atom labels"
+        },
+        "catgo.structure.site_label_bg_color": {
+          "type": "string",
+          "default": "#000000",
+          "description": "Background color for atom labels"
+        },
+        "catgo.structure.site_label_padding": {
+          "type": "number",
+          "default": 2,
+          "description": "Padding around atom labels in pixels",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "catgo.structure.site_label_offset": {
+          "type": "array",
+          "default": [
+            0,
+            0.5,
+            0
+          ],
+          "description": "3D offset for atom labels [x, y, z]",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "catgo.structure.ambient_light": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Ambient light intensity (0 = dark, higher = brighter)",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "catgo.structure.directional_light": {
+          "type": "number",
+          "default": 2.2,
+          "description": "Directional light intensity (0 = no shadows, higher = stronger shadows)",
+          "minimum": 0,
+          "maximum": 4
+        },
+        "catgo.structure.show_force_vectors": {
+          "type": "boolean",
+          "default": false,
+          "description": "Display force vectors on atoms"
+        },
+        "catgo.structure.force_scale": {
+          "type": "number",
+          "default": 1,
+          "description": "Scale factor for force vector arrows",
+          "minimum": 0.1,
+          "maximum": 10
+        },
+        "catgo.structure.force_color": {
+          "type": "string",
+          "default": "#ff0000",
+          "description": "Color for force vectors"
+        },
+        "catgo.structure.force_shaft_radius": {
+          "type": "number",
+          "default": -0.01,
+          "description": "Radius of force vector shaft (negative = relative to length, positive = absolute)",
+          "minimum": -0.1,
+          "maximum": 0.1
+        },
+        "catgo.structure.force_arrow_head_radius": {
+          "type": "number",
+          "default": -0.025,
+          "description": "Radius of force vector arrow head (negative = relative to length, positive = absolute)",
+          "minimum": -0.2,
+          "maximum": 0.2
+        },
+        "catgo.structure.force_arrow_head_length": {
+          "type": "number",
+          "default": -0.1,
+          "description": "Length of force vector arrow head (negative = relative to length, positive = absolute)",
+          "minimum": -0.5,
+          "maximum": 0.5
+        },
+        "catgo.structure.show_cell": {
+          "type": "boolean",
+          "default": false,
+          "description": "Display system cell"
+        },
+        "catgo.structure.show_cell_vectors": {
+          "type": "boolean",
+          "default": true,
+          "description": "Display cell vectors"
+        },
+        "catgo.structure.cell_edge_opacity": {
+          "type": "number",
+          "default": 0.3,
+          "description": "Opacity of cell edge lines",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.structure.cell_surface_opacity": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Opacity of cell surfaces",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.structure.cell_edge_color": {
+          "type": "string",
+          "default": "#808080",
+          "description": "Color of cell edges"
+        },
+        "catgo.structure.cell_surface_color": {
+          "type": "string",
+          "default": "#e0e0e0",
+          "description": "Color of cell surfaces"
+        },
+        "catgo.structure.cell_edge_width": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Width of cell edge lines",
+          "minimum": 0.5,
+          "maximum": 5
+        },
+        "catgo.server.auto_start": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the CatGo backend server when the extension activates. Provides xTB optimization and DFT input generation."
+        },
+        "catgo.server.port": {
+          "type": "number",
+          "default": 0,
+          "description": "Backend server port. 0 = auto-assign a free port.",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "catgo.trajectory.auto_play": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically start playing trajectory when opened"
+        },
+        "catgo.trajectory.fps": {
+          "type": "number",
+          "default": 10,
+          "description": "Frames per second for trajectory playback",
+          "minimum": 0.1,
+          "maximum": 60
+        },
+        "catgo.trajectory.fps_range": {
+          "type": "array",
+          "default": [
+            0.2,
+            60
+          ],
+          "description": "Allowed range for playback speed [min, max]",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "number"
+          }
+        },
+        "catgo.trajectory.display_mode": {
+          "type": "string",
+          "default": "structure+scatter",
+          "description": "Visualization mode for trajectory data",
+          "enum": [
+            "structure+scatter",
+            "structure",
+            "scatter",
+            "histogram",
+            "structure+histogram"
+          ]
+        },
+        "catgo.trajectory.show_controls": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show playback controls"
+        },
+        "catgo.trajectory.step_labels": {
+          "type": "number",
+          "default": 5,
+          "description": "Number of frame labels to display",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "catgo.trajectory.layout": {
+          "type": "string",
+          "default": "auto",
+          "description": "Layout arrangement for trajectory viewer",
+          "enum": [
+            "auto",
+            "horizontal",
+            "vertical"
+          ]
+        },
+        "catgo.trajectory.allow_file_drop": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow drag-and-drop of trajectory files"
+        },
+        "catgo.trajectory.bin_file_threshold": {
+          "type": "number",
+          "default": 50000000,
+          "description": "File size threshold for binary loading (bytes)",
+          "minimum": 1000000,
+          "maximum": 500000000
+        },
+        "catgo.trajectory.text_file_threshold": {
+          "type": "number",
+          "default": 25000000,
+          "description": "File size threshold for text loading (bytes)",
+          "minimum": 500000,
+          "maximum": 250000000
+        },
+        "catgo.trajectory.use_indexing": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use frame indexing for large trajectories"
+        },
+        "catgo.trajectory.chunk_size": {
+          "type": "number",
+          "default": 1000,
+          "description": "Number of frames to process at once",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "catgo.trajectory.step_label_format": {
+          "type": "string",
+          "default": ".3~s",
+          "description": "Number format for step labels (D3 format specifier)"
+        },
+        "catgo.trajectory.property_value_format": {
+          "type": "string",
+          "default": ".2~s",
+          "description": "Number format for property values (D3 format specifier)"
+        },
+        "catgo.trajectory.tooltip_format": {
+          "type": "string",
+          "default": ".3~s",
+          "description": "Number format for tooltips (D3 format specifier)"
+        },
+        "catgo.trajectory.enable_keyboard_shortcuts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable keyboard shortcuts for playback"
+        },
+        "catgo.trajectory.show_parsing_progress": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show progress indicator while parsing files"
+        },
+        "catgo.trajectory.compact_controls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use compact layout for playback controls"
+        },
+        "catgo.trajectory.show_filename_in_controls": {
+          "type": "boolean",
+          "default": true,
+          "description": "Display filename in control pane"
+        },
+        "catgo.trajectory.smooth_playback": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use smooth interpolation between frames"
+        },
+        "catgo.trajectory.loop_playback": {
+          "type": "boolean",
+          "default": true,
+          "description": "Loop trajectory playback"
+        },
+        "catgo.trajectory.pause_on_hover": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pause playback when hovering over controls"
+        },
+        "catgo.trajectory.highlight_current_frame": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight current frame in timeline"
+        },
+        "catgo.trajectory.show_frame_info": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show frame information overlay"
+        },
+        "catgo.trajectory.max_frames_in_memory": {
+          "type": "number",
+          "default": 1000,
+          "description": "Maximum frames to keep in memory",
+          "minimum": 10,
+          "maximum": 10000
+        },
+        "catgo.trajectory.memory_usage_warning_threshold": {
+          "type": "number",
+          "default": 500,
+          "description": "Frame count threshold for memory warnings",
+          "minimum": 10,
+          "maximum": 5000
+        },
+        "catgo.trajectory.enable_performance_monitoring": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable performance monitoring"
+        },
+        "catgo.trajectory.prefetch_frames": {
+          "type": "number",
+          "default": 5,
+          "description": "Number of frames to prefetch ahead",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "catgo.trajectory.cache_parsed_data": {
+          "type": "boolean",
+          "default": true,
+          "description": "Cache parsed trajectory data"
+        },
+        "catgo.histogram.mode": {
+          "type": "string",
+          "default": "overlay",
+          "description": "Histogram display mode. 'overlay' shows multiple histograms in the same plot, 'single' shows a single histogram",
+          "enum": [
+            "overlay",
+            "single"
+          ]
+        },
+        "catgo.histogram.show_legend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show legend in histogram plots"
+        },
+        "catgo.histogram.bin_count": {
+          "type": "number",
+          "default": 100,
+          "description": "Number of bins for histogram plots",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "catgo.histogram.bar.color": {
+          "type": "string",
+          "default": "#4A9EFF",
+          "description": "Histogram bar fill color"
+        },
+        "catgo.histogram.bar.opacity": {
+          "type": "number",
+          "default": 0.7,
+          "description": "Histogram bar opacity",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.histogram.bar.stroke_width": {
+          "type": "number",
+          "default": 1,
+          "description": "Histogram bar stroke width",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "catgo.histogram.bar.stroke_color": {
+          "type": "string",
+          "default": "#000000",
+          "description": "Histogram bar stroke color"
+        },
+        "catgo.histogram.bar.stroke_opacity": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Histogram bar stroke opacity",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.histogram.display.x_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis grid lines"
+        },
+        "catgo.histogram.display.y_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis grid lines"
+        },
+        "catgo.histogram.display.y2_grid": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show Y2-axis grid lines"
+        },
+        "catgo.histogram.display.x_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis zero reference line"
+        },
+        "catgo.histogram.display.y_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis zero reference line"
+        },
+        "catgo.bar.bar.color": {
+          "type": "string",
+          "default": "#4A9EFF",
+          "description": "Bar plot fill color"
+        },
+        "catgo.bar.bar.opacity": {
+          "type": "number",
+          "default": 0.6,
+          "description": "Bar plot opacity (overlay mode)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.bar.line.width": {
+          "type": "number",
+          "default": 2,
+          "description": "Bar plot line width",
+          "minimum": 0.5,
+          "maximum": 10
+        },
+        "catgo.bar.line.color": {
+          "type": "string",
+          "default": "#4A9EFF",
+          "description": "Bar plot line color"
+        },
+        "catgo.bar.display.x_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis grid lines"
+        },
+        "catgo.bar.display.y_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis grid lines"
+        },
+        "catgo.bar.display.y2_grid": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show Y2-axis grid lines"
+        },
+        "catgo.bar.display.x_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis zero reference line"
+        },
+        "catgo.bar.display.y_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis zero reference line"
+        },
+        "catgo.composition.display_mode": {
+          "type": "string",
+          "default": "pie",
+          "description": "Display mode for composition data",
+          "enum": [
+            "pie",
+            "bubble",
+            "bar"
+          ]
+        },
+        "catgo.composition.color_scheme": {
+          "type": "string",
+          "default": "Vesta",
+          "description": "Color scheme for composition visualization",
+          "enum": [
+            "Vesta",
+            "Jmol",
+            "Alloy",
+            "Pastel",
+            "Muted",
+            "Dark Mode"
+          ]
+        },
+        "catgo.scatter.symbol_type": {
+          "type": "string",
+          "default": "Circle",
+          "description": "Default symbol type for scatter plots",
+          "enum": [
+            "Circle",
+            "Cross",
+            "Diamond",
+            "Square",
+            "Star",
+            "Triangle",
+            "Wye",
+            "Plus",
+            "Times",
+            "Triangle2",
+            "Asterisk",
+            "Square2",
+            "Diamond2"
+          ]
+        },
+        "catgo.scatter.show_legend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show legend in scatter plots"
+        },
+        "catgo.scatter.show_points": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show points in scatter plots"
+        },
+        "catgo.scatter.show_lines": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show connecting lines in scatter plots"
+        },
+        "catgo.scatter.display.x_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis grid lines"
+        },
+        "catgo.scatter.display.y_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis grid lines"
+        },
+        "catgo.scatter.display.y2_grid": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show Y2-axis grid lines"
+        },
+        "catgo.scatter.display.x_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis zero reference line"
+        },
+        "catgo.scatter.display.y_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis zero reference line"
+        },
+        "catgo.scatter.point.size": {
+          "type": "number",
+          "default": 4,
+          "description": "Point size for scatter plots",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "catgo.scatter.point.color": {
+          "type": "string",
+          "default": "#4A9EFF",
+          "description": "Default color for scatter plot points"
+        },
+        "catgo.scatter.point.opacity": {
+          "type": "number",
+          "default": 1,
+          "description": "Opacity of scatter plot points",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.scatter.point.stroke_width": {
+          "type": "number",
+          "default": 1,
+          "description": "Stroke width for scatter plot points",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "catgo.scatter.point.stroke_color": {
+          "type": "string",
+          "default": "#000000",
+          "description": "Stroke color for scatter plot points"
+        },
+        "catgo.scatter.point.stroke_opacity": {
+          "type": "number",
+          "default": 1,
+          "description": "Stroke opacity for scatter plot points",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.scatter.line.width": {
+          "type": "number",
+          "default": 2,
+          "description": "Line width for scatter plot connections",
+          "minimum": 0.5,
+          "maximum": 10
+        },
+        "catgo.scatter.line.color": {
+          "type": "string",
+          "default": "#4A9EFF",
+          "description": "Default color for scatter plot lines"
+        },
+        "catgo.scatter.line.opacity": {
+          "type": "number",
+          "default": 1,
+          "description": "Opacity of scatter plot lines",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.scatter.line.dash": {
+          "type": "string",
+          "default": "solid",
+          "description": "Line dash pattern for scatter plots (e.g., \"4,4\" for dashed)"
+        },
+        "catgo.plot.animation_duration": {
+          "type": "number",
+          "default": 200,
+          "description": "Duration of plot animations in milliseconds",
+          "minimum": 0,
+          "maximum": 2000
+        },
+        "catgo.plot.enable_zoom": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable zooming in plots"
+        },
+        "catgo.plot.zoom_factor": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Zoom factor for plot interactions",
+          "minimum": 1.1,
+          "maximum": 5
+        },
+        "catgo.plot.auto_fit_range": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically fit plot range to data"
+        },
+        "catgo.plot.grid_lines": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show grid lines in plots"
+        },
+        "catgo.plot.axis_labels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show axis labels in plots"
+        },
+        "catgo.plot.show_x_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis zero reference line"
+        },
+        "catgo.plot.show_y_zero_line": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis zero reference line"
+        },
+        "catgo.plot.show_x_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show X-axis grid lines"
+        },
+        "catgo.plot.show_y_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Y-axis grid lines"
+        },
+        "catgo.plot.show_y2_grid": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show secondary Y-axis grid lines"
+        },
+        "catgo.plot.x_format": {
+          "type": "string",
+          "default": ".2~s",
+          "description": "Number format for X-axis ticks (D3 format specifier)"
+        },
+        "catgo.plot.y_format": {
+          "type": "string",
+          "default": "d",
+          "description": "Number format for Y-axis ticks (D3 format specifier)"
+        },
+        "catgo.plot.y2_format": {
+          "type": "string",
+          "default": "",
+          "description": "Number format for secondary Y-axis ticks (D3 format specifier)"
+        },
+        "catgo.plot.x_scale_type": {
+          "type": "string",
+          "default": "linear",
+          "description": "Scale type for X-axis",
+          "enum": [
+            "linear",
+            "log"
+          ]
+        },
+        "catgo.plot.y_scale_type": {
+          "type": "string",
+          "default": "linear",
+          "description": "Scale type for Y-axis",
+          "enum": [
+            "linear",
+            "log"
+          ]
+        },
+        "catgo.plot.x_ticks": {
+          "type": "number",
+          "default": 8,
+          "description": "Number of ticks on X-axis",
+          "minimum": 2,
+          "maximum": 20
+        },
+        "catgo.plot.y_ticks": {
+          "type": "number",
+          "default": 6,
+          "description": "Number of ticks on Y-axis",
+          "minimum": 2,
+          "maximum": 20
+        },
+        "catgo.phase_diagram.binary.camera_zoom": {
+          "type": "number",
+          "default": 1,
+          "description": "Initial zoom for binary (2D) phase diagram",
+          "minimum": 0.1,
+          "maximum": 10
+        },
+        "catgo.phase_diagram.binary.camera_center_x": {
+          "type": "number",
+          "default": 0,
+          "description": "Initial X center for binary (2D) phase diagram"
+        },
+        "catgo.phase_diagram.binary.camera_center_y": {
+          "type": "number",
+          "default": 0,
+          "description": "Initial Y center for binary (2D) phase diagram"
+        },
+        "catgo.phase_diagram.binary.color_mode": {
+          "type": "string",
+          "default": "energy",
+          "description": "Color mode for 2D PD points",
+          "enum": [
+            "stability",
+            "energy"
+          ]
+        },
+        "catgo.phase_diagram.binary.color_scale": {
+          "type": "string",
+          "default": "interpolateViridis",
+          "description": "D3 interpolate color scale for 2D PD energy mode"
+        },
+        "catgo.phase_diagram.binary.show_stable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show stable phases in 2D PD"
+        },
+        "catgo.phase_diagram.binary.show_unstable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show unstable phases in 2D PD"
+        },
+        "catgo.phase_diagram.binary.show_stable_labels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show labels for stable phases in 2D PD"
+        },
+        "catgo.phase_diagram.binary.show_unstable_labels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show labels for unstable phases in 2D PD"
+        },
+        "catgo.phase_diagram.binary.max_hull_dist_show_phases": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Max eV/atom above hull for showing unstable entries in 2D PD",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.phase_diagram.binary.max_hull_dist_show_labels": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Max eV/atom above hull for labeling unstable entries in 2D PD",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.phase_diagram.binary.fullscreen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start in fullscreen for 2D PD"
+        },
+        "catgo.phase_diagram.binary.info_pane_open": {
+          "type": "boolean",
+          "default": false,
+          "description": "Info pane open by default for 2D PD"
+        },
+        "catgo.phase_diagram.binary.legend_pane_open": {
+          "type": "boolean",
+          "default": false,
+          "description": "Legend pane open by default for 2D PD"
+        },
+        "catgo.phase_diagram.ternary.camera_elevation": {
+          "type": "number",
+          "default": 45,
+          "description": "Initial camera elevation (deg) for ternary (3D) PD",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "catgo.phase_diagram.ternary.camera_azimuth": {
+          "type": "number",
+          "default": 60,
+          "description": "Initial camera azimuth (deg) for ternary (3D) PD",
+          "minimum": -360,
+          "maximum": 360
+        },
+        "catgo.phase_diagram.ternary.camera_zoom": {
+          "type": "number",
+          "default": 1.5,
+          "description": "Initial camera zoom for ternary (3D) PD",
+          "minimum": 0.1,
+          "maximum": 10
+        },
+        "catgo.phase_diagram.ternary.camera_center_x": {
+          "type": "number",
+          "default": 0,
+          "description": "Initial X center for ternary (3D) PD"
+        },
+        "catgo.phase_diagram.ternary.camera_center_y": {
+          "type": "number",
+          "default": -50,
+          "description": "Initial Y center for ternary (3D) PD"
+        },
+        "catgo.phase_diagram.ternary.color_mode": {
+          "type": "string",
+          "default": "energy",
+          "description": "Color mode for 3D PD points",
+          "enum": [
+            "stability",
+            "energy"
+          ]
+        },
+        "catgo.phase_diagram.ternary.color_scale": {
+          "type": "string",
+          "default": "interpolateViridis",
+          "description": "D3 interpolate color scale for 3D PD energy mode"
+        },
+        "catgo.phase_diagram.ternary.show_stable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show stable phases in 3D PD"
+        },
+        "catgo.phase_diagram.ternary.show_unstable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show unstable phases in 3D PD"
+        },
+        "catgo.phase_diagram.ternary.show_stable_labels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show labels for stable phases in 3D PD"
+        },
+        "catgo.phase_diagram.ternary.show_unstable_labels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show labels for unstable phases in 3D PD"
+        },
+        "catgo.phase_diagram.ternary.max_hull_dist_show_phases": {
+          "type": "number",
+          "default": 0.5,
+          "description": "Max eV/atom above hull for showing unstable entries in 3D PD",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.phase_diagram.ternary.max_hull_dist_show_labels": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Max eV/atom above hull for labeling unstable entries in 3D PD",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.phase_diagram.ternary.show_hull_faces": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render lower hull faces in 3D PD"
+        },
+        "catgo.phase_diagram.ternary.hull_face_color": {
+          "type": "string",
+          "default": "#4caf50",
+          "description": "Color for lower hull faces in 3D PD"
+        },
+        "catgo.phase_diagram.ternary.hull_face_opacity": {
+          "type": "number",
+          "default": 0.3,
+          "description": "Opacity for hull faces in 3D PD (0-1)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.phase_diagram.ternary.fullscreen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start in fullscreen for 3D PD"
+        },
+        "catgo.phase_diagram.ternary.info_pane_open": {
+          "type": "boolean",
+          "default": false,
+          "description": "Info pane open by default for 3D PD"
+        },
+        "catgo.phase_diagram.ternary.legend_pane_open": {
+          "type": "boolean",
+          "default": false,
+          "description": "Legend pane open by default for 3D PD"
+        },
+        "catgo.phase_diagram.quaternary.camera_rotation_x": {
+          "type": "number",
+          "default": -0.6,
+          "description": "Initial camera X rotation (rad) for quaternary (4D) PD",
+          "minimum": -6.283,
+          "maximum": 6.283
+        },
+        "catgo.phase_diagram.quaternary.camera_rotation_y": {
+          "type": "number",
+          "default": 0.8,
+          "description": "Initial camera Y rotation (rad) for quaternary (4D) PD",
+          "minimum": -6.283,
+          "maximum": 6.283
+        },
+        "catgo.phase_diagram.quaternary.camera_zoom": {
+          "type": "number",
+          "default": 1.4,
+          "description": "Initial camera zoom for quaternary (4D) PD",
+          "minimum": 0.1,
+          "maximum": 20
+        },
+        "catgo.phase_diagram.quaternary.camera_center_x": {
+          "type": "number",
+          "default": 0,
+          "description": "Initial X center for quaternary (4D) PD"
+        },
+        "catgo.phase_diagram.quaternary.camera_center_y": {
+          "type": "number",
+          "default": 20,
+          "description": "Initial Y center for quaternary (4D) PD"
+        },
+        "catgo.phase_diagram.quaternary.color_mode": {
+          "type": "string",
+          "default": "energy",
+          "description": "Color mode for 4D PD points",
+          "enum": [
+            "stability",
+            "energy"
+          ]
+        },
+        "catgo.phase_diagram.quaternary.color_scale": {
+          "type": "string",
+          "default": "interpolateViridis",
+          "description": "D3 interpolate color scale for 4D PD energy mode"
+        },
+        "catgo.phase_diagram.quaternary.show_stable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show stable phases in 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.show_unstable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show unstable phases in 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.show_stable_labels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show labels for stable phases in 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.show_unstable_labels": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show labels for unstable phases in 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.show_hull_faces": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show convex hull faces in 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.hull_face_color": {
+          "type": "string",
+          "default": "#4caf50",
+          "description": "Color for hull faces in 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.hull_face_opacity": {
+          "type": "number",
+          "default": 0.06,
+          "description": "Opacity for hull faces in 4D PD (0-1)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "catgo.phase_diagram.quaternary.max_hull_dist_show_phases": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Max eV/atom above hull for showing unstable entries in 4D PD",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.phase_diagram.quaternary.max_hull_dist_show_labels": {
+          "type": "number",
+          "default": 0.1,
+          "description": "Max eV/atom above hull for labeling unstable entries in 4D PD",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "catgo.phase_diagram.quaternary.fullscreen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start in fullscreen for 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.info_pane_open": {
+          "type": "boolean",
+          "default": false,
+          "description": "Info pane open by default for 4D PD"
+        },
+        "catgo.phase_diagram.quaternary.legend_pane_open": {
+          "type": "boolean",
+          "default": false,
+          "description": "Legend pane open by default for 4D PD"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "sync-config": "deno run -A --node-modules-dir scripts/sync-config.ts",
+    "prebuild": "pnpm sync-config || echo 'sync-config skipped (config already exists)'",
+    "build": "rm -rf dist && vite build --config vite.webview.config.ts && mkdir -p dist/src && cp -r ../../src/lib dist/src/lib/ && vite build",
+    "package": "pnpm build && vsce package --no-dependencies",
+    "test": "vitest"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^6.1.4",
+    "@types/node": "^24.3.1",
+    "@types/vscode": "^1.96.0",
+    "@types/ws": "^8.18.1",
+    "svelte": "^5.38.7",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.4",
+    "ws": "^8.19.0"
+  }
+}

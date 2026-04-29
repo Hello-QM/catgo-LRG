@@ -1,0 +1,64 @@
+engine: sella
+label: Sella
+description: "Transition state search using Sella optimizer"
+
+supported_calc_types:
+  - ts_search
+
+params:
+  - key: calculator
+    label: "Calculator"
+    type: select
+    options:
+      - { label: "xTB", value: "xtb" }
+      - { label: "VASP", value: "vasp" }
+      - { label: "MACE", value: "mace" }
+      - { label: "CHGNet", value: "chgnet" }
+      - { label: "ORCA", value: "orca" }
+    default: "xtb"
+  - key: fmax
+    label: "Force Convergence"
+    type: number
+    default: 0.01
+    unit: "eV/Å"
+  - key: max_steps
+    label: "Max Steps"
+    type: number
+    default: 200
+    range: [1, 5000]
+  - key: order
+    label: "Saddle Order"
+    type: number
+    default: 1
+    range: [1, 3]
+  - key: delta
+    label: "Delta"
+    type: number
+    default: 0.01
+  - key: gamma
+    label: "Gamma"
+    type: number
+    default: 0.4
+
+input_files:
+  "run_sella.py":
+    source: hook
+  "POSCAR":
+    source: structure
+    format: poscar
+
+run_commands:
+  - "python run_sella.py"
+
+output_files:
+  structure: "CONTCAR"
+  log: "sella.log"
+  trajectory: "sella.traj"
+
+hooks:
+  pre_generate: "workflow.hooks.sella_hooks:generate_inputs"
+
+calc_type_mapping:
+  ts_search: sella_ts
+
+safety: safe

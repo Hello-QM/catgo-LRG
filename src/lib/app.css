@@ -1,0 +1,196 @@
+:root {
+  --theme-transition-duration: 0.3s;
+  --text-color: #eee;
+  --page-bg: #090019;
+  --max-text-width: 50em;
+
+  --sms-max-width: 20em;
+  --sms-text-color: var(--text-color);
+
+  /* Svelte MultiSelect */
+  --sms-options-bg: var(--page-bg);
+  --sms-active-color: light-dark(var(--accent-color), cornflowerblue);
+}
+
+/* Targeted theme transitions for performance */
+:where(body, main, button, a, code, kbd, pre, blockquote, textarea, table, input),
+:where(select, label, .theme-control, .toc, svg, path, circle, rect, text),
+:where(.info-pane, .pane-header, .pane-content, .close-button),
+:where(nav > a),
+:where(.theme-control, .theme-control label, .theme-control select) {
+  transition:
+    background-color var(--theme-transition-duration) ease,
+    color var(--theme-transition-duration) ease,
+    border-color var(--theme-transition-duration) ease,
+    fill var(--theme-transition-duration) ease,
+    stroke var(--theme-transition-duration) ease,
+    box-shadow var(--theme-transition-duration) ease;
+}
+body {
+  background: var(--page-bg);
+  padding: 6vh 3vw;
+  font-family: -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  margin: auto;
+  color: var(--text-color);
+  line-height: 1.5;
+}
+main {
+  margin: auto;
+  margin-bottom: 3em;
+  width: 100%;
+  max-width: var(--max-text-width);
+  container-type: inline-size;
+}
+a {
+  color: var(--accent-color, cornflowerblue);
+  text-decoration: none;
+}
+
+button, a.btn {
+  color: var(--text-color);
+  cursor: pointer;
+  border: none;
+  border-radius: 3pt;
+  padding: 2pt 4pt;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+a:hover {
+  color: var(--accent-hover-color, orange);
+}
+code, kbd {
+  overflow-wrap: break-word;
+  padding: 1pt 3pt;
+  border-radius: 3pt;
+  background-color: var(--code-bg);
+}
+kbd {
+  font-size: larger;
+}
+pre code {
+  background-color: transparent;
+  display: inline-block;
+  padding: 0;
+  width: 100%;
+}
+pre {
+  position: relative;
+  border-radius: 4pt;
+  font-size: 0.95em;
+  background-color: var(--pre-bg);
+  padding: 1ex 1em;
+  overflow-x: auto;
+}
+blockquote {
+  border-left: 3pt solid var(--accent-color, cornflowerblue);
+  padding: 3pt 7pt;
+  background: rgba(255, 255, 255, 0.2);
+  margin: 1em 0;
+}
+blockquote p:first-child {
+  margin-top: 0;
+}
+blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+:where(h1, h2, h3, h4, h5, h6) {
+  scroll-margin-top: 100px;
+}
+body main > :where(h1, h2, h3, h4, h5, h6) {
+  text-align: center;
+}
+/* style heading anchors added by rehype-autolink-headings, see svelte.config.js */
+:where(h2, h3, h4, h5, h6) a[aria-hidden='true'] {
+  transition: 0.3s;
+  margin-left: 4pt;
+  opacity: 0;
+}
+:where(h2, h3, h4, h5, h6):hover a[aria-hidden='true'] {
+  opacity: 1;
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  min-height: 100px;
+  box-sizing: border-box;
+  margin: 1em auto;
+}
+
+/* Global select/option dark-mode fix */
+select {
+  color-scheme: inherit;
+}
+select option {
+  background: var(--dialog-bg, light-dark(#fff, #1c1d21));
+  color: var(--text-color, light-dark(#374151, #eee));
+}
+
+/* Modern flat input styling */
+input {
+  border: none;
+  border-radius: 3pt;
+}
+input[type='number'] {
+  min-width: 40px;
+  width: auto;
+}
+input[type='color'] {
+  border: none;
+  padding: 0;
+  outline: none;
+  border-radius: 3pt;
+  overflow: hidden;
+  cursor: pointer;
+}
+input[type='color']::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+input[type='color']::-webkit-color-swatch {
+  border: none;
+}
+
+table {
+  display: block;
+  max-width: 100%;
+  overflow: scroll;
+  border-collapse: collapse;
+}
+table :is(td, th) {
+  border: 1px solid var(--border-color, gray);
+  padding: 3pt 12pt;
+}
+table.roomy :is(td, th) {
+  padding: 5pt 9pt;
+}
+tbody tr:nth-child(odd) {
+  background: color-mix(in hsl, var(--page-bg, black), var(--text-color) 2%);
+}
+
+:where(ul.selected > li button, button.remove-all) {
+  background-color: transparent !important;
+}
+
+.full-bleed {
+  --margin: 5vw;
+  width: calc(100vw - 2 * var(--margin)) !important;
+  margin-left: calc(-50vw + 50% + var(--margin));
+  max-width: none !important;
+}
+.bleed-1400 {
+  --margin: 5vw;
+  width: min(1400px, calc(100vw - 2 * var(--margin))) !important;
+  margin-left: calc(-50vw + 50% + max(var(--margin), (100vw - 1400px) / 2));
+  max-width: none !important;
+}
+
+.copy-btn {
+  position: absolute;
+  top: 9pt;
+  right: 9pt;
+  background: var(--btn-bg);
+  color: var(--btn-color);
+}

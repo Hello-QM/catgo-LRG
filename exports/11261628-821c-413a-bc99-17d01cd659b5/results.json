@@ -1,0 +1,15 @@
+{
+  "workflow_id": "11261628-821c-413a-bc99-17d01cd659b5",
+  "export_step_id": "n1773436084392-6jxh",
+  "entries": [
+    {
+      "parent_step_id": "n1773436073693-f5gp",
+      "energy_eV": -557.155631,
+      "formula": "Cu143Ni"
+    }
+  ],
+  "exported_files": [
+    "results.db",
+    "structure_1_n1773436.vasp"
+  ]
+}

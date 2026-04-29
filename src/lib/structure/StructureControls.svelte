@@ -1,0 +1,1527 @@
+<script lang="ts">
+  import type { AnyStructure } from '$lib'
+  import { DraggablePane, format_num, Lattice, SettingsSection } from '$lib'
+  import { PluginPanelHost } from '$lib/plugins'
+  import type { ColorSchemeName } from '$lib/colors'
+  import { axis_colors, element_color_schemes } from '$lib/colors'
+  import { to_degrees, to_radians } from '$lib/math'
+  import { DEFAULTS, SETTINGS_CONFIG } from '$lib/settings'
+  import {
+    DEFAULT_PANE_FONT_SIZE,
+    pane_font_size_state,
+    save_pane_font_size,
+  } from '$lib/state.svelte'
+  import { StructureScene } from '$lib/structure'
+  import { is_valid_supercell_input } from '$lib/structure/supercell'
+  import { untrack } from 'svelte'
+  import type { ComponentProps } from 'svelte'
+  import Select from 'svelte-multiselect'
+  import { tooltip } from 'svelte-multiselect/attachments'
+
+  let {
+    controls_open = $bindable(false),
+    scene_props = $bindable({}),
+    lattice_props = $bindable({
+      show_cell_vectors: DEFAULTS.structure.show_cell_vectors,
+      cell_edge_color: DEFAULTS.structure.cell_edge_color,
+      cell_edge_opacity: DEFAULTS.structure.cell_edge_opacity,
+      cell_surface_color: DEFAULTS.structure.cell_surface_color,
+      cell_surface_opacity: DEFAULTS.structure.cell_surface_opacity,
+      cell_edge_width: DEFAULTS.structure.cell_edge_width,
+    }),
+    show_image_atoms = $bindable(DEFAULTS.structure.show_image_atoms),
+    image_atom_opacity = $bindable(1.0),
+    periodic_repeats = $bindable<[number, number, number]>([0, 0, 0]),
+    supercell_scaling = $bindable(`1x1x1`),
+    background_color = $bindable(undefined),
+    background_opacity = $bindable(DEFAULTS.background_opacity),
+    color_scheme = $bindable(DEFAULTS.color_scheme),
+    selection_opacity = $bindable(1.0),
+    selected_sites = [] as number[],
+    selected_bonds = [] as import('./index').SelectedBond[],
+    atom_opacity_overrides = $bindable(new Map<number, number>()),
+    bond_opacity_overrides = $bindable(new Map<string, number>()),
+    structure = undefined,
+    bond_distance_rules = $bindable<import('./index').BondDistanceRule[]>([]),
+    supercell_loading = false,
+    pane_props = {},
+    toggle_props = {},
+    ...rest
+  }: Omit<ComponentProps<typeof DraggablePane>, `children`> & {
+    controls_open?: boolean // Control pane state
+    scene_props?: ComponentProps<typeof StructureScene> & Record<string, any>
+    lattice_props?: ComponentProps<typeof Lattice>
+    show_image_atoms?: boolean
+    image_atom_opacity?: number
+    periodic_repeats?: [number, number, number]
+    supercell_scaling?: string
+    background_color?: string
+    background_opacity?: number
+    color_scheme?: string
+    selection_opacity?: number
+    selected_sites?: number[]
+    selected_bonds?: import('./index').SelectedBond[]
+    atom_opacity_overrides?: Map<number, number>
+    bond_opacity_overrides?: Map<string, number>
+    structure?: AnyStructure
+    bond_distance_rules?: import('./index').BondDistanceRule[]
+    supercell_loading?: boolean
+    pane_props?: ComponentProps<typeof DraggablePane>[`pane_props`]
+    toggle_props?: ComponentProps<typeof DraggablePane>[`toggle_props`]
+  } = $props()
+
+  // Color scheme selection state
+  let color_scheme_selected = $state([color_scheme])
+  $effect(() => {
+    if (color_scheme_selected.length > 0) {
+      color_scheme = color_scheme_selected[0] as string
+    }
+  })
+
+  // Atom label color management
+  // untrack: intentional initial value capture from scene_props
+  let site_label_hex_color = $state(
+    untrack(() => scene_props.site_label_color) || DEFAULTS.structure.site_label_color,
+  )
+  let site_label_bg_hex_color = $state(
+    untrack(() => scene_props.site_label_bg_color) || DEFAULTS.structure.site_label_bg_color,
+  )
+  let site_label_background_opacity = $state(0)
+
+  $effect(() => {
+    scene_props.site_label_color = site_label_hex_color
+    scene_props.site_label_bg_color =
+      `color-mix(in srgb, ${site_label_bg_hex_color} ${
+        format_num(site_label_background_opacity, `.1~%`)
+      }, transparent)`
+  })
+
+  // Ensure site_label_offset is always available
+  untrack(() => { scene_props.site_label_offset ??= [...DEFAULTS.structure.site_label_offset] })
+
+  // Detect if structure has force data
+  let has_forces = $derived(
+    structure?.sites?.some((site) =>
+      site.properties?.force && Array.isArray(site.properties.force)
+    ) ?? false,
+  )
+
+  // Detect if structure has lattice (can create supercells)
+  let has_lattice = $derived(
+    structure && `lattice` in structure && structure.lattice !== undefined,
+  )
+
+  // Validate supercell input
+  let supercell_input_valid = $derived(is_valid_supercell_input(supercell_scaling))
+
+  // Available elements in current structure (for bond distance rules)
+  let available_elements = $derived(
+    [...new Set(structure?.sites?.flatMap(s => s.species.map(sp => sp.element)) ?? [])].sort(),
+  )
+
+  function add_bond_rule() {
+    const els = available_elements
+    if (els.length < 2) return
+    bond_distance_rules = [...bond_distance_rules, { element_1: els[0], element_2: els[1], min_dist: 0, max_dist: 3.0 }]
+  }
+
+  function remove_bond_rule(idx: number) {
+    bond_distance_rules = bond_distance_rules.filter((_, i) => i !== idx)
+  }
+
+  function update_bond_rule(idx: number, field: string, value: string | number) {
+    bond_distance_rules = bond_distance_rules.map((r, i) =>
+      i === idx ? { ...r, [field]: value } : r,
+    )
+  }
+
+  // Ensure rotation is always an array
+  $effect(() => {
+    scene_props.rotation ??= [...DEFAULTS.structure.rotation]
+  })
+
+  let rotation_degrees = $derived(
+    scene_props.rotation?.map((rad) => {
+      const deg = to_degrees(rad)
+      // Convert to [0, 360] range for UI display
+      return ((deg % 360) + 360) % 360
+    }) ?? [0, 0, 0],
+  )
+
+  function update_rotation(axis: `x` | `y` | `z`, degrees: number) {
+    scene_props.rotation ??= [0, 0, 0]
+    const axis_index = { x: 0, y: 1, z: 2 }[axis]
+    const clamped = Math.max(0, Math.min(360, degrees))
+    const norm = ((clamped % 360) + 360) % 360
+    scene_props.rotation[axis_index] = to_radians(norm)
+    // Trigger reactivity by creating new array
+    scene_props.rotation = [...scene_props.rotation]
+  }
+
+  // Helper function to get example set of colors from an element color scheme
+  function get_representative_colors(scheme_name: string): string[] {
+    const scheme = element_color_schemes[scheme_name as ColorSchemeName]
+    if (!scheme) return []
+
+    // Get colors for common elements: H, C, N, O, Fe, Ca, Si, Al
+    const sample_elements = [`H`, `C`, `N`, `O`, `Fe`, `Ca`, `Si`, `Al`]
+    return sample_elements
+      .slice(0, 4) // Take first 4
+      .map((el) => scheme[el] || scheme.H || `#cccccc`)
+      .filter(Boolean)
+  }
+</script>
+
+<DraggablePane
+  bind:show={controls_open}
+  pane_props={{ ...pane_props, class: `controls-pane ${pane_props?.class ?? ``}` }}
+  toggle_props={{
+    title: controls_open ? `` : `Controls`,
+    ...toggle_props,
+    class: `structure-controls-toggle ${toggle_props?.class ?? ``}`,
+  }}
+  {...rest}
+>
+  <SettingsSection
+    title="Visibility"
+    current_values={{
+      show_atoms: scene_props.show_atoms,
+      show_cell: scene_props.show_cell,
+      show_bonds: scene_props.show_bonds,
+      show_image_atoms,
+      image_atom_opacity,
+      show_site_labels: scene_props.show_site_labels,
+      show_site_indices: scene_props.show_site_indices,
+      show_force_vectors: scene_props.show_force_vectors,
+      show_cell_vectors: lattice_props.show_cell_vectors,
+    }}
+    on_reset={() => {
+      scene_props.show_atoms = DEFAULTS.structure.show_atoms
+      scene_props.show_cell = DEFAULTS.structure.show_cell
+      scene_props.show_bonds = DEFAULTS.structure.show_bonds
+      scene_props.show_site_labels = DEFAULTS.structure.show_site_labels
+      scene_props.show_site_indices = DEFAULTS.structure.show_site_indices
+      scene_props.show_force_vectors = DEFAULTS.structure.show_force_vectors
+      show_image_atoms = DEFAULTS.structure.show_image_atoms
+      image_atom_opacity = 1.0
+      periodic_repeats = [0, 0, 0]
+      lattice_props.show_cell_vectors = DEFAULTS.structure.show_cell_vectors
+    }}
+  >
+    <div class="visibility-grid">
+      <label
+        {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_atoms.description })}
+      >
+        <input type="checkbox" bind:checked={scene_props.show_atoms} />
+        Atoms
+      </label>
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.show_image_atoms.description,
+        })}
+      >
+        <input type="checkbox" bind:checked={show_image_atoms} />
+        Image Atoms
+      </label>
+      {#if show_image_atoms}
+        <label>
+          <span title="Opacity of periodic boundary condition image atoms" {@attach tooltip()}>Image Opacity</span>
+          <input type="number" min={0} max={1} step={0.05} bind:value={image_atom_opacity} />
+          <input type="range" min={0} max={1} step={0.05} bind:value={image_atom_opacity} />
+        </label>
+        <div title="Number of periodic repeats in each direction (a, b, c)" style="grid-column: 1 / -1; display:flex; gap:6px; align-items:center; font-size:0.85em;">
+          <span style="opacity:0.7">Repeats</span>
+          <span style="opacity:0.5">a</span><input type="number" min={0} max={5} step={1} style="width:2.5em" bind:value={periodic_repeats[0]} />
+          <span style="opacity:0.5">b</span><input type="number" min={0} max={5} step={1} style="width:2.5em" bind:value={periodic_repeats[1]} />
+          <span style="opacity:0.5">c</span><input type="number" min={0} max={5} step={1} style="width:2.5em" bind:value={periodic_repeats[2]} />
+        </div>
+      {/if}
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.show_site_labels.description,
+        })}
+      >
+        <input type="checkbox" bind:checked={scene_props.show_site_labels} />
+        Site Labels
+      </label>
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.show_site_indices.description,
+        })}
+      >
+        <input type="checkbox" bind:checked={scene_props.show_site_indices} />
+        Site Indices
+      </label>
+      {#if has_forces}
+        <label
+          {@attach tooltip({
+            content: SETTINGS_CONFIG.structure.show_force_vectors.description,
+          })}
+        >
+          <input type="checkbox" bind:checked={scene_props.show_force_vectors} />
+          Force Vectors
+        </label>
+      {/if}
+      <label
+        {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_cell.description })}
+      >
+        <input type="checkbox" bind:checked={scene_props.show_cell} />
+        Unit Cell
+      </label>
+      <label>
+        <input type="checkbox" bind:checked={lattice_props.show_cell_vectors} />
+        Lattice Vectors
+      </label>
+    </div>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_bonds.description })}
+    >
+      Bonds:
+      <select bind:value={scene_props.show_bonds}>
+        {#each Object.entries(SETTINGS_CONFIG.structure.show_bonds.enum ?? {}) as
+          [value, label]
+          (value)
+        }
+          <option {value}>{label}</option>
+        {/each}
+      </select>
+    </label>
+    {#if available_elements.length >= 2}
+      <div class="bond-rules">
+        {#each bond_distance_rules as rule, idx (idx)}
+          <div class="bond-rule-row">
+            <select value={rule.element_1} onchange={(e) => update_bond_rule(idx, `element_1`, e.currentTarget.value)}>
+              {#each available_elements as el}<option value={el}>{el}</option>{/each}
+            </select>
+            <span class="rule-sep">–</span>
+            <select value={rule.element_2} onchange={(e) => update_bond_rule(idx, `element_2`, e.currentTarget.value)}>
+              {#each available_elements as el}<option value={el}>{el}</option>{/each}
+            </select>
+            <input
+              type="number" step="0.1" min="0" max="10"
+              value={rule.min_dist}
+              onchange={(e) => update_bond_rule(idx, `min_dist`, parseFloat(e.currentTarget.value) || 0)}
+              class="dist-input"
+            />
+            <span class="rule-sep">~</span>
+            <input
+              type="number" step="0.1" min="0" max="10"
+              value={rule.max_dist}
+              onchange={(e) => update_bond_rule(idx, `max_dist`, parseFloat(e.currentTarget.value) || 3)}
+              class="dist-input"
+            />
+            <span class="rule-unit">Å</span>
+            <button type="button" class="rule-remove" onclick={(e) => { e.stopPropagation(); remove_bond_rule(idx) }} title="Remove rule">×</button>
+          </div>
+        {/each}
+        <button type="button" class="add-rule-btn" onclick={add_bond_rule}>+ Bond rule</button>
+      </div>
+    {/if}
+  </SettingsSection>
+
+  <SettingsSection
+    title="Camera"
+    current_values={{
+      camera_projection: scene_props.camera_projection,
+      auto_rotate: scene_props.auto_rotate,
+      rotate_speed: scene_props.rotate_speed,
+      zoom_speed: scene_props.zoom_speed,
+      pan_speed: scene_props.pan_speed,
+      zoom_to_cursor: scene_props.zoom_to_cursor,
+      rotation_damping: scene_props.rotation_damping,
+    }}
+    on_reset={() => {
+      scene_props.camera_projection = DEFAULTS.structure.camera_projection
+      scene_props.auto_rotate = DEFAULTS.structure.auto_rotate
+      scene_props.rotate_speed = DEFAULTS.structure.rotate_speed
+      scene_props.zoom_speed = DEFAULTS.structure.zoom_speed
+      scene_props.pan_speed = DEFAULTS.structure.pan_speed
+      scene_props.zoom_to_cursor = DEFAULTS.structure.zoom_to_cursor
+      scene_props.rotation_damping = DEFAULTS.structure.rotation_damping
+    }}
+  >
+    <label>
+      <span
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.camera_projection.description,
+        })}
+      >
+        Projection
+      </span>
+      <select bind:value={scene_props.camera_projection}>
+        {#each Object.entries(
+            SETTINGS_CONFIG.structure.camera_projection.enum ?? {},
+          ) as
+          [value, label]
+          (value)
+        }
+          <option {value}>{label}</option>
+        {/each}
+      </select>
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.auto_rotate.description })}
+    >
+      Auto-rotate speed
+      <input
+        type="number"
+        min={0}
+        max={2}
+        step={0.01}
+        bind:value={scene_props.auto_rotate}
+      />
+      <input
+        type="range"
+        min={0}
+        max={2}
+        step={0.01}
+        bind:value={scene_props.auto_rotate}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.rotate_speed.description })}
+    >
+      Rotate speed
+      <input
+        type="number"
+        min={0}
+        max={2}
+        step={0.05}
+        bind:value={scene_props.rotate_speed}
+      />
+      <input
+        type="range"
+        min={0}
+        max={2}
+        step={0.05}
+        bind:value={scene_props.rotate_speed}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.zoom_speed.description })}
+    >
+      Zoom speed
+      <input
+        type="number"
+        min={0.1}
+        max={0.8}
+        step={0.02}
+        bind:value={scene_props.zoom_speed}
+      />
+      <input
+        type="range"
+        min={0.1}
+        max={0.8}
+        step={0.02}
+        bind:value={scene_props.zoom_speed}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.pan_speed.description })}
+    >
+      Pan speed
+      <input
+        type="number"
+        min={0}
+        max={2}
+        step={0.01}
+        bind:value={scene_props.pan_speed}
+      />
+      <input
+        type="range"
+        min={0}
+        max={2}
+        step={0.01}
+        bind:value={scene_props.pan_speed}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.zoom_to_cursor.description })}
+    >
+      <input type="checkbox" bind:checked={scene_props.zoom_to_cursor} />
+      <span>Zoom to cursor</span>
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.rotation_damping.description })}
+    >
+      Rotation damping
+      <input
+        type="number"
+        min={0.01}
+        max={0.3}
+        step={0.01}
+        bind:value={scene_props.rotation_damping}
+      />
+      <input
+        type="range"
+        min={0.01}
+        max={0.3}
+        step={0.01}
+        bind:value={scene_props.rotation_damping}
+      />
+    </label>
+  </SettingsSection>
+
+  <SettingsSection
+    title="Rotation"
+    current_values={{
+      rotation: scene_props.rotation,
+    }}
+    on_reset={() => {
+      scene_props.rotation = [...DEFAULTS.structure.rotation]
+    }}
+  >
+    <div class="rotation-axes">
+      {#each axis_colors as [axis, color], idx (axis)}
+        <div>
+          <div
+            {@attach tooltip()}
+            title="{axis}-axis rotation in degrees"
+            style:color
+          >
+            <span>{axis.toUpperCase()} = </span>
+            <input
+              type="number"
+              min={0}
+              max={360}
+              step={1}
+              value={rotation_degrees[idx].toFixed(0)}
+              oninput={(event) =>
+              update_rotation(axis, Number(event.currentTarget.value))}
+              style:color
+              style="margin: 0"
+            />
+            °
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={360}
+            step={1}
+            value={rotation_degrees[idx].toFixed(0)}
+            oninput={(event) => update_rotation(axis, Number(event.currentTarget.value))}
+            style:--thumb-color={color}
+            style="width: 100%"
+          />
+        </div>
+      {/each}
+    </div>
+  </SettingsSection>
+
+  <SettingsSection
+    title="Atoms"
+    current_values={{
+      atom_radius: scene_props.atom_radius,
+      same_size_atoms: scene_props.same_size_atoms,
+      color_scheme,
+    }}
+    on_reset={() => {
+      scene_props.atom_radius = DEFAULTS.structure.atom_radius
+      scene_props.same_size_atoms = DEFAULTS.structure.same_size_atoms
+      color_scheme = DEFAULTS.color_scheme
+      color_scheme_selected = [DEFAULTS.color_scheme]
+    }}
+  >
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.atom_radius.description })}
+    >
+      Radius <small>(Å)</small>
+      <input
+        type="number"
+        min={0.2}
+        max={2}
+        step={0.05}
+        bind:value={scene_props.atom_radius}
+      />
+      <input
+        type="range"
+        min={0.2}
+        max={2}
+        step={0.05}
+        bind:value={scene_props.atom_radius}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.same_size_atoms.description })}
+    >
+      Same size atoms
+      <input type="checkbox" bind:checked={scene_props.same_size_atoms} />
+    </label>
+    <label
+      style="align-items: start"
+      {@attach tooltip({ content: SETTINGS_CONFIG.color_scheme.description })}
+    >
+      Color scheme
+      <Select
+        options={Object.keys(element_color_schemes)}
+        maxSelect={1}
+        minSelect={1}
+        bind:selected={color_scheme_selected}
+        liOptionStyle="padding: 3pt 6pt;"
+        style="width: 10em; border: none"
+      >
+        {#snippet children({ option })}
+          {@const option_style =
+            `display: flex; align-items: center; gap: 6pt; justify-content: space-between;`}
+          <div style={option_style}>
+            {option}
+            <div style="display: flex; gap: 3pt">
+              {#each get_representative_colors(String(option)) as color (color)}
+                {@const color_style =
+                `width: 15px; height: 15px; border-radius: 2px; background: ${color};`}
+                <div style={color_style}></div>
+              {/each}
+            </div>
+          </div>
+        {/snippet}
+      </Select>
+    </label>
+  </SettingsSection>
+
+  {#if scene_props.show_site_labels || scene_props.show_site_indices}
+    <SettingsSection
+      title="Labels"
+      current_values={{
+        site_label_size: scene_props.site_label_size,
+        site_label_hex_color,
+        site_label_bg_hex_color,
+        site_label_background_opacity,
+        site_label_padding: scene_props.site_label_padding,
+        site_label_offset: scene_props.site_label_offset,
+      }}
+      on_reset={() => {
+        scene_props.site_label_size = DEFAULTS.structure.site_label_size
+        scene_props.site_label_padding = DEFAULTS.structure.site_label_padding
+        scene_props.site_label_offset = [...DEFAULTS.structure.site_label_offset]
+        site_label_hex_color = DEFAULTS.structure.site_label_color
+        site_label_bg_hex_color = DEFAULTS.structure.site_label_bg_color
+        site_label_background_opacity = 0
+      }}
+    >
+      <div class="pane-row">
+        <label>
+          Color
+          <input type="color" bind:value={site_label_hex_color} />
+        </label>
+        <label>
+          Size
+          <input
+            type="range"
+            min="0.5"
+            max="2"
+            step="0.1"
+            bind:value={scene_props.site_label_size}
+          />
+        </label>
+      </div>
+      <div class="pane-row">
+        <label>
+          Background
+          <input type="color" bind:value={site_label_bg_hex_color} />
+        </label>
+        <label>
+          Opacity
+          <input
+            type="number"
+            min="0"
+            max="1"
+            step="0.01"
+            bind:value={site_label_background_opacity}
+          />
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            bind:value={site_label_background_opacity}
+          />
+        </label>
+      </div>
+      <div class="pane-row">
+        <label>
+          Padding
+          <input
+            type="number"
+            min="0"
+            max="10"
+            step="1"
+            bind:value={scene_props.site_label_padding}
+          />
+          <input
+            type="range"
+            min="0"
+            max="10"
+            step="1"
+            bind:value={scene_props.site_label_padding}
+          />
+        </label>
+      </div>
+      <div class="pane-row">
+        Offset
+        {#each [`X`, `Y`, `Z`] as axis, idx (axis)}
+          <label>
+            {axis}
+            <input
+              type="number"
+              min="-1"
+              max="1"
+              step="0.1"
+              bind:value={scene_props.site_label_offset![idx]}
+            />
+          </label>
+        {/each}
+      </div>
+    </SettingsSection>
+  {/if}
+
+  {#if has_forces && scene_props.show_force_vectors}
+    <SettingsSection
+      title="Force Vectors"
+      current_values={{
+        force_scale: scene_props.force_scale,
+        force_color: scene_props.force_color,
+        force_display_mode: scene_props.force_display_mode,
+        force_color_mode: scene_props.force_color_mode,
+      }}
+      on_reset={() => {
+        scene_props.force_scale = DEFAULTS.structure.force_scale
+        scene_props.force_color = DEFAULTS.structure.force_color
+        scene_props.force_display_mode = DEFAULTS.structure.force_display_mode
+        scene_props.force_color_mode = DEFAULTS.structure.force_color_mode
+        scene_props.force_range_min = DEFAULTS.structure.force_range_min
+        scene_props.force_range_max = DEFAULTS.structure.force_range_max
+      }}
+    >
+      <label>
+        Display Mode
+        <select bind:value={scene_props.force_display_mode}>
+          <option value="all">All Forces</option>
+          <option value="max_only">Max Force Only</option>
+          <option value="range">Range Filter</option>
+        </select>
+      </label>
+      {#if scene_props.force_display_mode === 'range'}
+        <div class="pane-row">
+          <label>
+            Min (eV/Å)
+            <input type="number" min={0} step={0.01} bind:value={scene_props.force_range_min} />
+          </label>
+          <label>
+            Max (eV/Å)
+            <input type="number" min={0} step={0.01} bind:value={scene_props.force_range_max} />
+          </label>
+        </div>
+      {/if}
+      <label>
+        Scale
+        <input
+          type="number"
+          min={0.001}
+          max={5}
+          step={0.001}
+          bind:value={scene_props.force_scale}
+        />
+        <input
+          type="range"
+          min={0.001}
+          max={5}
+          step={0.001}
+          bind:value={scene_props.force_scale}
+        />
+      </label>
+      <div class="pane-row">
+        <label>
+          Color Mode
+          <select bind:value={scene_props.force_color_mode}>
+            <option value="custom">Custom</option>
+            <option value="element">Element</option>
+          </select>
+        </label>
+        {#if scene_props.force_color_mode !== 'element'}
+          <label>
+            Color
+            <input type="color" bind:value={scene_props.force_color} />
+          </label>
+        {/if}
+      </div>
+    </SettingsSection>
+  {/if}
+
+  {#if has_lattice}
+    <SettingsSection
+      title="Cell"
+      current_values={{
+        cell_edge_color: lattice_props.cell_edge_color,
+        cell_edge_opacity: lattice_props.cell_edge_opacity,
+        cell_surface_color: lattice_props.cell_surface_color,
+        cell_surface_opacity: lattice_props.cell_surface_opacity,
+        supercell_scaling,
+      }}
+      on_reset={() => {
+        lattice_props.cell_edge_color = DEFAULTS.structure.cell_edge_color
+        lattice_props.cell_edge_opacity = DEFAULTS.structure.cell_edge_opacity
+        lattice_props.cell_surface_color = DEFAULTS.structure.cell_surface_color
+        lattice_props.cell_surface_opacity = DEFAULTS.structure.cell_surface_opacity
+        supercell_scaling = `1x1x1`
+      }}
+    >
+      <label>
+        <span
+          {@attach tooltip({
+            content:
+              `Create supercells by repeating the unit cell. Examples: "2x2x2", "3x1x2", or "2"`,
+          })}
+        >
+          Supercell Scaling
+        </span>
+        <input
+          type="text"
+          bind:value={supercell_scaling}
+          placeholder="1x1x1"
+          style:border={supercell_input_valid ? undefined : `1px dashed red`}
+          style:opacity={supercell_loading ? 0.5 : 1}
+          disabled={supercell_loading}
+          inputmode="text"
+          autocomplete="off"
+          spellcheck="false"
+          pattern="^(\d+|\d+x\d+x\d+)$"
+          aria-invalid={!supercell_input_valid}
+          title={supercell_input_valid
+          ? `Valid supercell scaling: ${supercell_scaling}`
+          : `Invalid format. Use "2x2x2", "3x1x2", or "2"`}
+        />
+      </label>
+      {#if supercell_loading}
+        <div
+          style="display: flex; align-items: center; gap: 8px; font-size: 0.85em; color: var(--accent-color); margin-top: 4pt"
+        >
+          <span
+            class="spinner-icon"
+            style="display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite"
+          ></span>
+          <span>Generating supercell...</span>
+        </div>
+      {/if}
+
+      {#if !supercell_input_valid}
+        <div style="color: red; font-size: 0.8em; margin-top: 4pt">
+          Invalid format. Use patterns like "2x2x2", "3x1x2", or "2".
+        </div>
+      {/if}
+
+      {#each [
+        {
+          label: `Edge color`,
+          color_prop: `cell_edge_color`,
+          opacity_prop: `cell_edge_opacity`,
+          step: 0.05,
+        },
+        {
+          label: `Surface color`,
+          color_prop: `cell_surface_color`,
+          opacity_prop: `cell_surface_opacity`,
+          step: 0.01,
+        },
+      ] as const as
+        { label, color_prop, opacity_prop, step }
+        (label)
+      }
+        <div class="pane-row">
+          <label>
+            {label}
+            <input
+              type="color"
+              bind:value={lattice_props[color_prop]}
+            />
+          </label>
+          <label>
+            opacity
+            <input
+              type="number"
+              min={0}
+              max={1}
+              {step}
+              bind:value={lattice_props[opacity_prop]}
+            />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              {step}
+              bind:value={lattice_props[opacity_prop]}
+            />
+          </label>
+        </div>
+      {/each}
+    </SettingsSection>
+  {/if}
+
+  {#if scene_props.show_bonds && scene_props.show_bonds !== `never`}
+    <SettingsSection
+      title="Bonds"
+      current_values={{
+        bonding_strategy: scene_props.bonding_strategy,
+        bond_color: scene_props.bond_color,
+        bond_thickness: scene_props.bond_thickness,
+        incomplete_periodic_edge_mode: scene_props.incomplete_periodic_edge_mode,
+        incomplete_edge_length_scale: scene_props.incomplete_edge_length_scale,
+      }}
+      on_reset={() => {
+        scene_props.bonding_strategy = DEFAULTS.structure.bonding_strategy
+        scene_props.bond_color = DEFAULTS.structure.bond_color
+        scene_props.bond_thickness = DEFAULTS.structure.bond_thickness
+        scene_props.incomplete_periodic_edge_mode = DEFAULTS.structure.incomplete_periodic_edge_mode
+        scene_props.incomplete_edge_length_scale = DEFAULTS.structure.incomplete_edge_length_scale
+      }}
+    >
+      <label>
+        Strategy <select bind:value={scene_props.bonding_strategy}>
+          {#each Object.entries(
+            SETTINGS_CONFIG.structure.bonding_strategy.enum ?? {},
+          ) as
+            [value, label]
+            (value)
+          }
+            <option {value}>{label}</option>
+          {/each}
+        </select>
+      </label>
+      <label>
+        Color <input type="color" bind:value={scene_props.bond_color} />
+      </label>
+      <label>
+        Thickness
+        <input
+          type="number"
+          min={0.05}
+          max={0.5}
+          step={0.05}
+          bind:value={scene_props.bond_thickness}
+        />
+        <input
+          type="range"
+          min={0.05}
+          max={0.5}
+          step={0.05}
+          bind:value={scene_props.bond_thickness}
+        />
+      </label>
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.incomplete_periodic_edge_mode.description,
+        })}
+      >
+        <input
+          type="checkbox"
+          bind:checked={scene_props.incomplete_periodic_edge_mode}
+        />
+        Cell-edge stub bonds
+      </label>
+      {#if scene_props.incomplete_periodic_edge_mode}
+        <label>
+          Stub Length
+          <input
+            type="number"
+            min={0.05}
+            max={1.0}
+            step={0.05}
+            bind:value={scene_props.incomplete_edge_length_scale}
+          />
+          <input
+            type="range"
+            min={0.05}
+            max={1.0}
+            step={0.05}
+            bind:value={scene_props.incomplete_edge_length_scale}
+          />
+        </label>
+      {/if}
+    </SettingsSection>
+  {/if}
+
+  <SettingsSection
+    title="Clipping"
+    current_values={{
+      clip_active: scene_props.clip_active,
+      clip_radius: scene_props.clip_radius,
+      clip_outside_mode: scene_props.clip_outside_mode,
+    }}
+    on_reset={() => {
+      scene_props.clip_active = DEFAULTS.structure.clip_active
+      scene_props.clip_radius = DEFAULTS.structure.clip_radius
+      scene_props.clip_outside_mode = DEFAULTS.structure.clip_outside_mode
+      scene_props.clip_outside_opacity = DEFAULTS.structure.clip_outside_opacity
+    }}
+  >
+    <label>
+      <input type="checkbox" bind:checked={scene_props.clip_active} />
+      Sphere Clipping
+    </label>
+    {#if scene_props.clip_active}
+      <label>
+        Radius (Å)
+        <input
+          type="range"
+          min="2"
+          max="30"
+          step="0.5"
+          bind:value={scene_props.clip_radius}
+        />
+        <span>{scene_props.clip_radius}</span>
+      </label>
+      <label>
+        Outside Atoms
+        <select bind:value={scene_props.clip_outside_mode}>
+          <option value="hide">Hide</option>
+          <option value="transparent">Semi-transparent</option>
+        </select>
+      </label>
+      {#if scene_props.clip_outside_mode === `transparent`}
+        <label>
+          Outside Opacity
+          <input
+            type="range"
+            min="0"
+            max="0.5"
+            step="0.05"
+            bind:value={scene_props.clip_outside_opacity}
+          />
+        </label>
+      {/if}
+    {/if}
+  </SettingsSection>
+
+  <SettingsSection
+    title="Polyhedra"
+    current_values={{
+      show_polyhedra: scene_props.show_polyhedra,
+      polyhedra_opacity: scene_props.polyhedra_opacity,
+      polyhedra_opacity_mode: scene_props.polyhedra_opacity_mode,
+      polyhedra_edge_color: scene_props.polyhedra_edge_color,
+      hide_polyhedra_center_atoms: scene_props.hide_polyhedra_center_atoms,
+      hide_polyhedra_internal_bonds: scene_props.hide_polyhedra_internal_bonds,
+    }}
+    on_reset={() => {
+      scene_props.show_polyhedra = DEFAULTS.structure.show_polyhedra
+      scene_props.polyhedra_center_elements = DEFAULTS.structure.polyhedra_center_elements
+      scene_props.polyhedra_min_coordination = DEFAULTS.structure.polyhedra_min_coordination
+      scene_props.polyhedra_opacity_mode = DEFAULTS.structure.polyhedra_opacity_mode
+      scene_props.polyhedra_opacity = DEFAULTS.structure.polyhedra_opacity
+      scene_props.polyhedra_opacity_near = DEFAULTS.structure.polyhedra_opacity_near
+      scene_props.polyhedra_opacity_far = DEFAULTS.structure.polyhedra_opacity_far
+      scene_props.polyhedra_edge_opacity = DEFAULTS.structure.polyhedra_edge_opacity
+      scene_props.polyhedra_edge_color = DEFAULTS.structure.polyhedra_edge_color
+      scene_props.polyhedra_color_overrides = DEFAULTS.structure.polyhedra_color_overrides
+      scene_props.hide_polyhedra_center_atoms = DEFAULTS.structure.hide_polyhedra_center_atoms
+      scene_props.hide_polyhedra_internal_bonds = DEFAULTS.structure.hide_polyhedra_internal_bonds
+    }}
+  >
+    <label>
+      <input type="checkbox" bind:checked={scene_props.show_polyhedra} />
+      Show Polyhedra
+    </label>
+    {#if scene_props.show_polyhedra}
+      <label>
+        Min Coordination
+        <input
+          type="number"
+          min="3"
+          max="12"
+          step="1"
+          bind:value={scene_props.polyhedra_min_coordination}
+        />
+      </label>
+      <label>
+        Opacity Mode
+        <select bind:value={scene_props.polyhedra_opacity_mode}>
+          <option value="uniform">Uniform</option>
+          <option value="depth_gradient">Depth Gradient</option>
+        </select>
+      </label>
+      {#if scene_props.polyhedra_opacity_mode === `uniform`}
+        <label>
+          Face Opacity
+          <input
+            type="range"
+            min="0.05"
+            max="1"
+            step="0.05"
+            bind:value={scene_props.polyhedra_opacity}
+          />
+        </label>
+      {:else}
+        <label>
+          Near Opacity
+          <input
+            type="range"
+            min="0.05"
+            max="1"
+            step="0.05"
+            bind:value={scene_props.polyhedra_opacity_near}
+          />
+        </label>
+        <label>
+          Far Opacity
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            bind:value={scene_props.polyhedra_opacity_far}
+          />
+        </label>
+      {/if}
+      <label>
+        Edge Color
+        <input type="color" bind:value={scene_props.polyhedra_edge_color} />
+      </label>
+      <label>
+        Edge Opacity
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          bind:value={scene_props.polyhedra_edge_opacity}
+        />
+      </label>
+      <label>
+        <input type="checkbox" bind:checked={scene_props.hide_polyhedra_center_atoms} />
+        Hide Center Atoms
+      </label>
+      <label>
+        <input type="checkbox" bind:checked={scene_props.hide_polyhedra_internal_bonds} />
+        Hide Internal Bonds
+      </label>
+    {/if}
+  </SettingsSection>
+
+  <SettingsSection
+    title="Hydrogen Bonds"
+    current_values={{
+      show_hydrogen_bonds: scene_props.show_hydrogen_bonds,
+      hbond_distance_cutoff: scene_props.hbond_distance_cutoff,
+      hbond_angle_cutoff: scene_props.hbond_angle_cutoff,
+      hbond_thickness: scene_props.hbond_thickness,
+    }}
+    on_reset={() => {
+      scene_props.show_hydrogen_bonds = DEFAULTS.structure.show_hydrogen_bonds
+      scene_props.hbond_distance_cutoff = DEFAULTS.structure.hbond_distance_cutoff
+      scene_props.hbond_angle_cutoff = DEFAULTS.structure.hbond_angle_cutoff
+      scene_props.hbond_thickness = DEFAULTS.structure.hbond_thickness
+    }}
+  >
+    <label>
+      <input type="checkbox" bind:checked={scene_props.show_hydrogen_bonds} />
+      Show H-bonds
+    </label>
+    {#if scene_props.show_hydrogen_bonds}
+      <label>
+        Distance cutoff (Å)
+        <input
+          type="number"
+          min={1.5}
+          max={4.0}
+          step={0.1}
+          bind:value={scene_props.hbond_distance_cutoff}
+        />
+        <input
+          type="range"
+          min={1.5}
+          max={4.0}
+          step={0.1}
+          bind:value={scene_props.hbond_distance_cutoff}
+        />
+      </label>
+      <label>
+        Angle cutoff (°)
+        <input
+          type="number"
+          min={90}
+          max={180}
+          step={5}
+          bind:value={scene_props.hbond_angle_cutoff}
+        />
+        <input
+          type="range"
+          min={90}
+          max={180}
+          step={5}
+          bind:value={scene_props.hbond_angle_cutoff}
+        />
+      </label>
+      <label>
+        Thickness
+        <input
+          type="number"
+          min={0.01}
+          max={0.5}
+          step={0.01}
+          bind:value={scene_props.hbond_thickness}
+        />
+        <input
+          type="range"
+          min={0.01}
+          max={0.5}
+          step={0.01}
+          bind:value={scene_props.hbond_thickness}
+        />
+      </label>
+    {/if}
+  </SettingsSection>
+
+  <SettingsSection
+    title="Appearance"
+    current_values={{
+      background_color,
+      background_opacity,
+      directional_light: scene_props.directional_light,
+      ambient_light: scene_props.ambient_light,
+      depth_cueing: scene_props.depth_cueing,
+      depth_cue_start: scene_props.depth_cue_start,
+      depth_cue_end: scene_props.depth_cue_end,
+    }}
+    on_reset={() => {
+      background_color = undefined
+      background_opacity = DEFAULTS.background_opacity
+      scene_props.directional_light = DEFAULTS.structure.directional_light
+      scene_props.ambient_light = DEFAULTS.structure.ambient_light
+      scene_props.depth_cueing = DEFAULTS.structure.depth_cueing
+      scene_props.depth_cue_start = DEFAULTS.structure.depth_cue_start
+      scene_props.depth_cue_end = DEFAULTS.structure.depth_cue_end
+    }}
+  >
+    <h5>Background</h5>
+    <div class="pane-row">
+      <label>
+        Color
+        <!-- not using bind:value to not give a default value of #000000 to background_color, needs to stay undefined to not override --struct-bg theme color -->
+        <input
+          type="color"
+          value={background_color}
+          oninput={(event) => {
+            background_color = (event.target as HTMLInputElement).value
+          }}
+        />
+      </label>
+      <label>
+        Opacity
+        <input
+          type="number"
+          min={0}
+          max={1}
+          step={0.02}
+          bind:value={background_opacity}
+        />
+        <input type="range" min={0} max={1} step={0.02} bind:value={background_opacity} />
+      </label>
+    </div>
+    <h5>Lighting</h5>
+    <label>
+      <span title="Intensity of the directional light" {@attach tooltip()}>
+        Directional light
+      </span>
+      <input
+        type="number"
+        min={0}
+        max={4}
+        step={0.01}
+        bind:value={scene_props.directional_light}
+      />
+      <input
+        type="range"
+        min={0}
+        max={4}
+        step={0.01}
+        bind:value={scene_props.directional_light}
+      />
+    </label>
+    <label>
+      <span title="Intensity of the ambient light" {@attach tooltip()}>
+        Ambient light
+      </span>
+      <input
+        type="number"
+        min={0.5}
+        max={3}
+        step={0.05}
+        bind:value={scene_props.ambient_light}
+      />
+      <input
+        type="range"
+        min={0.5}
+        max={3}
+        step={0.05}
+        bind:value={scene_props.ambient_light}
+      />
+    </label>
+    <h5>Depth Cueing</h5>
+    <label>
+      <span title="Fades distant atoms toward background color to convey depth (0 = off, 1 = maximum)" {@attach tooltip()}>
+        Intensity
+      </span>
+      <input
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.depth_cueing}
+      />
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.depth_cueing}
+      />
+    </label>
+    <label>
+      <span title="Starting depth — atoms closer than this are unaffected (0 = front, 1 = back)" {@attach tooltip()}>
+        Start
+      </span>
+      <input
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.depth_cue_start}
+      />
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.depth_cue_start}
+      />
+    </label>
+    <label>
+      <span title="Ending depth — atoms beyond this are fully faded (0 = front, 1 = back)" {@attach tooltip()}>
+        End
+      </span>
+      <input
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.depth_cue_end}
+      />
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.depth_cue_end}
+      />
+    </label>
+  </SettingsSection>
+
+  {#if selected_sites.length > 0 || selected_bonds.length > 0 || atom_opacity_overrides.size > 0 || bond_opacity_overrides.size > 0}
+    <SettingsSection
+      title="Selection Opacity"
+      current_values={{ selection_opacity }}
+      on_reset={() => {
+        selection_opacity = 1.0
+        atom_opacity_overrides = new Map()
+        bond_opacity_overrides = new Map()
+      }}
+    >
+      {#if selected_sites.length > 0 || selected_bonds.length > 0}
+        <label>
+          <span title="Adjust opacity of selected atoms/bonds. Changes persist after deselection." {@attach tooltip()}>
+            Opacity
+          </span>
+          <input
+            type="number"
+            min={0}
+            max={1}
+            step={0.05}
+            bind:value={selection_opacity}
+          />
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            bind:value={selection_opacity}
+          />
+        </label>
+        <small style="color: var(--text-color-muted, #888)">
+          {selected_sites.length} atom{selected_sites.length !== 1 ? 's' : ''}{selected_bonds.length > 0 ? `, ${selected_bonds.length} bond${selected_bonds.length !== 1 ? 's' : ''}` : ''} selected
+        </small>
+      {/if}
+      {#if atom_opacity_overrides.size > 0 || bond_opacity_overrides.size > 0}
+        <small style="color: var(--text-color-muted, #888)">
+          {atom_opacity_overrides.size} atom{atom_opacity_overrides.size !== 1 ? 's' : ''}, {bond_opacity_overrides.size} bond{bond_opacity_overrides.size !== 1 ? 's' : ''} with custom opacity
+        </small>
+      {/if}
+    </SettingsSection>
+  {/if}
+
+  <SettingsSection
+    title="Manipulation"
+    current_values={{
+      keyboard_movement_step: scene_props.keyboard_movement_step,
+    }}
+    on_reset={() => {
+      scene_props.keyboard_movement_step = DEFAULTS.structure.keyboard_movement_step
+    }}
+  >
+    <label
+      {@attach tooltip({
+        content: SETTINGS_CONFIG.structure.keyboard_movement_step.description,
+      })}
+    >
+      Keyboard step <small>(Å)</small>
+      <input
+        type="number"
+        min={0.01}
+        max={1}
+        step={0.01}
+        bind:value={scene_props.keyboard_movement_step}
+      />
+      <input
+        type="range"
+        min={0.01}
+        max={1}
+        step={0.01}
+        bind:value={scene_props.keyboard_movement_step}
+      />
+    </label>
+    <div style="font-size: 0.8em; color: var(--text-color-muted, #888); margin-top: 4pt">
+      Shift: 10× | Ctrl: 0.1×
+    </div>
+  </SettingsSection>
+
+  <SettingsSection
+    title="Font Size"
+    current_values={{ pane_font_size: pane_font_size_state.size }}
+    on_reset={() => {
+      pane_font_size_state.size = DEFAULT_PANE_FONT_SIZE
+      save_pane_font_size(DEFAULT_PANE_FONT_SIZE)
+      document.documentElement.style.setProperty(`--pane-font-size`, `${DEFAULT_PANE_FONT_SIZE}em`)
+    }}
+  >
+    <label>
+      <span>Pane text size</span>
+      <span style="font-size: 0.85em; opacity: 0.7; min-width: 2.5em; text-align: right">
+        {Math.round(pane_font_size_state.size * 100)}%
+      </span>
+    </label>
+    <label>
+      <select
+        value={pane_font_size_state.size}
+        onchange={(e) => {
+          const v = parseFloat(e.currentTarget.value)
+          if (!isNaN(v)) {
+            pane_font_size_state.size = v
+            save_pane_font_size(v)
+            document.documentElement.style.setProperty(`--pane-font-size`, `${v}em`)
+          }
+        }}
+      >
+        {#each [0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0, 1.05, 1.1, 1.15, 1.2, 1.3] as size}
+          <option value={size}>{Math.round(size * 100)}%</option>
+        {/each}
+      </select>
+    </label>
+  </SettingsSection>
+
+  <!-- Plugin Panels -->
+  <PluginPanelHost
+    location="structure-sidebar"
+    {structure}
+    onRequestRender={() => {
+      // Trigger scene re-render by nudging rotation (temporary workaround)
+      // TODO: Implement proper scene refresh mechanism for plugins
+      if (scene_props.rotation) {
+        scene_props.rotation = [...scene_props.rotation]
+      }
+    }}
+  />
+</DraggablePane>
+
+<style>
+  /* Visibility checkboxes in 2-column grid */
+  .visibility-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 12px;
+  }
+
+  .rotation-axes {
+    display: flex;
+    gap: 9pt;
+    font-size: 0.8em;
+  }
+  .rotation-axes > div {
+    display: grid;
+    gap: 0.3em;
+    place-items: center;
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Bond distance rules */
+  .bond-rules {
+    margin-top: 4px;
+  }
+  .bond-rule-row {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    margin-bottom: 3px;
+  }
+  .bond-rule-row select {
+    width: 48px;
+    padding: 1px 2px;
+    font-size: 0.85em;
+  }
+  .dist-input {
+    width: 46px;
+    padding: 1px 3px;
+    font-size: 0.85em;
+    text-align: center;
+  }
+  .rule-sep {
+    font-size: 0.85em;
+    opacity: 0.6;
+  }
+  .rule-unit {
+    font-size: 0.8em;
+    opacity: 0.5;
+  }
+  .rule-remove {
+    background: none;
+    border: none;
+    color: #e55;
+    cursor: pointer;
+    font-size: 1em;
+    padding: 0 3px;
+    line-height: 1;
+  }
+  .rule-remove:hover {
+    color: #f77;
+  }
+  .add-rule-btn {
+    background: none;
+    border: 1px dashed rgba(255, 255, 255, 0.2);
+    color: inherit;
+    cursor: pointer;
+    font-size: 0.82em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    opacity: 0.7;
+    margin-top: 2px;
+  }
+  .add-rule-btn:hover {
+    opacity: 1;
+    border-color: rgba(255, 255, 255, 0.4);
+  }
+</style>

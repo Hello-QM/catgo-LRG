@@ -1,0 +1,45 @@
+"""Optimization tools."""
+
+__all__ = ["TOOLS"]
+
+TOOLS: list[dict] = [
+    # ─── Optimization ───
+    {
+        "name": "catgo_optimize",
+        "description": "Optimize a crystal/molecular structure using ML potentials (MACE, CHGNet, M3GNet, etc.).",
+        "endpoint": "/optimize/structure",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "structure": {"type": "object", "description": "Pymatgen structure dict"},
+                "calculator": {"type": "string", "description": "Calculator name (e.g. 'mace', 'chgnet', 'm3gnet')"},
+                "fmax": {"type": "number", "description": "Force convergence criterion (eV/A)", "default": 0.05},
+                "max_steps": {"type": "integer", "description": "Maximum optimization steps", "default": 200},
+                "relax_cell": {"type": "boolean", "description": "Whether to relax lattice", "default": False},
+            },
+            "required": ["structure"],
+        },
+    },
+    {
+        "name": "catgo_energy",
+        "description": "Calculate single-point energy and forces for a structure.",
+        "endpoint": "/optimize/energy",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "structure": {"type": "object"},
+                "calculator": {"type": "string"},
+            },
+            "required": ["structure"],
+        },
+    },
+    {
+        "name": "catgo_calculators",
+        "description": "List available ML potential calculators.",
+        "endpoint": "/optimize/calculators",
+        "method": "GET",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+]

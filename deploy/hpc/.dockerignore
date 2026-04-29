@@ -1,0 +1,16 @@
+node_modules/
+.svelte-kit/
+build/
+.git/
+.DS_Store
+*.sif
+*.tar
+build-desktop/
+desktop/
+src-tauri/
+tests/
+docs/
+.claude/
+extensions/vscode/
+!extensions/vscode/tests/vscode-mock.js
+extensions/rust/

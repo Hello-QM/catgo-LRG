@@ -1,0 +1,285 @@
+/* Shared styles for modal dialogs (FileSourceDialog, StructureInputDialog, RunConfigDialog, etc.)
+   Import this file in dialog components to get theme-aware modal styling. */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.dialog-modal {
+  background: var(--dialog-bg, light-dark(#fff, #1c1d21));
+  border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  color: var(--text-color, light-dark(#374151, #eee));
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Modal header/title */
+.dialog-modal .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+}
+
+.dialog-modal .modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-color, light-dark(#1f2937, #eee));
+  margin: 0;
+}
+
+/* Close button */
+.dialog-modal .close-btn {
+  background: none;
+  border: none;
+  color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.15s;
+  line-height: 1;
+}
+
+.dialog-modal .close-btn:hover {
+  color: var(--text-color, light-dark(#374151, #eee));
+  background: var(--surface-bg-hover, light-dark(#e5e7eb, #3a3a3a));
+}
+
+/* Tab bar */
+.dialog-modal .tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  padding: 0 16px;
+  gap: 4px;
+}
+
+.dialog-modal .tab-bar button,
+.dialog-modal .tab-bar .tab,
+.dialog-modal .tab-bar .tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 12px;
+  transition: all 0.15s;
+}
+
+.dialog-modal .tab-bar button:hover,
+.dialog-modal .tab-bar .tab:hover,
+.dialog-modal .tab-bar .tab-btn:hover {
+  color: var(--text-color, light-dark(#374151, #eee));
+}
+
+.dialog-modal .tab-bar button.active,
+.dialog-modal .tab-bar .tab.active,
+.dialog-modal .tab-bar .tab-btn.active {
+  color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+  border-bottom-color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+}
+
+/* Input fields */
+.dialog-modal input[type='text'],
+.dialog-modal input[type='number'],
+.dialog-modal input[type='search'],
+.dialog-modal textarea,
+.dialog-modal select,
+.dialog-modal .input,
+.dialog-modal .field-input,
+.dialog-modal .field-select {
+  background: var(--input-bg, light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05)));
+  border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  border-radius: 6px;
+  color: var(--text-color, light-dark(#374151, #eee));
+  font-size: 13px;
+  padding: 8px 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.dialog-modal input:focus,
+.dialog-modal textarea:focus,
+.dialog-modal select:focus,
+.dialog-modal .input:focus,
+.dialog-modal .field-input:focus {
+  border-color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, cornflowerblue) 15%, transparent);
+  outline: none;
+}
+
+.dialog-modal input::placeholder,
+.dialog-modal textarea::placeholder {
+  color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+}
+
+.dialog-modal select option {
+  background: var(--dialog-bg, light-dark(#fff, #1c1d21));
+  color: var(--text-color, light-dark(#374151, #eee));
+}
+
+/* Field labels */
+.dialog-modal label,
+.dialog-modal .field-label {
+  color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Primary button */
+.dialog-modal .btn-primary,
+.dialog-modal .btn-confirm,
+.dialog-modal .btn-run {
+  background: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.dialog-modal .btn-primary:hover,
+.dialog-modal .btn-confirm:hover,
+.dialog-modal .btn-run:hover {
+  background: var(--accent-hover-color, light-dark(#3730a3, #3b82f6));
+}
+
+.dialog-modal .btn-primary:disabled,
+.dialog-modal .btn-confirm:disabled,
+.dialog-modal .btn-run:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Secondary/Cancel button */
+.dialog-modal .btn-cancel {
+  background: var(--btn-bg, light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1)));
+  border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  border-radius: 6px;
+  color: var(--text-color, light-dark(#374151, #eee));
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px 16px;
+  transition: background 0.15s;
+}
+
+.dialog-modal .btn-cancel:hover {
+  background: var(--btn-bg-hover, light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.2)));
+}
+
+/* Error messages */
+.dialog-modal .error-msg,
+.dialog-modal .error-text {
+  color: var(--error-color, light-dark(#dc2626, #ef4444));
+  font-size: 12px;
+}
+
+/* Empty/placeholder state */
+.dialog-modal .empty-state,
+.dialog-modal .empty-text {
+  color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+  background: light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+}
+
+/* Hint/description text */
+.dialog-modal .hint,
+.dialog-modal .description,
+.dialog-modal .drop-hint,
+.dialog-modal .file-hint {
+  color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+  font-size: 11px;
+}
+
+/* Drop zone */
+.dialog-modal .drop-zone {
+  border: 2px dashed var(--dialog-border, light-dark(#d1d5db, #404040));
+  background: var(--input-bg, light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05)));
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.dialog-modal .drop-zone.drag-over {
+  border-color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+  background: color-mix(in srgb, var(--accent-color, cornflowerblue) 8%, transparent);
+}
+
+/* Section dividers */
+.dialog-modal .section-title {
+  color: var(--text-color, light-dark(#1f2937, #eee));
+  border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+}
+
+/* Scrollable content area */
+.dialog-modal .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+/* List items / rows */
+.dialog-modal .list-item,
+.dialog-modal .db-row,
+.dialog-modal .file-row {
+  background: var(--input-bg, light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05)));
+  border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  border-radius: 6px;
+  color: var(--text-color, light-dark(#374151, #eee));
+  transition: border-color 0.15s;
+}
+
+.dialog-modal .list-item:hover,
+.dialog-modal .db-row:hover,
+.dialog-modal .file-row:hover {
+  border-color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+}
+
+/* Status/semantic colors (use CSS vars for consistency) */
+.dialog-modal .text-success {
+  color: var(--success-color, light-dark(#059669, #10b981));
+}
+
+.dialog-modal .text-warning {
+  color: var(--warning-color, light-dark(#d97706, #f59e0b));
+}
+
+.dialog-modal .text-error {
+  color: var(--error-color, light-dark(#dc2626, #ef4444));
+}
+
+.dialog-modal .text-accent {
+  color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
+}
+
+.dialog-modal .text-muted {
+  color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+}
+
+.dialog-modal .text-dim {
+  color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+}

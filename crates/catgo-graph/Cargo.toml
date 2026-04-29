@@ -1,0 +1,38 @@
+[package]
+name = "catgo-graph"
+version = "0.1.0"
+edition = "2021"
+description = "Domain-agnostic DAG workflow runtime for CatGO"
+license = "MIT"
+
+[lib]
+name = "catgo_graph"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
+async-trait = "0.1"
+thiserror = "2.0"
+regex = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-util = { version = "0.7" }
+clap = { version = "4", features = ["derive"], optional = true }
+
+[features]
+default = []
+cli = ["clap", "tokio/rt-multi-thread", "tokio/signal"]
+
+[[bin]]
+name = "catgo_run"
+path = "src/bin/catgo_run.rs"
+required-features = ["cli"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+tempfile = "3"

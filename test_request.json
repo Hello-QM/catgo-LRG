@@ -1,0 +1,29 @@
+{
+  "structure": {
+    "lattice": {
+      "matrix": [[3.615, 0.0, 0.0], [0.0, 3.615, 0.0], [0.0, 0.0, 3.615]],
+      "a": 3.615,
+      "b": 3.615,
+      "c": 3.615,
+      "alpha": 90.0,
+      "beta": 90.0,
+      "gamma": 90.0
+    },
+    "sites": [
+      {"abc": [0.0, 0.0, 0.0], "xyz": [0.0, 0.0, 0.0], "species": [{"element": "Cu", "occu": 1.0}]},
+      {"abc": [0.5, 0.5, 0.5], "xyz": [1.8075, 1.8075, 1.8075], "species": [{"element": "Cu", "occu": 1.0}]}
+    ]
+  },
+  "prefix": "cubic_cu",
+  "units": "metal",
+  "atom_style": "atomic",
+  "boundary": "p p p",
+  "simulation_type": "minimize",
+  "pair_style": "eam/alloy",
+  "pair_coeff": "* * Cu_u3.eam Cu",
+  "min_style": "cg",
+  "etol": 1e-8,
+  "ftol": 1e-8,
+  "maxiter": 1000,
+  "maxeval": 10000
+}

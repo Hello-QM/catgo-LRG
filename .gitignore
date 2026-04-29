@@ -1,0 +1,78 @@
+# dependencies
+node_modules
+
+# production build
+.svelte-kit
+build
+dist
+
+# VitePress docs build
+docs/.vitepress/dist
+docs/.vitepress/cache
+
+# screen recordings
+*.mp4
+coverage
+
+# secrets
+.env
+.gh/hosts.yml
+
+# coverage and large test files
+test-results*
+playwright-report
+src/site/trajectories/large
+src/site/phonons/*.json
+
+# vscode extension
+*.vsix
+!extensions/vscode/.vscode/
+
+# Tauri
+src-tauri/target
+src-tauri/gen
+src-tauri/server/
+build-desktop/
+
+# HPC bundle artifacts
+deploy/hpc/bundle/frontend/
+deploy/hpc/bundle/server/
+deploy/hpc/bundle/wheels/
+
+# Server debug output
+server/debug_output/
+server/data/*.db
+*_backup_*.py
+
+# Claude Code — local-only files (shared settings/skills stay tracked)
+.claude/settings.local.json
+.claude/plan.md
+
+# Git worktrees
+.worktrees/
+
+# Generated doc chunks for AI chat
+src/lib/chat/docs-chunks.json
+
+# Rust build artifacts
+tools/cube-processor/target/*
+!tools/cube-processor/target/release/
+tools/cube-processor/target/release/*
+!tools/cube-processor/target/release/cube-processor
+crates/*/target/
+
+# Python cache
+__pycache__/
+
+# Container images
+*.sif
+*.tar
+*.tar.gz
+
+# Computational chemistry data directories
+1/
+QuAcc/
+cp2k/
+gaussian1/
+gaussian2/
+gromacs/

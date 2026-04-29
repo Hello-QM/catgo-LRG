@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><title>RuO2(110) OER Step Diagram</title>
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head><body>
+<h2>RuO2(110) OER Free Energy Diagram</h2>
+<p>Overpotential: eta = 2.0928 V | Limiting step: 1</p>
+<div id="plot" style="width:900px;height:500px;"></div>
+<script>
+var data = [{"type": "scatter", "x": [0.0, 0.3, null, 0.6, 0.8999999999999999, null, 1.2, 1.5, null, 1.7999999999999998, 2.0999999999999996, null, 2.4, 2.6999999999999997], "y": [0.0, 0.0, null, 3.3228421200002876, 3.3228421200002876, null, 6.5814120300004255, 6.5814120300004255, null, 4.553826179999749, 4.553826179999749, null, 4.92, 4.92], "mode": "lines", "line": {"color": "#1f77b4", "width": 3}, "name": "RuO2(110)", "legendgroup": "RuO2(110)"}, {"type": "scatter", "x": [0.3, 0.6, null, 0.8999999999999999, 1.2, null, 1.5, 1.7999999999999998, null, 2.0999999999999996, 2.4], "y": [0.0, 3.3228421200002876, null, 3.3228421200002876, 6.5814120300004255, null, 6.5814120300004255, 4.553826179999749, null, 4.553826179999749, 4.92], "mode": "lines", "line": {"color": "#1f77b4", "width": 3, "dash": "dash"}, "name": "RuO2(110)", "legendgroup": "RuO2(110)", "showlegend": false}, {"type": "scatter", "x": [0.0, 0.3, null, 0.6, 0.8999999999999999, null, 1.2, 1.5, null, 1.7999999999999998, 2.0999999999999996, null, 2.4, 2.6999999999999997], "y": [0.0, 0.0, null, 1.23, 1.23, null, 2.46, 2.46, null, 3.69, 3.69, null, 4.92, 4.92], "mode": "lines", "line": {"color": "#aaaaaa", "width": 3}, "name": "Ideal (1.23V each)", "legendgroup": "Ideal (1.23V each)"}, {"type": "scatter", "x": [0.3, 0.6, null, 0.8999999999999999, 1.2, null, 1.5, 1.7999999999999998, null, 2.0999999999999996, 2.4], "y": [0.0, 1.23, null, 1.23, 2.46, null, 2.46, 3.69, null, 3.69, 4.92], "mode": "lines", "line": {"color": "#aaaaaa", "width": 3, "dash": "dash"}, "name": "Ideal (1.23V each)", "legendgroup": "Ideal (1.23V each)", "showlegend": false}];
+var layout = {"height": 450, "paper_bgcolor": "rgba(0,0,0,0)", "plot_bgcolor": "rgba(0,0,0,0)", "xaxis": {"tickvals": [0.15, 0.75, 1.35, 1.9499999999999997, 2.55], "ticktext": ["* + 2H2O", "*OH + H2O", "*O + H2O", "*OOH", "O2 + *"], "tickangle": 0, "showline": false, "title": {"text": "Reaction Coordinate"}}, "yaxis": {"showgrid": true, "gridcolor": "rgba(200,200,200,0.6)", "gridwidth": 1, "title": {"text": "Free Energy (eV)"}}, "legend": {"x": 1, "y": 1, "xanchor": "right", "yanchor": "top"}, "margin": {"l": 60, "r": 20, "t": 30, "b": 60}};
+Plotly.newPlot("plot", data, layout);
+</script>
+<h3>Step Energies</h3>
+<table border="1" cellpadding="5">
+<tr><th>Step</th><th>Reaction</th><th>dG (eV)</th></tr>
+<tr><td>1</td><td>* + H2O -> *OH + H+ + e-</td><td>3.3228</td></tr>
+<tr><td>2</td><td>*OH -> *O + H+ + e-</td><td>3.2586</td></tr>
+<tr><td>3</td><td>*O + H2O -> *OOH + H+ + e-</td><td>-2.0276</td></tr>
+<tr><td>4</td><td>*OOH -> O2 + * + H+ + e-</td><td>0.3662</td></tr>
+</table>
+</body></html>

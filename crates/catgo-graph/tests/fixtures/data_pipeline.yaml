@@ -1,0 +1,60 @@
+graph_id: data_pipeline_v1
+version: "1.0.0"
+description: >
+  Minimal real workflow: save input data, compute statistics, save results.
+  Uses real tools (FileWriterTool + StatsTool) that perform actual file I/O.
+
+inputs_schema:
+  type: object
+  required:
+    - values
+  properties:
+    values:
+      type: array
+      description: Numeric values to analyze
+    label:
+      type: string
+      description: Human-readable label for the dataset
+
+outputs:
+  - name: statistics
+    source: ${nodes.compute_stats.outputs.mean}
+  - name: saved_result
+    source: ${nodes.save_result.outputs.mean}
+
+nodes:
+  - id: save_input
+    tool: file_writer
+    depends_on: []
+    input_bindings:
+      values: ${inputs.values}
+      label: ${inputs.label}
+    execution_mode: local
+    metadata:
+      stage: preparation
+
+  - id: compute_stats
+    tool: compute_stats
+    depends_on:
+      - save_input
+    input_bindings:
+      values: ${nodes.save_input.outputs.values}
+      label: ${nodes.save_input.outputs.label}
+    execution_mode: local
+    metadata:
+      stage: analysis
+
+  - id: save_result
+    tool: file_writer
+    depends_on:
+      - compute_stats
+    input_bindings:
+      mean: ${nodes.compute_stats.outputs.mean}
+      min: ${nodes.compute_stats.outputs.min}
+      max: ${nodes.compute_stats.outputs.max}
+      count: ${nodes.compute_stats.outputs.count}
+      sum: ${nodes.compute_stats.outputs.sum}
+      label: ${nodes.compute_stats.outputs.label}
+    execution_mode: local
+    metadata:
+      stage: output

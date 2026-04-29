@@ -1,0 +1,188 @@
+[
+  {
+    "name": "catgo_add_atom",
+    "description": "Add a single atom to the structure at a Cartesian position.",
+    "endpoint": "/structure-ops/add-atom",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object", "description": "Pymatgen structure dict"},
+        "element": {"type": "string", "description": "Element symbol (e.g. 'C', 'Fe')"},
+        "position": {
+          "type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3,
+          "description": "Cartesian [x, y, z] in Angstroms"
+        }
+      },
+      "required": ["structure", "element", "position"]
+    }
+  },
+  {
+    "name": "catgo_add_atoms",
+    "description": "Batch-add multiple atoms to the structure.",
+    "endpoint": "/structure-ops/add-atoms",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object"},
+        "atoms": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "element": {"type": "string"},
+              "xyz": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+            },
+            "required": ["element", "xyz"]
+          }
+        }
+      },
+      "required": ["structure", "atoms"]
+    }
+  },
+  {
+    "name": "catgo_delete_atoms",
+    "description": "Delete atoms by their site indices (0-based).",
+    "endpoint": "/structure-ops/delete-atoms",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object"},
+        "indices": {"type": "array", "items": {"type": "integer"}, "description": "Site indices to delete"}
+      },
+      "required": ["structure", "indices"]
+    }
+  },
+  {
+    "name": "catgo_replace_atom",
+    "description": "Replace the element at a specific site index.",
+    "endpoint": "/structure-ops/replace-atom",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object"},
+        "index": {"type": "integer", "minimum": 0},
+        "new_element": {"type": "string"}
+      },
+      "required": ["structure", "index", "new_element"]
+    }
+  },
+  {
+    "name": "catgo_move_atom",
+    "description": "Move a single atom to a new Cartesian position.",
+    "endpoint": "/structure-ops/move-atom",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object"},
+        "index": {"type": "integer", "minimum": 0},
+        "new_position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+      },
+      "required": ["structure", "index", "new_position"]
+    }
+  },
+  {
+    "name": "catgo_move_atoms",
+    "description": "Translate multiple atoms by a displacement vector.",
+    "endpoint": "/structure-ops/move-atoms",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object"},
+        "indices": {"type": "array", "items": {"type": "integer"}},
+        "displacement": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+      },
+      "required": ["structure", "indices", "displacement"]
+    }
+  },
+  {
+    "name": "catgo_supercell",
+    "description": "INSTANT — Create a supercell via integer scaling [na, nb, nc] or a 3x3 matrix. Result appears immediately in the 3D viewer — no workflow needed.",
+    "endpoint": "/structure-ops/supercell",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object"},
+        "scaling": {
+          "type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 3,
+          "description": "[na, nb, nc] repetitions"
+        },
+        "scaling_matrix": {
+          "type": "array",
+          "description": "3x3 integer scaling matrix (alternative to scaling)"
+        }
+      },
+      "required": ["structure"]
+    }
+  },
+  {
+    "name": "catgo_merge",
+    "description": "Merge an incoming structure into a base structure at a given position.",
+    "endpoint": "/structure-ops/merge",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "base": {"type": "object", "description": "Base structure dict"},
+        "incoming": {"type": "object", "description": "Incoming structure dict"},
+        "position": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+      },
+      "required": ["base", "incoming", "position"]
+    }
+  },
+  {
+    "name": "catgo_set_lattice",
+    "description": "Set or create periodic lattice (cell) for the current structure. For molecules without a cell, wraps them in a periodic box. For periodic structures, replaces lattice parameters. Use this when the user wants to add a cell/box to a molecule or change lattice parameters. Operates on the current viewer structure \u2014 no need to pass structure dict.",
+    "endpoint": "__special__/set-lattice",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "a": {"type": "number", "description": "Lattice parameter a in Angstroms"},
+        "b": {"type": "number", "description": "Lattice parameter b in Angstroms"},
+        "c": {"type": "number", "description": "Lattice parameter c in Angstroms"},
+        "alpha": {"type": "number", "default": 90, "description": "Angle alpha in degrees"},
+        "beta": {"type": "number", "default": 90, "description": "Angle beta in degrees"},
+        "gamma": {"type": "number", "default": 90, "description": "Angle gamma in degrees"},
+        "center": {"type": "boolean", "default": true, "description": "Center atoms in new cell"}
+      },
+      "required": ["a", "b", "c"]
+    }
+  },
+  {
+    "name": "catgo_generate_slab",
+    "description": "INSTANT — Generate surface slab(s) from a bulk crystal along Miller indices (h k l). Uses pymatgen SlabGenerator. Returns all symmetrically distinct terminations. Result appears immediately in the 3D viewer — no workflow needed.",
+    "endpoint": "/structure-ops/generate-slab",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "structure": {"type": "object", "description": "Pymatgen structure dict (bulk crystal)"},
+        "miller_index": {
+          "type": "array", "items": {"type": "integer"}, "minItems": 3, "maxItems": 3,
+          "description": "Miller indices [h, k, l], e.g. [1, 1, 0]"
+        },
+        "min_slab_size": {
+          "type": "number", "default": 10.0,
+          "description": "Minimum slab thickness in Angstroms"
+        },
+        "min_vacuum_size": {
+          "type": "number", "default": 15.0,
+          "description": "Minimum vacuum spacing in Angstroms"
+        },
+        "center_slab": {"type": "boolean", "default": true},
+        "orthogonalize_c": {
+          "type": "boolean", "default": false,
+          "description": "If true, orthogonalize the c-vector so it is perpendicular to the surface plane"
+        }
+      },
+      "required": ["structure", "miller_index"]
+    }
+  }
+]

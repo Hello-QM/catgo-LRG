@@ -1,0 +1,114 @@
+engine: orca
+label: ORCA
+description: "Quantum chemistry for molecular systems"
+
+supported_calc_types:
+  - geo_opt
+  - single_point
+  - freq
+  - ts_search
+  - irc
+  - uvvis
+
+params:
+  - key: method
+    label: "Functional"
+    type: select
+    options:
+      - { label: "B3LYP", value: "B3LYP" }
+      - { label: "PBE", value: "PBE" }
+      - { label: "PBE0", value: "PBE0" }
+      - { label: "M06-2X", value: "M06-2X" }
+      - { label: "wB97X-D3", value: "wB97X-D3" }
+      - { label: "DLPNO-CCSD(T)", value: "DLPNO-CCSD(T)" }
+      - { label: "RI-MP2", value: "RI-MP2" }
+    default: "B3LYP"
+  - key: basis_set
+    label: "Basis Set"
+    type: select
+    options:
+      - { label: "6-31G", value: "6-31G" }
+      - { label: "6-31G*", value: "6-31G*" }
+      - { label: "6-311G**", value: "6-311G**" }
+      - { label: "def2-SVP", value: "def2-SVP" }
+      - { label: "def2-TZVP", value: "def2-TZVP" }
+      - { label: "def2-QZVPP", value: "def2-QZVPP" }
+      - { label: "cc-pVDZ", value: "cc-pVDZ" }
+      - { label: "cc-pVTZ", value: "cc-pVTZ" }
+    default: "def2-SVP"
+  - key: charge
+    label: "Charge"
+    type: number
+    default: 0
+  - key: multiplicity
+    label: "Multiplicity"
+    type: number
+    default: 1
+    range: [1, 10]
+  - key: num_cores
+    label: "Number of Cores"
+    type: number
+    default: 4
+    range: [1, 128]
+  - key: max_iterations
+    label: "Max SCF Iterations"
+    type: number
+    default: 100
+    range: [1, 1000]
+  - key: custom_inp_text
+    label: "Custom ORCA Input"
+    type: text
+    help: "Override auto-generated input with custom ORCA.inp content"
+  - key: cartesian_opt
+    label: "Cartesian Optimization"
+    type: boolean
+    default: false
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: nimages
+    label: "NEB Images"
+    type: number
+    default: 8
+    range: [3, 20]
+    show_if: { key: calc_type, values: [ts_search] }
+  - key: nroots
+    label: "Number of Roots"
+    type: number
+    default: 10
+    range: [1, 50]
+    show_if: { key: calc_type, values: [uvvis] }
+  - key: solvation
+    label: "Solvent Model"
+    type: select
+    options:
+      - { label: "None", value: "none" }
+      - { label: "CPCM", value: "CPCM" }
+      - { label: "SMD", value: "SMD" }
+    default: "none"
+    show_if: { key: calc_type, values: [uvvis] }
+
+input_files:
+  "ORCA.inp":
+    source: hook
+  "POSCAR":
+    source: structure
+    format: poscar
+
+run_commands:
+  - "${ORCA_DIR}/orca ORCA.inp > ORCA.out"
+
+output_files:
+  log: "ORCA.out"
+  structure: "ORCA.xyz"
+
+hooks:
+  pre_generate: "workflow.hooks.orca_hooks:generate_inputs"
+
+calc_type_mapping:
+  geo_opt: orca_opt
+  single_point: orca_sp
+  freq: orca_freq
+  ts_search: orca_neb_ts
+  irc: orca_irc
+  uvvis: orca_uvvis
+
+safety: safe

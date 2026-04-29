@@ -1,0 +1,86 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "created": "2026-03-19",
+    "project": "CatGO AI-Driven Electrochemical Workflow",
+    "status": "approved"
+  },
+
+  "requirement_alignment": {
+    "core_objective": {
+      "title": "AI-Driven Interactive Electrochemical Reaction Workflow System",
+      "statement": "Build an AI-driven research workflow system within CatGO that enables CatBot to autonomously plan, generate, and orchestrate multi-step VASP AIMD + slow-growth + constant-potential calculations for studying cation effects on C-N coupling reactions at Cu-water interfaces.",
+      "success_criteria": [
+        "User describes research goal in natural language, CatBot generates structured computation plan",
+        "CatBot enumerates all chemically valid C-N coupling paths from given C and N species",
+        "CatBot builds slab+water+cation models with correct cation placement (near-surface vs bulk-water)",
+        "CatBot generates complete DAG workflow for each coupling path: opt -> AIMD equil -> slow-growth AIMD (constant-potential)",
+        "User confirms plan, CatBot generates VASP input files and submits to HPC",
+        "Results automatically collected and analyzed (barrier extraction, cation effect comparison)"
+      ],
+      "non_goals": [
+        "Full autonomous execution without human confirmation",
+        "Real-time AIMD simulation within CatGO (all DFT runs on HPC)",
+        "Replacing existing workflow engine (extend only)",
+        "Supporting non-VASP DFT codes for v1"
+      ]
+    },
+
+    "use_case": {
+      "title": "Cation Effects on C-N Coupling at Cu-Water Interface",
+      "system": "Cu(111) slab + explicit water layer + alkali cation",
+      "c_species": ["CO2", "COOH", "CO", "CHO", "CH2O"],
+      "n_species": ["NO2", "NO", "NOH", "NHOH", "HNO", "N", "NH", "NH2"],
+      "coupling_definition": "Formation of C-N bond between any C-species and any N-species adsorbed on surface",
+      "cation_conditions": [
+        {"label": "no_cation", "description": "Baseline: Cu slab + water, no cation"},
+        {"label": "Li_near", "description": "Li+ near Cu-water interface, bonding with adsorbate"},
+        {"label": "Li_far", "description": "Li+ in bulk water layer, far from adsorbate"},
+        {"label": "K_near", "description": "K+ near Cu-water interface, bonding with adsorbate"},
+        {"label": "K_far", "description": "K+ in bulk water layer, far from adsorbate"}
+      ],
+      "computational_pipeline": [
+        {"step": 1, "name": "Model Building", "description": "Cu slab + water + optional cation + adsorbate pair"},
+        {"step": 2, "name": "Structure Optimization", "description": "VASP geometry optimization (ISIF=2)"},
+        {"step": 3, "name": "AIMD Equilibration", "description": "VASP NVT MD at 300K, 5-10 ps"},
+        {"step": 4, "name": "Slow-Growth AIMD", "description": "Constrained MD varying C-N distance, LBLUEOUT=.TRUE., with constant-potential"},
+        {"step": 5, "name": "Analysis", "description": "Parse REPORT, extract barriers, compare across cation conditions"}
+      ]
+    },
+
+    "interaction_mode": "C - AI plans + generates inputs + user confirms -> submit HPC -> auto-collect results"
+  },
+
+  "acceptance_criteria": [
+    {"id": "AC-01", "criterion": "CatBot generates C-N coupling network from user-specified species lists", "priority": "P0"},
+    {"id": "AC-02", "criterion": "CatBot builds Cu slab + water + cation model through tool calls", "priority": "P0"},
+    {"id": "AC-03", "criterion": "Slow-growth AIMD workflow node generates correct VASP inputs (INCAR + ICONST)", "priority": "P0"},
+    {"id": "AC-04", "criterion": "Constant-potential overlay (TPOT/CP-VASP) applied to slow-growth node", "priority": "P0"},
+    {"id": "AC-05", "criterion": "CatBot plans multi-step workflow: opt -> AIMD equil -> slow-growth for coupling path", "priority": "P0"},
+    {"id": "AC-06", "criterion": "AI research planner decomposes high-level goal into computation tasks", "priority": "P1"},
+    {"id": "AC-07", "criterion": "Batch workflow creation from computation matrix", "priority": "P1"},
+    {"id": "AC-08", "criterion": "Cation placement supports near-surface and bulk-water strategies", "priority": "P1"},
+    {"id": "AC-09", "criterion": "Cross-condition barrier comparison table/plot generation", "priority": "P2"}
+  ],
+
+  "constraints": {
+    "technical": [
+      "Must integrate with existing DAG workflow engine",
+      "Must use existing VASP input generation backend (already supports slow-growth + TPOT + CP-VASP)",
+      "Must work with existing HPC SSH connection system",
+      "CatBot tool loop limited to 15 rounds — tools must be batch-capable",
+      "Frontend uses Svelte 5 runes"
+    ],
+    "scientific": [
+      "Not all 40 C-N pairs are chemically meaningful — AI must filter",
+      "ICONST atom indices must survive through all structure transformations",
+      "Cation placement must avoid unphysical short contacts",
+      "Constant-potential needs Fermi level and target electrode potential"
+    ],
+    "operational": [
+      "Backend under conda catgo environment",
+      "User must confirm each workflow before HPC submission",
+      "Each slow-growth run costs ~500-2000 CPU-hours"
+    ]
+  }
+}

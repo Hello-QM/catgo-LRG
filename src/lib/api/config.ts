@@ -1,0 +1,58 @@
+// Centralized backend server URL — injected at build time by vite.config.ts
+// so each worktree automatically connects to its own backend port.
+// Override: set VITE_SERVER_URL env var or PORT env var.
+
+declare const __CATGO_SERVER_URL__: string
+declare const __CATGO_DESKTOP__: boolean
+declare const __CATGO_STATIC_ONLY__: boolean
+
+export let SERVER_URL: string =
+  typeof __CATGO_SERVER_URL__ !== `undefined`
+    ? __CATGO_SERVER_URL__
+    : `http://localhost:8000`
+
+export let API_BASE = `${SERVER_URL}/api`
+export let WS_BASE = SERVER_URL.replace(/^http/, `ws`) + `/api`
+
+/** Override server URL at runtime (used by VS Code extension to set dynamic port). */
+export function setServerUrl(url: string): void {
+  SERVER_URL = url
+  API_BASE = `${url}/api`
+  WS_BASE = url.replace(/^http/, `ws`) + `/api`
+}
+
+/** True when built for static-only deployment (no Python backend). */
+export const STATIC_ONLY: boolean =
+  typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__
+
+// In static mode, intercept all fetch requests to the backend and return
+// a friendly error instead of making network requests that will fail.
+if (STATIC_ONLY && typeof window !== `undefined`) {
+  const _original_fetch = window.fetch
+  window.fetch = function(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const url = typeof input === `string` ? input : input instanceof URL ? input.href : input.url
+    if (url.startsWith(SERVER_URL) || url.startsWith(API_BASE)) {
+      return Promise.resolve(new Response(
+        JSON.stringify({ detail: `This feature requires the CatGo desktop app. Visit catgo-ucsd.org to download.` }),
+        { status: 503, statusText: `Service Unavailable`, headers: { 'Content-Type': `application/json` } },
+      ))
+    }
+    return _original_fetch.call(window, input, init)
+  }
+}
+
+/** [2026-03] Detect if Python backend is available in desktop mode (desktop:serve).
+ * Cached after first check.  Used by project.ts / workflow.ts to bypass stale WASM cache. */
+let _backend_state: boolean | null = null
+export async function desktop_backend_available(): Promise<boolean> {
+  if (STATIC_ONLY) return false
+  if (typeof __CATGO_DESKTOP__ === `undefined` || !__CATGO_DESKTOP__) return false
+  if (_backend_state !== null) return _backend_state
+  try {
+    const resp = await fetch(`${API_BASE}/providers`, { signal: AbortSignal.timeout(2000) })
+    _backend_state = resp.ok
+  } catch {
+    _backend_state = false
+  }
+  return _backend_state
+}

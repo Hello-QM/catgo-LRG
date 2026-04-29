@@ -1,0 +1,9 @@
+{
+  "name": "lammps_nvt",
+  "version": "1.0.0",
+  "displayName": "LAMMPS NVT (Plugin)",
+  "description": "Run NVT molecular dynamics using LAMMPS with a custom force field",
+  "author": "CatGo Team",
+  "trust": "user",
+  "permissions": []
+}

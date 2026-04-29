@@ -1,0 +1,233 @@
+graph_id: oer_workflow_v1
+version: "1.0.0"
+description: >
+  Example graph template for evaluating OER activity on a catalyst surface.
+  This workflow is intended as a graph-structure example for CatGo runtime development.
+
+inputs_schema:
+  type: object
+  required:
+    - surface
+  properties:
+    surface:
+      type: string
+      description: Catalyst surface descriptor, e.g. Pt(111)
+    charge:
+      type: number
+      default: 0.0
+    spin:
+      type: integer
+      default: 1
+
+outputs:
+  - name: oer_overpotential
+    source: ${nodes.evaluate_oer.outputs.overpotential}
+  - name: gibbs_summary
+    source: ${nodes.compute_gibbs.outputs.summary}
+
+nodes:
+  - id: build_surface
+    tool: generate_surface
+    depends_on: []
+    input_bindings:
+      surface: ${inputs.surface}
+    retry_policy:
+      max_attempts: 1
+      backoff:
+        type: none
+      retry_on: []
+    timeout_seconds: 300
+    execution_mode: local
+    metadata:
+      stage: structure
+
+  - id: enumerate_adsorbates
+    tool: enumerate_adsorbates
+    depends_on:
+      - build_surface
+    input_bindings:
+      structure: ${nodes.build_surface.outputs.structure}
+      adsorbates:
+        - OH
+        - O
+        - OOH
+    retry_policy:
+      max_attempts: 1
+      backoff:
+        type: none
+      retry_on: []
+    timeout_seconds: 300
+    execution_mode: local
+    metadata:
+      stage: enumeration
+
+  - id: relax_OH
+    tool: run_vasp_relax
+    depends_on:
+      - enumerate_adsorbates
+    input_bindings:
+      structure: ${nodes.enumerate_adsorbates.outputs.OH_structure}
+      charge: ${inputs.charge}
+      spin: ${inputs.spin}
+      adsorbate: OH
+    retry_policy:
+      max_attempts: 3
+      backoff:
+        type: fixed
+        seconds: 60
+      retry_on:
+        - ToolInvocation
+        - ExternalProcess
+        - ScfNonConvergence
+        - IonicNonConvergence
+    timeout_seconds: 86400
+    execution_mode: hpc
+    metadata:
+      stage: relaxation
+
+  - id: relax_O
+    tool: run_vasp_relax
+    depends_on:
+      - enumerate_adsorbates
+    input_bindings:
+      structure: ${nodes.enumerate_adsorbates.outputs.O_structure}
+      charge: ${inputs.charge}
+      spin: ${inputs.spin}
+      adsorbate: O
+    retry_policy:
+      max_attempts: 3
+      backoff:
+        type: fixed
+        seconds: 60
+      retry_on:
+        - ToolInvocation
+        - ExternalProcess
+        - ScfNonConvergence
+        - IonicNonConvergence
+    timeout_seconds: 86400
+    execution_mode: hpc
+    metadata:
+      stage: relaxation
+
+  - id: relax_OOH
+    tool: run_vasp_relax
+    depends_on:
+      - enumerate_adsorbates
+    input_bindings:
+      structure: ${nodes.enumerate_adsorbates.outputs.OOH_structure}
+      charge: ${inputs.charge}
+      spin: ${inputs.spin}
+      adsorbate: OOH
+    retry_policy:
+      max_attempts: 3
+      backoff:
+        type: fixed
+        seconds: 60
+      retry_on:
+        - ToolInvocation
+        - ExternalProcess
+        - ScfNonConvergence
+        - IonicNonConvergence
+    timeout_seconds: 86400
+    execution_mode: hpc
+    metadata:
+      stage: relaxation
+
+  - id: freq_OH
+    tool: run_vasp_freq
+    depends_on:
+      - relax_OH
+    input_bindings:
+      structure: ${nodes.relax_OH.outputs.final_structure}
+      adsorbate: OH
+    retry_policy:
+      max_attempts: 2
+      backoff:
+        type: fixed
+        seconds: 60
+      retry_on:
+        - ToolInvocation
+        - ExternalProcess
+    timeout_seconds: 86400
+    execution_mode: hpc
+    metadata:
+      stage: frequency
+
+  - id: freq_O
+    tool: run_vasp_freq
+    depends_on:
+      - relax_O
+    input_bindings:
+      structure: ${nodes.relax_O.outputs.final_structure}
+      adsorbate: O
+    retry_policy:
+      max_attempts: 2
+      backoff:
+        type: fixed
+        seconds: 60
+      retry_on:
+        - ToolInvocation
+        - ExternalProcess
+    timeout_seconds: 86400
+    execution_mode: hpc
+    metadata:
+      stage: frequency
+
+  - id: freq_OOH
+    tool: run_vasp_freq
+    depends_on:
+      - relax_OOH
+    input_bindings:
+      structure: ${nodes.relax_OOH.outputs.final_structure}
+      adsorbate: OOH
+    retry_policy:
+      max_attempts: 2
+      backoff:
+        type: fixed
+        seconds: 60
+      retry_on:
+        - ToolInvocation
+        - ExternalProcess
+    timeout_seconds: 86400
+    execution_mode: hpc
+    metadata:
+      stage: frequency
+
+  - id: compute_gibbs
+    tool: compute_gibbs_free_energy
+    depends_on:
+      - freq_OH
+      - freq_O
+      - freq_OOH
+    input_bindings:
+      OH_energy: ${nodes.relax_OH.outputs.energy}
+      O_energy: ${nodes.relax_O.outputs.energy}
+      OOH_energy: ${nodes.relax_OOH.outputs.energy}
+      OH_freq: ${nodes.freq_OH.outputs.frequencies}
+      O_freq: ${nodes.freq_O.outputs.frequencies}
+      OOH_freq: ${nodes.freq_OOH.outputs.frequencies}
+    retry_policy:
+      max_attempts: 1
+      backoff:
+        type: none
+      retry_on: []
+    timeout_seconds: 300
+    execution_mode: local
+    metadata:
+      stage: thermodynamics
+
+  - id: evaluate_oer
+    tool: compute_oer_overpotential
+    depends_on:
+      - compute_gibbs
+    input_bindings:
+      gibbs_summary: ${nodes.compute_gibbs.outputs.summary}
+    retry_policy:
+      max_attempts: 1
+      backoff:
+        type: none
+      retry_on: []
+    timeout_seconds: 300
+    execution_mode: local
+    metadata:
+      stage: evaluation

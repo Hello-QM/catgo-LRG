@@ -1,0 +1,10 @@
+{
+  "imports": {
+    "$lib/": "./src/lib/",
+    "$lib": "./src/lib/index.ts",
+    "$app/": "./src/lib/mocks/",
+    "d3-shape": "npm:d3-shape",
+    "d3-format": "npm:d3-format",
+    "d3-time-format": "npm:d3-time-format"
+  }
+}

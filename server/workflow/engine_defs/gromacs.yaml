@@ -1,0 +1,44 @@
+engine: gromacs
+label: GROMACS
+description: "Classical MD for biomolecular systems (not yet implemented)"
+
+supported_calc_types:
+  - md
+
+params:
+  - key: integrator
+    label: "Integrator"
+    type: select
+    options:
+      - { label: "Leap-Frog (md)", value: "md" }
+      - { label: "Velocity Verlet (md-vv)", value: "md-vv" }
+      - { label: "Steep Descent (steep)", value: "steep" }
+    default: "md"
+  - key: nsteps
+    label: "Number of Steps"
+    type: number
+    default: 50000
+  - key: dt
+    label: "Timestep"
+    type: number
+    default: 0.002
+    unit: "ps"
+  - key: temperature
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+  - key: pressure
+    label: "Pressure"
+    type: number
+    default: 1.0
+    unit: "bar"
+
+input_files: {}
+run_commands: []
+output_files: {}
+
+calc_type_mapping:
+  md: gromacs_md
+
+safety: safe

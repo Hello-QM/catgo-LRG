@@ -1,0 +1,19 @@
+{
+  "name": "catbot",
+  "description": "CatGO materials science assistant with 61+ crystallography tools for structure visualization, manipulation, surface building, optimization, and database querying",
+  "version": "1.0.0",
+  "author": {
+    "name": "Hello-QM",
+    "url": "https://github.com/Hello-QM/CatGO"
+  },
+  "repository": "https://github.com/Hello-QM/CatGO",
+  "keywords": [
+    "materials-science",
+    "crystallography",
+    "dft",
+    "catalysis",
+    "visualization",
+    "catgo",
+    "mcp"
+  ]
+}

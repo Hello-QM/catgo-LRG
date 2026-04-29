@@ -1,0 +1,30 @@
+{
+  "workflow_id": "d92e3c6b-48e9-4036-90ad-7abd0089e9df",
+  "export_step_id": "n1773366855469-9pmq",
+  "entries": [
+    {
+      "parent_step_id": "n1773366826773-g93r",
+      "formula": "Cu141Ni3",
+      "energy_compare": {
+        "node_type": "energy_compare",
+        "status": "completed",
+        "analysis_type": "energy_compare",
+        "reference_energy_eV": -560.014553,
+        "entries": [
+          {
+            "step_id": "n1773366822237-ylni",
+            "energy_eV": -560.014553,
+            "n_atoms": null,
+            "relative_eV": 0.0
+          }
+        ],
+        "lowest_step": "n1773366822237-ylni",
+        "spread_eV": 0.0
+      }
+    }
+  ],
+  "exported_files": [
+    "results.db",
+    "structure_1_n1773366.vasp"
+  ]
+}

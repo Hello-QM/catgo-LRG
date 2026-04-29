@@ -1,0 +1,20 @@
+# Fat base image with all system dependencies pre-installed.
+# Built on Mac (amd64 via buildx), transferred to Expanse as Docker tar.
+# The Apptainer .def bootstraps from this — no apt-get needed on compute node.
+
+FROM --platform=linux/amd64 python:3.11-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        nginx \
+        gcc \
+        g++ \
+        gfortran \
+        python3-dev \
+        cmake \
+        pkg-config \
+        liblapack-dev \
+        libopenblas-dev \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /var/log/catgo /run/nginx /opt/catgo/data

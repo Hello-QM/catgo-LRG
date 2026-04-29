@@ -1,0 +1,1168 @@
+import { COMPRESSION_EXTENSIONS_REGEX } from '$lib/constants'
+import { DEFAULTS, type DefaultSettings, merge } from '$lib/settings'
+import { is_structure_file } from '$lib/structure/parse'
+import { AUTO_THEME, COLOR_THEMES, is_valid_theme_mode, type ThemeName } from '$lib/theme'
+import type { FrameLoader } from '$lib/trajectory/index'
+import {
+  create_frame_loader,
+  is_trajectory_file,
+  parse_trajectory_async,
+} from '$lib/trajectory/parse'
+import { Buffer } from 'node:buffer'
+import * as fs from 'node:fs'
+import * as path from 'path'
+import * as vscode from 'vscode'
+import pkg_json from '../package.json' with { type: 'json' }
+import { start_server, stop_server, get_server_port } from './server'
+import { stream_file_to_buffer } from './node-io'
+import { search_optimade_structures_backend, type OptimadeSearchOptions } from './optimade-backend'
+import { search_pubchem_compounds_backend } from './pubchem-backend'
+
+interface FrameLoaderData {
+  loader: FrameLoader
+  file_data: ArrayBuffer
+  filename: string
+}
+
+// WebviewLike and ExtensionContextLike are unions to allow both real vscode types and mock types for testing
+type WebviewLike = vscode.Webview | {
+  cspSource: string
+  asWebviewUri: (uri: { fsPath: string }) => string | { toString(): string }
+  onDidReceiveMessage: (
+    listener: (message: unknown) => void,
+  ) => { dispose(): void } | void
+  postMessage: (message: unknown) => Promise<boolean> | void
+  html: string
+}
+
+type ExtensionContextLike = vscode.ExtensionContext | {
+  extensionUri: { fsPath: string }
+  subscriptions: { dispose(): void }[]
+  workspaceState?: {
+    get<T>(key: string): T | undefined
+    update(key: string, value: unknown): Promise<void>
+  }
+  globalState?: {
+    get<T>(key: string): T | undefined
+    update(key: string, value: unknown): Promise<void>
+  }
+  extensionPath?: string
+  storageUri?: { fsPath: string }
+  globalStorageUri?: { fsPath: string }
+  logUri?: { fsPath: string }
+}
+
+interface FileData {
+  filename: string
+  content: string
+  is_base64: boolean // content is base64-encoded (binary or compressed)
+}
+
+interface WebviewData {
+  type: `trajectory` | `structure`
+  data: FileData
+  theme: ThemeName
+  defaults?: DefaultSettings
+  wasm_binary?: string // base64-encoded ferrox WASM binary
+  moyo_wasm_binary?: string // base64-encoded moyo WASM binary
+  server_port?: number // backend server port for API calls
+}
+
+export type IncomingCommand =
+  | `info`
+  | `error`
+  | `request_large_file`
+  | `request_frame`
+  | `saveAs`
+  | `startWatching`
+  | `stopWatching`
+  | `optimade_fetch`
+  | `pubchem_fetch`
+  | `mp_fetch`
+  | `optimade_search`
+  | `pubchem_search`
+  | `api_request`
+  | `api_ws`
+
+export interface MessageData {
+  command: IncomingCommand
+  text?: string
+  filename?: string
+  file_size?: number
+  content?: string
+  is_binary?: boolean
+  file_path?: string
+  // Add frame loading support
+  request_id?: string
+  frame_index?: number
+  // OPTIMADE API proxy support
+  url?: string
+  // Materials Project API key
+  api_key?: string
+  // OPTIMADE search options
+  provider?: string
+  options?: Record<string, unknown>
+  // PubChem search options
+  search_term?: string
+  elements?: string[]
+  // API relay fields
+  endpoint?: string
+  method?: string
+  body?: unknown
+}
+
+type WatcherMeta = { request_id?: string; filename?: string; frame_index?: number }
+
+// Track active file watchers by file path
+export const active_watchers = new Map<string, vscode.FileSystemWatcher>()
+// Track active frame loaders by file path
+export const active_frame_loaders = new Map<string, FrameLoaderData>()
+// Track auto-render timers to clear them on deactivate
+export const auto_render_timers = new Map<string, ReturnType<typeof setTimeout>>()
+// Track active panels by URI to prevent duplicate opens
+export const active_auto_render_panels = new Map<string, vscode.WebviewPanel>()
+
+// File size thresholds for reading files via VSCode API (1GB for both text and binary)
+const MAX_VSCODE_FILE_SIZE = 1024 * 1024 * 1024 // 1GB
+
+// Helper: determine view type using content when available
+const infer_view_type = (file: FileData): `trajectory` | `structure` => {
+  // Only pass content for text files; for binary (compressed) fall back to filename
+  const content = file.is_base64 ? undefined : file.content
+  return is_trajectory_file(file.filename, content) ? `trajectory` : `structure`
+}
+
+// Check if a file should be auto-rendered
+export const should_auto_render = (filename: string): boolean => {
+  if (!filename || typeof filename !== `string`) return false
+  return is_structure_file(filename) || is_trajectory_file(filename)
+}
+
+// Update the shared VS Code context for supported resources
+const update_supported_resource_context = (uri?: vscode.Uri): void => {
+  // Prefer explicit URI; otherwise fall back to the active editor filename
+  const filename = uri?.fsPath
+    ? path.basename(uri.fsPath)
+    : (vscode.window.activeTextEditor?.document?.fileName
+      ? path.basename(vscode.window.activeTextEditor.document.fileName)
+      : ``)
+  const is_supported = should_auto_render(filename)
+  vscode.commands.executeCommand(
+    `setContext`,
+    `catgo.supported_resource`,
+    is_supported,
+  )
+}
+
+// Read file from filesystem using VSCode API (works with remote SSH)
+export const read_file = async (file_path: string): Promise<FileData> => {
+  const filename = path.basename(file_path)
+  const uri = vscode.Uri.file(file_path)
+
+  // Files we serialize as base64 for the webview (compressed OR binary)
+  const is_base64_payload = COMPRESSION_EXTENSIONS_REGEX.test(filename) ||
+    /\.(traj|h5|hdf5)$/i.test(filename)
+
+  // Check file size to avoid loading huge files into memory
+  let file_size: number
+  try {
+    file_size = (await vscode.workspace.fs.stat(uri)).size
+  } catch (error) {
+    console.warn(`Failed to get file stats for ${filename}:`, error)
+    throw new Error(
+      `Failed to access file ${filename}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+
+  const threshold = MAX_VSCODE_FILE_SIZE
+
+  if (file_size > threshold) {
+    return {
+      filename,
+      content: `LARGE_FILE:${file_path}:${file_size}`,
+      is_base64: is_base64_payload, // NOTE: base64 payload (compressed or binary)
+    }
+  }
+
+  // For normal-sized files, read using VSCode API
+  try {
+    const uint8array = await vscode.workspace.fs.readFile(uri)
+    const content = is_base64_payload
+      ? Buffer.from(uint8array).toString(`base64`)
+      : Buffer.from(uint8array).toString(`utf8`)
+    return { filename, content, is_base64: is_base64_payload }
+  } catch (error) {
+    throw new Error(
+      `Failed to read file ${filename}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+}
+
+// Get file data from URI or active editor
+export const get_file = async (uri?: vscode.Uri): Promise<FileData> => {
+  if (uri) return await read_file(uri.fsPath)
+
+  if (vscode.window.activeTextEditor) {
+    const filename = path.basename(vscode.window.activeTextEditor.document.fileName)
+    const content = vscode.window.activeTextEditor.document.getText()
+    return { filename, content, is_base64: false }
+  }
+
+  const active_tab = vscode.window.tabGroups.activeTabGroup.activeTab
+  if (
+    active_tab?.input && typeof active_tab.input === `object` &&
+    active_tab.input !== null && `uri` in active_tab.input
+  ) return await read_file(active_tab.input.uri.fsPath)
+
+  throw new Error(
+    `No file selected. CatGo needs an active editor to know what to render.`,
+  )
+}
+
+// Detect VSCode theme and user preference
+export const get_theme = (): ThemeName => {
+  const config = vscode.workspace.getConfiguration(`catgo`)
+  const theme_setting = config.get<string>(`theme`, AUTO_THEME)
+
+  // Validate theme setting
+  if (!is_valid_theme_mode(theme_setting)) {
+    console.warn(
+      `Invalid theme setting: ${theme_setting}, falling back to auto`,
+    )
+    return get_system_theme()
+  }
+
+  if (theme_setting !== AUTO_THEME) return theme_setting // Handle manual theme selection
+
+  return get_system_theme() // Auto-detect from VSCode color theme
+}
+
+// Get system theme based on VSCode's current color theme
+const get_system_theme = (): ThemeName => {
+  const color_theme = vscode.window.activeColorTheme
+
+  // Map VSCode theme kind to our theme names
+  if (color_theme.kind === vscode.ColorThemeKind.Light) return COLOR_THEMES.light
+  else if (color_theme.kind === vscode.ColorThemeKind.Dark) return COLOR_THEMES.dark
+  else if (color_theme.kind === vscode.ColorThemeKind.HighContrast) {
+    return COLOR_THEMES.black
+  } else if (color_theme.kind === vscode.ColorThemeKind.HighContrastLight) {
+    return COLOR_THEMES.white
+  } else return COLOR_THEMES.light
+}
+
+// Settings reader with nested structure support and built-in error handling
+export const get_defaults = (): DefaultSettings => {
+  try {
+    const config = vscode.workspace.getConfiguration(`catgo`)
+    const user_settings: Partial<DefaultSettings> = {}
+
+    // Helper to read settings section
+    const read_section = (
+      section_key: keyof DefaultSettings,
+      defaults_section: Record<string, unknown>,
+    ) => {
+      const settings: Record<string, unknown> = {}
+      const section_config = config.get(section_key, {})
+      for (const key of Object.keys(defaults_section)) {
+        const value = section_config?.[key]
+        if (value !== undefined) settings[key] = value
+      }
+      return Object.keys(settings).length > 0 ? settings : undefined
+    }
+
+    // Read all settings sections
+    // Top-level simple keys
+    const color_scheme_val = config.get(`color_scheme`)
+    if (color_scheme_val !== undefined) {
+      user_settings.color_scheme = color_scheme_val as DefaultSettings[`color_scheme`]
+    }
+    const bg_color_val = config.get(`background_color`)
+    if (bg_color_val !== undefined) {
+      user_settings.background_color = bg_color_val as DefaultSettings[`background_color`]
+    }
+    const bg_opacity_val = config.get(`background_opacity`)
+    if (bg_opacity_val !== undefined) {
+      user_settings.background_opacity =
+        bg_opacity_val as DefaultSettings[`background_opacity`]
+    }
+
+    const structure_settings = read_section(`structure`, DEFAULTS.structure)
+    if (structure_settings) {
+      user_settings.structure = structure_settings as DefaultSettings[`structure`]
+    }
+
+    const trajectory_settings = read_section(`trajectory`, DEFAULTS.trajectory)
+    if (trajectory_settings) {
+      user_settings.trajectory = trajectory_settings as DefaultSettings[`trajectory`]
+    }
+
+    const composition_settings = read_section(`composition`, DEFAULTS.composition)
+    if (composition_settings) {
+      user_settings.composition = composition_settings as DefaultSettings[`composition`]
+    }
+
+    return merge(user_settings)
+  } catch (error) {
+    console.error(`Failed to get defaults:`, error)
+    return DEFAULTS
+  }
+}
+
+// Create HTML content for webview
+export const create_html = (
+  webview: WebviewLike,
+  context: ExtensionContextLike,
+  data: WebviewData,
+): string => {
+  const nonce = Math.random().toString(36).slice(2, 34)
+  const webview_uri = webview.asWebviewUri(
+    vscode.Uri.joinPath(context.extensionUri, `dist`, `webview.js`),
+  )
+  const js_uri = typeof webview_uri === `string` ? webview_uri : webview_uri.toString()
+
+  // Inject server port so webview can connect to backend API
+  const data_with_wasm: WebviewData & { server_port?: number } = {
+    ...data,
+    server_port: get_server_port() ?? undefined,
+  }
+  try {
+    const assets_dir = path.join(context.extensionUri.fsPath, `dist`, `assets`)
+    console.log(`[CatGO] Looking for WASM in: ${assets_dir}`)
+    if (fs.existsSync(assets_dir)) {
+      // Load ferrox WASM
+      const ferrox_files = fs
+        .readdirSync(assets_dir)
+        .filter((f) => f.startsWith(`ferrox_bg-`) && f.endsWith(`.wasm`))
+      console.log(`[CatGO] Found WASM files: ${ferrox_files.join(`, `)}`)
+      if (ferrox_files.length > 0) {
+        const wasm_path = path.join(assets_dir, ferrox_files[0])
+        const wasm_buffer = fs.readFileSync(wasm_path)
+        data_with_wasm.wasm_binary = wasm_buffer.toString(`base64`)
+        console.log(`[CatGO] Successfully loaded ferrox WASM binary (${wasm_buffer.length} bytes → ${data_with_wasm.wasm_binary.length} base64 chars)`)
+      } else {
+        console.warn(`[CatGO] No ferrox WASM files found in ${assets_dir}`)
+      }
+
+      // Load moyo WASM
+      const moyo_files = fs
+        .readdirSync(assets_dir)
+        .filter((f) => f.startsWith(`moyo_wasm_bg-`) && f.endsWith(`.wasm`))
+      if (moyo_files.length > 0) {
+        const moyo_path = path.join(assets_dir, moyo_files[0])
+        const moyo_buffer = fs.readFileSync(moyo_path)
+        data_with_wasm.moyo_wasm_binary = moyo_buffer.toString(`base64`)
+        console.log(`[CatGO] Successfully loaded moyo WASM binary (${moyo_buffer.length} bytes → ${data_with_wasm.moyo_wasm_binary.length} base64 chars)`)
+      } else {
+        console.warn(`[CatGO] No moyo WASM files found in ${assets_dir}`)
+      }
+    } else {
+      console.warn(`[CatGO] Assets directory does not exist: ${assets_dir}`)
+    }
+  } catch (error) {
+    console.error(`[CatGO] Failed to read WASM binaries:`, error)
+    // Continue without WASM binaries - webview will fall back to web versions
+  }
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' 'unsafe-eval' 'wasm-unsafe-eval' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src ${webview.cspSource} data: blob:; font-src ${webview.cspSource} data:; connect-src ${webview.cspSource} http://127.0.0.1:* ws://127.0.0.1:* blob:; worker-src blob:;">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script nonce="${nonce}">window.catgoData=${JSON.stringify(data_with_wasm)}</script>
+  </head>
+  <body>
+    <div id="catgo-app"></div>
+    <script nonce="${nonce}" src="${js_uri}"></script>
+    <script nonce="${nonce}">
+      window.initializeCatGo?.();
+    </script>
+  </body>
+</html>`
+}
+
+// Handle messages from webview
+export const handle_msg = async (
+  msg: MessageData,
+  webview?: WebviewLike,
+): Promise<void> => {
+  if (msg.command === `info` && msg.text) {
+    vscode.window.showInformationMessage(msg.text)
+  } else if (msg.command === `error` && msg.text) {
+    vscode.window.showErrorMessage(msg.text)
+  } else if (msg.command === `request_large_file` && msg.file_path && webview) {
+    // Handle large file by parsing with indexing and setting up frame loader
+    const command = `large_file_response`
+    try {
+      const { request_id, file_path } = msg
+      const filename = path.basename(file_path)
+      const array_buffer = await stream_file_to_buffer(file_path, (progress_data) => {
+        webview.postMessage({
+          command: `large_file_progress`,
+          request_id,
+          stage: `Reading file`,
+          progress: Math.round(progress_data.progress * 100),
+        })
+      })
+
+      // Parse with indexing and create frame loader
+      const parsed_trajectory = await parse_trajectory_async(
+        array_buffer,
+        filename,
+        undefined,
+        { use_indexing: true, extract_plot_metadata: true },
+      )
+
+      active_frame_loaders.set(file_path, {
+        loader: create_frame_loader(filename),
+        file_data: array_buffer,
+        filename,
+      })
+
+      webview.postMessage({
+        command,
+        request_id,
+        parsed_trajectory,
+        is_parsed: true,
+        supports_frame_streaming: true,
+        file_path,
+      })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`Failed to setup indexed parsing:`, error_message)
+      const { request_id } = msg
+      webview.postMessage({ command, request_id, error: error_message })
+    }
+  } else if (msg.command === `request_frame` && msg.file_path && webview) {
+    try {
+      const { request_id, file_path, frame_index } = msg
+      if (
+        typeof request_id !== `string` ||
+        frame_index === undefined ||
+        !Number.isInteger(frame_index) ||
+        frame_index < 0
+      ) {
+        throw new Error(`Invalid request_id or frame_index`)
+      }
+      const loader_data = active_frame_loaders.get(file_path)
+      if (!loader_data) throw new Error(`No frame loader found for file: ${file_path}`)
+
+      const frame = await loader_data.loader.load_frame(
+        loader_data.file_data,
+        frame_index,
+      )
+      const command = `frame_response`
+      webview.postMessage({ command, request_id, frame, frame_index })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`Failed to load frame ${msg.frame_index}:`, error_message)
+      webview.postMessage({
+        command: `frame_response`,
+        request_id: msg.request_id ?? ``,
+        error: error_message,
+        frame_index: msg.frame_index,
+      })
+    }
+  } else if (msg.command === `saveAs` && msg.content) {
+    let is_binary_save = false
+    try {
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(msg.filename || `structure`),
+        filters: { 'Files': [`*`] },
+      })
+
+      if (uri && msg.content) {
+        if (msg.is_binary) {
+          is_binary_save = true
+          const base64_data = msg.content.replace(/^data:[^;]+;base64,/, ``)
+          if (!base64_data) throw new Error(`Invalid data URL: missing base64 data`)
+          await vscode.workspace.fs.writeFile(
+            uri,
+            Uint8Array.from(Buffer.from(base64_data, `base64`)),
+          )
+        } else {
+          await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(msg.content))
+        }
+        vscode.window.showInformationMessage(`Saved: ${path.basename(uri.fsPath)}`)
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      const error_type = is_binary_save ? `binary data` : `text file`
+      vscode.window.showErrorMessage(`Failed to save ${error_type}: ${message}`)
+    }
+  } else if (
+    msg.command === `startWatching` &&
+    webview &&
+    typeof msg.file_path === `string` &&
+    path.isAbsolute(msg.file_path)
+  ) {
+    // Handle request to start watching a file
+    start_watching_file(
+      msg.file_path,
+      webview,
+      {
+        request_id: msg.request_id,
+        filename: msg.filename,
+        frame_index: msg.frame_index,
+      },
+    )
+  } else if (msg.command === `stopWatching` && msg.file_path) {
+    // Handle request to stop watching a file
+    stop_watching_file(msg.file_path)
+  } else if (msg.command === `optimade_fetch` && msg.url && webview) {
+    // Handle OPTIMADE API requests - proxy through extension host to bypass CORS
+    const command = `optimade_fetch_response`
+    try {
+      const { request_id, url } = msg
+      const response = await fetch(url, {
+        headers: {
+          'Accept': `application/vnd.api+json`,
+          'User-Agent': `CatGo/1.0`,
+        },
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      const data = await response.json()
+      webview.postMessage({ command, request_id, data })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`[CatGo] OPTIMADE fetch failed for ${msg.url}:`, error_message)
+      webview.postMessage({ command, request_id: msg.request_id, error: error_message })
+    }
+  } else if (msg.command === `pubchem_fetch` && msg.url && webview) {
+    // Handle PubChem API requests - proxy through extension host to bypass CORS
+    const command = `pubchem_fetch_response`
+    try {
+      const { request_id, url } = msg
+      const response = await fetch(url, {
+        headers: {
+          'Accept': `application/json`,
+          'User-Agent': `CatGo/1.0`,
+        },
+      })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      const data = await response.json()
+      webview.postMessage({ command, request_id, data })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`[CatGo] PubChem fetch failed for ${msg.url}:`, error_message)
+      webview.postMessage({ command, request_id: msg.request_id, error: error_message })
+    }
+  } else if (msg.command === `mp_fetch` && msg.url && webview) {
+    // Handle Materials Project API requests - proxy through extension host
+    const command = `mp_fetch_response`
+    try {
+      const { request_id, url, api_key } = msg
+      const headers: Record<string, string> = {
+        'Accept': `application/json`,
+        'User-Agent': `MatterViz/1.0`,
+      }
+      if (api_key) {
+        headers['X-API-KEY'] = api_key
+      }
+
+      const response = await fetch(url, { headers })
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+      const data = await response.json()
+      webview.postMessage({ command, request_id, data })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`[MatterViz] Materials Project fetch failed for ${msg.url}:`, error_message)
+      webview.postMessage({ command, request_id: msg.request_id, error: error_message })
+    }
+  } else if (msg.command === `optimade_search` && msg.provider && msg.options && webview) {
+    // Handle OPTIMADE structure search - call backend logic
+    const command = `optimade_search_response`
+    try {
+      const { request_id, provider, options } = msg
+      const search_options = options as OptimadeSearchOptions
+      console.log(`[MatterViz] OPTIMADE search for provider="${provider}"`)
+      const results = await search_optimade_structures_backend(provider, search_options)
+      webview.postMessage({ command, request_id, data: results })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`[MatterViz] OPTIMADE search failed:`, error_message)
+      webview.postMessage({ command, request_id: msg.request_id, error: error_message })
+    }
+  } else if (msg.command === `pubchem_search` && webview) {
+    // Handle PubChem compound search - call backend logic
+    const command = `pubchem_search_response`
+    try {
+      const { request_id, search_term, elements } = msg
+      console.log(`[MatterViz] PubChem search: term="${search_term}" elements=${JSON.stringify(elements)}`)
+      const results = await search_pubchem_compounds_backend(search_term, elements)
+      webview.postMessage({ command, request_id, data: results })
+    } catch (error) {
+      const error_message = error instanceof Error ? error.message : String(error)
+      console.error(`[MatterViz] PubChem search failed:`, error_message)
+      webview.postMessage({ command, request_id: msg.request_id, error: error_message })
+    }
+  } else if (msg.command === `api_request` && webview) {
+    // Relay REST API request to local backend server
+    const port = get_server_port()
+    if (!port) {
+      webview.postMessage({ command: `api_response`, id: msg.request_id, error: `Server not running` })
+      return
+    }
+    try {
+      const url = `http://127.0.0.1:${port}/api/${msg.endpoint}`
+      const resp = await fetch(url, {
+        method: msg.method || `GET`,
+        headers: msg.body ? { 'Content-Type': `application/json` } : undefined,
+        body: msg.body ? JSON.stringify(msg.body) : undefined,
+      })
+      const data = await resp.json()
+      webview.postMessage({ command: `api_response`, id: msg.request_id, status: resp.status, data })
+    } catch (err: any) {
+      webview.postMessage({ command: `api_response`, id: msg.request_id, error: err.message })
+    }
+  } else if (msg.command === `api_ws` && webview) {
+    // Relay WebSocket connection for optimization progress
+    const port = get_server_port()
+    if (!port) {
+      webview.postMessage({ command: `ws_error`, id: msg.request_id, error: `Server not running` })
+      return
+    }
+    const { default: WebSocket } = await import(`ws`)
+    const ws_url = `ws://127.0.0.1:${port}/api/${msg.endpoint}`
+    const ws = new WebSocket(ws_url)
+
+    ws.on(`open`, () => {
+      if (msg.body) ws.send(JSON.stringify(msg.body))
+      webview.postMessage({ command: `ws_open`, id: msg.request_id })
+    })
+    ws.on(`message`, (raw: Buffer) => {
+      webview.postMessage({ command: `ws_message`, id: msg.request_id, data: JSON.parse(raw.toString()) })
+    })
+    ws.on(`close`, () => {
+      webview.postMessage({ command: `ws_close`, id: msg.request_id })
+    })
+    ws.on(`error`, (err: Error) => {
+      webview.postMessage({ command: `ws_error`, id: msg.request_id, error: err.message })
+    })
+  }
+}
+
+// Start watching a file using VS Code's built-in file system watcher
+function start_watching_file(
+  file_path: string,
+  webview: WebviewLike,
+  meta?: WatcherMeta,
+): void {
+  try {
+    // Stop existing watcher for this file if any
+    stop_watching_file(file_path)
+
+    // Create a new file system watcher for this specific file
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(
+        vscode.Uri.file(path.dirname(file_path)),
+        path.basename(file_path),
+      ),
+    )
+
+    // Listen for file changes
+    watcher.onDidChange(() => {
+      handle_file_change(`change`, file_path, webview, meta)
+    })
+
+    // Listen for file deletion
+    watcher.onDidDelete(() => {
+      handle_file_change(`delete`, file_path, webview, meta)
+      stop_watching_file(file_path) // Clean up watcher
+    })
+
+    active_watchers.set(file_path, watcher)
+  } catch (error) {
+    console.error(`Failed to start watching file ${file_path}:`, error)
+    webview.postMessage({
+      command: `error`,
+      text: `Failed to start watching file: ${error}`,
+    })
+  }
+}
+
+// Handle file change events from VS Code file system watcher
+async function handle_file_change(
+  event_type: `change` | `delete`,
+  file_path: string,
+  webview: WebviewLike,
+  meta?: WatcherMeta,
+): Promise<void> {
+  if (event_type === `delete`) {
+    try { // File was deleted - send notification
+      webview.postMessage({ command: `fileDeleted`, file_path, ...(meta || {}) })
+    } catch (error) {
+      console.error(`[CatGo] Failed to send fileDeleted message:`, error)
+    }
+    return
+  }
+
+  if (event_type === `change`) {
+    // File was changed - send updated content
+    try {
+      const updated_file = await read_file(file_path)
+
+      webview.postMessage({
+        command: `fileUpdated`,
+        file_path,
+        data: updated_file,
+        type: infer_view_type(updated_file),
+        theme: get_theme(),
+        ...(meta || {}),
+      })
+    } catch (error) {
+      console.error(`[CatGo] Failed to read updated file ${file_path}:`, error)
+      try {
+        webview.postMessage({
+          command: `error`,
+          text: `Failed to read updated file: ${error}`,
+        })
+      } catch (msgError) {
+        console.error(`[CatGo] Failed to send error message:`, msgError)
+      }
+    }
+  }
+}
+
+// Stop watching a file and dispose the watcher
+function stop_watching_file(file_path: string): void {
+  const watcher = active_watchers.get(file_path)
+  if (watcher) {
+    watcher.dispose()
+    active_watchers.delete(file_path)
+  }
+
+  // Also clean up frame loader for this file
+  if (active_frame_loaders.has(file_path)) {
+    active_frame_loaders.delete(file_path)
+  }
+}
+
+// Create webview panel with common setup
+function create_webview_panel(
+  context: vscode.ExtensionContext,
+  file_data: FileData,
+  file_path?: string,
+  view_column: vscode.ViewColumn = vscode.ViewColumn.Beside,
+): vscode.WebviewPanel {
+  const panel = vscode.window.createWebviewPanel(
+    `catgo`,
+    `CatGo - ${file_data.filename}`,
+    view_column,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(context.extensionUri, `dist`),
+        vscode.Uri.joinPath(context.extensionUri, `../../static`),
+      ],
+    },
+  )
+
+  if (file_path) start_watching_file(file_path, panel.webview)
+
+  // Render initial HTML (server may not be ready yet — webview will use the
+  // fetch interceptor and receive port via postMessage)
+  panel.webview.html = create_html(panel.webview, context, {
+    type: infer_view_type(file_data),
+    data: file_data,
+    theme: get_theme(),
+    defaults: get_defaults(),
+  })
+
+  // Wait for server to be ready, then push port to webview
+  start_server(context).then((port) => {
+    if (port) {
+      console.log(`[CatGo] Posted server_ready with port ${port}`)
+      panel.webview.postMessage({ command: `server_ready`, port })
+    } else {
+      console.error(`[CatGo] start_server returned null`)
+    }
+  })
+
+  panel.webview.onDidReceiveMessage(
+    (msg: MessageData) => handle_msg(msg, panel.webview),
+    undefined,
+    context.subscriptions,
+  )
+
+  // Theme change handling
+  const update_theme = async () => {
+    if (panel.visible) {
+      const current_file = file_path ? await read_file(file_path) : file_data
+      panel.webview.html = create_html(panel.webview, context, {
+        type: infer_view_type(current_file),
+        data: current_file,
+        theme: get_theme(),
+        defaults: get_defaults(),
+      })
+    }
+  }
+
+  const theme_listener = vscode.window.onDidChangeActiveColorTheme(update_theme)
+  const config_listener = vscode.workspace.onDidChangeConfiguration(
+    (event: vscode.ConfigurationChangeEvent) => {
+      if (event.affectsConfiguration(`catgo`)) update_theme()
+    },
+  )
+
+  panel.onDidDispose(() => {
+    theme_listener.dispose()
+    config_listener.dispose()
+    if (file_path) stop_watching_file(file_path)
+  })
+
+  return panel
+}
+
+// Enhanced render function with file watching
+export const render = async (
+  context: vscode.ExtensionContext,
+  uri?: vscode.Uri,
+): Promise<void> => {
+  try {
+    const file = await get_file(uri)
+    const file_path = uri?.fsPath ||
+      vscode.window.activeTextEditor?.document.fileName
+
+    await create_webview_panel(context, file, file_path)
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    vscode.window.showErrorMessage(`Failed: ${message}`)
+  }
+}
+
+// Custom editor provider for CatGo files
+class Provider implements vscode.CustomReadonlyEditorProvider<vscode.CustomDocument> {
+  constructor(private context: vscode.ExtensionContext) {}
+
+  openCustomDocument(
+    uri: vscode.Uri,
+    _open_context: vscode.CustomDocumentOpenContext,
+    _token: vscode.CancellationToken,
+  ): vscode.CustomDocument {
+    return {
+      uri,
+      dispose: () => {},
+    }
+  }
+
+  async resolveCustomEditor(
+    document: vscode.CustomDocument,
+    webview_panel: vscode.WebviewPanel,
+    _token: vscode.CancellationToken,
+  ): Promise<void> {
+    try {
+      const file_path = document.uri.fsPath
+
+      webview_panel.webview.options = {
+        enableScripts: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(this.context.extensionUri, `dist`),
+          vscode.Uri.joinPath(this.context.extensionUri, `../../static`),
+        ],
+      }
+      const current = await read_file(document.uri.fsPath)
+      webview_panel.webview.html = create_html(
+        webview_panel.webview,
+        this.context,
+        {
+          type: infer_view_type(current),
+          data: current,
+          theme: get_theme(),
+          defaults: get_defaults(),
+        },
+      )
+      webview_panel.webview.onDidReceiveMessage(
+        (msg: MessageData) => handle_msg(msg, webview_panel.webview),
+        undefined,
+        this.context.subscriptions,
+      )
+
+      // Start watching the file immediately
+      start_watching_file(file_path, webview_panel.webview)
+
+      // Listen for theme changes and update webview
+      const update_theme = async () => {
+        if (webview_panel.visible) {
+          const current = await read_file(document.uri.fsPath)
+          webview_panel.webview.html = create_html(
+            webview_panel.webview,
+            this.context,
+            {
+              type: infer_view_type(current),
+              data: current,
+              theme: get_theme(),
+              defaults: get_defaults(),
+            },
+          )
+        }
+      }
+
+      const theme_change_listener = vscode.window.onDidChangeActiveColorTheme(
+        update_theme,
+      )
+      const config_change_listener = vscode.workspace.onDidChangeConfiguration(
+        (event: vscode.ConfigurationChangeEvent) => {
+          if (event.affectsConfiguration(`catgo`)) update_theme()
+        },
+      )
+
+      // Dispose listeners when panel is closed
+      webview_panel.onDidDispose(() => {
+        theme_change_listener.dispose()
+        config_change_listener.dispose()
+
+        stop_watching_file(file_path) // Clean up file watcher
+      })
+      // Note: webview_panel disposal is managed by VSCode for custom editors
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      vscode.window.showErrorMessage(`Failed: ${message}`)
+    }
+  }
+}
+
+// Activate extension
+export const activate = (context: vscode.ExtensionContext) => {
+  console.log(`CatGo extension activated (v${pkg_json.version})`)
+
+  // Set initial context for currently active editor
+  update_supported_resource_context(vscode.window.activeTextEditor?.document.uri)
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      `catgo.render_structure`,
+      (uri?: vscode.Uri) => render(context, uri),
+    ),
+    vscode.commands.registerCommand(
+      `catgo.report_bug`,
+      report_bug,
+    ),
+    vscode.window.registerCustomEditorProvider(
+      `catgo.viewer`,
+      new Provider(context),
+      { webviewOptions: { retainContextWhenHidden: true } },
+    ),
+    vscode.workspace.onDidOpenTextDocument((document: vscode.TextDocument) => {
+      // Update context on any document open
+      update_supported_resource_context(document.uri)
+      if (
+        document.uri.scheme === `file` &&
+        should_auto_render(path.basename(document.uri.fsPath))
+      ) {
+        const file_path = document.uri.fsPath
+
+        // Clear existing timer and reveal existing panel if present
+        const existing_timer = auto_render_timers.get(file_path)
+        if (existing_timer) {
+          clearTimeout(existing_timer)
+          auto_render_timers.delete(file_path)
+        }
+        if (active_auto_render_panels.has(file_path)) {
+          active_auto_render_panels.get(file_path)?.reveal(vscode.ViewColumn.One)
+          return
+        }
+
+        const timer = setTimeout(async () => {
+          try {
+            if (
+              !vscode.workspace.getConfiguration(`catgo`).get(`auto_render`, true)
+            ) return
+            const panel = await create_webview_panel(
+              context,
+              await read_file(file_path),
+              file_path,
+              vscode.ViewColumn.One,
+            )
+            active_auto_render_panels.set(file_path, panel)
+            panel.onDidDispose(() => active_auto_render_panels.delete(file_path))
+          } catch (error: unknown) {
+            console.error(`Error auto-rendering file:`, error)
+            vscode.window.showErrorMessage(`CatGo auto-render failed: ${error}`)
+          } finally {
+            auto_render_timers.delete(file_path)
+          }
+        }, 100) // Small delay to allow VS Code to finish opening the document
+
+        auto_render_timers.set(file_path, timer)
+      }
+    }),
+    vscode.window.onDidChangeActiveTextEditor((editor: vscode.TextEditor | undefined) => {
+      update_supported_resource_context(editor?.document?.uri)
+    }),
+  )
+
+  // Auto-start backend server if configured
+  const auto_start = vscode.workspace.getConfiguration('catgo.server').get<boolean>('auto_start', true)
+  if (auto_start) {
+    start_server(context).then((port) => {
+      if (port) console.log(`[CatGo] Backend server running on port ${port}`)
+    })
+  }
+}
+
+// Collect debug information for bug reporting
+async function collect_debug_info(): Promise<string> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const os = require(`os`) // Cursor is still using CommonJS, module-scoped ESM import broke this function on 2025-10-23
+
+  // Check if running remotely
+  const remote_name = vscode.env.remoteName
+  const is_remote = !!remote_name
+  const ui_kind = vscode.env.uiKind === vscode.UIKind.Desktop ? `Desktop` : `Web`
+
+  // Get information about active files being rendered
+  const active_files: Array<{
+    filename: string
+    file_path: string
+    file_size?: number
+    has_watcher: boolean
+    has_frame_loader: boolean
+  }> = []
+
+  // Collect file stats asynchronously in parallel
+  const file_stat_promises = Array.from(active_watchers.keys()).map(async (file_path) => {
+    const filename = path.basename(file_path)
+    let file_size: number | undefined
+    try {
+      const uri = vscode.Uri.file(file_path)
+      file_size = (await vscode.workspace.fs.stat(uri)).size
+    } catch {
+      // File might not exist anymore
+    }
+    const has_frame_loader = active_frame_loaders.has(file_path)
+    return { filename, file_path, file_size, has_watcher: true, has_frame_loader }
+  })
+
+  active_files.push(...await Promise.all(file_stat_promises))
+
+  // Get memory usage if available (use global process object)
+  const memory_usage = globalThis.process?.memoryUsage() ?? {
+    rss: 0,
+    heapUsed: 0,
+    heapTotal: 0,
+    external: 0,
+    arrayBuffers: 0,
+  }
+
+  // Format file sizes
+  const format_bytes = (bytes?: number): string => {
+    if (bytes === undefined) return `Unknown`
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  // Build debug report
+  let report = `### Environment\n\n`
+  report += `- **Editor**: ${vscode.env.appName}\n`
+  report += `- **Editor Version**: ${vscode.version}\n`
+  report += `- **CatGo Version**: ${pkg_json.version}\n`
+  report += `- **OS**: ${os.type()} ${os.platform()} ${os.arch()}\n`
+  report += `- **OS Version**: ${os.release()}\n`
+  report += `- **UI Kind**: ${ui_kind}\n`
+  report += `- **Remote Session**: ${
+    is_remote ? `Yes (${remote_name})` : `No (Local)`
+  }\n\n`
+
+  report += `### System Resources\n\n`
+  report += `- **Total Memory**: ${format_bytes(os.totalmem())}\n`
+  report += `- **Free Memory**: ${format_bytes(os.freemem())}\n`
+  report += `- **Process RSS**: ${format_bytes(memory_usage.rss)}\n`
+  report += `- **Process Heap Used**: ${format_bytes(memory_usage.heapUsed)}\n`
+  report += `- **Process Heap Total**: ${format_bytes(memory_usage.heapTotal)}\n\n`
+
+  report += `### Active Files & Extension State\n\n`
+  report += `- **Active Watchers**: ${active_watchers.size}\n`
+  report += `- **Active Frame Loaders**: ${active_frame_loaders.size}\n`
+  report += `- **Auto-Render Timers**: ${auto_render_timers.size}\n`
+  report += `- **Active Auto-Render Panels**: ${active_auto_render_panels.size}\n\n`
+
+  if (active_files.length === 0) {
+    report += `No files currently being watched/rendered.\n\n`
+  } else {
+    report += `Currently watching/rendering ${active_files.length} file(s):\n\n`
+    for (const file_info of active_files) {
+      report += `**${file_info.filename}**\n`
+      report += `- **Path**: \`${file_info.file_path}\`\n`
+      report += `- **Size**: ${format_bytes(file_info.file_size)}\n`
+      report += `- **Has Watcher**: ${file_info.has_watcher}\n`
+      report += `- **Has Frame Loader**: ${file_info.has_frame_loader}\n\n`
+    }
+  }
+
+  report += `### Console Logs\n\n`
+  report += `**Please check for console errors/warnings:**\n\n`
+  report += `1. Open Developer Tools:\n`
+  report += `   - Cursor/VSCode: Help → Toggle Developer Tools (or Cmd/Ctrl+Shift+I)\n`
+  report += `2. Go to the "Console" tab\n`
+  report += `3. Look for any errors or warnings related to CatGo (especially in red)\n`
+  report += `4. Copy and paste any relevant error messages into your GitHub issue\n\n`
+  report +=
+    `Tip: You can filter console messages by typing "catgo" in the filter box.\n\n`
+
+  report += `---\n\n`
+  report += `**Generated**: ${new Date().toISOString()}\n\n`
+  report += `Please include this information when reporting bugs at:\n`
+  report += `https://github.com/janosh/catgo/issues\n`
+
+  return report
+}
+
+// Command to report a bug with debug information
+async function report_bug(): Promise<void> {
+  try {
+    // Collect debug information
+    const debug_info = await collect_debug_info()
+
+    // Create a new untitled document with the debug info
+    const doc = await vscode.workspace.openTextDocument({
+      content: debug_info,
+      language: `markdown`,
+    })
+
+    await vscode.window.showTextDocument(doc, { preview: false })
+
+    // Show a message with instructions
+    const action = await vscode.window.showInformationMessage(
+      `Debug information collected. Please copy this information and include it when reporting a bug on GitHub.`,
+      `Copy to Clipboard`,
+      `Open GitHub Issues`,
+    )
+
+    if (action === `Copy to Clipboard`) {
+      await vscode.env.clipboard.writeText(debug_info)
+      vscode.window.showInformationMessage(`Debug information copied to clipboard!`)
+    } else if (action === `Open GitHub Issues`) {
+      vscode.env.openExternal(
+        vscode.Uri.parse(`https://github.com/janosh/catgo/issues/new`),
+      )
+    }
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    vscode.window.showErrorMessage(`Failed to collect debug information: ${message}`)
+  }
+}
+
+// Deactivate extension and clean up resources
+export const deactivate = (): void => {
+  stop_server()
+  auto_render_timers.forEach(clearTimeout)
+  auto_render_timers.clear()
+  active_watchers.forEach((watcher) => watcher.dispose())
+  active_watchers.clear()
+  active_frame_loaders.clear()
+  active_auto_render_panels.clear()
+}

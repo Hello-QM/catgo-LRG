@@ -1,0 +1,178 @@
+/**
+ * Popout window management — extracted from App.svelte.
+ *
+ * Functions for opening structure/workflow/terminal in new windows,
+ * with Tauri WebviewWindow support.
+ */
+
+import type { AnyStructure } from '$lib'
+import type { StructureTabState } from '../pane-utils'
+
+/** Open a structure in a new popout window via localStorage transfer. */
+export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean) {
+  const key = `catgo-popout-${Date.now()}`
+  localStorage.setItem(key, JSON.stringify({ structure, filename }))
+  const url = `${window.location.origin}${window.location.pathname}#structure?key=${encodeURIComponent(key)}`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const win = new WebviewWindow(`structure-${Date.now()}`, {
+        title: filename || `CatGo - Structure`,
+        url, width: 900, height: 700, center: true, resizable: true, decorations: true,
+      })
+      win.once(`tauri://error`, () => {
+        window.open(url, `_blank`, `width=900,height=700,resizable=yes`)
+      })
+      return
+    } catch {}
+  }
+  window.open(url, `_blank`, `width=900,height=700,resizable=yes`)
+}
+
+/** Parse content and open the structure in a new window. */
+export async function parse_and_open_structure_window(content: string, filename: string, is_tauri: boolean) {
+  try {
+    const { is_trajectory_file, parse_trajectory_data } = await import(`$lib/trajectory/parse`)
+    if (is_trajectory_file(filename, content)) {
+      const traj = await parse_trajectory_data(content, filename)
+      if (traj?.frames?.length) {
+        await open_structure_in_new_window(traj.frames[0].structure as AnyStructure, filename, is_tauri)
+        return
+      }
+    }
+    const { parse_structure_file } = await import(`$lib/structure/parse`)
+    const parsed = parse_structure_file(content, filename)
+    if (parsed) {
+      await open_structure_in_new_window(parsed as AnyStructure, filename, is_tauri)
+    }
+  } catch (e) {
+    console.error(`Failed to parse structure for new window:`, e)
+  }
+}
+
+/** Load structure data from localStorage (used by popout structure windows). */
+export function load_popout_structure(
+  hash: string,
+  get_active_ts: () => StructureTabState | null,
+  active_tab_id: string,
+  update_tab_label: (tab_id: string) => void,
+) {
+  const qmark = hash.indexOf(`?`)
+  if (qmark < 0) return
+  const params = new URLSearchParams(hash.slice(qmark))
+  const key = params.get(`key`)
+  if (!key) return
+  try {
+    const raw = localStorage.getItem(key)
+    localStorage.removeItem(key) // cleanup after reading
+    if (!raw) return
+    const { structure, filename } = JSON.parse(raw) as { structure: AnyStructure; filename: string }
+    if (!structure) return
+    // Ensure a structure tab exists and load the data
+    const ts = get_active_ts()
+    if (ts) {
+      ts.panes[ts.active_pane].structure = structure
+      ts.panes[ts.active_pane].source_filename = filename
+      ts.panes[ts.active_pane].modified = false
+      update_tab_label(active_tab_id)
+    }
+  } catch (e) {
+    console.error(`Failed to load popout structure:`, e)
+  }
+}
+
+/** Open a split-view pane in a new window. */
+export async function popout_pane(
+  tab_id: string,
+  pane_idx: number,
+  tab_states: Record<string, StructureTabState>,
+  is_tauri: boolean,
+) {
+  const ts = tab_states[tab_id]
+  if (!ts) return
+  const pane = ts.panes[pane_idx]
+
+  if (pane.mode === `workflow` && pane.workflow_id) {
+    // Workflows have their own popout mechanism
+    const url = `${window.location.origin}${window.location.pathname}#workflow`
+    window.open(url, `_blank`, `width=1400,height=900,resizable=yes`)
+    return
+  }
+
+  // Structure pane: open in new window via localStorage transfer
+  const structure = pane.saveable_structure ?? pane.structure
+  if (!structure) return
+  await open_structure_in_new_window(structure as AnyStructure, pane.source_filename || ``, is_tauri)
+}
+
+/** Open the workflow tab in a new window. */
+export async function popout_workflow(
+  is_tauri: boolean,
+  close_tab: (id: string) => void,
+  switch_to_structure: () => void,
+) {
+  const url = `${window.location.origin}${window.location.pathname}#workflow`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const wf_window = new WebviewWindow(`workflow-editor`, {
+        title: `CatGo - Workflow Editor`,
+        url, width: 1400, height: 900, center: true, resizable: true, decorations: true,
+      })
+      wf_window.once(`tauri://created`, () => { close_tab(`workflow`); switch_to_structure() })
+      wf_window.once(`tauri://error`, (e) => {
+        console.error(`Workflow window error:`, e)
+        window.open(url, `workflow-editor`, `width=1400,height=900,resizable=yes`)
+        close_tab(`workflow`); switch_to_structure()
+      })
+      return
+    } catch (err) {
+      console.error(`Tauri WebviewWindow failed:`, err)
+    }
+  }
+  window.open(url, `workflow-editor`, `width=1400,height=900,resizable=yes`)
+  close_tab(`workflow`); switch_to_structure()
+}
+
+/** Open the terminal tab in a new window. */
+export async function popout_terminal(
+  is_tauri: boolean,
+  terminal: { init_session_id?: string; init_host?: string; init_username?: string; init_sync_cwd: boolean },
+  close_tab: (id: string) => void,
+  switch_to_structure: () => void,
+) {
+  const params = new URLSearchParams()
+  if (terminal.init_session_id) params.set(`session_id`, terminal.init_session_id)
+  if (terminal.init_host) params.set(`host`, terminal.init_host)
+  if (terminal.init_username) params.set(`username`, terminal.init_username)
+  if (terminal.init_sync_cwd) params.set(`sync_cwd`, `true`)
+  const qs = params.toString()
+  const url = `${window.location.origin}${window.location.pathname}#terminal${qs ? `?${qs}` : ``}`
+  const win_id = `terminal-${Date.now()}`
+  const is_already_popout = window.location.hash.startsWith(`#terminal`)
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const term_window = new WebviewWindow(win_id, {
+        title: terminal.init_host ? `${terminal.init_username || ``}@${terminal.init_host}` : `CatGo - Terminal`,
+        url, width: 900, height: 600, center: true, resizable: true, decorations: true,
+      })
+      if (!is_already_popout) {
+        term_window.once(`tauri://created`, () => { close_tab(`terminal`); switch_to_structure() })
+        term_window.once(`tauri://error`, (e) => {
+          console.error(`Terminal window error:`, e)
+          window.open(url, win_id, `width=900,height=600,resizable=yes`)
+          close_tab(`terminal`); switch_to_structure()
+        })
+      }
+      return
+    } catch (err) {
+      console.error(`Tauri WebviewWindow failed:`, err)
+    }
+  }
+  window.open(url, win_id, `width=900,height=600,resizable=yes`)
+  // Only close the terminal tab in the main window, not in popped-out windows
+  if (!is_already_popout) {
+    close_tab(`terminal`); switch_to_structure()
+  }
+}

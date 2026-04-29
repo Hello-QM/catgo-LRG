@@ -1,0 +1,15 @@
+engine: test_custom_e2e
+label: E2E Test Custom
+description: Custom engine for e2e testing
+supported_calc_types: []
+params:
+- key: greeting
+  label: Greeting
+  type: string
+  default: hello
+input_files: {}
+run_commands:
+- echo hello
+output_files: {}
+calc_type_mapping: {}
+safety: warn

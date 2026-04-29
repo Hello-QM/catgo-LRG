@@ -1,0 +1,28 @@
+# LAMMPS input script
+# Generated for cu_fcc
+
+# ============ Initialization ============
+units           metal
+atom_style      atomic
+boundary        p p p
+
+# ============ Read Structure ============
+read_data       cu_fcc.data
+
+# ============ Force Field ============
+pair_style      eam/alloy
+pair_coeff      * * <POTENTIAL_FILE> Cu
+
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# ============ Output Settings ============
+thermo          100
+thermo_style    custom step temp pe ke etotal press vol
+
+# ============ Simulation ============
+min_style       cg
+minimize        1e-08 1e-08 10000 100000
+
+# ============ Finalize ============
+write_data      cu_fcc_final.data

@@ -1,0 +1,15 @@
+{
+  "workflow_id": "44e6dc1b-99d2-4964-8f33-73a06fa283a7",
+  "export_step_id": "n1773370385488-aq7u",
+  "entries": [
+    {
+      "parent_step_id": "n1773370381507-oylp",
+      "energy_eV": -555.741706,
+      "formula": "Cu144"
+    }
+  ],
+  "exported_files": [
+    "results.db",
+    "structure_1_n1773370.vasp"
+  ]
+}

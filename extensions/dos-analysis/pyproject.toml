@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "catgo-dos"
+version = "0.1.0"
+description = "Electronic structure DOS analysis library for VASP HDF5 output"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.22",
+    "h5py>=3.0",
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.5"]
+batch = ["matplotlib>=3.5", "pandas>=1.4", "pyyaml>=6.0"]
+dev = ["pytest>=7.0", "matplotlib>=3.5", "pandas>=1.4", "pyyaml>=6.0"]
+
+[tool.setuptools.packages.find]
+include = ["catgo_dos*"]

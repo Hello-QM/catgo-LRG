@@ -1,0 +1,3 @@
+[submodule "server/ext/KMC"]
+	path = server/ext/KMC
+	url = https://github.com/leshenzhang/KMC.git

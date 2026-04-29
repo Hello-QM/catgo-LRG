@@ -1,0 +1,14 @@
+[package]
+name = "vsepr-rs"
+version = "1.0.0"
+edition = "2021"
+authors = ["Forblaze Project <forblazeproject@gmail.com>"]
+description = "A lightweight, high-performance molecular geometry optimizer based on VSEPR theory."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ForblazeProject/vsepr-rs.git"
+keywords = ["chemistry", "molecule", "vsepr", "geometry", "polymer"]
+categories = ["science"]
+readme = "README.md"
+
+[dependencies]
+# Zero dependencies!

@@ -1,0 +1,173 @@
+engine: cp2k
+label: CP2K
+description: "Hybrid Gaussian/plane-wave DFT for molecules and periodic systems"
+
+supported_calc_types:
+  - geo_opt
+  - single_point
+  - cell_opt
+  - md
+  - freq
+
+params:
+  - key: functional
+    label: "XC Functional"
+    type: select
+    options:
+      - { label: "PBE", value: "PBE" }
+      - { label: "BLYP", value: "BLYP" }
+      - { label: "PBE0", value: "PBE0" }
+      - { label: "B3LYP", value: "B3LYP" }
+      - { label: "HSE06", value: "HSE06" }
+      - { label: "SCAN", value: "SCAN" }
+      - { label: "PADE (LDA)", value: "PADE" }
+    default: "PBE"
+  - key: basis_set
+    label: "Basis Set"
+    type: select
+    options:
+      - { label: "DZVP-MOLOPT-SR-GTH", value: "DZVP-MOLOPT-SR-GTH" }
+      - { label: "TZVP-MOLOPT-GTH", value: "TZVP-MOLOPT-GTH" }
+      - { label: "TZV2P-MOLOPT-GTH", value: "TZV2P-MOLOPT-GTH" }
+      - { label: "SZV-MOLOPT-GTH", value: "SZV-MOLOPT-GTH" }
+    default: "DZVP-MOLOPT-SR-GTH"
+  - key: cutoff
+    label: "Planewave Cutoff"
+    type: number
+    default: 350
+    unit: "Ry"
+    range: [100, 1500]
+  - key: rel_cutoff
+    label: "Relative Cutoff"
+    type: number
+    default: 50
+    unit: "Ry"
+    range: [10, 200]
+  - key: scf_method
+    label: "SCF Method"
+    type: select
+    options:
+      - { label: "OT (Orbital Transformation)", value: "OT" }
+      - { label: "Diagonalization", value: "diagonalization" }
+    default: "OT"
+  - key: eps_scf
+    label: "SCF Convergence"
+    type: number
+    default: 0.000001
+  - key: max_scf
+    label: "Max SCF Iterations"
+    type: number
+    default: 25
+    range: [1, 500]
+  - key: charge
+    label: "Charge"
+    type: number
+    default: 0
+  - key: multiplicity
+    label: "Multiplicity"
+    type: number
+    default: 1
+    range: [1, 10]
+  - key: vdw
+    label: "VDW Correction"
+    type: select
+    options:
+      - { label: "None", value: "none" }
+      - { label: "DFT-D2", value: "DFTD2" }
+      - { label: "DFT-D3", value: "DFTD3" }
+      - { label: "DFT-D3(BJ)", value: "DFTD3(BJ)" }
+      - { label: "DFT-D4", value: "DFTD4" }
+    default: "none"
+  - key: periodic
+    label: "Periodicity"
+    type: select
+    options:
+      - { label: "XYZ (3D)", value: "XYZ" }
+      - { label: "XY (2D slab)", value: "XY" }
+      - { label: "NONE (molecule)", value: "NONE" }
+    default: "XYZ"
+  - key: custom_inp_text
+    label: "Custom CP2K Input"
+    type: text
+    help: "Override auto-generated input with custom project.inp content"
+  - key: geo_opt_optimizer
+    label: "Optimizer"
+    type: select
+    options:
+      - { label: "BFGS", value: "BFGS" }
+      - { label: "LBFGS", value: "LBFGS" }
+      - { label: "CG", value: "CG" }
+    default: "BFGS"
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+  - key: geo_opt_max_iter
+    label: "Max Optimization Steps"
+    type: number
+    default: 200
+    range: [1, 5000]
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+  - key: md_ensemble
+    label: "MD Ensemble"
+    type: select
+    options:
+      - { label: "NVT", value: "NVT" }
+      - { label: "NPT", value: "NPT_I" }
+      - { label: "NVE", value: "NVE" }
+    default: "NVT"
+    show_if: { key: calc_type, values: [md] }
+  - key: md_steps
+    label: "MD Steps"
+    type: number
+    default: 1000
+    range: [1, 1000000]
+    show_if: { key: calc_type, values: [md] }
+  - key: md_timestep
+    label: "Timestep"
+    type: number
+    default: 0.5
+    unit: "fs"
+    show_if: { key: calc_type, values: [md] }
+  - key: md_temperature
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+    show_if: { key: calc_type, values: [md] }
+  - key: fixed_elements
+    label: "Fixed Elements"
+    type: string
+    default: ""
+    help: "Comma-separated element symbols to freeze"
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+  - key: fixed_indices
+    label: "Fixed Atom Indices"
+    type: string
+    default: ""
+    help: "Ranges like 1-10,15,20-25"
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+
+input_files:
+  "project.inp":
+    source: hook
+  "POSCAR":
+    source: structure
+    format: poscar
+
+run_commands:
+  - "mpirun -np $SLURM_NTASKS cp2k.psmp -i project.inp -o project.out"
+
+output_files:
+  log: "project.out"
+  structure: "project-pos-1.xyz"
+  restart: "project-1.restart"
+
+hooks:
+  pre_generate: "workflow.hooks.cp2k_hooks:generate_inputs"
+
+calc_type_mapping:
+  geo_opt: cp2k_geopt
+  single_point: cp2k_static
+  cell_opt: cp2k_cellopt
+  md: cp2k_md
+  freq: cp2k_freq
+
+safety: safe

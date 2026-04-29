@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "created": "2026-03-19"
+  },
+  "decisions": [
+    {
+      "id": "D-001",
+      "date": "2026-03-19",
+      "title": "Separate slow-growth node vs extending md.ts",
+      "decision": "Create separate slow_growth node type",
+      "rationale": "Slow-growth has fundamentally different inputs (ICONST file, INCREM) and outputs (REPORT with free energy gradient) compared to standard MD. Dedicated node makes workflow graph more readable and parameter UI cleaner.",
+      "alternatives_considered": ["Extend md.ts with show_if conditionals"],
+      "status": "approved"
+    },
+    {
+      "id": "D-002",
+      "date": "2026-03-19",
+      "title": "Constant-potential as shared param group",
+      "decision": "Implement constant-potential (TPOT/CP-VASP) as a shared param_schema group importable by both md.ts and slow-growth.ts",
+      "rationale": "Avoids duplication, consistent UI, allows constant-potential on both regular MD and slow-growth",
+      "status": "approved"
+    },
+    {
+      "id": "D-003",
+      "date": "2026-03-19",
+      "title": "Tool batch design for CatBot 15-round limit",
+      "decision": "Design plan_research_project and create_batch_workflows as single-call batch tools",
+      "rationale": "CatBot has 15-round tool loop limit. Full plan must return in 1 call, batch creation in 1 call.",
+      "status": "approved"
+    },
+    {
+      "id": "D-004",
+      "date": "2026-03-19",
+      "title": "Cation placement strategy",
+      "decision": "Two placement modes: near-surface (2.5-4.0 Å from adsorbate COM) and bulk-water (>6 Å from surface, replacing a water molecule)",
+      "rationale": "User needs to compare cation proximity effects. Near-surface = direct interaction, bulk-water = control condition.",
+      "status": "approved"
+    },
+    {
+      "id": "D-005",
+      "date": "2026-03-19",
+      "title": "Reuse existing MCP tools over writing new code",
+      "decision": "Prioritize composing existing catgo_* MCP tools; only write new code where no existing tool covers the functionality",
+      "rationale": "User explicitly requested: '先使用已有的功能，调用mcp，如果无法实现，你再自己写'. Most structure building, VASP input gen, workflow creation already covered by 90+ existing tools.",
+      "status": "approved"
+    },
+    {
+      "id": "D-006",
+      "date": "2026-03-19",
+      "title": "Dual adsorbate placement as new tool",
+      "decision": "Create catgo_place_dual_adsorbates tool with auto site pair selection and orientation",
+      "rationale": "Existing catgo_adsorption_place can place one adsorbate at a time, but C-N coupling requires two adsorbates with controlled distance and facing orientation. This cannot be reliably composed from two sequential single-placement calls.",
+      "status": "approved"
+    },
+    {
+      "id": "D-007",
+      "date": "2026-03-19",
+      "title": "Remove all HPC file size limits",
+      "decision": "Remove MAX_TEXT_FILE_SIZE (100 MB), MAX_BINARY_FILE_SIZE (50 MB), and default 2 MB text limit",
+      "rationale": "User needs to visualize large VASP output files (XDATCAR, OUTCAR, vasprun.xml) from HPC without truncation.",
+      "status": "approved"
+    },
+    {
+      "id": "D-008",
+      "date": "2026-03-20",
+      "title": "Inline constant-potential params instead of shared module",
+      "decision": "Keep constant-potential params inline in both slow-growth.ts and md.ts rather than extracting to a shared file",
+      "rationale": "The two nodes have slightly different constant-potential params (md.ts includes tpot_electstep and cpvasp_nescheme, slow-growth uses tpot_fermi). Shared module would need complex conditional logic. Inline is simpler and each node's param_schema is self-contained.",
+      "status": "approved"
+    },
+    {
+      "id": "D-009",
+      "date": "2026-03-20",
+      "title": "Seed workflow templates at startup, don't overwrite existing",
+      "decision": "Built-in templates are upserted on first startup only; if a template ID already exists, skip it",
+      "rationale": "Users may customize templates after seeding. Re-seeding on every startup would overwrite their changes. Check by ID before inserting.",
+      "status": "approved"
+    }
+  ]
+}

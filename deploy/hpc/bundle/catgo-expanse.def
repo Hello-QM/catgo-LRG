@@ -1,0 +1,106 @@
+# CatGO Apptainer Definition — Fully Offline Build for Expanse
+#
+# Uses pre-built Docker tar and pre-downloaded pip wheels.
+# NO internet access required at any step.
+#
+# Prerequisites:
+#   - catgo-base-amd64.tar (Docker tar from Mac with gcc/gfortran/lapack pre-installed)
+#   - wheels/ (pip packages, downloaded on login node)
+#   - frontend/ (pre-built SvelteKit static site from Mac)
+#   - server/ (FastAPI Python backend)
+
+Bootstrap: docker-archive
+From: catgo-base-amd64.tar
+
+%labels
+    Author CatGO Team
+    Description CatGO materials science toolkit for HPC (offline build)
+    Version 0.3.0
+
+%files
+    # Pre-built frontend (from Mac Docker build)
+    frontend /opt/catgo/frontend
+
+    # Python server
+    server /opt/catgo/server
+
+    # Pre-downloaded pip wheels
+    wheels /tmp/wheels
+
+%post
+    # System deps (gcc, gfortran, lapack, nginx, etc.) are pre-installed in the
+    # base image (catgo-base-amd64.tar) — no apt-get needed, no internet needed.
+
+    # --- Install ALL Python packages from local wheels (offline) ---
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels \
+        torch
+
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels \
+        "fastapi>=0.109.0" \
+        "uvicorn[standard]>=0.27.0" \
+        "pydantic>=2.0.0" \
+        "python-multipart>=0.0.6" \
+        "httpx>=0.27.0" \
+        "asyncssh>=2.14.0" \
+        "numpy>=1.24.0" \
+        "scipy>=1.10.0" \
+        "ase>=3.22.0" \
+        "pymatgen>=2024.1.0" \
+        "mdtraj>=1.9.9" \
+        "scikit-learn>=1.3.0" \
+        "umap-learn>=0.5.0"
+
+    # ML potentials
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels "mace-torch>=0.3.0"
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels "chgnet>=0.3.0"
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels "matgl>=1.0.0"
+
+    # Semi-empirical (xTB)
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels "tblite[ase]>=0.3.0"
+
+    # Sella (TS search)
+    pip install --no-cache-dir --no-index --find-links=/tmp/wheels setuptools-scm
+    pip install --no-cache-dir --no-build-isolation --no-index --find-links=/tmp/wheels "sella>=2.3.0"
+
+    # --- Cleanup wheels to reduce image size ---
+    rm -rf /tmp/wheels
+
+    # --- Verify all imports ---
+    python -c "import fastapi; print(f'FastAPI {fastapi.__version__}')"
+    python -c "import ase; print(f'ASE {ase.__version__}')"
+    python -c "from importlib.metadata import version; print(f'pymatgen {version(\"pymatgen\")}')"
+    python -c "from mace.calculators import mace_mp; print('MACE: OK')"
+    python -c "from chgnet.model import CHGNet; print('CHGNet: OK')"
+    python -c "import matgl; print(f'MatGL {matgl.__version__} (M3GNet): OK')"
+    python -c "from tblite.ase import TBLite; print('tblite (xTB): OK')"
+    python -c "from sella import Sella, IRC; print('Sella: OK')"
+    echo "=== All imports verified ==="
+
+%environment
+    export CATGO_FRONTEND_DIR=/opt/catgo/frontend
+    export CATGO_DATA_DIR=/opt/catgo/data
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    export CATGO_FRONTEND_PORT=8080
+    export CATGO_BACKEND_PORT=8000
+    export MACE_DEVICE=cpu
+
+%test
+    echo "=== CatGO Container Validation ==="
+    python --version
+    python -c "import fastapi; print(f'  FastAPI {fastapi.__version__}')"
+    python -c "import ase; print(f'  ASE {ase.__version__}')"
+    python -c "from mace.calculators import mace_mp; print('  MACE: OK')"
+    python -c "from chgnet.model import CHGNet; print('  CHGNet: OK')"
+    python -c "import matgl; print(f'  MatGL {matgl.__version__} (M3GNet): OK')"
+    python -c "from tblite.ase import TBLite; print('  tblite (xTB): OK')"
+    python -c "from sella import Sella, IRC; print('  Sella: OK')"
+    test -f /opt/catgo/frontend/index.html && echo "  Frontend: OK" || echo "  Frontend: MISSING"
+    test -f /opt/catgo/server/main.py && echo "  Backend: OK" || echo "  Backend: MISSING"
+    echo "=== Validation complete ==="
+
+%runscript
+    echo "CatGO Materials Science Toolkit v0.3.0"
+    echo "  Calculators: EMT, MACE, CHGNet, M3GNet, xTB"
+    echo "  Optimizers:  BFGS, Sella (TS Search, Minimize, IRC)"
+    exec "$@"

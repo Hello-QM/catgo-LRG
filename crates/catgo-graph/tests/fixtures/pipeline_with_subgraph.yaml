@@ -1,0 +1,48 @@
+graph_id: pipeline_with_subgraph_v1
+version: "1.0.0"
+description: >
+  Pipeline that uses a reusable statistics subgraph.
+
+inputs_schema:
+  type: object
+  required:
+    - data
+  properties:
+    data:
+      type: array
+    label:
+      type: string
+      default: "pipeline_stats"
+
+nodes:
+  - id: prepare
+    tool: file_writer
+    depends_on: []
+    input_bindings:
+      data: ${inputs.data}
+    execution_mode: local
+
+  - id: analyze
+    subgraph:
+      template_id: reusable_stats_v1
+      input_map:
+        values: ${inputs.data}
+        label: ${inputs.label}
+    depends_on:
+      - prepare
+    execution_mode: local
+
+  - id: report
+    tool: file_writer
+    depends_on:
+      - analyze
+    input_bindings:
+      mean: ${nodes.analyze.outputs.mean}
+      count: ${nodes.analyze.outputs.count}
+    execution_mode: local
+
+outputs:
+  - name: mean
+    source: ${nodes.analyze.outputs.mean}
+  - name: count
+    source: ${nodes.analyze.outputs.count}

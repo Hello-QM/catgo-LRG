@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "npm: build",
+      "type": "shell",
+      "command": "pnpm exec vite build --config vite.webview.config.ts && mkdir -p dist/src && cp -r ../../src/lib dist/src/lib/ && pnpm exec vite build",
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

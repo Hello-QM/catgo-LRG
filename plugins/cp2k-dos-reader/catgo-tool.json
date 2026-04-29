@@ -1,0 +1,9 @@
+{
+  "name": "cp2k_dos_reader",
+  "version": "1.0.0",
+  "displayName": "CP2K DOS Reader",
+  "description": "Read projected density of states from CP2K .pdos output files",
+  "author": "CatGo Team",
+  "trust": "user",
+  "permissions": []
+}

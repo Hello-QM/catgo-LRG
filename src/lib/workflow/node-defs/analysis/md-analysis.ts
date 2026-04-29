@@ -1,0 +1,50 @@
+import type { NodeDefinition } from '../../workflow-types'
+
+export const md_analysis: NodeDefinition = {
+  type: `md_analysis`,
+  label: `MD Analysis`,
+  color: `#e879f9`,
+  icon: `\u{1F4C8}`,
+  category: `Analysis`,
+  description: `Molecular dynamics trajectory analysis`,
+  inputs: [`data`],
+  outputs: [`result`],
+  default_params: { analyses: `rmsd,rdf`, skip_frames: 0, rdf_max_dist: 10.0, rdf_bins: 100, rdf_pairs: ``, density_axis: `z`, density_type: `number` },
+  help_text: `**MD Trajectory Analysis** — Post-process molecular dynamics.`,
+  param_schema: [
+    { key: `analyses`, label: `Analysis Types`, type: `string`, default: `rmsd,rdf`, group: `Analysis`,
+      help: `Comma-separated: rmsd, rdf, msd, density, hbonds, angles.`,
+    },
+    { key: `skip_frames`, label: `Skip Initial Frames`, type: `number`, default: 0, group: `Analysis`,
+      min: 0, max: 10000, step: 100,
+      help: `Number of initial equilibration frames to skip.`,
+    },
+    // --- RDF parameters ---
+    { key: `rdf_max_dist`, label: `RDF Max Distance (\u00C5)`, type: `number`, default: 10.0, group: `RDF`,
+      min: 3, max: 30, step: 1,
+      help: `Maximum distance for radial distribution function.`,
+    },
+    { key: `rdf_bins`, label: `RDF Bins`, type: `number`, default: 100, group: `RDF`,
+      min: 50, max: 500, step: 50,
+      help: `Number of distance bins for RDF.`,
+    },
+    { key: `rdf_pairs`, label: `RDF Atom Pairs`, type: `string`, default: ``, group: `RDF`,
+      help: `Specific pair types (e.g. "O-H,O-O"). Empty = all pairs.`,
+    },
+    // --- Density parameters ---
+    { key: `density_axis`, label: `Density Profile Axis`, type: `select`, default: `z`, group: `Density`,
+      options: [
+        { label: `Z`, value: `z` },
+        { label: `X`, value: `x` },
+        { label: `Y`, value: `y` },
+      ],
+      help: `Axis along which to compute density profile.`,
+    },
+    { key: `density_type`, label: `Density Type`, type: `select`, default: `number`, group: `Density`,
+      options: [
+        { label: `Number density (atoms/\u00C5\u00B3)`, value: `number` },
+        { label: `Mass density (g/cm\u00B3)`, value: `mass` },
+      ],
+    },
+  ],
+}

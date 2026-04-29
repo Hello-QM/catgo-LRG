@@ -1,0 +1,27 @@
+<svg
+  width="220"
+  height="220"
+  viewBox="0 0 220 220"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <g transform="translate(0, 10)">
+    <path
+      d="M110 170 Q170 160 210 110 L190 10 Q140 40 110 50 Q80 40 30 10 L10 110 Q50 160 110 170 Z"
+      stroke="#0B1220"
+      stroke-width="10"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      fill="none"
+    />
+    <path
+      d="M70 80 L110 115 M150 80 L110 115"
+      stroke="#0B1220"
+      stroke-width="6"
+      stroke-linecap="round"
+    />
+    <circle cx="70" cy="80" r="10" fill="#3b82f6" />
+    <circle cx="150" cy="80" r="10" fill="#3b82f6" />
+    <circle cx="110" cy="115" r="10" fill="#7c3aed" />
+  </g>
+</svg>

@@ -1,0 +1,65 @@
+engine: kmc
+label: KMC
+description: "Kinetic Monte Carlo simulation"
+
+supported_calc_types: []
+
+params:
+  - key: model_json
+    label: "KMC Model (JSON)"
+    type: text
+    help: "JSON model definition for KMC simulation"
+  - key: temperature
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+  - key: potential
+    label: "Potential"
+    type: number
+    default: 0.0
+    unit: "V"
+  - key: mode
+    label: "Mode"
+    type: select
+    options:
+      - { label: "KMC", value: "kmc" }
+      - { label: "MKM", value: "mkm" }
+      - { label: "Both", value: "both" }
+    default: "kmc"
+  - key: lattice_size
+    label: "Lattice Size"
+    type: number
+    default: 20
+    range: [5, 200]
+  - key: kmc_steps
+    label: "KMC Steps"
+    type: number
+    default: 100000
+  - key: scan_type
+    label: "Scan Type"
+    type: select
+    options:
+      - { label: "None", value: "none" }
+      - { label: "Potential Scan", value: "potential" }
+      - { label: "Temperature Scan", value: "temperature" }
+    default: "none"
+
+input_files:
+  "model.json":
+    source: hook
+  "run_kmc.sh":
+    source: hook
+
+run_commands:
+  - "bash run_kmc.sh"
+
+output_files:
+  log: "kmc_output.json"
+
+hooks:
+  pre_generate: "workflow.hooks.kmc_hooks:generate_inputs"
+
+calc_type_mapping: {}
+
+safety: safe

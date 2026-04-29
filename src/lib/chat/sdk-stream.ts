@@ -1,0 +1,96 @@
+// Frontend SSE parser for the unified /api/agent/stream endpoint.
+// Yields AgentEvent objects from the SSE stream.
+
+import type { AgentType, Attachment } from './types'
+
+export interface AgentEvent {
+  type: string
+  [key: string]: unknown
+}
+
+export interface StreamAgentParams {
+  agent: AgentType
+  prompt: string
+  sessionId?: string
+  model?: string
+  systemPrompt?: string
+  attachments?: Attachment[]
+  signal?: AbortSignal
+  /**
+   * Per-tab identifier forwarded to the SvelteKit route, which passes it to
+   * the SDK adapter. The adapter injects it as an `X-CatGo-Tab-Id` HTTP
+   * header on MCP requests, so backend MCP tools push structures/workflows
+   * back to the specific tab that issued the chat rather than a shared
+   * "default" panel. Omit for legacy / popout contexts.
+   */
+  tabId?: string
+}
+
+export async function* stream_sdk_agent(
+  params: StreamAgentParams,
+): AsyncGenerator<AgentEvent> {
+  const { agent, prompt, sessionId, model, systemPrompt, attachments, signal, tabId } = params
+
+  const response = await fetch(`/api/agent/stream`, {
+    method: `POST`,
+    headers: { 'Content-Type': `application/json` },
+    body: JSON.stringify({ agent, prompt, sessionId, model, systemPrompt, attachments, tabId }),
+    signal,
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => `${response.status}`)
+    throw new Error(`Agent stream failed: ${text}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error(`No response body`)
+
+  const decoder = new TextDecoder()
+  let buffer = ``
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      const parts = buffer.split(`\n\n`)
+      buffer = parts.pop() ?? ``
+
+      for (const part of parts) {
+        for (const line of part.split(`\n`)) {
+          if (!line.startsWith(`data: `)) continue
+          const data = line.slice(6)
+          if (data === `[DONE]`) return
+
+          try {
+            const event = JSON.parse(data) as AgentEvent
+            yield event
+            if (event.type === `done`) return
+          } catch {
+            // Skip malformed JSON
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+export async function resolve_permission(
+  permissionId: string,
+  behavior: `allow` | `allow_session` | `deny`,
+  suggestions?: unknown[],
+): Promise<boolean> {
+  const resp = await fetch(`/api/agent/permission`, {
+    method: `POST`,
+    headers: { 'Content-Type': `application/json` },
+    body: JSON.stringify({ permissionId, behavior, suggestions }),
+  })
+  if (!resp.ok) return false
+  const data = await resp.json()
+  return data.ok === true
+}

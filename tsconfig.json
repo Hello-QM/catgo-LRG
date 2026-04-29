@@ -1,0 +1,36 @@
+{
+  "extends": "./.svelte-kit/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "strict": true,
+    "sourceMap": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "$lib": ["src/lib"],
+      "$lib/*": ["src/lib/*"],
+      "$site": ["src/site"],
+      "$site/*": ["src/site/*"],
+      "$root": ["."],
+      "$root/*": ["./*"],
+      "catgo": ["src/lib"],
+      "catgo/*": ["src/lib/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "desktop/**/*.ts",
+    "desktop/**/*.svelte"
+  ],
+  "exclude": [
+    "node_modules",
+    ".svelte-kit",
+    "build",
+    "build-desktop",
+    "dist"
+  ]
+}

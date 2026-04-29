@@ -1,0 +1,41 @@
+Please read the following CatGo design documents carefully:
+
+docs/catgo_graph_vision.md
+docs/catgo_runtime_requirements.md
+docs/catgo_rust_runtime_architecture.md
+docs/oer_graph_example.yaml
+
+Treat these files as the architectural source of truth.
+
+I want you to implement the first MVP of the CatGo Graph Runtime in Rust.
+
+Requirements:
+1. Keep the runtime domain-agnostic.
+2. Do not hardcode chemistry logic into the runtime.
+3. Use GraphTemplate and GraphRun as separate concepts.
+4. Implement explicit node lifecycle states.
+5. Implement DAG validation.
+6. Implement input resolution for:
+   - ${inputs.xxx}
+   - ${nodes.node_id.outputs.xxx}
+7. Implement a Tool trait and ToolRegistry.
+8. Implement a mock tool for testing.
+9. Implement a scheduler and executor.
+10. Implement SQLite state persistence.
+11. Implement filesystem-based artifact storage.
+12. Implement run and resume.
+
+Please work in this order:
+1. propose file/module layout
+2. implement core structs and enums
+3. implement validator
+4. implement resolver
+5. implement tool abstraction
+6. implement scheduler
+7. implement executor
+8. implement persistence
+9. implement one example test
+
+Do not produce a toy single-file demo.
+Use a modular Rust project structure.
+Explain your design choices briefly where needed.

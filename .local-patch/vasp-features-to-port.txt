@@ -1,0 +1,185 @@
+================================================================================
+VASP CatBot Features To Port Into VaspExport.svelte
+Extracted from ExportPane.svelte CatBot conflict sections
+Source commit: 41f51a9 (temp: save CatBot local changes before Rust-DAG migration)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. TYPE DEFINITION
+--------------------------------------------------------------------------------
+
+  type ConstantPotentialMethod = 'none' | 'tpot' | 'cpvasp'
+
+  // Place in VaspExport.svelte script section (or in a shared types file)
+
+
+--------------------------------------------------------------------------------
+2. STATE VARIABLES TO ADD TO VaspExport.svelte
+--------------------------------------------------------------------------------
+
+  // Constant-potential method selector
+  let vasp_constant_potential = $state<ConstantPotentialMethod>('none')
+
+  // Slow-growth MD settings
+  let vasp_sg_nsw = $state(10000)
+  let vasp_sg_potim = $state(1)
+  let vasp_sg_mdalgo = $state(2)
+  let vasp_sg_smass = $state(0)
+  let vasp_sg_tebeg = $state(300)
+  let vasp_sg_teend = $state(300)
+  let vasp_sg_nblock = $state(1)
+  let vasp_sg_increm = $state('-0.0008')
+
+  // TPOT (constant-potential via VASPsol TPOT method) settings
+  let vasp_tpot_vdiff = $state(0.001)
+  let vasp_tpot_vrate = $state(-1.6)
+  let vasp_tpot_vratelim = $state(0.05)
+  let vasp_tpot_electstep = $state(0.05)
+  // TPOT VASPsol solvation parameters
+  let vasp_tpot_eb_k = $state(78.4)
+  let vasp_tpot_lambda_d_k = $state(3.04)
+  let vasp_tpot_core_c = $state<number | null>(null)
+  let vasp_tpot_tau = $state(0)
+
+  // CP-VASP (constant-potential + VASPsol++) settings
+  let vasp_cpvasp_nescheme = $state(5)
+  let vasp_cpvasp_neadjust = $state(1)
+  let vasp_cpvasp_fermiconverge = $state(0.01)
+  let vasp_cpvasp_cap_max = $state(2.0)
+  let vasp_cpvasp_t_eta = $state(300)
+  let vasp_cpvasp_eta_length = $state(1)
+  // VASPsol++ solvation parameters
+  let vasp_cpvasp_c_molar = $state(1.0)
+  let vasp_cpvasp_r_ion = $state(4.0)
+
+  // Shared: target voltage (V vs SHE)
+  // SHE vacuum level reference: 4.6 V (computational, common with implicit solvation)
+  // Alternative: 4.44 V (IUPAC thermodynamic value, Trasatti 1986)
+  let vasp_cp_she_ref = $state(4.6)
+  let vasp_cp_voltage_she = $state(0)     // V vs SHE
+  let vasp_cp_nelect = $state<number | null>(null)   // NELECT from step 1
+
+  // ICONST constraint builder (for slow-growth)
+  type IconstPrimitive = { type: 'R' | 'A' | 'T'; atoms: number[]; status: 0 | 7 }
+  type IconstComplex = { coeffs: number[]; status: 0 | 7 }
+  let vasp_sg_primitives = $state<IconstPrimitive[]>([{ type: 'R', atoms: [1, 2], status: 0 }])
+  let vasp_sg_complexes = $state<IconstComplex[]>([])
+  let vasp_sg_iconst_manual = $state(false)
+  let vasp_sg_iconst_text = $state('')
+
+
+--------------------------------------------------------------------------------
+3. generate_vasp() FUNCTION ADDITIONS
+--------------------------------------------------------------------------------
+
+The existing VaspExport.svelte likely has a generate_vasp() function.
+Add the following blocks inside the request object and after it:
+
+--- 3a. Add to request object construction ---
+
+  const request: Record<string, unknown> = {
+    // ... existing fields ...
+    constant_potential: vasp_constant_potential !== 'none' ? vasp_constant_potential : undefined,
+    // ... rest of existing fields ...
+  }
+
+--- 3b. Slow-growth block (add after the MD block, before API call) ---
+
+  // Slow-growth specific parameters
+  if (vasp_calculation === 'slow_growth') {
+    request.nsw = vasp_sg_nsw
+    request.potim = vasp_sg_potim
+    request.mdalgo = vasp_sg_mdalgo
+    request.smass = vasp_sg_smass
+    request.tebeg = vasp_sg_tebeg
+    request.teend = vasp_sg_teend
+    request.nblock = vasp_sg_nblock
+    request.lblueout = true
+    request.increm = vasp_sg_increm
+
+    // Build ICONST content
+    if (vasp_sg_iconst_manual) {
+      request.iconst_content = vasp_sg_iconst_text
+    } else {
+      const lines: string[] = []
+      for (const p of vasp_sg_primitives) {
+        lines.push(`${p.type} ${p.atoms.join(' ')} ${p.status}`)
+      }
+      for (const c of vasp_sg_complexes) {
+        lines.push(`S ${c.coeffs.join(' ')} ${c.status}`)
+      }
+      if (lines.length > 0) request.iconst_content = lines.join('\n')
+    }
+  }
+
+--- 3c. Constant-potential parameters block (add after slow-growth block) ---
+
+  // Constant-potential parameters (overlay on any calc type)
+  if (vasp_constant_potential === 'tpot') {
+    request.tpot_vtarget = vasp_cp_voltage_she + vasp_cp_she_ref
+    request.tpot_vdiff = vasp_tpot_vdiff
+    request.tpot_vrate = vasp_tpot_vrate
+    request.tpot_vratelim = vasp_tpot_vratelim
+    request.tpot_electstep = vasp_tpot_electstep
+    // VASPsol solvation
+    request.tpot_eb_k = vasp_tpot_eb_k
+    request.tpot_lambda_d_k = vasp_tpot_lambda_d_k
+    if (vasp_tpot_core_c != null) request.tpot_core_c = vasp_tpot_core_c
+    request.tpot_tau = vasp_tpot_tau
+    if (vasp_cp_nelect != null) request.nelect = vasp_cp_nelect
+  } else if (vasp_constant_potential === 'cpvasp') {
+    request.cpvasp_targetmu = -(vasp_cp_voltage_she + vasp_cp_she_ref)
+    request.cpvasp_nescheme = vasp_cpvasp_nescheme
+    request.cpvasp_neadjust = vasp_cpvasp_neadjust
+    request.cpvasp_fermiconverge = vasp_cpvasp_fermiconverge
+    if (vasp_cpvasp_nescheme === 2) {
+      request.cpvasp_cap_max = vasp_cpvasp_cap_max
+    } else if (vasp_cpvasp_nescheme === 5) {
+      request.cpvasp_t_eta = vasp_cpvasp_t_eta
+      request.cpvasp_eta_length = vasp_cpvasp_eta_length
+    }
+    request.cpvasp_c_molar = vasp_cpvasp_c_molar
+    request.cpvasp_r_ion = vasp_cpvasp_r_ion
+    if (vasp_cp_nelect != null) request.nelect = vasp_cp_nelect
+  }
+
+--- 3d. Post-call: handle ICONST and INCAR_NELECT outputs ---
+
+  // After: const files = await generateVASPInputs(request as any)
+  // Add handling for the two new output files:
+
+  if (files.iconst) {
+    generated_output['ICONST'] = files.iconst
+  }
+  if (files.incar_nelect) {
+    generated_output['INCAR_NELECT'] = files.incar_nelect
+  }
+  // Also update active_file selection:
+  active_file = vasp_constant_potential !== 'none' ? 'INCAR_NELECT' : 'INCAR'
+
+  // Note: the VASP file editor tab list should include ICONST in its recognized
+  // language mapping. In ExportPane.svelte line ~140 the recognized VASP files list
+  // already includes 'ICONST'. Verify VaspExport.svelte also includes it.
+
+
+--------------------------------------------------------------------------------
+4. NOTES ON BACKEND SUPPORT
+--------------------------------------------------------------------------------
+
+The server/utils/vasp_input.py must support these new request fields:
+  - calculation_type: 'slow_growth' (new calculation type)
+  - constant_potential: 'tpot' | 'cpvasp'
+  - For slow_growth: nsw, potim, mdalgo, smass, tebeg, teend, nblock,
+    lblueout, increm, iconst_content
+  - For tpot: tpot_vtarget, tpot_vdiff, tpot_vrate, tpot_vratelim,
+    tpot_electstep, tpot_eb_k, tpot_lambda_d_k, tpot_core_c, tpot_tau
+  - For cpvasp: cpvasp_targetmu, cpvasp_nescheme, cpvasp_neadjust,
+    cpvasp_fermiconverge, cpvasp_cap_max (nescheme=2),
+    cpvasp_t_eta, cpvasp_eta_length (nescheme=5),
+    cpvasp_c_molar, cpvasp_r_ion
+  - Both CP methods: nelect (NELECT from reference run step 1)
+  Output files added: iconst (ICONST file content), incar_nelect (step-1 INCAR)
+
+See also: server/utils/vasp_report.py (new file in CatBot branch)
+See also: src/lib/structure/SlowGrowthPane.svelte (new file in CatBot branch)
+================================================================================

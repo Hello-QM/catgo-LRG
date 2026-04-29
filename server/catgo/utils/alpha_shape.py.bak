@@ -1,0 +1,915 @@
+"""Alpha Shape algorithm for surface atom identification and adsorption site finding.
+
+Adapted from surface_site_finder_V7.py. Uses Alpha Shape (Delaunay triangulation
+with circumradius filtering) to identify surface atoms, then computes Top, Bridge,
+Hollow3, and Hollow4 adsorption sites via neighbor graph analysis.
+"""
+
+import logging
+
+import numpy as np
+from scipy.spatial import Delaunay, cKDTree
+
+logger = logging.getLogger(__name__)
+
+
+# ==================== Surface atom identification ====================
+
+
+def get_circumradius(pts: np.ndarray) -> float:
+    """Compute circumradius of a tetrahedron defined by 4 points."""
+    a, b, c, d = pts
+    b_ = b - a
+    c_ = c - a
+    d_ = d - a
+
+    try:
+        det = np.linalg.det(np.array([b_, c_, d_]))
+        if abs(det) < 1e-9:
+            return 1000.0
+
+        res = (
+            np.linalg.norm(b_) ** 2 * np.cross(c_, d_)
+            + np.linalg.norm(c_) ** 2 * np.cross(d_, b_)
+            + np.linalg.norm(d_) ** 2 * np.cross(b_, c_)
+        ) / (2 * det)
+        return np.linalg.norm(res)
+    except Exception:
+        return 1000.0
+
+
+def find_surface_atoms(coords: np.ndarray, alpha: float) -> np.ndarray:
+    """Identify surface atoms using Alpha Shape algorithm.
+
+    Args:
+        coords: Atomic coordinates (N x 3).
+        alpha: Alpha parameter (circumradius cutoff in Angstroms).
+
+    Returns:
+        Array of surface atom indices.
+    """
+    coords_jitter = coords + np.random.normal(0, 1e-7, coords.shape)
+
+    tri = Delaunay(coords_jitter)
+
+    keep_simplices = []
+    for simplex in tri.simplices:
+        radius = get_circumradius(coords_jitter[simplex])
+        if radius < alpha:
+            keep_simplices.append(simplex)
+
+    if not keep_simplices:
+        return np.array([], dtype=int)
+
+    faces = {}
+    for simplex in keep_simplices:
+        for i in range(4):
+            face = tuple(sorted([simplex[j] for j in range(4) if j != i]))
+            faces[face] = faces.get(face, 0) + 1
+
+    surface_indices = set()
+    for face, count in faces.items():
+        if count == 1:
+            for node in face:
+                surface_indices.add(node)
+
+    return np.array(list(surface_indices), dtype=int)
+
+
+# ==================== PBC utilities ====================
+
+
+def expand_coords_for_pbc(
+    coords: np.ndarray, cell: np.ndarray, expansion_distance: float = 3.0
+) -> tuple[np.ndarray, list[int]]:
+    """Expand coordinates near cell boundaries for PBC handling.
+
+    Only copies atoms within expansion_distance of boundaries, not all atoms.
+
+    Args:
+        coords: Atomic coordinates (N x 3).
+        cell: 3x3 cell matrix.
+        expansion_distance: Distance threshold for boundary expansion (Angstroms).
+
+    Returns:
+        Tuple of (expanded_coords, original_indices).
+    """
+    cell_array = np.array(cell)
+
+    # Compute fractional coordinates
+    cell_inv = np.linalg.inv(cell_array.T)
+    frac_coords = np.dot(coords, cell_inv)
+
+    expanded_coords = list(coords)  # Start with all original atoms
+    original_indices = list(range(len(coords)))
+
+    # Distance thresholds in fractional coordinates
+    threshold_x = expansion_distance / np.linalg.norm(cell_array[0])
+    threshold_y = expansion_distance / np.linalg.norm(cell_array[1])
+
+    for i, (coord, frac) in enumerate(zip(coords, frac_coords)):
+        near_x_min = frac[0] < threshold_x
+        near_x_max = frac[0] > (1 - threshold_x)
+        near_y_min = frac[1] < threshold_y
+        near_y_max = frac[1] > (1 - threshold_y)
+
+        if near_x_min:
+            expanded_coords.append(coord + cell_array[0])
+        if near_x_max:
+            expanded_coords.append(coord - cell_array[0])
+        if near_y_min:
+            expanded_coords.append(coord + cell_array[1])
+        if near_y_max:
+            expanded_coords.append(coord - cell_array[1])
+
+        # Corners: diagonal copies
+        if near_x_min and near_y_min:
+            expanded_coords.append(coord + cell_array[0] + cell_array[1])
+        if near_x_min and near_y_max:
+            expanded_coords.append(coord + cell_array[0] - cell_array[1])
+        if near_x_max and near_y_min:
+            expanded_coords.append(coord - cell_array[0] + cell_array[1])
+        if near_x_max and near_y_max:
+            expanded_coords.append(coord - cell_array[0] - cell_array[1])
+
+    return np.array(expanded_coords), original_indices
+
+
+def filter_sites_in_cell(
+    sites: np.ndarray,
+    cell: np.ndarray,
+    normals: np.ndarray | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Filter sites to only those within the original unit cell.
+
+    Sites outside boundaries are discarded (not wrapped).
+
+    Args:
+        sites: Site coordinates (M x 3).
+        cell: 3x3 cell matrix.
+        normals: Optional per-site normals (M x 3). If provided, filtered normals
+            are returned as second element.
+
+    Returns:
+        Filtered site coordinates, or (filtered_sites, filtered_normals) if normals given.
+    """
+    if len(sites) == 0:
+        if normals is not None:
+            return sites, np.array([]).reshape(0, 3)
+        return sites
+
+    cell_array = np.array(cell)
+    cell_inv = np.linalg.inv(cell_array.T)
+
+    filtered_sites = []
+    filtered_normals = []
+    for i, site in enumerate(sites):
+        frac = np.dot(cell_inv, site)
+        # Check xy within [0, 1) with tolerance for numerical errors
+        if (-0.05 <= frac[0] <= 1.05) and (-0.05 <= frac[1] <= 1.05):
+            filtered_sites.append(site)
+            if normals is not None:
+                filtered_normals.append(normals[i])
+
+    if normals is not None:
+        s = np.array(filtered_sites) if filtered_sites else np.array([]).reshape(0, 3)
+        n = np.array(filtered_normals) if filtered_normals else np.array([]).reshape(0, 3)
+        return s, n
+    return np.array(filtered_sites) if filtered_sites else np.array([]).reshape(0, 3)
+
+
+def filter_upper_surface(
+    coords: np.ndarray,
+    all_coords: np.ndarray,
+    bottom_fraction: float = 0.5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove bottom-surface atoms in PBC mode.
+
+    Uses the Z range of all atoms to compute a cutoff. Surface atoms below
+    z_min + bottom_fraction * (z_max - z_min) are considered bottom surface.
+
+    Args:
+        coords: Surface atom coordinates (N x 3).
+        all_coords: All atom coordinates for computing the slab Z range.
+        bottom_fraction: Fraction of slab Z range used as bottom cutoff (0-1).
+            0.5 = slab midpoint (default). Lower values remove less, higher removes more.
+
+    Returns:
+        Tuple of (filtered_coords, kept_indices).
+    """
+    z_min = all_coords[:, 2].min()
+    z_max = all_coords[:, 2].max()
+    z_cutoff = z_min + bottom_fraction * (z_max - z_min)
+
+    z_values = coords[:, 2]
+    bottom_mask = z_values < z_cutoff
+    upper_mask = ~bottom_mask
+
+    n_bottom = int(np.sum(bottom_mask))
+    n_upper = int(np.sum(upper_mask))
+
+    if n_bottom > 0:
+        logger.info(
+            "Removed bottom surface: %d atoms (Z < %.3f, fraction=%.2f), kept %d atoms",
+            n_bottom,
+            z_cutoff,
+            bottom_fraction,
+            n_upper,
+        )
+        return coords[upper_mask], np.where(upper_mask)[0]
+    else:
+        logger.info("No bottom surface detected (cutoff=%.3f), keeping all surface atoms", z_cutoff)
+        return coords, np.arange(len(coords))
+
+
+# ==================== Site computation utilities ====================
+
+
+def merge_close_sites(
+    sites: np.ndarray,
+    merge_threshold: float = 1.0,
+    normals: np.ndarray | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Merge sites closer than threshold using connected-component clustering.
+
+    Args:
+        sites: Site coordinates (M x 3).
+        merge_threshold: Distance threshold for merging (Angstroms).
+        normals: Optional per-site normals (M x 3). If provided, normals are
+            averaged during merging and returned as second element.
+
+    Returns:
+        Merged site coordinates, or (merged_sites, merged_normals) if normals given.
+    """
+    if len(sites) == 0 or merge_threshold <= 0:
+        if normals is not None:
+            return sites, normals if len(sites) > 0 else np.array([]).reshape(0, 3)
+        return sites
+
+    tree = cKDTree(sites)
+    graph: dict[int, set[int]] = {i: set() for i in range(len(sites))}
+
+    for i in range(len(sites)):
+        indices = tree.query_ball_point(sites[i], merge_threshold)
+        for j in indices:
+            if i != j:
+                graph[i].add(j)
+
+    # Find connected components (DFS)
+    visited: set[int] = set()
+    clusters: list[list[int]] = []
+
+    def dfs(node: int, cluster: list[int]) -> None:
+        visited.add(node)
+        cluster.append(node)
+        for neighbor in graph[node]:
+            if neighbor not in visited:
+                dfs(neighbor, cluster)
+
+    for i in range(len(sites)):
+        if i not in visited:
+            cluster: list[int] = []
+            dfs(i, cluster)
+            clusters.append(cluster)
+
+    merged = []
+    merged_normals = []
+    for cluster in clusters:
+        cluster_sites = sites[cluster]
+        merged_site = np.mean(cluster_sites, axis=0)
+        merged.append(merged_site)
+        if normals is not None:
+            avg_n = np.mean(normals[cluster], axis=0)
+            n_len = np.linalg.norm(avg_n)
+            merged_normals.append(avg_n / n_len if n_len > 1e-9 else np.array([0, 0, 1.0]))
+
+    merged_arr = np.array(merged) if merged else np.array([]).reshape(0, 3)
+    if normals is not None:
+        normals_arr = np.array(merged_normals) if merged_normals else np.array([]).reshape(0, 3)
+        return merged_arr, normals_arr
+    return merged_arr
+
+
+def get_nearby_atoms_pbc(
+    center: np.ndarray,
+    all_coords: np.ndarray,
+    radius: float,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> list[np.ndarray]:
+    """Find atoms within radius of center, optionally with PBC.
+
+    Args:
+        center: Center position (3,).
+        all_coords: All atom coordinates (N x 3).
+        radius: Search radius (Angstroms).
+        cell: Optional cell matrix for PBC.
+        pbc: Optional PBC flags.
+
+    Returns:
+        List of nearby atom coordinates.
+    """
+    if cell is None or pbc is None or not any(pbc):
+        nearby = []
+        for coord in all_coords:
+            dist = np.linalg.norm(center - coord)
+            if 0.5 < dist < radius:
+                nearby.append(coord)
+        return nearby
+
+    from ase import Atoms
+
+    all_positions = np.vstack([center.reshape(1, 3), all_coords])
+    temp_atoms = Atoms(
+        ["X"] + ["H"] * len(all_coords),
+        positions=all_positions,
+        cell=cell,
+        pbc=pbc,
+    )
+
+    nearby = []
+    for i in range(1, len(temp_atoms)):
+        dist = temp_atoms.get_distance(0, i, mic=True)
+        if 0.5 < dist < radius:
+            nearby.append(all_coords[i - 1])
+
+    return nearby
+
+
+def is_surface_site(
+    site_pos: np.ndarray,
+    all_atom_coords: np.ndarray,
+    radius: float = 5.0,
+    threshold: float = 0.7,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> bool:
+    """Check if a site is on the surface (not internal).
+
+    Uses hemisphere analysis: if most nearby atom->site vectors point in the same
+    hemisphere, the site is on the surface.
+
+    Args:
+        site_pos: Site position (3,).
+        all_atom_coords: All atom coordinates (N x 3).
+        radius: Search radius.
+        threshold: Same-hemisphere ratio threshold.
+        cell: Optional cell matrix for PBC.
+        pbc: Optional PBC flags.
+
+    Returns:
+        True if the site is on the surface.
+    """
+    nearby_atoms = get_nearby_atoms_pbc(site_pos, all_atom_coords, radius, cell, pbc)
+
+    if len(nearby_atoms) < 3:
+        return True
+
+    vectors = []
+    for atom in nearby_atoms:
+        vec = site_pos - atom
+        vec_norm = np.linalg.norm(vec)
+        if vec_norm > 1e-9:
+            vec = vec / vec_norm
+            vectors.append(vec)
+
+    if len(vectors) < 3:
+        return True
+
+    avg_direction = np.mean(vectors, axis=0)
+    avg_norm = np.linalg.norm(avg_direction)
+
+    if avg_norm < 1e-9:
+        return False
+
+    avg_direction = avg_direction / avg_norm
+
+    same_hemisphere = 0
+    for vec in vectors:
+        if np.dot(vec, avg_direction) > 0:
+            same_hemisphere += 1
+
+    ratio = same_hemisphere / len(vectors)
+    return ratio > threshold
+
+
+def filter_surface_sites(
+    sites: np.ndarray,
+    all_atom_coords: np.ndarray,
+    radius: float = 5.0,
+    threshold: float = 0.7,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+    normals: np.ndarray | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Filter out internal sites, keeping only surface sites.
+
+    Args:
+        sites: Site coordinates (M x 3).
+        all_atom_coords: All atom coordinates (N x 3).
+        radius: Search radius for surface check.
+        threshold: Same-hemisphere ratio threshold.
+        cell: Optional cell matrix for PBC.
+        pbc: Optional PBC flags.
+        normals: Optional per-site normals (M x 3). If provided, filtered normals
+            are returned as second element.
+
+    Returns:
+        Filtered surface site coordinates, or (filtered_sites, filtered_normals)
+        if normals given.
+    """
+    if len(sites) == 0:
+        if normals is not None:
+            return sites, np.array([]).reshape(0, 3)
+        return sites
+
+    surface_sites = []
+    surface_normals = []
+    for i, site in enumerate(sites):
+        if is_surface_site(site, all_atom_coords, radius, threshold, cell, pbc):
+            surface_sites.append(site)
+            if normals is not None:
+                surface_normals.append(normals[i])
+
+    if normals is not None:
+        s = np.array(surface_sites) if surface_sites else np.array([]).reshape(0, 3)
+        n = np.array(surface_normals) if surface_normals else np.array([]).reshape(0, 3)
+        return s, n
+    return np.array(surface_sites) if surface_sites else np.array([]).reshape(0, 3)
+
+
+# ==================== Neighbor graph construction ====================
+
+
+def get_distance_pbc(
+    pos1: np.ndarray,
+    pos2: np.ndarray,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> float:
+    """Compute distance between two points, optionally with PBC."""
+    if cell is None or pbc is None or not any(pbc):
+        return float(np.linalg.norm(pos2 - pos1))
+
+    from ase import Atoms
+
+    temp_atoms = Atoms(["H", "H"], positions=[pos1, pos2], cell=cell, pbc=pbc)
+    return float(temp_atoms.get_distance(0, 1, mic=True))
+
+
+def find_true_neighbors(
+    coords: np.ndarray,
+    atom_idx: int,
+    distance_gap_ratio: float = 1.2,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> list[int]:
+    """Find true neighbors via distance gap analysis."""
+    if cell is None or pbc is None or not any(pbc):
+        tree = cKDTree(coords)
+        dists, indices = tree.query(coords[atom_idx], k=min(20, len(coords)))
+        dists = dists[1:]
+        indices = indices[1:]
+    else:
+        center = coords[atom_idx]
+        all_dists = []
+        for i, coord in enumerate(coords):
+            if i == atom_idx:
+                continue
+            dist = get_distance_pbc(center, coord, cell, pbc)
+            all_dists.append((dist, i))
+
+        all_dists.sort(key=lambda x: x[0])
+        dists = np.array([d for d, _ in all_dists[: min(20, len(all_dists))]])
+        indices = np.array([idx for _, idx in all_dists[: min(20, len(all_dists))]])
+
+    if len(dists) == 0:
+        return []
+
+    neighbors = [indices[0]]
+
+    for i in range(len(dists) - 1):
+        ratio = dists[i + 1] / dists[i]
+        if ratio > distance_gap_ratio:
+            break
+        neighbors.append(indices[i + 1])
+
+    if len(neighbors) > 12:
+        neighbors = neighbors[:12]
+
+    return neighbors
+
+
+def is_direct_neighbor(
+    i: int,
+    j: int,
+    coords: np.ndarray,
+    blocking_threshold: float = 0.8,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> bool:
+    """Check if two atoms are direct neighbors (no blocking atoms between them)."""
+    pos_i = coords[i]
+    pos_j = coords[j]
+
+    ij_dist = get_distance_pbc(pos_i, pos_j, cell, pbc)
+    threshold = blocking_threshold * (ij_dist / 2)
+
+    if cell is not None and pbc is not None and any(pbc):
+        from ase import Atoms
+
+        temp_atoms = Atoms(["H", "H"], positions=[pos_i, pos_j], cell=cell, pbc=pbc)
+        direction = temp_atoms.get_distance(0, 1, mic=True, vector=True)
+        direction = direction / (np.linalg.norm(direction) + 1e-9)
+    else:
+        direction = (pos_j - pos_i) / (ij_dist + 1e-9)
+
+    for k in range(len(coords)):
+        if k == i or k == j:
+            continue
+
+        vec_ik = coords[k] - pos_i
+        projection = np.dot(vec_ik, direction)
+
+        if 0 < projection < ij_dist:
+            projected_point = pos_i + projection * direction
+            perpendicular_dist = np.linalg.norm(coords[k] - projected_point)
+
+            if perpendicular_dist < threshold:
+                return False
+
+    return True
+
+
+def build_neighbor_graph(
+    coords: np.ndarray,
+    distance_gap_ratio: float = 1.2,
+    blocking_threshold: float = 0.8,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> dict[int, set[int]]:
+    """Build nearest-neighbor graph for surface atoms."""
+    graph: dict[int, set[int]] = {}
+
+    for i in range(len(coords)):
+        candidates = find_true_neighbors(coords, i, distance_gap_ratio, cell, pbc)
+
+        true_neighbors = []
+        for j in candidates:
+            if is_direct_neighbor(i, j, coords, blocking_threshold, cell, pbc):
+                true_neighbors.append(j)
+
+        graph[i] = set(true_neighbors)
+
+    return graph
+
+
+# ==================== Cycle finding and hollow sites ====================
+
+
+def find_atom_cycles(graph: dict[int, set[int]], cycle_length: int) -> list[list[int]]:
+    """Find minimal cycles of specified length in the atom graph."""
+    cycles = []
+    visited_cycles: set = set()
+    nodes = list(graph.keys())
+
+    if cycle_length == 3:
+        for i in range(len(nodes)):
+            node_i = nodes[i]
+            neighbors_i = list(graph[node_i])
+
+            for j_idx, j in enumerate(neighbors_i):
+                if j <= node_i:
+                    continue
+
+                for k in neighbors_i[j_idx + 1 :]:
+                    if k <= j:
+                        continue
+                    if k in graph[j]:
+                        cycle = tuple(sorted([node_i, j, k]))
+                        if cycle not in visited_cycles:
+                            visited_cycles.add(cycle)
+                            cycles.append(list(cycle))
+
+    elif cycle_length == 4:
+        for i in range(len(nodes)):
+            node_i = nodes[i]
+            neighbors_i = list(graph[node_i])
+
+            for j in neighbors_i:
+                if j <= node_i:
+                    continue
+
+                for k in graph[j]:
+                    if k <= node_i or k == node_i:
+                        continue
+
+                    for l in graph[k]:
+                        if l <= node_i or l == j:
+                            continue
+
+                        if node_i in graph[l]:
+                            if k not in graph[node_i] and l not in graph[j]:
+                                cycle = (node_i, j, k, l)
+
+                                min_idx = cycle.index(min(cycle))
+                                normalized = cycle[min_idx:] + cycle[:min_idx]
+
+                                if normalized not in visited_cycles:
+                                    visited_cycles.add(normalized)
+                                    cycles.append(list(cycle))
+
+    return cycles
+
+
+def get_atom_normal(
+    atom_idx: int,
+    coords: np.ndarray,
+    neighbors: list[int],
+    all_atom_coords: np.ndarray | None = None,
+    check_radius: float = 5.0,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+    fallback_direction: np.ndarray = np.array([0, 0, 1]),
+) -> np.ndarray:
+    """Compute surface normal for a single atom via PCA of neighbor coordinates."""
+    center = coords[atom_idx]
+    neighbor_coords = coords[neighbors]
+
+    if len(neighbors) < 3:
+        normal = fallback_direction / np.linalg.norm(fallback_direction)
+    else:
+        relative = neighbor_coords - center
+        cov = np.cov(relative.T)
+        eigenvalues, eigenvectors = np.linalg.eigh(cov)
+        normal = eigenvectors[:, 0]  # Smallest eigenvalue = normal direction
+
+    # Ensure normal points outward
+    if all_atom_coords is not None:
+        nearby_all = get_nearby_atoms_pbc(center, all_atom_coords, check_radius, cell, pbc)
+
+        if len(nearby_all) >= 3:
+            vectors_to_surface = [center - atom for atom in nearby_all]
+            avg_inward = np.mean(vectors_to_surface, axis=0)
+
+            if np.dot(normal, avg_inward) < 0:
+                normal = -normal
+        else:
+            if np.dot(normal, fallback_direction) < 0:
+                normal = -normal
+    else:
+        if np.dot(normal, fallback_direction) < 0:
+            normal = -normal
+
+    return normal / np.linalg.norm(normal)
+
+
+def find_hollow_sites_from_atom_cycles(
+    surface_coords: np.ndarray,
+    normals: np.ndarray,
+    graph: dict[int, set[int]],
+    site_height: float = 1.5,
+    all_atom_coords: np.ndarray | None = None,
+    check_radius: float = 5.0,
+    cell: np.ndarray | None = None,
+    pbc: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Find hollow sites from triangular and quadrilateral atom cycles.
+
+    Returns:
+        Tuple of (hollow3_sites, hollow4_sites, hollow3_normals, hollow4_normals).
+    """
+    triangles = find_atom_cycles(graph, cycle_length=3)
+    hollow3_sites = []
+    hollow3_normals = []
+
+    for tri in triangles:
+        center = surface_coords[tri].mean(axis=0)
+
+        v1 = surface_coords[tri[1]] - surface_coords[tri[0]]
+        v2 = surface_coords[tri[2]] - surface_coords[tri[0]]
+        geometric_normal = np.cross(v1, v2)
+
+        norm_length = np.linalg.norm(geometric_normal)
+        if norm_length < 1e-6:
+            geometric_normal = np.array([0, 0, 1])
+        else:
+            geometric_normal = geometric_normal / norm_length
+
+        # Orient normal outward
+        if all_atom_coords is not None:
+            nearby_atoms = get_nearby_atoms_pbc(center, all_atom_coords, check_radius, cell, pbc)
+            if len(nearby_atoms) >= 3:
+                vectors_to_center = [center - atom for atom in nearby_atoms]
+                avg_inward = np.mean(vectors_to_center, axis=0)
+                if np.dot(geometric_normal, avg_inward) < 0:
+                    geometric_normal = -geometric_normal
+
+        hollow_site = center + geometric_normal * site_height
+        hollow3_sites.append(hollow_site)
+        hollow3_normals.append(geometric_normal)
+
+    hollow3_sites = np.array(hollow3_sites) if hollow3_sites else np.array([]).reshape(0, 3)
+    hollow3_normals = np.array(hollow3_normals) if hollow3_normals else np.array([]).reshape(0, 3)
+
+    # Quadrilateral hollow sites
+    quads = find_atom_cycles(graph, cycle_length=4)
+    hollow4_sites = []
+    hollow4_normals = []
+
+    for quad in quads:
+        center = surface_coords[quad].mean(axis=0)
+
+        v1 = surface_coords[quad[1]] - surface_coords[quad[0]]
+        v2 = surface_coords[quad[2]] - surface_coords[quad[0]]
+        n1 = np.cross(v1, v2)
+
+        v3 = surface_coords[quad[2]] - surface_coords[quad[0]]
+        v4 = surface_coords[quad[3]] - surface_coords[quad[0]]
+        n2 = np.cross(v3, v4)
+
+        geometric_normal = n1 + n2
+        norm_length = np.linalg.norm(geometric_normal)
+
+        if norm_length < 1e-6:
+            geometric_normal = np.array([0, 0, 1])
+        else:
+            geometric_normal = geometric_normal / norm_length
+
+        # Orient normal outward
+        if all_atom_coords is not None:
+            nearby_atoms = get_nearby_atoms_pbc(center, all_atom_coords, check_radius, cell, pbc)
+            if len(nearby_atoms) >= 3:
+                vectors_to_center = [center - atom for atom in nearby_atoms]
+                avg_inward = np.mean(vectors_to_center, axis=0)
+                if np.dot(geometric_normal, avg_inward) < 0:
+                    geometric_normal = -geometric_normal
+
+        hollow_site = center + geometric_normal * site_height
+        hollow4_sites.append(hollow_site)
+        hollow4_normals.append(geometric_normal)
+
+    hollow4_sites = np.array(hollow4_sites) if hollow4_sites else np.array([]).reshape(0, 3)
+    hollow4_normals = np.array(hollow4_normals) if hollow4_normals else np.array([]).reshape(0, 3)
+
+    return hollow3_sites, hollow4_sites, hollow3_normals, hollow4_normals
+
+
+# ==================== Main site computation ====================
+
+
+def compute_sites(
+    surface_coords: np.ndarray,
+    all_atom_coords: np.ndarray,
+    site_height: float = 1.5,
+    distance_gap_ratio: float = 1.2,
+    blocking_threshold: float = 0.8,
+    merge_threshold: float = 1.0,
+    filter_internal: bool = True,
+    filter_radius: float = 5.0,
+    filter_threshold: float = 0.7,
+) -> dict[str, np.ndarray]:
+    """Compute all adsorption sites (Top, Bridge, Hollow3, Hollow4).
+
+    PBC is handled via cell expansion before calling this function,
+    so no cell/pbc parameters are needed here.
+
+    Args:
+        surface_coords: Surface atom coordinates (expanded for PBC).
+        all_atom_coords: All atom coordinates (expanded for PBC).
+        site_height: Height above surface for site placement (Angstroms).
+        distance_gap_ratio: Distance gap ratio for neighbor detection.
+        blocking_threshold: Blocking threshold for direct neighbor check.
+        merge_threshold: Distance threshold for merging close sites.
+        filter_internal: Whether to filter out internal sites.
+        filter_radius: Radius for internal site filtering.
+        filter_threshold: Hemisphere ratio threshold for internal filtering.
+
+    Returns:
+        Dict with keys 'top', 'bridge', 'hollow3', 'hollow4', each mapping
+        to an (M x 3) numpy array of site coordinates.
+    """
+    logger.info(
+        "Computing adsorption sites: height=%.1f, gap_ratio=%.1f, blocking=%.1f, merge=%.1f",
+        site_height,
+        distance_gap_ratio,
+        blocking_threshold,
+        merge_threshold,
+    )
+
+    # Build neighbor graph (no cell/pbc needed - already expanded)
+    graph = build_neighbor_graph(surface_coords, distance_gap_ratio, blocking_threshold, None, None)
+
+    normals = []
+    for i in range(len(surface_coords)):
+        neighbors = list(graph[i])
+        normal = get_atom_normal(
+            i, surface_coords, neighbors, all_atom_coords=all_atom_coords, cell=None, pbc=None
+        )
+        normals.append(normal)
+    normals = np.array(normals)
+
+    neighbor_counts = [len(graph[i]) for i in range(len(surface_coords))]
+    logger.debug(
+        "Neighbor stats: min=%d, max=%d, avg=%.1f",
+        min(neighbor_counts),
+        max(neighbor_counts),
+        np.mean(neighbor_counts),
+    )
+
+    # Top sites: each top site normal = the atom normal
+    top_sites = surface_coords + normals * site_height
+    top_normals = normals.copy()
+    logger.debug("Top sites (before merge): %d", len(top_sites))
+
+    # Bridge sites
+    bridges = []
+    bridge_normals_list = []
+    visited_edges: set[tuple[int, int]] = set()
+
+    for i in graph:
+        for j in graph[i]:
+            edge = tuple(sorted([i, j]))
+            if edge in visited_edges:
+                continue
+            visited_edges.add(edge)
+
+            mid_pos = (surface_coords[i] + surface_coords[j]) / 2
+
+            dists = [np.linalg.norm(mid_pos - coord) for coord in surface_coords]
+            nearest_indices = np.argsort(dists)[: min(6, len(surface_coords))]
+            avg_normal = normals[nearest_indices].mean(axis=0)
+
+            norm_length = np.linalg.norm(avg_normal)
+            if norm_length < 1e-6:
+                avg_normal = np.array([0, 0, 1])
+                norm_length = 1.0
+
+            avg_normal = avg_normal / norm_length
+            bridge = mid_pos + avg_normal * site_height
+            bridges.append(bridge)
+            bridge_normals_list.append(avg_normal)
+
+    bridges = np.array(bridges) if bridges else np.array([]).reshape(0, 3)
+    bridge_normals = np.array(bridge_normals_list) if bridge_normals_list else np.array([]).reshape(0, 3)
+    logger.debug("Bridge sites (before merge): %d", len(bridges))
+
+    # Hollow sites
+    hollow3, hollow4, hollow3_normals, hollow4_normals = find_hollow_sites_from_atom_cycles(
+        surface_coords,
+        normals,
+        graph,
+        site_height,
+        all_atom_coords=all_atom_coords,
+        cell=None,
+        pbc=None,
+    )
+    logger.debug("Hollow3 sites (before merge): %d", len(hollow3))
+    logger.debug("Hollow4 sites (before merge): %d", len(hollow4))
+
+    # Filter internal sites
+    if filter_internal:
+        logger.debug("Filtering internal sites...")
+
+        n_top_before = len(top_sites)
+        top_sites, top_normals = filter_surface_sites(top_sites, all_atom_coords, filter_radius, filter_threshold, None, None, normals=top_normals)
+        logger.debug("Top sites (after filter): %d (removed %d)", len(top_sites), n_top_before - len(top_sites))
+
+        n_bridge_before = len(bridges)
+        bridges, bridge_normals = filter_surface_sites(bridges, all_atom_coords, filter_radius, filter_threshold, None, None, normals=bridge_normals)
+        logger.debug("Bridge sites (after filter): %d (removed %d)", len(bridges), n_bridge_before - len(bridges))
+
+        n_hollow3_before = len(hollow3)
+        hollow3, hollow3_normals = filter_surface_sites(hollow3, all_atom_coords, filter_radius, filter_threshold, None, None, normals=hollow3_normals)
+        logger.debug("Hollow3 sites (after filter): %d (removed %d)", len(hollow3), n_hollow3_before - len(hollow3))
+
+        n_hollow4_before = len(hollow4)
+        hollow4, hollow4_normals = filter_surface_sites(hollow4, all_atom_coords, filter_radius, filter_threshold, None, None, normals=hollow4_normals)
+        logger.debug("Hollow4 sites (after filter): %d (removed %d)", len(hollow4), n_hollow4_before - len(hollow4))
+
+    # Merge close sites
+    if merge_threshold > 0:
+        logger.debug("Merging sites closer than %.1f A...", merge_threshold)
+
+        top_sites, top_normals = merge_close_sites(top_sites, merge_threshold, normals=top_normals)
+        logger.debug("Top sites (after merge): %d", len(top_sites))
+
+        bridges, bridge_normals = merge_close_sites(bridges, merge_threshold, normals=bridge_normals)
+        logger.debug("Bridge sites (after merge): %d", len(bridges))
+
+        hollow3, hollow3_normals = merge_close_sites(hollow3, merge_threshold, normals=hollow3_normals)
+        logger.debug("Hollow3 sites (after merge): %d", len(hollow3))
+
+        hollow4, hollow4_normals = merge_close_sites(hollow4, merge_threshold, normals=hollow4_normals)
+        logger.debug("Hollow4 sites (after merge): %d", len(hollow4))
+
+    return {
+        "top": top_sites,
+        "bridge": bridges,
+        "hollow3": hollow3,
+        "hollow4": hollow4,
+        "top_normals": top_normals,
+        "bridge_normals": bridge_normals,
+        "hollow3_normals": hollow3_normals,
+        "hollow4_normals": hollow4_normals,
+    }

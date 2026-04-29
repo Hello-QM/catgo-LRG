@@ -1,0 +1,41 @@
+graph_id: reusable_stats_v1
+version: "1.0.0"
+description: >
+  Reusable statistics computation sub-workflow.
+  Accepts values and label, saves result.
+
+inputs_schema:
+  type: object
+  required:
+    - values
+  properties:
+    values:
+      type: array
+      description: Numeric values to analyze
+    label:
+      type: string
+      default: "stats"
+
+nodes:
+  - id: compute
+    tool: compute_stats
+    depends_on: []
+    input_bindings:
+      values: ${inputs.values}
+      label: ${inputs.label}
+    execution_mode: local
+
+  - id: save
+    tool: file_writer
+    depends_on:
+      - compute
+    input_bindings:
+      mean: ${nodes.compute.outputs.mean}
+      count: ${nodes.compute.outputs.count}
+    execution_mode: local
+
+outputs:
+  - name: mean
+    source: ${nodes.compute.outputs.mean}
+  - name: count
+    source: ${nodes.compute.outputs.count}

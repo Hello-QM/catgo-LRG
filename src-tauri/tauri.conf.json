@@ -1,0 +1,89 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "CatGo",
+  "version": "0.3.0",
+  "identifier": "com.catgo.app",
+  "build": {
+    "frontendDist": "../build-desktop",
+    "devUrl": "http://localhost:3100",
+    "beforeDevCommand": "pnpm desktop:serve",
+    "beforeBuildCommand": "pnpm desktop:build"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "CatGo - Catalyst Editor",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/catgo-server"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Education",
+    "shortDescription": "Interactive visualizations for materials science",
+    "longDescription": "CatGo provides interactive visualizations for materials science including periodic tables, 3D crystal structures, molecular dynamics trajectories, and more.",
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "resources": {
+      "icons/document.icns": "./"
+    },
+    "fileAssociations": [
+      {
+        "ext": ["cif"],
+        "name": "CIF Structure",
+        "description": "Crystallographic Information File",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["poscar", "vasp", "contcar"],
+        "name": "VASP Structure",
+        "description": "VASP POSCAR/CONTCAR file",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["xyz", "extxyz"],
+        "name": "XYZ Structure",
+        "description": "XYZ molecular structure file",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["traj"],
+        "name": "ASE Trajectory",
+        "description": "ASE trajectory file",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["json"],
+        "name": "JSON Structure",
+        "description": "JSON structure data",
+        "role": "Viewer"
+      }
+    ]
+  }
+}

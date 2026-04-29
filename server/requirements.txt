@@ -1,0 +1,51 @@
+# FastAPI and server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# HTTP client for external API proxying
+httpx>=0.27.0
+
+# MCP (Model Context Protocol) server for AI agent tool integration
+mcp>=1.0.0
+
+# SSH/SFTP for HPC connectivity
+asyncssh>=2.14.0
+
+# Scientific computing
+numpy>=1.24.0
+scipy>=1.10.0
+ase>=3.22.0
+pymatgen>=2024.1.0
+
+# MD trajectory analysis
+mdtraj>=1.9.9
+
+# HDF5 file reading (for vaspout.h5 DOS analysis)
+h5py>=3.0.0
+
+# PDF text extraction for literature import
+pymupdf>=1.24.0
+
+# Machine learning (clustering, dimensionality reduction)
+scikit-learn>=1.3.0
+umap-learn>=0.5.0
+
+# VASP workflow automation (custodian error handlers, job management)
+custodian>=2024.1.0
+
+# ML potentials for local geometry optimization
+mace-torch>=0.3.0
+# chgnet>=0.3.0    # optional: alternative ML potential
+# matgl>=1.0.0     # optional: alternative ML potential
+
+# Saddle point / transition state optimizer (optional)
+# Enables TS Search, Sella Minimize, and IRC in the optimization pane.
+# Install with: pip install --no-build-isolation sella
+# On Python 3.13+, first run: pip install setuptools-scm
+# sella>=2.3.0
+
+# Open Babel for molecular format conversion and force field typing
+# Supports OPLS-AA, MMFF94, UFF, and other force fields
+openbabel>=3.1.0

@@ -1,0 +1,191 @@
+engine: vasp
+label: VASP
+description: "DFT plane-wave code for periodic systems"
+
+supported_calc_types:
+  - geo_opt
+  - single_point
+  - cell_opt
+  - md
+  - freq
+
+params:
+  # ── Core DFT ──
+  - key: ENCUT
+    label: "Energy Cutoff"
+    type: number
+    default: 520
+    unit: "eV"
+    range: [200, 1500]
+  - key: EDIFF
+    label: "Electronic Convergence"
+    type: number
+    default: 0.00001
+  - key: EDIFFG
+    label: "Ionic Convergence"
+    type: number
+    default: -0.02
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+  - key: NSW
+    label: "Max Ionic Steps"
+    type: number
+    default: 100
+    show_if: { key: calc_type, values: [geo_opt, cell_opt, md] }
+  - key: ISIF
+    label: "Stress Tensor"
+    type: select
+    options:
+      - { label: "2 (ions only)", value: 2 }
+      - { label: "3 (ions + cell)", value: 3 }
+      - { label: "4 (ions + cell shape)", value: 4 }
+    default: 2
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+  - key: ISMEAR
+    label: "Smearing"
+    type: select
+    options:
+      - { label: "Gaussian (0)", value: 0 }
+      - { label: "Methfessel-Paxton (1)", value: 1 }
+      - { label: "Tetrahedron (-5)", value: -5 }
+    default: 0
+  - key: SIGMA
+    label: "Smearing Width"
+    type: number
+    default: 0.05
+    unit: "eV"
+  - key: ISPIN
+    label: "Spin Polarization"
+    type: select
+    options:
+      - { label: "Non-spin (1)", value: 1 }
+      - { label: "Spin-polarized (2)", value: 2 }
+    default: 1
+  - key: IVDW
+    label: "VDW Correction"
+    type: select
+    options:
+      - { label: "None (0)", value: 0 }
+      - { label: "DFT-D2 (10)", value: 10 }
+      - { label: "DFT-D3 (11)", value: 11 }
+      - { label: "DFT-D3(BJ) (12)", value: 12 }
+    default: 0
+  - key: ALGO
+    label: "Algorithm"
+    type: select
+    options:
+      - { label: "Normal", value: "Normal" }
+      - { label: "Fast", value: "Fast" }
+      - { label: "All", value: "All" }
+    default: "Normal"
+  - key: PREC
+    label: "Precision"
+    type: select
+    options:
+      - { label: "Normal", value: "Normal" }
+      - { label: "Accurate", value: "Accurate" }
+      - { label: "High", value: "High" }
+    default: "Normal"
+  - key: NCORE
+    label: "NCORE"
+    type: number
+    default: 4
+    range: [1, 64]
+  # ── KPOINTS ──
+  - key: kpoints
+    label: "K-points"
+    type: string
+    default: "3x3x3"
+    help: "Format: 3x3x3 or 3 3 3"
+  # ── Custom input ──
+  - key: custom_incar_text
+    label: "Custom INCAR"
+    type: text
+    help: "Override auto-generated INCAR content"
+  - key: custom_kpoints_text
+    label: "Custom KPOINTS"
+    type: text
+    help: "Override auto-generated KPOINTS content"
+  # ── Slab/surface ──
+  - key: LDIPOL
+    label: "Dipole Correction"
+    type: boolean
+    default: false
+  - key: frozen_layers
+    label: "Frozen Bottom Layers"
+    type: number
+    default: 0
+    range: [0, 10]
+    show_if: { key: calc_type, values: [geo_opt] }
+  # ── Frequency ──
+  - key: freeze_mode
+    label: "Freeze Mode"
+    type: select
+    options:
+      - { label: "None", value: "none" }
+      - { label: "By Z Range", value: "z_range" }
+      - { label: "By Element", value: "element" }
+      - { label: "By Indices", value: "indices" }
+      - { label: "By Layers", value: "layers" }
+    default: "none"
+    show_if: { key: calc_type, values: [freq] }
+  - key: freeze_invert
+    label: "Invert Freeze"
+    type: boolean
+    default: false
+    show_if: { key: calc_type, values: [freq] }
+  # ── MD ──
+  - key: TEBEG
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+    show_if: { key: calc_type, values: [md] }
+  - key: POTIM
+    label: "Timestep"
+    type: number
+    default: 1.0
+    unit: "fs"
+    show_if: { key: calc_type, values: [md] }
+  # ── Double relax ──
+  - key: double_relax
+    label: "Double Relaxation"
+    type: boolean
+    default: false
+    show_if: { key: calc_type, values: [geo_opt, cell_opt] }
+  # ── Slow growth ──
+  - key: iconst_content
+    label: "ICONST Content"
+    type: text
+    help: "Constraint file for slow-growth AIMD"
+
+input_files:
+  "INCAR":
+    source: hook
+  "KPOINTS":
+    source: hook
+  "POSCAR":
+    source: hook
+  "ICONST":
+    source: hook
+
+run_commands:
+  - "${VASP_COMMAND}"
+
+output_files:
+  structure: "CONTCAR"
+  log: "OUTCAR"
+  energy: "OSZICAR"
+  charge: "CHGCAR"
+  wavefunction: "WAVECAR"
+
+hooks:
+  pre_generate: "workflow.hooks.vasp_hooks:generate_inputs"
+
+calc_type_mapping:
+  geo_opt: vasp_relax
+  single_point: vasp_static
+  cell_opt: bulk_opt
+  md: vasp_md
+  freq: frequency
+
+safety: safe

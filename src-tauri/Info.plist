@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Required by macOS to prompt the user for camera/microphone access.
+       Without these keys the OS silently blocks getUserMedia() in the WKWebView. -->
+  <key>NSCameraUsageDescription</key>
+  <string>CatGo uses the camera for hand gesture control of 3D structure visualization.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>CatGo uses the microphone for voice commands to control the viewer.</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>CIF Structure</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>cif</string>
+      </array>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>VASP Structure</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>poscar</string>
+        <string>vasp</string>
+        <string>contcar</string>
+      </array>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>XYZ Structure</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>xyz</string>
+        <string>extxyz</string>
+      </array>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>ASE Trajectory</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>traj</string>
+      </array>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>JSON Structure</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>json</string>
+      </array>
+      <key>CFBundleTypeIconFile</key>
+      <string>document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+    </dict>
+  </array>
+</dict>
+</plist>

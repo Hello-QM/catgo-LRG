@@ -1,0 +1,9 @@
+{
+  "name": "lennard_jones",
+  "version": "1.0.0",
+  "displayName": "Lennard-Jones Calculator",
+  "description": "Lennard-Jones pair potential calculator for noble gases",
+  "author": "CatGo Team",
+  "trust": "user",
+  "permissions": []
+}

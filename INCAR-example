@@ -1,0 +1,35 @@
+##### I/O #####
+SYSTEM = Au
+#KPAR = 4
+NCORE = 12
+ISTART = 1
+ICHARG = 1
+LWAVE = .FALSE.
+LCHARG = .FALSE.
+LVTOT = .FALSE.
+LVHAR = .FALSE.
+LELF = .FALSE.
+# LORBIT = 11
+
+#### Elec Relax ####
+ENCUT = 400
+ISMEAR = 0
+SIGMA = 0.05
+EDIFF = 1E-6
+NELMIN = 5
+NELM = 300
+GGA = PE
+LREAL = Auto
+ISYM = 0
+
+#### MD ####
+NSW = 10000
+POTIM = 1
+SMASS = 0
+MDALGO = 2
+TEBEG = 300
+TEEND = 300
+NBLOCK = 1
+LBLUEOUT = .TRUE.
+
+INCREM = -0.0008 # the CV change rate, usually 0.0008 for a smooth potential energy surface

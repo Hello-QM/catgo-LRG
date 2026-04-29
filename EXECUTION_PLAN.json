@@ -1,0 +1,215 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "created": "2026-03-19",
+    "project": "CatGO AI-Driven Electrochemical Workflow",
+    "status": "ready"
+  },
+
+  "phases": [
+    {
+      "id": "phase-1",
+      "title": "C-N Coupling Reaction Network Engine",
+      "priority": "P0",
+      "status": "pending",
+      "parallel_with": ["phase-2", "phase-3"],
+      "depends_on": [],
+      "tasks": [
+        {
+          "id": "T1.1",
+          "title": "Create cn_coupling.py — reaction network generator",
+          "description": "Backend service that enumerates all valid C-N coupling pairs from C_species and N_species lists. Includes chemical filtering, product identification, ICONST templates, and recommended slow-growth parameters.",
+          "file": "server/utils/cn_coupling.py",
+          "status": "pending"
+        },
+        {
+          "id": "T1.2",
+          "title": "Add API endpoint for C-N coupling network",
+          "description": "POST /api/catalysis/cn-coupling-network endpoint in server/routers/catalysis.py",
+          "file": "server/routers/catalysis.py",
+          "status": "pending"
+        },
+        {
+          "id": "T1.3",
+          "title": "Add CatBot MCP tool: plan_cn_coupling",
+          "description": "MCP tool definition in server/mcp_tools/tools/ that calls the network generator and presents results",
+          "files": ["server/mcp_tools/tools/catalysis.py", "server/mcp_tools/server.py"],
+          "status": "pending"
+        },
+        {
+          "id": "T1.4",
+          "title": "Add frontend CatBot tool: plan_cn_coupling",
+          "description": "Frontend tool definition in src/lib/chat/workflow-tools.ts for Anthropic-direct mode",
+          "file": "src/lib/chat/workflow-tools.ts",
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "title": "Cation Placement and Electrochemical Interface Builder",
+      "priority": "P0",
+      "status": "pending",
+      "parallel_with": ["phase-1", "phase-3"],
+      "depends_on": [],
+      "tasks": [
+        {
+          "id": "T2.1",
+          "title": "Create cation placement backend",
+          "description": "New endpoint in server/routers/cation.py or extend water_layer.py. Two modes: near-surface (coordinated with adsorbate, 2.5-4.0 Å) and bulk-water (>6 Å from surface, replace water molecule).",
+          "file": "server/routers/cation.py",
+          "status": "pending"
+        },
+        {
+          "id": "T2.2",
+          "title": "Add CatBot MCP tool: place_cation",
+          "description": "MCP tool in server/mcp_tools/tools/structure.py for cation placement",
+          "file": "server/mcp_tools/tools/structure.py",
+          "status": "pending"
+        },
+        {
+          "id": "T2.3",
+          "title": "Add frontend CatBot tool: place_cation",
+          "description": "Frontend tool in src/lib/chat/structure-tools.ts",
+          "file": "src/lib/chat/structure-tools.ts",
+          "status": "pending"
+        },
+        {
+          "id": "T2.4",
+          "title": "Electrochemical interface builder pipeline",
+          "description": "Orchestration logic chaining: slab_gen -> adsorbate_place -> water_layer -> place_cation. Can be a CatBot compound tool or workflow template.",
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "title": "Slow-Growth AIMD + Constant-Potential Workflow Nodes",
+      "priority": "P0",
+      "status": "pending",
+      "parallel_with": ["phase-1", "phase-2"],
+      "depends_on": [],
+      "tasks": [
+        {
+          "id": "T3.1",
+          "title": "Create slow-growth workflow node definition",
+          "description": "New DAG node type in src/lib/workflow/node-defs/calculation/slow-growth.ts. Parameters: NSW, POTIM, SMASS, TEBEG, INCREM, iconst_content. Separate from md.ts due to fundamentally different inputs (ICONST) and outputs (REPORT).",
+          "file": "src/lib/workflow/node-defs/calculation/slow-growth.ts",
+          "status": "pending"
+        },
+        {
+          "id": "T3.2",
+          "title": "Add constant-potential parameter group",
+          "description": "Shared param_schema group for TPOT and CP-VASP parameters. Importable by both md.ts and slow-growth.ts. Uses show_if conditionals.",
+          "file": "src/lib/workflow/node-defs/calculation/constant-potential-params.ts",
+          "status": "pending"
+        },
+        {
+          "id": "T3.3",
+          "title": "Register slow-growth node in node index",
+          "description": "Add slow_growth to src/lib/workflow/node-defs/calculation/index.ts and src/lib/workflow/node-defs/index.ts",
+          "files": ["src/lib/workflow/node-defs/calculation/index.ts", "src/lib/workflow/node-defs/index.ts"],
+          "status": "pending"
+        },
+        {
+          "id": "T3.4",
+          "title": "Add backend dispatch handler for slow-growth node",
+          "description": "Server-side dispatch in server/workflow/ that calls generate_vasp_inputs() with calculation_type=SLOW_GROWTH and constant_potential setting",
+          "file": "server/workflow/engines/vasp.py",
+          "status": "pending"
+        },
+        {
+          "id": "T3.5",
+          "title": "Create workflow template: electrochemical-slow-growth",
+          "description": "Pre-built template: structure_input -> geo_opt -> md(equilibration) -> slow_growth(constant-potential). Registered in server/workflow/presets/",
+          "file": "server/workflow/presets/electrochemical.py",
+          "status": "pending"
+        },
+        {
+          "id": "T3.6",
+          "title": "Add REPORT auto-parsing after slow-growth completion",
+          "description": "When slow-growth job completes on HPC, workflow engine calls parse_report() on REPORT file and stores barrier analysis as step results",
+          "file": "server/workflow/engines/vasp.py",
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "title": "AI Research Planner — CatBot High-Level Planning",
+      "priority": "P1",
+      "status": "pending",
+      "parallel_with": [],
+      "depends_on": ["phase-1", "phase-2", "phase-3"],
+      "tasks": [
+        {
+          "id": "T4.1",
+          "title": "Create research planner backend",
+          "description": "New module server/utils/research_planner.py that takes a research goal description and returns structured computation plan. Calls cn_coupling network, generates cation condition matrix, estimates compute cost.",
+          "file": "server/utils/research_planner.py",
+          "status": "pending"
+        },
+        {
+          "id": "T4.2",
+          "title": "Add CatBot MCP tool: plan_research_project",
+          "description": "High-level tool that decomposes research goal -> computation plan. Returns path x condition matrix with cost estimates.",
+          "files": ["server/mcp_tools/tools/catalysis.py", "server/mcp_tools/server.py"],
+          "status": "pending"
+        },
+        {
+          "id": "T4.3",
+          "title": "Add CatBot MCP tool: create_batch_workflows",
+          "description": "Tool that creates multiple workflows under a single project from the computation matrix. Server-side loop to minimize tool calls.",
+          "files": ["server/mcp_tools/workflow_tools.py"],
+          "status": "pending"
+        },
+        {
+          "id": "T4.4",
+          "title": "Extend CatBot system prompt with electrochemical domain knowledge",
+          "description": "Add planning instructions, slow-growth workflow guidance, and cation effect domain knowledge to catbot-plugin/agents/catbot.md",
+          "file": "catbot-plugin/agents/catbot.md",
+          "status": "pending"
+        },
+        {
+          "id": "T4.5",
+          "title": "Add frontend tools for plan_research_project and create_batch_workflows",
+          "description": "Frontend tool definitions in workflow-tools.ts for Anthropic-direct mode",
+          "file": "src/lib/chat/workflow-tools.ts",
+          "status": "pending"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "title": "Cross-Condition Analysis and Comparison",
+      "priority": "P2",
+      "status": "pending",
+      "parallel_with": [],
+      "depends_on": ["phase-3", "phase-4"],
+      "tasks": [
+        {
+          "id": "T5.1",
+          "title": "Create barrier comparison backend",
+          "description": "Endpoint that collects barrier data from multiple completed workflows and computes delta_delta_G (cation effect) for each path and condition.",
+          "file": "server/workflow/catalysis/cation_effect.py",
+          "status": "pending"
+        },
+        {
+          "id": "T5.2",
+          "title": "Add CatBot tool: compare_barriers",
+          "description": "Tool that generates comparison table/plot from completed workflow set",
+          "status": "pending"
+        },
+        {
+          "id": "T5.3",
+          "title": "Extend project dashboard with barrier comparison view",
+          "description": "Add comparison table to ProjectDashboard.svelte: coupling_path, cation_condition, barrier_forward, barrier_reverse, delta_delta_G",
+          "status": "pending"
+        }
+      ]
+    }
+  ],
+
+  "execution_order": "Phases 1, 2, 3 in parallel → Phase 4 → Phase 5",
+  "total_tasks": 22
+}

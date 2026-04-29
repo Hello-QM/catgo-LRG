@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "created": "2026-03-19",
+    "last_updated": "2026-03-20"
+  },
+  "tasks": [
+    {"id": "T1.1", "phase": "phase-1", "title": "cn_coupling.py — reaction network generator", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19"},
+    {"id": "T1.2", "phase": "phase-1", "title": "API endpoint for C-N coupling network", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "Implemented via __direct__ MCP dispatch (no REST endpoint needed)"},
+    {"id": "T1.3", "phase": "phase-1", "title": "MCP tool: catgo_cn_coupling_network", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19"},
+    {"id": "T1.4", "phase": "phase-1", "title": "CatBot system prompt: C-N coupling + research planning", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19"},
+    {"id": "T2.1", "phase": "phase-2", "title": "Cation placement backend", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "Uses existing catgo_add_atom — no new code needed"},
+    {"id": "T2.2", "phase": "phase-2", "title": "MCP tool: place_cation", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "Covered by catgo_add_atom + CatBot prompt guidance"},
+    {"id": "T2.3", "phase": "phase-2", "title": "Frontend tool: place_cation", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "Covered by existing add_atom tool"},
+    {"id": "T2.4", "phase": "phase-2", "title": "Dual adsorbate placement with auto site selection", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "New place_dual_adsorbates tool: auto site pair, orientation, collision detection"},
+    {"id": "T3.1", "phase": "phase-3", "title": "Slow-growth workflow node defaults", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "Added slow_growth to _NODE_DEFAULTS in workflow_tools.py"},
+    {"id": "T3.2", "phase": "phase-3", "title": "Constant-potential parameter group", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Inline in slow-growth.ts (TPOT/CP-VASP select + vtarget/fermi) and md.ts (TPOT/CP-VASP with full params)"},
+    {"id": "T3.3", "phase": "phase-3", "title": "Register slow-growth node in frontend index", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "slow_growth in CALCULATION_NODES, UNIFIED_CALC_TYPES, CALC_TYPE_OPTIONS"},
+    {"id": "T3.4", "phase": "phase-3", "title": "Backend dispatch for slow-growth node", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "@register_node in vasp.py, VASP_CALC_NODES, SLOW_GROWTH_PRESET, ICONST file writing"},
+    {"id": "T3.5", "phase": "phase-3", "title": "Workflow template: electrochemical-slow-growth", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Built-in template seeded on startup: structure_input → geo_opt → md → slow_growth"},
+    {"id": "T3.6", "phase": "phase-3", "title": "REPORT auto-parsing after slow-growth", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "hpc_execute.py auto-parses REPORT after slow-growth completion, stores barrier analysis in step_results"},
+    {"id": "T4.1", "phase": "phase-4", "title": "Research planner backend", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Covered by catgo_cn_coupling_network (generates coupling matrix + ICONST templates) — no separate planner module needed"},
+    {"id": "T4.2", "phase": "phase-4", "title": "MCP tool: plan_research_project", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Covered by catgo_cn_coupling_network tool — returns full network with path_id, products, ICONST, distance_range, increm, recommended_nsw"},
+    {"id": "T4.3", "phase": "phase-4", "title": "MCP tool: create_batch_workflows", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Covered by catgo_workflow batch action — can add_node + connect 100s of nodes in single call"},
+    {"id": "T4.4", "phase": "phase-4", "title": "CatBot system prompt extension", "status": "completed", "assignee": "claude", "completed_at": "2026-03-19", "notes": "Added electrochemistry domain knowledge + research planning pattern"},
+    {"id": "T4.5", "phase": "phase-4", "title": "Frontend tools: plan + batch create", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Covered by existing catgo_workflow frontend tool — batch action available via MCP and Anthropic-direct modes"},
+    {"id": "T5.1", "phase": "phase-5", "title": "Barrier comparison backend", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Barrier data stored in step_results via REPORT auto-parsing (T3.6), exposed through enriched results API (slow_growth added to NON_STRUCT_NODES query)"},
+    {"id": "T5.2", "phase": "phase-5", "title": "CatBot tool: compare_barriers", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "CatBot can query enriched results from multiple workflows via catgo_workflow get action — barrier_forward_eV, barrier_reverse_eV, total_delta_F exposed"},
+    {"id": "T5.3", "phase": "phase-5", "title": "Project dashboard barrier comparison view", "status": "completed", "assignee": "claude", "completed_at": "2026-03-20", "notes": "Enriched results now include barrier data columns — ProjectDashboard ResultsTable automatically displays new columns"}
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "_description": "Common bond lengths in Angstroms. Keys are element pairs (alphabetically sorted), values are objects with bond orders.",
+  "_source": "Approximate values from CRC Handbook, computational chemistry references, and experimental data",
+
+  "C-C": { "single": 1.54, "double": 1.34, "triple": 1.20, "aromatic": 1.40 },
+  "C-H": { "single": 1.09 },
+  "C-N": { "single": 1.47, "double": 1.29, "triple": 1.16, "aromatic": 1.34 },
+  "C-O": { "single": 1.43, "double": 1.20, "aromatic": 1.36 },
+  "C-S": { "single": 1.82, "double": 1.60 },
+  "C-P": { "single": 1.84, "double": 1.67 },
+  "C-F": { "single": 1.35 },
+  "C-Cl": { "single": 1.77 },
+  "C-Br": { "single": 1.94 },
+  "C-I": { "single": 2.14 },
+  "C-Si": { "single": 1.87 },
+
+  "N-H": { "single": 1.01 },
+  "N-N": { "single": 1.45, "double": 1.25, "triple": 1.10 },
+  "N-O": { "single": 1.40, "double": 1.21 },
+  "N-S": { "single": 1.70, "double": 1.54 },
+  "N-F": { "single": 1.36 },
+  "N-Cl": { "single": 1.75 },
+
+  "O-H": { "single": 0.96 },
+  "O-O": { "single": 1.48, "double": 1.21 },
+  "O-S": { "single": 1.58, "double": 1.43 },
+  "O-P": { "single": 1.63, "double": 1.48 },
+  "O-Si": { "single": 1.63 },
+  "O-F": { "single": 1.42 },
+
+  "S-H": { "single": 1.34 },
+  "S-S": { "single": 2.05, "double": 1.89 },
+  "S-F": { "single": 1.56 },
+  "S-Cl": { "single": 2.01 },
+
+  "P-H": { "single": 1.42 },
+  "P-P": { "single": 2.21 },
+  "P-F": { "single": 1.54 },
+  "P-Cl": { "single": 2.04 },
+  "P-S": { "single": 1.86, "double": 1.95 },
+
+  "Si-H": { "single": 1.48 },
+  "Si-Si": { "single": 2.35 },
+  "Si-F": { "single": 1.60 },
+  "Si-Cl": { "single": 2.05 },
+  "Si-N": { "single": 1.74 },
+  "Si-S": { "single": 2.14 },
+
+  "B-H": { "single": 1.19 },
+  "B-C": { "single": 1.56 },
+  "B-N": { "single": 1.42 },
+  "B-O": { "single": 1.36 },
+  "B-F": { "single": 1.30 },
+  "B-Cl": { "single": 1.75 },
+
+  "F-F": { "single": 1.42 },
+  "Cl-Cl": { "single": 1.99 },
+  "Br-Br": { "single": 2.28 },
+  "I-I": { "single": 2.67 },
+  "Br-Cl": { "single": 2.14 },
+  "Cl-F": { "single": 1.63 },
+  "Br-F": { "single": 1.76 },
+  "I-Cl": { "single": 2.32 },
+  "I-Br": { "single": 2.49 },
+  "I-F": { "single": 1.91 },
+
+  "H-H": { "single": 0.74 },
+  "H-F": { "single": 0.92 },
+  "H-Cl": { "single": 1.27 },
+  "H-Br": { "single": 1.41 },
+  "H-I": { "single": 1.61 },
+  "H-S": { "single": 1.34 },
+  "H-P": { "single": 1.42 },
+  "H-Si": { "single": 1.48 },
+  "H-B": { "single": 1.19 },
+
+  "Fe-O": { "single": 2.00 },
+  "Fe-N": { "single": 2.00 },
+  "Fe-C": { "single": 1.84 },
+  "Fe-S": { "single": 2.25 },
+
+  "Co-O": { "single": 1.95 },
+  "Co-N": { "single": 1.95 },
+  "Co-C": { "single": 1.83 },
+
+  "Ni-O": { "single": 1.90 },
+  "Ni-N": { "single": 1.90 },
+  "Ni-C": { "single": 1.82 },
+
+  "Cu-O": { "single": 1.95 },
+  "Cu-N": { "single": 2.00 },
+  "Cu-S": { "single": 2.30 },
+
+  "Zn-O": { "single": 2.00 },
+  "Zn-N": { "single": 2.05 },
+  "Zn-S": { "single": 2.35 },
+
+  "Pd-C": { "single": 2.00 },
+  "Pd-N": { "single": 2.05 },
+  "Pd-O": { "single": 2.00 },
+  "Pd-P": { "single": 2.28 },
+  "Pd-Cl": { "single": 2.30 },
+
+  "Pt-C": { "single": 2.00 },
+  "Pt-N": { "single": 2.05 },
+  "Pt-O": { "single": 2.00 },
+  "Pt-P": { "single": 2.28 },
+  "Pt-Cl": { "single": 2.30 },
+
+  "Ru-C": { "single": 2.00 },
+  "Ru-N": { "single": 2.10 },
+  "Ru-O": { "single": 2.05 },
+  "Ru-P": { "single": 2.35 },
+
+  "Rh-C": { "single": 2.00 },
+  "Rh-N": { "single": 2.05 },
+  "Rh-O": { "single": 2.00 },
+
+  "Ir-C": { "single": 2.00 },
+  "Ir-N": { "single": 2.05 },
+  "Ir-O": { "single": 2.00 },
+
+  "Au-C": { "single": 2.00 },
+  "Au-N": { "single": 2.05 },
+  "Au-P": { "single": 2.30 },
+  "Au-S": { "single": 2.30 },
+  "Au-Cl": { "single": 2.28 },
+
+  "Ag-O": { "single": 2.15 },
+  "Ag-N": { "single": 2.15 },
+  "Ag-S": { "single": 2.45 },
+
+  "Ti-O": { "single": 1.95, "double": 1.62 },
+  "Ti-N": { "single": 2.05 },
+  "Ti-C": { "single": 2.10 },
+  "Ti-Cl": { "single": 2.30 },
+
+  "V-O": { "single": 1.90, "double": 1.58 },
+  "Cr-O": { "single": 1.90, "double": 1.55 },
+  "Mn-O": { "single": 1.90, "double": 1.55 },
+
+  "Mo-O": { "single": 2.05, "double": 1.70 },
+  "Mo-N": { "single": 2.15 },
+  "Mo-S": { "single": 2.40 },
+
+  "W-O": { "single": 2.05, "double": 1.70 },
+  "W-N": { "single": 2.15 },
+  "W-C": { "single": 2.20 },
+
+  "Al-O": { "single": 1.75 },
+  "Al-N": { "single": 1.80 },
+  "Al-C": { "single": 1.95 },
+  "Al-Cl": { "single": 2.10 },
+
+  "Mg-O": { "single": 2.05 },
+  "Mg-N": { "single": 2.15 },
+  "Mg-C": { "single": 2.15 },
+
+  "Ca-O": { "single": 2.40 },
+  "Ca-N": { "single": 2.50 },
+
+  "Li-O": { "single": 1.95 },
+  "Li-N": { "single": 2.05 },
+  "Li-C": { "single": 2.10 },
+
+  "Na-O": { "single": 2.35 },
+  "Na-Cl": { "single": 2.36 },
+
+  "K-O": { "single": 2.70 },
+  "K-Cl": { "single": 2.67 }
+}

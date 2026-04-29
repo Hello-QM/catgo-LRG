@@ -1,0 +1,23 @@
+反应: Oxygen Reduction Reaction (氧还原反应)
+路径: O2 → *OOH → *O + H2O → *OH + H2O → 2H2O
+表面: Pt(1, 1, 1)
+
+结构列表 (pathway.traj中的顺序):
+----------------------------------------
+0: slab (干净表面)
+1: O2 (bridge, lying)
+2: OOH (ontop, upright)
+3: O (hollow, upright)
+4: OH (ontop, upright)
+5: H2O (ontop, upright)
+----------------------------------------
+
+读取方法:
+  from ase.io import read
+  structures = read('./ORR_Pt111/pathway.traj', index=':')
+  # structures[0] = slab
+  # structures[1] = O2
+  # structures[2] = OOH
+  # structures[3] = O
+  # structures[4] = OH
+  # structures[5] = H2O

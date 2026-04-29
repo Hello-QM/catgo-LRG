@@ -1,0 +1,6 @@
+Metadata-Version: 2.1
+Name: energydiagram
+Version: 1.0
+Requires-Dist: numpy>=1.18
+Requires-Dist: scipy>=1.4
+Requires-Dist: matplotlib>=3.1

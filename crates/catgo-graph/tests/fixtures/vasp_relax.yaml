@@ -1,0 +1,65 @@
+graph_id: vasp_relax_v1
+version: "1.0.0"
+description: >
+  Minimal VASP relaxation workflow using dry-run mode.
+  Saves input structure, runs VASP relax, saves result.
+
+inputs_schema:
+  type: object
+  required:
+    - structure
+  properties:
+    structure:
+      type: string
+      description: Structure identifier, e.g. Pt(111)
+    encut:
+      type: number
+      default: 520.0
+    kpoints:
+      type: string
+      default: "3 3 1"
+
+outputs:
+  - name: energy
+    source: ${nodes.vasp_relax.outputs.energy}
+  - name: converged
+    source: ${nodes.vasp_relax.outputs.converged}
+
+nodes:
+  - id: save_input
+    tool: file_writer
+    depends_on: []
+    input_bindings:
+      structure: ${inputs.structure}
+      encut: ${inputs.encut}
+      kpoints: ${inputs.kpoints}
+    execution_mode: local
+
+  - id: vasp_relax
+    tool: vasp_relax
+    depends_on:
+      - save_input
+    input_bindings:
+      structure: ${nodes.save_input.outputs.structure}
+      calculation_type: relax
+      encut: ${nodes.save_input.outputs.encut}
+      kpoints: ${nodes.save_input.outputs.kpoints}
+    retry_policy:
+      max_attempts: 2
+      backoff:
+        type: fixed
+        seconds: 0
+      retry_on:
+        - tool_invocation
+        - external_process
+    execution_mode: local
+
+  - id: save_result
+    tool: file_writer
+    depends_on:
+      - vasp_relax
+    input_bindings:
+      energy: ${nodes.vasp_relax.outputs.energy}
+      converged: ${nodes.vasp_relax.outputs.converged}
+      final_structure: ${nodes.vasp_relax.outputs.final_structure}
+    execution_mode: local

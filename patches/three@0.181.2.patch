@@ -1,0 +1,33 @@
+diff --git a/examples/jsm/controls/TrackballControls.js b/examples/jsm/controls/TrackballControls.js
+index 1234567..abcdefg 100644
+--- a/examples/jsm/controls/TrackballControls.js
++++ b/examples/jsm/controls/TrackballControls.js
+@@ -699,7 +699,27 @@
+
+ function onPointerUp( event ) {
+
+-	if ( this.enabled === false ) return;
++	if ( this.enabled === false ) {
++
++		// Even when disabled, clean up pointer state to prevent stuck interactions.
++		// Without this, state/listeners/capture remain dangling after external code
++		// (e.g. viewport gizmo) disables controls during an active pointer interaction.
++		this.state = _STATE.NONE;
++
++		this._removePointer( event );
++
++		if ( this._pointers.length === 0 ) {
++
++			this.domElement.releasePointerCapture( event.pointerId );
++
++			this.domElement.removeEventListener( 'pointermove', this._onPointerMove );
++			this.domElement.removeEventListener( 'pointerup', this._onPointerUp );
++
++		}
++
++		return;
++
++	}
+
+ 	if ( event.pointerType === 'touch' ) {
+

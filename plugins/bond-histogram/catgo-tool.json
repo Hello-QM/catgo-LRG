@@ -1,0 +1,9 @@
+{
+  "name": "bond_histogram",
+  "version": "1.0.0",
+  "displayName": "Bond Length Histogram",
+  "description": "Compute and display bond length distribution from a crystal structure",
+  "author": "CatGo Team",
+  "trust": "user",
+  "permissions": []
+}

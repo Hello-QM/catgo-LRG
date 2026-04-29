@@ -1,0 +1,64 @@
+engine: xtb
+label: xTB
+description: "Semi-empirical tight-binding calculations via GFN-xTB"
+
+supported_calc_types:
+  - geo_opt
+  - single_point
+
+params:
+  - key: method
+    label: "Method"
+    type: select
+    options:
+      - { label: "GFN2-xTB", value: "GFN2-xTB" }
+      - { label: "GFN1-xTB", value: "GFN1-xTB" }
+      - { label: "GFN0-xTB", value: "GFN0-xTB" }
+      - { label: "GFN-FF", value: "GFN-FF" }
+    default: "GFN2-xTB"
+  - key: accuracy
+    label: "Accuracy"
+    type: number
+    default: 1.0
+    range: [0.01, 10.0]
+    help: "Numerical accuracy parameter (lower = tighter)"
+  - key: electronic_temperature
+    label: "Electronic Temperature"
+    type: number
+    default: 300
+    unit: "K"
+    range: [0, 10000]
+  - key: fmax
+    label: "Force Convergence"
+    type: number
+    default: 0.01
+    unit: "eV/Å"
+    range: [0.0001, 1.0]
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: max_steps
+    label: "Max Optimization Steps"
+    type: number
+    default: 500
+    range: [1, 10000]
+    show_if: { key: calc_type, values: [geo_opt] }
+
+input_files:
+  "run_xtb.py":
+    template: "xtb/run_xtb.py.j2"
+  "POSCAR":
+    source: structure
+    format: poscar
+
+run_commands:
+  - "python run_xtb.py"
+
+output_files:
+  structure: "CONTCAR"
+  log: "opt.log"
+  trajectory: "opt.traj"
+
+calc_type_mapping:
+  geo_opt: xtb_relax
+  single_point: xtb_static
+
+safety: safe

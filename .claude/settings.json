@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git stash)",
+      "Bash(echo $CATGO_CONDA_ENV)",
+      "Bash(export CATGO_CONDA_ENV=catgo)",
+      "Bash(pnpm desktop:serve)",
+      "Bash(conda run -n catgo python -c \":*)",
+      "Bash(~/miniforge3/envs/catgo/python.exe -c \":*)"
+    ]
+  }
+}

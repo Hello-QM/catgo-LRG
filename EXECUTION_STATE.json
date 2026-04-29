@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "created": "2026-03-19",
+    "last_updated": "2026-03-20"
+  },
+  "current_phase": "completed",
+  "overall_progress": {
+    "total_tasks": 22,
+    "completed": 22,
+    "in_progress": 0,
+    "pending": 0,
+    "percentage": 100
+  },
+  "phase_status": {
+    "phase-1": {"status": "completed", "tasks_completed": 4, "tasks_total": 4, "notes": "cn_coupling.py + MCP tool + dispatch + CatBot prompt"},
+    "phase-2": {"status": "completed", "tasks_completed": 4, "tasks_total": 4, "notes": "Cation via catgo_add_atom; dual adsorbate placement tool created"},
+    "phase-3": {"status": "completed", "tasks_completed": 6, "tasks_total": 6, "notes": "All tasks done: node def, const-potential params, backend dispatch, template, REPORT auto-parsing"},
+    "phase-4": {"status": "completed", "tasks_completed": 5, "tasks_total": 5, "notes": "All covered by existing tools: catgo_cn_coupling_network + catgo_workflow batch action + CatBot prompt"},
+    "phase-5": {"status": "completed", "tasks_completed": 3, "tasks_total": 3, "notes": "Barrier data auto-parsed from REPORT, exposed via enriched results API, displayed in ProjectDashboard"}
+  },
+  "blockers": [],
+  "open_questions": [
+    {"id": "Q-01", "question": "Cu(100) confirmed from POSCAR analysis", "status": "resolved"},
+    {"id": "Q-02", "question": "Constant-potential during slow-growth", "status": "resolved"},
+    {"id": "Q-03", "question": "~200 atoms, 49 water molecules", "status": "resolved"},
+    {"id": "Q-04", "question": "MLP pre-screening?", "status": "deferred"}
+  ],
+  "extra_completed": [
+    "HPC file size limits removed (text + binary)",
+    "Dual adsorbate placement with auto site selection + orientation",
+    "Bilingual README for leshenzhang/catgo",
+    "Code pushed to leshenzhang/catgo"
+  ]
+}

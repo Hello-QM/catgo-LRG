@@ -1,0 +1,85 @@
+engine: amber
+label: AMBER
+description: "Classical MD and ML/MM for biomolecular systems"
+
+supported_calc_types:
+  - geo_opt
+  - md
+
+params:
+  - key: maxcyc
+    label: "Max Minimization Cycles"
+    type: number
+    default: 1000
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: ncyc
+    label: "Steepest Descent Steps"
+    type: number
+    default: 500
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: nstlim
+    label: "MD Steps"
+    type: number
+    default: 10000
+    show_if: { key: calc_type, values: [md] }
+  - key: dt
+    label: "Timestep"
+    type: number
+    default: 0.002
+    unit: "ps"
+    show_if: { key: calc_type, values: [md] }
+  - key: temp0
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+  - key: cut
+    label: "Nonbond Cutoff"
+    type: number
+    default: 10.0
+    unit: "Å"
+  - key: ntt
+    label: "Thermostat"
+    type: select
+    options:
+      - { label: "No thermostat (0)", value: 0 }
+      - { label: "Berendsen (1)", value: 1 }
+      - { label: "Andersen (2)", value: 2 }
+      - { label: "Langevin (3)", value: 3 }
+    default: 3
+  - key: use_mlp
+    label: "Use ML Potential"
+    type: boolean
+    default: false
+  - key: mlp_model
+    label: "ML Model"
+    type: select
+    options:
+      - { label: "ANI-2x", value: "ani2x" }
+      - { label: "MACE-OFF", value: "mace-off" }
+    default: "ani2x"
+    show_if: { key: use_mlp, values: [true] }
+  - key: custom_mdin
+    label: "Custom AMBER Input"
+    type: text
+
+input_files:
+  "mdin":
+    source: hook
+
+run_commands:
+  - "pmemd.cuda -O -i mdin -o mdout -p prmtop -c inpcrd -r restrt -x mdcrd"
+
+output_files:
+  log: "mdout"
+  restart: "restrt"
+  trajectory: "mdcrd"
+
+hooks:
+  pre_generate: "workflow.hooks.amber_hooks:generate_inputs"
+
+calc_type_mapping:
+  geo_opt: amber_minimize
+  md: amber_md
+
+safety: safe

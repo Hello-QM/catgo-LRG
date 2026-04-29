@@ -1,0 +1,362 @@
+# CatGo Self-Extending Tools  
+## Technical Whitepaper  
+### A Self-Evolving Scientific Operating System
+
+---
+
+# 1. Executive Summary
+
+CatGo is designed as a self-evolving scientific operating system that enables dynamic generation, validation, and deployment of computational tools at runtime.
+
+Traditional scientific software evolves through manual development cycles, creating a bottleneck between emerging research needs and available computational capabilities. CatGo eliminates this bottleneck by introducing AI-driven tool synthesis within a governed execution framework.
+
+The core innovation lies in transforming scientific capabilities from static software modules into dynamically generated, version-controlled, sandbox-validated tool units.
+
+---
+
+# 2. System Philosophy
+
+## 2.1 From Static Tools to Dynamic Capabilities
+
+### Conventional Model
+
+Software Release Cycle  
+→ Feature Implementation  
+→ Deployment  
+→ User Adaptation  
+
+### CatGo Model
+
+User Intent  
+→ Tool Specification  
+→ AI Tool Synthesis  
+→ Sandboxed Validation  
+→ Immediate Deployment  
+
+This architecture allows research software to evolve at the speed of scientific inquiry.
+
+---
+
+# 3. System Architecture
+
+## 3.1 Layered Architecture
+
+CatGo consists of six architectural layers:
+
+1. Interaction Layer  
+2. Intent Interpretation Layer  
+3. Capability Abstraction Layer (ToolSpec)  
+4. Tool Registry & Governance Layer  
+5. Execution Sandbox Layer  
+6. Infrastructure Integration Layer  
+
+---
+
+## 3.2 Interaction Layer
+
+Handles:
+
+- Natural language commands  
+- DSL-based atomic operations  
+- GUI-triggered structural manipulations  
+- Programmatic API calls  
+
+All interactions are normalized into a structured ToolSpec.
+
+---
+
+## 3.3 Intent Interpretation Layer
+
+Powered by LLM-based semantic parsing:
+
+- Converts user intent into formal ToolSpec  
+- Performs capability matching  
+- Detects missing tools  
+- Suggests reuse of existing tools when possible  
+
+Output: Structured ToolSpec object.
+
+---
+
+# 4. ToolSpec Abstraction
+
+## 4.1 ToolSpec Schema
+
+Each tool must define:
+
+- Name  
+- Semantic version  
+- Input schema  
+- Output schema  
+- Deterministic flag  
+- Permission declaration  
+- Test requirements  
+
+Example:
+
+```yaml
+ToolSpec:
+  name: surface.find_fourfold_sites
+  version: 0.1.0
+  inputs:
+    structure: AtomGraph
+    cutoff: float
+  outputs:
+    sites: List[Vector3D]
+  deterministic: true
+  permissions:
+    atoms.read: true
+    atoms.write: false
+    filesystem: none
+    network: false
+4.2 Design Principles
+
+Deterministic execution preferred
+
+Minimal permission scope
+
+Explicit input/output typing
+
+Full version traceability
+
+Reproducibility guaranteed
+
+5. Tool Registry & Governance
+5.1 Registry Responsibilities
+
+The Tool Registry acts as:
+
+Capability index
+
+Version controller
+
+Governance authority
+
+Rollback manager
+
+Performance tracker
+
+5.2 Versioning Strategy
+
+Semantic Versioning:
+
+MAJOR: breaking change
+
+MINOR: feature addition
+
+PATCH: bug fix
+
+Registry supports:
+
+Rollback to previous stable versions
+
+Deprecation flags
+
+Tool lineage tracking
+
+6. AI Tool Builder Engine
+6.1 Generation Pipeline
+
+When a ToolSpec is missing:
+
+ToolSpec formalization
+
+AI code synthesis
+
+Automatic test generation
+
+Static code audit
+
+Sandbox execution
+
+Validation scoring
+
+Registry registration
+
+6.2 Constraints on AI-Generated Code
+
+AI-generated tools must:
+
+Use whitelisted scientific libraries
+
+Avoid unrestricted file I/O
+
+Avoid network access
+
+Avoid system command execution
+
+Operate only via AtomGraph API
+
+Static AST analysis ensures compliance.
+
+7. Execution Sandbox
+7.1 Security Isolation
+
+Each tool executes inside:
+
+Network-disabled container
+
+CPU-limited environment
+
+Memory-limited runtime
+
+Filesystem-restricted context
+
+Potential implementations:
+
+Docker (rootless)
+
+WASM runtime
+
+gVisor-based isolation
+
+7.2 Deterministic Testing
+
+Validation includes:
+
+Unit test suite
+
+Random seed control
+
+Structural sanity checks
+
+Geometry constraint verification
+
+Boundary condition testing
+
+Tools must pass all required tests before registration.
+
+8. Atomic Operation DSL Layer
+
+To reduce tool-generation frequency, CatGo includes a DSL for common atomic operations.
+
+Examples:
+
+Select atoms by coordination
+
+Replace species
+
+Add adsorbate
+
+Apply constraints
+
+Identify adsorption sites
+
+This covers high-frequency operations and minimizes generation latency.
+
+9. Infrastructure Integration
+9.1 HPC Integration
+
+CatGo integrates with:
+
+Remote HPC clusters
+
+Job schedulers (SLURM)
+
+DFT engines
+
+ML potentials
+
+Generated tools may trigger:
+
+Simulation workflows
+
+High-throughput screening pipelines
+
+Structure optimization tasks
+
+9.2 Distributed Registry (Future)
+
+Registry may evolve into:
+
+Multi-node synchronized capability network
+
+Institutional shared tool ecosystem
+
+Federated scientific capability layer
+
+10. Governance & Risk Mitigation
+10.1 Risk Categories
+
+Arbitrary code execution
+
+Non-deterministic behavior
+
+Performance degradation
+
+Tool redundancy
+
+Reproducibility failure
+
+Mitigation strategies:
+
+Permission gating
+
+Validation pipeline
+
+Version rollback
+
+Tool scoring
+
+Audit logging
+
+11. Development Roadmap
+Phase I — Core Framework
+
+ToolSpec standard
+
+Registry implementation
+
+DSL layer
+
+Basic sandbox
+
+Phase II — Self-Extending Engine
+
+AI Tool Builder
+
+Test auto-generation
+
+Security audit layer
+
+Phase III — Scalable Infrastructure
+
+HPC integration
+
+Performance analytics
+
+Tool quality metrics
+
+Phase IV — Verified Tool Tier
+
+Migration to Rust/WASM
+
+Deterministic execution enforcement
+
+Formal validation mechanisms
+
+12. Long-Term Vision
+
+CatGo evolves into:
+
+Self-Extending Tool Platform
+→ Capability Synthesis Engine
+→ Scientific Infrastructure Layer
+→ Autonomous Research Ecosystem
+
+Ultimately enabling:
+
+AI-driven hypothesis generation
+
+Closed-loop computational discovery
+
+Democratized access to advanced scientific methods
+
+13. Strategic Positioning
+
+CatGo represents a new paradigm:
+
+Not a scientific tool.
+Not a workflow manager.
+
+But a self-evolving scientific operating system.

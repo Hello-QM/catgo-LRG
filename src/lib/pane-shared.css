@@ -1,0 +1,202 @@
+/*
+ * Shared CSS classes for all tool panes (IO, Build, Analysis, Workflow, etc.)
+ * Imported once in DraggablePane.svelte so every pane inherits these styles.
+ * All rules scoped under .draggable-pane to avoid leaking.
+ */
+
+/* ===== Pane Title ===== */
+.draggable-pane .pane-title {
+  margin: 0 0 6px;
+  font-size: 0.9em;
+  font-weight: 600;
+  color: inherit;
+  text-align: center;
+}
+
+/* ===== Tab Bar ===== */
+/* NOTE: grid-template-columns stays in each pane (varies by tab count) */
+.draggable-pane .tab-bar {
+  display: grid;
+  gap: 3px;
+  padding: 3px;
+  margin-bottom: 8px;
+  background: var(--pane-tabs-bg, rgba(0, 0, 0, 0.06));
+  border-radius: 8px;
+}
+.draggable-pane .tab-bar button {
+  padding: 5px 4px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.8em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  transition: background 0.15s;
+  text-align: center;
+}
+.draggable-pane .tab-bar button:hover:not(:disabled) {
+  background: var(--pane-btn-bg-hover, rgba(0, 0, 0, 0.08));
+}
+.draggable-pane .tab-bar button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.draggable-pane .tab-bar button.active {
+  background: var(--accent-color, #007acc);
+  color: white;
+}
+
+/* ===== Pane Content (scrollable body) ===== */
+.draggable-pane .pane-content {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ===== Action Section (grouped card) ===== */
+.draggable-pane .action-section {
+  padding: 8px;
+  background: var(--pane-card-bg, rgba(255, 255, 255, 0.04));
+  border-radius: 8px;
+}
+.draggable-pane .action-section h5 {
+  margin: 0 0 8px;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: inherit;
+}
+
+/* ===== Module Placeholder (coming-soon sections) ===== */
+.draggable-pane .module-placeholder {
+  padding: 8px;
+  background: var(--pane-card-bg, rgba(255, 255, 255, 0.04));
+  border-radius: 8px;
+}
+.draggable-pane .module-placeholder h5 {
+  margin: 0 0 6px;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: inherit;
+}
+.draggable-pane .module-placeholder ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.8em;
+  color: var(--text-color-muted, rgba(0, 0, 0, 0.6));
+  line-height: 1.6;
+}
+
+/* ===== Action Button (card-style) ===== */
+.draggable-pane .action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--pane-card-border, rgba(0, 0, 0, 0.08));
+  background: var(--pane-btn-bg, var(--btn-bg));
+  color: inherit;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.8em;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.draggable-pane .action-btn:hover {
+  background: var(--pane-btn-bg-hover, var(--btn-bg-hover));
+}
+
+/* ===== Apply Button (primary action) ===== */
+.draggable-pane .apply-btn {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--accent-color, #007acc);
+  border: none;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s;
+}
+.draggable-pane .apply-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.draggable-pane .apply-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Secondary Button ===== */
+.draggable-pane .secondary-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--pane-card-border, rgba(0, 0, 0, 0.08));
+  background: var(--pane-btn-bg, var(--btn-bg));
+  color: inherit;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85em;
+  transition: background 0.15s;
+}
+.draggable-pane .secondary-btn:hover:not(:disabled) {
+  background: var(--pane-btn-bg-hover, var(--btn-bg-hover));
+}
+.draggable-pane .secondary-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ===== Cancel Button ===== */
+.draggable-pane .cancel-btn {
+  padding: 6px 12px;
+  border: none;
+  background: var(--error-color, #ef4444);
+  color: white;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 0.15s, opacity 0.15s;
+}
+.draggable-pane .cancel-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* ===== Button Group (row container) ===== */
+.draggable-pane .button-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.draggable-pane .button-group button {
+  flex: 1;
+}
+
+/* ===== Setting Row (label + control) ===== */
+.draggable-pane .setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 0.88em;
+}
+
+/* ===== Error Message Box ===== */
+.draggable-pane .error-msg {
+  padding: 6px 8px;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 6px;
+  font-size: 0.85em;
+  color: var(--error-color, #ef4444);
+}

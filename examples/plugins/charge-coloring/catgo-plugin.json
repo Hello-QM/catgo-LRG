@@ -1,0 +1,67 @@
+{
+  "name": "@catgo/charge-coloring",
+  "version": "1.0.0",
+  "displayName": "Charge Coloring",
+  "description": "Colorize atoms based on their oxidation state or computed charge",
+  "author": {
+    "name": "CatGo Team",
+    "email": "catgo@example.com"
+  },
+  "license": "MIT",
+  "keywords": ["visualization", "charge", "oxidation"],
+  "catgo": {
+    "apiVersion": "1.0",
+    "platforms": ["web", "desktop"],
+    "frontend": {
+      "main": "dist/index.js",
+      "contributions": {
+        "panels": [
+          {
+            "id": "charge-coloring-panel",
+            "name": "Charge Coloring",
+            "icon": "palette",
+            "location": "structure-sidebar",
+            "component": "ChargeColoringPanel"
+          }
+        ],
+        "structureHooks": [
+          {
+            "hook": "atomColors",
+            "handler": "atomColorsHook",
+            "priority": 10
+          }
+        ]
+      }
+    },
+    "permissions": [
+      "structure:read",
+      "ui:notification"
+    ],
+    "settings": {
+      "colorScheme": {
+        "type": "select",
+        "default": "diverging",
+        "description": "Color scheme for charge visualization",
+        "options": [
+          { "label": "Diverging (Red-White-Blue)", "value": "diverging" },
+          { "label": "Sequential (Blue)", "value": "sequential" },
+          { "label": "Viridis", "value": "viridis" }
+        ]
+      },
+      "minCharge": {
+        "type": "number",
+        "default": -2,
+        "min": -10,
+        "max": 0,
+        "description": "Minimum charge value for color scale"
+      },
+      "maxCharge": {
+        "type": "number",
+        "default": 2,
+        "min": 0,
+        "max": 10,
+        "description": "Maximum charge value for color scale"
+      }
+    }
+  }
+}

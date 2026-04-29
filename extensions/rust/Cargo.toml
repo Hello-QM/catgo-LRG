@@ -1,0 +1,112 @@
+[package]
+name = "ferrox"
+version = "0.0.4"
+edition = "2024"
+rust-version = "1.93"
+authors = ["Janosh Riebesell <janosh.riebesell@gmail.com>"]
+description = "High-performance structure matching for crystallographic data"
+license = "MIT"
+repository = "https://github.com/janosh/catgo"
+keywords = ["crystallography", "materials-science", "structure-matching"]
+include = [
+  "src/**/*.rs",
+  "src/**/*.json", # atomic scattering params - SSOT shared with TypeScript
+  "Cargo.toml",
+  "readme.md",
+]
+
+[lib]
+name = "ferrox"
+crate-type = ["cdylib", "rlib"] # cdylib for Python/WASM, rlib for Rust
+
+[[bin]]
+name = "ferrox-cli"
+path = "src/bin/ferrox_cli.rs"
+required-features = [] # no WASM/Python deps needed
+
+[dependencies]
+# Python bindings
+pyo3 = { version = "0.27.2", features = [
+  "abi3-py311",
+  "extension-module",
+], optional = true }
+pyo3-stub-gen = { version = "0.7", optional = true }
+
+# WASM bindings
+wasm-bindgen = { version = "0.2.108", optional = true }
+js-sys = { version = "0.3.85", optional = true }
+web-sys = { version = "0.3.85", features = ["console"], optional = true }
+serde-wasm-bindgen = { version = "0.6.5", optional = true }
+console_error_panic_hook = { version = "0.1.7", optional = true }
+tsify-next = { version = "0.5", features = ["js"], optional = true }
+# WASM random number generation
+# getrandom 0.2.x: needs "js" feature for wasm32-unknown-unknown (used by rand 0.8)
+# getrandom 0.3.x: needs "wasm_js" feature + rustflag config in .cargo/config.toml (used by meshless_voronoi -> ahash)
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+# Math
+nalgebra = "0.34"
+glam = "0.27"  # Vector math for Voronoi (compatible with meshless_voronoi)
+
+# Symmetry - same underlying Rust crate as moyopy
+moyo = "0.7"
+
+# Parallelism (not used in WASM builds)
+rayon = { version = "1.11", optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Algorithms
+pathfinding = "4.14"      # Hungarian algorithm (kuhn_munkres)
+itertools = "0.14"        # permutations for fit_anonymous
+rand = "0.8"              # random perturbations (0.8 uses getrandom 0.2 with simpler WASM support)
+regex = "1.12"            # formula parsing
+meshless_voronoi = "0.7"  # Voronoi tessellation for coordination analysis
+num-complex = "0.4"       # complex numbers for spherical harmonics
+
+# Utilities
+indexmap = { version = "2.13", features = ["serde"] }
+thiserror = "2.0"
+glob = "0.3"
+tracing = "0.1"
+flate2 = "1.1"  # gzip decompression for element data
+
+# File format parsing
+vasp-poscar = "0.3"
+extxyz = "0.2"
+
+# Local workspace crates
+uff-relax = { path = "../uff-relax", default-features = false }
+vsepr-rs = { path = "../vsepr-rs" }
+
+[dev-dependencies]
+approx = "0.5"
+criterion = { version = "0.8", features = ["html_reports"] }
+proptest = "1.9"
+tempfile = "3"
+
+[build-dependencies]
+pyo3-build-config = { version = "0.27.2", optional = true }
+
+[features]
+default = ["rayon"]
+python = ["dep:pyo3", "dep:pyo3-build-config", "dep:pyo3-stub-gen", "rayon"]
+wasm = [
+  "dep:console_error_panic_hook",
+  "dep:js-sys",
+  "dep:web-sys",
+  "dep:serde-wasm-bindgen",
+  "dep:tsify-next",
+  "dep:wasm-bindgen",
+]
+rayon = ["dep:rayon"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[[bench]]
+name = "matcher_bench"
+harness = false

@@ -1,0 +1,80 @@
+name: Build HPC Bundle
+
+# Builds the pre-built frontend + server bundle that the install-catgo.sh
+# installer downloads on HPC systems (which don't have Node.js).
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - dev
+    paths:
+      - 'src/**'
+      - 'server/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'vite.config.ts'
+      - 'svelte.config.js'
+  workflow_dispatch:
+
+jobs:
+  build-bundle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Create HPC bundle
+        run: |
+          BUNDLE_DIR="catgo-hpc-bundle"
+          mkdir -p "$BUNDLE_DIR"
+
+          # Copy pre-built frontend
+          cp -r build "$BUNDLE_DIR/frontend"
+
+          # Copy server (Python backend)
+          cp -r server "$BUNDLE_DIR/server"
+
+          # Remove __pycache__ and .pyc files
+          find "$BUNDLE_DIR/server" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          find "$BUNDLE_DIR/server" -name "*.pyc" -delete 2>/dev/null || true
+
+          # Create tarball
+          tar czf catgo-hpc-bundle.tar.gz -C "$BUNDLE_DIR" frontend server
+
+          echo "Bundle contents:"
+          tar tzf catgo-hpc-bundle.tar.gz | head -20
+          echo "..."
+          echo "Bundle size: $(du -h catgo-hpc-bundle.tar.gz | cut -f1)"
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: catgo-hpc-bundle
+          path: catgo-hpc-bundle.tar.gz
+          retention-days: 90
+
+      # Attach to release when triggered by a tag
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: catgo-hpc-bundle.tar.gz

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "catgo": {
+      "command": "python",
+      "args": [
+        "server/mcp_server.py"
+      ],
+      "env": {
+        "CATGO_API": "http://localhost:8000/api"
+      }
+    }
+  }
+}

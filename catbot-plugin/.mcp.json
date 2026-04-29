@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "catgo": {
+      "command": "python",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/mcp_server.py"],
+      "env": {
+        "CATGO_API": "http://localhost:8000/api"
+      }
+    }
+  }
+}

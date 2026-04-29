@@ -1,0 +1,16 @@
+# Source files
+src/**
+*.ts
+server/**
+
+# Build config
+tsconfig.json
+vite.config.mjs
+vite.webview.config.ts
+scripts/**
+.vscode/**
+tests/**
+
+# Dev files
+node_modules/**
+*.map

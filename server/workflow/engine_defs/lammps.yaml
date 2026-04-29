@@ -1,0 +1,152 @@
+engine: lammps
+label: LAMMPS
+description: "Classical molecular dynamics for polymers, metals, and organic systems"
+
+supported_calc_types:
+  - md
+  - md_minimize
+
+params:
+  - key: potential_type
+    label: "Potential Type"
+    type: select
+    options:
+      - { label: "Force Field (GAFF2/OPLS-AA)", value: "forcefield" }
+      - { label: "Lennard-Jones", value: "lj" }
+      - { label: "CHARMM", value: "charmm" }
+      - { label: "Buckingham", value: "buck" }
+      - { label: "EAM (metals)", value: "eam" }
+      - { label: "Tersoff", value: "tersoff" }
+      - { label: "Custom", value: "custom" }
+    default: "lj"
+  - key: forcefield
+    label: "Force Field"
+    type: select
+    options:
+      - { label: "GAFF2", value: "gaff2" }
+      - { label: "OPLS-AA", value: "opls-aa" }
+      - { label: "COMPASS", value: "compass" }
+    default: "gaff2"
+    show_if: { key: potential_type, values: [forcefield] }
+  - key: ensemble
+    label: "Ensemble"
+    type: select
+    options:
+      - { label: "NVT", value: "nvt" }
+      - { label: "NPT", value: "npt" }
+      - { label: "NVE", value: "nve" }
+    default: "nvt"
+    show_if: { key: calc_type, values: [md] }
+  - key: temperature
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+    range: [0, 10000]
+  - key: pressure
+    label: "Pressure"
+    type: number
+    default: 1.0
+    unit: "atm"
+    show_if: { key: ensemble, values: [npt] }
+  - key: timestep
+    label: "Timestep"
+    type: number
+    default: 0.001
+    unit: "ps"
+  - key: steps
+    label: "Number of Steps"
+    type: number
+    default: 10000
+    range: [1, 100000000]
+  - key: dump_freq
+    label: "Dump Frequency"
+    type: number
+    default: 100
+  - key: atom_style
+    label: "Atom Style"
+    type: select
+    options:
+      - { label: "atomic", value: "atomic" }
+      - { label: "full", value: "full" }
+      - { label: "molecular", value: "molecular" }
+      - { label: "charge", value: "charge" }
+    default: "atomic"
+  - key: units
+    label: "Units"
+    type: select
+    options:
+      - { label: "metal", value: "metal" }
+      - { label: "real", value: "real" }
+      - { label: "lj", value: "lj" }
+    default: "metal"
+  - key: pair_style
+    label: "Pair Style"
+    type: string
+    default: "lj/cut 2.5"
+    show_if: { key: potential_type, values: [custom] }
+  - key: pair_coeff
+    label: "Pair Coefficients"
+    type: string
+    default: "* * 1.0 1.0"
+    show_if: { key: potential_type, values: [custom] }
+  - key: bond_style
+    label: "Bond Style"
+    type: string
+    show_if: { key: potential_type, values: [custom, lj, charmm, buck] }
+  - key: angle_style
+    label: "Angle Style"
+    type: string
+    show_if: { key: potential_type, values: [custom, lj, charmm, buck] }
+  - key: min_style
+    label: "Minimization Style"
+    type: select
+    options:
+      - { label: "Conjugate Gradient", value: "cg" }
+      - { label: "Steepest Descent", value: "sd" }
+      - { label: "HFTN", value: "hftn" }
+      - { label: "FIRE", value: "fire" }
+      - { label: "QuickMin", value: "quickmin" }
+    default: "cg"
+    show_if: { key: calc_type, values: [md_minimize] }
+  - key: etol
+    label: "Energy Tolerance"
+    type: number
+    default: 0.000001
+    show_if: { key: calc_type, values: [md_minimize] }
+  - key: ftol
+    label: "Force Tolerance"
+    type: number
+    default: 0.000001
+    show_if: { key: calc_type, values: [md_minimize] }
+  - key: custom_input_text
+    label: "Custom LAMMPS Input"
+    type: text
+    help: "Override auto-generated in.lammps content"
+  - key: extra_commands
+    label: "Extra LAMMPS Commands"
+    type: text
+    help: "Additional commands appended to input script"
+
+input_files:
+  "in.lammps":
+    source: hook
+  "system.data":
+    source: hook
+
+run_commands:
+  - "lmp -in in.lammps"
+
+output_files:
+  structure: "final.data"
+  log: "log.lammps"
+  trajectory: "trajectory.dump"
+
+hooks:
+  pre_generate: "hooks/lammps_hooks:generate_inputs"
+
+calc_type_mapping:
+  md: lammps_md
+  md_minimize: lammps_minimize
+
+safety: safe

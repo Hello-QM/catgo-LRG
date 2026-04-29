@@ -1,0 +1,31 @@
+# LAMMPS input script
+# Generated for si_slab_111
+
+# ============ Initialization ============
+units           metal
+atom_style      atomic
+boundary        p p p
+
+# ============ Read Structure ============
+read_data       si_slab_111.data
+
+# ============ Force Field ============
+pair_style      tersoff
+pair_coeff      * * <PARAMETERS>
+
+neighbor        2.0 bin
+neigh_modify    every 1 delay 0 check yes
+
+# ============ Output Settings ============
+thermo          100
+thermo_style    custom step temp pe ke etotal press vol
+
+# ============ Simulation ============
+timestep        0.0005
+velocity        all create 300.0 12345 dist gaussian
+dump            1 all custom 1000 si_slab_111.dump id type x y z
+fix             1 all nvt temp 300.0 300.0 0.1
+run             1000
+
+# ============ Finalize ============
+write_data      si_slab_111_final.data

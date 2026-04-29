@@ -1,0 +1,26 @@
+{
+  "name": "@catgo/lennard-jones",
+  "version": "1.0.0",
+  "displayName": "Lennard-Jones Calculator",
+  "description": "Simple Lennard-Jones potential calculator for noble gases",
+  "author": {
+    "name": "CatGo Team"
+  },
+  "license": "MIT",
+  "catgo": {
+    "apiVersion": "1.0",
+    "backend": {
+      "main": "plugin.py",
+      "contributions": {
+        "calculators": [
+          {
+            "id": "lennard_jones",
+            "name": "Lennard-Jones",
+            "description": "Lennard-Jones pair potential calculator",
+            "class": "LennardJonesPlugin"
+          }
+        ]
+      }
+    }
+  }
+}

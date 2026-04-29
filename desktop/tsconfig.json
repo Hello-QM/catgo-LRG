@@ -1,0 +1,39 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "esnext",
+    "target": "esnext",
+    "moduleResolution": "bundler",
+    "sourceMap": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "baseUrl": "..",
+    "paths": {
+      "$lib": ["src/lib"],
+      "$lib/*": ["src/lib/*"],
+      "$root": ["."],
+      "$root/*": ["./*"],
+      "$app/environment": ["desktop/mocks/environment.ts"],
+      "$app/navigation": ["desktop/mocks/navigation.ts"],
+      "$app/stores": ["desktop/mocks/stores.ts"],
+      "@catgo/ferrox-wasm": ["extensions/rust-wasm"],
+      "@catgo/ferrox-wasm/*": ["extensions/rust-wasm/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.svelte",
+    "../src/**/*.ts",
+    "../src/**/*.svelte"
+  ],
+  "exclude": [
+    "../node_modules",
+    "../.svelte-kit"
+  ]
+}

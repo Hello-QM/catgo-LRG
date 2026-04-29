@@ -1,0 +1,37 @@
+engine: gaussian
+label: Gaussian
+description: "Quantum chemistry (not yet implemented)"
+
+supported_calc_types:
+  - geo_opt
+  - single_point
+  - freq
+
+params:
+  - key: method
+    label: "Method"
+    type: string
+    default: "B3LYP"
+  - key: basis_set
+    label: "Basis Set"
+    type: string
+    default: "6-31G*"
+  - key: charge
+    label: "Charge"
+    type: number
+    default: 0
+  - key: multiplicity
+    label: "Multiplicity"
+    type: number
+    default: 1
+
+input_files: {}
+run_commands: []
+output_files: {}
+
+calc_type_mapping:
+  geo_opt: gaussian_opt
+  single_point: gaussian_sp
+  freq: gaussian_freq
+
+safety: safe

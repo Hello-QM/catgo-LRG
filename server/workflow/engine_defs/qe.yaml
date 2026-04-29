@@ -1,0 +1,29 @@
+engine: qe
+label: Quantum ESPRESSO
+description: "DFT plane-wave code (not yet implemented)"
+
+supported_calc_types: []
+
+params:
+  - key: ecutwfc
+    label: "Wavefunction Cutoff"
+    type: number
+    default: 60
+    unit: "Ry"
+  - key: ecutrho
+    label: "Charge Density Cutoff"
+    type: number
+    default: 480
+    unit: "Ry"
+  - key: pseudo_family
+    label: "Pseudopotential Family"
+    type: string
+    default: "SSSP_efficiency"
+
+input_files: {}
+run_commands: []
+output_files: {}
+
+calc_type_mapping: {}
+
+safety: safe

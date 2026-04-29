@@ -1,0 +1,97 @@
+engine: mlp
+label: Machine Learning Potentials
+description: "ML potentials (MACE, CHGNet, M3GNet) for fast structure optimization and MD"
+
+supported_calc_types:
+  - geo_opt
+  - md
+
+params:
+  - key: model
+    label: "Model"
+    type: select
+    options:
+      - { label: "MACE-MP-0 (Universal)", value: "mace-mp-0" }
+      - { label: "CHGNet", value: "chgnet" }
+      - { label: "M3GNet", value: "m3gnet" }
+    default: "mace-mp-0"
+  - key: device
+    label: "Device"
+    type: select
+    options:
+      - { label: "Auto (CUDA if available)", value: "auto" }
+      - { label: "CPU", value: "cpu" }
+      - { label: "CUDA GPU", value: "cuda" }
+    default: "auto"
+  - key: model_path
+    label: "Custom Model Path (optional)"
+    type: string
+    default: ""
+  - key: fmax
+    label: "Force Convergence"
+    type: number
+    default: 0.01
+    unit: "eV/Å"
+    range: [0.0001, 1.0]
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: max_steps
+    label: "Max Steps"
+    type: number
+    default: 500
+    range: [1, 10000]
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: relax_cell
+    label: "Relax Cell"
+    type: boolean
+    default: false
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: optimizer
+    label: "Optimizer"
+    type: select
+    options:
+      - { label: "BFGS", value: "BFGS" }
+      - { label: "FIRE", value: "FIRE" }
+      - { label: "LBFGS", value: "LBFGS" }
+    default: "BFGS"
+    show_if: { key: calc_type, values: [geo_opt] }
+  - key: temp
+    label: "Temperature"
+    type: number
+    default: 300
+    unit: "K"
+    range: [0, 10000]
+    show_if: { key: calc_type, values: [md] }
+  - key: steps
+    label: "MD Steps"
+    type: number
+    default: 1000
+    range: [1, 1000000]
+    show_if: { key: calc_type, values: [md] }
+  - key: timestep
+    label: "Timestep"
+    type: number
+    default: 1.0
+    unit: "fs"
+    range: [0.1, 10.0]
+    show_if: { key: calc_type, values: [md] }
+
+input_files:
+  "run_mlp.py":
+    template: "mlp/run_mlp.py.j2"
+  "POSCAR":
+    source: structure
+    format: poscar
+
+run_commands:
+  - "python run_mlp.py"
+
+output_files:
+  structure: "CONTCAR"
+  log: "opt.log"
+  trajectory: "md.traj"
+
+calc_type_mapping:
+  geo_opt: mlp_relax
+  md: mlp_md
+
+safety: safe

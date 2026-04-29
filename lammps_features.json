@@ -1,0 +1,289 @@
+{
+  "project": "LAMMPS Module Improvements",
+  "description": "Improvements to LAMMPS input file generation module based on LAMMPS_MODULE_IMPROVEMENTS.md",
+  "last_updated": "2025-02-13",
+  "features": [
+    {
+      "id": "CRITICAL-1",
+      "category": "critical",
+      "description": "Fix charge style fails with JSON structures",
+      "file": "server/routers/lammps.py",
+      "location": "lines 119-138",
+      "issue": "When using atom_style 'charge', code fails with plain JSON structures because it expects pymatgen objects with oxidation_state attribute",
+      "steps": [
+        "Create get_charge helper function that handles both pymatgen objects and plain dicts",
+        "Check isinstance(species, dict) and use species.get('oxidation_state', 0.0)",
+        "Use getattr(species, 'oxidation_state', 0.0) for pymatgen objects",
+        "Update extract_structure_info function to use new helper",
+        "Test with JSON structure input"
+      ],
+      "passes": true,
+      "completed_date": "2025-02-13"
+    },
+    {
+      "id": "CRITICAL-2",
+      "category": "critical",
+      "description": "Fix non-contiguous fixed atoms group definition",
+      "file": "server/routers/lammps.py and src/lib/structure/ExportPane.svelte",
+      "location": "backend lines 357-371, frontend lines 502-511",
+      "issue": "When fixing more than 10 atoms, code uses 'id start:end' syntax which only works for contiguous atoms",
+      "steps": [
+        "Remove the range-based group definition",
+        "Write fixed atom IDs in chunks of 20 per group command",
+        "Use 'group mobile subtract all fixed' to create mobile group",
+        "Test with non-contiguous atom selections"
+      ],
+      "passes": true,
+      "completed_date": "2025-02-13"
+    },
+    {
+      "id": "HIGH-1",
+      "category": "high",
+      "description": "Add input validation for pair_coeff",
+      "file": "server/routers/lammps.py",
+      "location": "lines 117-119, 438-603, /validate endpoint",
+      "issue": "No validation of pair_coeff syntax or parameter consistency with selected pair_style",
+      "steps": [
+        "Create ValidationResult model",
+        "Create validate_pair_coeff function",
+        "Create validate_units_and_params function",
+        "Update API endpoint to run validation",
+        "Add standalone /validate endpoint",
+        "Return warnings/errors in API response"
+      ],
+      "passes": true,
+      "completed_date": "2025-02-13"
+    },
+    {
+      "id": "HIGH-2",
+      "category": "high",
+      "description": "Frontend offline mode triclinic cell support",
+      "file": "src/lib/structure/ExportPane.svelte",
+      "location": "/potential_templates endpoint (lines 854-915)",
+      "issue": "The gen_lammps_local() function only handles orthogonal cells, not triclinic cells with tilt factors",
+      "steps": [
+        "Add getBoxBounds function matching backend implementation",
+        "Calculate xy, xz, yz tilt factors",
+        "Detect isTriclinic condition",
+        "Update data file generation with tilt factors",
+        "Test with triclinic structure"
+      ],
+      "passes": true,
+      "completed_date": "2025-02-13"
+    },
+    {
+      "id": "MEDIUM-1",
+      "category": "medium",
+      "description": "Enhanced unit validation",
+      "file": "server/routers/lammps.py",
+      "location": "new function",
+      "issue": "No unit consistency checks for timestep vs units",
+      "steps": [
+        "Create validate_units function",
+        "Warn if timestep > 0.01 ps for metal units",
+        "Warn if timestep > 1.0 fs for real units",
+        "Suggest lj units for lj/cut pair_style",
+        "Integrate into API endpoint"
+      ],
+      "passes": true,
+      "completed_date": "2025-02-13"
+    },
+    {
+      "id": "MEDIUM-2",
+      "category": "medium",
+      "description": "Add common potential templates",
+      "file": "server/routers/lammps.py",
+      "location": "lines 607-698",
+      "issue": "Users must manually specify pair_coeff for common potentials",
+      "steps": [
+        "Create POTENTIAL_TEMPLATES dictionary",
+        "Include Cu_eam, Ni3Al_eam, Si_tersoff examples",
+        "Add API endpoint to list templates",
+        "Update frontend to show template options"
+      ],
+      "passes": true,
+      "completed_date": "2025-02-13"
+    },
+    {
+      "id": "MEDIUM-3",
+      "category": "medium",
+      "description": "Preset simulation profiles",
+      "file": "src/lib/structure/ExportPane.svelte",
+      "location": "UI section",
+      "issue": "Users must manually configure common simulation types",
+      "steps": [
+        "Define presets: bulk relaxation, surface annealing, defect migration, thermal expansion",
+        "Add preset dropdown to UI",
+        "Auto-fill parameters when preset selected",
+        "Allow user to override preset values"
+      ],
+      "passes": false
+    },
+    {
+      "id": "MEDIUM-4",
+      "category": "medium",
+      "description": "Better error messages",
+      "file": "server/routers/lammps.py",
+      "location": "throughout",
+      "issue": "Generic error messages don't help users fix issues",
+      "steps": [
+        "Create detailed error response schema",
+        "Include expected format in error response",
+        "Show received value that failed validation",
+        "Update HTTPException calls throughout"
+      ],
+      "passes": false
+    },
+    {
+      "id": "LOW-1",
+      "category": "low",
+      "description": "Additional atom styles",
+      "file": "server/routers/lammps.py and ExportPane.svelte",
+      "location": "atom_style options",
+      "issue": "Only atomic and charge styles supported",
+      "steps": [
+        "Add molecular style for molecules with bonds",
+        "Add full style for molecular systems with charges",
+        "Add angle style for angle-dependent potentials",
+        "Update backend to handle bonds/angles data",
+        "Update frontend dropdown options"
+      ],
+      "passes": false
+    },
+    {
+      "id": "LOW-2",
+      "category": "low",
+      "description": "Dump format options in UI",
+      "file": "src/lib/structure/ExportPane.svelte",
+      "location": "LAMMPS section",
+      "issue": "Dump format is hardcoded, users can't choose",
+      "steps": [
+        "Add dump_format dropdown to UI",
+        "Include options: atom, custom, xyz, cfg",
+        "Pass selected format to generation function",
+        "Update input script generation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "LOW-3",
+      "category": "low",
+      "description": "LAMMPS version compatibility",
+      "file": "server/routers/lammps.py",
+      "location": "new parameter",
+      "issue": "Different LAMMPS versions have different syntax",
+      "steps": [
+        "Add lammps_version parameter to request",
+        "Adjust syntax based on version",
+        "Document version-specific differences",
+        "Add default version to latest stable"
+      ],
+      "passes": false
+    },
+    {
+      "id": "LOW-4",
+      "category": "low",
+      "description": "Preview and validation button",
+      "file": "src/lib/structure/ExportPane.svelte",
+      "location": "LAMMPS section",
+      "issue": "No way to validate without generating files",
+      "steps": [
+        "Add Validate button",
+        "Call validation endpoint",
+        "Show validation results inline",
+        "Don't generate files if validation fails"
+      ],
+      "passes": false
+    },
+    {
+      "id": "TEST-1",
+      "category": "testing",
+      "description": "Unit tests for coordinate transformation",
+      "file": "tests/vitest/lammps.test.ts",
+      "location": "new test file",
+      "issue": "No tests for coordinate transformation functions",
+      "steps": [
+        "Test triclinic coordinate transformation",
+        "Test orthogonal coordinate transformation",
+        "Test box bounds calculation",
+        "Test fractional to Cartesian conversion"
+      ],
+      "passes": false
+    },
+    {
+      "id": "TEST-2",
+      "category": "testing",
+      "description": "Unit tests for element mapping",
+      "file": "tests/vitest/lammps.test.ts",
+      "location": "test file",
+      "issue": "No tests for element-to-type mapping",
+      "steps": [
+        "Test unique element detection",
+        "Test type assignment preserves order",
+        "Test multi-element systems",
+        "Test single element systems"
+      ],
+      "passes": false
+    },
+    {
+      "id": "TEST-3",
+      "category": "testing",
+      "description": "Unit tests for fixed atom groups",
+      "file": "tests/vitest/lammps.test.ts",
+      "location": "test file",
+      "issue": "No tests for fixed atom group generation",
+      "steps": [
+        "Test contiguous fixed atoms",
+        "Test non-contiguous fixed atoms",
+        "Test fixed_z_below selection",
+        "Test no fixed atoms case"
+      ],
+      "passes": false
+    },
+    {
+      "id": "TEST-4",
+      "category": "testing",
+      "description": "Unit tests for charge handling",
+      "file": "tests/vitest/lammps.test.ts",
+      "location": "test file",
+      "issue": "No tests for charge extraction from structures",
+      "steps": [
+        "Test pymatgen structure with oxidation states",
+        "Test JSON structure with oxidation_state key",
+        "Test structure without oxidation states",
+        "Test charge-style output format"
+      ],
+      "passes": false
+    },
+    {
+      "id": "TEST-5",
+      "category": "testing",
+      "description": "Integration tests for each simulation type",
+      "file": "tests/playwright/lammps.spec.ts",
+      "location": "new test file",
+      "issue": "No end-to-end testing of LAMMPS generation",
+      "steps": [
+        "Test minimize generation",
+        "Test nve generation",
+        "Test nvt generation",
+        "Test npt generation"
+      ],
+      "passes": false
+    },
+    {
+      "id": "TEST-6",
+      "category": "testing",
+      "description": "Integration tests for pair_style variants",
+      "file": "tests/playwright/lammps.spec.ts",
+      "location": "test file",
+      "issue": "Pair styles generate different pair_coeff formats",
+      "steps": [
+        "Test EAM pair_style generation",
+        "Test LJ pair_style generation",
+        "Test tersoff pair_style generation",
+        "Test reaxff pair_style generation"
+      ],
+      "passes": false
+    }
+  ]
+}

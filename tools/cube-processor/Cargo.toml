@@ -1,0 +1,46 @@
+[package]
+name = "cube-processor"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance Gaussian cube file processor with Marching Cubes isosurface extraction"
+license = "MIT"
+
+[[bin]]
+name = "cube-processor"
+path = "src/main.rs"
+
+[lib]
+name = "cube_processor"
+path = "src/lib.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Parallelism
+rayon = "1.10"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Image generation for slices
+image = "0.25"
+
+# GLB/glTF export
+gltf-json = "1.4"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Progress
+indicatif = "0.17"
+
+# Memory-mapped I/O for large files
+memmap2 = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

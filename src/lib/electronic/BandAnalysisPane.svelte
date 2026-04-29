@@ -1,0 +1,533 @@
+<script lang="ts">
+  import { untrack } from 'svelte'
+  import { Spinner } from '$lib'
+  import {
+    upload_band_vasprun,
+    get_band_data,
+    get_band_projections,
+    select_band_atoms,
+    cleanup_band_session,
+    load_band_from_directory,
+  } from '$lib/api/bands'
+  import { register_analysis_session, unregister_analysis_session } from '$lib/chat/analysis-session-store.svelte'
+  import FileSourceDialog from './FileSourceDialog.svelte'
+  import type {
+    BandSessionInfo,
+    BandProjectionGroup,
+    BandViewState,
+  } from './band_types'
+  import type { PymatgenStructure } from '$lib/structure'
+
+  let {
+    on_structure_loaded = (_s: PymatgenStructure) => {},
+    band_state = $bindable(),
+  }: {
+    on_structure_loaded?: (s: PymatgenStructure) => void
+    band_state: BandViewState
+  } = $props()
+
+  // State
+  let session = $state<BandSessionInfo | null>(null)
+
+  // Register/unregister analysis session for AI tool access
+  $effect(() => {
+    if (session) {
+      const { session_id, elements, efermi, is_metal, band_gap } = session
+      untrack(() => register_analysis_session({
+        type: `bands`,
+        session_id,
+        label: `Bands (${elements?.join(`, `) ?? `uploaded`})`,
+        meta: { elements, efermi, is_metal, band_gap },
+        created_at: Date.now(),
+      }))
+    } else {
+      untrack(() => unregister_analysis_session(`bands`))
+    }
+  })
+
+  let uploading = $state(false)
+  let loading_bands = $state(false)
+  let loading_projections = $state(false)
+  let error_msg = $state(``)
+
+  // Projection groups
+  let proj_groups: BandProjectionGroup[] = $state([])
+
+  // New group form
+  let selection_mode = $state<`element` | `index`>(`element`)
+  let new_element = $state(``)
+  let new_index_spec = $state(``)
+  let new_orbital = $state(`d`)
+  let new_label = $state(``)
+
+  // File inputs
+  let kpoints_file = $state<File | null>(null)
+  let show_file_dialog = $state(false)
+
+  // Derived
+  let unique_elements: string[] = $derived(
+    session ? [...new Set(session.elements)] : []
+  )
+
+  async function handle_upload(event: Event) {
+    const input = event.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    uploading = true
+    error_msg = ``
+    try {
+      session = await upload_band_vasprun(file, kpoints_file ?? undefined)
+      proj_groups = []
+      band_state.band_data = null
+      band_state.projections = null
+      if (session.structure) {
+        on_structure_loaded(session.structure as PymatgenStructure)
+      }
+    } catch (e: any) {
+      error_msg = e.message || `Upload failed`
+    } finally {
+      uploading = false
+    }
+  }
+
+  async function handle_drop(event: DragEvent) {
+    event.preventDefault()
+    const file = event.dataTransfer?.files[0]
+    if (!file) return
+
+    uploading = true
+    error_msg = ``
+    try {
+      session = await upload_band_vasprun(file, kpoints_file ?? undefined)
+      proj_groups = []
+      band_state.band_data = null
+      band_state.projections = null
+      if (session.structure) {
+        on_structure_loaded(session.structure as PymatgenStructure)
+      }
+    } catch (e: any) {
+      error_msg = e.message || `Upload failed`
+    } finally {
+      uploading = false
+    }
+  }
+
+  async function handle_remote_path(hpc_session_id: string, path: string) {
+    uploading = true
+    error_msg = ''
+    try {
+      session = await load_band_from_directory(hpc_session_id, path)
+      proj_groups = []
+      band_state.band_data = null
+      band_state.projections = null
+      if (session?.structure) {
+        on_structure_loaded(session.structure as PymatgenStructure)
+      }
+    } catch (e: any) {
+      error_msg = e.message || 'Remote load failed'
+    } finally {
+      uploading = false
+    }
+  }
+
+  async function load_bands() {
+    if (!session) return
+    loading_bands = true
+    error_msg = ``
+    try {
+      const [emin, emax] = band_state.energy_range
+      band_state.band_data = await get_band_data(session.session_id, { emin, emax })
+      band_state.projections = null
+    } catch (e: any) {
+      error_msg = e.message || `Failed to load bands`
+    } finally {
+      loading_bands = false
+    }
+  }
+
+  async function add_group() {
+    if (!session) return
+    error_msg = ``
+    try {
+      let atoms: number[]
+      if (selection_mode === `element`) {
+        if (!new_element) return
+        atoms = await select_band_atoms(session.session_id, { elements: [new_element] })
+      } else {
+        if (!new_index_spec.trim()) return
+        atoms = await select_band_atoms(session.session_id, { index_spec: new_index_spec.trim() })
+      }
+
+      if (atoms.length === 0) {
+        error_msg = `No atoms found`
+        return
+      }
+
+      const sel_label = selection_mode === `element` ? new_element : `[${new_index_spec}]`
+      const label = new_label || `${sel_label}-${new_orbital}`
+
+      proj_groups = [...proj_groups, { atoms, channels: new_orbital, label }]
+      new_label = ``
+    } catch (e: any) {
+      error_msg = e.message
+    }
+  }
+
+  function remove_group(idx: number) {
+    proj_groups = proj_groups.filter((_, i) => i !== idx)
+  }
+
+  async function load_projections() {
+    if (!session || proj_groups.length === 0) return
+    loading_projections = true
+    error_msg = ``
+    try {
+      const [emin, emax] = band_state.energy_range
+      const result = await get_band_projections(session.session_id, proj_groups, { emin, emax })
+      band_state.band_data = result  // BandProjectionResponse extends BandDataResponse
+      band_state.projections = result.projections
+    } catch (e: any) {
+      error_msg = e.message || `Projection failed`
+    } finally {
+      loading_projections = false
+    }
+  }
+
+  function close_session() {
+    if (session) cleanup_band_session(session.session_id)
+    session = null
+    band_state.band_data = null
+    band_state.projections = null
+    proj_groups = []
+  }
+
+  // Cleanup on destroy
+  $effect(() => {
+    const sid = session?.session_id
+    return () => {
+      if (sid) cleanup_band_session(sid)
+    }
+  })
+</script>
+
+<div class="band-analysis">
+  {#if !session}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="upload-zone"
+      role="region"
+      ondragover={(e) => e.preventDefault()}
+      ondrop={handle_drop}
+    >
+      {#if uploading}
+        <Spinner />
+        <span>Parsing...</span>
+      {:else}
+        <p>Drop <code>vasprun.xml</code> here or</p>
+        <div class="source-buttons">
+          <label class="upload-btn">
+            Browse Local
+            <input type="file" accept=".xml" onchange={handle_upload} hidden />
+          </label>
+          <button class="upload-btn remote-btn" onclick={() => show_file_dialog = true}>
+            Browse Remote
+          </button>
+        </div>
+        <div class="kpoints-row">
+          <label class="kpoints-label">
+            KPOINTS (optional):
+            <input
+              type="file"
+              accept="KPOINTS,*"
+              onchange={(e) => { kpoints_file = (e.target as HTMLInputElement).files?.[0] ?? null }}
+            />
+          </label>
+        </div>
+      {/if}
+    </div>
+  {:else}
+    <!-- Session Info -->
+    <div class="info-bar">
+      <span title="Elements">{session.ion_types.join(`, `)}</span>
+      <span title="K-points">{session.nkpts}k</span>
+      <span title="Bands">{session.nbands}b</span>
+      <span title="Spin">{session.nspin > 1 ? `spin-pol` : `non-spin`}</span>
+      <span title="Metal?">{session.is_metal ? `metal` : `semicond`}</span>
+      {#if session.band_gap}
+        <span title="Band gap">{session.band_gap.energy.toFixed(3)} eV</span>
+      {/if}
+      <button class="btn-small danger" title="Close session" onclick={close_session}>
+        &times;
+      </button>
+    </div>
+
+    <!-- Load Bands -->
+    <button
+      class="btn-compute"
+      onclick={load_bands}
+      disabled={loading_bands}
+    >
+      {#if loading_bands}
+        <Spinner /> Loading...
+      {:else}
+        Load Bands
+      {/if}
+    </button>
+
+    <!-- Projection Groups -->
+    <details>
+      <summary>Fat Bands / Projections ({proj_groups.length})</summary>
+
+      <div class="tab-bar">
+        <button
+          class="tab-btn"
+          class:active={selection_mode === `element`}
+          onclick={() => selection_mode = `element`}
+        >Element</button>
+        <button
+          class="tab-btn"
+          class:active={selection_mode === `index`}
+          onclick={() => selection_mode = `index`}
+        >Index</button>
+      </div>
+
+      <div class="group-form">
+        {#if selection_mode === `element`}
+          <select bind:value={new_element}>
+            <option value="">Element</option>
+            {#each unique_elements as el}
+              <option value={el}>{el}</option>
+            {/each}
+          </select>
+        {:else}
+          <input
+            type="text"
+            placeholder="1-5,8-10"
+            bind:value={new_index_spec}
+            class="index-input"
+            title="1-based atom indices"
+          />
+        {/if}
+
+        <select bind:value={new_orbital}>
+          <option value="s">s</option>
+          <option value="p">p</option>
+          <option value="d">d</option>
+          <option value="f">f</option>
+          <option value="s,p">s+p</option>
+          <option value="s,p,d">s+p+d</option>
+          <option value="dxy">dxy</option>
+          <option value="dyz">dyz</option>
+          <option value="dz2">dz2</option>
+          <option value="dxz">dxz</option>
+          <option value="dx2-y2">dx2-y2</option>
+        </select>
+
+        <input
+          type="text"
+          placeholder="Label"
+          bind:value={new_label}
+          class="label-input"
+        />
+
+        <button
+          class="btn-small"
+          onclick={add_group}
+          disabled={selection_mode === `element` ? !new_element : !new_index_spec.trim()}
+        >+</button>
+      </div>
+
+      {#if proj_groups.length > 0}
+        <ul class="group-list">
+          {#each proj_groups as g, i}
+            <li>
+              <span class="group-label">{g.label}</span>
+              <span class="group-detail">
+                {g.atoms.length} atoms, {g.channels}
+              </span>
+              <button class="btn-tiny" onclick={() => remove_group(i)}>&times;</button>
+            </li>
+          {/each}
+        </ul>
+
+        <button
+          class="btn-compute"
+          onclick={load_projections}
+          disabled={loading_projections}
+        >
+          {#if loading_projections}
+            <Spinner /> Computing...
+          {:else}
+            Load Projections
+          {/if}
+        </button>
+      {/if}
+    </details>
+
+    <!-- Display Options -->
+    <details>
+      <summary>Display Options</summary>
+      <div class="display-opts">
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={band_state.show_fermi_line} />
+          Fermi level line
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={band_state.show_band_gap} />
+          Band gap annotation
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={band_state.show_spin_down} />
+          Show spin down
+        </label>
+        <div class="range-row">
+          <span>E min (eV):</span>
+          <input
+            type="number"
+            bind:value={band_state.energy_range[0]}
+            step="0.5"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>E max (eV):</span>
+          <input
+            type="number"
+            bind:value={band_state.energy_range[1]}
+            step="0.5"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>Fat band scale:</span>
+          <input
+            type="number"
+            bind:value={band_state.fat_band_scale}
+            min="1" max="50" step="1"
+            class="range-input"
+          />
+        </div>
+
+        <hr class="section-divider" />
+
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={band_state.legend_visible} />
+          Show legend
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={band_state.show_gridlines} />
+          Show gridlines
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" bind:checked={band_state.show_axis_lines} />
+          Show axis lines
+        </label>
+      </div>
+    </details>
+  {/if}
+
+  {#if error_msg}
+    <div class="error-msg">{error_msg}</div>
+  {/if}
+</div>
+
+<FileSourceDialog
+  bind:show={show_file_dialog}
+  file_types={['.xml']}
+  title="Load Band Structure"
+  description="Select a vasprun.xml file or provide a remote directory containing vasprun.xml (+ optional KPOINTS)."
+  onfile={async (file) => {
+    uploading = true
+    error_msg = ''
+    try {
+      session = await upload_band_vasprun(file, kpoints_file ?? undefined)
+      proj_groups = []
+      band_state.band_data = null
+      band_state.projections = null
+      if (session.structure) {
+        on_structure_loaded(session.structure as PymatgenStructure)
+      }
+    } catch (e: any) {
+      error_msg = e.message || 'Upload failed'
+    } finally {
+      uploading = false
+    }
+  }}
+  onremote_path={handle_remote_path}
+  onclose={() => show_file_dialog = false}
+/>
+
+<style>
+  .band-analysis {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 0.82em;
+  }
+  .upload-zone {
+    border: 2px dashed light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.2));
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+    color: var(--text-color-muted, rgba(255, 255, 255, 0.6));
+    cursor: pointer;
+  }
+  .upload-zone:hover { border-color: var(--accent-color, #007acc); }
+  .upload-zone p { margin: 0 0 8px; }
+  .upload-zone code { background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1)); padding: 2px 5px; border-radius: 3px; }
+  .upload-btn {
+    display: inline-block; padding: 5px 14px;
+    background: var(--accent-color, #007acc); color: white;
+    border-radius: 4px; cursor: pointer; font-size: 0.9em;
+  }
+  .kpoints-row { margin-top: 10px; }
+  .kpoints-label { font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.5)); }
+  .kpoints-label input { font-size: 0.85em; margin-left: 4px; }
+  .info-bar {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    padding: 4px 6px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.04));
+    border-radius: 4px; font-size: 0.85em;
+    color: var(--text-color-muted, rgba(255, 255, 255, 0.7));
+  }
+  .info-bar span { padding: 1px 4px; background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.06)); border-radius: 3px; }
+  .tab-bar { display: flex; gap: 2px; margin: 6px 0 4px; }
+  .tab-btn {
+    padding: 2px 10px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.06));
+    border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1)); border-radius: 3px 3px 0 0;
+    color: var(--text-color-muted, rgba(255, 255, 255, 0.5)); cursor: pointer; font-size: 0.85em;
+  }
+  .tab-btn.active { background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.12)); color: var(--text-color, #fff); border-bottom-color: transparent; }
+  details { background: light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.03)); border-radius: 6px; padding: 6px 8px; }
+  summary { cursor: pointer; font-weight: 600; font-size: 0.88em; color: var(--text-color, #fff); user-select: none; }
+  .group-form { display: flex; gap: 4px; margin-top: 6px; align-items: center; flex-wrap: wrap; }
+  .group-form select, .group-form input {
+    padding: 3px 5px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08));
+    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 4px;
+    color: var(--text-color, #fff); font-size: 0.9em;
+  }
+  .group-form select { min-width: 60px; }
+  .label-input { width: 60px; }
+  .index-input { width: 80px; }
+  .group-list { list-style: none; padding: 0; margin: 6px 0; }
+  .group-list li { display: flex; align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.05)); }
+  .group-label { font-weight: 500; color: var(--text-color, #fff); }
+  .group-detail { font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.5)); flex: 1; }
+  .display-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+  .display-opts label { font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.7)); }
+  .checkbox-label { display: flex; align-items: center; gap: 5px; font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.7)); cursor: pointer; }
+  .range-row { display: flex; align-items: center; gap: 4px; font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.6)); }
+  .range-input { width: 55px; padding: 2px 4px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08)); border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; color: var(--text-color, #fff); font-size: 0.9em; }
+  .btn-compute { padding: 6px 12px; background: var(--accent-color, #007acc); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .btn-compute:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-small { padding: 3px 8px; background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1)); border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; color: var(--text-color, #fff); cursor: pointer; font-size: 0.85em; }
+  .btn-small:hover { background: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.2)); }
+  .btn-small.danger { color: var(--error-color, #f55); }
+  .btn-tiny { padding: 1px 5px; background: transparent; border: none; color: var(--text-color-muted, rgba(255, 255, 255, 0.4)); cursor: pointer; font-size: 1em; }
+  .btn-tiny:hover { color: var(--error-color, #f55); }
+  .error-msg { padding: 5px 8px; background: light-dark(rgba(220, 38, 38, 0.1), rgba(255, 60, 60, 0.15)); border: 1px solid light-dark(rgba(220, 38, 38, 0.25), rgba(255, 60, 60, 0.3)); border-radius: 4px; color: var(--error-color, #f88); font-size: 0.85em; }
+  .section-divider { border: none; border-top: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08)); margin: 4px 0; }
+  .source-buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .remote-btn { background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08)); border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); }
+  .remote-btn:hover { background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15)); }
+</style>
