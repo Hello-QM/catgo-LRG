@@ -42,22 +42,6 @@ describe(`PeriodicTable`, () => {
     expect(Array.from(element_tile.classList)).not.toContain(`active`)
   })
 
-  test(`shows element photo when hovering element tile`, async () => {
-    mount(PeriodicTable, { target: document.body, props: { show_photo: true } })
-
-    const element_tile = doc_query(`.element-tile`)
-    element_tile?.dispatchEvent(mouseenter)
-    await tick()
-
-    expect(doc_query(`img[alt="Hydrogen"]`)?.style.gridArea).toBe(
-      `9/1/span 2/span 2`,
-    )
-
-    element_tile?.dispatchEvent(mouseleave)
-    await tick()
-    expect(document.querySelector(`img`)).toBeNull()
-  })
-
   test(`keyboard navigation works`, () => {
     let active_element: (typeof element_data)[0] | null = null
 

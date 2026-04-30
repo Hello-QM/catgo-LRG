@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ChemicalElement, ElementCategory, XyObj } from '$lib'
-  import { elem_symbols, ElementPhoto, type ElementSymbol, ElementTile } from '$lib'
+  import { elem_symbols, type ElementSymbol, ElementTile } from '$lib'
   import { default_category_colors, is_color } from '$lib/colors'
   import { element_data } from '$lib/element'
   import { ColorBar } from '$lib/plot'
@@ -17,7 +17,6 @@
   ] as const
   let {
     tile_props,
-    show_photo = false,
     disabled = false,
     heatmap_values = [],
     links = null,
@@ -47,7 +46,6 @@
     ...rest
   }: HTMLAttributes<HTMLDivElement> & {
     tile_props?: Partial<ComponentProps<typeof ElementTile>>
-    show_photo?: boolean
     disabled?: boolean // disable hover and click events from updating active_element
     // either array of numbers/colors (can be partial, missing elements default to 0) or object with
     // element symbol as key and heat value as value
@@ -366,8 +364,6 @@
 
     {#if bottom_left_inset}
       {@render bottom_left_inset({ active_element })}
-    {:else if show_photo && active_element}
-      <ElementPhoto element={active_element} style="grid-area: 9/1/span 2/span 2" />
     {/if}
 
     <!-- Tooltip -->
