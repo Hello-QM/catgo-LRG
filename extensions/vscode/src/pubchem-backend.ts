@@ -73,7 +73,7 @@ export async function search_pubchem_compounds_backend(
     const cid_response = await fetch(cid_url, {
       headers: {
         'Accept': `application/json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       },
     })
 
@@ -104,7 +104,7 @@ export async function search_pubchem_compounds_backend(
     const props_response = await fetch(props_url, {
       headers: {
         'Accept': `application/json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       },
     })
 
@@ -169,7 +169,7 @@ export async function fetch_pubchem_compound_backend(cid: number): Promise<unkno
     const response = await fetch(url, {
       headers: {
         'Accept': `application/json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       },
     })
 

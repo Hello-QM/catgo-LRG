@@ -562,7 +562,7 @@ export const handle_msg = async (
       const { request_id, url, api_key } = msg
       const headers: Record<string, string> = {
         'Accept': `application/json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       }
       if (api_key) {
         headers['X-API-KEY'] = api_key
@@ -576,7 +576,7 @@ export const handle_msg = async (
       webview.postMessage({ command, request_id, data })
     } catch (error) {
       const error_message = error instanceof Error ? error.message : String(error)
-      console.error(`[MatterViz] Materials Project fetch failed for ${msg.url}:`, error_message)
+      console.error(`[CatGO] Materials Project fetch failed for ${msg.url}:`, error_message)
       webview.postMessage({ command, request_id: msg.request_id, error: error_message })
     }
   } else if (msg.command === `optimade_search` && msg.provider && msg.options && webview) {
@@ -585,12 +585,12 @@ export const handle_msg = async (
     try {
       const { request_id, provider, options } = msg
       const search_options = options as OptimadeSearchOptions
-      console.log(`[MatterViz] OPTIMADE search for provider="${provider}"`)
+      console.log(`[CatGO] OPTIMADE search for provider="${provider}"`)
       const results = await search_optimade_structures_backend(provider, search_options)
       webview.postMessage({ command, request_id, data: results })
     } catch (error) {
       const error_message = error instanceof Error ? error.message : String(error)
-      console.error(`[MatterViz] OPTIMADE search failed:`, error_message)
+      console.error(`[CatGO] OPTIMADE search failed:`, error_message)
       webview.postMessage({ command, request_id: msg.request_id, error: error_message })
     }
   } else if (msg.command === `pubchem_search` && webview) {
@@ -598,12 +598,12 @@ export const handle_msg = async (
     const command = `pubchem_search_response`
     try {
       const { request_id, search_term, elements } = msg
-      console.log(`[MatterViz] PubChem search: term="${search_term}" elements=${JSON.stringify(elements)}`)
+      console.log(`[CatGO] PubChem search: term="${search_term}" elements=${JSON.stringify(elements)}`)
       const results = await search_pubchem_compounds_backend(search_term, elements)
       webview.postMessage({ command, request_id, data: results })
     } catch (error) {
       const error_message = error instanceof Error ? error.message : String(error)
-      console.error(`[MatterViz] PubChem search failed:`, error_message)
+      console.error(`[CatGO] PubChem search failed:`, error_message)
       webview.postMessage({ command, request_id: msg.request_id, error: error_message })
     }
   } else if (msg.command === `api_request` && webview) {
@@ -1116,7 +1116,7 @@ async function collect_debug_info(): Promise<string> {
   report += `---\n\n`
   report += `**Generated**: ${new Date().toISOString()}\n\n`
   report += `Please include this information when reporting bugs at:\n`
-  report += `https://github.com/janosh/catgo/issues\n`
+  report += `https://github.com/Hello-QM/catgo-LRG/issues\n`
 
   return report
 }
@@ -1147,7 +1147,7 @@ async function report_bug(): Promise<void> {
       vscode.window.showInformationMessage(`Debug information copied to clipboard!`)
     } else if (action === `Open GitHub Issues`) {
       vscode.env.openExternal(
-        vscode.Uri.parse(`https://github.com/janosh/catgo/issues/new`),
+        vscode.Uri.parse(`https://github.com/Hello-QM/catgo-LRG/issues/new`),
       )
     }
   } catch (error: unknown) {

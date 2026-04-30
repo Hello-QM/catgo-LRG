@@ -3,10 +3,10 @@ name = "ferrox"
 version = "0.0.4"
 edition = "2024"
 rust-version = "1.93"
-authors = ["Janosh Riebesell <janosh.riebesell@gmail.com>"]
+authors = ["LRG <gul026@ucsd.edu>"]
 description = "High-performance structure matching for crystallographic data"
 license = "MIT"
-repository = "https://github.com/janosh/catgo"
+repository = "https://github.com/Hello-QM/catgo-LRG"
 keywords = ["crystallography", "materials-science", "structure-matching"]
 include = [
   "src/**/*.rs",

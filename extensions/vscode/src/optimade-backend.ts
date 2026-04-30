@@ -90,7 +90,7 @@ async function fetch_providers(): Promise<OptimadeProvider[]> {
     const response = await fetch(`https://providers.optimade.org/v1/links`, {
       headers: {
         'Accept': `application/vnd.api+json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       },
     })
 
@@ -242,7 +242,7 @@ export async function search_optimade_structures_backend(
     const response = await fetch(url, {
       headers: {
         'Accept': `application/vnd.api+json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       },
     })
 
@@ -288,7 +288,7 @@ export async function fetch_suggested_structures_backend(
     const response = await fetch(url, {
       headers: {
         'Accept': `application/vnd.api+json`,
-        'User-Agent': `MatterViz/1.0`,
+        'User-Agent': `CatGO/1.0`,
       },
     })
 

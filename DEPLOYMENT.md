@@ -20,7 +20,7 @@ curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/janosh/catgo.git
+git clone https://github.com/Hello-QM/catgo-LRG.git
 cd catgo
 git checkout james/desktop
 ```

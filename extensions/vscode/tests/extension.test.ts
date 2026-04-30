@@ -122,7 +122,7 @@ describe(`CatGo Extension`, () => {
   }
 
   test(`extensionKind should be configured as ["workspace"] to work locally and in remote SSH sessions`, () => {
-    // https://github.com/janosh/catgo/issues/129#issuecomment-3193473225
+    // https://github.com/Hello-QM/catgo-LRG/issues/129#issuecomment-3193473225
     expect(pkg_json.extensionKind).toEqual([`workspace`])
   })
 
@@ -650,7 +650,7 @@ describe(`CatGo Extension`, () => {
 
       // Check GitHub link
       expect(content).toContain(
-        `https://github.com/janosh/catgo/issues`,
+        `https://github.com/Hello-QM/catgo-LRG/issues`,
       )
 
       // Check timestamp
@@ -761,7 +761,7 @@ describe(`CatGo Extension`, () => {
       // Verify the URL contains the GitHub issues path
       const call_args = mock_env.openExternal.mock.calls[0]
       expect(call_args[0].toString()).toContain(
-        `https://github.com/janosh/catgo/issues/new`,
+        `https://github.com/Hello-QM/catgo-LRG/issues/new`,
       )
     })
 

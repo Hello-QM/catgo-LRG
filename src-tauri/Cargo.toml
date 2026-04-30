@@ -2,9 +2,9 @@
 name = "catgo"
 version = "0.3.0"
 description = "Interactive visualizations for materials science"
-authors = ["Janosh Riebesell <janosh.riebesell@gmail.com>"]
+authors = ["LRG <gul026@ucsd.edu>"]
 license = "MIT"
-repository = "https://github.com/janosh/catgo"
+repository = "https://github.com/Hello-QM/catgo-LRG"
 edition = "2021"
 rust-version = "1.77.2"
 

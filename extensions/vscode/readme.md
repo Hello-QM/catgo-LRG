@@ -159,7 +159,7 @@ If you encounter any issues with CatGo, you can use the built-in bug reporting c
    - Files currently being rendered
    - System resources and memory usage
    - Extension configuration
-4. Copy the information and include it when [creating a GitHub issue](https://github.com/janosh/catgo/issues/new)
+4. Copy the information and include it when [creating a GitHub issue](https://github.com/Hello-QM/catgo-LRG/issues/new)
 
 ## 📄 License
 
@@ -167,8 +167,8 @@ This extension is [MIT-Licensed](./license).
 
 ## 🔗 Related Projects
 
-- **✅ CatGo Web**: [catgo.janosh.dev](https://catgo.janosh.dev)
-- **✅ pymatviz**: [Jupyter](https://jupyter.org)/[Marimo](https://marimo.io) extension for Python notebooks. Read about widgets in [`pymatviz` readme](https://github.com/janosh/pymatviz/blob/main/readme.md#interactive-widgets) for details.
+- **Upstream CatGo / MatterViz**: [github.com/janosh/catgo](https://github.com/janosh/catgo)
+- **pymatviz**: [Jupyter](https://jupyter.org)/[Marimo](https://marimo.io) extension for Python notebooks. Read about widgets in [`pymatviz` readme](https://github.com/janosh/pymatviz/blob/main/readme.md#interactive-widgets) for details.
 
 ## 🤝 Contributing
 
@@ -177,7 +177,7 @@ We welcome contributions! Please see our [Contributing Guide](../../contributing
 ## 🛠️ Development
 
 ```bash
-git clone https://github.com/janosh/catgo
+git clone https://github.com/Hello-QM/catgo-LRG
 cd catgo/extensions/vscode
 pnpm install
 pnpm build

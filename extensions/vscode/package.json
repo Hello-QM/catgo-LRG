@@ -2,10 +2,10 @@
   "name": "catgo",
   "displayName": "CatGo",
   "description": "Visualize crystal structures and MD trajectories in VSCode",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "Guangsheng",
   "icon": "icon.png",
-  "repository": "https://github.com/janosh/catgo",
+  "repository": "https://github.com/Hello-QM/catgo-LRG",
   "categories": [
     "Data Science",
     "Machine Learning",
