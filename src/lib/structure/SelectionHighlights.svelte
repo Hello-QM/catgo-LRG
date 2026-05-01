@@ -1,34 +1,44 @@
 <script lang="ts">
   /**
-   * R7 — Instanced selection-highlight mesh.
+   * Fresnel-halo selection highlight.
    *
-   * Replaces N per-atom `<T.Mesh>` highlights (one geometry, one material,
-   * one draw call per selected atom) with a single InstancedMesh. Selected
-   * + active atoms share one geometry, one material, one draw call;
-   * per-instance position+scale via instanceMatrix; per-instance color via
-   * Three.js's built-in `instanceColor` attribute.
+   * Replaces the legacy black-wireframe sphere with a 3Dmol-style
+   * silhouette glow. The body of each highlight is fully transparent
+   * (atoms + fog read through unobstructed); only the rim contributes
+   * color, decaying smoothly toward the center via a fresnel curve.
    *
-   * Why this matters:
-   *   - Selection toggle no longer mounts/unmounts N <T.Mesh> components.
-   *   - The pulse $effect in StructureScene writes ONE `material.opacity`
-   *     value per frame (was N per frame, one per highlight material).
-   *   - select_all on a 100+ atom structure during orbit becomes O(1) draw
-   *     calls instead of O(N).
+   * Architecture (mirrors Bond.svelte's proven path — explicitly NOT
+   * using Three.js's `mesh.instanceColor` special-attribute mechanism,
+   * which has historically been flaky with raw ShaderMaterial + Threlte
+   * v8 on this codebase):
    *
-   * Caller contract: parent owns the pulse opacity ($state) and passes it
-   * via the `pulse_opacity` prop. We bind it to the single shared
-   * MeshBasicMaterial; Threlte's prop watcher triggers the per-frame paint
-   * automatically.
+   *   - Build SphereGeometry up front; attach a custom
+   *     InstancedBufferAttribute named `haloColor` (per-instance vec3)
+   *     and a per-instance scale attribute `haloScale` (float, applied
+   *     to the unit sphere so we avoid mucking with instanceMatrix
+   *     scale and can render slightly larger than the underlying atom).
+   *   - Build a ShaderMaterial up front and pass it via T.InstancedMesh
+   *     `args` so Threlte attaches it directly (instead of via a child
+   *     <T.ShaderMaterial>, which doesn't reliably wire custom attribs).
+   *   - The vertex shader reads `instanceMatrix` (auto-injected by
+   *     Three.js for InstancedMesh + ShaderMaterial) for translation,
+   *     plus `haloColor` and `haloScale` for the rest.
    *
-   * Capacity: fixed `max_capacity` (default 4096). Selecting more than that
-   * truncates silently with a console warning. Realistic ceiling — even
-   * select_all on a 4096-atom slab fits.
+   * Depth behavior:
+   *   - depthTest: true  → opaque atoms in front correctly occlude.
+   *   - depthWrite: false → halo doesn't itself occlude things behind.
+   *   - renderOrder: 1 → paints after opaque atoms. The cell surface
+   *     also has depthWrite:false (Lattice.svelte) so it can't block
+   *     the halo from being seen through translucent volumes.
+   *
+   * Capacity: fixed `max_capacity` (default 4096). Selecting more than
+   * that truncates silently with a console warning.
    */
 
   import type { AnyStructure, Vec3 } from '$lib'
   import { T } from '@threlte/core'
   import type { Camera, InstancedMesh } from 'three'
-  import { Color, InstancedBufferAttribute, Matrix4, Quaternion, Vector3 } from 'three'
+  import { Color, InstancedBufferAttribute, Matrix4, NormalBlending, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
   import { compute_depth_range, get_depth_color } from './depth-cue-helpers'
 
   interface Props {
@@ -38,7 +48,7 @@
     selection_highlight_color: string
     active_highlight_color: string
     /** Per-frame pulse opacity (0..1), driven by the parent's $effect.
-     *  Bound to the shared material; Threlte auto-invalidates on change. */
+     *  Bound to the shared material's uOpacity uniform. */
     pulse_opacity: number
     /** Atom drag overrides — when present, override the canonical xyz. */
     realtime_position_overrides: Map<number, Vec3> | null
@@ -53,7 +63,7 @@
     camera: Camera | undefined
     is_rotating_atoms: boolean
     is_dragging_atom: boolean
-    /** Imperative GPU writes (instanceMatrix, instanceColor) bypass the
+    /** Imperative GPU writes (instanceMatrix + custom buffers) bypass the
      *  <T.> prop chain — caller passes its mark_dirty so we can request a
      *  paint after each rebuild. */
     mark_dirty: () => void
@@ -80,30 +90,88 @@
 
   let mesh = $state<InstancedMesh | undefined>()
 
-
   // Reusable scratch objects — zero per-frame allocations.
   const __scratch_xyz = new Vector3()
   const __scratch_quat = new Quaternion() // identity, never modified
-  const __scratch_scale = new Vector3()
+  const __scratch_unit_scale = new Vector3(1, 1, 1)
   const __scratch_matrix = new Matrix4()
   const __scratch_color = new Color()
   // Pre-parsed base colors. Recomputed only when the input string props change.
   const __selected_color_obj = new Color()
   const __active_color_obj = new Color()
 
-  // Track whether instanceColor attribute has been initialized on the mesh.
-  // Three.js auto-creates one when you assign mesh.instanceColor = ..., but
-  // we own the lifecycle here so we can grow + write into our own buffer.
-  let __instance_color_buf: Float32Array | null = null
+  // ─── Geometry + shader material (built up front, attached via args) ───
+  const halo_geometry = new SphereGeometry(1.0, 24, 24)
 
-  // Sync builder: walks selected_sites + active_sites, writes per-instance
-  // matrix + color, sets mesh.count, calls mark_dirty(). Runs whenever any
-  // tracked input changes — Svelte's $effect handles the dependency graph.
+  // Per-instance color and per-instance scale buffers. Attached to the
+  // geometry as InstancedBufferAttributes (Bond.svelte pattern).
+  const halo_color_buf = new Float32Array(max_capacity * 3)
+  const halo_scale_buf = new Float32Array(max_capacity)
+  const halo_color_attr = new InstancedBufferAttribute(halo_color_buf, 3, false)
+  const halo_scale_attr = new InstancedBufferAttribute(halo_scale_buf, 1, false)
+  halo_geometry.setAttribute(`haloColor`, halo_color_attr)
+  halo_geometry.setAttribute(`haloScale`, halo_scale_attr)
+
+  const halo_uniforms = { uOpacity: { value: 0 } }
+
+  const halo_vertex = `
+    attribute vec3 haloColor;
+    attribute float haloScale;
+    varying vec3 vColor;
+    varying vec3 vViewNormal;
+    varying vec3 vViewPos;
+    void main() {
+      vColor = haloColor;
+      // Apply our per-instance scale to the unit sphere first, then the
+      // instanceMatrix (translation only — Three.js auto-injects this).
+      vec3 scaled = position * haloScale;
+      vec4 mv = modelViewMatrix * instanceMatrix * vec4(scaled, 1.0);
+      vViewPos = mv.xyz;
+      // instanceMatrix is translation only (uniform-1 scale baked into our
+      // own attribute), so plain normalMatrix * normal is correct.
+      vViewNormal = normalize(normalMatrix * normal);
+      gl_Position = projectionMatrix * mv;
+    }
+  `
+
+  const halo_fragment = `
+    uniform float uOpacity;
+    varying vec3 vColor;
+    varying vec3 vViewNormal;
+    varying vec3 vViewPos;
+    void main() {
+      vec3 viewDir = normalize(-vViewPos);
+      float NdotV = abs(dot(normalize(vViewNormal), viewDir));
+      // Fresnel rises near silhouette (NdotV near 0). Exponent 2.0 →
+      // moderate ring thickness; tighter than wireframe but readable.
+      float fresnel = pow(1.0 - NdotV, 2.0);
+      float a = fresnel * uOpacity;
+      if (a < 0.02) discard;
+      gl_FragColor = vec4(vColor, a);
+    }
+  `
+
+  const halo_material = new ShaderMaterial({
+    vertexShader: halo_vertex,
+    fragmentShader: halo_fragment,
+    uniforms: halo_uniforms,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+    blending: NormalBlending,
+  })
+
+  // Reactively pump pulse_opacity into the uniform — no shader recompile.
+  $effect(() => {
+    halo_uniforms.uOpacity.value = pulse_opacity
+    mark_dirty()
+  })
+
+  // ─── Sync builder ───
+  // Walks selected_sites + active_sites, writes per-instance translation
+  // matrix, color, and scale, then sets mesh.count.
   $effect(() => {
     if (!mesh) return
-    // Local const so closures inside this effect can read it without
-    // re-checking undefined (Svelte 5's narrowing doesn't propagate
-    // across closure boundaries).
     const m = mesh
     if (!structure?.sites) {
       m.count = 0
@@ -111,8 +179,7 @@
       return
     }
 
-    // Track reactive deps explicitly. Without these reads, Svelte won't
-    // re-fire this effect when overrides / position map / structure update.
+    // Track reactive deps explicitly so Svelte refires when these change.
     const _struct = structure
     const _overrides = realtime_position_overrides
     const _ovr_size = realtime_position_overrides?.size ?? 0
@@ -122,23 +189,12 @@
     const _atom_r = atom_radius
     void _struct; void _overrides; void _ovr_size; void _pos_map_size; void _rad_map_size; void _atom_r
 
-    // Re-parse the base colors in case prop strings changed.
     __selected_color_obj.set(selection_highlight_color)
     __active_color_obj.set(active_highlight_color)
 
-    // Depth tinting is only meaningful while the user is manipulating
-    // selected atoms (rotation / drag). The depth_range gives near/far
-    // bounds for normalizing each atom's distance.
     const depth_range: [number, number] = _is_manip && selected_sites.length > 0 && camera
       ? compute_depth_range(selected_sites, realtime_position_overrides, structure, camera)
       : [0, 0]
-
-    // Ensure instanceColor buffer matches mesh capacity.
-    if (!__instance_color_buf || __instance_color_buf.length !== max_capacity * 3) {
-      __instance_color_buf = new Float32Array(max_capacity * 3)
-      const attr = new InstancedBufferAttribute(__instance_color_buf, 3, false)
-      m.instanceColor = attr
-    }
 
     let write = 0
     const total_requested = selected_sites.length + active_sites.length
@@ -157,13 +213,19 @@
         ?? position_by_site_idx.get(idx)
         ?? structure?.sites?.[idx]?.xyz
       if (!xyz) return
-      const r = (radius_by_site_idx.get(idx) ?? atom_radius) * 1.3
+
+      // Halo radius: visually 1.15× the atom radius so the silhouette ring
+      // sits just OUTSIDE the atom's edge. Geometry is unit sphere; we
+      // pump the radius via the per-instance haloScale attribute.
+      const halo_radius = (radius_by_site_idx.get(idx) ?? atom_radius) * 1.15
+
+      // instanceMatrix carries translation only; scale lives in haloScale.
       __scratch_xyz.set(xyz[0], xyz[1], xyz[2])
-      __scratch_scale.set(r, r, r)
-      __scratch_matrix.compose(__scratch_xyz, __scratch_quat, __scratch_scale)
+      __scratch_matrix.compose(__scratch_xyz, __scratch_quat, __scratch_unit_scale)
       m.setMatrixAt(write, __scratch_matrix)
-      // Per-instance color: depth-tinted during manipulation, base
-      // color otherwise. get_depth_color returns a hex string; parse.
+
+      // Per-instance color: depth-tinted during manipulation, base color
+      // otherwise. get_depth_color returns a hex string.
       if (_is_manip && camera) {
         const tinted = get_depth_color(xyz, camera, depth_range, base_color === __selected_color_obj
           ? selection_highlight_color
@@ -172,9 +234,10 @@
       } else {
         __scratch_color.copy(base_color)
       }
-      __instance_color_buf![write * 3] = __scratch_color.r
-      __instance_color_buf![write * 3 + 1] = __scratch_color.g
-      __instance_color_buf![write * 3 + 2] = __scratch_color.b
+      halo_color_buf[write * 3]     = __scratch_color.r
+      halo_color_buf[write * 3 + 1] = __scratch_color.g
+      halo_color_buf[write * 3 + 2] = __scratch_color.b
+      halo_scale_buf[write] = halo_radius
       write++
     }
 
@@ -187,30 +250,19 @@
 
     m.count = write
     m.instanceMatrix.needsUpdate = true
-    if (m.instanceColor) m.instanceColor.needsUpdate = true
+    halo_color_attr.needsUpdate = true
+    halo_scale_attr.needsUpdate = true
     mark_dirty()
   })
 </script>
 
-<!-- Wireframe selection highlight. depthTest:true so opaque atoms in
-     front occlude the rings; depthWrite:false so the rings themselves
-     don't write into the depth buffer (cell-surface translucency behind
-     therefore won't get clipped, and transparent atoms render correctly).
-     renderOrder=1 so the wireframe paints after opaque geometry. -->
+<!-- Halo InstancedMesh. Geometry + ShaderMaterial passed via args so
+     Threlte attaches them up front (matches Bond.svelte). renderOrder=1
+     so the halo paints after opaque atoms. -->
 <T.InstancedMesh
-  args={[undefined, undefined, max_capacity]}
+  args={[halo_geometry, halo_material, max_capacity]}
   bind:ref={mesh}
   frustumCulled={false}
   raycast={null}
   renderOrder={1}
->
-  <T.SphereGeometry args={[0.5, 16, 16]} />
-  <T.MeshBasicMaterial
-    wireframe
-    transparent
-    opacity={pulse_opacity}
-    vertexColors
-    depthTest={true}
-    depthWrite={false}
-  />
-</T.InstancedMesh>
+/>
