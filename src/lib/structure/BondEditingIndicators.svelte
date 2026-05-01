@@ -88,12 +88,14 @@
   })
 </script>
 
-<!-- Selected bond highlights: always visible regardless of mode -->
-{#each highlight_groups as group}
-  <Bond {group} />
-{/each}
-
+<!-- Bond editing visuals are only relevant in bond_mode_active. The
+     non-editing selection visual is now the fresnel halo in
+     StructureScene (bond_halo_entries) — drawing the heavy yellow
+     overlay here would compete with it. -->
 {#if bond_mode_active}
+  {#each highlight_groups as group}
+    <Bond {group} />
+  {/each}
   <!-- Hovered bond highlight: light blue semi-transparent bond -->
   {#if hover_group}
     <Bond group={hover_group} />

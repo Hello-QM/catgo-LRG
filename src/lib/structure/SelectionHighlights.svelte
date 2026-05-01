@@ -68,6 +68,9 @@
      *  paint after each rebuild. */
     mark_dirty: () => void
     max_capacity?: number
+    /** Single-atom hover index. Renders a halo at half the pulse opacity
+     *  (subtle preview, distinguishable from a committed selection). */
+    hovered_site_idx?: number | null
   }
 
   let {
@@ -86,6 +89,7 @@
     is_dragging_atom,
     mark_dirty,
     max_capacity = 4096,
+    hovered_site_idx = null,
   }: Props = $props()
 
   let mesh = $state<InstancedMesh | undefined>()
@@ -101,7 +105,9 @@
   const __active_color_obj = new Color()
 
   // ─── Geometry + shader material (built up front, attached via args) ───
-  const halo_geometry = new SphereGeometry(1.0, 24, 24)
+  // 48×48 keeps the silhouette arc clean even at high zoom — 24×24 was
+  // visibly polygonal on the outer ring.
+  const halo_geometry = new SphereGeometry(1.0, 48, 48)
 
   // Per-instance color and per-instance scale buffers. Attached to the
   // geometry as InstancedBufferAttributes (Bond.svelte pattern).
@@ -142,9 +148,10 @@
     void main() {
       vec3 viewDir = normalize(-vViewPos);
       float NdotV = abs(dot(normalize(vViewNormal), viewDir));
-      // Fresnel rises near silhouette (NdotV near 0). Exponent 2.0 →
-      // moderate ring thickness; tighter than wireframe but readable.
-      float fresnel = pow(1.0 - NdotV, 2.0);
+      // Fresnel rises near silhouette (NdotV near 0). Exponent 2.5 →
+      // a clean readable ring without the heavy "shell" look that 1.0–2.0
+      // gives, while still wider than the unreadable 4.0 we tried.
+      float fresnel = pow(1.0 - NdotV, 2.5);
       float a = fresnel * uOpacity;
       if (a < 0.02) discard;
       gl_FragColor = vec4(vColor, a);
@@ -214,10 +221,13 @@
         ?? structure?.sites?.[idx]?.xyz
       if (!xyz) return
 
-      // Halo radius: visually 1.15× the atom radius so the silhouette ring
-      // sits just OUTSIDE the atom's edge. Geometry is unit sphere; we
-      // pump the radius via the per-instance haloScale attribute.
-      const halo_radius = (radius_by_site_idx.get(idx) ?? atom_radius) * 1.15
+      // Halo radius: ≈1.25× the visually-rendered atom radius. radius_map
+      // stores `atom.radius` which AtomInstancedRenderer renders at HALF
+      // (VISUAL_RADIUS_SCALE = 0.5). So multiply by 0.5 * 1.25 = 0.625.
+      // Need a wider band than atom-edge so the fresnel ring has room to
+      // breathe — at the atom edge (multiplier 0.525) the ring fits in
+      // a sub-pixel strip and visually disappears.
+      const halo_radius = (radius_by_site_idx.get(idx) ?? atom_radius) * 0.625
 
       // instanceMatrix carries translation only; scale lives in haloScale.
       __scratch_xyz.set(xyz[0], xyz[1], xyz[2])
@@ -246,6 +256,16 @@
     }
     for (let i = 0; i < active_sites.length; i++) {
       write_one(active_sites[i], __active_color_obj)
+    }
+    // Hover halo: render only when the cursor is over an atom and that
+    // atom isn't already in selected/active (skip duplicate draw).
+    if (
+      hovered_site_idx !== null &&
+      hovered_site_idx !== undefined &&
+      !selected_sites.includes(hovered_site_idx) &&
+      !active_sites.includes(hovered_site_idx)
+    ) {
+      write_one(hovered_site_idx, __selected_color_obj)
     }
 
     m.count = write

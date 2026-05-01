@@ -164,7 +164,8 @@ export interface SettingsConfig {
     depth_cueing: SettingType<number>
     depth_cue_start: SettingType<number>
     depth_cue_end: SettingType<number>
-    outline_strength: SettingType<number>
+    atom_outline_strength: SettingType<number>
+    bond_outline_strength: SettingType<number>
 
     // Forces & Lattice
     show_force_vectors: SettingType<boolean>

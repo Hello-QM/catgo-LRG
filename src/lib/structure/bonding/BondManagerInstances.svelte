@@ -27,7 +27,8 @@
       uDepthNear: { value: number }
       uDepthFar: { value: number }
       uDepthCueBgColor: { value: Color }
-      uOutlineStrength: { value: number }
+      uOutlineStrength: { value: number }       // unused here — kept for shape match
+      uBondOutlineStrength: { value: number }
     }
     max_capacity?: number
     /**
@@ -162,7 +163,7 @@
     uniform float uDepthNear;
     uniform float uDepthFar;
     uniform vec3 uDepthCueBgColor;
-    uniform float uOutlineStrength;
+    uniform float uBondOutlineStrength;
     uniform vec3 uLightDir;    // directional light in view space (headlamp, normalized)
     varying vec3 vColorStart;
     varying vec3 vColorEnd;
@@ -249,10 +250,13 @@
         gl_FragColor.rgb = mix(gl_FragColor.rgb, linearTosRGB(uDepthCueBgColor), fade);
       }
 
-      // 3Dmol-style silhouette outline: NdotV already computed above.
-      if (uOutlineStrength > 0.0) {
-        float silhouette = smoothstep(0.55, 1.0, 1.0 - NdotV);
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uOutlineStrength);
+      // Bond silhouette outline. Bonds already dim at the rim via
+      // rim_mask, so the atom shader's tight smoothstep window was
+      // mostly invisible here — widen the band (0.0 → 0.6) and add a
+      // higher gain (×0.85) so the side strip visibly darkens.
+      if (uBondOutlineStrength > 0.0) {
+        float silhouette = smoothstep(0.0, 0.6, 1.0 - NdotV);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uBondOutlineStrength * 0.85);
       }
     }
   `
@@ -275,7 +279,7 @@
       uDepthNear: depth_cue_uniforms?.uDepthNear ?? { value: 0 },
       uDepthFar: depth_cue_uniforms?.uDepthFar ?? { value: 10 },
       uDepthCueBgColor: depth_cue_uniforms?.uDepthCueBgColor ?? { value: new Color(0xffffff) },
-      uOutlineStrength: depth_cue_uniforms?.uOutlineStrength ?? { value: 0 },
+      uBondOutlineStrength: depth_cue_uniforms?.uBondOutlineStrength ?? { value: 0 },
     },
   }))
 

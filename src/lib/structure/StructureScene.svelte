@@ -15,7 +15,7 @@
   import { type Snippet, untrack } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import type { Camera, Scene, InstancedMesh as ThreeInstancedMesh } from 'three'
-  import { BufferGeometry, Color, CylinderGeometry, Euler, InstancedBufferAttribute, MeshBasicMaterial, Matrix4, Mesh, MeshStandardMaterial, Quaternion, SphereGeometry, Vector3 } from 'three'
+  import { BufferGeometry, Color, CylinderGeometry, Euler, InstancedBufferAttribute, MeshBasicMaterial, Matrix4, Mesh, MeshStandardMaterial, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
   import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh'
   import AdsorptionSiteMarkers from './AdsorptionSiteMarkers.svelte'
   import DashedBond from './DashedBond.svelte'
@@ -453,7 +453,8 @@
     depth_cueing = DEFAULTS.structure.depth_cueing,
     depth_cue_start = DEFAULTS.structure.depth_cue_start,
     depth_cue_end = DEFAULTS.structure.depth_cue_end,
-    outline_strength = DEFAULTS.structure.outline_strength,
+    atom_outline_strength = DEFAULTS.structure.atom_outline_strength,
+    bond_outline_strength = DEFAULTS.structure.bond_outline_strength,
     background_color = undefined as string | undefined,
     background_opacity = DEFAULTS.background_opacity,
     sphere_segments = DEFAULTS.structure.sphere_segments,
@@ -681,7 +682,8 @@
     depth_cueing?: number
     depth_cue_start?: number
     depth_cue_end?: number
-    outline_strength?: number
+    atom_outline_strength?: number
+    bond_outline_strength?: number
     background_color?: string | undefined
     background_opacity?: number
     sphere_segments?: number
@@ -1403,7 +1405,7 @@
     // 3Dmol-style fog + silhouette outline: track camera distance every
     // frame so fog near/far follow zoom without manual sliders. Runs in
     // both perspective and orthographic mode.
-    if (depth_cueing > 0 || outline_strength > 0) update_depth_cue_uniforms()
+    if (depth_cueing > 0 || atom_outline_strength > 0 || bond_outline_strength > 0) update_depth_cue_uniforms()
 
     if (!cam || !(cam as any).isPerspectiveCamera) return
 
@@ -1469,7 +1471,8 @@
     uDepthNear: { value: 0 },
     uDepthFar: { value: 10 },
     uDepthCueBgColor: { value: new Color(0xffffff) },
-    uOutlineStrength: { value: 0 },
+    uOutlineStrength: { value: 0 },         // atom shader reads this
+    uBondOutlineStrength: { value: 0 },     // bond / dashed-bond shaders read this
   }
 
   // Patch a MeshStandardMaterial to apply VESTA-style depth cueing in its fragment shader.
@@ -1544,7 +1547,8 @@
   // Also called per-frame via useTask below to track camera distance changes.
   function update_depth_cue_uniforms() {
     depth_cue_uniforms.uDepthCueing.value = Math.max(0, Math.min(1, depth_cueing))
-    depth_cue_uniforms.uOutlineStrength.value = Math.max(0, Math.min(1, outline_strength))
+    depth_cue_uniforms.uOutlineStrength.value = Math.max(0, Math.min(1, atom_outline_strength))
+    depth_cue_uniforms.uBondOutlineStrength.value = Math.max(0, Math.min(1, bond_outline_strength))
     // uDepthCueBgColor is written ONLY by sync_clear_color (the bg-tracking
     // effect). Don't re-write here — it would race with sync_clear_color
     // when both fire on the same frame, and risks reading stale closure
@@ -1565,8 +1569,9 @@
     }
   }
   $effect(() => {
-    // Track reactive dependencies (depth_cueing, depth_cue_start, depth_cue_end, background_color, outline_strength)
-    void depth_cueing; void depth_cue_start; void depth_cue_end; void background_color; void outline_strength
+    // Track reactive dependencies
+    void depth_cueing; void depth_cue_start; void depth_cue_end; void background_color
+    void atom_outline_strength; void bond_outline_strength
     update_depth_cue_uniforms()
     mark_dirty()
   })
@@ -3120,6 +3125,84 @@
     depthWrite: false,
   })
 
+  // ─── Bond halo (fresnel) — visually unifies with atom selection halo ───
+  // Open-ended cylinder so end-on view doesn't get a solid cap; radial
+  // segments 24 for a clean silhouette. Geometry rebuilds when bond_thickness
+  // changes (rare). The bond's own transform_matrix scales height to bond
+  // length and leaves radius scale at 1, so a unit cylinder at our chosen
+  // radius produces a sleeve of that radius.
+  const bond_halo_uniforms = {
+    uOpacity: { value: 0 },
+    uColor: { value: new Color(0xffff66) },
+  }
+  let bond_halo_geometry = $derived(
+    new CylinderGeometry(bond_thickness * 1.6, bond_thickness * 1.6, 1, 24, 1, true),
+  )
+  const bond_halo_material = new ShaderMaterial({
+    vertexShader: `
+      varying vec3 vViewNormal;
+      varying vec3 vViewPos;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vViewPos = mv.xyz;
+        vViewNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: `
+      uniform float uOpacity;
+      uniform vec3 uColor;
+      varying vec3 vViewNormal;
+      varying vec3 vViewPos;
+      void main() {
+        vec3 viewDir = normalize(-vViewPos);
+        float NdotV = abs(dot(normalize(vViewNormal), viewDir));
+        // Wider falloff than the atom halo (exp 1.5 vs 2.5). Cylinder
+        // silhouette is a thin band along the side; without a softer
+        // exponent it disappears at typical zooms.
+        float fresnel = pow(1.0 - NdotV, 1.5);
+        float a = fresnel * uOpacity;
+        if (a < 0.02) discard;
+        gl_FragColor = vec4(uColor, a);
+      }
+    `,
+    uniforms: bond_halo_uniforms,
+    transparent: true,
+    depthTest: true,
+    depthWrite: false,
+  })
+  $effect(() => {
+    bond_halo_uniforms.uOpacity.value = __pulse_opacity
+    bond_halo_uniforms.uColor.value.set(selection_highlight_color)
+    mark_dirty()
+  })
+
+  // Bonds that should render a halo: union of hovered + selected (deduped).
+  let bond_halo_entries = $derived.by(() => {
+    const out: Array<{ key: string; matrix: number[] }> = []
+    const seen = new Set<string>()
+    if (hovered_bond_key) {
+      const b = filtered_bond_pairs.find(
+        (x) => get_bond_key(x.site_idx_1, x.site_idx_2) === hovered_bond_key,
+      )
+      if (b) {
+        out.push({ key: hovered_bond_key, matrix: b.transform_matrix })
+        seen.add(hovered_bond_key)
+      }
+    }
+    for (const sb of selected_bonds) {
+      if (seen.has(sb.key)) continue
+      const b = filtered_bond_pairs.find(
+        (x) => get_bond_key(x.site_idx_1, x.site_idx_2) === sb.key,
+      )
+      if (b) {
+        out.push({ key: sb.key, matrix: b.transform_matrix })
+        seen.add(sb.key)
+      }
+    }
+    return out
+  })
+
   // Batch-update bond hitbox matrices.
   //
   // Each logical bond emits TWO hitbox instances mirroring the paired-stub
@@ -3386,7 +3469,9 @@
   }
 
   function handle_bond_hitbox_pointer_enter(event: any) {
-    if (bond_drag_active || external_dragging) return
+    // Suppress hover during orbit/zoom so brushing past bonds while
+    // rotating doesn't flash highlight rings.
+    if (bond_drag_active || external_dragging || camera_is_moving) return
     const instance_id = event.instanceId
     if (instance_id === undefined) return
     // Phase 7f — per-instance map handles both cell-internal and decorator hits.
@@ -3732,7 +3817,12 @@
     // The target is managed programmatically in the $effect blocks above.
     onstart: () => {
       camera_is_moving = true
-      // Don't clear hovered_idx here - let it stay so rotation stays disabled on atoms
+      // Don't clear hovered_idx here - let it stay so rotation stays disabled on atoms.
+      // Don't clear hovered_bond_key either: TrackballControls fires onstart on
+      // mousedown even if no movement follows, so clearing here would erase
+      // the click-time hover ring before the click handler runs and the user
+      // would see no feedback. The pointer_enter `camera_is_moving` gate
+      // already prevents NEW hovers from kicking in during actual orbit.
     },
     onend: () => {
       camera_is_moving = false
@@ -4327,23 +4417,24 @@
           onpointerenter={handle_bond_hitbox_pointer_enter}
           onpointerleave={handle_bond_hitbox_pointer_leave}
         />
-        <!-- Single hover highlight mesh for the hovered bond -->
-        {#if hovered_bond_key}
-          {@const hovered_bond = filtered_bond_pairs.find(b => get_bond_key(b.site_idx_1, b.site_idx_2) === hovered_bond_key)}
-          {#if hovered_bond}
-            <T.Mesh
-              matrixAutoUpdate={false}
-              oncreate={(ref) => {
-                ref.matrix.fromArray(hovered_bond.transform_matrix)
-                ref.matrixWorldNeedsUpdate = true
-              }}
-              raycast={null}
-            >
-              <T.CylinderGeometry args={[bond_thickness * 2, bond_thickness * 2, 1, 6]} />
-              <T.MeshBasicMaterial transparent opacity={0.4} color="#fff176" depthWrite={false} />
-            </T.Mesh>
-          {/if}
-        {/if}
+        <!-- Bond halo (fresnel silhouette glow) — unified visual language
+             with the atom selection halo. Renders for hovered + selected
+             bonds; deduped via bond_halo_entries. depthTest:true so atoms
+             in front correctly occlude; depthWrite:false so halo doesn't
+             write into z-buffer. -->
+        {#each bond_halo_entries as entry (entry.key)}
+          <T.Mesh
+            matrixAutoUpdate={false}
+            geometry={bond_halo_geometry}
+            material={bond_halo_material}
+            raycast={null}
+            renderOrder={1}
+            oncreate={(ref) => {
+              ref.matrix.fromArray(entry.matrix)
+              ref.matrixWorldNeedsUpdate = true
+            }}
+          />
+        {/each}
       {/if}
 
       <BondEditingIndicators
@@ -4376,6 +4467,7 @@
         {structure}
         selected_sites={selected_sites ?? []}
         active_sites={active_sites ?? []}
+        hovered_site_idx={camera_is_moving ? null : hovered_idx}
         {selection_highlight_color}
         {active_highlight_color}
         pulse_opacity={__pulse_opacity}

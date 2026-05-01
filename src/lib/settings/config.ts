@@ -329,9 +329,15 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 0,
       maximum: 1,
     },
-    outline_strength: {
+    atom_outline_strength: {
       value: 0,
-      description: `Silhouette outline strength (0 = off, 1 = full). Darkens the rim of atoms and bonds for a 3Dmol/cartoon look. Implemented as a screen-free fragment-shader effect — no postprocessing pass.`,
+      description: `Silhouette outline strength on atoms (0 = off, 1 = full). Darkens the rim of each atom for a 3Dmol/PyMOL cartoon look. Implemented as a fragment-shader effect — no postprocessing pass.`,
+      minimum: 0,
+      maximum: 1,
+    },
+    bond_outline_strength: {
+      value: 0,
+      description: `Silhouette outline strength on bonds (0 = off, 1 = full). Independent of atom outline; bonds are typically thinner so a separate dial is useful.`,
       minimum: 0,
       maximum: 1,
     },
