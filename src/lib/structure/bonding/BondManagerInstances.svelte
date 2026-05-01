@@ -27,6 +27,7 @@
       uDepthNear: { value: number }
       uDepthFar: { value: number }
       uDepthCueBgColor: { value: Color }
+      uOutlineStrength: { value: number }
     }
     max_capacity?: number
     /**
@@ -161,6 +162,7 @@
     uniform float uDepthNear;
     uniform float uDepthFar;
     uniform vec3 uDepthCueBgColor;
+    uniform float uOutlineStrength;
     uniform vec3 uLightDir;    // directional light in view space (headlamp, normalized)
     varying vec3 vColorStart;
     varying vec3 vColorEnd;
@@ -240,10 +242,17 @@
 
       gl_FragColor = vec4(linearTosRGB(final_color), uOpacity * vOpacity);
 
-      // Depth cueing: fade toward background color (VESTA-style)
+      // Depth cueing: fade toward background color (VESTA-style).
+      // uDepthCueBgColor is linear-RGB; encode to sRGB to match gl_FragColor.
       if (uDepthCueing > 0.0) {
         float fade = clamp((vDepthCueZ - uDepthNear) / max(uDepthFar - uDepthNear, 0.01), 0.0, 1.0) * uDepthCueing;
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, uDepthCueBgColor, fade);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, linearTosRGB(uDepthCueBgColor), fade);
+      }
+
+      // 3Dmol-style silhouette outline: NdotV already computed above.
+      if (uOutlineStrength > 0.0) {
+        float silhouette = smoothstep(0.55, 1.0, 1.0 - NdotV);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uOutlineStrength);
       }
     }
   `
@@ -266,6 +275,7 @@
       uDepthNear: depth_cue_uniforms?.uDepthNear ?? { value: 0 },
       uDepthFar: depth_cue_uniforms?.uDepthFar ?? { value: 10 },
       uDepthCueBgColor: depth_cue_uniforms?.uDepthCueBgColor ?? { value: new Color(0xffffff) },
+      uOutlineStrength: depth_cue_uniforms?.uOutlineStrength ?? { value: 0 },
     },
   }))
 

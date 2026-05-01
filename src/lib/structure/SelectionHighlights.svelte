@@ -80,6 +80,7 @@
 
   let mesh = $state<InstancedMesh | undefined>()
 
+
   // Reusable scratch objects — zero per-frame allocations.
   const __scratch_xyz = new Vector3()
   const __scratch_quat = new Quaternion() // identity, never modified
@@ -191,14 +192,17 @@
   })
 </script>
 
-<!-- Single InstancedMesh shared across selected + active highlights.
-     wireframe + transparent matches the legacy per-mesh appearance.
-     vertexColors=true tells MeshBasicMaterial to use instanceColor. -->
+<!-- Wireframe selection highlight. depthTest:true so opaque atoms in
+     front occlude the rings; depthWrite:false so the rings themselves
+     don't write into the depth buffer (cell-surface translucency behind
+     therefore won't get clipped, and transparent atoms render correctly).
+     renderOrder=1 so the wireframe paints after opaque geometry. -->
 <T.InstancedMesh
   args={[undefined, undefined, max_capacity]}
   bind:ref={mesh}
   frustumCulled={false}
   raycast={null}
+  renderOrder={1}
 >
   <T.SphereGeometry args={[0.5, 16, 16]} />
   <T.MeshBasicMaterial
@@ -206,5 +210,7 @@
     transparent
     opacity={pulse_opacity}
     vertexColors
+    depthTest={true}
+    depthWrite={false}
   />
 </T.InstancedMesh>

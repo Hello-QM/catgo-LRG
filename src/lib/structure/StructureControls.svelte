@@ -1180,6 +1180,7 @@
       depth_cueing: scene_props.depth_cueing,
       depth_cue_start: scene_props.depth_cue_start,
       depth_cue_end: scene_props.depth_cue_end,
+      outline_strength: scene_props.outline_strength,
     }}
     on_reset={() => {
       background_color = undefined
@@ -1189,6 +1190,7 @@
       scene_props.depth_cueing = DEFAULTS.structure.depth_cueing
       scene_props.depth_cue_start = DEFAULTS.structure.depth_cue_start
       scene_props.depth_cue_end = DEFAULTS.structure.depth_cue_end
+      scene_props.outline_strength = DEFAULTS.structure.outline_strength
     }}
   >
     <h5>Background</h5>
@@ -1311,6 +1313,25 @@
         max={1}
         step={0.05}
         bind:value={scene_props.depth_cue_end}
+      />
+    </label>
+    <label>
+      <span title="Silhouette outline strength (0 = off). Darkens atom/bond rims for a 3Dmol/PyMOL cartoon look." {@attach tooltip()}>
+        Outline
+      </span>
+      <input
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.outline_strength}
+      />
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        bind:value={scene_props.outline_strength}
       />
     </label>
   </SettingsSection>

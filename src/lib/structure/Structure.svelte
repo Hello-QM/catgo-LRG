@@ -3441,6 +3441,7 @@
             {mof_clusters}
             {isolated_node_atoms}
             background_color={background_color}
+            {background_opacity}
             {element_radius_overrides}
             {site_radius_overrides}
             {site_color_overrides}

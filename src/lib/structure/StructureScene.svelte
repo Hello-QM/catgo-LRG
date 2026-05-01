@@ -453,7 +453,9 @@
     depth_cueing = DEFAULTS.structure.depth_cueing,
     depth_cue_start = DEFAULTS.structure.depth_cue_start,
     depth_cue_end = DEFAULTS.structure.depth_cue_end,
+    outline_strength = DEFAULTS.structure.outline_strength,
     background_color = undefined as string | undefined,
+    background_opacity = DEFAULTS.background_opacity,
     sphere_segments = DEFAULTS.structure.sphere_segments,
     lattice_props = {},
     atom_label,
@@ -679,7 +681,9 @@
     depth_cueing?: number
     depth_cue_start?: number
     depth_cue_end?: number
+    outline_strength?: number
     background_color?: string | undefined
+    background_opacity?: number
     sphere_segments?: number
     lattice_props?: ComponentProps<typeof Lattice>
     atom_label?: Snippet<[Site, number]>
@@ -914,40 +918,56 @@
   // Sync renderer clear color with the effective CSS background.
   // Canvas uses alpha:false (opaque) to avoid compositing glitches caused by
   // the Gizmo's multi-pass rendering toggling autoClear on a transparent canvas.
-  // Sync renderer clear color with background_color prop or CSS background
-  function sync_clear_color() {
+  // Walk DOM to resolve theme background (alpha >= 0.5 wins).
+  function find_theme_bg(): Color {
     const r = threlte.renderer
-    if (!r) return
-
-    // If background_color is explicitly set by user, use it directly
-    if (background_color !== undefined) {
-      r.setClearColor(new Color(background_color), 1)
-      mark_dirty()
-      return
-    }
-
-    const canvas = r.domElement
-    let el: HTMLElement | null = canvas
+    const canvas = r?.domElement
+    let el: HTMLElement | null = canvas ?? null
     while (el) {
       const bg = getComputedStyle(el).backgroundColor
       const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
       if (m) {
         const a = m[4] !== undefined ? parseFloat(m[4]) : 1
         if (a >= 0.5) {
-          r.setClearColor(new Color(+m[1] / 255, +m[2] / 255, +m[3] / 255), 1)
-          mark_dirty()
-          return
+          return new Color(+m[1] / 255, +m[2] / 255, +m[3] / 255)
         }
       }
       el = el.parentElement
     }
-    r.setClearColor(0x000000, 1)
+    return new Color(0x000000)
+  }
+
+  // Resolve the visible canvas background. Both sync_clear_color and the fog
+  // uniform must produce the same color so depth-cued atoms truly fade INTO
+  // the painted bg. Treat unset background_color as #000000 (matches the
+  // default <input type="color"> swatch) so the opacity slider is always live.
+  function compute_canvas_bg(target: Color): Color {
+    const picked = new Color(background_color ?? `#000000`)
+    const t = Math.max(0, Math.min(1, background_opacity))
+    if (t >= 0.999) return target.copy(picked)
+    if (t <= 0.001) return target.copy(find_theme_bg())
+    return target.copy(find_theme_bg()).lerp(picked, t)
+  }
+
+  // Sync renderer clear color with background_color/opacity. Canvas is
+  // alpha:false (opaque) so `background_opacity` is treated as override
+  // strength: 0 → theme bg, 1 → picked, mid → lerp.
+  const __scratch_bg = new Color()
+  function sync_clear_color() {
+    const r = threlte.renderer
+    if (!r) return
+    compute_canvas_bg(__scratch_bg)
+    r.setClearColor(__scratch_bg, 1)
+    // Keep fog target in lockstep — same color object computation, no
+    // dependency on effect ordering between sync_clear_color and the fog
+    // uniform updater.
+    depth_cue_uniforms.uDepthCueBgColor.value.copy(__scratch_bg)
     mark_dirty()
   }
 
-  // Re-run when background_color prop changes
+  // Re-run when background_color or background_opacity prop changes
   $effect(() => {
-    void background_color
+    void background_color; void background_opacity
     sync_clear_color()
   })
 
@@ -1380,6 +1400,11 @@
   // depth buffer precision issues that cause atom blinking/Z-fighting when zoomed in.
   useTask(() => {
     const cam = threlte.camera.current
+    // 3Dmol-style fog + silhouette outline: track camera distance every
+    // frame so fog near/far follow zoom without manual sliders. Runs in
+    // both perspective and orthographic mode.
+    if (depth_cueing > 0 || outline_strength > 0) update_depth_cue_uniforms()
+
     if (!cam || !(cam as any).isPerspectiveCamera) return
 
     const target = rotation_target ?? [0, 0, 0]
@@ -1401,8 +1426,6 @@
       ;(cam as any).far = new_far
       ;(cam as any).updateProjectionMatrix()
     }
-    // Keep depth cueing in sync with camera distance
-    if (depth_cueing > 0) update_depth_cue_uniforms()
 
     // Update scale bar projection (camera is mutable, so we do this per-frame)
     if (show_scale_bar && width > 0) {
@@ -1446,6 +1469,7 @@
     uDepthNear: { value: 0 },
     uDepthFar: { value: 10 },
     uDepthCueBgColor: { value: new Color(0xffffff) },
+    uOutlineStrength: { value: 0 },
   }
 
   // Patch a MeshStandardMaterial to apply VESTA-style depth cueing in its fragment shader.
@@ -1456,20 +1480,29 @@
       shader.uniforms.uDepthNear = depth_cue_uniforms.uDepthNear
       shader.uniforms.uDepthFar = depth_cue_uniforms.uDepthFar
       shader.uniforms.uDepthCueBgColor = depth_cue_uniforms.uDepthCueBgColor
+      shader.uniforms.uOutlineStrength = depth_cue_uniforms.uOutlineStrength
 
-      // Vertex: pass view-space depth (mvPosition.z handles instancing correctly)
+      // Vertex: pass view-space depth + view-space normal/position for outline
       shader.vertexShader = shader.vertexShader.replace(
         `#include <common>`,
         `#include <common>
-        varying float vDepthCueZ;`,
+        varying float vDepthCueZ;
+        varying vec3 vDepthCueViewPos;
+        varying vec3 vDepthCueViewNormal;`,
       )
       shader.vertexShader = shader.vertexShader.replace(
         `#include <fog_vertex>`,
         `#include <fog_vertex>
-        vDepthCueZ = -mvPosition.z;`,
+        vDepthCueZ = -mvPosition.z;
+        vDepthCueViewPos = mvPosition.xyz;
+        vDepthCueViewNormal = normalize(normalMatrix * objectNormal);`,
       )
 
-      // Fragment: fade toward background color based on depth
+      // Fragment: fade toward background color based on depth + silhouette outline.
+      // gl_FragColor.rgb at <dithering_fragment> is already sRGB-encoded
+      // (colorspace_fragment chunk ran). uDepthCueBgColor is linear (Three.js
+      // Color); encode it to sRGB before mixing or fog target won't match
+      // the canvas-painted bg color.
       shader.fragmentShader = shader.fragmentShader.replace(
         `#include <common>`,
         `#include <common>
@@ -1477,14 +1510,30 @@
         uniform float uDepthNear;
         uniform float uDepthFar;
         uniform vec3 uDepthCueBgColor;
-        varying float vDepthCueZ;`,
+        uniform float uOutlineStrength;
+        varying float vDepthCueZ;
+        varying vec3 vDepthCueViewPos;
+        varying vec3 vDepthCueViewNormal;
+        vec3 catgoLinearTosRGB(vec3 c) {
+          return vec3(
+            c.r <= 0.0031308 ? c.r * 12.92 : 1.055 * pow(c.r, 1.0/2.4) - 0.055,
+            c.g <= 0.0031308 ? c.g * 12.92 : 1.055 * pow(c.g, 1.0/2.4) - 0.055,
+            c.b <= 0.0031308 ? c.b * 12.92 : 1.055 * pow(c.b, 1.0/2.4) - 0.055
+          );
+        }`,
       )
       shader.fragmentShader = shader.fragmentShader.replace(
         `#include <dithering_fragment>`,
         `#include <dithering_fragment>
         if (uDepthCueing > 0.0) {
           float fade = clamp((vDepthCueZ - uDepthNear) / max(uDepthFar - uDepthNear, 0.01), 0.0, 1.0) * uDepthCueing;
-          gl_FragColor.rgb = mix(gl_FragColor.rgb, uDepthCueBgColor, fade);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, catgoLinearTosRGB(uDepthCueBgColor), fade);
+        }
+        if (uOutlineStrength > 0.0) {
+          vec3 viewDir = normalize(-vDepthCueViewPos);
+          float NdotV = max(dot(normalize(vDepthCueViewNormal), viewDir), 0.0);
+          float silhouette = smoothstep(0.55, 1.0, 1.0 - NdotV);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uOutlineStrength);
         }`,
       )
     }
@@ -1494,8 +1543,12 @@
   // Update depth cueing uniforms reactively — pure uniform updates, no recompilation.
   // Also called per-frame via useTask below to track camera distance changes.
   function update_depth_cue_uniforms() {
-    depth_cue_uniforms.uDepthCueing.value = depth_cueing
-    depth_cue_uniforms.uDepthCueBgColor.value.set(background_color ?? `#ffffff`)
+    depth_cue_uniforms.uDepthCueing.value = Math.max(0, Math.min(1, depth_cueing))
+    depth_cue_uniforms.uOutlineStrength.value = Math.max(0, Math.min(1, outline_strength))
+    // uDepthCueBgColor is written ONLY by sync_clear_color (the bg-tracking
+    // effect). Don't re-write here — it would race with sync_clear_color
+    // when both fire on the same frame, and risks reading stale closure
+    // values when invoked from the per-frame useTask.
     if (depth_cueing > 0) {
       const cam = threlte.camera.current
       if (cam) {
@@ -1512,8 +1565,8 @@
     }
   }
   $effect(() => {
-    // Track reactive dependencies (depth_cueing, depth_cue_start, depth_cue_end, background_color)
-    void depth_cueing; void depth_cue_start; void depth_cue_end; void background_color
+    // Track reactive dependencies (depth_cueing, depth_cue_start, depth_cue_end, background_color, outline_strength)
+    void depth_cueing; void depth_cue_start; void depth_cue_end; void background_color; void outline_strength
     update_depth_cue_uniforms()
     mark_dirty()
   })
@@ -2496,6 +2549,7 @@
   let __x2_prev_atom_radius = -1
   let __x2_prev_hook_count = -1
   let __x2_prev_plugin_count = -1
+  let __x2_prev_color_hash = ``
   let __x2_initialized = false
   let __x2_skips = 0
 
@@ -2562,8 +2616,24 @@
     const _enabled_plugin_count = pluginManager.enabledPlugins.length
     // Trajectory fast-path input: read identity now so Svelte subscribes.
     const traj_positions = trajectory_frame_positions
+    // Per-element color hash. Reads colors.element entries for the elements
+    // present in this structure, joined into a single string. When the user
+    // recolors element X in the legend, this hash changes and the gate below
+    // recognizes it as a meaningful update — without this, the manager's
+    // shadow sync skipped recoloring (atom_data ref-equality didn't fire).
+    let _color_hash = ``
+    {
+      const seen = new Set<string>()
+      for (let i = 0; i < sites.length; i++) {
+        const el = sites[i]?.species?.[0]?.element as string | undefined
+        if (!el || seen.has(el)) continue
+        seen.add(el)
+        _color_hash += `${el}=${(colors.element as Record<string, string>)?.[el] ?? ``};`
+      }
+    }
     void _ero_keys; void _site_r_size; void _site_c_size; void _prop_colors_ref
     void _same_size; void _atom_radius; void _hook_count; void _enabled_plugin_count
+    void _color_hash
 
     // ── Memoization & trajectory fast-path branch ──────────────────────
     // Plan v3 Phase 6: trajectory_only and positions_only fast-path branches
@@ -2582,11 +2652,13 @@
       const radius_changed = _atom_radius !== __x2_prev_atom_radius
       const hooks_changed = _hook_count !== __x2_prev_hook_count
       const plugins_changed = _enabled_plugin_count !== __x2_prev_plugin_count
+      const colors_changed = _color_hash !== __x2_prev_color_hash
 
       const anything_changed =
         struct_changed || prop_changed || sro_changed
         || sco_changed || ero_changed || same_size_changed
         || radius_changed || hooks_changed || plugins_changed
+        || colors_changed
 
       if (!anything_changed) {
         if (import.meta.env?.DEV) {
@@ -2609,6 +2681,7 @@
     __x2_prev_atom_radius = _atom_radius
     __x2_prev_hook_count = _hook_count
     __x2_prev_plugin_count = _enabled_plugin_count
+    __x2_prev_color_hash = _color_hash
 
     // --- Build initialColors + pluginColors mirror (same chain as atom_data) ---
     // Used for the color priority chain below. This must match atom_data's
@@ -4233,6 +4306,7 @@
           {incomplete_edge_length_scale}
           {image_atom_layout}
           {partner_drawn_lookup}
+          {depth_cue_uniforms}
         />
       {/if}
 

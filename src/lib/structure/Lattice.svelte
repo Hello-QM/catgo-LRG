@@ -127,13 +127,18 @@
       </T.Group>
     {/if}
 
-    <!-- Render transparent surfaces if surface opacity > 0 -->
+    <!-- Render transparent surfaces if surface opacity > 0.
+         depthWrite:false so the half-transparent cell surface doesn't
+         write into the depth buffer — otherwise it occludes the
+         selection wireframe (which uses depthTest:true so opaque atoms
+         in front correctly hide it). -->
     {#if cell_surface_opacity > 0}
       <T.Mesh geometry={box_geometry} position={lattice_center}>
         <T.MeshStandardMaterial
           color={cell_surface_color}
           opacity={cell_surface_opacity}
           transparent
+          depthWrite={false}
         />
       </T.Mesh>
     {/if}

@@ -55,6 +55,7 @@
       uDepthNear: { value: number }
       uDepthFar: { value: number }
       uDepthCueBgColor: { value: Color }
+      uOutlineStrength: { value: number }
     }
     ambient_light: number
     directional_light: number
@@ -121,6 +122,7 @@
     uniform float uDepthNear;
     uniform float uDepthFar;
     uniform vec3 uDepthCueBgColor;
+    uniform float uOutlineStrength;
     // projectionMatrix is only auto-injected into vertex shader, must re-declare for fragment
     uniform mat4 projectionMatrix;
 
@@ -256,6 +258,15 @@
         gl_FragColor.rgb = mix(gl_FragColor.rgb, uDepthCueBgColor, fade);
       }
 
+      // 3Dmol-inspired silhouette outline: darken pixels at glancing angles
+      // (high 1 - NdotV). smoothstep gives a clean ring without bleeding into
+      // the body. Skipped when uOutlineStrength == 0 so default visuals are
+      // unchanged.
+      if (uOutlineStrength > 0.0) {
+        float silhouette = smoothstep(0.55, 1.0, 1.0 - NdotV);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uOutlineStrength);
+      }
+
     }
   `
 
@@ -281,6 +292,7 @@
         uDepthNear: depth_cue_uniforms.uDepthNear,
         uDepthFar: depth_cue_uniforms.uDepthFar,
         uDepthCueBgColor: depth_cue_uniforms.uDepthCueBgColor,
+        uOutlineStrength: depth_cue_uniforms.uOutlineStrength,
       },
     })
   }
