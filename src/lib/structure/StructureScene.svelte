@@ -3177,6 +3177,11 @@
     mark_dirty()
   })
 
+  // Per-entry mesh refs (paired with the {#each entry, i} block below).
+  // The matrix-sync $effect is declared after bond_halo_entries to avoid
+  // TDZ when reading the $derived.
+  let bond_halo_meshes: (Mesh | undefined)[] = $state([])
+
   // Bonds that should render a halo: union of hovered + selected (deduped).
   let bond_halo_entries = $derived.by(() => {
     const out: Array<{ key: string; matrix: number[] }> = []
@@ -3201,6 +3206,23 @@
       }
     }
     return out
+  })
+
+  // Reactive matrix sync: the {#each bond_halo_entries} block is keyed by
+  // entry.key, so meshes persist across move/rotate ticks. We must
+  // imperatively rewrite each ref's local matrix whenever entry.matrix
+  // changes (driven by realtime_position_overrides → bond_pairs →
+  // filtered_bond_pairs → bond_halo_entries).
+  $effect(() => {
+    const entries = bond_halo_entries
+    for (let i = 0; i < entries.length; i++) {
+      const m = bond_halo_meshes[i]
+      const e = entries[i]
+      if (!m || !e?.matrix) continue
+      m.matrix.fromArray(e.matrix)
+      m.matrixWorldNeedsUpdate = true
+    }
+    mark_dirty()
   })
 
   // Batch-update bond hitbox matrices.
@@ -4421,18 +4443,19 @@
              with the atom selection halo. Renders for hovered + selected
              bonds; deduped via bond_halo_entries. depthTest:true so atoms
              in front correctly occlude; depthWrite:false so halo doesn't
-             write into z-buffer. -->
-        {#each bond_halo_entries as entry (entry.key)}
+             write into z-buffer.
+             Matrix is updated reactively via the $effect below — using
+             `oncreate` only would freeze the halo in place when atoms
+             move/rotate (entry.matrix changes but the mesh isn't recreated
+             since its `entry.key` is stable across drags). -->
+        {#each bond_halo_entries as entry, i (entry.key)}
           <T.Mesh
             matrixAutoUpdate={false}
             geometry={bond_halo_geometry}
             material={bond_halo_material}
             raycast={null}
             renderOrder={1}
-            oncreate={(ref) => {
-              ref.matrix.fromArray(entry.matrix)
-              ref.matrixWorldNeedsUpdate = true
-            }}
+            bind:ref={bond_halo_meshes[i]}
           />
         {/each}
       {/if}
