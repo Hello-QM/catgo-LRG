@@ -2,7 +2,7 @@ import type { FileInfo } from '$lib'
 import type { TrajectoryFormat } from '$lib/trajectory'
 
 // Auto-updating object storing all trajectory files
-export const trajectory_files = import.meta.glob(`$site/trajectories/*`, {
+export const trajectory_files = import.meta.glob(`./*`, {
   query: `?url`,
 })
 

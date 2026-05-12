@@ -17,14 +17,14 @@ export const test_molecules = Object.fromEntries(molecules.map((mol) => [mol.id,
 
 export const molecule_files: FileInfo[] = (Object.entries( // all structure files as raw text
   import.meta.glob(
-    `$site/molecules/*`,
+    `./*`,
     { eager: true, query: `?raw`, import: `default` },
   ),
 ) as [string, string][]).map(
   ([path]) => {
     const filename = path.split(`/`).pop() || path
     const type = path.split(`.`).pop()?.toUpperCase() ?? `FILE`
-    const url = path.replace(`/src/site`, ``)
+    const url = `/molecules/${filename}`
     return { name: filename, url, type, category: `molecule`, category_icon: `🧬` }
   },
 )

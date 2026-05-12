@@ -80,10 +80,10 @@
   } = $props()
 
   // ========== Static file data ==========
-  const raw_structures = import.meta.glob(`$site/structures/*`, { eager: true, query: `?raw`, import: `default` }) as Record<string, string>
-  const raw_molecules = import.meta.glob(`$site/molecules/*.{json,xyz}`, { eager: true, query: `?raw`, import: `default` }) as Record<string, string>
+  const raw_structures = import.meta.glob(`./../src/site/structures/*`, { eager: true, query: `?raw`, import: `default` }) as Record<string, string>
+  const raw_molecules = import.meta.glob(`./../src/site/molecules/*.{json,xyz}`, { eager: true, query: `?raw`, import: `default` }) as Record<string, string>
   // Trajectories are large — use lazy ?url imports
-  const traj_urls = import.meta.glob(`$site/trajectories/*`, { eager: true, query: `?url`, import: `default` }) as Record<string, string>
+  const traj_urls = import.meta.glob(`./../src/site/trajectories/*`, { eager: true, query: `?url`, import: `default` }) as Record<string, string>
 
 
   const structure_list = make_files(raw_structures, `raw`)

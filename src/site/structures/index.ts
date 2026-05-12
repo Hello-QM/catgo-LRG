@@ -38,14 +38,14 @@ export const structure_map = new Map(structures.map((struct) => [struct.id, stru
 
 export const structure_files: FileInfo[] = (Object.entries( // all structure files as raw text
   import.meta.glob(
-    `$site/structures/*`,
+    `./*`,
     { eager: true, query: `?raw`, import: `default` },
   ),
 ) as [string, string][]).map(
   ([path, content]) => {
     const filename = path.split(`/`).pop() || path
     const type = path.split(`.`).pop()?.toUpperCase() ?? `FILE`
-    const url = path.replace(`/src/site`, ``)
+    const url = `/structures/${filename}`
 
     const category = detect_structure_type(filename, content)
     const category_icon = { crystal: `🔷`, molecule: `🧬`, unknown: `❓` }[category] ||
