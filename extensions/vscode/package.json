@@ -1,7 +1,7 @@
 {
   "name": "catgo",
   "displayName": "CatGo",
-  "description": "Interactive 3D viewer for crystal structures and molecular-dynamics trajectories inside VS Code — opens POSCAR/CONTCAR/XDATCAR (VASP), CIF, XYZ/extXYZ, ASE .traj, HDF5, DCD/XTC/TRR. Renders bonds across periodic boundaries, lattice axes, per-element coloring, light/dark/white/black themes, frame-by-frame trajectory scrubbing, structure/trajectory export, and the same parsing engine as the standalone CatGo desktop app.",
+  "description": "Materials-science 3D viewer for VS Code. Opens POSCAR/CONTCAR/XDATCAR, CIF, XYZ/extXYZ, ASE .traj, HDF5, DCD/XTC/TRR as a custom editor — Ctrl+Shift+V or auto-render on open. Stands out from other crystal viewers with: bond rendering across periodic boundaries (image atoms drawn in all 27 neighbor cells, not clipped at the unit-cell edge); moyo-driven space-group + Wyckoff-position detection; charge-density cube isosurface rendering; MD/IRC/NEB trajectory playback with frame scrubbing, per-frame bond recomputation, and energy/force/per-atom-property overlays; Bader-charge labels overlaid on atoms; per-element / per-site / property-expression color overrides; light/dark/white/black themes that follow VS Code's theme. Symmetry, parsing, and rendering use the same Rust + Svelte engine as the standalone CatGo desktop app — what the editor shows is exactly what the desktop app shows.",
   "version": "1.0.1",
   "publisher": "Guangsheng",
   "icon": "icon.png",
