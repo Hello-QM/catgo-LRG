@@ -35,13 +35,13 @@
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "binaries/catgo-server", "sidecar": true, "args": true }
+        { "name": "catgo-server", "sidecar": true, "args": true }
       ]
     },
     {
       "identifier": "shell:allow-spawn",
       "allow": [
-        { "name": "binaries/catgo-server", "sidecar": true, "args": true }
+        { "name": "catgo-server", "sidecar": true, "args": true }
       ]
     },
     {

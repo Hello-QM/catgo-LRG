@@ -224,7 +224,7 @@ pub fn run() {
             } else {
                 // Try to spawn the bundled backend sidecar
                 let shell = app.shell();
-                match shell.sidecar("binaries/catgo-server") {
+                match shell.sidecar("catgo-server") {
                     Ok(cmd) => {
                         match cmd.spawn() {
                             Ok((mut rx, child)) => {
