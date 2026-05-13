@@ -3,7 +3,7 @@ name = "cube-processor"
 version = "0.1.0"
 edition = "2021"
 description = "High-performance Gaussian cube file processor with Marching Cubes isosurface extraction"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [[bin]]
 name = "cube-processor"

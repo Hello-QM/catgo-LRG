@@ -1,7 +1,7 @@
 {
   "name": "catgo",
   "displayName": "CatGo",
-  "description": "Visualize crystal structures and MD trajectories in VSCode",
+  "description": "Interactive 3D viewer for crystal structures and molecular-dynamics trajectories inside VS Code — opens POSCAR/CONTCAR/XDATCAR (VASP), CIF, XYZ/extXYZ, ASE .traj, HDF5, DCD/XTC/TRR. Renders bonds across periodic boundaries, lattice axes, per-element coloring, light/dark/white/black themes, frame-by-frame trajectory scrubbing, structure/trajectory export, and the same parsing engine as the standalone CatGo desktop app.",
   "version": "1.0.1",
   "publisher": "Guangsheng",
   "icon": "icon.png",

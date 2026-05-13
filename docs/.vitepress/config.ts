@@ -12,6 +12,22 @@ export default defineConfig({
   // Clean URLs without .html extension
   cleanUrls: true,
 
+  // Exclude internal-only docs (specs, debug logs, dev architecture notes)
+  // from the public site. Files remain in repo for contributors.
+  srcExclude: [
+    `archive/**`,
+    `superpowers/**`,
+    `DEBUG_LOG_*.md`,
+    `rendering-code-review-*.md`,
+    `catgo_graph_*.md`,
+    `catgo_recipe_catalog.md`,
+    `catgo_runtime_requirements.md`,
+    `catgo_rust_runtime_architecture.md`,
+    `catgo_unified_workflow_architecture.md`,
+    `catgo_workflow_capabilities.md`,
+    `DEVELOPMENT_GUIDE.md`,
+  ],
+
   // Markdown options
   markdown: {
     math: true, // KaTeX for equations

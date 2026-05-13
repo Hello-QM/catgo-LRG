@@ -3,7 +3,7 @@ name = "catgo-graph"
 version = "0.1.0"
 edition = "2021"
 description = "Domain-agnostic DAG workflow runtime for CatGO"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [lib]
 name = "catgo_graph"
