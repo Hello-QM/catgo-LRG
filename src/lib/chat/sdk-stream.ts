@@ -1,7 +1,23 @@
 // Frontend SSE parser for the unified /api/agent/stream endpoint.
 // Yields AgentEvent objects from the SSE stream.
+//
+// In `pnpm desktop:dev` the endpoint is served by vite-plugin-agent-bridge.ts
+// against the dev origin, so a relative URL works. In production AppImage
+// builds it is served by the `catgo-agent` sidecar (Bun-compiled Node binary)
+// listening on 127.0.0.1:8001 — the Rust setup hook in src-tauri/src/lib.rs
+// stashes the live port on `window.__CATGO_AGENT_PORT__` so we can target it
+// absolutely from the webview origin (tauri://localhost).
 
 import type { AgentType, Attachment } from './types'
+
+function getAgentBase(): string {
+  if (typeof window !== `undefined`) {
+    const port = (window as unknown as { __CATGO_AGENT_PORT__?: number | string })
+      .__CATGO_AGENT_PORT__
+    if (port) return `http://127.0.0.1:${port}`
+  }
+  return ``
+}
 
 export interface AgentEvent {
   type: string
@@ -31,7 +47,7 @@ export async function* stream_sdk_agent(
 ): AsyncGenerator<AgentEvent> {
   const { agent, prompt, sessionId, model, systemPrompt, attachments, signal, tabId } = params
 
-  const response = await fetch(`/api/agent/stream`, {
+  const response = await fetch(`${getAgentBase()}/api/agent/stream`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify({ agent, prompt, sessionId, model, systemPrompt, attachments, tabId }),
@@ -85,7 +101,7 @@ export async function resolve_permission(
   behavior: `allow` | `allow_session` | `deny`,
   suggestions?: unknown[],
 ): Promise<boolean> {
-  const resp = await fetch(`/api/agent/permission`, {
+  const resp = await fetch(`${getAgentBase()}/api/agent/permission`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify({ permissionId, behavior, suggestions }),

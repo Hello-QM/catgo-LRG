@@ -32,6 +32,10 @@ workflow_submodules = collect_submodules('workflow')
 pymatgen_datas = collect_data_files('pymatgen')
 tblite_datas = collect_data_files('tblite', include_py_files=False)
 ase_datas = collect_data_files('ase', include_py_files=False)
+# rfc3987_syntax ships a .lark grammar consumed by mcp's URL validation;
+# without it the MCP HTTP router fails to register at startup and the
+# `/api/mcp/*` endpoints 404.
+rfc3987_syntax_datas = collect_data_files('rfc3987_syntax')
 
 a = Analysis(
     ['main.py'],
@@ -50,7 +54,7 @@ a = Analysis(
         ('catgo/tool_schema/*.json', 'catgo/tool_schema'),
         # HPC job script templates
         ('templates/*.sh', 'templates'),
-    ] + pymatgen_datas + tblite_datas + ase_datas,
+    ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas,
     hiddenimports=catgo_submodules + workflow_submodules + [
         # ---------------------------------------------------------------
         # FastAPI / ASGI stack

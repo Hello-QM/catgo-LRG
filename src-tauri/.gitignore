@@ -3,6 +3,7 @@
 /target/
 /gen/schemas
 
-# Sidecar binaries (built by PyInstaller)
+# Sidecar binaries (built by PyInstaller / Bun)
 /binaries/catgo-server*
+/binaries/catgo-agent*
 !/binaries/.gitkeep

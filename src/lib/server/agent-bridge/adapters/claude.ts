@@ -1,7 +1,68 @@
 import { query, listSessions as sdkListSessions } from '@anthropic-ai/claude-agent-sdk'
+import { execSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '../types.js'
+
+// ---------------------------------------------------------------------------
+// Claude Code CLI discovery.
+//
+// The Agent SDK does NOT search $PATH — it expects `claude` at a vendored
+// path under the SDK's own node_modules.  When users install Claude Code
+// through Anthropic's installer it lands at `~/.local/bin/claude` (Linux/Mac)
+// or somewhere else, and the SDK throws "Claude Code native binary not
+// found" before even spawning the process.
+//
+// Resolve the CLI ourselves here and pass `pathToClaudeCodeExecutable` to
+// the SDK so it skips its own (broken-for-our-case) lookup.  We cache the
+// result so we only run `which` once per process.
+// ---------------------------------------------------------------------------
+
+let _claudePath: string | null | undefined
+
+function resolveClaudeExecutable(): string | undefined {
+  if (_claudePath !== undefined) return _claudePath ?? undefined
+
+  // 1. Explicit override
+  const override = process.env.CATGO_CLAUDE_PATH
+  if (override && existsSync(override)) {
+    _claudePath = override
+    return override
+  }
+
+  // 2. PATH lookup via `which` / `where`
+  try {
+    const cmd = process.platform === 'win32' ? 'where claude' : 'which claude'
+    const found = execSync(cmd, { encoding: 'utf8' }).trim().split(/\r?\n/)[0]
+    if (found && existsSync(found)) {
+      _claudePath = found
+      return found
+    }
+  } catch {
+    // not on PATH
+  }
+
+  // 3. Common install locations
+  const candidates = [
+    join(homedir(), '.local', 'bin', 'claude'),
+    join(homedir(), '.npm-global', 'bin', 'claude'),
+    join(homedir(), '.bun', 'bin', 'claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ]
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      _claudePath = c
+      return c
+    }
+  }
+
+  _claudePath = null
+  return undefined
+}
 
 // ---------------------------------------------------------------------------
 // Helper: translate a single SDK message to zero or more AgentEvents
@@ -189,6 +250,8 @@ export function createClaudeAdapter(): AgentAdapter {
         }
       }
 
+      const claudeExe = resolveClaudeExecutable()
+
       const q = query({
         prompt,
         options: {
@@ -206,6 +269,10 @@ export function createClaudeAdapter(): AgentAdapter {
           // stdio catgo server (we provide HTTP-mode catgo MCP above) and
           // disables sandbox (unnecessary — tools go through HTTP to backend).
           settingSources: [],
+          // Point SDK at the user's Claude Code install — without this it
+          // throws "Claude Code native binary not found" because it only
+          // checks its own vendored path.
+          ...(claudeExe ? { pathToClaudeCodeExecutable: claudeExe } : {}),
         },
       })
 

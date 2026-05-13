@@ -35,13 +35,15 @@
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "catgo-server", "sidecar": true, "args": true }
+        { "name": "catgo-server", "sidecar": true, "args": true },
+        { "name": "catgo-agent", "sidecar": true, "args": true }
       ]
     },
     {
       "identifier": "shell:allow-spawn",
       "allow": [
-        { "name": "catgo-server", "sidecar": true, "args": true }
+        { "name": "catgo-server", "sidecar": true, "args": true },
+        { "name": "catgo-agent", "sidecar": true, "args": true }
       ]
     },
     {

@@ -72,6 +72,11 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -164,6 +169,11 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -185,6 +195,9 @@ jobs:
 
       - name: Generate icons
         run: node scripts/generate-icons.js
+
+      - name: Build agent sidecar
+        run: pnpm build:agent mac-arm
 
       - name: Build Tauri app
         run: |
@@ -258,6 +271,11 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -279,6 +297,9 @@ jobs:
 
       - name: Generate icons
         run: node scripts/generate-icons.js
+
+      - name: Build agent sidecar
+        run: pnpm build:agent mac-intel
 
       - name: Build Tauri app
         run: |

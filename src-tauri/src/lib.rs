@@ -94,10 +94,18 @@ mod db;
 mod pty;
 mod workflow_engine;
 
-// Global state to track the backend process
+// Global state to track the Python backend process
 struct BackendState {
     child: Option<tauri_plugin_shell::process::CommandChild>,
     /// True when we spawned the sidecar ourselves; false if backend was already running.
+    spawned_by_us: bool,
+}
+
+// Global state to track the Node agent-bridge sidecar (catgo-agent).
+// Separate from BackendState because the two binaries have independent
+// lifecycles and the agent sidecar may be missing on older builds.
+struct AgentState {
+    child: Option<tauri_plugin_shell::process::CommandChild>,
     spawned_by_us: bool,
 }
 
@@ -123,6 +131,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .manage(Mutex::new(BackendState { child: None, spawned_by_us: false }))
+        .manage(Mutex::new(AgentState { child: None, spawned_by_us: false }))
         .manage(Mutex::new(OpenedFiles { paths: Vec::new() }))
         .manage(pty::PtyState::default())
         .manage(db::DbState::default())
@@ -278,6 +287,106 @@ pub fn run() {
                 }
             }
 
+            // ── catgo-agent sidecar (Node.js, serves /api/agent/*) ────────────
+            //
+            // The agent-bridge runs the official SDKs (claude-agent-sdk,
+            // codex-sdk, gemini-cli-sdk) which spawn the platform CLIs
+            // (`claude`, `codex`, `gemini`). Desktop launchers strip PATH, so
+            // we re-augment it here with the usual user-bin locations or the
+            // CLIs won't be found in production.
+            let agent_port = std::env::var("CATGO_AGENT_PORT").unwrap_or_else(|_| "8001".to_string());
+            let agent_already_running = {
+                use std::net::TcpStream;
+                let addr = format!("127.0.0.1:{}", agent_port);
+                TcpStream::connect_timeout(
+                    &addr.parse().unwrap(),
+                    std::time::Duration::from_millis(500),
+                ).is_ok()
+            };
+
+            if agent_already_running {
+                log::info!(
+                    "[CatGo] Agent bridge already running on port {} — skipping sidecar spawn",
+                    agent_port
+                );
+            } else {
+                let augmented_path = {
+                    let current = std::env::var("PATH").unwrap_or_default();
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let extras = [
+                        format!("{home}/.local/bin"),
+                        format!("{home}/.bun/bin"),
+                        format!("{home}/.cargo/bin"),
+                        format!("{home}/.npm-global/bin"),
+                        format!("{home}/.nvm/versions/node"),
+                        "/usr/local/bin".to_string(),
+                        "/opt/homebrew/bin".to_string(),
+                    ];
+                    let extra = extras.join(":");
+                    if current.is_empty() { extra } else { format!("{extra}:{current}") }
+                };
+
+                let shell = app.shell();
+                match shell.sidecar("catgo-agent") {
+                    Ok(cmd) => {
+                        let cmd = cmd
+                            .env("CATGO_AGENT_PORT", &agent_port)
+                            .env("CATGO_BACKEND_PORT", &port)
+                            .env("PATH", &augmented_path);
+                        match cmd.spawn() {
+                            Ok((mut rx, child)) => {
+                                log::info!("[CatGo] Agent bridge started (sidecar) on port {}", agent_port);
+                                if let Ok(mut state) = app.state::<Mutex<AgentState>>().lock() {
+                                    state.child = Some(child);
+                                    state.spawned_by_us = true;
+                                }
+                                tauri::async_runtime::spawn(async move {
+                                    use tauri_plugin_shell::process::CommandEvent;
+                                    while let Some(event) = rx.recv().await {
+                                        match event {
+                                            CommandEvent::Stdout(line) => {
+                                                if let Ok(s) = String::from_utf8(line) {
+                                                    log::info!("[Agent] {}", s.trim());
+                                                }
+                                            }
+                                            CommandEvent::Stderr(line) => {
+                                                if let Ok(s) = String::from_utf8(line) {
+                                                    log::warn!("[Agent] {}", s.trim());
+                                                }
+                                            }
+                                            CommandEvent::Error(err) => {
+                                                log::error!("[Agent] Error: {}", err);
+                                            }
+                                            CommandEvent::Terminated(status) => {
+                                                log::info!("[Agent] Process terminated: {:?}", status);
+                                                break;
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                log::warn!("[CatGo] Could not start agent bridge: {}", e);
+                                log::info!("[CatGo] SDK chat (Claude Code / Codex / Gemini) will be unavailable.");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("[CatGo] Agent sidecar not bundled: {}", e);
+                        log::info!("[CatGo] SDK chat (Claude Code / Codex / Gemini) will be unavailable.");
+                    }
+                }
+            }
+
+            // Expose the agent port to the webview so `sdk-stream.ts` can
+            // build the absolute URL (otherwise it would try `/api/agent/stream`
+            // against the webview's own origin, which 404s in production).
+            if let Some(win) = app.get_webview_window("main") {
+                let init = format!("window.__CATGO_AGENT_PORT__ = {};", agent_port);
+                let _ = win.eval(&init);
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -298,6 +407,14 @@ pub fn run() {
                         }
                     } else {
                         log::info!("[CatGo] Backend was external — leaving it running");
+                    }
+                }
+                if let Ok(mut state) = window.state::<Mutex<AgentState>>().lock() {
+                    if state.spawned_by_us {
+                        if let Some(child) = state.child.take() {
+                            log::info!("[CatGo] Stopping agent bridge (spawned by us)...");
+                            let _ = child.kill();
+                        }
                     }
                 }
                 // Cancel all running workflows
