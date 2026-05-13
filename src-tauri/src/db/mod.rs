@@ -46,17 +46,74 @@ impl DbState {
     }
 }
 
-/// Resolve the active DB path (or fall back to `server/data/catgo_results.db`
-/// relative to the project root).
+/// Path to the user-config file that persists the last-opened DB path
+/// across application restarts.  Stored at `$HOME/.catgo/last_db.txt`.
+fn last_db_pointer_path() -> Option<PathBuf> {
+    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".catgo/last_db.txt"))
+}
+
+/// Read the persisted last-opened DB path, if any.  Returns None if the
+/// pointer file doesn't exist or the path inside no longer exists.
+fn read_last_db_path() -> Option<PathBuf> {
+    let ptr = last_db_pointer_path()?;
+    let raw = std::fs::read_to_string(&ptr).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(trimmed);
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// Persist the active DB path so the next launch reopens it.  Best-effort:
+/// errors are logged but don't fail the calling command.
+pub(crate) fn save_active_path_pointer(path: &str) {
+    if let Some(ptr) = last_db_pointer_path() {
+        if let Some(parent) = ptr.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(e) = std::fs::write(&ptr, path) {
+            log::warn!("[CatGo] Could not persist active DB path to {}: {}", ptr.display(), e);
+        }
+    }
+}
+
+/// Resolve the active DB path.
+///
+/// Precedence (highest first):
+///   1. `CATGO_DB_PATH` env var (explicit user override)
+///   2. Last-opened DB recorded in `$HOME/.catgo/last_db.txt`
+///   3. Project root walk-up (dev workflow — finds `package.json`)
+///   4. Exe-relative `server/data/catgo_results.db` (production install layouts)
+///   5. `$HOME/.catgo/data/catgo_results.db` (writable user fallback)
+///   6. CWD-relative `server/data/catgo_results.db` (last resort)
 ///
 /// IMPORTANT: `tauri dev` runs `cargo run` with CWD = `src-tauri/`, so bare
 /// relative paths like `server/data/...` resolve INSIDE `src-tauri/` and create
 /// files that trigger the Tauri file-watcher -> infinite rebuild loop -> crash.
-/// We detect the project root by walking up from CWD to find `package.json`.
+/// AppImage CWD is the read-only FUSE mount, so CWD-relative paths fail to
+/// create — that's why we walk up first and have a HOME-based fallback.
 fn resolve_default_path() -> PathBuf {
     let db_rel = "server/data/catgo_results.db";
 
-    // Walk up from CWD to find the project root (contains package.json)
+    // 1. Explicit env-var override
+    if let Ok(p) = std::env::var("CATGO_DB_PATH") {
+        let trimmed = p.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    // 2. Last-opened path (persisted across launches)
+    if let Some(p) = read_last_db_path() {
+        return p;
+    }
+
+    // 3. Walk up from CWD to find the project root (contains package.json)
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = cwd.as_path();
         loop {
@@ -71,7 +128,7 @@ fn resolve_default_path() -> PathBuf {
         }
     }
 
-    // Fallback: try exe-relative path (production build)
+    // 4. Try exe-relative path (production build)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let candidate = exe_dir.join(db_rel);
@@ -81,7 +138,13 @@ fn resolve_default_path() -> PathBuf {
         }
     }
 
-    // Last resort: relative to CWD (same as before)
+    // 5. Production fallback (AppImage / desktop launchers): use HOME-relative
+    //    writable location.
+    if let Ok(home) = std::env::var("HOME") {
+        return PathBuf::from(home).join(".catgo/data/catgo_results.db");
+    }
+
+    // 6. Last resort: relative to CWD (rarely reached)
     PathBuf::from(db_rel)
 }
 
@@ -327,8 +390,11 @@ pub fn db_new(state: tauri::State<'_, DbState>, path: String) -> Result<DbInfo, 
     drop(conn);
 
     // Switch active
+    let path_str = p.to_string_lossy().to_string();
     let mut guard = state.active_path.lock().map_err(|e| e.to_string())?;
-    *guard = Some(p.to_string_lossy().to_string());
+    *guard = Some(path_str.clone());
+    drop(guard);
+    save_active_path_pointer(&path_str);
 
     let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok(DbInfo {
@@ -350,8 +416,11 @@ pub fn db_open(state: tauri::State<'_, DbState>, path: String) -> Result<DbInfo,
     ensure_tables(&conn).map_err(|e| format!("tables: {e}"))?;
     drop(conn);
 
+    let path_str = p.to_string_lossy().to_string();
     let mut guard = state.active_path.lock().map_err(|e| e.to_string())?;
-    *guard = Some(p.to_string_lossy().to_string());
+    *guard = Some(path_str.clone());
+    drop(guard);
+    save_active_path_pointer(&path_str);
 
     let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok(DbInfo {
@@ -386,8 +455,11 @@ pub fn db_save_as(state: tauri::State<'_, DbState>, path: String) -> Result<DbIn
         ensure_tables(&conn)?;
     }
 
+    let dst_str = dst.to_string_lossy().to_string();
     let mut guard = state.active_path.lock().map_err(|e| e.to_string())?;
-    *guard = Some(dst.to_string_lossy().to_string());
+    *guard = Some(dst_str.clone());
+    drop(guard);
+    save_active_path_pointer(&dst_str);
 
     let name = dst.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     Ok(DbInfo {

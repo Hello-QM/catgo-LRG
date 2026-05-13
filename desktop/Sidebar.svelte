@@ -404,7 +404,7 @@
         load_workflow_results(wid)
       }
     } catch (e) {
-      db_error = e instanceof Error ? e.message : `Failed to load database`
+      db_error = e instanceof Error ? e.message : (typeof e === `string` ? e : `Failed to load database`)
     } finally {
       db_loading = false
     }
