@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local research / reference notes — not part of the published source tree
+.acoord_research/
+
 # SvelteKit / Vite build output
 .svelte-kit/
 build/

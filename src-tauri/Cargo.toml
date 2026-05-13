@@ -1,9 +1,9 @@
 [package]
 name = "catgo"
-version = "1.0.0"
+version = "1.0.1"
 description = "Interactive visualizations for materials science"
 authors = ["LRG <gul026@ucsd.edu>"]
-license = "MIT"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/Hello-QM/catgo-LRG"
 edition = "2021"
 rust-version = "1.77.2"
