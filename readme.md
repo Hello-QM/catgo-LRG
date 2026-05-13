@@ -361,13 +361,17 @@ Thank you to every maintainer of these projects — the science work CatGo enabl
 
 ## 📚 Citation
 
-If you use CatGo in a publication, please cite the Zenodo record:
+If you use CatGo in a publication, please cite the ChemRxiv preprint:
 
 ```bibtex
-@software{catgo,
-  title  = {CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry},
-  doi    = {10.5281/zenodo.19709425},
-  url    = {https://doi.org/10.5281/zenodo.19709425},
+@misc{liu2026catgo,
+  author    = {Liu, Guangsheng and Ma, Xiao and Zhang, Leshen and Pascasio, Jenedith and Yang, Jonathan and Chen, Yuxiang and Li, Wan-Lu},
+  title     = {CatGo: Bridging CLI Coding Agents with Interactive Structure and Workflow Management for Computational Chemistry},
+  year      = {2026},
+  doi       = {10.26434/chemrxiv.15002984/v1},
+  url       = {https://doi.org/10.26434/chemrxiv.15002984/v1},
+  publisher = {ChemRxiv},
+  note      = {Preprint},
 }
 ```
 
