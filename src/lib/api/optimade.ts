@@ -217,23 +217,16 @@ export async function fetch_optimade_providers(): Promise<OptimadeProvider[]> {
   }
 
   try {
-    // In VSCode context, fetch directly from providers.optimade.org
-    // In web context with backend, go through backend proxy
-    const url = vscode_api
-      ? `https://providers.optimade.org/v1/links`
-      : `${API_BASE}/optimade/providers`
+    // Always go through the catgo-server backend when one is available
+    // (the VSCode extension bundles a sidecar at API_BASE = http://127.0.0.1:<port>/api).
+    // Extension host's undici fetch occasionally fails on providers.optimade.org
+    // with a bare "fetch failed" — routing through the Python backend's
+    // /optimade/providers endpoint sidesteps that entire failure mode and also
+    // gives us the same provider filtering that the desktop app gets.
+    const url = `${API_BASE}/optimade/providers`
 
     const data = await fetch_json_smart(url) as { data?: OptimadeProvider[] }
-
-    // Filter broken providers if fetching directly
-    let providers = data.data || []
-    if (vscode_api) {
-      const BROKEN_PROVIDER_IDS = new Set([
-        `aflow`, `cod`, `cmr`, `exmpl`, `matcloud`, `mpds`,
-        `mpod`, `nmd`, `odbx`, `oqmd`, `jarvis`, `tcod`,
-      ])
-      providers = providers.filter(p => !BROKEN_PROVIDER_IDS.has(p.id))
-    }
+    const providers = data.data || []
 
     cached_providers = providers
     providers_cache_time = now

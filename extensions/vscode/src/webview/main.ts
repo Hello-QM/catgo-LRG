@@ -3,9 +3,9 @@
 import '$lib/app.css'
 import { setServerUrl } from '$lib/api/config'
 import { setApiBase } from '$lib/api/compute'
-import { set_vscode_api as set_optimade_vscode_api } from '$lib/api/optimade'
-import { set_vscode_pubchem_api } from '$lib/api/pubchem'
-import { set_vscode_mp_api } from '$lib/api/materials-project'
+import { set_vscode_api as set_optimade_vscode_api, setOptimadeApiBase } from '$lib/api/optimade'
+import { set_vscode_pubchem_api, setPubChemApiBase } from '$lib/api/pubchem'
+import { set_vscode_mp_api, setMPApiBase } from '$lib/api/materials-project'
 import { decompress_data, detect_compression_format } from '$lib/io/decompress'
 import { parse_structure_file } from '$lib/structure/parse'
 import Structure from '$lib/structure/Structure.svelte'
@@ -160,6 +160,14 @@ const _apply_port = (port: number) => {
   _backend_port = port
   setServerUrl(`http://127.0.0.1:${port}`)
   setApiBase(`http://127.0.0.1:${port}/api`)
+  // OPTIMADE / PubChem / Materials Project modules keep their own local API_BASE
+  // (ES-module `let` rebinding breaks the live binding from config.ts), so we
+  // have to push the port to each of them explicitly — otherwise their default
+  // `http://localhost:8000/api` stays cached and every database search request
+  // dies before reaching the bundled catgo-server.
+  setOptimadeApiBase(`http://127.0.0.1:${port}/api`)
+  setPubChemApiBase(`http://127.0.0.1:${port}/api`)
+  setMPApiBase(`http://127.0.0.1:${port}/api`)
   console.log(`[CatGO Webview] Backend port set to ${port}`)
   globalThis.dispatchEvent(new CustomEvent(`catgo-server-ready`, { detail: { port } }))
   // Release any fetches/WebSockets that were waiting on the port

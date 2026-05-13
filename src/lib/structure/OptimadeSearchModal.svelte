@@ -413,6 +413,16 @@
       // Fall back to first available provider
       if (providers.length > 0) {
         selected_provider = providers[0].id
+        // If the fallback is PubChem, restart through the PubChem path —
+        // we already started down the OPTIMADE branch but PubChem needs
+        // a different request shape and a different message channel.
+        // Without this re-entry the extension host receives an
+        // `optimade_search` for provider=pubchem and errors out with
+        // "Unknown provider: pubchem".
+        if (selected_provider === `pubchem`) {
+          loading_search = false
+          return do_search(page)
+        }
       } else {
         search_error = `No providers available`
         return
