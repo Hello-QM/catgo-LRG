@@ -138,6 +138,24 @@ a = Analysis(
         'mcp',
         'mcp.server',
         'mcp.types',
+
+        # ---------------------------------------------------------------
+        # Windows: pywin32 helper modules in win32/lib/
+        #
+        # PyInstaller's pywin32 hook captures the .pyd C extensions but does
+        # NOT run pywin32's .pth file, which is what makes the pure-Python
+        # helpers in win32/lib/ importable at the top level (e.g.
+        # `import win32timezone`). pywin32 itself and some of its dependents
+        # lazy-import these helpers from inside C code paths; without them,
+        # HPC connect raises `ModuleNotFoundError: No module named 'win32timezone'`
+        # at runtime even though all the .pyd files are present.
+        #
+        # Listed explicitly so PyInstaller's importer finds the .py files and
+        # packs them. Build is unaffected on macOS/Linux — unresolved hidden
+        # imports emit a warning but do not fail the build.
+        # ---------------------------------------------------------------
+        'win32timezone',
+        'pywin32_bootstrap',
     ],
     hookspath=[str(server_dir / 'pyinstaller_hooks')],
     hooksconfig={},
