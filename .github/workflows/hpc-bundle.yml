@@ -11,11 +11,18 @@ on:
       - main
       - dev
     paths:
+      - '.github/workflows/hpc-bundle.yml'
+      - 'desktop/**'
+      - 'docs/**'
+      - 'extensions/**'
+      - 'scripts/build-doc-chunks.js'
       - 'src/**'
       - 'server/**'
+      - 'static/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
-      - 'vite.config.ts'
+      - 'vite.desktop.config.ts'
+      - 'vite.shared.ts'
       - 'svelte.config.js'
   workflow_dispatch:
 
@@ -37,8 +44,32 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Generate SvelteKit tsconfig + ambient types
+        run: pnpm exec svelte-kit sync
+
+      - name: Build WASM extensions
+        run: |
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Build documentation chunks
+        run: pnpm run build:doc-chunks
+
       - name: Build frontend
-        run: pnpm build
+        run: pnpm run deploy:build
 
       - name: Create HPC bundle
         run: |
@@ -46,7 +77,7 @@ jobs:
           mkdir -p "$BUNDLE_DIR"
 
           # Copy pre-built frontend
-          cp -r build "$BUNDLE_DIR/frontend"
+          cp -r build-desktop "$BUNDLE_DIR/frontend"
 
           # Copy server (Python backend)
           cp -r server "$BUNDLE_DIR/server"

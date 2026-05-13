@@ -19,6 +19,9 @@ jobs:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     name: Build Windows
+    defaults:
+      run:
+        shell: bash -el {0}
 
     steps:
       - name: Checkout repository
@@ -33,8 +36,34 @@ jobs:
           node-version: 'lts/*'
           cache: 'pnpm'
 
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: catgo
+
+      - name: Install Python dependencies
+        run: |
+          conda install -y -c conda-forge openbabel pip
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          grep -iv '^openbabel' server/requirements.txt > reqs_no_ob.txt
+          pip install -r reqs_no_ob.txt
+          rm reqs_no_ob.txt
+
+      - name: Build backend
+        run: |
+          cd server
+          python -m PyInstaller catgo_server.spec --noconfirm
+          mkdir -p ../src-tauri/binaries
+          cp dist/catgo-server.exe ../src-tauri/binaries/catgo-server-x86_64-pc-windows-msvc.exe
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -42,7 +71,26 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build WASM extensions
+        run: |
+          if ! command -v wasm-pack &> /dev/null; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Generate documentation chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Generate icons
+        run: node scripts/generate-icons.js
 
       - name: Build Tauri app
         run: pnpm tauri:build
@@ -60,6 +108,9 @@ jobs:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     name: Build macOS (Apple Silicon)
+    defaults:
+      run:
+        shell: bash -el {0}
 
     steps:
       - name: Checkout repository
@@ -74,10 +125,35 @@ jobs:
           node-version: 'lts/*'
           cache: 'pnpm'
 
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: catgo
+
+      - name: Install Python dependencies
+        run: |
+          conda install -y -c conda-forge openbabel pip
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          grep -iv '^openbabel' server/requirements.txt > reqs_no_ob.txt
+          pip install -r reqs_no_ob.txt
+          rm reqs_no_ob.txt
+
+      - name: Build backend
+        run: |
+          cd server
+          python -m PyInstaller catgo_server.spec --noconfirm
+          mkdir -p ../src-tauri/binaries
+          cp dist/catgo-server ../src-tauri/binaries/catgo-server-aarch64-apple-darwin
+          chmod +x ../src-tauri/binaries/catgo-server-aarch64-apple-darwin
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -85,7 +161,26 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build WASM extensions
+        run: |
+          if ! command -v wasm-pack &> /dev/null; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Generate documentation chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Generate icons
+        run: node scripts/generate-icons.js
 
       - name: Build Tauri app
         run: pnpm tauri:build -- --target aarch64-apple-darwin
@@ -101,8 +196,11 @@ jobs:
 
   build-macos-intel:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'macos-intel' }}
-    runs-on: macos-15
+    runs-on: macos-13
     name: Build macOS (Intel)
+    defaults:
+      run:
+        shell: bash -el {0}
 
     steps:
       - name: Checkout repository
@@ -117,10 +215,35 @@ jobs:
           node-version: 'lts/*'
           cache: 'pnpm'
 
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: catgo
+
+      - name: Install Python dependencies
+        run: |
+          conda install -y -c conda-forge openbabel pip
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          grep -iv '^openbabel' server/requirements.txt > reqs_no_ob.txt
+          pip install -r reqs_no_ob.txt
+          rm reqs_no_ob.txt
+
+      - name: Build backend
+        run: |
+          cd server
+          python -m PyInstaller catgo_server.spec --noconfirm
+          mkdir -p ../src-tauri/binaries
+          cp dist/catgo-server ../src-tauri/binaries/catgo-server-x86_64-apple-darwin
+          chmod +x ../src-tauri/binaries/catgo-server-x86_64-apple-darwin
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-apple-darwin
+          targets: x86_64-apple-darwin, wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -128,7 +251,26 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build WASM extensions
+        run: |
+          if ! command -v wasm-pack &> /dev/null; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Generate documentation chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Generate icons
+        run: node scripts/generate-icons.js
 
       - name: Build Tauri app
         run: pnpm tauri:build -- --target x86_64-apple-darwin

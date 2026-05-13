@@ -43,6 +43,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'pnpm'
+
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -53,7 +62,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          conda install -y -c conda-forge openbabel
+          conda install -y -c conda-forge openbabel pip
           python -m pip install --upgrade pip
           pip install pyinstaller
           grep -iv '^openbabel' server/requirements.txt > reqs_no_ob.txt
@@ -77,33 +86,46 @@ jobs:
           mkdir -p ../src-tauri/binaries
           cp dist/catgo-server.exe ../src-tauri/binaries/catgo-server-${{ matrix.backend_target }}.exe
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 'lts/*'
-          cache: 'pnpm'
-
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }}, wasm32-unknown-unknown
+
+      - name: Install frontend dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build WASM extensions
+        run: |
+          if ! command -v wasm-pack &> /dev/null; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+      - name: Generate documentation chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Verify generated build assets
+        run: |
+          ls -la extensions/rust-wasm/pkg/ferrox_bg.wasm
+          ls -la src/lib/electronic/chgdiff-wasm-pkg/chgdiff_wasm_bg.wasm
+          ls -la src/lib/chat/docs-chunks.json
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
 
-      - name: Install frontend dependencies
-        run: pnpm install --no-frozen-lockfile
-
       - name: Generate icons
         run: node scripts/generate-icons.js
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
