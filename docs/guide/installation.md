@@ -1,6 +1,27 @@
 # Installation
 
-CatGo is a desktop application. The recommended development setup runs the Svelte frontend and the Python backend together via a single command (`pnpm desktop:serve`). For a production-ready bundle, use the Tauri build path further down this page.
+CatGo is a desktop application. Most users should grab a pre-built installer from GitHub Releases. Developers building from source can use the Quick Start below.
+
+## Download a Pre-Built Installer
+
+Pre-built installers for every release are published on [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases/latest). All installers bundle the Python backend (via PyInstaller) and the agent-bridge sidecar — no separate Python or Node install required.
+
+| Platform | File | Notes |
+|----------|------|-------|
+| **macOS (Apple Silicon)** | `CatGo_<version>_aarch64.dmg` | Drag to `/Applications`. May require right-click → Open on first launch (unsigned). |
+| **macOS (Intel)** | `CatGo_<version>_x64.dmg` | Universal builds also available — file name contains `universal`. |
+| **Windows** | `CatGo_<version>_x64-setup.exe` or `.msi` | WebView2 runtime is auto-installed if missing. |
+| **Linux (`.AppImage`)** | `CatGo_<version>_amd64.AppImage` | `chmod +x` then run. Works on most distros without root. |
+| **Linux (`.deb`)** | `CatGo_<version>_amd64.deb` | `sudo apt install ./CatGo_*.deb` on Ubuntu / Debian. |
+
+After install, launch *CatGo* from your launcher. On Linux from the terminal:
+
+```bash
+chmod +x CatGo_*.AppImage
+./CatGo_*.AppImage
+```
+
+User data (databases, panel state, agent working directories) persists under `~/.catgo/`. Override the location with the `CATGO_HOME` environment variable.
 
 ## Prerequisites
 
@@ -113,6 +134,25 @@ The server listens on `http://localhost:8000` with CORS enabled for the frontend
 
 ## Troubleshooting
 
+### General
+
 - **`pnpm desktop:serve` says it can't find `python`** — your shell `python` may point to a broken or unrelated interpreter. Either activate the `catgo` conda environment first (`conda activate catgo`), or set the `PYTHON` environment variable to an absolute path like `/opt/anaconda3/bin/python`.
 - **`pnpm tauri:dev` fails to compile** — make sure you have the platform-specific build tools for [Tauri 2.0](https://tauri.app/start/prerequisites/) (Xcode Command Line Tools on macOS, the WebView2 runtime on Windows, the standard build essentials on Linux).
 - **Frontend loads but viewer is blank** — the WASM module may be missing. Re-run `pnpm install` (the pre-built WASM ships as a workspace link), or rebuild from source as shown above.
+
+### Windows
+
+- **HPC connect fails with `ImportError` for `pywintypes` or `pythoncom`** — fixed in v1.0.1. If you're on an older build, upgrade. The bundled backend now ships the required `pywin32` DLLs.
+- **CatBot chat exits immediately** — the agent-bridge sidecar requires the `claude` CLI for the Claude provider. Install it via `npm i -g @anthropic-ai/claude-cli`, or switch CatBot to the Gemini / Codex provider in *Settings*.
+
+### Linux (`.AppImage`)
+
+- **`./CatGo_*.AppImage: cannot execute`** — set the executable bit: `chmod +x CatGo_*.AppImage`.
+- **AppImage exits with `WebKit2GTK` error** — install `libwebkit2gtk-4.1-0` (Ubuntu 24.04+) or `libwebkit2gtk-4.0-37` (older). The AppImage does not bundle WebKit; it relies on the system library.
+- **MCP endpoint `/api/mcp/` returns 404** — fixed in v1.0.1. Earlier PyInstaller bundles silently dropped the `rfc3987_syntax` grammar files.
+- **User data missing after upgrade** — CatGo stores databases and panel state in `~/.catgo/` (not inside the AppImage mount). Make sure that directory is writable.
+
+### macOS
+
+- **"CatGo can't be opened because it is from an unidentified developer"** — right-click the app and choose *Open*, then confirm. Builds are currently unsigned.
+- **Sidecar process fails to start** — fixed in v1.0.1; the sidecar lookup now uses the bundle basename. Upgrade to the latest release if you see "catgo-server not found" in the logs.

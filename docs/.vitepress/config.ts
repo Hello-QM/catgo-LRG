@@ -12,6 +12,57 @@ export default defineConfig({
   // Clean URLs without .html extension
   cleanUrls: true,
 
+  // Localhost links in install/dev docs are intentional, not navigable.
+  ignoreDeadLinks: [/^https?:\/\/localhost(:\d+)?/],
+
+  // Locales — English at root, 简体中文 under /zh/
+  locales: {
+    root: {
+      label: `English`,
+      lang: `en-US`,
+    },
+    zh: {
+      label: `简体中文`,
+      lang: `zh-CN`,
+      link: `/zh/`,
+      themeConfig: {
+        nav: [
+          { text: `首页`, link: `/zh/` },
+          { text: `指南`, link: `/zh/guide/installation` },
+          { text: `CatBot AI`, link: `/zh/guide/catbot` },
+          { text: `GitHub`, link: `https://github.com/Hello-QM/catgo-LRG` },
+        ],
+        sidebar: {
+          '/zh/guide/': [
+            {
+              text: `入门`,
+              items: [
+                { text: `安装`, link: `/zh/guide/installation` },
+                { text: `CatBot AI`, link: `/zh/guide/catbot` },
+              ],
+            },
+          ],
+        },
+        footer: {
+          message: `基于 AGPL-3.0-or-later 许可证发布。`,
+          copyright: `Copyright 2024-present CatGo Contributors`,
+        },
+        docFooter: { prev: `上一页`, next: `下一页` },
+        outline: { level: [2, 3], label: `本页内容` },
+        editLink: {
+          pattern: `https://github.com/Hello-QM/catgo-LRG/edit/main/docs/:path`,
+          text: `在 GitHub 上编辑此页`,
+        },
+        lastUpdated: { text: `最后更新于` },
+        returnToTopLabel: `回到顶部`,
+        sidebarMenuLabel: `菜单`,
+        darkModeSwitchLabel: `主题`,
+        lightModeSwitchTitle: `切换到浅色模式`,
+        darkModeSwitchTitle: `切换到深色模式`,
+      },
+    },
+  },
+
   // Exclude internal-only docs (specs, debug logs, dev architecture notes)
   // from the public site. Files remain in repo for contributors.
   srcExclude: [
@@ -93,6 +144,7 @@ export default defineConfig({
         items: [
           { text: `Gallery`, link: `/guide/gallery` },
           { text: `Tips & Tricks`, link: `/guide/tips-and-tricks` },
+          { text: `Configuration`, link: `/reference/configuration` },
           { text: `FAQ`, link: `/reference/faq` },
           { text: `Changelog`, link: `/reference/changelog` },
         ],
@@ -107,6 +159,7 @@ export default defineConfig({
           items: [
             { text: `Overview`, link: `/guide/overview` },
             { text: `Installation`, link: `/guide/installation` },
+            { text: `CatBot AI`, link: `/guide/catbot` },
             { text: `Gallery`, link: `/guide/gallery` },
             { text: `Tips & Tricks`, link: `/guide/tips-and-tricks` },
           ],
@@ -362,6 +415,7 @@ export default defineConfig({
         {
           text: `Reference`,
           items: [
+            { text: `Configuration`, link: `/reference/configuration` },
             { text: `FAQ`, link: `/reference/faq` },
             { text: `Changelog`, link: `/reference/changelog` },
           ],

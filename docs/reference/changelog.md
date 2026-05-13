@@ -2,6 +2,25 @@
 
 All notable changes to CatGo are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.1] — 2026-05-12
+
+### Added
+- **Agent-bridge sidecar** — Claude Agent SDK chat now works in packaged Tauri builds. A Node sidecar process (`catgo-agent`) is bundled alongside the Python sidecar so CatBot streams responses without requiring a separate Node install on the user's machine.
+- **Linux installers** — official `.AppImage` and `.deb` artifacts for x86_64 published with each release.
+- **MCP server endpoint** — `/api/mcp/` now responds in PyInstaller builds. External tools can drive CatGo over the Model Context Protocol.
+- **Persistent user data via `~/.catgo/`** — workflow databases, panel state, and agent working directories persist across upgrades. Override the path with the `CATGO_HOME` environment variable.
+
+### Fixed
+- **Windows HPC connect** — `pywin32` helper libraries (`pywintypes`/`pythoncom`) are now bundled correctly, fixing `ImportError` when launching the workflow engine from a packaged install on Windows.
+- **AppImage DB path resolution** — DB no longer writes under the read-only AppImage mount; resolution falls back to `~/.catgo/` automatically.
+- **macOS sidecar discovery** — `catgo-server` sidecar uses the bundle basename, fixing failed launches in signed `.app` bundles.
+- **PyInstaller `/api/mcp/` 404** — `rfc3987_syntax` `.lark` grammar files are now collected into the bundle, restoring the MCP HTTP transport.
+- **Claude SDK binary lookup in packaged builds** — `resolveClaudeExecutable()` now resolves the CLI via `PATH` instead of the bun cache, eliminating "native binary not found" errors when CatBot starts.
+
+### Changed
+- README citation now points to the ChemRxiv preprint instead of Zenodo.
+- Project license metadata corrected from `MIT` to `AGPL-3.0-or-later` across all packages, matching the repository `LICENSE`.
+
 ## [Unreleased]
 
 ### Added
