@@ -71,14 +71,47 @@ async def _get_current_structure_direct(
 ) -> dict | None:
     """In-process replacement — reads shared memory instead of HTTP.
 
-    Asymmetric read: panel_id="default" (the typical case for lab claude
-    over SSH with no X-CatGo-Tab-Id header) routes to whichever panel the
-    user is currently active in — not the literal Remote-pane "default"
-    cache. Explicit panel_ids ("structure-1" etc.) read that panel as-is.
+    Resolution order when ``panel_id == "default"``:
+      1. ``X-CatGo-Tab-Id`` header captured by the MCP ASGI middleware into
+         ``current_panel_id`` ContextVar — this is the chat tab that issued
+         the tool call.  Reading the same tab that just pushed its viewer
+         state via ``_push_structure_direct`` is what makes CatBot's
+         ``set_lattice`` see the H₂O the user is looking at, instead of
+         the empty Remote-pane "default" cache.
+      2. Whichever panel the user most recently touched
+         (``last_active_panel_id``).  This is the lab-claude-over-SSH path
+         where no header is present.
+      3. Any other panel that has a structure pushed into it — final
+         fallback so a freshly opened tab whose ID we don't know yet still
+         resolves something.  Without it CatBot raced the frontend's first
+         heartbeat push and returned "No structure loaded in viewer".
+
+    Explicit panel ids (``"structure-1"`` etc.) read that panel directly
+    with no fallback so callers that knew which tab they wanted aren't
+    silently rerouted.
     """
-    if panel_id == "default":
-        return get_active_structure()
-    return get_structure(panel_id)
+    if panel_id != "default":
+        return get_structure(panel_id)
+
+    from catgo.mcp_tools.helpers import current_panel_id
+    from catgo.routers.view_state import panel_structures
+
+    ctx_panel = current_panel_id.get()
+    if ctx_panel and ctx_panel != "default":
+        struct = get_structure(ctx_panel)
+        if struct:
+            return struct
+
+    active = get_active_structure()
+    if active:
+        return active
+
+    # Final fallback: any panel that has a structure.  Mirrors the HTTP
+    # ``/view/structure/current`` route which already does this.
+    for pid, candidate in panel_structures.items():
+        if candidate:
+            return candidate
+    return None
 
 
 async def _push_structure_direct(
