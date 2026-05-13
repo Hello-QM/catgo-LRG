@@ -91,6 +91,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}, wasm32-unknown-unknown
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
 
@@ -123,6 +128,9 @@ jobs:
 
       - name: Generate icons
         run: node scripts/generate-icons.js
+
+      - name: Build agent sidecar (Bun-compiled Node binary)
+        run: pnpm build:agent
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6
