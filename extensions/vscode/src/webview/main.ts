@@ -566,13 +566,13 @@ const create_display = (
         trajectory: final_trajectory_data,
         ...trajectory_props(defaults),
         fullscreen_toggle: false,
-        hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture'],
+        hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture', 'workflow'],
       }
       : {
         structure: result.data,
         ...structure_props(defaults),
         fullscreen_toggle: false,
-        hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture'],
+        hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture', 'workflow'],
       }),
     allow_file_drop: false,
     style: `height: 100%; border-radius: 0`,
