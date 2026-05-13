@@ -19,6 +19,8 @@ jobs:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}
     runs-on: windows-latest
     name: Build Windows
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
     defaults:
       run:
         shell: bash -el {0}
@@ -108,6 +110,8 @@ jobs:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'macos' }}
     runs-on: macos-latest
     name: Build macOS (Apple Silicon)
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
     defaults:
       run:
         shell: bash -el {0}
@@ -198,6 +202,8 @@ jobs:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'macos-intel' }}
     runs-on: macos-13
     name: Build macOS (Intel)
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
     defaults:
       run:
         shell: bash -el {0}
