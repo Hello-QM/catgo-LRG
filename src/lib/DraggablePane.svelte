@@ -520,16 +520,26 @@
         >
           <Icon icon="Reset" style="width: 1.25em; height: 1.25em" />
         </button>
-        <button
-          type="button"
-          class="close-button"
-          onclick={close_pane}
-          title="Close pane"
-          aria-label="Close pane"
-        >
-          <Icon icon="Cross" style="width: 1.25em; height: 1.25em" />
-        </button>
       {/if}
+      <!--
+        Close button is ALWAYS visible whenever the pane is open, not only
+        after the user has dragged/resized it.  Previously gated on
+        `show_control_buttons`, which only flipped to true inside the drag /
+        ResizeObserver handlers — so a pane that the user just opened and
+        wanted to dismiss without dragging first had no in-pane close
+        affordance, only the round toggle outside the pane.  When the cube
+        panel showed an error message that overlapped the toggle, the user
+        had no way to close it.
+      -->
+      <button
+        type="button"
+        class="close-button"
+        onclick={close_pane}
+        title="Close pane"
+        aria-label="Close pane"
+      >
+        <Icon icon="Cross" style="width: 1.25em; height: 1.25em" />
+      </button>
       {#if show_toggle || show_control_buttons}
         <Icon
           icon="DragIndicator"
