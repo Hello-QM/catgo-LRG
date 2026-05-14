@@ -631,9 +631,21 @@ const create_display = (
   const on_file_load = (payload: { trajectory?: unknown; filename?: string }) => {
     if (!payload?.trajectory) return
     const next_filename = payload.filename ?? filename
+    // Detach Svelte 5 $state proxies before handing the trajectory off to a
+    // freshly-mounted component. DopingPane / PathwayPane / SubstitutionPane
+    // build their frames from `$state` arrays, and re-reading those proxies
+    // inside the new Trajectory component's effects triggers
+    // `effect_update_depth_exceeded` (the bond-recompute effect writes to a
+    // signal it transitively depends on through the proxy).
+    let detached: unknown = payload.trajectory
+    try {
+      detached = structuredClone(payload.trajectory)
+    } catch (err) {
+      console.warn(`[CatGO Webview] structuredClone failed on trajectory payload, using raw reference:`, err)
+    }
     const next_result: ParseResult = {
       type: `trajectory`,
-      data: payload.trajectory,
+      data: detached,
       filename: next_filename,
     }
     // Defer the swap to the next macrotask so the originating click handler
