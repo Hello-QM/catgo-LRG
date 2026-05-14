@@ -636,13 +636,18 @@ const create_display = (
       data: payload.trajectory,
       filename: next_filename,
     }
-    // Tear down the current Structure mount and re-render as Trajectory.
-    cleanup_catgo().then(() => {
-      const next_app = create_display(container, next_result, next_filename)
-      current_app = next_app
-    }).catch((err) => {
-      console.error(`[CatGO Webview] Failed to swap to trajectory view:`, err)
-    })
+    // Defer the swap to the next macrotask so the originating click handler
+    // (and any synchronous Svelte reactivity it triggered) can settle before
+    // we unmount the Structure component out from under it. Unmounting mid
+    // event-handler under Svelte 5 wedges the UI on Trajectory remount.
+    setTimeout(() => {
+      cleanup_catgo().then(() => {
+        const next_app = create_display(container, next_result, next_filename)
+        current_app = next_app
+      }).catch((err) => {
+        console.error(`[CatGO Webview] Failed to swap to trajectory view:`, err)
+      })
+    }, 0)
   }
 
   // Create component props by mapping defaults to component props
