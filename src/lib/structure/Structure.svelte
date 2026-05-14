@@ -3045,7 +3045,11 @@
                 <ChargeAnalysisPane
                   on_load_chgcar={async (file) => {
                     const is_cube = /\.(cube|cub)$/i.test(file.name)
-                    const is_chgcar = !is_cube && /CHGCAR|AECCAR|LOCPOT|ELFCAR|PARCHG/i.test(file.name)
+                    // VASP grid file variants — CHGCAR diff outputs are named
+                    // CHGDIFF / CHGCAR_diff / DIFFCHG / CHGCAR.diff in the wild;
+                    // they share the CHGCAR file format and route through the
+                    // same backend cube-conversion endpoint.
+                    const is_chgcar = !is_cube && /CHGCAR|CHGDIFF|DIFFCHG|AECCAR|LOCPOT|ELFCAR|PARCHG/i.test(file.name)
                     if (is_chgcar) {
                       // CHGCAR needs backend conversion to cube format first
                       try {
