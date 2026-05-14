@@ -3,9 +3,21 @@
 import '$lib/app.css'
 import { setServerUrl } from '$lib/api/config'
 import { setApiBase } from '$lib/api/compute'
-import { set_vscode_api as set_optimade_vscode_api, setOptimadeApiBase } from '$lib/api/optimade'
-import { set_vscode_pubchem_api, setPubChemApiBase } from '$lib/api/pubchem'
-import { set_vscode_mp_api, setMPApiBase } from '$lib/api/materials-project'
+import { setOptimadeApiBase } from '$lib/api/optimade'
+import { setPubChemApiBase } from '$lib/api/pubchem'
+import { setMPApiBase } from '$lib/api/materials-project'
+
+// NOTE: we deliberately do NOT register the `set_vscode_api` / `set_vscode_pubchem_api`
+// / `set_vscode_mp_api` proxies any more.  Those routed every external HTTPS
+// call through the extension host's undici fetch (`postMessage('optimade_fetch')`
+// etc.), which fails on VS Code 1.105's bundled Node with a bare
+// `TypeError: fetch failed` (probably an IPv6 / TLS-stack quirk in Electron's
+// undici bundle).  The bundled catgo-server sidecar's Python httpx is the
+// reliable fallback, so we just let every `${API_BASE}/optimade/*` /
+// `${API_BASE}/pubchem/*` / `${API_BASE}/mp/*` request hit the local sidecar
+// over plain localhost HTTP and the sidecar proxies to the upstream APIs
+// from there.  Closes the "fetch failed" + "Unknown provider: pubchem"
+// chain reported in issue #14.
 import { decompress_data, detect_compression_format } from '$lib/io/decompress'
 import { parse_structure_file } from '$lib/structure/parse'
 import Structure from '$lib/structure/Structure.svelte'
@@ -239,12 +251,11 @@ globalThis.addEventListener(`message`, (event) => {
 // Initialize VSCode API at module level
 try {
   vscode_api = globalThis.acquireVsCodeApi?.() ?? null
-  // Initialize API proxies with VSCode API for CORS-free requests
-  if (vscode_api) {
-    set_optimade_vscode_api(vscode_api)
-    set_vscode_pubchem_api(vscode_api)
-    set_vscode_mp_api(vscode_api)
-  }
+  // Intentionally NOT calling `set_optimade_vscode_api` / `set_vscode_pubchem_api`
+  // / `set_vscode_mp_api` here — see the comment at the top of this file.
+  // The bundled catgo-server sidecar at `${API_BASE}` is the canonical proxy
+  // for all upstream HTTP traffic, and routing through the extension host's
+  // undici fetch is the source of the "fetch failed" errors in issue #14.
 } catch (error) {
   console.warn(`VSCode API already acquired or not available:`, error)
   vscode_api = null
