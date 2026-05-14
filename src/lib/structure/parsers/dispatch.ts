@@ -260,8 +260,8 @@ export function is_structure_file(filename: string): boolean {
   // CHGCAR/AECCAR/LOCPOT/ELFCAR/PARCHG — VASP volumetric data (handled as cube conversion)
   if (/\.(cube|cub)$/i.test(name)) return true
   const basename = name.replace(/\.(gz|bz2|xz|zst)$/i, ``)
-  if (/^(chgcar|aeccar[012]|locpot|elfcar|parchg)$/i.test(basename)) return true
-  if (/chgcar|aeccar|locpot|elfcar|parchg/i.test(basename)) return true
+  if (/^(chgcar|chgdiff|diffchg|aeccar[012]|locpot|elfcar|parchg)$/i.test(basename)) return true
+  if (/chgcar|chgdiff|diffchg|aeccar|locpot|elfcar|parchg/i.test(basename)) return true
 
   // .xyz/.extxyz files: structure unless they have trajectory keywords
   if (/\.(xyz|extxyz)$/i.test(name)) return !TRAJ_KEYWORDS_REGEX.test(name)

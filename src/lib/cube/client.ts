@@ -7,15 +7,17 @@
 import type { CubeMesh } from './api'
 import type { VolumetricGrid } from './parse-cube'
 import type { WorkerOutput } from './marching-cubes.worker'
+// Inline-bundle the worker as a blob URL so it works under VSCode webview's
+// `vscode-webview://` origin, where same-host `/assets/*.js` fetches are
+// rejected as cross-origin against `vscode-resource://` asset URLs.
+import MarchingCubesWorker from './marching-cubes.worker.ts?worker&inline'
 
 let worker: Worker | null = null
 let generation = 0
 
 function get_worker(): Worker {
   if (!worker) {
-    worker = new Worker(new URL(`./marching-cubes.worker.ts`, import.meta.url), {
-      type: `module`,
-    })
+    worker = new MarchingCubesWorker()
   }
   return worker
 }
