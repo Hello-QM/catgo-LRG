@@ -54,6 +54,17 @@
     if (tauri_win_label) return
     const url = `${window.location.origin}${window.location.pathname}#doping-pt`
 
+    // Skip the Tauri WebviewWindow path entirely outside Tauri.  In the VS
+    // Code webview the @tauri-apps module resolves but its IPC bridge is
+    // absent, so constructing a WebviewWindow throws
+    // "Cannot read properties of undefined (reading 'transformCallback')".
+    const has_tauri = typeof window !== `undefined` &&
+      (`__TAURI__` in window || `__TAURI_INTERNALS__` in window)
+    if (!has_tauri) {
+      open_browser_window(url)
+      return
+    }
+
     import(`@tauri-apps/api/webviewWindow`).then(({ WebviewWindow }) => {
       const label = `doping-pt-${Date.now()}`
       const win = new WebviewWindow(label, {

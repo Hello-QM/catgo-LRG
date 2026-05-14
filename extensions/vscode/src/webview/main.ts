@@ -624,6 +624,27 @@ const create_display = (
     }
   }
 
+  // `on_file_load` is how children (DopingPane / PathwayPane / SubstitutionPane)
+  // ask the host to re-mount in a different viewer.  Without this prop the
+  // Structure component's "Open as Trajectory" button is a no-op under the
+  // VS Code webview because there's no App.svelte router to route through.
+  const on_file_load = (payload: { trajectory?: unknown; filename?: string }) => {
+    if (!payload?.trajectory) return
+    const next_filename = payload.filename ?? filename
+    const next_result: ParseResult = {
+      type: `trajectory`,
+      data: payload.trajectory,
+      filename: next_filename,
+    }
+    // Tear down the current Structure mount and re-render as Trajectory.
+    cleanup_catgo().then(() => {
+      const next_app = create_display(container, next_result, next_filename)
+      current_app = next_app
+    }).catch((err) => {
+      console.error(`[CatGO Webview] Failed to swap to trajectory view:`, err)
+    })
+  }
+
   // Create component props by mapping defaults to component props
   const props = {
     ...(is_trajectory
@@ -639,6 +660,7 @@ const create_display = (
         fullscreen_toggle: false,
         hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture', 'workflow'],
         ...(result.cube_file ? { cube_file: result.cube_file } : {}),
+        on_file_load,
       }),
     allow_file_drop: false,
     style: `height: 100%; border-radius: 0`,
