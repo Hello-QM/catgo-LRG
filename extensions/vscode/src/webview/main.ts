@@ -53,6 +53,7 @@ export interface CatGoData {
   defaults?: DefaultSettings
   wasm_binary?: string // base64-encoded ferrox WASM binary from extension
   moyo_wasm_binary?: string // base64-encoded moyo WASM binary from extension
+  chgdiff_wasm_binary?: string // base64-encoded chgdiff WASM binary from extension
 }
 
 export interface ParseResult {
@@ -722,6 +723,22 @@ async function initialize() {
     }
   } else {
     console.log(`[CatGO Webview] No ferrox WASM binary provided by extension - will use web bundled version`)
+  }
+
+  // Stash chgdiff WASM binary for lazy init when a CHGCAR-family file is loaded.
+  // Lives on globalThis so $lib/electronic/chgdiff-wasm.ts can pick it up without
+  // an extension-specific import.
+  if (catgo_data?.chgdiff_wasm_binary) {
+    try {
+      console.log(`[CatGO Webview] Received chgdiff WASM binary (${catgo_data.chgdiff_wasm_binary.length} base64 chars)`)
+      const chgdiff_buffer = base64_to_array_buffer(catgo_data.chgdiff_wasm_binary)
+      ;(globalThis as unknown as { __catgo_chgdiff_wasm?: ArrayBuffer }).__catgo_chgdiff_wasm = chgdiff_buffer
+      console.log(`[CatGO Webview] Stashed chgdiff WASM binary on globalThis (${chgdiff_buffer.byteLength} bytes)`)
+    } catch (error) {
+      console.warn(`[CatGO Webview] Failed to decode chgdiff WASM binary:`, error)
+    }
+  } else {
+    console.log(`[CatGO Webview] No chgdiff WASM binary provided by extension - will fetch from bundled assets`)
   }
 
   // Initialize moyo WASM with binary data if provided by extension

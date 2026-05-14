@@ -7,9 +7,18 @@
 
 import { browser } from '$app/environment'
 
+type WasmInitInput =
+  | string
+  | URL
+  | Request
+  | Response
+  | BufferSource
+  | WebAssembly.Module
+  | { module_or_path: WasmInitInput }
+
 type ChgdiffWasmModule = {
-  /** wasm-bindgen init function — call once with the .wasm URL */
-  default: (input: string | { module_or_path: string }) => Promise<void>
+  /** wasm-bindgen init function — call once with the .wasm URL or binary */
+  default: (input: WasmInitInput) => Promise<void>
   /** Compute ρ_AB − ρ_A − ρ_B and return Gaussian cube text */
   compute_chgdiff: (ab: string, a: string, b: string) => string
   /** Convert a single CHGCAR-format file (CHGCAR, CHGDIFF, LOCPOT, …) to cube */
@@ -29,12 +38,22 @@ async function ensure_ready(): Promise<ChgdiffWasmModule> {
     // @ts-ignore — generated WASM package
     const mod = (await import(/* @vite-ignore */ `./chgdiff-wasm-pkg/chgdiff_wasm.js`)) as unknown as ChgdiffWasmModule
 
-    const wasm_url_module = await import(
-      /* @vite-ignore */ `./chgdiff-wasm-pkg/chgdiff_wasm_bg.wasm?url`
-    )
-    const wasm_url = wasm_url_module.default as string
+    // VS Code extension stashes the WASM binary on globalThis so we can avoid
+    // a cross-origin fetch under `vscode-webview://`.  Web app path still
+    // resolves the bundled `?url` asset.
+    const preloaded = (globalThis as unknown as {
+      __catgo_chgdiff_wasm?: ArrayBuffer | Uint8Array
+    }).__catgo_chgdiff_wasm
 
-    await mod.default({ module_or_path: wasm_url })
+    if (preloaded) {
+      await mod.default(preloaded)
+    } else {
+      const wasm_url_module = await import(
+        /* @vite-ignore */ `./chgdiff-wasm-pkg/chgdiff_wasm_bg.wasm?url`
+      )
+      const wasm_url = wasm_url_module.default as string
+      await mod.default({ module_or_path: wasm_url })
+    }
     _module = mod
     return mod
   })()

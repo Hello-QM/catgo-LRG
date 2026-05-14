@@ -65,6 +65,7 @@ interface WebviewData {
   defaults?: DefaultSettings
   wasm_binary?: string // base64-encoded ferrox WASM binary
   moyo_wasm_binary?: string // base64-encoded moyo WASM binary
+  chgdiff_wasm_binary?: string // base64-encoded chgdiff WASM binary
   server_port?: number // backend server port for API calls
 }
 
@@ -359,6 +360,19 @@ export const create_html = (
         console.log(`[CatGO] Successfully loaded moyo WASM binary (${moyo_buffer.length} bytes → ${data_with_wasm.moyo_wasm_binary.length} base64 chars)`)
       } else {
         console.warn(`[CatGO] No moyo WASM files found in ${assets_dir}`)
+      }
+
+      // Load chgdiff WASM (CHGCAR/CHGDIFF → cube converter)
+      const chgdiff_files = fs
+        .readdirSync(assets_dir)
+        .filter((f) => f.startsWith(`chgdiff_wasm_bg-`) && f.endsWith(`.wasm`))
+      if (chgdiff_files.length > 0) {
+        const chgdiff_path = path.join(assets_dir, chgdiff_files[0])
+        const chgdiff_buffer = fs.readFileSync(chgdiff_path)
+        data_with_wasm.chgdiff_wasm_binary = chgdiff_buffer.toString(`base64`)
+        console.log(`[CatGO] Successfully loaded chgdiff WASM binary (${chgdiff_buffer.length} bytes → ${data_with_wasm.chgdiff_wasm_binary.length} base64 chars)`)
+      } else {
+        console.warn(`[CatGO] No chgdiff WASM files found in ${assets_dir}`)
       }
     } else {
       console.warn(`[CatGO] Assets directory does not exist: ${assets_dir}`)
