@@ -3,6 +3,7 @@
   import { Icon } from '$lib'
   import type { IconName } from '$lib/icons'
   import type { Snippet } from 'svelte'
+  import { onDestroy } from 'svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
 
@@ -382,6 +383,18 @@
       ro.observe(pane_div.offsetParent)
     }
     return () => ro.disconnect()
+  })
+
+  // Defensive cleanup: when the component unmounts (tab closed, parent
+  // destroyed, etc.) make sure the portaled pane DOM is removed from
+  // <body>.  Svelte's normal teardown should do this via the bind:this
+  // contract, but the portal step happens in an $effect and Svelte's
+  // moved-node tracking has been observed to miss it in production
+  // builds — the cube panel was reproducibly orphaned after a tab close.
+  onDestroy(() => {
+    if (pane_div && pane_div.parentElement === document.body) {
+      pane_div.remove()
+    }
   })
 
   // Portal: move the pane DOM node into document.body when shown so it escapes
