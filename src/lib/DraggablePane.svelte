@@ -398,6 +398,55 @@
     }
   })
 
+  // Tab-visibility tracking: because we portal the pane DOM into <body>,
+  // hiding the *original* view-layer ancestor (via class `view-layer-hidden`
+  // when its tab is inactive) no longer hides the pane.  Result: opening a
+  // cube panel in Tab A, switching to Tab B, leaves the cube pane stuck on
+  // top of Tab B and unclickable (its tab is inert).  And once Tab A is
+  // closed, it's literally orphan DOM in <body>.
+  //
+  // The toggle button stays in the original tree, so we watch it: any time
+  // the toggle is inside a `view-layer-hidden` ancestor (or removed from
+  // the document entirely because its tab was destroyed), hide the
+  // portaled pane.  Restores `display: grid` when the tab becomes active
+  // again, and removes the orphan node from <body> when the toggle goes
+  // away.
+  $effect(() => {
+    if (!toggle_pane_btn || !pane_div) return
+
+    function apply_visibility() {
+      if (!pane_div) return
+      const owner_in_dom = toggle_pane_btn?.isConnected
+      if (!owner_in_dom) {
+        // Owner tab was destroyed; remove the orphan portaled DOM.
+        pane_div.remove()
+        return
+      }
+      const owner_hidden = !!toggle_pane_btn?.closest('.view-layer-hidden')
+      if (owner_hidden) {
+        pane_div.style.setProperty('display', 'none', 'important')
+      } else if (show) {
+        pane_div.style.removeProperty('display')
+      }
+    }
+
+    apply_visibility()
+    // Watch class changes on every view-layer ancestor so we react when the
+    // active tab flips, and on body for owner removal.
+    const observers: MutationObserver[] = []
+    let el: Element | null = toggle_pane_btn.parentElement
+    while (el && el !== document.body) {
+      const obs = new MutationObserver(apply_visibility)
+      obs.observe(el, { attributes: true, attributeFilter: ['class'] })
+      observers.push(obs)
+      el = el.parentElement
+    }
+    const body_obs = new MutationObserver(apply_visibility)
+    body_obs.observe(document.body, { childList: true, subtree: true })
+    observers.push(body_obs)
+    return () => observers.forEach((o) => o.disconnect())
+  })
+
   // Stop pointer events from bubbling past the pane root. Once portaled to body,
   // events fired on the pane bubble all the way to document — and any sibling
   // component that listens at the document level (e.g. trajectory plots that
