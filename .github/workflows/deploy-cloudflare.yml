@@ -1,0 +1,136 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/**"
+      - "desktop/**"
+      - "extensions/rust-wasm/**"
+      - "static/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "vite.desktop.config.ts"
+      - "vite.shared.ts"
+      - "svelte.config.js"
+      - "wrangler.docs.toml"
+      - "wrangler.app.toml"
+      - ".github/workflows/deploy-cloudflare.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  WRANGLER_SEND_METRICS: "false"
+
+jobs:
+  deploy-docs:
+    name: Deploy docs.catgo-ucsd.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm docs:build
+
+      - name: Inject cache headers
+        run: |
+          cat > docs/.vitepress/dist/_headers <<'EOF'
+          /assets/*
+            Cache-Control: public, max-age=31536000, immutable
+
+          /*.woff2
+            Cache-Control: public, max-age=31536000, immutable
+
+          /*.woff
+            Cache-Control: public, max-age=31536000, immutable
+
+          /index.html
+            Cache-Control: public, max-age=0, must-revalidate
+
+          /
+            Cache-Control: public, max-age=0, must-revalidate
+          EOF
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.docs.toml
+
+  deploy-app:
+    name: Deploy app.catgo-ucsd.org
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build static SPA (VITE_STATIC_ONLY=true)
+        run: pnpm deploy:build
+
+      - name: Inject cache + isolation headers
+        run: |
+          # Remove the dev-only _redirects shipped under build-desktop/;
+          # wrangler.app.toml uses not_found_handling = "single-page-application"
+          # which conflicts with a wildcard _redirects rule.
+          rm -f build-desktop/_redirects
+
+          cat > build-desktop/_headers <<'EOF'
+          /*
+            Cross-Origin-Opener-Policy: same-origin
+            Cross-Origin-Embedder-Policy: require-corp
+            Cross-Origin-Resource-Policy: same-origin
+
+          /assets/*
+            Cache-Control: public, max-age=31536000, immutable
+            Cross-Origin-Resource-Policy: same-origin
+
+          /*.wasm
+            Cache-Control: public, max-age=31536000, immutable
+            Cross-Origin-Resource-Policy: same-origin
+
+          /*.woff2
+            Cache-Control: public, max-age=31536000, immutable
+
+          /*.woff
+            Cache-Control: public, max-age=31536000, immutable
+
+          /index.html
+            Cache-Control: public, max-age=0, must-revalidate
+
+          /
+            Cache-Control: public, max-age=0, must-revalidate
+          EOF
+
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --config wrangler.app.toml

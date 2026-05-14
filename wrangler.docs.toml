@@ -1,0 +1,12 @@
+# Cloudflare Worker — VitePress docs site at https://docs.catgo-ucsd.org
+# Deployed by .github/workflows/deploy-cloudflare.yml on push to main:
+#     wrangler deploy -c wrangler.docs.toml
+
+name = "catgo-docs"
+compatibility_date = "2026-05-13"
+workers_dev = false
+preview_urls = false
+
+[assets]
+directory = "./docs/.vitepress/dist"
+not_found_handling = "404-page"
