@@ -166,14 +166,15 @@ export interface SampleStructure {
 // ========== File Detection ==========
 
 /** CHGCAR/AECCAR/LOCPOT etc. VASP volumetric data file name detection */
-const CHGCAR_PATTERNS = /^(CHGCAR|AECCAR0|AECCAR1|AECCAR2|LOCPOT|ELFCAR|PARCHG)$/i
+const CHGCAR_PATTERNS = /^(CHGCAR|CHGDIFF|DIFFCHG|AECCAR0|AECCAR1|AECCAR2|LOCPOT|ELFCAR|PARCHG)(\.vasp)?$/i
 
 export function is_chgcar_file(filename: string): boolean {
   // Files with .cube/.cub extension are NOT CHGCAR, even if name contains "CHGCAR"
   if (/\.(cube|cub)$/i.test(filename)) return false
   const basename = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``)
   if (CHGCAR_PATTERNS.test(basename)) return true
-  if (/CHGCAR|AECCAR|LOCPOT|ELFCAR|PARCHG/i.test(basename)) return true
+  // Loose match — catches "CHGCAR_diff_HCO2", "DIFFCHG_HCO2" etc.
+  if (/CHGCAR|CHGDIFF|DIFFCHG|AECCAR|LOCPOT|ELFCAR|PARCHG/i.test(basename)) return true
   return false
 }
 

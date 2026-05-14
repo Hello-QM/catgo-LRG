@@ -743,21 +743,34 @@
     }
     const text = typeof content === `string` ? content : new TextDecoder().decode(content)
 
-    // CHGCAR/AECCAR/LOCPOT 等 VASP 体积数据文件 → 后端转换为 cube 格式
+    // CHGCAR / CHGDIFF / LOCPOT etc. → convert to Gaussian cube via wasm.
+    // chgdiff-wasm exposes `chgcar_to_cube(text)` and the package is already
+    // bundled with the desktop frontend, so we don't hit the backend's
+    // `/api/chgcar/convert-to-cube` endpoint (which shells out to the
+    // Rust cube-processor binary that may not be present in a fresh
+    // PyInstaller bundle).  Backend HTTP path is kept as a fallback so
+    // dev setups with the binary present keep working unchanged.
     if (is_chgcar_file(filename)) {
       try {
-        const blob = new Blob([text], { type: `application/octet-stream` })
-        const form_data = new FormData()
-        form_data.append(`file`, new File([blob], filename))
-        const resp = await fetch(`${API_BASE}/chgcar/convert-to-cube`, {
-          method: `POST`,
-          body: form_data,
-        })
-        if (!resp.ok) {
-          const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-          throw new Error(err.detail || `CHGCAR conversion failed: ${resp.statusText}`)
+        let cube_text: string
+        try {
+          const { chgcar_to_cube } = await import('$lib/electronic/chgdiff-wasm')
+          cube_text = await chgcar_to_cube(text)
+        } catch (wasm_err) {
+          console.warn(`[CHGCAR] wasm path failed, falling back to backend:`, wasm_err)
+          const blob = new Blob([text], { type: `application/octet-stream` })
+          const form_data = new FormData()
+          form_data.append(`file`, new File([blob], filename))
+          const resp = await fetch(`${API_BASE}/chgcar/convert-to-cube`, {
+            method: `POST`,
+            body: form_data,
+          })
+          if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: resp.statusText }))
+            throw new Error(err.detail || `CHGCAR conversion failed: ${resp.statusText}`)
+          }
+          cube_text = await resp.text()
         }
-        const cube_text = await resp.text()
         const cube_filename = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``) + `.cube`
         try {
           const header = parse_cube_header(cube_text)

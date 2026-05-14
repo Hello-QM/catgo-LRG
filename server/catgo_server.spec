@@ -54,6 +54,15 @@ a = Analysis(
         ('catgo/tool_schema/*.json', 'catgo/tool_schema'),
         # HPC job script templates
         ('templates/*.sh', 'templates'),
+        # Rust cube-processor binary — used by /api/cube/{compute,slice,export-glb,
+        # export-obj} for mesh extraction and isosurface ops. Without it the
+        # bundled backend returns 503 "cube-processor binary not found" the
+        # moment a user clicks Export GLB / Export OBJ. Path inside the bundle
+        # must match the layout `server/catgo/routers/{chgcar,cube}.py` use,
+        # which is `<MEIPASS>/tools/cube-processor/target/release/cube-processor`
+        # (from Path(__file__).parent.parent.parent / "tools" / ...).
+        ('../tools/cube-processor/target/release/cube-processor',
+         'tools/cube-processor/target/release'),
     ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas,
     hiddenimports=catgo_submodules + workflow_submodules + [
         # ---------------------------------------------------------------
