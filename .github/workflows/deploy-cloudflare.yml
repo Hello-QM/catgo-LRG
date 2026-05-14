@@ -116,6 +116,9 @@ jobs:
         run: |
           wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
 
+      - name: Generate docs-chunks.json for CatBot RAG
+        run: pnpm build:doc-chunks
+
       - name: Build static SPA (VITE_STATIC_ONLY=true)
         run: pnpm deploy:build
 
