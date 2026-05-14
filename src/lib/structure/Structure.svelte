@@ -3051,18 +3051,36 @@
                     // same backend cube-conversion endpoint.
                     const is_chgcar = !is_cube && /CHGCAR|CHGDIFF|DIFFCHG|AECCAR|LOCPOT|ELFCAR|PARCHG/i.test(file.name)
                     if (is_chgcar) {
-                      // CHGCAR needs backend conversion to cube format first
+                      // Convert CHGCAR-family files (CHGCAR, CHGDIFF, LOCPOT,
+                      // ELFCAR, PARCHG, …) to Gaussian cube text in the
+                      // browser via chgdiff-wasm.  Was a `/api/chgcar/convert-to-cube`
+                      // round-trip to the Python backend; that endpoint
+                      // shells out to a Rust `cube-processor` binary which
+                      // isn't bundled in the PyInstaller image, so a fresh
+                      // .deb / .AppImage couldn't render CHGDIFF at all.
+                      // The WASM path also makes the VS Code extension
+                      // independent of the bundled sidecar for this feature.
+                      // Falls back to the HTTP endpoint if WASM init fails
+                      // (older browsers, broken pkg) so existing dev setups
+                      // keep working.
                       try {
-                        const form = new FormData()
-                        form.append(`file`, file)
-                        const resp = await fetch(`${API_BASE}/chgcar/convert-to-cube`, {
-                          method: `POST`,
-                          body: form,
-                        })
-                        if (!resp.ok) throw new Error(`Conversion failed: ${resp.statusText}`)
-                        const cube_text = await resp.text()
+                        const text = await file.text()
+                        let cube_text: string
+                        try {
+                          const { chgcar_to_cube } = await import('$lib/electronic/chgdiff-wasm')
+                          cube_text = await chgcar_to_cube(text)
+                        } catch (wasm_err) {
+                          console.warn(`[CHGCAR] WASM path failed, falling back to backend:`, wasm_err)
+                          const form = new FormData()
+                          form.append(`file`, file)
+                          const resp = await fetch(`${API_BASE}/chgcar/convert-to-cube`, {
+                            method: `POST`,
+                            body: form,
+                          })
+                          if (!resp.ok) throw new Error(`Conversion failed: ${resp.statusText}`)
+                          cube_text = await resp.text()
+                        }
                         const cube_filename = file.name + `.cube`
-                        // Update structure from cube atoms
                         const { parse_cube_header, cube_atoms_to_molecule } = await import('$lib/cube/parse-cube')
                         const header = parse_cube_header(cube_text)
                         const molecule = cube_atoms_to_molecule(header)
@@ -3070,7 +3088,6 @@
                           structure = { ...molecule, _aligned: true } as any
                           center_camera_trigger++
                         }
-                        // Set cube file for CubePanel
                         const blob = new Blob([cube_text], { type: `chemical/x-cube` })
                         cube_file = new File([blob], cube_filename)
                         cube_pane_open = true

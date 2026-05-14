@@ -347,7 +347,80 @@ fn chgdiff_to_cube(
     Ok(out)
 }
 
+/// Write a single ParsedChgcar to a Gaussian cube string (e/Bohr³).
+/// Same coordinate / unit conventions as `chgdiff_to_cube`; just the
+/// volumetric values are the raw ρ from the CHGCAR rather than a diff.
+fn chgcar_to_cube_string(chg: &ParsedChgcar) -> Result<String, String> {
+    let lat = &chg.lattice;
+    let volume_ang3 = det3(lat).abs();
+    let volume_bohr3 = volume_ang3 * ANGSTROM_TO_BOHR.powi(3);
+
+    let (ngx, ngy, ngz) = (chg.ngx, chg.ngy, chg.ngz);
+    let n_atoms = chg.atomic_numbers.len();
+
+    let vx = lat[0].map(|x| x / ngx as f64 * ANGSTROM_TO_BOHR);
+    let vy = lat[1].map(|x| x / ngy as f64 * ANGSTROM_TO_BOHR);
+    let vz = lat[2].map(|x| x / ngz as f64 * ANGSTROM_TO_BOHR);
+
+    let total = ngx * ngy * ngz;
+    let cap = 300 + n_atoms * 65 + (total / 6 + 1) * 80;
+    let mut out = String::with_capacity(cap);
+
+    out.push_str(&format!("CHGCAR: {}\n", chg.comment));
+    out.push_str("Single-file conversion produced by CatGO chgdiff-wasm\n");
+    out.push_str(&format!("{:5}  {:12.6}  {:12.6}  {:12.6}\n", n_atoms, 0.0f64, 0.0f64, 0.0f64));
+    out.push_str(&format!("{:5}  {:12.6}  {:12.6}  {:12.6}\n", ngx, vx[0], vx[1], vx[2]));
+    out.push_str(&format!("{:5}  {:12.6}  {:12.6}  {:12.6}\n", ngy, vy[0], vy[1], vy[2]));
+    out.push_str(&format!("{:5}  {:12.6}  {:12.6}  {:12.6}\n", ngz, vz[0], vz[1], vz[2]));
+
+    for i in 0..n_atoms {
+        let z = chg.atomic_numbers[i];
+        let pos = chg.positions_cart[i];
+        out.push_str(&format!(
+            "{:5}  {:12.6}  {:12.6}  {:12.6}  {:12.6}\n",
+            z,
+            z as f64,
+            pos[0] * ANGSTROM_TO_BOHR,
+            pos[1] * ANGSTROM_TO_BOHR,
+            pos[2] * ANGSTROM_TO_BOHR,
+        ));
+    }
+
+    let mut col = 0usize;
+    for ix in 0..ngx {
+        for iy in 0..ngy {
+            for iz in 0..ngz {
+                let chg_idx = iz * ngy * ngx + iy * ngx + ix;
+                let v = chg.data[chg_idx] / volume_bohr3;
+                out.push_str(&fmt_e(v));
+                col += 1;
+                if col == 6 {
+                    out.push('\n');
+                    col = 0;
+                }
+            }
+        }
+    }
+    if col > 0 {
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 // ── Public WASM API ──────────────────────────────────────────────────────────
+
+/// Convert a single CHGCAR-format file (CHGCAR, CHGDIFF, CHGCAR_diff, LOCPOT,
+/// ELFCAR, PARCHG, etc.) to a Gaussian cube string in e/Bohr³.
+///
+/// Lets the desktop app and the VS Code extension skip the
+/// `/api/chgcar/convert-to-cube` round-trip when the bundled
+/// `cube-processor` binary isn't available (and reduces overall latency
+/// since the file stays in the webview memory the whole time).
+#[wasm_bindgen]
+pub fn chgcar_to_cube(content: &str) -> Result<String, JsError> {
+    let chg = parse_chgcar(content).map_err(|e| JsError::new(&e))?;
+    chgcar_to_cube_string(&chg).map_err(|e| JsError::new(&e))
+}
 
 /// Compute difference charge density from three CHGCAR file contents.
 ///

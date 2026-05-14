@@ -12,6 +12,8 @@ type ChgdiffWasmModule = {
   default: (input: string | { module_or_path: string }) => Promise<void>
   /** Compute ρ_AB − ρ_A − ρ_B and return Gaussian cube text */
   compute_chgdiff: (ab: string, a: string, b: string) => string
+  /** Convert a single CHGCAR-format file (CHGCAR, CHGDIFF, LOCPOT, …) to cube */
+  chgcar_to_cube: (content: string) => string
 }
 
 let _module: ChgdiffWasmModule | null = null
@@ -54,4 +56,17 @@ export async function compute_chgdiff(
 ): Promise<string> {
   const mod = await ensure_ready()
   return mod.compute_chgdiff(content_ab, content_a, content_b)
+}
+
+/**
+ * Convert a single VASP grid file (CHGCAR / CHGDIFF / CHGCAR_diff / LOCPOT
+ * / ELFCAR / PARCHG) to a Gaussian cube string in e/Bohr³.  Pure-WASM —
+ * avoids the desktop backend's `/api/chgcar/convert-to-cube` round-trip
+ * and the cube-processor binary that's missing from the PyInstaller
+ * bundle, and gives the VS Code extension a path that doesn't depend on
+ * the bundled sidecar at all.
+ */
+export async function chgcar_to_cube(content: string): Promise<string> {
+  const mod = await ensure_ready()
+  return mod.chgcar_to_cube(content)
 }
