@@ -90,7 +90,31 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            extensions/rust -> target
+            extensions/chgdiff-wasm -> target
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
       - run: pnpm install --frozen-lockfile
+
+      - name: Build ferrox WASM (extensions/rust → extensions/rust-wasm/pkg)
+        working-directory: extensions/rust
+        run: |
+          wasm-pack build --target web --features wasm --no-default-features
+          rm -rf ../rust-wasm/pkg
+          cp -r pkg ../rust-wasm/pkg
+
+      - name: Build chgdiff WASM (extensions/chgdiff-wasm → src/lib/electronic/chgdiff-wasm-pkg)
+        working-directory: extensions/chgdiff-wasm
+        run: |
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
 
       - name: Build static SPA (VITE_STATIC_ONLY=true)
         run: pnpm deploy:build
