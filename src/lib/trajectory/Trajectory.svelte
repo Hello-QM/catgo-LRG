@@ -592,7 +592,20 @@
       topology_initialized = false
       return
     }
-    if (position_cache) {
+    // Doping / substitution trajectories swap element identity per frame
+    // while keeping positions constant; the position_cache fast-path freezes
+    // current_structure to frame[0] so every later frame would render the
+    // first frame's elements (e.g. all Sc instead of Sc → Ti → V → ... in
+    // a 10-element scan). Detect those via `trajectory.metadata.source_format`
+    // and force the slow path so each frame's species labels reach the
+    // viewer.
+    const traj_meta = trajectory?.metadata as
+      | { source_format?: string; type?: string }
+      | undefined
+    const traj_source = traj_meta?.source_format ?? traj_meta?.type
+    const force_slow_path = traj_source === `doping_substitution` ||
+      traj_source === `reaction_pathway`
+    if (position_cache && !force_slow_path) {
       // Architecture P fast-path: write current_structure once on trajectory
       // load (or new trajectory). Subsequent frames update only the Float32Array,
       // bypassing the displayed_structure cascade. Atom positions reach the
