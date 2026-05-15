@@ -760,11 +760,6 @@ async function initialize() {
       const buffer = base64_to_array_buffer(wasm_binary)
       const wasm_uint8 = new Uint8Array(buffer)
       console.log(`[CatGO Webview] Decoded to Uint8Array (${wasm_uint8.length} bytes)`)
-      // Stash the ArrayBuffer on globalThis so compile_wasm_module
-      // (used by the bond Worker for WebAssembly.compile) avoids the
-      // vscode-webview://.../assets/ferrox_bg-*.wasm fetch which 403s
-      // against the sandboxed webview origin.
-      ;(globalThis as unknown as { __catgo_ferrox_wasm?: ArrayBuffer }).__catgo_ferrox_wasm = buffer
       console.log(`[CatGO Webview] Initializing ferrox-wasm...`)
       await ensure_ferrox_wasm_ready(wasm_uint8)
       console.log(`[CatGO Webview] Successfully initialized ferrox-wasm from extension binary!`)

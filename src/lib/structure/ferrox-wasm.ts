@@ -366,20 +366,6 @@ export async function compile_wasm_module(): Promise<WebAssembly.Module> {
   if (!browser) throw new Error(`WASM only in browser`)
   if (cached_wasm_compiled_module) return cached_wasm_compiled_module
 
-  // VS Code extension preloads the binary on globalThis (see
-  // extensions/vscode/src/webview/main.ts) — fetching the URL there resolves
-  // to vscode-webview://.../assets/ferrox_bg-*.wasm and returns 403 against
-  // the webview's sandbox. Use the buffer directly when present.
-  const preloaded = (globalThis as unknown as {
-    __catgo_ferrox_wasm?: ArrayBuffer | Uint8Array
-  }).__catgo_ferrox_wasm
-  if (preloaded) {
-    const bytes = preloaded instanceof Uint8Array ? preloaded.buffer : preloaded
-    cached_wasm_compiled_module = await WebAssembly.compile(bytes as ArrayBuffer)
-    console.log(`[ferrox-wasm] compile_wasm_module: compiled from preloaded binary`)
-    return cached_wasm_compiled_module
-  }
-
   const wasm_url_module = await import(
     /* @vite-ignore */ `@catgo/ferrox-wasm/ferrox_bg.wasm?url`
   )
