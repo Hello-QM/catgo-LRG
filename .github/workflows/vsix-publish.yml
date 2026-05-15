@@ -1,0 +1,71 @@
+name: Publish VSCode Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Package only — do not publish to marketplace'
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install root deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Install extension deps
+        working-directory: extensions/vscode
+        run: pnpm install --frozen-lockfile
+
+      - name: Build extension
+        working-directory: extensions/vscode
+        run: pnpm build
+
+      - name: Package VSIX
+        working-directory: extensions/vscode
+        run: pnpm dlx @vscode/vsce package --no-dependencies
+
+      - name: Publish to VS Code Marketplace
+        if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+        working-directory: extensions/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix
+
+      - name: Upload VSIX as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: catgo-vsix
+          path: extensions/vscode/catgo-*.vsix
+          retention-days: 90
+
+      - name: Attach VSIX to GitHub Release
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          vsix=$(ls extensions/vscode/catgo-*.vsix | head -1)
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --notes "Release $tag"
+          gh release upload "$tag" "$vsix" --clobber
