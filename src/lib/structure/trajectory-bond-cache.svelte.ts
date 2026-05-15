@@ -17,6 +17,7 @@
 
 import type { AnyStructure } from '$lib'
 import type { BondingStrategy } from '$lib/structure/bonding'
+import { untrack } from 'svelte'
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { compute_bonds_async } from './workers/bond-worker-api'
 
@@ -192,42 +193,107 @@ export function wire_trajectory_bond_cache(
   },
 ): void {
   // Reset cache on actual value changes (not parent-render proxy churn).
+  // Identity comparison alone causes a feedback loop with Trajectory's bond
+  // pipeline: the connectivity-push effect writes
+  // `trajectory_bond_connectivity_for_frame`, which re-renders Structure
+  // and re-derives the `structure` prop with a new spread (find_pbc_images_fast
+  // / transform-controller / Svelte-5 proxy churn). The new ref trips this
+  // guard, resets `last_idx = -2`, and re-fires the on_frame_change effect
+  // for the same frame — which kicks another compute_bonds_async, which
+  // bumps version, which fires connectivity-push again, ad infinitum.
+  // Compare by content fingerprint so a same-content re-spread is a no-op.
   let last_struct: AnyStructure | undefined = undefined
+  let last_struct_fp: string | undefined = undefined
   let last_strategy: string | undefined = undefined
   let last_opts: string | undefined = undefined
   let last_idx = -2
 
+  const fingerprint = (s: AnyStructure | undefined): string => {
+    if (!s) return `<none>`
+    const sites = (s as { sites?: { species?: { element?: string }[] }[] }).sites
+    const lattice = (s as { lattice?: { a?: number; b?: number; c?: number; alpha?: number; beta?: number; gamma?: number } }).lattice
+    const n = sites?.length ?? 0
+    // Sample a handful of sites' element so doping (per-frame element change)
+    // is detected as a real content change, not a no-op spread.
+    const e0 = sites?.[0]?.species?.[0]?.element ?? ``
+    const eMid = sites?.[Math.floor(n / 2)]?.species?.[0]?.element ?? ``
+    const eLast = sites?.[n - 1]?.species?.[0]?.element ?? ``
+    const la = lattice
+      ? `${lattice.a ?? 0}-${lattice.b ?? 0}-${lattice.c ?? 0}-${lattice.alpha ?? 0}-${lattice.beta ?? 0}-${lattice.gamma ?? 0}`
+      : `<mol>`
+    return `${n}|${e0}|${eMid}|${eLast}|${la}`
+  }
+
   $effect(() => {
     const s = deps.get_structure()
-    const strategy = deps.get_strategy()
-    const opts_str = JSON.stringify(deps.get_options() ?? {})
-    if (s === last_struct && strategy === last_strategy && opts_str === last_opts) return
-    last_struct = s
-    last_strategy = strategy
-    last_opts = opts_str
-    last_idx = -2
-    cache.clear()
+    if (s === last_struct) return
+    untrack(() => {
+      const strategy = deps.get_strategy()
+      const opts_str = JSON.stringify(deps.get_options() ?? {})
+      if (strategy === last_strategy && opts_str === last_opts) {
+        // Structure ref changed but strategy/options stable — check content.
+        const fp = fingerprint(s)
+        const same_content = fp === last_struct_fp
+        if (same_content) {
+          // Same content, different reference (proxy churn from a re-render).
+          last_struct = s
+          return
+        }
+        // First-ever assignment: don't clear (nothing cached yet).
+        const first_assignment = last_struct_fp === undefined
+        last_struct = s
+        last_struct_fp = fp
+        if (first_assignment) return
+        last_idx = -2
+        cache.clear()
+      } else {
+        // Strategy or options actually changed — full reset.
+        last_struct = s
+        last_struct_fp = fingerprint(s)
+        last_strategy = strategy
+        last_opts = opts_str
+        last_idx = -2
+        cache.clear()
+      }
+    })
   })
 
   // Drive on_frame_change only when the frame index actually moves.
+  // Only `idx` is allowed to be a reactive dep — `getter`, `base`,
+  // `strategy`, and `options` are read inside `untrack()` so that
+  // identity churn on those (Svelte 5 proxy re-spreads through
+  // `bind:scene_props`, `bind:structure`, etc.) does not refire this
+  // effect when the frame index hasn't moved. Without the untrack, every
+  // bond-compute result triggers a Structure re-render which respreads
+  // scene_props / structure and refires this effect, which kicks another
+  // bond-worker request, which spreads again, and Svelte 5's flush
+  // overflow guard kicks in.
   $effect(() => {
     const idx = deps.get_step_idx()
-    const getter = deps.get_positions()
-    const base = deps.get_base()
-    if (!getter || idx < 0 || !base) return
+    if (idx < 0) return
     if (idx === last_idx) return
-    last_idx = idx
-    cache.on_frame_change(idx, getter, base, deps.get_strategy(), deps.get_options())
+    untrack(() => {
+      const getter = deps.get_positions()
+      const base = deps.get_base()
+      if (!getter || !base) return
+      last_idx = idx
+      cache.on_frame_change(idx, getter, base, deps.get_strategy(), deps.get_options())
+    })
   })
 
-  // Push the resolved connectivity into the caller's $state. Skip writes
-  // when content reference is unchanged.
+  // Push the resolved connectivity into the caller's $state. Only
+  // `cache.version` is allowed as a reactive dep — everything else is
+  // untracked so writing `set_connectivity()` (which mutates a $state in
+  // the caller) doesn't refire this effect through `get_connectivity()`'s
+  // own subscription. Without untrack, set→get→re-run feeds the loop.
   $effect(() => {
     void cache.version
-    let next: BondConnectivity[] | null = null
-    if (deps.get_trajectory_active() && deps.get_step_idx() >= 0) {
-      next = cache.get_best(deps.get_step_idx()) ?? null
-    }
-    if (next !== deps.get_connectivity()) deps.set_connectivity(next)
+    untrack(() => {
+      let next: BondConnectivity[] | null = null
+      if (deps.get_trajectory_active() && deps.get_step_idx() >= 0) {
+        next = cache.get_best(deps.get_step_idx()) ?? null
+      }
+      if (next !== deps.get_connectivity()) deps.set_connectivity(next)
+    })
   })
 }
