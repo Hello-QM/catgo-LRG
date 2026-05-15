@@ -1,22 +1,11 @@
 import { spawn, ChildProcess } from 'child_process'
-import * as path from 'path'
 import * as vscode from 'vscode'
 import * as http from 'http'
+import { ensure_sidecar_binary } from './sidecar'
 
 let server_process: ChildProcess | null = null
 let server_port: number | null = null
 let in_flight_start: Promise<number | null> | null = null
-
-function get_binary_name(): string {
-  const platform = process.platform
-  if (platform === 'win32') return 'catgo-server-win-x64.exe'
-  if (platform === 'darwin') return 'catgo-server-darwin-arm64'
-  return 'catgo-server-linux-x64'
-}
-
-function get_binary_path(context: vscode.ExtensionContext): string {
-  return path.join(context.extensionPath, 'bin', get_binary_name())
-}
 
 function health_check(port: number, timeout_ms = 2000): Promise<boolean> {
   return new Promise((resolve) => {
@@ -38,7 +27,14 @@ export async function start_server(context: vscode.ExtensionContext): Promise<nu
     stop_server()
   }
 
-  const binary = get_binary_path(context)
+  let binary: string
+  try {
+    binary = await ensure_sidecar_binary(context)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    vscode.window.showErrorMessage(`CatGo server sidecar unavailable: ${message}`)
+    return null
+  }
   const config = vscode.workspace.getConfiguration('catgo.server')
   const port_setting = config.get<number>('port', 0)
 

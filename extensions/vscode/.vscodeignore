@@ -14,3 +14,10 @@ tests/**
 # Dev files
 node_modules/**
 *.map
+
+# Sidecar binaries: downloaded lazily from the matching GitHub Release on
+# first activation (see src/sidecar.ts). Bundling them inside the .vsix
+# pushes the package past the Marketplace's ~100 MB size limit. The
+# extension still picks up a locally-staged `bin/<name>` if present, which
+# is useful for sideload dev builds.
+bin/catgo-server-*
