@@ -52,6 +52,15 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix
 
+      - name: Publish to Open VSX (Cursor / VSCodium / Theia)
+        if: ${{ (github.event_name == 'push' || inputs.dry_run == false) && env.OVSX_PAT != '' }}
+        working-directory: extensions/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          vsix=$(ls catgo-*.vsix | head -1)
+          pnpm dlx ovsx publish "$vsix" --no-dependencies
+
       - name: Upload VSIX as workflow artifact
         uses: actions/upload-artifact@v4
         with:
