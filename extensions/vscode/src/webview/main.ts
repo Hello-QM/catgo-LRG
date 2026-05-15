@@ -624,6 +624,40 @@ const create_display = (
     }
   }
 
+  // `on_file_load` bubbles up from DopingPane / PathwayPane / SubstitutionPane
+  // when the user clicks "Open as Trajectory". The webview has no SvelteKit
+  // router, so we tear the current Structure mount down and re-render as
+  // Trajectory in-place. (Trajectory's bond-cache + per-frame element
+  // pipeline now stay stable thanks to the wire untrack + slow-path fixes,
+  // so this remount no longer trips effect_update_depth_exceeded.)
+  const on_file_load = (payload: { trajectory?: unknown; filename?: string }) => {
+    if (!payload?.trajectory) return
+    const next_filename = payload.filename ?? filename
+    // Strip Svelte 5 `$state` proxies (DopingPane builds result_structures
+    // via `$state` so its frames carry proxy wrappers that aren't
+    // structuredClone-safe and add extra reactive slots on the new mount).
+    let detached: unknown = payload.trajectory
+    try {
+      detached = JSON.parse(JSON.stringify(payload.trajectory))
+    } catch (err) {
+      console.warn(`[CatGO Webview] proxy-strip failed, using raw trajectory:`, err)
+    }
+    const next_result: ParseResult = {
+      type: `trajectory`,
+      data: detached,
+      filename: next_filename,
+    }
+    // Defer to next macrotask so the originating click handler can finish
+    // before we unmount the Structure component out from under it.
+    setTimeout(() => {
+      cleanup_catgo().then(() => {
+        current_app = create_display(container, next_result, next_filename)
+      }).catch((err) => {
+        console.error(`[CatGO Webview] Failed to swap to Trajectory view:`, err)
+      })
+    }, 0)
+  }
+
   // Create component props by mapping defaults to component props
   const props = {
     ...(is_trajectory
@@ -639,6 +673,7 @@ const create_display = (
         fullscreen_toggle: false,
         hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture', 'workflow'],
         ...(result.cube_file ? { cube_file: result.cube_file } : {}),
+        on_file_load,
       }),
     allow_file_drop: false,
     style: `height: 100%; border-radius: 0`,
