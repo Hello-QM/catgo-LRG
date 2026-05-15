@@ -36,23 +36,29 @@ function which(cmd) {
   return null
 }
 
-const bun = which('bun')
+let bun = which('bun')
 if (!bun) {
-  console.error(`
-[agent:dev] Bun is not on PATH. The catgo-agent bridge that powers
-CatBot's SDK chat (Claude Code / Codex CLI / Gemini CLI) runs from
-TypeScript via Bun in dev mode.
+  console.log(`[agent:dev] Bun not found on PATH — auto-installing into ~/.bun via the official installer...`)
+  const result = spawn(`bash`, [`-c`, `curl -fsSL https://bun.sh/install | bash`], {
+    stdio: 'inherit',
+    env: { ...process.env, BUN_INSTALL: `${process.env.HOME}/.bun` },
+  })
+  await new Promise((resolve) => result.on('exit', resolve))
+  bun = which('bun')
+  if (!bun) {
+    console.error(`
+[agent:dev] Bun install attempted but \`bun\` still not on PATH. Common causes:
+  - Curl blocked / behind a corp proxy.
+  - PATH not refreshed: open a new shell or \`source ~/.bashrc\`.
+  - Manual install: \`curl -fsSL https://bun.sh/install | bash\` then add
+    \`export PATH="$HOME/.bun/bin:$PATH"\` to your shell rc.
 
-Install Bun:
-  curl -fsSL https://bun.sh/install | bash
-  # or, on macOS: brew install oven-sh/bun/bun
-
-Then re-run \`pnpm desktop:serve\` / \`pnpm tauri:dev\`.
-
-(In production builds the agent bridge is shipped as a pre-compiled
-sidecar binary, so end users don't need Bun.)
+(In production builds the agent bridge ships as a pre-compiled sidecar
+binary, so end users don't need Bun.)
 `)
-  process.exit(2)
+    process.exit(2)
+  }
+  console.log(`[agent:dev] Bun installed at ${bun}. Continuing...`)
 }
 
 const child = spawn(bun, [`run`, ENTRY], {
