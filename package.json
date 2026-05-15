@@ -12,7 +12,6 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.87",
     "@catgo/ferrox-wasm": "link:extensions/rust-wasm",
     "@huggingface/transformers": "^3.8.1",
-    "@ketd/gemini-cli-sdk": "^0.4.0",
     "@mediapipe/tasks-vision": "^0.10.32",
     "@openai/codex-sdk": "^0.117.0",
     "@ricky0123/vad-web": "^0.0.30",
