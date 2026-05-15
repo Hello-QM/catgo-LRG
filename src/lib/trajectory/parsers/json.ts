@@ -1,9 +1,54 @@
 // JSON-based trajectory parsers (Pymatgen, generic JSON arrays, etc.)
-import type { AnyStructure, ElementSymbol, Vec3 } from '$lib'
+import type { AnyStructure, ElementSymbol, Pbc, Vec3 } from '$lib'
 import type { Matrix3x3 } from '$lib/math'
 import * as math from '$lib/math'
 import type { TrajectoryFrame, TrajectoryType } from '../index'
-import { create_trajectory_frame } from './common'
+import { create_structure, create_trajectory_frame } from './common'
+
+/**
+ * Rebuild a pymatgen `Structure.as_dict()` payload into the canonical site /
+ * lattice shape produced by `create_structure` (the path extxyz / XDATCAR
+ * etc. take through the parser pipeline). Pymatgen dicts carry `@class`,
+ * `@module`, `charge`, `oxidation_state: null` and may omit `lattice.pbc`;
+ * those extra keys + null fields become deep-proxy reactive slots that
+ * trigger Svelte 5's `effect_update_depth_exceeded` inside Trajectory's
+ * `position_cache` + `trajectory_bond_cache.wire` pipeline under the VS
+ * Code extension webview. Routing each frame through `create_structure`
+ * normalizes the shape so it matches well-behaved trajectory formats.
+ *
+ * Exported so producers that build TrajectoryType inline without going
+ * through `parse_json_trajectory` (DopingPane, pathway-builder, etc.) can
+ * normalize at the boundary instead of stuffing pymatgen dicts directly
+ * into `frames[i].structure`.
+ *
+ * Returns `null` if the structure can't be normalized (missing sites,
+ * unrecognized species shape); callers should fall back to the raw
+ * structure in that case.
+ */
+export function normalize_pymatgen_frame_structure(
+  s: Record<string, unknown> | AnyStructure | undefined,
+): AnyStructure | null {
+  if (!s || typeof s !== `object` || !(`sites` in s)) return null
+  const sites = (s as { sites?: unknown[] }).sites
+  if (!Array.isArray(sites) || sites.length === 0) return null
+  const positions: Vec3[] = []
+  const elements: ElementSymbol[] = []
+  for (const site of sites as Record<string, unknown>[]) {
+    const xyz = site.xyz as Vec3 | undefined
+    if (!xyz || xyz.length < 3) return null
+    positions.push([xyz[0], xyz[1], xyz[2]])
+    const species = site.species as Array<{ element?: string }> | undefined
+    const element = (species?.[0]?.element ?? (site.label as string | undefined)) as
+      | ElementSymbol
+      | undefined
+    if (!element) return null
+    elements.push(element)
+  }
+  const lattice = (s as { lattice?: { matrix?: number[][]; pbc?: Pbc } }).lattice
+  const matrix = (lattice?.matrix as Matrix3x3 | undefined) ?? undefined
+  const pbc = lattice?.pbc
+  return create_structure(positions, elements, matrix, pbc) as AnyStructure
+}
 
 // Parse a JSON object into a trajectory (handles multiple JSON formats)
 export function parse_json_trajectory(
@@ -14,9 +59,11 @@ export function parse_json_trajectory(
   if (Array.isArray(data)) {
     const frames = data.map((frame_data, idx) => {
       const frame_obj = frame_data as Record<string, unknown>
+      const raw_structure = (frame_obj.structure ?? frame_obj) as Record<string, unknown>
+      const normalized = normalize_pymatgen_frame_structure(raw_structure)
       return {
-        structure: (frame_obj.structure || frame_obj) as AnyStructure,
-        step: (frame_obj.step as number) || idx,
+        structure: (normalized ?? raw_structure) as AnyStructure,
+        step: (frame_obj.step as number) ?? idx,
         metadata: (frame_obj.metadata as Record<string, unknown>) || {},
       }
     })
@@ -32,8 +79,18 @@ export function parse_json_trajectory(
 
   // Object with frames
   if (obj.frames && Array.isArray(obj.frames)) {
+    const frames = (obj.frames as TrajectoryFrame[]).map((f, idx) => {
+      const normalized = normalize_pymatgen_frame_structure(
+        f.structure as unknown as Record<string, unknown>,
+      )
+      return {
+        ...f,
+        step: f.step ?? idx,
+        structure: (normalized ?? f.structure) as AnyStructure,
+      }
+    })
     return {
-      frames: obj.frames as TrajectoryFrame[],
+      frames,
       metadata: {
         ...obj.metadata as Record<string, unknown>,
         source_format: `object_with_frames`,
@@ -43,8 +100,9 @@ export function parse_json_trajectory(
 
   // Single structure
   if (obj.sites) {
+    const normalized = normalize_pymatgen_frame_structure(obj)
     return {
-      frames: [{ structure: obj as AnyStructure, step: 0, metadata: {} }],
+      frames: [{ structure: (normalized ?? obj) as AnyStructure, step: 0, metadata: {} }],
       metadata: { source_format: `single_structure`, frame_count: 1 },
     }
   }

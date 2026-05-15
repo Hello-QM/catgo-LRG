@@ -4,6 +4,7 @@
   import { PeriodicTable } from '$lib/periodic-table'
   import { combinatorial_substitution } from '$lib/api/build'
   import type { TrajectoryType } from '$lib/trajectory'
+  import { normalize_pymatgen_frame_structure } from '$lib/trajectory/parsers/json'
 
   let {
     structure = $bindable<PymatgenStructure | undefined>(),
@@ -182,12 +183,33 @@
 
   function open_as_trajectory() {
     if (result_structures.length === 0) return
-    const frames = result_structures.map((s, i) => ({
-      structure: s as unknown as PymatgenStructure,
-      step: i,
-      metadata: { label: result_labels[i] || `Structure ${i + 1}` },
-    }))
-    on_trajectory_created?.({ frames, total_frames: frames.length } as TrajectoryType)
+    // `combinatorial_substitution` returns raw `pymatgen.Structure.as_dict()`
+    // payloads with `@class`, `@module`, `charge`, `oxidation_state: null`,
+    // etc. Feeding those straight into Trajectory turns each frame into a
+    // deep reactive proxy with extra slots; combined with per-frame element
+    // changes from substitution, the trajectory-bond-cache + position-cache
+    // pipeline re-clears + re-writes connectivity every flush and overflows
+    // Svelte 5's effect guard under the VS Code webview. Rebuild via
+    // `create_structure` (the same path extxyz uses) so the resulting
+    // trajectory matches the well-behaved on-disk format.
+    const frames = result_structures.map((s, i) => {
+      const normalized = normalize_pymatgen_frame_structure(
+        s as Record<string, unknown>,
+      )
+      return {
+        structure: (normalized ?? s) as unknown as PymatgenStructure,
+        step: i,
+        metadata: { label: result_labels[i] || `Structure ${i + 1}` },
+      }
+    })
+    on_trajectory_created?.({
+      frames,
+      total_frames: frames.length,
+      metadata: {
+        source_format: `doping_substitution`,
+        frame_count: frames.length,
+      },
+    } as TrajectoryType)
   }
 </script>
 

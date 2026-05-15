@@ -8,6 +8,7 @@
 import type { ElementSymbol, Vec3 } from '$lib'
 import type { AnyStructure, PymatgenStructure, Site } from '$lib/structure'
 import type { TrajectoryFrame, TrajectoryType } from '$lib/trajectory'
+import { normalize_pymatgen_frame_structure } from '$lib/trajectory/parsers/json'
 import { mat3x3_vec3_multiply, matrix_inverse_3x3, transpose_3x3_matrix } from '$lib/math'
 import type {
   AnchoredAtom,
@@ -139,7 +140,15 @@ export function generate_pathway_trajectory(
     for (const pathway of pathways) {
       for (let ki = 0; ki < pathway.steps.length; ki++) {
         const step = pathway.steps[ki]
-        const structure = apply_adsorbates_to_surface(surfaces[si], step.adsorbate_atoms)
+        const raw_structure = apply_adsorbates_to_surface(surfaces[si], step.adsorbate_atoms)
+        // Normalize to canonical xyz-parser shape — same fix DopingPane
+        // applies. `apply_adsorbates_to_surface` returns a pymatgen-shaped
+        // dict, which trips Svelte 5's effect flush under the VS Code
+        // webview when stuffed straight into a TrajectoryFrame.
+        const normalized = normalize_pymatgen_frame_structure(
+          raw_structure as unknown as Record<string, unknown>,
+        )
+        const structure = (normalized ?? raw_structure) as AnyStructure
 
         const metadata: PathwayFrameMetadata = {
           surface_idx: si,
