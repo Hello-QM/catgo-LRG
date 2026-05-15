@@ -40,17 +40,24 @@ export interface StreamAgentParams {
    * "default" panel. Omit for legacy / popout contexts.
    */
   tabId?: string
+  /**
+   * Per-chat-thread key. Forwarded to the Gemini adapter's persistent ACP
+   * process pool so repeat prompts in the same chat tab reuse one
+   * `gemini --acp` process and keep cross-turn context. The Claude/Codex
+   * adapters ignore it (their SDKs persist the subprocess themselves).
+   */
+  chatId?: string
 }
 
 export async function* stream_sdk_agent(
   params: StreamAgentParams,
 ): AsyncGenerator<AgentEvent> {
-  const { agent, prompt, sessionId, model, systemPrompt, attachments, signal, tabId } = params
+  const { agent, prompt, sessionId, model, systemPrompt, attachments, signal, tabId, chatId } = params
 
   const response = await fetch(`${getAgentBase()}/api/agent/stream`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
-    body: JSON.stringify({ agent, prompt, sessionId, model, systemPrompt, attachments, tabId }),
+    body: JSON.stringify({ agent, prompt, sessionId, model, systemPrompt, attachments, tabId, chatId }),
     signal,
   })
 
