@@ -98,14 +98,25 @@ export async function start_server(context: vscode.ExtensionContext): Promise<nu
 
     proc.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString()
+      // Drop verbose workflow.engine.scanner INFO records — the bundled
+      // sidecar logs full HPC job_defaults (account, paths, env_setup,
+      // module_loads) on every config read, which leaks user info into the
+      // VS Code extension-host console.  These are useful only with DEBUG
+      // logging on the sidecar; from the extension side, scrub them out
+      // before they hit `console.log`.
+      const filtered = text
+        .split(/\r?\n/)
+        .filter((line) => !/INFO:catgo\.workflow\.engine\.scanner/.test(line))
+        .join('\n')
+      if (!filtered.trim()) return
       // Python logging writes INFO/WARNING/ERROR records to stderr. Classify by
       // level so benign backend info logs don't spam VSCode's error channel.
-      if (/^\s*(ERROR|CRITICAL):/m.test(text) || /Traceback \(most recent call last\)/.test(text)) {
-        console.error('[catgo-server]', text)
-      } else if (/^\s*WARNING:/m.test(text) || /UserWarning/.test(text)) {
-        console.warn('[catgo-server]', text)
+      if (/^\s*(ERROR|CRITICAL):/m.test(filtered) || /Traceback \(most recent call last\)/.test(filtered)) {
+        console.error('[catgo-server]', filtered)
+      } else if (/^\s*WARNING:/m.test(filtered) || /UserWarning/.test(filtered)) {
+        console.warn('[catgo-server]', filtered)
       } else {
-        console.log('[catgo-server]', text)
+        console.log('[catgo-server]', filtered)
       }
     })
 

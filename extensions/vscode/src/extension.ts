@@ -18,6 +18,18 @@ import { stream_file_to_buffer } from './node-io'
 import { search_optimade_structures_backend, type OptimadeSearchOptions } from './optimade-backend'
 import { search_pubchem_compounds_backend } from './pubchem-backend'
 
+// Suppress Node 22 `punycode` DEP0040 deprecation warning surfaced by one of
+// our transitive deps. VS Code routes process warnings through the extension
+// host as ERR-level logs even though they're informational; the warning
+// leaks into the user-visible error channel and is non-actionable. All
+// other warnings pass through unchanged.
+process.on(`warning`, (warning: Error & { code?: string }) => {
+  if (warning.name === `DeprecationWarning` && warning.code === `DEP0040`) {
+    return
+  }
+  console.warn(`[node-warning]`, warning.name, warning.code ?? ``, warning.message)
+})
+
 interface FrameLoaderData {
   loader: FrameLoader
   file_data: ArrayBuffer

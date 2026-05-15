@@ -54,6 +54,24 @@
     if (tauri_win_label) return
     const url = `${window.location.origin}${window.location.pathname}#doping-pt`
 
+    // VS Code extension webview: window.open is sandboxed (warning) and
+    // `@tauri-apps/api`'s IPC bridge is absent (throws transformCallback
+    // undefined). The inline periodic table in DopingPane covers the picker
+    // UX, so just no-op here.
+    const is_vscode_webview = typeof globalThis !== `undefined` &&
+      typeof (globalThis as { acquireVsCodeApi?: unknown }).acquireVsCodeApi === `function`
+    if (is_vscode_webview) return
+
+    // Outside Tauri (plain web), bypass the Tauri path entirely — its IPC
+    // bridge is absent so post-construction calls (`.once(...)`) throw
+    // `Cannot read properties of undefined (reading 'transformCallback')`.
+    const has_tauri = typeof window !== `undefined` &&
+      (`__TAURI_INTERNALS__` in window || `__TAURI__` in window)
+    if (!has_tauri) {
+      open_browser_window(url)
+      return
+    }
+
     import(`@tauri-apps/api/webviewWindow`).then(({ WebviewWindow }) => {
       const label = `doping-pt-${Date.now()}`
       const win = new WebviewWindow(label, {
