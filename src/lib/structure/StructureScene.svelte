@@ -3054,6 +3054,24 @@
         if (!USE_NEW_ATOM_SYSTEM) return false
         if (added.length === 0) return false
         if (!structure) return false
+        // Bail out if any incoming site_id collides with an existing slot in
+        // the manager. Pencil/fragment adds compute site_id from the
+        // **un-imaged** structure length, but the manager mirrors the
+        // **imaged** structure — so PBC image atoms already occupy sids in
+        // the [num_original, num_original + n_images) range that collides
+        // with the next pencil sid. add_atoms would overwrite the existing
+        // map entry, shadow sync would then remove the new slot during its
+        // diff (consuming the desired entry first, leaving the tail slot
+        // unmatched), and the final remove_atoms .delete(sid) call would
+        // wipe the surviving slot's map entry — leaving the buffer with the
+        // sid but find_slot_by_site_id returning -1. Caller falls back to
+        // canonical set_structure → shadow sync path which handles this
+        // correctly. See issue #33.
+        for (let i = 0; i < added.length; i++) {
+          if (atom_manager.find_slot_by_site_id(added[i].site_id) >= 0) {
+            return false
+          }
+        }
         const t0 = import.meta.env?.DEV ? performance.now() : 0
         // AtomManager: bulk-add the new slots, then set initial colors in a
         // batch. Typed-array construction per-call is fine for the small
