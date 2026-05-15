@@ -227,7 +227,7 @@
     "desktop:dev": "vite --config vite.desktop.config.ts",
     "desktop:build": "vite build --config vite.desktop.config.ts",
     "deploy:build": "VITE_STATIC_ONLY=true vite build --config vite.desktop.config.ts",
-    "agent:dev": "bun run src/lib/server/agent-bridge/server.ts",
+    "agent:dev": "node scripts/agent-dev.mjs",
     "desktop:serve": "concurrently -k -n fe,be,ag -c blue,green,magenta \"pnpm desktop:dev\" \"python server/main.py\" \"pnpm agent:dev\"",
     "tauri": "node scripts/tauri-dev.mjs",
     "tauri:dev": "pnpm desktop:build && node scripts/tauri-dev.mjs dev",
