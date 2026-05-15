@@ -80,7 +80,7 @@ export function agentBridgePlugin(serverPort: number): Plugin {
             await ensureAdapters()
 
             const body = JSON.parse(await readBody(req))
-            const { agent, prompt, sessionId, model, systemPrompt, attachments, tabId } = body
+            const { agent, prompt, sessionId, model, systemPrompt, attachments, tabId, chatId } = body
 
             if (!VALID_AGENTS.includes(agent)) {
               jsonResponse(res, 400, { error: `Invalid agent: must be one of ${VALID_AGENTS.join(', ')}` })
@@ -144,6 +144,7 @@ export function agentBridgePlugin(serverPort: number): Plugin {
                 permissionCallback,
                 abortSignal: abortController.signal,
                 tabId,
+                chatId,
               })) {
                 writeEvent(event)
               }

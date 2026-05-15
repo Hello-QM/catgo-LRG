@@ -20,7 +20,7 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
-    include: ['tests/vitest/**/*.test.ts'],
+    include: ['tests/vitest/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
     globals: false,
     // quickhull3d ships an ESM index.js that imports `./QuickHull` without
     // an extension. Node's ESM resolver rejects that — force Vite to

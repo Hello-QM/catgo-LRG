@@ -64,4 +64,12 @@ export interface StreamParams {
    * currently ignore this (their CLIs configure MCP elsewhere).
    */
   tabId?: string
+  /**
+   * Per-chat-thread key for the persistent Gemini ACP process pool. When
+   * set, repeat `stream()` calls with the same `chatId` reuse one
+   * `gemini --acp` process + ACP session, so the model remembers prior
+   * turns. Omit → fresh one-shot process per call (legacy behaviour;
+   * keeps non-pooled callers and the Claude/Codex adapters unaffected).
+   */
+  chatId?: string
 }

@@ -460,6 +460,7 @@ export async function send_message(
         attachments,
         signal: slice.abort_controller.signal,
         tabId: tab_id,
+        chatId: tab_id,
       })
 
       let full_text = ``

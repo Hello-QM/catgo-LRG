@@ -31,6 +31,7 @@ import type { AgentType } from './types.js'
 import './adapters/claude.js'
 import './adapters/codex.js'
 import './adapters/gemini.js'
+import { shutdownGeminiPool } from './adapters/gemini.js'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -93,7 +94,7 @@ function agentCwdFor(agent: AgentType): string {
 
 async function handleStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = JSON.parse(await readBody(req))
-  const { agent, prompt, sessionId, model, systemPrompt, attachments, tabId } = body
+  const { agent, prompt, sessionId, model, systemPrompt, attachments, tabId, chatId } = body
 
   if (!VALID_AGENTS.includes(agent)) {
     jsonResponse(res, 400, { error: `Invalid agent: must be one of ${VALID_AGENTS.join(', ')}` })
@@ -141,6 +142,7 @@ async function handleStream(req: IncomingMessage, res: ServerResponse): Promise<
       permissionCallback,
       abortSignal: abortController.signal,
       tabId,
+      chatId,
     })) {
       writeEvent(event)
     }
@@ -237,6 +239,9 @@ server.listen(AGENT_PORT, HOST, () => {
 // Graceful shutdown — Tauri sidecar sends SIGTERM on app exit.
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, () => {
+    // Kill all persistent gemini --acp children so desktop:serve restarts
+    // don't leak processes.
+    void shutdownGeminiPool()
     server.close(() => process.exit(0))
     // Hard exit after 2s if close hangs (long-poll SSE connection)
     setTimeout(() => process.exit(1), 2000).unref()
