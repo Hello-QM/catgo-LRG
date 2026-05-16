@@ -51,7 +51,6 @@
     compute_step_label_positions,
     get_view_mode_label,
     read_file_content,
-    structures_compatible,
   } from './trajectory-utils'
   import {
     clamp_fps,
@@ -243,6 +242,9 @@
         return trajectory?.frames?.[frame_idx]?.structure?.sites?.[0]?.xyz?.[0] ?? null
       },
       get_current_idx(): number { return current_step_idx },
+      get_frame_natoms(frame_idx: number): number | null {
+        return trajectory?.frames?.[frame_idx]?.structure?.sites?.length ?? null
+      },
       get_current_frame_x0(): number | null {
         return trajectory?.frames?.[current_step_idx]?.structure?.sites?.[0]?.xyz?.[0] ?? null
       },
@@ -1340,69 +1342,6 @@
     pending_ops = [...pending_ops, op]
   }
 
-  // structures_compatible imported from trajectory-utils.ts
-
-  /** Get first non-current frame as compatibility reference (for add/delete/replace where current frame already changed) */
-  function _get_ref_structure(): AnyStructure | null {
-    if (!trajectory) return null
-    for (let i = 0; i < trajectory.frames.length; i++) {
-      if (i !== current_step_idx) return materialize_frame(i) ?? trajectory.frames[i].structure
-    }
-    return null
-  }
-
-  /** Apply edit_fn to all compatible non-current frames in chunks to avoid blocking the UI.
-   *  Used for add/delete/replace — less frequent than move, so object allocation is acceptable. */
-  function _chunked_cross_frame_edit(
-    edit_fn: (structure: AnyStructure) => AnyStructure,
-    ref_structure: AnyStructure,
-  ) {
-    if (!trajectory) return
-    // Catch all frames up to the current pending queue before an eager edit,
-    // so edit_fn sees the latest state and pending ops don't get lost.
-    // No-op while the queue is empty (Phases A–C).
-    flush_pending_ops()
-    const frames = trajectory.frames
-    const skip = current_step_idx
-
-    // Pre-check compatibility once: if the first non-current frame is incompatible, bail early.
-    // Trajectory frames almost always share the same atom count and element sequence.
-    const probe_idx = skip === 0 ? 1 : 0
-    if (probe_idx >= frames.length) return
-    const probe_struct = materialize_frame(probe_idx) ?? frames[probe_idx].structure
-    if (!structures_compatible(ref_structure, probe_struct)) return
-
-    // Chunks sized to stay close to one 60fps frame budget (~16 ms). At
-    // ~1.5–2 ms per frame edit on an 878-site proxy-wrapped structure,
-    // CHUNK=8 keeps each macrotask under ~16 ms so the scheduler rarely
-    // drops a frame. FIRST_CHUNK=4 makes the kick-off task tiny so the user
-    // sees no perceivable hitch right after the delete.
-    const FIRST_CHUNK = 4
-    const CHUNK = 8
-    let pos = 0
-    let first_pass = true
-    cross_frame_busy = true
-
-    function process_chunk() {
-      const size = first_pass ? FIRST_CHUNK : CHUNK
-      first_pass = false
-      const end = Math.min(pos + size, frames.length)
-      for (let i = pos; i < end; i++) {
-        if (i === skip) continue
-        const frame = frames[i]
-        frames[i] = { ...frame, structure: edit_fn(frame.structure) }
-      }
-      pos = end
-      if (pos < frames.length) {
-        setTimeout(process_chunk, 0)
-      } else {
-        if (trajectory) trajectory = { ...trajectory }
-        cross_frame_busy = false
-      }
-    }
-    process_chunk()
-  }
-
   /** True when this trajectory is in-memory (frames mutable, position_cache
    *  usable). Indexed/streaming trajectories have a frame_loader. */
   function _is_in_memory(): boolean {
@@ -1484,51 +1423,71 @@
     trajectory = { ...trajectory }
   }
 
-  function handle_atom_added(event: { element: ElementSymbol; position: Vec3 }) {
-    // W5: topology-altering edit during pause disables resume. Must come
-    // BEFORE _can_cross_frame_edit guard — even for indexed trajectories
-    // where cross-frame propagation doesn't run, the topology is altered
-    // locally and position_cache becomes invalid.
+  /**
+   * Unified topology-edit write path (add / delete / replace), mirroring the
+   * #51 manipulate path. Always commits the CURRENT frame (the fast-path
+   * renders position_cache / slow-path renders frames[idx].structure — NOT
+   * the bound current_structure — so the current frame must be committed
+   * here, never skipped). Topology changes atom count → drop position_cache
+   * (slow-path renders the edited frame; bond cache invalidated via the
+   * {all:true} positions-version). edit-current stops; edit-all fans the op
+   * out lazily via the existing pending-ops machinery.
+   */
+  function _apply_topology_op(op: PendingOp) {
+    // W5: a topology-altering edit while paused disables resume (even in the
+    // not-in-memory case the local topology / position_cache is now invalid).
     if (!is_playing) resume_disabled = true
-    if (!_can_cross_frame_edit()) return
-    // Current frame already has the atom — use non-current frame as ref
-    const ref = _get_ref_structure()
-    if (!ref) return
-    _chunked_cross_frame_edit((s) => add_atom(s, event.element, event.position), ref)
+    if (!trajectory) return
+    if (edit_mode === `view`) return
+    if (!_is_in_memory()) {
+      // Indexed/streaming slow path already renders frame.structure each
+      // frame; the editing UI mutated the current structure via bind. Just
+      // refresh so the change is observed.
+      trajectory = { ...trajectory }
+      return
+    }
+
+    const frames = trajectory.frames
+    const idx = current_step_idx
+    const cur = frames[idx]
+    if (!cur?.structure) return
+
+    // Commit the CURRENT frame.
+    frames[idx] = { ...cur, structure: apply_op(cur.structure, op) }
+
+    // Topology changed: the Float32 position cache (fixed per-frame length)
+    // is invalid. Dropping it makes the render fall back to the slow path
+    // (current_structure = frames[idx].structure) so the edit is visible on
+    // the current frame; the {all:true} bump invalidates every bond frame.
+    position_cache = null
+    force_cache = null
+    trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
+
+    if (edit_mode === `edit-current`) {
+      // Other frames stay independent (use-case 2).
+      trajectory = { ...trajectory }
+      return
+    }
+
+    // edit-all: fan out lazily (use-case 3 — many frames, must not freeze).
+    // Other frames materialize this op on next read (scrub / export / flush)
+    // exactly like the proven delete path. Current frame already applied →
+    // pre-advance its cursor so materialize_frame won't re-apply it.
+    enqueue_pending_op(op)
+    frame_op_cursor[idx] = pending_ops.length
+    trajectory = { ...trajectory }
+  }
+
+  function handle_atom_added(event: { element: ElementSymbol; position: Vec3 }) {
+    _apply_topology_op({ kind: `add`, element: event.element, position: event.position })
   }
 
   function handle_atoms_deleted(event: { site_indices: number[] }) {
-    if (!is_playing) resume_disabled = true
-    // Phase D: lazy delete. O(1) at the edit site. Record the op once; each
-    // frame applies it in `materialize_frame()` the next time that frame is
-    // read (navigation, flush, save). Current frame's view is already
-    // post-delete via Structure.svelte's `bind:structure`, so nothing to do
-    // for it here — if the user scrubs away and comes back, materialize
-    // catches it up from its stale baseline using the same pending op.
-    //
-    // Compared to the previous eager chunked-edit model, this eliminates:
-    //   - 200+ proxy reads per frame per delete
-    //   - setTimeout chunk storm (N_frames / CHUNK tasks)
-    //   - `trajectory = { ...trajectory }` spread → plot_series re-derive
-    //   - cross_frame_busy flag dance
-    if (!_can_cross_frame_edit()) return
-    if (!_get_ref_structure()) return // no other frames to edit
-    enqueue_pending_op({ kind: 'delete', site_indices: event.site_indices })
+    _apply_topology_op({ kind: `delete`, site_indices: event.site_indices })
   }
 
   function handle_atom_replaced(event: { site_indices: number[]; new_element: ElementSymbol }) {
-    if (!is_playing) resume_disabled = true
-    if (!_can_cross_frame_edit()) return
-    // Current frame already has atoms replaced — use non-current frame as ref
-    const ref = _get_ref_structure()
-    if (!ref) return
-    _chunked_cross_frame_edit((s) => {
-      let result = s
-      for (const idx of event.site_indices) {
-        result = replace_atom(result, idx, event.new_element)
-      }
-      return result
-    }, ref)
+    _apply_topology_op({ kind: `replace`, site_indices: event.site_indices, new_element: event.new_element })
   }
 </script>
 
