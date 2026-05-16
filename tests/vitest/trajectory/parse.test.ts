@@ -1,3 +1,4 @@
+import { create_structure } from '$lib/trajectory/parsers/common'
 import {
   get_unsupported_format_message,
   is_trajectory_file,
@@ -907,4 +908,63 @@ describe(`Comprehensive File Coverage`, () => {
       })
     },
   )
+})
+
+describe(`create_structure non-orthogonal lattice (cart↔frac handedness)`, () => {
+  const M: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+  ] = [
+    [-4.039723298286767, 4.039723298286767, 4.039723298286767],
+    [4.039723298286767, -4.039723298286767, 4.039723298286767],
+    [14.812318760384814, 14.812318760384814, -14.812318760384814],
+  ]
+  const Mt = [
+    [M[0][0], M[1][0], M[2][0]],
+    [M[0][1], M[1][1], M[2][1]],
+    [M[0][2], M[1][2], M[2][2]],
+  ]
+  function inv3(m: number[][]): number[][] {
+    const d =
+      m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+      m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+      m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+    return [
+      [(m[1][1] * m[2][2] - m[1][2] * m[2][1]) / d, (m[0][2] * m[2][1] - m[0][1] * m[2][2]) / d, (m[0][1] * m[1][2] - m[0][2] * m[1][1]) / d],
+      [(m[1][2] * m[2][0] - m[1][0] * m[2][2]) / d, (m[0][0] * m[2][2] - m[0][2] * m[2][0]) / d, (m[0][2] * m[1][0] - m[0][0] * m[1][2]) / d],
+      [(m[1][0] * m[2][1] - m[1][1] * m[2][0]) / d, (m[0][1] * m[2][0] - m[0][0] * m[2][1]) / d, (m[0][0] * m[1][1] - m[0][1] * m[1][0]) / d],
+    ]
+  }
+  const invMt = inv3(Mt)
+  const expected_frac = (c: number[]) => [
+    invMt[0][0] * c[0] + invMt[0][1] * c[1] + invMt[0][2] * c[2],
+    invMt[1][0] * c[0] + invMt[1][1] * c[1] + invMt[1][2] * c[2],
+    invMt[2][0] * c[0] + invMt[2][1] * c[1] + invMt[2][2] * c[2],
+  ]
+
+  it(`keeps an in-cell atom's xyz and derives correct fractional abc`, () => {
+    const pos = [1.357, 1.36, -1.358]
+    const ef = expected_frac(pos)
+    const s = create_structure([pos], [`W`] as never, M as never, [true, true, true] as never)
+    const site = (s as { sites: { xyz: number[]; abc: number[] }[] }).sites[0]
+    expect(site.xyz[0]).toBeCloseTo(pos[0], 6)
+    expect(site.xyz[1]).toBeCloseTo(pos[1], 6)
+    expect(site.xyz[2]).toBeCloseTo(pos[2], 6)
+    expect(site.abc[0]).toBeCloseTo(ef[0], 5)
+    expect(site.abc[1]).toBeCloseTo(ef[1], 5)
+    expect(site.abc[2]).toBeCloseTo(ef[2], 5)
+  })
+
+  it(`round-trips: Mᵀ·abc reproduces xyz for the non-orthogonal cell`, () => {
+    const pos = [2.728, 2.694, -2.71]
+    const s = create_structure([pos], [`W`] as never, M as never, [true, true, true] as never)
+    const site = (s as { sites: { xyz: number[]; abc: number[] }[] }).sites[0]
+    const rx = Mt[0][0] * site.abc[0] + Mt[0][1] * site.abc[1] + Mt[0][2] * site.abc[2]
+    const ry = Mt[1][0] * site.abc[0] + Mt[1][1] * site.abc[1] + Mt[1][2] * site.abc[2]
+    const rz = Mt[2][0] * site.abc[0] + Mt[2][1] * site.abc[1] + Mt[2][2] * site.abc[2]
+    expect(rx).toBeCloseTo(site.xyz[0], 4)
+    expect(ry).toBeCloseTo(site.xyz[1], 4)
+    expect(rz).toBeCloseTo(site.xyz[2], 4)
+  })
 })

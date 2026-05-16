@@ -47,7 +47,10 @@ export const create_structure = (
   force_data?: number[][],
   move_mask?: boolean[],
 ): AnyStructure => {
-  const inv_matrix = lattice_matrix ? get_inverse_matrix(lattice_matrix) : null
+  // extxyz/pymatgen lattice rows = a,b,c ⇒ cart = Mᵀ·frac ⇒ frac = inv(Mᵀ)·cart.
+  // inv(M) here silently breaks only non-orthogonal cells (M ≠ Mᵀ); matches pbc.ts.
+  const lattice_T = lattice_matrix ? math.transpose_3x3_matrix(lattice_matrix) : null
+  const inv_matrix = lattice_T ? math.matrix_inverse_3x3(lattice_T) : null
   // Pre-compute fractional coords for all atoms so the wrap-decision pass
   // can do a near-neighbor check in raw Cartesian without re-deriving abc.
   const initial_abcs: Vec3[] = positions.map((pos) =>
@@ -118,7 +121,9 @@ export const create_structure = (
         abc[2] - Math.floor(abc[2]),
       ]
       abc = new_abc
-      xyz = math.mat3x3_vec3_multiply(lattice_matrix, new_abc)
+      // frac→cart for rows=a,b,c is Mᵀ·frac (same as the inline near-neighbor
+      // check above and pbc.ts:219).
+      xyz = math.mat3x3_vec3_multiply(lattice_T as Matrix3x3, new_abc)
     }
     const properties: Record<string, unknown> = force_data?.[idx]
       ? { force: force_data[idx] as Vec3 }
