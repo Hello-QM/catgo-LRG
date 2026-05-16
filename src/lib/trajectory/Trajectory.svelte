@@ -1373,6 +1373,14 @@
       return
     }
 
+    // Catch every frame (incl. the current one) up to the pending queue
+    // before this eager in-place edit, so we commit on top of the latest
+    // materialized state and a prior lazy op can't be skipped on the
+    // current frame (its cursor is pre-advanced below). No-op when the
+    // queue is empty. Restores the guard the old `_chunked_cross_frame_edit`
+    // ran before every eager edit.
+    flush_pending_ops()
+
     const frames = trajectory.frames
     const idx = current_step_idx
 
@@ -1446,6 +1454,13 @@
       trajectory = { ...trajectory }
       return
     }
+
+    // Catch every frame up to the pending queue before this eager topology
+    // edit, so the current frame is committed on top of the latest
+    // materialized state and a prior lazy op can't be skipped on it (its
+    // cursor is pre-advanced below). No-op when the queue is empty.
+    // Restores the guard the old `_chunked_cross_frame_edit` ran first.
+    flush_pending_ops()
 
     const frames = trajectory.frames
     const idx = current_step_idx
