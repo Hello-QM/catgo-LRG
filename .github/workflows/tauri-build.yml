@@ -69,6 +69,12 @@ jobs:
           pip install -r reqs_no_ob.txt
           rm reqs_no_ob.txt
 
+      - name: Install Rust (cube-processor)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build cube-processor
+        run: cargo build --release --manifest-path tools/cube-processor/Cargo.toml
+
       - name: Build backend (Unix)
         if: runner.os != 'Windows'
         run: |
