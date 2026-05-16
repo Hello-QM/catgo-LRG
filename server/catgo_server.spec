@@ -24,6 +24,12 @@ block_cipher = None
 # Get the server directory
 server_dir = Path(SPECPATH)
 
+# cube-processor binary name is platform-specific (Windows appends .exe).
+# The source path must match the actual cargo artifact or PyInstaller fails
+# with "Unable to find ...cube-processor"; the bundle dest dir stays the
+# same so runtime path resolution is unchanged on each platform.
+_cube_bin = 'cube-processor.exe' if sys.platform == 'win32' else 'cube-processor'
+
 # Auto-collect all submodules (lazy imports invisible to PyInstaller)
 catgo_submodules = collect_submodules('catgo')
 workflow_submodules = collect_submodules('workflow')
@@ -61,7 +67,7 @@ a = Analysis(
         # must match the layout `server/catgo/routers/{chgcar,cube}.py` use,
         # which is `<MEIPASS>/tools/cube-processor/target/release/cube-processor`
         # (from Path(__file__).parent.parent.parent / "tools" / ...).
-        ('../tools/cube-processor/target/release/cube-processor',
+        (f'../tools/cube-processor/target/release/{_cube_bin}',
          'tools/cube-processor/target/release'),
     ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas,
     hiddenimports=catgo_submodules + workflow_submodules + [
