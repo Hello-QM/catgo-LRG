@@ -1,4 +1,4 @@
-import type { elem_symbols, element_categories } from './labels'
+import type { ElementSymbol, elem_symbols, element_categories } from './labels'
 
 export * from './bands'
 export * from './brillouin'
@@ -36,7 +36,6 @@ export * from './utils'
 export * from './xrd'
 
 export type ElementCategory = (typeof element_categories)[number]
-export type ElementSymbol = (typeof elem_symbols)[number]
 
 export type ChemicalElement = {
   'cpk-hex': string | null
