@@ -1057,6 +1057,73 @@ test.describe(`Trajectory Component`, () => {
       expect(after, `view mode = no mutation`).toBeCloseTo(before as number, 6)
     })
   })
+
+  test.describe(`add/delete/replace edit scope (issue #51 follow-up)`, () => {
+    const api = `(globalThis).__catgo_traj_test`
+
+    test(`edit-current add: only the current frame gains an atom`, async ({ page }) => {
+      await expect(trajectory_viewer).toBeVisible({ timeout: 10000 })
+      await page.evaluate((a) => eval(a).set_edit_mode(`edit-current`), api)
+      const idx = await page.evaluate((a) => eval(a).get_current_idx(), api)
+      const other = idx === 0 ? 1 : 0
+      const cur0 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      const oth0 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+
+      await page.evaluate((a) => eval(a).trigger_atom_added(), api)
+      await page.waitForTimeout(150)
+
+      const cur1 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      const oth1 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+      expect(cur1, `current frame +1 atom`).toBe((cur0 as number) + 1)
+      expect(oth1, `other frame unchanged`).toBe(oth0 as number)
+    })
+
+    test(`edit-all add: every frame gains the atom (current + lazily others)`, async ({ page }) => {
+      await expect(trajectory_viewer).toBeVisible({ timeout: 10000 })
+      await page.evaluate((a) => eval(a).set_edit_mode(`edit-all`), api)
+      const idx = await page.evaluate((a) => eval(a).get_current_idx(), api)
+      const other = idx === 0 ? 1 : 0
+      const cur0 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      const oth0 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+
+      await page.evaluate((a) => eval(a).trigger_atom_added(), api)
+      await page.waitForTimeout(150)
+      const cur1 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      expect(cur1, `current frame +1`).toBe((cur0 as number) + 1)
+      await page.keyboard.press(idx < other ? `ArrowRight` : `ArrowLeft`)
+      await page.waitForTimeout(150)
+      const oth1 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+      expect(oth1, `other frame +1 lazily`).toBe((oth0 as number) + 1)
+    })
+
+    test(`edit-current delete: only current frame loses an atom`, async ({ page }) => {
+      await expect(trajectory_viewer).toBeVisible({ timeout: 10000 })
+      await page.evaluate((a) => eval(a).set_edit_mode(`edit-current`), api)
+      const idx = await page.evaluate((a) => eval(a).get_current_idx(), api)
+      const other = idx === 0 ? 1 : 0
+      const cur0 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      const oth0 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+
+      await page.evaluate((a) => eval(a).trigger_atoms_deleted(), api)
+      await page.waitForTimeout(150)
+
+      const cur1 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      const oth1 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+      expect(cur1, `current frame -1 atom`).toBe((cur0 as number) - 1)
+      expect(oth1, `other frame unchanged`).toBe(oth0 as number)
+    })
+
+    test(`view mode blocks topology edits`, async ({ page }) => {
+      await expect(trajectory_viewer).toBeVisible({ timeout: 10000 })
+      await page.evaluate((a) => eval(a).set_edit_mode(`view`), api)
+      const idx = await page.evaluate((a) => eval(a).get_current_idx(), api)
+      const n0 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      await page.evaluate((a) => eval(a).trigger_atom_added(), api)
+      await page.waitForTimeout(150)
+      const n1 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      expect(n1, `view mode = no topology change`).toBe(n0 as number)
+    })
+  })
 })
 
 test.describe(`Trajectory Demo Page - Unit-Aware Plotting`, () => {
