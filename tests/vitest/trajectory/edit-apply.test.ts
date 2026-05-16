@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apply_displacements, write_sites_to_cache_slice } from '$lib/trajectory/edit-apply'
+import { apply_displacements, sites_to_float32, write_sites_to_cache_slice } from '$lib/trajectory/edit-apply'
 
 type Site = { xyz: [number, number, number]; abc: [number, number, number]; species: unknown }
 
@@ -68,5 +68,24 @@ describe('write_sites_to_cache_slice', () => {
     const arr = new Float32Array(3)
     write_sites_to_cache_slice(arr, sites)
     expect(Array.from(arr)).toEqual([1, 2, 3])
+  })
+})
+
+describe('sites_to_float32', () => {
+  it('builds a fresh xyz-flat (3·n) Float32Array from sites', () => {
+    const out = sites_to_float32([site(1, 2, 3), site(4, 5, 6)])
+    expect(out).toBeInstanceOf(Float32Array)
+    expect(out.length).toBe(6)
+    expect(Array.from(out)).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('returns an empty Float32Array for no sites', () => {
+    const out = sites_to_float32([])
+    expect(out.length).toBe(0)
+  })
+
+  it('reads xyz only (ignores abc) so the bond fallback matches the cache slice layout', () => {
+    const s = { xyz: [7, 8, 9] as [number, number, number], abc: [0.1, 0.2, 0.3] as [number, number, number] }
+    expect(Array.from(sites_to_float32([s]))).toEqual([7, 8, 9])
   })
 })

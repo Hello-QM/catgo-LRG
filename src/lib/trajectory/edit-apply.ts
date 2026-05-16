@@ -54,6 +54,22 @@ export function apply_displacements<T extends EditSite>(
   })
 }
 
+/** Build a fresh xyz-flat (3·n) Float32Array from sites. Renderer/bond
+ *  fallback for when the `position_cache` is transiently null — e.g. an
+ *  edit-all enqueues a pending op (which nulls the cache) in the same flush
+ *  the bond pipeline reads positions. Reads the already-committed frame
+ *  sites so the getter never returns null mid-edit. */
+export function sites_to_float32(sites: readonly { xyz: Vec3 }[]): Float32Array {
+  const out = new Float32Array(sites.length * 3)
+  for (let i = 0; i < sites.length; i++) {
+    const xyz = sites[i].xyz
+    out[i * 3] = xyz[0]
+    out[i * 3 + 1] = xyz[1]
+    out[i * 3 + 2] = xyz[2]
+  }
+  return out
+}
+
 /** Mirror sites' xyz into a position-cache Float32Array slice, in place. */
 export function write_sites_to_cache_slice(
   slice: Float32Array,

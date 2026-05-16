@@ -308,15 +308,25 @@ export function wire_trajectory_bond_cache(
       if (!getter || !base) return
       last_idx = idx
       last_pos_version = pv
-      // A same-frame in-place edit must recompute THIS frame even though
-      // idx didn't move — invalidate then request (on_frame_change's cache
-      // hit-check would otherwise early-return).
-      if (pos_changed && !idx_moved) {
+      // An in-place edit (positions-version bumped) must invalidate BEFORE
+      // any request, independent of whether `idx` also moved in the same
+      // flush. When a scrub coalesces with an edit-all version bump,
+      // `idx_moved && pos_changed` are both true; without this the cache
+      // hit-check in on_frame_change/request early-returns stale bonds for
+      // the destination frame. edit-all → drop every frame; edit-current →
+      // drop just this one.
+      if (pos_changed) {
         if (deps.get_positions_invalidate_all?.()) cache.invalidate_all()
         else cache.invalidate(idx)
-        cache.request(idx, getter, base, deps.get_strategy(), deps.get_options())
-      } else {
+      }
+      if (idx_moved) {
+        // Frame changed (with or without a coalesced edit): on_frame_change
+        // recomputes idx (cache now clean if pos_changed) and primes
+        // neighbors.
         cache.on_frame_change(idx, getter, base, deps.get_strategy(), deps.get_options())
+      } else {
+        // Same-frame in-place edit only: recompute just this frame.
+        cache.request(idx, getter, base, deps.get_strategy(), deps.get_options())
       }
     })
   })

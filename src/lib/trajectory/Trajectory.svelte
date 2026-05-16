@@ -56,7 +56,7 @@
     clamp_fps,
     get_keyboard_action,
   } from './trajectory-controls'
-  import { apply_displacements, write_sites_to_cache_slice } from './edit-apply'
+  import { apply_displacements, sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
 
   type EventHandlers = {
     on_play?: (data: TrajHandlerData) => void
@@ -1867,7 +1867,19 @@
           {trajectory_frame_forces}
           trajectory_step_idx={current_step_idx}
           trajectory_positions_version={trajectory_positions_version}
-          get_trajectory_frame_positions={(i: number) => position_cache?.[i] ?? null}
+          get_trajectory_frame_positions={(i: number) => {
+            const c = position_cache?.[i]
+            if (c) return c
+            // position_cache transiently null (an edit-all enqueued a
+            // pending op in the same flush that nulled it): fall back to
+            // the already-committed frame sites so the bond pipeline never
+            // reads null mid-edit (issue #60). Indexed/streaming frames
+            // have no in-memory structure → null (slow path handles it).
+            const sites = (
+              trajectory?.frames?.[i]?.structure as { sites?: { xyz: [number, number, number] }[] } | undefined
+            )?.sites
+            return sites ? sites_to_float32(sites) : null
+          }}
           allow_file_drop={false}
           style="height: 100%; min-height: 0; z-index: 3; border-radius: 0"
           {...{
