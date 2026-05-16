@@ -1123,6 +1123,50 @@ test.describe(`Trajectory Component`, () => {
       const n1 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
       expect(n1, `view mode = no topology change`).toBe(n0 as number)
     })
+
+    // issue B regression: two consecutive edit-all edits WITHOUT scrubbing
+    // between them. The current frame must commit on top of the prior op
+    // (not a stale baseline) so neither op is skipped on it, and the lazy
+    // fan-out must land BOTH ops on other frames identically. Pre-fix, the
+    // missing flush_pending_ops() let the second edit commit on a stale
+    // baseline / pre-advance the cursor past the first op → current frame
+    // diverged from every other frame.
+    test(`edit-all: consecutive manipulate+add (no scrub) keeps both ops on current frame and fans out consistently`, async ({ page }) => {
+      await expect(trajectory_viewer).toBeVisible({ timeout: 10000 })
+      await page.evaluate((a) => eval(a).set_edit_mode(`edit-all`), api)
+      const idx = await page.evaluate((a) => eval(a).get_current_idx(), api)
+      const other = idx === 0 ? 1 : 0
+      const cur_x0 = await page.evaluate(([a, i]) => eval(a).get_frame_x0(i), [api, idx] as const)
+      const cur_n0 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      const oth_x0 = await page.evaluate(([a, o]) => eval(a).get_frame_x0(o), [api, other] as const)
+      const oth_n0 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+
+      // op1: manipulate atom 0 by Δ=[0.01,0,0]; op2: add an H. No scrub between.
+      await page.evaluate((a) => eval(a).trigger_atoms_manipulated(), api)
+      await page.waitForTimeout(120)
+      await page.evaluate((a) => eval(a).trigger_atom_added(), api)
+      await page.waitForTimeout(150)
+
+      // Current frame must reflect BOTH ops (manipulate not skipped by the
+      // subsequent topology edit committing on a stale baseline).
+      const cur_x1 = await page.evaluate(([a, i]) => eval(a).get_frame_x0(i), [api, idx] as const)
+      const cur_n1 = await page.evaluate(([a, i]) => eval(a).get_frame_natoms(i), [api, idx] as const)
+      expect(cur_x1, `current frame kept the manipulate displacement`).toBeCloseTo(
+        (cur_x0 as number) + 0.01, 6,
+      )
+      expect(cur_n1, `current frame kept the add`).toBe((cur_n0 as number) + 1)
+
+      // Force the lazy fan-out to materialize on `other`, then assert it
+      // received the SAME two ops — no divergence from the current frame.
+      await page.keyboard.press(idx < other ? `ArrowRight` : `ArrowLeft`)
+      await page.waitForTimeout(150)
+      const oth_x1 = await page.evaluate(([a, o]) => eval(a).get_frame_x0(o), [api, other] as const)
+      const oth_n1 = await page.evaluate(([a, o]) => eval(a).get_frame_natoms(o), [api, other] as const)
+      expect(oth_x1, `other frame received the manipulate op lazily`).toBeCloseTo(
+        (oth_x0 as number) + 0.01, 6,
+      )
+      expect(oth_n1, `other frame received the add op lazily`).toBe((oth_n0 as number) + 1)
+    })
   })
 })
 
