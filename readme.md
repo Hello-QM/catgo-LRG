@@ -29,6 +29,17 @@ CatGo is a desktop application that combines an interactive 3D structure viewer,
 
 ---
 
+## 🔗 Links
+
+| | |
+|---|---|
+| **Web app** — try instantly, no install | <https://app.catgo-ucsd.org> |
+| **Tutorial / Docs** | <https://docs.catgo-ucsd.org> |
+| **Downloads** — prebuilt editions | <https://github.com/Hello-QM/catgo-LRG/releases> |
+| **Source** | <https://github.com/Hello-QM/catgo-LRG> |
+
+---
+
 ## ✨ Features
 
 | Area | Capability |
@@ -109,6 +120,29 @@ CatGo is a desktop application that combines an interactive 3D structure viewer,
 
 - **Import** — drag-drop, paste, OPTIMADE search (Materials Project, MC3D, Alexandria, MaterialsCloud, OMDB, 2DMatPedia), PubChem molecule search, file browser, HPC remote file read
 - **Export** — POSCAR, CIF, XYZ, extxyz, mol2, PDB, NEB-image set, full workflow JSON
+
+---
+
+## 📦 Get CatGo
+
+Prebuilt artifacts are published on [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases):
+
+- **Desktop app** — Tauri build, bundled backend + agent + shell.
+- **IDE extension** — a cross-platform `.vsix` (Windows / macOS / Linux). Installs in **VS Code, Cursor, and other VS Code-compatible IDEs**, bringing the full CatGo workbench (including the bundled backend and shell) inside your editor.
+- **Linux server binary** — headless backend for remote / HPC hosts.
+- **HPC bundle** — for cluster deployment.
+
+### Web version — frontend only
+
+<https://app.catgo-ucsd.org> is a hosted static single-page app (SvelteKit `adapter-static`). It runs **frontend features only**: structure viewing, editing, and 3D visualization in the browser, with zero install.
+
+It does **not** include the backend: no DFT/MD execution, no HPC job submission, and no AI-agent task execution. Those require the desktop app or the IDE extension, which bundle the backend and an integrated shell. Use the web app to inspect and edit structures; use a full edition to run real work.
+
+### Built-in shell
+
+The desktop app and the IDE extension ship with an **integrated shell** — drive jobs, inspect outputs, and move files without leaving CatGo. In the shell, **Ctrl + click** a structure file path (POSCAR, CIF, XYZ, extxyz, trajectory, …) opens it directly in the 3D viewer — no manual upload step.
+
+The rest of this README covers running CatGo **from source** for development.
 
 ---
 
