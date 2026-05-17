@@ -81,3 +81,70 @@ describe('session commands', () => {
     expect(c.cancel_generation).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('/resume', () => {
+  const sessions = [
+    { session_id: 'sB', agent: 'claude', topic: 'OER on RuO2', created_at: 1, last_active: 200, message_count: 4 },
+    { session_id: 'sA', agent: 'claude', topic: '', created_at: 1, last_active: 100, message_count: 2 },
+  ]
+  it('lists newest-first; shows topic + last-message snippet; falls back to last message when topic empty', async () => {
+    const c = ctx({
+      list_sessions: vi.fn(() => sessions),
+      load_session_messages: vi.fn((id: string) =>
+        id === 'sB' ? [{ role: 'user', content: 'hi', timestamp: 1 },
+                        { role: 'assistant', content: 'Here is the OER workflow summary text', timestamp: 2 }]
+                     : [{ role: 'user', content: 'plain question about slab', timestamp: 1 }]),
+    })
+    await run_slash('/resume', c as any)
+    const out = (c.emit as any).mock.calls[0][0] as string
+    expect(out.indexOf('1.')).toBeLessThan(out.indexOf('2.'))           // sB (newest) first
+    expect(out).toContain('OER on RuO2 — Here is the OER workflow')     // topic + last-msg combined
+    expect(out).toContain('plain question about slab')                  // empty topic → last msg
+    expect(c.resume_session).not.toHaveBeenCalled()
+  })
+  it('shows only the topic when the session has no messages', async () => {
+    const c = ctx({
+      list_sessions: vi.fn(() => [{ session_id: 'sT', agent: 'claude', topic: 'Just a topic', created_at: 1, last_active: 5, message_count: 0 }]),
+      load_session_messages: vi.fn(() => []),
+    })
+    await run_slash('/resume', c as any)
+    const out = (c.emit as any).mock.calls[0][0] as string
+    expect(out).toContain('Just a topic')
+    // The session line must not have a separator — only the header line contains "—"
+    const sessionLine = out.split('\n').find((l: string) => l.startsWith('1.')) ?? ''
+    expect(sessionLine).not.toContain('—')   // no separator when there is no last message
+  })
+  it('numeric arg resumes the nth listed session', async () => {
+    const c = ctx({
+      list_sessions: vi.fn(() => sessions),
+      load_session_messages: vi.fn(() => [{ role: 'user', content: 'x', timestamp: 1 }]),
+    })
+    await run_slash('/resume 1', c as any)
+    expect(c.resume_session).toHaveBeenCalledWith('claude', 'sB',
+      [{ role: 'user', content: 'x', timestamp: 1 }], 'default')
+  })
+  it('out-of-range index emits a usage note, does not throw or resume', async () => {
+    const c = ctx({ list_sessions: vi.fn(() => sessions) })
+    await run_slash('/resume 9', c as any)
+    expect(c.resume_session).not.toHaveBeenCalled()
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('1–2'))
+  })
+  it('empty session list emits a note', async () => {
+    const c = ctx({ list_sessions: vi.fn(() => []) })
+    await run_slash('/resume', c as any)
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('No past sessions'))
+  })
+  it('truncates a long composed line to 60 chars + ellipsis', async () => {
+    const longTopic = 'X'.repeat(80)
+    const c = ctx({
+      list_sessions: vi.fn(() => [{ session_id: 's1', agent: 'claude', topic: longTopic, created_at: 1, last_active: 9, message_count: 0 }]),
+      load_session_messages: vi.fn(() => []),
+    })
+    await run_slash('/resume', c as any)
+    const out = (c.emit as any).mock.calls[0][0] as string
+    const line = out.split('\n').find(l => l.startsWith('1.')) as string
+    expect(line).toContain('…')
+    expect(line).toContain('X'.repeat(60))
+    expect(line).not.toContain('X'.repeat(61))
+  })
+})

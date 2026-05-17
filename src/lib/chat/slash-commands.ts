@@ -1,14 +1,7 @@
-import type { ChatMessage } from './types'
+import type { ChatMessage, SessionSummary } from './types'
+import { get_display_text } from './types'
 
-export interface SessionSummary {
-  session_id: string
-  agent: string
-  topic: string
-  created_at: number
-  last_active: number
-  message_count: number
-  model?: string
-}
+export type { SessionSummary } from './types'
 
 export interface SlashCtx {
   tab_id: string
@@ -103,3 +96,50 @@ SLASH_COMMANDS.push(
     run(ctx) { ctx.cancel_generation() },
   },
 )
+
+function rel_time(ms: number): string {
+  const d = Date.now() - ms
+  const m = Math.round(d / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.round(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.round(h / 24)}d ago`
+}
+
+function snippet(ctx: SlashCtx, s: SessionSummary): string {
+  const msgs = ctx.load_session_messages(s.session_id)
+  const last = msgs.length ? get_display_text(msgs[msgs.length - 1].content) : ''
+  const topic = (s.topic ?? '').replace(/\s+/g, ' ').trim()
+  const preview = last.replace(/\s+/g, ' ').trim()
+  // Design: each line shows topic AND a snippet of the last message.
+  // topic + preview when both exist; whichever exists alone otherwise.
+  let text: string
+  if (topic && preview) text = `${topic} — ${preview}`
+  else text = topic || preview || '(empty)'
+  return text.length > 60 ? text.slice(0, 60) + '…' : text
+}
+
+SLASH_COMMANDS.push({
+  name: 'resume',
+  hint: '[n]',
+  summary: 'List recent sessions, or resume the nth',
+  run(ctx) {
+    const sorted = ctx.list_sessions().slice().sort((a, b) => b.last_active - a.last_active)
+    if (sorted.length === 0) { ctx.emit('No past sessions found.'); return }
+    if (ctx.args.trim() === '') {
+      const lines = sorted.map((s, i) =>
+        `${i + 1}. ${snippet(ctx, s)} · ${rel_time(s.last_active)}`)
+      ctx.emit(`**Recent sessions** — /resume <n> to open one\n\n${lines.join('\n')}`)
+      return
+    }
+    const n = Number.parseInt(ctx.args.trim(), 10)
+    if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
+      ctx.emit(`/resume expects a number 1–${sorted.length}.`)
+      return
+    }
+    const s = sorted[n - 1]
+    const msgs = ctx.load_session_messages(s.session_id)
+    ctx.resume_session(s.agent, s.session_id, msgs.length ? msgs : undefined, ctx.tab_id)
+  },
+})
