@@ -1000,6 +1000,7 @@ _ACTION_REQUIRED: dict[str, list[str]] = {
     "node_types": [],
     "node_details": ["node_type"],
     "create": ["name"],
+    "rename": ["workflow_id", "name"],
     "get": ["workflow_id"],
     "add_node": ["workflow_id", "node_type"],
     "remove_node": ["workflow_id", "node_id"],
@@ -1243,6 +1244,24 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                 has_struct = bool(init_nodes[0]["params"].get("structure_json")) if init_nodes else False
                 struct_msg = "with viewer structure captured" if has_struct else "(WARNING: no structure in viewer — user must import manually)"
             return [_t(type="text", text=f"Created workflow '{wf['name']}' (id={wf['id']}). {len(init_nodes)} structure_input node(s) {struct_msg}. Use add_node/batch to build the pipeline.{snapshot}")]
+
+        # -- Rename: change only the workflow's display name, leave graph alone --
+        if action == "rename":
+            wf_id = args["workflow_id"]
+            new_name = str(args["name"]).strip()
+            if not new_name:
+                return [_t(type="text", text="rename: name must be non-empty")]
+            # PUT /{id} with only `name` — the backend WorkflowUpdate model
+            # supports rename without touching graph_json (workflow.py:369,
+            # "Update a workflow (save graph, rename, change status)").
+            resp = await client.put(f"{base}/{wf_id}", json={"name": new_name})
+            if resp.status_code not in (200, 201):
+                return [_t(type="text", text=f"Rename failed ({resp.status_code}): {resp.text[:300]}")]
+            wf = resp.json()
+            # Refresh the open editor + sidebar so the new name shows without
+            # a manual reload (same signal create/set_params use).
+            await _push_workflow_navigate(client, wf_id)
+            return [_t(type="text", text=f"Renamed workflow to '{wf.get('name', new_name)}' (id={wf_id}).")]
 
         # -- Batch mutation: multiple operations in a single read-modify-write --
         if action == "batch":

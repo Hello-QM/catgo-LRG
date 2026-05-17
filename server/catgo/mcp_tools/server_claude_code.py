@@ -220,9 +220,13 @@ TOOLS = [
             "supercell expansion, atom add/delete — those are catgo_structure + catgo_analyze. "
             "The disambiguator: does the user want NUMBERS (energies, ΔG, barriers) at the end? "
             "If yes, build a workflow. If they just want a STRUCTURE in the viewer, don't.\n\n"
-            "Actions: list, templates, node_types, node_details, create, get, add_node, "
+            "Actions: list, templates, node_types, node_details, create, rename, get, add_node, "
             "remove_node, connect, set_params, batch, run, pause, resume, validate, status, step_error, "
             "retry, batch_status, batch_results, list_presets.\n\n"
+            "RENAME an existing workflow: rename {workflow_id:'<ID from context>', "
+            "name:'<new name>'}. This only changes the display name — the graph is "
+            "untouched. Use it when the user asks to rename/retitle the current "
+            "workflow; do NOT create a new workflow for a rename.\n\n"
             "FAST PATH for a new reaction-mechanism workflow (CO2RR / OER / HER / NRR / NEB / "
             "DOS / slow-growth — i.e. when the user wants ΔG values, overpotentials, barriers):\n"
             "  1) create name='<descriptive>' — auto-adds a structure_input node from the viewer.\n"
@@ -306,7 +310,7 @@ TOOLS = [
                 "action": {
                     "type": "string",
                     "enum": [
-                        "list", "templates", "node_types", "node_details", "create", "get",
+                        "list", "templates", "node_types", "node_details", "create", "rename", "get",
                         "add_node", "remove_node", "connect", "set_params", "batch",
                         "run", "pause", "resume", "validate", "status", "step_error",
                         "retry", "batch_status", "batch_results", "list_presets",
@@ -314,7 +318,7 @@ TOOLS = [
                     "description": "Workflow operation",
                 },
                 "workflow_id": {"type": "string"},
-                "name": {"type": "string", "description": "Workflow name for create"},
+                "name": {"type": "string", "description": "Workflow name (for create, or the new name for rename)"},
                 "template_id": {"type": "string"},
                 "node_type": {
                     "type": "string",
