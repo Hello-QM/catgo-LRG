@@ -5,6 +5,7 @@
 import type {
   ElementSymbol,
   Matrix3x3,
+  Pbc,
   PymatgenLattice,
   PymatgenStructure,
   Site,
@@ -105,7 +106,7 @@ function rad_to_deg(r: number): number {
 }
 
 // Build a PymatgenLattice from a Matrix3x3 (rows = lattice vectors).
-function lattice_from_matrix(cell: Matrix3x3, pbc: [boolean, boolean, boolean]): PymatgenLattice {
+function lattice_from_matrix(cell: Matrix3x3, pbc: Pbc): PymatgenLattice {
   const a_vec = cell[0]
   const b_vec = cell[1]
   const c_vec = cell[2]

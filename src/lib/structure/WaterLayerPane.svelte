@@ -5,7 +5,9 @@
   import { addWaterLayer, type WaterLayerParams, type WaterLayerResult } from '$lib/api/water-layer'
   import { SERVER_URL } from '$lib/api/config'
 
-  declare const __CATGO_VSCODE_EXTENSION__: boolean | undefined
+  // __CATGO_VSCODE_EXTENSION__ is a vite `define` token; its type lives in
+  // src/app.d.ts (declare global) — an in-component `declare const` is a
+  // modifier svelte-check rejects here.
   const is_vscode_extension = typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` && __CATGO_VSCODE_EXTENSION__
 
   let {

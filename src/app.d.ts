@@ -29,5 +29,11 @@ declare global {
   var CATGO_THEMES: Record<string, Record<string, string>> | undefined
   // eslint-disable-next-line no-var
   var CATGO_CSS_MAP: Record<string, string> | undefined
+  // Build-time flag injected by vite `define` in the VS Code webview build
+  // (extensions/vscode/vite.config.mjs). Declared globally so .svelte
+  // <script> blocks can reference it without an illegal in-component
+  // `declare const` (svelte-check: "Modifiers cannot appear here").
+  // eslint-disable-next-line no-var
+  var __CATGO_VSCODE_EXTENSION__: boolean | undefined
 }
 export {}
