@@ -19,6 +19,7 @@
     new_session,
     delete_session,
     session_list,
+    load_session_messages,
   } from './chat-state.svelte'
   import { build_structure_context, build_workflow_context } from './context'
   import { markdown_to_html } from './markdown'
@@ -247,24 +248,12 @@
     if (provider && provider !== chat_config.provider) {
       update_config({ provider, mode: `sdk` })
     }
-    // Fetch conversation history from backend instead of localStorage
-    try {
-      const resp = await fetch(`${API_BASE}/chat/sessions/${s.agent}/${s.session_id}/history`)
-      if (resp.ok) {
-        const data = await resp.json()
-        const msgs = (data.messages ?? []).map((m: { role: string; content: string; timestamp?: string }) => ({
-          role: m.role,
-          content: m.content,
-          timestamp: m.timestamp ? new Date(m.timestamp).getTime() : Date.now(),
-        }))
-        resume_session(s.agent, s.session_id, msgs, tab_slice_id)
-      } else {
-        // Fallback: resume without history
-        resume_session(s.agent, s.session_id, undefined, tab_slice_id)
-      }
-    } catch {
-      resume_session(s.agent, s.session_id, undefined, tab_slice_id)
-    }
+    // Restore the transcript from the client-side store. There is no backend
+    // session-history endpoint (the old fetch to /chat/sessions/.../history
+    // always 404'd and silently fell back to an empty chat); messages are now
+    // persisted locally per session_id at the end of every round.
+    const msgs = load_session_messages(s.session_id)
+    resume_session(s.agent, s.session_id, msgs.length ? msgs : undefined, tab_slice_id)
     active_tab = `chat`
   }
 
@@ -646,9 +635,11 @@
     if (textarea_el) textarea_el.style.height = `auto`
     active_tab = `chat`
 
-    // Auto-detect DOI input and resolve it
+    // Auto-detect DOI input and resolve it. Skip while a round is streaming:
+    // send_message will queue this text and the DOI branch would otherwise
+    // clobber slice.loading mid-stream.
     const doi_match = msg.match(/^(?:doi[:\s]*)?((10\.\d{4,}\/\S+))\s*$/i)
-    if (doi_match && !slice.paper_session.session_id) {
+    if (doi_match && !slice.paper_session.session_id && !slice.loading.value) {
       try {
         slice.loading.value = true
         await import_doi(doi_match[1])
@@ -1372,9 +1363,13 @@
           onpaste={handle_attach_paste}
           onfocus={(e) => { const w = (e.target as HTMLElement).closest(`.input-wrapper`); w?.classList.add(`focused`) }}
           onblur={(e) => { const w = (e.target as HTMLElement).closest(`.input-wrapper`); w?.classList.remove(`focused`) }}
-          disabled={slice.loading.value}
         ></textarea>
         {#if slice.loading.value}
+          {#if input_text.trim()}
+            <button type="button" class="chat-send-btn" title="Send after current reply" onclick={() => handle_send()}>
+              <Icon icon="ArrowUp" style="width: 14px; height: 14px" />
+            </button>
+          {/if}
           <button type="button" class="chat-send-btn stop" title="Stop" onclick={() => cancel_generation(tab_slice_id)}>
             <Icon icon="Disabled" style="width: 14px; height: 14px" />
           </button>
@@ -1400,7 +1395,13 @@
         style="display: none"
       />
       <div class="input-hint-row">
-        <span class="input-hint">Enter send · Shift+Enter newline · Esc cancel</span>
+        {#if slice.pending_send?.value}
+          <span class="input-hint queued">⏳ Queued — sends when the current reply finishes</span>
+        {:else if slice.loading.value}
+          <span class="input-hint">Enter to queue · sends after the current reply · Esc stops</span>
+        {:else}
+          <span class="input-hint">Enter send · Shift+Enter newline · Esc cancel</span>
+        {/if}
         <select
           class="voice-lang-select"
           bind:value={voice_language}

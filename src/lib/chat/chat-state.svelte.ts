@@ -162,6 +162,10 @@ export interface ChatSlice {
   workflow_context: { value: string }
   paper_context: { value: string }
   paper_session: PaperSession
+  // A message the user composed while a response was still streaming. It is
+  // sent automatically the moment the in-flight round finishes (drained in
+  // send_message's finally), so the input box never has to be locked.
+  pending_send: { value: { content: string; attachments?: import('./types').Attachment[] } | null }
   // Plain (non-$state) field — abort_controller is a DOM class we cancel
   // via a method call; wrapping it in a $state proxy adds nothing.
   abort_controller: AbortController | null
@@ -185,6 +189,9 @@ function make_chat_slice(): ChatSlice {
   const paper_session: PaperSession = $state({
     session_id: ``, title: ``, authors: [], doi: ``, page_count: 0,
   })
+  const pending_send = $state({
+    value: null as { content: string; attachments?: import('./types').Attachment[] } | null,
+  })
   return {
     messages,
     loading,
@@ -195,6 +202,7 @@ function make_chat_slice(): ChatSlice {
     workflow_context,
     paper_context,
     paper_session,
+    pending_send,
     abort_controller: null,
   }
 }
@@ -413,7 +421,14 @@ export async function send_message(
   tab_id: string = `default`,
 ): Promise<void> {
   const slice = get_chat_slice(tab_id)
-  if (!content.trim() || slice.loading.value) return
+  if (!content.trim()) return
+  // A round is already streaming: don't drop this message — queue it and
+  // let the finally block fire it as soon as the current response ends.
+  // Last write wins (latest compose replaces an earlier un-sent queue entry).
+  if (slice.loading.value) {
+    slice.pending_send.value = { content: content.trim(), attachments }
+    return
+  }
 
   // Add user message
   const user_msg: ChatMessage = {
@@ -602,6 +617,23 @@ export async function send_message(
     finalize_stream_indicators(slice)
     slice.loading.value = false
     slice.abort_controller = null
+    // Persist the finished round so the Sessions tab can restore it later
+    // (no backend history endpoint exists). The session_id is assigned during
+    // the stream (record_session / event.sessionId); by the finally it lives
+    // in agent_sessions for the current provider's agent.
+    try {
+      const persist_agent = agent_from_provider(chat_config.provider)
+      const persist_sid = persist_agent ? agent_sessions[persist_agent] : undefined
+      if (persist_sid) persist_session_messages(persist_sid, slice.messages.list)
+    } catch { /* persistence is best-effort, never block the UI */ }
+    // Drain a message the user composed mid-stream. queueMicrotask so this
+    // send_message promise settles (and the UI repaints the finished round)
+    // before the queued round flips loading back on.
+    const queued = slice.pending_send.value
+    if (queued) {
+      slice.pending_send.value = null
+      queueMicrotask(() => { void send_message(queued.content, queued.attachments, tab_id) })
+    }
   }
 }
 
@@ -642,7 +674,11 @@ function finalize_stream_indicators(slice: ChatSlice): void {
 }
 
 export function cancel_generation(tab_id: string = `default`): void {
-  get_chat_slice(tab_id).abort_controller?.abort()
+  const slice = get_chat_slice(tab_id)
+  // Explicit Stop cancels everything, including a message the user queued
+  // mid-stream — otherwise it would surprise them by firing after Stop.
+  slice.pending_send.value = null
+  slice.abort_controller?.abort()
 }
 
 // ─── Session list — tracks all sessions for the Sessions tab ───
@@ -656,6 +692,41 @@ export const session_list = $state<{ list: SessionSummary[] }>({
 
 function persist_session_list(): void {
   save_to_storage(STORAGE_KEY_SESSION_LIST, session_list.list)
+}
+
+// ─── Per-session chat transcript persistence ───
+//
+// No backend endpoint exposes session history (the original assumption that
+// every CLI agent surfaces its own transcript proved unreliable — see the
+// note in ChatPane.handle_resume_session). So we persist the message list
+// client-side, keyed by session_id, exactly like session_list metadata:
+// localStorage, agent-agnostic, survives reload/tab-switch. Capped per
+// session so a long conversation can't blow the ~5 MB localStorage quota.
+const STORAGE_KEY_SESSION_MESSAGES = `catgo-session-messages`
+const MAX_PERSISTED_MESSAGES = 400
+
+type SessionMessageMap = Record<string, ChatMessage[]>
+
+export function load_session_messages(session_id: string): ChatMessage[] {
+  if (!session_id) return []
+  const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
+  return Array.isArray(map[session_id]) ? map[session_id] : []
+}
+
+export function persist_session_messages(session_id: string, messages: ChatMessage[]): void {
+  if (!session_id || messages.length === 0) return
+  const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
+  map[session_id] = messages.slice(-MAX_PERSISTED_MESSAGES)
+  save_to_storage(STORAGE_KEY_SESSION_MESSAGES, map)
+}
+
+function forget_session_messages(session_id: string): void {
+  if (!session_id) return
+  const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
+  if (session_id in map) {
+    delete map[session_id]
+    save_to_storage(STORAGE_KEY_SESSION_MESSAGES, map)
+  }
 }
 
 /** Record a session_id from the agent stream.
@@ -703,6 +774,7 @@ export function record_session(agent: string, session_id: string, topic: string,
 export function delete_session(session_id: string): void {
   session_list.list = session_list.list.filter((s) => s.session_id !== session_id)
   persist_session_list()
+  forget_session_messages(session_id)
 }
 
 /** Resume a previous session in the given tab. */
