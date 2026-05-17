@@ -1,6 +1,14 @@
 import type { NodeDefinition, ParamDef, ShowIfCondition, SidebarCategory } from './workflow-types'
 import { MD_MINIMIZE_NODE } from './node-defs/calculation/md-minimize'
 import { UVVIS_NODE } from './node-defs/calculation/uvvis'
+// ── Single-source-of-truth migration ─────────────────────────────────────────
+// The legacy inline definitions in this file have drifted from the modular
+// schemas under src/lib/workflow/node-defs/. As types are validated, prefer
+// the modular version — it's loaded from the canonical JSON / spec and avoids
+// double-maintenance. To migrate a type: delete its inline `<type>: { … }`
+// block below, add an `import { foo } from './node-defs/<group>/<file>'` here,
+// and reference it as `foo,` in the NODE_DEFINITIONS object literal.
+import { adsorbate_place } from './node-defs/utility/adsorbate-place'
 
 // ====== Software periodicity classification ======
 
@@ -1205,6 +1213,13 @@ Choose system type first, then select a compatible MD engine.
   // ─── MD Minimize ───
   md_minimize: MD_MINIMIZE_NODE,
 
+  // ─── Adsorbate placement (migrated to node-defs/) ───
+  // Source: src/lib/workflow/node-defs/utility/adsorbate-place.ts.
+  // The schema (species enum, site enum) is built at module-load time from
+  // server/data/adsorbates.json so it stays in sync with the workflow
+  // engine + MCP `list_presets`.
+  adsorbate_place,
+
   // ─── UV-Vis Spectroscopy ───
   uvvis: UVVIS_NODE,
 
@@ -1924,48 +1939,6 @@ Replaces surface atoms with dopant elements. Supports symmetry-aware deduplicati
       {
         key: `deduplicate`, label: `Deduplicate`, type: `boolean`, default: true, group: `Doping`,
         help: `Remove symmetry-equivalent doped structures.`,
-      },
-    ],
-  },
-
-  adsorbate_place: {
-    type: `adsorbate_place`,
-    label: `Adsorbate`,
-    color: `#7c3aed`,
-    icon: `\u{1F3AF}`,
-    category: `Tools`,
-    description: `Place adsorbate molecule on surface`,
-    inputs: [`structure`],
-    outputs: [`structure`],
-    default_params: { species: `*N2`, site: `fcc`, mode: `end-on` },
-    help_text: `**Adsorbate Placement** — Place molecules on the surface.
-
-Opens CatGo's adsorbate placement tool for interactive site selection.`,
-    param_schema: [
-      {
-        key: `species`, label: `Adsorbate`, type: `string`, default: `*N2`, group: `Adsorbate`,
-        help: `Adsorbate formula. Use * prefix for surface-bound species.`,
-      },
-      {
-        key: `site`, label: `Adsorption Site`, type: `select`, default: `fcc`, group: `Adsorbate`,
-        options: [
-          { label: `On-top`, value: `ontop` },
-          { label: `Bridge`, value: `bridge` },
-          { label: `FCC Hollow`, value: `fcc` },
-          { label: `HCP Hollow`, value: `hcp` },
-          { label: `All sites`, value: `all` },
-        ],
-      },
-      {
-        key: `mode`, label: `Binding Mode`, type: `select`, default: `end-on`, group: `Adsorbate`,
-        options: [
-          { label: `End-on (vertical)`, value: `end-on` },
-          { label: `Side-on (horizontal)`, value: `side-on` },
-        ],
-      },
-      {
-        key: `height`, label: `Initial Height (Å)`, type: `number`, default: 2.0, group: `Adsorbate`,
-        min: 1.0, max: 4.0, step: 0.1,
       },
     ],
   },

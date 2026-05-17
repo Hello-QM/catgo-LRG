@@ -17,186 +17,56 @@ function format_error_detail(detail: unknown): string {
   return JSON.stringify(detail)
 }
 
-/** A preset adsorbate molecule with xyz coordinates and default binding atom. */
+/** A preset adsorbate molecule with xyz coordinates and default binding atom.
+ *
+ * `formula` is the canonical ASCII formula (H2O, NH2NH2, …). It is what the
+ * workflow engine looks up in its species library and what gets serialised to
+ * MCP / backend payloads. `display_formula`, when present, is the pretty
+ * Unicode-subscript variant (H₂O, NH₂NH₂, …) used for UI rendering only.
+ */
 export interface AdsorbatePreset {
   name: string
   formula: string
+  display_formula?: string
   atoms: { symbol: string; position: [number, number, number] }[]
   default_binding_index: number
   group?: string
 }
 
-// Helper to define presets concisely: [symbol, x, y, z]
-type A = { symbol: string; position: [number, number, number] }
-const _a = (s: string, x: number, y: number, z: number): A => ({ symbol: s, position: [x, y, z] })
-const _p = (name: string, formula: string, group: string, atoms: A[], bind = 0): AdsorbatePreset =>
-  ({ name, formula, group, atoms, default_binding_index: bind })
+/** Grouped adsorbate presets for electrocatalysis screening.
+ *
+ * Single source of truth: `server/data/adsorbates.json`. The same JSON is
+ * loaded by the Python workflow engine and by the MCP `list_presets` action,
+ * so adding a species in one place propagates to all surfaces.
+ */
+import ADSORBATE_DATA from '../../../server/data/adsorbates.json'
 
-/** Grouped adsorbate presets for electrocatalysis screening. */
-export const ADSORBATE_PRESET_GROUPS: { label: string; presets: AdsorbatePreset[] }[] = [
-  {
-    label: `Common`,
-    presets: [
-      _p(`Atomic hydrogen`, `H`, `Common`, [_a(`H`, 0, 0, 0)]),
-      _p(`Atomic oxygen`, `O`, `Common`, [_a(`O`, 0, 0, 0)]),
-      _p(`Hydroxyl`, `OH`, `Common`, [_a(`O`, 0, 0, 0), _a(`H`, 0, 0, 0.97)]),
-      _p(`Water`, `H₂O`, `Common`, [_a(`O`, 0, 0, 0), _a(`H`, 0.757, 0, 0.586), _a(`H`, -0.757, 0, 0.586)]),
-      _p(`Carbon monoxide`, `CO`, `Common`, [_a(`C`, 0, 0, 0), _a(`O`, 0, 0, 1.128)]),
-      _p(`Nitric oxide`, `NO`, `Common`, [_a(`N`, 0, 0, 0), _a(`O`, 0, 0, 1.151)]),
-      _p(`Nitrogen dioxide`, `NO₂`, `Common`, [_a(`N`, 0, 0, 0), _a(`O`, 1.098, 0, 0.465), _a(`O`, -1.098, 0, 0.465)]),
-      _p(`Ammonia`, `NH₃`, `Common`, [_a(`N`, 0, 0, 0), _a(`H`, 0.939, 0, -0.381), _a(`H`, -0.470, 0.813, -0.381), _a(`H`, -0.470, -0.813, -0.381)]),
-      _p(`Methyl`, `CH₃`, `Common`, [_a(`C`, 0, 0, 0), _a(`H`, 1.026, 0, -0.363), _a(`H`, -0.513, 0.889, -0.363), _a(`H`, -0.513, -0.889, -0.363)]),
-    ],
-  },
-  {
-    label: `OER / ORR`,
-    presets: [
-      _p(`Oxygen`, `O`, `OER`, [_a(`O`, 0, 0, 0)]),
-      _p(`Hydroxyl`, `OH`, `OER`, [_a(`O`, 0, 0, 0), _a(`H`, 0, 0, 0.97)]),
-      _p(`Hydroperoxyl`, `OOH`, `OER`, [_a(`O`, 0, 0, 0), _a(`O`, 1.28, 0, 0.70), _a(`H`, 1.28, 0.80, 1.20)]),
-      _p(`Molecular oxygen`, `O₂`, `ORR`, [_a(`O`, 0, 0, 0), _a(`O`, 0, 0, 1.21)]),
-      _p(`Hydrogen peroxide`, `H₂O₂`, `ORR`, [_a(`O`, 0, 0, 0), _a(`O`, 1.21, 0, 0.73), _a(`H`, -0.52, 0, -0.76), _a(`H`, 1.73, 0, -0.03)]),
-    ],
-  },
-  {
-    label: `CO₂RR / CORR`,
-    presets: [
-      // C1 pathway
-      _p(`Carbon dioxide`, `CO₂`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`O`, -1.16, 0, 0), _a(`O`, 1.16, 0, 0)]),
-      _p(`Carboxyl`, `COOH`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`O`, 1.208, 0, 0), _a(`O`, -0.396, 1.171, 0), _a(`H`, 0.164, 1.882, 0)]),
-      _p(`Formate`, `OCHO`, `CO₂RR`, [_a(`O`, -1.08, 0, -0.63), _a(`C`, 0, 0, 0), _a(`H`, 0, 0, 1.10), _a(`O`, 1.08, 0, -0.63)], 1),
-      _p(`Carbon monoxide`, `CO`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`O`, 0, 0, 1.128)]),
-      _p(`Formyl`, `CHO`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 1.09, 0, 0.12), _a(`O`, -0.58, 0, 1.03)]),
-      _p(`Hydroxymethylidyne`, `COH`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`O`, 0, 0, 1.31), _a(`H`, 0, 0.87, 1.70)]),
-      _p(`Hydroxymethylene`, `CHOH`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 1.09, 0, -0.12), _a(`O`, -0.40, 0, 1.22), _a(`H`, -0.40, 0.76, 1.70)]),
-      _p(`Formaldehyde`, `CH₂O`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`O`, 0, 0, 1.20)]),
-      _p(`Hydroxymethyl`, `CH₂OH`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`O`, 0, 0, 1.43), _a(`H`, 0, 0.76, 1.85)]),
-      _p(`Methoxy`, `OCH₃`, `CO₂RR`, [_a(`O`, 0, 0, 0), _a(`C`, 1.22, 0, 0.60), _a(`H`, 1.22, 0.89, 1.22), _a(`H`, 1.22, -0.89, 1.22), _a(`H`, 2.12, 0, 0.10)]),
-      _p(`Methylidyne`, `CH`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 0, 0, 1.09)]),
-      _p(`Methylene`, `CH₂`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, 0.56), _a(`H`, -0.93, 0, 0.56)]),
-      _p(`Methyl`, `CH₃`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 1.026, 0, -0.363), _a(`H`, -0.513, 0.889, -0.363), _a(`H`, -0.513, -0.889, -0.363)]),
-      // C2 pathway
-      _p(`CO dimer`, `OCCO`, `CO₂RR`, [_a(`O`, -1.80, 0, 0.58), _a(`C`, -0.76, 0, 0), _a(`C`, 0.76, 0, 0), _a(`O`, 1.80, 0, 0.58)], 1),
-      _p(`CO dimer + H`, `OCCOH`, `CO₂RR`, [_a(`O`, -1.80, 0, 0.58), _a(`C`, -0.76, 0, 0), _a(`C`, 0.76, 0, 0), _a(`O`, 1.80, 0, 0.58), _a(`H`, 2.30, 0, -0.22)], 1),
-      _p(`Ketene`, `CH₂CO`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`C`, 0, 0, 1.31), _a(`O`, 0, 0, 2.44)]),
-      _p(`Acetaldehyde frag.`, `CH₃CHO`, `CO₂RR`, [_a(`C`, 0, 0, 0), _a(`H`, 0, 0, 1.09), _a(`O`, -0.58, 0, -0.95), _a(`C`, 1.50, 0, -0.20), _a(`H`, 1.50, 0.89, -0.82), _a(`H`, 1.50, -0.89, -0.82), _a(`H`, 2.40, 0, 0.40)]),
-      _p(`Vinyl alkoxy`, `OCHCH₂`, `CO₂RR`, [_a(`O`, 0, 0, 0), _a(`C`, 1.22, 0, 0.40), _a(`H`, 1.22, 0, 1.50), _a(`C`, 2.38, 0, -0.20), _a(`H`, 2.38, 0.93, -0.80), _a(`H`, 2.38, -0.93, -0.80)]),
-      _p(`Ethoxy`, `OCH₂CH₃`, `CO₂RR`, [_a(`O`, 0, 0, 0), _a(`C`, 1.24, 0, 0.60), _a(`H`, 1.24, 0.89, 1.22), _a(`H`, 1.24, -0.89, 1.22), _a(`C`, 2.48, 0, -0.26), _a(`H`, 2.48, 0.89, -0.88), _a(`H`, 2.48, -0.89, -0.88), _a(`H`, 3.38, 0, 0.34)]),
-      _p(`Acetaldehyde`, `OCHCH₃`, `CO₂RR`, [_a(`O`, 0, 0, 0), _a(`C`, 1.22, 0, 0.40), _a(`H`, 1.22, 0, 1.50), _a(`C`, 2.48, 0, -0.26), _a(`H`, 2.48, 0.89, -0.88), _a(`H`, 2.48, -0.89, -0.88), _a(`H`, 3.38, 0, 0.34)]),
-    ],
-  },
-  {
-    label: `NRR`,
-    presets: [
-      _p(`Dinitrogen`, `N₂`, `NRR`, [_a(`N`, 0, 0, 0), _a(`N`, 0, 0, 1.10)]),
-      _p(`Diazenyl`, `NNH`, `NRR`, [_a(`N`, 0, 0, 0), _a(`N`, 0, 0, 1.20), _a(`H`, 0.87, 0, 1.68)]),
-      _p(`Diazenyl + H`, `NNH₂`, `NRR`, [_a(`N`, 0, 0, 0), _a(`N`, 0, 0, 1.20), _a(`H`, 0.80, 0, 1.75), _a(`H`, -0.80, 0, 1.75)]),
-      _p(`Diazene`, `NHNH`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.87, 0, -0.48), _a(`N`, 0, 0, 1.24), _a(`H`, -0.87, 0, 1.72)]),
-      _p(`Hydrazinyl`, `NH₂NH`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.87, 0, -0.48), _a(`H`, -0.87, 0, -0.48), _a(`N`, 0, 0, 1.40), _a(`H`, 0.87, 0, 1.88)]),
-      _p(`Hydrazine`, `NH₂NH₂`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.87, 0, -0.48), _a(`H`, -0.87, 0, -0.48), _a(`N`, 0, 0, 1.45), _a(`H`, 0.87, 0, 1.93), _a(`H`, -0.87, 0, 1.93)]),
-      _p(`NH₃—NH`, `NH₃NH`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.94, 0, -0.38), _a(`H`, -0.47, 0.81, -0.38), _a(`H`, -0.47, -0.81, -0.38), _a(`N`, 0, 0, 1.45), _a(`H`, 0.87, 0, 1.93)], 4),
-      _p(`NH₃—NH₂`, `NH₃NH₂`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.94, 0, -0.38), _a(`H`, -0.47, 0.81, -0.38), _a(`H`, -0.47, -0.81, -0.38), _a(`N`, 0, 0, 1.45), _a(`H`, 0.87, 0, 1.93), _a(`H`, -0.87, 0, 1.93)], 4),
-      _p(`Atomic nitrogen`, `N`, `NRR`, [_a(`N`, 0, 0, 0)]),
-      _p(`Imido`, `NH`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0, 0, 1.04)]),
-      _p(`Amino`, `NH₂`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.80, 0, 0.60), _a(`H`, -0.80, 0, 0.60)]),
-      _p(`Ammonia`, `NH₃`, `NRR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.939, 0, -0.381), _a(`H`, -0.470, 0.813, -0.381), _a(`H`, -0.470, -0.813, -0.381)]),
-    ],
-  },
-  {
-    label: `NO₃RR`,
-    presets: [
-      _p(`Nitrate`, `NO₃`, `NO₃RR`, [_a(`N`, 0, 0, 0), _a(`O`, 1.08, 0, 0.63), _a(`O`, -0.54, 0.94, 0.63), _a(`O`, -0.54, -0.94, 0.63)]),
-      _p(`Nitrite`, `NO₂`, `NO₃RR`, [_a(`N`, 0, 0, 0), _a(`O`, 1.098, 0, 0.465), _a(`O`, -1.098, 0, 0.465)]),
-      _p(`Nitric oxide`, `NO`, `NO₃RR`, [_a(`N`, 0, 0, 0), _a(`O`, 0, 0, 1.151)]),
-      _p(`Nitroxyl`, `NOH`, `NO₃RR`, [_a(`N`, 0, 0, 0), _a(`O`, 0, 0, 1.21), _a(`H`, 0, 0.76, 1.63)]),
-      _p(`HNO`, `HNO`, `NO₃RR`, [_a(`H`, 0.95, 0, -0.40), _a(`N`, 0, 0, 0), _a(`O`, 0, 0, 1.21)], 1),
-      _p(`NHOH`, `NHOH`, `NO₃RR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.87, 0, -0.48), _a(`O`, 0, 0, 1.36), _a(`H`, 0, 0.76, 1.78)]),
-      _p(`Hydroxylamine`, `NH₂OH`, `NO₃RR`, [_a(`N`, 0, 0, 0), _a(`H`, 0.87, 0, -0.48), _a(`H`, -0.87, 0, -0.48), _a(`O`, 0, 0, 1.40), _a(`H`, 0, 0.76, 1.82)]),
-    ],
-  },
-  {
-    label: `HER`,
-    presets: [
-      _p(`Hydrogen`, `H`, `HER`, [_a(`H`, 0, 0, 0)]),
-    ],
-  },
-  {
-    label: `PDH`,
-    presets: [
-      // Propane dehydrogenation: C₃H₈ → C₃H₆ + H₂
-      _p(`Propyl`, `C₃H₇`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0.89, 0, -0.63), _a(`H`, -0.89, 0, -0.63), _a(`C`, 0, 0, 1.54), _a(`H`, 0.89, 0, 2.17), _a(`H`, -0.89, 0, 2.17), _a(`C`, 0, 0, 3.08), _a(`H`, 0.89, 0, 3.71), _a(`H`, -0.89, 0, 3.71), _a(`H`, 0, 0, 3.71)]),
-      _p(`Isopropyl`, `i-C₃H₇`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0, 0, 1.09), _a(`C`, 1.26, 0.73, -0.51), _a(`H`, 1.26, 0.73, -1.60), _a(`H`, 2.12, 0.18, -0.12), _a(`H`, 1.26, 1.78, -0.18), _a(`C`, -1.26, 0.73, -0.51), _a(`H`, -1.26, 0.73, -1.60), _a(`H`, -2.12, 0.18, -0.12), _a(`H`, -1.26, 1.78, -0.18)]),
-      _p(`Propylene`, `C₃H₆`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`C`, 0, 0, 1.34), _a(`H`, -0.93, 0, 1.90), _a(`C`, 1.26, 0, 2.08), _a(`H`, 1.26, 0.89, 2.70), _a(`H`, 1.26, -0.89, 2.70), _a(`H`, 2.16, 0, 1.48)]),
-      _p(`Propylidyne`, `C₃H₅`, `PDH`, [_a(`C`, 0, 0, 0), _a(`C`, 0, 0, 1.34), _a(`H`, -0.93, 0, 1.90), _a(`C`, 1.26, 0, 2.08), _a(`H`, 1.26, 0.89, 2.70), _a(`H`, 1.26, -0.89, 2.70), _a(`H`, 2.16, 0, 1.48)]),
-      _p(`Ethyl`, `C₂H₅`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0.89, 0, -0.63), _a(`H`, -0.89, 0, -0.63), _a(`C`, 0, 0, 1.54), _a(`H`, 0.89, 0, 2.17), _a(`H`, -0.89, 0, 2.17), _a(`H`, 0, 0, 2.17)]),
-      _p(`Ethylene`, `C₂H₄`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`C`, 0, 0, 1.34), _a(`H`, 0.93, 0, 1.90), _a(`H`, -0.93, 0, 1.90)]),
-      _p(`Vinyl`, `C₂H₃`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`C`, 0, 0, 1.34), _a(`H`, 0.93, 0, 1.90), _a(`H`, -0.93, 0, 1.90)]),
-      _p(`Acetylene`, `C₂H₂`, `PDH`, [_a(`C`, 0, 0, 0), _a(`H`, 0, 0, -1.06), _a(`C`, 0, 0, 1.20), _a(`H`, 0, 0, 2.26)]),
-      _p(`Coke precursor`, `C`, `PDH`, [_a(`C`, 0, 0, 0)]),
-    ],
-  },
-  {
-    label: `FTS`,
-    presets: [
-      // Fischer-Tropsch synthesis: CO + H₂ → hydrocarbons
-      _p(`Carbon monoxide`, `CO`, `FTS`, [_a(`C`, 0, 0, 0), _a(`O`, 0, 0, 1.128)]),
-      _p(`Formyl`, `HCO`, `FTS`, [_a(`H`, 1.09, 0, 0.12), _a(`C`, 0, 0, 0), _a(`O`, -0.58, 0, 1.03)], 1),
-      _p(`Hydroxymethylidyne`, `COH`, `FTS`, [_a(`C`, 0, 0, 0), _a(`O`, 0, 0, 1.31), _a(`H`, 0, 0.87, 1.70)]),
-      _p(`Hydroxymethylene`, `CHOH`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 1.09, 0, -0.12), _a(`O`, -0.40, 0, 1.22), _a(`H`, -0.40, 0.76, 1.70)]),
-      _p(`Formaldehyde`, `CH₂O`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`O`, 0, 0, 1.20)]),
-      _p(`Hydroxymethyl`, `CH₂OH`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`O`, 0, 0, 1.43), _a(`H`, 0, 0.76, 1.85)]),
-      _p(`Methylidyne`, `CH`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0, 0, 1.09)]),
-      _p(`Methylene`, `CH₂`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, 0.56), _a(`H`, -0.93, 0, 0.56)]),
-      _p(`Methyl`, `CH₃`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 1.026, 0, -0.363), _a(`H`, -0.513, 0.889, -0.363), _a(`H`, -0.513, -0.889, -0.363)]),
-      _p(`Ethylene`, `C₂H₄`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`C`, 0, 0, 1.34), _a(`H`, 0.93, 0, 1.90), _a(`H`, -0.93, 0, 1.90)]),
-      _p(`Acetylene (vinylidene)`, `CHCH`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0, 0, -1.06), _a(`C`, 0, 0, 1.34), _a(`H`, 0, 0, 2.40)]),
-      _p(`Ethylidyne`, `CCH₃`, `FTS`, [_a(`C`, 0, 0, 0), _a(`C`, 0, 0, 1.47), _a(`H`, 1.026, 0, 1.833), _a(`H`, -0.513, 0.889, 1.833), _a(`H`, -0.513, -0.889, 1.833)]),
-      _p(`Ethyl`, `C₂H₅`, `FTS`, [_a(`C`, 0, 0, 0), _a(`H`, 0.89, 0, -0.63), _a(`H`, -0.89, 0, -0.63), _a(`C`, 0, 0, 1.54), _a(`H`, 0.89, 0, 2.17), _a(`H`, -0.89, 0, 2.17), _a(`H`, 0, 0, 2.17)]),
-    ],
-  },
-  {
-    label: `WGS / MeOH`,
-    presets: [
-      // Water-gas shift: CO + H₂O → CO₂ + H₂  /  Methanol synthesis: CO₂ + H₂ → CH₃OH
-      _p(`Carbon monoxide`, `CO`, `WGS`, [_a(`C`, 0, 0, 0), _a(`O`, 0, 0, 1.128)]),
-      _p(`Carbon dioxide`, `CO₂`, `WGS`, [_a(`C`, 0, 0, 0), _a(`O`, -1.16, 0, 0), _a(`O`, 1.16, 0, 0)]),
-      _p(`Water`, `H₂O`, `WGS`, [_a(`O`, 0, 0, 0), _a(`H`, 0.757, 0, 0.586), _a(`H`, -0.757, 0, 0.586)]),
-      _p(`Hydroxyl`, `OH`, `WGS`, [_a(`O`, 0, 0, 0), _a(`H`, 0, 0, 0.97)]),
-      _p(`Carboxyl`, `COOH`, `WGS`, [_a(`C`, 0, 0, 0), _a(`O`, 1.208, 0, 0), _a(`O`, -0.396, 1.171, 0), _a(`H`, 0.164, 1.882, 0)]),
-      _p(`Formate`, `HCOO`, `WGS`, [_a(`H`, 0, 0, 1.10), _a(`C`, 0, 0, 0), _a(`O`, 1.08, 0, -0.63), _a(`O`, -1.08, 0, -0.63)], 1),
-      _p(`Dioxymethylene`, `H₂COO`, `MeOH`, [_a(`H`, 0.93, 0, 1.20), _a(`H`, -0.93, 0, 1.20), _a(`C`, 0, 0, 0.60), _a(`O`, 1.08, 0, -0.03), _a(`O`, -1.08, 0, -0.03)], 2),
-      _p(`Methoxy`, `H₃CO`, `MeOH`, [_a(`O`, 0, 0, 0), _a(`C`, 1.22, 0, 0.60), _a(`H`, 1.22, 0.89, 1.22), _a(`H`, 1.22, -0.89, 1.22), _a(`H`, 2.12, 0, 0.10)]),
-      _p(`Formaldehyde`, `H₂CO`, `MeOH`, [_a(`C`, 0, 0, 0), _a(`H`, 0.93, 0, -0.56), _a(`H`, -0.93, 0, -0.56), _a(`O`, 0, 0, 1.20)]),
-      _p(`Methanol`, `CH₃OH`, `MeOH`, [_a(`C`, 0, 0, 0), _a(`H`, 1.026, 0, -0.363), _a(`H`, -0.513, 0.889, -0.363), _a(`H`, -0.513, -0.889, -0.363), _a(`O`, 0, 0, 1.43), _a(`H`, 0, 0.76, 1.85)]),
-    ],
-  },
-  {
-    label: `NH₃ Synth`,
-    presets: [
-      // Haber-Bosch / ammonia decomposition
-      _p(`Dinitrogen`, `N₂`, `NH₃Syn`, [_a(`N`, 0, 0, 0), _a(`N`, 0, 0, 1.10)]),
-      _p(`Atomic nitrogen`, `N`, `NH₃Syn`, [_a(`N`, 0, 0, 0)]),
-      _p(`Imido`, `NH`, `NH₃Syn`, [_a(`N`, 0, 0, 0), _a(`H`, 0, 0, 1.04)]),
-      _p(`Amino`, `NH₂`, `NH₃Syn`, [_a(`N`, 0, 0, 0), _a(`H`, 0.80, 0, 0.60), _a(`H`, -0.80, 0, 0.60)]),
-      _p(`Ammonia`, `NH₃`, `NH₃Syn`, [_a(`N`, 0, 0, 0), _a(`H`, 0.939, 0, -0.381), _a(`H`, -0.470, 0.813, -0.381), _a(`H`, -0.470, -0.813, -0.381)]),
-      _p(`Atomic hydrogen`, `H`, `NH₃Syn`, [_a(`H`, 0, 0, 0)]),
-    ],
-  },
-  {
-    label: `S / Other`,
-    presets: [
-      _p(`Sulfur`, `S`, `Other`, [_a(`S`, 0, 0, 0)]),
-      _p(`Sulfhydryl`, `SH`, `Other`, [_a(`S`, 0, 0, 0), _a(`H`, 0, 0, 1.34)]),
-      _p(`Sulfur monoxide`, `SO`, `Other`, [_a(`S`, 0, 0, 0), _a(`O`, 0, 0, 1.48)]),
-      _p(`Sulfur dioxide`, `SO₂`, `Other`, [_a(`S`, 0, 0, 0), _a(`O`, 1.25, 0, 0.72), _a(`O`, -1.25, 0, 0.72)]),
-      _p(`Cyanide`, `CN`, `Other`, [_a(`C`, 0, 0, 0), _a(`N`, 0, 0, 1.16)]),
-      _p(`Thiocyanate`, `SCN`, `Other`, [_a(`S`, 0, 0, 0), _a(`C`, 0, 0, 1.68), _a(`N`, 0, 0, 2.84)]),
-      _p(`Formate`, `HCOO`, `Other`, [_a(`H`, 0, 0, 1.10), _a(`C`, 0, 0, 0), _a(`O`, 1.08, 0, -0.63), _a(`O`, -1.08, 0, -0.63)], 1),
-      _p(`Methanol`, `CH₃OH`, `Other`, [_a(`C`, 0, 0, 0), _a(`H`, 1.026, 0, -0.363), _a(`H`, -0.513, 0.889, -0.363), _a(`H`, -0.513, -0.889, -0.363), _a(`O`, 0, 0, 1.43), _a(`H`, 0, 0.76, 1.85)]),
-      _p(`Ethanol`, `C₂H₅OH`, `Other`, [_a(`C`, 0, 0, 0), _a(`H`, 0.89, 0, -0.63), _a(`H`, -0.89, 0, -0.63), _a(`C`, 0, 0, 1.54), _a(`H`, 0.89, 0, 2.17), _a(`H`, -0.89, 0, 2.17), _a(`O`, 0, 0, 2.97), _a(`H`, 0, 0.76, 3.39)]),
-    ],
-  },
-]
+type RawPreset = {
+  name: string
+  formula: string
+  display_formula?: string
+  atoms: { symbol: string; position: number[] }[]
+  default_binding_index: number
+}
+type RawGroup = { label: string; presets: RawPreset[] }
+const _RAW_GROUPS = (ADSORBATE_DATA as { groups: RawGroup[] }).groups
+
+export const ADSORBATE_PRESET_GROUPS: { label: string; presets: AdsorbatePreset[] }[] =
+  _RAW_GROUPS.map((g) => ({
+    label: g.label,
+    presets: g.presets.map((p) => ({
+      name: p.name,
+      formula: p.formula,
+      display_formula: p.display_formula,
+      atoms: p.atoms.map((a) => ({
+        symbol: a.symbol,
+        position: [a.position[0], a.position[1], a.position[2]] as [number, number, number],
+      })),
+      default_binding_index: p.default_binding_index,
+      group: g.label,
+    })),
+  }))
+
 
 /** Flat list of all presets (for backward compatibility). */
 export const ADSORBATE_PRESETS: AdsorbatePreset[] = ADSORBATE_PRESET_GROUPS.flatMap(g => g.presets)

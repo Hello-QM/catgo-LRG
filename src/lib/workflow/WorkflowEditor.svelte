@@ -2416,7 +2416,7 @@
             {@const path = bezier(fp.x, fp.y, tp.x, tp.y)}
             {@const is_sel = sel_edge === edge.id}
             {@const cfg = NODE_DEFINITIONS[fn.type]}
-            {@const out_idx = parseInt(edge.fromH.split(`-`)[1]) || 0}
+            {@const out_idx = parseInt((edge.fromH ?? ``).split(`-`)[1]) || 0}
             {@const ecolor = is_sel ? `var(--accent-color, #60a5fa)` : cfg?.is_condition ? (out_idx === 0 ? `#22c55e` : `#ef4444`) : (cfg?.color || `#475569`) + `80`}
             {@const mid = point_on_bezier(fp.x, fp.y, tp.x, tp.y, 0.5)}
             <g>
@@ -2853,6 +2853,14 @@
               {/if}
             {/if}
             <!-- ═══ Custom panels that replace NodeConfigPanel ═══ -->
+            <!-- Key on nd.id so Svelte tears down + remounts the panel when
+                 the user clicks between two same-typed nodes (e.g. ads_OH →
+                 ads_O). Without this, the panel component instance is
+                 reused and its internal `$state` locals (species_idx,
+                 site_strategy, manual_position, …) keep the previous
+                 node's values — the canonical "click another node, then
+                 back" workaround the user was hitting. -->
+            {#key nd.id}
             {#if nd.type === `doping_gen`}
               <!-- Doping uses dedicated modal — no NodeConfigPanel needed -->
             {:else if nd.type === `adsorbate_place`}
@@ -3012,6 +3020,7 @@
               {/if}
             </NodeConfigPanel>
             {/if}
+            {/key}
             {#if is_structure_node(nd.type) && nd.type !== `slab_gen` && nd.type !== `adsorbate_place`}
               <button
                 class="tbtn structure-btn"

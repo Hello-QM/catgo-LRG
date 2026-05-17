@@ -7,7 +7,35 @@ These are called by the @task-decorated functions in builtins.py.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
+
+
+# Single source of truth for adsorbate species: server/data/adsorbates.json,
+# which is also imported by the frontend (src/lib/api/adsorbate.ts) and used
+# by the MCP `list_presets` action. Add new species there and they propagate
+# to all surfaces. Formula keys in the JSON are ASCII (H2O, NH2NH2, …); the
+# UI's Unicode subscript variants are kept in a separate `display_formula`
+# field and are not used as lookup keys.
+_ADSORBATES_JSON_PATH = Path(__file__).parent.parent.parent / "data" / "adsorbates.json"
+
+
+def _load_adsorbate_library() -> dict[str, tuple[list[str], list[list[float]]]]:
+    try:
+        data = json.loads(_ADSORBATES_JSON_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    library: dict[str, tuple[list[str], list[list[float]]]] = {}
+    for group in data.get("groups", []):
+        for preset in group.get("presets", []):
+            formula_upper = str(preset["formula"]).upper()
+            elements = [a["symbol"] for a in preset["atoms"]]
+            coords = [list(a["position"]) for a in preset["atoms"]]
+            # First occurrence wins — order in JSON puts Common group first
+            # so e.g. "H" / "OH" canonical defs come from the Common group
+            # rather than reaction-specific duplicates.
+            library.setdefault(formula_upper, (elements, coords))
+    return library
 
 
 def run_structure_input(structure: Any = None, structure_json: Any = None, **params) -> dict:
@@ -155,21 +183,7 @@ def run_slab_gen(
     return {"structure": json.dumps(slab.as_dict())}
 
 
-_ADSORBATE_MOLECULES = {
-    "OH": (["O", "H"], [[0, 0, 0], [0, 0, 0.96]]),
-    "O": (["O"], [[0, 0, 0]]),
-    "OOH": (["O", "O", "H"], [[0, 0, 0], [1.2, 0, 0.7], [1.2, 0, 1.66]]),
-    "H": (["H"], [[0, 0, 0]]),
-    "H2O": (["O", "H", "H"], [[0, 0, 0], [0.76, 0.59, 0], [-0.76, 0.59, 0]]),
-    "CO": (["C", "O"], [[0, 0, 0], [0, 0, 1.13]]),
-    "CO2": (["C", "O", "O"], [[0, 0, 0], [0, 0, 1.16], [0, 0, -1.16]]),
-    "N2": (["N", "N"], [[0, 0, 0], [0, 0, 1.10]]),
-    "NH": (["N", "H"], [[0, 0, 0], [0, 0, 1.04]]),
-    "NH2": (["N", "H", "H"], [[0, 0, 0], [0.80, 0.60, 0], [-0.80, 0.60, 0]]),
-    "NH3": (["N", "H", "H", "H"], [[0, 0, 0], [0.94, 0.27, 0], [-0.47, 0.82, 0.27], [-0.47, -0.27, 0.82]]),
-    "CHO": (["C", "H", "O"], [[0, 0, 0], [1.09, 0, 0], [-0.6, 0, 1.05]]),
-    "COOH": (["C", "O", "O", "H"], [[0, 0, 0], [1.2, 0, 0.3], [-0.4, 0, 1.2], [-0.4, 0, 2.16]]),
-}
+_ADSORBATE_MOLECULES: dict[str, tuple[list[str], list[list[float]]]] = _load_adsorbate_library()
 
 
 def run_adsorbate_place(
@@ -177,7 +191,7 @@ def run_adsorbate_place(
     species: str = "OH",
     site: str = "ontop",
     height: float = 2.0,
-    site_index: int = 0,
+    site_index: int | None = None,
     **params,
 ) -> dict:
     """Place adsorbate on slab surface using ferrox site finder + CatGo placement engine.
@@ -190,7 +204,12 @@ def run_adsorbate_place(
         species: Adsorbate species name (OH, O, OOH, H, H2O, CO, etc.).
         site: Site type — "ontop", "bridge", "hollow", or "all" (picks ontop).
         height: Height above surface in Å (default 2.0).
-        site_index: Which site of the given type to use (default 0 = first).
+        site_index: Which site of the given type to use. When ``None`` (the
+            default), pick the site whose xy projection is closest to the
+            slab's xy centroid — this is what a user almost always wants for
+            an auto-generated workflow (CatBot-built OER/HER/CO2RR pipelines)
+            so the adsorbate lands somewhere visible in the viewer rather
+            than at whatever corner ferrox happened to enumerate first.
     """
     if structure is None:
         raise ValueError("adsorbate_place requires a structure input")
@@ -203,6 +222,7 @@ def run_adsorbate_place(
         import ferrox
     except ImportError:
         # Fallback: pymatgen AdsorbateSiteFinder when ferrox (Rust) is not available
+        import numpy as _np
         from pymatgen.core import Structure as PmgStructure, Molecule
         from pymatgen.analysis.adsorption import AdsorbateSiteFinder
 
@@ -219,11 +239,56 @@ def run_adsorbate_place(
         mol = Molecule(elements, coords)
 
         asf = AdsorbateSiteFinder(slab)
-        ads_structs = asf.generate_adsorption_structures(
-            mol, find_args={"distance": height}, repeat=[1, 1, 1])
-        if not ads_structs:
+
+        # Get raw site coordinates (not structures), filter to the requested
+        # site type, then pick the one closest to the slab's top-layer xy
+        # centroid (or honour an explicit site_index). Going through
+        # generate_adsorption_structures() directly would just return the
+        # first available site, which often lands at a cell corner.
+        site_key = (site or "all").lower()
+        # Accept LLM-natural aliases too — Claude / GPT tend to write "top"
+        # for an ontop site even when the schema enum says "ontop". Mapping
+        # them here is cheaper than catching every miswritten node param
+        # on the frontend.
+        pmg_key_map = {"ontop": "ontop", "on_top": "ontop", "top": "ontop",
+                       "atop": "ontop", "bridge": "bridge",
+                       "hollow": "hollow", "fcc": "hollow", "hcp": "hollow",
+                       "hollow3": "hollow", "hollow4": "hollow",
+                       "all": "ontop"}
+        pmg_key = pmg_key_map.get(site_key, site_key)
+        sites_by_type = asf.find_adsorption_sites(symm_reduce=0)
+        candidates = sites_by_type.get(pmg_key, [])
+        if not candidates:
+            for k in ("ontop", "bridge", "hollow"):
+                candidates = sites_by_type.get(k, [])
+                if candidates:
+                    break
+        if not candidates:
             raise RuntimeError(f"No adsorption sites found for {species} on surface")
-        return {"structure": json.dumps(ads_structs[0].as_dict())}
+
+        all_pos = slab.cart_coords
+        z_top = float(all_pos[:, 2].max())
+        top_layer = all_pos[all_pos[:, 2] >= z_top - 1.0]
+        xy_center = (top_layer[:, :2].mean(axis=0)
+                     if len(top_layer) else all_pos[:, :2].mean(axis=0))
+        if site_index is None:
+            cand_arr = _np.asarray(candidates)
+            d2 = ((cand_arr[:, :2] - xy_center) ** 2).sum(axis=1)
+            chosen = candidates[int(d2.argmin())]
+        else:
+            chosen = candidates[min(site_index, len(candidates) - 1)]
+
+        # Place adsorbate at chosen site (height handled by pymatgen)
+        chosen_3d = list(chosen)
+        chosen_3d[2] = z_top + height
+        new_slab = slab.copy()
+        for elem, off in zip(elements, coords):
+            new_slab.append(
+                elem,
+                [chosen_3d[0] + off[0], chosen_3d[1] + off[1], chosen_3d[2] + off[2]],
+                coords_are_cartesian=True,
+            )
+        return {"structure": json.dumps(new_slab.as_dict())}
 
     import numpy as np
     from catgo.utils.adsorbate_placement import place_adsorbate
@@ -261,9 +326,13 @@ def run_adsorbate_place(
     site_key = site.lower()
     if site_key == "all":
         site_key = "atop"
-    # Map our naming to ferrox naming
-    _type_map = {"ontop": "atop", "on_top": "atop", "bridge": "bridge",
-                 "hollow": "hollow3", "hollow3": "hollow3", "hollow4": "hollow4"}
+    # Map our naming to ferrox naming. "top" / "atop" are accepted as
+    # LLM-natural aliases for "ontop" (CatBot tends to write "top"); "fcc"
+    # and "hcp" are the frontend's enum names for 3-fold hollow sites.
+    _type_map = {"ontop": "atop", "on_top": "atop", "top": "atop", "atop": "atop",
+                 "bridge": "bridge",
+                 "hollow": "hollow3", "hollow3": "hollow3", "hollow4": "hollow4",
+                 "fcc": "hollow3", "hcp": "hollow3"}
     ferrox_type = _type_map.get(site_key, site_key)
 
     filtered = [s for s in all_sites if s["site_type"] == ferrox_type]
@@ -276,7 +345,27 @@ def run_adsorbate_place(
     if not filtered:
         filtered = all_sites
 
-    idx = min(site_index, len(filtered) - 1)
+    # Pick the site whose xy projection is closest to the slab's xy centroid
+    # when no explicit index is given. The centroid uses only the top-most
+    # layer of the slab (≥ z_max − 1 Å) so a thick slab's bulk atoms don't
+    # drag the target away from the surface that the adsorbate actually
+    # binds to.
+    if site_index is None:
+        z_max = float(slab_positions[:, 2].max())
+        top_layer_mask = slab_positions[:, 2] >= z_max - 1.0
+        top_layer = slab_positions[top_layer_mask] if top_layer_mask.any() else slab_positions
+        xy_center = top_layer[:, :2].mean(axis=0)
+        best_idx = 0
+        best_d2 = float("inf")
+        for i, s in enumerate(filtered):
+            xy = np.asarray(s["cart_coords"][:2])
+            d2 = float(((xy - xy_center) ** 2).sum())
+            if d2 < best_d2:
+                best_d2 = d2
+                best_idx = i
+        idx = best_idx
+    else:
+        idx = min(site_index, len(filtered) - 1)
     chosen_site = filtered[idx]
     site_position = np.array(chosen_site["cart_coords"])
 

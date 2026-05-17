@@ -144,9 +144,26 @@
   // ─── Node params ───
   type SourceType = `preset` | `xyz` | `pubchem` | `self_define`
   let source_type = $state<SourceType>((node.params._source_type as SourceType) ?? `preset`)
-  let species_idx = $state<number>(
-    typeof node.params._species_idx === `number` ? node.params._species_idx : 0
-  )
+
+  // Resolve initial species_idx. The panel used to read only its internal
+  // cache key `_species_idx`, which CatBot / MCP never set — they store the
+  // canonical formula in `params.species`. So a workflow with
+  // `params.species = "OH"` opened in this panel showed ADSORBATE_PRESETS[0]
+  // (Atomic hydrogen), making the user think CatBot hadn't picked an
+  // adsorbate at all. Now we fall back to looking up the formula in the
+  // preset library (stripping any leading "*" / Unicode subscripts), so
+  // MCP-built workflows display the right molecule.
+  function _resolve_initial_species_idx(): number {
+    if (typeof node.params._species_idx === `number`) return node.params._species_idx as number
+    const raw = node.params.species
+    if (typeof raw !== `string` || !raw) return 0
+    const ascii = raw.replace(/^\*+/, ``).replace(/[₀-₉]/g, (c) =>
+      String(c.charCodeAt(0) - 0x2080),
+    ).toUpperCase()
+    const idx = ADSORBATE_PRESETS.findIndex((p) => p.formula.toUpperCase() === ascii)
+    return idx >= 0 ? idx : 0
+  }
+  let species_idx = $state<number>(_resolve_initial_species_idx())
 
   // XYZ custom input
   let xyz_text = $state<string>((node.params._xyz_text as string) ?? `C 0.000 0.000 0.000\nO 0.000 0.000 1.128`)
@@ -500,7 +517,11 @@
 
   let auto_rotate = $state<boolean>((node.params._auto_rotate as boolean) ?? true)
   let height = $state<number>((node.params.height as number) ?? 2.0)
-  let site_strategy = $state<SiteStrategy>((node.params._site_strategy as SiteStrategy) ?? `manual_position`)
+  // Default to `nearest_center_top` so CatBot-generated workflows place the
+  // adsorbate immediately at the most-central top site without forcing the
+  // user to click on the 3D preview. Users who want explicit placement can
+  // still switch the dropdown to `manual_position`.
+  let site_strategy = $state<SiteStrategy>((node.params._site_strategy as SiteStrategy) ?? `nearest_center_top`)
   let selected_site_id = $state<number | null>(
     typeof node.params._selected_site_id === `number` ? node.params._selected_site_id : null
   )
@@ -1040,7 +1061,7 @@
       {#if preview_info}
         <div class="preview-info">
           {#if preview_info.is_placed}
-            *{active_adsorbate?.formula ?? `?`} placed
+            *{active_adsorbate?.display_formula ?? active_adsorbate?.formula ?? `?`} placed
           {/if}
           &middot; {preview_info.n_atoms} atoms
           {#if !result_structure && sites.length > 0}
@@ -1113,7 +1134,7 @@
             <optgroup label={group.label}>
               {#each group.presets as p}
                 {@const flat_idx = ADSORBATE_PRESETS.indexOf(p)}
-                <option value={flat_idx}>{p.formula} — {p.name}</option>
+                <option value={flat_idx}>{p.display_formula ?? p.formula} — {p.name}</option>
               {/each}
             </optgroup>
           {/each}

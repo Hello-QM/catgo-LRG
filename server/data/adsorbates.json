@@ -1,0 +1,4010 @@
+{
+  "groups": [
+    {
+      "label": "Common",
+      "presets": [
+        {
+          "name": "Atomic hydrogen",
+          "formula": "H",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Atomic oxygen",
+          "formula": "O",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxyl",
+          "formula": "OH",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                0.97
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Water",
+          "formula": "H2O",
+          "display_formula": "H₂O",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.757,
+                0.0,
+                0.586
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.757,
+                0.0,
+                0.586
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Carbon monoxide",
+          "formula": "CO",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.128
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Nitric oxide",
+          "formula": "NO",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.151
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Nitrogen dioxide",
+          "formula": "NO2",
+          "display_formula": "NO₂",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.098,
+                0.0,
+                0.465
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.098,
+                0.0,
+                0.465
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ammonia",
+          "formula": "NH3",
+          "display_formula": "NH₃",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.939,
+                0.0,
+                -0.381
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                0.813,
+                -0.381
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                -0.813,
+                -0.381
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methyl",
+          "formula": "CH3",
+          "display_formula": "CH₃",
+          "group_tag": "Common",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.026,
+                0.0,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                -0.889,
+                -0.363
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "OER / ORR",
+      "presets": [
+        {
+          "name": "Oxygen",
+          "formula": "O",
+          "group_tag": "OER",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxyl",
+          "formula": "OH",
+          "group_tag": "OER",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                0.97
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroperoxyl",
+          "formula": "OOH",
+          "group_tag": "OER",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.28,
+                0.0,
+                0.7
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.28,
+                0.8,
+                1.2
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Molecular oxygen",
+          "formula": "O2",
+          "display_formula": "O₂",
+          "group_tag": "ORR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.21
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydrogen peroxide",
+          "formula": "H2O2",
+          "display_formula": "H₂O₂",
+          "group_tag": "ORR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.21,
+                0.0,
+                0.73
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.52,
+                0.0,
+                -0.76
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.73,
+                0.0,
+                -0.03
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "CO₂RR / CORR",
+      "presets": [
+        {
+          "name": "Carbon dioxide",
+          "formula": "CO2",
+          "display_formula": "CO₂",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.16,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.16,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Carboxyl",
+          "formula": "COOH",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.208,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.396,
+                1.171,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.164,
+                1.882,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formate",
+          "formula": "OCHO",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                -1.08,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.1
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.08,
+                0.0,
+                -0.63
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "Carbon monoxide",
+          "formula": "CO",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.128
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formyl",
+          "formula": "CHO",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.09,
+                0.0,
+                0.12
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.58,
+                0.0,
+                1.03
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxymethylidyne",
+          "formula": "COH",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.31
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.87,
+                1.7
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxymethylene",
+          "formula": "CHOH",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.09,
+                0.0,
+                -0.12
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.4,
+                0.0,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.4,
+                0.76,
+                1.7
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formaldehyde",
+          "formula": "CH2O",
+          "display_formula": "CH₂O",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxymethyl",
+          "formula": "CH2OH",
+          "display_formula": "CH₂OH",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.43
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.85
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methoxy",
+          "formula": "OCH3",
+          "display_formula": "OCH₃",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.22,
+                0.0,
+                0.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.22,
+                0.89,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.22,
+                -0.89,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.12,
+                0.0,
+                0.1
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methylidyne",
+          "formula": "CH",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.09
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methylene",
+          "formula": "CH2",
+          "display_formula": "CH₂",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                0.56
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methyl",
+          "formula": "CH3",
+          "display_formula": "CH₃",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.026,
+                0.0,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                -0.889,
+                -0.363
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "CO dimer",
+          "formula": "OCCO",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                -1.8,
+                0.0,
+                0.58
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                -0.76,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.76,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.8,
+                0.0,
+                0.58
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "CO dimer + H",
+          "formula": "OCCOH",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                -1.8,
+                0.0,
+                0.58
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                -0.76,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.76,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.8,
+                0.0,
+                0.58
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.3,
+                0.0,
+                -0.22
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "Ketene",
+          "formula": "CH2CO",
+          "display_formula": "CH₂CO",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.31
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                2.44
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Acetaldehyde frag.",
+          "formula": "CH3CHO",
+          "display_formula": "CH₃CHO",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.09
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.58,
+                0.0,
+                -0.95
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.5,
+                0.0,
+                -0.2
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.5,
+                0.89,
+                -0.82
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.5,
+                -0.89,
+                -0.82
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.4,
+                0.0,
+                0.4
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Vinyl alkoxy",
+          "formula": "OCHCH2",
+          "display_formula": "OCHCH₂",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.22,
+                0.0,
+                0.4
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.22,
+                0.0,
+                1.5
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                2.38,
+                0.0,
+                -0.2
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.38,
+                0.93,
+                -0.8
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.38,
+                -0.93,
+                -0.8
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethoxy",
+          "formula": "OCH2CH3",
+          "display_formula": "OCH₂CH₃",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.24,
+                0.0,
+                0.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.24,
+                0.89,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.24,
+                -0.89,
+                1.22
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                2.48,
+                0.0,
+                -0.26
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.48,
+                0.89,
+                -0.88
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.48,
+                -0.89,
+                -0.88
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                3.38,
+                0.0,
+                0.34
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Acetaldehyde",
+          "formula": "OCHCH3",
+          "display_formula": "OCHCH₃",
+          "group_tag": "CO₂RR",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.22,
+                0.0,
+                0.4
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.22,
+                0.0,
+                1.5
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                2.48,
+                0.0,
+                -0.26
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.48,
+                0.89,
+                -0.88
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.48,
+                -0.89,
+                -0.88
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                3.38,
+                0.0,
+                0.34
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "NRR",
+      "presets": [
+        {
+          "name": "Dinitrogen",
+          "formula": "N2",
+          "display_formula": "N₂",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.1
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Diazenyl",
+          "formula": "NNH",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                1.68
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Diazenyl + H",
+          "formula": "NNH2",
+          "display_formula": "NNH₂",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.8,
+                0.0,
+                1.75
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.8,
+                0.0,
+                1.75
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Diazene",
+          "formula": "NHNH",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.24
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.87,
+                0.0,
+                1.72
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydrazinyl",
+          "formula": "NH2NH",
+          "display_formula": "NH₂NH",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.4
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                1.88
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydrazine",
+          "formula": "NH2NH2",
+          "display_formula": "NH₂NH₂",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.45
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                1.93
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.87,
+                0.0,
+                1.93
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "NH₃—NH",
+          "formula": "NH3NH",
+          "display_formula": "NH₃NH",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.94,
+                0.0,
+                -0.38
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                0.81,
+                -0.38
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                -0.81,
+                -0.38
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.45
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                1.93
+              ]
+            }
+          ],
+          "default_binding_index": 4
+        },
+        {
+          "name": "NH₃—NH₂",
+          "formula": "NH3NH2",
+          "display_formula": "NH₃NH₂",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.94,
+                0.0,
+                -0.38
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                0.81,
+                -0.38
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                -0.81,
+                -0.38
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.45
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                1.93
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.87,
+                0.0,
+                1.93
+              ]
+            }
+          ],
+          "default_binding_index": 4
+        },
+        {
+          "name": "Atomic nitrogen",
+          "formula": "N",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Imido",
+          "formula": "NH",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.04
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Amino",
+          "formula": "NH2",
+          "display_formula": "NH₂",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.8,
+                0.0,
+                0.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.8,
+                0.0,
+                0.6
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ammonia",
+          "formula": "NH3",
+          "display_formula": "NH₃",
+          "group_tag": "NRR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.939,
+                0.0,
+                -0.381
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                0.813,
+                -0.381
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                -0.813,
+                -0.381
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "NO₃RR",
+      "presets": [
+        {
+          "name": "Nitrate",
+          "formula": "NO3",
+          "display_formula": "NO₃",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.08,
+                0.0,
+                0.63
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.54,
+                0.94,
+                0.63
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.54,
+                -0.94,
+                0.63
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Nitrite",
+          "formula": "NO2",
+          "display_formula": "NO₂",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.098,
+                0.0,
+                0.465
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.098,
+                0.0,
+                0.465
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Nitric oxide",
+          "formula": "NO",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.151
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Nitroxyl",
+          "formula": "NOH",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.21
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.63
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "HNO",
+          "formula": "HNO",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.95,
+                0.0,
+                -0.4
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.21
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "NHOH",
+          "formula": "NHOH",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.36
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.78
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxylamine",
+          "formula": "NH2OH",
+          "display_formula": "NH₂OH",
+          "group_tag": "NO₃RR",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.87,
+                0.0,
+                -0.48
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.4
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.82
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "HER",
+      "presets": [
+        {
+          "name": "Hydrogen",
+          "formula": "H",
+          "group_tag": "HER",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "PDH",
+      "presets": [
+        {
+          "name": "Propyl",
+          "formula": "C3H7",
+          "display_formula": "C₃H₇",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.54
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                3.08
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                3.71
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                3.71
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                3.71
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Isopropyl",
+          "formula": "i-C3H7",
+          "display_formula": "i-C₃H₇",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.09
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.26,
+                0.73,
+                -0.51
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.26,
+                0.73,
+                -1.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.12,
+                0.18,
+                -0.12
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.26,
+                1.78,
+                -0.18
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                -1.26,
+                0.73,
+                -0.51
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -1.26,
+                0.73,
+                -1.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -2.12,
+                0.18,
+                -0.12
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -1.26,
+                1.78,
+                -0.18
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Propylene",
+          "formula": "C3H6",
+          "display_formula": "C₃H₆",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                1.9
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.26,
+                0.0,
+                2.08
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.26,
+                0.89,
+                2.7
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.26,
+                -0.89,
+                2.7
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.16,
+                0.0,
+                1.48
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Propylidyne",
+          "formula": "C3H5",
+          "display_formula": "C₃H₅",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                1.9
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.26,
+                0.0,
+                2.08
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.26,
+                0.89,
+                2.7
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.26,
+                -0.89,
+                2.7
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.16,
+                0.0,
+                1.48
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethyl",
+          "formula": "C2H5",
+          "display_formula": "C₂H₅",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.54
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                2.17
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethylene",
+          "formula": "C2H4",
+          "display_formula": "C₂H₄",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                1.9
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                1.9
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Vinyl",
+          "formula": "C2H3",
+          "display_formula": "C₂H₃",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                1.9
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                1.9
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Acetylene",
+          "formula": "C2H2",
+          "display_formula": "C₂H₂",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                -1.06
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                2.26
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Coke precursor",
+          "formula": "C",
+          "group_tag": "PDH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "FTS",
+      "presets": [
+        {
+          "name": "Carbon monoxide",
+          "formula": "CO",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.128
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formyl",
+          "formula": "HCO",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                1.09,
+                0.0,
+                0.12
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.58,
+                0.0,
+                1.03
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "Hydroxymethylidyne",
+          "formula": "COH",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.31
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.87,
+                1.7
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxymethylene",
+          "formula": "CHOH",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.09,
+                0.0,
+                -0.12
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.4,
+                0.0,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.4,
+                0.76,
+                1.7
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formaldehyde",
+          "formula": "CH2O",
+          "display_formula": "CH₂O",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxymethyl",
+          "formula": "CH2OH",
+          "display_formula": "CH₂OH",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.43
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.85
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methylidyne",
+          "formula": "CH",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.09
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methylene",
+          "formula": "CH2",
+          "display_formula": "CH₂",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                0.56
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methyl",
+          "formula": "CH3",
+          "display_formula": "CH₃",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.026,
+                0.0,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                -0.889,
+                -0.363
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethylene",
+          "formula": "C2H4",
+          "display_formula": "C₂H₄",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                1.9
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                1.9
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Acetylene (vinylidene)",
+          "formula": "CHCH",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                -1.06
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                2.4
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethylidyne",
+          "formula": "CCH3",
+          "display_formula": "CCH₃",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.47
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.026,
+                0.0,
+                1.833
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                0.889,
+                1.833
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                -0.889,
+                1.833
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethyl",
+          "formula": "C2H5",
+          "display_formula": "C₂H₅",
+          "group_tag": "FTS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.54
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                2.17
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "WGS / MeOH",
+      "presets": [
+        {
+          "name": "Carbon monoxide",
+          "formula": "CO",
+          "group_tag": "WGS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.128
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Carbon dioxide",
+          "formula": "CO2",
+          "display_formula": "CO₂",
+          "group_tag": "WGS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.16,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.16,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Water",
+          "formula": "H2O",
+          "display_formula": "H₂O",
+          "group_tag": "WGS",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.757,
+                0.0,
+                0.586
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.757,
+                0.0,
+                0.586
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Hydroxyl",
+          "formula": "OH",
+          "group_tag": "WGS",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                0.97
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Carboxyl",
+          "formula": "COOH",
+          "group_tag": "WGS",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.208,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -0.396,
+                1.171,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.164,
+                1.882,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formate",
+          "formula": "HCOO",
+          "group_tag": "WGS",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.1
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.08,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.08,
+                0.0,
+                -0.63
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "Dioxymethylene",
+          "formula": "H2COO",
+          "display_formula": "H₂COO",
+          "group_tag": "MeOH",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                1.2
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                1.2
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.6
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.08,
+                0.0,
+                -0.03
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.08,
+                0.0,
+                -0.03
+              ]
+            }
+          ],
+          "default_binding_index": 2
+        },
+        {
+          "name": "Methoxy",
+          "formula": "H3CO",
+          "display_formula": "H₃CO",
+          "group_tag": "MeOH",
+          "atoms": [
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                1.22,
+                0.0,
+                0.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.22,
+                0.89,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.22,
+                -0.89,
+                1.22
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                2.12,
+                0.0,
+                0.1
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formaldehyde",
+          "formula": "H2CO",
+          "display_formula": "H₂CO",
+          "group_tag": "MeOH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.93,
+                0.0,
+                -0.56
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.2
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Methanol",
+          "formula": "CH3OH",
+          "display_formula": "CH₃OH",
+          "group_tag": "MeOH",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.026,
+                0.0,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                -0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.43
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.85
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "NH₃ Synth",
+      "presets": [
+        {
+          "name": "Dinitrogen",
+          "formula": "N2",
+          "display_formula": "N₂",
+          "group_tag": "NH₃Syn",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.1
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Atomic nitrogen",
+          "formula": "N",
+          "group_tag": "NH₃Syn",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Imido",
+          "formula": "NH",
+          "group_tag": "NH₃Syn",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.04
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Amino",
+          "formula": "NH2",
+          "display_formula": "NH₂",
+          "group_tag": "NH₃Syn",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.8,
+                0.0,
+                0.6
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.8,
+                0.0,
+                0.6
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ammonia",
+          "formula": "NH3",
+          "display_formula": "NH₃",
+          "group_tag": "NH₃Syn",
+          "atoms": [
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.939,
+                0.0,
+                -0.381
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                0.813,
+                -0.381
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.47,
+                -0.813,
+                -0.381
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Atomic hydrogen",
+          "formula": "H",
+          "group_tag": "NH₃Syn",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    },
+    {
+      "label": "S / Other",
+      "presets": [
+        {
+          "name": "Sulfur",
+          "formula": "S",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "S",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Sulfhydryl",
+          "formula": "SH",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "S",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.34
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Sulfur monoxide",
+          "formula": "SO",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "S",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.48
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Sulfur dioxide",
+          "formula": "SO2",
+          "display_formula": "SO₂",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "S",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.25,
+                0.0,
+                0.72
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.25,
+                0.0,
+                0.72
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Cyanide",
+          "formula": "CN",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                1.16
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Thiocyanate",
+          "formula": "SCN",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "S",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.68
+              ]
+            },
+            {
+              "symbol": "N",
+              "position": [
+                0.0,
+                0.0,
+                2.84
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Formate",
+          "formula": "HCOO",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.0,
+                1.1
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                1.08,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                -1.08,
+                0.0,
+                -0.63
+              ]
+            }
+          ],
+          "default_binding_index": 1
+        },
+        {
+          "name": "Methanol",
+          "formula": "CH3OH",
+          "display_formula": "CH₃OH",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                1.026,
+                0.0,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.513,
+                -0.889,
+                -0.363
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                1.43
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                1.85
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        },
+        {
+          "name": "Ethanol",
+          "formula": "C2H5OH",
+          "display_formula": "C₂H₅OH",
+          "group_tag": "Other",
+          "atoms": [
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                -0.63
+              ]
+            },
+            {
+              "symbol": "C",
+              "position": [
+                0.0,
+                0.0,
+                1.54
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                -0.89,
+                0.0,
+                2.17
+              ]
+            },
+            {
+              "symbol": "O",
+              "position": [
+                0.0,
+                0.0,
+                2.97
+              ]
+            },
+            {
+              "symbol": "H",
+              "position": [
+                0.0,
+                0.76,
+                3.39
+              ]
+            }
+          ],
+          "default_binding_index": 0
+        }
+      ]
+    }
+  ]
+}

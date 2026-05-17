@@ -426,12 +426,18 @@ async def execute_local_node(
                                 len(elems),
                             )
                         else:
-                            from workflow.engines.batch_adsorbate import _place_adsorbate
+                            # Delegate to catgo.workflow.builtins_impl.run_adsorbate_place,
+                            # which uses the ferrox site finder + CatGo placement engine
+                            # (same algorithm as the 3D viewer). The previous import
+                            # `from workflow.engines.batch_adsorbate import _place_adsorbate`
+                            # pointed at a module that doesn't exist in this repo —
+                            # the call always raised ImportError, the surrounding
+                            # try/except swallowed it, and the node "completed"
+                            # without an adsorbate, which is exactly the bug CatBot
+                            # users were hitting.
+                            from catgo.workflow.builtins_impl import run_adsorbate_place
 
-                            # Map frontend site names to pymatgen strategy
                             site = params.get("site", "all")
-                            strategy = "hollow" if site in ("fcc", "hcp") else site
-
                             if species == "custom":
                                 custom_xyz = params.get("custom_xyz", "")
                                 if custom_xyz:
@@ -459,15 +465,17 @@ async def execute_local_node(
                                         if placed:
                                             structure_json = json.dumps(placed[0].as_dict())
                             else:
-                                placed = _place_adsorbate(
-                                    struct_dict, species, strategy, max_sites=1,
+                                # site_index left as None → pick the site closest
+                                # to the slab xy centroid (the default a user
+                                # expects for an auto-generated workflow).
+                                result = run_adsorbate_place(
+                                    struct_dict, species=species, site=site, height=height,
                                 )
-                                if placed:
-                                    structure_json = json.dumps(placed[0])
+                                structure_json = result["structure"]
 
                             if structure_json:
                                 logger.info(
-                                    "adsorbate_place: placed %s via pymatgen fallback (site=%s, height=%.1f)",
+                                    "adsorbate_place: placed %s via run_adsorbate_place (site=%s, height=%.1f)",
                                     species, site, height,
                                 )
                     except Exception as e:
@@ -506,20 +514,30 @@ async def execute_local_node(
                         "adsorbate_place: no parent structure and no pre-configured "
                         "structure_json. Connect to a slab node or configure manually."
                     )
-                from workflow.engines.batch_adsorbate import _place_adsorbate
+                from catgo.workflow.builtins_impl import run_adsorbate_place
                 species = params.get("species", "OH")
                 site = params.get("site", "all")
+                height = float(params.get("height", 2.0))
+
+                def _place_one(struct_dict: dict) -> dict:
+                    """Wrap run_adsorbate_place so the calling code keeps the
+                    `list[dict]`-shape it had with the old _place_adsorbate.
+                    site_index is left at its default (None) so the placement
+                    lands on the site closest to the slab's xy centroid.
+                    """
+                    res = run_adsorbate_place(struct_dict, species=species, site=site, height=height)
+                    return json.loads(res["structure"])
 
                 # Multi-structure: place adsorbate on each input structure
                 if parent_structures_list and len(parent_structures_list) > 1:
                     all_placed = []
                     for ps in parent_structures_list:
                         ps_dict = json.loads(ps) if isinstance(ps, str) else ps
-                        placed = _place_adsorbate(ps_dict, species, site, 1)
-                        if placed:
-                            all_placed.append(placed[0])
-                        else:
-                            all_placed.append(ps_dict)  # keep original if placement fails
+                        try:
+                            all_placed.append(_place_one(ps_dict))
+                        except Exception as exc:
+                            logger.warning("adsorbate_place: %s on a fan-out structure failed: %s — keeping original", species, exc)
+                            all_placed.append(ps_dict)
                     if not all_placed:
                         raise RuntimeError(f"adsorbate_place: failed to place {species} on any structure.")
                     # Fan-out: primary is first, all are in structures list
@@ -539,13 +557,14 @@ async def execute_local_node(
                     target_struct = parent_struct or (parent_structures_list[0] if parent_structures_list else None)
                     if isinstance(target_struct, str):
                         target_struct = json.loads(target_struct)
-                    placed = _place_adsorbate(target_struct, species, site, 1)
-                    if not placed:
+                    try:
+                        result_struct = _place_one(target_struct)
+                    except Exception as exc:
                         raise RuntimeError(
-                            f"adsorbate_place: failed to place {species} on parent structure. "
+                            f"adsorbate_place: failed to place {species} on parent structure "
+                            f"(site={site}, height={height} Å): {exc}. "
                             "Try a different site type or check the slab structure."
-                        )
-                    result_struct = placed[0]
+                        ) from exc
                     result_json_str = json.dumps(result_struct)
                     step_results[step_id] = {"structure_json": result_json_str, "structure": result_struct}
                     update_step(workflow_id, step_id, {
@@ -815,17 +834,12 @@ async def execute_local_node(
             from pymatgen.core import Structure as PmgStructure
             from pymatgen.analysis.adsorption import AdsorbateSiteFinder
 
-            # Adsorbate molecule definitions (matching builtins_impl.py)
-            _ADSORBATE_MOLECULES: dict[str, tuple[list[str], list[list[float]]]] = {
-                "H": (["H"], [[0, 0, 0]]),
-                "O": (["O"], [[0, 0, 0]]),
-                "OH": (["O", "H"], [[0, 0, 0], [0, 0, 0.96]]),
-                "OOH": (["O", "O", "H"], [[0, 0, 0], [1.24, 0, 0.49], [1.60, 0, 1.41]]),
-                "H2O": (["O", "H", "H"], [[0, 0, 0], [0.76, 0.59, 0], [-0.76, 0.59, 0]]),
-                "CO": (["C", "O"], [[0, 0, 0], [0, 0, 1.13]]),
-                "N": (["N"], [[0, 0, 0]]),
-                "N2": (["N", "N"], [[0, 0, 0], [0, 0, 1.10]]),
-            }
+            # Single source of truth: catgo.workflow.builtins_impl loads from
+            # server/data/adsorbates.json (~70 species, kept in sync with the
+            # frontend library). Importing here lets a Ni(111) coverage sweep
+            # use, say, NH2NH2 or OCCO without us needing to duplicate the
+            # molecule definitions in two places.
+            from catgo.workflow.builtins_impl import _ADSORBATE_MOLECULES
 
             slab = PmgStructure.from_dict(struct_dict)
             asf = AdsorbateSiteFinder(slab)

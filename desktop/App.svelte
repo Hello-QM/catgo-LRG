@@ -418,6 +418,13 @@
         // — harmless, but avoidable).
         untrack(() => { slice.pending_navigate_workflow.id = `` })
         handle_sidebar_open_workflow(wf_id, true, slice_tab_id)
+        // The MCP / CatBot path that triggers this navigate signal is also
+        // the one that just wrote a new workflow row (or extra nodes) to
+        // the DB. The sidebar otherwise only refreshes on db-change /
+        // close-all-save / pane operations, so a CatBot-built workflow
+        // wouldn't appear in the list until the user reloaded the page.
+        // Bumping the refresh counter here closes that gap.
+        untrack(() => { sidebar.refresh_counter++ })
       }
     }
   })

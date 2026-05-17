@@ -1,4 +1,20 @@
 import type { NodeDefinition } from '../../workflow-types'
+import { ADSORBATE_PRESET_GROUPS } from '$lib/api/adsorbate'
+
+// Build species dropdown options from the same JSON the viewer + backend
+// engine read (server/data/adsorbates.json). This guarantees that when the
+// user adds an adsorbate to that file it shows up everywhere — workflow node
+// dropdown, MCP `list_presets`, viewer panel, backend placement engine —
+// without three independent hand-maintained lists drifting apart.
+const _species_options: { label: string; value: string }[] = [
+  ...ADSORBATE_PRESET_GROUPS.flatMap((group) =>
+    group.presets.map((p) => ({
+      label: `${p.display_formula ?? p.formula} (${p.name}) — ${group.label}`,
+      value: p.formula,
+    })),
+  ),
+  { label: `Custom`, value: `custom` },
+]
 
 export const adsorbate_place: NodeDefinition = {
   type: `adsorbate_place`,
@@ -17,28 +33,7 @@ Opens CatGo's adsorbate placement tool for interactive site selection.`,
     // --- Adsorbate selection ---
     {
       key: `species`, label: `Adsorbate`, type: `select`, default: `OH`, group: `Adsorbate`,
-      options: [
-        { label: `OH (hydroxyl)`, value: `OH` },
-        { label: `O (oxygen)`, value: `O` },
-        { label: `OOH (peroxyl)`, value: `OOH` },
-        { label: `H (hydrogen)`, value: `H` },
-        { label: `H\u2082O (water)`, value: `H2O` },
-        { label: `CO (carbon monoxide)`, value: `CO` },
-        { label: `COOH (carboxyl)`, value: `COOH` },
-        { label: `N\u2082 (nitrogen)`, value: `N2` },
-        { label: `NH\u2083 (ammonia)`, value: `NH3` },
-        { label: `NO (nitric oxide)`, value: `NO` },
-        { label: `N (atomic nitrogen)`, value: `N` },
-        { label: `NH (imide)`, value: `NH` },
-        { label: `NH\u2082 (amino)`, value: `NH2` },
-        { label: `NOH (nitrosyl hydroxide)`, value: `NOH` },
-        { label: `NHOH (hydroxylamine)`, value: `NHOH` },
-        { label: `HNO (nitroxyl)`, value: `HNO` },
-        { label: `NO\u2082 (nitrogen dioxide)`, value: `NO2` },
-        { label: `N\u2082O (nitrous oxide)`, value: `N2O` },
-        { label: `NO\u2083 (nitrate)`, value: `NO3` },
-        { label: `Custom`, value: `custom` },
-      ],
+      options: _species_options,
       help: `Select adsorbate molecule. Choose "Custom" to specify XYZ coordinates manually.`,
     },
     {

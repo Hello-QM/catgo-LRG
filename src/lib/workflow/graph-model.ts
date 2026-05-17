@@ -296,7 +296,35 @@ export function parse_kpoints_str(kp: unknown): number[][] | undefined {
   return undefined
 }
 
-/** BFS upstream to find the nearest ancestor node with structure_json */
+/**
+ * Node types that TRANSFORM their input structure into a meaningfully
+ * different output (slab from bulk, slab+adsorbate from slab, doped slab,
+ * etc.). For these, the BFS upstream resolver MUST stop at the node itself
+ * — falling through to its parent gives the wrong structure (e.g. raw bulk
+ * IrO2 where the caller wanted the slab). Pure pass-through / logic types
+ * (loop, merge, condition) are NOT in this set, so they're still
+ * transparently skipped while the transformation cache is being filled.
+ */
+const STRUCTURE_TRANSFORMING_TYPES = new Set<string>([
+  `slab_gen`,
+  `batch_slab_gen`,
+  `batch_coverage_gen`,
+  `adsorbate_place`,
+  `batch_adsorbate_place`,
+  `doping_gen`,
+  `polymer_build`,
+  `polymer_crosslink`,
+])
+
+/** BFS upstream to find the nearest ancestor node with structure_json.
+ *
+ * When the immediate parent is a STRUCTURE_TRANSFORMING_TYPES node whose
+ * own `structure_json` hasn't been cached yet (preview not finished,
+ * step not run, etc.), this returns `null` instead of falling through to
+ * its grandparent. Falling through there silently substitutes the bulk
+ * crystal for the expected slab — that's the "sometimes slab / sometimes
+ * bulk" race CatBot-built OER pipelines were hitting.
+ */
 export function resolve_input_structure(node_id: string, nodes: WfNode[], edges: WfEdge[]): string | null {
   const visited = new Set<string>()
   const queue = [node_id]
@@ -309,6 +337,13 @@ export function resolve_input_structure(node_id: string, nodes: WfNode[], edges:
       const parent = nodes.find(n => n.id === edge.from)
       if (!parent || visited.has(parent.id)) continue
       if (parent.params?.structure_json) return parent.params.structure_json as string
+      if (STRUCTURE_TRANSFORMING_TYPES.has(parent.type)) {
+        // Don't fall through past a transformer that hasn't produced its
+        // output yet — wait for it. The caller will retry once
+        // SlabGenPreview / AdsorbatePlacePanel writes structure_json back
+        // (Svelte reactivity re-runs the derived).
+        return null
+      }
       queue.push(parent.id)
     }
   }
@@ -352,6 +387,10 @@ export function resolve_input_structures(
         if (p.structure_json)
           return [p.structure_json as string]
       }
+      // Same wait-don't-fall-through rule as resolve_input_structure: a
+      // transformer parent without cached output blocks the BFS instead
+      // of letting us silently grab the grandparent's bulk crystal.
+      if (STRUCTURE_TRANSFORMING_TYPES.has(parent.type)) return null
       queue.push(parent.id)
     }
   }

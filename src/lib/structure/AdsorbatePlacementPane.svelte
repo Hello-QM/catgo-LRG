@@ -424,7 +424,7 @@
             <optgroup label={group.label}>
               {#each group.presets as preset}
                 {@const flat_idx = ADSORBATE_PRESETS.indexOf(preset)}
-                <option value={flat_idx}>{preset.formula} — {preset.name}</option>
+                <option value={flat_idx}>{preset.display_formula ?? preset.formula} — {preset.name}</option>
               {/each}
             </optgroup>
           {/each}
