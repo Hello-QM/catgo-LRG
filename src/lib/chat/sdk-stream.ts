@@ -107,11 +107,12 @@ export async function resolve_permission(
   permissionId: string,
   behavior: `allow` | `allow_session` | `deny`,
   suggestions?: unknown[],
+  updatedInput?: Record<string, unknown>,
 ): Promise<boolean> {
   const resp = await fetch(`${getAgentBase()}/api/agent/permission`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
-    body: JSON.stringify({ permissionId, behavior, suggestions }),
+    body: JSON.stringify({ permissionId, behavior, suggestions, updatedInput }),
   })
   if (!resp.ok) return false
   const data = await resp.json()

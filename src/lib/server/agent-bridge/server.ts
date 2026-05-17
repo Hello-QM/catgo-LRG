@@ -157,7 +157,7 @@ async function handleStream(req: IncomingMessage, res: ServerResponse): Promise<
 
 async function handlePermission(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = JSON.parse(await readBody(req))
-  const { permissionId, behavior, suggestions } = body
+  const { permissionId, behavior, suggestions, updatedInput } = body
 
   if (!permissionId || typeof permissionId !== 'string') {
     jsonResponse(res, 400, { error: 'permissionId is required' })
@@ -168,7 +168,7 @@ async function handlePermission(req: IncomingMessage, res: ServerResponse): Prom
     return
   }
 
-  const ok = resolvePending(permissionId, behavior, suggestions)
+  const ok = resolvePending(permissionId, behavior, suggestions, updatedInput)
   jsonResponse(res, 200, { ok })
 }
 

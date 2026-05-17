@@ -43,6 +43,51 @@
             resolving = false
         }
     }
+
+    // ── AskUserQuestion: selected option label(s) per question index ──
+    let selections = $state<Record<number, string[]>>({})
+
+    function toggle_option(qi: number, label: string, multi: boolean) {
+        const cur = selections[qi] ?? []
+        if (multi) {
+            selections[qi] = cur.includes(label)
+                ? cur.filter((l) => l !== label)
+                : [...cur, label]
+        } else {
+            selections[qi] = [label]
+        }
+    }
+
+    const all_answered = $derived(
+        ask_questions.length > 0 &&
+        ask_questions.every((_q, i) => (selections[i]?.length ?? 0) > 0),
+    )
+
+    async function submit_answers() {
+        if (resolving || !all_answered) return
+        resolving = true
+        try {
+            // Per the Agent SDK contract: answers maps each question's
+            // `question` text → the chosen option label (string for
+            // single-select, array for multiSelect). The SDK turns the
+            // returned updatedInput into the tool_result automatically.
+            const answers: Record<string, string | string[]> = {}
+            ask_questions.forEach((q, i) => {
+                const picked = selections[i] ?? []
+                const key = q.question ?? q.header ?? `q${i}`
+                answers[key] = q.multiSelect ? picked : (picked[0] ?? ``)
+            })
+            await resolve_permission(permissionId, `allow`, suggestions, {
+                questions: ask_questions,
+                answers,
+            })
+            status = `allowed`
+        } catch (err) {
+            console.error(`[PermissionCard] submit_answers failed:`, err)
+        } finally {
+            resolving = false
+        }
+    }
 </script>
 
 {#if status === `pending`}
@@ -65,52 +110,82 @@
 
         {#if is_ask && ask_questions.length > 0}
             <div class="ask-block">
-                {#each ask_questions as q (q.question ?? q.header)}
+                {#each ask_questions as q, qi (q.question ?? q.header ?? qi)}
                     <div class="ask-question">
                         {#if q.header}<span class="ask-header">{q.header}</span>{/if}
                         <div class="ask-text">{q.question ?? ``}</div>
                         {#if q.options && q.options.length > 0}
                             <ul class="ask-options">
                                 {#each q.options as opt}
+                                    {@const label = opt.label ?? ``}
+                                    {@const picked = (selections[qi] ?? []).includes(label)}
                                     <li>
-                                        <span class="ask-opt-label">{opt.label ?? ``}</span>
-                                        {#if opt.description}<span class="ask-opt-desc">{opt.description}</span>{/if}
+                                        <button
+                                            type="button"
+                                            class="ask-opt-btn"
+                                            class:picked
+                                            disabled={resolving}
+                                            onclick={() => toggle_option(qi, label, !!q.multiSelect)}
+                                        >
+                                            <span class="ask-opt-mark">{picked ? `●` : `○`}</span>
+                                            <span class="ask-opt-body">
+                                                <span class="ask-opt-label">{label}</span>
+                                                {#if opt.description}<span class="ask-opt-desc">{opt.description}</span>{/if}
+                                            </span>
+                                        </button>
                                     </li>
                                 {/each}
                             </ul>
                         {/if}
-                        {#if q.multiSelect}<div class="ask-hint">(multiple selections allowed)</div>{/if}
+                        {#if q.multiSelect}<div class="ask-hint">(select one or more)</div>{/if}
                     </div>
                 {/each}
-                <div class="ask-note">Allow to let CatBot continue and ask this in the chat.</div>
+            </div>
+
+            <div class="action-buttons">
+                <button
+                    class="btn btn-allow"
+                    disabled={resolving || !all_answered}
+                    onclick={submit_answers}
+                    title={all_answered ? `Send your choice to CatBot` : `Pick an option for every question first`}
+                >
+                    {resolving ? `…` : `Submit`}
+                </button>
+                <button
+                    class="btn btn-deny"
+                    disabled={resolving}
+                    onclick={() => handle(`deny`)}
+                >
+                    {resolving ? `…` : `Cancel`}
+                </button>
             </div>
         {:else}
             <pre class="input-preview">{truncated_input()}</pre>
-        {/if}
 
-        <div class="action-buttons">
-            <button
-                class="btn btn-allow"
-                disabled={resolving}
-                onclick={() => handle(`allow`)}
-            >
-                {resolving ? `…` : `Allow`}
-            </button>
-            <button
-                class="btn btn-allow-session"
-                disabled={resolving}
-                onclick={() => handle(`allow_session`)}
-            >
-                {resolving ? `…` : `Allow Session`}
-            </button>
-            <button
-                class="btn btn-deny"
-                disabled={resolving}
-                onclick={() => handle(`deny`)}
-            >
-                {resolving ? `…` : `Deny`}
-            </button>
-        </div>
+            <div class="action-buttons">
+                <button
+                    class="btn btn-allow"
+                    disabled={resolving}
+                    onclick={() => handle(`allow`)}
+                >
+                    {resolving ? `…` : `Allow`}
+                </button>
+                <button
+                    class="btn btn-allow-session"
+                    disabled={resolving}
+                    onclick={() => handle(`allow_session`)}
+                >
+                    {resolving ? `…` : `Allow Session`}
+                </button>
+                <button
+                    class="btn btn-deny"
+                    disabled={resolving}
+                    onclick={() => handle(`deny`)}
+                >
+                    {resolving ? `…` : `Deny`}
+                </button>
+            </div>
+        {/if}
     </div>
 {:else}
     <div class="permission-resolved">
@@ -243,10 +318,50 @@
     }
 
     .ask-options li {
-        padding: 5px 8px;
+        margin: 0;
+        padding: 0;
+    }
+
+    .ask-opt-btn {
+        display: flex;
+        align-items: flex-start;
+        gap: 7px;
+        width: 100%;
+        text-align: left;
+        padding: 6px 9px;
         border-radius: 4px;
         background: var(--code-bg);
         border: 1px solid var(--border-color);
+        cursor: pointer;
+        transition: background 0.12s, border-color 0.12s;
+        font: inherit;
+    }
+
+    .ask-opt-btn:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--accent-color) 12%, var(--code-bg));
+    }
+
+    .ask-opt-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+    }
+
+    .ask-opt-btn.picked {
+        border-color: var(--accent-color);
+        background: color-mix(in srgb, var(--accent-color) 18%, transparent);
+    }
+
+    .ask-opt-mark {
+        color: var(--accent-color);
+        font-size: 11px;
+        line-height: 1.5;
+        flex-shrink: 0;
+    }
+
+    .ask-opt-body {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
     }
 
     .ask-opt-label {
@@ -268,12 +383,6 @@
         font-style: italic;
         color: var(--text-color-muted);
         margin-top: 4px;
-    }
-
-    .ask-note {
-        font-size: 11px;
-        color: var(--text-color-muted);
-        margin-top: 8px;
     }
 
     .action-buttons {

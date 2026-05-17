@@ -31,6 +31,7 @@ export function resolvePending(
   id: string,
   behavior: 'allow' | 'allow_session' | 'deny',
   suggestions?: unknown[],
+  updatedInput?: Record<string, unknown>,
 ): boolean {
   const entry = pending.get(id)
   if (!entry) return false
@@ -42,11 +43,14 @@ export function resolvePending(
     // For "allow_session", pass suggestions back as updatedPermissions.
     // The adapter's canUseTool will handle constructing a fallback rule
     // if suggestions are empty — see claude.ts.
+    // `updatedInput` carries AskUserQuestion answers ({ questions, answers })
+    // straight through to canUseTool.
     entry.resolve({
       behavior: 'allow',
       updatedPermissions: behavior === 'allow_session'
         ? (suggestions && suggestions.length > 0 ? suggestions : undefined)
         : undefined,
+      updatedInput,
     })
   }
   return true

@@ -38,6 +38,14 @@ export interface PermissionResult {
   behavior: 'allow' | 'deny'
   updatedPermissions?: unknown[]
   message?: string
+  /**
+   * For the SDK `AskUserQuestion` tool: the host injects the user's
+   * selected answers here. The Claude adapter forwards this verbatim as
+   * the canUseTool `updatedInput` ({ questions, answers }), which the
+   * Agent SDK turns into the tool_result automatically. Undefined for
+   * ordinary allow/deny tool gating.
+   */
+  updatedInput?: Record<string, unknown>
 }
 
 export interface SessionInfo {

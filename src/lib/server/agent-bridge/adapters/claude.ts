@@ -238,9 +238,14 @@ export function createClaudeAdapter(): AgentAdapter {
                   destination: 'session',
                 }])
 
+          // For AskUserQuestion the host injects the user's selected
+          // answers as updatedInput ({ questions, answers }); the Agent
+          // SDK turns it into the tool_result automatically. For ordinary
+          // tools updatedInput is undefined and the call is just gated.
           return {
             behavior: 'allow',
             updatedPermissions,
+            ...(result.updatedInput ? { updatedInput: result.updatedInput } : {}),
           }
         } else {
           return {
