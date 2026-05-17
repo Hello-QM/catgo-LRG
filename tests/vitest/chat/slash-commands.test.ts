@@ -170,3 +170,39 @@ describe('quickbuild commands', () => {
     expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('mp-'))
   })
 })
+
+describe('/structure', () => {
+  it('calls inject_structure', async () => {
+    const c = ctx(); await run_slash('/structure', c as any)
+    expect(c.inject_structure).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('/skip-permission', () => {
+  it('no arg reports current state', async () => {
+    const c = ctx({ get_skip_permission: vi.fn(() => false) })
+    await run_slash('/skip-permission', c as any)
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('OFF'))
+    expect(c.set_skip_permission).not.toHaveBeenCalled()
+  })
+  it('no arg reports ON when skip is enabled', async () => {
+    const c = ctx({ get_skip_permission: vi.fn(() => true) })
+    await run_slash('/skip-permission', c as any)
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('ON'))
+    expect(c.set_skip_permission).not.toHaveBeenCalled()
+  })
+  it('on sets true and emits a security warning', async () => {
+    const c = ctx(); await run_slash('/skip-permission on', c as any)
+    expect(c.set_skip_permission).toHaveBeenCalledWith(true)
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('⚠️'))
+  })
+  it('off sets false', async () => {
+    const c = ctx(); await run_slash('/skip-permission off', c as any)
+    expect(c.set_skip_permission).toHaveBeenCalledWith(false)
+  })
+  it('garbage arg emits usage, does not change state', async () => {
+    const c = ctx(); await run_slash('/skip-permission maybe', c as any)
+    expect(c.set_skip_permission).not.toHaveBeenCalled()
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('on'))
+  })
+})

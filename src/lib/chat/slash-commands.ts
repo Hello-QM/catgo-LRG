@@ -166,3 +166,34 @@ for (const r of RECIPES) {
     },
   })
 }
+
+SLASH_COMMANDS.push({
+  name: 'structure',
+  hint: '',
+  summary: 'Put the current structure into the Structure Input node',
+  async run(ctx) { await ctx.inject_structure() },
+})
+
+SLASH_COMMANDS.push({
+  name: 'skip-permission',
+  hint: '[on|off]',
+  summary: 'Toggle the per-session tool-approval gate',
+  run(ctx) {
+    const a = ctx.args.trim().toLowerCase()
+    if (a === '') {
+      ctx.emit(`skip-permission is ${ctx.get_skip_permission() ? 'ON' : 'OFF'}. Use /skip-permission on|off.`)
+      return
+    }
+    if (a === 'on') {
+      ctx.set_skip_permission(true)
+      ctx.emit(`⚠️ Permission prompts disabled for this session — Bash and file tools will run without asking. /skip-permission off to re-enable.`)
+      return
+    }
+    if (a === 'off') {
+      ctx.set_skip_permission(false)
+      ctx.emit(`skip-permission OFF — tool calls will ask for approval again.`)
+      return
+    }
+    ctx.emit(`Usage: /skip-permission on|off`)
+  },
+})
