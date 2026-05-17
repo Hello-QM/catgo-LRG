@@ -88,3 +88,18 @@ SLASH_COMMANDS.push({
     ctx.emit(`**CatBot slash commands**\n\n${lines.join('\n')}`)
   },
 })
+
+SLASH_COMMANDS.push(
+  {
+    name: 'new', hint: '', summary: 'Start a fresh chat session',
+    run(ctx) { ctx.new_session() },
+  },
+  {
+    name: 'clear', hint: '', summary: 'Clear messages, keep the session',
+    run(ctx) { ctx.clear_chat_history() },
+  },
+  {
+    name: 'stop', hint: '', summary: 'Stop the current streaming reply',
+    run(ctx) { ctx.cancel_generation() },
+  },
+)

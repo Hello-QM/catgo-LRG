@@ -66,3 +66,18 @@ describe('run_slash', () => {
     SLASH_COMMANDS.splice(i, 1)
   })
 })
+
+describe('session commands', () => {
+  it('/new calls new_session', async () => {
+    const c = ctx(); await run_slash('/new', c as any)
+    expect(c.new_session).toHaveBeenCalledTimes(1)
+  })
+  it('/clear calls clear_chat_history', async () => {
+    const c = ctx(); await run_slash('/clear', c as any)
+    expect(c.clear_chat_history).toHaveBeenCalledTimes(1)
+  })
+  it('/stop calls cancel_generation', async () => {
+    const c = ctx(); await run_slash('/stop', c as any)
+    expect(c.cancel_generation).toHaveBeenCalledTimes(1)
+  })
+})
