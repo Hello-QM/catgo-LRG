@@ -480,6 +480,7 @@ export async function send_message(
         attachments,
         signal: slice.abort_controller.signal,
         tabId: tab_id,
+        skipPermissions: slice.skip_permission.value,
         chatId: tab_id,
       })
 

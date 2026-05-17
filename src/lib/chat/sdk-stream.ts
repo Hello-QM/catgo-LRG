@@ -41,6 +41,13 @@ export interface StreamAgentParams {
    */
   tabId?: string
   /**
+   * When true, forwarded to the server and into the Claude adapter's
+   * canUseTool so ALL non-CatGo tools are auto-allowed without a
+   * PermissionCard for this stream. Mirrors the chat slice's session-scoped
+   * skip_permission flag; never persisted.
+   */
+  skipPermissions?: boolean
+  /**
    * Per-chat-thread key. Forwarded to the Gemini adapter's persistent ACP
    * process pool so repeat prompts in the same chat tab reuse one
    * `gemini --acp` process and keep cross-turn context. The Claude/Codex
@@ -52,12 +59,12 @@ export interface StreamAgentParams {
 export async function* stream_sdk_agent(
   params: StreamAgentParams,
 ): AsyncGenerator<AgentEvent> {
-  const { agent, prompt, sessionId, model, systemPrompt, attachments, signal, tabId, chatId } = params
+  const { agent, prompt, sessionId, model, systemPrompt, attachments, signal, tabId, skipPermissions, chatId } = params
 
   const response = await fetch(`${getAgentBase()}/api/agent/stream`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
-    body: JSON.stringify({ agent, prompt, sessionId, model, systemPrompt, attachments, tabId, chatId }),
+    body: JSON.stringify({ agent, prompt, sessionId, model, systemPrompt, attachments, tabId, skipPermissions, chatId }),
     signal,
   })
 

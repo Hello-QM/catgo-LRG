@@ -73,6 +73,13 @@ export interface StreamParams {
    */
   tabId?: string
   /**
+   * When true, the Claude adapter's canUseTool auto-allows ALL tools
+   * (not just CatGo MCP) without showing the PermissionCard, for this
+   * stream only. Set per-stream from the chat slice's session-scoped
+   * skip_permission flag; never persisted.
+   */
+  skipPermissions?: boolean
+  /**
    * Per-chat-thread key for the persistent Gemini ACP process pool. When
    * set, repeat `stream()` calls with the same `chatId` reuse one
    * `gemini --acp` process + ACP session, so the model remembers prior

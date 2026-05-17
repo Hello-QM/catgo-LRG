@@ -177,6 +177,7 @@ export function createClaudeAdapter(): AgentAdapter {
         permissionCallback,
         abortSignal,
         tabId,
+        skipPermissions,
       } = params
 
       const effectiveController = new AbortController()
@@ -210,6 +211,13 @@ export function createClaudeAdapter(): AgentAdapter {
       ): Promise<any> => {
         // Auto-allow all CatGo MCP tools — they are safe backend operations
         if (toolName.startsWith('mcp__catgo__') || toolName.startsWith('catgo_')) {
+          return { behavior: 'allow' }
+        }
+
+        // Session-scoped user opt-out of the approval gate (/skip-permission).
+        // Captured per-stream so a mid-stream toggle can't retroactively
+        // affect an in-flight round.
+        if (skipPermissions === true) {
           return { behavior: 'allow' }
         }
 

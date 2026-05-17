@@ -95,6 +95,7 @@ function agentCwdFor(agent: AgentType): string {
 async function handleStream(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = JSON.parse(await readBody(req))
   const { agent, prompt, sessionId, model, systemPrompt, attachments, tabId, chatId } = body
+  const skipPermissions = body.skipPermissions === true
 
   if (!VALID_AGENTS.includes(agent)) {
     jsonResponse(res, 400, { error: `Invalid agent: must be one of ${VALID_AGENTS.join(', ')}` })
@@ -142,6 +143,7 @@ async function handleStream(req: IncomingMessage, res: ServerResponse): Promise<
       permissionCallback,
       abortSignal: abortController.signal,
       tabId,
+      skipPermissions,
       chatId,
     })) {
       writeEvent(event)
