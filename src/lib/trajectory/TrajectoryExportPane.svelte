@@ -65,7 +65,25 @@
   let start_frame = $state(0)
   let end_frame = $state(0)
 
-  let canvas = $derived(wrapper?.querySelector(`canvas`) as HTMLCanvasElement)
+  // The WebGL <canvas> mounts asynchronously — after the trajectory parses and
+  // StructureScene initializes — which is AFTER `wrapper` is already bound. A
+  // one-shot `wrapper.querySelector('canvas')` in $derived runs too early (canvas
+  // doesn't exist yet) and never re-checks, since querySelector isn't reactive
+  // and the wrapper reference never changes. Mirror the working pattern in
+  // ExportPane.svelte: observe the subtree and update reactive $state.
+  let canvas = $state<HTMLCanvasElement | null>(null)
+  $effect(() => {
+    if (!wrapper) {
+      canvas = null
+      return
+    }
+    const check = () =>
+      (canvas = wrapper.querySelector(`canvas`) as HTMLCanvasElement | null)
+    check()
+    const observer = new MutationObserver(check)
+    observer.observe(wrapper, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  })
 
   // Estimated file size in MB
   let file_size_mb = $derived.by(() => {
