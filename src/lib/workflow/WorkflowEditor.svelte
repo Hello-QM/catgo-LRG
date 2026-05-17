@@ -2074,19 +2074,31 @@
   let reload_debounce_timer: ReturnType<typeof setTimeout> | null = null
   $effect(() => {
     const seq = wf_slice.workflow_reload_seq.seq
+    // `last_reload_seq` is advanced INSIDE the timer (i.e. only once the
+    // reload actually runs), NOT here at schedule time. If this effect
+    // re-runs for an unrelated reason before the 250 ms elapses, the
+    // guard below is still true, so we just re-arm the debounce rather
+    // than dropping the reload. Previously last_reload_seq was bumped at
+    // schedule time and the cleanup cancelled the pending timer on every
+    // re-run — a single isolated bump (exactly the rename case: one MCP
+    // tool call → one seq++) was silently lost, while multi-bump big
+    // generations survived by luck. See the rename-not-reflected fix.
     if (seq > last_reload_seq && is_loaded) {
-      last_reload_seq = seq
       if (reload_debounce_timer) clearTimeout(reload_debounce_timer)
       reload_debounce_timer = setTimeout(() => {
         reload_debounce_timer = null
+        last_reload_seq = seq
         reload_from_server().then(() => do_auto_layout())
       }, 250)
     }
-    return () => {
-      if (reload_debounce_timer) {
-        clearTimeout(reload_debounce_timer)
-        reload_debounce_timer = null
-      }
+  })
+  // Teardown-only cleanup: no tracked deps, so the cleanup fires solely
+  // on component destroy — an unrelated re-run of the effect above can no
+  // longer cancel a valid pending reload.
+  $effect(() => () => {
+    if (reload_debounce_timer) {
+      clearTimeout(reload_debounce_timer)
+      reload_debounce_timer = null
     }
   })
 
