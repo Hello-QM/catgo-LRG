@@ -71,6 +71,7 @@
   import { build_structure_context } from '$lib/chat/context'
   import { analysis_sessions, get_analysis_session, get_session_blob } from '$lib/chat/analysis-session-store.svelte'
   import { start_mcp_bridge, type McpBridgeDeps } from './controllers/tool-handler'
+  import { set_current_structure } from './current-structure.svelte'
   import { molecular_fragments, type MolecularFragment } from './controllers/fragments'
   import { create_xrd_controller, format_hkl } from './controllers/xrd-state.svelte'
   import { create_build_tools_controller } from './controllers/build-tools.svelte'
@@ -2002,6 +2003,16 @@
   // re-run fires `POST /view/reset` on the backend, wiping structures that
   // were JUST pushed by MCP tools. Symptom was: Tab 1 shows water from
   // PubChem for a frame, then goes blank because /view/reset cleared it.
+  // Mirror the live structure into the durable module-level store so the
+  // workflow "Capture from Viewer" button and CatBot's structure_input
+  // resolution still find it after this pane is closed / unmounted (e.g.
+  // full-screen Workflow editor). Only real structures with a tab_id are
+  // recorded — preview/popup instances (no tab_id) must not clobber it.
+  $effect(() => {
+    if (tab_id === undefined) return
+    if (structure) set_current_structure(structure)
+  })
+
   let mcp_request_push: (() => void) | null = null
   $effect(() => {
     // Preview / popup Structures (sample cards, StructurePopup, Trajectory

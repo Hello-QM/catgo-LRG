@@ -37,6 +37,7 @@
   import StructureListInputPanel from './StructureListInputPanel.svelte'
   import AdsorbatePlacePanel from './AdsorbatePlacePanel.svelte'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
+  import { get_current_structure } from '$lib/structure/current-structure.svelte'
   import JobScriptWorkplace from './JobScriptWorkplace.svelte'
   import VaspEditorModal from './components/VaspEditorModal.svelte'
   import ImportWorkflowDialog from './components/ImportWorkflowDialog.svelte'
@@ -1838,6 +1839,32 @@
     setTimeout(() => (save_flash = false), 800)
   }
 
+  // After a (re)load, fill any structure_input node the backend could not
+  // resolve. CatBot's set_params/add_node resolves structure_json via
+  // mp_id or the backend viewer copy; in a full-screen Workflow editor the
+  // backend viewer copy is wiped (structure pane closed), so the node
+  // comes back empty. Inject the durable client-side structure here — the
+  // user's "put the current structure into Structure Input" via CatBot then
+  // actually lands. Conservative: only nodes with NO structure_json AND no
+  // mp_id/structure_id (i.e. backend genuinely had nothing and there is no
+  // Materials Project source to defer to). Persist via schedule_save so the
+  // injection survives the next reload instead of being wiped again.
+  function fill_empty_structure_inputs(): void {
+    const cur = get_current_structure()
+    if (!cur) return
+    let changed = false
+    nodes = nodes.map((n) => {
+      if (n.type !== `structure_input`) return n
+      const p = n.params ?? {}
+      const has_struct = typeof p.structure_json === `string` && p.structure_json.length > 0
+      const has_mp = !!(p.mp_id || p.structure_id)
+      if (has_struct || has_mp) return n
+      changed = true
+      return { ...n, params: { ...p, structure_json: JSON.stringify(cur) } }
+    })
+    if (changed) schedule_save()
+  }
+
   async function reload_from_server() {
     if (!workflow_id) return
     try {
@@ -1860,6 +1887,7 @@
         }
       })
       edges = graph.edges || []
+      fill_empty_structure_inputs()
       push_history()
       change_det.set_external_change_detected(false)
     } catch (err) {
@@ -1902,6 +1930,7 @@
       })
       edges = graph.edges || []
       is_loaded = true
+      fill_empty_structure_inputs()
       // Auto-layout if any nodes were missing coordinates
       if (nodes.length > 0 && (graph.nodes || []).some((n: WfNode) => !Number.isFinite(n.x) || !Number.isFinite(n.y))) {
         do_auto_layout()

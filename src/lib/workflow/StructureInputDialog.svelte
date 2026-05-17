@@ -2,6 +2,7 @@
   import '$lib/dialog-shared.css'
   import { API_BASE } from '$lib/api/config'
   import { parse_structure_file } from '$lib/structure/parse'
+  import { get_current_structure } from '$lib/structure/current-structure.svelte'
   import { hpc_session_store, refresh_hpc_sessions, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
@@ -106,10 +107,21 @@
     capture_loading = true
     capture_error = ``
     try {
-      const resp = await fetch(`${API_BASE}/view/structure/current`)
-      if (!resp.ok) throw new Error(`No structure in viewer (${resp.status})`)
-      const data = await resp.json()
-      if (!data || !data.sites?.length) throw new Error(`Viewer has no structure loaded`)
+      let data: { sites?: unknown[] } | null = null
+      // Prefer the backend viewer state (covers multi-tab / external panes),
+      // but it is wiped when the structure pane closes. Fall back to the
+      // durable client-side store so this still works full-screen on the
+      // Workflow editor with no visible structure pane.
+      try {
+        const resp = await fetch(`${API_BASE}/view/structure/current`)
+        if (resp.ok) data = await resp.json()
+      } catch { /* fall through to client store */ }
+      if (!data || !(data.sites?.length)) {
+        data = get_current_structure() as { sites?: unknown[] } | null
+      }
+      if (!data || !(data.sites?.length)) {
+        throw new Error(`No structure loaded — open one in a structure viewer first`)
+      }
       const json_str = JSON.stringify(data)
       pending_json = json_str
       extract_preview(data)
