@@ -166,6 +166,9 @@ export interface ChatSlice {
   // sent automatically the moment the in-flight round finishes (drained in
   // send_message's finally), so the input box never has to be locked.
   pending_send: { value: { content: string; attachments?: import('./types').Attachment[] } | null }
+  // Session-scoped tool-approval bypass (NOT persisted — a fresh session
+  // always re-gates). Read at send time, threaded into the Claude adapter.
+  skip_permission: { value: boolean }
   // Plain (non-$state) field — abort_controller is a DOM class we cancel
   // via a method call; wrapping it in a $state proxy adds nothing.
   abort_controller: AbortController | null
@@ -192,6 +195,7 @@ function make_chat_slice(): ChatSlice {
   const pending_send = $state({
     value: null as { content: string; attachments?: import('./types').Attachment[] } | null,
   })
+  const skip_permission = $state({ value: false })
   return {
     messages,
     loading,
@@ -203,6 +207,7 @@ function make_chat_slice(): ChatSlice {
     paper_context,
     paper_session,
     pending_send,
+    skip_permission,
     abort_controller: null,
   }
 }
@@ -786,6 +791,7 @@ export function resume_session(
 ): void {
   const slice = get_chat_slice(tab_id)
   slice.error.value = ``
+  slice.skip_permission.value = false
   clear_workflow_events(tab_id)
   agent_sessions[agent] = session_id
   slice.messages.list = messages ?? []
@@ -796,6 +802,7 @@ export function new_session(agent?: string, tab_id: string = `default`): void {
   const slice = get_chat_slice(tab_id)
   slice.messages.list = []
   slice.error.value = ``
+  slice.skip_permission.value = false
 
   clear_workflow_events(tab_id)
   if (agent) {
@@ -809,6 +816,7 @@ export function clear_chat_history(tab_id: string = `default`): void {
   const slice = get_chat_slice(tab_id)
   slice.messages.list = []
   slice.error.value = ``
+  slice.skip_permission.value = false
 
   clear_workflow_events(tab_id)
   clear_agent_session()
