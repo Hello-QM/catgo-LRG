@@ -143,3 +143,26 @@ SLASH_COMMANDS.push({
     ctx.resume_session(s.agent, s.session_id, msgs.length ? msgs : undefined, ctx.tab_id)
   },
 })
+
+const RECIPES: { name: string; label: string }[] = [
+  { name: 'oer', label: 'OER' },
+  { name: 'her', label: 'HER' },
+  { name: 'co2rr', label: 'CO2RR' },
+  { name: 'nrr', label: 'NRR' },
+]
+
+for (const r of RECIPES) {
+  SLASH_COMMANDS.push({
+    name: r.name,
+    hint: '[mp-id]',
+    summary: `Quick-build a ${r.label} workflow (optional Materials Project id)`,
+    async run(ctx) {
+      const a = ctx.args.trim()
+      if (a !== '' && !/^mp-\d+$/i.test(a)) {
+        ctx.emit(`Usage: /${r.name} [mp-id] — e.g. /${r.name} mp-1019. Omit the id to use the current structure.`)
+        return
+      }
+      await ctx.run_quickbuild(r.name, a === '' ? undefined : a)
+    },
+  })
+}

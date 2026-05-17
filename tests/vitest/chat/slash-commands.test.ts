@@ -148,3 +148,25 @@ describe('/resume', () => {
     expect(line).not.toContain('X'.repeat(61))
   })
 })
+
+describe('quickbuild commands', () => {
+  it('/oer with no args calls run_quickbuild("oer", undefined)', async () => {
+    const c = ctx(); await run_slash('/oer', c as any)
+    expect(c.run_quickbuild).toHaveBeenCalledWith('oer', undefined)
+  })
+  it('/her mp-1019 passes the mp id', async () => {
+    const c = ctx(); await run_slash('/her mp-1019', c as any)
+    expect(c.run_quickbuild).toHaveBeenCalledWith('her', 'mp-1019')
+  })
+  it('/co2rr and /nrr are registered', async () => {
+    const c1 = ctx(); await run_slash('/co2rr', c1 as any)
+    expect(c1.run_quickbuild).toHaveBeenCalledWith('co2rr', undefined)
+    const c2 = ctx(); await run_slash('/nrr', c2 as any)
+    expect(c2.run_quickbuild).toHaveBeenCalledWith('nrr', undefined)
+  })
+  it('rejects a malformed mp id with a usage note, no quickbuild call', async () => {
+    const c = ctx(); await run_slash('/oer notanid', c as any)
+    expect(c.run_quickbuild).not.toHaveBeenCalled()
+    expect(c.emit).toHaveBeenCalledWith(expect.stringContaining('mp-'))
+  })
+})
