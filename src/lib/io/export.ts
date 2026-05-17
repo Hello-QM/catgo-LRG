@@ -804,14 +804,20 @@ export async function export_trajectory_png_sequence(
     on_step,
     png_dpi = 150,
     crop_region,
-    scene,
-    camera,
   } = options
 
   if (!canvas) throw new Error(`Canvas not available for PNG sequence export`)
   if (frame_indices.length === 0) return
 
   const renderer = (canvas as { __renderer?: WebGLRenderer }).__renderer
+  // Fall back to scene/camera attached to the canvas by StructureScene when a
+  // caller doesn't pass them explicitly (e.g. the trajectory export pane).
+  // Required for the reliable gl.readPixels path; without it the fallback
+  // canvas.toBlob() yields blank/transparent frames on a WebGL canvas.
+  const scene =
+    options.scene ?? (canvas as { __scene?: THREE.Scene }).__scene ?? null
+  const camera =
+    options.camera ?? (canvas as { __camera?: THREE.Camera }).__camera ?? null
   const resolution_multiplier = Math.min(png_dpi / 72, 10)
 
   const files: Record<string, Uint8Array> = {}

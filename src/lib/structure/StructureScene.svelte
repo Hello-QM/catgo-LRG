@@ -911,7 +911,17 @@
       threlte.scene.background = null
     }
     if (threlte.renderer) {
-      Object.assign(threlte.renderer.domElement, { __renderer: threlte.renderer })
+      // Also expose scene/camera on the canvas (alongside __renderer) so
+      // export helpers can take the reliable gl.readPixels render path even
+      // when a caller doesn't thread scene/camera through props (e.g. the
+      // trajectory export pane). Without these, exports fall back to
+      // canvas.toBlob() on a non-preserveDrawingBuffer WebGL canvas and
+      // produce blank/transparent output.
+      Object.assign(threlte.renderer.domElement, {
+        __renderer: threlte.renderer,
+        __scene: threlte.scene,
+        __camera: threlte.camera.current,
+      })
     }
   })
 

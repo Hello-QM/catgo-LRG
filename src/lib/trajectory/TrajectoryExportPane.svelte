@@ -363,7 +363,13 @@
       {#if is_video_supported}
         {#each [
           { label: `WebM`, format: `webm`, hint: `Export as WebM video` },
-          { label: `MP4`, format: `mp4`, hint: `WebM + ffmpeg command` },
+          {
+            label: `MP4*`,
+            format: `mp4`,
+            hint:
+              `Browsers can't record MP4 — downloads a WebM and copies an ` +
+              `ffmpeg command to your clipboard to convert it to MP4`,
+          },
         ] as const as
           { label, format, hint }
           (format)
