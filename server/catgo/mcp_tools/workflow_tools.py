@@ -1180,6 +1180,25 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                         if struct_json:
                             si_params["structure_json"] = struct_json
                             logger.info("Fetched structure for %s into workflow", mp_id)
+                        elif len(material_ids) == 1:
+                            # Single-material create and the mp-id fetch failed:
+                            # fall back to the current viewer structure. CatBot
+                            # usually loads the material into the viewer (by name)
+                            # before building the workflow, so the viewer is the
+                            # most reliable source of the intended structure.
+                            # (Multi-material can't be disambiguated this way, so
+                            # only single-material falls back.)
+                            try:
+                                sr = await client.get(f"{API_BASE}/view/structure/current")
+                                if sr.status_code == 200:
+                                    sd = sr.json()
+                                    if sd:
+                                        si_params["structure_json"] = json.dumps(sd) if isinstance(sd, dict) else str(sd)
+                                        logger.info("Captured viewer structure for %s (mp-id fetch failed)", mp_id)
+                            except Exception as e:
+                                logger.warning("Viewer fallback failed for %s: %s", mp_id, e)
+                            if not si_params.get("structure_json"):
+                                logger.warning("Could not fetch structure for %s (no viewer fallback available)", mp_id)
                         else:
                             logger.warning("Could not fetch structure for %s", mp_id)
                         init_nodes.append({

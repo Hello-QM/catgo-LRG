@@ -1849,6 +1849,17 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
             logger.warning("Quickbuild: failed to prefetch %s: %s", material_id, exc)
     else:
         si_params = {}
+    # Fallback: if the mp-id prefetch failed (or no material_id was given),
+    # capture whatever the user already has in the viewer. CatBot typically
+    # fetches the material by name and loads it into the viewer *before*
+    # calling quickbuild, so the viewer is the most reliable source of the
+    # intended structure — without this the structure_input node ends up
+    # empty even though the correct structure is sitting on screen.
+    if not si_params.get("structure_json"):
+        viewer_struct = await _get_current_structure(client)
+        if viewer_struct:
+            si_params["structure_json"] = json.dumps(viewer_struct)
+            logger.info("Quickbuild: captured viewer structure into structure_input")
     nodes.append({"id": si_id, "type": "structure_input", "x": 80, "y": 200, "params": si_params})
 
     x = 280
