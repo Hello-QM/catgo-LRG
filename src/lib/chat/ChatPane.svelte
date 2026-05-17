@@ -40,6 +40,8 @@
   } from './message-utils'
   import { get_tool_results_for, is_streaming } from './tool-execution'
   import { copy_to_clipboard, handle_messages_click } from './attachment-utils'
+  import { run_slash } from './slash-commands'
+  import { get_current_structure } from '$lib/structure/current-structure.svelte'
 
 
   // Dynamic providers from backend
@@ -634,6 +636,51 @@
     // Reset textarea height after clearing
     if (textarea_el) textarea_el.style.height = `auto`
     active_tab = `chat`
+
+    // Slash commands: intercept before DOI / send_message. A "/"-prefixed
+    // line never reaches the LLM. Unknown "/x" is reported locally.
+    if (msg.startsWith(`/`)) {
+      const emit_note = (text: string) => {
+        slice.messages.list = [...slice.messages.list,
+          { role: `assistant`, content: text, timestamp: Date.now() }]
+      }
+      const handled = await run_slash(msg, {
+        tab_id: tab_slice_id,
+        args: ``,
+        new_session: () => new_session(SDK_PROVIDERS.has(chat_config.provider) ? chat_config.provider.replace(`sdk-`, ``) : undefined, tab_slice_id),
+        clear_chat_history: () => clear_chat_history(tab_slice_id),
+        cancel_generation: () => cancel_generation(tab_slice_id),
+        resume_session: (agent, sid, messages, tid) => resume_session(agent, sid, messages, tid ?? tab_slice_id),
+        list_sessions: () => session_list.list,
+        load_session_messages: (sid) => load_session_messages(sid),
+        run_quickbuild: async (recipe, mp_id) => {
+          const resp = await fetch(`${API_BASE}/workflow/quickbuild`, {
+            method: `POST`, headers: { 'Content-Type': `application/json` },
+            body: JSON.stringify(mp_id ? { recipe, material_id: mp_id } : { recipe }),
+          })
+          if (!resp.ok) throw new Error((await resp.text().catch(() => String(resp.status))).slice(0, 200))
+          const data = await resp.json()
+          const wf_id = data.workflow_id
+          if (wf_id) {
+            const wfslice = get_workflow_slice(tab_slice_id)
+            wfslice.pending_navigate_workflow.id = wf_id
+            wfslice.workflow_reload_seq.seq++
+          }
+          emit_note(`✅ ${recipe.toUpperCase()} workflow built${mp_id ? ` for ${mp_id}` : ``}.`)
+        },
+        inject_structure: async () => {
+          const cur = get_current_structure()
+          if (!cur) { emit_note(`No structure loaded — open one in a structure viewer first.`); return }
+          const wfslice = get_workflow_slice(tab_slice_id)
+          wfslice.workflow_reload_seq.seq++
+          emit_note(`Structure captured. Open the Workflow editor — an empty Structure Input node will be filled with it (a node that already has a structure is left unchanged).`)
+        },
+        set_skip_permission: (on) => { slice.skip_permission.value = on },
+        get_skip_permission: () => slice.skip_permission.value,
+        emit: emit_note,
+      })
+      if (handled) return
+    }
 
     // Auto-detect DOI input and resolve it. Skip while a round is streaming:
     // send_message will queue this text and the DOI branch would otherwise
@@ -1395,7 +1442,9 @@
         style="display: none"
       />
       <div class="input-hint-row">
-        {#if slice.pending_send?.value}
+        {#if slice.skip_permission.value}
+          <span class="input-hint skip-warn">⚠️ skip-permission ON — tools run without asking</span>
+        {:else if slice.pending_send?.value}
           <span class="input-hint queued">⏳ Queued — sends when the current reply finishes</span>
         {:else if slice.loading.value}
           <span class="input-hint">Enter to queue · sends after the current reply · Esc stops</span>
@@ -2263,6 +2312,10 @@
   .input-hint {
     font-size: 0.72em;
     color: var(--text-color-muted, #6b7280);
+  }
+  .input-hint.skip-warn {
+    color: var(--error-color);
+    font-weight: 600;
   }
   /* Paper attachment badge */
   .paper-badge {
