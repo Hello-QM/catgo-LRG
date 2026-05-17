@@ -70,7 +70,9 @@ def _find_spc216() -> str:
     3. GROMACS gmx binary auto-detection
     """
     # 1. Bundled copy (shipped with CatGO — works everywhere)
-    bundled = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "spc216.gro")
+    # __file__ = server/catgo/routers/water_layer.py → up 3 dirs to server/
+    server_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    bundled = os.path.join(server_dir, "data", "spc216.gro")
     if os.path.exists(bundled):
         return bundled
 
