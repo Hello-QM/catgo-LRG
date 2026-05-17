@@ -41,6 +41,48 @@ async def _fetch_structure_by_mp_id(client: httpx.AsyncClient, mp_id: str, provi
         return None
 
 
+async def _resolve_structure_input_params(
+    client: httpx.AsyncClient, params: dict,
+) -> dict:
+    """Ensure a structure_input node's params carry a real ``structure_json``.
+
+    Single source of truth for "what structure does this structure_input
+    hold". An LLM cannot synthesise a pymatgen JSON, so when CatBot creates
+    OR edits a structure_input it only ever passes ``mp_id`` (or nothing).
+    Without this resolution the node stays empty no matter how many times
+    the user asks. Resolution order, only when ``structure_json`` is absent:
+
+      1. ``mp_id`` / ``structure_id`` → OPTIMADE fetch.
+      2. otherwise the current viewer structure (what the user is looking
+         at — the most reliable intent signal for an auto-built workflow).
+
+    Mutates and returns ``params``. Best-effort: viewer errors are swallowed
+    so a missing backend never breaks the mutation.
+    """
+    if params.get("structure_json"):
+        return params
+    mp_id = params.get("mp_id") or params.get("structure_id")
+    if mp_id:
+        struct_json = await _fetch_structure_by_mp_id(client, str(mp_id))
+        if struct_json:
+            params["structure_json"] = struct_json
+            if not params.get("label"):
+                params["label"] = str(mp_id)
+            logger.info("structure_input: fetched %s", mp_id)
+            return params
+        logger.warning("structure_input: mp-id fetch failed for %s, trying viewer", mp_id)
+    try:
+        sr = await client.get(f"{API_BASE}/view/structure/current")
+        if sr.status_code == 200:
+            sd = sr.json()
+            if sd:
+                params["structure_json"] = json.dumps(sd) if isinstance(sd, dict) else str(sd)
+                logger.info("structure_input: captured viewer structure")
+    except Exception as e:
+        logger.warning("structure_input: viewer capture failed: %s", e)
+    return params
+
+
 # ---------------------------------------------------------------------------
 # Workflow: node defaults, validation, and handler
 # ---------------------------------------------------------------------------
@@ -1338,27 +1380,9 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                     if node_type == "adsorbate_place":
                         merged = _normalize_adsorbate_place_params(merged)
 
-                    # Auto-capture structure for structure_input
-                    if node_type == "structure_input" and not merged.get("structure_json"):
-                        mp_id = merged.get("mp_id") or merged.get("structure_id")
-                        if mp_id:
-                            # Fetch specific material by MP ID instead of viewer
-                            struct_json = await _fetch_structure_by_mp_id(client, str(mp_id))
-                            if struct_json:
-                                merged["structure_json"] = struct_json
-                                if not merged.get("label"):
-                                    merged["label"] = str(mp_id)
-                                logger.info("Fetched structure %s for structure_input node", mp_id)
-                        else:
-                            # Fall back to viewer capture
-                            try:
-                                sr = await client.get(f"{API_BASE}/view/structure/current")
-                                if sr.status_code == 200:
-                                    sd = sr.json()
-                                    if sd:
-                                        merged["structure_json"] = json.dumps(sd) if isinstance(sd, dict) else str(sd)
-                            except Exception:
-                                pass
+                    # Resolve structure for structure_input (mp-id → viewer).
+                    if node_type == "structure_input":
+                        merged = await _resolve_structure_input_params(client, merged)
 
                     node_id = f"n{batch_ts}-{idx}{''.join(_rnd.choices('abcdefghijklmnop', k=2))}"
                     # Compute layer for positioning
@@ -1460,7 +1484,15 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                     found = False
                     for n in nodes:
                         if n["id"] == nid:
-                            n["params"] = {**n.get("params", {}), **params}
+                            merged_sp = {**n.get("params", {}), **params}
+                            # Same resolution as add_node/create: editing a
+                            # structure_input via set_params must also turn
+                            # an mp_id (or nothing) into a real structure_json,
+                            # else the node stays empty no matter how often
+                            # the user asks CatBot to set it.
+                            if n.get("type") == "structure_input":
+                                merged_sp = await _resolve_structure_input_params(client, merged_sp)
+                            n["params"] = merged_sp
                             found = True
                             break
                     if not found:
@@ -1579,17 +1611,11 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                 if node_type == "adsorbate_place":
                     merged_params = _normalize_adsorbate_place_params(merged_params)
 
-                # Auto-capture current viewer structure for structure_input nodes
-                if node_type == "structure_input" and not merged_params.get("structure_json"):
-                    try:
-                        sr = await client.get(f"{API_BASE}/view/structure/current")
-                        if sr.status_code == 200:
-                            struct_data = sr.json()
-                            if struct_data:
-                                merged_params["structure_json"] = json.dumps(struct_data) if isinstance(struct_data, dict) else str(struct_data)
-                                logger.info("Auto-captured viewer structure for structure_input node")
-                    except Exception as e:
-                        logger.warning("Failed to auto-capture viewer structure: %s", e)
+                # Resolve structure for structure_input (mp-id → viewer).
+                # Previously this path only did viewer capture (no mp-id
+                # fetch) — now unified with every other path via the helper.
+                if node_type == "structure_input":
+                    merged_params = await _resolve_structure_input_params(client, merged_params)
 
                 node_id = f"n{int(time.time())}-{''.join(_rnd.choices('abcdefghijklmnop', k=4))}"
                 # DAG-layer-aware positioning (matches editor's Sugiyama layout)
@@ -1722,6 +1748,11 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                         merged_set = {**n.get("params", {}), **params}
                         if n.get("type") == "adsorbate_place":
                             merged_set = _normalize_adsorbate_place_params(merged_set)
+                        elif n.get("type") == "structure_input":
+                            # Editing a structure_input must resolve mp_id /
+                            # viewer into a real structure_json — without this
+                            # the node stays empty however many times asked.
+                            merged_set = await _resolve_structure_input_params(client, merged_set)
                         n["params"] = merged_set
                         found = True
                         break
