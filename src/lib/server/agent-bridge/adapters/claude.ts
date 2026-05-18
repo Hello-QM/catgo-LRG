@@ -159,6 +159,23 @@ function* translateMessage(msg: any): Generator<AgentEvent> {
 }
 
 // ---------------------------------------------------------------------------
+// Security gate: pure permission decision helper
+// ---------------------------------------------------------------------------
+
+/** Pure pre-decision for canUseTool. 'allow' = auto-allow without the
+ *  PermissionCard; 'gate' = fall through to the human permissionCallback.
+ *  Security-critical: CatGo MCP tools are always safe; skipPermissions
+ *  only widens that when the user explicitly opted in (strict === true). */
+export function decide_tool_permission(
+  toolName: string,
+  skipPermissions: boolean | undefined,
+): 'allow' | 'gate' {
+  if (toolName.startsWith('mcp__catgo__') || toolName.startsWith('catgo_')) return 'allow'
+  if (skipPermissions === true) return 'allow'
+  return 'gate'
+}
+
+// ---------------------------------------------------------------------------
 // ClaudeAdapter
 // ---------------------------------------------------------------------------
 
@@ -209,15 +226,9 @@ export function createClaudeAdapter(): AgentAdapter {
           agentID?: string
         },
       ): Promise<any> => {
-        // Auto-allow all CatGo MCP tools — they are safe backend operations
-        if (toolName.startsWith('mcp__catgo__') || toolName.startsWith('catgo_')) {
-          return { behavior: 'allow' }
-        }
-
-        // Session-scoped user opt-out of the approval gate (/skip-permission).
-        // Captured per-stream so a mid-stream toggle can't retroactively
-        // affect an in-flight round.
-        if (skipPermissions === true) {
+        // Auto-allow CatGo MCP tools and session-scoped skip-permission opt-out.
+        // decide_tool_permission is the single source of truth for this gate.
+        if (decide_tool_permission(toolName, skipPermissions) === 'allow') {
           return { behavior: 'allow' }
         }
 

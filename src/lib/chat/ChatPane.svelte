@@ -665,8 +665,10 @@
             const wfslice = get_workflow_slice(tab_slice_id)
             wfslice.pending_navigate_workflow.id = wf_id
             wfslice.workflow_reload_seq.seq++
+            emit_note(`✅ ${recipe.toUpperCase()} workflow built${mp_id ? ` for ${mp_id}` : ``}.`)
+          } else {
+            emit_note(`⚠️ ${recipe.toUpperCase()} quick-build did not return a workflow. Try again or check the backend.`)
           }
-          emit_note(`✅ ${recipe.toUpperCase()} workflow built${mp_id ? ` for ${mp_id}` : ``}.`)
         },
         inject_structure: async () => {
           const cur = get_current_structure()
@@ -712,6 +714,7 @@
   }
 
   let slash_idx = $state(0)
+  let slash_dismissed = $state(false)
   const slash_filtered = $derived.by(() => {
     const s = input_text
     if (!s.startsWith(`/`) || /\s/.test(s)) return []
@@ -720,19 +723,30 @@
       .filter(c => c.name.startsWith(tok) || c.aliases?.some(a => a.startsWith(tok)))
       .sort((a, b) => a.name.localeCompare(b.name))
   })
-  const slash_open = $derived(slash_filtered.length > 0)
+  const slash_open = $derived(!slash_dismissed && slash_filtered.length > 0)
   // Clamp via $derived (not an $effect that writes slash_idx — that is the
   // self-trigger antipattern this codebase was bitten by). slash_idx is the
   // raw nav cursor; slash_sel is the safe index everything else reads.
   const slash_sel = $derived(
     slash_filtered.length === 0 ? 0 : Math.min(slash_idx, slash_filtered.length - 1)
   )
+  // Reset dismissal when the user keeps typing (input changes).
+  // _slash_last_input is a plain let (not $state) so reading/writing it does
+  // not create reactive deps — only input_text is tracked; no infinite loop.
+  let _slash_last_input = ''
+  $effect(() => {
+    if (input_text !== _slash_last_input) {
+      _slash_last_input = input_text
+      if (slash_dismissed) slash_dismissed = false
+    }
+  })
 
   function apply_slash_selection() {
     const c = slash_filtered[slash_sel]
     if (!c) return
     input_text = `/${c.name} `
     slash_idx = 0
+    slash_dismissed = false
     textarea_el?.focus()
   }
 
@@ -755,7 +769,7 @@
       }
       if (event.key === `Escape`) {
         event.preventDefault()
-        input_text = input_text + ` ` // typing a space closes the menu (args phase) without clearing
+        slash_dismissed = true
         return
       }
     }

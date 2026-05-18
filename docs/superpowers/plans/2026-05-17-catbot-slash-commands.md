@@ -350,6 +350,8 @@ function rel_time(ms: number): string {
   return `${Math.round(h / 24)}d ago`
 }
 
+> ⚠️ Corrected during execution: the shipped `snippet()` combines topic AND last-message (`${topic} — ${preview}`) via `get_display_text()`, per design doc §/resume line 102 (topic + last-message snippet). The block below is the pre-correction draft, kept for history. See `src/lib/chat/slash-commands.ts` for the authoritative implementation.
+
 function snippet(ctx: SlashCtx, s: SessionSummary): string {
   const msgs = ctx.load_session_messages(s.session_id)
   const last = msgs.length ? msgs[msgs.length - 1].content : ''
