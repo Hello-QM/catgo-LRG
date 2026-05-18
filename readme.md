@@ -37,6 +37,13 @@ CatGo is a desktop application that combines an interactive 3D structure viewer,
 | **Tutorial / Docs** | <https://docs.catgo-ucsd.org> |
 | **Downloads** — prebuilt editions | <https://github.com/Hello-QM/catgo-LRG/releases> |
 | **Source** | <https://github.com/Hello-QM/catgo-LRG> |
+| **Forum** — questions & discussion | <https://groups.google.com/g/catgo_official> |
+
+### Community
+
+Scan to join the CatGo QQ group:
+
+<img src="static/qr-qq-group.jpg" alt="CatGo QQ group QR code" width="200">
 
 ---
 
