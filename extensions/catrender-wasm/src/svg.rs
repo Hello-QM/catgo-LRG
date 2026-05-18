@@ -1,7 +1,7 @@
 //! Assemble an SVG document from projected atoms/bonds/cell.
 
 use crate::geom::{depth_order, project};
-use crate::preset::{BondStyle, GradientMode, Preset};
+use crate::preset::{GradientMode, Preset};
 use crate::types::RenderInput;
 
 fn cpk_color(el: &str) -> &'static str {
@@ -63,14 +63,14 @@ pub fn render_svg(inp: &RenderInput) -> String {
 
     let new_of: std::collections::HashMap<usize, usize> =
         keep.iter().enumerate().map(|(n, &o)| (o, n)).collect();
-    if !matches!(preset.bond_style, BondStyle::Wire) || preset.bond_width > 0.0 {
+    if preset.bond_width > 0.0 {
         for b in &inp.bonds {
             let (Some(&ni), Some(&nj)) = (new_of.get(&b.i), new_of.get(&b.j)) else {
                 continue;
             };
             let (x1, y1) = to_screen(projected[ni].0);
             let (x2, y2) = to_screen(projected[nj].0);
-            let w = preset.bond_width.max(0.5);
+            let w = preset.bond_width;
             let n = b.order.max(1) as i32;
             for k in 0..n {
                 let off = (k as f64 - (n as f64 - 1.0) / 2.0) * (w * 0.9);
@@ -176,6 +176,15 @@ mod tests {
         );
         let svg = render_svg(&inp);
         assert_eq!(svg.matches("<circle").count(), 1);
+    }
+
+    #[test]
+    fn empty_atoms_emits_valid_empty_svg() {
+        let inp = parse(r#"{"atoms":[],"style":{}}"#);
+        let svg = render_svg(&inp);
+        assert!(svg.starts_with("<svg"));
+        assert!(svg.ends_with("</svg>"));
+        assert!(!svg.contains("<circle"));
     }
 
     #[test]
