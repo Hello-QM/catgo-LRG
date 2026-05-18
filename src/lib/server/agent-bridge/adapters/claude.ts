@@ -10,56 +10,122 @@ import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '.
 // ---------------------------------------------------------------------------
 // Claude Code CLI discovery.
 //
-// The Agent SDK does NOT search $PATH — it expects `claude` at a vendored
-// path under the SDK's own node_modules.  When users install Claude Code
-// through Anthropic's installer it lands at `~/.local/bin/claude` (Linux/Mac)
-// or somewhere else, and the SDK throws "Claude Code native binary not
-// found" before even spawning the process.
+// The Agent SDK runs `pathToClaudeCodeExecutable` *through a JS runtime*
+// (`spawn(node|bun, [<path>, ...args])` — see sdk.mjs). So that path MUST be
+// the Claude Code `cli.js` JavaScript entrypoint, NOT a platform shim:
+//   - On Windows the `claude` shims are `claude.cmd` / `claude.ps1`. Node
+//     refuses to spawn a `.cmd` without `shell:true` (CVE-2024-27980 →
+//     EINVAL), and `node claude.cmd` is nonsense anyway, so handing the SDK
+//     a shim makes `query()` fail/hang with no useful error.
+// If we resolve nothing the SDK falls back to its own vendored cli.js, which
+// is also fine — so returning undefined is a safe last resort.
 //
-// Resolve the CLI ourselves here and pass `pathToClaudeCodeExecutable` to
-// the SDK so it skips its own (broken-for-our-case) lookup.  We cache the
-// result so we only run `which` once per process.
+// We locate the npm-global package's cli.js (the robust cross-platform
+// anchor is `npm root -g`), with shim-directory derivation as a fallback.
+// Cached so the lookup runs once per process.
 // ---------------------------------------------------------------------------
 
+const PKG_REL = join('@anthropic-ai', 'claude-code', 'cli.js')
+
 let _claudePath: string | null | undefined
+
+// Given a directory that may be an npm prefix / global node_modules / bin
+// dir, return the package cli.js inside it if present.
+function cliJsUnder(dir: string): string | undefined {
+  const candidates = [
+    join(dir, PKG_REL), // dir == global node_modules root
+    join(dir, 'node_modules', PKG_REL), // dir == npm prefix (Windows global)
+    join(dir, 'lib', 'node_modules', PKG_REL), // POSIX npm prefix
+    join(dir, '..', 'lib', 'node_modules', PKG_REL), // dir == <prefix>/bin
+  ]
+  return candidates.find((c) => existsSync(c))
+}
 
 function resolveClaudeExecutable(): string | undefined {
   if (_claudePath !== undefined) return _claudePath ?? undefined
 
-  // 1. Explicit override
-  const override = process.env.CATGO_CLAUDE_PATH
-  if (override && existsSync(override)) {
-    _claudePath = override
-    return override
+  const accept = (p: string | undefined): string | undefined => {
+    if (p && existsSync(p)) {
+      _claudePath = p
+      return p
+    }
+    return undefined
   }
 
-  // 2. PATH lookup via `which` / `where`
+  // 1. Explicit override. If it points at a shim, still try to map it to the
+  //    real cli.js the SDK needs; otherwise honour it verbatim.
+  const override = process.env.CATGO_CLAUDE_PATH
+  if (override && existsSync(override)) {
+    if (override.endsWith('.js')) return accept(override)
+    const fromOverride = cliJsUnder(join(override, '..'))
+    return accept(fromOverride) ?? accept(override)
+  }
+
+  const isWin = process.platform === 'win32'
+  const home = homedir()
+
+  // 2. Primary: `npm root -g` → <globalNodeModules>/@anthropic-ai/claude-code/cli.js.
+  //    Cross-platform and honours a customised `npm config set prefix`
+  //    (common on locked-down lab/corp machines).
   try {
-    const cmd = process.platform === 'win32' ? 'where claude' : 'which claude'
-    const found = execSync(cmd, { encoding: 'utf8' }).trim().split(/\r?\n/)[0]
+    const root = execSync('npm root -g', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    if (root) {
+      const hit = accept(join(root, PKG_REL))
+      if (hit) return hit
+    }
+  } catch {
+    // npm unavailable — fall through to shim discovery
+  }
+
+  // Resolve the npm prefix too (shim location differs from node_modules root).
+  let npmPrefix: string | undefined
+  try {
+    npmPrefix = execSync('npm prefix -g', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    // ignore
+  }
+  const npmDefault = process.env.APPDATA ?? join(home, 'AppData', 'Roaming')
+  const localDir = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+
+  // Directories well-known installers drop the `claude` shim into. Used both
+  // to augment PATH before `where`/`which` (the bridge often inherits a PATH
+  // stripped of these, e.g. as a Tauri sidecar) and to probe directly.
+  const binDirs = isWin
+    ? [join(npmDefault, 'npm'), npmPrefix, join(home, '.local', 'bin'), join(home, '.bun', 'bin'), join(localDir, 'Programs', 'claude')]
+    : [
+        join(home, '.local', 'bin'),
+        join(home, '.npm-global', 'bin'),
+        join(home, '.bun', 'bin'),
+        npmPrefix ? join(npmPrefix, 'bin') : undefined,
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+      ]
+  const dirs = binDirs.filter((d): d is string => Boolean(d))
+
+  // 3. Locate a shim via PATH-augmented `where`/`which`, then derive its
+  //    package cli.js. (`where` can return a .cmd/.ps1 — never spawnable.)
+  let shimDir: string | undefined
+  try {
+    const sep = isWin ? ';' : ':'
+    const env = { ...process.env, PATH: [process.env.PATH, ...dirs].filter(Boolean).join(sep) }
+    const found = execSync(isWin ? 'where claude' : 'which claude', { encoding: 'utf8', env })
+      .trim()
+      .split(/\r?\n/)[0]
     if (found && existsSync(found)) {
-      _claudePath = found
-      return found
+      if (found.endsWith('.js')) return accept(found)
+      shimDir = join(found, '..')
     }
   } catch {
     // not on PATH
   }
 
-  // 3. Common install locations
-  const candidates = [
-    join(homedir(), '.local', 'bin', 'claude'),
-    join(homedir(), '.npm-global', 'bin', 'claude'),
-    join(homedir(), '.bun', 'bin', 'claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ]
-  for (const c of candidates) {
-    if (existsSync(c)) {
-      _claudePath = c
-      return c
-    }
+  // 4. Probe known dirs (and any discovered shim dir) for the package cli.js.
+  for (const d of [shimDir, ...dirs].filter((x): x is string => Boolean(x))) {
+    const hit = accept(cliJsUnder(d))
+    if (hit) return hit
   }
 
+  // 5. Nothing resolved — let the SDK fall back to its own vendored cli.js.
   _claudePath = null
   return undefined
 }
@@ -297,6 +363,12 @@ export function createClaudeAdapter(): AgentAdapter {
           // throws "Claude Code native binary not found" because it only
           // checks its own vendored path.
           ...(claudeExe ? { pathToClaudeCodeExecutable: claudeExe } : {}),
+          // The bridge runs under bun (`bun run server.ts`), so the SDK
+          // defaults `executable` to "bun" and spawns the Claude cli.js as
+          // `bun cli.js`. On Windows that child's stdio pipe deadlocks and
+          // query() hangs forever (the exact same call under node returns in
+          // ~3s). Force "node" on Windows; POSIX is left at the SDK default.
+          ...(process.platform === 'win32' ? { executable: 'node' as const } : {}),
         },
       })
 

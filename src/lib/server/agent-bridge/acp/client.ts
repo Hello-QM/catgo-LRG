@@ -9,7 +9,10 @@
  */
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { spawn, spawnSync } from 'node:child_process'
+import { execSync, spawn, spawnSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { EventEmitter } from 'node:events'
 import { createInterface } from 'node:readline'
 
@@ -18,21 +21,78 @@ import { createInterface } from 'node:readline'
 // ────────────────────────────────────────────────────────────────────────────
 
 let _gemini_cli_path: string | null | undefined
+
+// Directories every well-known installer drops `gemini` into. Mirrors the
+// Claude resolver in adapters/claude.ts: the bridge often inherits a PATH
+// stripped of the npm/bun global bin dir (e.g. as a Tauri sidecar), so we
+// both augment PATH before `where`/`which` and probe these directly.
+function gemini_bin_dirs(): string[] {
+  const isWin = process.platform === 'win32'
+  const home = homedir()
+  let npmPrefix: string | undefined
+  try {
+    npmPrefix = execSync('npm prefix -g', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    // npm not available — fall back to default locations below
+  }
+  const npmDefault = process.env.APPDATA ?? join(home, 'AppData', 'Roaming')
+  const localDir = process.env.LOCALAPPDATA ?? join(home, 'AppData', 'Local')
+  const dirs = isWin
+    ? [
+        join(npmDefault, 'npm'),
+        npmPrefix,
+        join(home, '.local', 'bin'),
+        join(home, '.bun', 'bin'),
+        join(localDir, 'Programs', 'gemini'),
+      ]
+    : [
+        join(home, '.local', 'bin'),
+        join(home, '.npm-global', 'bin'),
+        join(home, '.bun', 'bin'),
+        npmPrefix ? join(npmPrefix, 'bin') : undefined,
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+      ]
+  return dirs.filter((d): d is string => Boolean(d))
+}
+
 export function find_gemini_cli(): string | null {
   // Explicit override (also the test seam — points at a fake ACP CLI).
   // Bypasses the cache so tests can swap it between runs.
   const override = process.env.CATGO_GEMINI_PATH
   if (override) return override
   if (_gemini_cli_path !== undefined) return _gemini_cli_path
-  const cmd = process.platform === 'win32' ? 'where' : 'which'
+
+  const isWin = process.platform === 'win32'
+  const dirs = gemini_bin_dirs()
+
+  // 1. PATH lookup via `where` / `which`, with PATH augmented by the dirs above.
   try {
-    const out = spawnSync(cmd, ['gemini'], { encoding: 'utf-8' })
+    const sep = isWin ? ';' : ':'
+    const env = { ...process.env, PATH: [process.env.PATH, ...dirs].filter(Boolean).join(sep) }
+    const out = spawnSync(isWin ? 'where' : 'which', ['gemini'], { encoding: 'utf-8', env })
     if (out.status === 0) {
-      const first = out.stdout.split(/\r?\n/).find(Boolean)
-      _gemini_cli_path = first?.trim() || null
-      return _gemini_cli_path
+      const first = out.stdout.split(/\r?\n/).find(Boolean)?.trim()
+      if (first && existsSync(first)) {
+        _gemini_cli_path = first
+        return _gemini_cli_path
+      }
     }
   } catch { /* fall through */ }
+
+  // 2. Probe each known dir directly. Windows installs land as `gemini.cmd`
+  // (npm) or `gemini.exe` (bun/standalone) rather than a bare `gemini`.
+  const names = isWin ? ['gemini.cmd', 'gemini.exe', 'gemini'] : ['gemini']
+  for (const d of dirs) {
+    for (const n of names) {
+      const c = join(d, n)
+      if (existsSync(c)) {
+        _gemini_cli_path = c
+        return _gemini_cli_path
+      }
+    }
+  }
+
   _gemini_cli_path = null
   return null
 }
