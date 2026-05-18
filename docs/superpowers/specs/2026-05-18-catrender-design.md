@@ -40,7 +40,7 @@ crystal package** (unit cell box, supercell, periodic-boundary wrap rendering).
 | Approach | Pure Rust → WASM render core | True real-time, no server round-trip; reuses CatGo's existing connectivity |
 | Pane ↔ viewer | Mirror mode (read-only) | Pane derives active-panel structure; only render params editable in pane |
 | Bond editing | Render-layer override | Pane add/remove/set-order is an overlay; never writes back to main viewer |
-| AI export | Bridge to frontend render | One render core for both live preview and AI export; no second drawing codebase |
+| AI export | Native CLI primary + frontend-bridge fallback | Frontend has no AI; backend CLI is headless/faster/needs no open browser. Same Rust core compiled as a native bin (no drawing fork). Bridge still tried first so an open pane contributes interactive bond overrides. CLI uses distance-based auto-bond perception. |
 | Name | `catrender` | "render" too generic / collides with existing render code |
 
 ## Architecture
@@ -159,30 +159,46 @@ Export buttons: SVG (direct) | PNG (rasterize svg → canvas → toBlob)
 WASM wrapper `src/lib/.../catrender-wasm.ts` + `catrender-wasm-pkg/`,
 following the `src/lib/electronic/chgdiff-wasm.ts` lazy-init pattern.
 
-## Component: AI export bridge
+## Component: AI export (native CLI primary + bridge fallback)
 
-Reuses the existing screenshot-pending pattern in
-`server/catgo/routers/view_capture.py`:
+The same Rust render core is also compiled as a **native binary**
+(`extensions/catrender-wasm/src/bin/catrender.rs`, target
+`catrender-wasm/target/release/catrender`): reads render-input JSON on
+stdin, prints SVG to stdout. The core gains distance-based **auto-bond
+perception** (`bonds.rs`, covalent-radii sum ×1.2) used whenever no
+explicit `bonds` are supplied — so the headless CLI, which has no
+frontend-computed connectivity, still draws bonds. WASM benefits too.
 
-```
-POST /api/view/catrender/pending   {style, format}   ← MCP writes
-GET  /api/view/catrender/pending                     ← frontend polls/SSE
-POST /api/view/catrender/result    {bytes}           ← frontend posts back
-```
-
-Frontend `CatRenderPane` watches pending → wasm-renders the current mirrored
-structure with the requested style → posts result bytes.
-
-MCP plugin `~/.catgo/plugins/catrender.py` (hot-reload pattern, `TOOL_DEF` +
-`async def handle`):
+Bridge endpoints (screenshot-pending pattern in
+`server/catgo/routers/view_capture.py`) remain, for the override-aware
+path:
 
 ```
-catgo_catrender_export(preset, format, show_h, rotation, labels, cell, ...)
-  → POST pending → poll result → save to disk → return file path to AI
+POST /api/view/catrender/request   {style, format}   ← MCP writes, awaits
+GET  /api/view/catrender/pending                     ← frontend polls
+POST /api/view/catrender/result    {svg, format}     ← frontend posts back
 ```
+
+MCP plugin `~/.catgo/plugins/catrender.py` (hot-reload pattern, `TOOL_DEF`
++ `async def handle`):
+
+```
+catgo_catrender_export(preset, show_h, rotation, out_path)
+  1. POST /view/catrender/request (8s) — if a Render pane is open it
+     wasm-renders WITH the user's interactive bond overrides → use that SVG
+  2. else fall back: GET /view/structure/current → build input JSON →
+     pipe to the native `catrender` binary (auto-bonds) → SVG
+  → save to out_path → return file path to AI
+```
+
+Binary resolution: `$CATRENDER_BIN` → `PATH` → `~/.catgo/bin/catrender`
+→ dev build under `extensions/catrender-wasm/target/release/`. Deployment
+ships the binary with the desktop bundle or to `~/.catgo/bin/`.
 
 AI cannot change the structure (read-only mirror); it selects
-preset/view/format and exports the current structure.
+preset/view/format and exports the current structure. Pane-local bond
+overrides reach AI export only via the bridge path (an open pane), never
+the headless CLI path.
 
 ## Build chain
 
