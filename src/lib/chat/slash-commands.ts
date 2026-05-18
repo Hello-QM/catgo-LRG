@@ -144,11 +144,11 @@ SLASH_COMMANDS.push({
   },
 })
 
-const RECIPES: { name: string; label: string }[] = [
-  { name: 'oer', label: 'OER' },
-  { name: 'her', label: 'HER' },
-  { name: 'co2rr', label: 'CO2RR' },
-  { name: 'nrr', label: 'NRR' },
+const RECIPES: { name: string; label: string; recipe: string }[] = [
+  { name: 'oer', label: 'OER', recipe: 'OER' },
+  { name: 'her', label: 'HER', recipe: 'HER' },
+  { name: 'co2rr', label: 'CO2RR', recipe: 'CO2RR_2e' },
+  { name: 'nrr', label: 'NRR', recipe: 'NRR' },
 ]
 
 for (const r of RECIPES) {
@@ -162,7 +162,7 @@ for (const r of RECIPES) {
         ctx.emit(`Usage: /${r.name} [mp-id] — e.g. /${r.name} mp-1019. Omit the id to use the current structure.`)
         return
       }
-      await ctx.run_quickbuild(r.name, a === '' ? undefined : a)
+      await ctx.run_quickbuild(r.recipe, a === '' ? undefined : a)
     },
   })
 }
