@@ -40,7 +40,7 @@
   } from './message-utils'
   import { get_tool_results_for, is_streaming } from './tool-execution'
   import { copy_to_clipboard, handle_messages_click } from './attachment-utils'
-  import { run_slash } from './slash-commands'
+  import { run_slash, SLASH_COMMANDS } from './slash-commands'
   import { get_current_structure } from '$lib/structure/current-structure.svelte'
 
 
@@ -711,7 +711,54 @@
     await send_message(msg, attachments, tab_slice_id)
   }
 
+  let slash_idx = $state(0)
+  const slash_filtered = $derived.by(() => {
+    const s = input_text
+    if (!s.startsWith(`/`) || /\s/.test(s)) return []
+    const tok = s.slice(1).toLowerCase()
+    return SLASH_COMMANDS
+      .filter(c => c.name.startsWith(tok) || c.aliases?.some(a => a.startsWith(tok)))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  })
+  const slash_open = $derived(slash_filtered.length > 0)
+  // Clamp via $derived (not an $effect that writes slash_idx — that is the
+  // self-trigger antipattern this codebase was bitten by). slash_idx is the
+  // raw nav cursor; slash_sel is the safe index everything else reads.
+  const slash_sel = $derived(
+    slash_filtered.length === 0 ? 0 : Math.min(slash_idx, slash_filtered.length - 1)
+  )
+
+  function apply_slash_selection() {
+    const c = slash_filtered[slash_sel]
+    if (!c) return
+    input_text = `/${c.name} `
+    slash_idx = 0
+    textarea_el?.focus()
+  }
+
   function handle_keydown(event: KeyboardEvent) {
+    if (slash_open) {
+      if (event.key === `ArrowDown`) {
+        event.preventDefault()
+        slash_idx = (slash_sel + 1) % slash_filtered.length
+        return
+      }
+      if (event.key === `ArrowUp`) {
+        event.preventDefault()
+        slash_idx = (slash_sel - 1 + slash_filtered.length) % slash_filtered.length
+        return
+      }
+      if (event.key === `Tab` || (event.key === `Enter` && !event.shiftKey)) {
+        event.preventDefault()
+        apply_slash_selection()
+        return
+      }
+      if (event.key === `Escape`) {
+        event.preventDefault()
+        input_text = input_text + ` ` // typing a space closes the menu (args phase) without clearing
+        return
+      }
+    }
     if (event.key === `Enter` && !event.shiftKey) {
       event.preventDefault()
       handle_send()
@@ -1353,6 +1400,23 @@
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
+          {/each}
+        </div>
+      {/if}
+      {#if slash_open}
+        <div class="slash-menu" role="listbox">
+          {#each slash_filtered as c, i (c.name)}
+            <button
+              type="button"
+              class="slash-row"
+              class:sel={i === slash_sel}
+              role="option"
+              aria-selected={i === slash_sel}
+              onmousedown={(e) => { e.preventDefault(); slash_idx = i; apply_slash_selection() }}
+            >
+              <span class="slash-name">/{c.name}{c.hint ? ` ${c.hint}` : ``}</span>
+              <span class="slash-summary">{c.summary}</span>
+            </button>
           {/each}
         </div>
       {/if}
@@ -2865,5 +2929,43 @@
     opacity: 1;
     background: color-mix(in srgb, #ef4444 15%, transparent);
     color: #ef4444;
+  }
+  .slash-menu {
+    display: flex;
+    flex-direction: column;
+    max-height: 240px;
+    overflow-y: auto;
+    margin: 0 0 4px 0;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--surface-bg, var(--pane-card-bg));
+  }
+  .slash-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    padding: 5px 9px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border-color);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+  }
+  .slash-row:last-child { border-bottom: none; }
+  .slash-row.sel,
+  .slash-row:hover {
+    background: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  }
+  .slash-name {
+    font-family: monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-color);
+  }
+  .slash-summary {
+    font-size: 11px;
+    color: var(--text-color-muted);
   }
 </style>
