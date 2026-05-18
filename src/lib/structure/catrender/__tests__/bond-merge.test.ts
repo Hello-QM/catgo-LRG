@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { merge_bonds, type Bond, type BondOverride } from './bond-merge'
+import { merge_bonds, type Bond, type BondOverride } from '../bond-merge'
 
 const base: Bond[] = [
   { i: 0, j: 1, order: 1 },
@@ -32,7 +32,7 @@ describe(`merge_bonds`, () => {
   })
 
   it(`prune_overrides drops overrides referencing deleted atoms`, async () => {
-    const { prune_overrides } = await import(`./bond-merge`)
+    const { prune_overrides } = await import(`../bond-merge`)
     const ov: BondOverride[] = [
       { op: `add`, i: 2, j: 9, order: 1 },
       { op: `setorder`, i: 0, j: 1, order: 2 },
