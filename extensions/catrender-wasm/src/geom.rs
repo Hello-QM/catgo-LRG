@@ -31,7 +31,7 @@ pub fn project(points: &[[f64; 3]], rot_deg: [f64; 3]) -> Vec<([f64; 2], f64)> {
 /// Atom indices sorted back-to-front (smallest depth first → drawn first).
 pub fn depth_order(projected: &[([f64; 2], f64)]) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..projected.len()).collect();
-    idx.sort_by(|&a, &b| projected[a].1.partial_cmp(&projected[b].1).unwrap());
+    idx.sort_by(|&a, &b| projected[a].1.total_cmp(&projected[b].1));
     idx
 }
 
