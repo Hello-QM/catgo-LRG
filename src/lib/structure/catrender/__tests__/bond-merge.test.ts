@@ -31,6 +31,24 @@ describe(`merge_bonds`, () => {
     expect(out).toContainEqual({ i: 0, j: 1, order: 2 })
   })
 
+  it(`add override replaces an existing pair (upsert, order-independent)`, () => {
+    const ov: BondOverride[] = [{ op: `add`, i: 1, j: 0, order: 3 }]
+    const out = merge_bonds(base, ov)
+    expect(out).toHaveLength(2)
+    expect(out).toContainEqual({ i: 1, j: 0, order: 3 })
+    expect(out.filter((b) => (b.i === 0 && b.j === 1) || (b.i === 1 && b.j === 0)))
+      .toHaveLength(1)
+  })
+
+  it(`does not mutate the input base or overrides arrays`, () => {
+    const base_clone = structuredClone(base)
+    const ov: BondOverride[] = [{ op: `setorder`, i: 0, j: 1, order: 9 }]
+    const ov_clone = structuredClone(ov)
+    merge_bonds(base, ov)
+    expect(base).toEqual(base_clone)
+    expect(ov).toEqual(ov_clone)
+  })
+
   it(`prune_overrides drops overrides referencing deleted atoms`, async () => {
     const { prune_overrides } = await import(`../bond-merge`)
     const ov: BondOverride[] = [
