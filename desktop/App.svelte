@@ -14,6 +14,7 @@
   import StatusPopout from '$lib/workflow/StatusPopout.svelte'
   import { apply_theme_to_dom, get_theme_preference } from '$lib/theme'
   import ThemeControl from '$lib/theme/ThemeControl.svelte'
+  import { app_language, set_app_language, t } from '$lib/i18n'
   import { readFile } from '@tauri-apps/plugin-fs'
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
@@ -1408,7 +1409,7 @@
   <button
     class="sidebar-toggle"
     onclick={() => sidebar.collapsed = !sidebar.collapsed}
-    title={sidebar.collapsed ? `Show sidebar` : `Hide sidebar`}
+    title={sidebar.collapsed ? t(`sidebar.show`) : t(`sidebar.hide`)}
     style="display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; background: transparent; border: 1px solid var(--border-color, rgba(128,128,128,0.2)); border-radius: 4px; color: var(--text-color-muted, #6b7280); cursor: pointer; flex-shrink: 0; transition: color 0.15s, background 0.15s;"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1421,6 +1422,16 @@
     </svg>
   </button>
   <ThemeControl style="position: static; box-shadow: none; backdrop-filter: none;" />
+  <select
+    class="top-language-select"
+    title={t(`app.language`)}
+    value={app_language.value}
+    onchange={(e) => set_app_language((e.target as HTMLSelectElement).value as 'auto' | 'en' | 'zh-CN')}
+  >
+    <option value="auto">{t(`app.language.auto`)}</option>
+    <option value="en">{t(`app.language.en`)}</option>
+    <option value="zh-CN">{t(`app.language.zh-CN`)}</option>
+  </select>
 </TabBar>
 
 <!-- Hidden file input (shared, multi-select) -->
@@ -1522,7 +1533,7 @@
                     <button
                       class="panel-popout-btn"
                       onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, idx) }}
-                      title="Open in new window"
+                      title={t(`panel.openNewWindow`)}
                     >
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
@@ -1534,7 +1545,7 @@
                   <button
                     class="panel-close-btn"
                     onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, idx) }}
-                    title="Close panel"
+                    title={t(`panel.closePanel`)}
                   >
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                       <path d="M18 6L6 18M6 6l12 12" />
@@ -1550,18 +1561,18 @@
                     <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
                   </svg>
                   {#if ts.panes[idx].mode === 'workflow'}
-                    <span>Workflow will be closed.</span>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>Cancel</button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>Close</button>
+                    <span>{t(`panel.workflowWillClose`)}</span>
+                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t(`app.cancel`)}</button>
+                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t(`app.close`)}</button>
                   {:else}
-                    <span>Save before closing?</span>
+                    <span>{t(`panel.saveBeforeClosing`)}</span>
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <select class="banner-select target-select" bind:value={exp.close_save_target} onclick={(e) => e.stopPropagation()}>
-                      <option value="local">Local</option>
+                      <option value="local">{t(`panel.local`)}</option>
                       {#if ts.panes[idx].remote_origin?.session_id}
                         <option value="hpc">HPC</option>
                       {/if}
-                      <option value="project">CatGo DB</option>
+                      <option value="project">{t(`panel.catgoDb`)}</option>
                     </select>
                     {#if exp.close_save_target === `project` && exp.close_save_projects.length > 0}
                       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1581,10 +1592,10 @@
                       <span class="banner-path" title={ts.panes[idx].remote_origin?.file_path}>{ts.panes[idx].remote_origin?.file_path?.split(/[/\\]/).pop()}</span>
                     {/if}
                     <button class="banner-btn save" disabled={exp.close_saving} onclick={(e) => { e.stopPropagation(); save_and_close_panel(tab.id, idx) }}>
-                      {exp.close_saving ? `Saving...` : `Save & Close`}
+                      {exp.close_saving ? t(`app.saving`) : t(`panel.saveAndClose`)}
                     </button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>Close</button>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>Cancel</button>
+                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t(`app.close`)}</button>
+                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t(`app.cancel`)}</button>
                   {/if}
                 </div>
               {/if}
@@ -1698,8 +1709,8 @@
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Open File</span>
-                        <span class="import-desc">multi-select or drop</span>
+                        <span class="import-title">{t(`welcome.openFile`)}</span>
+                        <span class="import-desc">{t(`welcome.openFileDesc`)}</span>
                       </div>
                     </button>
 
@@ -1709,8 +1720,8 @@
                         <path d="M2 10h20"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Open Folder</span>
-                        <span class="import-desc">load all structures</span>
+                        <span class="import-title">{t(`welcome.openFolder`)}</span>
+                        <span class="import-desc">{t(`welcome.openFolderDesc`)}</span>
                       </div>
                     </button>
 
@@ -1719,8 +1730,8 @@
                         <path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4s8-1.79 8-4s-3.58-4-8-4M4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9M4 14v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Search Database</span>
-                        <span class="import-desc">{STATIC_ONLY ? `PubChem molecules` : `OPTIMADE & PubChem`}</span>
+                        <span class="import-title">{t(`welcome.searchDatabase`)}</span>
+                        <span class="import-desc">{STATIC_ONLY ? t(`welcome.searchDatabaseDescStatic`) : t(`welcome.searchDatabaseDesc`)}</span>
                       </div>
                     </button>
 
@@ -1731,8 +1742,8 @@
                         <path d="M9 12h6M9 16h6"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Paste</span>
-                        <span class="import-desc">POSCAR/CONTCAR</span>
+                        <span class="import-title">{t(`welcome.paste`)}</span>
+                        <span class="import-desc">{t(`welcome.pasteDesc`)}</span>
                       </div>
                     </button>
 
@@ -1746,8 +1757,8 @@
                         <path d="M12 13v3" />
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Workflow</span>
-                        <span class="import-desc">Pipeline editor</span>
+                        <span class="import-title">{t(`welcome.workflow`)}</span>
+                        <span class="import-desc">{t(`welcome.workflowDesc`)}</span>
                       </div>
                     </button>
                     {/if}
@@ -1778,8 +1789,8 @@
                         <path d="M12 10.5v2.5l-4.5 3M12 13l4.5 3"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Build</span>
-                        <span class="import-desc">Moiré, Nanotube, etc.</span>
+                        <span class="import-title">{t(`welcome.build`)}</span>
+                        <span class="import-desc">{t(`welcome.buildDesc`)}</span>
                       </div>
                     </button>
 
@@ -1797,8 +1808,8 @@
                         <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">HPC</span>
-                        <span class="import-desc">Remote connect</span>
+                        <span class="import-title">{t(`welcome.hpc`)}</span>
+                        <span class="import-desc">{t(`welcome.hpcDesc`)}</span>
                       </div>
                     </button>
 
@@ -1815,8 +1826,8 @@
                         <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">AI Chat</span>
-                        <span class="import-desc">Ask questions</span>
+                        <span class="import-title">{t(`welcome.aiChat`)}</span>
+                        <span class="import-desc">{t(`welcome.aiChatDesc`)}</span>
                       </div>
                     </button>
 
@@ -1833,8 +1844,8 @@
                         <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Terminal</span>
-                        <span class="import-desc">Local shell</span>
+                        <span class="import-title">{t(`welcome.terminal`)}</span>
+                        <span class="import-desc">{t(`welcome.terminalDesc`)}</span>
                       </div>
                     </button>
                     {/if}
@@ -1848,8 +1859,8 @@
                           <path d="M2 12l10 5 10-5"/>
                         </svg>
                         <div class="import-text">
-                          <span class="import-title">Plugins</span>
-                          <span class="import-desc">Extend CatGo</span>
+                          <span class="import-title">{t(`welcome.plugins`)}</span>
+                          <span class="import-desc">{t(`welcome.pluginsDesc`)}</span>
                         </div>
                       </button>
 
@@ -2061,11 +2072,11 @@
     <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-        <h3>Close tab "{confirm_tab.label}"?</h3>
-        <p>{structure_count} loaded structure{structure_count !== 1 ? 's' : ''} will be removed.</p>
+        <h3>{t(`tabs.closeTabQuestion`, { label: confirm_tab.label })}</h3>
+        <p>{t(`tabs.loadedStructuresRemoved`, { count: structure_count })}</p>
         <div class="modal-actions">
-          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>Cancel</button>
-          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>Close Tab</button>
+          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>{t(`app.cancel`)}</button>
+          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t(`tabs.close`)}</button>
         </div>
       </div>
     </div>
@@ -2081,11 +2092,11 @@
   <div class="modal-overlay" onclick={() => tm.pending_layout_change = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-      <h3>Change layout?</h3>
-      <p>{tm.pending_layout_change.lost_count} structure{tm.pending_layout_change.lost_count !== 1 ? 's' : ''} will be removed.</p>
+      <h3>{t(`layout.changeQuestion`)}</h3>
+      <p>{t(`layout.structuresRemoved`, { count: tm.pending_layout_change.lost_count })}</p>
       <div class="modal-actions">
-        <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>Cancel</button>
-        <button class="modal-btn danger" onclick={confirm_layout_change}>Continue</button>
+        <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>{t(`app.cancel`)}</button>
+        <button class="modal-btn danger" onclick={confirm_layout_change}>{t(`app.continue`)}</button>
       </div>
     </div>
   </div>
@@ -2182,6 +2193,16 @@
   .standalone-chat > :global(*) {
     flex: 1;
     min-height: 0;
+  }
+
+  .top-language-select {
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color, rgba(128,128,128,0.2));
+    background: transparent;
+    color: var(--text-color, inherit);
+    font-size: 11px;
   }
 
   .app-container {

@@ -15,14 +15,15 @@
     icon: string
   }
 
-  const layout_options: LayoutOption[] = [
-    { id: 'single', label: 'Single', icon: 'M3 3h18v18H3z' },
-    { id: 'splitH', label: 'Side by Side', icon: 'M3 3h18v18H3zM12 3v18' },
-    { id: 'splitV', label: 'Stacked', icon: 'M3 3h18v18H3zM3 12h18' },
-    { id: 'quad', label: '2×2 Grid', icon: 'M3 3h18v18H3zM12 3v18M3 12h18' },
-  ]
-
   import type { Snippet } from 'svelte'
+  import { t } from '$lib/i18n'
+
+  const layout_options: LayoutOption[] = [
+    { id: 'single', label: 'layout.single', icon: 'M3 3h18v18H3z' },
+    { id: 'splitH', label: 'layout.sideBySide', icon: 'M3 3h18v18H3zM12 3v18' },
+    { id: 'splitV', label: 'layout.stacked', icon: 'M3 3h18v18H3zM3 12h18' },
+    { id: 'quad', label: 'layout.grid', icon: 'M3 3h18v18H3zM12 3v18M3 12h18' },
+  ]
 
   let {
     tabs,
@@ -109,7 +110,7 @@
           <button
             class="tab-close"
             onclick={(e) => { e.stopPropagation(); onclose(tab.id) }}
-            title="Close tab"
+            title={t(`tabs.close`)}
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
               <path d="M18 6L6 18M6 6l12 12" />
@@ -119,13 +120,13 @@
       </div>
     {/each}
 
-    <button class="add-tab-btn" onclick={() => onadd(`structure`)} title="New tab">
+    <button class="add-tab-btn" onclick={() => onadd(`structure`)} title={t(`tabs.new`)}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M12 5v14M5 12h14" />
       </svg>
     </button>
     {#if oncloseall && tabs.length > 1}
-      <button class="close-all-btn" onclick={oncloseall} title="Close all tabs">
+      <button class="close-all-btn" onclick={oncloseall} title={t(`tabs.closeAll`)}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
@@ -135,11 +136,11 @@
 
   {#if layout !== undefined}
     <div class="layout-menu-container">
-      <button class="layout-trigger" onclick={handle_layout_click} title="Layout: {current_layout_option.label}">
+      <button class="layout-trigger" onclick={handle_layout_click} title={t(`layout.title`, { layout: t(current_layout_option.label as any) })}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d={current_layout_option.icon} />
         </svg>
-        <span class="layout-trigger-label">{current_layout_option.label}</span>
+        <span class="layout-trigger-label">{t(current_layout_option.label as any)}</span>
       </button>
       {#if show_layout_menu}
         <div class="layout-menu">
@@ -152,7 +153,7 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d={opt.icon} />
               </svg>
-              <span>{opt.label}</span>
+              <span>{t(opt.label as any)}</span>
               {#if layout === opt.id}
                 <svg class="check-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M20 6L9 17l-5-5" />

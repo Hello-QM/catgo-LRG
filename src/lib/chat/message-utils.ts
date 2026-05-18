@@ -47,6 +47,7 @@ export const PROVIDER_META: Record<string, { label: string; group: `sdk` | `api`
   kimi: { label: `Kimi (月之暗面)`, group: `api` },
   zhipu: { label: `Zhipu GLM (智谱清言)`, group: `api` },
   gemini: { label: `Gemini`, group: `api` },
+  custom: { label: `Custom Provider`, group: `api` },
   ollama: { label: `Ollama (Local)`, group: `local` },
 }
 

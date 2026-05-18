@@ -8,6 +8,7 @@ export type LLMProvider =
   | `kimi`
   | `zhipu`
   | `gemini`
+  | `custom`
   | `ollama`
 
 /** Provider mode: SDK agent bridge, or universal OpenAI-compat. */

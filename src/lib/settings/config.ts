@@ -51,6 +51,15 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     minimum: 0,
     maximum: 1,
   },
+  app_language: {
+    value: `auto`,
+    description: `Application language`,
+    enum: {
+      auto: `Follow system`,
+      en: `English`,
+      'zh-CN': `简体中文`,
+    },
+  },
 
   symmetry: {
     symprec: {

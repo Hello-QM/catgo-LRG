@@ -102,6 +102,7 @@ export interface SettingsConfig {
   color_scheme: SettingType<string>
   background_color: SettingType<string>
   background_opacity: SettingType<number>
+  app_language: SettingType<`auto` | `en` | `zh-CN`>
 
   symmetry: {
     symprec: SettingType<number>

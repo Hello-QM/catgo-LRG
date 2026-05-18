@@ -10,7 +10,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,33 @@ class ChatStreamRequest(BaseModel):
     temperature: float = 0.3
     max_tokens: int = 2048
     system: Optional[str] = None
+
+
+class UniversalChatMessage(BaseModel):
+    role: str
+    content: str | list | dict
+
+
+class UniversalStreamRequest(BaseModel):
+    messages: list[UniversalChatMessage]
+    model: str
+    temperature: float = 0.3
+    max_tokens: int = 2048
+    system: Optional[str] = None
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+class ProviderTestRequest(BaseModel):
+    provider_id: str = "custom"
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+class ProviderModelsRequest(BaseModel):
+    base_url: str
+    api_key: Optional[str] = None
 
 
 async def stream_anthropic(req: ChatStreamRequest):
@@ -197,6 +224,15 @@ _API_PROVIDERS = {
     "kimi": ("Kimi (月之暗面)", "MOONSHOT_API_KEY"),
     "zhipu": ("Zhipu GLM (智谱清言)", "ZHIPUAI_API_KEY"),
     "gemini": ("Gemini", "GEMINI_API_KEY"),
+}
+
+_API_BASE_URLS = {
+    "deepseek": "https://api.deepseek.com/v1",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "kimi": "https://api.moonshot.cn/v1",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "ollama": "http://127.0.0.1:11434/v1",
 }
 
 # Model lists — minimal seed for the dropdown. The Anthropic SDK accepts the

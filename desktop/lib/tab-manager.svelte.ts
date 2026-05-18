@@ -6,6 +6,7 @@
  */
 
 import type { AppTab } from '../TabBar.svelte'
+import { t, app_language } from '$lib/i18n'
 import {
   type LayoutType, type StructureTabState,
   layout_panel_count, pane_has_content, create_empty_pane, create_tab_state,
@@ -43,16 +44,25 @@ export function create_tab_manager() {
     return tab_states_record[active_tab_id] ?? null
   }
 
+  function base_tab_label(tab: AppTab): string {
+    if (tab.type === `workflow`) return t(`app.workflow`)
+    if (tab.type === `terminal`) return t(`welcome.terminal`)
+    if (tab.id === `default`) return `🤖 ${t(`app.external`)}`
+    return t(`app.structure`)
+  }
+
   let tabs_with_badges = $derived(tabs.map(t => {
-    if (t.type !== `structure`) return t
+    app_language.value
+    const localized = { ...t, label: base_tab_label(t) }
+    if (t.type !== `structure`) return localized
     const ts = tab_states_record[t.id]
-    if (!ts) return t
+    if (!ts) return localized
     // Skip the badge on the currently-active tab — user already sees its
     // content; the count is just visual noise on the active tab.
-    if (t.id === active_tab_id) return t
+    if (t.id === active_tab_id) return localized
     const count = layout_panel_count(ts.layout)
     const badge = ts.panes.slice(0, count).filter(p => pane_has_content(p)).length
-    return { ...t, badge: badge > 0 ? badge : undefined }
+    return { ...localized, badge: badge > 0 ? badge : undefined }
   }))
 
   let active_layout = $derived.by(() => {
@@ -226,7 +236,7 @@ export function create_tab_manager() {
     }
     const count = layout_panel_count(ts.layout)
     if (ts.panes.slice(0, count).some(p => p.mode === 'workflow')) {
-      tab.label = `${prefix}Workflow`
+      tab.label = `${prefix}${t(`app.workflow`)}`
       return
     }
     tab.label = `${prefix}${fallback}`
