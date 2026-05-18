@@ -5,11 +5,11 @@
   import type { AnyStructure } from '$lib'
   import { parse_cube_header, cube_atoms_to_molecule } from '$lib/cube'
   import { API_BASE, STATIC_ONLY } from '$lib/api/config'
-  import { check_tauri, init_tauri, open_file as tauri_open_file } from '$lib/io/tauri'
+  import { check_tauri, init_tauri, open_files as tauri_open_files, open_folder as tauri_open_folder, read_dropped_paths as tauri_read_dropped_paths } from '$lib/io/tauri'
   import { decompress_file } from '$lib/io/decompress'
   import { is_trajectory_file, parse_trajectory_data } from '$lib/trajectory/parse'
   import type { TrajectoryType } from '$lib/trajectory'
-  import { parse_structure_file } from '$lib/structure/parse'
+  import { parse_structure_file, is_structure_file } from '$lib/structure/parse'
   import '$lib/theme/themes.js'
   import StatusPopout from '$lib/workflow/StatusPopout.svelte'
   import { apply_theme_to_dom, get_theme_preference } from '$lib/theme'
@@ -24,6 +24,7 @@
   import { show_toast } from '$lib/toast-state.svelte'
   import TabBar from './TabBar.svelte'
   import Sidebar from './Sidebar.svelte'
+  import StructureLibrary from './StructureLibrary.svelte'
   import type { AppTab } from './TabBar.svelte'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
@@ -42,7 +43,7 @@
   import { terminal } from './state/terminal-state.svelte'
   // Extracted pure utilities
   import {
-    type PaneState, type LayoutType, type StructureTabState, type SampleStructure,
+    type PaneState, type LayoutType, type StructureTabState, type SampleStructure, type LibraryEntry,
     layout_panel_count, get_pane_label, create_empty_pane, pane_has_content,
     content_to_base64, create_tab_state, auto_name as _auto_name,
     find_import_target_pane, get_visible_panes, get_grid_style, get_pane_position,
@@ -166,6 +167,7 @@
     get_active_tab_type: () => tm.active_tab_type,
     get_active_tab_id: () => tm.active_tab_id,
     process_file_content,
+    import_many,
     get_drag_target_pane: () => drag_target_pane,
     set_drag_target_pane: (v) => { drag_target_pane = v },
     set_is_loading: (v) => { is_loading = v },
@@ -583,6 +585,7 @@
 
   // ========== File Handling ==========
   let file_input_ref = $state<HTMLInputElement | undefined>()
+  let folder_input_ref = $state<HTMLInputElement | undefined>()
   let file_input_target_tab = ``
   let file_input_target_pane = 0
 
@@ -591,16 +594,13 @@
     if (!ts) return
     ts.active_pane = pane_idx
     if (is_tauri) {
-      is_loading = true
       try {
-        const result = await tauri_open_file()
-        if (result) {
-          await process_file_content(tab_id, result.content, result.filename, pane_idx)
+        const results = await tauri_open_files()
+        if (results && results.length > 0) {
+          await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
         }
       } catch (err) {
         console.error(err)
-      } finally {
-        is_loading = false
       }
     } else {
       file_input_target_tab = tab_id
@@ -609,18 +609,60 @@
     }
   }
 
+  /** Open a folder and import every recognizable structure file inside it. */
+  async function handle_open_folder(tab_id: string, pane_idx: number) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    ts.active_pane = pane_idx
+    const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
+    if (is_tauri) {
+      try {
+        const results = await tauri_open_folder(accept)
+        if (results && results.length > 0) {
+          await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+        }
+      } catch (err) {
+        console.error(err)
+      }
+    } else {
+      file_input_target_tab = tab_id
+      file_input_target_pane = pane_idx
+      folder_input_ref?.click()
+    }
+  }
+
   async function handle_file_input(event: Event) {
     const input = event.target as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
-    is_loading = true
+    const files = Array.from(input.files ?? [])
+    if (files.length === 0) return
     try {
-      const { content, filename } = await decompress_file(file)
-      await process_file_content(file_input_target_tab, content, filename, file_input_target_pane)
+      await import_many(
+        file_input_target_tab,
+        files.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
+        file_input_target_pane,
+      )
     } catch (err) {
       console.error(err)
     } finally {
-      is_loading = false
+      input.value = ``
+    }
+  }
+
+  /** Browser folder picker (webkitdirectory) — filters to structure files. */
+  async function handle_folder_input(event: Event) {
+    const input = event.target as HTMLInputElement
+    const all = Array.from(input.files ?? [])
+    const files = all.filter(f => is_structure_file(f.name) || is_trajectory_file(f.name) || is_chgcar_file(f.name))
+    if (files.length === 0) { input.value = ``; return }
+    try {
+      await import_many(
+        file_input_target_tab,
+        files.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
+        file_input_target_pane,
+      )
+    } catch (err) {
+      console.error(err)
+    } finally {
       input.value = ``
     }
   }
@@ -737,18 +779,21 @@
     modal.db_preview_lattice = null
   }
 
-  async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) {
-    const ts = tab_states[tab_id]
-    if (!ts) return
-    let target = find_import_target_pane(ts, pane_idx)
-    if (target === -1) {
-      // All panes full — open a new tab and load there
-      open_tab(`structure`)
-      const new_ts = tab_states[tm.active_tab_id]
-      if (!new_ts) return
-      return process_file_content(tm.active_tab_id, content, filename, 0, remote_origin, local_file_path)
-    }
+  // Result of parsing one file. 'skip' = ignore silently; 'editor' = not a
+  // structure, open raw text in the editor; 'entry' = a library entry payload.
+  type IngestOutcome =
+    | { kind: 'entry'; entry: Omit<LibraryEntry, 'id'> }
+    | { kind: 'skip' }
+    | { kind: 'editor'; text: string }
+
+  /**
+   * Parse a single file into a LibraryEntry payload WITHOUT touching any pane.
+   * Shared by the single-file path (process_file_content) and the batch path
+   * (import_many) so the CIF / cube / CHGCAR / trajectory branching lives once.
+   */
+  async function ingest_one(content: string | ArrayBuffer, filename: string): Promise<IngestOutcome> {
     const text = typeof content === `string` ? content : new TextDecoder().decode(content)
+    const ext = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``).split(`.`).pop()?.toLowerCase() || ``
 
     // CHGCAR / CHGDIFF / LOCPOT etc. → convert to Gaussian cube via wasm.
     // chgdiff-wasm exposes `chgcar_to_cube(text)` and the package is already
@@ -779,99 +824,207 @@
           cube_text = await resp.text()
         }
         const cube_filename = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``) + `.cube`
+        let structure: AnyStructure | undefined
         try {
-          const header = parse_cube_header(cube_text)
-          const molecule = cube_atoms_to_molecule(header)
-          if (molecule.sites.length > 0) {
-            ts.panes[target].structure = { ...molecule, _aligned: true } as AnyStructure
-            ts.panes[target].initial_site_count = molecule.sites.length
-            ts.panes[target].initial_structure_ref = ts.panes[target].structure
-          }
+          const molecule = cube_atoms_to_molecule(parse_cube_header(cube_text))
+          if (molecule.sites.length > 0) structure = { ...molecule, _aligned: true } as AnyStructure
         } catch (err) {
           console.error(`Failed to parse converted cube atoms:`, err)
         }
-        const cube_blob = new Blob([cube_text], { type: `chemical/x-cube` })
-        ts.panes[target].cube_file = new File([cube_blob], cube_filename)
-        ts.panes[target].is_trajectory_mode = false
-        ts.panes[target].trajectory = null
-        ts.panes[target].selected_sites = []
-        ts.panes[target].current_step_idx = 0
-        ts.panes[target].modified = false
-        ts.panes[target].remote_origin = remote_origin ?? null
-        ts.panes[target].local_file_path = local_file_path ?? null
-        ts.panes[target].source_filename = filename
-        ts.active_pane = target
-        update_tab_label(tab_id)
+        const cube_file = new File([new Blob([cube_text], { type: `chemical/x-cube` })], cube_filename)
+        return { kind: 'entry', entry: { filename, source_path: null, format: `cube`, structure, trajectory: undefined, is_trajectory: false, cube_file } }
       } catch (err) {
         console.error(`Failed to convert CHGCAR to cube:`, err)
+        return { kind: 'skip' }
       }
-      return
     }
 
     if (/\.(cube|cub)$/i.test(filename)) {
+      let structure: AnyStructure | undefined
       try {
-        const header = parse_cube_header(text)
-        const molecule = cube_atoms_to_molecule(header)
-        if (molecule.sites.length > 0) {
-          ts.panes[target].structure = { ...molecule, _aligned: true } as AnyStructure
-          ts.panes[target].initial_site_count = molecule.sites.length
-          ts.panes[target].initial_structure_ref = ts.panes[target].structure
-        }
+        const molecule = cube_atoms_to_molecule(parse_cube_header(text))
+        if (molecule.sites.length > 0) structure = { ...molecule, _aligned: true } as AnyStructure
       } catch (err) {
         console.error(`Failed to parse cube file atoms:`, err)
       }
-      const blob = new Blob([text], { type: `chemical/x-cube` })
-      ts.panes[target].cube_file = new File([blob], filename)
-      ts.panes[target].is_trajectory_mode = false
-      ts.panes[target].trajectory = null
-      ts.panes[target].selected_sites = []
-      ts.panes[target].current_step_idx = 0
-      ts.panes[target].modified = false
-      ts.panes[target].remote_origin = remote_origin ?? null
-      ts.panes[target].local_file_path = local_file_path ?? null
-      ts.panes[target].source_filename = filename
-      ts.active_pane = target
-      update_tab_label(tab_id)
-      return
+      const cube_file = new File([new Blob([text], { type: `chemical/x-cube` })], filename)
+      return { kind: 'entry', entry: { filename, source_path: null, format: `cube`, structure, trajectory: undefined, is_trajectory: false, cube_file } }
     }
 
     // Skip non-structure files (images, PDFs, spreadsheets, media, archives, binaries)
     if (NON_STRUCTURE_EXTS.test(filename)) {
-      console.warn(`[process_file_content] Skipping non-structure file: ${filename}`)
-      return
+      console.warn(`[ingest_one] Skipping non-structure file: ${filename}`)
+      return { kind: 'skip' }
     }
 
     if (is_trajectory_file(filename, text)) {
-      ts.panes[target].is_trajectory_mode = true
-      ts.panes[target].structure = undefined
-      ts.panes[target].trajectory = await parse_trajectory_data(content, filename)
-      ts.panes[target].initial_site_count = 0
-      ts.panes[target].raw_traj_b64 = content_to_base64(content)
-      ts.panes[target].raw_traj_format = filename.split('.').pop()?.toLowerCase() || ''
-    } else {
-      ts.panes[target].is_trajectory_mode = false
-      ts.panes[target].trajectory = null
-      const parsed = parse_structure_file(text, filename)
-      if (parsed?.sites?.length) {
-        ts.panes[target].structure = parsed
-        ts.panes[target].initial_site_count = parsed.sites.length
-        ts.panes[target].initial_structure_ref = parsed
-      } else {
-        // Can't parse as structure — open in text editor as fallback
-        const session = remote_origin?.session_id || ``
-        const fp = remote_origin?.file_path || local_file_path || ``
-        handle_sidebar_open_editor(text, filename, fp, session)
-        return
+      const trajectory = await parse_trajectory_data(content, filename)
+      return {
+        kind: 'entry',
+        entry: {
+          filename, source_path: null, format: ext, structure: undefined, trajectory,
+          is_trajectory: true, cube_file: null,
+          raw_traj_b64: content_to_base64(content),
+          raw_traj_format: filename.split('.').pop()?.toLowerCase() || '',
+        },
       }
     }
-    ts.panes[target].selected_sites = []
-    ts.panes[target].current_step_idx = 0
-    ts.panes[target].modified = false
-    ts.panes[target].remote_origin = remote_origin ?? null
-    ts.panes[target].local_file_path = local_file_path ?? null
-    ts.panes[target].source_filename = filename
+
+    const parsed = parse_structure_file(text, filename)
+    if (parsed?.sites?.length) {
+      return { kind: 'entry', entry: { filename, source_path: null, format: ext, structure: parsed, trajectory: undefined, is_trajectory: false, cube_file: null } }
+    }
+    // Can't parse as structure — fall back to the text editor
+    return { kind: 'editor', text }
+  }
+
+  /** Write a library entry's parsed content into a pane (in-place — Svelte 5 deep proxy). */
+  function apply_entry_to_pane(
+    tab_id: string,
+    ts: StructureTabState,
+    target: number,
+    e: LibraryEntry,
+    remote_origin: { session_id: string; file_path: string } | null = null,
+    local_file_path: string | null = null,
+  ) {
+    const p = ts.panes[target]
+    if (e.cube_file) {
+      p.structure = e.structure
+      p.initial_site_count = e.structure?.sites?.length ?? 0
+      p.initial_structure_ref = e.structure ?? null
+      p.cube_file = e.cube_file
+      p.is_trajectory_mode = false
+      p.trajectory = null
+    } else if (e.is_trajectory) {
+      p.is_trajectory_mode = true
+      p.structure = undefined
+      p.trajectory = e.trajectory
+      p.initial_site_count = 0
+      p.initial_structure_ref = null
+      p.cube_file = null
+      p.raw_traj_b64 = e.raw_traj_b64 ?? ''
+      p.raw_traj_format = e.raw_traj_format ?? ''
+    } else {
+      p.is_trajectory_mode = false
+      p.trajectory = null
+      p.structure = e.structure
+      p.initial_site_count = e.structure?.sites?.length ?? 0
+      p.initial_structure_ref = e.structure ?? null
+      p.cube_file = null
+    }
+    p.selected_sites = []
+    p.current_step_idx = 0
+    p.modified = false
+    p.remote_origin = remote_origin
+    p.local_file_path = local_file_path
+    p.source_filename = e.filename
     ts.active_pane = target
     update_tab_label(tab_id)
+  }
+
+  async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    let target = find_import_target_pane(ts, pane_idx)
+    if (target === -1) {
+      // All panes full — open a new tab and load there
+      open_tab(`structure`)
+      const new_ts = tab_states[tm.active_tab_id]
+      if (!new_ts) return
+      return process_file_content(tm.active_tab_id, content, filename, 0, remote_origin, local_file_path)
+    }
+    const outcome = await ingest_one(content, filename)
+    if (outcome.kind === 'skip') return
+    if (outcome.kind === 'editor') {
+      const session = remote_origin?.session_id || ``
+      const fp = remote_origin?.file_path || local_file_path || ``
+      handle_sidebar_open_editor(outcome.text, filename, fp, session)
+      return
+    }
+    const entry: LibraryEntry = { id: crypto.randomUUID(), ...outcome.entry, source_path: local_file_path ?? outcome.entry.source_path ?? null }
+    ts.library.push(entry)
+    ts.active_library_id = entry.id
+    apply_entry_to_pane(tab_id, ts, target, entry, remote_origin ?? null, local_file_path ?? null)
+  }
+
+  /**
+   * Import many files into a tab's structure library. Each file is parsed in
+   * isolation (one bad file never aborts the batch); entries are appended to
+   * the library and the first newly-added one is shown in the active pane.
+   * `items` carry either pre-read `content` (Tauri) or a `File` (browser).
+   */
+  async function import_many(
+    tab_id: string,
+    items: Array<{ content?: string | ArrayBuffer; filename: string; file?: File; path?: string | null }>,
+    pane_idx: number,
+  ) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    ts.active_pane = pane_idx
+    is_loading = true
+    const start = ts.library.length
+    let failures = 0
+    try {
+      for (const it of items) {
+        try {
+          let content = it.content
+          let filename = it.filename
+          if (it.file) {
+            const d = await decompress_file(it.file)
+            content = d.content
+            filename = d.filename
+          }
+          if (content == null) { failures++; continue }
+          const outcome = await ingest_one(content, filename)
+          if (outcome.kind !== 'entry') { failures++; continue }
+          ts.library.push({ id: crypto.randomUUID(), ...outcome.entry, source_path: it.path ?? outcome.entry.source_path ?? null })
+        } catch (err) {
+          failures++
+          console.warn(`[import_many] failed to import ${it.filename}:`, err)
+        }
+      }
+      if (ts.library.length > start) {
+        select_library_entry(tab_id, ts.library[start].id)
+      }
+    } finally {
+      is_loading = false
+    }
+    if (failures > 0) console.warn(`[import_many] ${failures} file(s) skipped or failed`)
+  }
+
+  /** Show a library entry in the tab's active pane. */
+  function select_library_entry(tab_id: string, id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const entry = ts.library.find(e => e.id === id)
+    if (!entry) return
+    apply_entry_to_pane(tab_id, ts, ts.active_pane, entry)
+    ts.active_library_id = id
+    tick().then(() => window.dispatchEvent(new Event('resize')))
+  }
+
+  /** Remove one entry; if it was active, fall back to the first remaining (or clear the pane). */
+  function remove_library_entry(tab_id: string, id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const was_active = ts.active_library_id === id
+    ts.library = ts.library.filter(e => e.id !== id)
+    if (!was_active) return
+    if (ts.library.length > 0) {
+      select_library_entry(tab_id, ts.library[0].id)
+    } else {
+      ts.active_library_id = null
+      ts.panes[ts.active_pane] = create_empty_pane()
+      update_tab_label(tab_id)
+    }
+  }
+
+  /** Empty the library list (does not clear what's currently shown in the pane). */
+  function clear_library(tab_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    ts.library = []
+    ts.active_library_id = null
   }
 
   function create_on_file_drop(tab_id: string, pane_idx: number) {
@@ -968,47 +1121,54 @@
         if (event.payload.type === `drop`) {
           const paths = event.payload.paths
           if (paths && paths.length > 0) {
-            const file_path = paths[0]
             const now = Date.now()
-            if (file_path === last_drop_path && now - last_drop_time < 500) return
+            // Dedupe on the whole batch (key off first path) so a single
+            // multi-file drop doesn't double-fire.
+            const batch_key = paths[0]
+            if (batch_key === last_drop_path && now - last_drop_time < 500) return
             last_drop_time = now
-            last_drop_path = file_path
-            const filename = file_path.split(/[/\\]/).pop() || `unknown`
+            last_drop_path = batch_key
 
             // If a modal dialog with a drop zone is open, skip — let DOM handlers process it
             if (document.querySelector(`.dialog-backdrop`)) return
 
-            // PDFs are never valid structure files — always route to paper import.
+            // PDFs are never valid structure files — route each to paper import.
             // App-level drop (not scoped to a specific tab) — route to the
             // currently-active tab's chat slice so the loading spinner and
             // any error message surface there.
-            if (/\.pdf$/i.test(filename)) {
+            const pdf_paths = paths.filter(p => /\.pdf$/i.test(p))
+            const other_paths = paths.filter(p => !/\.pdf$/i.test(p))
+
+            for (const pdf_path of pdf_paths) {
+              const pdf_name = pdf_path.split(/[/\\]/).pop() || `unknown.pdf`
               const target_tab_id = tm.active_tab_id
               const chat_slice = get_chat_slice(target_tab_id)
               try {
                 chat_slice.loading.value = true
                 chat_slice.error.value = ``
-                const content = await readFile(file_path)
-                const file = new File([content], filename, { type: `application/pdf` })
+                const content = await readFile(pdf_path)
+                const file = new File([content], pdf_name, { type: `application/pdf` })
                 await import_paper(file, target_tab_id)
               } catch (err) {
                 chat_slice.error.value = err instanceof Error ? err.message : `Paper import failed`
               } finally {
                 chat_slice.loading.value = false
               }
-              return
             }
+
+            if (other_paths.length === 0) return
 
             const ts = get_active_ts()
             if (!ts) return
             is_loading = true
             try {
-              const content = await readFile(file_path)
-              const text_content = new TextDecoder().decode(content)
+              const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
+              const files = await tauri_read_dropped_paths(other_paths, accept)
               const target_pane = ts.panes.findIndex(p => !pane_has_content(p))
               const pane_idx = target_pane >= 0 ? target_pane : ts.active_pane
-              await process_file_content(tm.active_tab_id, text_content, filename, pane_idx, null, file_path)
-              ts.active_pane = pane_idx
+              if (files.length > 0) {
+                await import_many(tm.active_tab_id, files.map(f => ({ content: f.content, filename: f.filename, path: f.path })), pane_idx)
+              }
             } catch (err) {
               console.error(`[Tauri Drop] Error reading file:`, err)
             } finally {
@@ -1263,12 +1423,22 @@
   <ThemeControl style="position: static; box-shadow: none; backdrop-filter: none;" />
 </TabBar>
 
-<!-- Hidden file input (shared) -->
+<!-- Hidden file input (shared, multi-select) -->
 <input
   bind:this={file_input_ref}
   type="file"
+  multiple
   accept=".cif,.poscar,.vasp,.xyz,.json,.extxyz,.traj,.h5,.hdf5,.gz,.bz2,.xz,.zst,.cube,.cub,.xml,.data,.lammps,*"
   onchange={handle_file_input}
+  hidden
+/>
+<!-- Hidden folder input (browser webkitdirectory) -->
+<input
+  bind:this={folder_input_ref}
+  type="file"
+  multiple
+  webkitdirectory
+  onchange={handle_folder_input}
   hidden
 />
 
@@ -1317,6 +1487,16 @@
         {@const visible = get_visible_panes(ts)}
         {@const panel_count = layout_panel_count(ts.layout)}
 
+        <div class="structure-workspace">
+        {#if ts.library.length >= 2}
+          <StructureLibrary
+            entries={ts.library}
+            active_id={ts.active_library_id}
+            on_select={(id) => select_library_entry(tab.id, id)}
+            on_remove={(id) => remove_library_entry(tab.id, id)}
+            on_clear={() => clear_library(tab.id)}
+          />
+        {/if}
         <div class="grid-container" class:resizing={is_panel_resizing} style={get_grid_style(ts)}>
           {#each visible as idx (idx)}
             {@const pane = ts.panes[idx]}
@@ -1519,7 +1699,18 @@
                       </svg>
                       <div class="import-text">
                         <span class="import-title">Open File</span>
-                        <span class="import-desc">or drop here</span>
+                        <span class="import-desc">multi-select or drop</span>
+                      </div>
+                    </button>
+
+                    <button class="import-card add-own-card" onclick={() => handle_open_folder(tab.id, idx)}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                        <path d="M2 10h20"/>
+                      </svg>
+                      <div class="import-text">
+                        <span class="import-title">Open Folder</span>
+                        <span class="import-desc">load all structures</span>
                       </div>
                     </button>
 
@@ -1738,6 +1929,7 @@
             ></div>
           {/if}
         </div>
+        </div><!-- end structure-workspace -->
       {/if}
 
     {:else if tab.type === `workflow`}
@@ -2043,6 +2235,16 @@
     visibility: hidden;
     pointer-events: none;
     z-index: -1;
+  }
+
+  .structure-workspace {
+    display: flex;
+    width: 100%;
+    height: 100%;
+  }
+  .structure-workspace > .grid-container {
+    flex: 1;
+    min-width: 0;
   }
 
   .grid-container {

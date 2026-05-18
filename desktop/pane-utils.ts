@@ -36,6 +36,27 @@ export interface PaneState {
 
 export type LayoutType = 'single' | 'splitH' | 'splitV' | 'quad'
 
+/**
+ * One imported structure held in a tab's structure-library sidebar.
+ * Parsed eagerly (see desktop/App.svelte ingest_one): a multi-frame file
+ * (vasprun/.traj/.extxyz/.h5) becomes a SINGLE entry with is_trajectory:true.
+ */
+export interface LibraryEntry {
+  id: string
+  /** Display name (post-decompression basename) */
+  filename: string
+  /** Tauri abs path or webkitRelativePath, for tooltip / re-resolve */
+  source_path?: string | null
+  /** Lowercased extension / detected format */
+  format: string
+  structure: AnyStructure | undefined
+  trajectory?: unknown
+  is_trajectory: boolean
+  cube_file?: File | null
+  raw_traj_b64?: string
+  raw_traj_format?: string
+}
+
 export interface StructureTabState {
   panes: PaneState[]
   layout: LayoutType
@@ -43,6 +64,9 @@ export interface StructureTabState {
   close_confirm_pane: number | null
   col_split: number
   row_split: number
+  /** Per-tab structure library (sidebar). Cleared automatically on tab close. */
+  library: LibraryEntry[]
+  active_library_id: string | null
 }
 
 // ========== Pure Functions ==========
@@ -93,6 +117,8 @@ export function create_tab_state(): StructureTabState {
     close_confirm_pane: null,
     col_split: 50,
     row_split: 50,
+    library: [],
+    active_library_id: null,
   }
 }
 

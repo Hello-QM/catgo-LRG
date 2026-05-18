@@ -141,6 +141,8 @@ export function create_tab_manager() {
           ts.active_pane = 0
           ts.col_split = 50
           ts.row_split = 50
+          ts.library = []
+          ts.active_library_id = null
           tab.label = `Structure`
         }
       }
@@ -165,6 +167,8 @@ export function create_tab_manager() {
         ts.col_split = 50
         ts.row_split = 50
         ts.close_confirm_pane = null
+        ts.library = []
+        ts.active_library_id = null
         tab.label = `Structure`
       }
       return
