@@ -349,3 +349,29 @@ fn known_radii_and_fallback() {
 - **Placeholders:** none — every constant cites spec §CPK/§presets/§Verbatim or an xyzrender `file:line`; the 3 `← replace` test expectations have an explicit "compute from cloned xyzrender before Step 3" instruction (concrete source, not TBD).
 - **Type consistency:** `Style`/`Bond`/`AtomOverride`/`BondOverride` defined RT10, consumed RT9/RT11; `pca_orient` signature fixed RT5 used RT9; `fit_canvas`/`scale_ratio` RT6 used RT8/RT9.
 - **Scope:** full-parity per locked decision; surfaces/GIF/measure explicitly Non-Goals (spec).
+
+---
+
+## Task RT13: split into two independent DraggablePanes + drag-rotate fix + direct bond/atom delete
+
+**Why:** user rejected the single stacked pane (params bury the preview; must scroll past 17 knobs to see structure). Chosen layout: **独立双窗** — two independent draggable panes. Also fixes the root-caused drag-rotate failure ([[feedback-draggablepane-svelte5-delegation]]) and makes bond/atom deletion direct.
+
+**Root cause (proven, evidence-backed):** `src/lib/DraggablePane.svelte` ~480-490 `stop()` calls `e.stopPropagation()` on `pointerdown`/`mousedown` at the pane root. Svelte 5 event delegation routes `onpointerdown={}` through ONE document-root listener reached via bubbling; the pane-root stop kills it → `on_pointer_down` never fires → `dragging` stays false → every `pointermove` early-returns → no rotation. Fix: bind preview pointer handlers via a Svelte `use:` action doing **direct `node.addEventListener`** (a direct listener on the descendant fires during bubble BEFORE the ancestor pane-root `stop()` — non-delegated, pane-local, does not touch shared DraggablePane).
+
+**Architecture:**
+- `src/lib/structure/catrender/catrender-state.svelte.ts` — shared reactive `$state` module: `preset`, `overrides`/knob state, `advanced_json`, `bond_overrides`, `atom_overrides`, `drag_rot`, plus the structure-mirror source. Both panes import this — single source of truth.
+- `src/lib/structure/catrender/CatRenderParamsPane.svelte` — wrapped in `DraggablePane`: preset select + 17 knob controls + advanced JSON + reset. Writes shared state only.
+- `src/lib/structure/catrender/CatRenderViewPane.svelte` — wrapped in `DraggablePane`: live SVG preview (C1 debounced $effect + render_seq + teardown — port verbatim from current CatRenderPane), xyz gizmo, drag-rotate (via the `use:` direct-listener action — THE fix), bond-edit (add + **per-row direct delete ×** + set-order, not just clear-all), atom-edit (select via click-pick or index list + hide/delete + recolor, per-row direct delete), Export SVG/PNG, AI-bridge poll. Reads shared state, owns render.
+- Keep `bond-merge.ts`/`atom-merge.ts`/`catrender-wasm.ts` unchanged. Delete old `CatRenderPane.svelte` (superseded) — or keep as a thin shell that mounts both for backward ExportPane wiring; pick the cleaner.
+- Toggle/open: follow the existing CatGo DraggablePane open pattern (the `ExportPane` "Render" tab should open BOTH panes, or two toolbar toggles — mirror how other DraggablePanes are registered/toggled in the app; do not invent a new mechanism).
+
+**Steps (TDD where unit-testable; .svelte verified via browser E2E):**
+- [ ] Create `catrender-state.svelte.ts` shared store; unit-test any pure helpers.
+- [ ] Create `CatRenderParamsPane.svelte` (DraggablePane + knob panel writing shared state).
+- [ ] Create `CatRenderViewPane.svelte` (DraggablePane + preview + C1 effect verbatim + `use:`-action pointer handlers [the fix] + gizmo + bond/atom direct-delete edit + export + poll).
+- [ ] Wire both into ExportPane/toolbar per existing DraggablePane pattern; remove/shell the old pane.
+- [ ] `pnpm run check` 0 new errors; `pnpm exec vitest run src/lib/structure/catrender/` green (bond-merge/atom-merge unchanged).
+- [ ] Browser E2E (agent-browser/chrome-devtools): drag preview → molecule rotates + gizmo tracks; Reset view; per-row bond delete works; atom hide/recolor (correct atom incl. with hidden present); preset/knob/advanced live; export; two panes independently movable; params no longer bury preview.
+- [ ] Commit.
+
+**Discipline:** C1 effect (render_seq+cancelled+teardown) ported VERBATIM into ViewPane — do not regress. The drag fix MUST be the `use:` direct-listener action (proven mechanism), not a DraggablePane edit (shared component; would risk other panes). Direct per-row delete for bonds AND atoms (user: "不能直接删 bond"). Faithful render core (RT1-RT12) untouched.
