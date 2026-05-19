@@ -49,11 +49,18 @@
   })
 
   let timer: ReturnType<typeof setTimeout> | undefined
+  let render_seq = 0
+  // NOTE: Svelte 5 tracks only synchronous reads in the effect *body*.
+  // Reads inside the setTimeout callback are NOT tracked — the `void [...]`
+  // line below is the dependency manifest and MUST list every reactive
+  // value the render depends on. Add new controls there too.
   $effect(() => {
     const m = mirror
     void [preset, show_h, rot_x, rot_y, rot_z, show_cell, overrides, m]
     if (!m) return
     clearTimeout(timer)
+    let cancelled = false
+    const seq = ++render_seq
     timer = setTimeout(async () => {
       const pruned = prune_overrides($state.snapshot(overrides), m.n)
       const bonds = merge_bonds(m.base, pruned)
@@ -68,12 +75,13 @@
         },
       })
       try {
-        svg = await render_svg(input)
-        render_err = ``
+        const out = await render_svg(input)
+        if (!cancelled && seq === render_seq) { svg = out; render_err = `` }
       } catch (e) {
-        render_err = String(e)
+        if (!cancelled && seq === render_seq) render_err = String(e)
       }
     }, 16)
+    return () => { cancelled = true; clearTimeout(timer) }
   })
 
   function download(name: string, blob: Blob) {
