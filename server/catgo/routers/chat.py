@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import socket
+import time
 from typing import Optional
 
 import httpx
@@ -231,9 +232,132 @@ def _ollama_running(host: str = "127.0.0.1", port: int = 11434, timeout: float =
         return False
 
 
+# ─── Dynamic model resolution ────────────────────────────────────────────────
+#
+# For API-key providers and Ollama we probe each provider's official model
+# catalog endpoint and surface whatever they currently expose, so the CatBot
+# dropdown stays up-to-date without code changes when vendors ship new models.
+# Failures (no key, timeout, parse error) silently fall back to the static
+# `_API_MODELS` / `_SDK_CLAUDE_MODELS` seeds — list_providers() is never empty.
+#
+# SDK CLI providers (sdk-claude/sdk-codex/sdk-gemini) keep their alias seed:
+# the SDKs themselves resolve `sonnet`/`opus`/`haiku` to the latest model in
+# that family at call time, and Codex/Gemini-CLI have no external "list
+# models" API (their catalog is account-tied inside the CLI binary).
+
+_DYN_CACHE_TTL = 300  # seconds; 5 min is plenty for "latest models" freshness
+_dyn_models_cache: dict[str, tuple[float, list[dict]]] = {}
+
+# OpenAI-compatible `/v1/models` endpoints. Gemini AI Studio has its own
+# native shape and key-in-query auth (handled separately below).
+_API_BASE_URLS = {
+    "deepseek": "https://api.deepseek.com",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "kimi": "https://api.moonshot.cn/v1",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+}
+
+
+async def _probe_openai_compat(base_url: str, api_key: str) -> Optional[list[dict]]:
+    """GET <base>/models with Bearer auth. Returns [{id,label}] or None."""
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(
+                f"{base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if r.status_code != 200:
+            return None
+        data = r.json().get("data") or []
+        out: list[dict] = []
+        for m in data:
+            if isinstance(m, dict) and m.get("id"):
+                out.append({"id": m["id"], "label": m["id"]})
+        return out or None
+    except Exception:  # noqa: BLE001 — best-effort probe, fall back to static
+        return None
+
+
+async def _probe_gemini(api_key: str) -> Optional[list[dict]]:
+    """Gemini AI Studio: key-in-query, native shape, filter generateContent-capable."""
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            r = await client.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+                params={"key": api_key},
+            )
+        if r.status_code != 200:
+            return None
+        arr = r.json().get("models") or []
+        out: list[dict] = []
+        for m in arr:
+            if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                continue
+            name = (m.get("name") or "").removeprefix("models/")
+            if not name:
+                continue
+            out.append({"id": name, "label": m.get("displayName") or name})
+        return out or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _probe_ollama(base_url: str = "http://127.0.0.1:11434") -> Optional[list[dict]]:
+    """Ollama is local, no key needed. /api/tags returns installed models."""
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f"{base_url.rstrip('/')}/api/tags")
+        if r.status_code != 200:
+            return None
+        arr = r.json().get("models") or []
+        return [
+            {"id": m["name"], "label": m["name"]}
+            for m in arr
+            if isinstance(m, dict) and m.get("name")
+        ] or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _resolve_models_dyn(pid: str) -> Optional[list[dict]]:
+    """TTL-cached live model list for one provider, or None to use static fallback."""
+    now = time.time()
+    cached = _dyn_models_cache.get(pid)
+    if cached and now - cached[0] < _DYN_CACHE_TTL:
+        return cached[1]
+
+    result: Optional[list[dict]] = None
+    if pid in _API_PROVIDERS:
+        _, env_key = _API_PROVIDERS[pid]
+        api_key = os.environ.get(env_key)
+        if not api_key:
+            return None  # no key → no live probe; caller uses static seed
+        if pid == "gemini":
+            result = await _probe_gemini(api_key)
+        else:
+            base = _API_BASE_URLS.get(pid)
+            if base:
+                result = await _probe_openai_compat(base, api_key)
+    elif pid == "ollama":
+        result = await _probe_ollama()
+
+    if result:
+        _dyn_models_cache[pid] = (now, result)
+    return result
+
+
 @router.get("/providers")
-def list_providers() -> dict:
-    """Return the provider catalogue with live availability flags."""
+async def list_providers() -> dict:
+    """Return the provider catalogue with live availability + dynamic model lists.
+
+    Behavior per provider category:
+      * SDK CLI (sdk-claude/sdk-codex/sdk-gemini): static alias seed; SDK
+        resolves aliases to latest at call time.
+      * API providers (deepseek/qwen/kimi/zhipu/gemini): live probe of the
+        vendor's /v1/models when the env-var key is set; static seed otherwise.
+        TTL-cached for `_DYN_CACHE_TTL` seconds.
+      * Ollama: live probe of /api/tags (no key needed).
+    """
     providers: list[dict] = []
 
     for pid, (binary, label) in _CLI_BINARIES.items():
@@ -247,22 +371,32 @@ def list_providers() -> dict:
         })
 
     for pid, (label, env_key) in _API_PROVIDERS.items():
+        dyn = await _resolve_models_dyn(pid)
         providers.append({
             "id": pid,
             "name": label,
             "type": "api",
             "available": bool(os.environ.get(env_key)),
-            "models": _API_MODELS.get(pid, []),
+            "models": dyn if dyn else _API_MODELS.get(pid, []),
             "base_url": None,
         })
 
+    dyn_ollama = await _resolve_models_dyn("ollama")
     providers.append({
         "id": "ollama",
         "name": "Ollama (Local)",
         "type": "local",
         "available": _ollama_running(),
-        "models": [],
+        "models": dyn_ollama or [],
         "base_url": "http://127.0.0.1:11434",
     })
 
     return {"providers": providers}
+
+
+@router.post("/providers/refresh")
+def refresh_providers_cache() -> dict:
+    """Force-clear the dynamic model cache so the next /providers call re-probes."""
+    n = len(_dyn_models_cache)
+    _dyn_models_cache.clear()
+    return {"cleared": n}
