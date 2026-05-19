@@ -227,6 +227,26 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let sc = inp.style.cell.supercell;
     if let Some(lat) = inp.lattice {
         let (sa, sb, sc_) = (sc[0].max(1), sc[1].max(1), sc[2].max(1));
+        // Upper bound (FIX B): an adversarial frontend can send e.g.
+        // supercell:[80,80,80] from a tiny motif, projecting to millions of
+        // atoms → a 100MB+ SVG string / wasm linear-memory OOM that kills
+        // the tab. 200_000 atoms is already a heavy but still-renderable
+        // SVG (≈ tens of MB), so anything beyond that is treated as caller
+        // error: short-circuit to the SAME graceful error-SVG shape that a
+        // JSON parse error uses (lib.rs) — NOT a panic, NOT a silent clamp
+        // that would hide the caller's intent. Lower-bound `.max(1)` / the
+        // `> 1` skip below remain intact.
+        const MAX_SUPERCELL_ATOMS: u64 = 200_000;
+        let total_images = (sa as u64) * (sb as u64) * (sc_ as u64);
+        let projected_atoms = total_images.saturating_mul(keep.len() as u64);
+        if projected_atoms > MAX_SUPERCELL_ATOMS {
+            return format!(
+                "<svg xmlns='http://www.w3.org/2000/svg' width='400' height='40'>\
+<text x='4' y='24' fill='red' font-size='13'>catrender: supercell \
+{}×{}×{} exceeds {}-atom render cap</text></svg>",
+                sa, sb, sc_, MAX_SUPERCELL_ATOMS
+            );
+        }
         if sa * sb * sc_ > 1 {
             let base_n = keep.len();
             let base_pos = pos.clone();
@@ -717,6 +737,7 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
                         ppy,
                         bo: if bond_orders { bo_raw } else { 1.0 },
                         bw,
+                        sr,
                         gap: bond_gap_factor * bw,
                         bond_color: &bond_color,
                         bond_color_by_element,
@@ -804,6 +825,8 @@ struct AddBond<'a> {
     ppy: f64,
     bo: f64,
     bw: f64,
+    /// scale_ratio (renderer.py:1146 non-solid bond-width cap factor).
+    sr: f64,
     gap: f64,
     bond_color: &'a str,
     bond_color_by_element: bool,
@@ -849,6 +872,7 @@ fn add_bond(b: AddBond) {
         ppy,
         bo,
         bw,
+        sr,
         gap,
         bond_color,
         bond_color_by_element,
@@ -1017,15 +1041,23 @@ x2=\"{lx2:.1}\" y2=\"{ly2:.1}\" gradientUnits=\"userSpaceOnUse\">\
     // Width/dash from the bonds.rs helpers; paint = ts_color/nci_color when
     // the preset supplies it, else the resolved uniform bond color (fogged).
     if vis != BondVis::Solid {
+        // renderer.py:1146-1148 caps the non-solid base width to
+        // `min(_bw, 20*scale_ratio)` for any `style != SOLID` BEFORE the
+        // DASHED(TS)/DOTTED(NCI) branches, and recomputes the dash period
+        // from the capped value. Without this, tube(bond_width=50) /
+        // pmol(24) TS/NCI strokes render ~2.5× too fat with the wrong
+        // dash period. Aromatic is reached via style==SOLID upstream so it
+        // is (correctly) NOT capped here — see the `is_aromatic` branch.
+        let cbw = bonds::cap_nonsolid_bw(bw, sr);
         let (w, dash, paint) = match vis {
             BondVis::Ts => (
-                bonds::bond_stroke_width(bw, bonds::StrokeKind::DashedTs),
-                bonds::dash_array(bw * 1.2, bw * 2.2),
+                bonds::bond_stroke_width(cbw, bonds::StrokeKind::DashedTs),
+                bonds::dash_array(cbw * 1.2, cbw * 2.2),
                 ts_color,
             ),
             BondVis::Nci => (
-                bonds::bond_stroke_width(bw, bonds::StrokeKind::DottedNci),
-                bonds::dash_array(bw * 0.08, bw * 2.0),
+                bonds::bond_stroke_width(cbw, bonds::StrokeKind::DottedNci),
+                bonds::dash_array(cbw * 0.08, cbw * 2.0),
                 nci_color,
             ),
             BondVis::Solid => unreachable!(),
@@ -1660,6 +1692,119 @@ mod tests {
             "atom_scale override must scale circle radius (small {} < large {})",
             max_r(&small),
             max_r(&large)
+        );
+    }
+
+    // ---- FIX A/B regression locks (renderer.py:1146 cap; supercell bound) ----
+
+    // Smallest stroke-width across all <line> elements (the TS/NCI bond
+    // stroke; the outline layer is wider, so min isolates the real stroke).
+    fn min_line_stroke_width(svg: &str) -> f64 {
+        svg.split("<line")
+            .skip(1)
+            .filter_map(|seg| {
+                seg.split("stroke-width=\"")
+                    .nth(1)
+                    .and_then(|x| x.split('"').next())
+                    .and_then(|x| x.parse::<f64>().ok())
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn tube_ts_bond_width_is_capped() {
+        // renderer.py:1146 — non-solid width capped at 20*scale_ratio BEFORE
+        // the DASHED(TS) branch, so the emitted TS width is
+        // bond_stroke_width(min(bw,20*sr), DashedTs) = cbw*1.2, and the dash
+        // array is (cbw*1.2, cbw*2.2). The cap is self-evident from the
+        // emitted geometry: width == dash[0] and dash[1]/dash[0] == 2.2/1.2,
+        // AND the absolute width is the capped value (observed 78.2 for
+        // tube bond_width=50; uncapped would be 50*sr*1.2 ≈ 195.5 — i.e.
+        // ~2.5× larger). Pin: TS width must be far below the uncapped
+        // 50-derived number, and exactly cbw*1.2 = dash[0].
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"C","xyz":[1.4,0,0]}],"bonds":[{"i":0,"j":1,"ts":true}],"style":{"preset":"tube"}}"#,
+        );
+        let w = min_line_stroke_width(&s);
+        let frag = s
+            .split("stroke-dasharray=\"")
+            .nth(1)
+            .and_then(|x| x.split('"').next())
+            .expect("TS dasharray");
+        let mut it = frag.split(',');
+        let d0: f64 = it.next().unwrap().parse().unwrap();
+        let d1: f64 = it.next().unwrap().parse().unwrap();
+        // TS stroke width equals dash period component cbw*1.2.
+        assert!((w - d0).abs() < 0.2, "TS width {w} must equal dash[0] {d0}");
+        // TS dash ratio is 2.2/1.2 (renderer.py:1211-1212 on the CAPPED bw).
+        assert!(
+            (d1 / d0 - 2.2 / 1.2).abs() < 0.02,
+            "TS dash ratio {} must be 2.2/1.2",
+            d1 / d0
+        );
+        // Capped: observed 78.2; uncapped (50*sr*1.2) would be ≈195.5.
+        // Anything <= 100 proves the cap fired (not the fat 50-derived value).
+        assert!(
+            (78.0..=79.0).contains(&w),
+            "tube TS width must be the capped ~78.2, got {w} \
+             (uncapped 50-derived would be ≈195.5)"
+        );
+    }
+
+    #[test]
+    fn supercell_zero_and_huge_no_panic_or_oom() {
+        let z = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]}],"lattice":[[3,0,0],[0,3,0],[0,0,3]],"style":{"preset":"default","cell":{"show":true,"supercell":[0,0,0]}}}"#,
+        );
+        assert!(z.starts_with("<svg"));
+        let huge = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"lattice":[[3,0,0],[0,3,0],[0,0,3]],"style":{"preset":"default","cell":{"show":true,"supercell":[80,80,80]}}}"#,
+        );
+        assert!(
+            huge.starts_with("<svg") && huge.ends_with("</svg>"),
+            "huge supercell must short-circuit to a graceful error-SVG"
+        );
+        assert!(
+            huge.len() < 5_000_000,
+            "huge supercell must short-circuit, not allocate a giant SVG"
+        );
+        assert!(
+            huge.contains("exceeds") && huge.contains("render cap"),
+            "graceful error-SVG must carry the cap message"
+        );
+    }
+
+    #[test]
+    fn override_wrong_type_renders_gracefully() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]}],"style":{"preset":"default","overrides":{"bond_width":"not-a-number","atom_scale":[1,2,3]}}}"#,
+        );
+        assert!(
+            s.starts_with("<svg") && s.ends_with("</svg>"),
+            "wrong-typed overrides must not panic — preset fallback"
+        );
+    }
+
+    #[test]
+    fn ts_and_nci_both_ts_wins() {
+        // ts wins over nci (svg.rs BondVis precedence). TS dash ratio is
+        // 2.2/1.2 ≈ 1.833; NCI is 2.0/0.08 = 25. Assert the TS pattern.
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"N","xyz":[1.3,0,0]}],"bonds":[{"i":0,"j":1,"ts":true,"nci":true}],"style":{"preset":"default"}}"#,
+        );
+        assert!(s.contains("stroke-dasharray"));
+        let frag = s
+            .split("stroke-dasharray=\"")
+            .nth(1)
+            .and_then(|x| x.split('"').next())
+            .expect("dasharray fragment");
+        let mut it = frag.split(',');
+        let d0: f64 = it.next().unwrap().parse().unwrap();
+        let d1: f64 = it.next().unwrap().parse().unwrap();
+        assert!(
+            (d1 / d0 - 2.2 / 1.2).abs() < 0.05,
+            "ts+nci must use the TS dash ratio (2.2/1.2), got {}",
+            d1 / d0
         );
     }
 }

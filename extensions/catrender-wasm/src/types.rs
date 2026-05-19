@@ -43,6 +43,11 @@ pub struct Cell {
     pub show: bool,
     #[serde(default = "unit_super")]
     pub supercell: [u32; 3],
+    /// Periodic *ghost*-image flag — the DISTINCT, deferred concept (tracked
+    /// as RT12; see svg.rs z-order loop): opacity-dimmed PBC partner atoms
+    /// wrapped across the 26 neighbour cells. Schema-plumbed and resolved
+    /// today but no ghost atom is produced until RT12 wires PBC wrap-image
+    /// generation. (Supercell replication above is a separate, live concept.)
     #[serde(default)]
     pub pbc_wrap: bool,
 }
