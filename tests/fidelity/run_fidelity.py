@@ -505,7 +505,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--venv", default=str(DEFAULT_VENV))
     ap.add_argument("--bin", default=str(DEFAULT_BIN))
-    ap.add_argument("--report", default=str(HERE / "REPORT.md"))
+    DEFAULT_REPORT = str(HERE / "REPORT.md")
+    ap.add_argument("--report", default=DEFAULT_REPORT)
     ap.add_argument(
         "--no-orient",
         action="store_true",
@@ -728,8 +729,16 @@ def main() -> int:
         "6. **`radius_scale` per-element multiplier** (renderer.py:150) "
         "now applied — fixes `btube{\"H\":1.2}` H-radius.\n"
     )
-    Path(args.report).write_text("\n".join(lines) + "\n")
-    print(f"\nREPORT.md → {args.report}")
+    filtered_run = bool(args.only_struct or args.only_preset)
+    explicit_report = args.report != DEFAULT_REPORT
+    if filtered_run and not explicit_report:
+        print(
+            "filtered run — REPORT.md not written (partial matrix)",
+            file=sys.stderr,
+        )
+    else:
+        Path(args.report).write_text("\n".join(lines) + "\n")
+        print(f"\nREPORT.md → {args.report}")
     print(
         f"TOT:  {counts['PASS']} PASS  "
         f"{counts['ACCEPTABLE-DEVIATION']} ACC-DEV  {counts['FAIL']} FAIL"

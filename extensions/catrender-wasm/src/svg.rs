@@ -1631,9 +1631,10 @@ mod tests {
             2,
             "tube emits one (zero-radius) circle per atom, like xyzrender"
         );
-        assert!(
-            s.contains("r=\"0.0\""),
-            "tube circles are degenerate (r=0.0)"
+        assert_eq!(
+            s.matches("r=\"0.0\"").count(),
+            2,
+            "every tube circle is degenerate (r=0.0), one per atom"
         );
         assert!(s.contains("<line"), "tube still draws bonds");
     }
