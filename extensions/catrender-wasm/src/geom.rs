@@ -95,6 +95,9 @@ pub struct Fit {
 ///
 /// `fixed_span = Some(s)` reproduces GIF mode (square canvas, fixed span).
 /// Use [`fit_canvas_extra`] when the cell box / overlays must widen the bbox.
+///
+/// Empty `pos` returns a sentinel empty canvas (scale=ref_scale, center 0,
+/// w=h=2·padding or canvas_size if fixed_span) — does not panic or emit NaN.
 pub fn fit_canvas(
     pos: &[[f64; 3]],
     radii: &[f64],
@@ -120,6 +123,20 @@ pub fn fit_canvas_extra(
     extra_lo: Option<[f64; 2]>,
     extra_hi: Option<[f64; 2]>,
 ) -> Fit {
+    if pos.is_empty() {
+        // xyzrender raises on empty coords; catrender fails safe instead so an
+        // all-atoms-hidden render yields a valid (empty) canvas, not NaN coords.
+        let s = ref_scale(padding);
+        let side = fixed_span.map(|_| canvas_size).unwrap_or(2.0 * padding);
+        return Fit {
+            scale: s,
+            cx: 0.0,
+            cy: 0.0,
+            w: side,
+            h: side,
+        };
+    }
+
     // pad = radii.max() if len(radii) else 0  (single scalar)
     let pad = if radii.is_empty() {
         0.0
@@ -329,6 +346,21 @@ mod tests {
         // max_span floored at 1e-6 → scale = 760 / 1e-6
         assert!((f.scale - 760.0 / 1e-6).abs() / f.scale < 1e-9, "scale {}", f.scale);
         assert!(f.scale.is_finite());
+    }
+
+    #[test]
+    fn empty_pos_is_sentinel_not_nan() {
+        let f = fit_canvas(&[], &[], 800.0, 20.0, None);
+        assert!(f.scale.is_finite() && f.cx.is_finite() && f.cy.is_finite());
+        assert!(f.w.is_finite() && f.h.is_finite());
+        assert_eq!(f.cx, 0.0);
+        assert_eq!(f.cy, 0.0);
+        assert_eq!(f.w, 40.0); // 2*padding
+        assert_eq!(f.h, 40.0);
+        // fixed_span variant → square canvas_size
+        let g = fit_canvas(&[], &[], 800.0, 20.0, Some(8.0));
+        assert_eq!(g.w, 800.0);
+        assert_eq!(g.h, 800.0);
     }
 
     // xyzrender cross-check (run on the clone to confirm semantics):
