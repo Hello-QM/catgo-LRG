@@ -167,6 +167,9 @@ impl MergedConfig {
             }
             self.map.insert(k.clone(), v.clone());
         }
+        // normalize is idempotent — safe to re-run after override insert:
+        // renames already applied (old keys gone), resolve_color is stable on
+        // already-lowercased hex, radius_scale/regions already transformed.
         normalize(&mut self.map);
     }
 }
@@ -640,5 +643,16 @@ mod tests {
         let u = get("nonsense-xyz");
         assert_eq!(d.atom_radius_scale, u.atom_radius_scale);
         assert_eq!(d.bond_width, u.bond_width);
+    }
+
+    #[test]
+    #[should_panic]
+    fn get_f_missing_required_key_panics() {
+        let _ = load("default").get_f("definitely_absent_key");
+    }
+
+    #[test]
+    fn dotted_missing_intermediate_is_none_not_panic() {
+        assert!(load("default").get_s_opt("nope.C").is_none());
     }
 }
