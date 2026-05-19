@@ -41,3 +41,32 @@ class ServerLink:
             if _ping(f"{url}/health"):
                 return cls(base_url=url)
         return None
+
+    def push_structure(self, path, panel_id) -> dict:
+        """POST /api/view/upload-and-load (multipart). Returns server JSON."""
+        import os
+        from pathlib import Path
+        p = Path(path)
+        boundary = "----catgo-cli-" + os.urandom(8).hex()
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; '
+            f'filename="{p.name}"\r\n'
+            f"Content-Type: application/octet-stream\r\n\r\n"
+        ).encode() + p.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+
+        url = f"{self.base_url}/api/view/upload-and-load"
+        if panel_id:
+            url += f"?panel_id={panel_id}"
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type":
+                     f"multipart/form-data; boundary={boundary}"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            raise OpError(f"server error: {_extract_detail(exc)}") from exc
+        except urllib.error.URLError as exc:
+            raise OpError(
+                f"server connection failed: {exc.reason}") from exc
