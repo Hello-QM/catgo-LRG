@@ -29,6 +29,9 @@ use crate::preset::{self, MergedConfig};
 use crate::types::RenderInput;
 use crate::vdw::vdw;
 
+/// Directed bond projection: (x1, y1, x2, y2, perp_x, perp_y) in canvas px.
+type BondGeom = (f64, f64, f64, f64, f64, f64);
+
 const RADIUS_SCALE: f64 = 0.075;
 const H_ATOM_SCALE: f64 = 0.6;
 const CENTROID_VDW: f64 = 0.5;
@@ -176,7 +179,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
     // simpler all-H gate the v1 frontend relied on). Combined keep mask.
     let keep: Vec<usize> = (0..n_in)
         .filter(|&i| {
-            !hidden_ov[i] && !(!inp.style.show_h && inp.atoms[i].el == "H")
+            !(hidden_ov[i] || !inp.style.show_h && inp.atoms[i].el == "H")
         })
         .collect();
     let n = keep.len();
@@ -493,7 +496,7 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
 
     // --- bond geometry precompute (trim 0.9r, reject, perp2d) ---------
     // bond_geom[(i,j)] = Some((x1,y1,x2,y2,px,py)) directed i→j.
-    let mut bond_geom: std::collections::HashMap<(usize, usize), (f64, f64, f64, f64, f64, f64)> =
+    let mut bond_geom: std::collections::HashMap<(usize, usize), BondGeom> =
         std::collections::HashMap::new();
     if !hide_bonds && bw > 0.0 {
         let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
@@ -1072,13 +1075,14 @@ fn ring_side(
         if ring.contains(&ai) && ring.contains(&aj) {
             let mut c = [0.0; 3];
             for &m in ring {
-                for k in 0..3 {
-                    c[k] += pos[m][k];
+                let p = pos[m];
+                for (ck, pk) in c.iter_mut().zip(p) {
+                    *ck += pk;
                 }
             }
             let nf = ring.len().max(1) as f64;
-            for k in 0..3 {
-                c[k] /= nf;
+            for ck in &mut c {
+                *ck /= nf;
             }
             let (rcx, rcy) = proj(c, scale, cx, cy, cw, ch);
             let (mx, my) = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);

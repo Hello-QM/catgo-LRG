@@ -183,7 +183,10 @@ fn pca_orient_full(
 
     // Order eigenvectors by DESCENDING eigenvalue into rows of vt.
     let mut order = [0usize, 1, 2];
-    order.sort_by(|&a, &b| evals[b].partial_cmp(&evals[a]).unwrap());
+    // NaN-safe: huge coords can overflow covariance → NaN eigenvalue.
+    // total_cmp == partial_cmp ordering for all finite values (identical
+    // descending order); only defines a position for NaN instead of panicking.
+    order.sort_by(|&a, &b| evals[b].total_cmp(&evals[a]));
     // vt row k = eigenvector for the k-th largest eigenvalue.
     let mut vt = [[0.0_f64; 3]; 3];
     for k in 0..3 {
@@ -526,5 +529,18 @@ mod tests {
         let (ev, vec) = jacobi_eig_3x3(&[[0.0; 3]; 3]);
         assert!(ev.iter().all(|v| v.is_finite() && v.abs() < 1e-12));
         assert_eq!(vec, IDENTITY);
+    }
+
+    #[test]
+    fn huge_coords_no_panic() {
+        // covariance overflow → NaN eigenvalue must not panic the sort
+        let p = vec![
+            [1e160, 0.0, 0.0],
+            [0.0, 1e160, 0.0],
+            [-1e160, 0.0, 1e160],
+            [0.0, -1e160, 0.0],
+        ];
+        let o = pca_orient(&p, None);
+        assert_eq!(o.len(), 4); // returns (possibly non-finite) result, does NOT panic
     }
 }
