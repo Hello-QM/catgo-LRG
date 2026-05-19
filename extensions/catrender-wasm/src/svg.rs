@@ -175,21 +175,8 @@ pub fn render_svg(inp: &RenderInput) -> String {
             _ => {}
         }
     }
-    // show_h: only drop H here (xyzrender hides C-only H; catrender keeps the
-    // simpler all-H gate the v1 frontend relied on). Combined keep mask.
-    let mut keep: Vec<usize> = (0..n_in)
-        .filter(|&i| {
-            !(hidden_ov[i] || !inp.style.show_h && inp.atoms[i].el == "H")
-        })
-        .collect();
-
-    // dense → original index, original → dense
-    let new_of: std::collections::HashMap<usize, usize> =
-        keep.iter().enumerate().map(|(d, &o)| (o, d)).collect();
-
-    let mut pos: Vec<[f64; 3]> = keep.iter().map(|&i| inp.atoms[i].xyz).collect();
-
-    // --- bonds: explicit, else perceived; remapped to dense indices ----
+    // --- bonds: explicit, else perceived (resolved BEFORE the show_h keep
+    //     mask so the C-only-H rule can see connectivity) -----------------
     let perceived;
     let raw_bonds: &[crate::types::Bond] = if inp.bonds.is_empty() {
         perceived = bonds::perceive(&inp.atoms);
@@ -197,6 +184,68 @@ pub fn render_svg(inp: &RenderInput) -> String {
     } else {
         &inp.bonds
     };
+
+    // show_h hide path — FAITHFUL xyzrender semantics (renderer.py
+    // `apply_hydrogen_flags` + the "Only hide C-H hydrogens (not O-H, N-H,
+    // free H, etc.)" loop at renderer.py:428). When `show_h == false`
+    // (xyzrender `cfg.hide_h == true`, its CLI default) an H is hidden
+    // ONLY if it has ≥1 neighbour and EVERY neighbour is carbon; bare H,
+    // O-H, N-H, metal-H stay drawn. H atoms that are an endpoint of a TS
+    // or NCI bond are force-shown (xyzrender auto-show, so the structural
+    // overlay bond is not orphaned). `show_h == true` ⇒ show all H
+    // (xyzrender `--hy`).
+    //
+    // CRITICAL ordering (renderer.py): the `hidden` set is computed AFTER
+    // `_fit_canvas`/`pca_orient` — a C-only H is DRAW-suppressed only; it
+    // STILL participates in PCA + canvas-fit + z-depth (it just isn't
+    // painted, and bonds incident to it are skipped). So `h_c_only` must
+    // NOT prune `keep` (that would shrink the bounding box → larger scale
+    // → wrong radii/stroke widths on every organic — the parity defect
+    // this fix corrects). Only `atom_overrides` "hide" (a catrender
+    // editing feature with no xyzrender analogue) is a genuine geometry
+    // prune.
+    let hide_h = !inp.style.show_h;
+    let h_c_only: Vec<bool> = if hide_h {
+        let mut nbr_all_c = vec![true; n_in]; // vacuously true → flipped below
+        let mut nbr_any = vec![false; n_in];
+        let mut force_show = vec![false; n_in];
+        for b in raw_bonds {
+            for (a, o) in [(b.i, b.j), (b.j, b.i)] {
+                if a >= n_in || o >= n_in {
+                    continue;
+                }
+                nbr_any[a] = true;
+                if inp.atoms[o].el != "C" {
+                    nbr_all_c[a] = false;
+                }
+                if (b.ts || b.nci) && inp.atoms[a].el == "H" {
+                    force_show[a] = true;
+                }
+            }
+        }
+        (0..n_in)
+            .map(|i| {
+                inp.atoms[i].el == "H"
+                    && nbr_any[i]
+                    && nbr_all_c[i]
+                    && !force_show[i]
+            })
+            .collect()
+    } else {
+        vec![false; n_in]
+    };
+    // `keep` prunes ONLY override-hidden atoms. C-only H stays (geometry
+    // parity); it is draw-suppressed via `suppress_draw` (dense-indexed,
+    // built after the dense remap below).
+    let mut keep: Vec<usize> = (0..n_in)
+        .filter(|&i| !hidden_ov[i])
+        .collect();
+
+    // dense → original index, original → dense
+    let new_of: std::collections::HashMap<usize, usize> =
+        keep.iter().enumerate().map(|(d, &o)| (o, d)).collect();
+
+    let mut pos: Vec<[f64; 3]> = keep.iter().map(|&i| inp.atoms[i].xyz).collect();
     // (di, dj, order, vis) in dense space, only for kept atoms.
     let mut edges: Vec<(usize, usize, f64, BondVis)> = Vec::new();
     if !hide_bonds {
@@ -288,6 +337,14 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let a_nums: Vec<u32> = symbols.iter().map(|s| s2n(s)).collect();
     let n = keep.len();
 
+    // Dense-space draw-suppress mask for C-only H (xyzrender `hidden` set).
+    // Built AFTER supercell replication so every replica's H is suppressed
+    // too (`keep[d]` still maps each dense atom to its original index).
+    // These atoms remain in `pos`/PCA/fit/z-order; only their circle/text
+    // and incident bonds are skipped in the painter loop below.
+    let suppress_draw: Vec<bool> =
+        keep.iter().map(|&orig| h_c_only[orig]).collect();
+
     // --- PCA auto-orient (fit-mask excludes `*`), then drag rotation ----
     let auto_orient = inp.style.auto_orient.unwrap_or(auto_orient_default);
     let (mut pca_drag, _) = (geom_identity(), ());
@@ -322,6 +379,27 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let gizmo_basis = pca_drag;
 
     // --- display radii (vdw · H-scale · atom_scale · 0.075) ------------
+    // `radius_scale` (preset.rs already normalised the JSON dict
+    // `{"H":1.2}` → `[["H",1.2],…]`) is xyzrender's per-atom radius
+    // multiplier (renderer.py:150 `radii = radii * _per_atom_mult`).
+    // Faithful minimal scope: element-symbol selectors (the only form any
+    // built-in preset uses — `btube{"H":1.2}`). xyzrender's broader
+    // selector engine (index lists, `M`/metal atom-classes) is not
+    // exercised by any preset and stays out of RT12's minimal scope.
+    let mut elem_radius_mult: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
+    if let Some(serde_json::Value::Array(pairs)) = cfg.get("radius_scale") {
+        for p in pairs {
+            if let serde_json::Value::Array(kv) = p {
+                if let (Some(sel), Some(f)) = (
+                    kv.first().and_then(serde_json::Value::as_str),
+                    kv.get(1).and_then(serde_json::Value::as_f64),
+                ) {
+                    *elem_radius_mult.entry(sel.to_string()).or_insert(1.0) *= f;
+                }
+            }
+        }
+    }
     let radii: Vec<f64> = symbols
         .iter()
         .map(|&s| {
@@ -330,7 +408,8 @@ pub fn render_svg(inp: &RenderInput) -> String {
             } else {
                 vdw(s) * if s == "H" { H_ATOM_SCALE } else { 1.0 }
             };
-            base * atom_scale * RADIUS_SCALE
+            let mult = elem_radius_mult.get(s).copied().unwrap_or(1.0);
+            base * atom_scale * RADIUS_SCALE * mult
         })
         .collect();
 
@@ -506,6 +585,11 @@ data-gizmo-basis=\"{g00},{g01},{g02},{g10},{g11},{g12},{g20},{g21},{g22}\">",
         svg.push("  <defs>".to_string());
         if use_per_atom_grad {
             for ai in 0..n {
+                // xyzrender: `if ai in hidden: continue` — no gradient def
+                // for a draw-suppressed C-only H (it is never painted).
+                if suppress_draw[ai] {
+                    continue;
+                }
                 let (hi, me, lo) = colors[ai].get_gradient_colors(atom_grad_str, hue, light, sat);
                 let t = (fog_f[ai] * fog_f[ai] * 0.7).min(0.70);
                 let (hi, me, lo) = (
@@ -527,6 +611,10 @@ data-gizmo-basis=\"{g00},{g01},{g02},{g10},{g11},{g12},{g20},{g21},{g22}\">",
         } else {
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             for ai in 0..n {
+                // xyzrender: `if key in seen or ai in hidden: continue`.
+                if suppress_draw[ai] {
+                    continue;
+                }
                 let chex = colors[ai].hex();
                 let gid = format!("{}_{}", a_nums[ai], &chex[1..]);
                 if !seen.insert(gid.clone()) {
@@ -584,6 +672,25 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
     // bond_geom[(i,j)] = Some((x1,y1,x2,y2,px,py)) directed i→j.
     let mut bond_geom: std::collections::HashMap<(usize, usize), BondGeom> =
         std::collections::HashMap::new();
+    // Skeletal bond-endpoint radii (xyzrender skeletal.py
+    // `skeletal_bond_radii`): carbon → 0 (bonds meet at the bare vertex);
+    // non-carbon → max(display radius, label-margin) so the bond does not
+    // overlap the element-symbol text. `margin_3d = fs_label*0.7/scale`
+    // with `fs_label = label_font_size · scale_ratio` (renderer.py:244).
+    // In normal modes this is just the display `radii`.
+    let skel_fs_label = cfg_f(&cfg, "label_font_size", 40.0) * sr;
+    let skel_margin_3d = (skel_fs_label * 0.7) / scale.max(1e-6);
+    let bond_r = |idx: usize| -> f64 {
+        if skeletal_style {
+            if symbols[idx] == "C" {
+                0.0
+            } else {
+                radii[idx].max(skel_margin_3d)
+            }
+        } else {
+            radii[idx]
+        }
+    };
     if !hide_bonds && bw > 0.0 {
         let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
         for &(i, j, _, _) in &edges {
@@ -591,7 +698,7 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
             if a == b || !seen.insert((a, b)) {
                 continue;
             }
-            let (start, end, ok) = bonds::trim(pos[a], pos[b], radii[a], radii[b]);
+            let (start, end, ok) = bonds::trim(pos[a], pos[b], bond_r(a), bond_r(b));
             if !ok {
                 continue;
             }
@@ -615,6 +722,14 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
     let base_scfg = bond_gradient; // cylinder shading active
 
     for (idx, &ai) in z_order.iter().enumerate() {
+        // xyzrender renderer.py: `if ai in hidden: continue` — a C-only H
+        // is a depth marker (it kept its z-order slot, which is why this
+        // `continue` is here and not a pre-filter) but paints NOTHING:
+        // not its sphere, not its forward bonds. Bonds INTO it from a
+        // visible atom are separately skipped (see `suppress_draw[aj]`).
+        if suppress_draw[ai] {
+            continue;
+        }
         let xi = px[ai];
         let yi = py[ai];
         let orig = keep[ai];
@@ -656,8 +771,15 @@ fill=\"{fill}\">{}</text>",
                     symbols[ai]
                 ));
             }
-        } else if atom_scale > 0.0 {
-            // Sphere — gradient or flat fill.
+        } else {
+            // Sphere — gradient or flat fill. Emitted UNCONDITIONALLY
+            // (xyzrender renderer.py non-skeletal `else:` branch has no
+            // atom_scale gate): when atom_scale==0 (tube/mtube/wire) the
+            // radius is `radii[ai]*scale == 0.0`, so xyzrender writes a
+            // degenerate `<circle r="0.0" .../>`. catrender must emit the
+            // same zero-radius circle (count + fill/stroke parity) — the
+            // earlier `atom_scale > 0.0` guard dropped it and broke every
+            // tube-family preset's circle count.
             let stroke_src = recolor[orig]
                 .map(|c| c.hex())
                 .unwrap_or_else(|| atom_stroke_color.clone());
@@ -727,7 +849,9 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
             let mut nbrs = adj[ai].clone();
             nbrs.sort_by_key(|&(j, _, _)| j);
             for (aj, bo_raw, vis) in nbrs {
-                if z_rank[aj] <= idx {
+                // xyzrender renderer.py: `if aj_int in hidden ...: continue`
+                // — never draw a bond into a C-only-H (it would dangle).
+                if suppress_draw[aj] || z_rank[aj] <= idx {
                     continue;
                 }
                 let Some(&(x1, y1, x2, y2, ppx, ppy)) = bond_geom.get(&(ai, aj)) else {
@@ -745,7 +869,13 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
                         ppx,
                         ppy,
                         bo: if bond_orders { bo_raw } else { 1.0 },
-                        bw,
+                        // xyzrender skeletal.py:93 `_bw = bw * 0.6` — the
+                        // skeletal base stroke width is 60% of the scaled
+                        // bond width. The gap/offset still uses the FULL
+                        // bw (renderer.py passes `_gap = bond_gap·bw`,
+                        // skeletal_bond_svg consumes it un-scaled), so only
+                        // the width arg gets the 0.6 factor here.
+                        bw: if skeletal_style { bw * 0.6 } else { bw },
                         sr,
                         gap: bond_gap_factor * bw,
                         bond_color: &bond_color,
@@ -768,6 +898,7 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
                         ts_color: ts_color.as_deref(),
                         nci_color: nci_color.as_deref(),
                         vis,
+                        skeletal: skeletal_style,
                         aromatic_rings: &aromatic_rings,
                         ai,
                         aj,
@@ -857,6 +988,11 @@ struct AddBond<'a> {
     ts_color: Option<&'a str>,
     nci_color: Option<&'a str>,
     vis: BondVis,
+    /// Skeletal mode (xyzrender `skeletal_bond_svg`): every multi-bond
+    /// sub-line keeps the FULL skeletal base width `_bw` (skeletal.py:138
+    /// `w = _bw`). Normal mode narrows multi-bonds to `bw·0.7` — that
+    /// narrowing must NOT apply in skeletal.
+    skeletal: bool,
     aromatic_rings: &'a [Vec<usize>],
     ai: usize,
     aj: usize,
@@ -903,6 +1039,7 @@ fn add_bond(b: AddBond) {
         ts_color,
         nci_color,
         vis,
+        skeletal,
         aromatic_rings,
         ai,
         aj,
@@ -1107,6 +1244,41 @@ x2=\"{lx2:.1}\" y2=\"{ly2:.1}\" gradientUnits=\"userSpaceOnUse\">\
             cw,
             ch,
         );
+        if skeletal {
+            // xyzrender skeletal.py:114-135 aromatic: a SOLID centre line
+            // (no offset) + ONE end-trimmed, ring-inward-offset DASHED
+            // line — both at the flat skeletal base width `_bw` (the `bw`
+            // passed in already carries the ·0.6 factor). This differs
+            // from the normal-mode twin-offset aromatic style below.
+            let w = bw;
+            let scol = if fog_on {
+                blend_fog_hex(bond_color, (fi + fj) / 2.0 * 0.75)
+            } else {
+                bond_color.to_string()
+            };
+            svg.push(bonds::line_fragment(
+                x1, y1, x2, y2, w, &scol, "", &op_attr,
+            ));
+            let dx = x2 - x1;
+            let dy = y2 - y1;
+            let ln = (dx * dx + dy * dy).sqrt().max(1e-9);
+            let (vx, vy) = (dx / ln, dy / ln);
+            let trim = (ln * 0.2).min(w * 2.5);
+            let (dxd, dyd) = (vx * trim, vy * trim);
+            let (ox, oy) = (ppx * 2.0 * gap * side as f64, ppy * 2.0 * gap * side as f64);
+            let dash = bonds::dash_array(w * 1.0, w * 2.0);
+            svg.push(bonds::line_fragment(
+                x1 + dxd + ox,
+                y1 + dyd + oy,
+                x2 - dxd + ox,
+                y2 - dyd + oy,
+                w,
+                &scol,
+                &dash,
+                &op_attr,
+            ));
+            return;
+        }
         let w = bw * 0.7;
         for ib in [-1i32, 1] {
             let (ox, oy) = (ppx * ib as f64 * gap, ppy * ib as f64 * gap);
@@ -1133,7 +1305,10 @@ x2=\"{lx2:.1}\" y2=\"{ly2:.1}\" gradientUnits=\"userSpaceOnUse\">\
         }
     } else {
         let nb = bonds::nb_from_order(bo, true);
-        let w = if nb == 1 { bw } else { bw * 0.7 };
+        // Normal mode narrows multi-bond sub-lines to `bw·0.7`; skeletal
+        // keeps the flat skeletal base width on every sub-line
+        // (skeletal.py:138 `w = _bw`, no 0.7).
+        let w = if nb == 1 || skeletal { bw } else { bw * 0.7 };
         for ib in bonds::ib_seq(nb) {
             let (ox, oy) = (ppx * ib as f64 * gap, ppy * ib as f64 * gap);
             emit(
@@ -1441,12 +1616,25 @@ mod tests {
     // ---- Additional RT9 coverage (behavioral, deterministic) ----
 
     #[test]
-    fn tube_no_circle() {
-        // tube: atom_scale 0 → no spheres, bonds only.
+    fn tube_zero_radius_circles() {
+        // tube: atom_scale 0. xyzrender's non-skeletal atom branch has NO
+        // atom_scale gate — it emits a degenerate `<circle r="0.0" .../>`
+        // per atom (verified against real xyzrender 0.2.10: water/tube →
+        // 3× `<circle ... r="0.0" ...>`). catrender must match that circle
+        // COUNT for the fidelity gate, so the circle is emitted with a
+        // zero radius rather than suppressed.
         let s = render(
             r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"style":{"preset":"tube"}}"#,
         );
-        assert!(!s.contains("<circle"), "tube draws no spheres");
+        assert_eq!(
+            s.matches("<circle").count(),
+            2,
+            "tube emits one (zero-radius) circle per atom, like xyzrender"
+        );
+        assert!(
+            s.contains("r=\"0.0\""),
+            "tube circles are degenerate (r=0.0)"
+        );
         assert!(s.contains("<line"), "tube still draws bonds");
     }
 
