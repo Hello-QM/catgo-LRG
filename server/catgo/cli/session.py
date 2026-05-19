@@ -17,13 +17,13 @@ _ASE_ONLY_EXT = {".extxyz", ".mol2", ".pdb"}
 
 def _read_structure(path: Path) -> Structure:
     ext = path.suffix.lower()
-    if ext in _ASE_ONLY_EXT:
-        from ase.io import read
-        from catgo.utils.converter import ase_to_pymatgen
-        return ase_to_pymatgen(read(str(path)))
     try:
+        if ext in _ASE_ONLY_EXT:
+            from ase.io import read
+            from catgo.utils.converter import ase_to_pymatgen
+            return ase_to_pymatgen(read(str(path)))
         return Structure.from_file(str(path))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — unify all parse failures
         raise SessionError(f"cannot parse {path}: {exc}") from exc
 
 

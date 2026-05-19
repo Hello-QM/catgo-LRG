@@ -22,6 +22,26 @@ def test_load_and_save_poscar_roundtrip(tmp_path):
     assert Structure.from_file(str(out)).num_sites == 2
 
 
+def test_ase_extxyz_roundtrip(tmp_path):
+    from ase.io import write as _ase_write
+    from pymatgen.io.ase import AseAtomsAdaptor
+    src = tmp_path / "s.extxyz"
+    _ase_write(str(src), AseAtomsAdaptor.get_atoms(_bcc_fe()))
+    s = Session()
+    s.load(src)
+    # ASE path returns catgo.models.structure.PymatgenStructure
+    # (pydantic model with .sites, no .num_sites — unlike the
+    # pymatgen path which returns pymatgen.core.Structure)
+    assert len(s.structure.sites) == 2
+
+
+def test_unparseable_file_raises_sessionerror(tmp_path):
+    bad = tmp_path / "junk.cif"
+    bad.write_text("not a real structure")
+    with pytest.raises(SessionError):
+        Session().load(bad)
+
+
 def test_undo_restores_previous(tmp_path):
     s = Session()
     s.structure = _bcc_fe()
