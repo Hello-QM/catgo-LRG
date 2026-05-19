@@ -29,3 +29,8 @@ def test_slab_all_zero_miller_errors():
     s = Session(); s.structure = _fcc_cu()
     with pytest.raises(OpError):
         ops_build.slab(s, {"miller": [0, 0, 0], "layers": 4, "vacuum": 12.0})
+
+
+def test_no_active_structure_errors():
+    with pytest.raises(OpError):
+        ops_build.supercell(Session(), {"scaling": [2, 2, 2]})
