@@ -62,15 +62,30 @@ Backend: underlying libs, import-mode, no server. Inputs = local DFT files:
 | `dos` | vaspout.h5 | `catgo_dos.io.read_vaspout_h5` | `catgo_dos.pdos.compute_pdos_groups` (+ d-band center) |
 | `band` | vasprun.xml (+ optional KPOINTS) | `pymatgen.io.vasp.Vasprun` | pymatgen band-structure API |
 | `cohp` | COHPCAR.lobster | `catgo_cohp.io.parse_cohpcar` | parsed data plotted directly |
-| `freq` | vasprun.xml | `pymatgen.io.vasp.Vasprun` `normalmode_eigenvals`/`normalmode_eigenvecs` | `catgo.utils.gibbs_calculator.calc_adsorbed` / `calc_gas` |
+| `freq` | OUTCAR | local OUTCAR parser in `vib.py` (faithful port of `vasp_freq_parser` regex) | `catgo.utils.gibbs_calculator.calc_adsorbed` / `calc_gas` |
 
-**Key freq-backend decision:** the existing
-`catgo.utils.vasp_freq_parser.parse_vasp_frequencies` is async + SSH-only
-(AWK over an SSH connection on a remote OUTCAR) — unfit for an offline,
-local-file CLI. Use pymatgen `Vasprun` normal-mode API on the local
-vasprun.xml (IBRION=5/6) for frequencies + eigenvectors instead. No SSH, no
-reinvented OUTCAR regex. Thermo reuses `gibbs_calculator` (sync, takes
-frequency lists) unchanged.
+**Key freq-backend decision (verified against the env):** pymatgen `Vasprun`
+in this build has **no** normal-mode API (`normalmode_eigenvals`/
+`normalmode_eigenvecs` absent — confirmed by introspection), so it cannot be
+used. The existing `catgo.utils.vasp_freq_parser.parse_vasp_frequencies` is
+async + SSH-only (its `f =`/`f/i =` frequency and eigenvector regexes parse
+the *output of remote `awk`* over an SSH `conn.run`) — unfit for an offline
+local CLI. Decision: `vib.py` ships a **local, pure-Python OUTCAR parser**
+that reads a local `OUTCAR` and applies the same proven frequency/eigenvector
+regex patterns as `vasp_freq_parser` (the AWK was only an SSH transport
+optimization, not the parsing logic). Input = `OUTCAR`. Thermo reuses
+`gibbs_calculator` (sync, frequency lists) unchanged.
+
+**Extension-package bootstrap (dos/cohp):** `catgo_dos` and `catgo_cohp` are
+local packages under `extensions/dos-analysis/` and `extensions/cohp-analysis/`
+(each its own `pyproject.toml`), **not installed in the CLI environment**
+(routers lazy-import them server-side). The `dos`/`cohp` handlers must
+bootstrap `sys.path` with these two directories (resolved relative to the
+repo root from `__file__`) before the lazy import, and raise a clear
+`OpError` if the extension directory or package is missing. Confirmed APIs:
+`catgo_dos.io.read_vaspout_h5(path) -> VaspData`, `catgo_dos.pdos` /
+`catgo_dos.dband`; `catgo_cohp.io.parse_cohpcar(path) -> COHPData` /
+`parse_icohplist`.
 
 File structure (new, under `server/catgo/cli/`, P1 conventions):
 - `ops_analyze.py` — handlers `dos`/`band`/`cohp`/`freq`, signature
@@ -142,10 +157,10 @@ under matplotlib `Agg`, no GUI path).
 oscillation trajectory for viewing the TS in CatGO, (b) Gibbs-correction
 numbers. `freq` handler orchestrates; no plotting, no pylustrator.
 
-Parse: `pymatgen.io.vasp.Vasprun(vasprun.xml)` → `normalmode_eigenvals`
-(cm⁻¹; negative = imaginary), `normalmode_eigenvecs` (per-mode per-atom
-displacement), `final_structure` (positions/species/masses). Split into
-`real_freqs_cm` / `imag_freqs_cm`.
+Parse: local pure-Python OUTCAR parser in `vib.py` (faithful to
+`vasp_freq_parser` regex) → real/imaginary frequencies (cm⁻¹), per-mode
+per-atom eigenvectors (displacements), positions, masses, atom types,
+`num_imaginary`. Imaginary = OUTCAR `f/i =` lines.
 
 (a) TS imaginary-mode animation (core purpose: confirm TS in CatGO):
 - `num_imaginary` reported: a proper TS has exactly 1 imaginary frequency.
@@ -172,13 +187,13 @@ displacement), `final_structure` (positions/species/masses). Split into
 - Output to stdout + `--dump` (json): ZPE, ΔU_vib, T·S, H_corr, G_corr
   (eV), num_imaginary, count of soft modes raised to the cutoff.
 
-Single op, dual output: `catgo freq vasprun.xml --mode adsorbed -o ts.xyz`
+Single op, dual output: `catgo freq OUTCAR --mode adsorbed -o ts.xyz`
 writes the TS animation xyz **and** prints the Gibbs correction. Independent:
 no imaginary freq → skip animation (message "0 imaginary — not a TS; no
 animation"), still print Gibbs, exit 0; `--no-anim` skips animation when
 only numbers are wanted.
 
-Param schema (registry, `mutates=False`, no `--edit`): `input`=vasprun.xml;
+Param schema (registry, `mutates=False`, no `--edit`): `input`=OUTCAR;
 `--mode` (adsorbed|gas, choices); `--T --P --freq-cutoff --unpaired
 --frames --amplitude --mode-index --all-modes --no-anim --dump -o`.
 
@@ -208,9 +223,10 @@ Error handling (P1 `OpError`/`SessionError` boundary; no raw tracebacks):
 | output exists without `--force` | P1 behavior: refuse + hint (menu asks y/N) |
 
 Testing (TDD, pytest, `server/tests/cli/`, P1 style):
-1. Fixtures: locate minimal real vaspout.h5 / vasprun.xml (with normalmode)
-   / COHPCAR.lobster / band vasprun in repo; if absent, `pytest.skip` with a
-   note that the fixture must be supplied (do not fabricate scientific data).
+1. Fixtures: locate minimal real vaspout.h5 / OUTCAR (with imaginary freq + eigenvectors)
+   / COHPCAR.lobster / band vasprun.xml in repo; if absent, `pytest.skip`
+   with a note that the fixture must be supplied (do not fabricate
+   scientific data).
 2. Handler unit (matplotlib `Agg`, no GUI): each op parse→produce file;
    assert artifact exists, message contains the key number (d-band / gap /
    ICOHP / G_corr) anchored to the fixture's known value.
