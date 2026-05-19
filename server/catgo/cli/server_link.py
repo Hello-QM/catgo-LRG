@@ -70,3 +70,19 @@ class ServerLink:
         except urllib.error.URLError as exc:
             raise OpError(
                 f"server connection failed: {exc.reason}") from exc
+
+    def pull_structure(self, fmt, panel_id) -> bytes:
+        """GET /api/view/structure/export?format=<f>[&panel_id=<id>].
+        Returns the structure-file bytes."""
+        url = f"{self.base_url}/api/view/structure/export?format={fmt}"
+        if panel_id:
+            url += f"&panel_id={panel_id}"
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            raise OpError(f"server error: {_extract_detail(exc)}") from exc
+        except urllib.error.URLError as exc:
+            raise OpError(
+                f"server connection failed: {exc.reason}") from exc

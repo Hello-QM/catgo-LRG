@@ -77,3 +77,33 @@ def test_push_structure_4xx_raises_operror(monkeypatch, tmp_path):
     with pytest.raises(OpError) as ei:
         link.push_structure(p, panel_id=None)
     assert "bad file" in str(ei.value)
+
+
+def test_pull_structure_get_with_format(monkeypatch):
+    from catgo.cli import server_link
+    calls = {}
+    def _urlopen(req, timeout=None):
+        calls["url"] = req.full_url
+        calls["method"] = req.get_method()
+        return _FakeResponse(b"POSCAR\n1.0\n...")
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    link = server_link.ServerLink(base_url="http://localhost:33413")
+    data = link.pull_structure(fmt="poscar", panel_id="structure-1")
+    assert calls["method"] == "GET"
+    assert calls["url"].startswith(
+        "http://localhost:33413/api/view/structure/export?format=poscar")
+    assert "panel_id=structure-1" in calls["url"]
+    assert data.startswith(b"POSCAR")
+
+
+def test_pull_structure_panel_omitted(monkeypatch):
+    from catgo.cli import server_link
+    calls = {}
+    def _urlopen(req, timeout=None):
+        calls["url"] = req.full_url
+        return _FakeResponse(b"x")
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    link.pull_structure(fmt="cif", panel_id=None)
+    assert "panel_id=" not in calls["url"]
+    assert "format=cif" in calls["url"]
