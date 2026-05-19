@@ -2,7 +2,7 @@
 //!
 //! Data sourced verbatim from xyzgraph 1.6.10
 //! (`xyzgraph/data/vdw_radii.json`, `vdw_radius` field in bohr),
-//! converted to angstrom via BOHR_TO_ANGSTROM = 0.5291772105.
+//! converted offline to angstrom (factor 0.5291772105 bohr->angstrom).
 //! Odd / non-canonical element keys (e.g. `"ho"`) are preserved literally.
 //! 117 element entries.
 
@@ -146,5 +146,7 @@ mod tests {
         assert!((vdw("C") - 1.9101180590208).abs() < 1e-9);
         assert!((vdw("O") - 1.71453416202).abs() < 1e-9);
         assert!((vdw("Zz") - 1.5).abs() < 1e-12);
+        assert_eq!(TABLE.len(), 117);
+        assert!((vdw("ho") - 2.779238709546).abs() < 1e-9);
     }
 }
