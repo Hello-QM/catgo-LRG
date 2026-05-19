@@ -123,6 +123,12 @@ pub fn perp2d(x1: f64, y1: f64, x2: f64, y2: f64) -> (f64, f64) {
 ///
 /// 0.5→0, 1.5→2, 2.5→2, 3.5→4, -0.5→0, -1.5→-2.  Matches CPython
 /// `round(x)` semantics used by `round(bo)` at renderer.py:1296.
+///
+/// Valid for |x| < 2^63 (always true here: bond order derives from u8).
+/// Beyond that the saturated `i64` parity check no longer holds. NaN/±inf
+/// pass through unchanged (NaN: both `< 0.5` and `> 0.5` are false, the
+/// `(NaN as i64) % 2 == 0` parity branch returns `NaN.floor()` == NaN;
+/// ±inf: `inf - inf` = NaN diff routes the same way, yielding ±inf).
 pub fn round_half_even(x: f64) -> f64 {
     let f = x.floor();
     let diff = x - f;
@@ -254,6 +260,8 @@ pub fn dash_array(dash: f64, gap_len: f64) -> String {
 /// A single bond `<line>` — the ONLY bond primitive (renderer.py:964-967).
 /// `stroke` is the resolved paint (hex or `url(#id)`); `dash` and `op` are
 /// the pre-built attribute fragments (empty string = absent).
+// positional SVG-attr builder mirroring xyzrender signature
+#[allow(clippy::too_many_arguments)]
 pub fn line_fragment(
     x1: f64,
     y1: f64,
@@ -276,6 +284,8 @@ stroke=\"{}\" stroke-width=\"{:.1}\" stroke-linecap=\"round\"{}{}/>",
 /// bond through the midpoint along the perpendicular `(lpx, lpy)`; stops
 /// `lo → hi → lo`. Returns the `<defs>` fragment; caller uses
 /// `url(#{id})` as the line stroke.
+// positional SVG-attr builder mirroring xyzrender signature
+#[allow(clippy::too_many_arguments)]
 pub fn shade_gradient_fragment(
     id: &str,
     lx1: f64,
@@ -311,6 +321,8 @@ x2=\"{:.1}\" y2=\"{:.1}\" gradientUnits=\"userSpaceOnUse\">\
 /// to `line_fragment`; named separately to mark caller intent (this goes
 /// into the deferred `_bond_outline_layer`, spliced at the molecule base
 /// by RT9).
+// positional SVG-attr builder mirroring xyzrender signature
+#[allow(clippy::too_many_arguments)]
 pub fn outline_fragment(
     x1: f64,
     y1: f64,
@@ -563,5 +575,48 @@ x2=\"50.0\" y2=\"10.0\" gradientUnits=\"userSpaceOnUse\">\
         assert_eq!(dash_array(24.0, 44.0), " stroke-dasharray=\"24.0,44.0\"");
         // NCI dotted bw=20: 0.08*20=1.6, 2*20=40
         assert_eq!(dash_array(1.6, 40.0), " stroke-dasharray=\"1.6,40.0\"");
+    }
+
+    // --- RT9 safety contracts: pin the real reject/bound/NaN behavior ---
+
+    #[test]
+    fn trim_nan_radius_is_rejected_not_nan_into_svg() {
+        // RT9 relies on this: a NaN radius must drive the bond to ok==false
+        // so no fragment string is ever built from NaN coordinates.
+        // trim returns (start, end, ok). With rj=NaN: dist is finite, `end`
+        // is NaN, so dot = NaN and `dot > 0.0` is false → ok==false.
+        let (_s, _e, ok) = trim([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], 0.5, f64::NAN);
+        assert!(!ok, "NaN radius must yield ok==false (bond dropped)");
+        // also the symmetric ri=NaN case
+        let (_s2, _e2, ok2) = trim([0.0, 0.0, 0.0], [2.0, 0.0, 0.0], f64::NAN, 0.5);
+        assert!(!ok2, "NaN radius (ri) must also yield ok==false");
+    }
+
+    #[test]
+    fn nb_from_order_max_u8_bounded() {
+        // round_half_even(255.0)=255.0 → as i32 = 255 → max(1) = 255.
+        let nb = nb_from_order(255.0, true);
+        assert!(nb >= 1 && nb <= 255, "nb={} out of [1,255]", nb);
+        assert_eq!(nb, 255);
+        // ib_seq(nb) = range(-nb+1, nb, 2): for nb=255 → -254,-252,..,254,
+        // exactly 255 elements. The length equals nb for all nb>=1.
+        let seq = ib_seq(nb);
+        assert_eq!(seq.len() as i32, nb, "ib_seq len must equal nb");
+        // spot-check the small-nb relation too (single..multi).
+        assert_eq!(ib_seq(1).len() as i32, 1);
+        assert_eq!(ib_seq(2).len() as i32, 2);
+        assert_eq!(ib_seq(3).len() as i32, 3);
+    }
+
+    #[test]
+    fn round_half_even_nan_benign() {
+        // Real behavior (verified): NaN passes through UNCHANGED. Although
+        // `NaN as i64` saturates to 0, the value returned is `NaN.floor()`
+        // which is NaN — NOT 0. ±inf likewise pass through unchanged.
+        // Pin this so any future code change that maps NaN→0 is caught.
+        let v = round_half_even(f64::NAN);
+        assert!(v.is_nan(), "round_half_even(NaN) must stay NaN, got {}", v);
+        assert_eq!(round_half_even(f64::INFINITY), f64::INFINITY);
+        assert_eq!(round_half_even(f64::NEG_INFINITY), f64::NEG_INFINITY);
     }
 }
