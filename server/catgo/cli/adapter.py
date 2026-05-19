@@ -4,6 +4,10 @@ Route handlers in catgo.routers are plain functions taking a Pydantic
 request model. Some are ``def`` (sync), some ``async def``. This adapter
 builds the model, dispatches correctly, and translates HTTPException into
 a CLI-level OpError so handlers never leak HTTP concerns.
+
+Returns the route's return value UNCHANGED — for catgo routes that is a
+Pydantic model (e.g. StructureResult/SlabResult), so callers use
+attribute access (``.structure`` / ``.slabs``), not dict keys.
 """
 from __future__ import annotations
 

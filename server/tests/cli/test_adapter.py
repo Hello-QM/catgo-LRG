@@ -30,3 +30,9 @@ def test_httpexception_becomes_operror():
     with pytest.raises(OpError) as ei:
         call_route(_sync_route, _Req, x=-1)
     assert "x must be >= 0" in str(ei.value)
+
+
+def test_validation_error_becomes_operror():
+    with pytest.raises(OpError) as ei:
+        call_route(_sync_route, _Req, x="not-an-int")
+    assert "invalid parameters" in str(ei.value)
