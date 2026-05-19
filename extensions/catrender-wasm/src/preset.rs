@@ -383,109 +383,6 @@ fn normalize(map: &mut Map<String, Value>) {
 }
 
 // ---------------------------------------------------------------------------
-// COMPAT SHIM — old v1 `Preset` / `get` / `GradientMode` / `BondStyle` API.
-//
-// `svg.rs` (and its inline tests) still reference `crate::preset::{get,
-// Preset, GradientMode}` + `BondStyle`. RT9 rewrites svg.rs to consume
-// `MergedConfig`; until then this thin shim keeps the crate compiling and
-// `cargo test` green. The numbers below are the unchanged v1 toy values —
-// they are NOT authoritative aesthetics and are slated for removal by RT9.
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-pub enum BondStyle {
-    Stick,
-    Line,
-    Wire,
-}
-
-#[derive(Clone, Copy)]
-pub enum GradientMode {
-    Radial,
-    Flat,
-}
-
-#[derive(Clone, Copy)]
-pub struct Preset {
-    pub atom_radius_scale: f64,
-    pub bond_width: f64,
-    pub bond_style: BondStyle,
-    pub gradient: GradientMode,
-    pub outline: f64,
-    pub depth_strength: f64,
-}
-
-/// Legacy v1 preset accessor (compat shim for `svg.rs` until RT9).
-pub fn get(name: &str) -> Preset {
-    match name {
-        "flat" => Preset {
-            atom_radius_scale: 0.40,
-            bond_width: 6.0,
-            bond_style: BondStyle::Stick,
-            gradient: GradientMode::Flat,
-            outline: 1.5,
-            depth_strength: 0.0,
-        },
-        "paton" => Preset {
-            atom_radius_scale: 0.30,
-            bond_width: 5.0,
-            bond_style: BondStyle::Stick,
-            gradient: GradientMode::Radial,
-            outline: 1.0,
-            depth_strength: 0.5,
-        },
-        "skeletal" => Preset {
-            atom_radius_scale: 0.0,
-            bond_width: 4.0,
-            bond_style: BondStyle::Line,
-            gradient: GradientMode::Flat,
-            outline: 0.0,
-            depth_strength: 0.0,
-        },
-        "bubble" => Preset {
-            atom_radius_scale: 0.85,
-            bond_width: 0.0,
-            bond_style: BondStyle::Line,
-            gradient: GradientMode::Radial,
-            outline: 0.0,
-            depth_strength: 0.7,
-        },
-        "tube" => Preset {
-            atom_radius_scale: 0.25,
-            bond_width: 8.0,
-            bond_style: BondStyle::Stick,
-            gradient: GradientMode::Radial,
-            outline: 0.0,
-            depth_strength: 0.6,
-        },
-        "wire" => Preset {
-            atom_radius_scale: 0.0,
-            bond_width: 2.0,
-            bond_style: BondStyle::Wire,
-            gradient: GradientMode::Flat,
-            outline: 0.0,
-            depth_strength: 0.0,
-        },
-        "graph" => Preset {
-            atom_radius_scale: 0.18,
-            bond_width: 2.0,
-            bond_style: BondStyle::Line,
-            gradient: GradientMode::Flat,
-            outline: 1.0,
-            depth_strength: 0.0,
-        },
-        _ => Preset {
-            atom_radius_scale: 0.45,
-            bond_width: 5.0,
-            bond_style: BondStyle::Stick,
-            gradient: GradientMode::Radial,
-            outline: 1.0,
-            depth_strength: 0.4,
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Tests — plan RT4 block, adapted to the real accessor names and the REAL
 // resolved color values (see discrepancy note in the RT4 report).
 // ---------------------------------------------------------------------------
@@ -634,15 +531,6 @@ mod tests {
             assert!(c.get_f_opt("atom_scale").is_some(), "{name} missing atom_scale");
         }
         assert_eq!(PRESET_NAMES.len(), 12);
-    }
-
-    // --- compat shim still works for svg.rs until RT9 ---
-    #[test]
-    fn legacy_get_shim_unknown_falls_back() {
-        let d = get("default");
-        let u = get("nonsense-xyz");
-        assert_eq!(d.atom_radius_scale, u.atom_radius_scale);
-        assert_eq!(d.bond_width, u.bond_width);
     }
 
     #[test]

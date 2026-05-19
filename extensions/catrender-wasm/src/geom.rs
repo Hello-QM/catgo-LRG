@@ -5,9 +5,7 @@
 //! including the Python `int()` truncation of canvas w/h, the `1e-6`
 //! `max_span` floor, and the single-scalar `radii.max()` bbox pad.
 //!
-//! `rotate` is retained from v1 — the future drag-overlay (RT11) needs it.
-//! `project` / `depth_order` are retained as compat for the v1 `svg.rs`
-//! (RT9 rewrites `svg.rs`); the crate must stay cargo-test green.
+//! `rotate` is retained — the drag-overlay (RT9/RT11) applies it after PCA.
 
 /// Apply intrinsic XYZ rotation (degrees) to a point.
 pub fn rotate(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
@@ -24,28 +22,6 @@ pub fn rotate(p: [f64; 3], rot_deg: [f64; 3]) -> [f64; 3] {
     let (x2, z2) = (x * cy + z1 * sy, -x * sy + z1 * cy);
     let (x3, y3) = (x2 * cz - y1 * sz, x2 * sz + y1 * cz);
     [x3, y3, z2]
-}
-
-/// Project rotated points to 2D screen coords (orthographic, +Z toward viewer).
-///
-/// v1 compat for `svg.rs` (RT9 supersedes). Returns `([x,y], depth)` per point.
-pub fn project(points: &[[f64; 3]], rot_deg: [f64; 3]) -> Vec<([f64; 2], f64)> {
-    points
-        .iter()
-        .map(|&p| {
-            let r = rotate(p, rot_deg);
-            ([r[0], r[1]], r[2])
-        })
-        .collect()
-}
-
-/// Atom indices sorted back-to-front (smallest depth first → drawn first).
-///
-/// v1 compat for `svg.rs` (RT9 supersedes).
-pub fn depth_order(projected: &[([f64; 2], f64)]) -> Vec<usize> {
-    let mut idx: Vec<usize> = (0..projected.len()).collect();
-    idx.sort_by(|&a, &b| projected[a].1.total_cmp(&projected[b].1));
-    idx
 }
 
 /// Orthographic 3D→2D pixel projection — verbatim xyzrender `_proj`
@@ -236,12 +212,6 @@ mod tests {
         let r = rotate([1.0, 0.0, 0.0], [0.0, 0.0, 90.0]);
         assert!(r[0].abs() < 1e-9, "x≈0, got {}", r[0]);
         assert!((r[1] - 1.0).abs() < 1e-9, "y≈1, got {}", r[1]);
-    }
-
-    #[test]
-    fn depth_order_is_back_to_front() {
-        let proj = vec![([0.0, 0.0], 5.0), ([0.0, 0.0], -2.0), ([0.0, 0.0], 1.0)];
-        assert_eq!(depth_order(&proj), vec![1, 2, 0]);
     }
 
     // ---- RT6 plan block (verbatim) ----
