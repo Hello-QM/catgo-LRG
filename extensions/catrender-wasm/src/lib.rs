@@ -1,5 +1,6 @@
 pub mod bonds;
 pub mod geom;
+pub mod palette;
 pub mod preset;
 pub mod svg;
 pub mod types;
