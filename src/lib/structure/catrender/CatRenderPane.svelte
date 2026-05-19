@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import type { AnyStructure } from '$lib'
   import { compute_bonds_sync } from '$lib/structure/workers/bond-worker-api'
   import { render_svg } from './catrender-wasm'
@@ -82,6 +83,65 @@
       }
     }, 16)
     return () => { cancelled = true; clearTimeout(timer) }
+  })
+
+  // --- AI export bridge poll loop -----------------------------------------
+  // Mirrors the poll_screenshot 2s loop in tool-handler.ts: while this pane
+  // is mounted it fulfils pending /catrender/request signals by rendering
+  // the CURRENT mirror + interactive bond overrides with the AI-requested
+  // style merged in. Independent of the C1-guarded debounced $effect above.
+  const API_BASE = `/api`
+
+  onMount(() => {
+    let stopped = false
+    ;(async () => {
+      while (!stopped) {
+        try {
+          const r = await fetch(`${API_BASE}/view/catrender/pending`)
+          if (r.ok) {
+            const { pending } = await r.json()
+            for (const item of pending as {
+              request_id: string
+              style: any
+              format: string
+            }[]) {
+              const m = mirror
+              if (!m) continue
+              const pruned = prune_overrides($state.snapshot(overrides), m.n)
+              const bonds = merge_bonds(m.base, pruned)
+              const out = await render_svg(
+                JSON.stringify({
+                  atoms: m.atoms,
+                  bonds,
+                  lattice: m.lattice,
+                  style: {
+                    preset,
+                    show_h,
+                    rotation: [rot_x, rot_y, rot_z],
+                    ...item.style,
+                  },
+                }),
+              )
+              await fetch(`${API_BASE}/view/catrender/result`, {
+                method: `POST`,
+                headers: { 'Content-Type': `application/json` },
+                body: JSON.stringify({
+                  request_id: item.request_id,
+                  svg: out,
+                  format: item.format,
+                }),
+              })
+            }
+          }
+        } catch (e) {
+          console.debug(`[catrender] poll error`, e)
+        }
+        await new Promise((res) => setTimeout(res, 2000))
+      }
+    })()
+    return () => {
+      stopped = true
+    }
   })
 
   function download(name: string, blob: Blob) {
