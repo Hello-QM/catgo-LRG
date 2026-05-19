@@ -81,7 +81,18 @@ class InteractiveShell:
                     self._out(self._status())
                 elif choice in self.reg.names():
                     op = self.reg.get(choice)
-                    params = self._prompt_params(op)
+                    # Analyze ops read a DFT output file directly (not the
+                    # active session structure); argparse takes that as
+                    # the positional `input`. From the menu we must prompt
+                    # explicitly so the handler has params["input"].
+                    pre_params: dict = {}
+                    if op.group == "analyze":
+                        ip = self._in("input path: ").strip()
+                        if not ip:
+                            raise OpError(
+                                f"{op.name} requires an input file path")
+                        pre_params["input"] = ip
+                    params = {**pre_params, **self._prompt_params(op)}
                     if op.mutates:
                         self.session.push_history()
                     res = op.handler(self.session, params)

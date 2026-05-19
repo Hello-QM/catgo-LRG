@@ -50,7 +50,7 @@ def freq(session, params: dict) -> OpResult:
             out = params.get("out")
             if not out:
                 raise OpError("-o/--out required to write the TS animation "
-                              "(or pass --no-anim)")
+                              "(or pass --no_anim)")
             syms = params.get("symbols")
             if not syms:
                 raise OpError("--symbols (comma-separated, one per atom) "
@@ -63,7 +63,7 @@ def freq(session, params: dict) -> OpResult:
                 idx = data.imag_mode_indices[0]   # first imaginary mode
             else:
                 raise OpError(
-                    "no imaginary modes; pass --mode-index for a real mode")
+                    "no imaginary modes; pass --mode_index for a real mode")
             write_mode_animation(
                 data, mode_index=idx, out=Path(out),
                 frames=int(params.get("frames", 20)),
