@@ -41,13 +41,6 @@ def _build_legacy_parser():
     return parser, sub
 
 
-def _coerce(param, raw: str):
-    if param.type is tuple:
-        return tuple(int(x) if x.lstrip("-").isdigit() else float(x)
-                     for x in raw.split(","))
-    return param.type(raw)
-
-
 def _add_op_subparsers(sub):
     from catgo.cli.ops import build_registry
     reg = build_registry()
@@ -69,6 +62,7 @@ def _add_op_subparsers(sub):
 def _run_op(args) -> int:
     from catgo.cli.session import Session, SessionError
     from catgo.cli.adapter import OpError
+    from catgo.cli.registry import coerce_param
     op = args._op
     session = Session()
     try:
@@ -89,7 +83,7 @@ def _run_op(args) -> int:
                     return 1
                 continue
             try:
-                params[prm.name] = _coerce(prm, raw)
+                params[prm.name] = coerce_param(prm, raw)
             except ValueError:
                 kind = ("comma-separated numbers" if prm.type is tuple
                         else prm.type.__name__)

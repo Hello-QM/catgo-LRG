@@ -24,6 +24,21 @@ class Param:
         return self.default is None
 
 
+def coerce_param(param: Param, raw: str):
+    """Parse a raw CLI/menu string into the Param's declared type.
+
+    THE shared coercion — imported by both the argparse path
+    (__init__._run_op) and the interactive menu (shell._prompt_params)
+    so the two form factors parse identically (dual-form equivalence;
+    one place to change parsing rules). Raises ValueError on malformed
+    input; callers translate it into a clean user-facing message.
+    """
+    if param.type is tuple:
+        return tuple(int(x) if x.lstrip("-").isdigit() else float(x)
+                     for x in raw.split(","))
+    return param.type(raw)
+
+
 @dataclass
 class OpResult:
     ok: bool

@@ -1,5 +1,7 @@
 import pytest
-from catgo.cli.registry import Param, Operation, OpResult, OperationRegistry
+from catgo.cli.registry import (
+    Param, Operation, OpResult, OperationRegistry, coerce_param,
+)
 
 
 def _noop(session, params):
@@ -42,3 +44,14 @@ def test_all_and_empty_group_and_missing_get():
     assert reg.by_group("nope") == []          # empty group
     with pytest.raises(KeyError):
         reg.get("missing")
+
+
+def test_coerce_param():
+    assert coerce_param(Param("m", tuple), "1,1,0") == (1, 1, 0)
+    assert coerce_param(Param("m", tuple), "-1,0,1") == (-1, 0, 1)
+    assert coerce_param(Param("n", int), "4") == 4
+    assert coerce_param(Param("v", float), "15") == 15.0
+    with pytest.raises(ValueError):
+        coerce_param(Param("m", tuple), "abc")
+    with pytest.raises(ValueError):
+        coerce_param(Param("n", int), "xx")

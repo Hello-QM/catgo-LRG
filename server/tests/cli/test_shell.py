@@ -34,3 +34,46 @@ def test_quit_immediately():
                           input_fn=lambda _="": next(script),
                           output_fn=lambda *_a, **_k: None)
     sh.run()  # must return without error
+
+
+def test_bad_input_keeps_shell_alive(tmp_path):
+    src = _cu_poscar(tmp_path)
+    out = []
+    script = iter(["0", str(src), "supercell", "abc", "q"])
+    sh = InteractiveShell(session=Session(),
+                          input_fn=lambda _="": next(script),
+                          output_fn=lambda *a, **k: out.append(" ".join(map(str, a))))
+    sh.run()
+    assert any("expects" in line for line in out)
+    assert sh.session.structure.num_sites == 1
+
+
+def test_unknown_choice(tmp_path):
+    out = []
+    script = iter(["zzz", "q"])
+    sh = InteractiveShell(session=Session(),
+                          input_fn=lambda _="": next(script),
+                          output_fn=lambda *a, **k: out.append(" ".join(map(str, a))))
+    sh.run()
+    assert any("unknown choice" in line for line in out)
+
+
+def test_eof_exits_gracefully():
+    def _raise_eof(_=""):
+        raise EOFError
+    sh = InteractiveShell(session=Session(),
+                          input_fn=_raise_eof,
+                          output_fn=lambda *_a, **_k: None)
+    sh.run()
+
+
+def test_save_roundtrip(tmp_path):
+    src = _cu_poscar(tmp_path)
+    dst = tmp_path / "out.cif"
+    script = iter(["0", str(src), "s", str(dst), "q"])
+    sh = InteractiveShell(session=Session(),
+                          input_fn=lambda _="": next(script),
+                          output_fn=lambda *_a, **_k: None)
+    sh.run()
+    assert dst.exists()
+    assert Structure.from_file(str(dst)).num_sites == 1

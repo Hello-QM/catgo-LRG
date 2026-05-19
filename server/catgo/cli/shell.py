@@ -8,6 +8,7 @@ from typing import Callable
 
 from catgo.cli.adapter import OpError
 from catgo.cli.ops import build_registry
+from catgo.cli.registry import coerce_param
 from catgo.cli.session import Session, SessionError
 
 
@@ -43,18 +44,24 @@ class InteractiveShell:
             if not raw and prm.default is not None:
                 params[prm.name] = prm.default
                 continue
-            if prm.type is tuple:
-                params[prm.name] = tuple(
-                    int(x) if x.lstrip("-").isdigit() else float(x)
-                    for x in raw.split(","))
-            else:
-                params[prm.name] = prm.type(raw)
+            # Shared coercion with the argparse path (dual-form
+            # equivalence). Translate bad input into OpError so run()'s
+            # error boundary catches it and the loop survives a typo.
+            try:
+                params[prm.name] = coerce_param(prm, raw)
+            except ValueError:
+                kind = ("comma-separated numbers" if prm.type is tuple
+                        else prm.type.__name__)
+                raise OpError(f"{prm.name} expects {kind}, got '{raw}'")
         return params
 
     def run(self) -> None:
         while True:
             self._banner()
-            choice = self._in("> ").strip()
+            try:
+                choice = self._in("> ").strip()
+            except EOFError:        # Ctrl-D at the menu -> graceful exit
+                return
             if choice in ("q", "quit"):
                 return
             try:
