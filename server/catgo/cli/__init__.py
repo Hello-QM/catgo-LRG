@@ -62,7 +62,7 @@ def _add_op_subparsers(sub):
                 continue
             p.add_argument(f"--{prm.name}", default=None,
                            required=prm.required, help=prm.help)
-        p.set_defaults(_op=op, _reg=reg)
+        p.set_defaults(_op=op)
     return reg
 
 
@@ -77,14 +77,25 @@ def _run_op(args) -> int:
         params: dict = {}
         for prm in op.params:
             if prm.name == "out":
+                if prm.required and not getattr(args, "out", None):
+                    print("error: -o/--out is required for this command",
+                          file=sys.stderr)
+                    return 1
                 continue
             raw = getattr(args, prm.name, None)
             if raw is None:
                 if prm.required:
-                    print(f"error: --{prm.name} required", file=__import__("sys").stderr)
+                    print(f"error: --{prm.name} required", file=sys.stderr)
                     return 1
                 continue
-            params[prm.name] = _coerce(prm, raw)
+            try:
+                params[prm.name] = _coerce(prm, raw)
+            except ValueError:
+                kind = ("comma-separated numbers" if prm.type is tuple
+                        else prm.type.__name__)
+                print(f"error: --{prm.name} expects {kind}, got '{raw}'",
+                      file=sys.stderr)
+                return 1
         if getattr(args, "out", None):
             params["out"] = args.out
         if getattr(args, "force", False):
@@ -93,10 +104,10 @@ def _run_op(args) -> int:
             session.push_history()
         result = op.handler(session, params)
     except (SessionError, OpError) as exc:
-        print(f"error: {exc}", file=__import__("sys").stderr)
+        print(f"error: {exc}", file=sys.stderr)
         return 1
     if not result.ok:
-        print(f"error: {result.message}", file=__import__("sys").stderr)
+        print(f"error: {result.message}", file=sys.stderr)
         return 1
     if result.structure is not None:
         session.structure = result.structure
@@ -104,14 +115,13 @@ def _run_op(args) -> int:
             session.save(args.out)
             print(f"{result.message} -> {args.out}")
         else:
-            print(result.message)
+            print(f"{result.message}  (not saved -- pass -o to persist)")
     else:
         print(result.message)
     return 0
 
 
 def main(argv: list[str] | None = None) -> None:
-    import sys
     argv = sys.argv[1:] if argv is None else argv
     parser, sub = _build_legacy_parser()
     _add_op_subparsers(sub)
