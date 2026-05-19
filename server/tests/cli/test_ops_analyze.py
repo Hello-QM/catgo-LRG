@@ -167,3 +167,56 @@ def test_dos_happy_path_monkeypatched(tmp_path, monkeypatch):
     assert payload["d_band_center_eV"] == -1.234
     assert len(payload["energy"]) == 11
     assert len(payload["pdos"]) == 11
+
+
+def test_cohp_handler(tmp_path):
+    cc = _find_fixture("COHPCAR.lobster", "cohpcar.lobster")
+    if cc is None:
+        pytest.skip("no COHPCAR.lobster fixture — supply one")
+    out = tmp_path / "cohp.png"
+    r = ops_analyze.cohp(Session(), {"input": cc, "out": str(out)})
+    assert r.ok and out.exists()
+    assert "icohp" in r.message.lower()
+
+
+def test_cohp_wrong_format_errors(tmp_path):
+    bad = tmp_path / "x.h5"; bad.write_text("nope")
+    with pytest.raises(OpError):
+        ops_analyze.cohp(Session(), {"input": str(bad),
+                                     "out": str(tmp_path / "o.png")})
+
+
+def test_cohp_missing_file_clean_error(tmp_path):
+    with pytest.raises(OpError) as ei:
+        ops_analyze.cohp(Session(), {"input": str(tmp_path / "COHPCAR.lobster")})
+    assert "not found" in str(ei.value)
+
+
+def test_cohp_happy_path_monkeypatched(tmp_path, monkeypatch):
+    import sys, types
+    import numpy as np
+
+    class _CD:
+        energies = np.linspace(-5.0, 5.0, 11)
+        cohp = np.ones((2, 11)) * 0.5         # 1 pair + avg row 0
+        icohp = -np.linspace(0.0, 1.0, 11)[None].repeat(2, axis=0)
+        efermi = 0.0
+
+    fake_root = types.ModuleType("catgo_cohp")
+    fake_io = types.ModuleType("catgo_cohp.io")
+    fake_io.parse_cohpcar = lambda p: _CD()
+    monkeypatch.setitem(sys.modules, "catgo_cohp", fake_root)
+    monkeypatch.setitem(sys.modules, "catgo_cohp.io", fake_io)
+
+    cc = tmp_path / "COHPCAR.lobster"; cc.write_text("stub")
+    out = tmp_path / "cohp.png"
+    dump = tmp_path / "cohp.json"
+    r = ops_analyze.cohp(Session(),
+                         {"input": str(cc), "out": str(out), "dump": str(dump)})
+    assert r.ok and out.exists()
+    import re
+    assert re.search(r"ICOHP at E_f = -?\d+\.\d{4}", r.message)
+    import json
+    payload = json.loads(dump.read_text())
+    assert "icohp_at_Ef" in payload
+    assert len(payload["energy"]) == 11

@@ -140,3 +140,57 @@ def dos(session, params: dict) -> OpResult:
     return OpResult(ok=True,
                     message=f"d-band center = {dband_val:.4f} eV -> {out}",
                     artifact=out, structure=None)
+
+
+def cohp(session, params: dict) -> OpResult:
+    from catgo.cli._extpath import ensure_extension
+    from catgo.cli.plotting import PlotSpec, render
+
+    src = params.get("input")
+    if not src or "cohpcar" not in str(src).lower():
+        raise OpError("cohp expects a COHPCAR.lobster file")
+    if not Path(src).exists():
+        raise OpError(f"COHPCAR not found: {src}")
+    ensure_extension("cohp-analysis", "catgo_cohp")
+    from catgo_cohp.io import parse_cohpcar
+    try:
+        cd = parse_cohpcar(str(src))
+    except Exception as exc:  # noqa: BLE001
+        raise OpError(f"failed to parse COHPCAR: {exc}") from exc
+
+    # catgo_cohp ships `energies` already shifted to E_f = 0 (per
+    # COHPData docstring) and the real `cohp`/`icohp` arrays have shape
+    # (nspin, ncols, npoints) with the Average channel at col-index 0.
+    # The test stub uses a 2D shape (n_pairs+1, npoints) with the
+    # Average at row 0. Handle both: collapse to a 1D "average" series.
+    import numpy as _np
+    cohp_arr = _np.asarray(cd.cohp)
+    icohp_arr = _np.asarray(cd.icohp)
+    if cohp_arr.ndim == 3:
+        # (nspin, ncols, npoints) -> sum spins, take Average col (0)
+        avg_cohp = cohp_arr.sum(axis=0)[0]
+        avg_icohp = icohp_arr.sum(axis=0)[0]
+    else:
+        # 2D fallback (n_pairs+1, npoints): row 0 = average.
+        avg_cohp = cohp_arr[0]
+        avg_icohp = icohp_arr[0]
+
+    e = list(cd.energies)
+    # pCOHP convention: sign-flip so bonding is positive.
+    avg = [-float(v) for v in avg_cohp]
+    # Energies are already E - E_f, so the Fermi level sits at 0 eV.
+    fi = min(range(len(e)), key=lambda k: abs(e[k] - 0.0))
+    icohp_ef = float(avg_icohp[fi])
+
+    spec = PlotSpec(
+        kind="cohp", x=e, series=[("-pCOHP (avg)", avg, {})],
+        xlabel="E - E_f (eV)", ylabel="-pCOHP",
+        vlines=[0.0])
+    out = Path(params["out"]) if params.get("out") else Path("cohp.pdf")
+    render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
+    if params.get("dump"):
+        _dump(params["dump"], {"energy": e, "neg_pcohp_avg": avg,
+                               "icohp_at_Ef": icohp_ef})
+    return OpResult(ok=True,
+                    message=f"ICOHP at E_f = {icohp_ef:.4f} -> {out}",
+                    artifact=out, structure=None)
