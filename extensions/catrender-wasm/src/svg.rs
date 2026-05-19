@@ -177,19 +177,16 @@ pub fn render_svg(inp: &RenderInput) -> String {
     }
     // show_h: only drop H here (xyzrender hides C-only H; catrender keeps the
     // simpler all-H gate the v1 frontend relied on). Combined keep mask.
-    let keep: Vec<usize> = (0..n_in)
+    let mut keep: Vec<usize> = (0..n_in)
         .filter(|&i| {
             !(hidden_ov[i] || !inp.style.show_h && inp.atoms[i].el == "H")
         })
         .collect();
-    let n = keep.len();
 
     // dense → original index, original → dense
     let new_of: std::collections::HashMap<usize, usize> =
         keep.iter().enumerate().map(|(d, &o)| (o, d)).collect();
 
-    let symbols: Vec<&str> = keep.iter().map(|&i| inp.atoms[i].el.as_str()).collect();
-    let a_nums: Vec<u32> = symbols.iter().map(|s| s2n(s)).collect();
     let mut pos: Vec<[f64; 3]> = keep.iter().map(|&i| inp.atoms[i].xyz).collect();
 
     // --- bonds: explicit, else perceived; remapped to dense indices ----
@@ -200,16 +197,76 @@ pub fn render_svg(inp: &RenderInput) -> String {
     } else {
         &inp.bonds
     };
-    // (di, dj, order) in dense space, only for kept atoms.
-    let mut edges: Vec<(usize, usize, f64)> = Vec::new();
+    // (di, dj, order, vis) in dense space, only for kept atoms.
+    let mut edges: Vec<(usize, usize, f64, BondVis)> = Vec::new();
     if !hide_bonds {
         for b in raw_bonds {
             let (Some(&di), Some(&dj)) = (new_of.get(&b.i), new_of.get(&b.j)) else {
                 continue;
             };
-            edges.push((di, dj, b.order));
+            // `ts` wins over `nci` if a caller sets both (xyzrender precedence).
+            let vis = if b.ts {
+                BondVis::Ts
+            } else if b.nci {
+                BondVis::Nci
+            } else {
+                BondVis::Solid
+            };
+            edges.push((di, dj, b.order, vis));
         }
     }
+
+    // --- supercell graph replication (spec §Cell: "Supercell = graph
+    //     replication (render as normal)") ------------------------------
+    // Each image (i,j,k) translates every kept atom by i·a+j·b+k·c and
+    // re-emits the intra-cell bond graph offset into that image's index
+    // block. Done BEFORE PCA so the whole supercell orients/fits as one
+    // rigid body. Periodic ghost images over the 26 neighbour cells (a
+    // distinct, opacity-dimmed concept) remain a tracked follow-up; this
+    // is the explicit, replicate-as-normal graph supercell.
+    let sc = inp.style.cell.supercell;
+    if let Some(lat) = inp.lattice {
+        let (sa, sb, sc_) = (sc[0].max(1), sc[1].max(1), sc[2].max(1));
+        if sa * sb * sc_ > 1 {
+            let base_n = keep.len();
+            let base_pos = pos.clone();
+            let base_keep = keep.clone();
+            let base_edges = edges.clone();
+            let mut img = 1usize; // image 0 = the original block already present
+            for i in 0..sa {
+                for j in 0..sb {
+                    for k in 0..sc_ {
+                        if i == 0 && j == 0 && k == 0 {
+                            continue;
+                        }
+                        let (fi, fj, fk) = (i as f64, j as f64, k as f64);
+                        let shift = [
+                            fi * lat[0][0] + fj * lat[1][0] + fk * lat[2][0],
+                            fi * lat[0][1] + fj * lat[1][1] + fk * lat[2][1],
+                            fi * lat[0][2] + fj * lat[1][2] + fk * lat[2][2],
+                        ];
+                        for (d, p) in base_pos.iter().enumerate() {
+                            pos.push([
+                                p[0] + shift[0],
+                                p[1] + shift[1],
+                                p[2] + shift[2],
+                            ]);
+                            keep.push(base_keep[d]); // inherits recolor/CPK
+                        }
+                        let off = img * base_n;
+                        for &(di, dj, o, v) in &base_edges {
+                            edges.push((di + off, dj + off, o, v));
+                        }
+                        img += 1;
+                    }
+                }
+            }
+        }
+    }
+    // Rebuild dense-derived arrays after replication (indices may have grown).
+    let symbols: Vec<&str> = keep.iter().map(|&i| inp.atoms[i].el.as_str()).collect();
+    let a_nums: Vec<u32> = symbols.iter().map(|s| s2n(s)).collect();
+    let n = keep.len();
 
     // --- PCA auto-orient (fit-mask excludes `*`), then drag rotation ----
     let auto_orient = inp.style.auto_orient.unwrap_or(auto_orient_default);
@@ -348,11 +405,11 @@ pub fn render_svg(inp: &RenderInput) -> String {
         .collect();
 
     // --- adjacency for the O(degree) forward-bond loop -----------------
-    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n];
-    for &(i, j, o) in &edges {
+    let mut adj: Vec<Vec<(usize, f64, BondVis)>> = vec![Vec::new(); n];
+    for &(i, j, o, v) in &edges {
         if i < n && j < n && i != j {
-            adj[i].push((j, o));
-            adj[j].push((i, o));
+            adj[i].push((j, o, v));
+            adj[j].push((i, o, v));
         }
     }
 
@@ -500,7 +557,7 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
         std::collections::HashMap::new();
     if !hide_bonds && bw > 0.0 {
         let mut seen: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
-        for &(i, j, _) in &edges {
+        for &(i, j, _, _) in &edges {
             let (a, b) = if i < j { (i, j) } else { (j, i) };
             if a == b || !seen.insert((a, b)) {
                 continue;
@@ -532,11 +589,16 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
         let xi = px[ai];
         let yi = py[ai];
         let orig = keep[ai];
-        let is_image = false; // RT9-DEFER: periodic-image atom generation is
-                              // RT10-schema scope (no supercell field in
-                              // RenderInput yet); periodic_image_opacity
-                              // wiring is present and applied once images
-                              // exist.
+        // Supercell graph replication (spec §Cell "render as normal") is
+        // DONE above — those atoms are real, full-opacity, in `keep`/`pos`.
+        // What stays deferred (tracked RT12 follow-up) is the DISTINCT
+        // periodic *ghost*-image concept: opacity-dimmed PBC partner atoms
+        // wrapped across the 26 neighbour cells when `cell.pbc_wrap` is set.
+        // `pbc_wrap` is schema-plumbed (types.rs Cell) and reaches cfg here;
+        // `periodic_image_opacity` is resolved and applied the moment a
+        // ghost atom is flagged — no such atom is produced yet, so this is
+        // always `false` until RT12 wires PBC wrap-image generation.
+        let is_image = false;
         let atom_op = if is_image { periodic_image_opacity } else { 1.0 };
         let op_atom = if atom_op < 1.0 {
             format!(" opacity=\"{:.2}\"", atom_op)
@@ -634,8 +696,8 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
         if !hide_bonds && bw > 0.0 {
             // stable neighbour order for deterministic output
             let mut nbrs = adj[ai].clone();
-            nbrs.sort_by_key(|&(j, _)| j);
-            for (aj, bo_raw) in nbrs {
+            nbrs.sort_by_key(|&(j, _, _)| j);
+            for (aj, bo_raw, vis) in nbrs {
                 if z_rank[aj] <= idx {
                     continue;
                 }
@@ -675,6 +737,7 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
                         opacity: 1.0,
                         ts_color: ts_color.as_deref(),
                         nci_color: nci_color.as_deref(),
+                        vis,
                         aromatic_rings: &aromatic_rings,
                         ai,
                         aj,
@@ -719,6 +782,16 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
 // _element_line / _bond_line / _shaded_stroke (RT8 helpers do the math).
 // ---------------------------------------------------------------------------
 
+/// Per-bond visual style fed in from `Bond.ts` / `Bond.nci`. `Solid` is the
+/// normal multi/aromatic path; `Ts`/`Nci` short-circuit to the dashed/dotted
+/// xyzrender strokes (`renderer.py:1211-1218` / `1238-1245`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BondVis {
+    Solid,
+    Ts,
+    Nci,
+}
+
 struct AddBond<'a> {
     svg: &'a mut Vec<String>,
     bond_outline_layer: &'a mut Vec<String>,
@@ -751,6 +824,7 @@ struct AddBond<'a> {
     opacity: f64,
     ts_color: Option<&'a str>,
     nci_color: Option<&'a str>,
+    vis: BondVis,
     aromatic_rings: &'a [Vec<usize>],
     ai: usize,
     aj: usize,
@@ -795,6 +869,7 @@ fn add_bond(b: AddBond) {
         opacity,
         ts_color,
         nci_color,
+        vis,
         aromatic_rings,
         ai,
         aj,
@@ -805,9 +880,6 @@ fn add_bond(b: AddBond) {
         cw,
         ch,
     } = b;
-
-    let _ = (ts_color, nci_color); // TS/NCI bond input not wired (no flag in
-                                   // RenderInput) — solid path only here.
 
     let by_element = bond_color_by_element;
     let op_attr = if opacity < 1.0 {
@@ -939,6 +1011,42 @@ x2=\"{lx2:.1}\" y2=\"{ly2:.1}\" gradientUnits=\"userSpaceOnUse\">\
             );
         }
     };
+
+    // TS / NCI short-circuit: a single straight dashed (TS) or dotted (NCI)
+    // stroke — no multi-bond split, no aromatic offset (renderer.py:1211-1245).
+    // Width/dash from the bonds.rs helpers; paint = ts_color/nci_color when
+    // the preset supplies it, else the resolved uniform bond color (fogged).
+    if vis != BondVis::Solid {
+        let (w, dash, paint) = match vis {
+            BondVis::Ts => (
+                bonds::bond_stroke_width(bw, bonds::StrokeKind::DashedTs),
+                bonds::dash_array(bw * 1.2, bw * 2.2),
+                ts_color,
+            ),
+            BondVis::Nci => (
+                bonds::bond_stroke_width(bw, bonds::StrokeKind::DottedNci),
+                bonds::dash_array(bw * 0.08, bw * 2.0),
+                nci_color,
+            ),
+            BondVis::Solid => unreachable!(),
+        };
+        let stroke = match paint {
+            Some(c) if fog_on => blend_fog_hex(c, (fi + fj) / 2.0 * 0.75),
+            Some(c) => c.to_string(),
+            None => color.clone(),
+        };
+        if let Some(si) = &stroke_i {
+            // Outline behind the dashed/dotted stroke (single uniform color —
+            // TS/NCI strokes are never element-split).
+            bond_outline_layer.push(bonds::outline_fragment(
+                x1, y1, x2, y2, w, outline_w, si, &dash, &op_attr,
+            ));
+        }
+        svg.push(bonds::line_fragment(
+            x1, y1, x2, y2, w, &stroke, &dash, &op_attr,
+        ));
+        return;
+    }
 
     if bonds::is_aromatic(bo) {
         let side = ring_side(
@@ -1098,11 +1206,11 @@ fn ring_side(
 
 /// Aromatic ring sets from minimum cycle basis over aromatic-order edges
 /// (renderer.py:1719-1726 fallback path — catrender has no graph ring data).
-fn compute_aromatic_rings(edges: &[(usize, usize, f64)], n: usize) -> Vec<Vec<usize>> {
+fn compute_aromatic_rings(edges: &[(usize, usize, f64, BondVis)], n: usize) -> Vec<Vec<usize>> {
     let arom: Vec<(usize, usize)> = edges
         .iter()
-        .filter(|&&(_, _, o)| bonds::is_aromatic(o))
-        .map(|&(i, j, _)| if i < j { (i, j) } else { (j, i) })
+        .filter(|&&(_, _, o, _)| bonds::is_aromatic(o))
+        .map(|&(i, j, _, _)| if i < j { (i, j) } else { (j, i) })
         .collect();
     if arom.is_empty() {
         return Vec::new();
@@ -1439,5 +1547,119 @@ mod tests {
         let s = render(r#"{"atoms":[],"style":{"preset":"default"}}"#);
         assert!(s.starts_with("<svg") && s.ends_with("</svg>"));
         assert!(!s.contains("<circle"));
+    }
+
+    // ---- RT10 behavioral: TS/NCI bond flags, supercell, open override ----
+
+    #[test]
+    fn bond_ts_flag_emits_dashed_stroke() {
+        // ts:true → dashed bond: stroke-dasharray "1.2·bw,2.2·bw".
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.4,0,0]}],
+               "bonds":[{"i":0,"j":1,"ts":true}],
+               "style":{"preset":"default"}}"#,
+        );
+        assert!(
+            s.contains("stroke-dasharray"),
+            "TS bond must emit a dashed stroke"
+        );
+    }
+
+    #[test]
+    fn bond_nci_flag_emits_dotted_stroke() {
+        // nci:true → dotted bond: stroke-dasharray "0.08·bw,2·bw".
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.4,0,0]}],
+               "bonds":[{"i":0,"j":1,"nci":true}],
+               "style":{"preset":"default"}}"#,
+        );
+        assert!(
+            s.contains("stroke-dasharray"),
+            "NCI bond must emit a dotted stroke"
+        );
+        // dotted dash component is very small relative to gap (0.08 vs 2.0):
+        // the first dasharray number must be far below the second.
+        let frag = s
+            .split("stroke-dasharray=\"")
+            .nth(1)
+            .and_then(|x| x.split('"').next())
+            .expect("dasharray fragment");
+        let mut it = frag.split(',');
+        let d: f64 = it.next().unwrap().parse().unwrap();
+        let g: f64 = it.next().unwrap().parse().unwrap();
+        assert!(d * 10.0 < g, "NCI dotted: dash {d} << gap {g}");
+    }
+
+    #[test]
+    fn supercell_replicates_atoms() {
+        // supercell [2,1,1] over a 1-atom cell → 2 atoms (graph replication).
+        let one = render(
+            r#"{"atoms":[{"el":"C","xyz":[0.5,0.5,0.5]}],
+               "lattice":[[4,0,0],[0,4,0],[0,0,4]],
+               "style":{"preset":"default","cell":{"show":true,"supercell":[1,1,1]}}}"#,
+        );
+        let two = render(
+            r#"{"atoms":[{"el":"C","xyz":[0.5,0.5,0.5]}],
+               "lattice":[[4,0,0],[0,4,0],[0,0,4]],
+               "style":{"preset":"default","cell":{"show":true,"supercell":[2,1,1]}}}"#,
+        );
+        assert_eq!(one.matches("<circle").count(), 1);
+        assert_eq!(
+            two.matches("<circle").count(),
+            2,
+            "supercell [2,1,1] must replicate the atom along a"
+        );
+    }
+
+    #[test]
+    fn supercell_replicates_bonds() {
+        // 2-atom motif, bond 0-1; supercell [2,1,1] → 2 motifs, 2 bonds.
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0.5,0.5,0.5]},{"el":"O","xyz":[1.7,0.5,0.5]}],
+               "bonds":[{"i":0,"j":1}],
+               "lattice":[[6,0,0],[0,6,0],[0,0,6]],
+               "style":{"preset":"default","cell":{"show":true,"supercell":[2,1,1]}}}"#,
+        );
+        assert_eq!(s.matches("<circle").count(), 4, "2 atoms × 2 images");
+        assert!(
+            s.matches("<line").count() >= 2,
+            "each replicated motif keeps its intra-cell bond"
+        );
+    }
+
+    #[test]
+    fn open_override_beats_preset_value() {
+        // IDENTICAL geometry (auto_orient off, same 2 atoms) so the only
+        // variable is the `atom_scale` override. A tiny atom_scale must yield
+        // strictly smaller circles than a large one — proving an ARBITRARY
+        // default.json knob flows live through the open override map.
+        let small = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[20,0,0]}],
+               "style":{"preset":"default","auto_orient":false,
+                        "overrides":{"atom_scale":0.05}}}"#,
+        );
+        let large = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[20,0,0]}],
+               "style":{"preset":"default","auto_orient":false,
+                        "overrides":{"atom_scale":5.0}}}"#,
+        );
+        // Max circle radius across the render.
+        let max_r = |svg: &str| -> f64 {
+            svg.split("<circle")
+                .skip(1)
+                .filter_map(|seg| {
+                    seg.split("r=\"")
+                        .nth(1)
+                        .and_then(|x| x.split('"').next())
+                        .and_then(|x| x.parse::<f64>().ok())
+                })
+                .fold(0.0_f64, f64::max)
+        };
+        assert!(
+            max_r(&small) < max_r(&large),
+            "atom_scale override must scale circle radius (small {} < large {})",
+            max_r(&small),
+            max_r(&large)
+        );
     }
 }
