@@ -40,8 +40,22 @@ request models) in `server/catgo/routers/` (structure_ops.py, build.py, dos.py,
   hot ops in P2/P3, not a big-bang refactor.
 
 `ServerLink`: on startup ping `localhost:8000/health`. Reachable → HTTP mode
-available (viewer push/pull). Unreachable → pure import mode; viewer-only ops
-greyed-out with hint, everything else works.
+available (viewer push/pull). Unreachable → pure import mode for offline ops.
+
+**Auto-start on demand**: when a `needs_server` op (viewer push/pull, anything
+that visualizes the structure) is invoked while no server is reachable, the CLI
+does **not** grey out or abort — it auto-launches the backend:
+
+1. spawn `catgo serve --daemon` (reuse existing serve subcommand) as a detached
+   background process
+2. poll `localhost:8000/health` until ready (timeout ~20s, backoff)
+3. build `ServerLink`, then proceed with the originally requested op transparently
+4. spawn fails (port taken, backend error) → only then error out with diagnostics
+
+The auto-started server is left running after the CLI exits (viewer needs it
+alive); CLI does not own its lifecycle / does not stop it on quit. If a server
+is already reachable, no spawn — reuse it. `--no-autostart` disables this
+(revert to grey-out/abort behavior) for scripted/offline-strict use.
 
 ## Architecture
 
@@ -151,7 +165,9 @@ defaults. New capability = one `registry.add(...)`; both forms get it.
 - Top bar = live `Session` state; refreshed after each action.
 - Number → prompt that op's params (show default, Enter = take default; list `choices`).
 - `mutates=True` → auto `push_history()` before handler; `u` reverts.
-- `needs_server` w/o link: tagged `[需 server]`, selecting prints hint, no crash.
+- `needs_server` w/o link: selecting auto-starts backend (spawn `catgo serve
+  --daemon`, wait `/health`, then run op); shows "starting server…" progress;
+  only spawn failure errors. `--no-autostart` → revert to grey-out + hint.
 - `OpResult.structure` non-null → written back to `session.structure`.
 
 ### Subcommand mapping (auto-generated from same registry)
@@ -178,7 +194,8 @@ Conventions:
 | Scenario | Behavior |
 |---|---|
 | File missing / unparseable | menu: red error, return main, session unchanged; CLI: stderr + exit 1 |
-| `needs_server` w/o link | menu: greyed + hint; CLI: `error: 'push' needs server` exit 2 |
+| `needs_server` w/o link | auto-start backend (spawn `catgo serve --daemon`, poll `/health`, proceed); only spawn failure → `error: backend failed to start` exit 2. `--no-autostart` → menu greyed + hint / CLI exit 2 immediately |
+| auto-start timeout / port taken | error with cause + manual `catgo serve` hint; session unchanged |
 | handler raises (pymatgen etc.) | caught → `OpResult(ok=False, message=str(e))`; session not written back (history already snapshotted); menu no crash, CLI exit 1 |
 | server drops mid-op (HTTP) | httpx timeout caught → degrade hint; not silently swallowed |
 | output path exists | menu: ask overwrite y/N; CLI: refuse unless `--force` |
@@ -193,7 +210,7 @@ factors behave identically.
 1. **registry**: every Operation params schema valid, handler callable, `--list` complete
 2. **handler unit** (core): import-mode pure-functional, Structure in → assert Structure/artifact out, no server; one set per op (slab layers/vacuum, supercell multiples, convert round-trip, inspect numerics)
 3. **dual-form equivalence**: same op+params via argparse path vs menu path → same OpResult (guards logic fork)
-4. **server mode**: mock httpx / test server, assert push/pull hit correct endpoints
+4. **server mode + auto-start**: mock httpx / test server, assert push/pull hit correct endpoints; auto-start path — no server → invoke needs_server op → asserts spawn called, polls health, op proceeds; `--no-autostart` → asserts no spawn + exit 2; spawn-failure → exit 2 + session unchanged
 5. **error injection**: bad file, missing server, handler raises → exit code + session unchanged
 6. **adapter**: `asyncio.run(route_fn(ReqModel))` unwraps `StructureResult` correctly (guards route-signature drift)
 
@@ -204,7 +221,8 @@ CI: pure-import tests have no server dependency; runnable standalone (matches HP
 - **P1**: registry + Session + dual-form skeleton + adapter pattern; groups
   **build** + **convert/inspect** (import-only). No viewer/HPC yet.
 - **P2**: **analyze** group (DOS/band/COHP/freq read+plot).
-- **P3**: **viewer sync** (push/pull, HTTP mode) + **HPC** (gen input + SLURM submit).
+- **P3**: **viewer sync** (push/pull, HTTP mode) + **on-demand backend
+  auto-start** (`--no-autostart` opt-out) + **HPC** (gen input + SLURM submit).
 
 Each phase: spec slice → plan → implement → tests green before next.
 
