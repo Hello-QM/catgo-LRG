@@ -27,6 +27,7 @@
   import AbacusExport from '$lib/structure/export/AbacusExport.svelte'
   import AmberExport from '$lib/structure/export/AmberExport.svelte'
   import SparkExport from '$lib/structure/export/SparkExport.svelte'
+  import CatRenderPane from '$lib/structure/catrender/CatRenderPane.svelte'
 
   let {
     export_pane_open = $bindable(false),
@@ -62,7 +63,7 @@
   } = $props()
 
   // Active section tab
-  let active_section = $state<'structure' | 'figure' | 'qe' | 'lammps' | 'vasp' | 'cp2k' | 'gaussian' | 'gromacs' | 'orca' | 'abacus' | 'amber' | 'spark'>('structure')
+  let active_section = $state<'structure' | 'figure' | 'qe' | 'lammps' | 'vasp' | 'cp2k' | 'gaussian' | 'gromacs' | 'orca' | 'abacus' | 'amber' | 'spark' | 'catrender'>('structure')
 
   // Multi-frame export state
   let frame_spec = $state(``)
@@ -326,6 +327,7 @@
     <button class:active={active_section === 'abacus'} onclick={() => active_section = 'abacus'}>ABACUS</button>
     <button class:active={active_section === 'amber'} onclick={() => active_section = 'amber'}>AMBER</button>
     <button class:active={active_section === 'spark'} onclick={() => active_section = 'spark'}>SPARK</button>
+    <button class:active={active_section === 'catrender'} onclick={() => active_section = 'catrender'}>Render</button>
   </div>
 
   {#if active_section === 'structure'}
@@ -580,6 +582,9 @@
       bind:generation_error
       bind:active_file
     />
+
+  {:else if active_section === 'catrender'}
+    <CatRenderPane {structure} />
   {/if}
 
   <!-- Generated output preview -->
