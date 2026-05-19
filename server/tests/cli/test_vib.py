@@ -103,3 +103,21 @@ def test_unparseable_ions_per_type_raises(tmp_path):
     bad.write_text("garbage with no ions-per-type line\n")
     with pytest.raises(OpError):
         parse_outcar_freqs(bad)
+
+
+from catgo.cli.vib import write_mode_animation
+
+
+def test_write_mode_animation(tmp_path):
+    p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
+    data = parse_outcar_freqs(p)
+    out = tmp_path / "ts.xyz"
+    n = write_mode_animation(
+        data, mode_index=1, out=out, frames=10, amplitude=0.5,
+        symbols=["H", "O"])
+    assert n == 10
+    txt = out.read_text().splitlines()
+    # extxyz: each frame = 1 count line + 1 comment + N atom lines
+    assert txt[0].strip() == "2"
+    assert txt.count("2") == 10            # 10 frame count-lines
+    assert len([l for l in txt if l.startswith(("H ", "O "))]) == 20

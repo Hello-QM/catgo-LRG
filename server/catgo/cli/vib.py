@@ -113,3 +113,35 @@ def parse_outcar_freqs(path) -> FreqData:
         i += 1
     data.num_imaginary = len(data.imag_freqs_cm)
     return data
+
+
+import math
+
+
+def write_mode_animation(data: FreqData, mode_index: int, out,
+                          frames: int, amplitude: float,
+                          symbols: list) -> int:
+    """Write an extxyz oscillation trajectory R(t)=R0+A*sin(2*pi*t)*e
+    for one normal mode. Returns the number of frames written.
+    """
+    if not (0 <= mode_index < len(data.eigenvectors)):
+        raise OpError(
+            f"mode_index {mode_index} out of range "
+            f"(0..{len(data.eigenvectors) - 1})")
+    if len(symbols) != data.total_atoms:
+        raise OpError(
+            f"symbols length {len(symbols)} != atoms {data.total_atoms}")
+    vec = data.eigenvectors[mode_index]
+    out = Path(out)
+    with out.open("w") as fh:
+        for k in range(frames):
+            t = k / frames
+            s = amplitude * math.sin(2.0 * math.pi * t)
+            fh.write(f"{data.total_atoms}\n")
+            fh.write(f'frame={k} mode={mode_index}\n')
+            for a in range(data.total_atoms):
+                x = data.positions[a][0] + s * vec[a][0]
+                y = data.positions[a][1] + s * vec[a][1]
+                z = data.positions[a][2] + s * vec[a][2]
+                fh.write(f"{symbols[a]} {x:.6f} {y:.6f} {z:.6f}\n")
+    return frames
