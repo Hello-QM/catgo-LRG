@@ -23,6 +23,18 @@ class OpError(Exception):
     """Operation failed (validation, route error). Carries a user message."""
 
 
+def require_structure(session):
+    """Shared op-handler guard: active structure or OpError.
+
+    DRY single source — replaces the per-module _require/_require_structure
+    helpers. Raises OpError (op-precondition failure) so every handler and
+    the CLI/shell dispatch treat "nothing loaded" uniformly.
+    """
+    if session.structure is None:
+        raise OpError("no active structure -- load one first")
+    return session.structure
+
+
 def call_route(route_fn: Callable, request_model: Type[BaseModel], **params: Any):
     try:
         req = request_model(**params)

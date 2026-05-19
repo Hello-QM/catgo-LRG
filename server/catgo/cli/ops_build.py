@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pymatgen.core import Structure
 
-from catgo.cli.adapter import OpError, call_route
+from catgo.cli.adapter import call_route, require_structure
 from catgo.cli.registry import OpResult
 from catgo.routers.structure_ops import (
     GenerateSlabRequest, SupercellRequest,
@@ -15,14 +15,8 @@ from catgo.routers.structure_ops import (
 )
 
 
-def _require_structure(session) -> Structure:
-    if session.structure is None:
-        raise OpError("no active structure -- load one first")
-    return session.structure
-
-
 def supercell(session, params: dict) -> OpResult:
-    struct = _require_structure(session)
+    struct = require_structure(session)
     res = call_route(
         create_supercell, SupercellRequest,
         structure=struct.as_dict(), scaling=list(params["scaling"]),
@@ -33,7 +27,7 @@ def supercell(session, params: dict) -> OpResult:
 
 
 def slab(session, params: dict) -> OpResult:
-    struct = _require_structure(session)
+    struct = require_structure(session)
     # in_unit_planes=True -> min_slab_size is a true atomic-layer count,
     # so `layers` means exactly that (no Angstrom/layer heuristic).
     res = call_route(

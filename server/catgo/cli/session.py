@@ -15,7 +15,8 @@ class SessionError(Exception):
 _ASE_ONLY_EXT = {".extxyz", ".mol2", ".pdb"}
 
 
-def _read_structure(path: Path) -> Structure:
+# Public (no underscore): consumed by ops_convert as well as Session.
+def read_structure(path: Path) -> Structure:
     # ASE-only formats go through pymatgen.io.ase.AseAtomsAdaptor so the
     # return type is ALWAYS a genuine pymatgen.core.Structure (consistent
     # with the Structure.from_file branch). Do NOT use
@@ -32,7 +33,8 @@ def _read_structure(path: Path) -> Structure:
         raise SessionError(f"cannot parse {path}: {exc}") from exc
 
 
-def _write_structure(struct: Structure, path: Path) -> None:
+# Public (no underscore): consumed by ops_convert as well as Session.
+def write_structure(struct: Structure, path: Path) -> None:
     # AseAtomsAdaptor (not catgo.utils.converter.pymatgen_to_ase, which has
     # a pre-existing crash on plain-element structures).
     ext = path.suffix.lower()
@@ -55,7 +57,7 @@ class Session:
         p = Path(path)
         if not p.exists():
             raise SessionError(f"file not found: {p}")
-        self.structure = _read_structure(p)
+        self.structure = read_structure(p)
         self.source_path = p
 
     def push_history(self) -> None:
@@ -71,4 +73,4 @@ class Session:
         if self.structure is None:
             raise SessionError("no active structure to save")
         p = Path(path)
-        _write_structure(self.structure, p)
+        write_structure(self.structure, p)

@@ -36,3 +36,15 @@ def test_validation_error_becomes_operror():
     with pytest.raises(OpError) as ei:
         call_route(_sync_route, _Req, x="not-an-int")
     assert "invalid parameters" in str(ei.value)
+
+
+def test_require_structure():
+    from catgo.cli.adapter import require_structure
+
+    class _S:  # minimal session stand-in
+        structure = None
+
+    with pytest.raises(OpError):
+        require_structure(_S())
+    s = _S(); s.structure = "X"
+    assert require_structure(s) == "X"
