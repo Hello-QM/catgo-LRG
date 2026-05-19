@@ -16,23 +16,30 @@ _ASE_ONLY_EXT = {".extxyz", ".mol2", ".pdb"}
 
 
 def _read_structure(path: Path) -> Structure:
+    # ASE-only formats go through pymatgen.io.ase.AseAtomsAdaptor so the
+    # return type is ALWAYS a genuine pymatgen.core.Structure (consistent
+    # with the Structure.from_file branch). Do NOT use
+    # catgo.utils.converter.ase_to_pymatgen — it returns a different
+    # pydantic model type and breaks every downstream consumer.
     ext = path.suffix.lower()
     try:
         if ext in _ASE_ONLY_EXT:
             from ase.io import read
-            from catgo.utils.converter import ase_to_pymatgen
-            return ase_to_pymatgen(read(str(path)))
+            from pymatgen.io.ase import AseAtomsAdaptor
+            return AseAtomsAdaptor.get_structure(read(str(path)))
         return Structure.from_file(str(path))
     except Exception as exc:  # noqa: BLE001 — unify all parse failures
         raise SessionError(f"cannot parse {path}: {exc}") from exc
 
 
 def _write_structure(struct: Structure, path: Path) -> None:
+    # AseAtomsAdaptor (not catgo.utils.converter.pymatgen_to_ase, which has
+    # a pre-existing crash on plain-element structures).
     ext = path.suffix.lower()
     if ext in _ASE_ONLY_EXT:
         from ase.io import write
-        from catgo.utils.converter import pymatgen_to_ase
-        write(str(path), pymatgen_to_ase(struct))
+        from pymatgen.io.ase import AseAtomsAdaptor
+        write(str(path), AseAtomsAdaptor.get_atoms(struct))
         return
     struct.to(filename=str(path))
 
