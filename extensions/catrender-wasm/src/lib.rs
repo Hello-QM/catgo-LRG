@@ -1,5 +1,6 @@
 pub mod bonds;
 pub mod color;
+pub mod fog;
 pub mod geom;
 pub mod orient;
 pub mod palette;
