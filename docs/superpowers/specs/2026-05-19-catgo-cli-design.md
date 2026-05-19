@@ -89,7 +89,15 @@ class Session:
     history: list[Structure] = field(default_factory=list)  # undo stack
     link: ServerLink | None = None          # non-None only if :8000 reachable
 
-    def load(self, path) -> None            # file → structure (via converters)
+    # ASE-only formats (.extxyz/.mol2/.pdb) read/written via
+    # pymatgen.io.ase.AseAtomsAdaptor so session.structure is ALWAYS a
+    # genuine pymatgen.core.Structure (NOT catgo.utils.converter, whose
+    # ase_to_pymatgen returns a different pydantic model type and whose
+    # pymatgen_to_ase has a pre-existing crash on plain-element structures).
+    # P1 known limit: AseAtomsAdaptor.get_structure needs a periodic cell;
+    # non-periodic .mol2/.pdb molecules are a P2 concern (P1 build ops
+    # already require periodic input anyway).
+    def load(self, path) -> None            # file → structure (type-faithful)
     def push_history(self) -> None          # snapshot before mutating op
     def undo(self) -> None
     def save(self, path, fmt=None) -> None
