@@ -32,8 +32,8 @@
 
   // --- The OPEN live-knob override map (locked decision: ANY default.json
   // knob is live-tunable; sent as style.overrides; empty = inherit preset).
-  // Dedicated controls below + an advanced raw-JSON textarea both write here.
-  let overrides_map = $state<Record<string, unknown>>({})
+  // Dedicated controls below + an advanced raw-JSON textarea feed the pure
+  // `overrides` $derived ({ map, err }) defined further down.
 
   // Dedicated-control backing state. Each is gated by an `*_on` toggle so an
   // untouched control does NOT pin a value into the override map (unset =
@@ -60,11 +60,18 @@
   // Advanced: raw JSON the power-user/AI uses for ANY knob not given a
   // dedicated control. Merged LAST onto the dedicated knobs.
   let advanced_json = $state(``)
-  let advanced_err = $state(``)
 
   // Derived open override map: dedicated (only `on` knobs) ← advanced JSON.
-  const overrides = $derived.by(() => {
+  // PURE projection — returns `{ map, err }`; no external $state writes (a
+  // Svelte 5 footgun). Malformed advanced JSON → `err` set + `map` is the
+  // last-good dedicated-knob map (advanced merge skipped). Consumers read
+  // `overrides.map` for the payload and `overrides.err` for the inline error.
+  const overrides = $derived.by((): {
+    map: Record<string, unknown>
+    err: string
+  } => {
     const o: Record<string, unknown> = {}
+    let err = ``
     if (k_atom_scale.on) o.atom_scale = k_atom_scale.v
     if (k_bond_width.on) o.bond_width = k_bond_width.v
     if (k_atom_stroke_width.on) o.atom_stroke_width = k_atom_stroke_width.v
@@ -83,20 +90,17 @@
     if (k_bond_color.on) o.bond_color = k_bond_color.v
     if (k_background.on) o.background = k_background.v
     if (k_cell_color.on) o.cell_color = k_cell_color.v
-    advanced_err = ``
     if (advanced_json.trim()) {
       try {
         const parsed = JSON.parse(advanced_json)
         if (parsed && typeof parsed === `object` && !Array.isArray(parsed))
           Object.assign(o, parsed)
-        else advanced_err = `advanced JSON must be an object`
+        else err = `advanced JSON must be an object`
       } catch (e) {
-        advanced_err = `advanced JSON: ${String(e)}`
+        err = `advanced JSON: ${String(e)}`
       }
     }
-    // keep a snapshot mirror for the bridge poll (non-reactive read there)
-    overrides_map = o
-    return o
+    return { map: o, err }
   })
 
   function reset_to_preset() {
@@ -248,9 +252,22 @@
         best = idx
       }
     })
-    // circle paint order follows kept-atom order; this is a best-effort map
-    // (hidden atoms shift it — index list below is the exact fallback).
-    if (best >= 0) selected_atom = best
+    if (best < 0) return
+    // `best` is the DOM/paint ordinal of the picked <circle>. svg.rs emits one
+    // circle per VISIBLE atom in ORIGINAL atom order, skipping hidden atoms —
+    // so the Nth rendered circle is the Nth non-hidden atom. Reconstruct that
+    // visible→original map via merge_atoms (this is what makes merge_atoms
+    // load-bearing): build the hidden set off the same pruned overrides the
+    // render uses, list the non-hidden original indices in order, and look up
+    // the picked ordinal. Without this, hidden atoms shift the DOM index and
+    // a click selects the wrong ORIGINAL atom.
+    const m = mirror
+    if (!m) return
+    const a_ov = prune_atom_overrides($state.snapshot(atom_overrides), m.n)
+    const { hidden } = merge_atoms(m.n, a_ov)
+    const visible_idx: number[] = []
+    for (let i = 0; i < m.n; i++) if (!hidden.has(i)) visible_idx.push(i)
+    selected_atom = best < visible_idx.length ? visible_idx[best] : best
   }
   function on_preview_click(e: MouseEvent) {
     // a plain click (not the end of a drag) selects an atom
@@ -304,7 +321,7 @@
       const pruned = prune_overrides($state.snapshot(bond_overrides), m.n)
       const bonds = merge_bonds(m.base, pruned)
       const a_ov = prune_atom_overrides($state.snapshot(atom_overrides), m.n)
-      const ov = $state.snapshot(overrides) as Record<string, unknown>
+      const ov = $state.snapshot(overrides.map) as Record<string, unknown>
       const input = JSON.stringify({
         atoms: m.atoms,
         bonds,
@@ -361,7 +378,7 @@
               const a_ov = prune_atom_overrides(
                 $state.snapshot(atom_overrides), m.n,
               )
-              const ov = { ...overrides_map }
+              const ov = { ...overrides.map }
               const out = await render_svg(
                 JSON.stringify({
                   atoms: m.atoms,
@@ -412,6 +429,7 @@
     download(`catrender.svg`, new Blob([svg], { type: `image/svg+xml` }))
   }
 
+  // TODO(followup): export_png hardcodes 1200x1200, ignores viewBox aspect
   async function export_png() {
     const img = new Image()
     img.src = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
@@ -560,7 +578,7 @@
         placeholder={'{ "vdw_opacity": 0.4, "label_color": "#333" }'}
         bind:value={advanced_json}></textarea>
     </label>
-    {#if advanced_err}<p class="err">{advanced_err}</p>{/if}
+    {#if overrides.err}<p class="err">{overrides.err}</p>{/if}
   </details>
 
   <details class="panel">

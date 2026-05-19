@@ -1,12 +1,17 @@
 // Render-layer atom override util — pure, no Svelte. Mirrors bond-merge.ts.
 //
 // The catrender WASM core consumes `atom_overrides:[{op,idx,hex?}]` directly
-// (RT9 svg.rs / RT10 types.rs `AtomOverride`). This module's job is therefore
-// NORMALISATION, not transformation: dedupe per-idx (last op wins), drop
-// out-of-range indices (atom deleted upstream — mirror `prune_overrides`),
-// and surface a {hidden,recolor} view the pane uses for hit-test masking and
-// for building the array it hands to the wasm input. A hidden atom's incident
-// bonds are dropped by the core; the recolor entry is normalised even when the
+// (RT9 svg.rs / RT10 types.rs `AtomOverride`). The wasm payload is therefore
+// the RAW pruned override array (see `prune_atom_overrides`) — the Rust core
+// dedups per-idx and applies hide/recolor internally; this module does NOT
+// build the wasm input.
+//
+// `merge_atoms` is the front-end-only normalisation used purely for click
+// HIT-TEST masking: it dedupes per-idx (last op wins) and drops out-of-range
+// indices, surfacing a `{hidden, recolor}` view. The pane uses `hidden` to map
+// a clicked <circle> back to its ORIGINAL atom index — svg.rs emits one circle
+// per visible atom in original order, so the picker must skip hidden indices
+// to avoid selecting the wrong atom. `recolor` is normalised even when the
 // same idx is also hidden (moot then, but kept so toggling hide back off
 // restores the colour).
 
