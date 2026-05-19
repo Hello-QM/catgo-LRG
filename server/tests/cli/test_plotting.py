@@ -32,3 +32,29 @@ def test_missing_matplotlib_raises_operror(tmp_path, monkeypatch):
     with pytest.raises(OpError) as ei:
         render(_spec(), tmp_path / "p.png", edit=False, latex=False)
     assert "catgo-engine[analyze]" in str(ei.value)
+
+
+import os, sys, types
+import pytest
+from catgo.cli.adapter import OpError
+
+
+def test_edit_no_display_degrades(monkeypatch, tmp_path):
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(sys, "platform", "linux")
+    with pytest.raises(OpError) as ei:
+        render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
+    assert "--edit" in str(ei.value)
+
+
+def test_edit_calls_pylustrator_start(monkeypatch, tmp_path):
+    monkeypatch.setenv("DISPLAY", ":0")
+    calls = {}
+    fake = types.ModuleType("pylustrator")
+    fake.start = lambda: calls.setdefault("start", True)
+    monkeypatch.setitem(sys.modules, "pylustrator", fake)
+    import matplotlib.pyplot as plt
+    monkeypatch.setattr(plt, "show", lambda *a, **k: calls.setdefault("show", True))
+    out = render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
+    assert calls.get("start") and calls.get("show")
+    assert out == tmp_path / "p.pdf"

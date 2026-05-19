@@ -73,5 +73,32 @@ def render(spec: PlotSpec, out, edit: bool, latex: bool) -> Path:
     return out
 
 
+def _has_display() -> bool:
+    import os
+    import sys
+    if sys.platform == "darwin":
+        return True
+    return bool(os.environ.get("DISPLAY"))
+
+
 def _render_edit(spec: PlotSpec, out: Path, latex: bool) -> Path:
-    raise OpError("edit mode not yet available")  # implemented in Task 3
+    if not _has_display():
+        raise OpError(
+            "no display available for --edit; drop --edit to write a "
+            "static publication figure instead")
+    try:
+        import pylustrator
+    except ImportError as exc:
+        raise OpError(
+            f"pylustrator not installed (needed for --edit): {exc}") from exc
+    pylustrator.start()  # overloads plt.figure/plt.show into the GUI
+    plt = _pyplot()
+    _build_figure(spec)   # GUI captures the current figure
+    plt.show()            # blocks in the pylustrator editor
+    # User saves from the GUI: pylustrator writes reproducible matplotlib
+    # code back into the calling script and exports the figure. We still
+    # write a baseline file at `out` so a non-interactive caller has one.
+    fig = _build_figure(spec)
+    fig.savefig(str(out), dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return out
