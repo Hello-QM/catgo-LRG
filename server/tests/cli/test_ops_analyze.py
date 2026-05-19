@@ -198,8 +198,9 @@ def test_cohp_happy_path_monkeypatched(tmp_path, monkeypatch):
 
     class _CD:
         energies = np.linspace(-5.0, 5.0, 11)
-        cohp = np.ones((2, 11)) * 0.5         # 1 pair + avg row 0
-        icohp = -np.linspace(0.0, 1.0, 11)[None].repeat(2, axis=0)
+        # real shape (nspin=1, ncols=2, npoints=11); col 0 = Average, col 1 = a bond
+        cohp = np.ones((1, 2, 11)) * 0.5
+        icohp = -np.tile(np.linspace(0.0, 1.0, 11), (1, 2, 1))
         efermi = 0.0
 
     fake_root = types.ModuleType("catgo_cohp")

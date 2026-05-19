@@ -120,9 +120,8 @@ def dos(session, params: dict) -> OpResult:
         # Narrow catch: catgo_dos returns NaN-DBandCenter for non-d
         # systems natively (no exception). This fires only on real
         # errors (bad atoms, shape skew, version drift) — surface them.
-        import sys as _sys
         print(f"warning: d-band fallback ({exc.__class__.__name__}: {exc})",
-              file=_sys.stderr)
+              file=sys.stderr)
         dband_val = float("nan")
 
     energy = list(res.grid)
@@ -143,6 +142,7 @@ def dos(session, params: dict) -> OpResult:
 
 
 def cohp(session, params: dict) -> OpResult:
+    import numpy as np
     from catgo.cli._extpath import ensure_extension
     from catgo.cli.plotting import PlotSpec, render
 
@@ -158,38 +158,30 @@ def cohp(session, params: dict) -> OpResult:
     except Exception as exc:  # noqa: BLE001
         raise OpError(f"failed to parse COHPCAR: {exc}") from exc
 
-    # catgo_cohp ships `energies` already shifted to E_f = 0 (per
-    # COHPData docstring) and the real `cohp`/`icohp` arrays have shape
-    # (nspin, ncols, npoints) with the Average channel at col-index 0.
-    # The test stub uses a 2D shape (n_pairs+1, npoints) with the
-    # Average at row 0. Handle both: collapse to a 1D "average" series.
-    import numpy as _np
-    cohp_arr = _np.asarray(cd.cohp)
-    icohp_arr = _np.asarray(cd.icohp)
-    if cohp_arr.ndim == 3:
-        # (nspin, ncols, npoints) -> sum spins, take Average col (0)
-        avg_cohp = cohp_arr.sum(axis=0)[0]
-        avg_icohp = icohp_arr.sum(axis=0)[0]
-    else:
-        # 2D fallback (n_pairs+1, npoints): row 0 = average.
-        avg_cohp = cohp_arr[0]
-        avg_icohp = icohp_arr[0]
-
-    e = list(cd.energies)
-    # pCOHP convention: sign-flip so bonding is positive.
-    avg = [-float(v) for v in avg_cohp]
-    # Energies are already E - E_f, so the Fermi level sits at 0 eV.
-    fi = min(range(len(e)), key=lambda k: abs(e[k] - 0.0))
+    # catgo_cohp ships cohp/icohp as (nspin, ncols, npoints) with the
+    # Average bond at col index 0; energies are already shifted so that
+    # E_f = 0 (cohp/io.py docstring). Sum over spin, take the Average.
+    cohp_3d = np.asarray(cd.cohp)
+    icohp_3d = np.asarray(cd.icohp)
+    avg_cohp = cohp_3d.sum(axis=0)[0]                 # -> (npoints,)
+    avg_icohp = icohp_3d.sum(axis=0)[0]
+    e = np.asarray(cd.energies)
+    # pCOHP plotting convention: sign-flip so bonding is positive.
+    avg_neg = (-avg_cohp).tolist()
+    # ICOHP at E_f: sample the integrated average at the Fermi level (E=0).
+    fi = int(np.argmin(np.abs(e)))
     icohp_ef = float(avg_icohp[fi])
 
     spec = PlotSpec(
-        kind="cohp", x=e, series=[("-pCOHP (avg)", avg, {})],
+        kind="cohp", x=e.tolist(),
+        series=[("-pCOHP (avg, spin-summed)", avg_neg, {})],
         xlabel="E - E_f (eV)", ylabel="-pCOHP",
         vlines=[0.0])
     out = Path(params["out"]) if params.get("out") else Path("cohp.pdf")
     render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
     if params.get("dump"):
-        _dump(params["dump"], {"energy": e, "neg_pcohp_avg": avg,
+        _dump(params["dump"], {"energy": e.tolist(),
+                               "neg_pcohp_avg": avg_neg,
                                "icohp_at_Ef": icohp_ef})
     return OpResult(ok=True,
                     message=f"ICOHP at E_f = {icohp_ef:.4f} -> {out}",
