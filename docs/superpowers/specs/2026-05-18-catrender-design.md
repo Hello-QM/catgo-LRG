@@ -29,7 +29,8 @@ MCP tool.
   read-only; bond overrides are render-only and do not write back).
 - QM file parsing (Gaussian/ORCA/etc.) — CatGo's existing parsers feed the pane.
 
-In scope v1: molecular appearance (11 presets, depth-cue/fog, ball-stick,
+In scope v1: molecular appearance (8 presets — default/flat/paton/skeletal/
+bubble/tube/wire/graph, depth-cue/fog, ball-stick,
 H toggle, rotation/view, distance/angle labels, SVG/PNG export) **plus the
 crystal package** (unit cell box, supercell, periodic-boundary wrap rendering).
 
@@ -99,7 +100,7 @@ pub fn render(input_json: &str) -> String   // returns SVG string
   "bonds":  [{"i":0,"j":1,"order":2}, ...],     // main connectivity ⊕ overrides (merged in frontend)
   "lattice": [[..],[..],[..]] | null,           // crystal package
   "style": {
-    "preset": "paton",                          // enum of 11
+    "preset": "paton",                          // enum of 8 (v1)
     "show_h": true,
     "rotation": [rx,ry,rz],
     "scale": 1.0,
