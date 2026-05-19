@@ -74,6 +74,19 @@ fn cfg_b(c: &MergedConfig, key: &str, dflt: bool) -> bool {
 fn cfg_s<'a>(c: &'a MergedConfig, key: &str, dflt: &'a str) -> &'a str {
     c.get_s_opt(key).unwrap_or(dflt)
 }
+/// Color-field getter that ALWAYS routes the value (preset-present OR the
+/// hardcoded absent-key fallback) through `palette::resolve_color`.
+///
+/// preset.rs only resolves color keys that are PRESENT in the merged config;
+/// when a key is ABSENT the in-svg.rs `dflt` (e.g. `"black"`, `"#000000"`)
+/// would otherwise reach `Color::from_hex` raw — and `from_hex("black")`
+/// misparses the CSS name to `#00ac00` (green). resolve_color maps
+/// `"black"→"#000000"`, lowercases `#rrggbb`, and passes the `"atom"`
+/// marker through unchanged, so all downstream `from_hex`/fog-blend/raw-emit
+/// uses are safe regardless of whether the key was in the preset.
+fn cfg_color(c: &MergedConfig, key: &str, dflt: &str) -> String {
+    crate::palette::resolve_color(cfg_s(c, key, dflt))
+}
 
 /// Per-element color: `color_overrides[sym]` (preset `colors`) wins, then
 /// per-atom recolor (handled by caller via `recolor`), then CPK by Z.
@@ -100,9 +113,9 @@ pub fn render_svg(inp: &RenderInput) -> String {
     // --- gather knobs --------------------------------------------------
     let atom_scale = cfg_f(&cfg, "atom_scale", 1.0);
     let bond_width = cfg_f(&cfg, "bond_width", 5.0);
-    let bond_color = cfg_s(&cfg, "bond_color", "#333333").to_string();
+    let bond_color = cfg_color(&cfg, "bond_color", "#333333");
     let atom_stroke_width = cfg_f(&cfg, "atom_stroke_width", 1.5);
-    let atom_stroke_color = cfg_s(&cfg, "atom_stroke_color", "black").to_string();
+    let atom_stroke_color = cfg_color(&cfg, "atom_stroke_color", "black");
     let gradient = cfg_b(&cfg, "gradient", false);
     let hue = cfg_f(&cfg, "hue_shift_factor", 0.2);
     let light = cfg_f(&cfg, "light_shift_factor", 0.2);
@@ -111,7 +124,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let fog_on = cfg_b(&cfg, "fog", false);
     let fog_strength = cfg_f(&cfg, "fog_strength", 0.8);
     let bond_orders = cfg_b(&cfg, "bond_orders", false);
-    let background = cfg_s(&cfg, "background", "#ffffff").to_string();
+    let background = cfg_color(&cfg, "background", "#ffffff");
     let transparent = cfg_b(&cfg, "transparent", false);
     let padding = cfg_f(&cfg, "padding", 20.0);
     let canvas_size = cfg_f(&cfg, "canvas_size", 800.0);
@@ -120,19 +133,25 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let bond_gradient = cfg_b(&cfg, "bond_gradient", false);
     let bond_gradient_strength = cfg_f(&cfg, "bond_gradient_strength", 0.3);
     let bond_outline_width = cfg_f(&cfg, "bond_outline_width", 0.0);
-    let bond_outline_color = cfg_s(&cfg, "bond_outline_color", "#000000").to_string();
+    let bond_outline_color = cfg_color(&cfg, "bond_outline_color", "#000000");
     let atom_wash = cfg_f(&cfg, "atom_wash", 0.0);
     let atoms_above_bonds = cfg_b(&cfg, "atoms_above_bonds", false);
     let skeletal_style = cfg_b(&cfg, "skeletal_style", false);
-    let skeletal_label_color = cfg.get_s_opt("skeletal_label_color").map(str::to_string);
+    let skeletal_label_color = cfg
+        .get_s_opt("skeletal_label_color")
+        .map(crate::palette::resolve_color);
     let hide_bonds = cfg_b(&cfg, "hide_bonds", false);
     let dof = cfg_b(&cfg, "dof", false);
     let dof_strength = cfg_f(&cfg, "dof_strength", 3.0);
     let periodic_image_opacity = cfg_f(&cfg, "periodic_image_opacity", 0.5);
-    let cell_color = cfg_s(&cfg, "cell_color", "#333333").to_string();
+    let cell_color = cfg_color(&cfg, "cell_color", "#333333");
     let cell_line_width = cfg_f(&cfg, "cell_line_width", 2.0);
-    let ts_color = cfg.get_s_opt("ts_color").map(str::to_string);
-    let nci_color = cfg.get_s_opt("nci_color").map(str::to_string);
+    let ts_color = cfg
+        .get_s_opt("ts_color")
+        .map(crate::palette::resolve_color);
+    let nci_color = cfg
+        .get_s_opt("nci_color")
+        .map(crate::palette::resolve_color);
     let auto_orient_default = cfg_b(&cfg, "auto_align", true);
 
     // --- atom-override prune: hide drops the atom + incident bonds -----
@@ -510,8 +529,11 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
         let xi = px[ai];
         let yi = py[ai];
         let orig = keep[ai];
-        let is_image = false; // periodic image atoms handled in the supercell
-                              // expansion below (none in the base cell).
+        let is_image = false; // RT9-DEFER: periodic-image atom generation is
+                              // RT10-schema scope (no supercell field in
+                              // RenderInput yet); periodic_image_opacity
+                              // wiring is present and applied once images
+                              // exist.
         let atom_op = if is_image { periodic_image_opacity } else { 1.0 };
         let op_atom = if atom_op < 1.0 {
             format!(" opacity=\"{:.2}\"", atom_op)
@@ -1389,6 +1411,23 @@ mod tests {
         );
         assert_eq!(s.matches("<circle").count(), 1, "hidden atom dropped");
         assert!(!s.contains("<line"), "incident bond dropped with atom");
+    }
+
+    #[test]
+    fn default_atom_stroke_is_black_not_green() {
+        // regression: absent atom_stroke_color must resolve "black"→#000000,
+        // never Color::from_hex("black")→#00ac00. default.json has fog=true
+        // (fog_strength 1.2) but a single atom has zr→0 ⇒ fog_f[0]=0.0, so
+        // blend_fog_hex("#000000", 0.0) == "#000000" (no fog shift): the
+        // stroke derives from #000000, NOT from a misparsed-"black" green.
+        let s = render(
+            r#"{"atoms":[{"el":"O","xyz":[0,0,0]}],"style":{"preset":"default"}}"#,
+        );
+        assert!(!s.contains("#00ac00"), "green stroke regression");
+        assert!(
+            s.contains("stroke=\"#000000\"") || s.contains("stroke=\"black\""),
+            "atom stroke must be resolved black"
+        );
     }
 
     #[test]
