@@ -330,5 +330,10 @@ mod tests {
         assert_eq!(resolve_color("steelblue"), "#4682b4");
         assert_eq!(resolve_color("#AbC"), "#aabbcc");
         assert_eq!(resolve_color("atom"), "atom");
+        assert_eq!(resolve_color("#gg"), "#gg");          // malformed hex: no panic, passthrough
+        assert_eq!(resolve_color("#"), "#");              // degenerate, no panic
+        assert_eq!(resolve_color("SteelBlue"), "#4682b4"); // case-insensitive name
+        assert_eq!(resolve_color("NotAColor"), "NotAColor"); // unknown name preserved unchanged
+        assert_eq!(resolve_color("#AABBCC"), "#aabbcc");   // 6-digit hex lowercased
     }
 }
