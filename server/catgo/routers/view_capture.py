@@ -258,10 +258,12 @@ async def request_catrender(payload: dict[str, Any]):
         "style": payload.get("style", {}),
         "format": payload.get("format", "svg"),
     }
+    logger.info("catrender requested (id=%s, style=%s)", request_id, payload.get("style"))
     try:
         result = await asyncio.wait_for(future, timeout=CATRENDER_TIMEOUT)
         return result
     except asyncio.TimeoutError:
+        logger.warning("catrender request %s timed out", request_id)
         raise HTTPException(
             status_code=504,
             detail=f"catrender timed out after {CATRENDER_TIMEOUT}s. "
@@ -290,6 +292,7 @@ def upload_catrender(payload: dict[str, Any]):
     if future.done():
         raise HTTPException(status_code=409, detail="Already fulfilled")
     future.set_result(payload)
+    logger.info("catrender result received (id=%s, %d bytes)", payload.get("request_id"), len(payload.get("svg") or ""))
     return {"status": "ok"}
 
 

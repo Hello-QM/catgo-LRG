@@ -97,6 +97,11 @@
     ;(async () => {
       while (!stopped) {
         try {
+          // Intentionally NOT panel-scoped: any open Render pane is a valid
+          // responder for an AI export request. If two panes are mounted both
+          // may answer; the server's /result done()-guard 409s the loser
+          // (swallowed below). Do not add panel_id scoping — it breaks
+          // headless-style requests that target "whatever pane is open".
           const r = await fetch(`${API_BASE}/view/catrender/pending`)
           if (r.ok) {
             const { pending } = await r.json()

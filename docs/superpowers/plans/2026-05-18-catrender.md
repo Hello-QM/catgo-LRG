@@ -1550,14 +1550,23 @@ async def handle(arguments: dict, client, api_base: str):
         ]
         lattice = (sd.get("lattice", {}) or {}).get("matrix")
         payload = json.dumps({"atoms": atoms, "lattice": lattice, "style": style})
-        proc = subprocess.run([binp], input=payload, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(
+                [binp], input=payload, capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return [{"type": "text",
+                     "text": "catrender CLI timed out after 30s (structure too large or binary hung)."}]
         if proc.returncode != 0:
             return [{"type": "text", "text": f"catrender CLI error: {proc.stderr.strip()}"}]
         svg = proc.stdout
         via = "native CLI (headless)"
 
-    with open(out, "w") as fh:
-        fh.write(svg)
+    try:
+        with open(out, "w") as fh:
+            fh.write(svg)
+    except OSError as e:
+        return [{"type": "text", "text": f"catrender: cannot write {out}: {e}"}]
     return [{"type": "text",
              "text": f"Rendered current structure via {via} → {out} ({len(svg)} bytes)."}]
 ```
