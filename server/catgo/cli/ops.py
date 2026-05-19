@@ -32,4 +32,58 @@ def build_registry() -> OperationRegistry:
         summary="print composition / symmetry / nearest-neighbor",
         params=[], handler=ops_convert.inspect, mutates=False,
     ))
+    from catgo.cli import ops_analyze
+    reg.add(Operation(
+        name="dos", group="analyze",
+        summary="vaspout.h5 -> PDOS publication plot + d-band center",
+        params=[
+            Param("atoms", str, default="all", help="atom indices or 'all'"),
+            Param("channels", str, default="spd",
+                  help="orbital spec: s|p|d|spd|... (catgo_dos)"),
+            Param("edit", bool, default=False, help="open pylustrator GUI editor"),
+            Param("latex", bool, default=False, help="LaTeX text rendering"),
+            Param("dump", str, default="", help="also write raw data JSON"),
+        ],
+        handler=ops_analyze.dos, mutates=False))
+    reg.add(Operation(
+        name="band", group="analyze",
+        summary="vasprun.xml -> band structure plot + gap",
+        params=[
+            Param("edit", bool, default=False, help="open pylustrator GUI editor"),
+            Param("latex", bool, default=False, help="LaTeX text rendering"),
+            Param("dump", str, default="", help="also write raw data JSON"),
+        ],
+        handler=ops_analyze.band, mutates=False))
+    reg.add(Operation(
+        name="cohp", group="analyze",
+        summary="COHPCAR.lobster -> -pCOHP plot + ICOHP",
+        params=[
+            Param("edit", bool, default=False, help="open pylustrator GUI editor"),
+            Param("latex", bool, default=False, help="LaTeX text rendering"),
+            Param("dump", str, default="", help="also write raw data JSON"),
+        ],
+        handler=ops_analyze.cohp, mutates=False))
+    reg.add(Operation(
+        name="freq", group="analyze",
+        summary="OUTCAR -> Gibbs correction + TS imaginary-mode animation",
+        params=[
+            Param("mode", str, default="adsorbed",
+                  help="adsorbed|gas", choices=["adsorbed", "gas"]),
+            Param("T", float, default=298.15, help="temperature (K)"),
+            Param("P", float, default=1.0, help="pressure (bar, gas)"),
+            Param("freq_cutoff", float, default=50.0,
+                  help="soft-mode cutoff (cm-1)"),
+            Param("unpaired", int, default=0, help="unpaired electrons (gas)"),
+            Param("frames", int, default=20, help="animation frames"),
+            Param("amplitude", float, default=0.5,
+                  help="animation amplitude (A)"),
+            Param("mode_index", int, default=-1,
+                  help="mode to animate (-1 = first imaginary)"),
+            Param("symbols", str, default="",
+                  help="comma element symbols, one per atom (animation)"),
+            Param("no_anim", bool, default=False,
+                  help="skip the TS animation, numbers only"),
+            Param("dump", str, default="", help="also write Gibbs JSON"),
+        ],
+        handler=ops_analyze.freq, mutates=False))
     return reg

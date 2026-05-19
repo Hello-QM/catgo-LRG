@@ -84,3 +84,10 @@ def test_legacy_dispatch_still_works_after_wiring():
     r = _run_catgo("status")
     assert r.returncode == 0
     assert "Traceback" not in r.stderr
+
+
+def test_analyze_subcommands_in_help():
+    out = _run_catgo("--help")
+    assert out.returncode == 0
+    for c in ("dos", "band", "cohp", "freq"):
+        assert c in out.stdout

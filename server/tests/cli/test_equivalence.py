@@ -13,3 +13,34 @@ def test_handler_invoked_same_via_registry_lookup():
     s = Session(); s.structure = _cu()
     r = op.handler(s, {"scaling": [2, 2, 2]})
     assert r.ok and r.structure.num_sites == 8
+
+
+def test_analyze_ops_registered():
+    reg = build_registry()
+    for name in ("dos", "band", "cohp", "freq"):
+        op = reg.get(name)
+        assert op.group == "analyze"
+        assert op.mutates is False
+
+
+def test_freq_via_registry(tmp_path):
+    import textwrap
+    from catgo.cli.session import Session
+    outcar = tmp_path / "OUTCAR"
+    outcar.write_text(textwrap.dedent("""\
+       ions per type =               1
+      POMASS =   1.00
+     position of ions in cartesian coordinates  (Angst):
+       0.0000000  0.0000000  0.0000000
+
+     Eigenvectors and eigenvalues of the dynamical matrix
+     ----------------------------------------------------
+
+       1 f  =    5.000000 THz    31.4159 2PiTHz  166.7800 cm-1    20.6789 meV
+                 X         Y         Z           dx          dy          dz
+          0.000000  0.000000  0.000000     0.000000  0.000000  1.000000
+    """))
+    op = build_registry().get("freq")
+    r = op.handler(Session(), {"input": str(outcar), "mode": "adsorbed",
+                               "no_anim": True})
+    assert r.ok and "G_corr" in r.message
