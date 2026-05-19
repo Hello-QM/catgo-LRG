@@ -34,6 +34,15 @@ const VIEW: f64 = 600.0;
 pub fn render_svg(inp: &RenderInput) -> String {
     let preset: Preset = crate::preset::get(&inp.style.preset);
 
+    // Use explicit bonds if supplied; otherwise perceive by distance.
+    let perceived;
+    let bonds: &[crate::types::Bond] = if inp.bonds.is_empty() {
+        perceived = crate::bonds::perceive(&inp.atoms);
+        &perceived
+    } else {
+        &inp.bonds
+    };
+
     let mut keep: Vec<usize> = Vec::new();
     for (i, a) in inp.atoms.iter().enumerate() {
         if !inp.style.show_h && a.el == "H" {
@@ -64,7 +73,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let new_of: std::collections::HashMap<usize, usize> =
         keep.iter().enumerate().map(|(n, &o)| (o, n)).collect();
     if preset.bond_width > 0.0 {
-        for b in &inp.bonds {
+        for b in bonds {
             let (Some(&ni), Some(&nj)) = (new_of.get(&b.i), new_of.get(&b.j)) else {
                 continue;
             };
@@ -185,6 +194,15 @@ mod tests {
         assert!(svg.starts_with("<svg"));
         assert!(svg.ends_with("</svg>"));
         assert!(!svg.contains("<circle"));
+    }
+
+    #[test]
+    fn auto_bonds_drawn_when_no_explicit_bonds() {
+        let inp = parse(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"style":{"preset":"skeletal"}}"#,
+        );
+        let svg = render_svg(&inp);
+        assert!(svg.contains("<line"), "auto-perceived bond should render");
     }
 
     #[test]

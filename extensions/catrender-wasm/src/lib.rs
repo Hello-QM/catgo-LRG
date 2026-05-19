@@ -1,3 +1,4 @@
+pub mod bonds;
 pub mod geom;
 pub mod preset;
 pub mod svg;
