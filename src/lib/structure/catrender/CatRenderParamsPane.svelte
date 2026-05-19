@@ -13,10 +13,28 @@
   // no cell). Read the shared mirror's `lattice` so the toggle disables
   // itself instead of silently doing nothing. NO render/Rust change.
   let has_lattice = $derived(S.mirror?.lattice != null)
+
+  // RT13 overlap fix: DraggablePane's toggle-less fallback hard-codes BOTH
+  // panes to left:50px/top:50px, so the View pane 100% occludes this Params
+  // pane on first open and the user can't find the knobs. There is no
+  // toggle-less absolute-position PROP, but DraggablePane DOES expose its
+  // pane element as a bindable (`pane_div`). We seed a distinct default
+  // position on it once it mounts — but ONLY while it's still sitting at
+  // the untouched 50px fallback, so a user drag (which writes other px
+  // values to the same inline style) is never snapped back. Independent
+  // dragging is therefore preserved; we only relocate the *initial* spot.
+  let pane_div = $state<HTMLDivElement>()
+  $effect(() => {
+    if (show && pane_div && pane_div.style.left === `50px` && pane_div.style.top === `50px`) {
+      pane_div.style.left = `32px`
+      pane_div.style.top = `64px`
+    }
+  })
 </script>
 
 <DraggablePane
   bind:show
+  bind:pane_div
   show_toggle={false}
   close_on_click_outside={false}
   max_width="26em"

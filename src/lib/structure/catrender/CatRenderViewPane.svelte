@@ -22,6 +22,21 @@
     structure = undefined as AnyStructure | undefined,
   } = $props()
 
+  // RT13 overlap fix: see CatRenderParamsPane for the rationale.
+  // DraggablePane's toggle-less fallback puts BOTH panes at
+  // left:50px/top:50px so this View pane completely covers the Params knob
+  // column on first open. Seed a distinct default to the RIGHT of Params
+  // (Params ≈ 32px..~390px wide) via DraggablePane's bindable pane element,
+  // only while still at the untouched 50px fallback so a user drag is never
+  // reverted — the panes stay independently draggable.
+  let pane_div = $state<HTMLDivElement>()
+  $effect(() => {
+    if (show && pane_div && pane_div.style.left === `50px` && pane_div.style.top === `50px`) {
+      pane_div.style.left = `470px`
+      pane_div.style.top = `64px`
+    }
+  })
+
   // --- Bond-edit override layer (existing bond-merge plumbing) ------------
   let be_i = $state(0)
   let be_j = $state(1)
@@ -356,6 +371,7 @@
 
 <DraggablePane
   bind:show
+  bind:pane_div
   show_toggle={false}
   close_on_click_outside={false}
   max_width="none"
