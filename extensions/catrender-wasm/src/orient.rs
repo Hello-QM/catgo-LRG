@@ -38,9 +38,20 @@
 /// rotation is still applied to ALL positions (prevents NCI centroid dummy
 /// nodes from biasing the orientation — `utils.py:73-77`). `mask[i] == true`
 /// keeps row `i` in the fit set.
+
+/// TS priority up-weight (xyzrender utils.py priority_weight=5.0)
 const PRIORITY_WEIGHT: f64 = 5.0;
 
+// cyclic Jacobi (Golub & Van Loan §8.4); bounded sweep cap guarantees termination
+const JACOBI_MAX_SWEEPS: usize = 50;
+const JACOBI_OFFDIAG_EPS: f64 = 1e-300;
+const JACOBI_PAIR_EPS: f64 = 1e-30;
+const JACOBI_CONVERGED: f64 = 1e-18;
+
 /// Faithful `pca_orient`. Returns centered + rotated positions.
+///
+/// `priority` indices address the *fit subset* (post-`fit_mask`), 0-based;
+/// out-of-range pairs are silently skipped (degrades to plain PCA if none valid).
 pub fn pca_orient(pos: &[[f64; 3]], priority: Option<&[(usize, usize)]>) -> Vec<[f64; 3]> {
     pca_orient_full(pos, priority, None).0
 }
@@ -48,6 +59,9 @@ pub fn pca_orient(pos: &[[f64; 3]], priority: Option<&[(usize, usize)]>) -> Vec<
 /// As [`pca_orient`] but also returns the cumulative 3×3 rotation matrix
 /// (`rot`, row-major) for the corner axis gizmo. Row `k` of `rot` is the
 /// world-space axis that maps to local axis `k` (matches upstream `rot`).
+///
+/// `priority` indices address the *fit subset* (post-`fit_mask`), 0-based;
+/// out-of-range pairs are silently skipped (degrades to plain PCA if none valid).
 pub fn pca_orient_with_matrix(
     pos: &[[f64; 3]],
     priority: Option<&[(usize, usize)]>,
@@ -56,6 +70,9 @@ pub fn pca_orient_with_matrix(
 }
 
 /// Full form exposing `fit_mask` (NCI `*` exclusion — `utils.py:77`).
+///
+/// `priority` indices address the *fit subset* (post-`fit_mask`), 0-based;
+/// out-of-range pairs are silently skipped (degrades to plain PCA if none valid).
 pub fn pca_orient_with_mask(
     pos: &[[f64; 3]],
     priority: Option<&[(usize, usize)]>,
@@ -137,9 +154,17 @@ fn pca_orient_full(
     let mut weighted: Vec<[f64; 3]> = c_fit.clone();
     if let Some(pp) = priority {
         if !pp.is_empty() {
+            // priority indices address the fit subset (c_fit), 0-based.
+            // Out-of-range pairs are skipped (no panic); if every pair is
+            // skipped, `weighted` stays == c_fit → plain PCA (defensive
+            // style mirrors fit_mask's `unwrap_or(false)`).
             for &(i, j) in pp {
-                weighted.push(scale(c_fit[i], PRIORITY_WEIGHT));
-                weighted.push(scale(c_fit[j], PRIORITY_WEIGHT));
+                if i < c_fit.len() && j < c_fit.len() {
+                    weighted.push(scale(c_fit[i], PRIORITY_WEIGHT));
+                    weighted.push(scale(c_fit[j], PRIORITY_WEIGHT));
+                } else {
+                    continue;
+                }
             }
         }
     }
@@ -177,15 +202,28 @@ fn pca_orient_full(
     // TS bonds: rotate around z to align mean TS dir along +x    (utils.py:115-124)
     if let Some(pp) = priority {
         if !pp.is_empty() {
+            // Same fit-subset contract: out-of-range pairs skipped (no
+            // panic). If no valid pair remains, `valid` == 0 → mag stays 0
+            // → z-rotation skipped → plain-PCA result (graceful degrade).
             let mut avg = [0.0_f64; 2];
+            let mut valid = 0usize;
             for &(i, j) in pp {
-                avg[0] += oriented[j][0] - oriented[i][0];
-                avg[1] += oriented[j][1] - oriented[i][1];
+                if i < oriented.len() && j < oriented.len() {
+                    avg[0] += oriented[j][0] - oriented[i][0];
+                    avg[1] += oriented[j][1] - oriented[i][1];
+                    valid += 1;
+                } else {
+                    continue;
+                }
             }
-            let m = pp.len() as f64;
+            let m = valid.max(1) as f64;
             avg[0] /= m;
             avg[1] /= m;
-            let mag = (avg[0] * avg[0] + avg[1] * avg[1]).sqrt();
+            let mag = if valid == 0 {
+                0.0
+            } else {
+                (avg[0] * avg[0] + avg[1] * avg[1]).sqrt()
+            };
             if mag > 1e-6 {
                 let theta = -avg[1].atan2(avg[0]);
                 let (ct, st) = (theta.cos(), theta.sin());
@@ -259,15 +297,15 @@ fn matmul(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
 fn jacobi_eig_3x3(input: &[[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
     let mut a = *input;
     let mut v = IDENTITY;
-    for _sweep in 0..50 {
+    for _sweep in 0..JACOBI_MAX_SWEEPS {
         // Largest off-diagonal magnitude.
         let off = a[0][1].abs() + a[0][2].abs() + a[1][2].abs();
-        if off < 1e-300 {
+        if off < JACOBI_OFFDIAG_EPS {
             break;
         }
         for &(p, q) in &[(0usize, 1usize), (0, 2), (1, 2)] {
             let apq = a[p][q];
-            if apq.abs() < 1e-30 {
+            if apq.abs() < JACOBI_PAIR_EPS {
                 continue;
             }
             let app = a[p][p];
@@ -296,7 +334,7 @@ fn jacobi_eig_3x3(input: &[[f64; 3]; 3]) -> ([f64; 3], [[f64; 3]; 3]) {
                 v[k][q] = s * vkp + c * vkq;
             }
         }
-        if a[0][1].abs() + a[0][2].abs() + a[1][2].abs() < 1e-18 {
+        if a[0][1].abs() + a[0][2].abs() + a[1][2].abs() < JACOBI_CONVERGED {
             break;
         }
     }
@@ -458,5 +496,35 @@ mod tests {
                 assert!((o_all[i][k] - o_masked[i][k]).abs() < 1e-9);
             }
         }
+    }
+
+    // ---- RT5 defensive bounds-check coverage --------------------------
+
+    #[test]
+    fn priority_out_of_range_skips_not_panic() {
+        let p = vec![[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]];
+        let o = pca_orient(&p, Some(&[(0usize, 99usize)])); // 99 invalid → skipped → plain PCA
+        assert!(o.iter().all(|q| q.iter().all(|v| v.is_finite())));
+    }
+    #[test]
+    fn tiny_variance_is_finite_no_nan() {
+        let s = 1e-30;
+        let p = vec![[0., 0., 0.], [s, 0., 0.], [0., s, 0.], [s, s, 0.]];
+        let o = pca_orient(&p, None);
+        assert!(o.iter().all(|q| q.iter().all(|v| v.is_finite())));
+    }
+    #[test]
+    fn short_mask_no_panic_finite() {
+        let p = vec![[0., 0., 0.], [2., 0., 0.], [0., 2., 0.]];
+        // real signature: (pos, priority, fit_mask); mask shorter than pos
+        let o = pca_orient_with_mask(&p, None, Some(&[true, false]));
+        assert!(o.0.iter().all(|q| q.iter().all(|v| v.is_finite())));
+    }
+    /// Zero matrix → degenerate but finite spectrum; eigenvectors identity.
+    #[test]
+    fn eigensolver_zero_matrix_finite_identity() {
+        let (ev, vec) = jacobi_eig_3x3(&[[0.0; 3]; 3]);
+        assert!(ev.iter().all(|v| v.is_finite() && v.abs() < 1e-12));
+        assert_eq!(vec, IDENTITY);
     }
 }
