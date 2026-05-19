@@ -55,6 +55,17 @@ def test_ensure_extension_imports_catgo_dos():
 def test_ensure_extension_missing_raises():
     with pytest.raises(OpError):
         ensure_extension("does-not-exist", "nope_pkg")
+
+
+def test_ensure_extension_import_error_wrapped(monkeypatch):
+    # present dir but broken/absent package -> OpError, cause preserved
+    import importlib
+    def _boom(name):
+        raise ImportError("simulated missing transitive dep")
+    monkeypatch.setattr(importlib, "import_module", _boom)
+    with pytest.raises(OpError) as ei:
+        ensure_extension("dos-analysis", "catgo_dos")
+    assert isinstance(ei.value.__cause__, ImportError)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -100,6 +111,8 @@ def ensure_extension(ext_dir: str, package: str) -> ModuleType:
             f"extension '{ext_dir}' not found at {ext_path} — "
             f"required for this analysis")
     p = str(ext_path)
+    # prepend is safe: extension dirs contain only namespaced catgo_*
+    # packages (+ README/pyproject), nothing that shadows stdlib/site
     if p not in sys.path:
         sys.path.insert(0, p)
     try:
@@ -109,12 +122,18 @@ def ensure_extension(ext_dir: str, package: str) -> ModuleType:
             f"cannot import '{package}' from {ext_path}: {exc}") from exc
 ```
 
-Append to `server/pyproject.toml` `[project]` dependencies list (locate the existing `dependencies = [` array and add these three entries, keeping formatting):
+Add an `analyze` **optional** extra to `server/pyproject.toml` (NOT core
+`dependencies` — pylustrator pulls a heavy Qt stack and neither P1 nor the
+freq path uses these; the plot handlers lazy-import with a clean OpError).
+Under `[project.optional-dependencies]`, after the existing `ml = [...]`
+block, add:
 
 ```toml
+analyze = [
     "matplotlib>=3.8",
-    "scienceplots",
+    "scienceplots>=2.1",
     "pylustrator>=1.3",
+]
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -168,6 +187,16 @@ def test_render_writes_pdf(tmp_path):
     out = tmp_path / "p.pdf"
     render(_spec(), out, edit=False, latex=False)
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_missing_matplotlib_raises_operror(tmp_path, monkeypatch):
+    import sys, pytest
+    from catgo.cli.adapter import OpError
+    # simulate matplotlib absent (optional [analyze] extra not installed)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", None)
+    with pytest.raises(OpError) as ei:
+        render(_spec(), tmp_path / "p.png", edit=False, latex=False)
+    assert "catgo-engine[analyze]" in str(ei.value)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -201,25 +230,41 @@ class PlotSpec:
     xlabel: str
     ylabel: str
     vlines: list = field(default_factory=list)
+    hlines: list = field(default_factory=list)
     title: str = ""
 
 
+def _pyplot():
+    """Lazy matplotlib.pyplot, or a clean OpError if the optional
+    [analyze] extra is not installed (matplotlib is NOT a core dep)."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise OpError(
+            "matplotlib not installed (needed for analyze plots) — "
+            "pip install 'catgo-engine[analyze]'") from exc
+    return plt
+
+
 def _apply_style(latex: bool) -> None:
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
     try:
         import scienceplots  # noqa: F401  (registers styles)
-        plt.style.use(["science"] if latex else ["science", "no-latex"])
-    except Exception:  # noqa: BLE001 — scienceplots optional/registration
+    except ImportError:
         plt.rcParams.update({"figure.dpi": 300, "font.size": 9})
+        return
+    plt.style.use(["science"] if latex else ["science", "no-latex"])
 
 
 def _build_figure(spec: PlotSpec):
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
     fig, ax = plt.subplots(figsize=(3.3, 2.5))
     for label, y, style in spec.series:
         ax.plot(spec.x, y, label=label, **(style or {}))
     for vx in spec.vlines:
         ax.axvline(vx, color="0.5", lw=0.6, ls="--")
+    for vy in spec.hlines:
+        ax.axhline(vy, color="0.5", lw=0.6, ls="--")
     ax.set_xlabel(spec.xlabel)
     ax.set_ylabel(spec.ylabel)
     if spec.title:
@@ -235,7 +280,7 @@ def render(spec: PlotSpec, out, edit: bool, latex: bool) -> Path:
     _apply_style(latex)
     if edit:
         return _render_edit(spec, out, latex)
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
     fig = _build_figure(spec)
     fig.savefig(str(out), dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -280,6 +325,7 @@ from catgo.cli.adapter import OpError
 
 def test_edit_no_display_degrades(monkeypatch, tmp_path):
     monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(sys, "platform", "linux")
     with pytest.raises(OpError) as ei:
         render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
@@ -297,6 +343,14 @@ def test_edit_calls_pylustrator_start(monkeypatch, tmp_path):
     out = render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
     assert calls.get("start") and calls.get("show")
     assert out == tmp_path / "p.pdf"
+
+
+def test_edit_pylustrator_missing_raises_operror(monkeypatch, tmp_path):
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setitem(sys.modules, "pylustrator", None)  # import -> ImportError
+    with pytest.raises(OpError) as ei:
+        render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
+    assert "catgo-engine[analyze]" in str(ei.value)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -314,7 +368,8 @@ def _has_display() -> bool:
     import sys
     if sys.platform == "darwin":
         return True
-    return bool(os.environ.get("DISPLAY"))
+    return bool(os.environ.get("DISPLAY")
+                or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _render_edit(spec: PlotSpec, out: Path, latex: bool) -> Path:
@@ -326,17 +381,19 @@ def _render_edit(spec: PlotSpec, out: Path, latex: bool) -> Path:
         import pylustrator
     except ImportError as exc:
         raise OpError(
-            f"pylustrator not installed (needed for --edit): {exc}") from exc
-    pylustrator.start()  # overloads plt.figure/plt.show into the GUI
-    import matplotlib.pyplot as plt
-    _build_figure(spec)   # GUI captures the current figure
+            "pylustrator not installed (needed for --edit) — "
+            "pip install 'catgo-engine[analyze]'") from exc
+    # NOTE: pylustrator.start() monkeypatches plt.figure/plt.show
+    # process-wide and is NOT reversible. Acceptable: --edit is a terminal
+    # user action; a long-lived shell should run it last.
+    pylustrator.start()
+    plt = _pyplot()
+    _build_figure(spec)   # GUI captures this figure; user edits it
     plt.show()            # blocks in the pylustrator editor
-    # User saves from the GUI: pylustrator writes reproducible matplotlib
-    # code back into the calling script and exports the figure. We still
-    # write a baseline file at `out` so a non-interactive caller has one.
-    fig = _build_figure(spec)
-    fig.savefig(str(out), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    # Per design §2: the user exports the final figure to `out` from the
+    # GUI (pylustrator also writes reproducible code back). We deliberately
+    # do NOT write a fresh un-edited baseline to `out` here — that would
+    # silently discard the user's interactive edits.
     return out
 ```
 
@@ -374,8 +431,12 @@ from catgo.cli.vib import parse_outcar_freqs
 # "ions per type", a POSITION/mass block, and the f= / f/i= mode blocks
 # each followed by an "X Y Z dx dy dz" eigenvector table.
 _OUTCAR = textwrap.dedent("""\
-   ions per type =               2
+   ions per type =               1 1
   POMASS =   1.00 16.00
+      direct lattice vectors                 reciprocal lattice vectors
+     5.000000  0.000000  0.000000     0.200000  0.000000  0.000000
+     0.000000  5.000000  0.000000     0.000000  0.200000  0.000000
+     0.000000  0.000000  8.000000     0.000000  0.000000  0.125000
  position of ions in cartesian coordinates  (Angst):
    0.0000000  0.0000000  0.0000000
    0.0000000  0.0000000  1.1000000
@@ -407,7 +468,74 @@ def test_parse_outcar_freqs(tmp_path):
     assert len(r.eigenvectors[0]) == 2       # per atom
     assert r.eigenvectors[0][1] == [0.0, 0.0, -0.7]
     assert r.masses_amu == [1.0, 16.0]
+    assert r.atom_types == [0, 1]            # H -> type 0, O -> type 1
     assert len(r.positions) == 2
+    assert r.lattice == [[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 8.0]]
+    assert r.imag_mode_indices == [1]        # eigenvectors[1] is the imag mode
+
+
+import pytest
+from catgo.cli.adapter import OpError
+
+# real VASP prints the freq table BEFORE the eigenvector section (no vec
+# rows there) and again interleaved with eigenvectors; the parser must
+# dedup by "only blocks with vec rows count". 3 real modes, no imaginary.
+_OUTCAR_DEDUP = textwrap.dedent("""\
+   ions per type =               1 1
+  POMASS =   1.00 16.00; ZVAL = 1.0
+  POMASS =   1.00 16.00
+ position of ions in cartesian coordinates  (Angst):
+   0.0000000  0.0000000  0.0000000
+   0.0000000  0.0000000  1.1000000
+
+   1 f  =    9.0 THz   56.5 2PiTHz  300.0000 cm-1   37.2 meV
+   2 f  =    6.0 THz   37.7 2PiTHz  200.0000 cm-1   24.8 meV
+   3 f  =    3.0 THz   18.8 2PiTHz  100.0000 cm-1   12.4 meV
+
+ Eigenvectors and eigenvalues of the dynamical matrix
+ ----------------------------------------------------
+
+   1 f  =    9.0 THz   56.5 2PiTHz  300.0000 cm-1   37.2 meV
+             X         Y         Z           dx          dy          dz
+      0.000000  0.000000  0.000000     0.000000  0.000000  0.100000
+      0.000000  0.000000  1.100000     0.000000  0.000000 -0.100000
+
+   2 f  =    6.0 THz   37.7 2PiTHz  200.0000 cm-1   24.8 meV
+             X         Y         Z           dx          dy          dz
+      0.000000  0.000000  0.000000     0.000000  0.200000  0.000000
+      0.000000  0.000000  1.100000     0.000000 -0.200000  0.000000
+
+   3 f  =    3.0 THz   18.8 2PiTHz  100.0000 cm-1   12.4 meV
+             X         Y         Z           dx          dy          dz
+      0.000000  0.000000  0.000000     0.300000  0.000000  0.000000
+      0.000000  0.000000  1.100000    -0.300000  0.000000  0.000000
+""")
+
+
+def test_dedup_leading_freq_table_not_double_counted(tmp_path):
+    p = tmp_path / "OUTCAR"
+    p.write_text(_OUTCAR_DEDUP)
+    r = parse_outcar_freqs(p)
+    # 3 real modes, the pre-eigenvector listing must NOT double-count
+    assert r.real_freqs_cm == [300.0, 200.0, 100.0]
+    assert r.imag_freqs_cm == []
+    assert r.num_imaginary == 0
+    assert len(r.eigenvectors) == 3
+    # POMASS summary line (no ';'/ZVAL) chosen over the per-POTCAR line
+    assert r.masses_amu == [1.0, 16.0]
+    assert r.atom_types == [0, 1]
+
+
+def test_missing_outcar_raises():
+    with pytest.raises(OpError):
+        parse_outcar_freqs("/no/such/OUTCAR")
+
+
+def test_unparseable_ions_per_type_raises(tmp_path):
+    bad = tmp_path / "OUTCAR"
+    bad.write_text("garbage with no ions-per-type line\n")
+    with pytest.raises(OpError):
+        parse_outcar_freqs(bad)
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -449,9 +577,15 @@ _VEC_RE = re.compile(
 class FreqData:
     real_freqs_cm: list = field(default_factory=list)
     imag_freqs_cm: list = field(default_factory=list)
+    # eigenvectors indexed in OUTCAR line order; real modes come first
+    # in standard VASP output but downstream MUST use imag_mode_indices
+    # rather than assume the boundary is len(real_freqs_cm).
     eigenvectors: list = field(default_factory=list)  # [mode][atom][dx,dy,dz]
+    imag_mode_indices: list = field(default_factory=list)  # idx into eigenvectors
     positions: list = field(default_factory=list)      # [atom][x,y,z]
+    lattice: list = field(default_factory=list)        # 3x3 direct Å
     masses_amu: list = field(default_factory=list)
+    atom_types: list = field(default_factory=list)     # [atom] -> type idx
     total_atoms: int = 0
     num_imaginary: int = 0
 
@@ -460,21 +594,38 @@ def parse_outcar_freqs(path) -> FreqData:
     p = Path(path)
     if not p.exists():
         raise OpError(f"OUTCAR not found: {p}")
-    text = p.read_text(errors="ignore")
+    text = p.read_text(errors="ignore")  # OUTCARs are ASCII; read whole
     lines = text.splitlines()
 
     m = re.search(r"ions per type\s*=\s*([\d ]+)", text)
     if not m:
         raise OpError("could not parse 'ions per type' from OUTCAR")
-    total = sum(int(x) for x in m.group(1).split())
-
-    pm = re.search(r"POMASS\s*=\s*([\d. ]+)", text)
-    masses = [float(x) for x in pm.group(1).split()] if pm else []
-    # expand per-type masses to per-atom using ions-per-type counts
     counts = [int(x) for x in m.group(1).split()]
+    total = sum(counts)
+
+    # Per-POTCAR lines look like "POMASS =  16.00; ZVAL = 6.00" (one
+    # value). The per-type SUMMARY line is "POMASS = m1 m2 ..." (only
+    # floats, no ';'/ZVAL, one value per element type) — that is the one
+    # we want; grabbing the first POMASS match would bind a single-type
+    # POTCAR header on real multi-element OUTCARs.
+    masses: list = []
+    for ln in lines:
+        s = ln.strip()
+        if not s.startswith("POMASS") or ";" in s or "ZVAL" in s:
+            continue
+        mm = re.match(r"POMASS\s*=\s*([\d.\s]+)$", s)
+        if mm:
+            cand = [float(x) for x in mm.group(1).split()]
+            if len(cand) == len(counts):
+                masses = cand
+                break
+
     masses_per_atom: list = []
-    for c, mass in zip(counts, masses):
+    atom_types: list = []
+    for ti, c in enumerate(counts):
+        mass = masses[ti] if ti < len(masses) else 0.0
         masses_per_atom += [mass] * c
+        atom_types += [ti] * c
 
     pos: list = []
     for i, ln in enumerate(lines):
@@ -486,17 +637,35 @@ def parse_outcar_freqs(path) -> FreqData:
                                 float(parts[2])])
             break
 
+    # Direct lattice vectors: VASP prints
+    #   "direct lattice vectors                 reciprocal lattice vectors"
+    # then 3 rows "ax ay az   bx by bz"; we take the first 3 floats per row.
+    # Needed so the written extxyz carries Lattice=... and CatGO can
+    # render cross-cell bonds for slab TS visualization.
+    lat: list = []
+    for i, ln in enumerate(lines):
+        if "direct lattice vectors" in ln:
+            tmp: list = []
+            for j in range(i + 1, i + 4):
+                parts = lines[j].split()
+                if len(parts) >= 3:
+                    tmp.append([float(parts[0]), float(parts[1]),
+                                float(parts[2])])
+            if len(tmp) == 3:
+                lat = tmp
+                break
+
     data = FreqData(total_atoms=total, masses_amu=masses_per_atom,
-                    positions=pos)
+                    atom_types=atom_types, positions=pos, lattice=lat)
     i = 0
-    seen: list = []
     while i < len(lines):
         ln = lines[i]
         mr, mi = _F_RE.match(ln), _FI_RE.match(ln)
         if mr or mi:
             cm = float((mr or mi).group(4))
-            key = (i, cm)
-            # OUTCAR prints modes twice; keep the eigenvector-bearing block
+            # OUTCAR prints the freq table twice; the pre-eigenvector
+            # listing has no vec rows after each line, so blocks with no
+            # eigenvectors are skipped below (robust dedup substitute).
             vecs: list = []
             j = i + 2  # skip the "X Y Z dx dy dz" header line
             while j < len(lines):
@@ -507,10 +676,12 @@ def parse_outcar_freqs(path) -> FreqData:
                              float(vm.group(6))])
                 j += 1
             if vecs:  # only blocks that actually carry eigenvectors
+                eig_idx = len(data.eigenvectors)
                 if mr:
                     data.real_freqs_cm.append(cm)
                 else:
                     data.imag_freqs_cm.append(cm)
+                    data.imag_mode_indices.append(eig_idx)
                 data.eigenvectors.append(vecs)
             i = j
             continue
@@ -546,6 +717,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 Append to `server/tests/cli/test_vib.py`:
 
 ```python
+import math
 from catgo.cli.vib import write_mode_animation
 
 
@@ -553,15 +725,46 @@ def test_write_mode_animation(tmp_path):
     p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
     data = parse_outcar_freqs(p)
     out = tmp_path / "ts.xyz"
+    n_frames = 10
     n = write_mode_animation(
-        data, mode_index=1, out=out, frames=10, amplitude=0.5,
+        data, mode_index=1, out=out, frames=n_frames, amplitude=0.5,
         symbols=["H", "O"])
-    assert n == 10
+    assert n == n_frames
     txt = out.read_text().splitlines()
-    # extxyz: each frame = 1 count line + 1 comment + N atom lines
-    assert txt[0].strip() == "2"
-    assert txt.count("2") == 10            # 10 frame count-lines
-    assert len([l for l in txt if l.startswith(("H ", "O "))]) == 20
+    stride = 2 + data.total_atoms                     # count + comment + N
+    # frame count-lines at known strides (robust; no string.count False+)
+    for k in range(n_frames):
+        assert txt[k * stride].strip() == str(data.total_atoms)
+    # extxyz header keys present (CatGO needs Lattice + Properties for PBC)
+    assert "Lattice=" in txt[1]
+    assert "Properties=species:S:1:pos:R:3" in txt[1]
+    atom_lines = [l for l in txt if l.startswith(("H ", "O "))]
+    assert len(atom_lines) == n_frames * data.total_atoms
+    # Numeric anchor: frame 0 (sin=0) -> equilibrium positions exactly
+    f0_h = atom_lines[0].split()
+    assert float(f0_h[1]) == 0.0 and float(f0_h[2]) == 0.0
+    assert float(f0_h[3]) == 0.0
+    # mode_index=1 eigenvector for atom 0 = (0.1,0,0); at k=frames//4 sin=1
+    qk = n_frames // 4
+    f_qk_h = atom_lines[qk * data.total_atoms].split()
+    expected_x = 0.0 + 0.5 * math.sin(2.0 * math.pi * qk / n_frames) * 0.1
+    assert abs(float(f_qk_h[1]) - expected_x) < 1e-6
+
+
+def test_write_mode_animation_bad_mode_index_raises(tmp_path):
+    p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
+    data = parse_outcar_freqs(p)
+    with pytest.raises(OpError):
+        write_mode_animation(data, mode_index=99, out=tmp_path / "x.xyz",
+                              frames=5, amplitude=0.1, symbols=["H", "O"])
+
+
+def test_write_mode_animation_symbols_len_mismatch_raises(tmp_path):
+    p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
+    data = parse_outcar_freqs(p)
+    with pytest.raises(OpError):
+        write_mode_animation(data, mode_index=0, out=tmp_path / "x.xyz",
+                              frames=5, amplitude=0.1, symbols=["H"])  # 1 != 2
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -571,17 +774,18 @@ Expected: FAIL — `ImportError: cannot import name 'write_mode_animation'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `server/catgo/cli/vib.py`:
+Hoist `import math` to the top of `server/catgo/cli/vib.py` (next to `import re`) instead of mid-file (PEP 8). Then append the function:
 
 ```python
-import math
-
-
 def write_mode_animation(data: FreqData, mode_index: int, out,
                           frames: int, amplitude: float,
                           symbols: list) -> int:
     """Write an extxyz oscillation trajectory R(t)=R0+A*sin(2*pi*t)*e
-    for one normal mode. Returns the number of frames written.
+    for one normal mode, with Lattice= and Properties= keys so CatGO
+    renders PBC cross-cell bonds. Returns the number of frames written.
+
+    t = k/frames over [0,1) — no-duplicate-endpoint loop convention
+    (matches CatGO's loop_playback default).
     """
     if not (0 <= mode_index < len(data.eigenvectors)):
         raise OpError(
@@ -591,13 +795,23 @@ def write_mode_animation(data: FreqData, mode_index: int, out,
         raise OpError(
             f"symbols length {len(symbols)} != atoms {data.total_atoms}")
     vec = data.eigenvectors[mode_index]
-    out = Path(out)
-    with out.open("w") as fh:
+    out_path = Path(out)
+    # extxyz comment header: Lattice + Properties (omit Lattice if the
+    # OUTCAR lattice wasn't parsed — viewers fall back to non-periodic).
+    if data.lattice and len(data.lattice) == 3:
+        l = data.lattice
+        lat_str = ('Lattice="'
+                   + " ".join(f"{v:.6f}" for row in l for v in row)
+                   + '" ')
+    else:
+        lat_str = ""
+    header_keys = f'{lat_str}Properties=species:S:1:pos:R:3'
+    with out_path.open("w") as fh:
         for k in range(frames):
             t = k / frames
             s = amplitude * math.sin(2.0 * math.pi * t)
             fh.write(f"{data.total_atoms}\n")
-            fh.write(f'frame={k} mode={mode_index}\n')
+            fh.write(f'{header_keys} frame={k} mode={mode_index}\n')
             for a in range(data.total_atoms):
                 x = data.positions[a][0] + s * vec[a][0]
                 y = data.positions[a][1] + s * vec[a][1]
@@ -640,8 +854,12 @@ from catgo.cli import ops_analyze
 from catgo.cli.adapter import OpError
 
 _OUTCAR = textwrap.dedent("""\
-   ions per type =               2
+   ions per type =               1 1
   POMASS =   1.00 16.00
+      direct lattice vectors                 reciprocal lattice vectors
+     5.000000  0.000000  0.000000     0.200000  0.000000  0.000000
+     0.000000  5.000000  0.000000     0.000000  0.200000  0.000000
+     0.000000  0.000000  8.000000     0.000000  0.000000  0.125000
  position of ions in cartesian coordinates  (Angst):
    0.0000000  0.0000000  0.0000000
    0.0000000  0.0000000  1.1000000
@@ -745,9 +963,8 @@ def freq(session, params: dict) -> OpResult:
     if mode == "adsorbed":
         g = calc_adsorbed(data.real_freqs_cm, data.imag_freqs_cm, T, cutoff)
     elif mode == "gas":
-        atom_types = list(range(data.total_atoms))
         g = calc_gas(data.real_freqs_cm, data.imag_freqs_cm, data.positions,
-                     data.masses_amu, atom_types, T,
+                     data.masses_amu, data.atom_types, T,
                      float(params.get("P", 1.0)) * 1e5,
                      int(params.get("unpaired", 0)))
     else:
@@ -841,6 +1058,79 @@ def test_dos_wrong_format_errors(tmp_path):
     bad = tmp_path / "x.xml"; bad.write_text("<xml/>")
     with pytest.raises(OpError):
         ops_analyze.dos(Session(), {"input": str(bad), "out": str(tmp_path/"o.png")})
+
+
+def test_dos_missing_file_clean_error(tmp_path):
+    with pytest.raises(OpError) as ei:
+        ops_analyze.dos(Session(), {"input": str(tmp_path / "nope.h5"),
+                                    "out": str(tmp_path / "o.png")})
+    assert "not found" in str(ei.value)
+
+
+def test_dos_bad_atoms_clean_error(tmp_path, monkeypatch):
+    # Stub the extension imports so the validation runs without a real h5.
+    import sys, types, importlib
+    # Build a fake catgo_dos with the minimum surface dos() touches before
+    # atoms validation runs: read_vaspout_h5 returns a stub with .nions.
+    fake_io = types.ModuleType("catgo_dos.io")
+    class _V:
+        nions = 1
+    fake_io.read_vaspout_h5 = lambda p: _V()
+    fake_pdos = types.ModuleType("catgo_dos.pdos")
+    fake_pdos.compute_pdos = lambda *a, **k: None  # not reached
+    fake_dband = types.ModuleType("catgo_dos.dband")
+    fake_dband.compute_d_center = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "catgo_dos.io", fake_io)
+    monkeypatch.setitem(sys.modules, "catgo_dos.pdos", fake_pdos)
+    monkeypatch.setitem(sys.modules, "catgo_dos.dband", fake_dband)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")  # minimal stub
+    with pytest.raises(OpError) as ei:
+        ops_analyze.dos(Session(), {"input": str(h5),
+                                    "atoms": "abc,xyz",
+                                    "out": str(tmp_path / "o.png")})
+    assert "comma-separated integers" in str(ei.value)
+
+
+def test_dos_happy_path_monkeypatched(tmp_path, monkeypatch):
+    # Cover the happy path (CI lacks real vaspout.h5) by stubbing the
+    # catgo_dos surface dos() consumes.
+    import sys, types
+    import numpy as np
+
+    class _V:
+        nions = 2
+    class _PDOS:
+        grid = np.linspace(-5.0, 5.0, 11)
+        pdos = np.ones((1, 11))      # (nspin, ngrid)
+    class _DB:
+        eps_rel = -1.234
+
+    fake_io = types.ModuleType("catgo_dos.io")
+    fake_io.read_vaspout_h5 = lambda p: _V()
+    fake_pdos = types.ModuleType("catgo_dos.pdos")
+    fake_pdos.compute_pdos = lambda vd, atoms, channels: _PDOS()
+    fake_dband = types.ModuleType("catgo_dos.dband")
+    fake_dband.compute_d_center = lambda vd, atoms: _DB()
+    monkeypatch.setitem(sys.modules, "catgo_dos.io", fake_io)
+    monkeypatch.setitem(sys.modules, "catgo_dos.pdos", fake_pdos)
+    monkeypatch.setitem(sys.modules, "catgo_dos.dband", fake_dband)
+
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    dump = tmp_path / "dos.json"
+    r = ops_analyze.dos(Session(),
+                        {"input": str(h5), "out": str(out),
+                         "atoms": "all", "channels": "d",
+                         "dump": str(dump)})
+    assert r.ok and out.exists()
+    import re
+    assert re.search(r"d-band center = -?\d+\.\d{4} eV", r.message)
+    assert "-1.2340" in r.message            # the eps_rel value
+    import json
+    payload = json.loads(dump.read_text())
+    assert payload["d_band_center_eV"] == -1.234
+    assert len(payload["energy"]) == 11
+    assert len(payload["pdos"]) == 11
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -860,7 +1150,9 @@ def dos(session, params: dict) -> OpResult:
     src = params.get("input")
     if not src or not str(src).lower().endswith((".h5", ".hdf5")):
         raise OpError("dos expects a vaspout.h5 file (.h5)")
-    cdos = ensure_extension("dos-analysis", "catgo_dos")
+    if not Path(src).exists():
+        raise OpError(f"vaspout.h5 not found: {src}")
+    ensure_extension("dos-analysis", "catgo_dos")
     from catgo_dos.io import read_vaspout_h5
     from catgo_dos.pdos import compute_pdos
     try:
@@ -869,27 +1161,44 @@ def dos(session, params: dict) -> OpResult:
         raise OpError(f"failed to parse vaspout.h5: {exc}") from exc
 
     atoms_p = params.get("atoms", "all")
-    atoms = (list(range(vdata.n_ions)) if atoms_p in ("all", None)
-             else [int(x) for x in str(atoms_p).split(",")])
-    res = compute_pdos(vdata, atoms, "spd")
+    if atoms_p in ("all", None):
+        atoms = list(range(vdata.nions))
+    else:
+        try:
+            atoms = [int(x) for x in str(atoms_p).split(",")]
+        except ValueError as exc:
+            raise OpError(
+                f"--atoms must be comma-separated integers or 'all', "
+                f"got '{atoms_p}'") from exc
+
+    channels = params.get("channels", "spd")
+    res = compute_pdos(vdata, atoms, channels)
 
     from catgo_dos.dband import compute_d_center
     try:
-        dband = compute_d_center(res.energy, res.total)  # E, weights
-        dband_val = float(getattr(dband, "center", dband))
-    except Exception:  # noqa: BLE001
+        dband = compute_d_center(vdata, atoms)
+        dband_val = float(getattr(dband, "eps_rel",
+                                   getattr(dband, "center", dband)))
+    except (TypeError, ValueError, IndexError, AttributeError) as exc:
+        # Narrow catch: catgo_dos returns NaN-DBandCenter for non-d
+        # systems natively (no exception). This fires only on real
+        # errors (bad atoms, shape skew, version drift) — surface them.
+        import sys as _sys
+        print(f"warning: d-band fallback ({exc.__class__.__name__}: {exc})",
+              file=_sys.stderr)
         dband_val = float("nan")
 
+    energy = list(res.grid)
+    total = list(res.pdos.sum(axis=0))   # collapse spins → (ngrid,)
     spec = PlotSpec(
-        kind="dos", x=list(res.energy),
-        series=[("PDOS", list(res.total), {})],
+        kind="dos", x=energy,
+        series=[("PDOS", total, {})],
         xlabel="E - E_f (eV)", ylabel="DOS (states/eV)",
-        vlines=[0.0], title="")
+        vlines=[0.0])
     out = Path(params["out"]) if params.get("out") else Path("dos.pdf")
     render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
     if params.get("dump"):
-        _dump(params["dump"], {"energy": list(res.energy),
-                               "pdos": list(res.total),
+        _dump(params["dump"], {"energy": energy, "pdos": total,
                                "d_band_center_eV": dband_val})
     return OpResult(ok=True,
                     message=f"d-band center = {dband_val:.4f} eV -> {out}",
@@ -1027,6 +1336,49 @@ def test_band_handler(tmp_path):
 def test_band_missing_input_errors():
     with pytest.raises(OpError):
         ops_analyze.band(Session(), {"input": None})
+
+
+def test_band_missing_file_clean_error(tmp_path):
+    with pytest.raises(OpError) as ei:
+        ops_analyze.band(Session(), {"input": str(tmp_path / "vasprun.xml")})
+    assert "not found" in str(ei.value)
+
+
+def test_band_happy_path_monkeypatched(tmp_path, monkeypatch):
+    import sys, types
+    import numpy as np
+    from pymatgen.electronic_structure.core import Spin
+
+    class _BS:
+        distance = [0.0, 0.5, 1.0]
+        # real shape: dict[Spin -> ndarray (nbands, nkpoints)]; plot ALL bands
+        bands = {Spin.up: np.array([[0.0, 0.5, 1.0], [1.5, 2.0, 2.5]])}
+        def get_band_gap(self):
+            return {"energy": 1.234, "direct": True}
+
+    class _VR:
+        def __init__(self, *a, **kw): pass
+        def get_band_structure(self, line_mode=True): return _BS()
+
+    fake_outputs = types.ModuleType("pymatgen.io.vasp.outputs")
+    fake_outputs.Vasprun = _VR
+    monkeypatch.setitem(sys.modules, "pymatgen.io.vasp.outputs", fake_outputs)
+
+    vr = tmp_path / "vasprun.xml"; vr.write_text("<?xml?>")
+    out = tmp_path / "band.png"
+    dump = tmp_path / "band.json"
+    r = ops_analyze.band(Session(),
+                         {"input": str(vr), "out": str(out),
+                          "dump": str(dump)})
+    assert r.ok and out.exists()
+    import re
+    assert re.search(r"band gap = -?\d+\.\d{4} eV \((direct|indirect)\)", r.message)
+    assert "1.2340" in r.message
+    import json
+    payload = json.loads(dump.read_text())
+    assert payload["band_gap_eV"] == 1.234
+    assert payload["kind"] == "direct"
+    assert len(payload["distance"]) == 3
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1058,16 +1410,24 @@ def band(session, params: dict) -> OpResult:
     gap_ev = float(gap.get("energy") or 0.0)
     kind = "direct" if gap.get("direct") else "indirect"
 
-    # distances along the k-path; one series per spin/band-min envelope
+    # Plot ALL bands per spin (publication-grade). Label only the first
+    # band of each spin channel and only when the system is spin-polarized
+    # (otherwise the legend gets crowded for no information).
     dists = list(bs.distance)
+    multi_spin = len(bs.bands) > 1
+    spin_colors = ["C0", "C3"]   # up, down
     series = []
-    for spin, bands in bs.bands.items():
-        for bi in range(min(len(bands), 1)):  # plot first band as exemplar
-            series.append((f"band {bi}", list(bands[bi]), {}))
+    for si, (spin, bands_arr) in enumerate(bs.bands.items()):
+        color = spin_colors[si] if si < len(spin_colors) else None
+        spin_name = getattr(spin, "name", str(spin))
+        for bi in range(len(bands_arr)):
+            label = (spin_name if multi_spin and bi == 0 else "")
+            style = {"color": color} if color else {}
+            series.append((label, list(bands_arr[bi]), style))
     spec = PlotSpec(
         kind="band", x=dists, series=series or [("", [], {})],
         xlabel="k-path", ylabel="E - E_f (eV)",
-        vlines=[], title="")
+        vlines=[], hlines=[0.0])      # y=0 = Fermi reference
     out = Path(params["out"]) if params.get("out") else Path("band.pdf")
     render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
     if params.get("dump"):
@@ -1163,6 +1523,8 @@ In `server/catgo/cli/ops.py`, add the import and append the four ops inside `bui
         summary="vaspout.h5 -> PDOS publication plot + d-band center",
         params=[
             Param("atoms", str, default="all", help="atom indices or 'all'"),
+            Param("channels", str, default="spd",
+                  help="orbital spec: s|p|d|spd|... (catgo_dos)"),
             Param("edit", bool, default=False, help="open pylustrator GUI editor"),
             Param("latex", bool, default=False, help="LaTeX text rendering"),
             Param("dump", str, default="", help="also write raw data JSON"),
@@ -1217,7 +1579,13 @@ Then in `server/catgo/cli/ops_analyze.py` `freq`, change the default
 
 ```python
             mi = int(params.get("mode_index", -1))
-            idx = len(data.real_freqs_cm) if mi < 0 else mi
+            if mi >= 0:
+                idx = mi
+            elif data.imag_mode_indices:
+                idx = data.imag_mode_indices[0]   # first imaginary mode
+            else:
+                raise OpError(
+                    "no imaginary modes; pass --mode-index for a real mode")
 ```
 
 (Param types `bool`/`int`/`float`/`str` are already handled by P1
