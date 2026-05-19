@@ -78,3 +78,49 @@ def freq(session, params: dict) -> OpResult:
            f"H_corr={g['h_corr_ev']:.4f}  TS={g['ts_vib_ev']:.4f}  "
            f"imaginary={data.num_imaginary}{anim_note}")
     return OpResult(ok=True, message=msg, artifact=artifact, structure=None)
+
+
+def dos(session, params: dict) -> OpResult:
+    from catgo.cli._extpath import ensure_extension
+    from catgo.cli.plotting import PlotSpec, render
+
+    src = params.get("input")
+    if not src or not str(src).lower().endswith((".h5", ".hdf5")):
+        raise OpError("dos expects a vaspout.h5 file (.h5)")
+    ensure_extension("dos-analysis", "catgo_dos")
+    from catgo_dos.io import read_vaspout_h5
+    from catgo_dos.pdos import compute_pdos
+    try:
+        vdata = read_vaspout_h5(str(src))
+    except Exception as exc:  # noqa: BLE001
+        raise OpError(f"failed to parse vaspout.h5: {exc}") from exc
+
+    atoms_p = params.get("atoms", "all")
+    atoms = (list(range(vdata.nions)) if atoms_p in ("all", None)
+             else [int(x) for x in str(atoms_p).split(",")])
+    res = compute_pdos(vdata, atoms, "spd")
+
+    from catgo_dos.dband import compute_d_center
+    try:
+        dband = compute_d_center(vdata, atoms)
+        dband_val = float(getattr(dband, "eps_rel",
+                                  getattr(dband, "center", dband)))
+    except Exception:  # noqa: BLE001
+        dband_val = float("nan")
+
+    # PDOSResult.pdos has shape (nspin, ngrid); sum spins for plotting
+    total = res.pdos.sum(axis=0)
+    spec = PlotSpec(
+        kind="dos", x=list(res.grid),
+        series=[("PDOS", list(total), {})],
+        xlabel="E - E_f (eV)", ylabel="DOS (states/eV)",
+        vlines=[0.0], title="")
+    out = Path(params["out"]) if params.get("out") else Path("dos.pdf")
+    render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
+    if params.get("dump"):
+        _dump(params["dump"], {"energy": list(res.grid),
+                               "pdos": list(total),
+                               "d_band_center_eV": dband_val})
+    return OpResult(ok=True,
+                    message=f"d-band center = {dband_val:.4f} eV -> {out}",
+                    artifact=out, structure=None)

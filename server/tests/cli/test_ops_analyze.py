@@ -66,3 +66,32 @@ def test_freq_bad_input_errors(tmp_path):
     with pytest.raises(OpError):
         ops_analyze.freq(Session(), {"input": str(tmp_path / "nope"),
                                      "mode": "adsorbed"})
+
+
+import os
+
+
+def _find_fixture(*names):
+    base = os.path.join(os.path.dirname(__file__), "fixtures")
+    for n in names:
+        p = os.path.join(base, n)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def test_dos_handler(tmp_path):
+    h5 = _find_fixture("dos.h5", "vaspout.h5")
+    if h5 is None:
+        pytest.skip("no vaspout.h5 fixture in tests/cli/fixtures/ — supply one")
+    out = tmp_path / "dos.png"
+    r = ops_analyze.dos(Session(), {"input": h5, "out": str(out),
+                                    "atoms": "all"})
+    assert r.ok and out.exists()
+    assert "d-band" in r.message.lower()
+
+
+def test_dos_wrong_format_errors(tmp_path):
+    bad = tmp_path / "x.xml"; bad.write_text("<xml/>")
+    with pytest.raises(OpError):
+        ops_analyze.dos(Session(), {"input": str(bad), "out": str(tmp_path/"o.png")})
