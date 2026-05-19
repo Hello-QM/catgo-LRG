@@ -237,7 +237,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
         // that would hide the caller's intent. Lower-bound `.max(1)` / the
         // `> 1` skip below remain intact.
         const MAX_SUPERCELL_ATOMS: u64 = 200_000;
-        let total_images = (sa as u64) * (sb as u64) * (sc_ as u64);
+        let total_images = (sa as u64).saturating_mul(sb as u64).saturating_mul(sc_ as u64);
         let projected_atoms = total_images.saturating_mul(keep.len() as u64);
         if projected_atoms > MAX_SUPERCELL_ATOMS {
             return format!(
@@ -1772,6 +1772,21 @@ mod tests {
             huge.contains("exceeds") && huge.contains("render cap"),
             "graceful error-SVG must carry the cap message"
         );
+    }
+
+    #[test]
+    fn supercell_overflow_axis_hits_cap_not_silent_noop() {
+        // u64 product must saturate, not wrap → explicit cap error, not a silent
+        // unreplicated render. 4194304^3 = 2^66 wraps a plain u64 multiply to a
+        // small value (silently bypassing the cap); saturating_mul pins it to
+        // u64::MAX so it deterministically hits the SAME graceful error-SVG.
+        let s = render(r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"lattice":[[3,0,0],[0,3,0],[0,0,3]],"style":{"preset":"default","cell":{"show":true,"supercell":[4194304,4194304,4194304]}}}"#);
+        assert!(s.starts_with("<svg") && s.ends_with("</svg>"));
+        assert!(
+            s.contains("exceeds") && s.contains("render cap"),
+            "must be the explicit cap error-SVG, not a silent 2-atom render"
+        );
+        assert!(s.len() < 5000); // graceful error, not a real render
     }
 
     #[test]
