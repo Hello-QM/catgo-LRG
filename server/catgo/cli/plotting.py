@@ -22,17 +22,30 @@ class PlotSpec:
     title: str = ""
 
 
+def _pyplot():
+    """Lazy matplotlib.pyplot, or a clean OpError if the optional
+    [analyze] extra is not installed (matplotlib is NOT a core dep)."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise OpError(
+            "matplotlib not installed (needed for analyze plots) — "
+            "pip install 'catgo-engine[analyze]'") from exc
+    return plt
+
+
 def _apply_style(latex: bool) -> None:
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
     try:
         import scienceplots  # noqa: F401  (registers styles)
-        plt.style.use(["science"] if latex else ["science", "no-latex"])
-    except Exception:  # noqa: BLE001 — scienceplots optional/registration
+    except ImportError:
         plt.rcParams.update({"figure.dpi": 300, "font.size": 9})
+        return
+    plt.style.use(["science"] if latex else ["science", "no-latex"])
 
 
 def _build_figure(spec: PlotSpec):
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
     fig, ax = plt.subplots(figsize=(3.3, 2.5))
     for label, y, style in spec.series:
         ax.plot(spec.x, y, label=label, **(style or {}))
@@ -53,7 +66,7 @@ def render(spec: PlotSpec, out, edit: bool, latex: bool) -> Path:
     _apply_style(latex)
     if edit:
         return _render_edit(spec, out, latex)
-    import matplotlib.pyplot as plt
+    plt = _pyplot()
     fig = _build_figure(spec)
     fig.savefig(str(out), dpi=300, bbox_inches="tight")
     plt.close(fig)

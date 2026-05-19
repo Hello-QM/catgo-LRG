@@ -22,3 +22,13 @@ def test_render_writes_pdf(tmp_path):
     out = tmp_path / "p.pdf"
     render(_spec(), out, edit=False, latex=False)
     assert out.exists() and out.stat().st_size > 0
+
+
+def test_missing_matplotlib_raises_operror(tmp_path, monkeypatch):
+    import sys, pytest
+    from catgo.cli.adapter import OpError
+    # simulate matplotlib absent (optional [analyze] extra not installed)
+    monkeypatch.setitem(sys.modules, "matplotlib.pyplot", None)
+    with pytest.raises(OpError) as ei:
+        render(_spec(), tmp_path / "p.png", edit=False, latex=False)
+    assert "catgo-engine[analyze]" in str(ei.value)
