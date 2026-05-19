@@ -95,3 +95,75 @@ def test_dos_wrong_format_errors(tmp_path):
     bad = tmp_path / "x.xml"; bad.write_text("<xml/>")
     with pytest.raises(OpError):
         ops_analyze.dos(Session(), {"input": str(bad), "out": str(tmp_path/"o.png")})
+
+
+def test_dos_missing_file_clean_error(tmp_path):
+    with pytest.raises(OpError) as ei:
+        ops_analyze.dos(Session(), {"input": str(tmp_path / "nope.h5"),
+                                    "out": str(tmp_path / "o.png")})
+    assert "not found" in str(ei.value)
+
+
+def test_dos_bad_atoms_clean_error(tmp_path, monkeypatch):
+    import sys, types
+    fake_root = types.ModuleType("catgo_dos")
+    fake_io = types.ModuleType("catgo_dos.io")
+    class _V:
+        nions = 1
+    fake_io.read_vaspout_h5 = lambda p: _V()
+    fake_pdos = types.ModuleType("catgo_dos.pdos")
+    fake_pdos.compute_pdos = lambda *a, **k: None
+    fake_dband = types.ModuleType("catgo_dos.dband")
+    fake_dband.compute_d_center = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "catgo_dos", fake_root)
+    monkeypatch.setitem(sys.modules, "catgo_dos.io", fake_io)
+    monkeypatch.setitem(sys.modules, "catgo_dos.pdos", fake_pdos)
+    monkeypatch.setitem(sys.modules, "catgo_dos.dband", fake_dband)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    with pytest.raises(OpError) as ei:
+        ops_analyze.dos(Session(), {"input": str(h5),
+                                    "atoms": "abc,xyz",
+                                    "out": str(tmp_path / "o.png")})
+    assert "comma-separated integers" in str(ei.value)
+
+
+def test_dos_happy_path_monkeypatched(tmp_path, monkeypatch):
+    import sys, types
+    import numpy as np
+
+    class _V:
+        nions = 2
+    class _PDOS:
+        grid = np.linspace(-5.0, 5.0, 11)
+        pdos = np.ones((1, 11))      # (nspin, ngrid)
+    class _DB:
+        eps_rel = -1.234
+
+    fake_root = types.ModuleType("catgo_dos")
+    fake_io = types.ModuleType("catgo_dos.io")
+    fake_io.read_vaspout_h5 = lambda p: _V()
+    fake_pdos = types.ModuleType("catgo_dos.pdos")
+    fake_pdos.compute_pdos = lambda vd, atoms, channels: _PDOS()
+    fake_dband = types.ModuleType("catgo_dos.dband")
+    fake_dband.compute_d_center = lambda vd, atoms: _DB()
+    monkeypatch.setitem(sys.modules, "catgo_dos", fake_root)
+    monkeypatch.setitem(sys.modules, "catgo_dos.io", fake_io)
+    monkeypatch.setitem(sys.modules, "catgo_dos.pdos", fake_pdos)
+    monkeypatch.setitem(sys.modules, "catgo_dos.dband", fake_dband)
+
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    dump = tmp_path / "dos.json"
+    r = ops_analyze.dos(Session(),
+                        {"input": str(h5), "out": str(out),
+                         "atoms": "all", "channels": "d",
+                         "dump": str(dump)})
+    assert r.ok and out.exists()
+    import re
+    assert re.search(r"d-band center = -?\d+\.\d{4} eV", r.message)
+    assert "-1.2340" in r.message
+    import json
+    payload = json.loads(dump.read_text())
+    assert payload["d_band_center_eV"] == -1.234
+    assert len(payload["energy"]) == 11
+    assert len(payload["pdos"]) == 11

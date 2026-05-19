@@ -87,6 +87,8 @@ def dos(session, params: dict) -> OpResult:
     src = params.get("input")
     if not src or not str(src).lower().endswith((".h5", ".hdf5")):
         raise OpError("dos expects a vaspout.h5 file (.h5)")
+    if not Path(src).exists():
+        raise OpError(f"vaspout.h5 not found: {src}")
     ensure_extension("dos-analysis", "catgo_dos")
     from catgo_dos.io import read_vaspout_h5
     from catgo_dos.pdos import compute_pdos
@@ -96,30 +98,44 @@ def dos(session, params: dict) -> OpResult:
         raise OpError(f"failed to parse vaspout.h5: {exc}") from exc
 
     atoms_p = params.get("atoms", "all")
-    atoms = (list(range(vdata.nions)) if atoms_p in ("all", None)
-             else [int(x) for x in str(atoms_p).split(",")])
-    res = compute_pdos(vdata, atoms, "spd")
+    if atoms_p in ("all", None):
+        atoms = list(range(vdata.nions))
+    else:
+        try:
+            atoms = [int(x) for x in str(atoms_p).split(",")]
+        except ValueError as exc:
+            raise OpError(
+                f"--atoms must be comma-separated integers or 'all', "
+                f"got '{atoms_p}'") from exc
+
+    channels = params.get("channels", "spd")
+    res = compute_pdos(vdata, atoms, channels)
 
     from catgo_dos.dband import compute_d_center
     try:
         dband = compute_d_center(vdata, atoms)
         dband_val = float(getattr(dband, "eps_rel",
-                                  getattr(dband, "center", dband)))
-    except Exception:  # noqa: BLE001
+                                   getattr(dband, "center", dband)))
+    except (TypeError, ValueError, IndexError, AttributeError) as exc:
+        # Narrow catch: catgo_dos returns NaN-DBandCenter for non-d
+        # systems natively (no exception). This fires only on real
+        # errors (bad atoms, shape skew, version drift) — surface them.
+        import sys as _sys
+        print(f"warning: d-band fallback ({exc.__class__.__name__}: {exc})",
+              file=_sys.stderr)
         dband_val = float("nan")
 
-    # PDOSResult.pdos has shape (nspin, ngrid); sum spins for plotting
-    total = res.pdos.sum(axis=0)
+    energy = list(res.grid)
+    total = list(res.pdos.sum(axis=0))   # collapse spins -> (ngrid,)
     spec = PlotSpec(
-        kind="dos", x=list(res.grid),
-        series=[("PDOS", list(total), {})],
+        kind="dos", x=energy,
+        series=[("PDOS", total, {})],
         xlabel="E - E_f (eV)", ylabel="DOS (states/eV)",
-        vlines=[0.0], title="")
+        vlines=[0.0])
     out = Path(params["out"]) if params.get("out") else Path("dos.pdf")
     render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
     if params.get("dump"):
-        _dump(params["dump"], {"energy": list(res.grid),
-                               "pdos": list(total),
+        _dump(params["dump"], {"energy": energy, "pdos": total,
                                "d_band_center_eV": dband_val})
     return OpResult(ok=True,
                     message=f"d-band center = {dband_val:.4f} eV -> {out}",
