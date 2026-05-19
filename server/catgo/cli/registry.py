@@ -1,7 +1,8 @@
 """Single source of truth: operations consumed by both argparse and the menu."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from pymatgen.core import Structure
@@ -14,10 +15,12 @@ class Param:
     default: Any = None
     help: str = ""
     choices: Optional[list] = None
-    _required_sentinel: bool = field(default=False, repr=False)
 
     @property
     def required(self) -> bool:
+        # P1: a param with no default is required. Known P2 limitation —
+        # an optional param whose natural default is None cannot be
+        # expressed; introduce an explicit `required` field then.
         return self.default is None
 
 
@@ -26,7 +29,7 @@ class OpResult:
     ok: bool
     message: str
     structure: Optional[Structure] = None
-    artifact: Optional[object] = None  # Path | None
+    artifact: Optional[Path] = None
 
 
 @dataclass

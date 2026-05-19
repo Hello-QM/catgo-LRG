@@ -30,3 +30,15 @@ def test_param_defaults_and_required():
     assert p.required is False  # has default → optional
     q = Param("miller", tuple)
     assert q.required is True
+
+
+def test_all_and_empty_group_and_missing_get():
+    reg = OperationRegistry()
+    a = Operation(name="a", group="build", summary="", params=[], handler=_noop)
+    b = Operation(name="b", group="convert", summary="", params=[], handler=_noop)
+    reg.add(a)
+    reg.add(b)
+    assert reg.all() == [a, b]                 # insertion order preserved
+    assert reg.by_group("nope") == []          # empty group
+    with pytest.raises(KeyError):
+        reg.get("missing")
