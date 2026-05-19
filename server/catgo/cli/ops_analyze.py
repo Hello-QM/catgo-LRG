@@ -186,3 +186,42 @@ def cohp(session, params: dict) -> OpResult:
     return OpResult(ok=True,
                     message=f"ICOHP at E_f = {icohp_ef:.4f} -> {out}",
                     artifact=out, structure=None)
+
+
+def band(session, params: dict) -> OpResult:
+    from catgo.cli.plotting import PlotSpec, render
+
+    src = params.get("input")
+    if not src:
+        raise OpError("band requires a vasprun.xml path")
+    if not Path(src).exists():
+        raise OpError(f"vasprun.xml not found: {src}")
+    try:
+        from pymatgen.io.vasp.outputs import Vasprun
+        vr = Vasprun(str(src), parse_projected_eigen=False)
+        bs = vr.get_band_structure(line_mode=True)
+    except Exception as exc:  # noqa: BLE001
+        raise OpError(f"failed to parse band structure: {exc}") from exc
+
+    gap = bs.get_band_gap()
+    gap_ev = float(gap.get("energy") or 0.0)
+    kind = "direct" if gap.get("direct") else "indirect"
+
+    dists = list(bs.distance)
+    series = []
+    for spin, bands in bs.bands.items():
+        for bi in range(min(len(bands), 1)):   # plot first band as exemplar
+            series.append((f"band {bi}", list(bands[bi]), {}))
+    spec = PlotSpec(
+        kind="band", x=dists, series=series or [("", [], {})],
+        xlabel="k-path", ylabel="E - E_f (eV)",
+        vlines=[])
+    out = Path(params["out"]) if params.get("out") else Path("band.pdf")
+    render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
+    if params.get("dump"):
+        _dump(params["dump"], {"distance": dists,
+                               "band_gap_eV": gap_ev, "kind": kind})
+    return OpResult(
+        ok=True,
+        message=f"band gap = {gap_ev:.4f} eV ({kind}) -> {out}",
+        artifact=out, structure=None)
