@@ -30,7 +30,13 @@ class InteractiveShell:
     def _banner(self) -> None:
         self._out(f"== CatGO CLI ==  {self._status()}")
         self._out(" 0) Load structure")
-        for grp in ("build", "convert"):
+        # Enumerate groups dynamically from the registry (preserves insertion
+        # order so new groups appear after existing ones).
+        seen: list = []
+        for op in self.reg.all():
+            if op.group not in seen:
+                seen.append(op.group)
+        for grp in seen:
             self._out(f" -- {grp} --")
             for op in self.reg.by_group(grp):
                 self._out(f"    {op.name}: {op.summary}")

@@ -91,3 +91,34 @@ def test_analyze_subcommands_in_help():
     assert out.returncode == 0
     for c in ("dos", "band", "cohp", "freq"):
         assert c in out.stdout
+
+
+import textwrap
+
+
+def test_cli_freq_subcommand_end_to_end(tmp_path):
+    outcar = tmp_path / "OUTCAR"
+    outcar.write_text(textwrap.dedent("""\
+       ions per type =               1
+      POMASS =   1.00
+     position of ions in cartesian coordinates  (Angst):
+       0.0000000  0.0000000  0.0000000
+
+     Eigenvectors and eigenvalues of the dynamical matrix
+     ----------------------------------------------------
+
+       1 f  =    5.000000 THz    31.4159 2PiTHz  166.7800 cm-1    20.6789 meV
+                 X         Y         Z           dx          dy          dz
+          0.000000  0.000000  0.000000     0.000000  0.000000  1.000000
+    """))
+    r = _run_catgo("freq", str(outcar), "--mode", "adsorbed", "--no_anim")
+    assert r.returncode == 0, r.stderr
+    assert "G_corr" in r.stdout and "imaginary=0" in r.stdout
+
+
+def test_cli_freq_invalid_mode_choice_rejected(tmp_path):
+    outcar = tmp_path / "OUTCAR"; outcar.write_text("dummy")
+    r = _run_catgo("freq", str(outcar), "--mode", "nonsense", "--no_anim")
+    # argparse 'choices' should reject 'nonsense' before reaching the handler
+    assert r.returncode != 0
+    assert "nonsense" in r.stderr.lower() or "invalid choice" in r.stderr.lower()

@@ -77,3 +77,19 @@ def test_save_roundtrip(tmp_path):
     sh.run()
     assert dst.exists()
     assert Structure.from_file(str(dst)).num_sites == 1
+
+
+def test_shell_banner_lists_analyze_group():
+    out = []
+    script = iter(["q"])
+    sh = InteractiveShell(session=Session(),
+                          input_fn=lambda _="": next(script),
+                          output_fn=lambda *a, **k: out.append(" ".join(map(str, a))))
+    sh.run()
+    text = "\n".join(out)
+    # Each registered group must show up in the banner (dynamic enumeration).
+    assert "-- build --" in text
+    assert "-- convert --" in text
+    assert "-- analyze --" in text
+    # Spot-check at least one analyze op listed under its group
+    assert "freq:" in text

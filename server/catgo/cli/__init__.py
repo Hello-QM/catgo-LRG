@@ -53,8 +53,15 @@ def _add_op_subparsers(sub):
         for prm in op.params:
             if prm.name == "out":
                 continue
-            p.add_argument(f"--{prm.name}", default=None,
-                           required=prm.required, help=prm.help)
+            if prm.type is bool:
+                p.add_argument(f"--{prm.name}", action="store_true",
+                               help=prm.help)
+                continue
+            kwargs = {"default": None, "required": prm.required,
+                      "help": prm.help}
+            if prm.choices is not None:
+                kwargs["choices"] = prm.choices
+            p.add_argument(f"--{prm.name}", **kwargs)
         p.set_defaults(_op=op)
     return reg
 
@@ -66,9 +73,18 @@ def _run_op(args) -> int:
     op = args._op
     session = Session()
     try:
+        # analyze ops take an artifact path (OUTCAR / vasprun.xml / vaspout.h5
+        # / COHPCAR.lobster) — NOT a parsable structure file. Skip session
+        # load and forward the path via params["input"] so the handler reads
+        # it directly (same shape the registry path uses).
         if args.input:
-            session.load(args.input)
+            if op.group == "analyze":
+                pass
+            else:
+                session.load(args.input)
         params: dict = {}
+        if op.group == "analyze" and args.input:
+            params["input"] = args.input
         for prm in op.params:
             if prm.name == "out":
                 if prm.required and not getattr(args, "out", None):
