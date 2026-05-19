@@ -8,6 +8,10 @@ from catgo.cli.vib import parse_outcar_freqs
 _OUTCAR = textwrap.dedent("""\
    ions per type =               1 1
   POMASS =   1.00 16.00
+      direct lattice vectors                 reciprocal lattice vectors
+     5.000000  0.000000  0.000000     0.200000  0.000000  0.000000
+     0.000000  5.000000  0.000000     0.000000  0.200000  0.000000
+     0.000000  0.000000  8.000000     0.000000  0.000000  0.125000
  position of ions in cartesian coordinates  (Angst):
    0.0000000  0.0000000  0.0000000
    0.0000000  0.0000000  1.1000000
@@ -41,6 +45,8 @@ def test_parse_outcar_freqs(tmp_path):
     assert r.masses_amu == [1.0, 16.0]
     assert r.atom_types == [0, 1]            # H -> type 0, O -> type 1
     assert len(r.positions) == 2
+    assert r.lattice == [[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 8.0]]
+    assert r.imag_mode_indices == [1]        # eigenvectors[1] is the imag mode
 
 
 import pytest
@@ -105,6 +111,7 @@ def test_unparseable_ions_per_type_raises(tmp_path):
         parse_outcar_freqs(bad)
 
 
+import math
 from catgo.cli.vib import write_mode_animation
 
 
@@ -112,12 +119,39 @@ def test_write_mode_animation(tmp_path):
     p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
     data = parse_outcar_freqs(p)
     out = tmp_path / "ts.xyz"
+    n_frames = 10
     n = write_mode_animation(
-        data, mode_index=1, out=out, frames=10, amplitude=0.5,
+        data, mode_index=1, out=out, frames=n_frames, amplitude=0.5,
         symbols=["H", "O"])
-    assert n == 10
+    assert n == n_frames
     txt = out.read_text().splitlines()
-    # extxyz: each frame = 1 count line + 1 comment + N atom lines
-    assert txt[0].strip() == "2"
-    assert txt.count("2") == 10            # 10 frame count-lines
-    assert len([l for l in txt if l.startswith(("H ", "O "))]) == 20
+    stride = 2 + data.total_atoms                     # count + comment + N
+    for k in range(n_frames):
+        assert txt[k * stride].strip() == str(data.total_atoms)
+    assert "Lattice=" in txt[1]
+    assert "Properties=species:S:1:pos:R:3" in txt[1]
+    atom_lines = [l for l in txt if l.startswith(("H ", "O "))]
+    assert len(atom_lines) == n_frames * data.total_atoms
+    f0_h = atom_lines[0].split()
+    assert float(f0_h[1]) == 0.0 and float(f0_h[2]) == 0.0
+    assert float(f0_h[3]) == 0.0
+    qk = n_frames // 4
+    f_qk_h = atom_lines[qk * data.total_atoms].split()
+    expected_x = 0.0 + 0.5 * math.sin(2.0 * math.pi * qk / n_frames) * 0.1
+    assert abs(float(f_qk_h[1]) - expected_x) < 1e-6
+
+
+def test_write_mode_animation_bad_mode_index_raises(tmp_path):
+    p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
+    data = parse_outcar_freqs(p)
+    with pytest.raises(OpError):
+        write_mode_animation(data, mode_index=99, out=tmp_path / "x.xyz",
+                              frames=5, amplitude=0.1, symbols=["H", "O"])
+
+
+def test_write_mode_animation_symbols_len_mismatch_raises(tmp_path):
+    p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR)
+    data = parse_outcar_freqs(p)
+    with pytest.raises(OpError):
+        write_mode_animation(data, mode_index=0, out=tmp_path / "x.xyz",
+                              frames=5, amplitude=0.1, symbols=["H"])  # 1 != 2

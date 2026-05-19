@@ -6,6 +6,7 @@ local OUTCAR. pymatgen Vasprun has no normal-mode API in this build.
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,8 +28,13 @@ _VEC_RE = re.compile(
 class FreqData:
     real_freqs_cm: list = field(default_factory=list)
     imag_freqs_cm: list = field(default_factory=list)
+    # eigenvectors indexed in OUTCAR line order; real modes come first
+    # in standard VASP output but downstream MUST use imag_mode_indices
+    # rather than assume the boundary is len(real_freqs_cm).
     eigenvectors: list = field(default_factory=list)  # [mode][atom][dx,dy,dz]
+    imag_mode_indices: list = field(default_factory=list)  # idx into eigenvectors
     positions: list = field(default_factory=list)      # [atom][x,y,z]
+    lattice: list = field(default_factory=list)        # 3x3 direct Å
     masses_amu: list = field(default_factory=list)
     atom_types: list = field(default_factory=list)     # [atom] -> type idx
     total_atoms: int = 0
@@ -82,8 +88,26 @@ def parse_outcar_freqs(path) -> FreqData:
                                 float(parts[2])])
             break
 
+    # Direct lattice vectors: VASP prints
+    #   "direct lattice vectors                 reciprocal lattice vectors"
+    # then 3 rows "ax ay az   bx by bz"; we take the first 3 floats per row.
+    # Needed so the written extxyz carries Lattice=... and CatGO can
+    # render cross-cell bonds for slab TS visualization.
+    lat: list = []
+    for i, ln in enumerate(lines):
+        if "direct lattice vectors" in ln:
+            tmp: list = []
+            for j in range(i + 1, i + 4):
+                parts = lines[j].split()
+                if len(parts) >= 3:
+                    tmp.append([float(parts[0]), float(parts[1]),
+                                float(parts[2])])
+            if len(tmp) == 3:
+                lat = tmp
+                break
+
     data = FreqData(total_atoms=total, masses_amu=masses_per_atom,
-                    atom_types=atom_types, positions=pos)
+                    atom_types=atom_types, positions=pos, lattice=lat)
     i = 0
     while i < len(lines):
         ln = lines[i]
@@ -103,10 +127,12 @@ def parse_outcar_freqs(path) -> FreqData:
                              float(vm.group(6))])
                 j += 1
             if vecs:  # only blocks that actually carry eigenvectors
+                eig_idx = len(data.eigenvectors)
                 if mr:
                     data.real_freqs_cm.append(cm)
                 else:
                     data.imag_freqs_cm.append(cm)
+                    data.imag_mode_indices.append(eig_idx)
                 data.eigenvectors.append(vecs)
             i = j
             continue
@@ -115,14 +141,15 @@ def parse_outcar_freqs(path) -> FreqData:
     return data
 
 
-import math
-
-
 def write_mode_animation(data: FreqData, mode_index: int, out,
                           frames: int, amplitude: float,
                           symbols: list) -> int:
     """Write an extxyz oscillation trajectory R(t)=R0+A*sin(2*pi*t)*e
-    for one normal mode. Returns the number of frames written.
+    for one normal mode, with Lattice= and Properties= keys so CatGO
+    renders PBC cross-cell bonds. Returns the number of frames written.
+
+    t = k/frames over [0,1) — no-duplicate-endpoint loop convention
+    (matches CatGO's loop_playback default).
     """
     if not (0 <= mode_index < len(data.eigenvectors)):
         raise OpError(
@@ -132,13 +159,21 @@ def write_mode_animation(data: FreqData, mode_index: int, out,
         raise OpError(
             f"symbols length {len(symbols)} != atoms {data.total_atoms}")
     vec = data.eigenvectors[mode_index]
-    out = Path(out)
-    with out.open("w") as fh:
+    out_path = Path(out)
+    if data.lattice and len(data.lattice) == 3:
+        l = data.lattice
+        lat_str = ('Lattice="'
+                   + " ".join(f"{v:.6f}" for row in l for v in row)
+                   + '" ')
+    else:
+        lat_str = ""
+    header_keys = f'{lat_str}Properties=species:S:1:pos:R:3'
+    with out_path.open("w") as fh:
         for k in range(frames):
             t = k / frames
             s = amplitude * math.sin(2.0 * math.pi * t)
             fh.write(f"{data.total_atoms}\n")
-            fh.write(f'frame={k} mode={mode_index}\n')
+            fh.write(f'{header_keys} frame={k} mode={mode_index}\n')
             for a in range(data.total_atoms):
                 x = data.positions[a][0] + s * vec[a][0]
                 y = data.positions[a][1] + s * vec[a][1]
