@@ -375,3 +375,27 @@ fn known_radii_and_fallback() {
 - [ ] Commit.
 
 **Discipline:** C1 effect (render_seq+cancelled+teardown) ported VERBATIM into ViewPane — do not regress. The drag fix MUST be the `use:` direct-listener action (proven mechanism), not a DraggablePane edit (shared component; would risk other panes). Direct per-row delete for bonds AND atoms (user: "不能直接删 bond"). Faithful render core (RT1-RT12) untouched.
+
+---
+
+## Task RT14: in-canvas direct-manipulation delete (click atom/bond in the SVG → one-step delete)
+
+**Why (pinned, recurred ≥3×):** user wants to click an atom OR a bond directly in the rendered preview → on-the-spot highlight + an inline delete affordance + Del/Backspace → one-step delete. NOT the current select-then-go-to-a-side-list-× flow. Render-only override (no write-back — locked, user-confirmed). RT13 (two-pane, drag-rotate fixed, per-row delete) is APPROVED and the baseline; RT14 builds the direct-manipulation layer on `CatRenderViewPane.svelte`.
+
+**Design (frontend-only; Rust/wasm untouched; C1 + drag-rotate action + shared state + DraggablePane NOT modified):**
+- **Atom pick**: reuse existing click-pick (pointerup-when-not-dragged → nearest projected `<circle>` → correct ORIGINAL index via `merge_atoms` hidden remap). On pick set `selected = {kind:'atom', idx}`.
+- **Bond pick (new)**: on the same click, if no atom is within hit radius, hit-test bonds — map click (svg-space) to the nearest bond *segment* (point-to-line-segment distance) among the effective merged bonds, using the same projected atom coords the renderer used (parse the wasm SVG's `<circle>` cx/cy in original-index order, or recompute projection). Within a px threshold → `selected = {kind:'bond', i, j}`.
+- **Highlight overlay**: a client-side absolutely-positioned `<svg>` layer ON TOP of `.preview` (same viewBox/scale as the rendered SVG — read its `viewBox`/width), drawing a highlight (atom: ring/glow at the picked circle's cx/cy,r; bond: thick translucent stroke along the picked segment). Pure overlay — does NOT mutate the `{@html}` wasm SVG.
+- **Inline delete affordance**: a small floating "✕ delete" button positioned next to the highlighted element (screen coords from the projected point); clicking it deletes. ALSO: `Del`/`Backspace` keydown (listener scoped to the View pane / preview, added/removed cleanly — mirror the RT13 drag-action lifecycle discipline; do not use Svelte delegation for keydown if the DraggablePane swallow-list affects it — verify; keydown is NOT in DraggablePane's pointer/mouse/wheel swallow list, so a normal handler is fine, but the preview must be focusable (tabindex) to receive keydown, or attach to window with a guard that the pane is open + something selected).
+- **Delete action**: atom → push `{op:'hide',idx}` into `catrender_state.atom_overrides` (via existing atom-merge path); bond → push a `{op:'remove',i,j}` BondOverride into `catrender_state.bond_overrides` (existing bond-merge path). Clears `selected`. Render-only; the existing C1 effect re-renders. An "undo last" / the existing per-row × list stays as the secondary/batch path (do not remove RT13's list — it's the keyboard-free/batch fallback).
+- Selection clears on: successful delete, Esc, clicking empty canvas, structure mirror change (prune if idx invalid).
+- Drag vs click: preserve RT13's `dragged` gate — a drag rotates (no select); a click (no movement) selects. Do not regress drag-rotate or C1.
+
+**Steps (TDD for pure logic; browser-verify the interaction):**
+- [ ] Pure helper `pick_hit.ts` (+`__tests__`): `nearest_atom(click_xy, atom_xy[], r[]) -> idx|null` and `nearest_bond(click_xy, bonds[(i,j)], atom_xy[], thresh) -> {i,j}|null` (point-to-segment distance). Unit-test both incl. ties/empty/threshold.
+- [ ] CatRenderViewPane: wire pick → `selected` state; overlay highlight `<svg>`; inline ✕ button; Del/Backspace + Esc; delete → atom-merge/bond-merge override; selection-clear rules. Keep RT13 list path.
+- [ ] `pnpm exec vitest run src/lib/structure/catrender/` green (existing 21 + pick_hit tests); `pnpm run check` 0 new errors.
+- [ ] Browser E2E: load benzene → Render → click an atom in preview → it highlights + ✕ appears → click ✕ (or press Del) → atom gone (circle count drops), render-only (main viewer unchanged); click a bond → highlight → Del → bond gone (`<line>` drops); Esc/empty-click clears; drag still rotates (not select); two-pane + per-row list still work. Screenshots.
+- [ ] Commit.
+
+**Discipline:** frontend-only; Rust/wasm/C1/drag-action/DraggablePane/shared-state untouched (extend, don't rewrite). Render-only, no main-viewer write-back. Bond hit-test must use the SAME projected coords the renderer used (parse rendered `<circle>` positions) so the highlight aligns with what's drawn. Keyboard handler lifecycle clean (no leak; mirror RT13 action discipline). Browser-verify the one-step delete actually works (the whole point) — if click→delete doesn't work end-to-end, STOP and report.
