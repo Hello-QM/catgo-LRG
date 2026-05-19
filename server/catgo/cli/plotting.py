@@ -78,7 +78,8 @@ def _has_display() -> bool:
     import sys
     if sys.platform == "darwin":
         return True
-    return bool(os.environ.get("DISPLAY"))
+    return bool(os.environ.get("DISPLAY")
+                or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def _render_edit(spec: PlotSpec, out: Path, latex: bool) -> Path:
@@ -90,15 +91,17 @@ def _render_edit(spec: PlotSpec, out: Path, latex: bool) -> Path:
         import pylustrator
     except ImportError as exc:
         raise OpError(
-            f"pylustrator not installed (needed for --edit): {exc}") from exc
-    pylustrator.start()  # overloads plt.figure/plt.show into the GUI
+            "pylustrator not installed (needed for --edit) — "
+            "pip install 'catgo-engine[analyze]'") from exc
+    # NOTE: pylustrator.start() monkeypatches plt.figure/plt.show
+    # process-wide and is NOT reversible. Acceptable: --edit is a terminal
+    # user action; a long-lived shell should run it last.
+    pylustrator.start()
     plt = _pyplot()
-    _build_figure(spec)   # GUI captures the current figure
+    _build_figure(spec)   # GUI captures this figure; user edits it
     plt.show()            # blocks in the pylustrator editor
-    # User saves from the GUI: pylustrator writes reproducible matplotlib
-    # code back into the calling script and exports the figure. We still
-    # write a baseline file at `out` so a non-interactive caller has one.
-    fig = _build_figure(spec)
-    fig.savefig(str(out), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    # Per design §2: the user exports the final figure to `out` from the
+    # GUI (pylustrator also writes reproducible code back). We deliberately
+    # do NOT write a fresh un-edited baseline to `out` here — that would
+    # silently discard the user's interactive edits.
     return out

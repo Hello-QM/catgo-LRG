@@ -41,6 +41,7 @@ from catgo.cli.adapter import OpError
 
 def test_edit_no_display_degrades(monkeypatch, tmp_path):
     monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(sys, "platform", "linux")
     with pytest.raises(OpError) as ei:
         render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
@@ -58,3 +59,11 @@ def test_edit_calls_pylustrator_start(monkeypatch, tmp_path):
     out = render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
     assert calls.get("start") and calls.get("show")
     assert out == tmp_path / "p.pdf"
+
+
+def test_edit_pylustrator_missing_raises_operror(monkeypatch, tmp_path):
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setitem(sys.modules, "pylustrator", None)  # import -> ImportError
+    with pytest.raises(OpError) as ei:
+        render(_spec(), tmp_path / "p.pdf", edit=True, latex=False)
+    assert "catgo-engine[analyze]" in str(ei.value)
