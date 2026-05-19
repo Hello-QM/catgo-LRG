@@ -314,7 +314,12 @@ pub fn render_svg(inp: &RenderInput) -> String {
             pca_drag = matmul3(&euler_matrix(dr), &pca_drag);
         }
     }
-    let _gizmo_basis = pca_drag; // RT11 consumes; at minimum computed here.
+    // (PCA·drag) basis surfaced to the frontend for the RT11 corner axis
+    // gizmo. Row k = the post-transform world-space direction of input axis k
+    // (x,y,z). Emitted as a `data-gizmo-basis` attr on the root <svg> so the
+    // pane reflects the EXACT same orientation the renderer applied (no
+    // client-side re-derivation / drift).
+    let gizmo_basis = pca_drag;
 
     // --- display radii (vdw · H-scale · atom_scale · 0.075) ------------
     let radii: Vec<f64> = symbols
@@ -452,14 +457,18 @@ pub fn render_svg(inp: &RenderInput) -> String {
     svg.push(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" \
 xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
-viewBox=\"0 0 {cw} {ch}\" width=\"{cw}\" height=\"{ch}\"{}>",
-        if transparent {
+viewBox=\"0 0 {cw} {ch}\" width=\"{cw}\" height=\"{ch}\"{bg} \
+data-gizmo-basis=\"{g00},{g01},{g02},{g10},{g11},{g12},{g20},{g21},{g22}\">",
+        bg = if transparent {
             " style=\"background:transparent\""
         } else {
             ""
         },
         cw = fmt0(cw),
-        ch = fmt0(ch)
+        ch = fmt0(ch),
+        g00 = gizmo_basis[0][0], g01 = gizmo_basis[0][1], g02 = gizmo_basis[0][2],
+        g10 = gizmo_basis[1][0], g11 = gizmo_basis[1][1], g12 = gizmo_basis[1][2],
+        g20 = gizmo_basis[2][0], g21 = gizmo_basis[2][1], g22 = gizmo_basis[2][2],
     ));
     if !transparent {
         svg.push(format!(
@@ -1525,6 +1534,31 @@ mod tests {
             r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[2,0,0]},{"el":"N","xyz":[0,2,0]}],"style":{"preset":"default","auto_orient":false,"drag_rotation":[0,0,90]}}"#,
         );
         assert_ne!(base, rot, "drag_rotation must change projected coords");
+    }
+
+    #[test]
+    fn gizmo_basis_attr_present_identity_when_no_orient_no_drag() {
+        // auto_orient off + no drag → basis is the identity (row-major).
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[2,0,0]}],"style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert!(
+            s.contains("data-gizmo-basis=\"1,0,0,0,1,0,0,0,1\""),
+            "identity basis attr; got: {}",
+            &s[..s.find('>').unwrap_or(200).min(s.len())]
+        );
+    }
+
+    #[test]
+    fn gizmo_basis_attr_changes_with_drag_rotation() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[2,0,0]}],"style":{"preset":"default","auto_orient":false,"drag_rotation":[0,0,90]}}"#,
+        );
+        assert!(s.contains("data-gizmo-basis="), "attr present");
+        assert!(
+            !s.contains("data-gizmo-basis=\"1,0,0,0,1,0,0,0,1\""),
+            "drag must rotate the gizmo basis off identity"
+        );
     }
 
     #[test]
