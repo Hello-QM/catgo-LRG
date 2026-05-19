@@ -19,3 +19,25 @@ def test_legacy_subcommands_still_present():
 def test_import_main_resolves():
     from catgo.cli import main  # entry point catgo.cli:main
     assert callable(main)
+
+
+def test_build_registry_has_p1_ops():
+    from catgo.cli.ops import build_registry
+    reg = build_registry()
+    assert set(["slab", "supercell", "convert", "inspect"]).issubset(reg.names())
+
+
+def test_cli_slab_subcommand_end_to_end(tmp_path):
+    import subprocess, sys
+    from pymatgen.core import Lattice, Structure
+    src = tmp_path / "POSCAR"
+    Structure(Lattice.cubic(3.61), ["Cu"], [[0, 0, 0]]).to(
+        filename=str(src), fmt="poscar")
+    out = tmp_path / "slab.vasp"
+    r = subprocess.run(
+        [sys.executable, "-m", "catgo", "slab", str(src),
+         "--miller", "1,1,0", "--layers", "4", "-o", str(out)],
+        cwd=str(SERVER_DIR), capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    assert out.exists()

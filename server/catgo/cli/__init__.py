@@ -41,13 +41,90 @@ def _build_legacy_parser():
     return parser, sub
 
 
+def _coerce(param, raw: str):
+    if param.type is tuple:
+        return tuple(int(x) if x.lstrip("-").isdigit() else float(x)
+                     for x in raw.split(","))
+    return param.type(raw)
+
+
+def _add_op_subparsers(sub):
+    from catgo.cli.ops import build_registry
+    reg = build_registry()
+    for op in reg.all():
+        p = sub.add_parser(op.name, help=op.summary)
+        p.add_argument("input", nargs="?", help="input structure file")
+        p.add_argument("-o", "--out", help="output path")
+        p.add_argument("--force", action="store_true",
+                       help="overwrite existing output")
+        for prm in op.params:
+            if prm.name == "out":
+                continue
+            p.add_argument(f"--{prm.name}", default=None,
+                           required=prm.required, help=prm.help)
+        p.set_defaults(_op=op, _reg=reg)
+    return reg
+
+
+def _run_op(args) -> int:
+    from catgo.cli.session import Session, SessionError
+    from catgo.cli.adapter import OpError
+    op = args._op
+    session = Session()
+    try:
+        if args.input:
+            session.load(args.input)
+        params: dict = {}
+        for prm in op.params:
+            if prm.name == "out":
+                continue
+            raw = getattr(args, prm.name, None)
+            if raw is None:
+                if prm.required:
+                    print(f"error: --{prm.name} required", file=__import__("sys").stderr)
+                    return 1
+                continue
+            params[prm.name] = _coerce(prm, raw)
+        if getattr(args, "out", None):
+            params["out"] = args.out
+        if getattr(args, "force", False):
+            params["force"] = True
+        if op.mutates:
+            session.push_history()
+        result = op.handler(session, params)
+    except (SessionError, OpError) as exc:
+        print(f"error: {exc}", file=__import__("sys").stderr)
+        return 1
+    if not result.ok:
+        print(f"error: {result.message}", file=__import__("sys").stderr)
+        return 1
+    if result.structure is not None:
+        session.structure = result.structure
+        if args.out and result.artifact is None:
+            session.save(args.out)
+            print(f"{result.message} -> {args.out}")
+        else:
+            print(result.message)
+    else:
+        print(result.message)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
+    import sys
     argv = sys.argv[1:] if argv is None else argv
-    parser, _sub = _build_legacy_parser()
+    parser, sub = _build_legacy_parser()
+    _add_op_subparsers(sub)
+    if not argv:
+        from catgo.cli.shell import InteractiveShell
+        InteractiveShell().run()
+        return
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
         parser.print_help()
         return
+    if hasattr(args, "_op"):
+        raise SystemExit(_run_op(args))
     args.func(args)
 
 

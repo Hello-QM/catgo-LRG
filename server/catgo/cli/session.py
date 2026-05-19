@@ -43,6 +43,11 @@ def write_structure(struct: Structure, path: Path) -> None:
         from pymatgen.io.ase import AseAtomsAdaptor
         write(str(path), AseAtomsAdaptor.get_atoms(struct))
         return
+    # pymatgen's filename-based format inference matches "*POSCAR*" but NOT
+    # the conventional ".vasp" VASP structure extension — pin it explicitly.
+    if ext == ".vasp":
+        struct.to(filename=str(path), fmt="poscar")
+        return
     struct.to(filename=str(path))
 
 
