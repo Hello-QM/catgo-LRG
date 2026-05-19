@@ -248,9 +248,11 @@ def test_band_happy_path_monkeypatched(tmp_path, monkeypatch):
     import sys, types
     import numpy as np
 
+    from pymatgen.electronic_structure.core import Spin
     class _BS:
         distance = [0.0, 0.5, 1.0]
-        bands = {"Spin.up": np.array([[0.0, 0.5, 1.0]])}
+        # real shape: dict[Spin -> ndarray (nbands, nkpoints)]; 2 bands here
+        bands = {Spin.up: np.array([[0.0, 0.5, 1.0], [1.5, 2.0, 2.5]])}
         def get_band_gap(self):
             return {"energy": 1.234, "direct": True}
 

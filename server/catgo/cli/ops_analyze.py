@@ -207,15 +207,24 @@ def band(session, params: dict) -> OpResult:
     gap_ev = float(gap.get("energy") or 0.0)
     kind = "direct" if gap.get("direct") else "indirect"
 
+    # Plot ALL bands per spin (publication-grade). Label only the first
+    # band of each spin channel and only when the system is spin-polarized
+    # (otherwise the legend gets crowded for no information).
     dists = list(bs.distance)
+    multi_spin = len(bs.bands) > 1
+    spin_colors = ["C0", "C3"]   # up, down
     series = []
-    for spin, bands in bs.bands.items():
-        for bi in range(min(len(bands), 1)):   # plot first band as exemplar
-            series.append((f"band {bi}", list(bands[bi]), {}))
+    for si, (spin, bands_arr) in enumerate(bs.bands.items()):
+        color = spin_colors[si] if si < len(spin_colors) else None
+        spin_name = getattr(spin, "name", str(spin))
+        for bi in range(len(bands_arr)):
+            label = (spin_name if multi_spin and bi == 0 else "")
+            style = {"color": color} if color else {}
+            series.append((label, list(bands_arr[bi]), style))
     spec = PlotSpec(
         kind="band", x=dists, series=series or [("", [], {})],
         xlabel="k-path", ylabel="E - E_f (eV)",
-        vlines=[])
+        vlines=[], hlines=[0.0])      # y=0 = Fermi reference
     out = Path(params["out"]) if params.get("out") else Path("band.pdf")
     render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
     if params.get("dump"):

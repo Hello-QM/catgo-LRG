@@ -19,6 +19,7 @@ class PlotSpec:
     xlabel: str
     ylabel: str
     vlines: list = field(default_factory=list)
+    hlines: list = field(default_factory=list)
     title: str = ""
 
 
@@ -51,6 +52,8 @@ def _build_figure(spec: PlotSpec):
         ax.plot(spec.x, y, label=label, **(style or {}))
     for vx in spec.vlines:
         ax.axvline(vx, color="0.5", lw=0.6, ls="--")
+    for vy in spec.hlines:
+        ax.axhline(vy, color="0.5", lw=0.6, ls="--")
     ax.set_xlabel(spec.xlabel)
     ax.set_ylabel(spec.ylabel)
     if spec.title:
