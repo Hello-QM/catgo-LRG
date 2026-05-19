@@ -3,6 +3,7 @@ pub mod geom;
 pub mod preset;
 pub mod svg;
 pub mod types;
+pub mod vdw;
 
 use wasm_bindgen::prelude::*;
 
