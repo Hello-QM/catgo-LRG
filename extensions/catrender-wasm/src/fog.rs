@@ -57,6 +57,11 @@ pub fn fog_factors(z: &[f64], fog_strength: f64) -> Vec<f64> {
 /// Python `int()` truncates toward zero; `.trunc() as i64` replicates that
 /// (for non-negative `d` this equals `floor`, matching the cross-check
 /// `python3 -c "print(int(0.5*19+0.5))"` → 10).
+///
+/// Precondition: `d` ∈ [0,1] (caller contract — both xyzrender producers
+/// `renderer.py:461,464` clip/construct into this range; out-of-range `d`
+/// is faithful-port UB, not validated here — matches xyzrender, which also
+/// does not clamp at the `int()` site).
 pub fn dof_bucket(d: f64) -> i64 {
     (d * (N_DOF_LEVELS as f64 - 1.0) + 0.5).trunc() as i64
 }
