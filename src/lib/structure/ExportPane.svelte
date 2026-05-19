@@ -27,7 +27,8 @@
   import AbacusExport from '$lib/structure/export/AbacusExport.svelte'
   import AmberExport from '$lib/structure/export/AmberExport.svelte'
   import SparkExport from '$lib/structure/export/SparkExport.svelte'
-  import CatRenderPane from '$lib/structure/catrender/CatRenderPane.svelte'
+  import CatRenderParamsPane from '$lib/structure/catrender/CatRenderParamsPane.svelte'
+  import CatRenderViewPane from '$lib/structure/catrender/CatRenderViewPane.svelte'
 
   let {
     export_pane_open = $bindable(false),
@@ -64,6 +65,17 @@
 
   // Active section tab
   let active_section = $state<'structure' | 'figure' | 'qe' | 'lammps' | 'vasp' | 'cp2k' | 'gaussian' | 'gromacs' | 'orca' | 'abacus' | 'amber' | 'spark' | 'catrender'>('structure')
+
+  // RT13: catrender is now TWO independent floating DraggablePanes (Params +
+  // View) so the preview is never buried under the 17 knobs. The "Render"
+  // tab opens BOTH (mirrors the established bind:show DraggablePane pattern
+  // used by AnalysisPane et al.); they are then independently movable.
+  let catrender_params_open = $state(false)
+  let catrender_view_open = $state(false)
+  function open_catrender() {
+    catrender_params_open = true
+    catrender_view_open = true
+  }
 
   // Multi-frame export state
   let frame_spec = $state(``)
@@ -327,7 +339,7 @@
     <button class:active={active_section === 'abacus'} onclick={() => active_section = 'abacus'}>ABACUS</button>
     <button class:active={active_section === 'amber'} onclick={() => active_section = 'amber'}>AMBER</button>
     <button class:active={active_section === 'spark'} onclick={() => active_section = 'spark'}>SPARK</button>
-    <button class:active={active_section === 'catrender'} onclick={() => active_section = 'catrender'}>Render</button>
+    <button class:active={active_section === 'catrender'} onclick={() => { active_section = 'catrender'; open_catrender() }}>Render</button>
   </div>
 
   {#if active_section === 'structure'}
@@ -584,7 +596,21 @@
     />
 
   {:else if active_section === 'catrender'}
-    <CatRenderPane {structure} />
+    <div class="catrender-launcher">
+      <p>
+        The renderer opens as two independent, draggable windows so the
+        preview is never buried under the parameter knobs.
+      </p>
+      <div class="catrender-launcher-btns">
+        <button onclick={() => (catrender_params_open = !catrender_params_open)}>
+          {catrender_params_open ? `Hide` : `Show`} Parameters
+        </button>
+        <button onclick={() => (catrender_view_open = !catrender_view_open)}>
+          {catrender_view_open ? `Hide` : `Show`} View
+        </button>
+        <button onclick={open_catrender}>Open both</button>
+      </div>
+    </div>
   {/if}
 
   <!-- Generated output preview -->
@@ -630,10 +656,21 @@
   </DraggablePane>
 {/if}
 
+<!-- RT13: the two independent catrender DraggablePanes. Mounted at the
+     component root (NOT inside ExportPane's own pane) so each floats and
+     drags independently and the View pane's drag-rotate surface is not an
+     ExportPane descendant. Each has its own bind:show toggled by the Render
+     tab — the established DraggablePane open pattern (cf. AnalysisPane). -->
+<CatRenderParamsPane bind:show={catrender_params_open} />
+<CatRenderViewPane bind:show={catrender_view_open} {structure} />
+
 <style>
   .export-embedded {
     font-size: 0.9em;
   }
+  .catrender-launcher { font-size: 0.9em; padding: 4px 2px; }
+  .catrender-launcher p { color: #666; margin: 0 0 8px; }
+  .catrender-launcher-btns { display: flex; flex-wrap: wrap; gap: 8px; }
   .section-tabs {
     display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 0.8em;
     border-bottom: 1px solid var(--btn-bg, light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.1))); padding-bottom: 0.5em;
