@@ -18,17 +18,6 @@ fn cpk_color(el: &str) -> &'static str {
     }
 }
 
-fn covalent_radius(el: &str) -> f64 {
-    match el {
-        "H" => 0.31,
-        "C" => 0.76,
-        "N" => 0.71,
-        "O" => 0.66,
-        "S" => 1.05,
-        _ => 0.85,
-    }
-}
-
 const VIEW: f64 = 600.0;
 
 pub fn render_svg(inp: &RenderInput) -> String {
@@ -101,7 +90,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
             continue;
         }
         let (x, y) = to_screen(projected[n].0);
-        let r = covalent_radius(&a.el) * preset.atom_radius_scale * s;
+        let r = crate::bonds::covalent_radius(&a.el) * preset.atom_radius_scale * s;
         let col = cpk_color(&a.el);
         let fill = match preset.gradient {
             GradientMode::Radial => {

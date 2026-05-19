@@ -2,7 +2,7 @@
 
 use crate::types::{Atom, Bond};
 
-fn covalent_radius(el: &str) -> f64 {
+pub fn covalent_radius(el: &str) -> f64 {
     match el {
         "H" => 0.31,
         "C" => 0.76,
@@ -61,5 +61,11 @@ mod tests {
         let b = perceive(&atoms);
         assert_eq!(b.len(), 1);
         assert_eq!((b[0].i, b[0].j), (0, 1));
+    }
+
+    #[test]
+    fn perceive_empty_atoms_is_empty() {
+        let atoms: Vec<Atom> = vec![];
+        assert!(perceive(&atoms).is_empty());
     }
 }
