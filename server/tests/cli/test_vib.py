@@ -6,7 +6,7 @@ from catgo.cli.vib import parse_outcar_freqs
 # "ions per type", a POSITION/mass block, and the f= / f/i= mode blocks
 # each followed by an "X Y Z dx dy dz" eigenvector table.
 _OUTCAR = textwrap.dedent("""\
-   ions per type =               2
+   ions per type =               1 1
   POMASS =   1.00 16.00
  position of ions in cartesian coordinates  (Angst):
    0.0000000  0.0000000  0.0000000

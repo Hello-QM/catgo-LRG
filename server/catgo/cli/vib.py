@@ -48,16 +48,11 @@ def parse_outcar_freqs(path) -> FreqData:
 
     pm = re.search(r"POMASS\s*=\s*([\d. ]+)", text)
     masses = [float(x) for x in pm.group(1).split()] if pm else []
+    # expand per-type masses to per-atom using ions-per-type counts
     counts = [int(x) for x in m.group(1).split()]
-    if len(masses) == total:
-        # one POMASS value already given per atom
-        masses_per_atom = list(masses)
-    else:
-        # expand per-type masses to per-atom using ions-per-type counts
-        # (faithful to catgo.utils.vasp_freq_parser)
-        masses_per_atom = []
-        for c, mass in zip(counts, masses):
-            masses_per_atom += [mass] * c
+    masses_per_atom: list = []
+    for c, mass in zip(counts, masses):
+        masses_per_atom += [mass] * c
 
     pos: list = []
     for i, ln in enumerate(lines):
