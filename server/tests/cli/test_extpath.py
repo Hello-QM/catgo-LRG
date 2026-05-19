@@ -15,3 +15,14 @@ def test_ensure_extension_imports_catgo_dos():
 def test_ensure_extension_missing_raises():
     with pytest.raises(OpError):
         ensure_extension("does-not-exist", "nope_pkg")
+
+
+def test_ensure_extension_import_error_wrapped(monkeypatch):
+    # present dir but broken/absent package -> OpError, cause preserved
+    import importlib
+    def _boom(name):
+        raise ImportError("simulated missing transitive dep")
+    monkeypatch.setattr(importlib, "import_module", _boom)
+    with pytest.raises(OpError) as ei:
+        ensure_extension("dos-analysis", "catgo_dos")
+    assert isinstance(ei.value.__cause__, ImportError)

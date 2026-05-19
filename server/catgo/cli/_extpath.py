@@ -31,6 +31,8 @@ def ensure_extension(ext_dir: str, package: str) -> ModuleType:
             f"extension '{ext_dir}' not found at {ext_path} — "
             f"required for this analysis")
     p = str(ext_path)
+    # prepend is safe: extension dirs contain only namespaced catgo_*
+    # packages (+ README/pyproject), nothing that shadows stdlib/site
     if p not in sys.path:
         sys.path.insert(0, p)
     try:
