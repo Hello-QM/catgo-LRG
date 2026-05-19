@@ -105,9 +105,9 @@ fn _v(m1: f64, m2: f64, hue: f64) -> f64 {
 /// `colorsys.hls_to_rgb((h%360)/360, l, s)` then `int(x*255)` (**floor**, clamped 0..255).
 pub fn hls_to_rgb(h: f64, l: f64, s: f64) -> (u8, u8, u8) {
     let h = h.rem_euclid(360.0) / 360.0;
-    let trunc = |x: f64| (x * 255.0).clamp(0.0, 255.0).floor() as u8;
+    let floor_u8 = |x: f64| (x * 255.0).clamp(0.0, 255.0).floor() as u8;
     if s == 0.0 {
-        let v = trunc(l);
+        let v = floor_u8(l);
         return (v, v, v);
     }
     let m2 = if l <= 0.5 {
@@ -117,14 +117,14 @@ pub fn hls_to_rgb(h: f64, l: f64, s: f64) -> (u8, u8, u8) {
     };
     let m1 = 2.0 * l - m2;
     (
-        trunc(_v(m1, m2, h + 1.0 / 3.0)),
-        trunc(_v(m1, m2, h)),
-        trunc(_v(m1, m2, h - 1.0 / 3.0)),
+        floor_u8(_v(m1, m2, h + 1.0 / 3.0)),
+        floor_u8(_v(m1, m2, h)),
+        floor_u8(_v(m1, m2, h - 1.0 / 3.0)),
     )
 }
 
 fn clamp01(x: f64) -> f64 {
-    x.max(0.0).min(1.0)
+    x.clamp(0.0, 1.0)
 }
 
 impl Color {
@@ -133,7 +133,7 @@ impl Color {
         Color { r, g, b }
     }
 
-    fn to_hls(&self) -> (f64, f64, f64) {
+    fn to_hls(self) -> (f64, f64, f64) {
         rgb_to_hls(self.r, self.g, self.b)
     }
 
@@ -337,5 +337,27 @@ mod tests {
         assert_eq!(hi.hex(), "#a6a6a6");
         assert_eq!(base.hex(), "#909090");
         assert_eq!(lo.hex(), "#452e37");
+    }
+
+    #[test]
+    fn from_hex_malformed_no_panic() {
+        let _ = Color::from_hex("");
+        let _ = Color::from_hex("#xyz");
+        let _ = Color::from_hex("#12");
+        let _ = Color::from_hex("zzzzzz");
+        // contract: graceful degradation, never panics
+    }
+    #[test]
+    fn hls_grayscale_and_extremes_nan_free() {
+        assert_eq!(rgb_to_hls(128, 128, 128), (0.0, rgb_to_hls(128,128,128).1, 0.0));
+        assert_eq!(rgb_to_hls(0, 0, 0), (0.0, 0.0, 0.0));
+        assert_eq!(rgb_to_hls(255, 255, 255), (0.0, 1.0, 0.0));
+    }
+    #[test]
+    fn blend_endpoints_identity() {
+        let a = Color { r: 10, g: 20, b: 30 };
+        let b = Color { r: 200, g: 100, b: 50 };
+        assert_eq!(a.blend(&b, 0.0), a);
+        assert_eq!(a.blend(&b, 1.0), b);
     }
 }
