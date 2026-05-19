@@ -1,4 +1,5 @@
 pub mod bonds;
+pub mod color;
 pub mod geom;
 pub mod palette;
 pub mod preset;
