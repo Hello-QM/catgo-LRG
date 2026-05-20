@@ -133,6 +133,30 @@ def test_bec_intensities_heavier_atom_taller_peak():
     assert I[0] > I[1]
 
 
+# ============================================================================
+# E5 — text writer
+# ============================================================================
+
+
+def test_write_ir_text_round_trips(tmp_path):
+    from catgo.cli.ir import IrSpectrum, write_ir_text
+    spec = IrSpectrum(grid_cm=[100.0, 200.0, 300.0],
+                      intensity=[1.0, 0.5, 0.0],
+                      used_bec=False, n_modes=3)
+    out = tmp_path / "ir.dat"
+    write_ir_text(spec, out)
+    assert out.exists()
+    # Parse back
+    parsed = []
+    for line in out.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        w, y = line.split()
+        parsed.append((float(w), float(y)))
+    assert parsed == [(100.0, 1.0), (200.0, 0.5), (300.0, 0.0)]
+
+
 def test_compute_ir_spectrum_with_bec_taller_in_phase_peak():
     """End-to-end: feed two modes with the in-phase / out-of-phase
     eigenvectors above and verify the spectrum peak at ω_inphase is

@@ -82,6 +82,26 @@ def compute_ir_spectrum(
                       n_modes=len(freqs_cm))
 
 
+def write_ir_text(spec: IrSpectrum, path) -> Path:
+    """Dump the spectrum as 2-column text: `freq_cm intensity`.
+
+    A header `# IR spectrum: …` line records the BEC vs uniform regime
+    and the mode count so the file is self-describing. Round-trippable
+    by `numpy.loadtxt` / shell `awk '/^#/' {next} …`.
+    """
+    out = Path(path)
+    header = (
+        f"# IR spectrum  modes={spec.n_modes}  "
+        f"intensities={'BEC' if spec.used_bec else 'uniform'}\n"
+        "# freq_cm   intensity\n"
+    )
+    rows = "\n".join(
+        f"{w:.6f} {y:.6e}" for w, y in zip(spec.grid_cm, spec.intensity)
+    )
+    out.write_text(header + rows + "\n")
+    return out
+
+
 def _bec_intensities(eigenvectors, born) -> list:
     """IR intensity per mode k:
 
