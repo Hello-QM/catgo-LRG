@@ -71,5 +71,15 @@ def test_pull_with_out_writes_file(tmp_path):
     r = ops_viewer.pull(s, {"panel": "structure-1", "format": "poscar",
                             "out": str(out)})
     assert r.ok and out.exists()
+    # server bytes preserved verbatim (no pymatgen round-trip mangling)
+    assert out.read_bytes() == poscar
     assert "-> " + str(out) in r.message
     assert "panel=structure-1" in r.message
+
+
+def test_pull_unparseable_bytes_wrapped_as_operror():
+    s = Session(); s.link = _PullLink(b"this is not a structure file")
+    with pytest.raises(OpError) as ei:
+        ops_viewer.pull(s, {"panel": "", "format": "poscar"})
+    assert "unparseable poscar" in str(ei.value)
+    assert s.structure is None      # half-success not allowed
