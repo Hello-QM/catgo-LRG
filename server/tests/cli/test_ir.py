@@ -92,6 +92,76 @@ def test_compute_ir_spectrum_empty_returns_empty():
     assert spec.n_modes == 0
 
 
+# ============================================================================
+# E4 — BEC-weighted intensities
+# ============================================================================
+
+
+def test_bec_intensities_diagonal_isotropic():
+    """One mode pure-z on a single atom whose Z* is isotropic 2.0:
+    I = (Z * e)² = 4 (sum over j of (Z[2][j] * 1.0)² = 0+0+4)."""
+    from catgo.cli.ir import _bec_intensities
+    eigs = [[[0.0, 0.0, 1.0]]]   # 1 mode, 1 atom, z-displacement
+    born = [[[2.0, 0.0, 0.0],    # Z*[atom=0]
+             [0.0, 2.0, 0.0],
+             [0.0, 0.0, 2.0]]]
+    I = _bec_intensities(eigs, born)
+    assert I == [pytest.approx(4.0)]
+
+
+def test_bec_intensities_heavier_atom_taller_peak():
+    """Same eigenvector on two atoms with different Z* → I scales with
+    |Σ_a Z*_a · e(a)|²; the heavier Z* contributes more, so its
+    in-phase mode beats the out-of-phase mode."""
+    from catgo.cli.ir import _bec_intensities
+    # Two modes, both 2-atom systems:
+    # mode 0 — atoms move in-phase along z: e = [[0,0,1], [0,0,1]]
+    # mode 1 — out of phase:                e = [[0,0,1], [0,0,-1]]
+    eigs = [
+        [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]],
+    ]
+    born = [
+        [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]],   # atom 0: Z = 1
+        [[3.0, 0, 0], [0, 3.0, 0], [0, 0, 3.0]],   # atom 1: Z = 3
+    ]
+    I = _bec_intensities(eigs, born)
+    # In-phase: sum(Z·e) along z = 1+3 = 4 → I = 16
+    # Out-of-phase: 1-3 = -2 → I = 4
+    assert I[0] == pytest.approx(16.0)
+    assert I[1] == pytest.approx(4.0)
+    assert I[0] > I[1]
+
+
+def test_compute_ir_spectrum_with_bec_taller_in_phase_peak():
+    """End-to-end: feed two modes with the in-phase / out-of-phase
+    eigenvectors above and verify the spectrum peak at ω_inphase is
+    taller."""
+    from catgo.cli.ir import compute_ir_spectrum
+    eigs = [
+        [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]],
+        [[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]],
+    ]
+    born = [
+        [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]],
+        [[3.0, 0, 0], [0, 3.0, 0], [0, 0, 3.0]],
+    ]
+    freqs = [500.0, 1500.0]   # well-separated
+    spec = compute_ir_spectrum(freqs, eigs, born=born,
+                               emin=None, emax=None, sigma=20.0)
+    assert spec.used_bec is True
+    # Peak heights at the mode positions
+    def at(w):
+        idx = min(range(len(spec.grid_cm)),
+                  key=lambda i: abs(spec.grid_cm[i] - w))
+        return spec.intensity[idx]
+    h_in = at(500.0)
+    h_out = at(1500.0)
+    # Ratio ≈ 16/4 = 4
+    assert h_in > h_out
+    assert h_in / h_out == pytest.approx(16.0 / 4.0, rel=1e-2)
+
+
 def test_compute_ir_spectrum_explicit_range():
     from catgo.cli.ir import compute_ir_spectrum
     spec = compute_ir_spectrum([1000.0], [[[0,0,1]]], born=None,

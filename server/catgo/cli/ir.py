@@ -83,8 +83,33 @@ def compute_ir_spectrum(
 
 
 def _bec_intensities(eigenvectors, born) -> list:
-    """Stub — replaced in E4 with the real BEC-weighted formula."""
-    return [1.0] * len(eigenvectors)
+    """IR intensity per mode k:
+
+        I_k = Σ_j ( Σ_a Σ_i Z*_a[i][j] * e_k[a][i] )²
+
+    Sums are over Cartesian electric-field direction j ∈ {x,y,z}, atom
+    index a, and Cartesian displacement direction i ∈ {x,y,z}. Returns
+    a plain list of len(eigenvectors). Pure Python (no numpy needed for
+    this size).
+    """
+    out: list[float] = []
+    for vec in eigenvectors:
+        # vec[a][i] are the per-atom Cartesian displacements of mode k.
+        total = 0.0
+        for j in range(3):
+            s = 0.0
+            for a, z in enumerate(born):
+                # Defensive: skip atoms missing from eigenvector (shouldn't
+                # happen — parser guarantees one per atom — but the test
+                # surface deserves a soft floor).
+                if a >= len(vec):
+                    break
+                e_a = vec[a]
+                # Σ_i Z*[i][j] * e[i]
+                s += sum(z[i][j] * e_a[i] for i in range(3))
+            total += s * s
+        out.append(total)
+    return out
 
 
 def parse_born_charges(text: str, n_atoms: int
