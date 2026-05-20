@@ -82,6 +82,25 @@ def compute_ir_spectrum(
                       n_modes=len(freqs_cm))
 
 
+def write_ir_plot(spec: IrSpectrum, path, edit: bool = False,
+                  latex: bool = False) -> Path:
+    """Render the IR spectrum via the shared `plotting.PlotSpec`/`render`
+    pipeline (SciencePlots baseline + optional pylustrator `--edit`).
+
+    The matplotlib / scienceplots imports are kept inside `plotting`
+    so the `[analyze]` extra error message is reused verbatim.
+    """
+    from catgo.cli.plotting import PlotSpec, render
+    plot_spec = PlotSpec(
+        kind="ir",
+        x=list(spec.grid_cm),
+        series=[("IR", list(spec.intensity), {})],
+        xlabel=r"wavenumber (cm$^{-1}$)",
+        ylabel="intensity (arb.)",
+    )
+    return render(plot_spec, path, edit, latex)
+
+
 def write_ir_text(spec: IrSpectrum, path) -> Path:
     """Dump the spectrum as 2-column text: `freq_cm intensity`.
 

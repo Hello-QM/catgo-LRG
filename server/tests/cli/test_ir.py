@@ -138,6 +138,42 @@ def test_bec_intensities_heavier_atom_taller_peak():
 # ============================================================================
 
 
+# ============================================================================
+# E6 — plot writer
+# ============================================================================
+
+
+def test_write_ir_plot_builds_correct_spec(monkeypatch, tmp_path):
+    """Monkeypatch catgo.cli.plotting.render and assert that
+    write_ir_plot constructs a PlotSpec with the IR axes and the
+    spectrum bound to the single series."""
+    captured = {}
+
+    def fake_render(spec, out, edit, latex):
+        captured["spec"] = spec
+        captured["out"] = out
+        captured["edit"] = edit
+        captured["latex"] = latex
+        return out
+
+    monkeypatch.setattr("catgo.cli.plotting.render", fake_render)
+    from catgo.cli.ir import IrSpectrum, write_ir_plot
+    spec = IrSpectrum(grid_cm=[100.0, 110.0, 120.0],
+                      intensity=[0.1, 1.0, 0.1],
+                      used_bec=True, n_modes=1)
+    out = tmp_path / "ir.pdf"
+    write_ir_plot(spec, out, edit=False, latex=False)
+    ps = captured["spec"]
+    assert ps.kind == "ir"
+    assert ps.x == [100.0, 110.0, 120.0]
+    assert len(ps.series) == 1
+    label, y, style = ps.series[0]
+    assert y == [0.1, 1.0, 0.1]
+    # Axes labels look right
+    assert "cm" in ps.xlabel  # "wavenumber (cm$^{-1}$)" or similar
+    assert "intensity" in ps.ylabel.lower()
+
+
 def test_write_ir_text_round_trips(tmp_path):
     from catgo.cli.ir import IrSpectrum, write_ir_text
     spec = IrSpectrum(grid_cm=[100.0, 200.0, 300.0],
