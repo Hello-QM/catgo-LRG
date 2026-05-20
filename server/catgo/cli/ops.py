@@ -43,6 +43,9 @@ def build_registry() -> OperationRegistry:
             Param("edit", bool, default=False, help="open pylustrator GUI editor"),
             Param("latex", bool, default=False, help="LaTeX text rendering"),
             Param("dump", str, default="", help="also write raw data JSON"),
+            Param("groups", str, default="",
+                  help="multi-group PDOS spec: "
+                       "'a1:c1[:l1];a2:c2[:l2];…' (overrides --atoms/--channels)"),
         ],
         handler=ops_analyze.dos, mutates=False))
     reg.add(Operation(

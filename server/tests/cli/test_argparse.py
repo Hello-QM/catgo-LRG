@@ -286,6 +286,27 @@ def test_freq_ir_dash_flag_parses():
     assert args.ir_spectrum == "ir.pdf"
 
 
+def test_dos_groups_flag_parses():
+    """F4 — --groups string param shows up on the dos subcommand and
+    routes to args.groups."""
+    from catgo.cli import _build_legacy_parser, _add_op_subparsers
+    parser, sub = _build_legacy_parser()
+    _add_op_subparsers(sub)
+    args = parser.parse_args([
+        "dos", "x.h5",
+        "--groups", "0-3:d; 4,5:p:ads",
+    ])
+    assert args._op.name == "dos"
+    assert args.groups == "0-3:d; 4,5:p:ads"
+
+
+def test_dos_help_lists_groups_flag():
+    """F4 — `catgo dos --help` advertises --groups."""
+    r = _run_catgo("dos", "--help")
+    assert r.returncode == 0
+    assert "--groups" in r.stdout
+
+
 def test_freq_help_lists_ir_flags():
     """E8 — `catgo freq --help` advertises the new IR flag surface."""
     r = _run_catgo("freq", "--help")
