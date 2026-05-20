@@ -149,7 +149,11 @@ def _run_op(args) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
-    # Extract --no-autostart so the empty-argv shell path honors it too.
+    # Top-level argparse flags don't propagate into subparsers, so a
+    # user typing `catgo push --no-autostart` would otherwise fail with
+    # "unrecognized arguments". Strip --no-autostart from wherever it
+    # appears and re-prepend it before the (sub)command so the top-level
+    # parser always sees it.
     no_auto = "--no-autostart" in argv
     effective = [a for a in argv if a != "--no-autostart"]
     parser, sub = _build_legacy_parser()
@@ -159,7 +163,8 @@ def main(argv: list[str] | None = None) -> None:
         # Task 9 adds the no_autostart kwarg to InteractiveShell.
         InteractiveShell().run()
         return
-    args = parser.parse_args(argv)
+    args = parser.parse_args(
+        (["--no-autostart"] if no_auto else []) + effective)
     if not getattr(args, "command", None):
         parser.print_help()
         return

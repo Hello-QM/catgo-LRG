@@ -152,3 +152,11 @@ def test_viewer_subcommands_in_help():
     assert pull_help.returncode == 0
     assert "--panel" in pull_help.stdout
     assert "{poscar,cif,xyz,extxyz}" in pull_help.stdout or "--format" in pull_help.stdout
+
+
+def test_no_autostart_after_subcommand_also_works(tmp_path):
+    # Users will type the flag in either position; both must work.
+    r = _run_catgo("push", "--no-autostart", "--panel", "default")
+    assert r.returncode == 2, r.stderr
+    assert "unrecognized" not in r.stderr  # not an argparse rejection
+    assert "--no-autostart" in r.stderr or "server" in r.stderr.lower()
