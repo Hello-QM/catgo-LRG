@@ -93,6 +93,30 @@ def test_dedup_leading_freq_table_not_double_counted(tmp_path):
     r = parse_outcar_freqs(p)
     assert r.real_freqs_cm == [300.0, 200.0, 100.0]
     assert r.imag_freqs_cm == []
+
+
+def test_eigenvectors_for_real_excludes_imag(tmp_path):
+    """E1 — IR spectrum (real modes only) needs an explicit getter.
+    Don't slice by len(real_freqs_cm) — imag_mode_indices is the
+    source of truth (the same boundary-bug guard P2 already documented)."""
+    p = tmp_path / "OUTCAR"
+    p.write_text(_OUTCAR)
+    r = parse_outcar_freqs(p)
+    # 1 real + 1 imag mode; eigenvectors[0] real, eigenvectors[1] imag.
+    real_vecs = r.eigenvectors_for_real()
+    assert len(real_vecs) == 1
+    # The single real eigenvector should be the first eigenvector in
+    # OUTCAR order (a 2-atom Z-displacement +0.7, -0.7).
+    assert real_vecs[0] == r.eigenvectors[0]
+
+
+def test_eigenvectors_for_real_pure_real_fixture(tmp_path):
+    """3 real, 0 imag fixture: full eigenvector list returned in order."""
+    p = tmp_path / "OUTCAR"
+    p.write_text(_OUTCAR_DEDUP)
+    r = parse_outcar_freqs(p)
+    assert len(r.eigenvectors_for_real()) == 3
+    assert r.eigenvectors_for_real() == r.eigenvectors
     assert r.num_imaginary == 0
     assert len(r.eigenvectors) == 3
     assert r.masses_amu == [1.0, 16.0]   # SUMMARY line, not the ;ZVAL one

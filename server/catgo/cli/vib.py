@@ -40,6 +40,18 @@ class FreqData:
     total_atoms: int = 0
     num_imaginary: int = 0
 
+    def eigenvectors_for_real(self) -> list:
+        """Return the eigenvectors of the REAL modes only, in OUTCAR
+        order. Used by the IR spectrum (which excludes imaginary modes).
+
+        Sourced from `imag_mode_indices` rather than slicing by
+        `len(real_freqs_cm)` — the same boundary-bug guard P2 already
+        documented (real and imag are NOT guaranteed contiguous in the
+        eigenvector list).
+        """
+        imag = set(self.imag_mode_indices)
+        return [v for k, v in enumerate(self.eigenvectors) if k not in imag]
+
 
 def parse_outcar_freqs(path) -> FreqData:
     p = Path(path)
