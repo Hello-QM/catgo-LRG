@@ -144,6 +144,56 @@ def test_push_structure_quotes_filename_with_backslash(monkeypatch,
     assert b'filename="back\\\\slash.vasp"' in captured["body"]
 
 
+def test_push_structure_urlerror_raises_operror(monkeypatch, tmp_path):
+    """C3 — connection-level failures must surface as OpError with a clean
+    message (no urllib traceback leak)."""
+    from catgo.cli import server_link
+    from catgo.cli.adapter import OpError
+
+    def _urlopen(req, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    p = tmp_path / "x.vasp"
+    p.write_bytes(b"x")
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    with pytest.raises(OpError) as ei:
+        link.push_structure(p, panel_id=None)
+    assert "connection failed" in str(ei.value)
+
+
+def test_pull_structure_4xx_raises_operror(monkeypatch):
+    """C3 — pull mirrors push: HTTPError → OpError carrying detail."""
+    from catgo.cli import server_link
+    from catgo.cli.adapter import OpError
+    err_body = b'{"detail": "no panel"}'
+
+    def _urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 404, "Not Found", {}, io.BytesIO(err_body))
+
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    with pytest.raises(OpError) as ei:
+        link.pull_structure(fmt="poscar", panel_id="ghost")
+    assert "no panel" in str(ei.value)
+
+
+def test_pull_structure_urlerror_raises_operror(monkeypatch):
+    """C3 — pull mirrors push for connection failures too."""
+    from catgo.cli import server_link
+    from catgo.cli.adapter import OpError
+
+    def _urlopen(req, timeout=None):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    with pytest.raises(OpError) as ei:
+        link.pull_structure(fmt="poscar", panel_id=None)
+    assert "connection failed" in str(ei.value)
+
+
 def test_pull_structure_panel_omitted(monkeypatch):
     from catgo.cli import server_link
     calls = {}
