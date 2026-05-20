@@ -132,6 +132,59 @@ def dos(session, params: dict) -> OpResult:
     except Exception as exc:  # noqa: BLE001
         raise OpError(f"failed to parse vaspout.h5: {exc}") from exc
 
+    # --- multi-group PDOS path (F3) ----------------------------------------
+    groups_spec = params.get("groups", "") or ""
+    if groups_spec:
+        from catgo.cli.pdos_groups import parse_groups_spec
+        from catgo_dos.pdos import compute_pdos_groups
+        from catgo_dos.dband import compute_d_center
+        group_dicts = parse_groups_spec(groups_spec, vdata.nions)
+        results = compute_pdos_groups(vdata, group_dicts)
+        series: list = []
+        for grp, res in zip(group_dicts, results):
+            total = list(res.pdos.sum(axis=0))   # collapse spins
+            series.append((grp["label"], total, {}))
+        grid = list(results[0].grid) if results else []
+        spec = PlotSpec(
+            kind="dos", x=grid, series=series,
+            xlabel="E - E_f (eV)", ylabel="DOS (states/eV)",
+            vlines=[0.0],
+        )
+        out = Path(params["out"]) if params.get("out") else Path("dos.pdf")
+        render(spec, out, bool(params.get("edit")), bool(params.get("latex")))
+
+        # Per-group d-band centers (only when the group's channel spec
+        # mentions 'd' — avoids nan rows for s/p-only groups).
+        dband_parts: list[str] = []
+        for grp in group_dicts:
+            if "d" not in grp["channels"]:
+                continue
+            try:
+                dband = compute_d_center(vdata, grp["atoms"])
+                val = float(getattr(dband, "eps_rel",
+                                     getattr(dband, "center", dband)))
+            except (TypeError, ValueError, IndexError, AttributeError):
+                val = float("nan")
+            dband_parts.append(f"{grp['label']}={val:.4f}")
+        dband_msg = (f"  (d-band centers: {', '.join(dband_parts)})"
+                     if dband_parts else "")
+
+        if params.get("dump"):
+            _dump(params["dump"], {
+                "energy": grid,
+                "groups": [{
+                    "label": g["label"],
+                    "atoms": g["atoms"],
+                    "channels": g["channels"],
+                    "pdos": list(r.pdos.sum(axis=0)),
+                } for g, r in zip(group_dicts, results)],
+            })
+        return OpResult(
+            ok=True,
+            message=f"{len(group_dicts)} PDOS groups -> {out}{dband_msg}",
+            artifact=out, structure=None,
+        )
+
     atoms_p = params.get("atoms", "all")
     if atoms_p in ("all", None):
         atoms = list(range(vdata.nions))

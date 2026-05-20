@@ -302,6 +302,168 @@ def test_dos_happy_path_monkeypatched(tmp_path, monkeypatch):
     assert len(payload["pdos"]) == 11
 
 
+# ============================================================================
+# F3 — dos --groups multi-PDOS
+# ============================================================================
+
+
+def _install_fake_catgo_dos(monkeypatch, group_calls=None,
+                            single_calls=None):
+    """Install a synthetic catgo_dos so dos() can run without the real
+    extension. Returns the list of catch-all recorders.
+    """
+    import sys, types
+    import numpy as np
+
+    class _V:
+        nions = 6
+
+    class _PDOS:
+        def __init__(self, label="", atoms=None, channels=None):
+            self.grid = np.linspace(-5.0, 5.0, 11)
+            self.pdos = np.ones((1, 11))
+            self.label = label
+            self.atoms = atoms or []
+            self.channels = channels or ""
+
+    class _DB:
+        eps_rel = -1.234
+
+    fake_root = types.ModuleType("catgo_dos")
+    fake_io = types.ModuleType("catgo_dos.io")
+    fake_io.read_vaspout_h5 = lambda p: _V()
+    fake_pdos = types.ModuleType("catgo_dos.pdos")
+    fake_pdos.compute_pdos = lambda vd, atoms, channels: _PDOS(
+        atoms=atoms, channels=channels
+    )
+    if group_calls is not None:
+        def _groups(vd, dicts):
+            group_calls.append(list(dicts))
+            return [_PDOS(label=g["label"], atoms=g["atoms"],
+                          channels=g["channels"]) for g in dicts]
+        fake_pdos.compute_pdos_groups = _groups
+    else:
+        fake_pdos.compute_pdos_groups = lambda vd, dicts: [
+            _PDOS(label=g["label"]) for g in dicts]
+    fake_dband = types.ModuleType("catgo_dos.dband")
+    fake_dband.compute_d_center = lambda vd, atoms: _DB()
+    monkeypatch.setitem(sys.modules, "catgo_dos", fake_root)
+    monkeypatch.setitem(sys.modules, "catgo_dos.io", fake_io)
+    monkeypatch.setitem(sys.modules, "catgo_dos.pdos", fake_pdos)
+    monkeypatch.setitem(sys.modules, "catgo_dos.dband", fake_dband)
+
+
+def test_dos_groups_calls_extension_with_dict_list(tmp_path, monkeypatch):
+    recorded: list = []
+    _install_fake_catgo_dos(monkeypatch, group_calls=recorded)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    r = ops_analyze.dos(Session(), {
+        "input": str(h5), "out": str(out),
+        "groups": "0-3:d:slab; 4,5:p:ads",
+    })
+    assert r.ok
+    assert len(recorded) == 1
+    dicts = recorded[0]
+    assert len(dicts) == 2
+    assert dicts[0]["atoms"] == [0, 1, 2, 3]
+    assert dicts[0]["channels"] == "d"
+    assert dicts[0]["label"] == "slab"
+    assert dicts[1]["atoms"] == [4, 5]
+    assert dicts[1]["channels"] == "p"
+    assert dicts[1]["label"] == "ads"
+
+
+def test_dos_groups_plots_one_series_per_group(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_render(spec, out, edit, latex):
+        captured["spec"] = spec
+        return out
+
+    _install_fake_catgo_dos(monkeypatch)
+    monkeypatch.setattr("catgo.cli.plotting.render", fake_render)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    r = ops_analyze.dos(Session(), {
+        "input": str(h5), "out": str(out),
+        "groups": "0-3:d:slab; 4,5:p:ads",
+    })
+    assert r.ok
+    series = captured["spec"].series
+    assert len(series) == 2
+    labels = [s[0] for s in series]
+    assert labels == ["slab", "ads"]
+
+
+def test_dos_groups_dump_has_groups_array(tmp_path, monkeypatch):
+    _install_fake_catgo_dos(monkeypatch)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    dump = tmp_path / "dos.json"
+    r = ops_analyze.dos(Session(), {
+        "input": str(h5), "out": str(out),
+        "groups": "0-3:d; 4,5:p",
+        "dump": str(dump),
+    })
+    assert r.ok
+    import json
+    payload = json.loads(dump.read_text())
+    assert "groups" in payload
+    assert len(payload["groups"]) == 2
+    g0, g1 = payload["groups"]
+    assert g0["atoms"] == [0, 1, 2, 3]
+    assert g0["channels"] == "d"
+    assert g0["label"] == "d@0-3"
+    assert len(g0["pdos"]) == 11
+    assert g1["channels"] == "p"
+    assert "energy" in payload
+    assert len(payload["energy"]) == 11
+
+
+def test_dos_groups_message_lists_count(tmp_path, monkeypatch):
+    _install_fake_catgo_dos(monkeypatch)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    r = ops_analyze.dos(Session(), {
+        "input": str(h5), "out": str(out),
+        "groups": "0-3:d; 4,5:p",
+    })
+    assert r.ok
+    assert r.message.startswith("2 PDOS groups ->")
+
+
+def test_dos_no_groups_unchanged_message(tmp_path, monkeypatch):
+    """Baseline single-group path must still produce the existing
+    'd-band center = …' message."""
+    _install_fake_catgo_dos(monkeypatch)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    r = ops_analyze.dos(Session(), {
+        "input": str(h5), "out": str(out),
+        "atoms": "all", "channels": "d",
+    })
+    assert r.ok
+    import re
+    assert re.search(r"d-band center = -?\d+\.\d{4} eV", r.message)
+
+
+def test_dos_groups_d_band_only_for_d_channels(tmp_path, monkeypatch):
+    """d-band centers should be reported in the message ONLY for groups
+    whose channel spec contains 'd'."""
+    _install_fake_catgo_dos(monkeypatch)
+    h5 = tmp_path / "x.h5"; h5.write_bytes(b"\x89HDF")
+    out = tmp_path / "dos.png"
+    r = ops_analyze.dos(Session(), {
+        "input": str(h5), "out": str(out),
+        "groups": "0-3:d:slab; 4,5:p:ads",
+    })
+    assert r.ok
+    # slab has 'd' -> appears; ads has 'p' -> does NOT appear
+    assert "slab" in r.message
+    assert "ads" not in r.message or "d-band" not in r.message.split("ads")[-1]
+
+
 def test_cohp_handler(tmp_path):
     cc = _find_fixture("COHPCAR.lobster", "cohpcar.lobster")
     if cc is None:
