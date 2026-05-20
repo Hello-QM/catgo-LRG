@@ -257,6 +257,43 @@ def test_submit_dash_flag_aliases_parse():
     assert args.job_name == "myjob"
 
 
+def test_freq_ir_dash_flag_parses():
+    """E8 — new freq IR flags accept the dash-form names AND emit the
+    expected dest names so the handler picks them up by Param.name."""
+    from catgo.cli import _build_legacy_parser, _add_op_subparsers
+    parser, sub = _build_legacy_parser()
+    _add_op_subparsers(sub)
+    args = parser.parse_args([
+        "freq", "OUTCAR",
+        "--ir-spectrum", "ir.dat",
+        "--ir-sigma", "5.0",
+        "--ir-emin", "100",
+        "--ir-emax", "2000",
+        "--no-anim",
+    ])
+    assert args._op.name == "freq"
+    assert args.ir_spectrum == "ir.dat"
+    assert float(args.ir_sigma) == 5.0
+    assert float(args.ir_emin) == 100.0
+    assert float(args.ir_emax) == 2000.0
+    # Underscore form still works
+    args = parser.parse_args([
+        "freq", "OUTCAR",
+        "--ir_spectrum", "ir.pdf",
+        "--ir_sigma", "20",
+        "--no_anim",
+    ])
+    assert args.ir_spectrum == "ir.pdf"
+
+
+def test_freq_help_lists_ir_flags():
+    """E8 — `catgo freq --help` advertises the new IR flag surface."""
+    r = _run_catgo("freq", "--help")
+    assert r.returncode == 0
+    for flag in ("--ir-spectrum", "--ir-sigma", "--ir-emin", "--ir-emax"):
+        assert flag in r.stdout, f"missing from freq --help: {flag}"
+
+
 def test_submit_op_registered_in_hpc_group():
     """D10 — registry self-check: submit lives in group 'hpc' and is
     needs_server=False (no auto-start)."""

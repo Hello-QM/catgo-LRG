@@ -118,7 +118,7 @@ def test_shell_freq_analyze_via_menu(tmp_path):
     # Script: choose freq, give input path, mode=adsorbed (default ok? non-empty),
     # accept defaults for other params (Enter), no_anim=True, quit.
     # Param order in registry: mode T P freq_cutoff unpaired frames amplitude
-    #   mode_index symbols no_anim dump
+    #   mode_index symbols no_anim dump ir_spectrum ir_sigma ir_emin ir_emax
     script = iter([
         "freq",                # op
         str(outcar),           # input path
@@ -133,6 +133,10 @@ def test_shell_freq_analyze_via_menu(tmp_path):
         "",                    # symbols
         "1",                   # no_anim (truthy bool via prm.type(raw) = bool("1") = True)
         "",                    # dump
+        "",                    # ir_spectrum (E8)
+        "",                    # ir_sigma
+        "",                    # ir_emin
+        "",                    # ir_emax
         "q",
     ])
     sh = InteractiveShell(session=Session(),

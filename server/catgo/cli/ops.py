@@ -84,6 +84,18 @@ def build_registry() -> OperationRegistry:
             Param("no_anim", bool, default=False,
                   help="skip the TS animation, numbers only"),
             Param("dump", str, default="", help="also write Gibbs JSON"),
+            # IR spectrum (real-mode Gaussian-broadened absorption).
+            # Path extension picks text (.dat/.txt/.csv) vs plot
+            # (.pdf/.png/.svg). Sentinel -1 on emin/emax = auto range
+            # (registry has no Optional-float Param surface yet).
+            Param("ir_spectrum", str, default="",
+                  help="write IR spectrum (.dat/.pdf/.png)"),
+            Param("ir_sigma", float, default=10.0,
+                  help="Gaussian width (cm-1) for IR spectrum"),
+            Param("ir_emin", float, default=-1.0,
+                  help="IR spectrum lower bound (cm-1); <0 = auto"),
+            Param("ir_emax", float, default=-1.0,
+                  help="IR spectrum upper bound (cm-1); <0 = auto"),
         ],
         handler=ops_analyze.freq, mutates=False))
     from catgo.cli import ops_viewer
