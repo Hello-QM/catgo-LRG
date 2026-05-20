@@ -86,4 +86,24 @@ def build_registry() -> OperationRegistry:
             Param("dump", str, default="", help="also write Gibbs JSON"),
         ],
         handler=ops_analyze.freq, mutates=False))
+    from catgo.cli import ops_viewer
+    reg.add(Operation(
+        name="push", group="viewer",
+        summary="upload structure to the CatGO viewer (auto-starts server)",
+        params=[
+            Param("panel", str, default="",
+                  help="viewer panel id (empty = server default)"),
+        ],
+        handler=ops_viewer.push, needs_server=True, mutates=False))
+    reg.add(Operation(
+        name="pull", group="viewer",
+        summary="download current viewer structure into the session",
+        params=[
+            Param("panel", str, default="",
+                  help="viewer panel id (empty = server default)"),
+            Param("format", str, default="poscar",
+                  choices=["poscar", "cif", "xyz", "extxyz"],
+                  help="export format"),
+        ],
+        handler=ops_viewer.pull, needs_server=True, mutates=True))
     return reg

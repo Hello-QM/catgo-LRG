@@ -44,3 +44,13 @@ def test_freq_via_registry(tmp_path):
     r = op.handler(Session(), {"input": str(outcar), "mode": "adsorbed",
                                "no_anim": True})
     assert r.ok and "G_corr" in r.message
+
+
+def test_viewer_ops_registered():
+    reg = build_registry()
+    push = reg.get("push")
+    pull = reg.get("pull")
+    assert push.group == "viewer" and push.needs_server is True
+    assert push.mutates is False
+    assert pull.group == "viewer" and pull.needs_server is True
+    assert pull.mutates is True
