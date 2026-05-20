@@ -22,11 +22,12 @@ class InteractiveShell:
         self._in = input_fn
         self._out = output_fn
         self._no_autostart = no_autostart
-        try:
-            from catgo.cli.server_link import ServerLink
-            self.session.link = ServerLink.discover()
-        except Exception:  # noqa: BLE001
-            self.session.link = None
+        # ServerLink.discover() is total: its internal _ping swallows
+        # every exception and returns False on failure, so discover()
+        # itself returns None rather than raising. Mirror _run_op's
+        # call site — no try/except needed.
+        from catgo.cli.server_link import ServerLink
+        self.session.link = ServerLink.discover()
 
     def _status(self) -> str:
         s = self.session.structure
