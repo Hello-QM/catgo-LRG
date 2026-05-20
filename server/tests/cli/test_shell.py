@@ -158,3 +158,56 @@ def test_shell_no_autostart_blocks_push():
     sh.run()
     text = "\n".join(out)
     assert "no-autostart" in text or "unreachable" in text.lower()
+
+
+def test_shell_autostart_success_proceeds(monkeypatch, tmp_path):
+    """C4 — symmetric to test_shell_no_autostart_blocks_push but on the
+    happy path: when no_autostart is False and the daemon spawn succeeds
+    (faked), the shell should set session.link, run push_structure, and
+    print the 'pushed' confirmation line."""
+    src = _cu_poscar(tmp_path)
+
+    # Fake link with a recording push_structure. Mirrors the ServerLink
+    # surface used by ops_viewer.push (signature: (Path, panel_id) -> dict).
+    class _FakeLink:
+        def __init__(self):
+            self.calls = []
+            self.base_url = "http://fake:0"
+
+        def push_structure(self, path, panel_id):
+            self.calls.append((path, panel_id))
+            return {"panel_id": panel_id or "default", "num_sites": 1}
+
+    fake = _FakeLink()
+    # Patch the autostart factory so the menu's needs_server branch
+    # gets our fake instead of trying to spawn `catgo serve --daemon`.
+    monkeypatch.setattr(
+        "catgo.cli._autostart.spawn_daemon_and_wait", lambda: fake)
+    # Also ensure ServerLink.discover() (called in __init__) returns None
+    # so the menu hits the autostart branch deterministically — no
+    # background server can interfere with the test.
+    from catgo.cli import server_link
+    monkeypatch.setattr(server_link.ServerLink, "discover",
+                        classmethod(lambda cls: None))
+
+    out: list[str] = []
+    # Script: load the POSCAR (so session.structure is set), then push,
+    # blank panel (uses default), then quit.
+    script = iter(["0", str(src), "push", "", "q"])
+    session = Session()
+    sh = InteractiveShell(
+        session=session,
+        no_autostart=False,  # autostart enabled — this is the happy path
+        input_fn=lambda _="": next(script),
+        output_fn=lambda *a, **k: out.append(" ".join(map(str, a))),
+    )
+    sh.run()
+
+    text = "\n".join(out)
+    assert "pushed" in text, text
+    assert "panel=default" in text, text
+    # Side-effects: session.link set to our fake; one push call made.
+    assert sh.session.link is fake
+    assert len(fake.calls) == 1
+    _, panel_arg = fake.calls[0]
+    assert panel_arg is None  # blank panel -> None (server picks default)
