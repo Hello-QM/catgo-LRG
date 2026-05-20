@@ -204,7 +204,10 @@ def submit(session, params: dict) -> OpResult:
     # Resolve remote dir (default ~/catgo-jobs/<UTC-ts>-<jobname>)
     remote_dir = params.get("remote_dir") or ""
     if not remote_dir:
-        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        # tz-aware UTC; utcnow() is deprecated in py3.12+.
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y%m%dT%H%M%SZ"
+        )
         remote_dir = f"~/catgo-jobs/{ts}-{job_name}"
 
     # Talk to the remote host
