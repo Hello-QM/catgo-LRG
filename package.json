@@ -13,7 +13,7 @@
     "@catgo/ferrox-wasm": "link:extensions/rust-wasm",
     "@huggingface/transformers": "^3.8.1",
     "@mediapipe/tasks-vision": "^0.10.32",
-    "@openai/codex-sdk": "^0.117.0",
+    "@openai/codex-sdk": "0.132.0-alpha.1",
     "@ricky0123/vad-web": "^0.0.30",
     "@sapphi-red/web-noise-suppressor": "^0.3.5",
     "@spglib/moyo-wasm": "^0.7.1",
@@ -212,7 +212,8 @@
       "sharp"
     ],
     "patchedDependencies": {
-      "three@0.181.2": "patches/three@0.181.2.patch"
+      "three@0.181.2": "patches/three@0.181.2.patch",
+      "@openai/codex-sdk@0.132.0-alpha.1": "patches/@openai__codex-sdk@0.132.0-alpha.1.patch"
     }
   },
   "scripts": {

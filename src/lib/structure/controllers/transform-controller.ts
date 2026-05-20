@@ -23,7 +23,12 @@ export function is_image_atom(
 ): boolean {
   const num_original = (displayed_structure as any)?.num_original_sites
   if (!num_original) return false
-  return idx >= num_original
+  // Image atoms occupy [num_original, displayed_structure.sites.length).
+  // Indices beyond that range refer to atoms added after displayed_structure
+  // was last derived (e.g. newly placed atoms not yet PBC-expanded) — treat
+  // them as originals so drag/move/select operations include them.
+  const displayed_count = displayed_structure?.sites?.length ?? 0
+  return idx >= num_original && idx < displayed_count
 }
 
 /**
@@ -50,8 +55,19 @@ export function get_original_atoms_only(
   const image_map = (displayed_structure as any)?.image_to_original_map
   const max_idx = structure?.sites?.length ?? 0
 
+  // Consistency guard: image_to_original_map is only meaningful while the PBC
+  // expansion still matches the base structure. The expansion records
+  // num_original_sites = base.sites.length at derivation time, so once the
+  // base count diverges (an atom was added/removed after expansion) the
+  // displayed_structure is stale: a freshly added atom's base index can
+  // collide with the stale image range [num_original, displayed_count) and be
+  // mis-mapped via image_map (e.g. image_map[0] → atom 0, dragging the wrong
+  // atom). When stale, pass indices through untouched — base indices are
+  // always real atoms; image remapping resumes once the expansion re-derives.
+  const expansion_consistent = num_original === max_idx
+
   const mapped = indices.map((idx) => {
-    if (num_original && idx >= num_original && image_map) {
+    if (expansion_consistent && num_original && image_map && idx >= num_original) {
       return image_map[idx - num_original] ?? idx
     }
     return idx

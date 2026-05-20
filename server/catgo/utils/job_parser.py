@@ -450,6 +450,308 @@ async def parse_vasp_convergence(
     )
 
 
+# CP2K reports energies in Hartree and gradients in Hartree/Bohr. Convert to
+# the VASP-aligned units (eV, eV/Å) so the same Plotly trace config works for
+# both engines and the user reads consistent magnitudes across the workflow.
+_HARTREE_TO_EV = 27.211386245988
+_HARTREE_PER_BOHR_TO_EV_PER_ANG = 51.42220675112
+
+
+def _parse_cp2k_scf(raw: str) -> ConvergenceData | None:
+    """Parse CP2K SCF iteration table — fallback when no MD/OPT steps exist yet.
+
+    During initial SCF (before the first MD step or before the first
+    optimization step completes), CP2K writes lines like:
+
+        Step     Update method      Time    Convergence         Total energy    Change
+        ------------------------------------------------------------------------------
+           1 OT DIIS     0.15E+00    3.2     0.18934141       -65.1644992206 -6.52E+01
+           2 OT DIIS     0.15E+00    3.8     0.15555510       -66.6465994918 -1.48E+00
+
+    With nothing else parseable yet, the user sees a blank chart that says
+    "Waiting for first MD step…" for ~10 min on a big basis — which is
+    indistinguishable from "the parser is broken". Surfacing the SCF
+    energy descent gives them real-time feedback that CP2K is actually
+    making progress. Each SCF iteration becomes a ConvergencePoint with
+    step = iteration index, energy in eV.
+
+    Returns None if no SCF table found, so caller can fall back further.
+    """
+    # Match SCF lines: leading whitespace, integer step, "OT DIIS" or other
+    # method (e.g. "OT CG"), the stepsize, time, convergence, total energy,
+    # change. We anchor on `OT ` to avoid matching unrelated tables.
+    scf_re = re.compile(
+        r"^\s*(\d+)\s+OT\s+\w+\s+\S+\s+\S+\s+\S+\s+(-?\d+\.\d+(?:[eE][+-]?\d+)?)\s+(\S+)\s*$",
+        re.MULTILINE,
+    )
+    matches = list(scf_re.finditer(raw))
+    if not matches:
+        return None
+
+    points: list[ConvergencePoint] = []
+    for m in matches:
+        iter_n = int(m.group(1))
+        energy_ha = float(m.group(2))
+        points.append(ConvergencePoint(
+            step=iter_n,
+            energy=energy_ha * _HARTREE_TO_EV,
+            energy_sigma0=energy_ha * _HARTREE_TO_EV,
+        ))
+
+    return ConvergenceData(
+        success=True,
+        points=points,
+        converged=False,
+        message=f"SCF iterations ({len(points)}) — waiting for first MD/OPT step",
+    )
+
+
+def _parse_cp2k_md(raw: str) -> ConvergenceData:
+    """Parse CP2K MD output for per-step thermodynamic data.
+
+    CP2K MD prints one block per MD step containing STEP NUMBER, TIME,
+    CONSERVED QUANTITY, POTENTIAL ENERGY, KINETIC ENERGY, TEMPERATURE.
+    These appear at every step (no extra PRINT keyword needed), so the
+    chart fills in dense from the very first step — which is what the
+    user expects for MD (vs the once-per-cycle pattern of GEO_OPT).
+
+    Format variations handled:
+      - Classic block format: `STEP NUMBER = N` (CP2K 2023.x default)
+      - Optional unit brackets: `TEMPERATURE [K] = X` or `TEMPERATURE = X`
+      - Integer values (no decimal): `TEMPERATURE [K] = 298`
+      - Both `POTENTIAL ENERGY[hartree]` (no space) and `KINETIC ENERGY [hartree]` (with space)
+    """
+    # Try classic block format first, then MD| prefix format.
+    step_re = re.compile(r"^\s*STEP NUMBER\s*=\s*(\d+)\s*$", re.MULTILINE)
+    step_matches = list(step_re.finditer(raw))
+    md_prefix = False
+    if not step_matches:
+        md_prefix = True
+        step_re = re.compile(
+            r"^\s*MD\|\s*Step number\s+(\d+)", re.MULTILINE | re.IGNORECASE,
+        )
+        step_matches = list(step_re.finditer(raw))
+    if not step_matches:
+        return ConvergenceData(success=False, message="No MD steps found")
+
+    # Helper: pull a `KEY [unit?] = NUMBER` value from one MD-step block.
+    # In the classic block format keys look like:
+    #   TEMPERATURE [K] = 298.150
+    #   TEMPERATURE [K] = 0.298150E+03
+    #   TEMPERATURE [K] = 298           (int — Variant 5)
+    #   TEMPERATURE     = 298.150       (no brackets — Variant 3)
+    # In the MD| prefix format keys look like:
+    #   MD| Temperature [K]   298.150
+    # (no `=` sign — the value is just whitespace-separated). Try both.
+    def _field(block: str, key: str) -> float | None:
+        # Pattern 1: classic "KEY [unit?] = VALUE"
+        m = re.search(
+            rf"{key}\s*(?:\[[^\]]*\])?\s*=\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+            block,
+            re.IGNORECASE,
+        )
+        if m:
+            return float(m.group(1))
+        # Pattern 2: MD| prefix "MD| KEY [unit?] VALUE"
+        m = re.search(
+            rf"MD\|\s*{key}\s*(?:\[[^\]]*\])?\s+(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+            block,
+            re.IGNORECASE,
+        )
+        return float(m.group(1)) if m else None
+
+    points: list[ConvergencePoint] = []
+    for i, sm in enumerate(step_matches):
+        block_start = sm.start()
+        block_end = step_matches[i + 1].start() if i + 1 < len(step_matches) else len(raw)
+        block = raw[block_start:block_end]
+        step_num = int(sm.group(1))
+
+        pot_ha = _field(block, r"POTENTIAL ENERGY") or 0.0
+        kin_ha = _field(block, r"KINETIC ENERGY") or 0.0
+        cons_ha = _field(block, r"CONSERVED QUANTITY") or 0.0
+        temp_k = _field(block, r"TEMPERATURE") or 0.0
+        # CP2K MD doesn't print forces in the step block by default; the
+        # chart's force panel will just be flat zero for MD which is fine
+        # — it's still useful when MOTION/PRINT/FORCES is enabled.
+
+        # `energy` is what the chart's "Energy" trace reads — for MD show
+        # the total (potential + kinetic) so the curve reflects what an
+        # MD user would call "the energy" (cons_quantity is also useful
+        # and lives on its own field).
+        total_ha = pot_ha + kin_ha
+        points.append(ConvergencePoint(
+            step=step_num,
+            energy=total_ha * _HARTREE_TO_EV,
+            energy_sigma0=total_ha * _HARTREE_TO_EV,
+            potential_energy=pot_ha * _HARTREE_TO_EV,
+            kinetic_energy=kin_ha * _HARTREE_TO_EV,
+            conserved_energy=cons_ha * _HARTREE_TO_EV,
+            temperature=temp_k,
+        ))
+
+    return ConvergenceData(
+        success=True,
+        points=points,
+        # MD doesn't "converge" — show running so the UI doesn't flag the
+        # task as not-converged when the user has run its full nsteps.
+        converged=False,
+        message=f"{len(points)} MD steps parsed",
+    )
+
+
+async def parse_cp2k_convergence(
+    conn: Any, work_dir: str
+) -> ConvergenceData:
+    """Parse CP2K output (geo_opt, cell_opt, MD, or single-point) for
+    per-step convergence / trajectory data.
+
+    CP2K writes its stdout to whatever file we tee to (our submit.sh pipes
+    to `cp2k.out`); some workflows alternatively use `project.out` (CP2K's
+    default when `-o` is passed). We try both in one SSH round-trip.
+
+    Routing:
+      * If output contains `STEP NUMBER` blocks → MD parser (per-step
+        energies + temperature + conserved quantity).
+      * If output contains `OPTIMIZATION STEP:` markers → geo_opt /
+        cell_opt parser (per-step total energy + max/RMS gradient).
+      * If only an `ENERGY|` line exists → single-point fallback (1 pt).
+
+    All energies are returned in eV, forces in eV/Å, temperature in K —
+    consistent with the VASP parser so the frontend chart config can be
+    shared.
+
+    Args:
+        conn: SSH connection with async run() method.
+        work_dir: Remote directory containing cp2k.out (or project.out).
+
+    Returns:
+        ConvergenceData with per-step ConvergencePoint entries.
+    """
+    safe_dir = shlex.quote(work_dir)
+    combined_cmd = (
+        f"if [ -s {safe_dir}/cp2k.out ]; then cat {safe_dir}/cp2k.out; "
+        f"elif [ -s {safe_dir}/project.out ]; then cat {safe_dir}/project.out; "
+        f"fi"
+    )
+    result = await conn.run(combined_cmd, check=False)
+    raw = result.stdout or ""
+
+    if not raw.strip():
+        return ConvergenceData(
+            success=False, message="cp2k.out / project.out not found or empty"
+        )
+
+    # MD takes priority — its per-step blocks have nothing in common
+    # with OPTIMIZATION STEP, so the routing is unambiguous.
+    # Match either:
+    #   - "STEP NUMBER = N"        (CP2K 2023.x classic block format)
+    #   - "MD| Step number  N"     (older CP2K MD| line-prefix format)
+    if (
+        re.search(r"^\s*STEP NUMBER\s*=\s*\d+", raw, re.MULTILINE)
+        or re.search(r"^\s*MD\|\s*Step number\s+\d+", raw, re.MULTILINE | re.IGNORECASE)
+    ):
+        return _parse_cp2k_md(raw)
+
+    converged = (
+        "GEOMETRY OPTIMIZATION COMPLETED" in raw
+        or "CELL OPTIMIZATION COMPLETED" in raw
+    )
+
+    energy_re = re.compile(
+        r"ENERGY\|\s+Total FORCE_EVAL\s*\([^)]+\)\s*energy\s*\[(?:a\.u\.|hartree)\]:\s+(-?\d+\.\d+(?:[eE][+-]?\d+)?)"
+    )
+    # CP2K writes per-step blocks with different markers across versions:
+    #   - "--------  Informations at step =     1 ------" (CP2K 2023.x BFGS — most common)
+    #   - "OPTIMIZATION STEP:     1"                     (some older or alternative-optimizer variants)
+    # Match either. Single regex with alternation keeps the i-th match
+    # alignment with the i-th ENERGY| line intact.
+    step_re = re.compile(
+        r"(?:Informations at step\s*=|OPTIMIZATION STEP:)\s*(\d+)",
+        re.IGNORECASE,
+    )
+    # Gradient values appear in the per-step "Convergence check" block.
+    # Accept "Max. gradient", "Max gradient", or the "MAX. ATOMIC FORCE"
+    # variant some CP2K versions print in the force-eval summary.
+    max_grad_re = re.compile(
+        r"(?:Max\.?\s+(?:atomic\s+)?gradient|MAX\.?\s+ATOMIC\s+FORCE)\s*=?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+        re.IGNORECASE,
+    )
+    rms_grad_re = re.compile(
+        r"RMS\s+(?:atomic\s+)?(?:gradient|force)\s*=?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+        re.IGNORECASE,
+    )
+
+    energies_ha = [float(m.group(1)) for m in energy_re.finditer(raw)]
+    step_matches = list(step_re.finditer(raw))
+
+    if not step_matches and energies_ha:
+        # No OPT/MD step markers, but multiple ENERGY| lines exist —
+        # almost certainly an MD that's printed several SCF-converged
+        # total energies but where CP2K hasn't yet emitted its "STEP
+        # NUMBER" block (the per-step thermodynamics block comes after
+        # the SCF + force calc). Return one point per ENERGY| so the
+        # user sees the trajectory build up live, instead of a frozen
+        # single-point readout.
+        points = [
+            ConvergencePoint(
+                step=i + 1,
+                energy=e_ha * _HARTREE_TO_EV,
+                energy_sigma0=e_ha * _HARTREE_TO_EV,
+            )
+            for i, e_ha in enumerate(energies_ha)
+        ]
+        return ConvergenceData(
+            success=True,
+            points=points,
+            converged=len(points) == 1,  # 1 point ≈ single-point calc
+            message=(
+                "single-point energy parsed" if len(points) == 1
+                else f"{len(points)} converged SCFs (pre-MD-step)"
+            ),
+        )
+
+    if not step_matches:
+        # No MD step, no OPT step, no ENERGY| line — CP2K is probably still
+        # in initial SCF on a big system. Surface the SCF iteration table
+        # so the live chart shows real progress instead of "broken".
+        scf_fallback = _parse_cp2k_scf(raw)
+        if scf_fallback:
+            return scf_fallback
+        return ConvergenceData(
+            success=False, message="No optimization steps found in CP2K output"
+        )
+
+    points: list[ConvergencePoint] = []
+    for i, sm in enumerate(step_matches):
+        step_num = int(sm.group(1))
+        block_start = sm.start()
+        block_end = step_matches[i + 1].start() if i + 1 < len(step_matches) else len(raw)
+        block = raw[block_start:block_end]
+
+        energy_ha = energies_ha[i] if i < len(energies_ha) else 0.0
+        max_g_match = max_grad_re.search(block)
+        rms_g_match = rms_grad_re.search(block)
+        max_grad_au = float(max_g_match.group(1)) if max_g_match else 0.0
+        rms_grad_au = float(rms_g_match.group(1)) if rms_g_match else 0.0
+
+        points.append(ConvergencePoint(
+            step=step_num,
+            energy=energy_ha * _HARTREE_TO_EV,
+            energy_sigma0=energy_ha * _HARTREE_TO_EV,
+            max_force=max_grad_au * _HARTREE_PER_BOHR_TO_EV_PER_ANG,
+            rms_force=rms_grad_au * _HARTREE_PER_BOHR_TO_EV_PER_ANG,
+        ))
+
+    return ConvergenceData(
+        success=True,
+        points=points,
+        converged=converged,
+        message=f"{len(points)} optimization steps parsed"
+        + (" (converged)" if converged else ""),
+    )
+
+
 async def parse_vasp_forces(
     conn: Any, work_dir: str, ionic_step: int = 0
 ) -> dict:

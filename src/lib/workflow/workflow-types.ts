@@ -109,6 +109,15 @@ export interface ClusterConfig {
   account?: string
   module_loads?: string
   orca_dir?: string
+  /** CP2K data directory containing BASIS_MOLOPT / GTH_POTENTIALS / etc.
+   *  When set, _generate_cp2k_input_content emits `BASIS_SET_FILE_NAME
+   *  ${cp2k_data_dir}/BASIS_MOLOPT` (and same for POTENTIAL_FILE_NAME),
+   *  otherwise it falls back to bare filenames (which only resolves when
+   *  the cluster has CP2K_DATA_DIR exported in the user's environment). */
+  cp2k_data_dir?: string
+  /** Override CP2K run command. Default `srun cp2k.popt`; useful when the
+   *  cluster only has `cp2k.psmp` or needs explicit hints. */
+  cp2k_command?: string
 }
 
 /** Run configuration sent to backend */
@@ -129,6 +138,30 @@ export interface WorkflowRunConfig {
   use_custodian: boolean
   custodian_max_errors: number
   orca_binary?: string
+  /**
+   * Per-software default params merged into each task's params at submit
+   * time by the Scanner (`_merged_config`) + each engine builtin's
+   * `config.defaults.{sw}` lookup. CP2K is the first consumer; ORCA used
+   * the same pattern as `defaults.orca` already.
+   *
+   * Key naming inside each sub-object matches what the engine reads from
+   * task `params`. For CP2K that's `cutoff` / `rel_cutoff` / `scf_method`
+   * (OT vs DIAGONALIZATION) / `max_scf` / `eps_scf`.
+   *
+   * Cluster-level paths (BASIS_SET_FILE_NAME / POTENTIAL_FILE_NAME /
+   * CP2K_DATA_DIR) live on ClusterConfig, not here, so the same set of
+   * run-time knobs follows a workflow across machines.
+   */
+  defaults?: {
+    cp2k?: {
+      cutoff?: number          // Ry — plane-wave cutoff for the GPW grid
+      rel_cutoff?: number      // Ry — Gaussian-fitting reference cutoff
+      scf_method?: string      // "OT" (fast, insulators) | "DIAGONALIZATION" (metals)
+      max_scf?: number         // SCF iteration limit
+      eps_scf?: number         // SCF convergence threshold
+    }
+    [sw: string]: Record<string, unknown> | undefined
+  }
 }
 
 export interface JobScriptParams {

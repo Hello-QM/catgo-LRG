@@ -313,6 +313,13 @@ class ConvergencePoint(BaseModel):
     max_gradient: float = 0.0  # max |G| (Hartree/Bohr) — ORCA IRC only
     rms_gradient: float = 0.0  # RMS(G) (Hartree/Bohr)  — ORCA IRC only
     is_ts: bool = False        # True for the TS step (step 0)  — ORCA IRC only
+    # CP2K MD-specific fields. Zero when the step isn't from an MD run so
+    # consumers can show them only for MD nodes. All in eV / K — backend
+    # parsers convert from CP2K's native Hartree before populating these.
+    temperature: float = 0.0       # K — instantaneous ionic temperature
+    kinetic_energy: float = 0.0    # eV — kinetic energy this step
+    potential_energy: float = 0.0  # eV — potential energy this step
+    conserved_energy: float = 0.0  # eV — CP2K's "CONSERVED QUANTITY" (should be ~const)
 
 
 class ConvergenceData(BaseModel):

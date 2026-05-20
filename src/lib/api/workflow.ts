@@ -314,7 +314,7 @@ export async function get_job_script_presets(): Promise<Record<string, { id: str
   return handle_response(response)
 }
 
-/** Convergence data point from OSZICAR + OUTCAR */
+/** Convergence data point from OSZICAR + OUTCAR (VASP) or cp2k.out (CP2K). */
 export interface ConvergencePoint {
   step: number
   energy: number
@@ -322,11 +322,17 @@ export interface ConvergencePoint {
   energy_sigma0: number
   max_force: number
   rms_force: number
-  max_step?: number       // MAX displacement (Bohr) — ORCA OPT only
-  rms_step?: number       // RMS displacement (Bohr) — ORCA OPT only
-  max_gradient?: number   // max |G| (Hartree/Bohr)  — ORCA IRC only
-  rms_gradient?: number   // RMS(G) (Hartree/Bohr)   — ORCA IRC only
-  is_ts?: boolean         // true for TS step (step 0) — ORCA IRC only
+  max_step?: number          // MAX displacement (Bohr) — ORCA OPT only
+  rms_step?: number          // RMS displacement (Bohr) — ORCA OPT only
+  max_gradient?: number      // max |G| (Hartree/Bohr)  — ORCA IRC only
+  rms_gradient?: number      // RMS(G) (Hartree/Bohr)   — ORCA IRC only
+  is_ts?: boolean            // true for TS step (step 0) — ORCA IRC only
+  // CP2K MD fields — present only when parse_cp2k_convergence routed to its
+  // MD branch (cp2k.out had `STEP NUMBER` blocks). All in eV / K.
+  temperature?: number       // K — instantaneous ionic temperature
+  kinetic_energy?: number    // eV
+  potential_energy?: number  // eV
+  conserved_energy?: number  // eV — CP2K's "CONSERVED QUANTITY"
 }
 
 /** Get OSZICAR convergence history for a workflow step */

@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import socket
+import time
 from typing import Optional
 
 import httpx
@@ -210,6 +211,31 @@ _SDK_CLAUDE_MODELS = [
     {"id": "haiku", "label": "Haiku 4.5"},
 ]
 
+# Empirically verified against this user's ChatGPT-account Codex on
+# @openai/codex 0.132.0-alpha.1 (other gpt-5* variants returned
+# "not supported when using Codex with a ChatGPT account").
+_SDK_CODEX_MODELS = [
+    {"id": "gpt-5.5",       "label": "Default (GPT-5.5)"},
+    {"id": "gpt-5.4",       "label": "GPT-5.4"},
+    {"id": "gpt-5.4-mini",  "label": "GPT-5.4 mini"},
+    {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
+]
+
+# Empirically verified against gemini-cli 0.42.0 + this user's OAuth account.
+_SDK_GEMINI_MODELS = [
+    {"id": "gemini-2.5-pro",        "label": "Default (Gemini 2.5 Pro)"},
+    {"id": "gemini-2.5-flash",      "label": "Gemini 2.5 Flash"},
+    {"id": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"},
+    {"id": "gemini-3-pro-preview",  "label": "Gemini 3 Pro (preview)"},
+]
+
+# Dispatch table — list_providers() looks up the seed by provider id.
+_SDK_MODELS = {
+    "sdk-claude": _SDK_CLAUDE_MODELS,
+    "sdk-codex":  _SDK_CODEX_MODELS,
+    "sdk-gemini": _SDK_GEMINI_MODELS,
+}
+
 _API_MODELS = {
     "deepseek": [
         {"id": "deepseek-chat", "label": "DeepSeek V3"},
@@ -242,7 +268,7 @@ def list_providers() -> dict:
             "name": label,
             "type": "cli",
             "available": shutil.which(binary) is not None,
-            "models": _SDK_CLAUDE_MODELS if pid == "sdk-claude" else [],
+            "models": _SDK_MODELS.get(pid, []),
             "base_url": None,
         })
 
@@ -266,3 +292,121 @@ def list_providers() -> dict:
     })
 
     return {"providers": providers}
+
+
+# ─── Provider connection test ─────────────────────────────────────────────────
+#
+# Backs the CatBot settings "Test Connection" button. The frontend
+# (`src/lib/chat/ChatPane.svelte:test_provider_connection`) POSTs the current
+# config and expects `{success, latency_ms}` on success or
+# `{success: False, error}` on failure. Without this route the button hit a
+# bare 404 and silently reported "Cannot reach backend server".
+
+# OpenAI-compatible base URLs for the universal API providers. `GET /models`
+# with `Authorization: Bearer <key>` is the cheapest call that proves both
+# reachability and that the key is valid (no tokens spent).
+_API_BASE_URLS = {
+    "deepseek": "https://api.deepseek.com",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "kimi": "https://api.moonshot.cn/v1",
+    "zhipu": "https://open.bigmodel.cn/api/paas/v4",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+}
+
+# Maps an SDK CLI provider to its npm package, so on Windows we can probe the
+# vendored native binary under %APPDATA%\npm — `shutil.which` only sees the
+# sh-shim there, same trap the agent-bridge adapter hit.
+_CLI_NPM_PKG = {
+    "sdk-claude": "@anthropic-ai/claude-code",
+    "sdk-codex": "@openai/codex",
+}
+
+
+class ProviderTestRequest(BaseModel):
+    provider_id: str
+    api_key: Optional[str] = None
+    model: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+def _resolve_cli(provider_id: str) -> Optional[str]:
+    """Resolve an SDK CLI binary for an honest availability signal."""
+    binary, _ = _CLI_BINARIES[provider_id]
+    found = shutil.which(binary)
+    if found:
+        return found
+    appdata = os.environ.get("APPDATA")
+    pkg = _CLI_NPM_PKG.get(provider_id)
+    if appdata and pkg:
+        cand = os.path.join(
+            appdata, "npm", "node_modules", *pkg.split("/"), "bin", binary + ".exe"
+        )
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+@router.post("/providers/test")
+async def test_provider(req: ProviderTestRequest) -> dict:
+    """Validate a provider configuration. See ChatPane.test_provider_connection."""
+    pid = req.provider_id
+
+    # SDK/CLI agents — "connected" means the CLI binary is resolvable.
+    if pid in _CLI_BINARIES:
+        path = _resolve_cli(pid)
+        if path:
+            return {"success": True, "latency_ms": 0, "detail": path}
+        _, label = _CLI_BINARIES[pid]
+        return {
+            "success": False,
+            "error": f"{label} CLI not found on PATH or the npm global prefix.",
+        }
+
+    # Ollama — TCP probe, then confirm the HTTP API actually answers.
+    if pid == "ollama":
+        base = (req.base_url or "http://127.0.0.1:11434").rstrip("/")
+        if not _ollama_running():
+            return {"success": False, "error": "Ollama is not running on 127.0.0.1:11434."}
+        t0 = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                r = await client.get(f"{base}/api/tags")
+        except Exception as exc:
+            return {"success": False, "error": f"Cannot reach Ollama: {exc}"}
+        if r.status_code == 200:
+            return {"success": True, "latency_ms": (time.perf_counter() - t0) * 1000}
+        return {"success": False, "error": f"Ollama responded HTTP {r.status_code}."}
+
+    # OpenAI-compatible API providers — GET /models with the key.
+    if pid in _API_PROVIDERS:
+        _, env_key = _API_PROVIDERS[pid]
+        api_key = req.api_key or os.environ.get(env_key)
+        if not api_key:
+            return {
+                "success": False,
+                "error": f"No API key. Enter one in chat settings or set ${env_key}.",
+            }
+        base = (req.base_url or _API_BASE_URLS.get(pid, "")).rstrip("/")
+        if not base:
+            return {"success": False, "error": f"No base URL configured for '{pid}'."}
+        t0 = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    f"{base}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+        except Exception as exc:
+            return {"success": False, "error": f"Cannot reach {base}: {exc}"}
+        latency = (time.perf_counter() - t0) * 1000
+        if r.status_code == 200:
+            return {"success": True, "latency_ms": latency}
+        if r.status_code in (401, 403):
+            return {
+                "success": False,
+                "error": f"Authentication failed (HTTP {r.status_code}). Check the API key.",
+            }
+        snippet = r.text[:200].replace("\n", " ")
+        return {"success": False, "error": f"HTTP {r.status_code}: {snippet}"}
+
+    return {"success": False, "error": f"Unknown provider '{pid}'."}

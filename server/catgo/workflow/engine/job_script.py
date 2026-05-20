@@ -30,16 +30,48 @@ cd {{work_dir}}
 {{run_command}}
 """
 
-# Engine → run command mapping
+# Engine → run command mapping. CP2K needs the input filename + tee to
+# capture stdout: generate_cp2k_inputs writes `project.inp` so we run
+# `cp2k.popt project.inp | tee cp2k.out`. Any cluster override flows in via
+# params.cp2k_command or job_defaults.cp2k_command (resolved in
+# generate_job_script's cp2k branch).
 _ENGINE_COMMANDS: dict[str, str] = {
     "vasp": "srun vasp_std",
-    "cp2k": "srun cp2k.popt",
+    "cp2k": "srun cp2k.popt project.inp | tee cp2k.out",
     "orca": "orca ORCA.inp > ORCA.out 2>&1",
     "lammps": "python run_lammps.py",
     "mlp": "python run_mlp.py",
     "xtb": "python run_xtb.py",
     "sella": "python run_sella.py",
 }
+
+
+# Built-in CP2K SLURM template. Used when the cluster's default_template is
+# VASP-flavored (contains VASP_HOME / {{vasp_run_command}} / PrgEnv-cray
+# hardcoded module switches) and the task engine is cp2k — the VASP template
+# would otherwise leak its hardcoded `module switch PrgEnv-cray` /
+# `export VASP_HOME=...` lines into the CP2K submission.
+#
+# Module loads come from job_defaults.module_loads (typed in RunConfigDialog
+# Clusters tab → "Module loads" textbox, e.g. `module load cp2k/2023.2`).
+_CP2K_DEFAULT_TEMPLATE = """#!/bin/bash
+#SBATCH --job-name={{job_name}}
+#SBATCH --nodes={{nodes}}
+#SBATCH --ntasks={{ntasks}}
+#SBATCH --time={{walltime}}
+#SBATCH --partition={{partition}}
+{% if account %}#SBATCH --account={{account}}{% endif %}
+#SBATCH --exclusive
+#SBATCH --output=cp2k_%j.out
+#SBATCH --error=cp2k_%j.err
+
+{{module_loads}}
+
+export OMP_NUM_THREADS=1
+
+cd {{work_dir}}
+{{run_command}}
+"""
 
 
 def _process_conditionals(template: str, replacements: dict[str, str]) -> str:
@@ -94,6 +126,19 @@ def generate_job_script(
     if not template:
         template = _DEFAULT_TEMPLATE
 
+    # If a cluster's default_template is VASP-flavored (hardcodes VASP_HOME /
+    # `module switch PrgEnv-cray` / `{{vasp_run_command}}`), we can't reuse it
+    # for non-VASP engines — placeholder substitution alone cannot strip the
+    # hardcoded VASP module-switch lines. Fall back to a built-in template
+    # that honors {{module_loads}} so the user's CP2K modules (configured in
+    # RunConfigDialog → Clusters → Module loads) flow through cleanly.
+    if engine_key == "cp2k" and template and (
+        "VASP_HOME" in template
+        or "{{vasp_run_command}}" in template
+        or "PrgEnv-cray" in template
+    ):
+        template = _CP2K_DEFAULT_TEMPLATE
+
     # Resolve each field with priority: params > job_defaults > fallback
     def _get(key: str, fallback: str = "") -> str:
         val = params.get(key) or job_defaults.get(key) or fallback
@@ -107,12 +152,32 @@ def generate_job_script(
     if engine_key == "orca":
         orca_dir = (params.get("orca_dir") or job_defaults.get("orca_dir", "")).strip()
 
-    # Run command: params > config > engine default
+    # Run command: params > cluster-specific override > config > engine default
     run_command = params.get("run_command")
     if not run_command:
         # For ORCA, use $ORCA_DIR/orca (full path required for parallel MPI runs)
         if engine_key == "orca" and orca_dir:
             run_command = "$ORCA_DIR/orca ORCA.inp > ORCA.out 2>&1"
+        elif engine_key == "cp2k":
+            # cp2k_command lives on ClusterConfig and gets propagated to
+            # hpc.job_defaults by scanner._merged_config. Per-task override
+            # via params.run_command still wins above.
+            #
+            # The CP2K binary REQUIRES an input filename argument — if the
+            # user provided a command like `srun cp2k.psmp` (binary only)
+            # without it, append the input file + tee for stdout capture so
+            # cp2k.psmp doesn't bail with "At least one command line argument
+            # must be specified". `generate_cp2k_inputs` always writes
+            # `project.inp`, so that's what we append.
+            cp2k_cmd = (
+                params.get("cp2k_command")
+                or job_defaults.get("cp2k_command")
+                or hpc_cfg.get("run_commands", {}).get(engine_key)
+                or _ENGINE_COMMANDS.get(engine_key, f"srun {engine_key}")
+            )
+            if ".inp" not in cp2k_cmd:
+                cp2k_cmd = f"{cp2k_cmd} project.inp | tee cp2k.out"
+            run_command = cp2k_cmd
         else:
             run_command = (
                 hpc_cfg.get("run_commands", {}).get(engine_key)

@@ -279,35 +279,50 @@ async def _submit_one(
     # 7. Build or use explicit job script
     session_id = task.get("hpc_session_id") or ""
     cluster_cfg = _resolve_cluster_config(wf_config, session_id or getattr(hpc, 'session_id', ''))
-    job_script = params.get("job_script", "")
-    if not job_script or "#SBATCH" not in job_script:
-        from catgo.workflow.engine.job_script import generate_job_script, generate_custodian_script
-        # Resolve VASP command for custodian script (needed regardless of template path)
-        hpc_cfg = config.get("hpc", {})
-        vasp_cmd = (
-            cluster_cfg.get("vasp_command")
-            or hpc_cfg.get("run_commands", {}).get(engine_key)
-            or "srun vasp_std"
-        )
-        # Check workflow-level job_script_template (full SLURM script with headers)
-        # Check top-level first (V1 format), then nested hpc section (V2 engine config)
-        wf_template = wf_config.get("job_script_template", "") or wf_config.get("hpc", {}).get("job_script_template", "")
-        if wf_template and "#SBATCH" in wf_template:
-            # Inject the wf_template into params so generate_job_script uses it
-            # instead of the built-in default. generate_job_script handles all
-            # {{nodes}}/{{ntasks}}/etc. replacements + run command injection.
-            params_with_template = {**params, "job_script_template": wf_template}
+    from catgo.workflow.engine.job_script import generate_job_script, generate_custodian_script
+    hpc_cfg = config.get("hpc", {})
+    vasp_cmd = (
+        cluster_cfg.get("vasp_command")
+        or hpc_cfg.get("run_commands", {}).get(engine_key)
+        or "srun vasp_std"
+    )
+
+    # Pick a template source. If a previous Run-dialog click stamped
+    # params.job_script with a raw cluster template (still contains
+    # `{{placeholders}}`), treat it as a template — NOT as a finished script
+    # — so generate_job_script can substitute {{nodes}}/{{partition}}/etc and
+    # apply engine-specific run_command + (for CP2K on a VASP-flavored
+    # cluster template) swap in the CP2K built-in template.
+    job_script_param = params.get("job_script", "")
+    has_placeholders = "{{" in job_script_param and "}}" in job_script_param
+
+    if job_script_param and "#SBATCH" in job_script_param and not has_placeholders:
+        # Fully-substituted explicit script — pass through unchanged.
+        job_script = job_script_param
+    else:
+        template_source = ""
+        if job_script_param and has_placeholders:
+            template_source = job_script_param
+        else:
+            template_source = (
+                wf_config.get("job_script_template", "")
+                or wf_config.get("hpc", {}).get("job_script_template", "")
+            )
+        if template_source and "#SBATCH" in template_source:
+            params_with_template = {**params, "job_script_template": template_source}
+            params_with_template.pop("job_script", None)
             job_script = generate_job_script(engine_key, work_dir, task, params_with_template, config)
         else:
-            job_script = generate_job_script(engine_key, work_dir, task, params, config)
+            params_no_stale_js = {k: v for k, v in params.items() if k != "job_script"}
+            job_script = generate_job_script(engine_key, work_dir, task, params_no_stale_js, config)
 
-        # Upload custodian script if needed
-        custodian_py = generate_custodian_script(vasp_cmd, params, config)
-        if custodian_py:
-            await hpc.run_on_owner(lambda: hpc.conn.run(
-                f"cat > {work_dir}/run_custodian.py << 'CATGO_EOF'\n{custodian_py}\nCATGO_EOF",
-                check=True,
-            ))
+    # Upload custodian script if needed
+    custodian_py = generate_custodian_script(vasp_cmd, params, config)
+    if custodian_py:
+        await hpc.run_on_owner(lambda: hpc.conn.run(
+            f"cat > {work_dir}/run_custodian.py << 'CATGO_EOF'\n{custodian_py}\nCATGO_EOF",
+            check=True,
+        ))
 
     # 8. Generate POTCAR on remote (for VASP)
     if engine_key == "vasp":

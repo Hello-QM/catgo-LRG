@@ -66,8 +66,13 @@ binary, so end users don't need Bun.)
 // IPv4-first on the runtime + Bun avoids the silent stall that
 // otherwise makes CatBot's workflow generation "freeze ~50% of the
 // time" on those hosts. Harmless on healthy networks.
+// `which('bun')` on Windows often resolves to the npm shim `bun.cmd`.
+// Node >=18.20/20.12/22 (CVE-2024-27980) refuses to spawn .cmd/.bat
+// without shell:true -> `spawn EINVAL`. shell:true runs it via cmd.exe,
+// which resolves the shim. (bun path & ENTRY are space-free here.)
 const child = spawn(bun, [`run`, ENTRY], {
   stdio: 'inherit',
+  shell: process.platform === 'win32',
   env: {
     ...process.env,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ``} --dns-result-order=ipv4first`.trim(),

@@ -121,7 +121,7 @@ async function* streamPersistent(
   params: StreamParams,
   chatId: string,
 ): AsyncGenerator<AgentEvent> {
-  const { prompt, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId } = params
+  const { prompt, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt } = params
 
   let handle
   try {
@@ -166,10 +166,19 @@ async function* streamPersistent(
 
     yield { type: 'status', sessionId: handle.sessionId, model: model ?? undefined }
 
+    // ACP has no `setSystemInstruction`/`session/setInstructions` (those
+    // symbols exist inside gemini-cli's JS but aren't exposed over ACP), so
+    // we prepend systemPrompt as a context block in the user prompt. Without
+    // this the adapter silently dropped systemPrompt — Gemini never saw the
+    // loaded structure / chat context that Claude got via `query({systemPrompt})`.
+    const fullText = systemPrompt
+      ? `[System Context]\n${systemPrompt}\n\n[User]\n${prompt}`
+      : prompt
+
     const promptPromise = handle.client
       .request<{ stopReason?: string }>('session/prompt', {
         sessionId: handle.sessionId,
-        prompt: [{ type: 'text', text: prompt }],
+        prompt: [{ type: 'text', text: fullText }],
       })
       .then((res) => { stop.reason = res?.stopReason })
       .catch((e: Error) => { stop.err = e })
@@ -189,7 +198,7 @@ async function* streamPersistent(
 
 async function* streamOneShot(params: StreamParams): AsyncGenerator<AgentEvent> {
   const {
-    prompt, sessionId, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId,
+    prompt, sessionId, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt,
   } = params
 
   let spawned
@@ -239,10 +248,15 @@ async function* streamOneShot(params: StreamParams): AsyncGenerator<AgentEvent> 
 
     yield { type: 'status', sessionId: effectiveSessionId, model: model ?? undefined }
 
+    // Same prompt-prepend as the persistent path — see comment above.
+    const fullText = systemPrompt
+      ? `[System Context]\n${systemPrompt}\n\n[User]\n${prompt}`
+      : prompt
+
     const promptPromise = client
       .request<{ stopReason?: string }>('session/prompt', {
         sessionId: effectiveSessionId,
-        prompt: [{ type: 'text', text: prompt }],
+        prompt: [{ type: 'text', text: fullText }],
       })
       .then((res) => { stop.reason = res?.stopReason })
       .catch((e: Error) => { stop.err = e })

@@ -10,10 +10,10 @@
 
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { execSync, spawn, spawnSync } from 'node:child_process'
+import type { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
-import type { EventEmitter } from 'node:events'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -72,9 +72,24 @@ export function find_gemini_cli(): string | null {
     const env = { ...process.env, PATH: [process.env.PATH, ...dirs].filter(Boolean).join(sep) }
     const out = spawnSync(isWin ? 'where' : 'which', ['gemini'], { encoding: 'utf-8', env })
     if (out.status === 0) {
-      const first = out.stdout.split(/\r?\n/).find(Boolean)?.trim()
-      if (first && existsSync(first)) {
-        _gemini_cli_path = first
+      const lines = out.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+      let pick: string | undefined = lines[0]
+      if (pick && isWin) {
+        // `where gemini` lists the extensionless /bin/sh shim first; Node's
+        // spawn() on Windows cannot execute it (ENOENT — the exact failure
+        // that left the Gemini chat hanging with an empty response). Prefer a
+        // real `.cmd` launcher: another `where` hit, or the sibling npm
+        // generates next to every shim.
+        const cmdHit =
+          lines.find((l) => /\.cmd$/i.test(l)) ??
+          (existsSync(`${pick}.cmd`) ? `${pick}.cmd` : undefined) ??
+          (existsSync(join(dirname(pick), 'gemini.cmd'))
+            ? join(dirname(pick), 'gemini.cmd')
+            : undefined)
+        if (cmdHit) pick = cmdHit
+      }
+      if (pick && existsSync(pick)) {
+        _gemini_cli_path = pick
         return _gemini_cli_path
       }
     }
@@ -287,9 +302,15 @@ export async function spawn_gemini_acp(opts: {
   const args = ['--acp']
   if (opts.model) args.push('--model', opts.model)
 
+  // A Windows `.cmd`/`.bat` launcher is a batch script — Node ≥18.20/20.x
+  // refuses to spawn it without `shell:true` (and cmd.exe must interpret it).
+  const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cliPath)
+
   const child = spawn(cliPath, args, {
     cwd: opts.cwd ?? process.cwd(),
     stdio: ['pipe', 'pipe', 'pipe'],
+    shell: useShell,
+    windowsHide: true,
     env: {
       ...process.env,
       // GEMINI_API_KEY required by the CLI; OAuth users have a real one in

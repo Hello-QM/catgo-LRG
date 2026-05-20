@@ -26,6 +26,24 @@ async def _gen_vasp(hpc, work_dir, node_type, params, structure_str, config, tas
 @register_engine("cp2k")
 async def _gen_cp2k(hpc, work_dir, node_type, params, structure_str, config, task):
     from workflow.engines.cp2k import generate_cp2k_inputs
+
+    # Apply per-workflow CP2K defaults (RunConfigDialog → Settings tab →
+    # CP2K) for keys the node didn't override. Resolution order:
+    #   task params  >  config.defaults.cp2k  >  engine fallbacks
+    # Mirrors the ORCA branch above so RunConfigDialog's CP2K SCF/grid
+    # knobs reach the actual cp2k.inp generator.
+    if isinstance(config, dict):
+        cp2k_defaults = config.get("defaults", {}).get("cp2k", {})
+        for key, value in cp2k_defaults.items():
+            if key not in params:
+                params[key] = value
+        # Cluster-level CP2K path (cp2k_data_dir) → params so the .inp
+        # writer can emit absolute BASIS_SET / POTENTIAL paths.
+        # scanner._merged_config puts it in hpc.job_defaults.
+        job_defaults = config.get("hpc", {}).get("job_defaults", {})
+        if job_defaults.get("cp2k_data_dir") and "cp2k_data_dir" not in params:
+            params["cp2k_data_dir"] = job_defaults["cp2k_data_dir"]
+
     await generate_cp2k_inputs(hpc, work_dir, node_type, params, structure_str)
 
 

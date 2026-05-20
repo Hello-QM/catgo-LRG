@@ -1937,6 +1937,26 @@
       } else {
         push_history()
       }
+      // Before reading run-status, ask the backend to reconcile this
+      // workflow's task statuses with HPC truth (probes each task's SLURM
+      // job_id and writes back the real state). Without this, the user's
+      // first view after re-opening CatGo can show stale "completed" /
+      // "running" cells from before the previous shutdown — the scanner
+      // would correct it on its next 15 s cycle, but that feels broken.
+      // Fire-and-forget with a short timeout so a slow reconcile doesn't
+      // block the editor from loading. The run-status fetch below will
+      // get fresh values once the reconcile finishes (or on next poll).
+      try {
+        const reconcile_url = `${API_BASE}/workflow/${workflow_id}/reconcile-from-hpc`
+        await Promise.race([
+          fetch(reconcile_url, { method: `POST` }),
+          new Promise((resolve) => setTimeout(resolve, 5000)),  // 5s cap
+        ])
+      } catch (e) {
+        // Non-fatal — scanner will catch up on its next cycle.
+        console.warn(`[load_workflow] reconcile-from-hpc failed:`, e)
+      }
+
       // Always check run-status via HTTP — WASM status is stale during execution
       try {
         const run_status = await api.get_run_status(workflow_id)

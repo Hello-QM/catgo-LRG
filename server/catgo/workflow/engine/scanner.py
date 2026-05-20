@@ -23,6 +23,26 @@ from catgo.workflow.provenance import record_provenance as _record_provenance
 
 logger = logging.getLogger(__name__)
 
+# V2 (TaskState enum) → V1 step status string used by the frontend's
+# StepInfo / workflow_steps table. Used by _update_workflow_status to
+# reflect engine truth into the legacy table the UI polls.
+_V2_TO_V1_STATUS: dict[str, str] = {
+    "WAITING": "pending",
+    "READY": "pending",
+    "PENDING_REVIEW": "pending",
+    "GENERATING": "submitting",
+    "UPLOADING": "submitting",
+    "SUBMITTED": "queued",
+    "QUEUED": "queued",
+    "RUNNING": "running",
+    "COMPLETED_REMOTE": "completed",
+    "COMPLETED": "completed",
+    "SKIPPED": "completed",
+    "REMOTE_ERROR": "failed",  # surfaced as failed while retries happen
+    "FAILED": "failed",
+    "PAUSED": "paused",
+}
+
 
 def _poscar_to_json(poscar_str: str) -> str:
     """Convert POSCAR/CONTCAR string to pymatgen JSON dict string.
@@ -354,9 +374,14 @@ class WorkflowEngine:
                 # Cluster template overrides global if set
                 if cc.get("default_template"):
                     hpc["job_script_template"] = cc["default_template"]
-                # Cluster-specific fields
+                # Cluster-specific fields. cp2k_data_dir / cp2k_command land
+                # in hpc.job_defaults so _gen_cp2k can pull them into the task
+                # params and _generate_cp2k_input_content can emit absolute
+                # BASIS / POTENTIAL paths; job_script.py reads cp2k_command
+                # as a run_command override.
                 for key in ("orca_dir", "potcar_root", "potcar_functional",
-                            "vasp_command", "module_loads", "account"):
+                            "vasp_command", "module_loads", "account",
+                            "cp2k_data_dir", "cp2k_command"):
                     if cc.get(key):
                         hpc.setdefault("job_defaults", {})[key] = cc[key]
 
@@ -977,12 +1002,43 @@ class WorkflowEngine:
         self._track_task(workflow_id, asyncio.get_event_loop().create_task(_run()))
 
     def _update_workflow_status(self, workflow_id: str) -> None:
-        """Derive workflow status from task states."""
+        """Derive workflow status from task states.
+
+        Also reflects per-task state into the V1 `workflow_steps` table so
+        the frontend (which still reads V1) shows the live status — without
+        this, V1 steps stay frozen at whatever they were when the workflow
+        was first created, and the user sees stale "pending" / "completed"
+        cells even though the V2 engine has moved on.
+        """
         tasks = self.db.get_all_tasks(workflow_id)
         if not tasks:
             return
 
         current = self.db.get_workflow(workflow_id)
+
+        # Sync V2 task statuses → V1 workflow_steps every cycle. Cheap (one
+        # UPDATE per task, indexed by id) and idempotent. Done BEFORE the
+        # workflow-level draft early-return so it runs even for draft
+        # workflows that have completed tasks. Wrapped per-task so one
+        # failure (e.g. step never registered in V1) doesn't skip the rest.
+        try:
+            from catgo.utils.workflow_db import update_step as update_v1_step
+            for t in tasks:
+                v1_status = _V2_TO_V1_STATUS.get(t["status"], "pending")
+                try:
+                    update_v1_step(workflow_id, t["id"], {
+                        "status": v1_status,
+                        "hpc_job_id": t.get("hpc_job_id"),
+                        "hpc_session_id": t.get("hpc_session_id"),
+                        "work_dir": t.get("work_dir"),
+                        "error_message": t.get("error_message"),
+                        "started_at": t.get("started_at"),
+                        "completed_at": t.get("completed_at"),
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
         # Never override an explicitly-set "draft" status — only the user
         # (via submit_workflow) should transition out of draft.
@@ -994,12 +1050,18 @@ class WorkflowEngine:
 
         if current["status"] != new_status.value:
             self.db.update_workflow(workflow_id, status=new_status.value)
-            # Sync V1 workflow DB so /run-status and UI see consistent status
-            try:
-                from catgo.utils.workflow_db import update_workflow as update_v1_workflow
-                update_v1_workflow(workflow_id, {"status": new_status.value})
-            except Exception:
-                pass
+
+        # Always reconcile V1 workflow status from V2 — even when V2 hasn't
+        # transitioned this cycle. Without this, a stale V1 row (e.g. left
+        # over as "completed" after the engine restarted mid-run) sticks
+        # forever because the change-detector above never fires. Idempotent
+        # UPDATE keyed on workflow_id is cheap. Errors are still swallowed
+        # since V1 is the legacy DB and not critical to engine correctness.
+        try:
+            from catgo.utils.workflow_db import update_workflow as update_v1_workflow
+            update_v1_workflow(workflow_id, {"status": new_status.value})
+        except Exception:
+            pass
             asyncio.get_event_loop().create_task(
                 _broadcast(workflow_id, {"type": "workflow_status", "status": new_status.value})
             )

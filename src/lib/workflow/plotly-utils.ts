@@ -43,13 +43,22 @@ export function base_layout(overrides: Record<string, unknown> = {}): Record<str
   }
 }
 
-/** Default Plotly config (responsive, no toolbar). */
+/** Default Plotly config (responsive, no toolbar).
+ *
+ * `scrollZoom: true` enables mousewheel zoom on cartesian axes so users
+ * can zoom out past the autoscaled view (we hide the modebar, so without
+ * scrollZoom they have no way to zoom out). Double-click on the plot
+ * resets to autoscale — Plotly's default gesture, still works with the
+ * modebar hidden.
+ */
 export function base_config(): Record<string, unknown> {
   return {
     responsive: true,
     displayModeBar: false,
     staticPlot: false,
+    scrollZoom: true,
     edits: { legendPosition: true },
+    doubleClick: `reset+autosize`,
   }
 }
 

@@ -9,6 +9,7 @@
   import UvVisPlot from './UvVisPlot.svelte'
   import ConvergencePlot from './ConvergencePlot.svelte'
   import VaspMonitorPlot from './VaspMonitorPlot.svelte'
+  import Cp2kMonitorPlot from './Cp2kMonitorPlot.svelte'
   import Trajectory from '$lib/trajectory/Trajectory.svelte'
   import IrcPathPlot from './IrcPathPlot.svelte'
   import ImageEnergyProfile from './ImageEnergyProfile.svelte'
@@ -349,6 +350,22 @@
   const is_vasp = $derived(
     VASP_ONLY_TYPES.has(effective_node_type) ||
     (UNIFIED_CALC_TYPES.has(effective_node_type) && effective_node_params?.software === `vasp`)
+  )
+  // CP2K node detection — mirrors is_vasp. Legacy `cp2k_*` task types AND
+  // unified calc types running with `software === 'cp2k'`. Drives both the
+  // convergence-fetch trigger below and the chart-component selection in
+  // the template.
+  const CP2K_ONLY_TYPES = new Set([
+    `cp2k_geopt`, `cp2k_static`, `cp2k_cellopt`, `cp2k_md`, `cp2k_freq`,
+  ])
+  const is_cp2k = $derived(
+    CP2K_ONLY_TYPES.has(effective_node_type) ||
+    (UNIFIED_CALC_TYPES.has(effective_node_type) && effective_node_params?.software === `cp2k`)
+  )
+  // CP2K MD subset — drives the chart-panel selection in Cp2kMonitorPlot
+  // (MD shows Energies + Temperature, OPT shows Energy + Forces).
+  const is_cp2k_md = $derived(
+    is_cp2k && (effective_node_type === `cp2k_md` || effective_node_type === `md`)
   )
   const MLP_TYPES = new Set([`mlp_relax`, `mlp_md`])
   const is_mlp = $derived(
@@ -804,9 +821,10 @@
     // Phase 2: Slow HPC calls — fire independently, update UI as each completes
     if (!has_run) return
 
-    // Convergence (VASP / ORCA / MLP) — independent. is_mlp_live excludes
-    // mlp_vibrations and mlp_single_point (no optimizer log).
-    if (is_vasp || is_orca || is_mlp_live) {
+    // Convergence (VASP / CP2K / ORCA / MLP) — independent. is_mlp_live excludes
+    // mlp_vibrations and mlp_single_point (no optimizer log). CP2K uses the
+    // same /convergence endpoint as VASP (backend dispatches by engine).
+    if (is_vasp || is_cp2k || is_orca || is_mlp_live) {
       conv_loading = true
       const conv_promise = is_mlp_live
         ? adapter.get_mlp_progress(task_ref)
@@ -1364,34 +1382,41 @@
         </div>
       {/if}
 
-      <!-- Energy & Force Convergence (live data from SSH) -->
-      {#if latest}
+      <!-- Energy & Force Convergence (live data from SSH).
+           For CP2K nodes that are running/queued/just-completed we ALWAYS
+           render this section even before any data point arrives, so the
+           chart frame is reserved and the user sees a "Waiting..." placeholder
+           instead of a missing slot. Without this, big basis CP2K jobs spend
+           the first ~10 min in SCF with nothing on screen. -->
+      {#if latest || (is_cp2k && (status === `running` || status === `queued` || status === `submitting`))}
         <div class="sp-section">
           <div class="sp-section-title">{is_orca && (status === `running` || status === `queued`) ? `Live Monitoring` : `Convergence`}</div>
           <div class="sp-info-grid">
+            {#if latest}
             <div class="sp-info-row">
               <span class="sp-info-label">{is_orca ? 'Energy (Eh)' : 'Energy (eV)'}</span>
               <span class="sp-info-value mono">{format_energy(latest.energy)}</span>
             </div>
             <div class="sp-info-row">
-              <span class="sp-info-label">{(node_type === `irc` || node_type === `orca_irc`) ? 'ΔE (kcal/mol)' : `d${is_vasp ? 'E (eV)' : 'E (Eh)'}`}</span>
+              <span class="sp-info-label">{(node_type === `irc` || node_type === `orca_irc`) ? 'ΔE (kcal/mol)' : `d${(is_vasp || is_cp2k) ? 'E (eV)' : 'E (Eh)'}`}</span>
               <span class="sp-info-value mono" class:sp-positive={latest.dE > 0} class:sp-negative={latest.dE < 0}>
                 {latest.dE >= 0 ? `+` : ``}{format_energy(latest.dE)}
               </span>
             </div>
-            {#if (latest as any).max_gradient > 0}
+            {/if}
+            {#if latest && (latest as any).max_gradient > 0}
               <div class="sp-info-row">
                 <span class="sp-info-label">Max |G| (Eh/bohr)</span>
                 <span class="sp-info-value mono">{format_force((latest as any).max_gradient)}</span>
               </div>
             {/if}
-            {#if (latest as any).rms_gradient > 0}
+            {#if latest && (latest as any).rms_gradient > 0}
               <div class="sp-info-row">
                 <span class="sp-info-label">RMS(G) (Eh/bohr)</span>
                 <span class="sp-info-value mono">{format_force((latest as any).rms_gradient)}</span>
               </div>
             {/if}
-            {#if latest.max_force > 0}
+            {#if latest && latest.max_force > 0}
               <div class="sp-info-row">
                 <span class="sp-info-label">{is_orca ? 'Max Gradient' : 'Max Force (eV/Å)'}</span>
                 <span class="sp-info-value mono">{format_force(latest.max_force)}</span>
@@ -1403,28 +1428,48 @@
                 </div>
               {/if}
             {/if}
-            {#if latest.rms_force > 0}
+            {#if latest && latest.rms_force > 0}
               <div class="sp-info-row">
                 <span class="sp-info-label">{is_orca ? 'RMS Gradient' : 'RMS Force (eV/Å)'}</span>
                 <span class="sp-info-value mono">{format_force(latest.rms_force)}</span>
               </div>
             {/if}
-            {#if is_orca && latest.max_step && latest.max_step > 0}
+            {#if is_orca && latest && latest.max_step && latest.max_step > 0}
               <div class="sp-info-row">
                 <span class="sp-info-label">MAX Step (Bohr)</span>
                 <span class="sp-info-value mono">{format_force(latest.max_step)}</span>
               </div>
             {/if}
-            {#if is_orca && latest.rms_step && latest.rms_step > 0}
+            {#if is_orca && latest && latest.rms_step && latest.rms_step > 0}
               <div class="sp-info-row">
                 <span class="sp-info-label">RMS Step (Bohr)</span>
                 <span class="sp-info-value mono">{format_force(latest.rms_step)}</span>
               </div>
             {/if}
+            {#if !latest && is_cp2k}
+              <div class="sp-info-row" style="grid-column: 1 / -1; color: var(--text-muted, #888); font-size: 12px;">
+                Waiting for first optimization step (CP2K is still in SCF)...
+              </div>
+            {/if}
           </div>
 
-          <!-- Convergence chart -->
-          {#if convergence && convergence.points.length >= 2}
+          <!-- Convergence chart. For CP2K we ALWAYS render the frame (component
+               shows its own "Waiting..." placeholder when points are empty) so
+               the user sees the plot slot reserved from the moment the task
+               starts. Other engines keep the original >=2-point gate. -->
+          {#if is_cp2k}
+            <div class="sp-convergence-chart">
+              <Cp2kMonitorPlot
+                points={convergence?.points ?? []}
+                running={status === `running` || status === `queued`}
+                mode={is_cp2k_md ? `md` : `opt`}
+                message={convergence?.message ?? ``}
+              />
+              {#if convergence && convergence.points.length > 0}
+                <div class="sp-chart-hint">Scroll to zoom · Drag to pan · Double-click to reset</div>
+              {/if}
+            </div>
+          {:else if convergence && convergence.points.length >= 2}
             <div class="sp-convergence-chart">
               {#if node_type === `irc` || node_type === `orca_irc`}
                 <IrcPathPlot
@@ -2811,7 +2856,11 @@
         </div>
       {/if}
 
-      {#if Object.keys(vasp_param_entries).length > 0}
+      <!-- VASP Parameters block — only render for actual VASP nodes.
+           A CP2K node may still carry leftover VASP keys (ENCUT/EDIFF/...)
+           from the unified node defaults; surfacing them under a "VASP
+           Parameters" header on a CP2K task is wrong and confusing. -->
+      {#if is_vasp && Object.keys(vasp_param_entries).length > 0}
         <div class="sp-section">
           <div class="sp-section-title">VASP Parameters</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:11px;">
@@ -2824,7 +2873,7 @@
       {/if}
       {#if Object.keys(non_vasp_param_entries).length > 0}
         <div class="sp-section">
-          <div class="sp-section-title">Other Parameters</div>
+          <div class="sp-section-title">{is_cp2k ? `CP2K Parameters` : `Other Parameters`}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:11px;">
             {#each Object.entries(non_vasp_param_entries) as [key, value]}
               <div style="color:var(--text-color-dim,#888);padding:2px 0;">{key}</div>
@@ -3161,6 +3210,14 @@
     margin-top: 12px;
     padding: 8px 0;
     border-top: 1px solid var(--dialog-border, light-dark(#e5e7eb, #404040));
+  }
+
+  .sp-chart-hint {
+    margin-top: 6px;
+    font-size: 10.5px;
+    text-align: center;
+    color: var(--text-muted, light-dark(#94a3b8, #64748b));
+    user-select: none;
   }
 
   /* Retry button */

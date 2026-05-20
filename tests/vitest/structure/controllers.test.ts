@@ -78,10 +78,25 @@ describe('is_image_atom', () => {
     expect(is_image_atom(s, 2)).toBe(true)
   })
 
-  test('boundary: index equal to num_original_sites is image', () => {
-    const s = make_structure([make_site('O', [0, 0, 0])], { num_original_sites: 1 })
-    expect(is_image_atom(s, 1)).toBe(true)
+  test('boundary: first index past num_original_sites is image when within displayed range', () => {
+    // Realistic PBC expansion: 1 original + 1 image = 2 displayed sites.
+    const s = make_structure(
+      [make_site('O', [0, 0, 0]), make_site('O', [5, 0, 0])],
+      { num_original_sites: 1 },
+    )
     expect(is_image_atom(s, 0)).toBe(false)
+    expect(is_image_atom(s, 1)).toBe(true)
+  })
+
+  test('index beyond displayed structure is NOT an image (newly added atom)', () => {
+    // displayed_structure was derived when there were 2 originals + 1 image (3
+    // sites). An atom added afterwards lands at idx 3, outside the displayed
+    // range — it must be treated as original, not mis-classified as an image.
+    const displayed = make_structure(
+      [make_site('C', [0, 0, 0]), make_site('C', [1, 0, 0]), make_site('C', [2, 0, 0])],
+      { num_original_sites: 2, image_to_original_map: [0] },
+    )
+    expect(is_image_atom(displayed, 3)).toBe(false)
   })
 })
 
@@ -134,6 +149,21 @@ describe('get_original_atoms_only', () => {
   test('filters out indices beyond base structure', () => {
     const result = get_original_atoms_only(displayed, base, [0, 5])
     expect(result).toEqual([0])
+  })
+
+  test('newly added atom (idx beyond displayed range) passes through, not mis-mapped via image_map', () => {
+    // Regression: user adds an atom after PBC expansion. displayed has 4 sites
+    // (2 original + 2 image, num_original_sites=2). The new atom is appended to
+    // the base structure at idx 2 — which collides with the image range start.
+    // Old code did image_map[2 - 2] = image_map[0] = 0, dragging atom 0 instead
+    // of the new atom. With the displayed-count upper bound it must stay idx 2.
+    const base_with_added = make_structure([
+      make_site('Fe', [0, 0, 0]),
+      make_site('Fe', [1, 0, 0]),
+      make_site('Fe', [9, 9, 9]), // newly placed atom, idx 2
+    ])
+    const result = get_original_atoms_only(displayed, base_with_added, [2])
+    expect(result).toEqual([2])
   })
 
   test('handles undefined structures', () => {

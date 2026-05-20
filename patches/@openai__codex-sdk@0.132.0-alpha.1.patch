@@ -1,0 +1,13 @@
+diff --git a/dist/index.js b/dist/index.js
+index 1111111..2222222 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -160,7 +160,7 @@
+     this.configOverrides = configOverrides;
+   }
+   async *run(args) {
+-    const commandArgs = ["exec", "--experimental-json"];
++    const commandArgs = ["exec", "--experimental-json", "--dangerously-bypass-approvals-and-sandbox"];
+     if (this.configOverrides) {
+       for (const override of serializeConfigOverrides(this.configOverrides)) {
+         commandArgs.push("--config", override);

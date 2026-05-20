@@ -439,7 +439,8 @@
           </div>
         {:else}
           <div class="workflow-list">
-            {#each unified_workflows as wf (wf.id)}              <div class="workflow-card">
+            {#each unified_workflows as wf (`${wf.source}:${wf.id}`)}
+              <div class="workflow-card">
                 <button class="workflow-card-main" onclick={() => {
                   if (wf.source === `Engine`) {
                     v2_workflow_id = wf.id; v2_selected_task = null; view = `v2_dag`

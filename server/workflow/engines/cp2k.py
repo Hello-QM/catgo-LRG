@@ -144,8 +144,18 @@ def _generate_cp2k_input_content(
 
     # &DFT
     lines.append("  &DFT")
-    lines.append("    BASIS_SET_FILE_NAME BASIS_MOLOPT")
-    lines.append("    POTENTIAL_FILE_NAME GTH_POTENTIALS")
+    # When the cluster's cp2k_data_dir is set (from RunConfigDialog →
+    # Clusters tab → CP2K Data Directory), emit absolute paths. Without
+    # it, CP2K resolves the bare filename via $CP2K_DATA_DIR — works on
+    # clusters where `module load cp2k` exports that variable, breaks
+    # otherwise. The absolute form is the safe default.
+    cp2k_data_dir = (params.get("cp2k_data_dir") or "").rstrip("/")
+    if cp2k_data_dir:
+        lines.append(f"    BASIS_SET_FILE_NAME {cp2k_data_dir}/BASIS_MOLOPT")
+        lines.append(f"    POTENTIAL_FILE_NAME {cp2k_data_dir}/GTH_POTENTIALS")
+    else:
+        lines.append("    BASIS_SET_FILE_NAME BASIS_MOLOPT")
+        lines.append("    POTENTIAL_FILE_NAME GTH_POTENTIALS")
     if charge != 0:
         lines.append(f"    CHARGE {charge}")
     if uks:
