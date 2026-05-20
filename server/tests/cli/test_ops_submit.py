@@ -92,3 +92,118 @@ def test_generate_cp2k_deck_returns_inp_with_prefix():
     deck = _generate_cp2k_deck(_cu(), prefix="myrun")
     assert "myrun.inp" in deck
     assert "&FORCE_EVAL" in deck["myrun.inp"]
+
+
+# ============================================================================
+# D8 — happy paths
+# ============================================================================
+
+
+class _FakeLink:
+    """Records every public HpcLink call for the test to inspect."""
+
+    def __init__(self, profile, timeout=60):
+        self.profile = profile
+        self.timeout = timeout
+        self.calls: list[tuple] = []
+        self.job_id = "99"
+
+    def preflight(self):
+        self.calls.append(("preflight",))
+        return "/home/me"
+
+    def mkdir_p(self, remote_dir):
+        self.calls.append(("mkdir_p", remote_dir))
+
+    def put_text(self, content, remote_path):
+        self.calls.append(("put_text", remote_path, content))
+
+    def sbatch(self, remote_dir, script_name):
+        self.calls.append(("sbatch", remote_dir, script_name))
+        return self.job_id
+
+
+@pytest.fixture
+def _stub_profile_and_link(monkeypatch):
+    """Common setup: one ssh_config profile + fake HpcLink."""
+    profile = _profile_ssh_config("lab")
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles", lambda: [profile]
+    )
+
+    created = {}
+
+    def _make(prof, timeout=60):
+        link = _FakeLink(prof, timeout=timeout)
+        created["link"] = link
+        return link
+
+    monkeypatch.setattr("catgo.cli.ops_submit.HpcLink", _make)
+    return profile, created
+
+
+def test_submit_vasp_happy_path(_stub_profile_and_link, tmp_path,
+                                  monkeypatch):
+    profile, created = _stub_profile_and_link
+    monkeypatch.chdir(tmp_path)
+
+    from catgo.cli import ops_submit
+    sess = Session()
+    sess.structure = _cu()
+    res = ops_submit.submit(sess, {
+        "code": "vasp", "host": "lab", "queue": "",
+        "walltime": 24, "nodes": 1, "remote_dir": "", "job_name": "",
+    })
+
+    assert res.ok
+    assert "submitted vasp" in res.message
+    assert "Cu" in res.message
+    assert "job=99" in res.message
+    assert "host=lab" in res.message
+
+    link = created["link"]
+    method_seq = [c[0] for c in link.calls]
+    assert method_seq[0] == "preflight"
+    assert method_seq[1] == "mkdir_p"
+    # 4 deck files (INCAR/POSCAR/KPOINTS/POTCAR_NEEDED) + 1 submit script
+    put_calls = [c for c in link.calls if c[0] == "put_text"]
+    put_names = sorted(c[1].rsplit("/", 1)[-1] for c in put_calls)
+    assert "INCAR" in put_names
+    assert "POSCAR" in put_names
+    assert "KPOINTS" in put_names
+    assert "POTCAR_NEEDED" in put_names
+    assert "catgo_submit.sh" in put_names
+    assert method_seq[-1] == "sbatch"
+
+    # Local artifact directory exists in cwd
+    artifact = tmp_path / "catgo-submit-99"
+    assert artifact.is_dir()
+    for f in ("INCAR", "POSCAR", "KPOINTS", "POTCAR_NEEDED",
+              "catgo_submit.sh"):
+        assert (artifact / f).exists(), f"local copy missing: {f}"
+    assert res.artifact == artifact
+
+
+def test_submit_cp2k_happy_path(_stub_profile_and_link, tmp_path,
+                                  monkeypatch):
+    profile, created = _stub_profile_and_link
+    monkeypatch.chdir(tmp_path)
+
+    from catgo.cli import ops_submit
+    sess = Session()
+    sess.structure = _cu()
+    res = ops_submit.submit(sess, {
+        "code": "cp2k", "host": "lab", "queue": "",
+        "walltime": 12, "nodes": 1, "remote_dir": "", "job_name": "",
+    })
+    assert res.ok
+    assert "submitted cp2k" in res.message
+    link = created["link"]
+    put_names = sorted(
+        c[1].rsplit("/", 1)[-1] for c in link.calls if c[0] == "put_text"
+    )
+    # One .inp + one submit script
+    assert any(n.endswith(".inp") for n in put_names)
+    assert "catgo_submit.sh" in put_names
+    # No INCAR/POSCAR/KPOINTS for CP2K
+    assert "INCAR" not in put_names
