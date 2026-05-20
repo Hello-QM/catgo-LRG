@@ -30,6 +30,12 @@ def _extract_detail(exc: urllib.error.HTTPError) -> str:
         return f"HTTP {exc.code}"
 
 
+def _q_filename(name: str) -> str:
+    """Quote a filename for the RFC 7578 multipart Content-Disposition
+    quoted-string form: backslash and double-quote must be escaped."""
+    return name.replace("\\", "\\\\").replace('"', '\\"')
+
+
 @dataclass
 class ServerLink:
     base_url: str
@@ -51,7 +57,7 @@ class ServerLink:
         body = (
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="file"; '
-            f'filename="{p.name}"\r\n'
+            f'filename="{_q_filename(p.name)}"\r\n'
             f"Content-Type: application/octet-stream\r\n\r\n"
         ).encode() + p.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
 

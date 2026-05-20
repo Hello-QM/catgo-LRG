@@ -96,6 +96,54 @@ def test_pull_structure_get_with_format(monkeypatch):
     assert data.startswith(b"POSCAR")
 
 
+def test_push_structure_quotes_filename_with_double_quote(monkeypatch,
+                                                          tmp_path):
+    """C2 — RFC 7578: filename in Content-Disposition is a quoted-string;
+    backslash and double-quote must be escaped. A filename containing `"`
+    must serialise as filename="weird\\"name.vasp" (with the backslash
+    literally in the bytes), not raw."""
+    from catgo.cli import server_link
+    captured = {}
+
+    def _urlopen(req, timeout=None):
+        captured["body"] = req.data
+        return _FakeResponse(b'{"ok": 1}')
+
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    p = tmp_path / 'weird"name.vasp'
+    try:
+        p.write_bytes(b"POSCAR\n")
+    except OSError:  # pragma: no cover — Linux/macOS allow `"` in names
+        import pytest
+        pytest.skip('filesystem rejects `"` in filename')
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    link.push_structure(p, panel_id=None)
+    # Backslash-escaped double-quote in the rendered header.
+    assert b'filename="weird\\"name.vasp"' in captured["body"]
+
+
+def test_push_structure_quotes_filename_with_backslash(monkeypatch,
+                                                      tmp_path):
+    """C2 — backslashes in the filename must also be escaped (RFC 7578)."""
+    from catgo.cli import server_link
+    captured = {}
+
+    def _urlopen(req, timeout=None):
+        captured["body"] = req.data
+        return _FakeResponse(b'{"ok": 1}')
+
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    p = tmp_path / "back\\slash.vasp"
+    try:
+        p.write_bytes(b"POSCAR\n")
+    except OSError:  # pragma: no cover
+        import pytest
+        pytest.skip("filesystem rejects `\\` in filename")
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    link.push_structure(p, panel_id=None)
+    assert b'filename="back\\\\slash.vasp"' in captured["body"]
+
+
 def test_pull_structure_panel_omitted(monkeypatch):
     from catgo.cli import server_link
     calls = {}
