@@ -53,6 +53,53 @@ def test_parse_born_charges_truncated_returns_none():
     assert parse_born_charges(bad, n_atoms=1) is None
 
 
+# ============================================================================
+# E3 — compute_ir_spectrum, uniform branch
+# ============================================================================
+
+
+def test_compute_ir_spectrum_uniform_three_peaks():
+    from catgo.cli.ir import compute_ir_spectrum
+    freqs = [100.0, 200.0, 300.0]
+    # Dummy eigenvectors (1 atom, z-displacement) — unused without BEC
+    eigs = [[[0.0, 0.0, 1.0]]] * 3
+    spec = compute_ir_spectrum(freqs, eigs, born=None,
+                               emin=None, emax=None, sigma=10.0)
+    assert spec.used_bec is False
+    assert spec.n_modes == 3
+    assert len(spec.grid_cm) == len(spec.intensity)
+    # ω grid covers all 3 peaks (within auto-padding 4σ each side)
+    assert spec.grid_cm[0] <= 100.0
+    assert spec.grid_cm[-1] >= 300.0
+    # Find local maxima — sample at the exact mode positions
+    def at(w):
+        idx = min(range(len(spec.grid_cm)),
+                  key=lambda i: abs(spec.grid_cm[i] - w))
+        return spec.intensity[idx]
+    # At each mode, intensity ~= 1.0 (the other peaks are 10σ away,
+    # so their tail contribution is exp(-100/2) ~ 1e-22 — negligible).
+    for w in freqs:
+        assert at(w) == pytest.approx(1.0, abs=1e-3)
+    # Between peaks the signal dips below half
+    assert at(150.0) < 0.5
+
+
+def test_compute_ir_spectrum_empty_returns_empty():
+    from catgo.cli.ir import compute_ir_spectrum
+    spec = compute_ir_spectrum([], [], born=None, emin=None, emax=None)
+    assert spec.grid_cm == []
+    assert spec.intensity == []
+    assert spec.n_modes == 0
+
+
+def test_compute_ir_spectrum_explicit_range():
+    from catgo.cli.ir import compute_ir_spectrum
+    spec = compute_ir_spectrum([1000.0], [[[0,0,1]]], born=None,
+                               emin=500.0, emax=1500.0, sigma=10.0)
+    assert spec.grid_cm[0] == pytest.approx(500.0)
+    assert spec.grid_cm[-1] == pytest.approx(1500.0)
+
+
 def test_parse_born_charges_two_atoms_but_only_one_block():
     """Asked for 2 atoms, OUTCAR has only 1 -> None."""
     from catgo.cli.ir import parse_born_charges

@@ -22,6 +22,71 @@ from typing import Optional
 _BORN_HDR = "BORN EFFECTIVE CHARGES"
 
 
+@dataclass
+class IrSpectrum:
+    """Gaussian-broadened IR absorption spectrum on a regular ω-grid."""
+
+    grid_cm: list  # ω-axis, cm⁻¹
+    intensity: list  # arb. units (matches grid_cm length)
+    used_bec: bool = False  # True iff BEC-weighted intensities used
+    n_modes: int = 0  # number of (real) modes that fed the spectrum
+
+
+def compute_ir_spectrum(
+    freqs_cm,
+    eigenvectors,
+    born,
+    emin: Optional[float],
+    emax: Optional[float],
+    sigma: float = 10.0,
+    step_cm: float = 1.0,
+) -> IrSpectrum:
+    """Broadened IR spectrum.
+
+    S(ω) = Σ_k I_k * exp(-(ω - ω_k)² / (2σ²))
+
+    With BEC: I_k = Σ_j ( Σ_a Σ_i Z*_a[i][j] * e_k[a][i] )²  (sum over
+    Cartesian j → scalar per mode, summed over the three E-field
+    directions).
+    Without BEC: I_k = 1.0 for every real mode (mode-count histogram).
+
+    ω-grid is `[emin, emin+step, …, emax]` (step=1 cm⁻¹). When emin/emax
+    are None the grid auto-spans `[min(ω)-4σ, max(ω)+4σ]` clamped to
+    ω >= 0.
+    """
+    if not freqs_cm:
+        return IrSpectrum(grid_cm=[], intensity=[],
+                          used_bec=born is not None, n_modes=0)
+
+    used_bec = born is not None
+    if used_bec:
+        intensities = _bec_intensities(eigenvectors, born)
+    else:
+        intensities = [1.0] * len(freqs_cm)
+
+    lo = emin if emin is not None else max(0.0, min(freqs_cm) - 4 * sigma)
+    hi = emax if emax is not None else max(freqs_cm) + 4 * sigma
+    if hi <= lo:
+        hi = lo + step_cm
+    n = int(round((hi - lo) / step_cm)) + 1
+    grid = [lo + i * step_cm for i in range(n)]
+    two_s_sq = 2.0 * sigma * sigma
+    intens = []
+    for w in grid:
+        total = 0.0
+        for f, I in zip(freqs_cm, intensities):
+            d = w - f
+            total += I * math.exp(-(d * d) / two_s_sq)
+        intens.append(total)
+    return IrSpectrum(grid_cm=grid, intensity=intens, used_bec=used_bec,
+                      n_modes=len(freqs_cm))
+
+
+def _bec_intensities(eigenvectors, born) -> list:
+    """Stub — replaced in E4 with the real BEC-weighted formula."""
+    return [1.0] * len(eigenvectors)
+
+
 def parse_born_charges(text: str, n_atoms: int
                        ) -> Optional[list[list[list[float]]]]:
     """Parse OUTCAR BEC block. Returns Z*[atom][i][j] or None.
