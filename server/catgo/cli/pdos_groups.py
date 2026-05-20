@@ -76,3 +76,41 @@ def _parse_atom_list(text: str, nions: int) -> list[int]:
     if not out:
         raise OpError("empty atom list")
     return out
+
+
+def parse_groups_spec(spec: str, nions: int) -> list[dict]:
+    """Parse a full multi-group spec into the
+    ``catgo_dos.pdos.compute_pdos_groups`` input shape.
+
+    Each entry is a dict ``{"atoms": [...], "channels": "...",
+    "label": "..."}``. Default label uses the *textual* atoms field
+    (e.g. `"d@0-3"`, not `"d@[0, 1, 2, 3]"`) so plot legends stay
+    readable.
+    """
+    groups: list[dict] = []
+    for raw in spec.split(";"):
+        s = raw.strip()
+        if not s:
+            continue
+        parts = s.split(":")
+        if len(parts) < 2 or len(parts) > 3:
+            raise OpError(
+                f"group spec needs 'atoms:channels[:label]', got '{s}'"
+            )
+        atoms_field = parts[0].strip()
+        channels_field = parts[1].strip()
+        if not atoms_field:
+            raise OpError(f"empty atoms field in group spec '{s}'")
+        if not channels_field:
+            raise OpError(f"empty channels field in group spec '{s}'")
+        atoms = _parse_atom_list(atoms_field, nions)
+        label = (
+            parts[2].strip()
+            if len(parts) == 3 and parts[2].strip()
+            else f"{channels_field}@{atoms_field}"
+        )
+        groups.append({"atoms": atoms, "channels": channels_field,
+                       "label": label})
+    if not groups:
+        raise OpError("empty groups spec")
+    return groups
