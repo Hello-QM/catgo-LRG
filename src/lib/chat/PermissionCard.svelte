@@ -1,6 +1,8 @@
 <!-- src/lib/chat/PermissionCard.svelte -->
 <script lang="ts">
     import { resolve_permission } from './sdk-stream'
+    import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+    load_i18n_module('chat')
 
     interface Props {
         permissionId: string
@@ -94,12 +96,12 @@
     <div class="permission-card">
         <div class="card-header">
             <span class="shield-icon">{is_ask ? `💬` : `🔐`}</span>
-            <span class="header-label">{is_ask ? `CatBot is asking` : `Permission Required`}</span>
+            <span class="header-label">{is_ask ? t('chat.catbot_asking') : t('chat.permission_required')}</span>
         </div>
 
         {#if !is_ask}
             <div class="tool-row">
-                <span class="tool-label">Tool</span>
+                <span class="tool-label">{t('chat.tool')}</span>
                 <code class="tool-name">{toolName}</code>
             </div>
         {/if}
@@ -137,7 +139,7 @@
                                 {/each}
                             </ul>
                         {/if}
-                        {#if q.multiSelect}<div class="ask-hint">(select one or more)</div>{/if}
+                        {#if q.multiSelect}<div class="ask-hint">({t('chat.select_one_or_more')})</div>{/if}
                     </div>
                 {/each}
             </div>
@@ -147,16 +149,16 @@
                     class="btn btn-allow"
                     disabled={resolving || !all_answered}
                     onclick={submit_answers}
-                    title={all_answered ? `Send your choice to CatBot` : `Pick an option for every question first`}
+                    title={all_answered ? t('chat.send_choice') : t('chat.pick_every_question')}
                 >
-                    {resolving ? `…` : `Submit`}
+                    {resolving ? `…` : t('chat.submit')}
                 </button>
                 <button
                     class="btn btn-deny"
                     disabled={resolving}
                     onclick={() => handle(`deny`)}
                 >
-                    {resolving ? `…` : `Cancel`}
+                    {resolving ? `…` : t('chat.cancel')}
                 </button>
             </div>
         {:else}
@@ -168,21 +170,21 @@
                     disabled={resolving}
                     onclick={() => handle(`allow`)}
                 >
-                    {resolving ? `…` : `Allow`}
+                    {resolving ? `…` : t('chat.allow')}
                 </button>
                 <button
                     class="btn btn-allow-session"
                     disabled={resolving}
                     onclick={() => handle(`allow_session`)}
                 >
-                    {resolving ? `…` : `Allow Session`}
+                    {resolving ? `…` : t('chat.allow_session')}
                 </button>
                 <button
                     class="btn btn-deny"
                     disabled={resolving}
                     onclick={() => handle(`deny`)}
                 >
-                    {resolving ? `…` : `Deny`}
+                    {resolving ? `…` : t('chat.deny')}
                 </button>
             </div>
         {/if}
@@ -191,10 +193,10 @@
     <div class="permission-resolved">
         {#if status === `allowed`}
             <span class="icon-allowed">✓</span>
-            <span class="resolved-label">Allowed — <code class="tool-name-inline">{toolName}</code></span>
+            <span class="resolved-label">{t('chat.allowed')} — <code class="tool-name-inline">{toolName}</code></span>
         {:else}
             <span class="icon-denied">✗</span>
-            <span class="resolved-label">Denied — <code class="tool-name-inline">{toolName}</code></span>
+            <span class="resolved-label">{t('chat.denied')} — <code class="tool-name-inline">{toolName}</code></span>
         {/if}
     </div>
 {/if}

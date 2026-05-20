@@ -5,6 +5,10 @@
   import { combinatorial_substitution } from '$lib/api/build'
   import type { TrajectoryType } from '$lib/trajectory'
   import { normalize_pymatgen_frame_structure } from '$lib/trajectory/parsers/json'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   let {
     structure = $bindable<PymatgenStructure | undefined>(),
@@ -98,7 +102,7 @@
   $effect(() => {
     const g = groups[active_group_idx]
     pt_highlight_symbols = g?.replacement_elements ?? []
-    pt_group_label = `Group ${active_group_idx + 1}`
+    pt_group_label = t('structure.group_n', { n: active_group_idx + 1 })
   })
 
   // Resolve target indices for a group
@@ -154,7 +158,7 @@
   // --- Generate ---
   async function generate() {
     if (!structure || valid_groups.length === 0) {
-      error_message = `Add at least one group with targets and replacement elements`
+      error_message = t('structure.doping_err_no_group')
       return
     }
     on_push_undo?.()
@@ -216,7 +220,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="doping-pane">
   <div class="dp-title-row">
-    <button class="dp-help-btn" onclick={() => show_help = !show_help} title="How to use">?</button>
+    <button class="dp-help-btn" onclick={() => show_help = !show_help} title={t('structure.how_to_use')}>?</button>
   </div>
 
   <!-- Inline periodic table -->
@@ -242,14 +246,14 @@
 
   {#if show_help}
     <div class="dp-help-box">
-      <strong>Combinatorial Doping</strong>
+      <strong>{t('structure.combinatorial_doping')}</strong>
       <ol>
-        <li>Each <b>Group</b> defines one substitution site. Choose target atoms by element or by selecting atoms in the 3D viewer.</li>
-        <li>In the <b>Periodic Table</b> window, click elements to add replacement candidates (shown as green chips). Drag across elements for quick multi-select.</li>
-        <li>Add more groups to substitute multiple sites simultaneously.</li>
-        <li>Click <b>Generate Structures</b> to create all combinatorial substitutions, then <b>Open as Trajectory</b> to browse them.</li>
+        <li>{@html t('structure.doping_help_1')}</li>
+        <li>{@html t('structure.doping_help_2')}</li>
+        <li>{@html t('structure.doping_help_3')}</li>
+        <li>{@html t('structure.doping_help_4')}</li>
       </ol>
-      <button class="dp-help-close" onclick={() => show_help = false}>Got it</button>
+      <button class="dp-help-close" onclick={() => show_help = false}>{t('structure.got_it')}</button>
     </div>
   {/if}
 
@@ -262,7 +266,7 @@
       onclick={() => (active_group_idx = gi)}
     >
       <div class="dp-group-header">
-        <span class="dp-group-title">Group {gi + 1}</span>
+        <span class="dp-group-title">{t('structure.group_n', { n: gi + 1 })}</span>
         {#if groups.length > 1}
           <button class="dp-group-close" onclick={(e) => { e.stopPropagation(); remove_group(gi) }}>&times;</button>
         {/if}
@@ -276,7 +280,7 @@
             checked={group.selection_mode === `by_element`}
             onchange={() => { group.selection_mode = `by_element`; groups = [...groups] }}
           />
-          By Element
+          {t('structure.by_element')}
         </label>
         <label class="dp-radio">
           <input
@@ -284,7 +288,7 @@
             checked={group.selection_mode === `by_indices`}
             onchange={() => { group.selection_mode = `by_indices`; groups = [...groups] }}
           />
-          By Selection
+          {t('structure.by_selection')}
         </label>
       </div>
 
@@ -299,28 +303,28 @@
           {/each}
         </select>
         <div class="dp-hint">
-          {targets.length} {group.target_element} atom{targets.length !== 1 ? `s` : ``}
+          {t('structure.n_atoms', { n: targets.length, el: group.target_element, s: targets.length !== 1 ? 's' : '' })}
         </div>
       {:else}
         {#if group.captured_indices.length > 0}
           <div class="dp-hint">
-            {group.captured_indices.length} captured: {group.captured_indices.slice(0, 8).join(`, `)}{group.captured_indices.length > 8 ? `...` : ``}
+            {t('structure.n_captured', { n: group.captured_indices.length })} {group.captured_indices.slice(0, 8).join(`, `)}{group.captured_indices.length > 8 ? `...` : ``}
           </div>
           <button
             class="dp-capture-btn"
             onclick={(e) => { e.stopPropagation(); group.captured_indices = []; groups = [...groups] }}
-          >Clear</button>
+          >{t('common.clear')}</button>
         {:else}
           <div class="dp-hint">
             {selected_sites.length > 0
-              ? `${selected_sites.length} in viewer: ${selected_sites.slice(0, 6).join(`, `)}${selected_sites.length > 6 ? `...` : ``}`
-              : `Click atoms in the 3D viewer`}
+              ? `${t('structure.n_in_viewer', { n: selected_sites.length })} ${selected_sites.slice(0, 6).join(`, `)}${selected_sites.length > 6 ? `...` : ``}`
+              : t('structure.click_atoms_in_viewer')}
           </div>
           <button
             class="dp-capture-btn"
             disabled={selected_sites.length === 0}
             onclick={(e) => { e.stopPropagation(); group.captured_indices = [...selected_sites]; groups = [...groups] }}
-          >Capture Selection ({selected_sites.length})</button>
+          >{t('structure.capture_selection', { n: selected_sites.length })}</button>
         {/if}
       {/if}
 
@@ -333,27 +337,27 @@
           </span>
         {/each}
         {#if group.replacement_elements.length === 0}
-          <span class="dp-hint">Select elements in periodic table</span>
+          <span class="dp-hint">{t('structure.select_elements_in_pt')}</span>
         {/if}
       </div>
     </section>
   {/each}
 
-  <button class="dp-add-group-btn" onclick={add_group}>+ Add Group</button>
+  <button class="dp-add-group-btn" onclick={add_group}>{t('structure.add_group')}</button>
 
   <!-- Preview -->
   {#if combo_count > 0}
     <section class="dp-section">
-      <h5 class="dp-label">Preview</h5>
+      <h5 class="dp-label">{t('common.preview')}</h5>
       <div class="dp-preview">
         {valid_groups.map((g) => g.replacement_elements.length).join(` \u00d7 `)}
-        = <strong>{combo_count.toLocaleString()}</strong> structures
+        = <strong>{combo_count.toLocaleString()}</strong> {t('structure.structures')}
       </div>
       {#if will_cap}
-        <div class="dp-warning">Capped at {max_structures} structures</div>
+        <div class="dp-warning">{t('structure.capped_at_n', { n: max_structures })}</div>
       {/if}
       <div class="dp-max-row">
-        <span class="dp-hint">Max:</span>
+        <span class="dp-hint">{t('structure.max_label')}</span>
         <input type="number" class="dp-input-num" bind:value={max_structures} min={1} max={10000} />
       </div>
     </section>
@@ -370,15 +374,15 @@
       onclick={generate}
       disabled={status === `running` || valid_groups.length === 0}
     >
-      {status === `running` ? `Generating...` : `Generate Structures`}
+      {status === `running` ? t('structure.generating') : t('structure.generate_structures')}
     </button>
 
     {#if status === `complete` && result_structures.length > 0}
       <div class="dp-result">
-        {result_structures.length}{result_capped ? `/${result_total.toLocaleString()}` : ``} structures generated
+        {t('structure.n_structures_generated', { current: result_structures.length, total_part: result_capped ? `/${result_total.toLocaleString()}` : `` })}
       </div>
       <button class="dp-btn-traj" onclick={open_as_trajectory}>
-        Open as Trajectory
+        {t('structure.open_as_trajectory')}
       </button>
     {/if}
   </section>

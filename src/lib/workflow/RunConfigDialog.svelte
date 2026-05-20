@@ -1,5 +1,6 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t } from '$lib/i18n/index.svelte'
   import type { WorkflowRunConfig, JobScriptParams, ClusterConfig } from './workflow-types'
   import { API_BASE } from '$lib/api/config'
 
@@ -38,25 +39,9 @@
   let base_work_dir = $state(``)
   let use_custodian = $state(true)
   let custodian_max_errors = $state(5)
-
-  // ─── CP2K Settings tab — defaults match the most common periodic DFT setup ───
-  // Cutoff / rel_cutoff are GPW grid params; OT is the orbital-transformation
-  // SCF method (fast for insulators / closed-shell, disable for metals);
-  // max_scf + eps_scf are the standard SCF convergence knobs.
-  let cp2k_cutoff = $state(400)        // Ry
-  let cp2k_rel_cutoff = $state(60)     // Ry
-  let cp2k_use_ot = $state(true)
-  let cp2k_max_scf = $state(50)
-  let cp2k_eps_scf = $state(1e-6)
   let poll_interval = $state(15)
   let orca_binary = $state(`orca`)
-  // Settings-tab software selection. The dropdown is always populated with
-  // every supported engine; `calc_mode` here is what the user picks in the
-  // UI — initialised from auto-detect but never overwritten after the user
-  // touches the dropdown (`user_picked_calc_mode`).
-  type CalcMode = 'vasp' | 'orca' | 'cp2k' | 'qe' | 'mlp' | 'xtb' | 'lammps'
-  let calc_mode = $state<CalcMode>('vasp')
-  let user_picked_calc_mode = $state(false)
+  let calc_mode = $state<'vasp' | 'orca' | 'mlp'>('vasp')
 
   // ─── Engine detection from workflow nodes ───
   const has_orca_nodes = $derived(
@@ -88,41 +73,14 @@
       return sw === `lammps` || t === `lammps_md` || t === `polymer_md` || t === `polymer_deform` || t === `glass_transition`
     })
   )
-  const has_cp2k_nodes = $derived(
-    workflow_nodes.some((n: any) => {
-      const t = n.type || ``
-      const sw = n.params?.software || ``
-      return t.startsWith(`cp2k_`) || sw === `cp2k`
-    })
-  )
-  const has_qe_nodes = $derived(
-    workflow_nodes.some((n: any) => {
-      const t = n.type || ``
-      const sw = n.params?.software || ``
-      return t.startsWith(`qe_`) || sw === `qe`
-    })
-  )
-  const has_xtb_nodes = $derived(
-    workflow_nodes.some((n: any) => {
-      const sw = n.params?.software || ``
-      const calc = n.params?.calculator || ``
-      return sw === `xtb` || calc === `xtb` || calc?.startsWith?.(`GFN`)
-    })
-  )
 
-  // Auto-pick an initial calc_mode the first time the dialog opens for a
-  // given workflow. After the user manually switches the dropdown we leave
-  // it alone — they're typically configuring a software not yet wired in,
-  // and re-imposing the detection would erase their pick on every render.
   $effect(() => {
-    if (!show || user_picked_calc_mode) return
-    if (has_vasp_nodes) calc_mode = `vasp`
-    else if (has_cp2k_nodes) calc_mode = `cp2k`
-    else if (has_orca_nodes) calc_mode = `orca`
-    else if (has_qe_nodes) calc_mode = `qe`
-    else if (has_lammps_nodes) calc_mode = `lammps`
-    else if (has_xtb_nodes) calc_mode = `xtb`
-    else if (has_mlp_nodes) calc_mode = `mlp`
+    if (!show) return
+    if (has_mlp_nodes && !has_vasp_nodes && !has_orca_nodes) {
+      calc_mode = `mlp`
+    } else if (has_orca_nodes && !has_vasp_nodes) {
+      calc_mode = `orca`
+    }
   })
 
   // ─── State: Per-cluster ───
@@ -301,31 +259,6 @@
     save_configs_to_storage()
   })
 
-  // ─── Load saved global job params + execution mode ───
-  $effect(() => {
-    if (!show) return
-    try {
-      const raw = localStorage.getItem(GLOBAL_PARAMS_KEY)
-      if (!raw) return
-      const p = JSON.parse(raw)
-      if (p.nodes) nodes = p.nodes
-      if (p.ntasks) ntasks = p.ntasks
-      if (p.cpus_per_task) cpus_per_task = p.cpus_per_task
-      if (p.walltime) walltime = p.walltime
-      if (p.partition) partition = p.partition
-      if (p.memory) memory = p.memory
-      if (p.execution_mode === `hpc` || p.execution_mode === `local`) {
-        execution_mode = p.execution_mode
-      }
-      // CP2K Settings — restore from last session if present.
-      if (typeof p.cp2k_cutoff === `number`) cp2k_cutoff = p.cp2k_cutoff
-      if (typeof p.cp2k_rel_cutoff === `number`) cp2k_rel_cutoff = p.cp2k_rel_cutoff
-      if (typeof p.cp2k_use_ot === `boolean`) cp2k_use_ot = p.cp2k_use_ot
-      if (typeof p.cp2k_max_scf === `number`) cp2k_max_scf = p.cp2k_max_scf
-      if (typeof p.cp2k_eps_scf === `number`) cp2k_eps_scf = p.cp2k_eps_scf
-    } catch {}
-  })
-
   // ─── Load presets on mount ───
   $effect(() => {
     if (!show) return
@@ -435,30 +368,10 @@
   }
 
   function handle_run() {
-    // Mismatch warning: user chose a Settings panel for a software whose
-    // nodes don't appear in the workflow. Skip when the workflow is empty
-    // (anything goes) and when the choice does match. The confirm() is a
-    // soft gate — power users sometimes want to pre-fill CP2K knobs before
-    // adding the node, and the alternative (silently dropping the chosen
-    // settings or blocking Run) is worse.
-    const calc_mode_present: Record<CalcMode, boolean> = {
-      vasp: has_vasp_nodes, orca: has_orca_nodes, cp2k: has_cp2k_nodes,
-      qe: has_qe_nodes, mlp: has_mlp_nodes, xtb: has_xtb_nodes, lammps: has_lammps_nodes,
-    }
-    const any_known = Object.values(calc_mode_present).some(Boolean)
-    if (any_known && !calc_mode_present[calc_mode]) {
-      const ok = confirm(
-        `You configured settings for ${calc_mode.toUpperCase()}, but the workflow has no ` +
-        `${calc_mode.toUpperCase()} nodes. Continue anyway?`,
-      )
-      if (!ok) return
-    }
-
     // Persist global job params + execution mode for next session
     try {
       localStorage.setItem(GLOBAL_PARAMS_KEY, JSON.stringify({
         nodes, ntasks, cpus_per_task, walltime, partition, memory, execution_mode,
-        cp2k_cutoff, cp2k_rel_cutoff, cp2k_use_ot, cp2k_max_scf, cp2k_eps_scf,
       }))
     } catch {}
 
@@ -498,22 +411,6 @@
       use_custodian,
       custodian_max_errors,
       orca_binary,
-      // Per-software defaults nested under `defaults.{sw}` — Scanner's
-      // _merged_config merges these into the engine config so each task's
-      // engine builtin (e.g. _gen_cp2k) can fall back to them when the
-      // node params don't override. Matches the existing ORCA pattern.
-      defaults: {
-        cp2k: {
-          cutoff: cp2k_cutoff,
-          rel_cutoff: cp2k_rel_cutoff,
-          // CP2K engine reads scf_method as a string; UI exposes the
-          // common bool toggle. Anything other than OT falls back to
-          // diagonalisation with Fermi smearing inside CP2K itself.
-          scf_method: cp2k_use_ot ? `OT` : `DIAGONALIZATION`,
-          max_scf: cp2k_max_scf,
-          eps_scf: cp2k_eps_scf,
-        },
-      },
     }
 
     onrun?.(config)
@@ -540,14 +437,14 @@
   <div class="backdrop dialog-backdrop" onmousedown={handle_backdrop_down} onmouseup={handle_backdrop_up} onkeydown={handle_keydown} role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal dialog-modal">
       <div class="modal-header">
-        <h2 class="modal-title">Run Configuration</h2>
+        <h2 class="modal-title">{t('workflow.rc_title')}</h2>
         <button class="close-btn" onclick={() => onclose?.()}>x</button>
       </div>
 
       <!-- Execution Mode Toggle -->
       <div class="modal-body" style="padding-bottom: 0;">
         <section class="section">
-          <h3 class="section-title">Execution Mode</h3>
+          <h3 class="section-title">{t('workflow.rc_exec_mode')}</h3>
           <div class="mode-toggle">
             <button
               class="mode-btn"
@@ -555,7 +452,7 @@
               onclick={() => execution_mode = `local`}
             >
               <span class="mode-icon">&#x1F4BB;</span>
-              Local
+              {t('workflow.rc_local')}
             </button>
             <button
               class="mode-btn"
@@ -563,19 +460,19 @@
               onclick={() => execution_mode = `hpc`}
             >
               <span class="mode-icon">&#x1F5A5;</span>
-              HPC Cluster
+              {t('workflow.rc_hpc_cluster')}
             </button>
           </div>
           <div class="mode-desc">
             {#if execution_mode === `local`}
-              Run MLP (MACE/CHGNet) and LAMMPS calculations on this machine. VASP, ORCA, and other HPC-only codes are not available in local mode.
+              {@html t('workflow.rc_mode_local_desc')}
             {:else}
-              Submit all calculations to a remote HPC cluster via SSH. Requires a connected cluster with the appropriate software installed.
+              {@html t('workflow.rc_mode_hpc_desc')}
             {/if}
           </div>
           {#if execution_mode === `hpc` && has_mlp_nodes}
             <div class="mode-warn">
-              Your workflow includes MLP nodes (MACE/CHGNet). Make sure <strong>Python Environment</strong> is configured in Cluster Settings so the HPC can find the ML potential packages.
+              {@html t('workflow.rc_mode_mlp_warn')}
             </div>
           {/if}
         </section>
@@ -586,26 +483,26 @@
         {#if has_vasp_nodes || has_orca_nodes}
           <div class="modal-body" style="padding-bottom: 0">
             <div class="mode-warn">
-              Your workflow has {has_vasp_nodes ? `VASP` : ``}{has_vasp_nodes && has_orca_nodes ? ` and ` : ``}{has_orca_nodes ? `ORCA` : ``} nodes which require an HPC cluster. Switch to <strong>HPC Cluster</strong> mode or remove those nodes.
+              {@html t('workflow.rc_mode_vasp_warn', { vasp: `${has_vasp_nodes ? 'VASP' : ''}${has_vasp_nodes && has_orca_nodes ? ' and ' : ''}${has_orca_nodes ? 'ORCA' : ''}` })}
             </div>
           </div>
         {/if}
         <!-- Local Settings -->
         <div class="modal-body">
           <section class="section">
-            <h3 class="section-title">Local Settings</h3>
+            <h3 class="section-title">{t('workflow.rc_local_settings')}</h3>
             <div class="field" style="margin-bottom: 10px">
-              <label class="field-label">LAMMPS Command</label>
+              <label class="field-label">{t('workflow.rc_lmp_command')}</label>
               <input class="input" type="text" bind:value={lmp_command} placeholder="lmp_serial" />
               <div class="help-text">
-                LAMMPS executable name or full path. Common: <code>lmp_serial</code> <code>lmp_mpi</code> <code>lmp</code>
+                {@html t('workflow.rc_lmp_help')}
               </div>
             </div>
             <div class="field">
-              <label class="field-label">Work Directory <span class="optional">(optional)</span></label>
+              <label class="field-label">{t('workflow.rc_work_dir')} <span class="optional">{t('workflow.rc_optional')}</span></label>
               <input class="input" type="text" bind:value={local_work_dir} placeholder="Auto (temp directory)" />
               <div class="help-text">
-                Leave empty to use a temporary directory. Otherwise specify an absolute path.
+                {t('workflow.rc_work_dir_help')}
               </div>
             </div>
           </section>
@@ -613,37 +510,22 @@
       {:else}
         <!-- HPC Mode: Tabs -->
         <div class="tab-bar">
-          <button class="tab" class:active={active_tab === 'clusters'} onclick={() => active_tab = 'clusters'}>Clusters</button>
-          <button class="tab" class:active={active_tab === 'params'} onclick={() => active_tab = 'params'}>Parameters</button>
-          <button class="tab" class:active={active_tab === 'settings'} onclick={() => active_tab = 'settings'}>Settings</button>
+          <button class="tab" class:active={active_tab === 'clusters'} onclick={() => active_tab = 'clusters'}>{t('workflow.rc_tab_clusters')}</button>
+          <button class="tab" class:active={active_tab === 'params'} onclick={() => active_tab = 'params'}>{t('workflow.rc_tab_params')}</button>
+          <button class="tab" class:active={active_tab === 'settings'} onclick={() => active_tab = 'settings'}>{t('workflow.rc_tab_settings')}</button>
       </div>
 
-      <!-- Software Toggle — drives both Clusters tab field set + Settings tab
-           panel. Always shows every supported engine so the user can pre-configure
-           cluster paths for a software not yet in the workflow. A ✓ marks
-           engines whose nodes actually appear in this workflow. -->
+      <!-- Calc Mode Toggle -->
       <div class="calc-mode-bar">
-        <button class="mode-btn" class:active={calc_mode === 'vasp'}
-          onclick={() => { calc_mode = 'vasp'; user_picked_calc_mode = true }}
-          title="VASP — periodic DFT">VASP{has_vasp_nodes ? ` ✓` : ``}</button>
-        <button class="mode-btn" class:active={calc_mode === 'cp2k'}
-          onclick={() => { calc_mode = 'cp2k'; user_picked_calc_mode = true }}
-          title="CP2K — Gaussian-plane-wave DFT (GPW)">CP2K{has_cp2k_nodes ? ` ✓` : ``}</button>
-        <button class="mode-btn" class:active={calc_mode === 'orca'}
-          onclick={() => { calc_mode = 'orca'; user_picked_calc_mode = true }}
-          title="ORCA — quantum chemistry">ORCA{has_orca_nodes ? ` ✓` : ``}</button>
-        <button class="mode-btn" class:active={calc_mode === 'qe'}
-          onclick={() => { calc_mode = 'qe'; user_picked_calc_mode = true }}
-          title="Quantum ESPRESSO — plane-wave DFT">QE{has_qe_nodes ? ` ✓` : ``}</button>
-        <button class="mode-btn" class:active={calc_mode === 'mlp'}
-          onclick={() => { calc_mode = 'mlp'; user_picked_calc_mode = true }}
-          title="MLP — MACE / CHGNet / M3GNet ML potentials">MLP{has_mlp_nodes ? ` ✓` : ``}</button>
-        <button class="mode-btn" class:active={calc_mode === 'xtb'}
-          onclick={() => { calc_mode = 'xtb'; user_picked_calc_mode = true }}
-          title="xTB — semi-empirical tight binding">xTB{has_xtb_nodes ? ` ✓` : ``}</button>
-        <button class="mode-btn" class:active={calc_mode === 'lammps'}
-          onclick={() => { calc_mode = 'lammps'; user_picked_calc_mode = true }}
-          title="LAMMPS — classical molecular dynamics">LAMMPS{has_lammps_nodes ? ` ✓` : ``}</button>
+        {#if has_vasp_nodes || (!has_mlp_nodes && !has_orca_nodes)}
+          <button class="mode-btn" class:active={calc_mode === 'vasp'} onclick={() => calc_mode = 'vasp'}>VASP</button>
+        {/if}
+        {#if has_orca_nodes}
+          <button class="mode-btn" class:active={calc_mode === 'orca'} onclick={() => calc_mode = 'orca'}>ORCA</button>
+        {/if}
+        {#if has_mlp_nodes}
+          <button class="mode-btn" class:active={calc_mode === 'mlp'} onclick={() => calc_mode = 'mlp'}>MLP</button>
+        {/if}
       </div>
 
       <div class="modal-body">
@@ -653,14 +535,14 @@
 
           <!-- Default cluster -->
           <section class="section">
-            <h3 class="section-title">Default HPC Cluster</h3>
+            <h3 class="section-title">{t('workflow.rc_default_hpc')}</h3>
             {#if sessions.length === 0}
               <div class="empty-state">
                 <div class="empty-icon">&#x1F5A5;</div>
-                <p class="empty-text">No HPC clusters connected</p>
-                <p class="empty-sub">Connect to a remote cluster via SSH to submit workflow jobs.</p>
+                <p class="empty-text">{t('workflow.rc_no_hpc')}</p>
+                <p class="empty-sub">{t('workflow.rc_no_hpc_sub')}</p>
                 {#if onconnect}
-                  <button class="btn btn-connect" onclick={() => onconnect?.()}>+ Connect HPC Cluster</button>
+                  <button class="btn btn-connect" onclick={() => onconnect?.()}>{t('workflow.rc_connect_hpc')}</button>
                 {/if}
               </div>
             {:else}
@@ -680,7 +562,7 @@
           <!-- Per-cluster settings -->
           {#if sessions.length > 0}
             <section class="section">
-              <h3 class="section-title">Cluster Settings</h3>
+              <h3 class="section-title">{t('workflow.rc_cluster_settings')}</h3>
 
               {#if sessions.length > 1}
                 <div class="cluster-tabs">
@@ -699,12 +581,12 @@
               {#if active_cluster && active_session}
                 <div class="cluster-fields">
                   {#if calc_mode === 'vasp'}
-                    <label class="field-label">POTCAR Root Directory</label>
+                    <label class="field-label">{t('workflow.rc_potcar_root')}</label>
                     <input class="input" type="text" placeholder="e.g. /scratch/user/VASP/pot64"
                       bind:value={active_cluster.potcar_root} />
-                    <div class="help-text">Base directory containing POTCAR files on {active_session.host}</div>
+                    <div class="help-text">{@html t('workflow.rc_potcar_help', { host: active_session.host })}</div>
 
-                    <label class="field-label" style="margin-top: 8px">POTCAR Functional</label>
+                    <label class="field-label" style="margin-top: 8px">{t('workflow.rc_potcar_functional')}</label>
                     <select class="input select" bind:value={active_cluster.potcar_functional}>
                       <option value="potpaw_PBE">potpaw_PBE</option>
                       <option value="potpaw_PBE.64">potpaw_PBE.64</option>
@@ -717,70 +599,39 @@
                       <option value="POT_LDA_PAW">POT_LDA_PAW</option>
                     </select>
 
-                    <label class="field-label" style="margin-top: 8px">VASP Run Command</label>
+                    <label class="field-label" style="margin-top: 8px">{t('workflow.rc_vasp_cmd')}</label>
                     <input class="input" type="text" placeholder="e.g. srun --map-by-numa --hint=nomultithread vasp_std"
                       bind:value={active_cluster.vasp_command} />
                     <div class="help-text">
-                      Used by custodian and <code>{"{{vasp_run_command}}"}</code> in templates
+                      {@html t('workflow.rc_vasp_cmd_help')}
                     </div>
-                  {:else if calc_mode === 'cp2k'}
-                    <label class="field-label">CP2K Data Directory</label>
-                    <input class="input" type="text" placeholder="e.g. /opt/cp2k/2024.1/data or $CP2K_DATA_DIR"
-                      bind:value={active_cluster.cp2k_data_dir} />
-                    <div class="help-text">
-                      Directory containing BASIS_MOLOPT, GTH_POTENTIALS, etc. on {active_session.host}.
-                      Leave blank if <code>CP2K_DATA_DIR</code> is exported via module load.
-                    </div>
-
-                    <label class="field-label" style="margin-top: 8px">CP2K Run Command</label>
-                    <input class="input" type="text" placeholder="e.g. srun cp2k.psmp"
-                      bind:value={active_cluster.cp2k_command} />
-                    <div class="help-text">
-                      Default <code>srun cp2k.popt</code>. Use <code>cp2k.psmp</code> for MPI+OpenMP builds.
-                    </div>
-
-                    <label class="field-label" style="margin-top: 8px">Module Loads <span class="optional">(optional)</span></label>
-                    <textarea class="input textarea" rows={2}
-                      placeholder={"module load gcc/10.2.0\nmodule load cp2k/2024.1"}
-                      bind:value={active_cluster.module_loads}></textarea>
-                    <div class="help-text">Modules to load before running CP2K (one per line)</div>
                   {:else if calc_mode === 'orca'}
-                    <label class="field-label">ORCA Directory</label>
+                    <label class="field-label">{t('workflow.rc_orca_dir')}</label>
                     <input class="input" type="text" placeholder="e.g. /home/user/orca_6_1_1 or /opt/orca"
                       bind:value={active_cluster.orca_dir} />
-                    <div class="help-text">Root directory of ORCA installation on {active_session.host}</div>
+                    <div class="help-text">{@html t('workflow.rc_orca_dir_help', { host: active_session.host })}</div>
 
-                    <label class="field-label" style="margin-top: 8px">Module Loads <span class="optional">(optional)</span></label>
+                    <label class="field-label" style="margin-top: 8px">{t('workflow.rc_module_loads')} <span class="optional">{t('workflow.rc_optional')}</span></label>
                     <textarea class="input textarea" rows={2}
                       placeholder={"module load gcc/10.2.0\nmodule load openmpi/4.1.1"}
                       bind:value={active_cluster.module_loads}></textarea>
-                    <div class="help-text">Modules to load before running ORCA (one per line)</div>
-                  {:else if calc_mode === 'mlp'}
+                    <div class="help-text">{t('workflow.rc_module_loads_help')}</div>
+                  {:else}
                     <!-- MLP mode: only needs Python env -->
                     <div class="mlp-info">
-                      <div class="mlp-info-title">MLP (MACE / CHGNet / M3GNet)</div>
+                      <div class="mlp-info-title">{t('workflow.rc_mlp_info')}</div>
                       <div class="mlp-info-desc">
-                        ML potentials run as Python scripts on the cluster. The only requirement is a Python environment with the ML potential packages installed (shown below in the Python Environment field).
-                      </div>
-                    </div>
-                  {:else}
-                    <!-- QE / xTB / LAMMPS: placeholder until per-cluster fields are wired -->
-                    <div class="mlp-info">
-                      <div class="mlp-info-title">{calc_mode.toUpperCase()}</div>
-                      <div class="mlp-info-desc">
-                        Cluster-level paths and run commands for {calc_mode.toUpperCase()} aren't surfaced here yet —
-                        configure them per-node in the workflow editor, or via the Job Script Template below.
-                        Module Loads (next section) is shared across engines.
+                        {t('workflow.rc_mlp_info_desc')}
                       </div>
                     </div>
                   {/if}
 
-                  <label class="field-label" style="margin-top: 8px">SLURM Account <span class="optional">(optional)</span></label>
+                  <label class="field-label" style="margin-top: 8px">{t('workflow.rc_slurm_account')} <span class="optional">{t('workflow.rc_optional')}</span></label>
                   <input class="input" type="text" placeholder="e.g. sdp126"
                     bind:value={active_cluster.account} />
-                  <div class="help-text">#SBATCH --account for billing/allocation</div>
+                  <div class="help-text">{t('workflow.rc_slurm_account_help')}</div>
 
-                  <label class="field-label" style="margin-top: 8px">Python Environment{calc_mode === 'mlp' ? ' (required)' : ''}</label>
+                  <label class="field-label" style="margin-top: 8px">{calc_mode === 'mlp' ? t('workflow.rc_py_env_req') : t('workflow.rc_py_env')}</label>
                   {#if env_profiles.length > 0 || active_cluster.python_env?.trim()}
                     <div class="preset-buttons" style="margin-bottom: 4px">
                       {#each env_profiles as profile}
@@ -789,11 +640,11 @@
                       {/each}
                       {#if active_cluster.python_env?.trim()}
                         <button class="preset-btn" style="color: var(--accent-color, #60a5fa)"
-                          onclick={save_env_profile}>+ Save</button>
+                          onclick={save_env_profile}>{t('workflow.rc_save')}</button>
                       {/if}
                       {#if env_profiles.length > 0}
                         <button class="preset-btn" style="color: var(--danger-color, #f87171); font-size: 10px"
-                          onclick={manage_env_profiles}>Manage</button>
+                          onclick={manage_env_profiles}>{t('workflow.rc_manage')}</button>
                       {/if}
                     </div>
                   {/if}
@@ -804,18 +655,18 @@
                     bind:value={active_cluster.python_env}></textarea>
                   <div class="help-text">
                     {#if calc_mode === 'mlp'}
-                      Conda activation commands so the cluster can find <code>mace-torch</code> / <code>chgnet</code> / <code>matgl</code>.
+                      {@html t('workflow.rc_py_env_mlp_help')}
                     {:else}
-                      Conda/virtualenv activation commands (one per line). Rendered as <code>{"{{python_env_activate}}"}</code> in templates.
+                      {@html t('workflow.rc_py_env_help')}
                     {/if}
                   </div>
                   {#if calc_mode === 'mlp' && !active_cluster?.python_env?.trim()}
                     <div class="mode-warn" style="margin-top: 4px">
-                      Python environment is required for MLP calculations. The job will fail without it.
+                      {t('workflow.rc_py_env_req_warn')}
                     </div>
                   {/if}
 
-                  <label class="field-label" style="margin-top: 12px">Default Job Script Template</label>
+                  <label class="field-label" style="margin-top: 12px">{t('workflow.rc_default_job_tpl')}</label>
                   <div class="preset-buttons" style="margin-bottom: 6px">
                     {#if presets_error}
                       <div class="error-text">{presets_error}</div>
@@ -826,12 +677,12 @@
                       </button>
                     {/each}
                     {#if presets.length === 0 && !presets_error}
-                      <span class="dim-text">Loading presets...</span>
+                      <span class="dim-text">{t('workflow.rc_loading_presets')}</span>
                     {/if}
                   </div>
                   <textarea class="input textarea" rows={8} bind:value={active_cluster.default_template}></textarea>
                   <div class="help-text">
-                    Variables: <code>{"{{job_name}}"}</code> <code>{"{{nodes}}"}</code> <code>{"{{ntasks}}"}</code>
+                    {t('workflow.rc_job_tpl_help')} <code>{"{{job_name}}"}</code> <code>{"{{nodes}}"}</code> <code>{"{{ntasks}}"}</code>
                     <code>{"{{cpus_per_task}}"}</code> <code>{"{{walltime}}"}</code> <code>{"{{partition}}"}</code>
                     <code>{"{{memory}}"}</code> <code>{"{{account}}"}</code> <code>{"{{work_dir}}"}</code> <code>{"{{python_env_activate}}"}</code> <code>{"{{vasp_run_command}}"}</code>
                   </div>
@@ -844,35 +695,35 @@
         {:else if active_tab === 'params'}
 
           <section class="section">
-            <h3 class="section-title">Default Job Parameters</h3>
+            <h3 class="section-title">{t('workflow.rc_default_job_params')}</h3>
             <div class="params-grid">
               <div class="field">
-                <label class="field-label">Nodes</label>
+                <label class="field-label">{t('workflow.rc_nodes')}</label>
                 <input class="input number" type="number" min={1} bind:value={nodes} />
               </div>
               <div class="field">
-                <label class="field-label">Tasks per node</label>
+                <label class="field-label">{t('workflow.rc_tasks_per_node')}</label>
                 <input class="input number" type="number" min={1} bind:value={ntasks} />
               </div>
               <div class="field">
-                <label class="field-label">CPUs per task</label>
+                <label class="field-label">{t('workflow.rc_cpus_per_task')}</label>
                 <input class="input number" type="number" min={1} bind:value={cpus_per_task} />
               </div>
               <div class="field">
-                <label class="field-label">Walltime</label>
+                <label class="field-label">{t('workflow.rc_walltime')}</label>
                 <input class="input" type="text" placeholder="HH:MM:SS" bind:value={walltime} />
               </div>
               <div class="field">
-                <label class="field-label">Partition</label>
+                <label class="field-label">{t('workflow.rc_partition')}</label>
                 <input class="input" type="text" placeholder="e.g. shared, workq" bind:value={partition} />
               </div>
               <div class="field">
-                <label class="field-label" for="memory-input">Memory <span class="optional">(optional)</span></label>
+                <label class="field-label" for="memory-input">{t('workflow.rc_memory')} <span class="optional">{t('workflow.rc_optional')}</span></label>
                 <input id="memory-input" class="input" type="text" placeholder="e.g. 4G" bind:value={memory} />
               </div>
               {#if active_cluster}
               <div class="field">
-                <label class="field-label">Account <span class="optional">(optional)</span></label>
+                <label class="field-label">{t('workflow.rc_slurm_account')} <span class="optional">{t('workflow.rc_optional')}</span></label>
                 <input class="input" type="text" placeholder="e.g. sdp126"
                   bind:value={active_cluster.account} />
               </div>
@@ -881,9 +732,9 @@
           </section>
 
           <section class="section">
-            <h3 class="section-title">Paths</h3>
+            <h3 class="section-title">{t('workflow.rc_paths')}</h3>
             <div class="field">
-              <label class="field-label" for="base-work-dir-input">Base Work Directory</label>
+              <label class="field-label" for="base-work-dir-input">{t('workflow.rc_base_work_dir')}</label>
               <input id="base-work-dir-input" class="input" type="text" bind:value={base_work_dir} />
             </div>
           </section>
@@ -891,92 +742,29 @@
         <!-- ═══════════ Tab: Settings ═══════════ -->
         {:else if active_tab === 'settings'}
 
-          <!-- Software picker: always lists every supported engine so the
-               user can pre-configure (or just inspect) settings for any of
-               them, regardless of which nodes the current workflow has.
-               `handle_run()` warns if the picked software doesn't match
-               the workflow. -->
-          <section class="section">
-            <h3 class="section-title">Software</h3>
-            <div class="field" style="max-width: 240px">
-              <label class="field-label" for="settings-software-select">Per-software options</label>
-              <select id="settings-software-select" class="input" bind:value={calc_mode}
-                onchange={() => { user_picked_calc_mode = true }}>
-                <option value="vasp">VASP{has_vasp_nodes ? ` ✓` : ``}</option>
-                <option value="cp2k">CP2K{has_cp2k_nodes ? ` ✓` : ``}</option>
-                <option value="orca">ORCA{has_orca_nodes ? ` ✓` : ``}</option>
-                <option value="qe">Quantum ESPRESSO{has_qe_nodes ? ` ✓` : ``}</option>
-                <option value="mlp">MLP (MACE / CHGNet){has_mlp_nodes ? ` ✓` : ``}</option>
-                <option value="xtb">xTB{has_xtb_nodes ? ` ✓` : ``}</option>
-                <option value="lammps">LAMMPS{has_lammps_nodes ? ` ✓` : ``}</option>
-              </select>
-              <p class="hint">A ✓ marks engines that have nodes in this workflow.</p>
-            </div>
-          </section>
-
           {#if calc_mode === 'vasp'}
             <section class="section">
-              <h3 class="section-title">VASP — Error Handling</h3>
+              <h3 class="section-title">{t('workflow.rc_error_handling')}</h3>
               <label class="checkbox-row">
                 <input type="checkbox" bind:checked={use_custodian} />
-                <span>Use custodian for automatic VASP error recovery</span>
+                <span>{t('workflow.rc_use_custodian')}</span>
               </label>
               {#if use_custodian}
                 <div class="custodian-sub">
                   <div class="field" style="max-width: 160px">
-                    <label class="field-label" for="custodian-max-errors-input">Max errors to fix</label>
+                    <label class="field-label" for="custodian-max-errors-input">{t('workflow.rc_max_errors')}</label>
                     <input id="custodian-max-errors-input" class="input number" type="number" min={1} max={50} bind:value={custodian_max_errors} />
                   </div>
                   <p class="custodian-desc">
-                    Custodian automatically fixes common VASP errors (ZBRENT, EDDDAV, memory issues) and restarts the calculation.
+                    {t('workflow.rc_custodian_desc')}
                   </p>
                 </div>
               {/if}
             </section>
-          {:else if calc_mode === 'cp2k'}
-            <section class="section">
-              <h3 class="section-title">CP2K — SCF &amp; Grid</h3>
-              <div class="params-grid">
-                <div class="field">
-                  <label class="field-label" for="cp2k-cutoff-input">CUTOFF <span class="optional">(Ry)</span></label>
-                  <input id="cp2k-cutoff-input" class="input number" type="number" min={100} max={2000} step={50} bind:value={cp2k_cutoff} />
-                </div>
-                <div class="field">
-                  <label class="field-label" for="cp2k-rel-cutoff-input">REL_CUTOFF <span class="optional">(Ry)</span></label>
-                  <input id="cp2k-rel-cutoff-input" class="input number" type="number" min={10} max={200} step={5} bind:value={cp2k_rel_cutoff} />
-                </div>
-                <div class="field">
-                  <label class="field-label" for="cp2k-max-scf-input">Max SCF iterations</label>
-                  <input id="cp2k-max-scf-input" class="input number" type="number" min={10} max={500} step={5} bind:value={cp2k_max_scf} />
-                </div>
-                <div class="field">
-                  <label class="field-label" for="cp2k-eps-scf-input">EPS_SCF</label>
-                  <input id="cp2k-eps-scf-input" class="input number" type="number" min={1e-9} max={1e-3} step={1e-7} bind:value={cp2k_eps_scf} />
-                </div>
-              </div>
-              <label class="checkbox-row">
-                <input type="checkbox" bind:checked={cp2k_use_ot} />
-                <span>Use Orbital Transformation (OT)</span>
-              </label>
-              <p class="hint">
-                Recommended ON for closed-shell systems (insulators, semiconductors, molecules).
-                Turn OFF for metals or open-shell systems — CP2K falls back to traditional
-                diagonalisation with Fermi smearing. Default CUTOFF/REL_CUTOFF (400/60 Ry) is
-                a safe starting point; converge per system.
-              </p>
-            </section>
-          {:else}
-            <section class="section">
-              <h3 class="section-title">{calc_mode.toUpperCase()}</h3>
-              <p class="hint">
-                No software-specific options here yet. Run-time parameters for {calc_mode.toUpperCase()}
-                live on each node's config panel; this tab will be expanded as global defaults emerge.
-              </p>
-            </section>
           {/if}
 
           <section class="section">
-            <h3 class="section-title">Poll Interval <span class="poll-value">{poll_label}</span></h3>
+            <h3 class="section-title">{t('workflow.rc_poll_interval')} <span class="poll-value">{poll_label}</span></h3>
             <input
               class="range-slider"
               type="range"
@@ -997,8 +785,8 @@
 
       <!-- Footer -->
       <div class="modal-footer">
-        <button class="btn btn-cancel" onclick={() => onclose?.()}>Cancel</button>
-        <button class="btn btn-run" onclick={handle_run}>Run Workflow &#9654;</button>
+        <button class="btn btn-cancel" onclick={() => onclose?.()}>{t('workflow.rc_btn_cancel')}</button>
+        <button class="btn btn-run" onclick={handle_run}>{@html t('workflow.rc_btn_run')}</button>
       </div>
     </div>
   </div>
@@ -1245,13 +1033,6 @@
   }
 
   .custodian-desc {
-    margin: 8px 0 0 0;
-    font-size: 11px;
-    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
-    line-height: 1.5;
-  }
-
-  .hint {
     margin: 8px 0 0 0;
     font-size: 11px;
     color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));

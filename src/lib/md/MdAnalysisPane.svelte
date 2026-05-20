@@ -1,17 +1,24 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
-  import { Spinner } from '$lib'
-  import { API_BASE } from '$lib/api/config'
-  import { register_analysis_session, unregister_analysis_session, store_session_blob } from '$lib/chat/analysis-session-store.svelte'
-  import FileSourceDialog from '$lib/electronic/FileSourceDialog.svelte'
-  import MdRdfPanel from './MdRdfPanel.svelte'
-  import MdDynamicsPanel from './MdDynamicsPanel.svelte'
-  import MdDensityPanel from './MdDensityPanel.svelte'
-  import MdHbondsPanel from './MdHbondsPanel.svelte'
-  import MdClusteringPanel from './MdClusteringPanel.svelte'
-  import MdMsdPanel from './MdMsdPanel.svelte'
-  import MdOrientationPanel from './MdOrientationPanel.svelte'
-  import MdCavitationPanel from './MdCavitationPanel.svelte'
+  import { untrack } from "svelte";
+  import { Spinner } from "$lib";
+  import { API_BASE } from "$lib/api/config";
+  import {
+    register_analysis_session,
+    unregister_analysis_session,
+    store_session_blob,
+  } from "$lib/chat/analysis-session-store.svelte";
+  import FileSourceDialog from "$lib/electronic/FileSourceDialog.svelte";
+  import MdRdfPanel from "./MdRdfPanel.svelte";
+  import MdDynamicsPanel from "./MdDynamicsPanel.svelte";
+  import MdDensityPanel from "./MdDensityPanel.svelte";
+  import MdHbondsPanel from "./MdHbondsPanel.svelte";
+  import MdClusteringPanel from "./MdClusteringPanel.svelte";
+  import MdMsdPanel from "./MdMsdPanel.svelte";
+  import MdOrientationPanel from "./MdOrientationPanel.svelte";
+  import MdCavitationPanel from "./MdCavitationPanel.svelte";
+  import { t, load_i18n_module } from "$lib/i18n/index.svelte";
+
+  load_i18n_module("structure");
 
   type MdSubTab =
     | `rdf`
@@ -21,7 +28,7 @@
     | `clustering`
     | `msd`
     | `orientation`
-    | `cavitation`
+    | `cavitation`;
 
   const sub_tabs: { id: MdSubTab; label: string }[] = [
     { id: `rdf`, label: `RDF` },
@@ -32,7 +39,7 @@
     { id: `orientation`, label: `Orientation` },
     { id: `cavitation`, label: `Cavitation` },
     { id: `clustering`, label: `Clustering` },
-  ]
+  ];
 
   let {
     trajectory_b64 = ``,
@@ -41,101 +48,113 @@
     topology_format = ``,
     on_plot = (data: any) => {},
   }: {
-    trajectory_b64?: string
-    trajectory_format?: string
-    topology_b64?: string | null
-    topology_format?: string
-    on_plot?: (data: { traces: any[]; title: string; x_label: string; y_label: string; layout_overrides?: Record<string, any> } | null) => void
-  } = $props()
+    trajectory_b64?: string;
+    trajectory_format?: string;
+    topology_b64?: string | null;
+    topology_format?: string;
+    on_plot?: (
+      data: {
+        traces: any[];
+        title: string;
+        x_label: string;
+        y_label: string;
+        layout_overrides?: Record<string, any>;
+      } | null,
+    ) => void;
+  } = $props();
 
-  let active_sub_tab: MdSubTab = $state(`rdf`)
-  let error_msg: string = $state(``)
+  let active_sub_tab: MdSubTab = $state(`rdf`);
+  let error_msg: string = $state(``);
 
   // File import state
-  let show_file_dialog = $state(false)
-  let local_traj_b64 = $state(``)
-  let local_traj_format = $state(``)
-  let importing = $state(false)
+  let show_file_dialog = $state(false);
+  let local_traj_b64 = $state(``);
+  let local_traj_format = $state(``);
+  let importing = $state(false);
 
   // Effective trajectory: local import takes priority over prop
-  let effective_traj_b64 = $derived(local_traj_b64 || trajectory_b64)
-  let effective_traj_format = $derived(local_traj_format || trajectory_format)
-  let has_trajectory = $derived(!!effective_traj_b64)
+  let effective_traj_b64 = $derived(local_traj_b64 || trajectory_b64);
+  let effective_traj_format = $derived(local_traj_format || trajectory_format);
+  let has_trajectory = $derived(!!effective_traj_b64);
 
   // Register/unregister MD session with analysis store for AI tool access.
   // Heavy trajectory data goes to non-reactive blob store (avoids Svelte proxy overhead).
   // Must untrack register/unregister — they read+write analysis_sessions ($state array).
   $effect(() => {
     if (effective_traj_b64) {
-      const fmt = effective_traj_format
-      const topo_b64 = topology_b64
-      const topo_fmt = topology_format
-      const traj_b64 = effective_traj_b64
+      const fmt = effective_traj_format;
+      const topo_b64 = topology_b64;
+      const topo_fmt = topology_format;
+      const traj_b64 = effective_traj_b64;
       untrack(() => {
-        const sid = `md-${Date.now()}`
+        const sid = `md-${Date.now()}`;
         store_session_blob(sid, {
           trajectory_b64: traj_b64,
           trajectory_format: fmt,
           topology_b64: topo_b64,
           topology_format: topo_fmt,
-        })
+        });
         register_analysis_session({
-          type: 'md',
+          type: "md",
           session_id: sid,
           label: `MD trajectory (${fmt})`,
           meta: { format: fmt },
           created_at: Date.now(),
-        })
-      })
+        });
+      });
     } else {
-      untrack(() => unregister_analysis_session('md'))
+      untrack(() => unregister_analysis_session("md"));
     }
-    return () => untrack(() => unregister_analysis_session('md'))
-  })
+    return () => untrack(() => unregister_analysis_session("md"));
+  });
 
   function file_to_b64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader()
+      const reader = new FileReader();
       reader.onload = () => {
-        const arr = new Uint8Array(reader.result as ArrayBuffer)
-        let binary = ``
-        for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i])
-        resolve(btoa(binary))
-      }
-      reader.onerror = reject
-      reader.readAsArrayBuffer(file)
-    })
+        const arr = new Uint8Array(reader.result as ArrayBuffer);
+        let binary = ``;
+        for (let i = 0; i < arr.length; i++)
+          binary += String.fromCharCode(arr[i]);
+        resolve(btoa(binary));
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
   }
 
   async function handle_local_file(file: File) {
-    importing = true
-    error_msg = ``
+    importing = true;
+    error_msg = ``;
     try {
-      local_traj_b64 = await file_to_b64(file)
-      local_traj_format = file.name.split(`.`).pop()?.toLowerCase() || ``
+      local_traj_b64 = await file_to_b64(file);
+      local_traj_format = file.name.split(`.`).pop()?.toLowerCase() || ``;
     } catch (e: any) {
-      error_msg = e.message || `Failed to read file`
+      error_msg = e.message || `Failed to read file`;
     } finally {
-      importing = false
+      importing = false;
     }
   }
 
   async function handle_remote_trajectory(session_id: string, path: string) {
-    importing = true
-    error_msg = ``
+    importing = true;
+    error_msg = ``;
     try {
-      const resp = await fetch(`${API_BASE}/hpc/download?session_id=${encodeURIComponent(session_id)}&remote_path=${encodeURIComponent(path)}`)
-      if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`)
-      const blob = await resp.blob()
-      const arr = new Uint8Array(await blob.arrayBuffer())
-      let binary = ``
-      for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i])
-      local_traj_b64 = btoa(binary)
-      local_traj_format = path.split(`.`).pop()?.toLowerCase() || ``
+      const resp = await fetch(
+        `${API_BASE}/hpc/download?session_id=${encodeURIComponent(session_id)}&remote_path=${encodeURIComponent(path)}`,
+      );
+      if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`);
+      const blob = await resp.blob();
+      const arr = new Uint8Array(await blob.arrayBuffer());
+      let binary = ``;
+      for (let i = 0; i < arr.length; i++)
+        binary += String.fromCharCode(arr[i]);
+      local_traj_b64 = btoa(binary);
+      local_traj_format = path.split(`.`).pop()?.toLowerCase() || ``;
     } catch (e: any) {
-      error_msg = e.message || `Download failed`
+      error_msg = e.message || `Download failed`;
     } finally {
-      importing = false
+      importing = false;
     }
   }
 </script>
@@ -143,9 +162,9 @@
 <div class="md-analysis">
   {#if !has_trajectory}
     <div class="no-traj-hint">
-      <p>Import a trajectory file (.xyz, .pdb, .gro, etc.) to enable MD analysis.</p>
-      <button class="import-btn" onclick={() => show_file_dialog = true}>
-        {#if importing}<Spinner />{:else}Import Trajectory{/if}
+      <p>{t("structure.import_trajectory_hint")}</p>
+      <button class="import-btn" onclick={() => (show_file_dialog = true)}>
+        {#if importing}<Spinner />{:else}{t("structure.import_trajectory")}{/if}
       </button>
     </div>
   {:else}
@@ -156,12 +175,16 @@
           <button
             class="tab-btn"
             class:active={active_sub_tab === tab.id}
-            onclick={() => active_sub_tab = tab.id}
-          >{tab.label}</button>
+            onclick={() => (active_sub_tab = tab.id)}>{tab.label}</button
+          >
         {/each}
       </div>
-      <button class="replace-btn" onclick={() => show_file_dialog = true} title="Import different trajectory">
-        Replace
+      <button
+        class="replace-btn"
+        onclick={() => (show_file_dialog = true)}
+        title={t("structure.import_different_trajectory")}
+      >
+        {t("structure.replace")}
       </button>
     </div>
 
@@ -242,12 +265,23 @@
 
 <FileSourceDialog
   bind:show={show_file_dialog}
-  file_types={[`.xyz`, `.extxyz`, `.pdb`, `.gro`, `.traj`, `.xtc`, `.trr`, `.dcd`, `.lammpstrj`, `.nc`]}
+  file_types={[
+    `.xyz`,
+    `.extxyz`,
+    `.pdb`,
+    `.gro`,
+    `.traj`,
+    `.xtc`,
+    `.trr`,
+    `.dcd`,
+    `.lammpstrj`,
+    `.nc`,
+  ]}
   title="Load Trajectory"
   description="Select a trajectory file for MD analysis."
   onfile={handle_local_file}
   onremote_path={handle_remote_trajectory}
-  onclose={() => show_file_dialog = false}
+  onclose={() => (show_file_dialog = false)}
 />
 
 <style>
@@ -280,7 +314,9 @@
     cursor: pointer;
     font-size: 0.9em;
   }
-  .import-btn:hover { opacity: 0.85; }
+  .import-btn:hover {
+    opacity: 0.85;
+  }
 
   /* Header with tabs + replace button */
   .md-header {
@@ -292,8 +328,8 @@
   .replace-btn {
     margin-left: auto;
     padding: 1px 8px;
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08));
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15));
+    background: var(--pane-btn-bg);
+    border: 1px solid var(--border-color);
     border-radius: 3px;
     color: var(--text-color-dim);
     cursor: pointer;
@@ -301,7 +337,7 @@
     white-space: nowrap;
   }
   .replace-btn:hover {
-    background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15));
+    background: var(--pane-btn-bg-hover);
     color: var(--text-color);
   }
 
@@ -313,15 +349,15 @@
   }
   .tab-btn {
     padding: 2px 10px;
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.06));
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    background: var(--pane-tabs-bg);
+    border: var(--pane-border);
     border-radius: 3px 3px 0 0;
     color: var(--text-color-dim);
     cursor: pointer;
     font-size: 0.85em;
   }
   .tab-btn.active {
-    background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.12));
+    background: var(--pane-bg);
     color: var(--text-color);
     border-bottom-color: transparent;
   }
@@ -335,8 +371,8 @@
   /* Error message */
   .error-msg {
     padding: 5px 8px;
-    background: light-dark(rgba(220, 60, 60, 0.1), rgba(255, 60, 60, 0.15));
-    border: 1px solid light-dark(rgba(220, 60, 60, 0.25), rgba(255, 60, 60, 0.3));
+    background: color-mix(in srgb, var(--error-color) 15%, transparent);
+    border: var(--error-border);
     border-radius: 4px;
     color: var(--error-color);
     font-size: 0.85em;

@@ -8,10 +8,13 @@ export type LLMProvider =
   | `kimi`
   | `zhipu`
   | `gemini`
+  | `anthropic`
+  | `custom`
   | `ollama`
 
 /** Provider mode: SDK agent bridge, or universal OpenAI-compat. */
 export type ProviderMode = `sdk` | `universal`
+export type ApiFormat = `auto` | `openai` | `anthropic`
 
 export interface TextBlock {
   type: `text`
@@ -55,6 +58,8 @@ export interface ChatConfig {
   max_tokens: number
   api_key: string // stored in localStorage, not in settings schema
   base_url: string // for universal OpenAI-compatible providers
+  api_format: ApiFormat
+  fetched_models: Partial<Record<LLMProvider, { id: string; label: string }[]>>
   mode: ProviderMode // how to connect
 }
 

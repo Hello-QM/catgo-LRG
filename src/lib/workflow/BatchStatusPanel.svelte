@@ -1,5 +1,8 @@
 <script lang="ts">
   import { API_BASE } from '$lib/api/config'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
 
   let {
     workflow_id,
@@ -133,7 +136,7 @@
 <div class="bp-root">
   <!-- Header -->
   <div class="bp-header">
-    <div class="bp-title">Batch Status</div>
+    <div class="bp-title">{t('workflow.batch_status_title')}</div>
     {#if summary}
       <div class="bp-progress-label">
         {summary.completed.toLocaleString()} / {summary.total.toLocaleString()}
@@ -147,10 +150,10 @@
       <div class="bp-progress-fill" style="width:{progress_pct.toFixed(1)}%"></div>
     </div>
     <div class="bp-status-line">
-      <span class="bp-stat bp-stat-completed">{summary.completed} completed</span>
-      <span class="bp-stat bp-stat-running">{summary.running} running</span>
-      <span class="bp-stat bp-stat-failed">{summary.failed} failed</span>
-      <span class="bp-stat bp-stat-pending">{summary.pending} pending</span>
+      <span class="bp-stat bp-stat-completed">{t('workflow.batch_status_completed', { n: summary.completed })}</span>
+      <span class="bp-stat bp-stat-running">{t('workflow.batch_status_running', { n: summary.running })}</span>
+      <span class="bp-stat bp-stat-failed">{t('workflow.batch_status_failed', { n: summary.failed })}</span>
+      <span class="bp-stat bp-stat-pending">{t('workflow.batch_status_pending', { n: summary.pending })}</span>
     </div>
   {/if}
 
@@ -160,17 +163,17 @@
       class="bp-tab"
       class:bp-tab-active={active_tab === 'overview'}
       onclick={() => (active_tab = 'overview')}
-    >Overview</button>
+    >{t('workflow.batch_status_overview')}</button>
     <button
       class="bp-tab"
       class:bp-tab-active={active_tab === 'table'}
       onclick={() => (active_tab = 'table')}
-    >Table</button>
+    >{t('workflow.batch_status_table')}</button>
     <button
       class="bp-tab"
       class:bp-tab-active={active_tab === 'failed'}
       onclick={() => (active_tab = 'failed')}
-    >Failed</button>
+    >{t('workflow.batch_status_failed_tab')}</button>
   </div>
 
   <!-- Tab content -->
@@ -181,19 +184,19 @@
         <div class="bp-stats-grid">
           {#if summary.energy_min != null}
             <div class="bp-stats-row">
-              <span class="bp-stats-label">Energy range</span>
+              <span class="bp-stats-label">{t('workflow.batch_status_energy_range')}</span>
               <span class="bp-stats-value">{summary.energy_min.toFixed(4)} ... {summary.energy_max?.toFixed(4)} eV</span>
             </div>
           {/if}
           {#if summary.energy_mean != null}
             <div class="bp-stats-row">
-              <span class="bp-stats-label">Mean</span>
+              <span class="bp-stats-label">{t('workflow.batch_status_mean')}</span>
               <span class="bp-stats-value">{summary.energy_mean.toFixed(4)} eV</span>
             </div>
           {/if}
           {#if summary.energy_std != null}
             <div class="bp-stats-row">
-              <span class="bp-stats-label">Std dev</span>
+              <span class="bp-stats-label">{t('workflow.batch_status_std_dev')}</span>
               <span class="bp-stats-value">{summary.energy_std.toFixed(4)} eV</span>
             </div>
           {/if}
@@ -201,7 +204,7 @@
 
         {#if histogram && histogram.bins.length > 1}
           <div class="bp-histogram">
-            <div class="bp-section-title">Energy Distribution</div>
+            <div class="bp-section-title">{t('workflow.batch_status_energy_distribution')}</div>
             <svg
               viewBox="0 0 {hist_width} {hist_height}"
               class="bp-hist-svg"
@@ -247,13 +250,13 @@
           </div>
         {/if}
       {:else}
-        <div class="bp-empty">No summary data yet</div>
+        <div class="bp-empty">{t('workflow.batch_status_no_summary_data')}</div>
       {/if}
 
     {:else if active_tab === 'table'}
       <!-- Table tab -->
       {#if loading}
-        <div class="bp-loading">Loading...</div>
+        <div class="bp-loading">{t('workflow.batch_status_loading')}</div>
       {:else if results_page}
         <div class="bp-table-wrap">
           <table class="bp-table">
@@ -263,10 +266,10 @@
                   # {sort_field === 'subtask_index' ? (sort_order === 'asc' ? '▲' : '▼') : ''}
                 </th>
                 <th class="bp-th bp-th-sortable" onclick={() => toggleSort('status')}>
-                  Status {sort_field === 'status' ? (sort_order === 'asc' ? '▲' : '▼') : ''}
+                  {t('common.status')} {sort_field === 'status' ? (sort_order === 'asc' ? '▲' : '▼') : ''}
                 </th>
                 <th class="bp-th bp-th-sortable" onclick={() => toggleSort('energy')}>
-                  Energy (eV) {sort_field === 'energy' ? (sort_order === 'asc' ? '▲' : '▼') : ''}
+                  {t('workflow.batch_status_energy_ev')} {sort_field === 'energy' ? (sort_order === 'asc' ? '▲' : '▼') : ''}
                 </th>
               </tr>
             </thead>
@@ -292,17 +295,17 @@
               class="bp-page-btn"
               disabled={current_page <= 1}
               onclick={() => goToPage(current_page - 1)}
-            >Prev</button>
-            <span class="bp-page-info">Page {current_page} / {total_pages}</span>
+            >{t('workflow.batch_status_prev')}</button>
+            <span class="bp-page-info">{t('workflow.batch_status_page', { current: current_page, total: total_pages })}</span>
             <button
               class="bp-page-btn"
               disabled={current_page >= total_pages}
               onclick={() => goToPage(current_page + 1)}
-            >Next</button>
+            >{t('workflow.batch_status_next')}</button>
           </div>
         {/if}
       {:else}
-        <div class="bp-empty">No results data</div>
+        <div class="bp-empty">{t('workflow.batch_status_no_results_data')}</div>
       {/if}
 
     {:else if active_tab === 'failed'}
@@ -313,10 +316,10 @@
           disabled={retry_loading || !summary?.failed}
           onclick={retryFailed}
         >
-          {retry_loading ? 'Retrying...' : 'Retry All Failed'}
+          {retry_loading ? t('workflow.batch_status_retrying') : t('workflow.batch_status_retry_all_failed')}
         </button>
         {#if summary}
-          <span class="bp-failed-count">{summary.failed} failed subtask{summary.failed !== 1 ? 's' : ''}</span>
+          <span class="bp-failed-count">{t('workflow.batch_status_failed_subtasks', { n: summary.failed, s: summary.failed !== 1 ? 's' : '' })}</span>
         {/if}
       </div>
 
@@ -325,14 +328,14 @@
           {#each failed_items as row (row.subtask_index)}
             <div class="bp-failed-item">
               <div class="bp-failed-idx">#{row.subtask_index}</div>
-              <div class="bp-failed-msg">{row.error_message ?? 'Unknown error'}</div>
+              <div class="bp-failed-msg">{row.error_message ?? t('workflow.batch_status_unknown_error')}</div>
             </div>
           {:else}
-            <div class="bp-empty">No failed subtasks on this page</div>
+            <div class="bp-empty">{t('workflow.batch_status_no_failed_subtasks_on_page')}</div>
           {/each}
         </div>
       {:else}
-        <div class="bp-empty">Loading failed results...</div>
+        <div class="bp-empty">{t('workflow.batch_status_loading_failed_results')}</div>
       {/if}
     {/if}
   </div>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as project_api from '$lib/api/project'
   import type { ProjectSummary } from '$lib/api/project'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   let {
     onselect,
@@ -13,6 +14,9 @@
     onclose?: () => void
     ondbchange?: () => void
   } = $props()
+
+  load_i18n_module('app')
+  load_i18n_module('common')
 
   let projects = $state<ProjectSummary[]>([])
   let is_loading = $state(false)
@@ -39,7 +43,7 @@
     } catch (err) {
       const msg = String(err)
       if (msg.includes(`abort`)) {
-        error = `Cannot connect to backend server. Make sure it is running.`
+        error = t('app.cannot_connect_backend')
       } else {
         error = msg
       }
@@ -66,7 +70,7 @@
   }
 
   async function handle_delete(project: ProjectSummary) {
-    if (!confirm(`Delete "${project.name}"? This cannot be undone.`)) return
+    if (!confirm(t('app.delete_project_irreversible', { name: project.name }))) return
     error = ``
     try {
       await project_api.delete_project(project.id)
@@ -90,6 +94,10 @@
     }
   }
 
+  function workflow_count_label(count: number): string {
+    return t('app.workflow_count', { n: String(count), s: count === 1 ? `` : `s` })
+  }
+
   // Load projects on mount
   $effect(() => {
     load_projects()
@@ -100,20 +108,20 @@
   <!-- Header -->
   <div class="header">
     {#if onclose}
-      <button type="button" class="close-btn" onclick={onclose} title="Back to structure viewer">
+      <button type="button" class="close-btn" onclick={onclose} title={t('app.back_to_structure_viewer')}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
         </svg>
       </button>
     {/if}
     <div class="tab-nav">
-      <button class="tab-btn active">Projects</button>
+      <button class="tab-btn active">{t('common.projects')}</button>
       {#if on_all_workflows}
-        <button class="tab-btn" onclick={on_all_workflows}>All Workflows</button>
+        <button class="tab-btn" onclick={on_all_workflows}>{t('app.all_workflows')}</button>
       {/if}
     </div>
     <div class="header-spacer"></div>
-    <button class="primary-btn" onclick={() => (show_create_dialog = true)}>+ New Project</button>
+    <button class="primary-btn" onclick={() => (show_create_dialog = true)}>{t('app.new_project')}</button>
   </div>
 
   <!-- Create dialog (inline, conditionally shown) -->
@@ -122,16 +130,16 @@
       <input
         class="form-input"
         bind:value={new_name}
-        placeholder="Project name"
+        placeholder={t('app.project_name_placeholder')}
       />
       <input
         class="form-input"
         bind:value={new_description}
-        placeholder="Description (optional)"
+        placeholder={t('app.description_optional_placeholder')}
       />
       <div class="form-actions">
         <button class="primary-btn" onclick={create_project} disabled={!new_name.trim()}>
-          Create
+          {t('common.create')}
         </button>
         <button
           class="secondary-btn"
@@ -141,7 +149,7 @@
             new_description = ``
           }}
         >
-          Cancel
+          {t('common.cancel')}
         </button>
       </div>
     </div>
@@ -154,10 +162,10 @@
 
   <!-- Loading / Empty / Grid -->
   {#if is_loading}
-    <div class="loading">Loading projects...</div>
+    <div class="loading">{t('app.loading_projects')}</div>
   {:else if projects.length === 0}
     <div class="empty-state">
-      <p>No projects yet. Create one to organize your workflows.</p>
+      <p>{t('app.no_projects_yet')}</p>
     </div>
   {:else}
     <div class="project-grid">
@@ -167,7 +175,7 @@
             <div class="card-header-row">
               <div class="card-name">{project.name}</div>
               {#if project.workflow_count !== undefined && project.workflow_count > 0}
-                <span class="card-wf-count">{project.workflow_count} workflow{project.workflow_count !== 1 ? `s` : ``}</span>
+                <span class="card-wf-count">{workflow_count_label(project.workflow_count)}</span>
               {/if}
             </div>
             {#if project.description}
@@ -177,7 +185,7 @@
               <span class="card-date">{format_date(project.updated_at)}</span>
             </div>
           </button>
-          <button class="card-delete" onclick={() => handle_delete(project)} title="Delete">
+          <button class="card-delete" onclick={() => handle_delete(project)} title={t('common.delete')}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
             </svg>

@@ -55,6 +55,10 @@
     get_status_color,
     filter_jobs,
   } from './server-utils'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     show = $bindable(false),
@@ -100,7 +104,7 @@
         for (const ls of sessions) {
           if (ls.session_id && ls.session_id !== LOCAL_SESSION_ID && ls.conn_status === `connected` && !shared_ids.has(ls.session_id)) {
             ls.conn_status = `disconnected`
-            ls.conn_error = `Session expired`
+            ls.conn_error = t('structure.session_expired')
             ls.ws_conn?.disconnect()
             ls.ws_conn = null
             remove_shared_session(ls.session_id)
@@ -403,7 +407,7 @@
         const s = get_session(sid)
         if (!s) return
         s.conn_status = `otp_required`
-        s.otp_prompt = prompt || `Verification code:`
+        s.otp_prompt = prompt || t('common.verification_code')
         s.otp_code = ``
       },
       onError: (message) => {
@@ -525,7 +529,7 @@
         if (s) s.conda_activate = install_status.conda_activate
       }
     } catch (e) {
-      install_error = `Failed to check: ${e}`
+      install_error = t('structure.failed_check', { error: String(e) })
     } finally {
       install_checking = false
     }
@@ -582,7 +586,7 @@
   async function do_launch_catgo() {
     if (!active_session?.session_id) return
     catgo_launch_state = `submitting`
-    catgo_message = `Submitting job...`
+    catgo_message = t('structure.submitting_job')
     catgo_job_id = ``
     catgo_node = ``
     catgo_local_port = 0
@@ -596,7 +600,7 @@
       }
       catgo_job_id = result.job_id
       catgo_launch_state = `pending`
-      catgo_message = `Waiting for allocation...`
+      catgo_message = t('structure.waiting_for_allocation')
       start_catgo_poll()
     } catch (e) {
       catgo_launch_state = `failed`
@@ -626,15 +630,15 @@
       if (info.status === `RUNNING`) {
         stop_catgo_poll()
         catgo_launch_state = `running`
-        catgo_message = `Job running, setting up tunnel...`
+        catgo_message = t('structure.job_running_setup_tunnel')
         await do_setup_tunnel()
       } else if (info.status === `PENDING`) {
         catgo_launch_state = `pending`
-        catgo_message = info.reason || `Waiting for allocation...`
+        catgo_message = info.reason || t('structure.waiting_for_allocation')
       } else if (info.status === `FAILED` || info.status === `CANCELLED` || info.status === `COMPLETED`) {
         stop_catgo_poll()
         catgo_launch_state = `failed`
-        catgo_message = `Job ${info.status}`
+        catgo_message = t('structure.job_status_label', { status: info.status })
       }
     } catch (e) {
       // Transient error — keep polling
@@ -645,7 +649,7 @@
   async function do_setup_tunnel() {
     if (!active_session?.session_id || !catgo_job_id) return
     catgo_launch_state = `tunneling`
-    catgo_message = `Setting up SSH tunnel...`
+    catgo_message = t('structure.setting_up_ssh_tunnel')
     try {
       const result = await setupCatgoTunnel(
         active_session.session_id,
@@ -661,10 +665,10 @@
       catgo_local_port = result.local_port
       catgo_node = result.remote_node
       catgo_launch_state = `ready`
-      catgo_message = `CatGO ready at localhost:${result.local_port}`
+      catgo_message = t('structure.catgo_ready_at', { port: result.local_port })
     } catch (e) {
       catgo_launch_state = `failed`
-      catgo_message = `Tunnel failed: ${e}`
+      catgo_message = t('structure.tunnel_failed', { error: String(e) })
     }
   }
 
@@ -715,10 +719,10 @@
       if (result.success) {
         s.jobs = result.jobs
       } else {
-        s.jobs_error = result.message || `Failed to fetch jobs`
+        s.jobs_error = result.message || t('structure.failed_fetch_jobs')
       }
     } catch (err) {
-      s.jobs_error = `Error: ${err}`
+      s.jobs_error = t('structure.error_with_message', { error: String(err) })
     } finally {
       s.jobs_loading = false
       s.jobs_fetched = true
@@ -748,7 +752,7 @@
         await refresh_jobs()
       }
     } catch (err) {
-      submit_message = `Error: ${err}`
+      submit_message = t('structure.error_with_message', { error: String(err) })
     } finally {
       submit_loading = false
     }
@@ -812,7 +816,7 @@
       s.upload_progress = null
       file_tree_key++  // Force FileTree remount to show new file
     } catch (err) {
-      s.files_error = `Upload failed: ${err}`
+      s.files_error = t('structure.upload_failed', { error: String(err) })
       s.upload_progress = null
     }
     input.value = ``
@@ -834,11 +838,11 @@
       const max_bytes = likely_traj ? 0 : undefined  // 0 = unlimited for trajectories
       const result = await readRemoteFile(active_session.session_id, file.path, max_bytes)
       if (!result.success) {
-        loading_error = `Failed to load ${file.name}: ${result.message || 'Unknown error'}`
+        loading_error = t('structure.failed_load_file', { name: file.name, error: result.message || t('structure.unknown_error') })
         return
       }
       if (!result.content) {
-        loading_error = `File ${file.name} is empty or could not be read`
+        loading_error = t('structure.file_empty_or_unreadable', { name: file.name })
         return
       }
       // Auto-detect multi-frame files and route to trajectory viewer
@@ -855,7 +859,7 @@
       }
     } catch (e: any) {
       console.error(`Failed to load structure:`, e)
-      loading_error = `Failed to load ${file.name}: ${e?.message || e}`
+      loading_error = t('structure.failed_load_file', { name: file.name, error: e?.message || String(e) })
     } finally {
       loading_file = null
     }
@@ -945,12 +949,12 @@
           session_id: active_session.session_id,
           dir_path: dir.path,
         })
-        set_merge_status(`success`, `Loaded ${pattern} trajectory from ${dir.name}/ — view in Structure panel`)
+        set_merge_status(`success`, t('structure.loaded_trajectory_from_dir', { pattern, dir: dir.name }))
       } else {
-        set_merge_status(`error`, `No ${pattern} files found in subdirectories of ${dir.name}/`)
+        set_merge_status(`error`, t('structure.no_pattern_files_in_dir', { pattern, dir: dir.name }))
       }
     } catch (e: any) {
-      set_merge_status(`error`, `Merge failed: ${e?.message || String(e)}`)
+      set_merge_status(`error`, t('structure.merge_failed', { error: e?.message || String(e) }))
     } finally {
       merging_dir = null
     }
@@ -1003,7 +1007,7 @@
 >
   <h4 class="pane-title">
     <span class="status-dot" style="background: {status_color()}"></span>
-    Server (HPC)
+    {t('structure.server_hpc')}
   </h4>
 
   {#if children}
@@ -1023,22 +1027,22 @@
             tabindex="0"
             onclick={() => { active_session_idx = idx }}
             onkeydown={(e) => { if (e.key === `Enter`) active_session_idx = idx }}
-            title={session._id === LOCAL_SESSION_ID ? `Local filesystem` : `${session.username}@${session.host} (${session.conn_status})`}
+            title={session._id === LOCAL_SESSION_ID ? t('structure.local_filesystem') : `${session.username}@${session.host} (${session.conn_status})`}
           >
             <span class="pill-dot" class:local-dot={session._id === LOCAL_SESSION_ID}></span>
-            {session._id === LOCAL_SESSION_ID ? `Local` : session.host ? session.host.split(`.`)[0] : `...`}
+            {session._id === LOCAL_SESSION_ID ? t('structure.local') : session.host ? session.host.split(`.`)[0] : `...`}
             {#if session._id !== LOCAL_SESSION_ID}
               <button
                 class="pill-close"
                 onclick={(e) => { e.stopPropagation(); do_disconnect(idx) }}
-                title="Disconnect"
+                title={t('common.disconnect')}
               >
                 ✕
               </button>
             {/if}
           </div>
         {/each}
-        <button class="pill pill-add" onclick={show_new_connection} title="New connection">
+        <button class="pill pill-add" onclick={show_new_connection} title={t('structure.new_connection')}>
           +
         </button>
       </div>
@@ -1047,13 +1051,14 @@
     <!-- Tab Bar -->
     <div class="tab-bar">
       {#each tab_defs as tab}
+        {@const tab_label = tab.id === `connection` ? t('structure.connection') : tab.id === `jobs` ? t('structure.jobs') : t('structure.files')}
         <button
           class:active={active_tab === tab.id}
           onclick={() => (active_tab = tab.id)}
           disabled={(tab.id !== `connection` && !is_connected) || (tab.id === `jobs` && active_session?._id === LOCAL_SESSION_ID)}
-          title={tab.id === `jobs` && active_session?._id === LOCAL_SESSION_ID ? `No scheduler for local` : !is_connected && tab.id !== `connection` ? `Connect first` : tab.label}
+          title={tab.id === `jobs` && active_session?._id === LOCAL_SESSION_ID ? t('structure.no_scheduler_local') : !is_connected && tab.id !== `connection` ? t('structure.connect_first') : tab_label}
         >
-          {tab.label}
+          {tab_label}
         </button>
       {/each}
     </div>
@@ -1064,19 +1069,19 @@
         {#if active_session && active_session.conn_status === `otp_required`}
           <!-- OTP Input -->
           <section class="action-section">
-            <h5>Two-Factor Authentication</h5>
+            <h5>{t('structure.two_factor_auth')}</h5>
             <p class="description">{active_session.otp_prompt}</p>
             <div class="form-row">
               <input
                 type="text"
                 bind:value={active_session.otp_code}
-                placeholder="Enter code"
+                placeholder={t('structure.enter_code')}
                 maxlength="8"
                 class="otp-input"
                 onkeydown={(e) => e.key === `Enter` && submit_otp()}
               />
               <button class="apply-btn" onclick={submit_otp} disabled={!active_session.otp_code}>
-                Submit
+                {t('common.submit')}
               </button>
             </div>
           </section>
@@ -1084,22 +1089,22 @@
           <!-- Connected Status -->
           <section class="action-section">
             {#if active_session._id === LOCAL_SESSION_ID}
-              <h5>Local Filesystem</h5>
-              <p class="description">Browse and load files from the local server machine.</p>
+              <h5>{t('structure.local_filesystem')}</h5>
+              <p class="description">{t('structure.browse_local_server_files')}</p>
             {:else}
-              <h5>Connected</h5>
+              <h5>{t('common.connected')}</h5>
               <div class="conn-info">
                 <span>{active_session.username}@{active_session.host}</span>
                 <span class="badge badge-green">{active_session.scheduler.toUpperCase()}</span>
               </div>
               {#if active_session.overview}
                 <div class="overview-mini">
-                  <span title="Running">{active_session.overview.job_summary.running} running</span>
-                  <span title="Pending">{active_session.overview.job_summary.pending} pending</span>
-                  <span title="Total">{active_session.overview.job_summary.total} total</span>
+                  <span title={t('structure.running')}>{t('structure.running_count', { n: active_session.overview.job_summary.running })}</span>
+                  <span title={t('structure.pending')}>{t('structure.pending_count', { n: active_session.overview.job_summary.pending })}</span>
+                  <span title={t('structure.all')}>{t('structure.total_count', { n: active_session.overview.job_summary.total })}</span>
                 </div>
                 {#if active_session.overview.disk_usage}
-                  <div class="overview-disk">Disk: {active_session.overview.disk_usage}</div>
+                  <div class="overview-disk">{t('structure.disk_usage', { usage: active_session.overview.disk_usage })}</div>
                 {/if}
               {/if}
               <div class="conn-actions">
@@ -1107,31 +1112,31 @@
                   <button
                     class="action-btn"
                     onclick={() => on_open_terminal?.(active_session.session_id, active_session.host, active_session.username)}
-                    title="Open remote terminal"
+                    title={t('structure.open_remote_terminal')}
                   >
-                    &#x2318; Terminal
+                    {t('structure.terminal_button')}
                   </button>
                 {/if}
                 <button class="cancel-btn full-width" onclick={() => do_disconnect(active_session_idx)}>
-                  Disconnect
+                  {t('common.disconnect')}
                 </button>
               </div>
 
               <!-- CatGO Remote Compute -->
               <div class="install-section">
-                <h5>Remote Compute</h5>
+                <h5>{t('structure.remote_compute')}</h5>
                 {#if install_checking}
-                  <p class="description">Checking installation...</p>
+                  <p class="description">{t('structure.checking_installation')}</p>
                 {:else if install_status?.installed}
                   <div class="install-status">
-                    <span class="badge badge-green">Installed</span>
-                    <p class="description" style="margin-top: 4px">CatGO server at {install_status.catgo_dir}</p>
+                    <span class="badge badge-green">{t('structure.installed')}</span>
+                    <p class="description" style="margin-top: 4px">{t('structure.catgo_server_at', { path: install_status.catgo_dir })}</p>
 
                     <!-- CatGO Launch State Machine UI -->
                     {#if catgo_launch_state === `idle`}
                       <div class="catgo-launch-row">
                         <label class="catgo-port-label">
-                          Port
+                          {t('structure.port')}
                           <input
                             type="number"
                             bind:value={catgo_port_config}
@@ -1144,13 +1149,13 @@
                           class="apply-btn catgo-launch-btn"
                           onclick={do_launch_catgo}
                         >
-                          Launch on Compute Node
+                          {t('structure.launch_on_compute_node')}
                         </button>
                       </div>
                     {:else if catgo_launch_state === `submitting`}
                       <div class="catgo-status-row">
                         <span class="catgo-spinner"></span>
-                        <span class="description">Submitting job...</span>
+                        <span class="description">{t('structure.submitting_job')}</span>
                       </div>
                     {:else if catgo_launch_state === `pending`}
                       <div class="catgo-status-row">
@@ -1158,10 +1163,10 @@
                         <span class="description">{catgo_message}</span>
                       </div>
                       {#if catgo_job_id}
-                        <div class="catgo-job-info">Job ID: {catgo_job_id}</div>
+                        <div class="catgo-job-info">{t('structure.job_id_label', { id: catgo_job_id })}</div>
                       {/if}
                       <button class="cancel-btn full-width" onclick={do_cancel_catgo} style="margin-top: 6px">
-                        Cancel
+                        {t('common.cancel')}
                       </button>
                     {:else if catgo_launch_state === `running` || catgo_launch_state === `tunneling`}
                       <div class="catgo-status-row">
@@ -1169,15 +1174,15 @@
                         <span class="description">{catgo_message}</span>
                       </div>
                       {#if catgo_job_id}
-                        <div class="catgo-job-info">Job ID: {catgo_job_id}</div>
+                        <div class="catgo-job-info">{t('structure.job_id_label', { id: catgo_job_id })}</div>
                       {/if}
                       <button class="cancel-btn full-width" onclick={do_cancel_catgo} style="margin-top: 6px">
-                        Cancel
+                        {t('common.cancel')}
                       </button>
                     {:else if catgo_launch_state === `ready`}
                       <div class="catgo-status-row">
                         <span class="badge badge-green">READY</span>
-                        <span class="description">on {catgo_node}</span>
+                        <span class="description">{t('structure.on_node', { node: catgo_node })}</span>
                       </div>
                       <a
                         href="http://localhost:{catgo_local_port}"
@@ -1185,10 +1190,10 @@
                         rel="noopener noreferrer"
                         class="apply-btn full-width catgo-open-link"
                       >
-                        Open CatGO (localhost:{catgo_local_port})
+                        {t('structure.open_catgo_localhost', { port: catgo_local_port })}
                       </a>
                       <button class="cancel-btn full-width" onclick={do_cancel_catgo} style="margin-top: 4px">
-                        Stop &amp; Disconnect
+                        {t('structure.stop_disconnect')}
                       </button>
                     {:else if catgo_launch_state === `failed`}
                       <div class="catgo-status-row">
@@ -1196,7 +1201,7 @@
                       </div>
                       <div class="error-msg" style="margin-top: 4px">{catgo_message}</div>
                       <button class="secondary-btn full-width" onclick={dismiss_catgo_error} style="margin-top: 6px">
-                        Dismiss
+                        {t('common.dismiss')}
                       </button>
                     {/if}
                   </div>
@@ -1218,7 +1223,7 @@
                       </span>
                     </div>
                     <p class="description" style="margin-top: 8px">
-                      Installs ML potentials (MACE, CHGNet, M3GNet) and generates a job script.
+                      {t('structure.install_remote_compute_desc')}
                     </p>
                     {#if install_running || install_log.length > 0}
                       <div
@@ -1229,11 +1234,11 @@
                           <div class="install-log-line">{line}</div>
                         {/each}
                         {#if install_running}
-                          <div class="install-log-line installing-pulse">Installing...</div>
+                          <div class="install-log-line installing-pulse">{t('structure.installing')}</div>
                         {/if}
                       </div>
                     {:else if install_done}
-                      <div class="success-msg" style="margin-top: 6px">Installation complete!</div>
+                      <div class="success-msg" style="margin-top: 6px">{t('structure.installation_complete')}</div>
                     {/if}
                     <button
                       class="secondary-btn full-width"
@@ -1241,7 +1246,7 @@
                       disabled={install_running}
                       style="margin-top: 6px"
                     >
-                      {install_running ? `Installing...` : `Install Remote Compute`}
+                      {install_running ? t('structure.installing') : t('structure.install_remote_compute')}
                     </button>
                     <button
                       class="secondary-btn full-width"
@@ -1249,7 +1254,7 @@
                       disabled={install_running}
                       style="margin-top: 4px"
                     >
-                      Re-check
+                      {t('structure.re_check')}
                     </button>
                   </div>
                 {:else}
@@ -1257,7 +1262,7 @@
                     class="secondary-btn full-width"
                     onclick={check_catgo_install}
                   >
-                    Check Remote Setup
+                    {t('structure.check_remote_setup')}
                   </button>
                 {/if}
                 {#if install_error}
@@ -1270,14 +1275,14 @@
           <!-- Claude Code Integration -->
           <section class="action-section">
             <h5>Claude Code</h5>
-            <p class="description">Configure Claude Code on this server to control CatGO remotely.</p>
+            <p class="description">{t('structure.claude_code_remote_desc')}</p>
             <button
               class="secondary-btn full-width"
               onclick={do_setup_claude_code}
               disabled={claude_setup_loading}
               style="margin-top: 4px"
             >
-              {claude_setup_loading ? `Configuring...` : `Setup Claude Code`}
+              {claude_setup_loading ? t('structure.configuring') : t('structure.setup_claude_code')}
             </button>
             {#if claude_setup_result}
               <div
@@ -1291,13 +1296,13 @@
         {:else if active_session && active_session.conn_status === `connecting`}
           <!-- Connecting -->
           <section class="action-section">
-            <h5>Connecting...</h5>
-            <p class="description">Establishing SSH connection to {active_session.host}...</p>
+            <h5>{t('structure.connecting')}</h5>
+            <p class="description">{t('structure.establishing_ssh_connection', { host: active_session.host })}</p>
           </section>
         {:else if active_session && active_session.conn_status === `error`}
           <!-- Error -->
           <section class="action-section">
-            <h5>Connection Error</h5>
+            <h5>{t('structure.connection_error')}</h5>
             <div class="error-msg">{active_session.conn_error}</div>
             <button class="secondary-btn full-width" onclick={() => do_disconnect(active_session_idx)} style="margin-top: 6px">
               Dismiss
@@ -1307,19 +1312,19 @@
           <!-- New Connection Form -->
           {#if profiles.length > 0}
             <section class="action-section">
-              <h5>Saved Profiles</h5>
+              <h5>{t('structure.saved_profiles')}</h5>
               <div class="form-row">
                 <select
                   bind:value={selected_profile}
                   onchange={() => apply_profile(selected_profile)}
                 >
-                  <option value="">Select profile...</option>
+                  <option value="">{t('structure.select_profile_placeholder')}</option>
                   {#each profiles as p}
                     <option value={p.name}>{p.name}</option>
                   {/each}
                 </select>
                 {#if selected_profile}
-                  <button class="icon-btn danger" onclick={delete_current_profile} title="Delete profile">
+                  <button class="icon-btn danger" onclick={delete_current_profile} title={t('structure.delete_profile')}>
                     ✕
                   </button>
                 {/if}
@@ -1328,53 +1333,52 @@
           {/if}
 
           <section class="action-section">
-            <h5>New Connection</h5>
+            <h5>{t('structure.new_connection')}</h5>
             <div class="form-grid">
               <label>
-                Auth
+                {t('structure.auth')}
                 <select bind:value={auth_method}>
-                  <option value="password">Password</option>
-                  <option value="password_otp">Password + OTP</option>
-                  <option value="key">SSH Key</option>
-                  <option value="key_otp">SSH Key + OTP</option>
-                  <option value="ssh_config">SSH Config (ControlMaster)</option>
+                  <option value="password">{t('structure.password')}</option>
+                  <option value="password_otp">{t('structure.password_otp')}</option>
+                  <option value="key">{t('structure.ssh_key')}</option>
+                  <option value="key_otp">{t('structure.ssh_key_otp')}</option>
+                  <option value="ssh_config">{t('structure.ssh_config_controlmaster')}</option>
                 </select>
               </label>
               {#if auth_method === `ssh_config`}
                 <p class="form-hint warning">
-                  Requires ControlMaster — not supported on Windows (no ControlPath/ControlPersist).
-                  Use SSH Key or SSH Key + OTP instead.
+                  {t('structure.ssh_config_windows_hint')}
                 </p>
                 <label class="full-span">
-                  SSH Alias <span class="optional-hint">(from ~/.ssh/config)</span>
-                  <input type="text" bind:value={ssh_alias} placeholder="e.g. Shaheen" />
+                  {t('structure.ssh_alias')} <span class="optional-hint">{t('structure.ssh_alias_hint')}</span>
+                  <input type="text" bind:value={ssh_alias} placeholder={t('structure.ssh_alias_placeholder')} />
                 </label>
               {:else}
                 <label>
-                  Host
+                  {t('structure.host')}
                   <input type="text" bind:value={host} placeholder="hpc.example.com" />
                 </label>
                 <label>
-                  Port
+                  {t('structure.port')}
                   <input type="number" bind:value={port} min={1} max={65535} />
                 </label>
                 <label>
-                  Username
+                  {t('structure.username')}
                   <input type="text" bind:value={username} placeholder="user" />
                 </label>
                 {#if auth_method === `password` || auth_method === `password_otp`}
                   <label class="full-span">
-                    Password
+                    {t('structure.password')}
                     <input type="password" bind:value={password} placeholder="••••••" />
                   </label>
                 {/if}
                 <label class="full-span">
-                  Key File <span class="optional-hint">(optional — specify if server needs a specific key)</span>
-                  <input type="text" bind:value={key_file} placeholder="~/.ssh/id_rsa (leave empty for agent/default)" />
+                  {t('structure.key_file')} <span class="optional-hint">{t('structure.key_file_hint')}</span>
+                  <input type="text" bind:value={key_file} placeholder={t('structure.key_file_placeholder')} />
                 </label>
               {/if}
               <label>
-                Scheduler
+                {t('structure.scheduler')}
                 <select bind:value={scheduler}>
                   <option value="slurm">SLURM</option>
                   <option value="pbs">PBS/Torque</option>
@@ -1384,33 +1388,33 @@
 
             <label class="checkbox-row">
               <input type="checkbox" bind:checked={use_jump} />
-              Use jump host (bastion)
+              {t('structure.use_jump_host')}
             </label>
 
             {#if use_jump}
               <div class="form-grid jump-fields">
                 <label>
-                  Jump Host
+                  {t('structure.jump_host')}
                   <input type="text" bind:value={jump_host} placeholder="bastion.example.com" />
                 </label>
                 <label>
-                  Port
+                  {t('structure.port')}
                   <input type="number" bind:value={jump_port} min={1} max={65535} />
                 </label>
                 <label class="full-span">
-                  Jump Username
-                  <input type="text" bind:value={jump_username} placeholder="Same as above" />
+                  {t('structure.jump_username')}
+                  <input type="text" bind:value={jump_username} placeholder={t('structure.same_as_above')} />
                 </label>
                 <label>
-                  Jump Auth
+                  {t('structure.jump_auth')}
                   <select bind:value={jump_use_key} onchange={() => { if (jump_use_key) jump_password = `` }}>
-                    <option value={true}>SSH Key</option>
-                    <option value={false}>Password</option>
+                    <option value={true}>{t('structure.ssh_key')}</option>
+                    <option value={false}>{t('structure.password')}</option>
                   </select>
                 </label>
                 {#if !jump_use_key}
                   <label>
-                    Jump Password
+                    {t('structure.jump_password')}
                     <input type="password" bind:value={jump_password} placeholder="••••••" />
                   </label>
                 {/if}
@@ -1419,25 +1423,25 @@
 
             <label class="checkbox-row">
               <input type="checkbox" bind:checked={use_proxy} />
-              Use SOCKS5 proxy
+              {t('structure.use_socks_proxy')}
             </label>
 
             {#if use_proxy}
               <div class="form-grid jump-fields">
                 <label>
-                  Proxy Host
+                  {t('structure.proxy_host')}
                   <input type="text" bind:value={proxy_host} placeholder="127.0.0.1" />
                 </label>
                 <label>
-                  Port
+                  {t('structure.port')}
                   <input type="number" bind:value={proxy_port} min={1} max={65535} />
                 </label>
                 <label>
-                  Username <span class="hint">(optional)</span>
-                  <input type="text" bind:value={proxy_username} placeholder="Leave empty for no auth" />
+                  {t('structure.username')} <span class="hint">({t('common.optional')})</span>
+                  <input type="text" bind:value={proxy_username} placeholder={t('structure.no_proxy_auth_placeholder')} />
                 </label>
                 <label>
-                  Password <span class="hint">(optional)</span>
+                  {t('structure.password')} <span class="hint">({t('common.optional')})</span>
                   <input type="password" bind:value={proxy_password} placeholder="••••••" />
                 </label>
               </div>
@@ -1447,7 +1451,7 @@
               <input
                 type="text"
                 bind:value={profile_name}
-                placeholder="Profile name"
+                placeholder={t('structure.profile_name')}
                 class="profile-name"
               />
               <button
@@ -1455,7 +1459,7 @@
                 onclick={save_current_profile}
                 disabled={!profile_name.trim() || (auth_method === `ssh_config` ? !ssh_alias.trim() : !host)}
               >
-                Save
+                {t('common.save')}
               </button>
             </div>
 
@@ -1466,7 +1470,7 @@
                 ? !ssh_alias
                 : (!host || !username || ((auth_method === `password` || auth_method === `password_otp`) && !password))}
             >
-              Connect
+              {t('common.connect')}
             </button>
           </section>
         {/if}
@@ -1490,56 +1494,56 @@
 
         <!-- Job Submission -->
         <section class="action-section">
-          <h5>Submit Job</h5>
+          <h5>{t('structure.submit_job')}</h5>
           <div class="form-grid">
             <label>
-              Job Name
+              {t('structure.job_name')}
               <input type="text" bind:value={job_name} />
             </label>
             <label>
-              Partition
+              {t('structure.partition')}
               <input type="text" bind:value={job_partition} placeholder="default" />
             </label>
             <label>
-              Nodes
+              {t('structure.nodes')}
               <input type="number" bind:value={job_nodes} min={1} />
             </label>
             <label>
-              Tasks
+              {t('common.tasks')}
               <input type="number" bind:value={job_ntasks} min={1} />
             </label>
             <label>
-              CPUs/Task
+              {t('structure.cpus_task')}
               <input type="number" bind:value={job_cpus} min={1} />
             </label>
             <label>
-              Walltime
+              {t('structure.walltime')}
               <input type="text" bind:value={job_time} placeholder="HH:MM:SS" />
             </label>
             <label>
-              Memory
+              {t('structure.memory')}
               <input type="text" bind:value={job_memory} placeholder="e.g. 4G" />
             </label>
             <label>
-              Work Dir
+              {t('structure.work_dir')}
               <input type="text" bind:value={job_work_dir} />
             </label>
           </div>
           <div class="script-header">
-            <span class="script-label-text">Job Script</span>
+            <span class="script-label-text">{t('structure.job_script')}</span>
             <label class="upload-script-btn">
-              Upload .sh
+              {t('structure.upload_shell_script')}
               <input type="file" accept=".sh,.bash,.slurm,.pbs,.job" onchange={upload_script} hidden />
             </label>
           </div>
-          <textarea bind:value={job_script} rows={5} placeholder="#!/bin/bash&#10;# Your commands here..."></textarea>
+          <textarea bind:value={job_script} rows={5} placeholder={`#!/bin/bash\n# ${t('structure.your_commands_here')}`}></textarea>
           <button
             class="apply-btn full-width"
             onclick={do_submit_job}
             disabled={submit_loading || !job_script.trim()}
             style="margin-top: 6px"
           >
-            {submit_loading ? `Submitting...` : `Submit Job`}
+            {submit_loading ? t('structure.submitting') : t('structure.submit_job')}
           </button>
           {#if submit_message}
             <div class="submit-msg">{submit_message}</div>
@@ -1549,17 +1553,17 @@
         <!-- Job List -->
         <section class="action-section">
           <div class="section-header">
-            <h5>Jobs</h5>
+            <h5>{t('structure.jobs')}</h5>
             <div class="header-actions">
               <button
                 class="icon-btn"
                 class:active={active_session.auto_refresh}
                 onclick={toggle_auto_refresh}
-                title={active_session.auto_refresh ? `Stop auto-refresh` : `Auto-refresh (15s)`}
+                title={active_session.auto_refresh ? t('structure.stop_auto_refresh') : t('structure.auto_refresh_seconds', { seconds: 15 })}
               >
                 {active_session.auto_refresh ? `⏸` : `⟳`}
               </button>
-              <button class="icon-btn" onclick={() => refresh_jobs()} disabled={active_session.jobs_loading} title="Refresh">
+              <button class="icon-btn" onclick={() => refresh_jobs()} disabled={active_session.jobs_loading} title={t('common.refresh')}>
                 ↻
               </button>
             </div>
@@ -1568,30 +1572,30 @@
           <!-- Job Filters -->
           <div class="job-filters">
             <select class="filter-select" bind:value={job_status_filter}>
-              <option value="all">All Status</option>
-              <option value="RUNNING">Running</option>
-              <option value="PENDING">Pending</option>
-              <option value="COMPLETED">Completed</option>
-              <option value="FAILED">Failed</option>
-              <option value="CANCELLED">Cancelled</option>
+              <option value="all">{t('structure.all_status')}</option>
+              <option value="RUNNING">{t('structure.running')}</option>
+              <option value="PENDING">{t('structure.pending')}</option>
+              <option value="COMPLETED">{t('common.completed')}</option>
+              <option value="FAILED">{t('common.failed')}</option>
+              <option value="CANCELLED">{t('structure.cancelled')}</option>
             </select>
             <select class="filter-select" bind:value={job_time_filter}>
-              <option value="all">All Time</option>
-              <option value="1h">Last 1h</option>
-              <option value="6h">Last 6h</option>
-              <option value="24h">Last 24h</option>
-              <option value="7d">Last 7d</option>
-              <option value="30d">Last 30d</option>
+              <option value="all">{t('structure.all_time')}</option>
+              <option value="1h">{t('structure.last_hours', { n: 1 })}</option>
+              <option value="6h">{t('structure.last_hours', { n: 6 })}</option>
+              <option value="24h">{t('structure.last_hours', { n: 24 })}</option>
+              <option value="7d">{t('structure.last_days', { n: 7 })}</option>
+              <option value="30d">{t('structure.last_days', { n: 30 })}</option>
             </select>
             <select class="filter-select" bind:value={job_software_filter}>
-              <option value="all">All Software</option>
+              <option value="all">{t('structure.all_software')}</option>
               <option value="vasp">VASP</option>
               <option value="qe">QE</option>
               <option value="lammps">LAMMPS</option>
               <option value="cp2k">CP2K</option>
             </select>
             <select class="filter-select" bind:value={job_calc_filter}>
-              <option value="all">All Types</option>
+              <option value="all">{t('structure.all_types')}</option>
               <option value="opt">Opt</option>
               <option value="scf">SCF</option>
               <option value="md">MD</option>
@@ -1603,7 +1607,7 @@
           </div>
           <div class="workdir-depth">
             <!-- svelte-ignore a11y_label_has_associated_control -->
-            <label>Path depth <input type="number" min={0} max={20} bind:value={workdir_skip_segments} class="depth-input" /></label>
+            <label>{t('structure.path_depth')} <input type="number" min={0} max={20} bind:value={workdir_skip_segments} class="depth-input" /></label>
           </div>
 
           {#if active_session.jobs_error}
@@ -1611,11 +1615,11 @@
           {/if}
 
           {#if active_session.jobs_loading && !active_session.jobs_fetched}
-            <p class="description">Loading jobs...</p>
+            <p class="description">{t('structure.loading_jobs')}</p>
           {:else if active_session.jobs.length === 0}
-            <p class="description">No jobs found</p>
+            <p class="description">{t('structure.no_jobs_found')}</p>
           {:else if filtered_jobs().length === 0}
-            <p class="description">No jobs match filters</p>
+            <p class="description">{t('structure.no_jobs_match_filters')}</p>
           {:else}
             <div class="job-list">
               {#each filtered_jobs() as job}
@@ -1646,11 +1650,11 @@
                     </div>
                   {/if}
                   {#if job.time_elapsed}
-                    <div class="job-detail">Time: {job.time_elapsed}</div>
+                    <div class="job-detail">{t('structure.time_label', { time: job.time_elapsed })}</div>
                   {/if}
                   {#if job.status === `PENDING` || job.status === `RUNNING`}
                     <button class="cancel-btn small" onclick={() => do_cancel_job(job.job_id)}>
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                   {/if}
                 </div>
@@ -1665,7 +1669,7 @@
           <!-- Upload -->
           <div class="form-row">
             <label class="upload-btn">
-              Upload File
+              {t('structure.upload_file')}
               <input type="file" onchange={do_upload} hidden />
             </label>
           </div>
@@ -1673,7 +1677,7 @@
           {#if active_session.upload_progress !== null}
             <div class="progress-bar">
               <div class="progress-fill" style="width: {active_session.upload_progress}%"></div>
-              <span class="progress-text">Uploading {active_session.upload_progress}%</span>
+              <span class="progress-text">{t('structure.uploading_percent', { percent: active_session.upload_progress })}</span>
             </div>
           {/if}
           {#if active_session.files_error}
@@ -1683,7 +1687,7 @@
           {#if loading_file}
             <div class="loading-bar">
               <div class="loading-bar-inner"></div>
-              <span class="loading-bar-text">Loading {loading_file.name}{loading_file.size ? ` (${format_file_size(loading_file.size)})` : ``}...</span>
+              <span class="loading-bar-text">{t('structure.loading_file', { name: loading_file.name, size: loading_file.size ? ` (${format_file_size(loading_file.size)})` : `` })}</span>
             </div>
           {/if}
           {#if loading_error}

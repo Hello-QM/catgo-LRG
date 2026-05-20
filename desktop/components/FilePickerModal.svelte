@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { BrowseResult } from '$lib/api/project'
+
+  load_i18n_module('common')
 
   let {
     visible = $bindable(false),
@@ -31,25 +34,25 @@
     <div class="fp-dialog" onclick={(e) => e.stopPropagation()}>
       <div class="fp-header">
         <span class="fp-title">
-          {mode === `open` ? `Open Database` : mode === `new` ? `New Database` : `Save Database As`}
+          {mode === `open` ? t('sidebar.open_database') : mode === `new` ? t('sidebar.new_database') : t('sidebar.save_database_as')}
         </span>
         <button class="fp-close" onclick={() => visible = false}>&times;</button>
       </div>
 
       <!-- Path bar -->
       <div class="fp-pathbar">
-        <button class="fp-up-btn" onclick={() => onbrowse(parent)} disabled={dir === `__drives__`} title="Go up">
+        <button class="fp-up-btn" onclick={() => onbrowse(parent)} disabled={dir === `__drives__`} title={t('sidebar.go_up')}>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6" /></svg>
         </button>
-        <span class="fp-path" title={dir}>{dir === `__drives__` ? `This PC` : dir}</span>
+        <span class="fp-path" title={dir}>{dir === `__drives__` ? t('app.this_pc') : dir}</span>
       </div>
 
       <!-- File list -->
       <div class="fp-list">
         {#if loading}
-          <div class="fp-loading">Loading...</div>
+          <div class="fp-loading">{t('common.loading')}</div>
         {:else if items.length === 0}
-          <div class="fp-empty">No folders or .db files</div>
+          <div class="fp-empty">{t('app.no_folders_or_db')}</div>
         {:else}
           {#each items as item (item.path)}
             {#if item.type === `dir`}
@@ -80,25 +83,25 @@
       <!-- Filename input (for new / save-as) -->
       {#if mode !== `open`}
         <div class="fp-filename-row">
-          <span class="fp-filename-label">Name:</span>
-          <input class="fp-filename-input" bind:value={filename} placeholder="database.db"
+          <span class="fp-filename-label">{t('common.name')}:</span>
+          <input class="fp-filename-input" bind:value={filename} placeholder={t('common.database_filename_placeholder')}
             onkeydown={(e) => { if (e.key === `Enter`) onconfirm() }} />
         </div>
       {/if}
 
       <!-- Actions -->
       <div class="fp-actions">
-        <button class="fp-btn fp-btn-cancel" onclick={() => visible = false}>Cancel</button>
+        <button class="fp-btn fp-btn-cancel" onclick={() => visible = false}>{t('common.cancel')}</button>
         {#if mode === `open`}
           <button class="fp-btn fp-btn-ok" disabled={!filename}
             onclick={() => {
               const found = items.find(i => i.name === filename)
               if (found) onconfirm(found.path)
-            }}>Open</button>
+            }}>{t('common.open')}</button>
         {:else}
           <button class="fp-btn fp-btn-ok" disabled={!filename}
             onclick={() => onconfirm()}>
-            {mode === `new` ? `Create` : `Save`}
+            {mode === `new` ? t('common.create') : t('common.save')}
           </button>
         {/if}
       </div>

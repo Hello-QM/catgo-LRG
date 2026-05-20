@@ -1,10 +1,14 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { Snippet } from 'svelte'
   import type { NodeDefinition, ParamDef } from './workflow-types'
   import { STATUS_COLORS } from './workflow-types'
   import { SOFTWARE_PERIODICITY } from './node-definitions'
   import { API_BASE } from '$lib/api/config'
+
+  // ─── Load workflow i18n on mount ───
+  $effect(() => { load_i18n_module('workflow') })
 
   let {
     node,
@@ -324,7 +328,7 @@
         class="help-btn"
         class:active={show_help}
         onclick={() => show_help = !show_help}
-        title="Toggle help"
+      title={t('workflow.config_toggle_help')}
       >?</button>
     </div>
     {#if show_help}
@@ -344,7 +348,7 @@
   <!-- Help text -->
   {#if show_help && definition.help_text}
     <div class="help-section">
-      <div class="help-label">Documentation</div>
+      <div class="help-label">{t('workflow.config_documentation')}</div>
       <div class="help-text">{@html render_help(definition.help_text)}</div>
     </div>
   {/if}
@@ -356,7 +360,7 @@
 
   <!-- Display Name (all node types) -->
   <div class="label-row">
-    <label class="field-label">Display Name</label>
+    <label class="field-label">{t('workflow.config_display_name')}</label>
     <input
       type="text"
       class="field-input"
@@ -369,14 +373,14 @@
   <!-- VASP Preset Selector (context-aware per calc type) -->
   {#if is_vasp_node && preset_options.length > 0}
     <div class="preset-selector">
-      <label class="field-label">INCAR Preset</label>
+      <label class="field-label">{t('workflow.config_incar_preset')}</label>
       <select
         class="field-select"
         value={selected_preset}
         disabled={preset_loading}
         onchange={(e) => apply_preset(e.currentTarget.value)}
       >
-        <option value="">Manual</option>
+        <option value="">{t('workflow.config_manual')}</option>
         {#each preset_options as opt}
           <option value={opt.value}>{opt.label}</option>
         {/each}
@@ -390,24 +394,24 @@
       <div class="freeze-warning">
         <span class="freeze-warning-icon">!</span>
         <span class="freeze-warning-text">
-          For surface calculations, freeze bulk atoms so only surface + adsorbate vibrate.
+          {t('workflow.config_freeze_warning')}
         </span>
         <div class="freeze-quick-actions">
           <button class="freeze-quick-btn" onclick={() => emit({ ...node.params, freeze_mode: `layers`, freeze_layers: node.params.freeze_layers || 4 })}>
-            Freeze by Layers
+            {t('workflow.config_freeze_by_layers')}
           </button>
           <button class="freeze-quick-btn" onclick={() => emit({ ...node.params, freeze_mode: `z_range`, freeze_z_below: node.params.freeze_z_below || 8.0 })}>
-            Freeze by Height
+            {t('workflow.config_freeze_by_height')}
           </button>
           <button class="freeze-quick-btn" onclick={() => { emit({ ...node.params, freeze_mode: `manual` }); onfreeze_edit?.() }}>
-            Select in 3D
+            {t('workflow.config_select_in_3d')}
           </button>
         </div>
       </div>
     {/if}
     {#if node.params.freeze_mode === `layers`}
       <div class="freeze-edit-section">
-        <label class="field-label">Freeze Bottom Layers</label>
+        <label class="field-label">{t('workflow.config_freeze_bottom_layers')}</label>
         <input
           type="number"
           class="field-input field-number"
@@ -422,7 +426,7 @@
     {/if}
     {#if node.params.freeze_mode === `z_range`}
       <div class="freeze-edit-section">
-        <label class="field-label">Freeze z below (A)</label>
+        <label class="field-label">{t('workflow.config_freeze_z_below')}</label>
         <input
           type="number"
           class="field-input field-number"
@@ -438,20 +442,20 @@
     {#if node.params.freeze_mode === `manual`}
       <div class="freeze-edit-section">
         <button class="freeze-edit-btn" onclick={() => onfreeze_edit?.()}>
-          Select Frozen Atoms in 3D
+          {t('workflow.config_select_frozen_atoms')}
         </button>
         {#if node.params.freeze_indices}
           {@const count = String(node.params.freeze_indices).split(",").filter(s => s.trim()).length}
-          <div class="freeze-count">{count} atom{count !== 1 ? `s` : ``} frozen</div>
+          <div class="freeze-count">{t('workflow.config_atoms_frozen', { n: count, s: count !== 1 ? `s` : `` })}</div>
         {:else}
-          <div class="freeze-count freeze-count-empty">No atoms frozen yet</div>
+          <div class="freeze-count freeze-count-empty">{t('workflow.config_no_atoms_frozen')}</div>
         {/if}
       </div>
     {/if}
     {#if node.params.freeze_mode && node.params.freeze_mode !== `none`}
       <div class="freeze-edit-section" style="padding-top: 0">
         <button class="freeze-quick-btn freeze-reset-btn" onclick={() => emit({ ...node.params, freeze_mode: `none`, freeze_layers: 0, freeze_z_below: 0, freeze_indices: `` })}>
-          Clear Freeze
+          {t('workflow.config_clear_freeze')}
         </button>
       </div>
     {/if}
@@ -472,7 +476,7 @@
         <div class="gibbs-result-row">
           <span class="gibbs-result-label">E<sub>DFT</sub></span>
           <span class="gibbs-result-value">{gibbs_result?.energy !== undefined ? `${gibbs_result.energy.toFixed(4)} eV` : `—`}
-            {#if gibbs_result?.energy === undefined}<span class="gibbs-hint">← energy input</span>{/if}
+            {#if gibbs_result?.energy === undefined}<span class="gibbs-hint">{t('workflow.config_gibbs_energy_input')}</span>{/if}
           </span>
         </div>
         <div class="gibbs-result-row">
@@ -482,7 +486,7 @@
         <div class="gibbs-result-row">
           <span class="gibbs-result-label">T×S</span>
           <span class="gibbs-result-value">{gibbs_result?.ts_correction !== undefined ? `−${gibbs_result.ts_correction.toFixed(4)} eV` : `—`}
-            {#if gibbs_result?.ts_correction === undefined}<span class="gibbs-hint">← freq input</span>{/if}
+            {#if gibbs_result?.ts_correction === undefined}<span class="gibbs-hint">{t('workflow.config_gibbs_freq_input')}</span>{/if}
           </span>
         </div>
         {#if gibbs_result?.n_real_freqs !== undefined}
@@ -498,7 +502,7 @@
   <!-- Parameter groups -->
   <div class="params-area">
     {#if grouped_params.length === 0}
-      <div class="no-params">No configurable parameters</div>
+      <div class="no-params">{t('workflow.config_no_params')}</div>
     {/if}
 
     {#each grouped_params as group}
@@ -517,7 +521,7 @@
           </span>
           <span class="group-name">{group.name}</span>
           {#if is_collapsed && is_modified}
-            <span class="group-modified-dot" title="Modified from defaults"></span>
+            <span class="group-modified-dot" title={t('workflow.config_modified_from_defaults')}></span>
           {/if}
           {#if is_collapsed}
             <span class="group-count">{group.params.length}</span>
@@ -573,7 +577,7 @@
                     >
                       <div class="toggle-knob"></div>
                     </div>
-                    <span class="toggle-label">{checked ? `On` : `Off`}</span>
+                    <span class="toggle-label">{checked ? t('workflow.config_toggle_on') : t('workflow.config_toggle_off')}</span>
                   </div>
 
                 {:else if param.type === `select`}
@@ -665,14 +669,14 @@
                     {#each groups as group, gi}
                       <div class="dg-card">
                         <div class="dg-header">
-                          <span class="dg-label">Group {gi + 1}</span>
+                          <span class="dg-label">{t('workflow.config_group_n', { n: gi + 1 })}</span>
                           <button class="dg-remove" onclick={() => {
                             const next = groups.filter((_: unknown, i: number) => i !== gi)
                             update_param(param.key, JSON.stringify(next))
-                          }} title="Remove group">&times;</button>
+                          }} title={t('workflow.config_remove_group')}>&times;</button>
                         </div>
                         <div class="dg-field">
-                          <span class="dg-field-label">Replace</span>
+                          <span class="dg-field-label">{t('workflow.config_group_replace')}</span>
                           <input class="field-input dg-input" type="text" placeholder="e.g. Ti"
                             value={group.target}
                             oninput={(e) => {
@@ -683,7 +687,7 @@
                           />
                         </div>
                         <div class="dg-field">
-                          <span class="dg-field-label">With</span>
+                          <span class="dg-field-label">{t('workflow.config_group_with')}</span>
                           <div class="dg-replacements">
                             {#each group.replacements as el, ri}
                               <span class="dg-el-chip">
@@ -715,10 +719,10 @@
                     <button class="dg-add-group" onclick={() => {
                       const next = [...groups, { target: '', replacements: [] }]
                       update_param(param.key, JSON.stringify(next))
-                    }}>+ Add Substitution Group</button>
+                    }}>{t('workflow.config_add_substitution_group')}</button>
                     {#if groups.length > 0}
                       {@const total = groups.reduce((acc: number, g: {replacements: string[]}) => acc * (g.replacements.length || 0), 1)}
-                      <div class="dg-count">Total configurations: {total}</div>
+                      <div class="dg-count">{t('workflow.config_total_configurations', { n: total })}</div>
                     {/if}
                   </div>
 
@@ -745,7 +749,7 @@
 
   <!-- Info section: Inputs / Outputs -->
   <div class="info-section">
-    <div class="info-label">Inputs / Outputs</div>
+    <div class="info-label">{t('workflow.config_inputs_outputs')}</div>
     <div class="io-row">
       <div class="io-col">
         <span class="io-heading">IN</span>
@@ -774,7 +778,7 @@
   <!-- Reset button -->
   <div class="footer-actions">
     <button class="reset-btn" onclick={reset_to_defaults}>
-      Reset to Defaults
+      {t('workflow.config_reset_to_defaults')}
     </button>
   </div>
 </div>

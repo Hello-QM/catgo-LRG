@@ -1,20 +1,23 @@
 <script lang="ts">
   import { get_toasts, dismiss_toast } from './toast-state.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
 
   const toasts = $derived(get_toasts())
 </script>
 
 {#if toasts.length > 0}
-  <div class="toast-stack" role="region" aria-label="Notifications" aria-live="polite">
-    {#each toasts as t (t.id)}
-      <div class="toast" class:warning={t.variant === 'warning'} class:error={t.variant === 'error'} class:success={t.variant === 'success'}>
-        <span class="toast-msg">{t.message}</span>
-        {#if t.action}
-          <button class="toast-action" onclick={() => { t.action?.onclick(); dismiss_toast(t.id) }}>
-            {t.action.label}
+  <div class="toast-stack" role="region" aria-label={t('common.notifications')} aria-live="polite">
+    {#each toasts as toast (toast.id)}
+      <div class="toast" class:warning={toast.variant === 'warning'} class:error={toast.variant === 'error'} class:success={toast.variant === 'success'}>
+        <span class="toast-msg">{toast.message}</span>
+        {#if toast.action}
+          <button class="toast-action" onclick={() => { toast.action?.onclick(); dismiss_toast(toast.id) }}>
+            {toast.action.label}
           </button>
         {/if}
-        <button class="toast-close" aria-label="Dismiss" onclick={() => dismiss_toast(t.id)}>×</button>
+        <button class="toast-close" aria-label={t('common.dismiss')} onclick={() => dismiss_toast(toast.id)}>×</button>
       </div>
     {/each}
   </div>

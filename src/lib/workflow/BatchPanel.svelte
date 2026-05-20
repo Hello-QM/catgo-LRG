@@ -8,6 +8,9 @@
    */
   import type { PymatgenStructure } from '$lib/structure'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
 
   interface Props {
     structures_json: string[]
@@ -122,10 +125,10 @@
 <div class="batch-panel">
   <!-- ═══ Selection header ═══ -->
   <div class="bp-header">
-    <span class="bp-count">{n_selected}/{n_total} selected</span>
+    <span class="bp-count">{t('workflow.batch_selected_count', { selected: n_selected, total: n_total })}</span>
     <div class="bp-actions">
-      <button class="bp-link" onclick={select_all}>All</button>
-      <button class="bp-link" onclick={select_none}>None</button>
+      <button class="bp-link" onclick={select_all}>{t('common.select_all')}</button>
+      <button class="bp-link" onclick={select_none}>{t('common.deselect_all')}</button>
     </div>
   </div>
 
@@ -135,7 +138,7 @@
       {#if current_structure}
         <StructurePreview structure={current_structure} />
       {:else}
-        <div class="bp-empty">No structure</div>
+        <div class="bp-empty">{t('workflow.we_no_structures')}</div>
       {/if}
     {/key}
   </div>
@@ -151,13 +154,13 @@
   <!-- ═══ Frame info ═══ -->
   <div class="bp-frame-info">
     <span class="bp-composition">{current_composition}</span>
-    <span class="bp-atom-count">{atom_count} atoms</span>
+    <span class="bp-atom-count">{t('common.atoms_count', { n: atom_count })}</span>
   </div>
 
   <!-- ═══ Selection checkbox ═══ -->
   <label class="bp-checkbox">
     <input type="checkbox" checked={selected.has(frame_idx)} onchange={() => toggle_selection(frame_idx)} />
-    <span>Include #{frame_idx + 1} in batch</span>
+    <span>{t('workflow.batch_include_in_batch', { n: frame_idx + 1 })}</span>
   </label>
 
   <!-- ═══ Structure list (compact) ═══ -->
@@ -176,7 +179,7 @@
           <span class="bp-list-idx">#{i + 1}</span>
           <span class="bp-list-comp">{frame_compositions[i]}</span>
           {#if overrides[String(i)]}
-            <span class="bp-override-dot" title="Has custom parameters"></span>
+            <span class="bp-override-dot" title={t('workflow.batch_has_custom_parameters')}></span>
           {/if}
         </button>
       {/each}
@@ -186,8 +189,8 @@
   <!-- ═══ Per-frame overrides ═══ -->
   <div class="bp-section">
     <div class="bp-section-title">
-      Overrides for #{frame_idx + 1}
-      {#if has_frame_overrides}<span class="bp-badge">custom</span>{/if}
+      {t('workflow.batch_overrides_for', { n: frame_idx + 1 })}
+      {#if has_frame_overrides}<span class="bp-badge">{t('workflow.batch_custom')}</span>{/if}
     </div>
 
     <!-- MAGMOM -->
@@ -225,30 +228,30 @@
     <!-- Edit INCAR button -->
     {#if on_edit_incar}
       <button class="bp-incar-btn" onclick={() => on_edit_incar?.(frame_idx)}>
-        Edit INCAR for #{frame_idx + 1}
+        {t('workflow.batch_edit_incar_for', { n: frame_idx + 1 })}
       </button>
     {/if}
 
     {#if has_frame_overrides}
-      <button class="bp-link bp-clear" onclick={clear_frame_overrides}>Reset to defaults</button>
+      <button class="bp-link bp-clear" onclick={clear_frame_overrides}>{t('common.reset')}</button>
     {/if}
 
     {#if n_overrides > 0}
-      <div class="bp-override-summary">{n_overrides} structure(s) with custom params</div>
+      <div class="bp-override-summary">{t('workflow.batch_structures_with_custom_params', { n: n_overrides })}</div>
     {/if}
   </div>
 
   <!-- ═══ HPC settings ═══ -->
   <div class="bp-section">
     <div class="bp-setting">
-      <label title="Maximum number of HPC jobs running at the same time. Prevents flooding the queue.">
-        Concurrent jobs
+      <label title={t('workflow.batch_concurrent_jobs_help')}>
+        {t('workflow.batch_concurrent_jobs')}
       </label>
       <input type="number" class="bp-num-input" min={1} max={50}
         value={max_parallel}
         onchange={(e) => onparams_change({ ...node_params, max_parallel: Math.max(1, Math.min(50, Number((e.target as HTMLInputElement).value))) })} />
     </div>
-    <div class="bp-setting-hint">Limits simultaneous HPC submissions to avoid queue flooding</div>
+    <div class="bp-setting-hint">{t('workflow.batch_concurrent_jobs_hint')}</div>
   </div>
 </div>
 

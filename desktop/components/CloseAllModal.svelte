@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { modal } from '../state/modal-state.svelte'
+
+  load_i18n_module('common')
 
   interface Props {
     execute_close_all: () => void
@@ -14,11 +17,11 @@
   <div class="modal-overlay" onclick={() => { if (!modal.close_all_saving) modal.close_all_visible = false }}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-dialog close-all-dialog" onclick={(e) => e.stopPropagation()}>
-      <h3>Close all tabs</h3>
+      <h3>{t('app.close_all_tabs')}</h3>
       {#if modal.close_all_entries.length === 0}
-        <p>No structures loaded.</p>
+        <p>{t('app.no_structures_loaded')}</p>
       {:else}
-        <p>Select structures to save before closing:</p>
+        <p>{t('app.select_structures_to_save')}</p>
         <div class="close-all-list">
           {#each modal.close_all_entries as entry, i}
             <label class="close-all-entry">
@@ -30,9 +33,9 @@
                 {:else if entry.save_target === `hpc`}
                   &#8594; HPC: {entry.save_path?.split(/[/\\]/).pop()}
                 {:else if entry.save_target === `database`}
-                  &#8594; CatGo DB
+                  &#8594; {t('app.catgo_db')}
                 {:else}
-                  <span class="close-all-nosave">(no save target)</span>
+                  <span class="close-all-nosave">{t('app.no_save_target')}</span>
                 {/if}
               </span>
             </label>
@@ -43,11 +46,11 @@
         <p class="close-all-error">{modal.close_all_error}</p>
       {/if}
       <div class="modal-actions">
-        <button class="modal-btn cancel" disabled={modal.close_all_saving} onclick={() => modal.close_all_visible = false}>Cancel</button>
-        <button class="modal-btn danger" disabled={modal.close_all_saving} onclick={close_all_without_saving}>Close without saving</button>
+        <button class="modal-btn cancel" disabled={modal.close_all_saving} onclick={() => modal.close_all_visible = false}>{t('common.cancel')}</button>
+        <button class="modal-btn danger" disabled={modal.close_all_saving} onclick={close_all_without_saving}>{t('common.close')}</button>
         {#if modal.close_all_entries.some(e => e.checked)}
           <button class="modal-btn save" disabled={modal.close_all_saving} onclick={execute_close_all}>
-            {modal.close_all_saving ? `Saving...` : `Save & Close All`}
+            {modal.close_all_saving ? t('common.saving') : t('app.save_and_close_all')}
           </button>
         {/if}
       </div>

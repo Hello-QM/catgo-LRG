@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '$lib/i18n/index.svelte'
   export interface AppTab {
     id: string
     type: 'structure' | 'workflow' | 'terminal'
@@ -15,12 +16,12 @@
     icon: string
   }
 
-  const layout_options: LayoutOption[] = [
-    { id: 'single', label: 'Single', icon: 'M3 3h18v18H3z' },
-    { id: 'splitH', label: 'Side by Side', icon: 'M3 3h18v18H3zM12 3v18' },
-    { id: 'splitV', label: 'Stacked', icon: 'M3 3h18v18H3zM3 12h18' },
-    { id: 'quad', label: '2×2 Grid', icon: 'M3 3h18v18H3zM12 3v18M3 12h18' },
-  ]
+  let layout_options: LayoutOption[] = $derived([
+    { id: 'single', label: t('app.layout_single'), icon: 'M3 3h18v18H3z' },
+    { id: 'splitH', label: t('app.layout_split_h'), icon: 'M3 3h18v18H3zM12 3v18' },
+    { id: 'splitV', label: t('app.layout_split_v'), icon: 'M3 3h18v18H3zM3 12h18' },
+    { id: 'quad', label: t('app.layout_quad'), icon: 'M3 3h18v18H3zM12 3v18M3 12h18' },
+  ])
 
   import type { Snippet } from 'svelte'
 
@@ -109,7 +110,7 @@
           <button
             class="tab-close"
             onclick={(e) => { e.stopPropagation(); onclose(tab.id) }}
-            title="Close tab"
+            title={t('app.close_tab')}
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
               <path d="M18 6L6 18M6 6l12 12" />
@@ -119,13 +120,13 @@
       </div>
     {/each}
 
-    <button class="add-tab-btn" onclick={() => onadd(`structure`)} title="New tab">
+    <button class="add-tab-btn" onclick={() => onadd(`structure`)} title={t('app.new_tab')}>
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
         <path d="M12 5v14M5 12h14" />
       </svg>
     </button>
     {#if oncloseall && tabs.length > 1}
-      <button class="close-all-btn" onclick={oncloseall} title="Close all tabs">
+      <button class="close-all-btn" onclick={oncloseall} title={t('app.close_all_tabs')}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
@@ -135,7 +136,7 @@
 
   {#if layout !== undefined}
     <div class="layout-menu-container">
-      <button class="layout-trigger" onclick={handle_layout_click} title="Layout: {current_layout_option.label}">
+      <button class="layout-trigger" onclick={handle_layout_click} title={t('app.layout') + ': ' + current_layout_option.label}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d={current_layout_option.icon} />
         </svg>
@@ -336,18 +337,20 @@
     position: relative;
     display: flex;
     align-items: center;
-    padding-left: 6px;
-    margin-left: 4px;
+    padding-left: 5px;
+    margin-left: 3px;
     border-left: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
   }
 
   .layout-trigger {
     display: flex;
     align-items: center;
-    gap: 5px;
-    padding: 4px 8px;
+    justify-content: center;
+    gap: 0;
+    padding: 2px 5px;
+    min-width: 28px;
     background: transparent;
-    border: none;
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     border-radius: 6px;
     color: var(--text-color-muted, #6b7280);
     font-size: 11px;
@@ -366,9 +369,15 @@
     display: none;
   }
 
-  @media (min-width: 600px) {
+  @media (min-width: 900px) {
     .layout-trigger-label {
       display: inline;
+    }
+    .layout-trigger {
+      justify-content: flex-start;
+      gap: 5px;
+      padding: 4px 8px;
+      border: none;
     }
   }
 
@@ -418,21 +427,30 @@
   .tab-bar-extra {
     display: flex;
     align-items: center;
-    padding-left: 6px;
-    margin-left: 4px;
+    gap: 3px;
+    padding-left: 5px;
+    margin-left: 3px;
     border-left: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
   }
 
   .tab-bar-extra :global(select),
   .tab-bar-extra :global(button) {
     font-size: 11px;
-    padding: 2px 4px;
+    padding: 2px 5px;
     border-radius: 4px;
     background: transparent;
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     color: var(--text-color-muted, #6b7280);
     cursor: pointer;
     transition: color 0.15s, background 0.15s;
+  }
+
+  .tab-bar-extra :global(select.theme-control) {
+    width: 108px;
+  }
+
+  .tab-bar-extra :global(select.locale-control) {
+    width: 88px;
   }
 
   .tab-bar-extra :global(select:hover),

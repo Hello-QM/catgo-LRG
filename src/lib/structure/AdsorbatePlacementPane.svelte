@@ -27,6 +27,9 @@
   import { Canvas } from '@threlte/core'
   import { SvelteMap } from 'svelte/reactivity'
   import StructureScene from './StructureScene.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     structure = $bindable(),
@@ -389,10 +392,10 @@
 </script>
 
 {#snippet pane_content()}
-  <h4>Adsorbate Placement</h4>
+  <h4>{t('structure.adsorbate_placement')}</h4>
 
   {#if adsorption_sites.length === 0}
-    <div class="hint">Find adsorption sites first to enable placement.</div>
+    <div class="hint">{t('structure.find_adsorption_sites_first')}</div>
   {:else}
     <!-- Source type tabs -->
     <div class="source-tabs">
@@ -616,7 +619,7 @@
             onclick={quick_optimize}
             disabled={is_optimizing}
           >
-            {is_optimizing ? `Optimizing...` : `Quick Optimize`}
+            {is_optimizing ? t('structure.optimizing') : t('structure.quick_optimize')}
           </button>
           {#if on_open_optimizer}
             <button
@@ -624,7 +627,7 @@
               class="optimize-btn full"
               onclick={() => on_open_optimizer?.(last_placed_adsorbate_indices)}
             >
-              Full Optimize...
+              {t('structure.full_optimize')}
             </button>
           {/if}
         </div>
@@ -645,7 +648,7 @@
     show_toggle={!embedded}
     pane_props={{ ...pane_props, class: `adsorbate-placement-pane ${pane_props?.class ?? ``}` }}
     toggle_props={{
-      title: pane_open ? `` : `Place Adsorbate`,
+      title: pane_open ? `` : t('structure.place_adsorbate'),
       ...toggle_props,
       class: `adsorbate-placement-toggle ${toggle_props?.class ?? ``}`,
     }}

@@ -1,5 +1,6 @@
 <!-- src/lib/chat/ToolResultRenderer.svelte -->
 <script lang="ts">
+    import { t, load_i18n_module } from '$lib/i18n/index.svelte'
     import type { Snippet } from 'svelte'
 
     interface TableColumn { key: string; label?: string }
@@ -13,6 +14,8 @@
         traceback?: string
         session_id?: string
     }
+
+    load_i18n_module('chat')
 
     let { result }: { result: ToolResultData } = $props()
 
@@ -44,7 +47,7 @@
 
 {#if result.error}
     <div class="tool-result-error">
-        <strong>Error:</strong> {result.error}
+        <strong>{t('chat.tool_result_error_label')}:</strong> {result.error}
         {#if result.traceback}
             <pre class="traceback">{result.traceback}</pre>
         {/if}
@@ -84,7 +87,7 @@
     </div>
 {:else if result.output_type === `image`}
     <div class="tool-result-image">
-        <img src={`data:${result.data.mime || `image/png`};base64,${result.data.data}`} alt="Tool output" />
+        <img src={`data:${result.data.mime || `image/png`};base64,${result.data.data}`} alt={t('chat.tool_result_image_alt')} />
     </div>
 {:else if result.output_type === `electronic_dos` && result.session_id && DosPlot}
     <div class="tool-result-plot">

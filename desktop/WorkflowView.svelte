@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '$lib/i18n/index.svelte'
   import { WorkflowEditor } from '$lib/workflow'
   import * as api from '$lib/api/workflow'
   import { list_v2_workflows, type V2WorkflowSummary } from '$lib/api/workflow-v2'
@@ -90,7 +91,7 @@
     try {
       const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
       const chat_window = new WebviewWindow(`catgo-chat`, {
-        title: `CatGo - AI Chat`,
+        title: t('chat.title') + ' - ' + t('chat.chat_tab'),
         url, width: 500, height: 700, center: true, resizable: true, decorations: true,
       })
       chat_window.once(`tauri://error`, () => {
@@ -209,7 +210,7 @@
     } catch (err) {
       const msg = String(err)
       if (msg.includes(`abort`)) {
-        error = `Cannot connect to backend server. Make sure it is running.`
+        error = t('app.cannot_connect_backend')
       } else {
         error = msg
       }
@@ -240,7 +241,7 @@
   async function create_new() {
     try {
       const graph_json = JSON.stringify({ nodes: [], edges: [] })
-      const wf = await api.create_workflow(`Untitled Workflow`, graph_json)
+      const wf = await api.create_workflow(t('app.untitled_workflow'), graph_json)
       active_workflow_id = wf.id
       view = `editor`
       ondbchange?.()
@@ -261,14 +262,14 @@
   }
 
   async function delete_workflow(id: string, source: string) {
-    if (!confirm(`Delete workflow?`)) return
+    if (!confirm(t('app.confirm_delete_workflow'))) return
     try {
       if (source === `Engine`) {
         // Engine (workflow-v2) workflows have no delete endpoint, and the
         // delete button is only rendered for GUI workflows, so this branch
         // is currently unreachable. Guard explicitly rather than call a
         // non-existent API.
-        throw new Error(`Deleting Engine workflows is not supported`)
+        throw new Error(t('app.delete_engine_unsupported'))
       } else {
         await api.delete_workflow(id)
       }
@@ -333,8 +334,8 @@
   {#if STATIC_ONLY}
     <div class="static-mode-banner-container">
       <StaticModeBanner
-        title="Workflow Engine"
-        message="Workflow execution, HPC integration, and project management require the CatGo desktop app. You can still use the 3D structure viewer and build tools in the browser."
+        title={t('app.static_mode_workflow_title')}
+        message={t('app.static_mode_workflow_message')}
       />
     </div>
   {:else}
@@ -360,7 +361,7 @@
         <div style="position:absolute; top:8px; left:8px; z-index:10;">
           <button class="back-btn" onclick={() => { view = `list`; load_list() }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-            All Workflows
+            {t('common.workflows')}
           </button>
         </div>
         <WorkflowDAGViewer workflow_id={v2_workflow_id} onselect_task={(id) => { v2_selected_task = id }} />
@@ -396,17 +397,17 @@
         <div class="tab-nav">
           <button class="tab-btn" onclick={back_to_projects}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-            Projects
+            {t('common.projects')}
           </button>
-          <button class="tab-btn active">All Workflows</button>
+          <button class="tab-btn active">{t('common.workflows')}</button>
         </div>
         <div class="header-spacer"></div>
         {#if onclose}
-          <button class="back-btn" onclick={onclose} title="Close workflow view">
+          <button class="back-btn" onclick={onclose} title={t('app.close_workflow_view')}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         {/if}
-        <button class="new-btn" onclick={create_new}>+ New Workflow</button>
+        <button class="new-btn" onclick={create_new}>{t('app.new_workflow')}</button>
       </div>
 
       {#if error}
@@ -416,7 +417,7 @@
       <!-- Templates -->
       {#if templates.length > 0}
         <section class="section">
-          <h3 class="section-title">Templates</h3>
+          <h3 class="section-title">{t('common.templates')}</h3>
           <div class="template-grid">
             {#each templates as tmpl (tmpl.id)}
               <button class="template-card" onclick={() => create_from_template(tmpl)}>
@@ -432,15 +433,14 @@
       <!-- Unified workflow list -->
       <section class="section">
         {#if is_loading}
-          <div class="loading">Loading...</div>
+          <div class="loading">{t('common.loading')}</div>
         {:else if unified_workflows.length === 0}
           <div class="empty-state">
-            <p>No workflows yet. Create one or use a template above.</p>
+            <p>{t('app.no_workflows_yet')}</p>
           </div>
         {:else}
           <div class="workflow-list">
-            {#each unified_workflows as wf (`${wf.source}:${wf.id}`)}
-              <div class="workflow-card">
+            {#each unified_workflows as wf (wf.id)}              <div class="workflow-card">
                 <button class="workflow-card-main" onclick={() => {
                   if (wf.source === `Engine`) {
                     v2_workflow_id = wf.id; v2_selected_task = null; view = `v2_dag`
@@ -458,9 +458,9 @@
                     <span class="wf-status {wf.status}">{wf.status.replace(/_/g, ` `)}</span>
                     <span class="wf-steps">
                       {#if wf.source === `GUI` && wf.completed_steps !== undefined}
-                        {wf.completed_steps}/{wf.step_count} steps
+                        {wf.completed_steps}/{t('common.steps_count', { n: wf.step_count ?? 0 })}
                       {:else}
-                        {wf.task_count} tasks
+                        {t('common.tasks_count', { n: wf.task_count })}
                       {/if}
                     </span>
                     {#if wf.created_at}
@@ -472,7 +472,7 @@
                   <button class="wf-delete" onclick={() => {
                     const orig = workflows.find(w => w.id === wf.id)
                     if (orig) delete_workflow(orig.id, `GUI`)
-                  }} title="Delete">
+                  }} title={t('common.delete')}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
                     </svg>

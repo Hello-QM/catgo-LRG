@@ -8,7 +8,18 @@ function render_status(html: string, color = `#888`) {
   target.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;font-family:system-ui;color:${color};padding:2rem;text-align:center;white-space:pre-wrap;font-size:14px">${html}</div>`
 }
 
+function is_ignorable_runtime_error(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err)
+  return message === `ResizeObserver loop completed with undelivered notifications.`
+    || message === `ResizeObserver loop limit exceeded`
+}
+
 function render_error(label: string, err: unknown) {
+  if (is_ignorable_runtime_error(err)) {
+    console.debug(`[CatGo] Ignored runtime browser notification:`, err)
+    return
+  }
+
   const detail = err instanceof Error
     ? `${err.name}: ${err.message}\n\n${err.stack ?? ``}`
     : String(err)

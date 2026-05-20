@@ -2,6 +2,10 @@
   import { Icon } from '$lib'
   import type { PymatgenStructure } from './index'
   import { parse_structure_file } from './parse'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   interface Props {
     visible: boolean
@@ -26,7 +30,7 @@
 
   function handle_import() {
     if (!content.trim()) {
-      error_message = `Please paste the file content`
+      error_message = t('structure.paste_file_content')
       return
     }
 
@@ -41,11 +45,11 @@
         error_message = null
         onclose()
       } else {
-        error_message = `Failed to parse structure. Please check the format and content.`
+        error_message = t('structure.failed_parse')
       }
     } catch (err) {
       console.error(`Failed to parse pasted content:`, err)
-      error_message = `Parse error: ${err instanceof Error ? err.message : String(err)}`
+      error_message = `${t('structure.parse_error')} ${err instanceof Error ? err.message : String(err)}`
     }
   }
 
@@ -76,14 +80,14 @@
   <div class="modal-overlay" onclick={handle_click_outside}>
     <div class="modal-content" bind:this={modal_element} role="dialog" aria-modal="true">
       <div class="modal-header">
-        <h2>Paste Structure Content</h2>
-        <button class="close-btn" onclick={onclose} aria-label="Close">×</button>
+        <h2>{t('structure.paste_structure_content')}</h2>
+        <button class="close-btn" onclick={onclose} aria-label={t('common.close')}>×</button>
       </div>
 
       <div class="modal-body">
         <!-- Format selection -->
         <div class="format-section">
-          <label for="format-select">Format:</label>
+          <label for="format-select">{t('structure.format')}</label>
           <div class="format-presets">
             {#each format_presets as preset (preset.filename)}
               <button
@@ -97,7 +101,7 @@
             {/each}
           </div>
           <div class="filename-input">
-            <label for="filename-input">Or custom filename:</label>
+            <label for="filename-input">{t('structure.custom_filename')}</label>
             <input
               id="filename-input"
               type="text"
@@ -109,7 +113,7 @@
 
         <!-- Content textarea -->
         <div class="content-section">
-          <label for="content-input">Paste POSCAR/CONTCAR or other structure file content:</label>
+          <label for="content-input">{t('structure.paste_content_desc')}</label>
           <textarea
             id="content-input"
             bind:value={content}
@@ -128,7 +132,7 @@ Direct
           ></textarea>
           <div class="content-hint">
             <Icon icon="Info" />
-            <span>Supports POSCAR/CONTCAR, CIF, XYZ, Extended XYZ formats. Press Ctrl+Enter to import.</span>
+            <span>{t('structure.paste_hint')}</span>
           </div>
         </div>
 
@@ -142,7 +146,7 @@ Direct
         <!-- Action buttons -->
         <div class="action-buttons">
           <button type="button" class="cancel-btn" onclick={onclose}>
-            Cancel
+            {t('common.cancel')}
           </button>
           <button
             type="button"
@@ -150,7 +154,7 @@ Direct
             onclick={handle_import}
             disabled={!content.trim()}
           >
-            <Icon icon="Download" /> Import Structure
+            <Icon icon="Download" /> {t('structure.import_structure')}
           </button>
         </div>
       </div>

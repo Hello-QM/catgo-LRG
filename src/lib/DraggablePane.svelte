@@ -529,18 +529,20 @@
 
 {#if show_pane}
   {#if show_toggle}
-    <button
-      type="button"
-      bind:this={toggle_pane_btn}
-      aria-expanded={show}
-      {...toggle_props}
-      style={`font-size: clamp(1em, 2.2cqw, 1.2em); ${toggle_props.style ?? ``}`}
-      onclick={toggle_pane}
-      class="pane-toggle {show ? `active` : ``} {toggle_props.class ?? ``}"
-      {@attach tooltip({ content: toggle_props.title ?? (show ? `Close pane` : `Open pane`) })}
-    >
-      <Icon icon={show ? open_icon : closed_icon} style={icon_style} />
-    </button>
+    <span class="pane-toggle-tooltip-wrap">
+      <button
+        type="button"
+        bind:this={toggle_pane_btn}
+        aria-expanded={show}
+        {...toggle_props}
+        style={`font-size: clamp(1em, 2.2cqw, 1.2em); ${toggle_props.style ?? ``}`}
+        onclick={toggle_pane}
+        class="pane-toggle {show ? `active` : ``} {toggle_props.class ?? ``}"
+      >
+        <Icon icon={show ? open_icon : closed_icon} style={icon_style} />
+      </button>
+      <span class="pane-toggle-tooltip" role="tooltip">{toggle_props.title ?? (show ? `Close pane` : `Open pane`)}</span>
+    </span>
   {/if}
 
   <div
@@ -616,6 +618,51 @@
 {/if}
 
 <style>
+  .pane-toggle-tooltip-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .pane-toggle-tooltip {
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 8px);
+    transform: translateX(-50%) translateY(-4px);
+    padding: 7px 12px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(17, 17, 17, 0.96);
+    color: #f5f5f5;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    z-index: 100000010;
+    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+  }
+  .pane-toggle-tooltip-wrap:hover .pane-toggle-tooltip,
+  .pane-toggle-tooltip-wrap:focus-within .pane-toggle-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+  .pane-toggle-tooltip::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 100%;
+    width: 9px;
+    height: 9px;
+    background: inherit;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    transform: translate(-50%, 50%) rotate(45deg);
+  }
   button.pane-toggle {
     box-sizing: border-box;
     display: flex;

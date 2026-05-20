@@ -2,6 +2,7 @@
   import { untrack } from 'svelte'
   import { Icon } from '$lib'
   import type { AnyStructure } from '$lib'
+  import { t } from '$lib/i18n/index.svelte'
   import { API_BASE } from '$lib/api/config'
   import {
     get_chat_slice,
@@ -53,13 +54,28 @@
   let test_message = $state(``)
   let test_latency = $state(0)
 
+  // Custom OpenAI-compatible provider model discovery state
+  let fetch_models_status = $state<`idle` | `loading` | `success` | `error`>(`idle`)
+  let fetch_models_message = $state(``)
+
+  // Migrate older localStorage configs that predate dynamic model discovery.
+  $effect(() => {
+    const patch: Partial<typeof chat_config> = {}
+    if (!chat_config.api_format) patch.api_format = `auto`
+    if (!chat_config.fetched_models) patch.fetched_models = {}
+    if (Object.keys(patch).length > 0) update_config(patch)
+  })
+
   // Reset test status when provider/key/model changes
   $effect(() => {
     void chat_config.provider
     void chat_config.api_key
     void chat_config.model
+    void chat_config.base_url
     test_status = `idle`
     test_message = ``
+    fetch_models_status = `idle`
+    fetch_models_message = ``
   })
 
   // Fetch providers on mount
@@ -85,21 +101,59 @@
           provider_id: chat_config.provider,
           api_key: chat_config.api_key || undefined,
           model: chat_config.model || undefined,
-          base_url: chat_config.base_url || undefined,
+          base_url: (chat_config.provider === `custom` || chat_config.provider === `ollama`) ? chat_config.base_url || undefined : undefined,
+          api_format: (chat_config.provider === `custom` || chat_config.provider === `anthropic`) ? chat_config.api_format : undefined,
         }),
       })
       const data = await resp.json()
       if (data.success) {
         test_status = `success`
         test_latency = Math.round(data.latency_ms ?? 0)
-        test_message = `Connected (${test_latency}ms)`
+        test_message = t('chat.provider_test_connected', { ms: test_latency })
       } else {
         test_status = `error`
-        test_message = data.error || `Connection failed`
+        test_message = data.error || t('chat.provider_test_failed')
       }
     } catch {
       test_status = `error`
-      test_message = `Cannot reach backend server`
+      test_message = t('chat.provider_test_backend_unreachable')
+    }
+  }
+
+  async function fetch_provider_models() {
+    fetch_models_status = `loading`
+    fetch_models_message = ``
+    try {
+      const resp = await fetch(`${API_BASE}/chat/providers/models`, {
+        method: `POST`,
+        headers: { 'Content-Type': `application/json` },
+        body: JSON.stringify({
+          provider_id: chat_config.provider,
+          api_key: chat_config.api_key || undefined,
+          base_url: chat_config.provider === `custom` ? chat_config.base_url || undefined : undefined,
+          api_format: (chat_config.provider === `custom` || chat_config.provider === `anthropic`) ? chat_config.api_format : undefined,
+        }),
+      })
+      const data = await resp.json()
+      if (data.success && Array.isArray(data.models)) {
+        const models = data.models as { id: string; label: string }[]
+        const updates: Partial<typeof chat_config> = {
+          fetched_models: { ...(chat_config.fetched_models ?? {}), [chat_config.provider]: models },
+          model: models[0]?.id ?? chat_config.model,
+        }
+        if (chat_config.provider === `custom` && data.api_format) {
+          updates.api_format = data.api_format
+        }
+        update_config(updates)
+        fetch_models_status = `success`
+        fetch_models_message = t('chat.models_loaded', { n: models.length.toString() })
+      } else {
+        fetch_models_status = `error`
+        fetch_models_message = data.error || t('chat.models_load_failed')
+      }
+    } catch {
+      fetch_models_status = `error`
+      fetch_models_message = t('chat.provider_test_backend_unreachable')
     }
   }
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -888,7 +942,7 @@
     <div class="pdf-drop-overlay">
       <div class="pdf-drop-label">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="12" y2="12"/><line x1="15" y1="15" x2="12" y2="12"/></svg>
-        Drop PDF to import paper
+        {t('chat.import_paper_pdf')}
       </div>
     </div>
   {/if}
@@ -896,12 +950,12 @@
   <div class="chat-header">
     <div class="chat-header-left">
       <Icon icon="Zap" style="width: 1.1em; height: 1.1em; vertical-align: -2px; color: var(--accent-color, #007acc)" />
-      <span class="chat-header-title">CatBot</span>
+      <span class="chat-header-title">{t('chat.title')}</span>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-      <div class="chat-status-badge" onclick={() => { settings_open = !settings_open }} title="Click to open settings">
+      <div class="chat-status-badge" onclick={() => { settings_open = !settings_open }} title={t('chat.open_settings')}>
         {PROVIDER_META[chat_config.provider]?.label ?? chat_config.provider}
         <span class="badge-model">
-          {get_models(chat_config.provider, providers)?.find((m) => m.id === chat_config.model)?.label ?? (chat_config.model || `Default`)}
+          {get_models(chat_config.provider, providers, chat_config.fetched_models ?? {})?.find((m) => m.id === chat_config.model)?.label ?? (chat_config.model || t('chat.default_model'))}
         </span>
       </div>
     </div>
@@ -912,7 +966,7 @@
           type="button"
           class="chat-action-btn"
           class:active={chat_position.value === `right`}
-          title="Dock right"
+          title={t('chat.dock_right')}
           onclick={() => set_chat_position(`right`)}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -923,7 +977,7 @@
           type="button"
           class="chat-action-btn"
           class:active={chat_position.value === `bottom`}
-          title="Dock bottom"
+          title={t('chat.dock_bottom')}
           onclick={() => set_chat_position(`bottom`)}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -933,7 +987,7 @@
         <button
           type="button"
           class="chat-action-btn"
-          title="Open in new window"
+          title={t('chat.open_in_new_window')}
           onclick={() => { set_chat_position(`popout`); on_popout?.() }}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -946,7 +1000,7 @@
         <button
           type="button"
           class="chat-action-btn"
-          title="New chat"
+          title={t('chat.new_chat')}
           onclick={() => clear_chat_history(tab_slice_id)}
         >
           <Icon icon="Reset" style="width: 1em; height: 1em" />
@@ -955,7 +1009,7 @@
       <button
         type="button"
         class="chat-action-btn"
-        title="Settings"
+        title={t('chat.settings')}
         onclick={() => { settings_open = !settings_open }}
       >
         <Icon icon="Settings" style="width: 1em; height: 1em" />
@@ -964,7 +1018,7 @@
         <button
           type="button"
           class="chat-action-btn"
-          title="Close"
+          title={t('chat.close')}
           onclick={on_close}
         >
           <Icon icon="Cross" style="width: 1em; height: 1em" />
@@ -978,40 +1032,40 @@
     <section class="chat-settings">
       <!-- Provider selector grouped by type -->
       <div class="param-row">
-        <span>Provider</span>
+        <span>{t('chat.provider')}</span>
         <select
           value={chat_config.provider}
           onchange={(e) => {
             const provider = (e.target as HTMLSelectElement).value as LLMProvider
             const mode = default_mode_for(provider)
-            const models = get_models(provider, providers)
+            const models = get_models(provider, providers, chat_config.fetched_models ?? {})
             const default_model = models.length > 0 ? models[0].id : ``
             const backend_info = providers.find((p) => p.id === provider)
             update_config({
               provider,
               model: default_model,
               mode,
-              base_url: backend_info?.base_url ?? ``,
+              base_url: provider === `custom` || provider === `ollama` ? backend_info?.base_url ?? chat_config.base_url : backend_info?.base_url ?? ``,
             })
           }}
         >
-          <optgroup label="Local (Free)">
+          <optgroup label={t('chat.local_free')}>
             <option value="ollama">
-              Ollama{is_available(`ollama`, providers) ? ` (recommended)` : ` (not running)`}
+              Ollama{is_available(`ollama`, providers) ? ` (${t('chat.recommended')})` : ` (${t('chat.not_running')})`}
             </option>
           </optgroup>
-          <optgroup label="SDK Agents">
+          <optgroup label={t('chat.sdk_agents')}>
             {#each [`sdk-claude`, `sdk-gemini`, `sdk-codex`] as id}
               {@const meta = PROVIDER_META[id]}
               <option value={id}>
-                {meta?.label ?? id}{is_available(id, providers) ? `` : ` (not installed)`}
+                {meta?.label ?? id}{is_available(id, providers) ? `` : ` (${t('chat.not_installed')})`}
               </option>
             {/each}
           </optgroup>
-          <optgroup label="API Providers (API Key)">
-            {#each [`deepseek`, `qwen`, `kimi`, `zhipu`, `gemini`] as id}
+          <optgroup label={t('chat.api_providers')}>
+            {#each [`deepseek`, `qwen`, `kimi`, `zhipu`, `gemini`, `anthropic`, `custom`] as id}
               {@const meta = PROVIDER_META[id]}
-              <option value={id}>{meta?.label ?? id}</option>
+              <option value={id}>{id === `custom` ? t('chat.custom_provider') : meta?.label ?? id}</option>
             {/each}
           </optgroup>
         </select>
@@ -1022,87 +1076,110 @@
         {@const info = CLI_INSTALL_INFO[chat_config.provider]}
         {#if info}
           <div class="install-guidance">
-            <p class="install-msg"><strong>{info.name}</strong> is not installed.</p>
+            <p class="install-msg"><strong>{info.name}</strong> {t('chat.install_missing', { name: '' })}</p>
             <div class="install-command">
               <code>{info.command}</code>
               <button
                 type="button"
                 class="copy-install-btn"
-                title="Copy command"
+                title={t('chat.copy_command_title')}
                 onclick={() => navigator.clipboard.writeText(info.command)}
-              >Copy</button>
+              >{t('chat.copy_command')}</button>
             </div>
             <p class="install-hint">
-              Run this in your terminal, then restart CatGO.
-              <a href={info.url} target="_blank" rel="noopener noreferrer">Learn more</a>
+              {t('chat.run_terminal_hint')}
+              <a href={info.url} target="_blank" rel="noopener noreferrer">{t('chat.learn_more')}</a>
             </p>
           </div>
         {/if}
       {/if}
 
       <!-- Model selector -->
-      {#if get_models(chat_config.provider, providers).length > 0}
-        <div class="param-row">
-          <span>Model</span>
-          <select
-            value={chat_config.model}
-            onchange={(e) => update_config({ model: (e.target as HTMLSelectElement).value })}
-          >
-            {#each get_models(chat_config.provider, providers) as model}
-              <option value={model.id}>{model.label}</option>
-            {/each}
-          </select>
+      <div class="param-row model-action-row">
+        <span>{t('chat.model')}</span>
+        <div class="model-control-group">
+          {#if get_models(chat_config.provider, providers, chat_config.fetched_models ?? {}).length > 0}
+            <select
+              value={chat_config.model}
+              onchange={(e) => update_config({ model: (e.target as HTMLSelectElement).value })}
+            >
+              {#each get_models(chat_config.provider, providers, chat_config.fetched_models ?? {}) as model}
+                <option value={model.id}>{model.label}</option>
+              {/each}
+            </select>
+          {:else}
+            <input
+              type="text"
+              value={chat_config.model}
+              placeholder={t('chat.model_name_placeholder')}
+              oninput={(e) => update_config({ model: (e.target as HTMLInputElement).value.trim() })}
+            />
+          {/if}
+          {#if !SDK_PROVIDERS.has(chat_config.provider) && chat_config.provider !== `ollama`}
+            <button
+              type="button"
+              class="test-btn compact"
+              disabled={fetch_models_status === `loading`}
+              onclick={fetch_provider_models}
+            >
+              {fetch_models_status === `loading` ? t('chat.loading_models') : t('chat.fetch_models')}
+            </button>
+            <button
+              type="button"
+              class="test-btn compact"
+              disabled={test_status === `testing`}
+              onclick={test_provider_connection}
+            >
+              {test_status === `testing` ? t('chat.testing') : t('chat.test_connection')}
+            </button>
+          {/if}
         </div>
-      {:else}
-        <div class="param-row">
-          <span>Model</span>
-          <input
-            type="text"
-            value={chat_config.model}
-            placeholder="model name"
-            oninput={(e) => update_config({ model: (e.target as HTMLInputElement).value.trim() })}
-          />
-        </div>
+      </div>
+      {#if fetch_models_status === `success`}
+        <div class="inline-status test-ok">{fetch_models_message}</div>
+      {:else if fetch_models_status === `error`}
+        <div class="inline-status test-fail">{fetch_models_message}</div>
+      {/if}
+      {#if test_status === `success`}
+        <div class="inline-status test-ok">{test_message}</div>
+      {:else if test_status === `error`}
+        <div class="inline-status test-fail">{test_message}</div>
       {/if}
 
       <!-- API Key (only for API providers) -->
       {#if !SDK_PROVIDERS.has(chat_config.provider) && chat_config.provider !== `ollama`}
         <div class="param-row">
-          <span>API Key</span>
+          <span>{t('chat.api_key')}</span>
           <input
             type="password"
             value={chat_config.api_key}
-            placeholder="sk-... (or use server env)"
+            placeholder={t('chat.api_key_placeholder')}
             oninput={(e) => update_config({ api_key: (e.target as HTMLInputElement).value.trim() })}
           />
         </div>
-        <div class="test-row">
-          <button
-            type="button"
-            class="test-btn"
-            disabled={test_status === `testing`}
-            onclick={test_provider_connection}
-          >
-            {test_status === `testing` ? `Testing...` : `Test Connection`}
-          </button>
-          {#if test_status === `success`}
-            <span class="test-result test-ok">{test_message}</span>
-          {:else if test_status === `error`}
-            <span class="test-result test-fail">{test_message}</span>
-          {/if}
-        </div>
       {/if}
 
-      <!-- Custom base URL for universal providers -->
-      {#if chat_config.mode === `universal`}
+      <!-- Custom base URL and dynamic model discovery -->
+      {#if chat_config.provider === `custom`}
         <div class="param-row">
-          <span>Base URL</span>
+          <span>{t('chat.base_url')}</span>
           <input
             type="text"
             value={chat_config.base_url}
-            placeholder="https://api.example.com/v1"
+            placeholder={t('chat.base_url_placeholder')}
             oninput={(e) => update_config({ base_url: (e.target as HTMLInputElement).value.trim() })}
           />
+        </div>
+        <div class="param-row">
+          <span>{t('chat.api_format')}</span>
+          <select
+            value={chat_config.api_format}
+            onchange={(e) => update_config({ api_format: (e.target as HTMLSelectElement).value as typeof chat_config.api_format })}
+          >
+            <option value="auto">{t('chat.api_format_auto')}</option>
+            <option value="openai">{t('chat.api_format_openai')}</option>
+            <option value="anthropic">{t('chat.api_format_anthropic')}</option>
+          </select>
         </div>
       {/if}
 
@@ -1158,11 +1235,11 @@
         {#if chat_config.provider === `ollama`}
           Free local inference &mdash; no API key needed. Install Ollama and pull a model to get started.
         {:else if chat_config.mode === `sdk`}
-          SDK agent mode &mdash; tools and streaming via Agent SDK bridge.
+          {t('chat.sdk_mode_desc')}
         {:else if chat_config.mode === `universal`}
-          OpenAI-compatible mode via backend
+          {t('chat.universal_mode_desc')}
         {:else}
-          Backend proxy mode (requires server with API key)
+          {t('chat.proxy_mode_desc')}
         {/if}
       </p>
     </section>
@@ -1170,9 +1247,9 @@
 
   <!-- Tab Bar -->
   <div class="tab-bar">
-    <button type="button" class:active={active_tab === `chat`} onclick={() => active_tab = `chat`}>Chat</button>
-    <button type="button" class:active={active_tab === `context`} onclick={() => active_tab = `context`}>Context</button>
-    <button type="button" class:active={active_tab === `sessions`} onclick={() => active_tab = `sessions`}>Sessions</button>
+    <button type="button" class:active={active_tab === `chat`} onclick={() => active_tab = `chat`}>{t('chat.chat_tab')}</button>
+    <button type="button" class:active={active_tab === `context`} onclick={() => active_tab = `context`}>{t('chat.context_tab')}</button>
+    <button type="button" class:active={active_tab === `sessions`} onclick={() => active_tab = `sessions`}>{t('chat.sessions_tab')}</button>
   </div>
 
   <!-- Tab content -->
@@ -1185,8 +1262,8 @@
           <div class="welcome-icon">
             <Icon icon="NeuralNetwork" style="width: 48px; height: 48px; opacity: 0.5" />
           </div>
-          <p class="welcome-title">How can I help?</p>
-          <p class="welcome-hint">Ask about your structure, visualize data, or run analysis tools.</p>
+          <p class="welcome-title">{t('chat.welcome_title')}</p>
+          <p class="welcome-hint">{t('chat.welcome_hint')}</p>
           <div class="suggestion-chips">
             {#each suggestion_chips as chip}
               <button type="button" class="chip" onclick={() => handle_send(chip)}>{chip}</button>
@@ -1207,7 +1284,7 @@
               {#if msg.role === `user`}
                 <div class="bubble-sender sender-user">{chat_username.value}</div>
               {:else}
-                <div class="bubble-sender sender-ai">CatBot</div>
+                <div class="bubble-sender sender-ai">{t('chat.catbot')}</div>
               {/if}
               <div class="chat-bubble chat-bubble-{msg.role}">
                 {#if msg.role === `assistant` && !get_display_text(msg.content) && slice.loading.value}
@@ -1217,7 +1294,7 @@
                     <span class="dot"></span>
                     {#if SDK_PROVIDERS.has(chat_config.provider) && elapsed_seconds > 0}
                       <span class="elapsed-label">
-                        {PROVIDER_META[chat_config.provider]?.label} processing... {elapsed_seconds}s
+                        {PROVIDER_META[chat_config.provider]?.label} {t('chat.processing')} {elapsed_seconds}s
                       </span>
                     {/if}
                   </span>
@@ -1295,7 +1372,7 @@
                   type="button"
                   class="hover-btn"
                   class:speaking={speaking_idx === idx}
-                  title={speaking_idx === idx ? `Stop` : `Read aloud`}
+                  title={speaking_idx === idx ? t('chat.stop') : t('chat.read_aloud')}
                   onclick={() => speak_message(idx)}
                 >
                   {#if speaking_idx === idx}
@@ -1308,7 +1385,7 @@
               <button
                 type="button"
                 class="hover-btn"
-                title="Quote reply"
+                title={t('chat.quote_reply')}
                 onclick={() => quote_message(idx)}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 10 20 15 15 20"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/></svg>
@@ -1316,7 +1393,7 @@
               <button
                 type="button"
                 class="hover-btn"
-                title={copied_idx === idx ? `Copied!` : `Copy`}
+                title={copied_idx === idx ? t('chat.copied') : t('chat.copy')}
                 onclick={() => copy_message(idx)}
               >
                 {#if copied_idx === idx}
@@ -1334,7 +1411,7 @@
           <div class="error">
             {friendly_error(slice.error.value)}
             {#if last_user_msg}
-              <button type="button" class="error-retry-btn" onclick={retry_last}>Retry</button>
+              <button type="button" class="error-retry-btn" onclick={retry_last}>{t('chat.retry')}</button>
             {/if}
           </div>
         </div>
@@ -1342,7 +1419,7 @@
     </div>
     {#if user_scrolled_up && slice.loading.value}
       <button type="button" class="jump-to-latest" onclick={scroll_to_bottom}>
-        ↓ Jump to latest
+        ↓ {t('chat.jump_to_latest')}
       </button>
     {/if}
 
@@ -1351,10 +1428,10 @@
       <div class="activity-bar">
         <div class="activity-bar-pulse"></div>
         <span class="activity-bar-text">
-          {current_action || `Thinking`}{elapsed_seconds > 0 ? ` · ${elapsed_seconds}s` : ``}
+          {current_action || t('chat.thinking')}{elapsed_seconds > 0 ? ` · ${elapsed_seconds}s` : ``}
         </span>
-        <button type="button" class="activity-bar-stop" title="Stop generation" onclick={() => cancel_generation(tab_slice_id)}>
-          Stop
+        <button type="button" class="activity-bar-stop" title={t('chat.stop_generation')} onclick={() => cancel_generation(tab_slice_id)}>
+          {t('chat.stop')}
         </button>
       </div>
     {/if}
@@ -1363,13 +1440,13 @@
     {#if pdf_uploading}
       <div class="pdf-upload-status uploading">
         <div class="pdf-upload-spinner"></div>
-        <span>Uploading <strong>{pdf_uploading}</strong>...</span>
+        <span>{t('chat.uploading')} <strong>{pdf_uploading}</strong>...</span>
       </div>
     {/if}
     {#if pdf_upload_success}
       <div class="pdf-upload-status success">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-        <span><strong>{pdf_upload_success}</strong> imported</span>
+        <span><strong>{pdf_upload_success}</strong> {t('chat.imported')}</span>
       </div>
     {/if}
 
@@ -1378,8 +1455,8 @@
       {#if slice.paper_session.session_id}
         <div class="paper-badge">
           <Icon icon="Paper" style="width: 0.9em; height: 0.9em" />
-          <span class="paper-title">{slice.paper_session.title || `Paper loaded`}</span>
-          <button type="button" class="paper-clear" title="Remove paper" onclick={handle_clear_paper}>
+          <span class="paper-title">{slice.paper_session.title || t('chat.paper_loaded')}</span>
+          <button type="button" class="paper-clear" title={t('chat.remove_paper')} onclick={handle_clear_paper}>
             <Icon icon="Cross" style="width: 0.7em; height: 0.7em" />
           </button>
         </div>
@@ -1388,10 +1465,10 @@
         <div class="quote-preview">
           <div class="quote-bar"></div>
           <div class="quote-content">
-            <span class="quote-sender">{quoted_role === `user` ? chat_username.value : `CatBot`}</span>
+            <span class="quote-sender">{quoted_role === `user` ? chat_username.value : t('chat.catbot')}</span>
             <span class="quote-text">{quoted_text}</span>
           </div>
-          <button type="button" class="quote-clear" title="Remove quote" onclick={clear_quote}>
+          <button type="button" class="quote-clear" title={t('chat.remove_quote')} onclick={clear_quote}>
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -1410,7 +1487,7 @@
                 {/if}
               </span>
               <span class="attachment-name">{att.name}</span>
-              <button type="button" class="attachment-remove" title="Remove" onclick={() => remove_attachment(i)}>
+              <button type="button" class="attachment-remove" title={t('chat.remove_attachment')} onclick={() => remove_attachment(i)}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
@@ -1438,7 +1515,7 @@
         <button
           type="button"
           class="chat-attach-btn"
-          title="Import paper (PDF)"
+          title={t('chat.import_paper_pdf')}
           onclick={() => file_input_el?.click()}
           disabled={slice.loading.value}
         >
@@ -1447,7 +1524,7 @@
         <button
           type="button"
           class="chat-attach-btn"
-          title="Attach file"
+          title={t('chat.attach_file')}
           onclick={() => attach_input_el?.click()}
           disabled={slice.loading.value}
         >
@@ -1457,7 +1534,7 @@
           type="button"
           class="chat-voice-btn"
           class:recording={voice_recording}
-          title={voice_recording ? `Stop recording` : `Voice input`}
+          title={voice_recording ? t('chat.stop_recording') : t('chat.voice_input')}
           onclick={toggle_voice}
           disabled={slice.loading.value}
         >
@@ -1471,7 +1548,7 @@
           type="button"
           class="chat-voice-chat-btn"
           class:active={voice_chat_mode}
-          title={voice_chat_mode ? `Stop voice chat` : `Voice conversation mode`}
+          title={voice_chat_mode ? t('chat.stop') : t('chat.voice_conversation_mode')}
           onclick={toggle_voice_chat}
           disabled={slice.loading.value}
         >
@@ -1479,7 +1556,7 @@
         </button>
         <textarea
           class="chat-input"
-          placeholder={voice_chat_mode ? `Voice chat active — speak to send...` : slice.paper_session.session_id ? `Ask about this paper...` : `Ask about your structure, or paste a DOI...`}
+          placeholder={voice_chat_mode ? t('chat.voice_chat_active') : slice.paper_session.session_id ? t('chat.ask_about_paper') : t('chat.ask_about_structure')}
           rows="1"
           bind:value={input_text}
           bind:this={textarea_el}
@@ -1491,15 +1568,15 @@
         ></textarea>
         {#if slice.loading.value}
           {#if input_text.trim()}
-            <button type="button" class="chat-send-btn" title="Send after current reply" onclick={() => handle_send()}>
+            <button type="button" class="chat-send-btn" title={t('chat.send_after_current_reply')} onclick={() => handle_send()}>
               <Icon icon="ArrowUp" style="width: 14px; height: 14px" />
             </button>
           {/if}
-          <button type="button" class="chat-send-btn stop" title="Stop" onclick={() => cancel_generation(tab_slice_id)}>
+          <button type="button" class="chat-send-btn stop" title={t('chat.stop')} onclick={() => cancel_generation(tab_slice_id)}>
             <Icon icon="Disabled" style="width: 14px; height: 14px" />
           </button>
         {:else}
-          <button type="button" class="chat-send-btn" title="Send" onclick={() => handle_send()} disabled={!input_text.trim()}>
+          <button type="button" class="chat-send-btn" title={t('chat.send')} onclick={() => handle_send()} disabled={!input_text.trim()}>
             <Icon icon="ArrowUp" style="width: 14px; height: 14px" />
           </button>
         {/if}
@@ -1521,18 +1598,18 @@
       />
       <div class="input-hint-row">
         {#if slice.skip_permission.value}
-          <span class="input-hint skip-warn">⚠️ skip-permission ON — tools run without asking</span>
+          <span class="input-hint skip-warn">{t('chat.skip_permission_on')}</span>
         {:else if slice.pending_send?.value}
-          <span class="input-hint queued">⏳ Queued — sends when the current reply finishes</span>
+          <span class="input-hint queued">{t('chat.send_queued')}</span>
         {:else if slice.loading.value}
-          <span class="input-hint">Enter to queue · sends after the current reply · Esc stops</span>
+          <span class="input-hint">{t('chat.enter_to_queue')}</span>
         {:else}
-          <span class="input-hint">Enter send · Shift+Enter newline · Esc cancel</span>
+          <span class="input-hint">{t('chat.enter_send')}</span>
         {/if}
         <select
           class="voice-lang-select"
           bind:value={voice_language}
-          title="Voice language"
+          title={t('chat.voice_language')}
         >
           {#each VOICE_LANGUAGES as lang}
             <option value={lang.code}>{lang.label}</option>
@@ -1544,19 +1621,19 @@
   {:else if active_tab === `context`}
     <div class="context-tab">
       {#if slice.paper_context.value}
-        <div class="context-divider">Paper Context</div>
+        <div class="context-divider">{t('chat.paper_context_header')}</div>
         <pre class="context-pre">{slice.paper_context.value.slice(0, 2000)}{slice.paper_context.value.length > 2000 ? `\n... (${slice.paper_context.value.length} chars total)` : ``}</pre>
       {/if}
       {#if slice.structure_context.value}
         <pre class="context-pre">{slice.structure_context.value}</pre>
       {:else if !slice.paper_context.value}
         <div class="context-empty">
-          <p>No structure or paper loaded.</p>
-          <p class="hint">Load a structure or import a paper to see context information sent to the AI.</p>
+          <p>{t('chat.no_structure_or_paper')}</p>
+          <p class="hint">{t('chat.context_hint')}</p>
         </div>
       {/if}
       {#if slice.workflow_context.value}
-        <div class="context-divider">Workflow Context</div>
+        <div class="context-divider">{t('chat.workflow_context_header')}</div>
         <pre class="context-pre">{slice.workflow_context.value}</pre>
       {/if}
     </div>
@@ -1566,13 +1643,13 @@
       <div class="sessions-header">
         <button type="button" class="new-session-btn" onclick={handle_new_session}>
           <Icon icon="Plus" style="width: 0.9em; height: 0.9em" />
-          New Session
+          {t('chat.new_session_title')}
         </button>
       </div>
 
       {#if all_sessions.length === 0}
         <div class="context-empty">
-          <p>{sessions_loading ? `Loading...` : `No sessions yet.`}</p>
+          <p>{sessions_loading ? t('chat.loading_sessions') : t('chat.no_sessions_yet')}</p>
         </div>
       {:else}
         <div class="session-list">
@@ -1587,22 +1664,22 @@
                 <div class="session-card-header">
                   <span class="session-agent-badge">{AGENT_LABELS[s.agent] ?? s.agent}</span>
                   {#if is_active_session(s)}
-                    <span class="session-active-dot" title="Current session"></span>
+                    <span class="session-active-dot" title={t('chat.current_session')}></span>
                   {/if}
                   <span class="session-time">{format_time_ago(s.last_active)}</span>
                 </div>
-                <div class="session-topic">{s.topic || `New session`}</div>
+                <div class="session-topic">{s.topic || t('chat.new_session_topic')}</div>
                 <div class="session-meta">
                   {#if s.model}
                     <span class="session-model">{s.model}</span>
                   {/if}
-                  <span class="session-msg-count">{s.message_count} messages</span>
+                  <span class="session-msg-count">{t('chat.messages_count', { n: s.message_count.toString() })}</span>
                 </div>
               </button>
               <button
                 type="button"
                 class="session-delete-btn"
-                title="Delete session"
+                title={t('chat.delete_session')}
                 onclick={(e) => { e.stopPropagation(); handle_delete_session(s) }}
               >
                 <Icon icon="Cross" style="width: 0.75em; height: 0.75em" />
@@ -1620,6 +1697,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-width: 0;
     position: relative;
     background: var(--pane-bg, light-dark(rgb(229, 231, 235), rgb(28, 29, 33)));
     border-left: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
@@ -1703,18 +1781,29 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 6px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--pane-card-border, rgba(0, 0, 0, 0.08));
     flex-shrink: 0;
+    min-width: 0;
   }
   .chat-header-left {
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    flex: 1;
   }
   .chat-header-title {
     font-weight: 700;
     font-size: 1.05em;
+    white-space: nowrap;
+  }
+  .chat-status-badge {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chat-version-badge {
     font-size: 0.7em;
@@ -1726,6 +1815,7 @@
   .chat-header-actions {
     display: flex;
     gap: 2px;
+    flex-shrink: 0;
   }
   .chat-action-btn {
     display: flex;
@@ -1785,6 +1875,37 @@
     border: 1px solid var(--pane-input-border, rgba(0, 0, 0, 0.1));
     background: var(--pane-input-bg, rgba(0, 0, 0, 0.03));
     color: inherit;
+  }
+  .chat-settings select {
+    color-scheme: inherit;
+  }
+  .chat-settings select option,
+  .chat-settings select optgroup {
+    background: var(--dialog-bg, light-dark(#fff, #1c1d21));
+    color: var(--text-color, light-dark(#374151, #eee));
+  }
+  .chat-settings select optgroup {
+    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+  }
+  .model-control-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+  }
+  .model-control-group select,
+  .model-control-group input {
+    flex: 1 1 8em;
+    min-width: 0;
+  }
+  .test-btn.compact {
+    flex: 0 0 auto;
+    padding-inline: 8px;
+  }
+  .inline-status {
+    margin: -2px 0 6px 68px;
+    font-size: 0.78em;
   }
   .temp-value {
     min-width: 2em;
@@ -1939,11 +2060,13 @@
   .chat-messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 6px 8px;
     display: flex;
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+    min-width: 0;
   }
 
   /* Welcome state */
@@ -1953,9 +2076,12 @@
     align-items: center;
     justify-content: center;
     flex: 1;
+    width: 100%;
+    min-width: 0;
     text-align: center;
     padding: 2em 1em;
     gap: 8px;
+    box-sizing: border-box;
   }
   .welcome-icon {
     margin-bottom: 4px;
@@ -1976,7 +2102,8 @@
     flex-wrap: wrap;
     justify-content: center;
     gap: 6px;
-    max-width: 320px;
+    max-width: min(320px, 100%);
+    min-width: 0;
   }
   .chip {
     font-size: 0.8em;
@@ -1987,6 +2114,10 @@
     color: inherit;
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chip:hover {
     background: color-mix(in srgb, var(--accent-color, #007acc) 12%, transparent);
@@ -2344,12 +2475,16 @@
     padding: 4px 4px 4px 4px;
     background: var(--pane-input-bg, rgba(0, 0, 0, 0.03));
     transition: border-color 0.15s;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
   }
   .input-wrapper.focused {
     border-color: var(--accent-color, #007acc);
   }
   .chat-input {
     flex: 1;
+    min-width: 0;
     resize: none;
     border: none;
     padding: 4px 0;

@@ -9,6 +9,10 @@
   import { get_electro_neg_formula } from '$lib/composition/parse'
   import type { PymatgenStructure } from './index'
   import { pubchem_to_pymatgen } from './parse'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   interface Props {
     visible: boolean
@@ -125,7 +129,7 @@
       search_results = results
       if (results.compounds.length === 0 && page === 0) {
         const what = has_text ? `"${search_input}"` : selected_elements.join(`, `)
-        search_error = `No compounds found for ${what}`
+        search_error = `${t('structure.no_compounds_found')} ${what}`
       }
     } catch (err) {
       search_error = `Search failed: ${err instanceof Error ? err.message : String(err)}`
@@ -200,8 +204,8 @@
 
       <!-- Header -->
       <div class="header">
-        <h2>Search PubChem</h2>
-        <button class="close-btn" onclick={onclose} aria-label="Close">×</button>
+        <h2>{t('structure.search_pubchem')}</h2>
+        <button class="close-btn" onclick={onclose} aria-label={t('common.close')}>×</button>
       </div>
 
       <div class="body">
@@ -214,7 +218,7 @@
               bind:this={search_input_el}
               class="search-input"
               type="text"
-              placeholder="Name, formula, SMILES, or CID…"
+              placeholder={t('structure.pubchem_search_placeholder')}
               value={search_input}
               oninput={on_input}
               onkeydown={(e) => {
@@ -252,14 +256,14 @@
             onclick={() => do_search(0)}
             disabled={loading_search || (!search_input.trim() && selected_elements.length === 0)}
           >
-            {loading_search ? `…` : `Search`}
+            {loading_search ? `…` : t('common.search')}
           </button>
         </div>
 
         <!-- Element filter -->
         <div class="element-section">
           <div class="element-header">
-            <span class="section-label">Element filter</span>
+            <span class="section-label">{t('structure.element_filter')}</span>
             {#if selected_elements.length > 0}
               <div class="selected-chips">
                 {#each selected_elements as el}
@@ -267,7 +271,7 @@
                     {el} <span class="chip-x">×</span>
                   </button>
                 {/each}
-                <button class="clear-link" onclick={clear_elements}>Clear all</button>
+                <button class="clear-link" onclick={clear_elements}>{t('common.clear_all')}</button>
               </div>
             {/if}
           </div>
@@ -286,7 +290,7 @@
               class="el-btn more-btn"
               class:active={show_periodic_table}
               onclick={() => { show_periodic_table = !show_periodic_table }}
-              title="Show full periodic table"
+              title={t('structure.show_full_pt')}
             >···</button>
           </div>
 
@@ -314,12 +318,12 @@
         {#if search_results}
           <div class="results-header">
             <span class="results-count">
-              {search_results.total_count ?? search_results.compounds.length} results
+              {search_results.total_count ?? search_results.compounds.length} {t('structure.results_count_label')}
             </span>
             {#if total_pages && total_pages > 1}
               <div class="pagination">
                 <button class="page-btn" onclick={prev_page} disabled={current_page === 0 || loading_search}>‹</button>
-                <span class="page-label">Page {current_page + 1}{total_pages ? ` / ${total_pages}` : ``}</span>
+                <span class="page-label">{t('structure.page_of_total', { current: current_page + 1, total: total_pages ?? current_page + 1 })}</span>
                 <button class="page-btn" onclick={next_page} disabled={!search_results.has_more || loading_search}>›</button>
               </div>
             {/if}
@@ -327,7 +331,7 @@
 
           <div class="results-list">
             {#if search_results.compounds.length === 0}
-              <p class="empty">No compounds found</p>
+              <p class="empty">{t('structure.no_compounds_found')}</p>
             {:else}
               {#each search_results.compounds as c (c.cid)}
                 <div class="result-row">
@@ -344,10 +348,10 @@
                         <span class="meta-item">{typeof c.weight === `number` ? c.weight.toFixed(2) : c.weight} g/mol</span>
                       {/if}
                       {#if c.HeavyAtomCount !== undefined}
-                        <span class="meta-item">{c.HeavyAtomCount} atoms</span>
+                        <span class="meta-item">{c.HeavyAtomCount} {t('structure.atoms')}</span>
                       {/if}
                       {#if c.XLogP !== undefined && c.XLogP !== null}
-                        <span class="meta-item" title="Lipophilicity">logP {c.XLogP}</span>
+                        <span class="meta-item" title={t('structure.lipophilicity')}>logP {c.XLogP}</span>
                       {/if}
                     </div>
                   </div>
@@ -355,7 +359,7 @@
                     class="import-btn"
                     onclick={() => handle_import(c.cid)}
                     disabled={loading_import !== null}
-                    title="Import into viewer"
+                    title={t('structure.import_into_viewer')}
                   >
                     {#if loading_import === c.cid}
                       <span class="spinner"></span>
@@ -371,17 +375,17 @@
           <!-- Bottom pagination -->
           {#if search_results.compounds.length > 0 && (search_results.has_more || current_page > 0)}
             <div class="pagination bottom-pag">
-              <button class="page-btn" onclick={prev_page} disabled={current_page === 0 || loading_search}>‹ Prev</button>
-              <span class="page-label">Page {current_page + 1}{total_pages ? ` / ${total_pages}` : ``}</span>
-              <button class="page-btn" onclick={next_page} disabled={!search_results.has_more || loading_search}>Next ›</button>
+              <button class="page-btn" onclick={prev_page} disabled={current_page === 0 || loading_search}>‹ {t('common.prev')}</button>
+              <span class="page-label">{t('structure.page_of_total', { current: current_page + 1, total: total_pages ?? current_page + 1 })}</span>
+              <button class="page-btn" onclick={next_page} disabled={!search_results.has_more || loading_search}>{t('common.next')} ›</button>
             </div>
           {/if}
         {:else if !loading_search}
-          <p class="hint">Type a name, formula, or select elements above</p>
+          <p class="hint">{t('structure.type_name_formula')}</p>
         {:else}
           <div class="loading-state">
             <span class="spinner large"></span>
-            <span>Searching PubChem…</span>
+            <span>{t('structure.searching_pubchem')}</span>
           </div>
         {/if}
 

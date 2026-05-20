@@ -3,6 +3,10 @@
   import { API_BASE } from '$lib/api/config'
   import type { AnyStructure } from '$lib/structure'
   import type { Snippet } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     show = $bindable(false),
@@ -284,7 +288,7 @@
   max_height={max_height || ``}
   pane_props={{ class: 'workflow-pane' }}
 >
-  <h4 class="pane-title">Workflow</h4>
+  <h4 class="pane-title">{t('common.workflow')}</h4>
   <div class="pane-content">
     {#if children}
       {@render children()}
@@ -295,7 +299,7 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M12 5v14M5 12h14" />
           </svg>
-          {creating ? `Creating...` : structure ? `New Workflow with Structure` : `New Workflow`}
+          {creating ? t('structure.creating') : structure ? t('structure.workflow_new_with_structure') : t('structure.workflow_new')}
         </button>
       </div>
 
@@ -306,9 +310,9 @@
       <!-- ══ Section 2: Active Workflow ══ -->
       {#if active_workflow}
         <div class="section-box active-section">
-          <div class="section-label">Current</div>
+          <div class="section-label">{t('structure.current')}</div>
           <div class="wf-header">
-            <button class="wf-name-btn" onclick={() => open_editor()} title="Open in editor">
+            <button class="wf-name-btn" onclick={() => open_editor()} title={t('structure.open_editor')}>
               {active_workflow.name}
             </button>
             <span class="wf-badge wf-badge-{active_workflow.status}">{active_workflow.status}</span>
@@ -342,22 +346,22 @@
             </div>
 
             {#if active_workflow?.status === `completed`}
-              <div class="wf-done-banner">Completed</div>
+              <div class="wf-done-banner">{t('common.completed')}</div>
             {:else if active_workflow?.status === `failed`}
-              <div class="wf-done-banner wf-done-failed">Failed</div>
+              <div class="wf-done-banner wf-done-failed">{t('common.failed')}</div>
             {/if}
           {:else}
-            <div class="wf-progress">No steps yet</div>
+            <div class="wf-progress">{t('structure.no_steps_yet')}</div>
           {/if}
 
           <div class="section-actions">
             {#if structure}
               <button class="section-btn send-btn" onclick={() => send_structure_to_workflow(active_workflow!.id)} disabled={sending}>
-                {sending ? `Sending...` : `Send Structure`}
+                {sending ? t('structure.sending') : t('structure.send_structure')}
               </button>
             {/if}
             <button class="section-btn editor-btn" onclick={() => open_editor()}>
-              Open Editor
+              {t('structure.open_editor')}
             </button>
           </div>
         </div>
@@ -366,7 +370,7 @@
       <!-- ══ Section 3: Previous Workflows ══ -->
       {#if workflows.length > (active_workflow ? 1 : 0)}
         <div class="section-box history-section">
-          <div class="section-label">Previous</div>
+          <div class="section-label">{t('structure.previous')}</div>
           <div class="wf-list">
             {#each workflows.filter(w => w.id !== active_workflow?.id) as wf (wf.id)}
               <div class="wf-list-item">
@@ -374,7 +378,7 @@
                   <span class="wf-list-name">{wf.name}</span>
                   <span class="wf-badge wf-badge-{wf.status}">{wf.status}</span>
                 </button>
-                <button class="wf-delete-btn" onclick={() => delete_workflow(wf.id, wf.name)} title="Delete">
+                <button class="wf-delete-btn" onclick={() => delete_workflow(wf.id, wf.name)} title={t('common.delete')}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                     <path d="M18 6L6 18M6 6l12 12" />
                   </svg>
@@ -385,7 +389,7 @@
         </div>
       {:else if !active_workflow}
         <div class="section-box">
-          <p class="hint">No workflows yet.</p>
+          <p class="hint">{t('structure.no_workflows_yet')}</p>
         </div>
       {/if}
     {/if}

@@ -1,5 +1,9 @@
 <!-- src/lib/chat/ToolProgressBlock.svelte -->
 <script lang="ts">
+    import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+    load_i18n_module('chat')
+
     interface Props {
         toolId: string
         toolName: string
@@ -56,7 +60,7 @@
         <span class="status-icon" aria-hidden="true">{statusIcon}</span>
         <span class="tool-name">{toolName}</span>
         {#if status === 'running'}
-            <span class="running-indicator" aria-label="Running">Running…</span>
+            <span class="running-indicator" aria-label={t('chat.tool_progress_running')}>{t('chat.tool_progress_running')}…</span>
         {/if}
         {#if elapsedLabel}
             <span class="elapsed">{elapsedLabel}</span>
@@ -69,18 +73,18 @@
         <div class="detail">
             {#if inputPreview !== null}
                 <div class="section">
-                    <div class="section-label">Input</div>
+                    <div class="section-label">{t('chat.tool_progress_input')}</div>
                     <pre class="code-block">{inputPreview}</pre>
                 </div>
             {/if}
             {#if outputPreview !== null}
                 <div class="section">
-                    <div class="section-label">Output</div>
+                    <div class="section-label">{t('chat.tool_progress_output')}</div>
                     <pre class="output-block">{outputPreview}</pre>
                 </div>
             {/if}
             {#if inputPreview === null && outputPreview === null}
-                <div class="empty-detail">No details available</div>
+                <div class="empty-detail">{t('chat.tool_progress_no_details')}</div>
             {/if}
         </div>
     {/if}

@@ -17,6 +17,10 @@
   import type { ComponentProps } from 'svelte'
   import Select from 'svelte-multiselect'
   import { tooltip } from 'svelte-multiselect/attachments'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   let {
     controls_open = $bindable(false),
@@ -176,14 +180,14 @@
   bind:show={controls_open}
   pane_props={{ ...pane_props, class: `controls-pane ${pane_props?.class ?? ``}` }}
   toggle_props={{
-    title: controls_open ? `` : `Controls`,
+    title: controls_open ? `` : t('structure.controls'),
     ...toggle_props,
     class: `structure-controls-toggle ${toggle_props?.class ?? ``}`,
   }}
   {...rest}
 >
   <SettingsSection
-    title="Visibility"
+    title={t('structure.visibility')}
     current_values={{
       show_atoms: scene_props.show_atoms,
       show_cell: scene_props.show_cell,
@@ -213,7 +217,7 @@
         {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_atoms.description })}
       >
         <input type="checkbox" bind:checked={scene_props.show_atoms} />
-        Atoms
+        {t('common.atoms')}
       </label>
       <label
         {@attach tooltip({
@@ -221,16 +225,16 @@
         })}
       >
         <input type="checkbox" bind:checked={show_image_atoms} />
-        Image Atoms
+        {t('structure.image_atoms')}
       </label>
       {#if show_image_atoms}
         <label>
-          <span title="Opacity of periodic boundary condition image atoms" {@attach tooltip()}>Image Opacity</span>
+          <span title="Opacity of periodic boundary condition image atoms" {@attach tooltip()}>{t('structure.image_opacity')}</span>
           <input type="number" min={0} max={1} step={0.05} bind:value={image_atom_opacity} />
           <input type="range" min={0} max={1} step={0.05} bind:value={image_atom_opacity} />
         </label>
         <div title="Number of periodic repeats in each direction (a, b, c)" style="grid-column: 1 / -1; display:flex; gap:6px; align-items:center; font-size:0.85em;">
-          <span style="opacity:0.7">Repeats</span>
+          <span style="opacity:0.7">{t('structure.repeats')}</span>
           <span style="opacity:0.5">a</span><input type="number" min={0} max={5} step={1} style="width:2.5em" bind:value={periodic_repeats[0]} />
           <span style="opacity:0.5">b</span><input type="number" min={0} max={5} step={1} style="width:2.5em" bind:value={periodic_repeats[1]} />
           <span style="opacity:0.5">c</span><input type="number" min={0} max={5} step={1} style="width:2.5em" bind:value={periodic_repeats[2]} />
@@ -242,7 +246,7 @@
         })}
       >
         <input type="checkbox" bind:checked={scene_props.show_site_labels} />
-        Site Labels
+        {t('structure.site_labels')}
       </label>
       <label
         {@attach tooltip({
@@ -250,7 +254,7 @@
         })}
       >
         <input type="checkbox" bind:checked={scene_props.show_site_indices} />
-        Site Indices
+        {t('structure.site_indices')}
       </label>
       {#if scene_props.show_site_indices || scene_props.show_site_labels}
         <label
@@ -259,7 +263,7 @@
             content: `Distance of the label from the atom center (Å along Y).`,
           })}
         >
-          <span style="white-space: nowrap;">Label offset</span>
+          <span style="white-space: nowrap;">{t('structure.label_offset')}</span>
           <input
             type="range"
             min="0"
@@ -285,24 +289,24 @@
           })}
         >
           <input type="checkbox" bind:checked={scene_props.show_force_vectors} />
-          Force Vectors
+          {t('structure.force_vectors')}
         </label>
       {/if}
       <label
         {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_cell.description })}
       >
         <input type="checkbox" bind:checked={scene_props.show_cell} />
-        Unit Cell
+        {t('structure.unit_cell')}
       </label>
       <label>
         <input type="checkbox" bind:checked={lattice_props.show_cell_vectors} />
-        Lattice Vectors
+        {t('structure.lattice_vectors')}
       </label>
     </div>
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.show_bonds.description })}
     >
-      Bonds:
+      {t('structure.bonds')}
       <select bind:value={scene_props.show_bonds}>
         {#each Object.entries(SETTINGS_CONFIG.structure.show_bonds.enum ?? {}) as
           [value, label]
@@ -340,13 +344,13 @@
             <button type="button" class="rule-remove" onclick={(e) => { e.stopPropagation(); remove_bond_rule(idx) }} title="Remove rule">×</button>
           </div>
         {/each}
-        <button type="button" class="add-rule-btn" onclick={add_bond_rule}>+ Bond rule</button>
+        <button type="button" class="add-rule-btn" onclick={add_bond_rule}>{t('structure.add_bond_rule')}</button>
       </div>
     {/if}
   </SettingsSection>
 
   <SettingsSection
-    title="Camera"
+    title={t('structure.camera')}
     current_values={{
       camera_projection: scene_props.camera_projection,
       auto_rotate: scene_props.auto_rotate,
@@ -372,7 +376,7 @@
           content: SETTINGS_CONFIG.structure.camera_projection.description,
         })}
       >
-        Projection
+        {t('structure.projection')}
       </span>
       <select bind:value={scene_props.camera_projection}>
         {#each Object.entries(
@@ -388,7 +392,7 @@
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.auto_rotate.description })}
     >
-      Auto-rotate speed
+      {t('structure.auto_rotate_speed')}
       <input
         type="number"
         min={0}
@@ -407,7 +411,7 @@
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.rotate_speed.description })}
     >
-      Rotate speed
+      {t('structure.rotate_speed')}
       <input
         type="number"
         min={0}
@@ -426,7 +430,7 @@
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.zoom_speed.description })}
     >
-      Zoom speed
+      {t('structure.zoom_speed')}
       <input
         type="number"
         min={0.1}
@@ -445,7 +449,7 @@
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.pan_speed.description })}
     >
-      Pan speed
+      {t('structure.pan_speed')}
       <input
         type="number"
         min={0}
@@ -465,12 +469,12 @@
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.zoom_to_cursor.description })}
     >
       <input type="checkbox" bind:checked={scene_props.zoom_to_cursor} />
-      <span>Zoom to cursor</span>
+      <span>{t('structure.zoom_to_cursor')}</span>
     </label>
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.rotation_damping.description })}
     >
-      Rotation damping
+      {t('structure.rotation_damping')}
       <input
         type="number"
         min={0.01}
@@ -489,7 +493,7 @@
   </SettingsSection>
 
   <SettingsSection
-    title="Rotation"
+    title={t('structure.rotation')}
     current_values={{
       rotation: scene_props.rotation,
     }}
@@ -535,7 +539,7 @@
   </SettingsSection>
 
   <SettingsSection
-    title="Atoms"
+    title={t('common.atoms')}
     current_values={{
       atom_radius: scene_props.atom_radius,
       same_size_atoms: scene_props.same_size_atoms,
@@ -551,7 +555,7 @@
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.atom_radius.description })}
     >
-      Radius <small>(Å)</small>
+      {t('structure.radius')}
       <input
         type="number"
         min={0.2}
@@ -570,14 +574,14 @@
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.same_size_atoms.description })}
     >
-      Same size atoms
+      {t('structure.same_size_atoms')}
       <input type="checkbox" bind:checked={scene_props.same_size_atoms} />
     </label>
     <label
       style="align-items: start"
       {@attach tooltip({ content: SETTINGS_CONFIG.color_scheme.description })}
     >
-      Color scheme
+      {t('structure.color_scheme')}
       <Select
         options={Object.keys(element_color_schemes)}
         maxSelect={1}
@@ -606,7 +610,7 @@
 
   {#if scene_props.show_site_labels || scene_props.show_site_indices}
     <SettingsSection
-      title="Labels"
+      title={t('structure.labels')}
       current_values={{
         site_label_size: scene_props.site_label_size,
         site_label_hex_color,
@@ -626,11 +630,11 @@
     >
       <div class="pane-row">
         <label>
-          Color
+          {t('structure.color')}
           <input type="color" bind:value={site_label_hex_color} />
         </label>
         <label>
-          Size
+          {t('structure.size')}
           <input
             type="range"
             min="0.5"
@@ -642,11 +646,11 @@
       </div>
       <div class="pane-row">
         <label>
-          Background
+          {t('structure.background')}
           <input type="color" bind:value={site_label_bg_hex_color} />
         </label>
         <label>
-          Opacity
+          {t('structure.opacity')}
           <input
             type="number"
             min="0"
@@ -665,7 +669,7 @@
       </div>
       <div class="pane-row">
         <label>
-          Padding
+          {t('structure.padding')}
           <input
             type="number"
             min="0"
@@ -683,7 +687,7 @@
         </label>
       </div>
       <div class="pane-row">
-        Offset
+        {t('structure.offset')}
         {#each [`X`, `Y`, `Z`] as axis, idx (axis)}
           <label>
             {axis}
@@ -702,7 +706,7 @@
 
   {#if has_forces && scene_props.show_force_vectors}
     <SettingsSection
-      title="Force Vectors"
+      title={t('structure.force_vectors')}
       current_values={{
         force_scale: scene_props.force_scale,
         force_color: scene_props.force_color,
@@ -719,7 +723,7 @@
       }}
     >
       <label>
-        Display Mode
+        {t('structure.display_mode')}
         <select bind:value={scene_props.force_display_mode}>
           <option value="all">All Forces</option>
           <option value="max_only">Max Force Only</option>
@@ -739,7 +743,7 @@
         </div>
       {/if}
       <label>
-        Scale
+        {t('structure.scale')}
         <input
           type="number"
           min={0.001}
@@ -757,7 +761,7 @@
       </label>
       <div class="pane-row">
         <label>
-          Color Mode
+          {t('structure.color_mode')}
           <select bind:value={scene_props.force_color_mode}>
             <option value="custom">Custom</option>
             <option value="element">Element</option>
@@ -765,7 +769,7 @@
         </label>
         {#if scene_props.force_color_mode !== 'element'}
           <label>
-            Color
+            {t('structure.color')}
             <input type="color" bind:value={scene_props.force_color} />
           </label>
         {/if}
@@ -775,7 +779,7 @@
 
   {#if has_lattice}
     <SettingsSection
-      title="Cell"
+      title={t('structure.cell')}
       current_values={{
         cell_edge_color: lattice_props.cell_edge_color,
         cell_edge_opacity: lattice_props.cell_edge_opacity,
@@ -798,7 +802,7 @@
               `Create supercells by repeating the unit cell. Examples: "2x2x2", "3x1x2", or "2"`,
           })}
         >
-          Supercell Scaling
+          {t('structure.supercell_scaling')}
         </span>
         <input
           type="text"
@@ -825,7 +829,7 @@
             class="spinner-icon"
             style="display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite"
           ></span>
-          <span>Generating supercell...</span>
+          <span>{t('structure.generating_supercell')}</span>
         </div>
       {/if}
 
@@ -837,13 +841,13 @@
 
       {#each [
         {
-          label: `Edge color`,
+          label: t('structure.edge_color'),
           color_prop: `cell_edge_color`,
           opacity_prop: `cell_edge_opacity`,
           step: 0.05,
         },
         {
-          label: `Surface color`,
+          label: t('structure.surface_color'),
           color_prop: `cell_surface_color`,
           opacity_prop: `cell_surface_opacity`,
           step: 0.01,
@@ -861,7 +865,7 @@
             />
           </label>
           <label>
-            opacity
+            {t('structure.opacity')}
             <input
               type="number"
               min={0}
@@ -901,7 +905,7 @@
       }}
     >
       <label>
-        Strategy <select bind:value={scene_props.bonding_strategy}>
+        {t('structure.strategy')} <select bind:value={scene_props.bonding_strategy}>
           {#each Object.entries(
             SETTINGS_CONFIG.structure.bonding_strategy.enum ?? {},
           ) as
@@ -913,10 +917,10 @@
         </select>
       </label>
       <label>
-        Color <input type="color" bind:value={scene_props.bond_color} />
+        {t('structure.color')} <input type="color" bind:value={scene_props.bond_color} />
       </label>
       <label>
-        Thickness
+        {t('structure.thickness')}
         <input
           type="number"
           min={0.05}
@@ -941,11 +945,11 @@
           type="checkbox"
           bind:checked={scene_props.incomplete_periodic_edge_mode}
         />
-        Cell-edge stub bonds
+        {t('structure.cell_edge_stub_bonds')}
       </label>
       {#if scene_props.incomplete_periodic_edge_mode}
         <label>
-          Stub Length
+          {t('structure.stub_length')}
           <input
             type="number"
             min={0.05}
@@ -966,7 +970,7 @@
   {/if}
 
   <SettingsSection
-    title="Clipping"
+    title={t('structure.clipping')}
     current_values={{
       clip_active: scene_props.clip_active,
       clip_radius: scene_props.clip_radius,
@@ -981,11 +985,11 @@
   >
     <label>
       <input type="checkbox" bind:checked={scene_props.clip_active} />
-      Sphere Clipping
+      {t('structure.sphere_clipping')}
     </label>
     {#if scene_props.clip_active}
       <label>
-        Radius (Å)
+        {t('structure.radius')}
         <input
           type="range"
           min="2"
@@ -996,7 +1000,7 @@
         <span>{scene_props.clip_radius}</span>
       </label>
       <label>
-        Outside Atoms
+        {t('structure.outside_atoms')}
         <select bind:value={scene_props.clip_outside_mode}>
           <option value="hide">Hide</option>
           <option value="transparent">Semi-transparent</option>
@@ -1004,7 +1008,7 @@
       </label>
       {#if scene_props.clip_outside_mode === `transparent`}
         <label>
-          Outside Opacity
+          {t('structure.outside_opacity')}
           <input
             type="range"
             min="0"
@@ -1018,7 +1022,7 @@
   </SettingsSection>
 
   <SettingsSection
-    title="Polyhedra"
+    title={t('structure.polyhedra')}
     current_values={{
       show_polyhedra: scene_props.show_polyhedra,
       polyhedra_opacity: scene_props.polyhedra_opacity,
@@ -1044,11 +1048,11 @@
   >
     <label>
       <input type="checkbox" bind:checked={scene_props.show_polyhedra} />
-      Show Polyhedra
+      {t('structure.show_polyhedra')}
     </label>
     {#if scene_props.show_polyhedra}
       <label>
-        Min Coordination
+        {t('structure.min_coordination')}
         <input
           type="number"
           min="3"
@@ -1058,7 +1062,7 @@
         />
       </label>
       <label>
-        Opacity Mode
+        {t('structure.opacity_mode')}
         <select bind:value={scene_props.polyhedra_opacity_mode}>
           <option value="uniform">Uniform</option>
           <option value="depth_gradient">Depth Gradient</option>
@@ -1066,7 +1070,7 @@
       </label>
       {#if scene_props.polyhedra_opacity_mode === `uniform`}
         <label>
-          Face Opacity
+          {t('structure.face_opacity')}
           <input
             type="range"
             min="0.05"
@@ -1077,7 +1081,7 @@
         </label>
       {:else}
         <label>
-          Near Opacity
+          {t('structure.near_opacity')}
           <input
             type="range"
             min="0.05"
@@ -1087,7 +1091,7 @@
           />
         </label>
         <label>
-          Far Opacity
+          {t('structure.far_opacity')}
           <input
             type="range"
             min="0"
@@ -1098,11 +1102,11 @@
         </label>
       {/if}
       <label>
-        Edge Color
+        {t('structure.edge_color')}
         <input type="color" bind:value={scene_props.polyhedra_edge_color} />
       </label>
       <label>
-        Edge Opacity
+        {t('structure.opacity')}
         <input
           type="range"
           min="0"
@@ -1113,17 +1117,17 @@
       </label>
       <label>
         <input type="checkbox" bind:checked={scene_props.hide_polyhedra_center_atoms} />
-        Hide Center Atoms
+        {t('structure.hide_center_atoms')}
       </label>
       <label>
         <input type="checkbox" bind:checked={scene_props.hide_polyhedra_internal_bonds} />
-        Hide Internal Bonds
+        {t('structure.hide_internal_bonds')}
       </label>
     {/if}
   </SettingsSection>
 
   <SettingsSection
-    title="Hydrogen Bonds"
+    title={t('structure.hydrogen_bonds')}
     current_values={{
       show_hydrogen_bonds: scene_props.show_hydrogen_bonds,
       hbond_distance_cutoff: scene_props.hbond_distance_cutoff,
@@ -1139,11 +1143,11 @@
   >
     <label>
       <input type="checkbox" bind:checked={scene_props.show_hydrogen_bonds} />
-      Show H-bonds
+      {t('structure.show_h_bonds')}
     </label>
     {#if scene_props.show_hydrogen_bonds}
       <label>
-        Distance cutoff (Å)
+        {t('structure.distance_cutoff')}
         <input
           type="number"
           min={1.5}
@@ -1160,7 +1164,7 @@
         />
       </label>
       <label>
-        Angle cutoff (°)
+        {t('structure.angle_cutoff')}
         <input
           type="number"
           min={90}
@@ -1177,7 +1181,7 @@
         />
       </label>
       <label>
-        Thickness
+        {t('structure.thickness')}
         <input
           type="number"
           min={0.01}
@@ -1197,7 +1201,7 @@
   </SettingsSection>
 
   <SettingsSection
-    title="Appearance"
+    title={t('structure.appearance')}
     current_values={{
       background_color,
       background_opacity,
@@ -1221,10 +1225,10 @@
       scene_props.bond_outline_strength = DEFAULTS.structure.bond_outline_strength
     }}
   >
-    <h5>Background</h5>
+    <h5>{t('structure.background')}</h5>
     <div class="pane-row">
       <label>
-        Color
+        {t('structure.color')}
         <!-- not using bind:value to not give a default value of #000000 to background_color, needs to stay undefined to not override --struct-bg theme color -->
         <input
           type="color"
@@ -1235,7 +1239,7 @@
         />
       </label>
       <label>
-        Opacity
+        {t('structure.opacity')}
         <input
           type="number"
           min={0}
@@ -1246,10 +1250,10 @@
         <input type="range" min={0} max={1} step={0.02} bind:value={background_opacity} />
       </label>
     </div>
-    <h5>Lighting</h5>
+    <h5>{t('structure.lighting')}</h5>
     <label>
       <span title="Intensity of the directional light" {@attach tooltip()}>
-        Directional light
+        {t('structure.directional_light')}
       </span>
       <input
         type="number"
@@ -1268,7 +1272,7 @@
     </label>
     <label>
       <span title="Intensity of the ambient light" {@attach tooltip()}>
-        Ambient light
+        {t('structure.ambient_light')}
       </span>
       <input
         type="number"
@@ -1288,7 +1292,7 @@
     <h5>Depth Cueing</h5>
     <label>
       <span title="Fades distant atoms toward background color to convey depth (0 = off, 1 = maximum)" {@attach tooltip()}>
-        Intensity
+        {t('structure.intensity')}
       </span>
       <input
         type="number"
@@ -1307,7 +1311,7 @@
     </label>
     <label>
       <span title="Starting depth — atoms closer than this are unaffected (0 = front, 1 = back)" {@attach tooltip()}>
-        Start
+        {t('structure.start')}
       </span>
       <input
         type="number"
@@ -1326,7 +1330,7 @@
     </label>
     <label>
       <span title="Ending depth — atoms beyond this are fully faded (0 = front, 1 = back)" {@attach tooltip()}>
-        End
+        {t('structure.end')}
       </span>
       <input
         type="number"
@@ -1345,7 +1349,7 @@
     </label>
     <label>
       <span title="Silhouette outline strength on atoms (0 = off). 3Dmol/PyMOL cartoon look." {@attach tooltip()}>
-        Atom outline
+        {t('structure.atom_outline')}
       </span>
       <input
         type="number"
@@ -1364,7 +1368,7 @@
     </label>
     <label>
       <span title="Silhouette outline strength on bonds. Independent of atom outline." {@attach tooltip()}>
-        Bond outline
+        {t('structure.bond_outline')}
       </span>
       <input
         type="number"
@@ -1385,7 +1389,7 @@
 
   {#if selected_sites.length > 0 || selected_bonds.length > 0 || atom_opacity_overrides.size > 0 || bond_opacity_overrides.size > 0}
     <SettingsSection
-      title="Selection Opacity"
+      title={t('structure.selection_opacity')}
       current_values={{ selection_opacity }}
       on_reset={() => {
         selection_opacity = 1.0
@@ -1396,7 +1400,7 @@
       {#if selected_sites.length > 0 || selected_bonds.length > 0}
         <label>
           <span title="Adjust opacity of selected atoms/bonds. Changes persist after deselection." {@attach tooltip()}>
-            Opacity
+            {t('structure.opacity')}
           </span>
           <input
             type="number"
@@ -1426,7 +1430,7 @@
   {/if}
 
   <SettingsSection
-    title="Manipulation"
+    title={t('structure.manipulation')}
     current_values={{
       keyboard_movement_step: scene_props.keyboard_movement_step,
     }}
@@ -1439,7 +1443,7 @@
         content: SETTINGS_CONFIG.structure.keyboard_movement_step.description,
       })}
     >
-      Keyboard step <small>(Å)</small>
+      {t('structure.keyboard_step')}
       <input
         type="number"
         min={0.01}
@@ -1456,12 +1460,12 @@
       />
     </label>
     <div style="font-size: 0.8em; color: var(--text-color-muted, #888); margin-top: 4pt">
-      Shift: 10× | Ctrl: 0.1×
+      {t('structure.keyboard_step_hint')}
     </div>
   </SettingsSection>
 
   <SettingsSection
-    title="Font Size"
+    title={t('structure.font_size')}
     current_values={{ pane_font_size: pane_font_size_state.size }}
     on_reset={() => {
       pane_font_size_state.size = DEFAULT_PANE_FONT_SIZE
@@ -1470,7 +1474,7 @@
     }}
   >
     <label>
-      <span>Pane text size</span>
+      <span>{t('structure.pane_text_size')}</span>
       <span style="font-size: 0.85em; opacity: 0.7; min-width: 2.5em; text-align: right">
         {Math.round(pane_font_size_state.size * 100)}%
       </span>

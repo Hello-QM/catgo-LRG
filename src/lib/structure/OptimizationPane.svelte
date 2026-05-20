@@ -19,9 +19,12 @@
     type WSConnection,
   } from '$lib/api/compute'
   import { optimize_structure_uff, optimize_structure_vsepr, is_ok } from './ferrox-wasm'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { VSEPROptimizerConfig } from './ferrox-wasm-types'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
+
+  load_i18n_module('structure')
 
   let {
     structure = $bindable(),
@@ -305,7 +308,7 @@
       // First check if server is available
       server_available = await checkServerHealth()
       if (!server_available) {
-        calculators_error = `Compute server not available`
+        calculators_error = t('structure.compute_server_not_available')
         calculators_loading = false
         server_checking = false
         return
@@ -320,7 +323,7 @@
       const available = Object.entries(data).find(([_, info]) => info.available)
       if (available) calculator = available[0] as CalculatorType
     } catch (err) {
-      calculators_error = err instanceof Error ? err.message : `Failed to connect to server`
+      calculators_error = err instanceof Error ? err.message : t('structure.failed_connect_server')
       calculators_loading = false
     }
     server_checking = false
@@ -424,7 +427,7 @@
         onDisconnected: () => {
           if (status === `connecting` || status === `running`) {
             status = `error`
-            error_message = `Connection lost`
+            error_message = t('structure.connection_lost')
           }
           ws_connection = null
         },
@@ -547,7 +550,7 @@
   close_on_click_outside={false}
   toggle_props={{
     class: `optimization-pane-toggle`,
-    title: `${pane_open ? `Close` : `Open`} structure optimizer`,
+    title: pane_open ? t('structure.close_structure_optimizer') : t('structure.open_structure_optimizer'),
     ...toggle_props,
   }}
   open_icon="Cross"
@@ -555,39 +558,39 @@
   pane_props={{ ...pane_props, class: `optimization-pane ${pane_props?.class ?? ``}` }}
   {...rest}
 >
-  <h4>Structure Optimization</h4>
+  <h4>{t('structure.structure_optimization')}</h4>
 
   {#if !structure}
-    <p class="warning">No structure loaded. Load a structure to optimize.</p>
+    <p class="warning">{t('structure.no_structure_optimize')}</p>
   {:else}
     <!-- Optimizer Type Selection -->
     <section>
-      <label class="section-label">Optimizer</label>
+      <label class="section-label">{t('structure.optimizer')}</label>
       <select bind:value={optimizer_type} disabled={is_running}>
-        <option value="local">Local (WASM)</option>
+        <option value="local">{t('structure.local_wasm')}</option>
         {#if !STATIC_ONLY}
-        <option value="server">Server (ML Potentials)</option>
+        <option value="server">{t('structure.server_ml_potentials')}</option>
         {/if}
       </select>
       {#if optimizer_type === 'local'}
         <label class="setting-row" style="margin-top: 6px">
-          <span>Method</span>
+          <span>{t('structure.method')}</span>
           <select bind:value={local_method} disabled={is_running}>
-            <option value="uff">UFF (Force Field)</option>
-            <option value="vsepr">VSEPR (Geometry)</option>
+            <option value="uff">{t('structure.uff_force_field')}</option>
+            <option value="vsepr">{t('structure.vsepr_geometry')}</option>
           </select>
         </label>
         <p class="hint">
           {#if local_method === 'uff'}
-            Full UFF force field with bonded & non-bonded interactions.
+            {t('structure.uff_hint')}
           {:else}
-            VSEPR geometry scaffolder -- fast initial structure from topology.
+            {t('structure.vsepr_hint')}
           {/if}
         </p>
         {#if frozen_atom_count() > 0 || selected_indices.length > 0}
           <div class="selected-atoms-info">
             {#if frozen_atom_count() > 0}
-              <div><strong>🔒 {frozen_atom_count()} atoms frozen</strong> (selective dynamics)</div>
+              <div><strong>🔒 {t('structure.atoms_frozen', { n: frozen_atom_count() })}</strong> (selective dynamics)</div>
             {/if}
             {#if selected_indices.length > 0}
               <div><strong>{selected_indices.length} atoms selected</strong> - only these will move.</div>
@@ -596,25 +599,25 @@
         {/if}
       {:else}
         <p class="hint">
-          ML potentials (MACE, CHGNet, xTB, etc.) require a running compute server.
+          {t('structure.ml_potentials_need_server')}
         </p>
         {#if frozen_atom_count() > 0}
           <div class="selected-atoms-info">
-            <div><strong>🔒 {frozen_atom_count()} atoms frozen</strong> (selective dynamics)</div>
+            <div><strong>🔒 {t('structure.atoms_frozen', { n: frozen_atom_count() })}</strong> (selective dynamics)</div>
           </div>
         {/if}
         {#if selected_indices.length > 0}
           <div class="selected-atoms-info">
-            <strong>{selected_indices.length} atoms selected</strong>
+            <strong>{t('structure.atoms_selected', { n: selected_indices.length })}</strong>
             <label class="checkbox-row fragment-toggle">
               <input type="checkbox" bind:checked={extract_fragment} disabled={is_running} />
-              <span>Extract as isolated molecule</span>
+              <span>{t('structure.extract_as_isolated_molecule')}</span>
             </label>
             <p class="hint fragment-hint">
               {#if extract_fragment}
-                Selected atoms will be extracted and optimized without periodic boundary conditions, then placed back.
+                {t('structure.selected_atoms_extract_hint')}
               {:else}
-                Unselected atoms will be fixed in place during optimization.
+                {t('structure.selected_atoms_fixed_hint')}
               {/if}
             </p>
           </div>
@@ -624,21 +627,21 @@
 
     {#if optimizer_type === 'server'}
       {#if calculators_loading || server_checking}
-        <p class="loading">Connecting to compute server...</p>
+        <p class="loading">{t('structure.connecting_compute_server')}</p>
       {:else if calculators_error}
         <div class="error-box">
           <p class="error">{calculators_error}</p>
-          <button class="secondary-btn" onclick={retry_connection}>Retry Connection</button>
+          <button class="secondary-btn" onclick={retry_connection}>{t('structure.retry_connection')}</button>
         </div>
       {:else if server_available}
         <!-- Calculator Selection (Server mode only) -->
         <section>
-          <label class="section-label">Calculator</label>
+          <label class="section-label">{t('structure.calculator')}</label>
           <select bind:value={calculator} disabled={is_running}>
             {#each Object.entries(calculators) as [key, info]}
               <option value={key} disabled={!info.available}>
                 {info.name}
-                {info.available ? `` : `(unavailable)`}
+                {info.available ? `` : `(${t('structure.unavailable')})`}
               </option>
             {/each}
           </select>
@@ -649,7 +652,7 @@
 
         <!-- Server Optimizer Method -->
         <section>
-          <label class="section-label">Optimizer Method</label>
+          <label class="section-label">{t('structure.optimizer_method')}</label>
           <select bind:value={server_method} disabled={is_running}>
             <option value="bfgs">BFGS (Minimization)</option>
             <option value="sella_min">Sella Minimize</option>
@@ -670,7 +673,7 @@
 
           {#if server_method === 'sella_min' || server_method === 'sella_ts'}
             <div class="param-row">
-              <span>Trust radius</span>
+              <span>{t('structure.trust_radius')}</span>
               <input
                 type="number"
                 step="0.01"
@@ -681,12 +684,12 @@
                 placeholder="auto"
               />
             </div>
-            <p class="hint">Initial trust radius (delta0). Leave empty for Sella default.</p>
+            <p class="hint">{t('structure.trust_radius_hint')}</p>
           {/if}
 
           {#if server_method === 'irc'}
             <div class="param-row">
-              <span>Step size (dx)</span>
+              <span>{t('structure.step_size_dx')}</span>
               <input
                 type="number"
                 step="0.01"
@@ -697,14 +700,14 @@
                 placeholder="auto"
               />
             </div>
-            <p class="hint">IRC step size in Angstrom. Leave empty for Sella default.</p>
+            <p class="hint">{t('structure.irc_step_size_hint')}</p>
           {/if}
         </section>
 
         <!-- xTB Method Selection -->
         {#if calculator === 'xtb' && calculators['xtb']?.available}
         <section>
-          <label class="section-label">xTB Method</label>
+          <label class="section-label">{t('structure.xtb_method')}</label>
           <select bind:value={xtb_method} disabled={is_running}>
             <option value="GFN2-xTB">GFN2-xTB (most accurate)</option>
             <option value="GFN1-xTB">GFN1-xTB (faster)</option>
@@ -727,7 +730,7 @@
           </p>
           <div class="xtb-advanced">
             <label class="xtb-advanced-row">
-              <span>Electronic temperature (K)</span>
+              <span>{t('structure.electronic_temperature')}</span>
               <input
                 type="number"
                 bind:value={xtb_electronic_temperature}
@@ -738,7 +741,7 @@
               />
             </label>
             <label class="xtb-advanced-row">
-              <span>Max SCF iterations</span>
+              <span>{t('structure.max_scf_iterations')}</span>
               <input
                 type="number"
                 bind:value={xtb_max_iterations}
@@ -767,7 +770,7 @@
         <!-- MACE Settings -->
         {#if calculator === 'mace' && calculators['mace']?.available}
         <section>
-          <label class="section-label">MACE Model</label>
+          <label class="section-label">{t('structure.mace_model')}</label>
           <select bind:value={mace_model} disabled={is_running}>
             <option value="small">Small (fastest)</option>
             <option value="medium">Medium (balanced)</option>
@@ -775,7 +778,7 @@
             <option value="custom">Custom Model</option>
           </select>
           {#if mace_model === 'custom'}
-            <label class="section-label" style="margin-top: 8px">Model Path</label>
+            <label class="section-label" style="margin-top: 8px">{t('structure.model_path')}</label>
             <input
               type="text"
               bind:value={mace_model_path}
@@ -798,7 +801,7 @@
             </p>
           {/if}
 
-          <label class="section-label" style="margin-top: 8px">Device</label>
+          <label class="section-label" style="margin-top: 8px">{t('structure.device')}</label>
           <select bind:value={mace_device} disabled={is_running}>
             <option value="cpu">CPU</option>
             <option value="cuda">GPU (CUDA)</option>
@@ -808,8 +811,8 @@
       {:else}
         <!-- Server not yet checked or not available -->
         <div class="error-box">
-          <p class="hint">Server not connected. Start the compute server or use Local (UFF) mode.</p>
-          <button class="secondary-btn" onclick={retry_connection}>Check Server</button>
+          <p class="hint">{t('structure.server_not_connected_hint')}</p>
+          <button class="secondary-btn" onclick={retry_connection}>{t('structure.check_server')}</button>
         </div>
       {/if}
     {/if}
@@ -818,9 +821,9 @@
     {#if optimizer_type === 'local' || (optimizer_type === 'server' && server_available && !calculators_loading)}
     <section>
       {#if optimizer_type === 'local' && local_method === 'vsepr'}
-        <label class="section-label">VSEPR Settings</label>
+        <label class="section-label">{t('structure.vsepr_settings')}</label>
         <div class="param-row">
-          <span>Iterations</span>
+          <span>{t('structure.iterations')}</span>
           <input
             type="number"
             step="100"
@@ -831,7 +834,7 @@
           />
         </div>
         <div class="param-row">
-          <span>Force constant</span>
+          <span>{t('structure.force_constant')}</span>
           <input
             type="number"
             step="0.01"
@@ -842,7 +845,7 @@
           />
         </div>
       {:else}
-        <label class="section-label">Convergence Settings</label>
+        <label class="section-label">{t('structure.convergence_settings')}</label>
         <div class="param-row">
           <span>fmax (eV/A)</span>
           <input
@@ -855,7 +858,7 @@
           />
         </div>
         <div class="param-row">
-          <span>Max steps</span>
+          <span>{t('structure.max_steps')}</span>
           <input
             type="number"
             step="10"
@@ -867,7 +870,7 @@
         </div>
         {#if optimizer_type === 'local' && local_method === 'uff'}
           <div class="param-row">
-            <span>Snapshot interval</span>
+            <span>{t('structure.snapshot_interval')}</span>
             <input
               type="number"
               step="1"
@@ -875,14 +878,14 @@
               max="100"
               bind:value={snapshot_interval}
               disabled={is_running}
-              title="Save trajectory frame every N steps (1 = every step)"
+              title={t('structure.snapshot_interval_title')}
             />
           </div>
         {/if}
         {#if has_lattice && optimizer_type === 'server'}
           <label class="checkbox-row">
             <input type="checkbox" bind:checked={optimize_cell} disabled={is_running} />
-            <span>Optimize cell parameters</span>
+            <span>{t('structure.optimize_cell_parameters')}</span>
           </label>
         {/if}
       {/if}
@@ -892,31 +895,31 @@
     <!-- Loading Calculator Message (Server mode only) -->
     {#if optimizer_type === 'server' && status === `connecting`}
       <p class="loading">
-        Loading {calculators[calculator]?.name || calculator} calculator...
+        {t('structure.loading_calculator', { name: calculators[calculator]?.name || calculator })}
         <br />
-        <span class="hint">(ML potentials may take a moment to initialize)</span>
+        <span class="hint">{t('structure.ml_potentials_may_take_moment')}</span>
       </p>
     {/if}
 
     <!-- VSEPR running indicator -->
     {#if optimizer_type === 'local' && local_method === 'vsepr' && status === 'running'}
-      <p class="loading">Optimizing geometry with VSEPR...</p>
+      <p class="loading">{t('structure.optimizing_vsepr')}</p>
     {/if}
 
     <!-- Progress Display -->
     {#if progress}
       <section class="progress-section">
-        <label class="section-label">Progress</label>
+        <label class="section-label">{t('structure.progress')}</label>
         <div class="progress-bar-container">
           <div class="progress-bar" style:width="{(progress.step / ((optimizer_type === 'local' && local_method === 'vsepr') ? vsepr_iterations : max_steps)) * 100}%"></div>
         </div>
         <div class="stats-grid">
           <div class="stat">
-            <span class="stat-label">Step</span>
+            <span class="stat-label">{t('structure.step')}</span>
             <span class="stat-value">{progress.step} / {(optimizer_type === 'local' && local_method === 'vsepr') ? vsepr_iterations : max_steps}</span>
           </div>
           <div class="stat">
-            <span class="stat-label">Energy</span>
+            <span class="stat-label">{t('structure.energy')}</span>
             <span class="stat-value">{fmt(progress.energy)} eV</span>
           </div>
           <div class="stat">
@@ -929,8 +932,8 @@
         {#if started_at !== null && last_progress_at !== null}
           {@const now = status === `running` || status === `connecting` ? Math.max(now_tick, last_progress_at) : last_progress_at}
           <div class="timing-row">
-            <span>This step: <strong>{fmt_elapsed(now - last_progress_at)}</strong></span>
-            <span>Total: <strong>{fmt_elapsed(now - started_at)}</strong></span>
+            <span>{t('structure.this_step', { time: fmt_elapsed(now - last_progress_at) })}</span>
+            <span>{t('structure.total_time', { time: fmt_elapsed(now - started_at) })}</span>
           </div>
         {/if}
 
@@ -962,12 +965,12 @@
     <!-- Status Messages -->
     {#if status === `complete`}
       {#if optimizer_type === 'local' && local_method === 'vsepr'}
-        <p class="success">VSEPR optimization complete</p>
+        <p class="success">{t('structure.vsepr_complete')}</p>
       {:else}
         <p class="success">
-          {progress?.converged ? `Converged!` : `Max steps reached`}
+          {progress?.converged ? t('structure.converged') : t('structure.max_steps_reached')}
           {#if progress}
-            - Final energy: {fmt(progress.energy)} eV
+            - {t('structure.final_energy', { energy: fmt(progress.energy) })}
           {/if}
         </p>
       {/if}
@@ -975,26 +978,26 @@
         <button
           class="save-btn"
           onclick={() => export_structure_as_extxyz(structure)}
-          title="Save final optimized structure with forces"
+          title={t('structure.save_final_title')}
         >
           <Icon icon="Export" style="width: 14px; height: 14px" />
-          Save Final
+          {t('structure.save_final')}
         </button>
         {#if trajectory_frames.length > 1}
           <button
             class="save-btn trajectory"
             onclick={export_trajectory}
-            title="Save all {trajectory_frames.length} optimization steps as trajectory"
+            title={t('structure.save_trajectory_title', { n: trajectory_frames.length })}
           >
             <Icon icon="Export" style="width: 14px; height: 14px" />
-            Save Trajectory ({trajectory_frames.length} frames)
+            {t('structure.save_trajectory_frames', { n: trajectory_frames.length })}
           </button>
         {/if}
       </div>
     {:else if status === `error`}
       <p class="error">{error_message}</p>
     {:else if status === `cancelled`}
-      <p class="warning">Optimization cancelled</p>
+      <p class="warning">{t('structure.optimization_cancelled')}</p>
     {/if}
 
     <!-- Action Buttons -->
@@ -1003,17 +1006,17 @@
       {#if is_running}
         <button class="cancel-btn" onclick={optimizer_type === 'server' ? cancel_optimization : undefined} disabled={optimizer_type === 'local'}>
           <Icon icon="Cross" style="width: 14px; height: 14px" />
-          {optimizer_type === 'local' ? 'Running...' : 'Cancel'}
+          {optimizer_type === 'local' ? t('structure.running') : t('common.cancel')}
         </button>
       {:else if status !== `idle`}
-        <button class="secondary-btn" onclick={reset_state}> Reset </button>
+        <button class="secondary-btn" onclick={reset_state}> {t('common.reset')} </button>
         <button class="apply-btn" onclick={() => { reset_state(); handle_start_optimization() }}>
-          Run Again
+          {t('structure.run_again')}
         </button>
       {:else}
         <button class="apply-btn" onclick={handle_start_optimization} disabled={!can_start}>
           <Icon icon="Zap" style="width: 14px; height: 14px" />
-          Optimize
+          {t('structure.optimize')}
         </button>
       {/if}
     </div>

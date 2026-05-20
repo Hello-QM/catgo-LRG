@@ -2,6 +2,9 @@
   import type { PymatgenStructure } from '$lib'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
   import MultiStructurePreview from './MultiStructurePreview.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
 
   let {
     upstream_structure_json,
@@ -51,18 +54,18 @@
       {#if structure}
         <StructurePreview {structure} />
         {#if on_expand}
-          <button class="viewport-expand-btn" onclick={on_expand} title="Open in full viewer">&#x26F6;</button>
+          <button class="viewport-expand-btn" onclick={on_expand} title={t('workflow.calc_open_full_viewer')}>&#x26F6;</button>
         {/if}
       {:else}
         <div class="preview-msg">
           <span class="msg-icon">&#x1F517;</span>
-          <span>Connect a structure input</span>
+          <span>{t('workflow.calc_connect_structure_input')}</span>
         </div>
       {/if}
     </div>
     {#if structure}
       <div class="preview-info">
-        <span>Input &middot; {structure.sites?.length ?? 0} atoms</span>
+        <span>{t('common.structure')} &middot; {t('common.atoms_count', { n: structure.sites?.length ?? 0 })}</span>
       </div>
     {/if}
   </div>

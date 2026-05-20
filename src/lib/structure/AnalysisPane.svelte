@@ -9,16 +9,20 @@
   import type { Hkl, RadiationKey, XrdPattern } from '$lib/xrd'
   import { WAVELENGTHS } from '$lib/xrd/calc-xrd'
   import { onMount, type Snippet } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   export type AnalysisTab = 'electronic' | 'md' | 'phase' | 'structure_analysis' | 'spectrum' | 'vibration' | string
 
-  const static_tab_defs: { id: AnalysisTab; label: string }[] = [
-    { id: 'electronic', label: 'Electronic' },
-    { id: 'md', label: 'MD' },
-    { id: 'phase', label: 'Phase' },
-    { id: 'structure_analysis', label: 'Structure' },
-    { id: 'spectrum', label: 'Spectrum' },
-    { id: 'vibration', label: 'Vibration' },
+  const static_tab_defs: { id: AnalysisTab; label: () => string }[] = [
+    { id: 'electronic', label: () => t('structure.electronic') },
+    { id: 'md', label: () => t('structure.md') },
+    { id: 'phase', label: () => t('structure.phase') },
+    { id: 'structure_analysis', label: () => t('structure.structure_tab') },
+    { id: 'spectrum', label: () => t('structure.spectrum') },
+    { id: 'vibration', label: () => t('structure.vibration') },
   ]
 
   interface PluginTabDef {
@@ -29,7 +33,7 @@
   }
 
   let plugin_tab_defs = $state<PluginTabDef[]>([])
-  let tab_defs = $derived([...static_tab_defs, ...plugin_tab_defs.map(p => ({ id: p.id, label: p.label }))])
+  let tab_defs = $derived([...static_tab_defs, ...plugin_tab_defs.map(p => ({ id: p.id, label: () => p.label }))])
 
   onMount(async () => {
     try {
@@ -185,15 +189,15 @@
   max_height={max_height || ``}
   pane_props={{ class: 'analysis-pane' }}
 >
-  <h4 class="pane-title">Analysis</h4>
+  <h4 class="pane-title">{t('structure.analysis')}</h4>
   <div class="tab-bar">
     {#each tab_defs as tab}
       <button
         class:active={active_tab === tab.id}
         onclick={() => active_tab = tab.id}
-        title={tab.label}
+        title={tab.label()}
       >
-        {tab.label}
+        {tab.label()}
       </button>
     {/each}
   </div>
@@ -201,19 +205,19 @@
     {#if active_tab === 'spectrum'}
       <!-- XRD 始终用 AnalysisPane 内部 UI，不被 children 覆盖 -->
       <section class="spectrum-section">
-        <h5>XRD Pattern</h5>
+        <h5>{t('structure.xrd_pattern')}</h5>
 
         {#if !structure}
-          <p class="warning">No structure loaded. Load a crystal structure to compute XRD.</p>
+          <p class="warning">{t('structure.xrd_no_structure')}</p>
           {#if on_structure_import}
-            <button class="import-structure-btn" onclick={() => show_structure_dialog = true}>Import Structure</button>
+            <button class="import-structure-btn" onclick={() => show_structure_dialog = true}>{t('structure.import_structure')}</button>
           {/if}
           {#if import_error}<p class="error-msg">{import_error}</p>{/if}
         {:else if !has_lattice}
-          <p class="warning">XRD requires a periodic crystal structure with a lattice.</p>
+          <p class="warning">{t('structure.xrd_requires_lattice')}</p>
         {:else}
           <label class="setting-row">
-            <span>Radiation</span>
+            <span>{t('structure.radiation')}</span>
             <select bind:value={xrd_radiation}>
               {#each radiation_groups as group}
                 <optgroup label={group.label}>
@@ -228,36 +232,36 @@
           {#if xrd_error}
             <p class="error-msg">{xrd_error}</p>
           {:else if xrd_loading}
-            <p class="hint">Computing XRD pattern (WASM)...</p>
+            <p class="hint">{t('structure.xrd_computing')}</p>
           {:else if xrd_pattern && xrd_pattern.x.length > 0}
-            <p class="hint">{xrd_pattern.x.length} peaks computed. Pattern displayed in side panel.</p>
+            <p class="hint">{t('structure.xrd_computed', { n: xrd_pattern.x.length })}</p>
 
             <div class="export-row">
-              <button onclick={export_csv} title="Export XRD data as CSV">
-                Export CSV
+              <button onclick={export_csv} title={t('structure.export_csv_title')}>
+                {t('structure.export_csv')}
               </button>
-              <button onclick={export_json} title="Export XRD data as JSON">
-                Export JSON
+              <button onclick={export_json} title={t('structure.export_json_title')}>
+                {t('structure.export_json')}
               </button>
               {#if on_pin_current}
                 <button
                   onclick={on_pin_current}
                   disabled={!xrd_pattern}
-                  title="Pin current pattern for comparison"
+                  title={t('structure.pin_title')}
                   class="pin-btn"
                 >
-                  Pin
+                  {t('structure.pin')}
                 </button>
               {/if}
             </div>
           {:else}
-            <p class="hint">No XRD peaks found.</p>
+            <p class="hint">{t('structure.no_xrd_peaks')}</p>
           {/if}
         {/if}
 
         {#if pinned_xrd_patterns.length > 0}
           <div class="pinned-section">
-            <h6 class="pinned-title">Pinned Patterns ({pinned_xrd_patterns.length})</h6>
+            <h6 class="pinned-title">{t('structure.pinned_patterns', { n: pinned_xrd_patterns.length })}</h6>
             <ul class="pinned-list">
               {#each pinned_xrd_patterns as pinned (pinned.id)}
                 <li class="pinned-item" class:dimmed={!pinned.visible}>
@@ -266,12 +270,12 @@
                   <button
                     class="pinned-action"
                     onclick={() => on_toggle_pinned?.(pinned.id)}
-                    title={pinned.visible ? 'Hide' : 'Show'}
+                    title={pinned.visible ? t('common.hide') : t('common.show')}
                   >{pinned.visible ? '👁' : '👁‍🗨'}</button>
                   <button
                     class="pinned-action remove"
                     onclick={() => on_unpin?.(pinned.id)}
-                    title="Remove"
+                    title={t('common.remove')}
                   >×</button>
                 </li>
               {/each}
@@ -284,43 +288,43 @@
     {:else}
       {#if active_tab === 'electronic'}
         <section class="module-placeholder">
-          <h5>Electronic Structure</h5>
+          <h5>{t('structure.electronic_structure')}</h5>
           <ul>
-            <li>Band structure</li>
-            <li>Density of states (DOS)</li>
-            <li>Charge density</li>
-            <li>Orbital analysis</li>
+            <li>{t('structure.band_structure')}</li>
+            <li>{t('structure.dos')}</li>
+            <li>{t('structure.charge_density')}</li>
+            <li>{t('structure.orbital_analysis')}</li>
           </ul>
         </section>
       {:else if active_tab === 'md'}
         <section class="module-placeholder">
-          <h5>Molecular Dynamics</h5>
+          <h5>{t('structure.molecular_dynamics')}</h5>
           <ul>
-            <li>Radial distribution function (RDF)</li>
-            <li>Mean square displacement (MSD)</li>
-            <li>Diffusion coefficient</li>
-            <li>Velocity autocorrelation (VACF)</li>
-            <li>Temperature profile</li>
+            <li>{t('structure.rdf')}</li>
+            <li>{t('structure.msd')}</li>
+            <li>{t('structure.diffusion_coef')}</li>
+            <li>{t('structure.vacf')}</li>
+            <li>{t('structure.temperature_profile')}</li>
           </ul>
         </section>
       {:else if active_tab === 'phase'}
         <section class="module-placeholder">
-          <h5>Phase Analysis</h5>
+          <h5>{t('structure.phase_analysis')}</h5>
           <ul>
-            <li>Phase diagram</li>
-            <li>Convex hull</li>
-            <li>Stability analysis</li>
-            <li>Formation energy</li>
+            <li>{t('structure.phase_diagram')}</li>
+            <li>{t('structure.convex_hull')}</li>
+            <li>{t('structure.stability_analysis')}</li>
+            <li>{t('structure.formation_energy')}</li>
           </ul>
         </section>
       {:else if active_tab === 'structure_analysis'}
         <section class="module-placeholder">
-          <h5>Structure Analysis</h5>
+          <h5>{t('structure.structure_analysis')}</h5>
           <ul>
-            <li>Symmetry analysis</li>
-            <li>Coordination environment</li>
-            <li>Voronoi tessellation</li>
-            <li>Bond valence sum</li>
+            <li>{t('structure.symmetry_analysis')}</li>
+            <li>{t('structure.coordination_env')}</li>
+            <li>{t('structure.voronoi')}</li>
+            <li>{t('structure.bond_valence')}</li>
           </ul>
         </section>
       {/if}
@@ -343,8 +347,8 @@
 <FileSourceDialog
   bind:show={show_structure_dialog}
   file_types={[`.cif`, `.vasp`, `.poscar`, `.xyz`, `.json`, `.pdb`]}
-  title="Import Structure for XRD"
-  description="Select a crystal structure file (CIF, POSCAR, etc.)"
+  title={t('structure.import_structure_xrd')}
+  description={t('structure.import_structure_desc')}
   onfile={handle_structure_file}
   onremote_path={handle_structure_remote}
   onclose={() => show_structure_dialog = false}
@@ -379,8 +383,8 @@
     max-width: 65%;
     padding: 3px 6px;
     border-radius: 4px;
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.2));
+    border: 1px solid var(--pane-input-border);
+    background: var(--pane-input-bg);
     color: var(--text-color);
     font-size: 0.85em;
   }
@@ -392,8 +396,8 @@
   .export-row button {
     flex: 1;
     padding: 5px 8px;
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-    background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--border-color);
+    background: var(--pane-btn-bg);
     color: var(--text-color);
     border-radius: 4px;
     cursor: pointer;
@@ -401,7 +405,7 @@
     transition: background 0.15s;
   }
   .export-row button:hover {
-    background: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.15));
+    background: var(--pane-btn-bg-hover);
   }
   .export-row button:disabled {
     opacity: 0.4;
@@ -418,7 +422,7 @@
   .pinned-section {
     margin-top: 10px;
     padding-top: 8px;
-    border-top: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    border-top: var(--pane-border);
   }
   .pinned-title {
     margin: 0 0 6px;
@@ -448,7 +452,7 @@
     opacity: 0.4;
   }
   .pinned-item:hover {
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.05));
+    background: var(--pane-bg-hover);
   }
   .color-dot {
     width: 8px;
@@ -474,7 +478,7 @@
   }
   .pinned-action:hover {
     color: var(--text-color);
-    background: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.1));
+    background: var(--pane-bg-hover);
   }
   .pinned-action.remove:hover {
     color: var(--error-color);

@@ -35,6 +35,8 @@ const DEFAULT_CONFIG: ChatConfig = {
   max_tokens: 4096,
   api_key: ``,
   base_url: ``,
+  api_format: `auto`,
+  fetched_models: {},
   mode: `sdk`,
 }
 

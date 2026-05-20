@@ -4,6 +4,10 @@
   import { API_BASE } from '$lib/api/config'
   import { pluginManager } from '$lib/plugins'
   import PluginInstaller from '$lib/plugins/components/PluginInstaller.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   type HubPlugin = {
     id: string
@@ -48,12 +52,12 @@
   let show_zip_installer = $state(false)
 
   const categories = [
-    { value: `all`, label: `All` },
-    { value: `general`, label: `General` },
-    { value: `calculator`, label: `Calculator` },
-    { value: `reader`, label: `Reader` },
-    { value: `workflow_node`, label: `Workflow` },
-    { value: `optimizer`, label: `Optimizer` },
+    { value: `all`, label: t('structure.all') },
+    { value: `general`, label: t('structure.plugin_category_general') },
+    { value: `calculator`, label: t('structure.plugin_category_calculator') },
+    { value: `reader`, label: t('structure.plugin_category_reader') },
+    { value: `workflow_node`, label: t('common.workflow') },
+    { value: `optimizer`, label: t('structure.optimizer') },
   ]
 
   const installed_ids = $derived(new Set(installed_plugins.map(p => p.id)))
@@ -87,7 +91,7 @@
       hub_plugins = data.plugins ?? data ?? []
       hub_fetched = true
     } catch (e: any) {
-      hub_error = e.message || `Failed to load plugin hub`
+      hub_error = e.message || t('structure.failed_load_plugin_hub')
       console.warn(`[PluginHubPane] Hub fetch failed:`, e)
     } finally {
       loading_hub = false
@@ -106,7 +110,7 @@
       const data = await resp.json()
       installed_plugins = data.installed ?? data.plugins ?? data ?? []
     } catch (e: any) {
-      installed_error = e.message || `Failed to load installed plugins`
+      installed_error = e.message || t('structure.failed_load_installed_plugins')
       console.warn(`[PluginHubPane] Installed fetch failed:`, e)
     } finally {
       loading_installed = false
@@ -127,7 +131,7 @@
       // Refresh installed list
       await fetch_installed()
     } catch (e: any) {
-      action_error = e.message || `Failed to install plugin`
+      action_error = e.message || t('structure.failed_install_plugin')
     } finally {
       installing = { ...installing, [plugin_id]: false }
     }
@@ -146,7 +150,7 @@
       }
       await fetch_installed()
     } catch (e: any) {
-      action_error = e.message || `Failed to uninstall plugin`
+      action_error = e.message || t('structure.failed_uninstall_plugin')
     } finally {
       installing = { ...installing, [plugin_id]: false }
     }
@@ -167,7 +171,7 @@
       }
       await fetch_installed()
     } catch (e: any) {
-      action_error = e.message || `Failed to upgrade trust level`
+      action_error = e.message || t('structure.failed_upgrade_trust')
     } finally {
       installing = { ...installing, [plugin_id]: false }
     }
@@ -186,7 +190,7 @@
       }
       await fetch_installed()
     } catch (e: any) {
-      action_error = e.message || `Failed to update plugin`
+      action_error = e.message || t('structure.failed_update_plugin')
     } finally {
       installing = { ...installing, [plugin_id]: false }
     }
@@ -235,12 +239,12 @@
   max_width="28em"
   pane_props={{ class: 'plugin-hub-pane' }}
 >
-  <h4 class="pane-title">Plugin Hub</h4>
+  <h4 class="pane-title">{t('structure.plugin_hub')}</h4>
   <div class="tab-bar">
-    <button class:active={active_tab === 'hub'} onclick={() => { active_tab = `hub` }}>Hub</button>
-    <button class:active={active_tab === 'installed'} onclick={() => { active_tab = `installed`; fetch_installed() }}>Installed</button>
-    <button class:active={active_tab === 'create'} onclick={() => { active_tab = `create` }}>Create</button>
-    <button class:active={active_tab === 'extensions'} onclick={() => { active_tab = `extensions`; if (!extensions_initialized) pluginManager.init().then(() => { extensions_initialized = true }) }}>Extensions</button>
+    <button class:active={active_tab === 'hub'} onclick={() => { active_tab = `hub` }}>{t('structure.plugin_hub_tab')}</button>
+    <button class:active={active_tab === 'installed'} onclick={() => { active_tab = `installed`; fetch_installed() }}>{t('structure.plugin_installed')}</button>
+    <button class:active={active_tab === 'create'} onclick={() => { active_tab = `create` }}>{t('structure.plugin_create')}</button>
+    <button class:active={active_tab === 'extensions'} onclick={() => { active_tab = `extensions`; if (!extensions_initialized) pluginManager.init().then(() => { extensions_initialized = true }) }}>{t('structure.plugin_extensions')}</button>
   </div>
 
   {#if action_error}
@@ -256,7 +260,7 @@
       <div class="filter-bar">
         <input
           type="text"
-          placeholder="Search plugins..."
+          placeholder={t('structure.search_plugins')}
           bind:value={search_query}
           class="search-input"
         />
@@ -268,12 +272,12 @@
       </div>
 
       {#if loading_hub}
-        <p class="hint">Loading plugins...</p>
+        <p class="hint">{t('structure.loading_plugins')}</p>
       {:else if filtered_hub_plugins.length === 0}
         <p class="hint">
           {hub_plugins.length === 0
-            ? `No plugins available. The hub may be offline.`
-            : `No plugins match your search.`}
+            ? t('structure.no_plugins_available')
+            : t('structure.no_plugins_match')}
         </p>
       {:else}
         <div class="plugin-grid">
@@ -311,10 +315,10 @@
                       disabled={installing[plugin.id]}
                       onclick={() => update_plugin(plugin.id)}
                     >
-                      {installing[plugin.id] ? `Updating...` : `Update`}
+                      {installing[plugin.id] ? t('structure.updating') : t('structure.update')}
                     </button>
                   {:else}
-                    <span class="installed-badge">Installed</span>
+                    <span class="installed-badge">{t('structure.plugin_installed')}</span>
                   {/if}
                 {:else}
                   <button
@@ -322,7 +326,7 @@
                     disabled={installing[plugin.id]}
                     onclick={() => install_plugin(plugin.id)}
                   >
-                    {installing[plugin.id] ? `Installing...` : `Install`}
+                    {installing[plugin.id] ? t('structure.installing') : t('structure.install')}
                   </button>
                 {/if}
               </div>
@@ -336,9 +340,9 @@
         <p class="error-msg">{installed_error}</p>
       {/if}
       {#if loading_installed}
-        <p class="hint">Loading installed plugins...</p>
+        <p class="hint">{t('structure.loading_installed_plugins')}</p>
       {:else if installed_plugins.length === 0}
-        <p class="hint">No plugins installed yet. Browse the Hub to discover and install plugins.</p>
+        <p class="hint">{t('structure.no_plugins_installed')}</p>
       {:else}
         <div class="installed-list">
           {#each installed_plugins as plugin (plugin.id)}
@@ -363,16 +367,16 @@
                     disabled={installing[plugin.id]}
                     onclick={() => update_plugin(plugin.id)}
                   >
-                    {installing[plugin.id] ? `Updating...` : `Update to v${plugin.latest_version}`}
+                    {installing[plugin.id] ? t('structure.updating') : t('structure.update_to_version', { version: plugin.latest_version ?? '' })}
                   </button>
                 {/if}
                 {#if plugin.trust === 'sandboxed'}
                   <button
                     class="action-btn trust-btn"
                     onclick={() => upgrade_trust(plugin.id)}
-                    title="Promote from sandboxed to user trust level for in-process execution"
+                    title={t('structure.promote_trust_title')}
                   >
-                    Upgrade Trust
+                    {t('structure.upgrade_trust')}
                   </button>
                 {/if}
                 {#if plugin.trust !== 'builtin'}
@@ -380,7 +384,7 @@
                     class="action-btn uninstall-btn"
                     onclick={() => uninstall_plugin(plugin.id)}
                   >
-                    Uninstall
+                    {t('structure.uninstall')}
                   </button>
                 {/if}
               </div>
@@ -391,12 +395,12 @@
 
     {:else if active_tab === 'create'}
       <section class="create-section">
-        <h5>Create Plugins with CatBot</h5>
+        <h5>{t('structure.create_plugins_with_catbot')}</h5>
         <p class="create-desc">
-          CatBot can generate custom plugins for you. Open the AI Assistant and describe what you need.
+          {t('structure.create_plugins_desc')}
         </p>
         <div class="create-examples">
-          <p class="examples-label">Example prompts:</p>
+          <p class="examples-label">{t('structure.example_prompts')}</p>
           <ul>
             <li>"Create a plugin that calculates the coordination number distribution"</li>
             <li>"Make a reader plugin for custom XYZ format with velocities"</li>
@@ -404,10 +408,9 @@
           </ul>
         </div>
         <div class="create-format">
-          <p class="examples-label">Plugin format:</p>
+          <p class="examples-label">{t('structure.plugin_format')}</p>
           <p class="format-desc">
-            Every plugin is a Python file with a <code>TOOL</code> dict and an <code>execute(context)</code> function.
-            CatBot handles the boilerplate -- just describe what computation you need.
+            {t('structure.plugin_format_desc')}
           </p>
           <pre class="format-example">{`TOOL = {
     "name": "my_tool",
@@ -431,16 +434,16 @@ async def execute(context):
         />
       {:else}
         <div class="extensions-header">
-          <span class="extensions-title">UI Extensions</span>
+          <span class="extensions-title">{t('structure.ui_extensions')}</span>
           <button class="action-btn install-btn" onclick={() => { show_zip_installer = true }}>
-            Install ZIP
+            {t('structure.install_zip')}
           </button>
         </div>
         {#if !extensions_initialized}
-          <p class="hint">Loading...</p>
+          <p class="hint">{t('common.loading')}</p>
         {:else if pluginManager.pluginsArray.length === 0}
           <p class="hint">
-            No UI extensions installed. UI extensions add custom views, panels, and visualization hooks.
+            {t('structure.no_ui_extensions')}
           </p>
         {:else}
           <div class="installed-list">
@@ -467,11 +470,11 @@ async def execute(context):
                           await pluginManager.enablePlugin(plugin.id)
                         }
                       } catch (e: any) {
-                        action_error = e.message || `Failed to toggle extension`
+                        action_error = e.message || t('structure.failed_toggle_extension')
                       }
                     }}
                   >
-                    {plugin.enabled ? `Disable` : `Enable`}
+                    {plugin.enabled ? t('structure.disable') : t('structure.enable')}
                   </button>
                   <button
                     class="action-btn uninstall-btn"
@@ -482,13 +485,13 @@ async def execute(context):
                       try {
                         await pluginManager.uninstallPlugin(plugin.id)
                       } catch (e: any) {
-                        action_error = e.message || `Failed to uninstall extension`
+                        action_error = e.message || t('structure.failed_uninstall_extension')
                       } finally {
                         installing = { ...installing, [plugin.id]: false }
                       }
                     }}
                   >
-                    {installing[plugin.id] ? `Removing...` : `Uninstall`}
+                    {installing[plugin.id] ? t('structure.removing') : t('structure.uninstall')}
                   </button>
                 </div>
               </div>

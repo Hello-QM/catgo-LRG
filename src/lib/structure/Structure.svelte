@@ -78,6 +78,7 @@
   import { create_file_handlers, content_to_base64 } from './controllers/file-handlers'
   import { create_context_menu_actions } from './controllers/context-menu-actions'
   import { analyze_mof, get_isolated_node_atoms, normalize_sbu_type, compute_rac, compute_wl_hashes, replace_mof_caps } from './mof-analysis'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { MofClusters, MofAnalysisResult, RacResult, WlHashResult, FunctionalGroup } from './mof-analysis'
   import { create_interaction_controller, type InteractionDeps } from './controllers/interaction.svelte'
   import { create_pencil_mode_controller } from './controllers/pencil-mode.svelte'
@@ -85,6 +86,9 @@
   import { create_settings_controller } from './controllers/settings.svelte'
   import { create_transform_controller } from './controllers/transform-controller.svelte'
   import { create_viewer_controller } from './controllers/viewer-controller.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
   import { create_selection_state } from './state/selection-state.svelte'
   import { create_charge_labels_state } from './state/charge-labels-state.svelte'
   import { create_measurement_state } from './state/measurement-state.svelte'
@@ -2734,7 +2738,7 @@
   {:else if error_msg}
     <div class="error-state">
       <p class="error">{error_msg}</p>
-      <button onclick={() => (error_msg = undefined)}>Dismiss</button>
+      <button onclick={() => (error_msg = undefined)}>{t('common.dismiss')}</button>
     </div>
   {:else if (structure?.sites?.length ?? 0) > 0}
     <StructureToolbar
@@ -2953,7 +2957,7 @@
               }}
             />
           {:else if structure && !('lattice' in structure && (structure as any).lattice) && ['slab_cutter', 'adsorption', 'adsorbate', 'water_layer', 'pseudo_h', 'doping', 'pathway'].includes(build.active_build_tab)}
-            <p class="needs-lattice-hint">This tool requires a periodic lattice. Use the <button class="link-btn" onclick={() => { build.active_build_tab = 'lattice' }}>Lattice</button> tab to add one first.</p>
+            <p class="needs-lattice-hint">{t('structure.requires_periodic_lattice', { tab: t('structure.lattice_tab') })}</p>
           {/if}
         </BuildPane>
         {/if}
@@ -2999,10 +3003,10 @@
               />
               <!-- Slow-Growth inline trigger -->
               <section class="sg-section">
-                <h5 class="sg-section-title">Slow-Growth Post-Processing</h5>
+                <h5 class="sg-section-title">{t('structure.slow_growth_post_processing')}</h5>
                 <div class="sg-upload-row">
                   <label class="sg-upload-btn">
-                    Upload REPORT
+                    {t('structure.upload_report')}
                     <input type="file" accept="*" onchange={(e) => {
                       slow_growth_pane_open = true
                       const input = e.target as HTMLInputElement
@@ -3016,13 +3020,13 @@
                   <button class="sg-upload-btn" onclick={() => {
                     slow_growth_pane_open = true
                     window.dispatchEvent(new CustomEvent(`catgo-sg-paste`))
-                  }}>Paste REPORT</button>
+                  }}>{t('structure.paste_report')}</button>
                   <button class="sg-upload-btn" onclick={() => {
                     slow_growth_pane_open = true
                     window.dispatchEvent(new CustomEvent(`catgo-sg-detect-report`))
-                  }} title="Auto-detect REPORT file in current HPC directory">Detect REPORT</button>
+                  }} title={t('structure.detect_report_title')}>{t('structure.detect_report')}</button>
                   {#if slow_growth_pane_open}
-                    <button class="sg-upload-btn sg-close" onclick={() => slow_growth_pane_open = false}>Close</button>
+                    <button class="sg-upload-btn sg-close" onclick={() => slow_growth_pane_open = false}>{t('common.close')}</button>
                   {/if}
                 </div>
               </section>
@@ -3039,11 +3043,11 @@
                 <button
                   class:active={electronic_sub_tab === `bands`}
                   onclick={() => electronic_sub_tab = `bands`}
-                >Bands</button>
+                >{t('structure.bands')}</button>
                 <button
                   class:active={electronic_sub_tab === `charge`}
                   onclick={() => electronic_sub_tab = `charge`}
-                >Charge</button>
+                >{t('structure.charge')}</button>
               </div>
               {#if electronic_sub_tab === `dos`}
                 <DosAnalysisPane
@@ -3136,23 +3140,23 @@
               {/if}
             {:else if analysis.active_analysis_tab ==='phase'}
               <section class="module-placeholder">
-                <h5>Phase Analysis</h5>
+                <h5>{t('structure.phase_analysis')}</h5>
                 <ul>
-                  <li>Phase diagram</li>
-                  <li>Convex hull</li>
-                  <li>Stability analysis</li>
-                  <li>Formation energy</li>
+                  <li>{t('structure.phase_diagram')}</li>
+                  <li>{t('structure.convex_hull')}</li>
+                  <li>{t('structure.stability_analysis')}</li>
+                  <li>{t('structure.formation_energy')}</li>
                 </ul>
               </section>
             {:else if analysis.active_analysis_tab ==='structure_analysis'}
               <section class="symmetry-analysis-section">
                 {#if !structure || !(`lattice` in structure)}
-                  <p class="sym-hint">Load a periodic crystal structure to run symmetry analysis.</p>
+                  <p class="sym-hint">{t('structure.load_periodic_for_symmetry')}</p>
                 {:else}
-                  <h5 class="sym-heading">Symmetry</h5>
+                  <h5 class="sym-heading">{t('structure.symmetry')}</h5>
                   <div class="sym-controls">
                     <label class="sym-control-row">
-                      <span>Precision</span>
+                      <span>{t('structure.precision')}</span>
                       <input
                         type="number"
                         step="1e-5"
@@ -3164,7 +3168,7 @@
                       />
                     </label>
                     <label class="sym-control-row">
-                      <span>Algorithm</span>
+                      <span>{t('structure.algorithm')}</span>
                       <select
                         value={analysis.symmetry_settings.algo}
                         onchange={(e) => analysis.symmetry_settings = { ...analysis.symmetry_settings, algo: e.currentTarget.value as 'Moyo' | 'Spglib' }}
@@ -3175,18 +3179,18 @@
                     </label>
                   </div>
                   <button class="sym-analyze-btn" onclick={analysis.run_symmetry_analysis} disabled={analysis.symmetry_loading}>
-                    {analysis.symmetry_loading ? 'Analyzing...' : 'Analyze'}
+                    {analysis.symmetry_loading ? t('structure.analyzing') : t('structure.analyze')}
                   </button>
                   {#if analysis.symmetry_error}
                     <p class="sym-error">{analysis.symmetry_error}</p>
                   {/if}
                   {#if symmetry_data}
                     <div class="sym-results">
-                      <div>Space Group <strong>{symmetry_data.number} ({symmetry_data.hm_symbol ?? '?'})</strong></div>
-                      <div>Crystal System <strong>{spacegroup_to_crystal_sys(symmetry_data.number)}</strong></div>
-                      <div>Hall Number <strong>{symmetry_data.hall_number}</strong></div>
-                      <div>Pearson <strong>{symmetry_data.pearson_symbol}</strong></div>
-                      <div>Sym Ops <strong>{symmetry_data.operations.length}</strong></div>
+                      <div>{t('structure.space_group')} <strong>{symmetry_data.number} ({symmetry_data.hm_symbol ?? '?'})</strong></div>
+                      <div>{t('structure.crystal_system')} <strong>{spacegroup_to_crystal_sys(symmetry_data.number)}</strong></div>
+                      <div>{t('structure.hall_number_label')} <strong>{symmetry_data.hall_number}</strong></div>
+                      <div>{t('structure.pearson_label')} <strong>{symmetry_data.pearson_symbol}</strong></div>
+                      <div>{t('structure.sym_ops_label')} <strong>{symmetry_data.operations.length}</strong></div>
                     </div>
                     {@const wyckoff_positions = wyckoff_positions_from_moyo(symmetry_data, structure)}
                     {#if wyckoff_positions.length > 0}
@@ -3200,34 +3204,34 @@
 
                   <!-- MOF Topology Analysis -->
                   <hr class="section-divider" />
-                  <h5 class="sym-heading">MOF Topology</h5>
+                  <h5 class="sym-heading">{t('structure.mof_topology')}</h5>
                   <button class="sym-analyze-btn" onclick={run_mof_analysis} disabled={mof_loading}>
-                    {mof_loading ? 'Analyzing...' : 'Analyze'}
+                    {mof_loading ? t('structure.analyzing') : t('structure.analyze')}
                   </button>
                   {#if mof_error}
                     <p class="sym-error">{mof_error}</p>
                   {/if}
                   {#if mof_clusters !== null}
                     {#if !mof_clusters.is_mof}
-                      <p class="sym-hint">Not a MOF structure.</p>
+                      <p class="sym-hint">{t('structure.not_mof_structure')}</p>
                     {:else}
                       {@const nodes = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === 'Node')}
                       {@const linkers = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === 'Linker')}
                       {@const ligands = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === 'Ligand')}
                       <div class="sym-results">
-                        <div>Nodes <strong>{nodes.length}</strong></div>
-                        <div>Linkers <strong>{linkers.length}</strong></div>
+                        <div>{t('structure.mof_nodes')} <strong>{nodes.length}</strong></div>
+                        <div>{t('structure.mof_linkers')} <strong>{linkers.length}</strong></div>
                         {#if ligands.length > 0}
-                          <div>Caps <strong>{ligands.length}</strong></div>
+                          <div>{t('structure.mof_caps')} <strong>{ligands.length}</strong></div>
                         {/if}
                       </div>
                       <div class="mof-sbu-list">
                         {#each nodes as sbu}
                           {@const sbu_hash = wl_hashes?.find(h => h.sbu_index === sbu._idx)}
                           <button class="mof-sbu-row" onclick={() => { selected_sites = [...sbu.atom_indices] }}
-                            title="Click to highlight {sbu.atom_indices.length} atoms">
-                            <span class="mof-sbu-badge node">Node</span>
-                            <span>{sbu.formula || `${sbu.atom_indices.length} atoms`}</span>
+                            title={t('structure.click_highlight_atoms', { n: sbu.atom_indices.length })}>
+                            <span class="mof-sbu-badge node">{t('structure.node')}</span>
+                            <span>{sbu.formula || t('common.atoms_count', { n: sbu.atom_indices.length })}</span>
                             {#if sbu_hash}
                               <span class="mof-wl-hash">#{sbu_hash.hash.toString(16).slice(0, 8)}</span>
                             {/if}
@@ -3236,9 +3240,9 @@
                         {#each linkers as sbu}
                           {@const sbu_hash = wl_hashes?.find(h => h.sbu_index === sbu._idx)}
                           <button class="mof-sbu-row" onclick={() => { selected_sites = [...sbu.atom_indices] }}
-                            title="Click to highlight {sbu.atom_indices.length} atoms">
-                            <span class="mof-sbu-badge linker">Linker</span>
-                            <span>{sbu.formula || `${sbu.atom_indices.length} atoms`}</span>
+                            title={t('structure.click_highlight_atoms', { n: sbu.atom_indices.length })}>
+                            <span class="mof-sbu-badge linker">{t('structure.linker')}</span>
+                            <span>{sbu.formula || t('common.atoms_count', { n: sbu.atom_indices.length })}</span>
                             {#if sbu_hash}
                               <span class="mof-wl-hash">#{sbu_hash.hash.toString(16).slice(0, 8)}</span>
                             {/if}
@@ -3247,9 +3251,9 @@
                         {#each ligands as sbu}
                           {@const sbu_hash = wl_hashes?.find(h => h.sbu_index === sbu._idx)}
                           <button class="mof-sbu-row" onclick={() => { selected_sites = [...sbu.atom_indices] }}
-                            title="Click to highlight {sbu.atom_indices.length} atoms">
-                            <span class="mof-sbu-badge cap">Cap</span>
-                            <span>{sbu.formula || `${sbu.atom_indices.length} atoms`}</span>
+                            title={t('structure.click_highlight_atoms', { n: sbu.atom_indices.length })}>
+                            <span class="mof-sbu-badge cap">{t('structure.cap')}</span>
+                            <span>{sbu.formula || t('common.atoms_count', { n: sbu.atom_indices.length })}</span>
                             {#if sbu_hash}
                               <span class="mof-wl-hash">#{sbu_hash.hash.toString(16).slice(0, 8)}</span>
                             {/if}
@@ -3261,12 +3265,12 @@
                       {@const func_groups = mof_clusters?.functional_groups ?? []}
                       {#if func_groups.length > 0}
                         <div style="margin-top: 6px">
-                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">Functional Groups</div>
+                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">{t('structure.functional_groups')}</div>
                           {#each func_groups as fg}
                             <button class="mof-sbu-row" onclick={() => { selected_sites = [...fg.atom_indices] }}
-                              title="Click to highlight">
+                              title={t('structure.click_highlight')}>
                               <span class="mof-sbu-badge func">-{fg.name}</span>
-                              <span style="font-size: 0.75rem">on SBU #{fg.parent_sbu}</span>
+                              <span style="font-size: 0.75rem">{t('structure.on_sbu', { n: fg.parent_sbu })}</span>
                             </button>
                           {/each}
                         </div>
@@ -3285,12 +3289,12 @@
                             rac_loading = false
                           }
                         }} disabled={rac_loading || !mof_clusters?.is_mof}>
-                          {rac_loading ? 'Computing RAC...' : 'Compute RAC'}
+                          {rac_loading ? t('structure.computing_rac') : t('structure.compute_rac')}
                         </button>
                         {#if rac_result}
                           <div class="rac-table-container">
                             <table class="rac-table">
-                              <thead><tr><th>Name</th><th>Value</th></tr></thead>
+                              <thead><tr><th>{t('common.name')}</th><th>{t('structure.value')}</th></tr></thead>
                               <tbody>
                                 {#each rac_result.descriptors.slice(0, 20) as d}
                                   <tr><td>{d.name}</td><td>{d.value.toFixed(4)}</td></tr>
@@ -3298,7 +3302,7 @@
                               </tbody>
                             </table>
                             {#if rac_result.descriptors.length > 20}
-                              <p class="sym-hint">{rac_result.descriptors.length} total descriptors (showing first 20)</p>
+                              <p class="sym-hint">{t('structure.total_descriptors_first20', { n: rac_result.descriptors.length })}</p>
                             {/if}
                             <button class="sym-analyze-btn" style="margin-top: 4px" onclick={() => {
                               if (!rac_result) return
@@ -3308,7 +3312,7 @@
                               const a = document.createElement('a')
                               a.href = url; a.download = 'rac_descriptors.csv'; a.click()
                               URL.revokeObjectURL(url)
-                            }}>Export CSV</button>
+                            }}>{t('structure.export_csv')}</button>
                           </div>
                         {/if}
                       </div>
@@ -3316,12 +3320,12 @@
                       <!-- Cap Replacement -->
                       {#if ligands.length > 0}
                         <div style="margin-top: 8px">
-                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">Replace Caps</div>
+                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">{t('structure.replace_caps')}</div>
                           <div style="display: flex; gap: 4px">
                             <input
                               type="text"
                               bind:value={cap_replace_smiles}
-                              placeholder="SMILES string..."
+                              placeholder={t('structure.smiles_placeholder')}
                               class="mof-smiles-input"
                             />
                             <button class="sym-analyze-btn" disabled={cap_replace_loading || !cap_replace_smiles.trim()}
@@ -3343,7 +3347,7 @@
                                   if (new_struct) {
                                     structure = new_struct
                                   } else {
-                                    cap_replace_error = 'Cap replacement failed'
+                                    cap_replace_error = t('structure.cap_replacement_failed')
                                   }
                                 } catch (err) {
                                   cap_replace_error = err instanceof Error ? err.message : String(err)
@@ -3351,7 +3355,7 @@
                                   cap_replace_loading = false
                                 }
                               }}>
-                              {cap_replace_loading ? '...' : 'Apply'}
+                              {cap_replace_loading ? '...' : t('common.apply')}
                             </button>
                           </div>
                           {#if cap_replace_error}
@@ -3771,7 +3775,7 @@
           <rect x="8" y="2" width="8" height="4" rx="1"/>
         </svg>
         <span>{atom_clipboard.sites.length} atoms copied</span>
-        <button class="clipboard-dismiss" onclick={() => { atom_clipboard.sites = null; atom_clipboard.paste_count = 0 }} title="Clear clipboard">&times;</button>
+        <button class="clipboard-dismiss" onclick={() => { atom_clipboard.sites = null; atom_clipboard.paste_count = 0 }} title={t('structure.clear_clipboard')}>&times;</button>
       </div>
     {/if}
 
@@ -3823,61 +3827,61 @@
       }}
       sections={[
         {
-          title: `Add Atom`,
+          title: t('structure.add_atom_section'),
           options: [
             {
               value: `add`,
-              label: `Add ${selected_add_element} atom`,
+              label: t('structure.add_atom_label', { elem: selected_add_element }),
               icon: `Atom`,
               disabled: !context_menu_3d_position,
             },
           ],
         },
         {
-          title: 'Selection',
+          title: t('structure.selection_section'),
           options: [
             ...unique_elements.map((el) => ({
               value: `select_element_${el}`,
-              label: `Select all ${el}`,
+              label: t('structure.select_all_elem', { elem: el }),
             })),
             {
               value: 'select_all',
-              label: 'Select all',
+              label: t('common.select_all'),
               disabled: !structure?.sites?.length,
             },
             {
               value: 'Invert',
-              label: 'Invert selection',
+              label: t('structure.invert_selection'),
               icon: 'Reset',
               disabled: !structure?.sites?.length,
             },
             {
               value: 'clear',
-              label: 'Clear selection',
+              label: t('structure.clear_selection'),
               disabled: selected_sites.length === 0,
             },
           ],
         },
         {
-          title: `Edit Atoms`,
+          title: t('structure.edit_atoms'),
           options: [
             {
               value: `replace`,
               label: context_menu_target_site !== null
-                ? `Replace with ${selected_add_element}`
+                ? t('structure.replace_with_elem', { elem: selected_add_element })
                 : selected_sites.length > 0
-                ? `Replace ${selected_sites.length} selected with ${selected_add_element}`
-                : `Replace with ${selected_add_element}`,
+                ? t('structure.replace_selected_with_elem', { n: selected_sites.length, elem: selected_add_element })
+                : t('structure.replace_with_elem', { elem: selected_add_element }),
               icon: `Reset`,
               disabled: context_menu_target_site === null && selected_sites.length === 0,
             },
             {
               value: `delete`,
               label: context_menu_target_site !== null
-                ? `Delete atom`
+                ? t('structure.delete_atom')
                 : selected_sites.length > 0
-                ? `Delete ${selected_sites.length} selected`
-                : `Delete atom`,
+                ? t('structure.delete_selected', { n: selected_sites.length })
+                : t('structure.delete_atom'),
               icon: `Close`,
               disabled: context_menu_target_site === null &&
                 selected_sites.length === 0,
@@ -3885,16 +3889,16 @@
             {
               value: `hide`,
               label: context_menu_target_site !== null
-                ? `Hide atom`
+                ? t('structure.hide_atom')
                 : selected_sites.length > 0
-                ? `Hide ${selected_sites.length} selected`
-                : `Hide atom`,
+                ? t('structure.hide_selected', { n: selected_sites.length })
+                : t('structure.hide_atom'),
               disabled: context_menu_target_site === null &&
                 selected_sites.length === 0,
             },
             {
               value: `show_all`,
-              label: `Show all atoms`,
+              label: t('structure.show_all_atoms'),
               disabled: hidden_sites.size === 0,
             },
           ],
@@ -3902,35 +3906,35 @@
         ...ctx_constraints_section,
         ...ctx_charge_label_section,
         {
-          title: `Atom Color`,
+          title: t('structure.atom_color'),
           options: [
             {
               value: `set_color`,
               label: context_menu_target_site !== null
-                ? `Set color...`
+                ? t('structure.set_color')
                 : selected_sites.length > 0
-                ? `Set color (${selected_sites.length} selected)...`
-                : `Set color...`,
+                ? t('structure.set_color_selected', { n: selected_sites.length })
+                : t('structure.set_color'),
               disabled: context_menu_target_site === null && selected_sites.length === 0,
             },
             {
               value: `reset_color`,
               label: context_menu_target_site !== null
-                ? `Reset color`
+                ? t('structure.reset_color')
                 : selected_sites.length > 0
-                ? `Reset color (${selected_sites.length} selected)`
-                : `Reset color`,
+                ? t('structure.reset_color_selected', { n: selected_sites.length })
+                : t('structure.reset_color'),
               disabled: context_menu_target_site === null && selected_sites.length === 0,
             },
             {
               value: `reset_all_colors`,
-              label: `Reset all colors`,
+              label: t('structure.reset_all_colors'),
               disabled: site_color_overrides.size === 0,
             },
           ],
         },
         {
-          title: `Defect Atom`,
+          title: t('structure.defect_atom'),
           options: [
             {
               value: `toggle_ghost`,
@@ -3939,38 +3943,38 @@
             },
             {
               value: `clear_all_ghosts`,
-              label: `Clear all ghosts`,
+              label: t('structure.clear_all_ghosts'),
               disabled: ghost_atom_indices.size === 0,
             },
           ],
         },
         {
-          title: 'Import',
+          title: t('common.import'),
           options: [
             {
               value: 'import_molecule',
-              label: 'Import molecule here',
+              label: t('structure.import_molecule_here'),
               icon: 'Plus',
               disabled: !context_menu_3d_position || !structure,
             },
             {
               value: 'load_charges',
-              label: 'Load charges (ACF.dat)',
+              label: t('structure.load_charges_acf'),
               disabled: !structure,
             },
           ],
         },
         {
-          title: `Clipping`,
+          title: t('structure.clipping'),
           options: [
             {
               value: `clip_here`,
-              label: `Clip around this atom`,
+              label: t('structure.clip_around_atom'),
               disabled: context_menu_target_site === null,
             },
             {
               value: `clip_clear`,
-              label: `Clear clipping`,
+              label: t('structure.clear_clipping'),
               disabled: !scene_props.clip_active,
             },
           ],
@@ -3980,38 +3984,38 @@
           options: [
             {
               value: `isolate_node`,
-              label: `Isolate Node`,
+              label: t('structure.isolate_node'),
               disabled: context_menu_target_site === null,
             },
             {
               value: `clear_isolation`,
-              label: `Clear Isolation`,
+              label: t('structure.clear_isolation'),
               disabled: !isolated_node_atoms,
             },
           ],
         }] : []),
         // [2025-02] "Save to project" section — only shown when desktop app provides callback
         ...((on_save_to_project || on_save_to_database || on_export_to_hpc || on_export_to_file || on_edit_as_text) ? [{ // Save / Export section
-          title: 'Save / Export',
+          title: t('structure.save_export'),
           options: [
             ...(on_save_to_database ?? on_save_to_project ? [{
               value: on_save_to_database ? 'save_to_database' : 'save_to_project',
-              label: 'Save to CatGo database...',
+              label: t('structure.save_to_catgo_database'),
               disabled: !structure,
             }] : []),
             ...(on_export_to_hpc ? [{
               value: 'export_to_hpc',
-              label: 'Export to HPC...',
+              label: t('structure.export_to_hpc'),
               disabled: !structure,
             }] : []),
             ...(on_export_to_file ? [{
               value: 'export_to_file',
-              label: 'Export to local computer...',
+              label: t('structure.export_to_local_computer'),
               disabled: !structure,
             }] : []),
             ...(on_edit_as_text ? [{
               value: 'edit_as_text',
-              label: 'Edit as text...',
+              label: t('structure.edit_as_text'),
               disabled: !structure,
             }] : []),
           ],
@@ -4024,7 +4028,7 @@
       {@const selector_top = `${context_menu_position.y}px`}
       {@const selector_left = `${context_menu_position.x + 180}px`}
       <div class="element-selector" style:top={selector_top} style:left={selector_left}>
-        <div class="element-selector-header">Select Element:</div>
+        <div class="element-selector-header">{t('structure.select_element')}</div>
         <div class="element-grid">
           {#each elem_symbols as element}
             <button
@@ -4043,25 +4047,25 @@
 
   {:else if structure}
     <div class="empty-structure-state">
-      <p>No atoms in structure</p>
+      <p>{t('structure.no_atoms_in_structure')}</p>
       <div class="empty-actions">
         <button class="empty-action-btn" onclick={() => { if (on_clear_structure) on_clear_structure(); else structure = undefined }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          Import New
+          {t('structure.import_new')}
         </button>
         <button class="empty-action-btn" onclick={() => undo()} disabled={!sel_state.can_undo}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 10h13a4 4 0 010 8H7"/>
             <path d="M3 10l4-4M3 10l4 4"/>
           </svg>
-          Undo
+          {t('common.undo')}
         </button>
       </div>
     </div>
   {:else}
-    <p class="warn">No structure provided</p>
+    <p class="warn">{t('structure.no_structure_provided')}</p>
   {/if}
 
   <!-- Hidden file input for molecule import -->
@@ -4137,7 +4141,7 @@
     <div class="periodic-table-modal-overlay" onclick={() => periodic_table_visible = false}>
       <div class="periodic-table-modal" onclick={(e) => e.stopPropagation()}>
         <div class="periodic-table-modal-header">
-          <h3>Select Element</h3>
+          <h3>{t('structure.select_element')}</h3>
           <button
             type="button"
             class="close-btn"
@@ -4167,7 +4171,7 @@
         </div>
         <div class="periodic-table-modal-footer">
           <span class="selected-element-display">
-            Selected: <strong>{selected_add_element}</strong>
+            {t('structure.selected_elem', { elem: selected_add_element })}
           </span>
         </div>
       </div>
@@ -4185,7 +4189,7 @@
         onclick={(e) => e.stopPropagation()}
       >
         <div class="charge-color-row">
-          <span class="charge-color-label">Text</span>
+          <span class="charge-color-label">{t('structure.text')}</span>
           <input
             type="color"
             value={(charge_state.charge_label_colors.get(charge_state.charge_color_menu.idx) ?? {}).text || `#9e9e9e`}
@@ -4199,7 +4203,7 @@
           />
         </div>
         <div class="charge-color-row">
-          <span class="charge-color-label">Background</span>
+          <span class="charge-color-label">{t('structure.background_label')}</span>
           <input
             type="color"
             value={(charge_state.charge_label_colors.get(charge_state.charge_color_menu.idx) ?? {}).bg || `#14141e`}
@@ -4221,7 +4225,7 @@
             charge_state.charge_label_colors = updated
             charge_state.charge_color_menu = null
           }}
-        >Reset colors</button>
+        >{t('structure.reset_colors')}</button>
         <button
           class="charge-color-reset charge-color-remove"
           onclick={() => {
@@ -4232,7 +4236,7 @@
             charge_state.charge_label_colors = updated
             charge_state.charge_color_menu = null
           }}
-        >Remove label</button>
+        >{t('structure.remove_label')}</button>
       </div>
     </div>
   {/if}
@@ -4279,24 +4283,24 @@
   {#if show_md_panel}
     <div class="md-panel">
       <div class="md-panel-header">
-        <span class="md-panel-title">{md_plot_data?.title || `MD Analysis`}</span>
+        <span class="md-panel-title">{md_plot_data?.title || t('structure.md_analysis')}</span>
         <div class="md-panel-controls">
           <button
             class="md-settings-btn"
             class:active={md_settings_open}
-            title="Plot settings"
+            title={t('structure.plot_settings')}
             onclick={() => md_settings_open = !md_settings_open}
           >&#9881;</button>
           <button
             class="md-layout-btn"
-            title="Toggle horizontal/vertical layout"
+            title={t('structure.toggle_hv_layout')}
             onclick={() => md_layout = md_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {md_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
           <button
             class="md-close-btn"
-            title="Close MD panel"
+            title={t('structure.close_panel_label', { name: 'MD' })}
             onclick={() => md_plot_data = null}
           >&times;</button>
         </div>
@@ -4305,19 +4309,19 @@
         <div class="md-settings-bar">
           <label class="md-setting">
             <span>X</span>
-            <input type="text" bind:value={md_x_label} placeholder="X label" />
+            <input type="text" bind:value={md_x_label} placeholder={t('structure.x_label')} />
           </label>
           <label class="md-setting">
             <span>Y</span>
-            <input type="text" bind:value={md_y_label} placeholder="Y label" />
+            <input type="text" bind:value={md_y_label} placeholder={t('structure.y_label')} />
           </label>
           <label class="md-setting md-checkbox">
             <input type="checkbox" bind:checked={md_show_gridlines} />
-            <span>Grid</span>
+            <span>{t('structure.grid')}</span>
           </label>
           <label class="md-setting md-checkbox">
             <input type="checkbox" bind:checked={md_show_legend} />
-            <span>Legend</span>
+            <span>{t('structure.legend')}</span>
           </label>
         </div>
       {/if}
@@ -4343,7 +4347,7 @@
         <div class="dos-panel-controls">
           <button
             class="dos-layout-btn"
-            title="Toggle horizontal/vertical layout"
+            title={t('structure.toggle_hv_layout')}
             onclick={() => dos_layout = dos_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {dos_layout === `horizontal` ? `\u2194` : `\u2195`}
@@ -4353,7 +4357,7 @@
           <button class="dos-export-btn" onclick={() => { if (dos_plot_ref) { const csv = dos_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `dos_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
           <button
             class="dos-close-btn"
-            title="Close DOS panel"
+            title={t('structure.close_panel_label', { name: 'DOS' })}
             onclick={() => { dos_state.dos_result = null; dos_state.dband_result = null }}
           >&times;</button>
         </div>
@@ -4387,19 +4391,19 @@
   {#if xrd.show_panel}
     <div class="xrd-panel" class:vertical={xrd.layout === `vertical`}>
       <div class="xrd-panel-header">
-        <span class="xrd-panel-title">XRD Pattern{xrd.pinned_patterns.length > 0 ? ` (${xrd.bar_series.length} series)` : ``}</span>
+        <span class="xrd-panel-title">{xrd.pinned_patterns.length > 0 ? t('structure.xrd_pattern_series', { n: xrd.bar_series.length }) : t('structure.xrd_pattern')}</span>
         <div class="xrd-panel-actions">
           <button
             class="xrd-layout-btn"
             onclick={xrd.toggle_layout}
-            title="Toggle layout"
+            title={t('structure.toggle_hv_layout')}
           >
             {xrd.layout === `horizontal` ? `\u2B82` : `\u2B81`}
           </button>
           <button
             class="xrd-close-btn"
             onclick={() => { analysis.active_analysis_tab = `electronic` }}
-            title="Close XRD panel"
+            title={t('structure.close_panel_label', { name: 'XRD' })}
           >
             <Icon icon="Close" />
           </button>
@@ -4420,12 +4424,12 @@
         <BarPlot
           series={xrd.bar_series}
           x_axis={{
-            label: `2\u03B8 (degrees)`,
+            label: t('structure.two_theta_degrees'),
             label_shift: { y: 12 },
             range: xrd.angle_range,
           }}
           y_axis={{
-            label: `Intensity (a.u.)`,
+            label: t('structure.intensity_au'),
             label_shift: { x: 2 },
             range: [0, 100],
           }}
@@ -4446,7 +4450,7 @@
         <div class="dos-panel-controls">
           <button
             class="dos-layout-btn"
-            title="Toggle horizontal/vertical layout"
+            title={t('structure.toggle_hv_layout')}
             onclick={() => cohp_layout = cohp_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {cohp_layout === `horizontal` ? `\u2194` : `\u2195`}
@@ -4456,7 +4460,7 @@
           <button class="dos-export-btn" onclick={() => { if (cohp_plot_ref) { const csv = cohp_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `cohp_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
           <button
             class="dos-close-btn"
-            title="Close COHP panel"
+            title={t('structure.close_panel_label', { name: 'COHP' })}
             onclick={() => { cohp_state.cohp_result = null }}
           >&times;</button>
         </div>
@@ -4493,11 +4497,11 @@
   {#if show_band_panel && band_state.band_data}
     <div class="dos-panel">
       <div class="dos-panel-header">
-        <span class="dos-panel-title">Bands</span>
+        <span class="dos-panel-title">{t('structure.bands')}</span>
         <div class="dos-panel-controls">
           <button
             class="dos-layout-btn"
-            title="Toggle horizontal/vertical layout"
+            title={t('structure.toggle_hv_layout')}
             onclick={() => band_layout = band_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {band_layout === `horizontal` ? `\u2194` : `\u2195`}
@@ -4507,7 +4511,7 @@
           <button class="dos-export-btn" onclick={() => { if (band_plot_ref) { const csv = band_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `band_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
           <button
             class="dos-close-btn"
-            title="Close Band panel"
+            title={t('structure.close_panel_label', { name: t('structure.bands') })}
             onclick={() => { band_state.band_data = null; band_state.projections = null }}
           >&times;</button>
         </div>
@@ -4561,7 +4565,7 @@
       {#if side_panel_minimized}
         <button
           class="side-panel-restore-btn"
-          title="Restore panel"
+          title={t('structure.restore_panel')}
           onclick={() => { side_panel_minimized = false }}
         >
           {(show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`) ? `\u25B4` : `\u25C2`}
@@ -5216,9 +5220,9 @@
   .side-panel-restore-btn {
     position: absolute;
     z-index: 6;
-    background: light-dark(rgba(230, 230, 230, 0.85), rgba(30, 30, 30, 0.85));
+    background: var(--pane-btn-bg);
     color: var(--text-color-dim, #ccc);
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+    border: var(--pane-border);
     font-size: 12px;
     line-height: 1;
     padding: 0;
@@ -5228,7 +5232,7 @@
     justify-content: center;
   }
   .side-panel-restore-btn:hover {
-    background: light-dark(rgba(200, 200, 200, 0.95), rgba(60, 60, 60, 0.95));
+    background: var(--pane-btn-bg-hover);
     color: var(--text-color);
   }
   /* Minimized state: restore button fills the collapsed bar */
@@ -5742,23 +5746,23 @@
   .md-panel {
     display: flex;
     flex-direction: column;
-    background: light-dark(rgba(240, 240, 245, 0.95), rgba(20, 20, 30, 0.95));
-    border-left: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+    background: var(--pane-bg);
+    border-left: var(--pane-border);
     min-height: 0;
     min-width: 0;
     overflow: hidden;
   }
   .structure.md-vertical .md-panel {
     border-left: none;
-    border-top: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+    border-top: var(--pane-border);
   }
   .md-panel-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 3px 8px;
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.04));
-    border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.06));
+    background: var(--pane-tabs-bg, var(--surface-bg));
+    border-bottom: var(--pane-border);
     flex-shrink: 0;
   }
   .md-panel-title {
@@ -5773,24 +5777,24 @@
   }
   .md-layout-btn, .md-close-btn, .md-settings-btn {
     padding: 2px 6px;
-    background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08));
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.12));
+    background: var(--pane-btn-bg);
+    border: 1px solid var(--border-color);
     border-radius: 3px;
     color: var(--struct-text-color, #ccc);
     cursor: pointer;
     font-size: 0.75em;
   }
-  .md-settings-btn.active { background: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18)); }
-  .md-settings-btn:hover, .md-layout-btn:hover { background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15)); }
+  .md-settings-btn.active { background: var(--pane-btn-bg-hover); }
+  .md-settings-btn:hover, .md-layout-btn:hover { background: var(--pane-btn-bg-hover); }
   .md-close-btn { color: var(--error-color, #f55); }
-  .md-close-btn:hover { background: rgba(255, 60, 60, 0.2); }
+  .md-close-btn:hover { background: color-mix(in srgb, var(--error-color) 15%, transparent); }
   .md-settings-bar {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 4px 8px;
-    background: light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.03));
-    border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.06));
+    background: var(--pane-card-bg);
+    border-bottom: var(--pane-border);
     flex-shrink: 0;
     flex-wrap: wrap;
   }
@@ -5804,8 +5808,8 @@
   .md-setting input[type="text"] {
     width: 90px;
     padding: 1px 4px;
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08));
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15));
+    background: var(--pane-input-bg);
+    border: 1px solid var(--pane-input-border);
     border-radius: 3px;
     color: var(--struct-text-color, #ccc);
     font-size: 1em;
@@ -5857,8 +5861,8 @@
     min-width: 0;
     padding: 4px 6px;
     border-radius: 4px;
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.2));
+    border: 1px solid var(--pane-input-border);
+    background: var(--pane-input-bg);
     color: var(--text-color);
     font-size: 0.9em;
   }
@@ -5867,16 +5871,16 @@
     min-width: 0;
     padding: 4px 6px;
     border-radius: 4px;
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-    background: light-dark(rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.2));
+    border: 1px solid var(--pane-input-border);
+    background: var(--pane-input-bg);
     color: var(--text-color);
     font-size: 0.9em;
   }
   .sym-analyze-btn {
     width: 100%;
     padding: 6px 12px;
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.25));
-    background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1));
+    border: 1px solid var(--border-color);
+    background: var(--pane-btn-bg);
     color: var(--text-color);
     border-radius: 4px;
     cursor: pointer;
@@ -5885,7 +5889,7 @@
     transition: background 0.15s;
   }
   .sym-analyze-btn:hover:not(:disabled) {
-    background: light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
+    background: var(--pane-btn-bg-hover);
   }
   .sym-analyze-btn:disabled {
     opacity: 0.5;
@@ -5897,7 +5901,7 @@
     gap: 4px;
     margin: 10px 0;
     padding: 8px;
-    background: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.04));
+    background: var(--pane-card-bg);
     border-radius: 4px;
   }
   .sym-results div {
@@ -5925,7 +5929,7 @@
   }
   .section-divider {
     border: none;
-    border-top: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15));
+    border-top: var(--pane-border);
     margin: 12px 0;
   }
   .mof-sbu-list {
@@ -5941,7 +5945,7 @@
     align-items: center;
     gap: 8px;
     padding: 4px 8px;
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.12));
+    border: 1px solid var(--border-color);
     border-radius: 4px;
     background: transparent;
     color: var(--text-color);
@@ -5951,7 +5955,7 @@
     width: 100%;
   }
   .mof-sbu-row:hover {
-    background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1));
+    background: var(--pane-bg-hover);
   }
   .mof-sbu-badge {
     font-size: 0.75em;
@@ -5967,9 +5971,9 @@
   .mof-smiles-input {
     flex: 1;
     padding: 4px 8px;
-    border: 1px solid light-dark(#d1d5db, #4b5563);
+    border: 1px solid var(--pane-input-border);
     border-radius: 4px;
-    background: light-dark(#fff, #1f2937);
+    background: var(--pane-input-bg);
     color: inherit;
     font-size: 0.8rem;
     min-width: 0;
@@ -5987,12 +5991,12 @@
   .rac-table th, .rac-table td {
     padding: 2px 6px;
     text-align: left;
-    border-bottom: 1px solid light-dark(#e5e7eb, #374151);
+    border-bottom: var(--pane-border);
   }
   .rac-table th { font-weight: 600; }
   .mof-wl-hash {
     font-size: 0.65rem;
-    color: light-dark(#9ca3af, #6b7280);
+    color: var(--text-color-muted);
     font-family: monospace;
   }
 

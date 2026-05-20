@@ -13,14 +13,10 @@
     type SchedulerType,
     type AuthMethod,
   } from '$lib/api/hpc'
-  import {
-    hpc_session_store,
-    refresh_hpc_sessions,
-    add_session,
-    remove_session,
-    LOCAL_SESSION_ID,
-    type HPCSessionInfo,
-  } from '$lib/hpc-sessions.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { hpc_session_store, refresh_hpc_sessions, add_session, remove_session } from '$lib/hpc-sessions.svelte'
+
+  load_i18n_module('common')
 
   let {
     show = $bindable(false),
@@ -32,7 +28,7 @@
   type ConnStatus = `idle` | `connecting` | `otp_required` | `connected` | `error`
   let conn_status = $state<ConnStatus>(`idle`)
   let conn_error = $state(``)
-  let otp_prompt = $state(`Verification code:`)
+  let otp_prompt = $state(t('common.verification_code'))
   let otp_code = $state(``)
   let ws_conn = $state<HPCWSConnection | null>(null)
   let connected_session_id = $state(``)
@@ -208,7 +204,7 @@
       },
       onOTPRequired: (prompt) => {
         conn_status = `otp_required`
-        otp_prompt = prompt || `Verification code:`
+        otp_prompt = prompt || t('common.verification_code')
         otp_code = ``
       },
       onError: (message) => {
@@ -322,27 +318,34 @@
   >
     <div class="dialog-modal connect-modal">
       <div class="modal-header">
-        <h2 class="modal-title">Connect to Server</h2>
-        <button class="close-btn" onclick={close}>x</button>
+        <div class="header-copy">
+          <h2 class="modal-title">Connect to Server</h2>
+          <p class="modal-subtitle">Create or reuse an HPC connection for workflow execution.</p>
+        </div>
+        <button class="close-btn" onclick={close} aria-label="Close dialog">✕</button>
       </div>
 
       <div class="modal-body">
-
         <!-- Connected Sessions List -->
         {#if hpc_session_store.sessions.length > 0}
-          <section class="conn-section">
-            <h4 class="section-label">Active Connections</h4>
+          <section class="conn-section conn-card conn-card-compact">
+            <div class="section-heading">
+              <h4 class="section-label">Active Connections</h4>
+              <span class="section-meta">{hpc_session_store.sessions.length} active</span>
+            </div>
             <div class="session-list">
               {#each hpc_session_store.sessions as s}
                 <div class="session-item">
                   <span class="session-dot connected"></span>
-                  <span class="session-info">{s.username}@{s.host}</span>
-                  <span class="session-sched">{s.scheduler}</span>
+                  <div class="session-copy">
+                    <span class="session-info">{s.username}@{s.host}</span>
+                    <span class="session-sched">{s.scheduler}</span>
+                  </div>
                   <button
                     class="session-disconnect"
                     onclick={() => do_disconnect(s.session_id)}
                     title="Disconnect"
-                  >✕</button>
+                  >Disconnect</button>
                 </div>
               {/each}
             </div>
@@ -351,12 +354,15 @@
 
         <!-- Status Messages -->
         {#if conn_status === `connecting`}
-          <section class="conn-section status-section">
-            <div class="status-msg connecting">Connecting...</div>
+          <section class="conn-section status-section status-connecting">
+            <div class="status-eyebrow">Connection status</div>
+            <div class="status-msg connecting">Connecting to server...</div>
+            <p class="status-description">Please keep this dialog open while the secure session is being established.</p>
           </section>
         {:else if conn_status === `otp_required`}
-          <section class="conn-section status-section">
-            <h4 class="section-label">Two-Factor Authentication</h4>
+          <section class="conn-section status-section status-otp">
+            <div class="status-eyebrow">Verification required</div>
+            <h4 class="section-label no-divider">Two-Factor Authentication</h4>
             <p class="status-description">{otp_prompt}</p>
             <div class="otp-row">
               <input
@@ -371,24 +377,30 @@
             </div>
           </section>
         {:else if conn_status === `connected`}
-          <section class="conn-section status-section">
+          <section class="conn-section status-section status-success">
+            <div class="status-eyebrow">Connection status</div>
             <div class="status-msg success">Connected to {connected_username}@{connected_host}</div>
+            <p class="status-description">You can proceed with workflow execution or open another connection.</p>
             <button class="btn-new" onclick={reset_form}>Connect Another</button>
           </section>
         {:else if conn_status === `error`}
-          <section class="conn-section status-section">
+          <section class="conn-section status-section status-error">
+            <div class="status-eyebrow">Connection failed</div>
             <div class="status-msg error-msg">{conn_error}</div>
+            <p class="status-description">Check the connection details and try again.</p>
             <button class="btn-new" onclick={reset_form}>Try Again</button>
           </section>
         {/if}
 
         <!-- Connection Form (shown when idle) -->
         {#if conn_status === `idle`}
-
           <!-- Profiles -->
           {#if profiles.length > 0}
-            <section class="conn-section">
-              <h4 class="section-label">Saved Profiles</h4>
+            <section class="conn-section conn-card conn-card-compact">
+              <div class="section-heading">
+                <h4 class="section-label">Saved Profiles</h4>
+                <span class="section-meta">{profiles.length} saved</span>
+              </div>
               <div class="profile-row">
                 <select
                   bind:value={selected_profile}
@@ -407,8 +419,11 @@
           {/if}
 
           <!-- New Connection -->
-          <section class="conn-section">
-            <h4 class="section-label">New Connection</h4>
+          <section class="conn-section conn-card">
+            <div class="section-heading">
+              <h4 class="section-label">New Connection</h4>
+              <span class="section-meta">Secure shell setup</span>
+            </div>
             <div class="form-grid">
               <label>
                 Auth
@@ -459,13 +474,16 @@
             </div>
 
             <!-- Jump Host -->
-            <label class="checkbox-row">
+            <label class="checkbox-row toggle-row">
               <input type="checkbox" bind:checked={use_jump} />
-              Use jump host (bastion)
+              <span class="toggle-copy">
+                <span class="toggle-title">Use jump host</span>
+                <span class="toggle-description">Route the connection through a bastion server.</span>
+              </span>
             </label>
 
             {#if use_jump}
-              <div class="form-grid jump-fields">
+              <div class="form-grid option-card jump-fields">
                 <label>
                   Jump Host
                   <input type="text" bind:value={jump_host} placeholder="bastion.example.com" />
@@ -495,13 +513,16 @@
             {/if}
 
             <!-- Network Settings (SOCKS5 proxy) -->
-            <label class="checkbox-row">
+            <label class="checkbox-row toggle-row">
               <input type="checkbox" bind:checked={use_proxy} />
-              Use SOCKS5 proxy
+              <span class="toggle-copy">
+                <span class="toggle-title">Use SOCKS5 proxy</span>
+                <span class="toggle-description">Forward traffic through an existing proxy endpoint.</span>
+              </span>
             </label>
 
             {#if use_proxy}
-              <div class="form-grid jump-fields">
+              <div class="form-grid option-card jump-fields">
                 <label>
                   Proxy Host
                   <input type="text" bind:value={proxy_host} placeholder="127.0.0.1" />
@@ -545,33 +566,70 @@
 
 <style>
   .connect-modal {
-    max-width: 480px;
-    width: 95%;
+    max-width: 560px;
+    width: min(92vw, 560px);
+  }
+
+  .header-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .modal-subtitle {
+    margin: 0;
+    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    font-size: 12px;
+    line-height: 1.45;
   }
 
   .modal-body {
-    padding: 16px 20px;
+    padding: 18px 20px 20px;
     overflow-y: auto;
     flex: 1;
     display: flex;
     flex-direction: column;
     gap: 16px;
-    max-height: 65vh;
+    max-height: 68vh;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--accent-color, #4f46e5) 4%, transparent), transparent 140px),
+      transparent;
   }
 
   .modal-footer {
     display: flex;
     justify-content: flex-end;
     gap: 10px;
-    padding: 14px 20px;
+    padding: 16px 20px 18px;
     border-top: 1px solid var(--dialog-border, light-dark(#d1d5db, #3a3a3a));
+    background: color-mix(in srgb, var(--dialog-bg, light-dark(#fff, #1c1d21)) 88%, var(--accent-color, #4f46e5) 12%);
     flex-shrink: 0;
   }
 
   .conn-section {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
+  }
+
+  .conn-card {
+    padding: 14px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--dialog-border, #404040) 88%, var(--accent-color, #4f46e5) 12%);
+    background: color-mix(in srgb, var(--input-bg, rgba(255, 255, 255, 0.05)) 72%, transparent);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+  }
+
+  .conn-card-compact {
+    gap: 10px;
+  }
+
+  .section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
   }
 
   .section-label {
@@ -581,96 +639,173 @@
     color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
     text-transform: uppercase;
     letter-spacing: 1px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #3a3a3a));
+    padding-bottom: 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--dialog-border, #3a3a3a) 80%, transparent);
+    flex: 1;
+  }
+
+  .section-label.no-divider {
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .section-meta {
+    flex-shrink: 0;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent-color, #4f46e5) 12%, transparent);
+    color: var(--accent-color, light-dark(#4338ca, #93c5fd));
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
   }
 
   /* Session list */
   .session-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
   }
 
   .session-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: var(--input-bg, light-dark(rgba(0,0,0,0.03), rgba(255, 255, 255, 0.05)));
-    border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--input-bg, rgba(255,255,255,0.05)) 78%, transparent);
+    border: 1px solid color-mix(in srgb, var(--dialog-border, #404040) 85%, transparent);
     font-size: 12px;
+    transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  }
+
+  .session-item:hover {
+    border-color: color-mix(in srgb, var(--accent-color, #4f46e5) 35%, var(--dialog-border, #404040));
+    background: color-mix(in srgb, var(--accent-color, #4f46e5) 8%, transparent);
+    transform: translateY(-1px);
   }
 
   .session-dot {
-    width: 8px;
-    height: 8px;
+    width: 9px;
+    height: 9px;
     border-radius: 50%;
     flex-shrink: 0;
   }
+
   .session-dot.connected {
     background: #22c55e;
-    box-shadow: 0 0 4px #22c55e;
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.75);
+  }
+
+  .session-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
   }
 
   .session-info {
-    flex: 1;
     color: var(--text-color, light-dark(#374151, #eee));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .session-sched {
+    width: fit-content;
     font-size: 10px;
-    color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+    color: var(--text-color-dim, light-dark(#9ca3af, #94a3b8));
     text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--btn-bg, rgba(255,255,255,0.1)) 85%, transparent);
   }
 
   .session-disconnect {
-    background: none;
-    border: none;
-    color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--dialog-border, #404040) 88%, transparent);
+    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
     cursor: pointer;
-    font-size: 12px;
-    padding: 2px 4px;
-    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 10px;
+    border-radius: 999px;
     line-height: 1;
+    transition: all 0.15s;
   }
+
   .session-disconnect:hover {
     color: var(--error-color, light-dark(#dc2626, #ef4444));
-    background: light-dark(rgba(220,38,38,0.1), rgba(248,81,73,0.15));
+    border-color: color-mix(in srgb, var(--error-color, #ef4444) 60%, transparent);
+    background: light-dark(rgba(220,38,38,0.08), rgba(248,81,73,0.12));
   }
 
   /* Status messages */
   .status-section {
-    padding: 12px;
-    border-radius: 8px;
-    background: var(--input-bg, light-dark(rgba(0,0,0,0.03), rgba(255, 255, 255, 0.05)));
+    padding: 16px;
+    border-radius: 12px;
     border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+  }
+
+  .status-connecting {
+    background: light-dark(rgba(79, 70, 229, 0.04), rgba(59, 130, 246, 0.08));
+    border-color: color-mix(in srgb, var(--accent-color, #4f46e5) 40%, var(--dialog-border, #404040));
+  }
+
+  .status-otp {
+    background: light-dark(rgba(217, 119, 6, 0.05), rgba(245, 158, 11, 0.08));
+    border-color: color-mix(in srgb, var(--warning-color, #f59e0b) 40%, var(--dialog-border, #404040));
+  }
+
+  .status-success {
+    background: light-dark(rgba(5, 150, 105, 0.06), rgba(16, 185, 129, 0.08));
+    border-color: color-mix(in srgb, var(--success-color, #10b981) 40%, var(--dialog-border, #404040));
+  }
+
+  .status-error {
+    background: light-dark(rgba(220, 38, 38, 0.05), rgba(239, 68, 68, 0.08));
+    border-color: color-mix(in srgb, var(--error-color, #ef4444) 45%, var(--dialog-border, #404040));
+  }
+
+  .status-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-color-muted, light-dark(#6b7280, #94a3b8));
   }
 
   .status-msg {
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.45;
   }
+
   .status-msg.connecting {
-    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    color: var(--text-color, light-dark(#374151, #e5e7eb));
   }
+
   .status-msg.success {
-    color: var(--success-color, light-dark(#059669, #10b981));
+    color: var(--success-color, light-dark(#059669, #34d399));
   }
 
   .status-description {
     margin: 0;
     font-size: 12px;
     color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    line-height: 1.5;
   }
 
   .otp-row {
     display: flex;
-    gap: 8px;
-    margin-top: 4px;
+    gap: 10px;
+    margin-top: 2px;
+    align-items: stretch;
   }
 
   .otp-input {
@@ -679,158 +814,229 @@
     letter-spacing: 4px;
     text-align: center;
     font-family: inherit;
+    font-weight: 600;
   }
 
   .btn-new {
-    margin-top: 8px;
-    background: none;
-    border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-    border-radius: 6px;
-    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    align-self: flex-start;
+    margin-top: 2px;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--dialog-border, #404040) 88%, transparent);
+    border-radius: 999px;
+    color: var(--text-color, light-dark(#374151, #eee));
     cursor: pointer;
-    padding: 6px 12px;
+    padding: 7px 12px;
     font-size: 12px;
+    font-weight: 600;
     font-family: inherit;
     transition: all 0.15s;
   }
+
   .btn-new:hover {
-    color: var(--text-color, light-dark(#374151, #eee));
+    color: var(--text-color, light-dark(#374151, #fff));
     border-color: var(--accent-color, light-dark(#4f46e5, #3b82f6));
+    background: color-mix(in srgb, var(--accent-color, #4f46e5) 10%, transparent);
   }
 
   /* Profile row */
   .profile-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
+
   .profile-row select {
     flex: 1;
   }
 
   .icon-btn {
-    background: none;
+    background: transparent;
     border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-    border-radius: 4px;
+    border-radius: 8px;
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 8px 10px;
     font-size: 12px;
     line-height: 1;
-    color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+    color: var(--text-color-dim, light-dark(#9ca3af, #94a3b8));
     transition: all 0.15s;
   }
+
+  .icon-btn:hover {
+    background: var(--surface-bg-hover, light-dark(#e5e7eb, #3a3a3a));
+    color: var(--text-color, light-dark(#374151, #eee));
+  }
+
   .icon-btn.danger:hover {
     color: var(--error-color, light-dark(#dc2626, #ef4444));
-    border-color: var(--error-color, light-dark(#dc2626, #ef4444));
+    border-color: color-mix(in srgb, var(--error-color, #ef4444) 70%, transparent);
+    background: light-dark(rgba(220,38,38,0.08), rgba(248,81,73,0.12));
   }
 
   /* Form grid */
   .form-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    gap: 12px;
   }
+
   .form-grid label {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
     font-size: 11px;
   }
+
   .form-grid .full-span {
     grid-column: 1 / -1;
   }
 
   .hint {
     font-weight: 400;
-    color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
+    color: var(--text-color-dim, light-dark(#9ca3af, #94a3b8));
+  }
+
+  .option-card {
+    margin-top: 2px;
+    padding: 12px;
+    border-radius: 10px;
+    background: light-dark(rgba(0,0,0,0.02), rgba(255,255,255,0.025));
+    border: 1px dashed color-mix(in srgb, var(--dialog-border, #404040) 82%, var(--accent-color, #4f46e5) 18%);
   }
 
   .jump-fields {
-    margin-top: 8px;
-    padding: 10px;
-    border-radius: 6px;
-    background: light-dark(rgba(0,0,0,0.02), rgba(255,255,255,0.02));
-    border: 1px dashed var(--dialog-border, light-dark(#d1d5db, #404040));
+    margin-top: 0;
   }
 
   .checkbox-row {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 8px;
+    align-items: flex-start;
+    gap: 10px;
     font-size: 12px;
     cursor: pointer;
     color: var(--text-color, light-dark(#374151, #eee));
   }
+
   .checkbox-row input[type="checkbox"] {
     width: 15px;
     height: 15px;
     accent-color: var(--accent-color, light-dark(#4f46e5, #3b82f6));
     cursor: pointer;
+    margin-top: 2px;
+  }
+
+  .toggle-row {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--dialog-border, #404040) 85%, transparent);
+    background: color-mix(in srgb, var(--input-bg, rgba(255,255,255,0.05)) 70%, transparent);
+  }
+
+  .toggle-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .toggle-title {
+    font-weight: 600;
+    color: var(--text-color, light-dark(#1f2937, #f3f4f6));
+  }
+
+  .toggle-description {
+    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    line-height: 1.45;
   }
 
   .profile-save-row {
     display: flex;
-    gap: 6px;
-    margin-top: 10px;
+    gap: 8px;
+    margin-top: 2px;
+    padding-top: 6px;
   }
+
   .profile-name-input {
     flex: 1;
     font-size: 12px !important;
-    padding: 6px 10px !important;
   }
 
   .btn-secondary {
     background: var(--btn-bg, light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.1)));
     border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-    border-radius: 6px;
+    border-radius: 8px;
     color: var(--text-color, light-dark(#374151, #eee));
     cursor: pointer;
     font-size: 12px;
-    padding: 6px 12px;
+    font-weight: 600;
+    padding: 8px 14px;
     font-family: inherit;
     transition: all 0.15s;
   }
+
   .btn-secondary:hover {
     background: var(--btn-bg-hover, light-dark(rgba(0,0,0,0.12), rgba(255,255,255,0.2)));
+    border-color: color-mix(in srgb, var(--accent-color, #4f46e5) 35%, var(--dialog-border, #404040));
   }
+
   .btn-secondary:disabled {
     opacity: 0.45;
     cursor: not-allowed;
   }
 
   .btn-primary {
-    background: var(--accent-color, light-dark(#4f46e5, #3b82f6));
-    border: none;
-    border-radius: 6px;
-    color: #fff;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 8px 18px;
-    font-family: inherit;
-    transition: all 0.15s;
-  }
-  .btn-primary:hover {
-    background: var(--accent-hover-color, light-dark(#3730a3, #2563eb));
-  }
-  .btn-primary:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
+    padding: 10px 18px;
+    border-radius: 8px;
+    box-shadow: 0 10px 22px color-mix(in srgb, var(--accent-color, #4f46e5) 22%, transparent);
   }
 
   .btn-cancel {
-    background: var(--btn-bg, light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.1)));
-    border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-    border-radius: 6px;
-    color: var(--text-color, light-dark(#374151, #eee));
-    cursor: pointer;
-    font-size: 13px;
-    padding: 8px 18px;
-    font-family: inherit;
-    transition: all 0.15s;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
   }
-  .btn-cancel:hover {
-    background: var(--btn-bg-hover, light-dark(rgba(0,0,0,0.12), rgba(255,255,255,0.2)));
+
+  @media (max-width: 640px) {
+    .connect-modal {
+      width: calc(100vw - 20px);
+      max-width: none;
+    }
+
+    .modal-body {
+      padding: 16px;
+      max-height: 72vh;
+    }
+
+    .form-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .otp-row,
+    .profile-save-row,
+    .profile-row,
+    .section-heading {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .section-label {
+      flex: unset;
+    }
+
+    .session-item {
+      align-items: flex-start;
+    }
+
+    .session-disconnect,
+    .btn-new,
+    .btn-secondary,
+    .btn-cancel,
+    .btn-primary {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .modal-footer {
+      flex-direction: column-reverse;
+    }
   }
 </style>

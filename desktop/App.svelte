@@ -1,5 +1,7 @@
 <script lang="ts">
   import { untrack, tick } from 'svelte'
+  import { init_i18n, t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import { Structure, Trajectory } from '$lib'
   import { PathwayControls } from '$lib/trajectory'
   import type { AnyStructure } from '$lib'
@@ -110,6 +112,8 @@
   // Extracted dialog sub-components
   import ExportSaveDialog from './components/ExportSaveDialog.svelte'
   import CloseAllModal from './components/CloseAllModal.svelte'
+
+  init_i18n().then(() => load_i18n_module('app'))
 
   // ========== Tab Management (extracted to ./lib/tab-manager.svelte.ts) ==========
   const tm = create_tab_manager()
@@ -236,7 +240,7 @@
       close_all_structure_tabs(tm.tabs, tab_states, close_tab)
       modal.close_all_visible = false
     } catch (e) {
-      modal.close_all_error = e instanceof Error ? e.message : `Save failed`
+      modal.close_all_error = e instanceof Error ? e.message : t('app.save_failed')
     } finally {
       modal.close_all_saving = false
     }
@@ -719,14 +723,14 @@
       attrs.n_sites ??
       (Array.isArray(attrs.cartesian_site_positions) ? attrs.cartesian_site_positions.length : 0)
 
-    modal.db_preview_title = `Preview Structure Import`
+    modal.db_preview_title = t('app.preview_structure_import')
     modal.db_preview_formula = formula
     modal.db_preview_lattice = compute_lattice_params(attrs.lattice_vectors)
     modal.db_preview_details = [
-      { label: `ID:`, value: String(optimade_struct?.id ?? ``), mono: true },
-      { label: `Formula:`, value: formula },
-      { label: `Sites:`, value: String(sites) },
-      { label: `Database:`, value: provider },
+      { label: t('app.field_id'), value: String(optimade_struct?.id ?? ``), mono: true },
+      { label: t('app.field_formula'), value: formula },
+      { label: t('app.field_sites'), value: String(sites) },
+      { label: t('app.field_database'), value: provider },
     ]
     modal.db_preview_visible = true
   }
@@ -748,15 +752,15 @@
       : (heavy ?? 0)
 
     const rows: Array<{ label: string; value: string; mono?: boolean }> = []
-    if (cid) rows.push({ label: `CID:`, value: String(cid), mono: true })
-    if (name) rows.push({ label: `Name:`, value: name })
-    if (formula) rows.push({ label: `Formula:`, value: formula })
-    if (n_atoms) rows.push({ label: `Atoms:`, value: String(n_atoms) })
+    if (cid) rows.push({ label: t('app.field_cid'), value: String(cid), mono: true })
+    if (name) rows.push({ label: t('app.field_name'), value: name })
+    if (formula) rows.push({ label: t('app.field_formula'), value: formula })
+    if (n_atoms) rows.push({ label: t('app.field_atoms'), value: String(n_atoms) })
     if (typeof weight === `number`)
-      rows.push({ label: `Weight:`, value: `${weight.toFixed(2)} g/mol` })
-    rows.push({ label: `Database:`, value: `PubChem` })
+      rows.push({ label: t('app.field_weight'), value: `${weight.toFixed(2)} g/mol` })
+    rows.push({ label: t('app.field_database'), value: `PubChem` })
 
-    modal.db_preview_title = `Preview Compound Import`
+    modal.db_preview_title = t('app.preview_compound_import')
     modal.db_preview_formula = formula
     modal.db_preview_lattice = null
     modal.db_preview_details = rows
@@ -1271,9 +1275,13 @@
         // overwrites of the panel cache).
         const captured = struct
         show_toast({
-          message: `External pushed ${formula} (${n} atom${n === 1 ? '' : 's'})`,
+          message: t('app.external_structure_pushed', {
+            formula,
+            count: String(n),
+            s: n === 1 ? `` : `s`,
+          }),
           variant: `info`,
-          action: { label: `Open External Viewer`, onclick: () => open_external_tab(captured) },
+          action: { label: t('app.open_external_viewer'), onclick: () => open_external_tab(captured) },
           duration: 12000,
         })
       } catch (err) {
@@ -1305,10 +1313,13 @@
         // No External tab → toast prompts the user to open one.
         const n_frames = traj?.frames?.length ?? `?`
         show_toast({
-          message: `External pushed trajectory: ${filename || `unnamed`} (${n_frames} frames)`,
+          message: t('app.external_trajectory_pushed', {
+            name: filename || t('app.unnamed'),
+            count: String(n_frames),
+          }),
           variant: `info`,
           action: {
-            label: `Open External Viewer`,
+            label: t('app.open_external_viewer'),
             onclick: () => {
               tm.create_remote_tab()
               // After tab is created, inject (next macrotask)
@@ -1408,7 +1419,7 @@
   <button
     class="sidebar-toggle"
     onclick={() => sidebar.collapsed = !sidebar.collapsed}
-    title={sidebar.collapsed ? `Show sidebar` : `Hide sidebar`}
+    title={sidebar.collapsed ? t('app.show_sidebar') : t('app.hide_sidebar')}
     style="display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; background: transparent; border: 1px solid var(--border-color, rgba(128,128,128,0.2)); border-radius: 4px; color: var(--text-color-muted, #6b7280); cursor: pointer; flex-shrink: 0; transition: color 0.15s, background 0.15s;"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1421,6 +1432,7 @@
     </svg>
   </button>
   <ThemeControl style="position: static; box-shadow: none; backdrop-filter: none;" />
+  <LocaleSwitch style="position: static; box-shadow: none; backdrop-filter: none;" />
 </TabBar>
 
 <!-- Hidden file input (shared, multi-select) -->
@@ -1522,7 +1534,7 @@
                     <button
                       class="panel-popout-btn"
                       onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, idx) }}
-                      title="Open in new window"
+                      title={t('app.open_in_new_window')}
                     >
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
@@ -1534,7 +1546,7 @@
                   <button
                     class="panel-close-btn"
                     onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, idx) }}
-                    title="Close panel"
+                    title={t('app.close_panel')}
                   >
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                       <path d="M18 6L6 18M6 6l12 12" />
@@ -1550,18 +1562,18 @@
                     <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
                   </svg>
                   {#if ts.panes[idx].mode === 'workflow'}
-                    <span>Workflow will be closed.</span>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>Cancel</button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>Close</button>
+                    <span>{t('app.workflow_will_be_closed')}</span>
+                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t('common.cancel')}</button>
+                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t('common.close')}</button>
                   {:else}
-                    <span>Save before closing?</span>
+                    <span>{t('common.save_before_closing')}</span>
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <select class="banner-select target-select" bind:value={exp.close_save_target} onclick={(e) => e.stopPropagation()}>
-                      <option value="local">Local</option>
+                      <option value="local">{t('app.local')}</option>
                       {#if ts.panes[idx].remote_origin?.session_id}
-                        <option value="hpc">HPC</option>
+                        <option value="hpc">{t('app.hpc')}</option>
                       {/if}
-                      <option value="project">CatGo DB</option>
+                      <option value="project">{t('app.catgo_db')}</option>
                     </select>
                     {#if exp.close_save_target === `project` && exp.close_save_projects.length > 0}
                       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1581,10 +1593,10 @@
                       <span class="banner-path" title={ts.panes[idx].remote_origin?.file_path}>{ts.panes[idx].remote_origin?.file_path?.split(/[/\\]/).pop()}</span>
                     {/if}
                     <button class="banner-btn save" disabled={exp.close_saving} onclick={(e) => { e.stopPropagation(); save_and_close_panel(tab.id, idx) }}>
-                      {exp.close_saving ? `Saving...` : `Save & Close`}
+                      {exp.close_saving ? t('common.saving') : t('common.save_and_close')}
                     </button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>Close</button>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>Cancel</button>
+                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t('common.close')}</button>
+                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t('common.cancel')}</button>
                   {/if}
                 </div>
               {/if}
@@ -1698,8 +1710,8 @@
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Open File</span>
-                        <span class="import-desc">multi-select or drop</span>
+                        <span class="import-title">{t('common.open_file')}</span>
+                        <span class="import-desc">{t('app.multi_select_or_drop')}</span>
                       </div>
                     </button>
 
@@ -1709,8 +1721,8 @@
                         <path d="M2 10h20"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Open Folder</span>
-                        <span class="import-desc">load all structures</span>
+                        <span class="import-title">{t('common.open_folder')}</span>
+                        <span class="import-desc">{t('app.load_all_structures')}</span>
                       </div>
                     </button>
 
@@ -1719,8 +1731,8 @@
                         <path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4s8-1.79 8-4s-3.58-4-8-4M4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9M4 14v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Search Database</span>
-                        <span class="import-desc">{STATIC_ONLY ? `PubChem molecules` : `OPTIMADE & PubChem`}</span>
+                        <span class="import-title">{t('app.search_database')}</span>
+                        <span class="import-desc">{STATIC_ONLY ? t('app.pubchem_molecules') : t('app.optimade_pubchem')}</span>
                       </div>
                     </button>
 
@@ -1731,7 +1743,7 @@
                         <path d="M9 12h6M9 16h6"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Paste</span>
+                        <span class="import-title">{t('common.paste')}</span>
                         <span class="import-desc">POSCAR/CONTCAR</span>
                       </div>
                     </button>
@@ -1746,8 +1758,8 @@
                         <path d="M12 13v3" />
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Workflow</span>
-                        <span class="import-desc">Pipeline editor</span>
+                        <span class="import-title">{t('common.workflow')}</span>
+                        <span class="import-desc">{t('app.pipeline_editor')}</span>
                       </div>
                     </button>
                     {/if}
@@ -1778,8 +1790,8 @@
                         <path d="M12 10.5v2.5l-4.5 3M12 13l4.5 3"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Build</span>
-                        <span class="import-desc">Moiré, Nanotube, etc.</span>
+                        <span class="import-title">{t('app.build')}</span>
+                        <span class="import-desc">{t('app.build_desc')}</span>
                       </div>
                     </button>
 
@@ -1797,8 +1809,8 @@
                         <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">HPC</span>
-                        <span class="import-desc">Remote connect</span>
+                        <span class="import-title">{t('app.hpc')}</span>
+                        <span class="import-desc">{t('app.remote_connect')}</span>
                       </div>
                     </button>
 
@@ -1815,8 +1827,8 @@
                         <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">AI Chat</span>
-                        <span class="import-desc">Ask questions</span>
+                        <span class="import-title">{t('app.ai_chat')}</span>
+                        <span class="import-desc">{t('app.ask_questions')}</span>
                       </div>
                     </button>
 
@@ -1833,8 +1845,8 @@
                         <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">Terminal</span>
-                        <span class="import-desc">Local shell</span>
+                        <span class="import-title">{t('app.terminal')}</span>
+                        <span class="import-desc">{t('app.local_shell')}</span>
                       </div>
                     </button>
                     {/if}
@@ -1848,8 +1860,8 @@
                           <path d="M2 12l10 5 10-5"/>
                         </svg>
                         <div class="import-text">
-                          <span class="import-title">Plugins</span>
-                          <span class="import-desc">Extend CatGo</span>
+                          <span class="import-title">{t('app.plugins')}</span>
+                          <span class="import-desc">{t('app.extend_catgo')}</span>
                         </div>
                       </button>
 
@@ -1866,8 +1878,8 @@
                           <path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>
                         </svg>
                         <div class="import-text">
-                          <span class="import-title">External</span>
-                          <span class="import-desc">Receive from lab/MCP</span>
+                          <span class="import-title">{t('app.external')}</span>
+                          <span class="import-desc">{t('app.receive_from_lab')}</span>
                         </div>
                       </button>
                     {/if}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { slide } from 'svelte/transition'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import DiagnosticsPanel from '$lib/DiagnosticsPanel.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
 
@@ -42,6 +43,8 @@
     is_structure_file, is_db_file, format_energy, format_file_size,
     get_file_icon, fs_get_breadcrumbs, fs_file_icon_class, make_files,
   } from './sidebar-utils'
+
+  load_i18n_module('app')
 
   // ========== Props ==========
   // [2025-02] Default source changed to localdb
@@ -264,7 +267,7 @@
       file_picker_parent = result.parent
       file_picker_items = result.items
     } catch (e) {
-      db_error = e instanceof Error ? e.message : `Failed to browse`
+      db_error = e instanceof Error ? e.message : t('app.failed_to_browse')
     } finally {
       file_picker_loading = false
     }
@@ -288,7 +291,7 @@
         await load_db() // [2025-02] refresh after save-as
       }
     } catch (e) {
-      db_error = e instanceof Error ? e.message : `Operation failed`
+      db_error = e instanceof Error ? e.message : t('app.operation_failed')
     }
   }
 
@@ -305,7 +308,7 @@
         current_db = await create_new_db(path)
         await load_db() // [2025-02] refresh after new DB (Tauri)
       } catch (e) {
-        db_error = e instanceof Error ? e.message : `Failed to create database`
+        db_error = e instanceof Error ? e.message : t('app.failed_to_create_database')
       }
     } else {
       open_file_picker(`new`)
@@ -325,7 +328,7 @@
         current_db = await open_db(result)
         await load_db() // [2025-02] refresh after open (Tauri)
       } catch (e) {
-        db_error = e instanceof Error ? e.message : `Failed to open database`
+        db_error = e instanceof Error ? e.message : t('app.failed_to_open_database')
       }
     } else {
       open_file_picker(`open`)
@@ -346,7 +349,7 @@
         current_db = await save_db_as(path)
         await load_db() // [2025-02] refresh after save-as (Tauri)
       } catch (e) {
-        db_error = e instanceof Error ? e.message : `Failed to save database`
+        db_error = e instanceof Error ? e.message : t('app.failed_to_save_database')
       }
     } else {
       open_file_picker(`save-as`)
@@ -404,7 +407,7 @@
         load_workflow_results(wid)
       }
     } catch (e) {
-      db_error = e instanceof Error ? e.message : (typeof e === `string` ? e : `Failed to load database`)
+      db_error = e instanceof Error ? e.message : (typeof e === `string` ? e : t('app.failed_to_load_database'))
     } finally {
       db_loading = false
     }
@@ -511,7 +514,7 @@
   }
 
   async function handle_create_project(parent_id?: string) {
-    const name = prompt(parent_id ? `New sub-folder name:` : `New project name:`)
+    const name = prompt(parent_id ? t('app.new_subfolder_name') : t('app.new_project_name'))
     if (!name?.trim()) return
     try {
       await create_project(name.trim(), ``, parent_id)
@@ -528,8 +531,8 @@
     const project = db_projects.find(p => p.id === project_id)
     const sub_count = (children_of[project_id] || []).length
     const msg = sub_count > 0
-      ? `Delete "${project?.name}" and its ${sub_count} sub-folder(s)?`
-      : `Delete "${project?.name}"?`
+      ? t('app.delete_project_and_subfolders', { name: project?.name ?? ``, count: String(sub_count) })
+      : t('app.delete_project', { name: project?.name ?? `` })
     if (!confirm(msg)) return
     try {
       await delete_project(project_id)
@@ -584,7 +587,7 @@
   // --- Result delete ---
   async function handle_delete_result(result: DbResult, parent_id: string) {
     ctx_menu = null
-    if (!confirm(`Delete "${result.label || result.formula}"?`)) return
+    if (!confirm(t('app.delete_result', { name: result.label || result.formula }))) return
     try {
       await delete_result(result.id)
       await load_db() // [2025-02] refresh after delete
@@ -854,7 +857,7 @@
       <!-- Workflow nodes (graph steps) -->
       {#if db_workflow_nodes[wf.id]?.length}
         <div class="wf-nodes-section">
-          <div class="wf-nodes-label" style:padding-left="{indent + 14}px">Steps</div>
+          <div class="wf-nodes-label" style:padding-left="{indent + 14}px">{t('app.steps')}</div>
           {#each db_workflow_nodes[wf.id] as node (node.id)}
             <div class="wf-node-item" style:padding-left="{indent + 20}px">
               <span class="wf-node-icon">{node.icon}</span>
@@ -866,16 +869,16 @@
       <!-- Workflow results -->
       {#if db_workflow_results[wf.id]}
         {#if db_workflow_results[wf.id].length > 0}
-          <div class="wf-nodes-label" style:padding-left="{indent + 14}px">Results</div>
+          <div class="wf-nodes-label" style:padding-left="{indent + 14}px">{t('app.results')}</div>
         {/if}
         {#each db_workflow_results[wf.id] as result (result.id)}
           {@render result_item(result, wf.id, indent + 14)}
         {/each}
       {:else if !db_workflow_nodes[wf.id]}
-        <div class="db-empty-small">Loading...</div>
+        <div class="db-empty-small">{t('app.loading')}</div>
       {/if}
       {#if db_workflow_nodes[wf.id]?.length === 0 && db_workflow_results[wf.id]?.length === 0}
-        <div class="db-empty-small">Empty workflow</div>
+        <div class="db-empty-small">{t('app.empty_workflow')}</div>
       {/if}
     </div>
   {/if}
@@ -952,7 +955,7 @@
         {@render workflow_row(wf, 22 + depth * 14)}
       {/each}
       {#if sub_projects.length === 0 && saved.length === 0 && wfs.length === 0}
-        <div class="db-empty-small">Empty</div>
+        <div class="db-empty-small">{t('app.empty')}</div>
       {/if}
     </div>
   {/if}
@@ -968,7 +971,7 @@
     <button
       class="sidebar-expand-btn"
       onclick={() => collapsed = false}
-      title="Show sidebar"
+      title={t('app.show_sidebar')}
     >
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M9 18l6-6-6-6" />
@@ -982,16 +985,16 @@
       <button
         class="sidebar-collapse-btn"
         onclick={() => collapsed = true}
-        title="Hide sidebar"
+        title={t('app.hide_sidebar')}
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M15 18l-6-6 6-6" />
         </svg>
       </button>
       <select bind:value={source}>
-        <option value="catgo">CatGo Examples</option>
+        <option value="catgo">{t('app.catgo_examples')}</option>
         {#if !STATIC_ONLY}
-        <option value="localdb">CatGo Database</option>
+        <option value="localdb">{t('app.catgo_db')}</option>
         <option value={LOCAL_SESSION_ID}>Local Files</option>
         {#each hpc_sessions as session}
           <option value={session.session_id}>
@@ -1010,7 +1013,7 @@
           <svg class="chevron" class:open={sections_open.structures} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M9 18l6-6-6-6" />
           </svg>
-          <span class="section-title">Structures</span>
+          <span class="section-title">{t('app.structures')}</span>
           <span class="section-badge">{structure_list.length}</span>
         </button>
         {#if sections_open.structures}
@@ -1031,7 +1034,7 @@
           <svg class="chevron" class:open={sections_open.molecules} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M9 18l6-6-6-6" />
           </svg>
-          <span class="section-title">Molecules</span>
+          <span class="section-title">{t('app.molecules')}</span>
           <span class="section-badge">{molecule_list.length}</span>
         </button>
         {#if sections_open.molecules}
@@ -1052,7 +1055,7 @@
           <svg class="chevron" class:open={sections_open.trajectories} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M9 18l6-6-6-6" />
           </svg>
-          <span class="section-title">Trajectories</span>
+          <span class="section-title">{t('app.trajectories')}</span>
           <span class="section-badge">{trajectory_list.length}</span>
         </button>
         {#if sections_open.trajectories}
@@ -1082,13 +1085,13 @@
             {current_db?.name || `catgo_results`}
           </span>
           <div class="db-file-actions">
-            <button class="db-file-btn" onclick={() => load_db()} title="Refresh" disabled={db_loading}>
+            <button class="db-file-btn" onclick={() => load_db()} title={t('app.refresh')} disabled={db_loading}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10" />
                 <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
               </svg>
             </button>
-            <button class="db-file-btn" onclick={handle_new_db} title="New database">
+            <button class="db-file-btn" onclick={handle_new_db} title={t('app.new_database')}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
                 <polyline points="14 2 14 8 20 8" />
@@ -1096,12 +1099,12 @@
                 <line x1="9" y1="14" x2="15" y2="14" />
               </svg>
             </button>
-            <button class="db-file-btn" onclick={handle_open_db} title="Open database">
+            <button class="db-file-btn" onclick={handle_open_db} title={t('app.open_database')}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
               </svg>
             </button>
-            <button class="db-file-btn" onclick={handle_save_as_db} title="Save database as...">
+            <button class="db-file-btn" onclick={handle_save_as_db} title={t('app.save_database_as')}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z" />
                 <polyline points="17 21 17 13 7 13 7 21" />
@@ -1128,7 +1131,7 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
             </svg>
-            Browse Files
+            {t('app.browse_files')}
             <svg class="chevron" class:open={fsb.fs_browser_open} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M9 18l6-6-6-6" />
             </svg>
@@ -1139,7 +1142,7 @@
           <div class="fs-browser" transition:slide={{ duration: 150 }}>
             <!-- Address bar -->
             <div class="fs-address-bar">
-              <button class="fs-addr-btn" onclick={fsb.fs_go_up} title="Go up" disabled={!fsb.fs_parent || fsb.fs_parent === fsb.fs_current_dir}>
+              <button class="fs-addr-btn" onclick={fsb.fs_go_up} title={t('app.go_up')} disabled={!fsb.fs_parent || fsb.fs_parent === fsb.fs_current_dir}>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M15 18l-6-6 6-6" />
                 </svg>
@@ -1166,13 +1169,13 @@
                   {/each}
                 </div>
               {/if}
-              <button class="fs-addr-btn" onclick={() => fsb.fs_browse(fsb.fs_current_dir)} title="Refresh" disabled={fsb.fs_loading}>
+              <button class="fs-addr-btn" onclick={() => fsb.fs_browse(fsb.fs_current_dir)} title={t('app.refresh')} disabled={fsb.fs_loading}>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="23 4 23 10 17 10" />
                   <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10" />
                 </svg>
               </button>
-              <button class="fs-addr-btn" onclick={() => { fsb.fs_new_folder = true; fsb.fs_new_folder_name = `New Folder` }} title="New Folder">
+              <button class="fs-addr-btn" onclick={() => { fsb.fs_new_folder = true; fsb.fs_new_folder_name = t('app.new_folder') }} title={t('app.new_folder')}>
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
                   <line x1="12" y1="11" x2="12" y2="17" />
@@ -1195,22 +1198,22 @@
                   autofocus
                   onkeydown={(e) => { if (e.key === `Enter`) fsb.fs_do_mkdir(); if (e.key === `Escape`) fsb.fs_new_folder = false }}
                   onblur={() => fsb.fs_new_folder = false}
-                  placeholder="Folder name..."
+                  placeholder={t('app.folder_name_placeholder')}
                 />
               </div>
             {/if}
 
             {#if fsb.fs_clipboard}
               <div class="fs-clipboard-bar">
-                <span class="fs-clip-op">{fsb.fs_clipboard.op === `copy` ? `Copied` : `Cut`}:</span>
+                <span class="fs-clip-op">{fsb.fs_clipboard.op === `copy` ? t('app.copied') : t('app.cut')}:</span>
                 <span class="fs-clip-name">{fsb.fs_clipboard.item.name}</span>
-                <button class="fs-clip-paste" onclick={fsb.fs_do_paste} disabled={fsb.fs_op_loading}>Paste</button>
+                <button class="fs-clip-paste" onclick={fsb.fs_do_paste} disabled={fsb.fs_op_loading}>{t('app.paste')}</button>
                 <button class="fs-clip-clear" onclick={() => fsb.fs_clipboard = null}>&#x2715;</button>
               </div>
             {/if}
 
             {#if fsb.fs_loading}
-              <div class="fs-status">Loading...</div>
+              <div class="fs-status">{t('app.loading')}</div>
             {:else}
               <div class="fs-file-list">
                 {#each fsb.fs_items as item}
@@ -1251,7 +1254,7 @@
                   </button>
                 {/each}
                 {#if fsb.fs_items.length === 0 && !fsb.fs_error}
-                  <div class="fs-empty">Empty directory</div>
+                  <div class="fs-empty">{t('app.empty_directory')}</div>
                 {/if}
               </div>
             {/if}
@@ -1263,14 +1266,14 @@
                   class="fs-export-input"
                   type="text"
                   bind:value={fsb.fs_export_name}
-                  placeholder="filename.cif"
+                  placeholder={t('app.file_name_placeholder')}
                   onkeydown={(e) => { if (e.key === `Enter`) fsb.fs_export_current() }}
                 />
                 <button
                   class="fs-export-btn"
                   onclick={fsb.fs_export_current}
                   disabled={fsb.fs_exporting || !fsb.fs_export_name.trim()}
-                  title="Export current structure to this directory"
+                  title={t('app.export_current_structure_to_directory')}
                 >
                   {fsb.fs_exporting ? `...` : `Export`}
                 </button>
@@ -1289,18 +1292,18 @@
           <div class="db-toolbar">
             {#if rsd.show_save_dialog}
               <div class="db-save-picker">
-                <span class="db-save-label">Save to:</span>
+                <span class="db-save-label">{t('app.save_to')}</span>
                 <select class="db-save-select" bind:value={rsd.save_target_project}>
-                  <option value={null}>-- No folder --</option>
+                  <option value={null}>{t('app.no_folder')}</option>
                   {#each db_projects as p}
                     <option value={p.id}>{p.name}</option>
                   {/each}
                 </select>
                 <div class="db-save-actions">
                   <button class="db-save-confirm" onclick={() => rsd.do_save_current(rsd.save_target_project)} disabled={rsd.saving}>
-                    {rsd.saving ? `...` : `Save`}
+                    {rsd.saving ? `...` : t('common.save')}
                   </button>
-                  <button class="db-save-cancel" onclick={() => rsd.show_save_dialog = false}>Cancel</button>
+                  <button class="db-save-cancel" onclick={() => rsd.show_save_dialog = false}>{t('common.cancel')}</button>
                 </div>
               </div>
             {:else}
@@ -1310,17 +1313,17 @@
                   <polyline points="17 21 17 13 7 13 7 21" />
                   <polyline points="7 3 7 8 15 8" />
                 </svg>
-                {rsd.saving ? `Saving...` : `Save current`}
+                {rsd.saving ? t('common.saving') : t('app.save_current')}
               </button>
             {/if}
           </div>
         {/if}
 
         {#if db_loading}
-          <div class="db-status">Loading...</div>
+          <div class="db-status">{t('app.loading')}</div>
         {:else if db_error}
           <div class="db-status db-error">{db_error}</div>
-          <button class="db-retry-btn" onclick={load_db}>Retry</button>
+          <button class="db-retry-btn" onclick={load_db}>{t('app.retry')}</button>
         {:else}
           <!-- ===== Projects section (structures + workflows inside projects) ===== -->
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1338,9 +1341,9 @@
             <svg class="chevron" class:open={structures_section_open} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <path d="M9 18l6-6-6-6" />
             </svg>
-            <span class="section-title">Projects</span>
+            <span class="section-title">{t('app.projects')}</span>
             <span class="section-badge">{root_projects.length}</span>
-            <button class="db-add-btn" onclick={(e) => { e.stopPropagation(); handle_create_project() }} title="New project folder">
+            <button class="db-add-btn" onclick={(e) => { e.stopPropagation(); handle_create_project() }} title={t('app.new_project_folder')}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
@@ -1562,8 +1565,8 @@
   <div class="fs-ctx-overlay" onclick={() => catgo_ctx = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="fs-ctx-menu" style="left: {catgo_ctx.x}px; top: {catgo_ctx.y}px" onclick={(e) => e.stopPropagation()}>
-      <button class="fs-ctx-item" onclick={() => { const f = catgo_ctx?.file; catgo_ctx = null; if (f) open_local_file_in_editor(f) }}>Open in Editor</button>
-      <button class="fs-ctx-item" onclick={() => { const f = catgo_ctx?.file; catgo_ctx = null; if (f) handle_local_click(f) }}>Load Structure</button>
+      <button class="fs-ctx-item" onclick={() => { const f = catgo_ctx?.file; catgo_ctx = null; if (f) open_local_file_in_editor(f) }}>{t('app.open_in_editor')}</button>
+      <button class="fs-ctx-item" onclick={() => { const f = catgo_ctx?.file; catgo_ctx = null; if (f) handle_local_click(f) }}>{t('app.load_structure')}</button>
     </div>
   </div>
 {/if}
@@ -1575,24 +1578,24 @@
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="fs-ctx-menu" style="left: {fsb.fs_ctx.x}px; top: {fsb.fs_ctx.y}px" onclick={(e) => e.stopPropagation()}>
       {#if fsb.fs_ctx.item.type === `dir`}
-        <button class="fs-ctx-item" onclick={() => { fsb.fs_new_folder = true; fsb.fs_new_folder_name = `New Folder`; fsb.fs_ctx = null }}>New Folder</button>
+        <button class="fs-ctx-item" onclick={() => { fsb.fs_new_folder = true; fsb.fs_new_folder_name = t('app.new_folder'); fsb.fs_ctx = null }}>{t('app.new_folder')}</button>
       {:else if fsb.fs_ctx.item.type === `file`}
         {#if is_structure_file(fsb.fs_ctx.item.name)}
-          <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const result = await read_file(item.path); on_load_file(result.content, result.name, item.path) } catch (e) { fsb.fs_error = e instanceof Error ? e.message : `Cannot read file` } }}>Load Structure</button>
+          <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const result = await read_file(item.path); on_load_file(result.content, result.name, item.path) } catch (e) { fsb.fs_error = e instanceof Error ? e.message : t('app.cannot_read_file') } }}>{t('app.load_structure')}</button>
         {/if}
         {#if on_open_editor}
-          <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const result = await read_file(item.path); on_open_editor!(result.content, result.name, item.path, ``); } catch (e) { fsb.fs_error = e instanceof Error ? e.message : `Cannot read file` } }}>Open in Editor</button>
+          <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const result = await read_file(item.path); on_open_editor!(result.content, result.name, item.path, ``); } catch (e) { fsb.fs_error = e instanceof Error ? e.message : t('app.cannot_read_file') } }}>{t('app.open_in_editor')}</button>
         {/if}
         {#if on_preview_file && /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|tiff?)$/i.test(fsb.fs_ctx.item.name)}
-          <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const { readFile } = await import(`@tauri-apps/plugin-fs`); const bytes = await readFile(item.path); const base64 = btoa(String.fromCharCode(...bytes)); const ext = item.name.toLowerCase().split(`.`).pop() || ``; on_preview_file!(`image`, item.name, item.path, ``, undefined, base64, `image/${ext === `jpg` ? `jpeg` : ext}`) } catch (e) { fsb.fs_error = e instanceof Error ? e.message : `Cannot read image` } }}>Preview Image</button>
+          <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const { readFile } = await import(`@tauri-apps/plugin-fs`); const bytes = await readFile(item.path); const base64 = btoa(String.fromCharCode(...bytes)); const ext = item.name.toLowerCase().split(`.`).pop() || ``; on_preview_file!(`image`, item.name, item.path, ``, undefined, base64, `image/${ext === `jpg` ? `jpeg` : ext}`) } catch (e) { fsb.fs_error = e instanceof Error ? e.message : t('app.cannot_read_image') } }}>{t('app.preview_image')}</button>
         {/if}
-        <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const { open } = await import(`@tauri-apps/plugin-shell`); await open(item.path) } catch (e) { fsb.fs_error = e instanceof Error ? e.message : `Cannot open file` } }}>Open with System App</button>
+        <button class="fs-ctx-item" onclick={async () => { if (!fsb.fs_ctx) return; const item = fsb.fs_ctx.item; fsb.fs_ctx = null; try { const { open } = await import(`@tauri-apps/plugin-shell`); await open(item.path) } catch (e) { fsb.fs_error = e instanceof Error ? e.message : t('app.cannot_open_file') } }}>{t('app.open_with_system_app')}</button>
       {/if}
-      <button class="fs-ctx-item" onclick={() => { fsb.fs_renaming = fsb.fs_ctx?.item ?? null; fsb.fs_rename_val = fsb.fs_ctx?.item.name ?? ``; fsb.fs_ctx = null }}>Rename</button>
-      <button class="fs-ctx-item" onclick={() => { if (fsb.fs_ctx) fsb.fs_clipboard = { item: fsb.fs_ctx.item, op: `copy` }; fsb.fs_ctx = null }}>Copy</button>
-      <button class="fs-ctx-item" onclick={() => { if (fsb.fs_ctx) fsb.fs_clipboard = { item: fsb.fs_ctx.item, op: `cut` }; fsb.fs_ctx = null }}>Cut</button>
+      <button class="fs-ctx-item" onclick={() => { fsb.fs_renaming = fsb.fs_ctx?.item ?? null; fsb.fs_rename_val = fsb.fs_ctx?.item.name ?? ``; fsb.fs_ctx = null }}>{t('common.rename')}</button>
+      <button class="fs-ctx-item" onclick={() => { if (fsb.fs_ctx) fsb.fs_clipboard = { item: fsb.fs_ctx.item, op: `copy` }; fsb.fs_ctx = null }}>{t('common.copy')}</button>
+      <button class="fs-ctx-item" onclick={() => { if (fsb.fs_ctx) fsb.fs_clipboard = { item: fsb.fs_ctx.item, op: `cut` }; fsb.fs_ctx = null }}>{t('common.cut')}</button>
       <hr class="fs-ctx-divider" />
-      <button class="fs-ctx-item danger" onclick={() => { fsb.fs_delete_confirm = fsb.fs_ctx?.item ?? null; fsb.fs_ctx = null }}>Delete</button>
+      <button class="fs-ctx-item danger" onclick={() => { fsb.fs_delete_confirm = fsb.fs_ctx?.item ?? null; fsb.fs_ctx = null }}>{t('common.delete')}</button>
     </div>
   </div>
 {/if}
@@ -1603,11 +1606,11 @@
   <div class="fs-ctx-overlay" onclick={() => fsb.fs_delete_confirm = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="fs-confirm-dialog" onclick={(e) => e.stopPropagation()}>
-      <p>Delete <strong>{fsb.fs_delete_confirm.name}</strong>?</p>
+      <p>{t('app.delete_item_confirm', { name: fsb.fs_delete_confirm.name })}</p>
       <p class="fs-confirm-path">{fsb.fs_delete_confirm.path}</p>
       <div class="fs-confirm-actions">
-        <button class="fs-confirm-btn cancel" onclick={() => fsb.fs_delete_confirm = null}>Cancel</button>
-        <button class="fs-confirm-btn danger" disabled={fsb.fs_op_loading} onclick={fsb.fs_do_delete}>{fsb.fs_op_loading ? `Deleting...` : `Delete`}</button>
+        <button class="fs-confirm-btn cancel" onclick={() => fsb.fs_delete_confirm = null}>{t('common.cancel')}</button>
+        <button class="fs-confirm-btn danger" disabled={fsb.fs_op_loading} onclick={fsb.fs_do_delete}>{fsb.fs_op_loading ? t('app.deleting') : t('common.delete')}</button>
       </div>
     </div>
   </div>
@@ -1619,14 +1622,14 @@
   <div class="fs-ctx-overlay" onclick={() => fsb.fs_renaming = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="fs-confirm-dialog" onclick={(e) => e.stopPropagation()}>
-      <p>Rename <strong>{fsb.fs_renaming.name}</strong></p>
+      <p>{t('app.rename_item', { name: fsb.fs_renaming.name })}</p>
       <!-- svelte-ignore a11y_autofocus -->
       <input class="fs-rename-input" type="text" bind:value={fsb.fs_rename_val} autofocus
         onkeydown={(e) => { if (e.key === `Enter`) fsb.fs_do_rename(); if (e.key === `Escape`) fsb.fs_renaming = null }}
       />
       <div class="fs-confirm-actions">
-        <button class="fs-confirm-btn cancel" onclick={() => fsb.fs_renaming = null}>Cancel</button>
-        <button class="fs-confirm-btn confirm" disabled={fsb.fs_op_loading || !fsb.fs_rename_val.trim()} onclick={fsb.fs_do_rename}>{fsb.fs_op_loading ? `Renaming...` : `Rename`}</button>
+        <button class="fs-confirm-btn cancel" onclick={() => fsb.fs_renaming = null}>{t('common.cancel')}</button>
+        <button class="fs-confirm-btn confirm" disabled={fsb.fs_op_loading || !fsb.fs_rename_val.trim()} onclick={fsb.fs_do_rename}>{fsb.fs_op_loading ? t('app.renaming') : t('common.rename')}</button>
       </div>
     </div>
   </div>

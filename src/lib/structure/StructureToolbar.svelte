@@ -22,6 +22,10 @@
   import { click_outside, tooltip } from 'svelte-multiselect'
   import { chat_position, set_chat_position } from '$lib/chat/chat-state.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   let {
     // ── 只读状态 ──
@@ -141,7 +145,7 @@
   {#if visible_buttons}
     <!-- === View / Navigation === -->
     {#if camera_has_moved}
-      <button class="reset-camera" onclick={reset_camera} title={reset_text}>
+      <button class="reset-camera" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
         <Icon icon="Reset" />
       </button>
     {/if}
@@ -149,7 +153,7 @@
       <button
         type="button"
         onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
-        title="{fullscreen ? `Exit` : `Enter`} fullscreen"
+        title={fullscreen ? t('structure.exit_fullscreen') : t('structure.enter_fullscreen')}
         aria-pressed={fullscreen}
         class="fullscreen-toggle"
         style="padding: 0"
@@ -165,81 +169,87 @@
 
     <!-- === Gesture Control === -->
     {#if !hidden_toolbar_items.includes('gesture')}
-    <button
-      type="button"
-      onclick={() => {
-        gesture_active = !gesture_active
-        gesture_config = { ...gesture_config, enabled: gesture_active }
-      }}
-      title={gesture_active ? `Disable gesture control (G)` : `Enable gesture control (G)`}
-      class="gesture-toggle"
-      class:active={gesture_active}
-      aria-pressed={gesture_active}
-    >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
-        <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
-        <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
-        <path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
-      </svg>
-    </button>
-    {#if gesture_active}
+    <span class="struct-toolbar-tooltip-wrap">
       <button
         type="button"
-        onclick={() => { gesture_art_mode = !gesture_art_mode }}
-        title={gesture_art_mode ? `Exit art mode` : `Enter atom art mode`}
-        class="gesture-toggle art"
-        class:active={gesture_art_mode}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="13.5" cy="6.5" r="2.5" />
-          <circle cx="17" cy="15" r="1.5" />
-          <circle cx="8.5" cy="14.5" r="1.5" />
-          <circle cx="6.5" cy="8" r="1.5" />
-          <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        onclick={() => { show_gesture_settings = !show_gesture_settings }}
-        title={show_gesture_settings ? `Close voice & gesture settings` : `Voice & gesture settings`}
-        class="gesture-toggle settings"
-        class:active={show_gesture_settings}
+        onclick={() => {
+          gesture_active = !gesture_active
+          gesture_config = { ...gesture_config, enabled: gesture_active }
+        }}
+        class="gesture-toggle"
+        class:active={gesture_active}
+        aria-pressed={gesture_active}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+          <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+          <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+          <path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
         </svg>
       </button>
+      <span class="struct-toolbar-tooltip" role="tooltip">{gesture_active ? t('structure.disable_gesture') : t('structure.enable_gesture')}</span>
+    </span>
+    {#if gesture_active}
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { gesture_art_mode = !gesture_art_mode }}
+          class="gesture-toggle art"
+          class:active={gesture_art_mode}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="13.5" cy="6.5" r="2.5" />
+            <circle cx="17" cy="15" r="1.5" />
+            <circle cx="8.5" cy="14.5" r="1.5" />
+            <circle cx="6.5" cy="8" r="1.5" />
+            <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z" />
+          </svg>
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{gesture_art_mode ? t('structure.exit_art_mode') : t('structure.enter_art_mode')}</span>
+      </span>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { show_gesture_settings = !show_gesture_settings }}
+          class="gesture-toggle settings"
+          class:active={show_gesture_settings}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{show_gesture_settings ? t('structure.close_voice_settings') : t('structure.open_voice_settings')}</span>
+      </span>
     {/if}
     {/if}
 
     <!-- === Structure Editing (Pencil Mode) === -->
     <div class="pencil-mode-container">
-      <button
-        type="button"
-        onclick={() => {
-          pencil.pencil_mode_active = !pencil.pencil_mode_active
-          if (!pencil.pencil_mode_active) {
-            pencil.pencil_drag_active = false
-            pencil.pencil_anchor_idx = null
-            pencil.pencil_ghost_atom = null
-          }
-        }}
-        title={pencil.pencil_mode_active
-          ? `Exit draw mode (Esc)`
-          : `Draw mode - click and drag from atoms to add new atoms`}
-        class="pencil-toggle"
-        class:active={pencil.pencil_mode_active}
-        aria-pressed={pencil.pencil_mode_active}
-      >
-        <Icon icon="Pencil" style={pencil.pencil_mode_active ? "color: var(--accent-color, #007acc)" : ""} />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => {
+            pencil.pencil_mode_active = !pencil.pencil_mode_active
+            if (!pencil.pencil_mode_active) {
+              pencil.pencil_drag_active = false
+              pencil.pencil_anchor_idx = null
+              pencil.pencil_ghost_atom = null
+            }
+          }}
+          class="pencil-toggle"
+          class:active={pencil.pencil_mode_active}
+          aria-pressed={pencil.pencil_mode_active}
+        >
+          <Icon icon="Pencil" style={pencil.pencil_mode_active ? "color: var(--accent-color, #007acc)" : ""} />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{pencil.pencil_mode_active ? t('structure.exit_draw_mode') : t('structure.draw_mode_hint')}</span>
+      </span>
       {#if pencil.pencil_mode_active}
         <button
           type="button"
-          aria-label="Exit draw mode"
-          title="Exit draw mode"
+          aria-label={t('structure.exit_draw_mode_btn')}
+          title={t('structure.exit_draw_mode_btn')}
           onclick={() => {
             pencil.pencil_mode_active = false
             pencil.pencil_drag_active = false
@@ -260,37 +270,37 @@
               class="mode-btn"
               class:active={pencil.pencil_add_mode === 'atom'}
               onclick={() => pencil.pencil_add_mode = 'atom'}
-              title="Add single atoms"
+              title={t('structure.add_atoms')}
             >
-              Atoms
+              {t('common.atoms')}
             </button>
             <button
               type="button"
               class="mode-btn"
               class:active={pencil.pencil_add_mode === 'fragment'}
               onclick={() => { pencil.pencil_add_mode = 'fragment'; pencil.selected_bonds = []; pencil.bond_first_atom = null }}
-              title="Add molecular fragments"
+              title={t('structure.add_fragments')}
             >
-              Fragments
+              {t('structure.fragments')}
             </button>
             <button
               type="button"
               class="mode-btn"
               class:active={pencil.pencil_add_mode === 'bonds'}
               onclick={() => { pencil.pencil_add_mode = 'bonds'; pencil.selected_bonds = []; pencil.bond_first_atom = null }}
-              title="Add or remove bonds"
+              title={t('structure.add_remove_bonds')}
             >
-              Bonds
+              {t('structure.bonds')}
             </button>
           </div>
           {#if pencil.pencil_add_mode === 'bonds'}
             <div class="bond-mode-status">
               {#if pencil.selected_bonds.length > 0}
-                <span style="color: var(--warning-color)">{pencil.selected_bonds.length} bond{pencil.selected_bonds.length > 1 ? 's' : ''} selected</span> — press Delete to remove
+                <span style="color: var(--warning-color)">{t('structure.bonds_selected', { n: pencil.selected_bonds.length })}</span> — {t('structure.press_delete_to_remove')}
               {:else if pencil.bond_first_atom !== null}
-                Click second atom to create bond
+                {t('structure.click_second_atom')}
               {:else}
-                Click an atom to start, or click a bond to select
+                {t('structure.click_atom_or_bond')}
               {/if}
             </div>
           {/if}
@@ -302,7 +312,7 @@
                   class="element-btn"
                   class:selected={selected_add_element === elem}
                   onclick={() => selected_add_element = elem as ElementSymbol}
-                  title={`Add ${elem} atoms`}
+                  title={t('structure.add_elem_atoms', { elem })}
                 >
                   {elem}
                 </button>
@@ -311,7 +321,7 @@
                 type="button"
                 class="element-btn more-elements"
                 onclick={() => periodic_table_visible = true}
-                title="Select from periodic table"
+                title={t('structure.select_from_pt')}
               >
                 ···
               </button>
@@ -322,7 +332,7 @@
                 {#each ['ring', 'alkyl', 'chain', 'functional'] as cat}
                   {@const cat_fragments = molecular_fragments.filter(f => f.category === cat)}
                   {#if cat_fragments.length > 0}
-                    <span class="category-label">{cat === 'alkyl' ? 'Alkyl' : cat === 'ring' ? 'Rings' : cat === 'chain' ? 'Chains' : 'Func.'}</span>
+                    <span class="category-label">{cat === 'alkyl' ? t('structure.alkyl') : cat === 'ring' ? t('structure.rings') : cat === 'chain' ? t('structure.chains') : t('structure.functional')}</span>
                     {#each cat_fragments as frag}
                       <button
                         type="button"
@@ -345,122 +355,130 @@
 
     {#if !hide_extra_tools}
       <!-- === Build Tools === -->
-      <button
-        type="button"
-        onclick={() => { build_pane_open = !build_pane_open }}
-        title="Build Tools"
-        class="build-tools-toggle"
-        class:active={build_pane_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="Hammer" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { build_pane_open = !build_pane_open }}
+          class="build-tools-toggle"
+          class:active={build_pane_open}
+        >
+          <Icon icon="Hammer" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.build_tools')}</span>
+      </span>
 
       <!-- === Analysis Tools === -->
-      <button
-        type="button"
-        onclick={() => { analysis_pane_open = !analysis_pane_open }}
-        title="Analysis Tools"
-        class="build-tools-toggle"
-        class:active={analysis_pane_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="ChartLine" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { analysis_pane_open = !analysis_pane_open }}
+          class="build-tools-toggle"
+          class:active={analysis_pane_open}
+        >
+          <Icon icon="ChartLine" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.analysis_tools')}</span>
+      </span>
 
       {#if !hidden_toolbar_items.includes('workflow') && !STATIC_ONLY}
       <!-- === Workflow === -->
-      <button
-        type="button"
-        onclick={() => { workflow_pane_open = !workflow_pane_open }}
-        title="Workflow"
-        class="build-tools-toggle"
-        class:active={workflow_pane_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="Workflow" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { workflow_pane_open = !workflow_pane_open }}
+          class="build-tools-toggle"
+          class:active={workflow_pane_open}
+        >
+          <Icon icon="Workflow" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('common.workflow')}</span>
+      </span>
       {/if}
 
       <!-- === IO (Import/Export) === -->
-      <button
-        type="button"
-        onclick={() => { io_pane_open = !io_pane_open }}
-        title="Import / Export"
-        class="build-tools-toggle"
-        class:active={io_pane_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="FileIO" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { io_pane_open = !io_pane_open }}
+          class="build-tools-toggle"
+          class:active={io_pane_open}
+        >
+          <Icon icon="FileIO" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.import_export')}</span>
+      </span>
 
       {#if !hidden_toolbar_items.includes('server') && !STATIC_ONLY}
       <!-- === Server (HPC) === -->
-      <button
-        type="button"
-        onclick={() => { server_pane_open = !server_pane_open }}
-        title="Server (HPC)"
-        class="build-tools-toggle"
-        class:active={server_pane_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="Server" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { server_pane_open = !server_pane_open }}
+          class="build-tools-toggle"
+          class:active={server_pane_open}
+        >
+          <Icon icon="Server" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.server_hpc')}</span>
+      </span>
       {/if}
 
       {#if !hidden_toolbar_items.includes('plugin_hub') && !STATIC_ONLY}
       <!-- === Plugin Hub === -->
-      <button
-        type="button"
-        onclick={() => { plugin_hub_open = !plugin_hub_open }}
-        title="Plugin Hub"
-        class="build-tools-toggle"
-        class:active={plugin_hub_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="PluginHub" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => { plugin_hub_open = !plugin_hub_open }}
+          class="build-tools-toggle"
+          class:active={plugin_hub_open}
+        >
+          <Icon icon="PluginHub" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.plugin_hub')}</span>
+      </span>
       {/if}
 
       {#if !hidden_toolbar_items.includes('chat') && !STATIC_ONLY}
       <!-- === AI Chat === -->
-      <button
-        type="button"
-        onclick={() => {
-          if (chat_position.value === `popout`) set_chat_position(`right`)
-          chat_pane_open = !chat_pane_open
-        }}
-        title="AI Assistant"
-        class="build-tools-toggle"
-        class:active={chat_pane_open}
-        {@attach tooltip()}
-      >
-        <Icon icon="Chat" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => {
+            if (chat_position.value === `popout`) set_chat_position(`right`)
+            chat_pane_open = !chat_pane_open
+          }}
+          class="build-tools-toggle"
+          class:active={chat_pane_open}
+        >
+          <Icon icon="Chat" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.ai_assistant')}</span>
+      </span>
       {/if}
 
       {#if !hidden_toolbar_items.includes('terminal') && !STATIC_ONLY}
       <!-- === Terminal === -->
-      <button
-        type="button"
-        onclick={() => {
-          if (show_terminal) {
-            side_panel_minimized = !side_panel_minimized
-          } else {
-            show_terminal = true
-            side_panel_minimized = false
-            terminal_popped_out = false
-            terminal_popped_sync_cwd = false
-          }
-        }}
-        title={show_terminal && side_panel_minimized ? `Restore terminal` : show_terminal ? `Minimize terminal` : `Open terminal`}
-        class="build-tools-toggle"
-        class:active={show_terminal}
-        class:minimized-indicator={show_terminal && side_panel_minimized}
-        {@attach tooltip()}
-      >
-        <Icon icon="Terminal" />
-      </button>
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => {
+            if (show_terminal) {
+              side_panel_minimized = !side_panel_minimized
+            } else {
+              show_terminal = true
+              side_panel_minimized = false
+              terminal_popped_out = false
+              terminal_popped_sync_cwd = false
+            }
+          }}
+          class="build-tools-toggle"
+          class:active={show_terminal}
+          class:minimized-indicator={show_terminal && side_panel_minimized}
+        >
+          <Icon icon="Terminal" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{show_terminal && side_panel_minimized ? t('structure.restore_terminal') : show_terminal ? t('structure.minimize_terminal') : t('structure.open_terminal')}</span>
+      </span>
       {/if}
 
       <!-- === Push structure back to remote === -->
@@ -479,7 +497,7 @@
               console.error(`Push-back failed:`, e)
             }
           }}
-          title="Save structure back to {remote_origin.file_path}"
+          title={t('structure.save_back_to', { path: remote_origin.file_path })}
           class="build-tools-toggle push-back-btn"
           {@attach tooltip()}
         >
@@ -497,37 +515,39 @@
         class="measure-mode-dropdown"
         {@attach click_outside({ callback: () => measure_menu_open = false })}
       >
-        <button
-          onclick={() => (measure_menu_open = !measure_menu_open)}
-          title={measure_mode_active
-            ? `Continuous ${measure_mode} mode ON - click atoms to measure`
+        <span class="struct-toolbar-tooltip-wrap">
+          <button
+            onclick={() => (measure_menu_open = !measure_menu_open)}
+            class="view-mode-button"
+            class:active={measure_menu_open || measure_mode_active}
+            aria-expanded={measure_menu_open}
+          >
+            {#if measure_mode_active}
+              <Icon
+                icon={({ distance: `Ruler`, angle: `Angle`, dihedral: `Angle` } as const)[measure_mode]}
+                style="color: var(--accent-color, #007acc)"
+              />
+            {:else if selected_sites.length > 0}
+              <span class="selection-limit-text">
+                {selected_sites.length}
+              </span>
+            {:else}
+              <Icon
+                icon={({ distance: `Ruler`, angle: `Angle`, dihedral: `Angle` } as const)[measure_mode]}
+              />
+            {/if}
+          </button>
+          <span class="struct-toolbar-tooltip" role="tooltip">{measure_mode_active
+            ? t('structure.continuous_mode_on', { mode: measure_mode })
             : selected_sites.length > 0
-              ? `${selected_sites.length} atoms selected - click to measure`
-              : `Select atoms then click to measure`}
-          class="view-mode-button"
-          class:active={measure_menu_open || measure_mode_active}
-          aria-expanded={measure_menu_open}
-        >
-          {#if measure_mode_active}
-            <Icon
-              icon={({ distance: `Ruler`, angle: `Angle`, dihedral: `Angle` } as const)[measure_mode]}
-              style="color: var(--accent-color, #007acc)"
-            />
-          {:else if selected_sites.length > 0}
-            <span class="selection-limit-text">
-              {selected_sites.length}
-            </span>
-          {:else}
-            <Icon
-              icon={({ distance: `Ruler`, angle: `Angle`, dihedral: `Angle` } as const)[measure_mode]}
-            />
-          {/if}
-        </button>
+              ? t('structure.atoms_selected_click', { n: selected_sites.length })
+              : t('structure.select_atoms_then_click')}</span>
+        </span>
         {#if measure_mode_active}
           <button
             type="button"
-            aria-label="Exit continuous mode"
-            title="Exit continuous measurement mode"
+            aria-label={t('structure.exit_continuous_mode')}
+            title={t('structure.exit_continuous_mode')}
             onclick={() => {
               measure_mode_active = false
               current_continuous_measurement_sites = []
@@ -539,8 +559,8 @@
         {:else if (selected_sites?.length ?? 0) > 0}
           <button
             type="button"
-            aria-label="Clear selection"
-            title="Clear selection"
+            aria-label={t('structure.clear_selection')}
+            title={t('structure.clear_selection')}
             onclick={() => selected_sites = []}
           >
             <Icon icon="Cross" />
@@ -549,8 +569,8 @@
         {#if measurements.length > 0}
           <button
             type="button"
-            aria-label="Clear all measurements"
-            title="Clear all measurements"
+            aria-label={t('structure.clear_all_measurements')}
+            title={t('structure.clear_all_measurements')}
             onclick={() => {
               measurements = []
               measured_sites = []
@@ -564,9 +584,9 @@
         {/if}
         {#if measure_menu_open}
           {@const measure_options = [
-            { mode: `distance` as const, icon: `Ruler` as const, label: `Distance`, scale: 1.1, min_atoms: 2 },
-            { mode: `angle` as const, icon: `Angle` as const, label: `Angle`, scale: 1.3, min_atoms: 3 },
-            { mode: `dihedral` as const, icon: `Angle` as const, label: `Dihedral`, scale: 1.3, min_atoms: 4 },
+            { mode: `distance` as const, icon: `Ruler` as const, label: t('structure.distance'), scale: 1.1, min_atoms: 2 },
+            { mode: `angle` as const, icon: `Angle` as const, label: t('structure.angle'), scale: 1.3, min_atoms: 3 },
+            { mode: `dihedral` as const, icon: `Angle` as const, label: t('structure.dihedral'), scale: 1.3, min_atoms: 4 },
           ]}
           <div class="view-mode-dropdown">
             {#each measure_options as { mode, icon, label, scale, min_atoms } (mode)}
@@ -574,8 +594,8 @@
                 class="view-mode-option"
                 class:selected={measure_mode === mode && measure_mode_active}
                 title={selected_sites.length >= min_atoms
-                  ? `Measure ${label.toLowerCase()} of selected atoms`
-                  : `Enter ${label.toLowerCase()} measurement mode`}
+                  ? t('structure.measure_label', { label })
+                  : t('structure.enter_label_mode', { label })}
                 onclick={(event) => {
                   event.stopPropagation()
                   measure_mode = mode
@@ -625,11 +645,11 @@
       {@const selected_meas = measurements.find(m => m.id === selected_measurement_id)}
       {#if selected_meas}
         <div class="selected-measurement-indicator">
-          <span>{selected_meas.type === 'distance' ? 'Distance' : selected_meas.type === 'angle' ? 'Angle' : 'Dihedral'} selected</span>
+          <span>{t('structure.type_selected', { type: selected_meas.type === 'distance' ? t('structure.distance') : selected_meas.type === 'angle' ? t('structure.angle') : t('structure.dihedral') })}</span>
           <button
             type="button"
-            aria-label="Delete measurement"
-            title="Delete measurement (Delete key)"
+            aria-label={t('structure.delete_measurement')}
+            title={t('structure.delete_measurement')}
             onclick={() => delete_measurement(selected_measurement_id!)}
           >
             <Icon icon="Close" style="transform: scale(0.8)" />
@@ -711,6 +731,58 @@
   @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
+  }
+
+  .struct-toolbar-tooltip-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .struct-toolbar-tooltip {
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 8px);
+    transform: translateX(-50%) translateY(-4px);
+    padding: 7px 12px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(17, 17, 17, 0.96);
+    color: #f5f5f5;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    z-index: 100000010;
+    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+  }
+  .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip,
+  .struct-toolbar-tooltip-wrap:focus-within .struct-toolbar-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+  .struct-toolbar-tooltip-wrap:has(.active) .struct-toolbar-tooltip,
+  .struct-toolbar-tooltip-wrap:has([aria-expanded='true']) .struct-toolbar-tooltip,
+  .struct-toolbar-tooltip-wrap:has([aria-pressed='true']) .struct-toolbar-tooltip {
+    opacity: 0;
+    visibility: hidden;
+  }
+  .struct-toolbar-tooltip::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 100%;
+    width: 9px;
+    height: 9px;
+    background: inherit;
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    transform: translate(-50%, 50%) rotate(45deg);
   }
 
   /* === 下拉菜单样式 (匹配 Trajectory dropdown UI) === */

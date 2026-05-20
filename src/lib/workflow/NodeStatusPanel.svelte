@@ -1,5 +1,6 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { STATUS_COLORS } from './workflow-types'
   import type { StepInfo } from './workflow-types'
   import type { ConvergencePoint } from '$lib/api/workflow'
@@ -9,7 +10,6 @@
   import UvVisPlot from './UvVisPlot.svelte'
   import ConvergencePlot from './ConvergencePlot.svelte'
   import VaspMonitorPlot from './VaspMonitorPlot.svelte'
-  import Cp2kMonitorPlot from './Cp2kMonitorPlot.svelte'
   import Trajectory from '$lib/trajectory/Trajectory.svelte'
   import IrcPathPlot from './IrcPathPlot.svelte'
   import ImageEnergyProfile from './ImageEnergyProfile.svelte'
@@ -139,21 +139,21 @@
     const traces: any[] = [{
       x: se.data_points.map((p: any) => p.volume),
       y: se.data_points.map((p: any) => p.energy),
-      mode: 'markers', type: 'scatter', name: 'Calculated',
+      mode: 'markers', type: 'scatter', name: t('workflow.nsp_calculated'),
       marker: { size: 8, color: '#3b82f6' },
     }]
     if (se.fit_curve?.volumes?.length) {
       traces.push({
         x: se.fit_curve.volumes, y: se.fit_curve.energies,
-        mode: 'lines', type: 'scatter', name: 'EOS Fit',
+        mode: 'lines', type: 'scatter', name: t('workflow.nsp_eos_fit'),
         line: { color: '#ef4444', width: 2 },
       })
     }
     const ac = 'var(--text-color, #374151)'
     _Plotly.react(eos_plot_div, traces, base_layout({
       height: 280,
-      xaxis: { title: 'Volume (\u00C5\u00B3)', showgrid: true, gridcolor: 'rgba(128,128,128,0.15)', color: ac },
-      yaxis: { title: 'Energy (eV)', showgrid: true, gridcolor: 'rgba(128,128,128,0.15)', color: ac },
+      xaxis: { title: t('workflow.nsp_volume_axis'), showgrid: true, gridcolor: 'rgba(128,128,128,0.15)', color: ac },
+      yaxis: { title: t('workflow.nsp_energy_axis'), showgrid: true, gridcolor: 'rgba(128,128,128,0.15)', color: ac },
     }), base_config())
     return () => { if (eos_plot_div && _Plotly) _Plotly.purge(eos_plot_div) }
   })
@@ -312,15 +312,15 @@
       const res = await fetch(`${API_BASE}/workflow/${workflow_id}/steps/${node_id}/retry`, { method: `POST` })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }))
-        retry_message = `Error: ${err.detail || res.statusText}`
+        retry_message = t('workflow.nsp_err_msg', { msg: err.detail || res.statusText })
         return
       }
       const data = await res.json()
-      retry_message = `Reset ${data.reset_nodes.length} nodes to pending`
+      retry_message = t('workflow.nsp_retry_success', { count: data.reset_nodes.length })
       // Notify parent to refresh statuses
       if (onstatus_sync) onstatus_sync(node_id, `pending`)
     } catch (e: any) {
-      retry_message = `Error: ${e.message}`
+      retry_message = t('workflow.nsp_err_msg', { msg: e.message })
     } finally {
       retry_loading = false
     }
@@ -350,22 +350,6 @@
   const is_vasp = $derived(
     VASP_ONLY_TYPES.has(effective_node_type) ||
     (UNIFIED_CALC_TYPES.has(effective_node_type) && effective_node_params?.software === `vasp`)
-  )
-  // CP2K node detection — mirrors is_vasp. Legacy `cp2k_*` task types AND
-  // unified calc types running with `software === 'cp2k'`. Drives both the
-  // convergence-fetch trigger below and the chart-component selection in
-  // the template.
-  const CP2K_ONLY_TYPES = new Set([
-    `cp2k_geopt`, `cp2k_static`, `cp2k_cellopt`, `cp2k_md`, `cp2k_freq`,
-  ])
-  const is_cp2k = $derived(
-    CP2K_ONLY_TYPES.has(effective_node_type) ||
-    (UNIFIED_CALC_TYPES.has(effective_node_type) && effective_node_params?.software === `cp2k`)
-  )
-  // CP2K MD subset — drives the chart-panel selection in Cp2kMonitorPlot
-  // (MD shows Energies + Temperature, OPT shows Energy + Forces).
-  const is_cp2k_md = $derived(
-    is_cp2k && (effective_node_type === `cp2k_md` || effective_node_type === `md`)
   )
   const MLP_TYPES = new Set([`mlp_relax`, `mlp_md`])
   const is_mlp = $derived(
@@ -821,10 +805,9 @@
     // Phase 2: Slow HPC calls — fire independently, update UI as each completes
     if (!has_run) return
 
-    // Convergence (VASP / CP2K / ORCA / MLP) — independent. is_mlp_live excludes
-    // mlp_vibrations and mlp_single_point (no optimizer log). CP2K uses the
-    // same /convergence endpoint as VASP (backend dispatches by engine).
-    if (is_vasp || is_cp2k || is_orca || is_mlp_live) {
+    // Convergence (VASP / ORCA / MLP) — independent. is_mlp_live excludes
+    // mlp_vibrations and mlp_single_point (no optimizer log).
+    if (is_vasp || is_orca || is_mlp_live) {
       conv_loading = true
       const conv_promise = is_mlp_live
         ? adapter.get_mlp_progress(task_ref)
@@ -952,7 +935,7 @@
       irc_trajectory_data_url = `data:chemical/x-xyz;base64,${btoa(irc_trajectory_content)}`
       irc_trajectory_loaded = true
     } catch (err) {
-      fetch_error = `Failed to load IRC trajectory: ${String(err)}`
+      fetch_error = t('workflow.nsp_err_failed_load_irc', { err: String(err) })
     } finally {
       irc_trajectory_loading = false
     }
@@ -1004,6 +987,9 @@
     prev_status = cur ?? null
   })
 
+  $effect(() => {
+    load_i18n_module('workflow')
+  })
 </script>
 
 <div class="status-panel dialog-modal">
@@ -1014,17 +1000,17 @@
     {#if display_status && display_status_color}
       <div class="sp-status-badge" style="background:{display_status_color}15;border-color:{display_status_color}40;color:{display_status_color}">
         <span class="sp-status-dot" class:running={effective_status === `running` || effective_status === `retrying`} style="background:{display_status_color}"></span>
-        {display_status === `retrying` ? `retrying (connection lost)` : display_status}
+        {display_status === `retrying` ? t('workflow.nsp_status_retrying_conn') : display_status}
       </div>
     {/if}
     {#if hpc_sid}
       <div class="sp-hpc-badge" class:connected={hpc_connected} class:disconnected={!hpc_connected}
-           title={hpc_connected ? `HPC connected: ${hpc_label}` : `HPC not connected — connect to the cluster to view live data`}>
+           title={hpc_connected ? `${t('workflow.nsp_hpc_connected')}: ${hpc_label}` : `${t('workflow.nsp_hpc_not_connected')} — ${t('workflow.nsp_hpc_connect_hint')}`}>
         <span class="sp-hpc-dot"></span>
         {#if hpc_connected}
           {hpc_label}
         {:else}
-          HPC not connected
+          {t('workflow.nsp_hpc_not_connected')}
         {/if}
       </div>
     {/if}
@@ -1033,15 +1019,15 @@
   {#if show_review_gate}
     <!-- ========== REVIEW PHASE ========== -->
     <div class="sp-section" style="background:rgba(245,158,11,0.1);border:1px solid #f59e0b;border-radius:8px;padding:12px;margin:8px 0;">
-      <div style="color:#f59e0b;font-weight:600;margin-bottom:8px;">Review Required</div>
+      <div style="color:#f59e0b;font-weight:600;margin-bottom:8px;">{t('workflow.nsp_review_required')}</div>
       <div style="color:var(--text-color-dim,#aaa);font-size:12px;margin-bottom:10px;">
-        Verify structure and parameters before submitting to HPC.
+        {t('workflow.nsp_review_hint')}
       </div>
 
       <!-- Parameter Review Section -->
       <div style="background:rgba(0,0,0,0.2);border-radius:6px;padding:10px;margin-bottom:10px;">
         <div style="font-size:12px;color:#ccc;margin-bottom:8px;">
-          <strong>Parameters to review:</strong>
+          <strong>{t('workflow.nsp_params_to_review')}</strong>
         </div>
         {#if engine_task?.params_json}
           {@const params = (() => {
@@ -1099,7 +1085,7 @@
           }}
           disabled={confirming_task}
         >
-          {confirming_task ? '⏳ Confirming...' : 'Confirm & Submit'}
+          {confirming_task ? t('workflow.nsp_confirming') : t('workflow.nsp_confirm_submit')}
         </button>
         <button
           style="background:rgba(239,68,68,0.3);color:#ef4444;border:1px solid #ef4444;border-radius:6px;padding:6px 16px;font-weight:600;cursor:pointer;flex:1;"
@@ -1133,7 +1119,7 @@
           }}
           disabled={rejecting_task}
         >
-          {rejecting_task ? '⏳ Rejecting...' : 'Reject'}
+          {rejecting_task ? t('workflow.nsp_rejecting') : t('workflow.nsp_reject')}
         </button>
       </div>
     </div>
@@ -1162,7 +1148,7 @@
       })
     })()}
     <div class="sp-section">
-      <div class="sp-section-title">Batch Execution</div>
+      <div class="sp-section-title">{t('workflow.nsp_batch_execution')}</div>
       <BatchStatusSection
         sub_steps={batch_results}
         {workflow_id}
@@ -1186,7 +1172,7 @@
       contcar: (r.result?.contcar) as string | undefined,
     }))}
     <div class="sp-section">
-      <div class="sp-section-title">Batch Results</div>
+      <div class="sp-section-title">{t('workflow.nsp_batch_results')}</div>
       <BatchStatusSection
         sub_steps={batch_results}
         {workflow_id}
@@ -1204,12 +1190,12 @@
     {@const agg_row_count = agg_labels.length || Math.max(0, ...Object.values(agg_table).map((col: any) => col?.length ?? 0))}
     {@const agg_columns = Object.keys(agg_table).filter(k => k !== `label` && k !== `index`)}
     <div class="sp-section">
-      <div class="sp-section-title">Aggregate Results ({agg_labels.length} structures)</div>
+      <div class="sp-section-title">{t('workflow.nsp_aggregate_results', { n: agg_labels.length })}</div>
       <div style="overflow-x: auto; font-size: 11px;">
         <table style="width: 100%; border-collapse: collapse;">
           <thead>
             <tr style="border-bottom: 1px solid var(--dialog-border, #404040);">
-              <th style="text-align: left; padding: 4px 6px; color: var(--text-color-muted);">Label</th>
+              <th style="text-align: left; padding: 4px 6px; color: var(--text-color-muted);">{t('workflow.editor_edge_label')}</th>
               {#each agg_columns as col}
                 <th style="text-align: right; padding: 4px 6px; color: var(--text-color-muted);">{col}</th>
               {/each}
@@ -1243,16 +1229,16 @@
   {/if}
 
   {#if loading && !step_info}
-    <div class="sp-loading">Loading execution data...</div>
+    <div class="sp-loading">{t('workflow.nsp_loading')}</div>
   {:else if !step_info && !effective_status}
     <div class="sp-empty">
       <div class="sp-empty-icon">📊</div>
       {#if hpc_sid && !hpc_connected}
-        <div class="sp-empty-text">HPC not connected</div>
-        <div class="sp-empty-hint">Connect to the cluster used by this workflow to view execution data</div>
+        <div class="sp-empty-text">{t('workflow.nsp_hpc_not_connected')}</div>
+        <div class="sp-empty-hint">{t('workflow.nsp_hpc_connect_hint')}</div>
       {:else}
-        <div class="sp-empty-text">No execution data</div>
-        <div class="sp-empty-hint">Run the workflow to see status here</div>
+        <div class="sp-empty-text">{t('workflow.nsp_no_data')}</div>
+        <div class="sp-empty-hint">{t('workflow.nsp_run_hint')}</div>
       {/if}
     </div>
   {:else}
@@ -1260,27 +1246,27 @@
       <!-- Execution Info -->
       {#if step_info}
         <div class="sp-section">
-          <div class="sp-section-title">Execution</div>
+          <div class="sp-section-title">{t('workflow.nsp_execution')}</div>
           <div class="sp-info-grid">
             {#if step_info.hpc_job_id}
               <div class="sp-info-row">
-                <span class="sp-info-label">Job ID</span>
+                <span class="sp-info-label">{t('workflow.nsp_job_id')}</span>
                 <span class="sp-info-value mono">{step_info.hpc_job_id}</span>
               </div>
             {/if}
             <div class="sp-info-row">
-              <span class="sp-info-label">Started</span>
+              <span class="sp-info-label">{t('workflow.nsp_started')}</span>
               <span class="sp-info-value">{format_time(step_info.started_at)}</span>
             </div>
             {#if status !== `running` && status !== `queued`}
               <div class="sp-info-row">
-                <span class="sp-info-label">Completed</span>
+                <span class="sp-info-label">{t('workflow.nsp_completed')}</span>
                 <span class="sp-info-value">{format_time(step_info.completed_at)}</span>
               </div>
             {/if}
             {#if effective_work_dir}
               <div class="sp-info-row">
-                <span class="sp-info-label">Work Dir</span>
+                <span class="sp-info-label">{t('workflow.nsp_work_dir')}</span>
                 <span class="sp-info-value mono truncate" title={effective_work_dir}>{effective_work_dir}</span>
               </div>
             {/if}
@@ -1291,7 +1277,7 @@
       <!-- Ionic Step Progress -->
       {#if is_vasp && nsw > 0 && current_step > 0}
         <div class="sp-section">
-          <div class="sp-section-title">Ionic Steps</div>
+          <div class="sp-section-title">{t('workflow.nsp_ionic_steps')}</div>
           <div class="sp-progress-row">
             <span class="sp-progress-text">{current_step} / {nsw}</span>
             <span class="sp-progress-pct">{Math.round(current_step / nsw * 100)}%</span>
@@ -1305,33 +1291,33 @@
       <!-- ========== TASK METADATA (EXECUTION PHASE) ========== -->
       {#if show_task_metadata}
         <div class="sp-section" style="border:1px solid rgba(100,200,255,0.3);border-radius:8px;padding:12px;margin:8px 0;background:rgba(100,200,255,0.05);">
-          <div style="font-size:12px;color:#64c8ff;font-weight:600;margin-bottom:8px;">Task Information (Mode: Task)</div>
+          <div style="font-size:12px;color:#64c8ff;font-weight:600;margin-bottom:8px;">{t('workflow.nsp_task_info')}</div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:11px;">
             {#if engine_task?.task_type}
               <div>
-                <span style="color:#aaa;">Type:</span>
+                <span style="color:#aaa;">{t('workflow.nsp_task_type')}</span>
                 <div style="color:#fff;font-weight:500;">{engine_task.task_type}</div>
               </div>
             {/if}
 
             {#if engine_task?.hpc_job_id}
               <div>
-                <span style="color:#aaa;">HPC Job ID:</span>
+                <span style="color:#aaa;">{t('workflow.nsp_task_hpc_job_id')}</span>
                 <div style="color:#fff;font-family:monospace;">{engine_task.hpc_job_id}</div>
               </div>
             {/if}
 
             {#if engine_task?.work_dir}
               <div>
-                <span style="color:#aaa;">Work Directory:</span>
+                <span style="color:#aaa;">{t('workflow.nsp_task_work_dir')}</span>
                 <div style="color:#fff;font-family:monospace;font-size:10px;">{engine_task.work_dir}</div>
               </div>
             {/if}
 
             {#if engine_task?.created_at}
               <div>
-                <span style="color:#aaa;">Created:</span>
+                <span style="color:#aaa;">{t('workflow.nsp_task_created')}</span>
                 <div style="color:#fff;">{new Date(engine_task.created_at).toLocaleString()}</div>
               </div>
             {/if}
@@ -1347,7 +1333,7 @@
       {#if is_mlp_live && current_step > 0}
         {@const mlp_max = Number(effective_node_params?.max_steps) || 0}
         <div class="sp-section">
-          <div class="sp-section-title">{effective_node_type === `ts_search` || effective_node_type === `mlp_neb` ? `NEB Iterations` : `Optimizer Steps`}</div>
+          <div class="sp-section-title">{effective_node_type === `ts_search` || effective_node_type === `mlp_neb` ? t('workflow.nsp_neb_iterations') : t('workflow.nsp_optimizer_steps')}</div>
           <div class="sp-progress-row">
             <span class="sp-progress-text">{current_step}{mlp_max > 0 ? ` / ${mlp_max}` : ``}</span>
             {#if mlp_max > 0}
@@ -1365,8 +1351,8 @@
       <!-- Convergence loading indicator -->
       {#if conv_loading && !latest && !cached_summary.convergence_points?.length}
         <div class="sp-section">
-          <div class="sp-section-title">Convergence</div>
-          <div class="sp-inline-loading">Fetching from HPC...</div>
+          <div class="sp-section-title">{t('workflow.nsp_convergence')}</div>
+          <div class="sp-inline-loading">{t('workflow.nsp_fetching_hpc')}</div>
         </div>
       {/if}
 
@@ -1377,99 +1363,72 @@
            why the plot is empty. -->
       {#if is_mlp_live && !latest && convergence?.message}
         <div class="sp-section">
-          <div class="sp-section-title">Live Progress</div>
+          <div class="sp-section-title">{t('workflow.nsp_live_progress')}</div>
           <div class="sp-inline-loading">{convergence.message}</div>
         </div>
       {/if}
 
-      <!-- Energy & Force Convergence (live data from SSH).
-           For CP2K nodes that are running/queued/just-completed we ALWAYS
-           render this section even before any data point arrives, so the
-           chart frame is reserved and the user sees a "Waiting..." placeholder
-           instead of a missing slot. Without this, big basis CP2K jobs spend
-           the first ~10 min in SCF with nothing on screen. -->
-      {#if latest || (is_cp2k && (status === `running` || status === `queued` || status === `submitting`))}
+      <!-- Energy & Force Convergence (live data from SSH) -->
+      {#if latest}
         <div class="sp-section">
-          <div class="sp-section-title">{is_orca && (status === `running` || status === `queued`) ? `Live Monitoring` : `Convergence`}</div>
+          <div class="sp-section-title">{is_orca && (status === `running` || status === `queued`) ? t('workflow.nsp_live_monitoring') : t('workflow.nsp_convergence')}</div>
           <div class="sp-info-grid">
-            {#if latest}
             <div class="sp-info-row">
-              <span class="sp-info-label">{is_orca ? 'Energy (Eh)' : 'Energy (eV)'}</span>
+              <span class="sp-info-label">{is_orca ? t('workflow.nsp_energy_eh') : t('workflow.nsp_energy_ev')}</span>
               <span class="sp-info-value mono">{format_energy(latest.energy)}</span>
             </div>
             <div class="sp-info-row">
-              <span class="sp-info-label">{(node_type === `irc` || node_type === `orca_irc`) ? 'ΔE (kcal/mol)' : `d${(is_vasp || is_cp2k) ? 'E (eV)' : 'E (Eh)'}`}</span>
+              <span class="sp-info-label">{(node_type === `irc` || node_type === `orca_irc`) ? t('workflow.nsp_de_kcal') : `d${is_vasp ? t('workflow.nsp_de_ev') : t('workflow.nsp_de_eh')}`}</span>
               <span class="sp-info-value mono" class:sp-positive={latest.dE > 0} class:sp-negative={latest.dE < 0}>
                 {latest.dE >= 0 ? `+` : ``}{format_energy(latest.dE)}
               </span>
             </div>
-            {/if}
-            {#if latest && (latest as any).max_gradient > 0}
+            {#if (latest as any).max_gradient > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">Max |G| (Eh/bohr)</span>
+                <span class="sp-info-label">{t('workflow.nsp_max_grad')}</span>
                 <span class="sp-info-value mono">{format_force((latest as any).max_gradient)}</span>
               </div>
             {/if}
-            {#if latest && (latest as any).rms_gradient > 0}
+            {#if (latest as any).rms_gradient > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">RMS(G) (Eh/bohr)</span>
+                <span class="sp-info-label">{t('workflow.nsp_rms_grad')}</span>
                 <span class="sp-info-value mono">{format_force((latest as any).rms_gradient)}</span>
               </div>
             {/if}
-            {#if latest && latest.max_force > 0}
+            {#if latest.max_force > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">{is_orca ? 'Max Gradient' : 'Max Force (eV/Å)'}</span>
+                <span class="sp-info-label">{is_orca ? t('workflow.nsp_max_gradient') : t('workflow.nsp_max_force')}</span>
                 <span class="sp-info-value mono">{format_force(latest.max_force)}</span>
               </div>
               {#if is_vasp && ediffg < 0}
                 <div class="sp-info-row">
-                  <span class="sp-info-label">Target (EDIFFG)</span>
+                  <span class="sp-info-label">{t('workflow.nsp_target_ediffg')}</span>
                   <span class="sp-info-value mono">{format_force(Math.abs(ediffg))}</span>
                 </div>
               {/if}
             {/if}
-            {#if latest && latest.rms_force > 0}
+            {#if latest.rms_force > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">{is_orca ? 'RMS Gradient' : 'RMS Force (eV/Å)'}</span>
+                <span class="sp-info-label">{is_orca ? t('workflow.nsp_rms_gradient') : t('workflow.nsp_rms_force')}</span>
                 <span class="sp-info-value mono">{format_force(latest.rms_force)}</span>
               </div>
             {/if}
-            {#if is_orca && latest && latest.max_step && latest.max_step > 0}
+            {#if is_orca && latest.max_step && latest.max_step > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">MAX Step (Bohr)</span>
+                <span class="sp-info-label">{t('workflow.nsp_max_step')}</span>
                 <span class="sp-info-value mono">{format_force(latest.max_step)}</span>
               </div>
             {/if}
-            {#if is_orca && latest && latest.rms_step && latest.rms_step > 0}
+            {#if is_orca && latest.rms_step && latest.rms_step > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">RMS Step (Bohr)</span>
+                <span class="sp-info-label">{t('workflow.nsp_rms_step')}</span>
                 <span class="sp-info-value mono">{format_force(latest.rms_step)}</span>
-              </div>
-            {/if}
-            {#if !latest && is_cp2k}
-              <div class="sp-info-row" style="grid-column: 1 / -1; color: var(--text-muted, #888); font-size: 12px;">
-                Waiting for first optimization step (CP2K is still in SCF)...
               </div>
             {/if}
           </div>
 
-          <!-- Convergence chart. For CP2K we ALWAYS render the frame (component
-               shows its own "Waiting..." placeholder when points are empty) so
-               the user sees the plot slot reserved from the moment the task
-               starts. Other engines keep the original >=2-point gate. -->
-          {#if is_cp2k}
-            <div class="sp-convergence-chart">
-              <Cp2kMonitorPlot
-                points={convergence?.points ?? []}
-                running={status === `running` || status === `queued`}
-                mode={is_cp2k_md ? `md` : `opt`}
-                message={convergence?.message ?? ``}
-              />
-              {#if convergence && convergence.points.length > 0}
-                <div class="sp-chart-hint">Scroll to zoom · Drag to pan · Double-click to reset</div>
-              {/if}
-            </div>
-          {:else if convergence && convergence.points.length >= 2}
+          <!-- Convergence chart -->
+          {#if convergence && convergence.points.length >= 2}
             <div class="sp-convergence-chart">
               {#if node_type === `irc` || node_type === `orca_irc`}
                 <IrcPathPlot
@@ -1508,40 +1467,40 @@
           {#if node_type === `freq` || node_type === `orca_freq`}
             {''}
           {:else if is_actually_converged}
-            <div class="sp-conv-flag converged">Converged</div>
+            <div class="sp-conv-flag converged">{t('workflow.nsp_converged')}</div>
           {:else if status === `completed` || status === `not_converged` || status === `failed`}
-            <div class="sp-conv-flag not-converged">Not converged</div>
+            <div class="sp-conv-flag not-converged">{t('workflow.nsp_not_converged')}</div>
             <!-- Convergence failure guidance -->
             {#if is_vasp && convergence && convergence.points.length > 0}
               {@const last_p = convergence.points[convergence.points.length - 1]}
               <div class="sp-guidance">
-                <div class="sp-guidance-title">Analysis</div>
+                <div class="sp-guidance-title">{t('workflow.nsp_analysis')}</div>
                 {#if ediffg < 0 && last_p.max_force > 0}
                   <div class="sp-guidance-reason">
-                    Max Force ({last_p.max_force.toFixed(4)} eV/Å) > Target ({Math.abs(ediffg).toFixed(4)} eV/Å)
+                    {t('workflow.nsp_max_force_gt_target', { max_force: last_p.max_force.toFixed(4), target: Math.abs(ediffg).toFixed(4) })}
                   </div>
                 {:else if ediffg > 0}
                   <div class="sp-guidance-reason">
-                    |dE| ({Math.abs(last_p.dE).toFixed(6)} eV) > Target ({ediffg.toFixed(6)} eV)
+                    {t('workflow.nsp_de_gt_target', { de: Math.abs(last_p.dE).toFixed(6), target: ediffg.toFixed(6) })}
                   </div>
                 {/if}
                 {#if nsw > 0 && convergence.points.length >= nsw}
                   <div class="sp-guidance-reason">
-                    Reached NSW limit ({nsw} steps) without converging
+                    {t('workflow.nsp_reached_nsw_limit', { n: nsw })}
                   </div>
                 {/if}
-                <div class="sp-guidance-title" style="margin-top:6px">Suggestions</div>
+                <div class="sp-guidance-title" style="margin-top:6px">{t('workflow.nsp_suggestions')}</div>
                 <ul class="sp-guidance-list">
                   {#if nsw > 0 && convergence.points.length >= nsw}
-                    <li>Increase NSW (e.g. NSW={nsw * 2})</li>
+                    <li>{t('workflow.nsp_suggest_nsw', { nsw: nsw * 2 })}</li>
                   {/if}
                   {#if ediffg < 0 && last_p.max_force > 0 && last_p.max_force < Math.abs(ediffg) * 2}
-                    <li>Close to target — relax EDIFFG slightly (e.g. EDIFFG={ediffg * 0.8})</li>
+                    <li>{t('workflow.nsp_suggest_ediffg_close', { ediffg: ediffg * 0.8 })}</li>
                   {:else if ediffg < 0 && last_p.max_force > Math.abs(ediffg) * 5}
-                    <li>Structure far from minimum — check initial geometry</li>
+                    <li>{t('workflow.nsp_suggest_far')}</li>
                   {/if}
-                  <li>Try a different optimizer (IBRION=1 for RMM-DIIS near minimum, IBRION=2 for CG)</li>
-                  <li>Reduce POTIM if oscillating, increase if converging slowly</li>
+                  <li>{t('workflow.nsp_suggest_opt')}</li>
+                  <li>{t('workflow.nsp_suggest_potim')}</li>
                 </ul>
               </div>
             {/if}
@@ -1562,57 +1521,57 @@
       {:else if is_vasp && cached_summary.energy !== undefined}
         <!-- Fallback: cached results from DB (no SSH needed) -->
         <div class="sp-section">
-          <div class="sp-section-title">Results (cached)</div>
+          <div class="sp-section-title">{t('workflow.nsp_results_cached')}</div>
           <div class="sp-info-grid">
             <div class="sp-info-row">
-              <span class="sp-info-label">Energy (eV)</span>
+              <span class="sp-info-label">{t('workflow.nsp_energy_ev')}</span>
               <span class="sp-info-value mono">{format_energy(cached_summary.energy!)}</span>
             </div>
             {#if cached_summary.max_force !== undefined && cached_summary.max_force! > 0}
               <div class="sp-info-row">
-                <span class="sp-info-label">Max Force (eV/A)</span>
+                <span class="sp-info-label">{t('workflow.nsp_max_force')}</span>
                 <span class="sp-info-value mono">{format_force(cached_summary.max_force!)}</span>
               </div>
             {/if}
             {#if cached_summary.n_steps !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Ionic Steps</span>
+                <span class="sp-info-label">{t('workflow.nsp_ionic_steps')}</span>
                 <span class="sp-info-value mono">{cached_summary.n_steps}{nsw > 0 ? ` / ${nsw}` : ``}</span>
               </div>
             {/if}
           </div>
 
           {#if cached_summary.converged === true}
-            <div class="sp-conv-flag converged">Converged</div>
+            <div class="sp-conv-flag converged">{t('workflow.nsp_converged')}</div>
           {:else if cached_summary.converged === false}
-            <div class="sp-conv-flag not-converged">Not converged</div>
+            <div class="sp-conv-flag not-converged">{t('workflow.nsp_not_converged')}</div>
           {/if}
 
           {#if ssh_unavailable}
-            <div class="sp-ssh-hint">Connect to HPC for detailed convergence data</div>
+            <div class="sp-ssh-hint">{t('workflow.nsp_hpc_detail_hint')}</div>
           {/if}
         </div>
       {:else if is_vasp && (status === `completed` || status === `not_converged` || status === `failed`) && cached_summary.extraction_error}
         <!-- Extraction failed — VASP likely failed -->
         <div class="sp-section">
-          <div class="sp-section-title">Results</div>
-          <div class="sp-warn-box">No VASP output found — calculation may not have run successfully</div>
+          <div class="sp-section-title">{t('workflow.nsp_results')}</div>
+          <div class="sp-warn-box">{t('workflow.nsp_no_vasp_output')}</div>
           {#if ssh_unavailable}
-            <div class="sp-ssh-hint">Connect to HPC to inspect output files</div>
+            <div class="sp-ssh-hint">{t('workflow.nsp_hpc_inspect_hint')}</div>
           {/if}
         </div>
       {:else if is_orca && (cached_summary.energy_eh !== undefined || cached_summary.energy !== undefined || cached_summary.irc_converged !== undefined || cached_summary.transitions !== undefined || cached_summary.neb_converged !== undefined) && status !== `running` && status !== `queued`}
         <div class="sp-section">
-          <div class="sp-section-title">Results (cached)</div>
+          <div class="sp-section-title">{t('workflow.nsp_results_cached')}</div>
           <div class="sp-info-grid">
             <!-- Energy for all ORCA types except IRC (which has no single-point energy) -->
             {#if node_type !== `irc` && node_type !== `orca_irc`}
             <div class="sp-info-row">
-              <span class="sp-info-label">Energy (Eh)</span>
+              <span class="sp-info-label">{t('workflow.nsp_energy_eh')}</span>
               <span class="sp-info-value mono">{format_energy(cached_summary.energy_eh ?? cached_summary.energy)}</span>
             </div>
             <div class="sp-info-row">
-              <span class="sp-info-label">Energy (eV)</span>
+              <span class="sp-info-label">{t('workflow.nsp_energy_ev')}</span>
               <span class="sp-info-value mono">
                 {format_energy(cached_summary.energy_ev ?? ((cached_summary.energy_eh ?? cached_summary.energy ?? 0) * 27.2114))}
               </span>
@@ -1622,30 +1581,30 @@
             <!-- geo_opt (ORCA) -->
             {#if node_type === `geo_opt` && is_orca}
               {#if cached_summary.n_steps}<div class="sp-info-row">
-                <span class="sp-info-label">Opt Cycles</span>
+                <span class="sp-info-label">{t('workflow.nsp_opt_cycles')}</span>
                 <span class="sp-info-value mono">{cached_summary.n_steps}</span>
               </div>{/if}
               {#if cached_summary.max_gradient != null}<div class="sp-info-row">
-                <span class="sp-info-label">Max Gradient</span>
+                <span class="sp-info-label">{t('workflow.nsp_max_gradient')}</span>
                 <span class="sp-info-value mono">{cached_summary.max_gradient.toFixed(6)}</span>
               </div>{/if}
               {#if cached_summary.rms_gradient != null}<div class="sp-info-row">
-                <span class="sp-info-label">RMS Gradient</span>
+                <span class="sp-info-label">{t('workflow.nsp_rms_gradient')}</span>
                 <span class="sp-info-value mono">{cached_summary.rms_gradient.toFixed(6)}</span>
               </div>{/if}
               {#if cached_summary.converged === true}
-                <div class="sp-conv-flag converged">Converged</div>
+                <div class="sp-conv-flag converged">{t('workflow.nsp_converged')}</div>
               {:else if cached_summary.converged === false}
-                <div class="sp-conv-flag not-converged">Not converged</div>
+                <div class="sp-conv-flag not-converged">{t('workflow.nsp_not_converged')}</div>
               {/if}
             {/if}
 
             <!-- single_point (ORCA) - convergence_points shows one point -->
             {#if node_type === `single_point` && is_orca}
               {#if cached_summary.converged === true}
-                <div class="sp-conv-flag converged">Converged</div>
+                <div class="sp-conv-flag converged">{t('workflow.nsp_converged')}</div>
               {:else if cached_summary.converged === false}
-                <div class="sp-conv-flag not-converged">Not converged</div>
+                <div class="sp-conv-flag not-converged">{t('workflow.nsp_not_converged')}</div>
               {/if}
             {/if}
 
@@ -1656,34 +1615,34 @@
               {/if}
               {#if (cached_summary.num_imaginary ?? 0) > 0}
                 <div class="imag-freq-warning">
-                  ⚠ {cached_summary.num_imaginary} imaginary mode{cached_summary.num_imaginary !== 1 ? `s` : ``} — structure may not be at a true minimum
+                  {t('workflow.nsp_imag_freq_warn', { n: cached_summary.num_imaginary ?? 0 })}
                 </div>
               {/if}
               {#if cached_summary.num_imaginary !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">Imaginary Modes</span>
+                <span class="sp-info-label">{t('workflow.nsp_imaginary_modes')}</span>
                 <span class="sp-info-value mono">{cached_summary.num_imaginary}</span>
               </div>{/if}
               {#if cached_summary.zpe_kj_mol != null || cached_summary.gibbs_eh != null}
                 <div class="thermo-table">
-                  <div class="thermo-title">Thermochemistry (298 K)</div>
+                  <div class="thermo-title">{t('workflow.nsp_thermochemistry')}</div>
                   <table>
                     {#if cached_summary.zpe_kj_mol != null}
-                      <tr><td>Zero-point energy</td><td>{cached_summary.zpe_kj_mol.toFixed(2)} kJ/mol</td></tr>
+                      <tr><td>{t('workflow.nsp_zpe')}</td><td>{cached_summary.zpe_kj_mol.toFixed(2)} kJ/mol</td></tr>
                     {/if}
                     {#if cached_summary.enthalpy_eh != null}
-                      <tr><td>Enthalpy corr.</td><td>{(cached_summary.enthalpy_eh * 2625.5).toFixed(2)} kJ/mol</td></tr>
+                      <tr><td>{t('workflow.nsp_enthalpy')}</td><td>{(cached_summary.enthalpy_eh * 2625.5).toFixed(2)} kJ/mol</td></tr>
                     {/if}
                     {#if cached_summary.entropy_j_mol_k != null}
-                      <tr><td>Entropy (298 K)</td><td>{(cached_summary.entropy_j_mol_k / 1000).toFixed(4)} kJ/(mol·K)</td></tr>
+                      <tr><td>{t('workflow.nsp_entropy')}</td><td>{(cached_summary.entropy_j_mol_k / 1000).toFixed(4)} kJ/(mol·K)</td></tr>
                     {/if}
                     {#if cached_summary.gibbs_eh != null}
-                      <tr><td>Gibbs free energy corr.</td><td>{(cached_summary.gibbs_eh * 2625.5).toFixed(2)} kJ/mol</td></tr>
+                      <tr><td>{t('workflow.nsp_gibbs_corr')}</td><td>{(cached_summary.gibbs_eh * 2625.5).toFixed(2)} kJ/mol</td></tr>
                     {/if}
                   </table>
                 </div>
               {/if}
               {#if cached_summary.frequencies?.length}
-                <div class="sp-info-label" style="margin-top:6px">Frequencies (cm⁻¹, first 10 non-zero)</div>
+                <div class="sp-info-label" style="margin-top:6px">{t('workflow.nsp_freq_first_10')}</div>
                 <div class="sp-freq-table">
                   {#each cached_summary.frequencies.filter(f => f.frequency_cm > 1.0).slice(0, 10) as f}
                     <div class="sp-freq-row" class:sp-freq-imag={f.imaginary}>
@@ -1698,14 +1657,14 @@
             <!-- freq (VASP) -->
             {#if node_type === `freq` && is_vasp}
               {#if vasp_freq_loading}
-                <div class="sp-info-row"><span class="sp-info-label">Loading frequency data...</span></div>
+                <div class="sp-info-row"><span class="sp-info-label">{t('workflow.nsp_loading')}</span></div>
               {:else if vasp_freq_data?.success}
                 <div class="sp-info-row">
-                  <span class="sp-info-label">Imaginary Modes</span>
+                  <span class="sp-info-label">{t('workflow.nsp_imaginary_modes')}</span>
                   <span class="sp-info-value mono" class:sp-freq-imag={vasp_freq_data.num_imaginary! > 0}>{vasp_freq_data.num_imaginary}</span>
                 </div>
                 {#if vasp_freq_data.imag_freqs?.length}
-                  <div class="sp-info-label" style="margin-top:4px">Imaginary Frequencies (cm⁻¹)</div>
+                  <div class="sp-info-label" style="margin-top:4px">{t('workflow.nsp_freq_imaginary')}</div>
                   <div class="sp-freq-table">
                     {#each vasp_freq_data.imag_freqs as f}
                       <div class="sp-freq-row sp-freq-imag">
@@ -1716,7 +1675,7 @@
                   </div>
                 {/if}
                 {#if vasp_freq_data.real_freqs?.length}
-                  <div class="sp-info-label" style="margin-top:4px">Real Frequencies (cm⁻¹, first 15)</div>
+                  <div class="sp-info-label" style="margin-top:4px">{t('workflow.nsp_freq_real')}</div>
                   <div class="sp-freq-table">
                     {#each vasp_freq_data.real_freqs.slice(0, 15) as f}
                       <div class="sp-freq-row">
@@ -1726,7 +1685,7 @@
                     {/each}
                     {#if vasp_freq_data.real_freqs.length > 15}
                       <div class="sp-freq-row" style="color: #94a3b8; font-style: italic">
-                        ...and {vasp_freq_data.real_freqs.length - 15} more
+                        {t('workflow.nsp_freq_more', { n: vasp_freq_data.real_freqs.length - 15 })}
                       </div>
                     {/if}
                   </div>
@@ -1736,32 +1695,34 @@
                 {#if cached_summary.gibbs}
                   {@const g = cached_summary.gibbs as GibbsResult}
                   <div class="gibbs-auto-section">
-                    <div class="gibbs-auto-title">Gibbs Free Energy ({g.mode === 'gas' ? 'Gas Phase' : 'Adsorbed'}, {g.temperature} K)</div>
+                    <div class="gibbs-auto-title">
+                      {t('workflow.nsp_gibbs_auto_title', { mode: g.mode === 'gas' ? t('workflow.nsp_gibbs_mode_gas') : t('workflow.nsp_gibbs_mode_adsorbed'), temp: g.temperature })}
+                    </div>
                     <div class="sp-info-row">
-                      <span class="sp-info-label">G_corr</span>
+                      <span class="sp-info-label">{t('workflow.nsp_gibbs_corr')}</span>
                       <span class="sp-info-value mono" style="color: #22c55e; font-weight: 600">{g.g_corr_ev.toFixed(6)} eV</span>
                     </div>
                     <div class="sp-info-row">
-                      <span class="sp-info-label">ZPE</span>
+                      <span class="sp-info-label">{t('workflow.nsp_zpe')}</span>
                       <span class="sp-info-value mono">{g.zpe_ev.toFixed(6)} eV</span>
                     </div>
                     <div class="sp-info-row">
-                      <span class="sp-info-label">H_corr</span>
+                      <span class="sp-info-label">{t('workflow.nsp_enthalpy')}</span>
                       <span class="sp-info-value mono">{g.h_corr_ev.toFixed(6)} eV</span>
                     </div>
                     {#if g.mode === 'adsorbed' && g.ts_vib_ev !== undefined}
                       <div class="sp-info-row">
-                        <span class="sp-info-label">T*S_vib</span>
+                        <span class="sp-info-label">T×S_vib</span>
                         <span class="sp-info-value mono">{g.ts_vib_ev.toFixed(6)} eV</span>
                       </div>
                     {/if}
                     {#if g.mode === 'gas' && g.ts_total_ev !== undefined}
                       <div class="sp-info-row">
-                        <span class="sp-info-label">T*S_total</span>
+                        <span class="sp-info-label">T×S_total</span>
                         <span class="sp-info-value mono">{g.ts_total_ev.toFixed(6)} eV</span>
                       </div>
                     {/if}
-                    <div class="gibbs-auto-hint">G_total = E_DFT + G_corr</div>
+                    <div class="gibbs-auto-hint">{t('workflow.nsp_gibbs_formula_hint')}</div>
                   </div>
                 {/if}
 
@@ -1783,22 +1744,22 @@
                   />
                 {/if}
               {:else if vasp_freq_data && !vasp_freq_data.success}
-                <div class="sp-info-row"><span class="sp-info-label" style="color:#ef4444">{vasp_freq_data.message ?? `Failed to load frequencies`}</span></div>
+                <div class="sp-info-row"><span class="sp-info-label" style="color:#ef4444">{vasp_freq_data.message ?? t('workflow.nsp_failed_load_freq')}</span></div>
               {/if}
             {/if}
 
             <!-- ts_search (ORCA) and orca_neb_ts (NEB) -->
             {#if (node_type === `ts_search` || node_type === `orca_neb_ts`) && is_orca}
               {#if cached_summary.activation_barrier_kcal_mol != null}<div class="sp-info-row">
-                <span class="sp-info-label">Activation Barrier</span>
+                <span class="sp-info-label">{t('workflow.nsp_activation_barrier')}</span>
                 <span class="sp-info-value mono">{cached_summary.activation_barrier_kcal_mol.toFixed(2)} kcal/mol</span>
               </div>{/if}
               {#if cached_summary.ts_imaginary_frequency != null}<div class="sp-info-row">
-                <span class="sp-info-label">TS Imag. Freq.</span>
+                <span class="sp-info-label">{t('workflow.nsp_ts_imag_freq')}</span>
                 <span class="sp-info-value mono">{cached_summary.ts_imaginary_frequency.toFixed(1)} cm⁻¹</span>
               </div>{/if}
-              {#if cached_summary.neb_converged}<div class="sp-conv-flag converged">NEB Converged</div>{/if}
-              {#if cached_summary.ts_converged}<div class="sp-conv-flag converged">TS Converged</div>{/if}
+              {#if cached_summary.neb_converged}<div class="sp-conv-flag converged">{t('workflow.nsp_neb_converged')}</div>{/if}
+              {#if cached_summary.ts_converged}<div class="sp-conv-flag converged">{t('workflow.nsp_ts_converged')}</div>{/if}
               {@const live_image_energies = convergence?.image_energies
                 ?? cached_summary.convergence_data?.image_energies}
               {@const has_path_summary = !!cached_summary.path_summary?.images?.length}
@@ -1813,7 +1774,7 @@
                         class:active={effective_neb_tab === 'summary'}
                         onclick={() => (neb_active_tab = 'summary')}
                       >
-                        Summary
+                        {t('workflow.we_summary')}
                       </button>
                     {/if}
                     <button
@@ -1822,7 +1783,7 @@
                       onclick={() => (neb_active_tab = 'energies')}
                       disabled={!has_image_energies}
                     >
-                      Path Energies
+                      {t('workflow.nsp_path_energies')}
                     </button>
                   </div>
 
@@ -1830,7 +1791,7 @@
                     <div class="neb-tab-content">
                       <NEBPathPlot path_summary={cached_summary.path_summary} />
                       <details>
-                        <summary class="sp-info-label" style="margin-top:6px">Path Summary Table</summary>
+                        <summary class="sp-info-label" style="margin-top:6px">{t('workflow.nsp_path_summary_table')}</summary>
                         <div class="sp-neb-table">
                           {#each cached_summary.path_summary?.images ?? [] as img}
                             <div class="sp-neb-row" class:sp-neb-ts={img.is_ts}>
@@ -1865,32 +1826,32 @@
             <!-- irc (ORCA) -->
             {#if (node_type === `irc` || node_type === `orca_irc`) && is_orca}
               {#if cached_summary.irc_converged === true}
-                <div class="sp-conv-flag converged">IRC Converged</div>
+                <div class="sp-conv-flag converged">{t('workflow.nsp_irc_converged')}</div>
               {:else if cached_summary.irc_converged === false}
-                <div class="sp-conv-flag not-converged">IRC Not Converged</div>
+                <div class="sp-conv-flag not-converged">{t('workflow.nsp_irc_not_converged')}</div>
               {/if}
               {#if cached_summary.forward_converged === false}
                 <div class="sp-info-row">
-                  <span class="sp-info-label" style="color:#ef4444">Forward arm</span>
-                  <span class="sp-info-value" style="color:#ef4444">did not converge</span>
+                  <span class="sp-info-label" style="color:#ef4444">{t('workflow.nsp_forward_arm')}</span>
+                  <span class="sp-info-value" style="color:#ef4444">{t('workflow.nsp_did_not_converge')}</span>
                 </div>
               {/if}
               {#if cached_summary.backward_converged === false}
                 <div class="sp-info-row">
-                  <span class="sp-info-label" style="color:#ef4444">Backward arm</span>
-                  <span class="sp-info-value" style="color:#ef4444">did not converge</span>
+                  <span class="sp-info-label" style="color:#ef4444">{t('workflow.nsp_backward_arm')}</span>
+                  <span class="sp-info-value" style="color:#ef4444">{t('workflow.nsp_did_not_converge')}</span>
                 </div>
               {/if}
               {#if cached_summary.forward_endpoint?.final_energy !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">Forward Endpoint</span>
+                <span class="sp-info-label">{t('workflow.nsp_forward_endpoint')}</span>
                 <span class="sp-info-value mono">{format_energy(cached_summary.forward_endpoint!.final_energy)} Eh</span>
               </div>{/if}
               {#if cached_summary.backward_endpoint?.final_energy !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">Backward Endpoint</span>
+                <span class="sp-info-label">{t('workflow.nsp_backward_endpoint')}</span>
                 <span class="sp-info-value mono">{format_energy(cached_summary.backward_endpoint!.final_energy)} Eh</span>
               </div>{/if}
               {#if cached_summary.reaction_coordinate_data?.energy_range_kcal_mol !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">Path Range</span>
+                <span class="sp-info-label">{t('workflow.nsp_path_range')}</span>
                 <span class="sp-info-value mono">{cached_summary.reaction_coordinate_data!.energy_range_kcal_mol.toFixed(2)} kcal/mol</span>
               </div>{/if}
               {#if status === `completed` || status === `not_converged` || status === `failed`}
@@ -1900,7 +1861,7 @@
                     onclick={load_irc_trajectory}
                     disabled={irc_trajectory_loading || irc_trajectory_loaded}
                   >
-                    {irc_trajectory_loading ? `Loading...` : irc_trajectory_loaded ? `✓ Loaded` : `View Trajectory`}
+                    {irc_trajectory_loading ? t('workflow.nsp_loading') : irc_trajectory_loaded ? t('workflow.nsp_loaded') : t('workflow.nsp_view_trajectory')}
                   </button>
                 </div>
               {/if}
@@ -1912,7 +1873,7 @@
         <!-- Convergence plot for completed opt/sp/freq jobs -->
         {#if ((node_type === `geo_opt` || node_type === `single_point` || node_type === `freq`) && is_orca) && cached_summary.convergence_points?.length}
           <div class="sp-section">
-            <div class="sp-section-title">Energy Convergence</div>
+            <div class="sp-section-title">{t('workflow.nsp_energy_convergence')}</div>
             <ConvergencePlot
               points={cached_summary.convergence_points as unknown as ConvergencePoint[]}
               is_orca={true}
@@ -1923,7 +1884,7 @@
         <!-- IRC path plots (energy profile + gradient convergence) -->
         {#if (node_type === `irc` || node_type === `orca_irc`) && is_orca && cached_summary.convergence_points?.length}
           <div class="sp-section">
-            <div class="sp-section-title">IRC Path</div>
+            <div class="sp-section-title">{t('workflow.nsp_irc_path')}</div>
             <IrcPathPlot
               points={cached_summary.convergence_points}
               convergence_thresholds={cached_summary.convergence_thresholds ?? { max_grad: 0.002, rms_grad: 0.0005 }}
@@ -1934,7 +1895,7 @@
         <!-- IRC trajectory viewer — only render when explicitly loaded -->
         {#if (node_type === `irc` || node_type === `orca_irc`) && is_orca && irc_trajectory_data_url}
           <div class="sp-section">
-            <div class="sp-section-title">Reaction Path Visualization</div>
+            <div class="sp-section-title">{t('workflow.nsp_path_visualization')}</div>
             <div class="sp-trajectory-viewer">
               <Trajectory
                 data_url={irc_trajectory_data_url}
@@ -1945,7 +1906,7 @@
 
         {#if cached_summary.warnings?.length}
           <div class="sp-section">
-            <div class="sp-section-title">Warnings</div>
+            <div class="sp-section-title">{t('workflow.we_warnings')}</div>
             {#each cached_summary.warnings! as w}
               <div class="sp-warn-box">{w}</div>
             {/each}
@@ -1954,7 +1915,7 @@
 
       {:else if is_orca && status === `running`}
         <div class="sp-section">
-          <div class="sp-section-title">Live Monitoring</div>
+          <div class="sp-section-title">{t('workflow.nsp_live_monitoring')}</div>
           {#if node_type === `irc` || node_type === `orca_irc`}
             {@const live_irc_points = (convergence && convergence.points.length >= 2)
               ? convergence.points
@@ -1971,16 +1932,16 @@
               />
             {:else}
               <div class="sp-ssh-hint">
-                {orca_stage_message ?? (loading ? `Fetching IRC progress...` : convergence?.message || `IRC in progress...`)}
+                {orca_stage_message ?? (loading ? t('workflow.nsp_fetching_irc') : convergence?.message || t('workflow.nsp_irc_in_progress'))}
               </div>
             {/if}
           {:else if node_type === `uvvis`}
             <div class="sp-ssh-hint">
-              {loading ? `Fetching TD-DFT progress...` : (orca_stage_message ?? (convergence?.message || `Computing excited states...`))}
+              {loading ? t('workflow.nsp_fetching_tddft') : (orca_stage_message ?? (convergence?.message || t('workflow.nsp_computing_excited')))}
             </div>
           {:else if node_type === `orca_neb_ts` || (node_type === `ts_search` && is_orca)}
             <div class="sp-ssh-hint">
-              {loading ? `Fetching NEB progress...` : convergence?.message || `NEB optimization in progress...`}
+              {loading ? t('workflow.nsp_fetching_neb') : convergence?.message || t('workflow.nsp_neb_in_progress')}
             </div>
           {:else}
             <!-- Default for opt/sp/freq -->
@@ -1992,7 +1953,7 @@
               />
             {:else}
               <div class="sp-ssh-hint">
-                {loading ? `Fetching live progress...` : `No convergence data yet — ORCA may still be initializing`}
+                {loading ? t('workflow.nsp_fetching_live') : t('workflow.nsp_no_conv_data')}
               </div>
             {/if}
           {/if}
@@ -2000,23 +1961,23 @@
 
       {:else if is_orca && (status === `completed` || status === `not_converged` || status === `failed`)}
         <div class="sp-section">
-          <div class="sp-section-title">Results</div>
-          <div class="sp-warn-box">No ORCA output found — calculation may not have run successfully</div>
+          <div class="sp-section-title">{t('workflow.nsp_results')}</div>
+          <div class="sp-warn-box">{t('workflow.nsp_no_orca_output')}</div>
         </div>
 
       {:else if is_mlp && (status === `completed` || status === `failed`)}
         <div class="sp-section">
-          <div class="sp-section-title">Results</div>
+          <div class="sp-section-title">{t('workflow.nsp_results')}</div>
           <div class="sp-info-grid">
             {#if cached_summary.energy !== undefined}
               <div class="sp-info-row sp-energy-highlight">
-                <span class="sp-info-label">Energy (eV)</span>
+                <span class="sp-info-label">{t('workflow.nsp_energy_ev')}</span>
                 <span class="sp-info-value mono">{format_energy(cached_summary.energy!)}</span>
               </div>
             {/if}
             {#if cached_summary.work_dir}
               <div class="sp-info-row">
-                <span class="sp-info-label">Work Dir</span>
+                <span class="sp-info-label">{t('workflow.nsp_work_dir')}</span>
                 <span class="sp-info-value mono truncate" title={cached_summary.work_dir}>{cached_summary.work_dir}</span>
               </div>
             {/if}
@@ -2024,13 +1985,13 @@
             {#if node_type === `ts_search` && is_mlp}
               {#if cached_summary.activation_barrier_kcal_mol !== undefined}
                 <div class="sp-info-row sp-energy-highlight">
-                  <span class="sp-info-label">Activation Barrier</span>
+                  <span class="sp-info-label">{t('workflow.nsp_activation_barrier')}</span>
                   <span class="sp-info-value mono">{cached_summary.activation_barrier_kcal_mol!.toFixed(2)} kcal/mol</span>
                 </div>
               {/if}
-              {#if cached_summary.neb_converged}<div class="sp-conv-flag converged">NEB Converged</div>{/if}
+              {#if cached_summary.neb_converged}<div class="sp-conv-flag converged">{t('workflow.nsp_neb_converged')}</div>{/if}
               {#if cached_summary.path_summary?.images?.length}
-                <div class="sp-info-label" style="margin-top:6px">NEB Images</div>
+                <div class="sp-info-label" style="margin-top:6px">{t('workflow.nsp_neb_images')}</div>
                 <div class="sp-neb-table">
                   {#each cached_summary.path_summary.images as img}
                     <div class="sp-neb-row" class:sp-neb-ts={img.is_ts}>
@@ -2052,31 +2013,31 @@
             {#if node_type === `freq` && is_mlp}
               {@const mlp_freq = cached_summary as any}
               {#if mlp_freq.is_valid_ts !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">TS Validation</span>
+                <span class="sp-info-label">{t('workflow.nsp_ts_validation')}</span>
                 {#if mlp_freq.is_valid_ts}
-                  <span class="sp-info-value mono" style="color: #22c55e" title="Exactly one imaginary mode above 20 cm⁻¹ — valid transition state">
-                    ✓ Valid TS ({mlp_freq.dominant_imag_freq_cm != null ? Math.abs(mlp_freq.dominant_imag_freq_cm).toFixed(1) + ' cm⁻¹ i' : ''})
+                  <span class="sp-info-value mono" style="color: #22c55e" title={t('workflow.nsp_validation_desc_valid')}>
+                    {t('workflow.nsp_valid_ts', { freq: mlp_freq.dominant_imag_freq_cm != null ? Math.abs(mlp_freq.dominant_imag_freq_cm).toFixed(1) + ' cm⁻¹ i' : '' })}
                   </span>
                 {:else}
-                  <span class="sp-info-value mono" style="color: #f59e0b" title="A valid TS has exactly one imaginary mode above 20 cm⁻¹. If this node is meant to be a minimum, ignore; if it's a TS, re-check the structure.">
-                    ⚠ Not a valid TS ({mlp_freq.n_nontrivial_imag ?? 0} imag &gt; 20 cm⁻¹)
+                  <span class="sp-info-value mono" style="color: #f59e0b" title={t('workflow.nsp_validation_desc_invalid')}>
+                    {t('workflow.nsp_invalid_ts', { n: mlp_freq.n_nontrivial_imag ?? 0 })}
                   </span>
                 {/if}
               </div>{/if}
               {#if mlp_freq.n_imag_freqs !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">Imaginary Modes</span>
+                <span class="sp-info-label">{t('workflow.nsp_imaginary_modes')}</span>
                 <span class="sp-info-value mono" style="color: {mlp_freq.n_imag_freqs > 0 ? '#f59e0b' : '#22c55e'}">{mlp_freq.n_imag_freqs}</span>
               </div>{/if}
               {#if mlp_freq.zpe !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">ZPE (eV)</span>
+                <span class="sp-info-label">{t('workflow.nsp_zpe')} (eV)</span>
                 <span class="sp-info-value mono">{Number(mlp_freq.zpe).toFixed(4)}</span>
               </div>{/if}
               {#if mlp_freq.n_frequencies !== undefined}<div class="sp-info-row">
-                <span class="sp-info-label">Total Modes</span>
+                <span class="sp-info-label">{t('workflow.nsp_total_modes')}</span>
                 <span class="sp-info-value mono">{mlp_freq.n_frequencies}</span>
               </div>{/if}
               {#if mlp_freq.frequencies?.length}
-                <div class="sp-info-label" style="margin-top:6px">Frequencies (cm⁻¹)</div>
+                <div class="sp-info-label" style="margin-top:6px">{t('workflow.nsp_frequencies_cm')}</div>
                 <div class="sp-freq-table">
                   {#each (mlp_freq.frequencies as number[]).filter((f: number) => Math.abs(f) > 1.0).slice(0, 20) as f, i}
                     <div class="sp-freq-row" class:sp-freq-imag={f < 0}>
@@ -2090,7 +2051,7 @@
           </div>
           {#if cached_summary.stdout}
             <details class="sp-stdout-details">
-              <summary>Output Log</summary>
+              <summary>{t('workflow.nsp_calc_log')}</summary>
               <pre class="sp-stdout-pre">{cached_summary.stdout}</pre>
             </details>
           {/if}
@@ -2102,7 +2063,7 @@
         {@const mlp_contcar_filename = mlp_contcar_is_xyz ? 'output.xyz' : 'CONTCAR'}
         {#if mlp_contcar || cached_summary.work_dir}
           <div class="sp-section">
-            <div class="sp-section-title">Output Files</div>
+            <div class="sp-section-title">{t('workflow.nsp_output_files')}</div>
             <div class="sp-file-list">
               {#if mlp_contcar}
                 <button class="sp-file-btn" onclick={() => {
@@ -2114,7 +2075,7 @@
                 }}>
                   <span class="sp-file-icon">📄</span>
                   <span class="sp-file-name">{mlp_contcar_filename}</span>
-                  <span class="sp-file-desc">Optimized structure</span>
+                  <span class="sp-file-desc">{t('workflow.nsp_optimized_structure')}</span>
                 </button>
               {/if}
               {#if cached_summary.stdout}
@@ -2127,7 +2088,7 @@
                 }}>
                   <span class="sp-file-icon">📋</span>
                   <span class="sp-file-name">output.log</span>
-                  <span class="sp-file-desc">Calculation log</span>
+                  <span class="sp-file-desc">{t('workflow.nsp_calc_log')}</span>
                 </button>
               {/if}
               {#if mlp_contcar}
@@ -2135,13 +2096,13 @@
                   view_structure_error = null
                   try {
                     if (!mlp_contcar || mlp_contcar.trim().length === 0) {
-                      view_structure_error = `Output structure is empty — backend did not extract a geometry for this task.`
+                    view_structure_error = t('workflow.nsp_err_empty_struct')
                       return
                     }
                     const parsed = mlp_contcar_is_xyz ? parse_xyz(mlp_contcar) : parse_poscar(mlp_contcar)
                     if (!parsed) {
                       const preview = mlp_contcar.slice(0, 80).replace(/\n/g, '\\n')
-                      view_structure_error = `Could not parse ${mlp_contcar_is_xyz ? 'XYZ' : 'POSCAR'} (first 80 chars: "${preview}")`
+                      view_structure_error = t('workflow.nsp_err_parse_struct', { type: mlp_contcar_is_xyz ? 'XYZ' : 'POSCAR', preview })
                       console.error(`[NodeStatusPanel] parser returned null for ${mlp_contcar_is_xyz ? 'XYZ' : 'POSCAR'} payload of ${mlp_contcar.length} bytes`)
                       return
                     }
@@ -2151,12 +2112,12 @@
                     console.info(`[NodeStatusPanel] View Structure: opened ${parsed.sites?.length ?? 0} sites in new tab`)
                   } catch (err) {
                     console.error(`[NodeStatusPanel] View Structure failed:`, err)
-                    view_structure_error = `Failed to load structure: ${err instanceof Error ? err.message : String(err)}`
+                    view_structure_error = t('workflow.nsp_err_failed_load_struct', { err: err instanceof Error ? err.message : String(err) })
                   }
                 }}>
                   <span class="sp-file-icon">🔬</span>
-                  <span class="sp-file-name">View Structure</span>
-                  <span class="sp-file-desc">Open structure in another tab</span>
+                  <span class="sp-file-name">{t('workflow.nsp_view_structure')}</span>
+                  <span class="sp-file-desc">{t('workflow.nsp_open_structure_hint')}</span>
                 </button>
                 {#if view_structure_error}
                   <div class="sp-error-box" style="margin-top: 6px; padding: 8px; font-size: 13px; line-height: 1.4; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 4px; color: #ef4444;" role="alert">{view_structure_error}</div>
@@ -2170,7 +2131,7 @@
       <!-- Validation warnings -->
       {#if cached_summary.validation_errors?.length}
         <div class="sp-section">
-          <div class="sp-section-title">Warnings</div>
+          <div class="sp-section-title">{t('workflow.we_warnings')}</div>
           {#each cached_summary.validation_errors! as err}
             <div class="sp-warn-box">{err}</div>
           {/each}
@@ -2181,11 +2142,11 @@
       {#if step_info?.error_message?.includes('Auto-continuing')}
         <div class="sp-section">
           <div class="sp-continuation-badge">
-            Auto-continuing from CONTCAR...
+            {t('workflow.nsp_auto_continuing')}
           </div>
           <div class="sp-info-grid">
             <div class="sp-info-row">
-              <span class="sp-info-label">Attempt</span>
+              <span class="sp-info-label">{t('workflow.nsp_attempt')}</span>
               <span class="sp-info-value mono">
                 {step_info.error_message.match(/\((\d+\/\d+)\)/)?.[1] ?? '?'}
               </span>
@@ -2200,7 +2161,7 @@
         {@const error_mentions_other_job = current_job && /job\s+(\d+)/i.test(step_info.error_message) && !step_info.error_message.includes(current_job)}
         {#if !error_mentions_other_job}
           <div class="sp-section">
-            <div class="sp-section-title">Error</div>
+            <div class="sp-section-title">{t('workflow.we_error')}</div>
             <div class="sp-error-box">{step_info.error_message}</div>
           </div>
         {/if}
@@ -2214,7 +2175,7 @@
             disabled={retry_loading}
             onclick={retry_from_here}
           >
-            {retry_loading ? `Resetting...` : `Rerun from here`}
+            {retry_loading ? t('workflow.nsp_resetting') : t('workflow.nsp_rerun')}
           </button>
           {#if retry_message}
             <div class="sp-retry-message">{retry_message}</div>
@@ -2231,7 +2192,7 @@
               fetch_data(gen)
             } catch (e) { fetch_error = String(e) }
           }}>
-            Cancel Task
+            {t('workflow.nsp_cancel_task')}
           </button>
         </div>
       {/if}
@@ -2239,7 +2200,7 @@
       <!-- Free Energy Correction results (Prompt 29) -->
       {#if node_type === `free_energy` && cached_summary.G !== undefined}
         <div class="sp-section">
-          <div class="sp-section-title">Free Energy Correction</div>
+          <div class="sp-section-title">{t('workflow.nsp_free_energy_corr')}</div>
           <div class="sp-info-grid">
             <div class="sp-info-row">
               <span class="sp-info-label">G (Gibbs)</span>
@@ -2265,7 +2226,7 @@
             {/if}
             {#if cached_summary.temperature !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Temperature</span>
+                <span class="sp-info-label">{t('workflow.nsp_temperature')}</span>
                 <span class="sp-info-value mono">{cached_summary.temperature} K</span>
               </div>
             {/if}
@@ -2283,39 +2244,39 @@
       <!-- Gibbs Energy node results -->
       {#if node_type === `gibbs_energy` && cached_summary.gibbs !== undefined}
         <div class="sp-section">
-          <div class="sp-section-title">Gibbs Free Energy</div>
+          <div class="sp-section-title">{t('workflow.nsp_gibbs_free_energy')}</div>
 
           <!-- Formula display -->
           <div class="sp-formula-box">
-            <span class="sp-formula">G = E<sub>DFT</sub> + ZPE - T&times;S</span>
+            <span class="sp-formula">{t('workflow.nsp_gibbs_formula_hint')}</span>
           </div>
 
           <div class="sp-info-grid">
             <div class="sp-info-row">
-              <span class="sp-info-label">G (Total)</span>
+              <span class="sp-info-label">{t('workflow.nsp_gibbs_free_energy')}</span>
               <span class="sp-info-value mono sp-highlight">{(cached_summary.gibbs as number).toFixed(4)} eV</span>
             </div>
             {#if cached_summary.energy !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">E<sub>DFT</sub></span>
+                <span class="sp-info-label">{t('workflow.nsp_energy_ev')}</span>
                 <span class="sp-info-value mono">{cached_summary.energy!.toFixed(4)} eV</span>
               </div>
             {/if}
             {#if cached_summary.zpe !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">ZPE</span>
+                <span class="sp-info-label">{t('workflow.nsp_zpe')}</span>
                 <span class="sp-info-value mono">+{cached_summary.zpe!.toFixed(4)} eV</span>
               </div>
             {/if}
             {#if cached_summary.ts_correction !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">T&times;S</span>
+                <span class="sp-info-label">T×S</span>
                 <span class="sp-info-value mono">-{cached_summary.ts_correction!.toFixed(4)} eV</span>
               </div>
             {/if}
             {#if cached_summary.g_corr !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">G<sub>corr</sub> (ZPE - T&times;S)</span>
+                <span class="sp-info-label">{t('workflow.nsp_gibbs_corr')}</span>
                 <span class="sp-info-value mono">{cached_summary.g_corr! >= 0 ? `+` : ``}{cached_summary.g_corr!.toFixed(4)} eV</span>
               </div>
             {/if}
@@ -2324,20 +2285,28 @@
           <div class="sp-info-grid" style="margin-top: 6px; opacity: 0.8;">
             {#if cached_summary.temperature !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Temperature</span>
+                <span class="sp-info-label">{t('workflow.nsp_temperature')}</span>
                 <span class="sp-info-value mono">{cached_summary.temperature} K</span>
               </div>
             {/if}
             {#if cached_summary.phase}
               <div class="sp-info-row">
-                <span class="sp-info-label">Phase</span>
-                <span class="sp-info-value mono">{cached_summary.phase === `adsorbed` ? `Adsorbed (harmonic)` : `Gas (ideal gas)`}</span>
+                <span class="sp-info-label">{t('workflow.nsp_phase')}</span>
+                <span class="sp-info-value mono">
+                  {cached_summary.phase === `adsorbed` ? t('workflow.nsp_phase_adsorbed') : t('workflow.nsp_phase_gas')}
+                </span>
               </div>
             {/if}
             {#if cached_summary.n_real_freqs !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Frequencies</span>
-                <span class="sp-info-value mono">{cached_summary.n_real_freqs} real{cached_summary.n_imag_freqs ? `, ${cached_summary.n_imag_freqs} imag` : ``}</span>
+                <span class="sp-info-label">{t('workflow.nsp_frequencies')}</span>
+                <span class="sp-info-value mono">
+                  {#if cached_summary.n_imag_freqs}
+                    {t('workflow.nsp_freqs_real_imag', { real: cached_summary.n_real_freqs, imag: cached_summary.n_imag_freqs })}
+                  {:else}
+                    {t('workflow.nsp_freqs_real_only', { real: cached_summary.n_real_freqs })}
+                  {/if}
+                </span>
               </div>
             {/if}
           </div>
@@ -2349,12 +2318,12 @@
         {@const se = (cached_summary as any).summary ?? cached_summary}
         {#if se.analysis_type === `surface_energy`}
         <div class="sp-section">
-          <div class="sp-section-title">Surface Energy</div>
+          <div class="sp-section-title">{t('workflow.nsp_surface_energy')}</div>
 
           {#if se.per_facet}
             {@const facets = Object.keys(se.per_facet).sort()}
             <table class="sp-energy-table">
-              <thead><tr><th>Facet</th><th>γ (J/m²)</th><th>γ (eV/Å²)</th><th>R²</th><th>Points</th></tr></thead>
+              <thead><tr><th>{t('workflow.nsp_facet')}</th><th>{t('workflow.nsp_gamma_j_m2')}</th><th>{t('workflow.nsp_gamma_ev_a2')}</th><th>{t('workflow.nsp_r_squared')}</th><th>{t('workflow.nsp_points')}</th></tr></thead>
               <tbody>
                 {#each facets as fk}
                   {@const fd = se.per_facet[fk]}
@@ -2371,7 +2340,7 @@
 
             {#if facets.length >= 2}
               <div style="margin-top: 8px; font-size: 11px; opacity: 0.7;">
-                Energy ordering: {facets
+                {t('workflow.nsp_energy_ordering')} {facets
                   .filter(f => se.per_facet[f]?.gamma_J_per_m2 != null)
                   .sort((a: string, b: string) => se.per_facet[a].gamma_J_per_m2 - se.per_facet[b].gamma_J_per_m2)
                   .map((f: string) => `(${f})`)
@@ -2393,15 +2362,15 @@
                 <span class="sp-info-value mono">{se.gamma_eV_per_A2?.toFixed(6)} eV/Å²</span>
               </div>
               <div class="sp-info-row">
-                <span class="sp-info-label">R²</span>
+                <span class="sp-info-label">{t('workflow.nsp_r_squared')}</span>
                 <span class="sp-info-value mono">{se.r_squared?.toFixed(4)}</span>
               </div>
               <div class="sp-info-row">
-                <span class="sp-info-label">Slope (E/atom)</span>
+                <span class="sp-info-label">{t('workflow.nsp_slope_e_atom')}</span>
                 <span class="sp-info-value mono">{se.slope_eV_per_atom?.toFixed(6)} eV</span>
               </div>
               <div class="sp-info-row">
-                <span class="sp-info-label">Area</span>
+                <span class="sp-info-label">{t('workflow.nsp_area')}</span>
                 <span class="sp-info-value mono">{se.surface_area_A2?.toFixed(2)} Å²</span>
               </div>
             </div>
@@ -2415,11 +2384,11 @@
         {@const wf = (cached_summary as any).summary ?? cached_summary}
         {#if wf.analysis_type === `wulff_construction`}
         <div class="sp-section">
-          <div class="sp-section-title">Wulff Construction</div>
+          <div class="sp-section-title">{t('workflow.nsp_wulff_construction')}</div>
 
           {#if wf.facet_table}
             <table class="sp-energy-table">
-              <thead><tr><th>Facet</th><th>Area %</th><th>γ (J/m²)</th></tr></thead>
+              <thead><tr><th>{t('workflow.nsp_facet')}</th><th>{t('workflow.nsp_area_percent')}</th><th>{t('workflow.nsp_gamma_j_m2')}</th></tr></thead>
               <tbody>
                 {#each wf.facet_table as row}
                   <tr>
@@ -2435,25 +2404,25 @@
           <div class="sp-info-grid" style="margin-top: 8px;">
             {#if wf.dominant_facet}
               <div class="sp-info-row">
-                <span class="sp-info-label">Dominant Facet</span>
+                <span class="sp-info-label">{t('workflow.nsp_dominant_facet')}</span>
                 <span class="sp-info-value mono sp-highlight">({wf.dominant_facet})</span>
               </div>
             {/if}
             {#if wf.weighted_surface_energy_J_per_m2 !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Weighted γ</span>
+                <span class="sp-info-label">{t('workflow.nsp_weighted_gamma')}</span>
                 <span class="sp-info-value mono">{wf.weighted_surface_energy_J_per_m2.toFixed(4)} J/m²</span>
               </div>
             {/if}
             {#if wf.effective_radius_A !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Eff. Radius</span>
+                <span class="sp-info-label">{t('workflow.nsp_eff_radius')}</span>
                 <span class="sp-info-value mono">{wf.effective_radius_A.toFixed(2)} Å</span>
               </div>
             {/if}
             {#if wf.volume_A3 !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">Volume</span>
+                <span class="sp-info-label">{t('workflow.nsp_volume')}</span>
                 <span class="sp-info-value mono">{wf.volume_A3.toFixed(2)} Å³</span>
               </div>
             {/if}
@@ -2468,7 +2437,7 @@
             />
           {/if}
           {#if wf.wulff_facets_3d?.length}
-            <div class="sp-section-title" style="margin-top: 12px">3D Nanoparticle Shape</div>
+            <div class="sp-section-title" style="margin-top: 12px">{t('workflow.nsp_3d_np_shape')}</div>
             <WulffShape3D facets_3d={wf.wulff_facets_3d} />
           {/if}
         </div>
@@ -2480,7 +2449,7 @@
         {@const ae = (cached_summary as any).summary ?? cached_summary}
         {#if ae.analysis_type === `adsorption_energy`}
         <div class="sp-section">
-          <div class="sp-section-title">Adsorption Energy</div>
+          <div class="sp-section-title">{t('workflow.nsp_adsorption_energy')}</div>
           <div class="sp-info-grid">
             <div class="sp-info-row">
               <span class="sp-info-label">E<sub>ads</sub></span>
@@ -2489,31 +2458,33 @@
               </span>
             </div>
             <div class="sp-info-row">
-              <span class="sp-info-label">Binding</span>
-              <span class="sp-info-value mono">{ae.binding === 'exothermic' ? 'Exothermic (binds)' : 'Endothermic (does not bind)'}</span>
+              <span class="sp-info-label">{t('workflow.nsp_binding')}</span>
+              <span class="sp-info-value mono">
+                {ae.binding === 'exothermic' ? t('workflow.nsp_binding_exothermic') : t('workflow.nsp_binding_endothermic')}
+              </span>
             </div>
           </div>
 
           <div class="sp-info-grid" style="margin-top: 8px; opacity: 0.8;">
             <div class="sp-info-row">
               <span class="sp-info-label">E(slab+ads)</span>
-              <span class="sp-info-value mono">{ae.E_slab_adsorbate_eV.toFixed(4)} eV {ae.n_atoms_slab_adsorbate ? `(${ae.n_atoms_slab_adsorbate} atoms)` : ''}</span>
+              <span class="sp-info-value mono">{ae.E_slab_adsorbate_eV.toFixed(4)} eV {ae.n_atoms_slab_adsorbate ? `(${t('workflow.we_atoms_count', { n: ae.n_atoms_slab_adsorbate })})` : ''}</span>
             </div>
             <div class="sp-info-row">
               <span class="sp-info-label">E(clean slab)</span>
-              <span class="sp-info-value mono">{ae.E_clean_slab_eV.toFixed(4)} eV {ae.n_atoms_clean_slab ? `(${ae.n_atoms_clean_slab} atoms)` : ''}</span>
+              <span class="sp-info-value mono">{ae.E_clean_slab_eV.toFixed(4)} eV {ae.n_atoms_clean_slab ? `(${t('workflow.we_atoms_count', { n: ae.n_atoms_clean_slab })})` : ''}</span>
             </div>
             {#if ae.E_reference_eV !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">E(ref) &times; {ae.reference_coefficient}</span>
-                <span class="sp-info-value mono">{(ae.reference_coefficient * ae.E_reference_eV).toFixed(4)} eV {ae.n_atoms_reference ? `(${ae.n_atoms_reference} atoms)` : ''}</span>
+                <span class="sp-info-label">E(ref) × {ae.reference_coefficient}</span>
+                <span class="sp-info-value mono">{(ae.reference_coefficient * ae.E_reference_eV).toFixed(4)} eV {ae.n_atoms_reference ? `(${t('workflow.we_atoms_count', { n: ae.n_atoms_reference })})` : ''}</span>
               </div>
             {/if}
           </div>
 
           {#if ae.E_ads_ZPE_eV !== undefined}
           <div class="sp-info-grid" style="margin-top: 12px;">
-            <div class="sp-section-title" style="font-size: 12px; margin-bottom: 4px;">ZPE Correction</div>
+            <div class="sp-section-title" style="font-size: 12px; margin-bottom: 4px;">{t('workflow.nsp_zpe_correction')}</div>
             <div class="sp-info-row">
               <span class="sp-info-label">E<sub>ads</sub> (ZPE)</span>
               <span class="sp-info-value mono sp-highlight" style="color: {ae.E_ads_ZPE_eV < 0 ? '#22c55e' : '#ef4444'}; font-weight: 600; font-size: 14px;">
@@ -2521,7 +2492,7 @@
               </span>
             </div>
             <div class="sp-info-row">
-              <span class="sp-info-label">&Delta;ZPE</span>
+              <span class="sp-info-label">ΔZPE</span>
               <span class="sp-info-value mono">{ae.dZPE_eV?.toFixed(4) ?? 'N/A'} eV</span>
             </div>
             {#if ae.ZPE_slab_adsorbate_eV !== undefined}
@@ -2538,14 +2509,16 @@
             {/if}
             {#if ae.ZPE_reference_eV !== undefined}
               <div class="sp-info-row">
-                <span class="sp-info-label">ZPE(ref) &times; {ae.reference_coefficient ?? 0.5}</span>
+                <span class="sp-info-label">ZPE(ref) × {ae.reference_coefficient ?? 0.5}</span>
                 <span class="sp-info-value mono">{((ae.reference_coefficient ?? 0.5) * ae.ZPE_reference_eV).toFixed(4)} eV</span>
               </div>
             {/if}
             {#if ae.binding_zpe}
               <div class="sp-info-row">
-                <span class="sp-info-label">Binding (ZPE)</span>
-                <span class="sp-info-value mono">{ae.binding_zpe === 'exothermic' ? 'Exothermic (binds)' : 'Endothermic'}</span>
+                <span class="sp-info-label">{t('workflow.nsp_binding_zpe')}</span>
+                <span class="sp-info-value mono">
+                  {ae.binding_zpe === 'exothermic' ? t('workflow.nsp_binding_exothermic') : t('workflow.nsp_binding_endothermic_zpe')}
+                </span>
               </div>
             {/if}
           </div>
@@ -2559,26 +2532,26 @@
         {@const ca = (cached_summary as any).summary ?? cached_summary}
         {#if ca.analysis_type === `coverage_analysis`}
         <div class="sp-section">
-          <div class="sp-section-title">Coverage Analysis</div>
+          <div class="sp-section-title">{t('workflow.nsp_coverage_analysis')}</div>
           {#if ca.fit}
             <div class="sp-info-grid">
               <div class="sp-info-row">
-                <span class="sp-info-label">Slope</span>
+                <span class="sp-info-label">{t('workflow.nsp_slope')}</span>
                 <span class="sp-info-value mono">{ca.fit.slope?.toFixed(3)} eV/ML</span>
               </div>
               <div class="sp-info-row">
-                <span class="sp-info-label">Intercept (&theta;&rarr;0)</span>
+                <span class="sp-info-label">{t('workflow.nsp_intercept_zero')}</span>
                 <span class="sp-info-value mono sp-highlight">{ca.fit.intercept?.toFixed(3)} eV</span>
               </div>
               <div class="sp-info-row">
-                <span class="sp-info-label">R&sup2;</span>
+                <span class="sp-info-label">{t('workflow.nsp_r_squared')}</span>
                 <span class="sp-info-value mono">{ca.fit.r_squared?.toFixed(4)}</span>
               </div>
             </div>
           {/if}
           {#if ca.coverages?.length}
             <table class="sp-energy-table" style="margin-top: 8px">
-              <thead><tr><th>&theta; (ML)</th><th>n_ads</th><th>E_ads/H (eV)</th></tr></thead>
+              <thead><tr><th>{t('workflow.nsp_theta_ml')}</th><th>{t('workflow.nsp_n_ads')}</th><th>{t('workflow.nsp_e_ads_per_h')}</th></tr></thead>
               <tbody>
                 {#each ca.coverages as theta, i}
                   <tr>
@@ -2606,7 +2579,7 @@
         {@const eos = (cached_summary as any).summary ?? cached_summary}
         {#if eos.analysis_type === `eos` && eos.data_points?.length}
         <div class="sp-section">
-          <div class="sp-section-title">Equation of State</div>
+          <div class="sp-section-title">{t('workflow.nsp_eos')}</div>
           {#if eos.V0}
             <div class="sp-info-grid">
               <div class="sp-info-row">
@@ -2633,9 +2606,18 @@
       <!-- Energy Comparison results (Prompt 29) -->
       {#if node_type === `energy_compare` && cached_summary.entries?.length}
         <div class="sp-section">
-          <div class="sp-section-title">Energy Comparison ({cached_summary.n_compared ?? cached_summary.entries!.length} structures)</div>
+          <div class="sp-section-title">
+            {t('workflow.nsp_energy_compare')} ({t('workflow.we_n_structures', { n: cached_summary.n_compared ?? cached_summary.entries!.length })})
+          </div>
           <table class="sp-energy-table">
-            <thead><tr><th>Rank</th><th>Step</th><th>Energy (eV)</th><th>Relative (meV/atom)</th></tr></thead>
+            <thead>
+              <tr>
+                <th>{t('workflow.nsp_rank')}</th>
+                <th>{t('workflow.nsp_step')}</th>
+                <th>{t('workflow.nsp_energy_ev')}</th>
+                <th>{t('workflow.nsp_relative_energy')}</th>
+              </tr>
+            </thead>
             <tbody>
               {#each cached_summary.entries! as entry}
                 <tr class:sp-best-row={entry.rank === 1}>
@@ -2653,11 +2635,13 @@
       <!-- Condition Check results (Prompt 29) -->
       {#if cached_summary.condition_met !== undefined}
         <div class="sp-section">
-          <div class="sp-section-title">Condition Check</div>
+          <div class="sp-section-title">{t('workflow.nsp_condition_check')}</div>
           <div class="sp-info-grid">
             <div class="sp-info-row">
-              <span class="sp-info-label">Result</span>
-              <span class="sp-info-value">{cached_summary.condition_met ? 'Condition met' : 'Condition not met'}</span>
+              <span class="sp-info-label">{t('workflow.nsp_result')}</span>
+              <span class="sp-info-value">
+                {cached_summary.condition_met ? t('workflow.nsp_condition_met') : t('workflow.nsp_condition_not_met')}
+              </span>
             </div>
             {#if cached_summary.check_type}
               <div class="sp-info-row">
@@ -2672,16 +2656,16 @@
       <!-- Pick Best results (Prompt 29) -->
       {#if node_type === `pick_best` && cached_summary.best_energy_eV !== undefined}
         <div class="sp-section">
-          <div class="sp-section-title">Best Structure</div>
+          <div class="sp-section-title">{t('workflow.nsp_best_structure')}</div>
           <div class="sp-info-grid">
             {#if cached_summary.best_step_id}
               <div class="sp-info-row">
-                <span class="sp-info-label">Best Step</span>
+                <span class="sp-info-label">{t('workflow.nsp_best_step')}</span>
                 <span class="sp-info-value mono">{cached_summary.best_step_id.slice(0, 8)}</span>
               </div>
             {/if}
             <div class="sp-info-row">
-              <span class="sp-info-label">Energy</span>
+              <span class="sp-info-label">{t('workflow.we_energy')}</span>
               <span class="sp-info-value mono">{cached_summary.best_energy_eV!.toFixed(4)} eV</span>
             </div>
           </div>
@@ -2691,18 +2675,18 @@
       <!-- UV-Vis results stats (separate since UV-Vis doesn't have energy_eh) -->
       {#if is_orca && node_type === `uvvis` && cached_summary.transitions?.length && (status === `completed` || status === `not_converged` || status === `failed`)}
         <div class="sp-section">
-          <div class="sp-section-title">Results (cached)</div>
+          <div class="sp-section-title">{t('workflow.nsp_results_cached')}</div>
           <div class="sp-info-grid">
             {#if cached_summary.lowest_excitation_nm !== undefined}<div class="sp-info-row">
-              <span class="sp-info-label">Lowest Excitation</span>
+              <span class="sp-info-label">{t('workflow.nsp_lowest_excitation')}</span>
               <span class="sp-info-value mono">{cached_summary.lowest_excitation_nm!.toFixed(1)} nm ({cached_summary.lowest_excitation_ev!.toFixed(3)} eV)</span>
             </div>{/if}
             {#if cached_summary.brightest_wavelength_nm !== undefined}<div class="sp-info-row">
-              <span class="sp-info-label">Brightest Peak</span>
+              <span class="sp-info-label">{t('workflow.nsp_brightest_peak')}</span>
               <span class="sp-info-value mono">{cached_summary.brightest_wavelength_nm!.toFixed(1)} nm (f={cached_summary.brightest_oscillator_strength!.toFixed(4)})</span>
             </div>{/if}
             <div class="sp-info-row">
-              <span class="sp-info-label">Transitions</span>
+              <span class="sp-info-label">{t('workflow.nsp_transitions_count')}</span>
               <span class="sp-info-value mono">{cached_summary.n_transitions}</span>
             </div>
           </div>
@@ -2712,7 +2696,7 @@
       <!-- UV-Vis absorption spectrum chart -->
       {#if node_type === `uvvis` && cached_summary.transitions?.length && status !== `running`}
         <div class="sp-section">
-          <div class="sp-section-title">Absorption Spectrum</div>
+          <div class="sp-section-title">{t('workflow.nsp_absorption_spectrum')}</div>
           <UvVisPlot transitions={cached_summary.transitions!} />
         </div>
       {/if}
@@ -2723,7 +2707,7 @@
         )}
         {#if result_entries.length > 0}
           <div class="sp-section">
-            <div class="sp-section-title">Result</div>
+            <div class="sp-section-title">{t('workflow.we_result')}</div>
             <div class="sp-info-grid">
               {#each result_entries as [k, v]}
                 <div class="sp-info-row">
@@ -2741,7 +2725,7 @@
         <div class="results-section">
           {#if results_data.type === 'orca_freq'}
             <div class="sp-section">
-              <div class="sp-section-title">Vibrational Frequencies</div>
+              <div class="sp-section-title">{t('workflow.nsp_vibrational_frequencies')}</div>
 
               <!-- Frequency spectrum plot -->
               <ResultsPlot
@@ -2754,14 +2738,14 @@
 
               <!-- Frequency table -->
               <div class="frequencies-table">
-                <h4>Frequency Details</h4>
+                <h4>{t('workflow.nsp_frequency_details')}</h4>
                 <table>
                   <thead>
                     <tr>
-                      <th>Mode</th>
-                      <th>Frequency (cm⁻¹)</th>
-                      <th>Type</th>
-                      <th>IR Intensity (km/mol)</th>
+                      <th>{t('workflow.nsp_mode')}</th>
+                      <th>{t('workflow.nsp_frequencies_cm')}</th>
+                      <th>{t('workflow.nsp_type')}</th>
+                      <th>{t('workflow.nsp_ir_intensity')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2771,9 +2755,9 @@
                         <td>{freq.toFixed(2)}</td>
                         <td>
                           {#if Array.isArray(results_data.intensities) && results_data.intensities[i]}
-                            Real
+                            {t('workflow.nsp_freq_type_real')}
                           {:else}
-                            Imaginary
+                            {t('workflow.nsp_freq_type_imag')}
                           {/if}
                         </td>
                         <td>
@@ -2792,22 +2776,22 @@
               <!-- Thermochemistry if available -->
               {#if results_data.thermochemistry}
                 <div class="thermochemistry">
-                  <h4>Thermochemistry</h4>
+                  <h4>{t('workflow.nsp_thermochemistry')}</h4>
                   <dl>
                     {#if results_data.thermochemistry.zero_point_energy !== undefined}
-                      <dt>Zero Point Energy:</dt>
+                      <dt>{t('workflow.nsp_zero_point_energy')}</dt>
                       <dd>{results_data.thermochemistry.zero_point_energy.toFixed(6)} eV</dd>
                     {/if}
                     {#if results_data.thermochemistry.enthalpy !== undefined}
-                      <dt>Enthalpy:</dt>
+                      <dt>{t('workflow.nsp_enthalpy')}</dt>
                       <dd>{results_data.thermochemistry.enthalpy.toFixed(6)} eV</dd>
                     {/if}
                     {#if results_data.thermochemistry.entropy !== undefined}
-                      <dt>Entropy:</dt>
+                      <dt>{t('workflow.nsp_entropy')}</dt>
                       <dd>{results_data.thermochemistry.entropy.toFixed(6)} J/(mol·K)</dd>
                     {/if}
                     {#if results_data.thermochemistry.gibbs_free_energy !== undefined}
-                      <dt>Gibbs Free Energy:</dt>
+                      <dt>{t('workflow.nsp_gibbs_free_energy')}</dt>
                       <dd>{results_data.thermochemistry.gibbs_free_energy.toFixed(6)} eV</dd>
                     {/if}
                   </dl>
@@ -2818,7 +2802,7 @@
 
           {#if results_data.type === 'orca_irc'}
             <div class="sp-section">
-              <div class="sp-section-title">IRC Reaction Path</div>
+              <div class="sp-section-title">{t('workflow.nsp_irc_reaction_path')}</div>
 
               <!-- IRC energy profile plot -->
               <ResultsPlot
@@ -2832,13 +2816,13 @@
 
               <!-- IRC statistics -->
               <div class="irc-statistics">
-                <h4>Path Statistics</h4>
+                <h4>{t('workflow.nsp_path_statistics')}</h4>
                 <dl>
-                  <dt>Forward Steps:</dt>
+                  <dt>{t('workflow.nsp_forward_steps')}</dt>
                   <dd>{results_data.forward_steps}</dd>
-                  <dt>Backward Steps:</dt>
+                  <dt>{t('workflow.nsp_backward_steps')}</dt>
                   <dd>{results_data.backward_steps}</dd>
-                  <dt>Total Points:</dt>
+                  <dt>{t('workflow.nsp_total_points')}</dt>
                   <dd>{results_data.energies?.length || 0}</dd>
                 </dl>
               </div>
@@ -2848,7 +2832,7 @@
           {#if results_data.error}
             <div class="sp-section">
               <div class="sp-error-box">
-                <strong>Error during result parsing:</strong>
+                <strong>{t('workflow.nsp_err_result_parsing')}</strong>
                 <p>{results_data.error}</p>
               </div>
             </div>
@@ -2856,13 +2840,9 @@
         </div>
       {/if}
 
-      <!-- VASP Parameters block — only render for actual VASP nodes.
-           A CP2K node may still carry leftover VASP keys (ENCUT/EDIFF/...)
-           from the unified node defaults; surfacing them under a "VASP
-           Parameters" header on a CP2K task is wrong and confusing. -->
-      {#if is_vasp && Object.keys(vasp_param_entries).length > 0}
+      {#if Object.keys(vasp_param_entries).length > 0}
         <div class="sp-section">
-          <div class="sp-section-title">VASP Parameters</div>
+          <div class="sp-section-title">{t('workflow.nsp_vasp_parameters')}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:11px;">
             {#each Object.entries(vasp_param_entries) as [key, value]}
               <div style="color:var(--text-color-dim,#888);padding:2px 0;">{key}</div>
@@ -2873,7 +2853,7 @@
       {/if}
       {#if Object.keys(non_vasp_param_entries).length > 0}
         <div class="sp-section">
-          <div class="sp-section-title">{is_cp2k ? `CP2K Parameters` : `Other Parameters`}</div>
+          <div class="sp-section-title">{t('workflow.nsp_other_parameters')}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:11px;">
             {#each Object.entries(non_vasp_param_entries) as [key, value]}
               <div style="color:var(--text-color-dim,#888);padding:2px 0;">{key}</div>
@@ -2886,7 +2866,7 @@
       <!-- Structure History (Lineage) -->
       {#if cached_summary._lineage?.length}
         <div class="sp-section">
-          <div class="sp-section-title">Structure History</div>
+          <div class="sp-section-title">{t('workflow.nsp_structure_history')}</div>
           <div class="sp-lineage">
             {#each cached_summary._lineage as step, i}
               <span class="sp-lineage-step" title={step.timestamp ?? ``}>
@@ -3210,14 +3190,6 @@
     margin-top: 12px;
     padding: 8px 0;
     border-top: 1px solid var(--dialog-border, light-dark(#e5e7eb, #404040));
-  }
-
-  .sp-chart-hint {
-    margin-top: 6px;
-    font-size: 10.5px;
-    text-align: center;
-    color: var(--text-muted, light-dark(#94a3b8, #64748b));
-    user-select: none;
   }
 
   /* Retry button */
