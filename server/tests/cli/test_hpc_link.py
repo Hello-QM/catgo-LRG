@@ -165,6 +165,67 @@ def test_preflight_timeout_raises_hpcerror(monkeypatch):
     assert "timed out" in str(ei.value).lower()
 
 
+# ============================================================================
+# D4 — put_text via scp
+# ============================================================================
+
+
+def test_put_text_writes_temp_then_scp(monkeypatch, tmp_path):
+    from catgo.cli.hpc_link import HpcLink
+    rec = _capture_subprocess(monkeypatch, [(0, "", "")])
+    link = HpcLink(_ssh_config_profile())
+    link.put_text("hello world\n", "/remote/dir/file.txt")
+    assert len(rec) == 1
+    argv = rec[0]
+    assert argv[0] == "scp"
+    # Last arg is target; second-to-last is the local tempfile path.
+    assert argv[-1] == "lab:/remote/dir/file.txt"
+    local = argv[-2]
+    # Tempfile must have been unlinked after the call (so we can't read
+    # contents now); just verify it WAS a local path string.
+    assert local.startswith("/") and not local.startswith("lab:")
+
+
+def test_put_text_writes_content_visible_to_scp(monkeypatch, tmp_path):
+    """The tempfile must exist with the expected content at scp-call
+    time. We capture the content from inside the fake before the
+    HpcLink unlinks the file."""
+    import subprocess as sp
+    from catgo.cli.hpc_link import HpcLink
+    from pathlib import Path
+
+    captured_content: dict = {}
+
+    class _CP:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        # Read the local tempfile (second-to-last argv entry) while it
+        # is still on disk.
+        local = argv[-2]
+        captured_content["text"] = Path(local).read_text()
+        return _CP()
+
+    monkeypatch.setattr("catgo.cli.hpc_link.subprocess.run", fake_run)
+    link = HpcLink(_ssh_config_profile())
+    link.put_text("alpha beta\n", "/r/a.txt")
+    assert captured_content["text"] == "alpha beta\n"
+
+
+def test_put_text_scp_failure_raises_hpcerror(monkeypatch):
+    from catgo.cli.hpc_link import HpcError, HpcLink
+    _capture_subprocess(monkeypatch, [(1, "", "No such file or directory\n")])
+    link = HpcLink(_ssh_config_profile())
+    with pytest.raises(HpcError) as ei:
+        link.put_text("x", "/no/such/path/file.txt")
+    msg = str(ei.value)
+    assert "scp" in msg
+    assert "lab" in msg
+    assert "No such file" in msg
+
+
 def test_mkdir_p_uses_ssh_mkdir_minus_p(monkeypatch):
     from catgo.cli.hpc_link import HpcLink
     rec = _capture_subprocess(monkeypatch, [(0, "", "")])

@@ -26,8 +26,10 @@ web UI.
 """
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass
 
 from catgo.models.hpc import AuthMethod, HPCProfile
@@ -161,3 +163,32 @@ class HpcLink:
                 f"mkdir on {self.profile.name}: "
                 f"{self._first_stderr_line(err)}"
             )
+
+    def put_text(self, content: str, remote_path: str) -> None:
+        """Stage `content` to a local tempfile and scp it to `remote_path`.
+
+        Tempfile is unlinked unconditionally in a finally clause so a
+        failed scp doesn't leave debris in the user's tmpdir.
+        """
+        # delete=False so we can close + scp + unlink ourselves; binary
+        # mode + utf-8 keeps line endings byte-faithful to what the
+        # caller passed (matters for INCAR/POSCAR formatting).
+        tmp = tempfile.NamedTemporaryFile(
+            mode="wb", suffix=".catgo-stage", delete=False
+        )
+        try:
+            tmp.write(content.encode("utf-8"))
+            tmp.close()
+            rc, _, err = self._run(
+                self._scp_argv(tmp.name, remote_path), "scp"
+            )
+            if rc != 0:
+                raise HpcError(
+                    f"scp to {self.profile.name}:{remote_path}: "
+                    f"{self._first_stderr_line(err)}"
+                )
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
