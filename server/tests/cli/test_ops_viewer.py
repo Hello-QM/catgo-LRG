@@ -40,3 +40,36 @@ def test_push_no_input_no_session_errors():
     s = Session(); s.link = _FakeLink()
     with pytest.raises(OpError):
         ops_viewer.push(s, {"panel": ""})
+
+
+class _PullLink:
+    def __init__(self, body: bytes):
+        self._body = body
+        self.calls = []
+    def pull_structure(self, fmt, panel_id):
+        self.calls.append((fmt, panel_id))
+        return self._body
+
+
+def test_pull_updates_session_structure(tmp_path):
+    poscar = (
+        "Cu\n1.0\n3.61 0 0\n0 3.61 0\n0 0 3.61\n"
+        "Cu\n1\nDirect\n0.0 0.0 0.0\n").encode()
+    s = Session(); s.link = _PullLink(poscar)
+    r = ops_viewer.pull(s, {"panel": "", "format": "poscar"})
+    assert r.ok and "pulled" in r.message and "panel=default" in r.message
+    assert s.structure is not None and s.structure.num_sites == 1
+    assert s.link.calls == [("poscar", None)]
+
+
+def test_pull_with_out_writes_file(tmp_path):
+    poscar = (
+        "Cu\n1.0\n3.61 0 0\n0 3.61 0\n0 0 3.61\n"
+        "Cu\n1\nDirect\n0.0 0.0 0.0\n").encode()
+    out = tmp_path / "viewed.vasp"
+    s = Session(); s.link = _PullLink(poscar)
+    r = ops_viewer.pull(s, {"panel": "structure-1", "format": "poscar",
+                            "out": str(out)})
+    assert r.ok and out.exists()
+    assert "-> " + str(out) in r.message
+    assert "panel=structure-1" in r.message

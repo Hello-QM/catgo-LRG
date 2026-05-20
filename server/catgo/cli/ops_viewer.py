@@ -49,3 +49,45 @@ def push(session, params: dict) -> OpResult:
         ok=True,
         message=f"pushed {formula} ({nsites} sites) -> viewer panel={panel_used}",
         artifact=None, structure=None)
+
+
+_FMT_EXT = {"poscar": ".vasp", "cif": ".cif", "xyz": ".xyz",
+            "extxyz": ".extxyz"}
+
+
+def pull(session, params: dict) -> OpResult:
+    panel = params.get("panel") or None
+    fmt = params.get("format", "poscar")
+    link = session.link
+    if link is None:
+        raise OpError("pull: server link unavailable (auto-start hook bug)")
+
+    data = link.pull_structure(fmt, panel)
+    ext = _FMT_EXT.get(fmt, ".vasp")
+    with tempfile.NamedTemporaryFile(suffix=ext, mode="wb",
+                                      delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = Path(tmp.name)
+    try:
+        session.load(tmp_path)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+    out = params.get("out")
+    suffix = ""
+    if out:
+        session.save(out)
+        suffix = f" -> {out}"
+
+    s = session.structure
+    formula = s.composition.reduced_formula if s is not None else "?"
+    nsites = s.num_sites if s is not None else "?"
+    return OpResult(
+        ok=True,
+        message=f"pulled {formula} ({nsites} sites) <- viewer "
+                f"panel={panel or 'default'}{suffix}",
+        artifact=Path(out) if out else None,
+        structure=s)
