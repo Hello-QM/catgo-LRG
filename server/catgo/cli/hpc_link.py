@@ -27,6 +27,7 @@ web UI.
 from __future__ import annotations
 
 import shlex
+import subprocess
 from dataclasses import dataclass
 
 from catgo.models.hpc import AuthMethod, HPCProfile
@@ -103,3 +104,60 @@ class HpcLink:
             target = f"{p.username}@{p.host}:{remote_path}"
         out.extend([local_path, target])
         return out
+
+    # ---------- subprocess runner ----------
+
+    def _run(self, argv: list[str], op_label: str) -> tuple[int, str, str]:
+        """Run argv with capture+timeout. Returns (rc, stdout, stderr).
+
+        On TimeoutExpired raises HpcError("<op_label> to <name>: timed out
+        after <s>s"). The caller (preflight, mkdir_p, …) decides whether
+        a nonzero rc is fatal so it can shape the error message in the
+        domain it knows about.
+        """
+        try:
+            cp = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise HpcError(
+                f"{op_label} to {self.profile.name}: timed out after "
+                f"{self.timeout}s"
+            )
+        return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+    def _first_stderr_line(self, stderr: str) -> str:
+        for line in stderr.splitlines():
+            if line.strip():
+                return line.strip()
+        return stderr.strip() or "(no stderr)"
+
+    # ---------- public ops ----------
+
+    def preflight(self) -> str:
+        """Verify ssh connectivity and return the remote $HOME."""
+        rc, out, err = self._run(self._ssh_argv("echo $HOME"), "ssh")
+        if rc != 0:
+            raise HpcError(
+                f"ssh to {self.profile.name}: {self._first_stderr_line(err)}"
+            )
+        home = out.strip()
+        if not home:
+            raise HpcError(
+                f"ssh to {self.profile.name}: empty $HOME from remote"
+            )
+        return home
+
+    def mkdir_p(self, remote_dir: str) -> None:
+        """Run `mkdir -p <remote_dir>` on the remote host."""
+        cmd = f"mkdir -p {shlex.quote(remote_dir)}"
+        rc, _, err = self._run(self._ssh_argv(cmd), "ssh")
+        if rc != 0:
+            raise HpcError(
+                f"mkdir on {self.profile.name}: "
+                f"{self._first_stderr_line(err)}"
+            )

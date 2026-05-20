@@ -101,6 +101,82 @@ def test_scp_argv_for_ssh_config():
     assert "lab:/remote/y" in argv
 
 
+# ============================================================================
+# D3 — preflight + mkdir_p
+# ============================================================================
+
+
+def _capture_subprocess(monkeypatch, results):
+    """Install a fake subprocess.run that pops from `results` (list of
+    CompletedProcess-like (rc, stdout, stderr) tuples) and records the
+    argv each call received. Returns the recorder list.
+    """
+    import subprocess as sp
+
+    class _CP:
+        def __init__(self, rc, out, err):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = err
+
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        rc, out, err = results.pop(0)
+        return _CP(rc, out, err)
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    monkeypatch.setattr("catgo.cli.hpc_link.subprocess.run", fake_run)
+    return recorded
+
+
+def test_preflight_returns_home(monkeypatch):
+    from catgo.cli.hpc_link import HpcLink
+    rec = _capture_subprocess(monkeypatch, [(0, "/home/u\n", "")])
+    link = HpcLink(_ssh_config_profile())
+    assert link.preflight() == "/home/u"
+    assert rec and rec[0][0] == "ssh"
+    assert any("echo $HOME" in a for a in rec[0])
+
+
+def test_preflight_nonzero_raises_hpcerror(monkeypatch):
+    from catgo.cli.hpc_link import HpcError, HpcLink
+    _capture_subprocess(monkeypatch, [(255, "", "Permission denied\n")])
+    link = HpcLink(_ssh_config_profile())
+    with pytest.raises(HpcError) as ei:
+        link.preflight()
+    msg = str(ei.value)
+    assert "lab" in msg
+    assert "Permission denied" in msg
+
+
+def test_preflight_timeout_raises_hpcerror(monkeypatch):
+    import subprocess as sp
+    from catgo.cli.hpc_link import HpcError, HpcLink
+
+    def fake_run(argv, **kwargs):
+        raise sp.TimeoutExpired(cmd=argv, timeout=1)
+
+    monkeypatch.setattr("catgo.cli.hpc_link.subprocess.run", fake_run)
+    link = HpcLink(_ssh_config_profile(), timeout=1)
+    with pytest.raises(HpcError) as ei:
+        link.preflight()
+    assert "timed out" in str(ei.value).lower()
+
+
+def test_mkdir_p_uses_ssh_mkdir_minus_p(monkeypatch):
+    from catgo.cli.hpc_link import HpcLink
+    rec = _capture_subprocess(monkeypatch, [(0, "", "")])
+    link = HpcLink(_ssh_config_profile())
+    link.mkdir_p("~/catgo-jobs/foo bar")
+    assert rec and rec[0][0] == "ssh"
+    # quoted path appears in the remote command
+    full = " ".join(rec[0])
+    assert "mkdir -p" in full
+    assert "foo bar" in full  # shlex.quote keeps the visible chars
+
+
 def test_scp_argv_for_key_auth():
     from catgo.cli.hpc_link import HpcLink
     argv = HpcLink(_key_profile())._scp_argv("/tmp/x", "/remote/y")
