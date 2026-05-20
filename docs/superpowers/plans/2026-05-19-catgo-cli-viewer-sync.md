@@ -649,8 +649,18 @@ def test_pull_with_out_writes_file(tmp_path):
     r = ops_viewer.pull(s, {"panel": "structure-1", "format": "poscar",
                             "out": str(out)})
     assert r.ok and out.exists()
+    # server bytes preserved verbatim (no pymatgen round-trip mangling)
+    assert out.read_bytes() == poscar
     assert "-> " + str(out) in r.message
     assert "panel=structure-1" in r.message
+
+
+def test_pull_unparseable_bytes_wrapped_as_operror():
+    s = Session(); s.link = _PullLink(b"this is not a structure file")
+    with pytest.raises(OpError) as ei:
+        ops_viewer.pull(s, {"panel": "", "format": "poscar"})
+    assert "unparseable poscar" in str(ei.value)
+    assert s.structure is None      # half-success not allowed
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -668,6 +678,7 @@ _FMT_EXT = {"poscar": ".vasp", "cif": ".cif", "xyz": ".xyz",
 
 
 def pull(session, params: dict) -> OpResult:
+    from catgo.cli.session import SessionError
     panel = params.get("panel") or None
     fmt = params.get("format", "poscar")
     link = session.link
@@ -675,24 +686,40 @@ def pull(session, params: dict) -> OpResult:
         raise OpError("pull: server link unavailable (auto-start hook bug)")
 
     data = link.pull_structure(fmt, panel)
-    ext = _FMT_EXT.get(fmt, ".vasp")
-    with tempfile.NamedTemporaryFile(suffix=ext, mode="wb",
-                                      delete=False) as tmp:
-        tmp.write(data)
-        tmp_path = Path(tmp.name)
-    try:
-        session.load(tmp_path)
-    finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-
     out = params.get("out")
-    suffix = ""
+
     if out:
-        session.save(out)
-        suffix = f" -> {out}"
+        # -o given: write the server's bytes verbatim to the user's path
+        # (preserves CIF comments / extxyz columns / etc. that a pymatgen
+        # round-trip would mangle). One write, atomic: if this fails, the
+        # session is NOT yet mutated.
+        target_path = Path(out)
+        target_path.write_bytes(data)
+        cleanup: "Path | None" = None
+    else:
+        # No -o: stage to a tempfile only so session.load can dispatch on
+        # the extension; unlinked in finally.
+        ext = _FMT_EXT.get(fmt, ".vasp")
+        with tempfile.NamedTemporaryFile(suffix=ext, mode="wb",
+                                          delete=False) as tmp:
+            tmp.write(data)
+            target_path = Path(tmp.name)
+        cleanup = target_path
+
+    try:
+        try:
+            session.load(target_path)
+        except SessionError as exc:
+            raise OpError(
+                f"pull: server returned unparseable {fmt}: {exc}") from exc
+    finally:
+        if cleanup is not None:
+            try:
+                cleanup.unlink()
+            except OSError:
+                pass
+
+    suffix = f" -> {out}" if out else ""
 
     s = session.structure
     formula = s.composition.reduced_formula if s is not None else "?"
@@ -814,6 +841,14 @@ def test_push_without_server_with_no_autostart_clean_exit(tmp_path):
     assert "--no-autostart" in r.stderr
     assert "unreachable" in r.stderr.lower() or "server" in r.stderr.lower()
     assert "Traceback" not in r.stderr
+
+
+def test_no_autostart_after_subcommand_also_works(tmp_path):
+    # Users will type the flag in either position; both must work.
+    r = _run_catgo("push", "--no-autostart", "--panel", "default")
+    assert r.returncode == 2, r.stderr
+    assert "unrecognized" not in r.stderr  # not an argparse rejection
+    assert "--no-autostart" in r.stderr or "server" in r.stderr.lower()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -858,6 +893,11 @@ In `server/catgo/cli/__init__.py`:
 ```python
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
+    # Top-level argparse flags don't propagate into subparsers, so a
+    # user typing `catgo push --no-autostart` would otherwise fail with
+    # "unrecognized arguments". Strip --no-autostart from wherever it
+    # appears and re-prepend it before the (sub)command so the top-level
+    # parser always sees it.
     no_auto = "--no-autostart" in argv
     effective = [a for a in argv if a != "--no-autostart"]
     parser, sub = _build_legacy_parser()
@@ -866,7 +906,8 @@ def main(argv: list[str] | None = None) -> None:
         from catgo.cli.shell import InteractiveShell
         InteractiveShell(no_autostart=no_auto).run()
         return
-    args = parser.parse_args(argv)
+    args = parser.parse_args(
+        (["--no-autostart"] if no_auto else []) + effective)
     if not getattr(args, "command", None):
         parser.print_help()
         return
