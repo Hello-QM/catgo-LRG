@@ -184,6 +184,94 @@ def test_submit_vasp_happy_path(_stub_profile_and_link, tmp_path,
     assert res.artifact == artifact
 
 
+# ============================================================================
+# D9 — precondition / error surfaces
+# ============================================================================
+
+
+def test_submit_no_profiles_errors(monkeypatch):
+    from catgo.cli import ops_submit
+    from catgo.cli.adapter import OpError
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles", lambda: []
+    )
+    sess = Session(); sess.structure = _cu()
+    with pytest.raises(OpError) as ei:
+        ops_submit.submit(sess, {"code": "vasp", "host": ""})
+    msg = str(ei.value)
+    assert "no HPC profiles" in msg
+
+
+def test_submit_unknown_host_errors(monkeypatch):
+    from catgo.cli import ops_submit
+    from catgo.cli.adapter import OpError
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles",
+        lambda: [_profile_ssh_config("lab")],
+    )
+    sess = Session(); sess.structure = _cu()
+    with pytest.raises(OpError) as ei:
+        ops_submit.submit(sess, {"code": "vasp", "host": "nosuch"})
+    msg = str(ei.value)
+    assert "host 'nosuch' not found" in msg
+    assert "lab" in msg  # available list
+
+
+def test_submit_unsupported_auth_errors(monkeypatch):
+    from catgo.cli import ops_submit
+    from catgo.cli.adapter import OpError
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles",
+        lambda: [_profile_password()],
+    )
+    sess = Session(); sess.structure = _cu()
+    with pytest.raises(OpError) as ei:
+        ops_submit.submit(sess, {"code": "vasp", "host": "oldhost"})
+    msg = str(ei.value)
+    assert "oldhost" in msg
+    assert "password" in msg
+    assert "ssh_config or key" in msg
+
+
+def test_submit_no_structure_and_no_input_errors(monkeypatch):
+    from catgo.cli import ops_submit
+    from catgo.cli.adapter import OpError
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles",
+        lambda: [_profile_ssh_config("lab")],
+    )
+    sess = Session()   # no structure
+    with pytest.raises(OpError) as ei:
+        ops_submit.submit(sess, {"code": "vasp", "host": "lab"})
+    msg = str(ei.value)
+    assert "requires <input> file or a loaded session structure" in msg
+
+
+def test_submit_input_file_missing_errors(monkeypatch, tmp_path):
+    from catgo.cli import ops_submit
+    from catgo.cli.adapter import OpError
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles",
+        lambda: [_profile_ssh_config("lab")],
+    )
+    sess = Session()
+    with pytest.raises(OpError) as ei:
+        ops_submit.submit(sess, {
+            "code": "vasp", "host": "lab",
+            "input": str(tmp_path / "no-such.vasp"),
+        })
+    assert "submit input not found" in str(ei.value)
+
+
+def test_submit_unsupported_code_errors(_stub_profile_and_link):
+    from catgo.cli import ops_submit
+    from catgo.cli.adapter import OpError
+    sess = Session(); sess.structure = _cu()
+    with pytest.raises(OpError) as ei:
+        ops_submit.submit(sess, {"code": "orca", "host": "lab"})
+    assert "unsupported code" in str(ei.value)
+
+
 def test_submit_cp2k_happy_path(_stub_profile_and_link, tmp_path,
                                   monkeypatch):
     profile, created = _stub_profile_and_link
