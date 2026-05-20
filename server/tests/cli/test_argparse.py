@@ -210,3 +210,60 @@ def test_help_shows_dash_form_first():
     assert "--no-anim" in r.stdout
     assert "--freq-cutoff" in r.stdout
     assert "--mode-index" in r.stdout
+
+
+# ============================================================================
+# D10 — submit op registered + dash-form aliases
+# ============================================================================
+
+
+def test_submit_subcommand_registered():
+    """D10 — `submit` shows up in `catgo --help` and accepts its full
+    flag surface end-to-end via argparse (without actually running)."""
+    r = _run_catgo("--help")
+    assert r.returncode == 0
+    assert "submit" in r.stdout
+
+    # `submit --help` must enumerate the per-op flags
+    r = _run_catgo("submit", "--help")
+    assert r.returncode == 0
+    for flag in ("--code", "--host", "--queue", "--walltime",
+                 "--nodes", "--remote-dir", "--job-name"):
+        assert flag in r.stdout, f"flag missing from help: {flag}"
+
+
+def test_submit_dash_flag_aliases_parse():
+    """D10 — registry params with underscores get both dash and underscore
+    flag forms (P3b C1 mechanism). Verify on submit's --remote-dir / --job-name."""
+    # Use the in-process parser directly — no actual submission.
+    from catgo.cli import _build_legacy_parser, _add_op_subparsers
+    parser, sub = _build_legacy_parser()
+    _add_op_subparsers(sub)
+    args = parser.parse_args([
+        "submit", "in.vasp",
+        "--code", "vasp", "--host", "lab",
+        "--remote-dir", "/tmp/x", "--job-name", "myjob",
+    ])
+    assert args._op.name == "submit"
+    assert args.remote_dir == "/tmp/x"
+    assert args.job_name == "myjob"
+    # Underscore form still works
+    args = parser.parse_args([
+        "submit", "in.vasp",
+        "--code", "vasp", "--host", "lab",
+        "--remote_dir", "/tmp/x", "--job_name", "myjob",
+    ])
+    assert args.remote_dir == "/tmp/x"
+    assert args.job_name == "myjob"
+
+
+def test_submit_op_registered_in_hpc_group():
+    """D10 — registry self-check: submit lives in group 'hpc' and is
+    needs_server=False (no auto-start)."""
+    from catgo.cli.ops import build_registry
+    reg = build_registry()
+    assert "submit" in reg.names()
+    op = reg.get("submit")
+    assert op.group == "hpc"
+    assert op.needs_server is False
+    assert op.mutates is False

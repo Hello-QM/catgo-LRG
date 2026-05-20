@@ -106,4 +106,27 @@ def build_registry() -> OperationRegistry:
                   help="export format"),
         ],
         handler=ops_viewer.pull, needs_server=True, mutates=True))
+    from catgo.cli import ops_submit
+    reg.add(Operation(
+        name="submit", group="hpc",
+        summary="generate code input + scp + sbatch to remote HPC",
+        params=[
+            Param("code", str, default="vasp",
+                  choices=["vasp", "cp2k"],
+                  help="code: vasp|cp2k"),
+            Param("host", str, default="",
+                  help="HPC profile name (~/.catgo/hpc_profiles.json); "
+                       "empty = first available"),
+            Param("queue", str, default="",
+                  help="SLURM partition (empty = scheduler default)"),
+            Param("walltime", int, default=24,
+                  help="wall time (hours)"),
+            Param("nodes", int, default=1,
+                  help="number of nodes"),
+            Param("remote_dir", str, default="",
+                  help="remote work dir (empty = ~/catgo-jobs/<ts>-<name>)"),
+            Param("job_name", str, default="",
+                  help="SLURM job name (empty = catgo_<formula>)"),
+        ],
+        handler=ops_submit.submit, needs_server=False, mutates=False))
     return reg
