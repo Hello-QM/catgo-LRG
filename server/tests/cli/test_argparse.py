@@ -122,3 +122,33 @@ def test_cli_freq_invalid_mode_choice_rejected(tmp_path):
     # argparse 'choices' should reject 'nonsense' before reaching the handler
     assert r.returncode != 0
     assert "nonsense" in r.stderr.lower() or "invalid choice" in r.stderr.lower()
+
+
+def test_no_autostart_global_flag_listed():
+    r = _run_catgo("--help")
+    assert r.returncode == 0
+    assert "--no-autostart" in r.stdout
+
+
+def test_push_without_server_with_no_autostart_clean_exit(tmp_path):
+    # No CatGO server running in CI; --no-autostart must NOT spawn one.
+    r = _run_catgo("--no-autostart", "push", "--panel", "default")
+    assert r.returncode == 2
+    assert "--no-autostart" in r.stderr
+    assert "unreachable" in r.stderr.lower() or "server" in r.stderr.lower()
+    assert "Traceback" not in r.stderr
+
+
+def test_viewer_subcommands_in_help():
+    """Task 7 review follow-up: --help lists push/pull and their flags."""
+    out = _run_catgo("--help")
+    assert out.returncode == 0
+    for c in ("push", "pull"):
+        assert c in out.stdout
+    push_help = _run_catgo("push", "--help")
+    assert push_help.returncode == 0
+    assert "--panel" in push_help.stdout
+    pull_help = _run_catgo("pull", "--help")
+    assert pull_help.returncode == 0
+    assert "--panel" in pull_help.stdout
+    assert "{poscar,cif,xyz,extxyz}" in pull_help.stdout or "--format" in pull_help.stdout

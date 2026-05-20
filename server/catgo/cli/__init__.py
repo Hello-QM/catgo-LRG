@@ -18,6 +18,9 @@ def _build_legacy_parser():
         prog="catgo",
         description="CatGo — Computational Chemistry Workflow Engine",
     )
+    parser.add_argument(
+        "--no-autostart", action="store_true", dest="no_autostart",
+        help="do not auto-spawn `catgo serve --daemon` for needs_server ops")
     sub = parser.add_subparsers(dest="command")
 
     p_serve = sub.add_parser("serve", help="Start the CatGo backend server")
@@ -72,6 +75,19 @@ def _run_op(args) -> int:
     from catgo.cli.registry import coerce_param
     op = args._op
     session = Session()
+    from catgo.cli.server_link import ServerLink
+    session.link = ServerLink.discover()
+    if op.needs_server and session.link is None:
+        if getattr(args, "no_autostart", False):
+            print("error: --no-autostart: server unreachable; "
+                  "start `catgo serve` first", file=sys.stderr)
+            return 2
+        try:
+            from catgo.cli._autostart import spawn_daemon_and_wait
+            session.link = spawn_daemon_and_wait()
+        except OpError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
     try:
         # analyze ops take an artifact path (OUTCAR / vasprun.xml / vaspout.h5
         # / COHPCAR.lobster) — NOT a parsable structure file. Skip session
@@ -133,10 +149,14 @@ def _run_op(args) -> int:
 
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
+    # Extract --no-autostart so the empty-argv shell path honors it too.
+    no_auto = "--no-autostart" in argv
+    effective = [a for a in argv if a != "--no-autostart"]
     parser, sub = _build_legacy_parser()
     _add_op_subparsers(sub)
-    if not argv:
+    if not effective:
         from catgo.cli.shell import InteractiveShell
+        # Task 9 adds the no_autostart kwarg to InteractiveShell.
         InteractiveShell().run()
         return
     args = parser.parse_args(argv)
