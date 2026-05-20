@@ -54,3 +54,42 @@ def test_viewer_ops_registered():
     assert push.mutates is False
     assert pull.group == "viewer" and pull.needs_server is True
     assert pull.mutates is True
+
+
+def test_submit_via_registry(monkeypatch, tmp_path):
+    """D11 — shell and argparse converge on the same handler with the
+    same dict shape. Exercise the path via the registry (same lookup
+    both forms use) with a fake HpcLink so no network IO happens."""
+    from catgo.models.hpc import AuthMethod, HPCProfile, SchedulerType
+
+    profile = HPCProfile(
+        name="lab", host="h", username="me",
+        auth_method=AuthMethod.SSH_CONFIG, ssh_alias="lab",
+        scheduler=SchedulerType.SLURM,
+    )
+    monkeypatch.setattr(
+        "catgo.cli.ops_submit.load_profiles", lambda: [profile]
+    )
+
+    class _Link:
+        def __init__(self, prof, timeout=60):
+            self.prof = prof
+        def preflight(self): return "/home/me"
+        def mkdir_p(self, d): pass
+        def put_text(self, c, p): pass
+        def sbatch(self, d, s): return "42"
+
+    monkeypatch.setattr("catgo.cli.ops_submit.HpcLink", _Link)
+    monkeypatch.chdir(tmp_path)
+
+    op = build_registry().get("submit")
+    sess = Session(); sess.structure = _cu()
+    r = op.handler(sess, {
+        "code": "vasp", "host": "lab", "queue": "",
+        "walltime": 6, "nodes": 1, "remote_dir": "", "job_name": "",
+    })
+    assert r.ok
+    assert "job=42" in r.message
+    # Both the argparse path (_run_op) and the shell path
+    # (InteractiveShell.run) call op.handler(session, params); reaching
+    # this assertion via the registry lookup proves the contract.
