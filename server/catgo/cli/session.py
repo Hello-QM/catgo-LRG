@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from pymatgen.core import Structure
+
+if TYPE_CHECKING:
+    from catgo.cli.server_link import ServerLink
 
 
 class SessionError(Exception):
@@ -56,7 +59,7 @@ class Session:
     structure: Optional[Structure] = None
     source_path: Optional[Path] = None
     history: list[Structure] = field(default_factory=list)
-    link: object | None = None  # ServerLink placeholder (P3)
+    link: "Optional[ServerLink]" = None  # populated at CLI entry (P3a)
 
     def load(self, path) -> None:
         p = Path(path)
