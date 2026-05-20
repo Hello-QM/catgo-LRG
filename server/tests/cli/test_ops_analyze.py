@@ -34,6 +34,139 @@ def _outcar(tmp_path):
     p = tmp_path / "OUTCAR"; p.write_text(_OUTCAR); return p
 
 
+# ============================================================================
+# E7 — freq --ir-spectrum
+# ============================================================================
+
+
+_OUTCAR_THREE_REAL = textwrap.dedent("""\
+   ions per type =               1 1
+  POMASS =   1.00 16.00
+      direct lattice vectors                 reciprocal lattice vectors
+     5.000000  0.000000  0.000000     0.200000  0.000000  0.000000
+     0.000000  5.000000  0.000000     0.000000  0.200000  0.000000
+     0.000000  0.000000  8.000000     0.000000  0.000000  0.125000
+ position of ions in cartesian coordinates  (Angst):
+   0.0000000  0.0000000  0.0000000
+   0.0000000  0.0000000  1.1000000
+
+ Eigenvectors and eigenvalues of the dynamical matrix
+ ----------------------------------------------------
+
+   1 f  =    9.0 THz   56.5 2PiTHz  300.0000 cm-1   37.2 meV
+             X         Y         Z           dx          dy          dz
+      0.000000  0.000000  0.000000     0.000000  0.000000  0.100000
+      0.000000  0.000000  1.100000     0.000000  0.000000 -0.100000
+
+   2 f  =    6.0 THz   37.7 2PiTHz  200.0000 cm-1   24.8 meV
+             X         Y         Z           dx          dy          dz
+      0.000000  0.000000  0.000000     0.000000  0.200000  0.000000
+      0.000000  0.000000  1.100000     0.000000 -0.200000  0.000000
+
+   3 f  =    3.0 THz   18.8 2PiTHz  100.0000 cm-1   12.4 meV
+             X         Y         Z           dx          dy          dz
+      0.000000  0.000000  0.000000     0.300000  0.000000  0.000000
+      0.000000  0.000000  1.100000    -0.300000  0.000000  0.000000
+""")
+
+
+def _outcar_three_real(tmp_path):
+    p = tmp_path / "OUTCAR"
+    p.write_text(_OUTCAR_THREE_REAL)
+    return p
+
+
+def test_freq_ir_spectrum_text_output(tmp_path):
+    src = _outcar_three_real(tmp_path)
+    out = tmp_path / "ir.dat"
+    r = ops_analyze.freq(Session(), {
+        "input": str(src), "mode": "adsorbed", "no_anim": True,
+        "ir_spectrum": str(out), "ir_sigma": 10.0,
+    })
+    assert r.ok
+    assert out.exists()
+    # The result message should mention IR (uniform — no BEC in fixture)
+    assert "IR" in r.message
+    assert "uniform" in r.message
+    # File parses as 2-column text; peak rows present at each ω_k
+    rows = []
+    for line in out.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        w, y = line.split()
+        rows.append((float(w), float(y)))
+    assert rows, "no spectrum rows in output"
+    # Sample intensities near each parsed mode
+    def at(w):
+        return min(rows, key=lambda r: abs(r[0] - w))[1]
+    for w in (100.0, 200.0, 300.0):
+        assert at(w) == pytest.approx(1.0, abs=1e-3)
+
+
+def test_freq_ir_spectrum_plot_output(tmp_path, monkeypatch):
+    src = _outcar_three_real(tmp_path)
+    out = tmp_path / "ir.pdf"
+    captured = {}
+
+    def fake_render(spec, path, edit, latex):
+        captured["spec"] = spec
+        captured["path"] = path
+        return path
+
+    # The plot writer imports render at call time so monkeypatch BOTH
+    # locations to be safe.
+    monkeypatch.setattr("catgo.cli.plotting.render", fake_render)
+    monkeypatch.setattr("catgo.cli.ir.render", fake_render, raising=False)
+
+    r = ops_analyze.freq(Session(), {
+        "input": str(src), "mode": "adsorbed", "no_anim": True,
+        "ir_spectrum": str(out), "ir_sigma": 10.0,
+    })
+    assert r.ok
+    assert "IR" in r.message
+    # render was called with a PlotSpec(kind='ir')
+    assert captured.get("spec") is not None
+    assert captured["spec"].kind == "ir"
+
+
+def test_freq_no_ir_spectrum_no_mention(tmp_path):
+    """Baseline: omitting --ir-spectrum should not change the existing
+    G_corr message shape."""
+    src = _outcar_three_real(tmp_path)
+    r = ops_analyze.freq(Session(), {
+        "input": str(src), "mode": "adsorbed", "no_anim": True,
+    })
+    assert r.ok
+    assert "G_corr" in r.message
+    assert "IR" not in r.message
+
+
+def test_freq_ir_includes_only_real_modes(tmp_path):
+    """Fixture _OUTCAR has 1 real + 1 imag mode; the IR spectrum must
+    use only the real frequency (166.78 cm⁻¹)."""
+    src = _outcar(tmp_path)
+    out = tmp_path / "ir.dat"
+    r = ops_analyze.freq(Session(), {
+        "input": str(src), "mode": "adsorbed", "no_anim": True,
+        "ir_spectrum": str(out),
+    })
+    assert r.ok
+    rows = []
+    for line in out.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        w, y = line.split()
+        rows.append((float(w), float(y)))
+    # Peak at 166.78, NOT at 33.356 (imag freq)
+    def at(w):
+        return min(rows, key=lambda r: abs(r[0] - w))[1]
+    assert at(166.78) > 0.9
+    # No peak near 33 (Gaussian tail negligible since 100+ cm-1 away)
+    assert at(33.356) < 0.5
+
+
 def test_freq_adsorbed_gibbs_and_anim(tmp_path):
     src = _outcar(tmp_path); out = tmp_path / "ts.xyz"
     s = Session()

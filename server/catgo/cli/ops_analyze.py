@@ -74,9 +74,44 @@ def freq(session, params: dict) -> OpResult:
     if params.get("dump"):
         _dump(params["dump"], g)
 
+    # ---- Optional IR spectrum (real modes only) -------------------------
+    ir_out = params.get("ir_spectrum") or ""
+    ir_note = ""
+    if ir_out:
+        from catgo.cli.ir import (
+            compute_ir_spectrum, parse_born_charges,
+            write_ir_plot, write_ir_text,
+        )
+        text = Path(src).read_text(errors="ignore")
+        born = parse_born_charges(text, data.total_atoms)
+        # Sentinel: registry has no Optional-float Param surface yet
+        # (P1 backlog item); a negative value means "auto".
+        emin_raw = params.get("ir_emin")
+        emax_raw = params.get("ir_emax")
+        emin = float(emin_raw) if emin_raw is not None and float(emin_raw) >= 0 else None
+        emax = float(emax_raw) if emax_raw is not None and float(emax_raw) >= 0 else None
+        spec = compute_ir_spectrum(
+            data.real_freqs_cm,
+            data.eigenvectors_for_real(),
+            born=born,
+            emin=emin, emax=emax,
+            sigma=float(params.get("ir_sigma", 10.0)),
+        )
+        ext = Path(ir_out).suffix.lower()
+        if ext in (".pdf", ".png", ".svg"):
+            write_ir_plot(spec, ir_out,
+                          edit=bool(params.get("edit")),
+                          latex=bool(params.get("latex")))
+        else:
+            write_ir_text(spec, ir_out)
+        ir_note = (
+            f"  (IR spec: {spec.n_modes} modes, "
+            f"{'BEC' if spec.used_bec else 'uniform'} -> {ir_out})"
+        )
+
     msg = (f"G_corr={g['g_corr_ev']:.4f} eV  ZPE={g['zpe_ev']:.4f}  "
            f"H_corr={g['h_corr_ev']:.4f}  TS={g['ts_vib_ev']:.4f}  "
-           f"imaginary={data.num_imaginary}{anim_note}")
+           f"imaginary={data.num_imaginary}{anim_note}{ir_note}")
     return OpResult(ok=True, message=msg, artifact=artifact, structure=None)
 
 
