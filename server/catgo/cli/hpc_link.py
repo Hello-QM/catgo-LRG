@@ -27,6 +27,7 @@ web UI.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -192,3 +193,30 @@ class HpcLink:
                 os.unlink(tmp.name)
             except OSError:
                 pass
+
+    def sbatch(self, remote_dir: str, script_name: str) -> str:
+        """Run `cd <remote_dir> && sbatch <script>` and return job id.
+
+        Mirrors `hpc.py:resubmit_job_endpoint`: parse the LAST `(\\d+)`
+        match in stdout — SLURM's "Submitted batch job 12345" puts the
+        id at the end, and `re.search` would also pick up any leading
+        diagnostic number. Falling back to `findall(...)[-1]` is the
+        robust choice.
+        """
+        cmd = (
+            f"cd {shlex.quote(remote_dir)} && "
+            f"sbatch {shlex.quote(script_name)}"
+        )
+        rc, out, err = self._run(self._ssh_argv(cmd), "sbatch")
+        if rc != 0:
+            raise HpcError(
+                f"sbatch on {self.profile.name}: "
+                f"{self._first_stderr_line(err)}"
+            )
+        ids = re.findall(r"(\d+)", out or "")
+        if not ids:
+            raise HpcError(
+                f"sbatch on {self.profile.name}: could not parse job id "
+                f"from '{(out or '').strip()}'"
+            )
+        return ids[-1]

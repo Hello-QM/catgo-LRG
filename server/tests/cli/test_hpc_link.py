@@ -170,6 +170,47 @@ def test_preflight_timeout_raises_hpcerror(monkeypatch):
 # ============================================================================
 
 
+# ============================================================================
+# D5 — sbatch
+# ============================================================================
+
+
+def test_sbatch_parses_job_id(monkeypatch):
+    from catgo.cli.hpc_link import HpcLink
+    rec = _capture_subprocess(
+        monkeypatch, [(0, "Submitted batch job 12345\n", "")]
+    )
+    link = HpcLink(_ssh_config_profile())
+    jid = link.sbatch("/work/dir", "catgo_submit.sh")
+    assert jid == "12345"
+    full = " ".join(rec[0])
+    assert "cd /work/dir" in full
+    assert "sbatch" in full
+    assert "catgo_submit.sh" in full
+
+
+def test_sbatch_no_job_id_raises_hpcerror(monkeypatch):
+    from catgo.cli.hpc_link import HpcError, HpcLink
+    _capture_subprocess(monkeypatch, [(0, "weird success\n", "")])
+    link = HpcLink(_ssh_config_profile())
+    with pytest.raises(HpcError) as ei:
+        link.sbatch("/d", "s.sh")
+    msg = str(ei.value)
+    assert "could not parse job id" in msg
+    assert "weird success" in msg
+
+
+def test_sbatch_nonzero_raises_hpcerror(monkeypatch):
+    from catgo.cli.hpc_link import HpcError, HpcLink
+    _capture_subprocess(monkeypatch, [(1, "", "Invalid partition\n")])
+    link = HpcLink(_ssh_config_profile())
+    with pytest.raises(HpcError) as ei:
+        link.sbatch("/d", "s.sh")
+    msg = str(ei.value)
+    assert "sbatch" in msg
+    assert "Invalid partition" in msg
+
+
 def test_put_text_writes_temp_then_scp(monkeypatch, tmp_path):
     from catgo.cli.hpc_link import HpcLink
     rec = _capture_subprocess(monkeypatch, [(0, "", "")])
