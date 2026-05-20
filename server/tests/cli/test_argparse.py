@@ -160,3 +160,53 @@ def test_no_autostart_after_subcommand_also_works(tmp_path):
     assert r.returncode == 2, r.stderr
     assert "unrecognized" not in r.stderr  # not an argparse rejection
     assert "--no-autostart" in r.stderr or "server" in r.stderr.lower()
+
+
+def _synthetic_outcar(tmp_path):
+    """Minimal OUTCAR the freq op accepts (mirrors the end_to_end test)."""
+    outcar = tmp_path / "OUTCAR"
+    outcar.write_text(textwrap.dedent("""\
+       ions per type =               1
+      POMASS =   1.00
+     position of ions in cartesian coordinates  (Angst):
+       0.0000000  0.0000000  0.0000000
+
+     Eigenvectors and eigenvalues of the dynamical matrix
+     ----------------------------------------------------
+
+       1 f  =    5.000000 THz    31.4159 2PiTHz  166.7800 cm-1    20.6789 meV
+                 X         Y         Z           dx          dy          dz
+          0.000000  0.000000  0.000000     0.000000  0.000000  1.000000
+    """))
+    return outcar
+
+
+def test_dash_flag_alias_accepted(tmp_path):
+    """C1 — modern GNU dash-form flags must work for registry params
+    whose `name` contains an underscore (e.g. freq_cutoff -> --freq-cutoff,
+    no_anim -> --no-anim)."""
+    outcar = _synthetic_outcar(tmp_path)
+    r = _run_catgo("freq", str(outcar),
+                   "--no-anim", "--freq-cutoff", "50.0",
+                   "--mode", "adsorbed")
+    assert r.returncode == 0, r.stderr
+    assert "G_corr" in r.stdout
+
+
+def test_underscore_form_still_works(tmp_path):
+    """C1 — backward compatibility: existing scripts using --no_anim style
+    must keep working alongside the new dash aliases."""
+    outcar = _synthetic_outcar(tmp_path)
+    r = _run_catgo("freq", str(outcar), "--no_anim", "--mode", "adsorbed")
+    assert r.returncode == 0, r.stderr
+    assert "G_corr" in r.stdout
+
+
+def test_help_shows_dash_form_first():
+    """C1 — --help for a subcommand whose params have underscores must
+    surface the dash form (modern GNU style is the primary advertised flag)."""
+    r = _run_catgo("freq", "--help")
+    assert r.returncode == 0
+    assert "--no-anim" in r.stdout
+    assert "--freq-cutoff" in r.stdout
+    assert "--mode-index" in r.stdout

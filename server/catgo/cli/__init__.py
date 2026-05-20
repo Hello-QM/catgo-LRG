@@ -56,15 +56,24 @@ def _add_op_subparsers(sub):
         for prm in op.params:
             if prm.name == "out":
                 continue
+            # Modern GNU dash style (--no-anim, --freq-cutoff) is the
+            # primary advertised flag; the underscore form remains as
+            # a backward-compat alias so existing scripts keep working.
+            # `dest=prm.name` keeps args.<name> in the underscore shape
+            # the handlers (and Param.name lookups) already use.
+            flag_dash = "--" + prm.name.replace("_", "-")
+            flag_underscore = f"--{prm.name}"
+            flags = ([flag_dash, flag_underscore]
+                     if flag_dash != flag_underscore else [flag_underscore])
             if prm.type is bool:
-                p.add_argument(f"--{prm.name}", action="store_true",
+                p.add_argument(*flags, action="store_true", dest=prm.name,
                                help=prm.help)
                 continue
             kwargs = {"default": None, "required": prm.required,
-                      "help": prm.help}
+                      "help": prm.help, "dest": prm.name}
             if prm.choices is not None:
                 kwargs["choices"] = prm.choices
-            p.add_argument(f"--{prm.name}", **kwargs)
+            p.add_argument(*flags, **kwargs)
         p.set_defaults(_op=op)
     return reg
 
