@@ -15,11 +15,18 @@ from catgo.cli.session import Session, SessionError
 class InteractiveShell:
     def __init__(self, session: Session | None = None,
                  input_fn: Callable[[str], str] = input,
-                 output_fn: Callable[..., None] = print) -> None:
+                 output_fn: Callable[..., None] = print,
+                 no_autostart: bool = False) -> None:
         self.session = session or Session()
         self.reg = build_registry()
         self._in = input_fn
         self._out = output_fn
+        self._no_autostart = no_autostart
+        try:
+            from catgo.cli.server_link import ServerLink
+            self.session.link = ServerLink.discover()
+        except Exception:  # noqa: BLE001
+            self.session.link = None
 
     def _status(self) -> str:
         s = self.session.structure
@@ -81,6 +88,15 @@ class InteractiveShell:
                     self._out(self._status())
                 elif choice in self.reg.names():
                     op = self.reg.get(choice)
+                    if op.needs_server and self.session.link is None:
+                        if self._no_autostart:
+                            raise OpError(
+                                "--no-autostart: server unreachable; "
+                                "start `catgo serve` first")
+                        from catgo.cli._autostart import (
+                            spawn_daemon_and_wait,
+                        )
+                        self.session.link = spawn_daemon_and_wait()
                     # Analyze ops read a DFT output file directly (not the
                     # active session structure); argparse takes that as
                     # the positional `input`. From the menu we must prompt

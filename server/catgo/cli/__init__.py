@@ -160,8 +160,7 @@ def main(argv: list[str] | None = None) -> None:
     _add_op_subparsers(sub)
     if not effective:
         from catgo.cli.shell import InteractiveShell
-        # Task 9 adds the no_autostart kwarg to InteractiveShell.
-        InteractiveShell().run()
+        InteractiveShell(no_autostart=no_auto).run()
         return
     args = parser.parse_args(
         (["--no-autostart"] if no_auto else []) + effective)

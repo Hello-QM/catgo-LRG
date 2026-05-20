@@ -142,3 +142,19 @@ def test_shell_freq_analyze_via_menu(tmp_path):
     text = "\n".join(outs)
     assert "G_corr" in text
     assert "imaginary=0" in text
+
+
+def test_shell_no_autostart_blocks_push():
+    # Without a real server and with no_autostart=True, choosing `push`
+    # in the menu must NOT spawn a daemon; the shell surfaces a clean
+    # OpError-format line and returns to the menu.
+    out = []
+    script = iter(["push", "", "q"])   # op name, panel (empty), quit
+    sh = InteractiveShell(session=Session(),
+                          no_autostart=True,
+                          input_fn=lambda _="": next(script),
+                          output_fn=lambda *a, **k: out.append(
+                              " ".join(map(str, a))))
+    sh.run()
+    text = "\n".join(out)
+    assert "no-autostart" in text or "unreachable" in text.lower()
