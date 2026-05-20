@@ -26,6 +26,7 @@ web UI.
 """
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 
 from catgo.models.hpc import AuthMethod, HPCProfile
@@ -51,3 +52,54 @@ class HpcLink:
                 f"auth_method '{self.profile.auth_method.value}' needs "
                 "interactive input; use ssh_config or key"
             )
+
+    # ---------- argv builders ----------
+
+    def _ssh_target(self) -> list[str]:
+        """Common ssh prefix excluding the remote command.
+
+        SSH_CONFIG: just the alias.
+        KEY:        `-i <key> -p <port> <user>@<host>`.
+        Both modes add `-o BatchMode=yes` so a key/auth failure errors
+        immediately instead of falling through to a password prompt.
+        """
+        p = self.profile
+        out: list[str] = ["-o", "BatchMode=yes"]
+        if p.auth_method == AuthMethod.SSH_CONFIG:
+            alias = p.ssh_alias or p.host
+            out.append(alias)
+            return out
+        # KEY
+        if p.key_file:
+            out.extend(["-i", p.key_file])
+        out.extend(["-p", str(p.port)])
+        out.append(f"{p.username}@{p.host}")
+        return out
+
+    def _ssh_argv(self, remote_cmd: str) -> list[str]:
+        """argv for `ssh … 'bash -l -c <quoted-cmd>'`.
+
+        bash -l matches the SubprocessSSHRunner / hpc.py convention so
+        module-managed tools (sbatch, squeue, vasp_std, cp2k.psmp) are
+        in PATH on the remote.
+        """
+        login_cmd = f"bash -l -c {shlex.quote(remote_cmd)}"
+        return ["ssh", *self._ssh_target(), login_cmd]
+
+    def _scp_argv(self, local_path: str, remote_path: str) -> list[str]:
+        """argv for `scp -o BatchMode=yes [-i key] [-P port] <local> <target>:<remote>`.
+
+        scp uses `-P` (capital) for port, unlike ssh's `-p`.
+        """
+        p = self.profile
+        out: list[str] = ["scp", "-o", "BatchMode=yes"]
+        if p.auth_method == AuthMethod.SSH_CONFIG:
+            alias = p.ssh_alias or p.host
+            target = f"{alias}:{remote_path}"
+        else:
+            if p.key_file:
+                out.extend(["-i", p.key_file])
+            out.extend(["-P", str(p.port)])
+            target = f"{p.username}@{p.host}:{remote_path}"
+        out.extend([local_path, target])
+        return out
