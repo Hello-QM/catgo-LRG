@@ -75,7 +75,7 @@ export async function run_slash(raw: string, ctx: SlashCtx): Promise<boolean> {
 SLASH_COMMANDS.push({
   name: 'help',
   hint: '',
-  summary: t('chat.slash_help_summary'),
+  get summary() { return t('chat.slash_help_summary') },
   run(ctx) {
     const lines = SLASH_COMMANDS
       .slice()
@@ -87,15 +87,15 @@ SLASH_COMMANDS.push({
 
 SLASH_COMMANDS.push(
   {
-    name: 'new', hint: '', summary: t('chat.slash_new_summary'),
+    name: 'new', hint: '', get summary() { return t('chat.slash_new_summary') },
     run(ctx) { ctx.new_session() },
   },
   {
-    name: 'clear', hint: '', summary: t('chat.slash_clear_summary'),
+    name: 'clear', hint: '', get summary() { return t('chat.slash_clear_summary') },
     run(ctx) { ctx.clear_chat_history() },
   },
   {
-    name: 'stop', hint: '', summary: t('chat.slash_stop_summary'),
+    name: 'stop', hint: '', get summary() { return t('chat.slash_stop_summary') },
     run(ctx) { ctx.cancel_generation() },
   },
 )
@@ -126,7 +126,7 @@ function snippet(ctx: SlashCtx, s: SessionSummary): string {
 SLASH_COMMANDS.push({
   name: 'resume',
   hint: '[n]',
-  summary: t('chat.slash_resume_summary'),
+  get summary() { return t('chat.slash_resume_summary') },
   run(ctx) {
     const sorted = ctx.list_sessions().slice().sort((a, b) => b.last_active - a.last_active)
     if (sorted.length === 0) { ctx.emit(t('chat.no_past_sessions')); return }
@@ -158,7 +158,7 @@ for (const r of RECIPES) {
   SLASH_COMMANDS.push({
     name: r.name,
     hint: '[mp-id]',
-    summary: t('chat.quickbuild_workflow', { label: r.label }),
+    get summary() { return t('chat.quickbuild_workflow', { label: r.label }) },
     async run(ctx) {
       const a = ctx.args.trim()
       if (a !== '' && !/^mp-\d+$/i.test(a)) {
@@ -173,14 +173,14 @@ for (const r of RECIPES) {
 SLASH_COMMANDS.push({
   name: 'structure',
   hint: '',
-  summary: t('chat.slash_structure_summary'),
+  get summary() { return t('chat.slash_structure_summary') },
   async run(ctx) { await ctx.inject_structure() },
 })
 
 SLASH_COMMANDS.push({
   name: 'skip-permission',
   hint: '[on|off]',
-  summary: t('chat.slash_skip_permission_summary'),
+  get summary() { return t('chat.slash_skip_permission_summary') },
   run(ctx) {
     const a = ctx.args.trim().toLowerCase()
     if (a === '') {
