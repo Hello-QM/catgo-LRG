@@ -77,6 +77,35 @@ fn cfg_b(c: &MergedConfig, key: &str, dflt: bool) -> bool {
 fn cfg_s<'a>(c: &'a MergedConfig, key: &str, dflt: &'a str) -> &'a str {
     c.get_s_opt(key).unwrap_or(dflt)
 }
+/// Inverse of a 3×3 matrix (row-major), or None if (near-)singular. Used to
+/// take cartesian → fractional coords for PBC ghost wrap-image generation:
+/// with lattice rows a,b,c, `cart = frac · L`, so `frac = cart · L⁻¹`.
+fn inv3(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let id = 1.0 / det;
+    Some([
+        [
+            (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * id,
+            (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * id,
+            (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * id,
+        ],
+        [
+            (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * id,
+            (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * id,
+            (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * id,
+        ],
+        [
+            (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * id,
+            (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * id,
+            (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * id,
+        ],
+    ])
+}
 /// Color-field getter that ALWAYS routes the value (preset-present OR the
 /// hardcoded absent-key fallback) through `palette::resolve_color`.
 ///
@@ -278,6 +307,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
     // rigid body. Periodic ghost images over the 26 neighbour cells (a
     // distinct, opacity-dimmed concept) remain a tracked follow-up; this
     // is the explicit, replicate-as-normal graph supercell.
+    let n_cell0 = keep.len(); // image-0 (original-cell) atom count, pre-replication
     let sc = inp.style.cell.supercell;
     if let Some(lat) = inp.lattice {
         let (sa, sb, sc_) = (sc[0].max(1), sc[1].max(1), sc[2].max(1));
@@ -332,6 +362,62 @@ pub fn render_svg(inp: &RenderInput) -> String {
                             edges.push((di + off, dj + off, o, v));
                         }
                         img += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- PBC ghost wrap-images (RT12) ----------------------------------
+    // When `cell.pbc_wrap` is set, atoms of the ORIGINAL cell (image 0) that
+    // sit within a fractional band of a cell face are duplicated into the
+    // adjacent neighbour cells (up to the 26 surrounding images) as DIM,
+    // BONDLESS partner atoms, so a slab / periodic motif reads as continuous.
+    // Opacity = `periodic_image_opacity`. OFF by default (opt-in flag), so the
+    // fidelity gate and ordinary renders are unaffected. Ghosts are appended
+    // here (before PCA/fit/z-order) so the existing pipeline orients, projects
+    // and depth-sorts them uniformly; they carry NO bonds (no edges pushed).
+    let mut image_flag = vec![false; keep.len()];
+    if inp.style.cell.pbc_wrap {
+        if let Some(lat) = inp.lattice {
+            if let Some(inv) = inv3(&lat) {
+                const T: f64 = 0.15; // fractional boundary band
+                let base = n_cell0.min(pos.len());
+                let axis_opts = |fa: f64| -> Vec<i32> {
+                    let mut v = vec![0i32];
+                    if fa < T {
+                        v.push(1);
+                    }
+                    if fa > 1.0 - T {
+                        v.push(-1);
+                    }
+                    v
+                };
+                for d in 0..base {
+                    let p = pos[d];
+                    let orig_idx = keep[d];
+                    let f = [
+                        p[0] * inv[0][0] + p[1] * inv[1][0] + p[2] * inv[2][0],
+                        p[0] * inv[0][1] + p[1] * inv[1][1] + p[2] * inv[2][1],
+                        p[0] * inv[0][2] + p[1] * inv[1][2] + p[2] * inv[2][2],
+                    ];
+                    let (vx, vy, vz) = (axis_opts(f[0]), axis_opts(f[1]), axis_opts(f[2]));
+                    for &i in &vx {
+                        for &j in &vy {
+                            for &k in &vz {
+                                if i == 0 && j == 0 && k == 0 {
+                                    continue;
+                                }
+                                let (fi, fj, fk) = (i as f64, j as f64, k as f64);
+                                pos.push([
+                                    p[0] + fi * lat[0][0] + fj * lat[1][0] + fk * lat[2][0],
+                                    p[1] + fi * lat[0][1] + fj * lat[1][1] + fk * lat[2][1],
+                                    p[2] + fi * lat[0][2] + fj * lat[1][2] + fk * lat[2][2],
+                                ]);
+                                keep.push(orig_idx); // inherit element/color
+                                image_flag.push(true); // dim, bondless ghost
+                            }
+                        }
                     }
                 }
             }
@@ -745,16 +831,11 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
         } else {
             String::new()
         };
-        // Supercell graph replication (spec §Cell "render as normal") is
-        // DONE above — those atoms are real, full-opacity, in `keep`/`pos`.
-        // What stays deferred (tracked RT12 follow-up) is the DISTINCT
-        // periodic *ghost*-image concept: opacity-dimmed PBC partner atoms
-        // wrapped across the 26 neighbour cells when `cell.pbc_wrap` is set.
-        // `pbc_wrap` is schema-plumbed (types.rs Cell) and reaches cfg here;
-        // `periodic_image_opacity` is resolved and applied the moment a
-        // ghost atom is flagged — no such atom is produced yet, so this is
-        // always `false` until RT12 wires PBC wrap-image generation.
-        let is_image = false;
+        // Supercell graph replication (spec §Cell "render as normal") atoms are
+        // real, full-opacity. PBC ghost wrap-images (RT12, generated above when
+        // `cell.pbc_wrap` is set) are flagged in `image_flag` and painted dim at
+        // `periodic_image_opacity`. Non-ghost atoms keep full opacity.
+        let is_image = image_flag[ai];
         let atom_op = if is_image { periodic_image_opacity } else { 1.0 };
         let op_atom = if atom_op < 1.0 {
             format!(" opacity=\"{:.2}\"", atom_op)
@@ -1802,6 +1883,36 @@ mod tests {
         );
         assert!(s.contains("data-atom-index=\"0\""), "atom 0 indexed");
         assert!(s.contains("data-atom-index=\"1\""), "atom 1 indexed");
+    }
+
+    #[test]
+    fn pbc_wrap_emits_dim_ghost_images() {
+        // RT12: a corner atom (frac 0,0,0) with pbc_wrap wraps into the 7
+        // adjacent images (+1 on each of the 3 axes, all combinations).
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]}],"lattice":[[5,0,0],[0,5,0],[0,0,5]],"style":{"preset":"default","cell":{"pbc_wrap":true}}}"#,
+        );
+        assert_eq!(
+            s.matches("<circle").count(),
+            8,
+            "1 real corner atom + 7 dim ghost images"
+        );
+        assert!(
+            s.contains("opacity=\"0.50\""),
+            "ghosts dimmed at periodic_image_opacity (0.5)"
+        );
+    }
+
+    #[test]
+    fn pbc_wrap_off_produces_no_ghosts() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]}],"lattice":[[5,0,0],[0,5,0],[0,0,5]],"style":{"preset":"default"}}"#,
+        );
+        assert_eq!(
+            s.matches("<circle").count(),
+            1,
+            "no pbc_wrap → no ghost images"
+        );
     }
 
     #[test]

@@ -413,7 +413,7 @@
   $effect(() => {
     const m = mirror
     void [
-      S.preset, S.show_h, S.show_cell, S.overrides, S.bond_overrides,
+      S.preset, S.show_h, S.show_cell, S.pbc_wrap, S.overrides, S.bond_overrides,
       S.atom_overrides, S.drag_rot, m,
     ]
     if (!m) return
@@ -433,7 +433,7 @@
         style: {
           preset: S.preset, show_h: S.show_h,
           drag_rotation: S.drag_rot,
-          cell: { show: S.show_cell, supercell: [1, 1, 1], pbc_wrap: false },
+          cell: { show: S.show_cell, supercell: [1, 1, 1], pbc_wrap: S.pbc_wrap },
           // pick_attrs: emit data-atom-index on every painted atom so the
           // in-canvas click-pick (RT14) maps a z-order circle to the right
           // original atom. Live preview only — export/AI-bridge render omits it.

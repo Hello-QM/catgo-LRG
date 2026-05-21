@@ -61,6 +61,17 @@
         bind:checked={S.show_cell}
         disabled={!has_lattice}
       /> Cell</label>
+    <label
+      title={has_lattice
+        ? `show dim periodic ghost images of boundary atoms`
+        : `structure has no lattice — PBC images only for periodic structures`}
+      class:inert={!has_lattice}
+    >
+      <input
+        type="checkbox"
+        bind:checked={S.pbc_wrap}
+        disabled={!has_lattice}
+      /> PBC</label>
     <button onclick={() => S.reset_to_preset()}
       title="clear all knob overrides">Reset to preset</button>
   </div>

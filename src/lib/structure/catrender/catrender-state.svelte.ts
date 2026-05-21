@@ -103,6 +103,9 @@ class CatRenderState {
   preset = $state<Preset>(`default`)
   show_h = $state(true)
   show_cell = $state(false)
+  // PBC ghost wrap-images: dim, bondless partner atoms across neighbour cells
+  // for boundary atoms (RT12). Periodic structures only.
+  pbc_wrap = $state(false)
 
   // --- the 17 dedicated live knobs (inherit-when-untouched gating) --------
   k_atom_scale = $state<Knob<number>>({ on: false, v: 2.5 })
