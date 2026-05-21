@@ -178,10 +178,11 @@
   // plus the click point in svg-space and a svg→client back-transform so the
   // overlay + inline ✕ align pixel-accurately with what the renderer drew.
   //
-  // svg.rs emits one <circle> per VISIBLE atom in ORIGINAL order, skipping
-  // hidden atoms — so the Nth rendered circle is the Nth non-hidden atom.
-  // We reuse merge_atoms' `hidden` set (the SAME remap click-pick already
-  // used) to scatter rendered circles back onto original indices.
+  // svg.rs paints circles in Z-ORDER (depth-sorted), NOT original-atom order,
+  // so the Nth rendered circle is NOT the Nth atom. With pick_attrs on, each
+  // circle carries data-atom-index="{orig}" (original input index) — we read
+  // that to scatter circles onto original indices. The visible-order remap is
+  // kept only as a fallback for circles lacking the attr (pick_attrs off).
   function project_scene(e: { clientX: number; clientY: number }) {
     const svg_el = preview_el?.querySelector(`svg`)
     if (!svg_el) return null
@@ -222,8 +223,16 @@
       const cy = parseFloat(c.getAttribute(`cy`) ?? `NaN`)
       const r = parseFloat(c.getAttribute(`r`) ?? `NaN`)
       if (Number.isNaN(cx) || Number.isNaN(cy)) return
-      const orig = ord < visible_idx.length ? visible_idx[ord] : ord
-      if (orig < m.n) proj[orig] = { x: cx, y: cy, r: Number.isNaN(r) ? 8 : r }
+      // Prefer the renderer's explicit original-atom index (RT14). Circles are
+      // z-order-painted, so the DOM ordinal is the WRONG index — only this attr
+      // (or the visible-order fallback) recovers the real atom.
+      const idx_attr = c.getAttribute(`data-atom-index`)
+      const orig = idx_attr !== null
+        ? Number.parseInt(idx_attr, 10)
+        : (ord < visible_idx.length ? visible_idx[ord] : ord)
+      if (Number.isFinite(orig) && orig >= 0 && orig < m.n) {
+        proj[orig] = { x: cx, y: cy, r: Number.isNaN(r) ? 8 : r }
+      }
     })
     return { m, proj, px, py, vb, to_client }
   }
@@ -413,7 +422,10 @@
           preset: S.preset, show_h: S.show_h,
           drag_rotation: S.drag_rot,
           cell: { show: S.show_cell, supercell: [1, 1, 1], pbc_wrap: false },
-          ...(Object.keys(ov).length ? { overrides: ov } : {}),
+          // pick_attrs: emit data-atom-index on every painted atom so the
+          // in-canvas click-pick (RT14) maps a z-order circle to the right
+          // original atom. Live preview only — export/AI-bridge render omits it.
+          overrides: { ...ov, pick_attrs: true },
         },
       })
       try {

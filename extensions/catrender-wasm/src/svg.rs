@@ -120,6 +120,11 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let atom_stroke_width = cfg_f(&cfg, "atom_stroke_width", 1.5);
     let atom_stroke_color = cfg_color(&cfg, "atom_stroke_color", "black");
     let gradient = cfg_b(&cfg, "gradient", false);
+    // UI-only hook: when set, every painted atom carries data-atom-index="{orig}"
+    // (original input-atom index) so the interactive View pane can map a click
+    // on a z-order-painted circle back to the correct atom for delete/select.
+    // OFF by default → fidelity gate + clean exports are byte-unaffected.
+    let pick_attrs = cfg_b(&cfg, "pick_attrs", false);
     let hue = cfg_f(&cfg, "hue_shift_factor", 0.2);
     let light = cfg_f(&cfg, "light_shift_factor", 0.2);
     let sat = cfg_f(&cfg, "saturation_shift_factor", 0.2);
@@ -733,6 +738,13 @@ stroke=\"{cell_color}\" stroke-width=\"{:.1}\" stroke-dasharray=\"{dash}\" strok
         let xi = px[ai];
         let yi = py[ai];
         let orig = keep[ai];
+        // RT14 pick hook (gated by pick_attrs). Original input-atom index so a
+        // canvas click on this z-order-painted glyph resolves to the right atom.
+        let pick_attr = if pick_attrs {
+            format!(" data-atom-index=\"{orig}\"")
+        } else {
+            String::new()
+        };
         // Supercell graph replication (spec §Cell "render as normal") is
         // DONE above — those atoms are real, full-opacity, in `keep`/`pos`.
         // What stays deferred (tracked RT12 follow-up) is the DISTINCT
@@ -815,7 +827,7 @@ fill=\"{fill}\">{}</text>",
                 };
                 svg.push(format!(
                     "  <circle cx=\"{xi:.1}\" cy=\"{yi:.1}\" r=\"{r:.1}\" \
-fill=\"url(#{grad_id})\" stroke=\"{fs_atom}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr}/>",
+fill=\"url(#{grad_id})\" stroke=\"{fs_atom}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr}{pick_attr}/>",
                     sw_a = sw
                 ));
             } else {
@@ -831,7 +843,7 @@ fill=\"url(#{grad_id})\" stroke=\"{fs_atom}\" stroke-width=\"{sw_a:.1}\"{op_atom
                 }
                 svg.push(format!(
                     "  <circle cx=\"{xi:.1}\" cy=\"{yi:.1}\" r=\"{r:.1}\" \
-fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr}/>",
+fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr}{pick_attr}/>",
                     sw_a = sw
                 ));
             }
@@ -1778,6 +1790,28 @@ mod tests {
         );
         assert_eq!(s.matches("<circle").count(), 1, "hidden atom dropped");
         assert!(!s.contains("<line"), "incident bond dropped with atom");
+    }
+
+    #[test]
+    fn pick_attrs_emits_original_atom_index() {
+        // RT14: with pick_attrs on, every painted atom carries its ORIGINAL
+        // input index so a z-order-painted click maps back correctly. Two
+        // atoms → data-atom-index="0" and "1" both present.
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"bonds":[{"i":0,"j":1,"order":1}],"style":{"preset":"default","overrides":{"pick_attrs":true}}}"#,
+        );
+        assert!(s.contains("data-atom-index=\"0\""), "atom 0 indexed");
+        assert!(s.contains("data-atom-index=\"1\""), "atom 1 indexed");
+    }
+
+    #[test]
+    fn pick_attrs_off_by_default_keeps_svg_clean() {
+        // Fidelity guard: absent pick_attrs, no data-atom-index leaks into the
+        // output (byte-twin / clean-export parity with xyzrender preserved).
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"bonds":[{"i":0,"j":1,"order":1}],"style":{"preset":"default"}}"#,
+        );
+        assert!(!s.contains("data-atom-index"), "no pick attrs by default");
     }
 
     #[test]
