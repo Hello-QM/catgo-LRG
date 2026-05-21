@@ -338,24 +338,36 @@
     selected = null
   }
 
-  // Keyboard: Del/Backspace deletes, Esc clears. Window listener with a
-  // strict guard (pane open + something selected) + clean add/remove
-  // lifecycle in onMount — mirrors the RT13 drag-action discipline (no leak).
-  // keydown is NOT in DraggablePane's pointer/mouse/wheel swallow list so a
-  // plain window listener reaches us.
+  // Keyboard: Del/Backspace deletes, Esc clears. Strict guard (pane open +
+  // something selected) + clean add/remove lifecycle in onMount.
+  //
+  // CAPTURE phase + stopPropagation: DraggablePane has its OWN
+  // `<svelte:window onkeydown>` that closes the pane on Escape (bubble phase).
+  // A bubble-phase listener here could not stop it, so Esc both cleared the
+  // selection AND closed the pane. Listening in capture lets us intercept the
+  // key first and stopPropagation() before DraggablePane's bubble listener
+  // runs — Esc now clears selection WITHOUT closing the pane. The shared
+  // DraggablePane stays untouched (same discipline as the RT13 drag fix).
   function on_keydown(e: KeyboardEvent) {
     if (!show || selected === null) return
+    // Never hijack keys while the user is typing in a field (knob inputs etc.).
+    const t = e.target as HTMLElement | null
+    if (t && (t.tagName === `INPUT` || t.tagName === `TEXTAREA` || t.isContentEditable)) {
+      return
+    }
     if (e.key === `Delete` || e.key === `Backspace`) {
       e.preventDefault()
+      e.stopPropagation()
       delete_selected()
     } else if (e.key === `Escape`) {
       e.preventDefault()
+      e.stopPropagation()
       clear_selection()
     }
   }
   onMount(() => {
-    window.addEventListener(`keydown`, on_keydown)
-    return () => window.removeEventListener(`keydown`, on_keydown)
+    window.addEventListener(`keydown`, on_keydown, true)
+    return () => window.removeEventListener(`keydown`, on_keydown, true)
   })
 
   // Selection-clear on structure mirror atom-count change (prune invalid idx).
@@ -523,16 +535,25 @@
     download(`catrender.svg`, new Blob([svg], { type: `image/svg+xml` }))
   }
 
-  // TODO(followup): export_png hardcodes 1200x1200, ignores viewBox aspect
   async function export_png() {
     const img = new Image()
     img.src = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`
     await img.decode()
+    // Preserve the rendered aspect ratio (was a hardcoded 1200x1200 square that
+    // distorted non-square molecules). Read the SVG viewBox and scale its long
+    // edge to 1200, keeping the short edge proportional.
+    const vb = svg.match(/viewBox="[\d.\-]+ [\d.\-]+ ([\d.\-]+) ([\d.\-]+)"/)
+    const vw = vb ? parseFloat(vb[1]) : 1200
+    const vh = vb ? parseFloat(vb[2]) : 1200
+    const long = Math.max(vw, vh) || 1200
+    const scale = 1200 / long
+    const w = Math.max(1, Math.round(vw * scale))
+    const h = Math.max(1, Math.round(vh * scale))
     const c = document.createElement(`canvas`)
-    c.width = 1200
-    c.height = 1200
+    c.width = w
+    c.height = h
     const ctx = c.getContext(`2d`)!
-    ctx.drawImage(img, 0, 0, 1200, 1200)
+    ctx.drawImage(img, 0, 0, w, h)
     c.toBlob((b) => b && download(`catrender.png`, b), `image/png`)
   }
 
