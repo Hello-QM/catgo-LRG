@@ -11,7 +11,6 @@
   import { DEFAULTS } from '$lib/settings'
   import type { BondingStrategy } from '$lib/structure/bonding'
   import { compute_bonds_sync } from '$lib/structure/workers/bond-worker-api'
-  import { render_svg } from './catrender-wasm'
   import { merge_bonds, prune_overrides, type Bond } from './bond-merge'
   import { merge_atoms, prune_atom_overrides } from './atom-merge'
   import { catrender_state as S, AXIS_COLORS } from './catrender-state.svelte'
@@ -22,6 +21,16 @@
     show = $bindable(false),
     structure = undefined as AnyStructure | undefined,
   } = $props()
+
+  // Lazy-load the WASM render core so its generated (gitignored) pkg never
+  // enters the static module graph. A static import here would force Vite to
+  // resolve ./catrender-wasm-pkg at transform time, breaking every test that
+  // transitively imports $lib when the pkg is unbuilt (e.g. CI unit job).
+  // Mirrors how Structure.svelte loads chgdiff-wasm.
+  async function render_svg(input: string): Promise<string> {
+    const m = await import('./catrender-wasm')
+    return m.render_svg(input)
+  }
 
   // RT13 overlap fix: see CatRenderParamsPane for the rationale.
   // DraggablePane's toggle-less fallback puts BOTH panes at
