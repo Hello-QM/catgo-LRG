@@ -292,6 +292,36 @@ pub fn render_svg(inp: &RenderInput) -> String {
         raw_bonds
     };
 
+    // Hide cross-period bonds (opt-in): drop bonds whose minimum-image needs a
+    // non-zero cell shift — these render as long lines spanning the cell rather
+    // than the real wrapped bond. Periodic only.
+    let xcell_owned: Vec<crate::types::Bond>;
+    let raw_bonds: &[crate::types::Bond] = if inp.style.hide_cross_cell_bonds {
+        if let Some(inv) = inp.lattice.and_then(|lat| inv3(&lat)) {
+            xcell_owned = raw_bonds
+                .iter()
+                .filter(|b| {
+                    let pi = inp.atoms[b.i].xyz;
+                    let pj = inp.atoms[b.j].xyz;
+                    let d = [pi[0] - pj[0], pi[1] - pj[1], pi[2] - pj[2]];
+                    let f = [
+                        d[0] * inv[0][0] + d[1] * inv[1][0] + d[2] * inv[2][0],
+                        d[0] * inv[0][1] + d[1] * inv[1][1] + d[2] * inv[2][1],
+                        d[0] * inv[0][2] + d[1] * inv[1][2] + d[2] * inv[2][2],
+                    ];
+                    // keep only if NO axis needs a cell shift
+                    f.iter().all(|fk| fk.round() == 0.0)
+                })
+                .cloned()
+                .collect();
+            &xcell_owned
+        } else {
+            raw_bonds
+        }
+    } else {
+        raw_bonds
+    };
+
     // show_h hide path — FAITHFUL xyzrender semantics (renderer.py
     // `apply_hydrogen_flags` + the "Only hide C-H hydrogens (not O-H, N-H,
     // free H, etc.)" loop at renderer.py:428). When `show_h == false`
@@ -1872,6 +1902,44 @@ mod tests {
                 "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
         );
         assert_eq!(on.matches("<line").count(), 1, "normal-length bond kept under prune");
+    }
+
+    #[test]
+    fn hide_cross_cell_drops_boundary_bond() {
+        // Cubic 3 Å cell. Two C: [0.1,0,0] and [2.9,0,0]. The i–j vector is
+        // -2.8 Å → fractional ≈ -0.933 → round = -1 ≠ 0 → cross-cell. The
+        // bond is stored to a home-cell partner so it draws as a long line
+        // spanning the cell. No cell box → the only <line> would be the bond.
+        let off = render(
+            r#"{"atoms":[{"el":"C","xyz":[0.1,0,0]},{"el":"C","xyz":[2.9,0,0]}],
+                "lattice":[[3,0,0],[0,3,0],[0,0,3]],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert_eq!(off.matches("<line").count(), 1, "cross-cell bond drawn when flag off");
+        let on = render(
+            r#"{"atoms":[{"el":"C","xyz":[0.1,0,0]},{"el":"C","xyz":[2.9,0,0]}],
+                "lattice":[[3,0,0],[0,3,0],[0,0,3]],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"hide_cross_cell_bonds":true}}"#,
+        );
+        assert_eq!(on.matches("<line").count(), 0, "cross-cell bond dropped when flag on");
+    }
+
+    #[test]
+    fn hide_cross_cell_keeps_intracell_bond() {
+        // Cubic 3 Å cell. Two C: [1.0,0,0] and [2.4,0,0]. The i–j vector is
+        // -1.4 Å → fractional ≈ -0.467 → round = 0 → not cross-cell → kept
+        // even with the flag on. (1.4 Å is a normal bond length that renders;
+        // a sub-Å bond is fully occluded behind the atom radii and draws no
+        // <line> regardless of the flag.)
+        let on = render(
+            r#"{"atoms":[{"el":"C","xyz":[1.0,0,0]},{"el":"C","xyz":[2.4,0,0]}],
+                "lattice":[[3,0,0],[0,3,0],[0,0,3]],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"hide_cross_cell_bonds":true}}"#,
+        );
+        assert_eq!(on.matches("<line").count(), 1, "intracell bond kept under hide_cross_cell_bonds");
     }
 
     // ---- Plan RT9 block (verbatim) ----

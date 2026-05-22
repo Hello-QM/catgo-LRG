@@ -122,6 +122,10 @@ pub struct Style {
     /// (default 1.3).
     #[serde(default)]
     pub prune_long_bonds: bool,
+    /// Hide bonds that cross a periodic-cell boundary (drawn as long lines
+    /// spanning the cell to a home-cell partner). Periodic only; default off.
+    #[serde(default)]
+    pub hide_cross_cell_bonds: bool,
     /// Live UI knob overrides merged onto the resolved preset with
     /// `MergedConfig::apply_overrides` precedence (None/absent = inherit).
     #[serde(default)]
