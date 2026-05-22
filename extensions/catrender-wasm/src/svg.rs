@@ -240,6 +240,30 @@ pub fn render_svg(inp: &RenderInput) -> String {
         raw_bonds
     };
 
+    // Bond-length sanity filter (opt-in): drop bonds far longer than the sum
+    // of covalent radii — removes spurious over-long bonds from distance-based
+    // connectivity. Uses the perceive.rs covalent-radius table.
+    let pruned_owned: Vec<crate::types::Bond>;
+    let raw_bonds: &[crate::types::Bond] = if inp.style.prune_long_bonds {
+        let factor = cfg_f(&cfg, "bond_prune_factor", 1.3);
+        pruned_owned = raw_bonds
+            .iter()
+            .filter(|b| {
+                let pi = inp.atoms[b.i].xyz;
+                let pj = inp.atoms[b.j].xyz;
+                let len = ((pi[0]-pj[0]).powi(2)+(pi[1]-pj[1]).powi(2)+(pi[2]-pj[2]).powi(2)).sqrt();
+                let max = factor
+                    * (crate::perceive::covalent_rad(s2n(&inp.atoms[b.i].el))
+                        + crate::perceive::covalent_rad(s2n(&inp.atoms[b.j].el)));
+                len <= max
+            })
+            .cloned()
+            .collect();
+        &pruned_owned
+    } else {
+        raw_bonds
+    };
+
     // show_h hide path — FAITHFUL xyzrender semantics (renderer.py
     // `apply_hydrogen_flags` + the "Only hide C-H hydrogens (not O-H, N-H,
     // free H, etc.)" loop at renderer.py:428). When `show_h == false`
@@ -1770,6 +1794,36 @@ mod tests {
                 "style":{"preset":"default","auto_orient":false}}"#,
         );
         assert!(!s.contains("class=\"atom-index\""), "no index labels when off");
+    }
+
+    // ---- bond-length sanity prune filter ----
+
+    #[test]
+    fn prune_long_bonds_drops_overlong() {
+        // Two carbons 5.0 Å apart, explicit bond. 5.0 > 1.3·(0.76+0.76)=1.976.
+        let off = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"C","xyz":[5,0,0]}],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert_eq!(off.matches("<line").count(), 1, "overlong bond drawn when prune off");
+        let on = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"C","xyz":[5,0,0]}],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
+        );
+        assert_eq!(on.matches("<line").count(), 0, "overlong bond pruned when prune on");
+    }
+
+    #[test]
+    fn prune_long_bonds_keeps_normal() {
+        // Two carbons 1.5 Å apart, explicit bond. 1.5 < 1.976 → kept.
+        let on = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"C","xyz":[1.5,0,0]}],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
+        );
+        assert_eq!(on.matches("<line").count(), 1, "normal-length bond kept under prune");
     }
 
     // ---- Plan RT9 block (verbatim) ----

@@ -6,7 +6,7 @@ pub struct Atom {
     pub xyz: [f64; 3],
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct Bond {
     pub i: usize,
     pub j: usize,
@@ -116,6 +116,12 @@ pub struct Style {
     /// setting bond i/j). Default off; turn off for publication figures.
     #[serde(default)]
     pub show_index: bool,
+    /// Drop bonds longer than `bond_prune_factor · (rcov_i + rcov_j)` before
+    /// rendering — removes spurious over-long bonds from distance-based
+    /// connectivity. Default off. Factor read from overrides "bond_prune_factor"
+    /// (default 1.3).
+    #[serde(default)]
+    pub prune_long_bonds: bool,
     /// Live UI knob overrides merged onto the resolved preset with
     /// `MergedConfig::apply_overrides` precedence (None/absent = inherit).
     #[serde(default)]
