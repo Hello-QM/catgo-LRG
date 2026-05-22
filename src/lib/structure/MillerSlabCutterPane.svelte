@@ -238,9 +238,16 @@
     })
   })
 
-  // Auto-sync layer_count to detected layers when structure or miller index changes
+  // Auto-sync layer_count to the detected layer count — but ONLY when the
+  // structure or miller index actually changes. The previous unconditional
+  // reset clobbered a user-chosen count (e.g. 6 layers via bulk replication)
+  // back to the 1× detected count whenever `layers` re-derived for an unrelated
+  // reason, so Apply Cut then generated the wrong (fewer) layers.
+  let _layer_sync_key = $state('')
   $effect(() => {
-    if (layers.length > 0) {
+    const key = `${h},${k},${l}|${calc_structure?.sites?.length ?? 0}`
+    if (layers.length > 0 && key !== _layer_sync_key) {
+      _layer_sync_key = key
       layer_count = layers.length
     }
   })

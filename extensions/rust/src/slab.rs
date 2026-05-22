@@ -997,6 +997,64 @@ mod tests {
         Structure::try_new_from_occupancies(lattice, site_occupancies, frac_coords).unwrap()
     }
 
+    fn create_rutile_ruo2() -> Structure {
+        // Rutile RuO2: tetragonal P4_2/mnm, a=b=4.4919, c=3.1066, u≈0.3053
+        let lattice = Lattice::tetragonal(4.4919, 3.1066);
+        let u = 0.3053;
+        let frac_coords = vec![
+            Vector3::new(0.0, 0.0, 0.0),         // Ru
+            Vector3::new(0.5, 0.5, 0.5),         // Ru
+            Vector3::new(u, u, 0.0),             // O
+            Vector3::new(1.0 - u, 1.0 - u, 0.0), // O
+            Vector3::new(0.5 + u, 0.5 - u, 0.5), // O
+            Vector3::new(0.5 - u, 0.5 + u, 0.5), // O
+        ];
+        let ru = Species::from_string("Ru").unwrap();
+        let o = Species::from_string("O").unwrap();
+        let occ = vec![
+            SiteOccupancy::ordered(ru),
+            SiteOccupancy::ordered(ru),
+            SiteOccupancy::ordered(o),
+            SiteOccupancy::ordered(o),
+            SiteOccupancy::ordered(o),
+            SiteOccupancy::ordered(o),
+        ];
+        Structure::try_new_from_occupancies(lattice, occ, frac_coords).unwrap()
+    }
+
+    /// Count distinct atomic layers (by cartesian z) in a generated slab.
+    fn count_z_layers(s: &Structure) -> usize {
+        let mut zs: Vec<f64> = s.cart_coords().iter().map(|v| v.z).collect();
+        zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut layers = 0usize;
+        let mut last = f64::NEG_INFINITY;
+        for z in zs {
+            if z - last > 0.5 {
+                layers += 1;
+                last = z;
+            }
+        }
+        layers
+    }
+
+    #[test]
+    fn ruo2_110_layer_count_matches_request() {
+        let bulk = create_rutile_ruo2();
+        let s4 = generate_slab_layers(&bulk, [1, 1, 0], 4, 0, 15.0, [1, 1]).unwrap();
+        let s6 = generate_slab_layers(&bulk, [1, 1, 0], 6, 0, 15.0, [1, 1]).unwrap();
+        let l4 = count_z_layers(&s4);
+        let l6 = count_z_layers(&s6);
+        eprintln!(
+            "RuO2(110): num_layers=4 -> {} z-layers, {} atoms | num_layers=6 -> {} z-layers, {} atoms",
+            l4, s4.num_sites(), l6, s6.num_sites()
+        );
+        assert!(
+            l6 > l4 && s6.num_sites() > s4.num_sites(),
+            "requesting 6 layers gave {} layers/{} atoms, not more than 4 layers ({}/{}) — clamped",
+            l6, s6.num_sites(), l4, s4.num_sites()
+        );
+    }
+
     #[test]
     fn test_normalize_miller() {
         assert_eq!(normalize_miller([2, 4, 6]), [1, 2, 3]);
