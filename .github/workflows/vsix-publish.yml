@@ -35,6 +35,29 @@ jobs:
         working-directory: extensions/vscode
         run: pnpm install --frozen-lockfile
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM extensions (ferrox + chgdiff + catrender)
+        run: |
+          export PATH=$PATH:$HOME/.cargo/bin
+
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+
+          cd ../catrender-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+
+      - name: Build documentation chunks
+        run: pnpm run build:doc-chunks
+
       - name: Build extension
         working-directory: extensions/vscode
         run: pnpm build
