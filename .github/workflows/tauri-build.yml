@@ -118,6 +118,9 @@ jobs:
           cd ../chgdiff-wasm
           wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
 
+          cd ../catrender-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+
       - name: Generate documentation chunks
         run: pnpm run build:doc-chunks
 
