@@ -54,8 +54,12 @@ function nativeBinaryUnder(codexRoot: string): string | undefined {
       continue
     }
     for (const triple of triples) {
-      const bin = join(vendor, triple, 'codex', exe)
-      if (existsSync(bin)) return bin
+      // The exe subdir varies by codex version: `bin/` (≥0.133),
+      // `codex/` (≤0.130), or directly under the triple dir.
+      for (const sub of ['bin', 'codex', '']) {
+        const bin = join(vendor, triple, sub, exe)
+        if (existsSync(bin)) return bin
+      }
     }
   }
   return undefined
@@ -73,13 +77,18 @@ function resolveCodexExecutable(): string | undefined {
   const roots: string[] = []
   if (cliOnPath) {
     try {
-      // realpath resolves the bin symlink → <root>/bin/codex.js → up 2 = root.
+      // POSIX npm/pnpm: bin is a symlink → <root>/bin/codex.js → up 2 = root.
       roots.push(dirname(dirname(realpathSync(cliOnPath))))
     } catch {
       /* ignore */
     }
+    // npm/pnpm-global layout (works on every OS, incl. Windows where the CLI
+    // is a `codex.cmd` shim that realpath can't follow): the package sits at
+    // <prefix>/node_modules/@openai/codex next to the CLI shim.
+    roots.push(join(dirname(cliOnPath), 'node_modules', '@openai', 'codex'))
   }
   if (process.platform === 'win32' && process.env.APPDATA) {
+    // Legacy npm-global on Windows nests under %APPDATA%\npm.
     roots.push(join(process.env.APPDATA, 'npm', 'node_modules', '@openai', 'codex'))
   }
   for (const root of roots) {
