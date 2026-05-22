@@ -432,7 +432,7 @@
     const m = mirror
     void [
       S.preset, S.show_h, S.show_cell, S.pbc_wrap, S.perceive_orders,
-      S.show_index, S.overrides, S.bond_overrides,
+      S.prune_long_bonds, S.show_index, S.overrides, S.bond_overrides,
       S.atom_overrides, S.drag_rot, m,
     ]
     if (!m) return
@@ -452,6 +452,7 @@
         style: {
           preset: S.preset, show_h: S.show_h,
           perceive_orders: S.perceive_orders,
+          prune_long_bonds: S.prune_long_bonds,
           show_index: S.show_index,
           drag_rotation: S.drag_rot,
           cell: { show: S.show_cell, supercell: [1, 1, 1], pbc_wrap: S.pbc_wrap },

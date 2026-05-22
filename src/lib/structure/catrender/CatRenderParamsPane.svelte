@@ -74,6 +74,9 @@
       /> PBC</label>
     <label title="OpenBabel-style auto bond-order perception (molecular only — not for slabs/ionic)">
       <input type="checkbox" bind:checked={S.perceive_orders} /> perceive bond orders</label>
+    <label title="Drop bonds far longer than covalent-radii sum (removes spurious over-long bonds from distance-based connectivity)">
+      <input type="checkbox" bind:checked={S.prune_long_bonds} /> prune long bonds
+    </label>
     <button onclick={() => S.reset_to_preset()}
       title="clear all knob overrides">Reset to preset</button>
   </div>
