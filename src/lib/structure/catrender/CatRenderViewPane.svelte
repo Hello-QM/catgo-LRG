@@ -117,13 +117,31 @@
     dragging = false
     last_xy = null
   }
+  // --- Wheel zoom (pure VISUAL CSS scale; NOT a wasm re-render) -----------
+  // Independent layer from drag-rotate: rotation is baked into the wasm SVG
+  // (drag_rot), zoom is a transform:scale on the SVG wrapper. Clamped so the
+  // molecule can't vanish or explode. dblclick resets to 1.
+  let zoom = $state(1)
+  function on_wheel(e: WheelEvent) {
+    e.preventDefault() // stop the page from scrolling under the cursor
+    const next = zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1)
+    zoom = Math.min(8, Math.max(0.2, next))
+  }
+  function on_dblclick() {
+    zoom = 1
+  }
+
   // The `use:` action drives these directly on the .preview node so the
   // pointer events fire BEFORE the ancestor DraggablePane stopPropagation.
+  // wheel/dblclick ride the SAME direct-listener channel (wheel non-passive
+  // so preventDefault suppresses page scroll).
   const drag_handlers: DragRotateHandlers = {
     down: on_pointer_down,
     move: on_pointer_move,
     up: on_pointer_up,
     pick: (e) => { if (!dragging) pick(e) },
+    wheel: on_wheel,
+    dblclick: on_dblclick,
   }
 
   let svg = $state(`<svg/>`)
@@ -678,7 +696,13 @@
       role="application"
       use:drag_rotate={() => drag_handlers}
       style:cursor={dragging ? `grabbing` : `grab`}>
-      {@html svg}
+      <!-- Zoom layer: pure CSS transform:scale on the rendered SVG only.
+           Rotation is baked into the wasm SVG (drag_rot); this scale is an
+           independent visual layer on top. The overlay below reads the live
+           getBoundingClientRect of this scaled svg so the highlight tracks. -->
+      <div class="zoom-layer" style:transform="scale({zoom})">
+        {@html svg}
+      </div>
       <!-- RT14 highlight overlay: absolutely-positioned svg layered EXACTLY
            over the rendered svg (same viewBox). Pure overlay — never mutates
            the {@html} content. pointer-events:none so drag/click pass
@@ -768,6 +792,11 @@
     touch-action: none; user-select: none;
   }
   .preview :global(svg) { max-width: 100%; max-height: 70vh; }
+  /* Wheel-zoom layer — CSS scale of the rendered svg only, centred. */
+  .zoom-layer {
+    display: grid; place-items: center;
+    transform-origin: center center;
+  }
   /* RT14 highlight overlay — exactly over the rendered svg, click-through. */
   .hl-overlay {
     position: absolute; pointer-events: none; overflow: visible;

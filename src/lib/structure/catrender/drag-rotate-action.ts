@@ -34,6 +34,10 @@ export type DragRotateHandlers = {
   up: (e: PointerEvent) => void
   /** pointerup when NOT dragging: treat as a click → atom pick. */
   pick: (e: PointerEvent) => void
+  /** wheel over the preview: visual zoom (CSS scale). Optional. */
+  wheel?: (e: WheelEvent) => void
+  /** dblclick on the preview: reset visual zoom. Optional. */
+  dblclick?: (e: MouseEvent) => void
 }
 
 /**
@@ -70,11 +74,25 @@ export function drag_rotate(
     get_handlers().up(e)
     dragged = false
   }
+  // Wheel zoom: a DIRECT, NON-PASSIVE listener so e.preventDefault() actually
+  // suppresses page scroll (Svelte template onwheel can be passive). Bound on
+  // the preview node — independent of the pointer-drag path above (rotation
+  // is handled in wasm; zoom is a CSS transform layered on top), so the two
+  // never interfere.
+  function on_wheel(e: WheelEvent) {
+    get_handlers().wheel?.(e)
+  }
+  // Double-click reset: zoom back to 1.
+  function on_dblclick(e: MouseEvent) {
+    get_handlers().dblclick?.(e)
+  }
 
   node.addEventListener(`pointerdown`, on_down)
   node.addEventListener(`pointermove`, on_move)
   node.addEventListener(`pointerup`, on_up)
   node.addEventListener(`pointerleave`, on_leave)
+  node.addEventListener(`wheel`, on_wheel, { passive: false })
+  node.addEventListener(`dblclick`, on_dblclick)
 
   return {
     destroy() {
@@ -82,6 +100,8 @@ export function drag_rotate(
       node.removeEventListener(`pointermove`, on_move)
       node.removeEventListener(`pointerup`, on_up)
       node.removeEventListener(`pointerleave`, on_leave)
+      node.removeEventListener(`wheel`, on_wheel)
+      node.removeEventListener(`dblclick`, on_dblclick)
     },
   }
 }
