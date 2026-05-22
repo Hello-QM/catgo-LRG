@@ -77,6 +77,8 @@
   let selected_atom = $state<number | null>(null)
   let recolor_hex = $state(`#ff0000`)
   let glow_hex = $state(`#ffd400`)
+  let glow_opacity = $state(0.7)
+  let glow_radius = $state(1.6)
   function atom_hide(idx: number) {
     S.atom_overrides = [...S.atom_overrides, { op: `hide`, idx }]
   }
@@ -219,7 +221,7 @@
     void [
       S.preset, S.show_h, S.show_cell, S.pbc_wrap, S.perceive_orders,
       S.prune_long_bonds, S.hide_cross_cell_bonds, S.show_index, S.overrides, S.bond_overrides,
-      S.atom_overrides, S.drag_rot, m,
+      S.atom_overrides, S.drag_rot, glow_opacity, glow_radius, m,
     ]
     if (!m) return
     clearTimeout(timer)
@@ -243,7 +245,7 @@
           show_index: S.show_index,
           drag_rotation: S.drag_rot,
           cell: { show: S.show_cell, supercell: [1, 1, 1], pbc_wrap: S.pbc_wrap },
-          overrides: { ...ov },
+          overrides: { ...ov, glow_opacity, glow_radius_scale: glow_radius },
         },
       })
       try {
@@ -454,6 +456,12 @@
         onclick={() => selected_atom !== null && atom_glow(selected_atom)}>
         Glow
       </button>
+      <label>glow width
+        <input type="range" min="1" max="4" step="0.1" bind:value={glow_radius} />
+      </label>
+      <label>glow opacity
+        <input type="range" min="0" max="1" step="0.05" bind:value={glow_opacity} />
+      </label>
       <button onclick={atom_clear}>Clear ({S.atom_overrides.length})</button>
     </div>
     {#if S.atom_overrides.length}
