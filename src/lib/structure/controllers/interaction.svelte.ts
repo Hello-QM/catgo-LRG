@@ -489,6 +489,11 @@ export function create_interaction_controller(deps: InteractionDeps) {
     is_rotating_atoms = true
     atom_rotation_prev_x = event.clientX
     atom_rotation_prev_y = event.clientY
+    atom_rotation_start_x = event.clientX
+    atom_rotation_start_y = event.clientY
+    // Default to left-drag (unlocked); the mousedown handlers override to 'x'
+    // for the right-button roll path AFTER this function returns.
+    atom_rotation_locked_axis = null
     atom_rotation_cumulative_quat = new Quaternion()
     atom_rotation_camera_quat = camera.quaternion.clone()
     atom_rotation_axis = null
@@ -604,6 +609,9 @@ export function create_interaction_controller(deps: InteractionDeps) {
     atom_rotation_roll_mode = false
     atom_rotation_axis = null
     atom_rotation_angle_deg = 0
+    atom_rotation_locked_axis = null
+    atom_rotation_start_x = 0
+    atom_rotation_start_y = 0
     pending_rotation_positions = new Map()
     pending_rotation_update = false
     const orbit_controls = deps.get_orbit_controls()
@@ -1129,6 +1137,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
         if (event.button === 2) {
           atom_rotation_roll_mode = true
           atom_rotation_used_right = true
+          atom_rotation_locked_axis = 'x' // roll = rotate about screen normal
         }
         event.stopPropagation()
         event.preventDefault()
@@ -1164,6 +1173,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
         if (event.button === 2) {
           atom_rotation_roll_mode = true
           atom_rotation_used_right = true
+          atom_rotation_locked_axis = 'x' // roll = rotate about screen normal
         }
         event.preventDefault()
         event.stopPropagation()
