@@ -141,6 +141,128 @@ pub(crate) fn torsion_deg(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) ->
     y.atan2(x).to_degrees()
 }
 
+/// Working molecule view for perception: atomic numbers, coords, adjacency,
+/// and a mutable order per (undirected) bond. Bonds are indexed by their
+/// position in the input bond list.
+pub(crate) struct Graph {
+    pub z: Vec<u32>,
+    pub xyz: Vec<[f64; 3]>,
+    /// adjacency: adj[i] = list of (neighbor_atom, bond_index)
+    pub adj: Vec<Vec<(usize, usize)>>,
+    /// per-bond endpoints
+    pub bonds: Vec<(usize, usize)>,
+    /// per-bond order (mutated during perception). 1.0 initially.
+    pub order: Vec<f64>,
+    /// per-atom perceived hybridization (1/2/3). 3 (sp3) default.
+    pub hyb: Vec<u32>,
+}
+
+impl Graph {
+    pub fn build(z: &[u32], xyz: &[[f64; 3]], bonds: &[(usize, usize)]) -> Self {
+        let n = z.len();
+        let mut adj = vec![Vec::new(); n];
+        for (bi, &(i, j)) in bonds.iter().enumerate() {
+            if i < n && j < n {
+                adj[i].push((j, bi));
+                adj[j].push((i, bi));
+            }
+        }
+        Graph {
+            z: z.to_vec(),
+            xyz: xyz.to_vec(),
+            adj,
+            bonds: bonds.to_vec(),
+            order: vec![1.0; bonds.len()],
+            hyb: vec![3; n],
+        }
+    }
+
+    /// Explicit degree = number of incident bonds (heavy + H, matching OB
+    /// GetExplicitDegree on a graph with explicit atoms).
+    pub fn degree(&self, a: usize) -> usize {
+        self.adj[a].len()
+    }
+
+    /// Explicit valence = sum of incident bond orders (OB GetExplicitValence).
+    pub fn valence(&self, a: usize) -> f64 {
+        self.adj[a].iter().map(|&(_, bi)| self.order[bi]).sum()
+    }
+
+    pub fn has_nonsingle(&self, a: usize) -> bool {
+        self.adj[a].iter().any(|&(_, bi)| self.order[bi] > 1.0 + 1e-9)
+    }
+
+    pub fn explicit_h_count(&self, a: usize) -> usize {
+        self.adj[a].iter().filter(|&&(nb, _)| self.z[nb] == 1).count()
+    }
+
+    pub fn bond_between(&self, a: usize, b: usize) -> Option<usize> {
+        self.adj[a].iter().find(|&&(nb, _)| nb == b).map(|&(_, bi)| bi)
+    }
+}
+
+/// Smallest set of smallest rings, approximated as: for each bond, the
+/// smallest cycle (size 3..=7) containing it; deduplicated by atom set.
+/// Returns ring atom-index paths (ordered around the ring). Sufficient for
+/// PerceiveBondOrders passes 2 & 5 which only inspect 5/6/7-membered rings.
+pub(crate) fn find_rings(g: &Graph) -> Vec<Vec<usize>> {
+    const MAX_RING: usize = 7;
+    let n = g.z.len();
+    let mut rings: Vec<Vec<usize>> = Vec::new();
+    let mut seen: std::collections::HashSet<Vec<usize>> = std::collections::HashSet::new();
+
+    // For each bond (u,v): find shortest path u→v NOT using that bond; the
+    // path + the bond forms the smallest ring through it.
+    for &(u, v) in &g.bonds {
+        // BFS from u to v, forbidding the direct u-v edge.
+        let mut prev = vec![usize::MAX; n];
+        let mut dist = vec![usize::MAX; n];
+        let mut queue = std::collections::VecDeque::new();
+        dist[u] = 0;
+        queue.push_back(u);
+        while let Some(x) = queue.pop_front() {
+            if dist[x] >= MAX_RING {
+                continue;
+            }
+            for &(y, _) in &g.adj[x] {
+                if x == u && y == v {
+                    continue; // skip the closing bond itself
+                }
+                if y == u && x == v {
+                    continue;
+                }
+                if dist[y] == usize::MAX {
+                    dist[y] = dist[x] + 1;
+                    prev[y] = x;
+                    queue.push_back(y);
+                }
+            }
+        }
+        if dist[v] == usize::MAX || dist[v] + 1 > MAX_RING {
+            continue;
+        }
+        // reconstruct v→u path
+        let mut path = Vec::new();
+        let mut cur = v;
+        while cur != usize::MAX {
+            path.push(cur);
+            if cur == u {
+                break;
+            }
+            cur = prev[cur];
+        }
+        if path.len() < 3 || path.first() != Some(&v) || path.last() != Some(&u) {
+            continue;
+        }
+        let mut key = path.clone();
+        key.sort_unstable();
+        if seen.insert(key) {
+            rings.push(path);
+        }
+    }
+    rings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +319,34 @@ mod tests {
             [1.0, 1.0, 0.0],
         );
         assert!(c.abs() < 1.0, "expected ~0, got {c}");
+    }
+
+    fn benzene_graph() -> Graph {
+        // planar hexagon, 1.39 Å C-C
+        let r = 1.39;
+        let mut xyz = Vec::new();
+        for k in 0..6 {
+            let a = (k as f64) * std::f64::consts::PI / 3.0;
+            xyz.push([r * a.cos(), r * a.sin(), 0.0]);
+        }
+        let z = vec![6u32; 6];
+        let bonds: Vec<(usize, usize)> =
+            (0..6).map(|k| (k, (k + 1) % 6)).collect();
+        Graph::build(&z, &xyz, &bonds)
+    }
+
+    #[test]
+    fn graph_degree_valence() {
+        let g = benzene_graph();
+        assert_eq!(g.degree(0), 2);
+        assert!((g.valence(0) - 2.0).abs() < 1e-9); // two single bonds
+    }
+
+    #[test]
+    fn sssr_finds_benzene_ring() {
+        let g = benzene_graph();
+        let rings = find_rings(&g);
+        assert_eq!(rings.len(), 1, "benzene has one ring");
+        assert_eq!(rings[0].len(), 6, "6-membered");
     }
 }
