@@ -246,12 +246,40 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let pruned_owned: Vec<crate::types::Bond>;
     let raw_bonds: &[crate::types::Bond] = if inp.style.prune_long_bonds {
         let factor = cfg_f(&cfg, "bond_prune_factor", 1.3);
+        // For periodic structures a legitimate cross-cell (PBC) bond connects
+        // atom i to atom j whose stored coordinate is in the home cell, so the
+        // raw cartesian i–j vector can span the whole cell and look huge even
+        // though the TRUE (minimum-image) bond is short. Use the minimum-image
+        // distance when a (non-degenerate) lattice is present; otherwise fall
+        // back to raw cartesian.
+        let prune_inv = inp.lattice.and_then(|lat| inv3(&lat).map(|inv| (lat, inv)));
         pruned_owned = raw_bonds
             .iter()
             .filter(|b| {
                 let pi = inp.atoms[b.i].xyz;
                 let pj = inp.atoms[b.j].xyz;
-                let len = ((pi[0]-pj[0]).powi(2)+(pi[1]-pj[1]).powi(2)+(pi[2]-pj[2]).powi(2)).sqrt();
+                let d = [pi[0] - pj[0], pi[1] - pj[1], pi[2] - pj[2]];
+                let len = if let Some((lat, inv)) = prune_inv {
+                    // fractional: f = d · inv  (matches the pbc_wrap convention)
+                    let mut f = [
+                        d[0] * inv[0][0] + d[1] * inv[1][0] + d[2] * inv[2][0],
+                        d[0] * inv[0][1] + d[1] * inv[1][1] + d[2] * inv[2][1],
+                        d[0] * inv[0][2] + d[1] * inv[1][2] + d[2] * inv[2][2],
+                    ];
+                    // wrap each component to [-0.5, 0.5)
+                    for fk in f.iter_mut() {
+                        *fk -= fk.round();
+                    }
+                    // back to cartesian: dmin[c] = Σ_k f[k]·lat[k][c]
+                    let dmin = [
+                        f[0] * lat[0][0] + f[1] * lat[1][0] + f[2] * lat[2][0],
+                        f[0] * lat[0][1] + f[1] * lat[1][1] + f[2] * lat[2][1],
+                        f[0] * lat[0][2] + f[1] * lat[1][2] + f[2] * lat[2][2],
+                    ];
+                    (dmin[0].powi(2) + dmin[1].powi(2) + dmin[2].powi(2)).sqrt()
+                } else {
+                    (d[0].powi(2) + d[1].powi(2) + d[2].powi(2)).sqrt()
+                };
                 let max = factor
                     * (crate::perceive::covalent_rad(s2n(&inp.atoms[b.i].el))
                         + crate::perceive::covalent_rad(s2n(&inp.atoms[b.j].el)));
@@ -1813,6 +1841,26 @@ mod tests {
                 "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
         );
         assert_eq!(on.matches("<line").count(), 0, "overlong bond pruned when prune on");
+    }
+
+    #[test]
+    fn prune_keeps_cross_cell_bond() {
+        // Cubic 3 Å cell. Two C: [0.1,0,0] and [2.9,0,0]. Raw cartesian
+        // distance is 2.8 Å > 1.3·(0.76+0.76)=1.976 → naive prune would DROP.
+        // But minimum-image distance across the periodic boundary is 0.2 Å,
+        // a real cross-cell bond that must be KEPT. No cell box (cell.show
+        // defaults off), so the only <line> is the bond itself.
+        let on = render(
+            r#"{"atoms":[{"el":"C","xyz":[0.1,0,0]},{"el":"C","xyz":[2.9,0,0]}],
+                "lattice":[[3,0,0],[0,3,0],[0,0,3]],
+                "bonds":[{"i":0,"j":1}],
+                "style":{"preset":"default","auto_orient":false,"prune_long_bonds":true}}"#,
+        );
+        assert_eq!(
+            on.matches("<line").count(),
+            1,
+            "cross-cell bond pruned despite short minimum-image length"
+        );
     }
 
     #[test]
