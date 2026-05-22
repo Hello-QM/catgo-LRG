@@ -718,12 +718,30 @@
           style:top="{overlay_viewbox.top}px"
           style:width="{overlay_viewbox.width}px"
           style:height="{overlay_viewbox.height}px">
+          <defs>
+            <filter id="catrender-sel-glow" x="-75%" y="-75%" width="250%" height="250%">
+              <feGaussianBlur in="SourceGraphic" stdDeviation={highlight.kind === `atom` ? highlight.r * 0.35 : 7} result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
           {#if highlight.kind === `atom`}
+            <circle
+              cx={highlight.cx} cy={highlight.cy} r={highlight.r * 1.15}
+              fill="#ff6a00" opacity="0.45" filter="url(#catrender-sel-glow)" />
             <circle
               cx={highlight.cx} cy={highlight.cy} r={highlight.r * 1.25}
               fill="none" stroke="#ff6a00" stroke-width={highlight.r * 0.18}
               opacity="0.95" />
           {:else}
+            <line
+              x1={highlight.x1} y1={highlight.y1}
+              x2={highlight.x2} y2={highlight.y2}
+              stroke="#ff6a00" stroke-width="22" stroke-linecap="round"
+              opacity="0.45" filter="url(#catrender-sel-glow)" />
             <line
               x1={highlight.x1} y1={highlight.y1}
               x2={highlight.x2} y2={highlight.y2}
