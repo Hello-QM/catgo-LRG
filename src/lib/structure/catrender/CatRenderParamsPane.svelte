@@ -72,6 +72,8 @@
         bind:checked={S.pbc_wrap}
         disabled={!has_lattice}
       /> PBC</label>
+    <label title="OpenBabel-style auto bond-order perception (molecular only — not for slabs/ionic)">
+      <input type="checkbox" bind:checked={S.perceive_orders} /> perceive bond orders</label>
     <button onclick={() => S.reset_to_preset()}
       title="clear all knob overrides">Reset to preset</button>
   </div>

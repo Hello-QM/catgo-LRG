@@ -106,6 +106,10 @@ class CatRenderState {
   // PBC ghost wrap-images: dim, bondless partner atoms across neighbour cells
   // for boundary atoms (RT12). Periodic structures only.
   pbc_wrap = $state(false)
+  // OpenBabel-style auto bond-order perception (molecular only — not slabs).
+  perceive_orders = $state<boolean>(false)
+  // Overlay atom indices (i/j) as an editing aid — off for clean figures.
+  show_index = $state<boolean>(false)
 
   // --- the 17 dedicated live knobs (inherit-when-untouched gating) --------
   k_atom_scale = $state<Knob<number>>({ on: false, v: 2.5 })
