@@ -1,4 +1,5 @@
 import { Quaternion, Vector3 } from 'three'
+import type { Vec3 } from '$lib/math'
 
 /** Screen-aligned orthonormal frame. Origin is the selection centroid
  *  (supplied separately). x = screen normal toward viewer, y = screen
@@ -10,7 +11,8 @@ export interface ScreenFrame {
 }
 
 /** Normalize signed-zero components to +0 so the frame is canonical
- *  (three.js quaternion math can emit -0 for axis-aligned inputs). */
+ *  (three.js quaternion math can emit -0 for axis-aligned inputs).
+ *  Mutates `v` in place (only ever called on throwaway vectors). */
 function clean_zeros(v: Vector3): Vector3 {
   const fix = (n: number): number => (n === 0 ? 0 : n)
   return v.set(fix(v.x), fix(v.y), fix(v.z))
@@ -47,16 +49,16 @@ export function pick_locked_axis(
 /** Rotate each point about `center` by `angle` radians around `axis`.
  *  Pure: inputs are tuples, output is fresh tuples. */
 export function rotate_points(
-  points: ReadonlyArray<readonly [number, number, number]>,
-  center: readonly [number, number, number],
+  points: ReadonlyArray<Vec3>,
+  center: Vec3,
   axis: Vector3,
   angle: number,
-): Array<[number, number, number]> {
+): Vec3[] {
   const quat = new Quaternion().setFromAxisAngle(axis.clone().normalize(), angle)
   const c = new Vector3(center[0], center[1], center[2])
   return points.map((p) => {
     const v = new Vector3(p[0], p[1], p[2]).sub(c).applyQuaternion(quat).add(c)
-    return [v.x, v.y, v.z] as [number, number, number]
+    return [v.x, v.y, v.z] as Vec3
   })
 }
 

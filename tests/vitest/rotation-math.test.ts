@@ -22,6 +22,14 @@ describe('screen_frame_from_camera', () => {
     expect(f.y.dot(f.z)).toBeCloseTo(0, 6)
     expect(f.x.dot(f.z)).toBeCloseTo(0, 6)
   })
+  it('is right-handed (x cross y ≈ z)', () => {
+    const q = new Quaternion().setFromAxisAngle(new Vector3(1, 1, 0).normalize(), 0.9)
+    const f = screen_frame_from_camera(q)
+    const cross = f.x.clone().cross(f.y)
+    expect(cross.x).toBeCloseTo(f.z.x, 6)
+    expect(cross.y).toBeCloseTo(f.z.y, 6)
+    expect(cross.z).toBeCloseTo(f.z.z, 6)
+  })
 })
 
 describe('pick_locked_axis', () => {
