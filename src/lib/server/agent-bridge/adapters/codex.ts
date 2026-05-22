@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, realpathSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, SessionInfo, StreamParams } from '../types.js'
@@ -13,21 +13,84 @@ import type { AgentEvent, SessionInfo, StreamParams } from '../types.js'
 // than the SDK's pin) stay rejected with "requires a newer version of Codex".
 // The SDK does expose `codexPathOverride`, which becomes the spawned
 // executable verbatim (no shell), so point it at the globally-installed
-// codex's NATIVE binary. Override with CATGO_CODEX_PATH (see catgo-native.bat).
+// codex's NATIVE binary. Override with CATGO_CODEX_PATH.
+//
+// Cross-platform (Windows / macOS / Linux): locate the globally-installed
+// `@openai/codex` package, then scan its bundled per-platform native package
+// (`@openai/codex-<plat>/vendor/<target-triple>/codex/codex[.exe]`) for the
+// real binary. The vendor target-triple varies (e.g. linux musl vs gnu,
+// apple-darwin arm64/x64), so we scan the vendor dir rather than hard-code it.
 // ---------------------------------------------------------------------------
+
+/** Search PATH for the first existing entry among `names`. */
+function findOnPath(names: string[]): string | undefined {
+  const sep = process.platform === 'win32' ? ';' : ':'
+  for (const dir of (process.env.PATH || '').split(sep)) {
+    if (!dir) continue
+    for (const n of names) {
+      const p = join(dir, n)
+      if (existsSync(p)) return p
+    }
+  }
+  return undefined
+}
+
+/** Find a native `codex` binary inside an `@openai/codex` package root. */
+function nativeBinaryUnder(codexRoot: string): string | undefined {
+  const exe = process.platform === 'win32' ? 'codex.exe' : 'codex'
+  const scope = join(codexRoot, 'node_modules', '@openai')
+  let plats: string[] = []
+  try {
+    plats = readdirSync(scope).filter((d) => d.startsWith('codex-'))
+  } catch {
+    return undefined
+  }
+  for (const plat of plats) {
+    const vendor = join(scope, plat, 'vendor')
+    let triples: string[] = []
+    try {
+      triples = readdirSync(vendor)
+    } catch {
+      continue
+    }
+    for (const triple of triples) {
+      const bin = join(vendor, triple, 'codex', exe)
+      if (existsSync(bin)) return bin
+    }
+  }
+  return undefined
+}
 
 function resolveCodexExecutable(): string | undefined {
   const override = process.env.CATGO_CODEX_PATH
   if (override && existsSync(override)) return override
-  if (process.platform === 'win32' && process.env.APPDATA) {
-    // npm-global @openai/codex → per-platform native package layout.
-    const p = join(
-      process.env.APPDATA, 'npm', 'node_modules', '@openai', 'codex',
-      'node_modules', '@openai', 'codex-win32-x64', 'vendor',
-      'x86_64-pc-windows-msvc', 'codex', 'codex.exe',
-    )
-    if (existsSync(p)) return p
+
+  // Candidate `@openai/codex` package roots: from the `codex` CLI on PATH
+  // (its bin is `<root>/bin/codex.js`), and the legacy npm-global Windows path.
+  const cliOnPath = findOnPath(
+    process.platform === 'win32' ? ['codex.cmd', 'codex.exe', 'codex'] : ['codex'],
+  )
+  const roots: string[] = []
+  if (cliOnPath) {
+    try {
+      // realpath resolves the bin symlink → <root>/bin/codex.js → up 2 = root.
+      roots.push(dirname(dirname(realpathSync(cliOnPath))))
+    } catch {
+      /* ignore */
+    }
   }
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    roots.push(join(process.env.APPDATA, 'npm', 'node_modules', '@openai', 'codex'))
+  }
+  for (const root of roots) {
+    const bin = nativeBinaryUnder(root)
+    if (bin) return bin
+  }
+
+  // Last resort: spawn the CLI wrapper on PATH directly. Its shebang makes it
+  // executable on macOS/Linux; on Windows a `.cmd` shim can't be spawned
+  // without a shell, so this only helps Unix.
+  if (cliOnPath && process.platform !== 'win32') return cliOnPath
   return undefined
 }
 
