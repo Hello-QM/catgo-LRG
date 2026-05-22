@@ -1124,6 +1124,7 @@
       await webview.onDragDropEvent(async (event) => {
         if (event.payload.type === `drop`) {
           const paths = event.payload.paths
+          console.log(`[Tauri Drop] received`, paths)
           if (paths && paths.length > 0) {
             const now = Date.now()
             // Dedupe on the whole batch (key off first path) so a single
@@ -1172,15 +1173,19 @@
               const pane_idx = target_pane >= 0 ? target_pane : ts.active_pane
               if (files.length > 0) {
                 await import_many(tm.active_tab_id, files.map(f => ({ content: f.content, filename: f.filename, path: f.path })), pane_idx)
+              } else {
+                show_toast({ message: `Could not read any file from the drop`, variant: `warning` })
               }
             } catch (err) {
               console.error(`[Tauri Drop] Error reading file:`, err)
+              show_toast({ message: `Drop failed: ${err instanceof Error ? err.message : String(err)}`, variant: `error` })
             } finally {
               is_loading = false
             }
           }
         }
       })
+      console.log(`[Tauri] file-drop listener registered`)
     } catch (err) {
       console.error(`[Tauri] Failed to set up file drop:`, err)
     }

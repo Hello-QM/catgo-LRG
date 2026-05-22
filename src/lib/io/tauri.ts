@@ -246,7 +246,10 @@ export async function read_dropped_paths(
       const info = await stat(p)
       if (info.isDirectory) {
         await walk_dir(p, accept, collected, 0, max_depth, max_files)
-      } else if (info.isFile && accept(p.split(/[/\\]/).pop() || p)) {
+      } else if (info.isFile) {
+        // Directly-dropped files are read regardless of extension, mirroring the
+        // Open File dialog (which has no accept gate). `accept` still filters
+        // the contents of dropped directories above.
         collected.push(p)
       }
     } catch (err) {
