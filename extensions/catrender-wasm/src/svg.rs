@@ -183,6 +183,9 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let periodic_image_opacity = cfg_f(&cfg, "periodic_image_opacity", 0.5);
     let cell_color = cfg_color(&cfg, "cell_color", "#333333");
     let cell_line_width = cfg_f(&cfg, "cell_line_width", 2.0);
+    // op:glow halo tunables — width (radius multiplier) and fill opacity.
+    let glow_radius_scale = cfg_f(&cfg, "glow_radius_scale", 1.6);
+    let glow_opacity = cfg_f(&cfg, "glow_opacity", 0.7);
     let ts_color = cfg
         .get_s_opt("ts_color")
         .map(crate::palette::resolve_color);
@@ -842,7 +845,9 @@ data-gizmo-basis=\"{g00},{g01},{g02},{g10},{g11},{g12},{g20},{g21},{g22}\">",
             "    <filter id=\"catrender-glow\" x=\"-75%\" y=\"-75%\" width=\"250%\" height=\"250%\">\
 <feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"{:.1}\" result=\"b\"/>\
 <feMerge><feMergeNode in=\"b\"/><feMergeNode in=\"b\"/><feMergeNode in=\"SourceGraphic\"/></feMerge></filter>",
-            (6.0 * sr).max(3.0)
+            // Blur scales with halo width: at the 1.6 default this is 6·sr;
+            // wider glow (larger glow_radius_scale) blurs proportionally more.
+            (6.0 * sr * glow_radius_scale / 1.6).max(3.0)
         ));
         svg.push("  </defs>".to_string());
     }
@@ -1071,8 +1076,8 @@ fill=\"{fill}\">{}</text>",
             if let Some(glow_hex) = glow_atoms.get(&orig) {
                 svg.push(format!(
                     "  <circle class=\"atom-glow\" cx=\"{xi:.1}\" cy=\"{yi:.1}\" r=\"{gr:.1}\" \
-fill=\"{glow_hex}\" opacity=\"0.7\" filter=\"url(#catrender-glow)\"/>",
-                    gr = r * 1.6
+fill=\"{glow_hex}\" opacity=\"{glow_opacity:.2}\" filter=\"url(#catrender-glow)\"/>",
+                    gr = r * glow_radius_scale
                 ));
             }
             if use_grad {
@@ -1921,6 +1926,79 @@ mod tests {
         );
         assert!(s.contains("class=\"atom-glow\""), "custom-color halo present");
         assert!(s.contains("fill=\"#00ff00\""), "custom glow fill applied");
+    }
+
+    // Extract the `r="..."` value from the atom-glow circle line.
+    fn glow_halo_r(svg: &str) -> f64 {
+        let line = svg
+            .lines()
+            .find(|l| l.contains("class=\"atom-glow\""))
+            .expect("atom-glow circle present");
+        let after = line.split(" r=\"").nth(1).expect("glow circle has r=");
+        after.split('"').next().unwrap().parse().expect("r is a float")
+    }
+
+    #[test]
+    fn glow_opacity_override() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "atom_overrides":[{"op":"glow","idx":0}],
+                "style":{"preset":"default","auto_orient":false,
+                         "overrides":{"glow_opacity":0.3}}}"#,
+        );
+        assert!(s.contains("class=\"atom-glow\""), "glow halo present");
+        // No other element uses 0.30, so this substring is unambiguous.
+        assert!(
+            s.contains("opacity=\"0.30\""),
+            "glow_opacity override applied to halo, got:\n{s}"
+        );
+    }
+
+    #[test]
+    fn glow_radius_override() {
+        let base = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "atom_overrides":[{"op":"glow","idx":0}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        let wide = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "atom_overrides":[{"op":"glow","idx":0}],
+                "style":{"preset":"default","auto_orient":false,
+                         "overrides":{"glow_radius_scale":3.0}}}"#,
+        );
+        let r_base = glow_halo_r(&base);
+        let r_wide = glow_halo_r(&wide);
+        // 3.0 scale vs default 1.6 → halo r grows by 3.0/1.6 ≈ 1.875×.
+        assert!(
+            r_wide > r_base,
+            "glow_radius_scale=3.0 must widen halo: base r={r_base}, wide r={r_wide}"
+        );
+        let expected = r_base / 1.6 * 3.0;
+        assert!(
+            (r_wide - expected).abs() < 0.2,
+            "halo r should be atom_r*3.0; expected ~{expected}, got {r_wide}"
+        );
+    }
+
+    #[test]
+    fn glow_defaults_unchanged() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "atom_overrides":[{"op":"glow","idx":0}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert!(
+            s.contains("opacity=\"0.70\""),
+            "default glow opacity is 0.70, got:\n{s}"
+        );
+        // atom drawn radius (r * scale) is the glow r divided by the 1.6 default.
+        let r_glow = glow_halo_r(&s);
+        let r_atom = r_glow / 1.6;
+        assert!(
+            (r_glow - r_atom * 1.6).abs() < 1e-6,
+            "default halo radius must be atom_r*1.6"
+        );
     }
 
     // ---- bond-length sanity prune filter ----
