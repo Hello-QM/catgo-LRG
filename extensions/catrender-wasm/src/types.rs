@@ -107,6 +107,11 @@ pub struct Style {
     /// interactive drag-rotate overlay (RT11 produces this).
     #[serde(default)]
     pub drag_rotation: Option<[f64; 3]>,
+    /// Run OpenBabel-style geometry bond-order perception (perceive.rs) before
+    /// rendering, overriding supplied single orders. Implies bond-order
+    /// rendering. Default off (slabs/ionic crystals should NOT auto-perceive).
+    #[serde(default)]
+    pub perceive_orders: bool,
     /// Live UI knob overrides merged onto the resolved preset with
     /// `MergedConfig::apply_overrides` precedence (None/absent = inherit).
     #[serde(default)]
