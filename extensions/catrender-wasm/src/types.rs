@@ -112,6 +112,10 @@ pub struct Style {
     /// rendering. Default off (slabs/ionic crystals should NOT auto-perceive).
     #[serde(default)]
     pub perceive_orders: bool,
+    /// Overlay each atom's ORIGINAL index as a small label (editing aid for
+    /// setting bond i/j). Default off; turn off for publication figures.
+    #[serde(default)]
+    pub show_index: bool,
     /// Live UI knob overrides merged onto the resolved preset with
     /// `MergedConfig::apply_overrides` precedence (None/absent = inherit).
     #[serde(default)]

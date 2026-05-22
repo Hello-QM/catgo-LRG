@@ -1001,6 +1001,23 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
             }
         }
 
+        // Atom-index overlay (editing aid). `suppress_draw[ai]` atoms already
+        // `continue`d at the top of the loop, so only real, non-suppressed
+        // atoms reach here; skip ghost/PBC-image atoms too. Uses the ORIGINAL
+        // input index `orig` (== keep[ai]) — the i/j a user types into the
+        // bond editor — NOT the dense/z-order index `ai`.
+        if inp.style.show_index && !image_flag[ai] {
+            let r = radii[ai] * scale;
+            svg.push(format!(
+                "  <text class=\"atom-index\" x=\"{:.1}\" y=\"{:.1}\" \
+font-size=\"{:.1}\" fill=\"#222\" text-anchor=\"middle\">{}</text>",
+                xi,
+                yi - r - 1.0,
+                (12.0 * sr).max(8.0),
+                orig
+            ));
+        }
+
         // Defer this atom's layers when atoms_above_bonds.
         if atoms_above_bonds && svg.len() > atom_layer_start {
             let drained: Vec<String> = svg.drain(atom_layer_start..).collect();
@@ -1732,6 +1749,26 @@ fn fmt0(v: f64) -> String {
 mod tests {
     use super::*;
     use crate::render;
+
+    #[test]
+    fn show_index_emits_labels() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[2,0,0]}],
+                "style":{"preset":"default","auto_orient":false,"show_index":true}}"#,
+        );
+        assert!(s.contains("class=\"atom-index\""), "index labels present");
+        // both original indices 0 and 1 appear as label text
+        assert!(s.contains(">0</text>") && s.contains(">1</text>"), "indices 0 and 1 labelled");
+    }
+
+    #[test]
+    fn show_index_off_no_labels() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[2,0,0]}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert!(!s.contains("class=\"atom-index\""), "no index labels when off");
+    }
 
     // ---- Plan RT9 block (verbatim) ----
 
