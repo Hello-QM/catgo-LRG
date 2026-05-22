@@ -1013,7 +1013,9 @@ fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{sw_a:.1}\"{op_atom}{dof_attr
 font-size=\"{:.1}\" fill=\"#222\" text-anchor=\"middle\">{}</text>",
                 xi,
                 yi - r - 1.0,
-                (12.0 * sr).max(8.0),
+                // Match element-label sizing (label_font_size·sr, default 40)
+                // with a readable floor — the old 12·sr was tiny on real molecules.
+                (cfg_f(&cfg, "label_font_size", 40.0) * sr).max(14.0),
                 orig
             ));
         }
