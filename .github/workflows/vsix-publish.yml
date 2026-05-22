@@ -68,6 +68,9 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
+        # Don't fail the whole job (and skip the release-attach below) when the
+        # version is already published — e.g. re-tagging the same version.
+        continue-on-error: true
         working-directory: extensions/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -75,6 +78,7 @@ jobs:
 
       - name: Publish to Open VSX (Cursor / VSCodium / Theia)
         if: ${{ (github.event_name == 'push' || inputs.dry_run == false) && env.OVSX_PAT != '' }}
+        continue-on-error: true
         working-directory: extensions/vscode
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
