@@ -356,6 +356,31 @@ pub(crate) fn assign_hybridization(g: &mut Graph, rings: &[Vec<usize>]) {
     }
 }
 
+/// Pass 5: mark fully-sp2 unsaturated 5/6/7-rings as aromatic (order 1.5).
+/// Returns true if any ring was marked (informational).
+pub(crate) fn assign_aromatic(g: &mut Graph, rings: &[Vec<usize>]) -> bool {
+    let mut any = false;
+    for ring in rings {
+        let sz = ring.len();
+        if sz != 5 && sz != 6 && sz != 7 {
+            continue;
+        }
+        let typed = ring.iter().any(|&a| g.has_nonsingle(a) || g.hyb[a] != 2);
+        if typed {
+            continue;
+        }
+        for k in 0..sz {
+            let a = ring[k];
+            let b = ring[(k + 1) % sz];
+            if let Some(bi) = g.bond_between(a, b) {
+                g.order[bi] = 1.5;
+                any = true;
+            }
+        }
+    }
+    any
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +499,22 @@ mod tests {
         assign_hybridization(&mut g, &rings);
         for c in 0..6 {
             assert_eq!(g.hyb[c], 2, "benzene C{c} sp2");
+        }
+    }
+
+    #[test]
+    fn aromatic_benzene_all_1_5() {
+        let mut g = benzene_graph();
+        let rings = find_rings(&g);
+        assign_hybridization(&mut g, &rings);
+        let marked = assign_aromatic(&mut g, &rings);
+        assert!(marked);
+        for bi in 0..g.order.len() {
+            assert!(
+                (g.order[bi] - 1.5).abs() < 1e-9,
+                "bond {bi} order {} not aromatic",
+                g.order[bi]
+            );
         }
     }
 }
