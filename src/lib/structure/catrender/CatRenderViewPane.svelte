@@ -76,6 +76,7 @@
   // --- Atom-edit override layer (atom-merge; render-only, NO write-back) --
   let selected_atom = $state<number | null>(null)
   let recolor_hex = $state(`#ff0000`)
+  let glow_hex = $state(`#ffd400`)
   function atom_hide(idx: number) {
     S.atom_overrides = [...S.atom_overrides, { op: `hide`, idx }]
   }
@@ -83,6 +84,9 @@
     S.atom_overrides = [
       ...S.atom_overrides, { op: `recolor`, idx, hex: recolor_hex },
     ]
+  }
+  function atom_glow(idx: number) {
+    S.atom_overrides = [...S.atom_overrides, { op: `glow`, idx, hex: glow_hex }]
   }
   // RT13 #3: per-row DIRECT delete for the atom override list too.
   function atom_override_del(idx: number) {
@@ -444,6 +448,12 @@
         onclick={() => selected_atom !== null && atom_recolor(selected_atom)}>
         Recolor
       </button>
+      <input type="color" bind:value={glow_hex} title="glow color" />
+      <button
+        disabled={selected_atom === null}
+        onclick={() => selected_atom !== null && atom_glow(selected_atom)}>
+        Glow
+      </button>
       <button onclick={atom_clear}>Clear ({S.atom_overrides.length})</button>
     </div>
     {#if S.atom_overrides.length}
@@ -451,7 +461,7 @@
         {#each S.atom_overrides as ov, idx}
           <li>
             <span>
-              {ov.op} atom {ov.idx}{ov.op === `recolor` ? ` → ${ov.hex}` : ``}
+              {ov.op} atom {ov.idx}{ov.op === `recolor` || ov.op === `glow` ? ` → ${ov.hex}` : ``}
             </span>
             <button class="del" title="remove this override"
               onclick={() => atom_override_del(idx)}>×</button>
