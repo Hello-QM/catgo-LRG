@@ -1081,7 +1081,197 @@ git commit -m "feat(catrender): live render pane mirroring active structure + Ex
 
 ---
 
-## Task 6: AI export bridge (server routes + pane poll + MCP plugin)
+## Task 6: Rust auto-bond perception + native CLI binary
+
+**Files:**
+- Create: `extensions/catrender-wasm/src/bonds.rs`
+- Modify: `extensions/catrender-wasm/src/lib.rs` (declare `pub mod bonds;`)
+- Modify: `extensions/catrender-wasm/src/svg.rs` (use auto-bonds when `inp.bonds` empty)
+- Create: `extensions/catrender-wasm/src/bin/catrender.rs` (native CLI)
+
+Rationale: AI export runs backend-side (no AI in the frontend). A native CLI
+that shares the exact same render core lets AI render headless — faster, no
+open-browser requirement — while the WASM path stays for the live preview
+pane. The CLI has no frontend-computed connectivity, so the core grows a
+distance-based auto-bond fallback (also benefits the WASM pane when bonds
+are absent). Pane-local bond overrides remain interactive-only and do not
+flow into the CLI path.
+
+- [ ] **Step 1: Write failing auto-bond test**
+
+Create `extensions/catrender-wasm/src/bonds.rs`:
+
+```rust
+//! Distance-based bond perception used when no explicit bonds are supplied.
+
+use crate::types::{Atom, Bond};
+
+fn covalent_radius(el: &str) -> f64 {
+    match el {
+        "H" => 0.31,
+        "C" => 0.76,
+        "N" => 0.71,
+        "O" => 0.66,
+        "S" => 1.05,
+        "P" => 1.07,
+        "F" => 0.57,
+        "Cl" => 1.02,
+        _ => 0.85,
+    }
+}
+
+/// Perceive single bonds: pair (i<j) bonded if dist < 1.2·(r_i + r_j).
+/// O(n²) — fine for the molecule sizes catrender targets.
+pub fn perceive(atoms: &[Atom]) -> Vec<Bond> {
+    let mut out = Vec::new();
+    for i in 0..atoms.len() {
+        for j in (i + 1)..atoms.len() {
+            let a = atoms[i].xyz;
+            let b = atoms[j].xyz;
+            let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+            let cutoff = 1.2 * (covalent_radius(&atoms[i].el) + covalent_radius(&atoms[j].el));
+            if d2 > 1e-6 && d2 < cutoff * cutoff {
+                out.push(Bond { i, j, order: 1 });
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Atom;
+
+    fn at(el: &str, xyz: [f64; 3]) -> Atom {
+        Atom { el: el.into(), xyz }
+    }
+
+    #[test]
+    fn bonds_close_pair_not_far_pair() {
+        let atoms = vec![
+            at("C", [0.0, 0.0, 0.0]),
+            at("O", [1.2, 0.0, 0.0]),  // bonded
+            at("C", [9.0, 0.0, 0.0]),  // far, unbonded
+        ];
+        let b = perceive(&atoms);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].i, b[0].j), (0, 1));
+    }
+
+    #[test]
+    fn no_self_bond_no_duplicate() {
+        let atoms = vec![at("H", [0.0, 0.0, 0.0]), at("H", [0.74, 0.0, 0.0])];
+        let b = perceive(&atoms);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].i, b[0].j), (0, 1));
+    }
+}
+```
+
+For the test to construct `Atom`/`Bond`, ensure both derive nothing extra
+but their fields are `pub` (they already are from Task 1) — `Atom`,`Bond`
+need to be constructible in-crate (they are: plain pub structs). If the
+test cannot build `Atom` because `el`/`xyz` privacy, it is a Task-1
+regression — they are `pub`, so this compiles.
+
+- [ ] **Step 2: Run test**
+
+Run: `cd extensions/catrender-wasm && cargo test bonds`
+Expected: PASS — 2 tests.
+
+- [ ] **Step 3: Wire module + use auto-bonds in svg.rs**
+
+In `extensions/catrender-wasm/src/lib.rs` add `pub mod bonds;` alongside
+the other `pub mod` lines.
+
+In `extensions/catrender-wasm/src/svg.rs`, at the top of `render_svg`,
+after `let preset = ...;`, derive the effective bond list:
+
+```rust
+    // Use explicit bonds if supplied; otherwise perceive by distance.
+    let perceived;
+    let bonds: &[crate::types::Bond] = if inp.bonds.is_empty() {
+        perceived = crate::bonds::perceive(&inp.atoms);
+        &perceived
+    } else {
+        &inp.bonds
+    };
+```
+
+Then change the bond loop `for b in &inp.bonds {` to `for b in bonds {`.
+Leave all other svg.rs logic unchanged.
+
+- [ ] **Step 4: Add a render-with-auto-bonds test to svg.rs tests**
+
+Add inside svg.rs `#[cfg(test)] mod tests`:
+
+```rust
+    #[test]
+    fn auto_bonds_drawn_when_no_explicit_bonds() {
+        // skeletal preset draws bonds as <line>; no bonds array supplied.
+        let inp = parse(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"style":{"preset":"skeletal"}}"#,
+        );
+        let svg = render_svg(&inp);
+        assert!(svg.contains("<line"), "auto-perceived bond should render");
+    }
+```
+
+- [ ] **Step 5: Create the native CLI binary**
+
+Create `extensions/catrender-wasm/src/bin/catrender.rs`:
+
+```rust
+//! Native CLI: read render-input JSON from stdin (or argv[1] as a file
+//! path), print the SVG to stdout. Shares the exact WASM render core.
+
+use std::io::{Read, Write};
+
+fn main() {
+    let arg = std::env::args().nth(1);
+    let json = match arg {
+        Some(path) => std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| { eprintln!("read {path}: {e}"); std::process::exit(2); }),
+        None => {
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s).expect("read stdin");
+            s
+        }
+    };
+    let svg = match serde_json::from_str::<catrender_wasm::types::RenderInput>(&json) {
+        Ok(inp) => catrender_wasm::svg::render_svg(&inp),
+        Err(e) => { eprintln!("catrender input error: {e}"); std::process::exit(1); }
+    };
+    std::io::stdout().write_all(svg.as_bytes()).expect("write stdout");
+}
+```
+
+This requires the crate to expose `types` and `svg` as a library (it does:
+`crate-type = ["cdylib","rlib"]` from Task 1, lib name `catrender_wasm`).
+
+- [ ] **Step 6: Build + test the CLI**
+
+Run:
+```bash
+cd extensions/catrender-wasm
+cargo test
+echo '{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],"style":{"preset":"flat"}}' \
+  | cargo run --quiet --bin catrender | head -c 80
+```
+Expected: all unit tests PASS (geom 3, types 2, preset 2, svg 6, bonds 2 = 15);
+the pipe prints SVG starting with `<svg xmlns=`.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add extensions/catrender-wasm/src/
+git commit -m "feat(catrender): distance-based auto-bond perception + native CLI binary"
+```
+
+---
+
+## Task 7: AI export — native CLI primary + bridge fallback (server routes + pane poll + MCP plugin)
 
 **Files:**
 - Modify: `server/catgo/routers/view_capture.py`
@@ -1252,15 +1442,29 @@ add a polling effect (mirrors `poll_screenshot` in
 - [ ] **Step 6: Write the MCP plugin**
 
 Create `~/.catgo/plugins/catrender.py` (hot-reload pattern, identical
-contract to `~/.catgo/plugins/wrap_atoms.py`):
+contract to `~/.catgo/plugins/wrap_atoms.py`). Strategy: **try the
+frontend bridge first** (short timeout) so an open Render pane contributes
+the user's interactive bond overrides; **fall back to the headless native
+CLI** when no pane is connected (fetch the current structure, pipe JSON to
+the `catrender` binary — auto-bond perception fills in connectivity).
 
 ```python
-"""CatGO plugin — export a publication-quality render of the current structure."""
+"""CatGO plugin — export a publication-quality render of the current structure.
+
+Tries the frontend WASM pane first (picks up interactive bond overrides);
+falls back to the headless native `catrender` CLI when no pane is open.
+"""
+
+import json
+import os
+import shutil
+import subprocess
 
 TOOL_DEF = {
     "name": "catgo_catrender_export",
     "description": "Render the current viewer structure to a publication-quality "
-    "SVG using catrender. Returns the saved file path.",
+    "SVG using catrender. Uses an open Render pane if present (honoring its bond "
+    "overrides), else renders headless via the native CLI. Returns the saved path.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -1282,30 +1486,104 @@ TOOL_DEF = {
 }
 
 
+def _catrender_bin() -> str | None:
+    """Resolve the native binary: $CATRENDER_BIN, then PATH, then the
+    dev build under the repo's extensions/catrender-wasm/target."""
+    env = os.environ.get("CATRENDER_BIN")
+    if env and os.path.exists(env):
+        return env
+    which = shutil.which("catrender")
+    if which:
+        return which
+    for cand in (
+        os.path.expanduser("~/.catgo/bin/catrender"),
+        os.path.join(
+            os.path.dirname(__file__), "..", "..",
+            "project/catgo-LRG/extensions/catrender-wasm/target/release/catrender",
+        ),
+    ):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 async def handle(arguments: dict, client, api_base: str):
     style = {
         "preset": arguments.get("preset", "default"),
         "show_h": arguments.get("show_h", True),
         "rotation": arguments.get("rotation", [0, 0, 0]),
     }
-    resp = await client.post(
-        f"{api_base}/view/catrender/request",
-        json={"style": style, "format": "svg"},
-        timeout=35.0,
-    )
-    if resp.status_code != 200:
-        return [{"type": "text", "text": f"catrender failed: {resp.status_code} {resp.text}"}]
-    svg = resp.json().get("svg", "")
     out = arguments.get("out_path", "/tmp/catrender.svg")
-    with open(out, "w") as fh:
-        fh.write(svg)
-    return [{"type": "text", "text": f"Rendered current structure → {out} ({len(svg)} bytes)."}]
+    svg = None
+    via = ""
+
+    # 1) Frontend bridge (short timeout) — honors pane bond overrides.
+    try:
+        resp = await client.post(
+            f"{api_base}/view/catrender/request",
+            json={"style": style, "format": "svg"},
+            timeout=8.0,
+        )
+        if resp.status_code == 200:
+            svg = resp.json().get("svg") or None
+            via = "frontend pane"
+    except Exception:
+        svg = None
+
+    # 2) Headless native CLI fallback — auto-perceived bonds.
+    if not svg:
+        binp = _catrender_bin()
+        if not binp:
+            return [{"type": "text", "text": "catrender failed: no Render pane "
+                     "open and native binary not found (set $CATRENDER_BIN)."}]
+        sr = await client.get(f"{api_base}/view/structure/current")
+        if sr.status_code != 200:
+            return [{"type": "text", "text": f"catrender failed: no current "
+                     f"structure ({sr.status_code})."}]
+        sd = sr.json()
+        sites = sd.get("sites", []) if isinstance(sd, dict) else []
+        atoms = [
+            {"el": (s.get("species", [{}])[0].get("element")
+                    or s.get("label") or "X"),
+             "xyz": s.get("xyz") or s.get("abc")}
+            for s in sites
+        ]
+        lattice = (sd.get("lattice", {}) or {}).get("matrix")
+        payload = json.dumps({"atoms": atoms, "lattice": lattice, "style": style})
+        try:
+            proc = subprocess.run(
+                [binp], input=payload, capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return [{"type": "text",
+                     "text": "catrender CLI timed out after 30s (structure too large or binary hung)."}]
+        if proc.returncode != 0:
+            return [{"type": "text", "text": f"catrender CLI error: {proc.stderr.strip()}"}]
+        svg = proc.stdout
+        via = "native CLI (headless)"
+
+    try:
+        with open(out, "w") as fh:
+            fh.write(svg)
+    except OSError as e:
+        return [{"type": "text", "text": f"catrender: cannot write {out}: {e}"}]
+    return [{"type": "text",
+             "text": f"Rendered current structure via {via} → {out} ({len(svg)} bytes)."}]
 ```
 
-> Confirm `api_base` already includes `/api` in the hot-reload plugin
-> contract (check `~/.catgo/plugins/wrap_atoms.py` usage: it calls
-> `{api_base}/structure`, so `api_base` is the API root — use
-> `{api_base}/view/catrender/request`).
+> Notes for the implementer:
+> - `api_base` is the API root in the hot-reload contract (wrap_atoms.py
+>   calls `{api_base}/structure`), so `{api_base}/view/...` is correct.
+> - Confirm the `/api/view/structure/current` JSON shape (sites/species/
+>   xyz/lattice.matrix) against `server/catgo/routers/view_capture.py`
+>   `get_current_structure` and adapt the `atoms`/`lattice` extraction
+>   only — keep the bridge-then-CLI control flow.
+> - The native binary is built by Task 6 at
+>   `extensions/catrender-wasm/target/release/catrender` (build with
+>   `cargo build --release --bin catrender`). Deployment: ship it with the
+>   desktop bundle or copy to `~/.catgo/bin/`; `$CATRENDER_BIN` overrides.
+>   For this task's verification, a `cargo build --release --bin catrender`
+>   in the worktree satisfies the dev-path lookup.
 
 - [ ] **Step 7: Full verification**
 

@@ -1,4 +1,11 @@
 import type { AnyStructure, ElementSymbol, Vec3 } from '$lib'
+import { seed_i18n_for_tests } from '$lib/i18n/index.svelte'
+import common_en from '$lib/i18n/en/common'
+import app_en from '$lib/i18n/en/app'
+import sidebar_en from '$lib/i18n/en/sidebar'
+import structure_en from '$lib/i18n/en/structure'
+import workflow_en from '$lib/i18n/en/workflow'
+import chat_en from '$lib/i18n/en/chat'
 import type { Matrix3x3 } from '$lib/math'
 import * as math from '$lib/math'
 import type { Pbc, PymatgenStructure, Site } from '$lib/structure'
@@ -6,6 +13,14 @@ import { beforeEach, vi } from 'vitest'
 
 beforeEach(() => {
   document.body.innerHTML = ``
+  seed_i18n_for_tests(`en`, {
+    common: common_en,
+    app: app_en,
+    sidebar: sidebar_en,
+    structure: structure_en,
+    workflow: workflow_en,
+    chat: chat_en,
+  })
 })
 
 export function doc_query<T extends HTMLElement>(selector: string): T {

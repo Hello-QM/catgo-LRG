@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PymatgenStructure } from '$lib/structure'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { DraggablePane } from '$lib'
   import type { ComponentProps } from 'svelte'
   import {
@@ -9,6 +10,8 @@
     type NanotubeInfoResult,
   } from '$lib/api/nanotube'
   import { SERVER_URL } from '$lib/api/config'
+
+  load_i18n_module('structure')
 
   let {
     structure = $bindable(),
@@ -186,24 +189,24 @@
 </script>
 
 {#snippet pane_content()}
-  <h4>Nanotube Builder</h4>
+  <h4>{t('structure.nanotube_builder')}</h4>
 
   <!-- Input mode -->
   <div class="input-mode">
     <label class="radio-row">
       <input type="radio" bind:group={input_mode} value="structure" disabled={!structure} />
-      <span>Use loaded structure</span>
+      <span>{t('structure.nanotube_use_loaded_structure')}</span>
     </label>
     <label class="radio-row">
       <input type="radio" bind:group={input_mode} value="manual" />
-      <span>Manual input</span>
+      <span>{t('structure.nanotube_manual_input')}</span>
     </label>
   </div>
 
   <!-- Material input -->
   {#if input_mode === `manual`}
     <fieldset class="layer-fieldset">
-      <legend>2D Material</legend>
+      <legend>{t('structure.nanotube_2d_material')}</legend>
       <div class="preset-row">
         {#each presets as p}
           <button type="button" class="preset-btn" onclick={() => apply_preset(p)}>{p.name}</button>
@@ -220,15 +223,15 @@
         </label>
       </div>
       <label>
-        <span>Elements (space-separated)</span>
+        <span>{t('structure.nanotube_elements_space_separated')}</span>
         <input type="text" bind:value={elements_str} placeholder="C C" />
       </label>
       <label>
-        <span>Basis positions (fractional, one per line)</span>
+        <span>{t('structure.nanotube_basis_positions_fractional')}</span>
         <textarea bind:value={basis_str} rows={3} placeholder="0.0 0.0&#10;0.333 0.333"></textarea>
       </label>
       <label>
-        <span>Z-offsets (Å, space-separated, relative to layer center)</span>
+        <span>{t('structure.nanotube_z_offsets_relative')}</span>
         <input type="text" bind:value={z_coords_str} placeholder="0.0 0.0" />
       </label>
     </fieldset>
@@ -236,7 +239,7 @@
 
   <!-- Chiral indices -->
   <fieldset class="params-fieldset">
-    <legend>Chiral Indices</legend>
+    <legend>{t('structure.nanotube_chiral_indices')}</legend>
     <div class="chiral-row">
       <label>
         <span>n</span>
@@ -247,7 +250,7 @@
         <input type="number" bind:value={chiral_m} min={0} max={100} step={1} />
       </label>
       <label>
-        <span>NL (repeats)</span>
+        <span>NL ({t('structure.nanotube_repeats').toLowerCase()})</span>
         <input type="number" bind:value={NL} min={1} max={50} step={1} />
       </label>
     </div>
@@ -261,7 +264,7 @@
         disabled={info_status === `loading` || (chiral_n === 0 && chiral_m === 0)}
         class="info-btn"
       >
-        {info_status === `loading` ? `Computing...` : `Preview Info`}
+        {info_status === `loading` ? t('structure.computing') : t('structure.preview_info')}
       </button>
     </div>
   </fieldset>
@@ -271,27 +274,27 @@
     <div class="info-section">
       <div class="info-grid">
         <div class="info-item">
-          <span class="info-label">Diameter</span>
+          <span class="info-label">{t('structure.nanotube_diameter')}</span>
           <span class="info-value">{info_result.diameter.toFixed(2)} Å</span>
         </div>
         <div class="info-item">
-          <span class="info-label">Circumference</span>
+          <span class="info-label">{t('structure.nanotube_circumference')}</span>
           <span class="info-value">{info_result.circumference.toFixed(2)} Å</span>
         </div>
         <div class="info-item">
-          <span class="info-label">Chiral angle</span>
+          <span class="info-label">{t('structure.nanotube_chiral_angle')}</span>
           <span class="info-value">{info_result.chiral_angle_deg.toFixed(2)}°</span>
         </div>
         <div class="info-item">
-          <span class="info-label">T vector</span>
+          <span class="info-label">{t('structure.nanotube_t_vector')}</span>
           <span class="info-value">{info_result.trans_length.toFixed(2)} Å</span>
         </div>
         <div class="info-item">
-          <span class="info-label">Tube length</span>
+          <span class="info-label">{t('structure.nanotube_tube_length')}</span>
           <span class="info-value">{info_result.tube_length.toFixed(2)} Å</span>
         </div>
         <div class="info-item">
-          <span class="info-label">Est. atoms</span>
+          <span class="info-label">{t('structure.nanotube_est_atoms')}</span>
           <span class="info-value">{info_result.n_atoms_estimate}</span>
         </div>
       </div>
@@ -300,14 +303,14 @@
 
   <!-- Build section -->
   <fieldset class="build-fieldset">
-    <legend>Build</legend>
+    <legend>{t('structure.nanotube_build')}</legend>
     <div class="build-grid">
       <label>
-        <span>Walls</span>
+        <span>{t('structure.nanotube_walls')}</span>
         <input type="number" bind:value={n_walls} min={1} max={10} step={1} />
       </label>
       <label>
-        <span>Spacing (Å)</span>
+        <span>{t('structure.nanotube_spacing')}</span>
         <input type="number" bind:value={interlayer_spacing} min={2} max={10} step={0.1}
           disabled={n_walls <= 1} />
       </label>
@@ -329,7 +332,7 @@
         disabled={build_status === `building` || (chiral_n === 0 && chiral_m === 0)}
         class="primary build-btn"
       >
-        {build_status === `building` ? `Building...` : n_walls > 1 ? `Build MWNT` : `Build Nanotube`}
+        {build_status === `building` ? t('structure.building') : n_walls > 1 ? t('structure.build_mwnt') : t('structure.build_nanotube')}
       </button>
     </div>
   </fieldset>
@@ -351,7 +354,7 @@
     show_toggle={show_toggle && !embedded}
     pane_props={{ ...pane_props, class: `nanotube-pane ${pane_props?.class ?? ``}` }}
     toggle_props={{
-      title: pane_open ? `` : `Nanotube Builder`,
+      title: pane_open ? `` : t('structure.nanotube_builder'),
       ...toggle_props,
       class: `nanotube-toggle ${toggle_props?.class ?? ``}`,
     }}

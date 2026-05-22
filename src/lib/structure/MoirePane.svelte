@@ -14,6 +14,9 @@
     type StrainLayer,
   } from '$lib/api/moire'
   import { SERVER_URL } from '$lib/api/config'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     structure = $bindable(),
@@ -209,7 +212,7 @@
 
   async function do_search() {
     if (input_mode === `structure` && !has_lattice) {
-      error_message = `Moiré construction requires a periodic structure with a lattice. Use Manual input mode with presets instead.`
+      error_message = t('structure.moire_err_needs_periodic')
       return
     }
 
@@ -292,55 +295,55 @@
 </script>
 
 {#snippet pane_content()}
-  <h4>Moiré Bilayer</h4>
+  <h4>{t('structure.moire_bilayer')}</h4>
 
   <!-- Input mode -->
   <div class="input-mode">
     <div class="mode-row">
       <label class="radio-row">
         <input type="radio" bind:group={input_mode} value="structure" disabled={!has_lattice} />
-        <span>Use loaded structure{!has_lattice ? ` (needs periodic structure)` : ``}</span>
+        <span>{t('structure.moire_use_loaded')}{!has_lattice ? t('structure.moire_needs_periodic') : ``}</span>
       </label>
       <label class="radio-row">
         <input type="radio" bind:group={input_mode} value="manual" />
-        <span>Manual input</span>
+        <span>{t('structure.moire_manual_input')}</span>
       </label>
     </div>
     <label class="checkbox-row">
       <input type="checkbox" bind:checked={is_homobilayer} />
-      <span>Homobilayer (same material both layers)</span>
+      <span>{t('structure.moire_homobilayer')}</span>
     </label>
   </div>
 
   <!-- Layer A input -->
   {#if input_mode === `manual`}
     <fieldset class="layer-fieldset">
-      <legend>Layer A {is_homobilayer ? `(both layers)` : `(bottom)`}</legend>
+      <legend>{t('structure.moire_layer_a')} {is_homobilayer ? t('structure.moire_both_layers') : t('structure.moire_bottom')}</legend>
       <div class="preset-row">
         {#each presets as p}
           <button type="button" class="preset-btn" onclick={() => apply_preset(p, `a`)}>{p.name}</button>
         {/each}
       </div>
       <label>
-        <span>celldm (a b c, Å)</span>
+        <span>{t('structure.moire_celldm')}</span>
         <input type="text" bind:value={celldm_a} placeholder="2.46 2.46 25.0" />
       </label>
       <div class="vec-row">
         <label>
-          <span>a1 (unit vector)</span>
+          <span>{t('structure.moire_a1')}</span>
           <input type="text" bind:value={a1_str} placeholder="0.5 0.866 0.0" />
         </label>
         <label>
-          <span>a2 (unit vector)</span>
+          <span>{t('structure.moire_a2')}</span>
           <input type="text" bind:value={a2_str} placeholder="-0.5 0.866 0.0" />
         </label>
       </div>
       <label>
-        <span>Elements (space-separated)</span>
+        <span>{t('structure.moire_elements')}</span>
         <input type="text" bind:value={elements_a_str} placeholder="C C" />
       </label>
       <label>
-        <span>Basis positions (fractional, one per line)</span>
+        <span>{t('structure.moire_basis')}</span>
         <textarea bind:value={basis_a_str} rows={3} placeholder="0.0 0.0&#10;0.333 0.333"></textarea>
       </label>
     </fieldset>
@@ -349,32 +352,32 @@
   <!-- Layer B input (heterobilayer only) -->
   {#if !is_homobilayer}
     <fieldset class="layer-fieldset">
-      <legend>Layer B (top)</legend>
+      <legend>{t('structure.moire_layer_b_top')}</legend>
       <div class="preset-row">
         {#each presets as p}
           <button type="button" class="preset-btn" onclick={() => apply_preset(p, `b`)}>{p.name}</button>
         {/each}
       </div>
       <label>
-        <span>celldm (a b c, Å)</span>
+        <span>{t('structure.moire_celldm')}</span>
         <input type="text" bind:value={celldm_b} placeholder="3.301 3.301 25.0" />
       </label>
       <div class="vec-row">
         <label>
-          <span>b1 (unit vector)</span>
+          <span>{t('structure.moire_b1')}</span>
           <input type="text" bind:value={b1_str} placeholder="0.5 0.866 0.0" />
         </label>
         <label>
-          <span>b2 (unit vector)</span>
+          <span>{t('structure.moire_b2')}</span>
           <input type="text" bind:value={b2_str} placeholder="-0.5 0.866 0.0" />
         </label>
       </div>
       <label>
-        <span>Elements (space-separated)</span>
+        <span>{t('structure.moire_elements')}</span>
         <input type="text" bind:value={elements_b_str} placeholder="Mo S S" />
       </label>
       <label>
-        <span>Basis positions (fractional, one per line)</span>
+        <span>{t('structure.moire_basis')}</span>
         <textarea bind:value={basis_b_str} rows={3} placeholder="0.0 0.0&#10;0.333 0.333&#10;0.667 0.667"></textarea>
       </label>
     </fieldset>
@@ -382,48 +385,48 @@
 
   <!-- Search parameters -->
   <fieldset class="search-fieldset">
-    <legend>Angle Search</legend>
+    <legend>{t('structure.moire_angle_search')}</legend>
     <div class="search-params">
       <label>
-        <span>θ min (°)</span>
+        <span>{t('structure.moire_theta_min')}</span>
         <input type="number" bind:value={angle_min} min={0} max={180} step={0.1} />
       </label>
       <label>
-        <span>θ max (°)</span>
+        <span>{t('structure.moire_theta_max')}</span>
         <input type="number" bind:value={angle_max} min={0} max={180} step={0.1} />
       </label>
       <label>
-        <span>Step (°)</span>
+        <span>{t('structure.moire_step')}</span>
         <input type="number" bind:value={angle_step} min={0.001} max={10} step={0.01} />
       </label>
       <label>
-        <span>Max atoms</span>
+        <span>{t('structure.moire_max_atoms')}</span>
         <input type="number" bind:value={max_atoms} min={10} max={100000} step={100} />
       </label>
     </div>
 
     <details bind:open={show_search_advanced}>
-      <summary>Advanced</summary>
+      <summary>{t('structure.moire_advanced')}</summary>
       <div class="advanced-params">
         <label>
-          <span>Max index (m,n,p,q)</span>
+          <span>{t('structure.moire_max_index')}</span>
           <input type="number" bind:value={max_index} min={1} max={50} step={1} />
         </label>
         <label>
-          <span>Mismatch threshold (Å)</span>
+          <span>{t('structure.moire_mismatch_threshold')}</span>
           <input type="number" bind:value={mismatch_threshold} min={0.0001} max={1} step={0.01} />
         </label>
         <label>
-          <span>Strain layer</span>
+          <span>{t('structure.moire_strain_layer')}</span>
           <select bind:value={strain_layer}>
-            <option value="both">Both</option>
-            <option value="top">Top (layer B)</option>
-            <option value="bottom">Bottom (layer A)</option>
+            <option value="both">{t('structure.moire_strain_both')}</option>
+            <option value="top">{t('structure.moire_strain_top')}</option>
+            <option value="bottom">{t('structure.moire_strain_bottom')}</option>
           </select>
         </label>
         <label class="checkbox-row">
           <input type="checkbox" bind:checked={apply_strain} />
-          <span>Apply strain</span>
+          <span>{t('structure.moire_apply_strain')}</span>
         </label>
       </div>
     </details>
@@ -435,7 +438,7 @@
         disabled={search_status === `searching` || (input_mode === `structure` && !has_lattice)}
         class="primary"
       >
-        {search_status === `searching` ? `Searching...` : `Search Angles`}
+        {search_status === `searching` ? t('structure.moire_searching') : t('structure.moire_search_angles')}
       </button>
     </div>
   </fieldset>
@@ -443,16 +446,16 @@
   <!-- Results table -->
   {#if candidates.length > 0}
     <div class="results-section">
-      <div class="results-header">{candidates.length} candidates found</div>
+      <div class="results-header">{t('structure.moire_candidates_found', { n: candidates.length })}</div>
       <div class="results-table-wrapper">
         <table class="results-table">
           <thead>
             <tr>
               <th></th>
-              <th>θ (°)</th>
-              <th>Atoms</th>
-              <th>Mismatch</th>
-              <th>Strain %</th>
+              <th>{t('structure.moire_th_theta')}</th>
+              <th>{t('structure.moire_th_atoms')}</th>
+              <th>{t('structure.moire_th_mismatch')}</th>
+              <th>{t('structure.moire_th_strain')}</th>
             </tr>
           </thead>
           <tbody>
@@ -477,15 +480,15 @@
     {#if selected_candidate}
       <div class="build-section">
         <div class="build-info">
-          Selected: θ = {selected_candidate.angle.toFixed(2)}°, ~{selected_candidate.n_atoms} atoms
+          {t('structure.moire_selected', { angle: selected_candidate.angle.toFixed(2), atoms: selected_candidate.n_atoms })}
         </div>
         <div class="build-params">
           <label>
-            <span>Interlayer dist (Å)</span>
+            <span>{t('structure.moire_interlayer_dist')}</span>
             <input type="number" bind:value={translate_z} min={1} max={20} step={0.05} />
           </label>
           <label>
-            <span>Vacuum (Å)</span>
+            <span>{t('structure.moire_vacuum')}</span>
             <input type="number" bind:value={vacuum} min={0} max={50} step={1} />
           </label>
         </div>
@@ -496,7 +499,7 @@
             disabled={build_status === `building`}
             class="primary build-btn"
           >
-            {build_status === `building` ? `Building...` : `Build Bilayer`}
+            {build_status === `building` ? t('structure.moire_building') : t('structure.moire_build_bilayer')}
           </button>
         </div>
       </div>
@@ -520,7 +523,7 @@
     show_toggle={show_toggle && !embedded}
     pane_props={{ ...pane_props, class: `moire-pane ${pane_props?.class ?? ``}` }}
     toggle_props={{
-      title: pane_open ? `` : `Moiré Bilayer Builder`,
+      title: pane_open ? `` : t('structure.moire_builder_title'),
       ...toggle_props,
       class: `moire-toggle ${toggle_props?.class ?? ``}`,
     }}

@@ -47,6 +47,8 @@ export const PROVIDER_META: Record<string, { label: string; group: `sdk` | `api`
   kimi: { label: `Kimi (月之暗面)`, group: `api` },
   zhipu: { label: `Zhipu GLM (智谱清言)`, group: `api` },
   gemini: { label: `Gemini`, group: `api` },
+  anthropic: { label: `Anthropic`, group: `api` },
+  custom: { label: `Custom Provider`, group: `api` },
   ollama: { label: `Ollama (Local)`, group: `local` },
 }
 
@@ -93,7 +95,10 @@ export const PAPER_CHIPS = [
 export function get_models(
   provider: LLMProvider,
   providers: ProviderInfoResponse[],
+  fetched_models: Partial<Record<LLMProvider, { id: string; label: string }[]>> = {},
 ): { id: string; label: string }[] {
+  const fetched = fetched_models[provider]
+  if (fetched?.length) return fetched
   const backend_info = providers.find((p) => p.id === provider)
   if (backend_info?.models.length) return backend_info.models
   return FALLBACK_MODELS[provider] ?? []

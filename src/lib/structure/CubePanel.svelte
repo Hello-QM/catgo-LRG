@@ -26,6 +26,9 @@
   import { onDestroy } from 'svelte'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     pane_open = $bindable(false),
@@ -376,7 +379,7 @@
   close_on_click_outside={false}
   toggle_props={{
     class: `cube-panel-toggle`,
-    title: `${pane_open ? `Close` : `Open`} cube file controls`,
+    title: pane_open ? t('structure.close_cube_file_controls') : t('structure.open_cube_file_controls'),
     ...toggle_props,
   }}
   open_icon="Cross"
@@ -387,7 +390,7 @@
   <div class="cube-controls">
     {#if !cube_state.filepath && !parsed_cube}
       <section class="section">
-        <h4>Cube File</h4>
+        <h4>{t('structure.cube_file')}</h4>
         <input
           type="file"
           accept=".cube,.cub"
@@ -395,12 +398,12 @@
           onchange={handle_file_upload}
         />
         {#if cube_state.loading}
-          <span class="loading-text">Uploading...</span>
+          <span class="loading-text">{t('structure.uploading')}</span>
         {/if}
       </section>
     {:else}
       <section class="section">
-        <h4>Cube File</h4>
+        <h4>{t('structure.cube_file')}</h4>
         {#if cube_state.header}
           <div class="info">
             <span>{cube_state.header.n_atoms} atoms</span>
@@ -471,7 +474,7 @@
         </div>
 
         <button onclick={parsed_cube ? extract_isosurface_local : handle_extract_isosurface} disabled={cube_state.loading}>
-          {cube_state.loading ? `Processing...` : `Update`}
+          {cube_state.loading ? t('structure.processing') : t('structure.update')}
         </button>
       </section>
 

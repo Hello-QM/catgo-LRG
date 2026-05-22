@@ -5,6 +5,10 @@
   import type { CropRegion } from '$lib/io/export'
   import type { Snippet } from 'svelte'
   import type { Camera, Scene } from 'three'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   export type IOTab = 'import' | 'export'
 
@@ -63,13 +67,13 @@
       class:active={active_tab === 'import'}
       onclick={() => active_tab = 'import'}
     >
-      Import
+      {t('common.import')}
     </button>
     <button
       class:active={active_tab === 'export'}
       onclick={() => active_tab = 'export'}
     >
-      Export
+      {t('common.export')}
     </button>
   </div>
   <div class="pane-content">
@@ -78,28 +82,28 @@
     {:else}
       {#if active_tab === 'import'}
         <section class="action-section">
-          <h5>Load Structure</h5>
+          <h5>{t('structure.load_structure')}</h5>
           <div class="action-buttons">
             <button class="action-btn" onclick={on_open_file}>
               <Icon icon="ArrowUp" style="width: 14px; height: 14px" />
-              Open File
+              {t('structure.open_file_btn')}
             </button>
             <button class="action-btn" onclick={on_paste_content}>
               <Icon icon="Code" style="width: 14px; height: 14px" />
-              Paste Content
+              {t('structure.paste_content')}
             </button>
           </div>
         </section>
         <section class="action-section">
-          <h5>Search Database</h5>
+          <h5>{t('structure.search_database')}</h5>
           <div class="action-buttons">
             <button class="action-btn" onclick={on_search_database}>
               <Icon icon="Database" style="width: 14px; height: 14px" />
-              Search Database
+              {t('structure.search_database')}
             </button>
           </div>
         </section>
-        <p class="hint">You can also drag &amp; drop files onto the viewer.</p>
+        <p class="hint">{t('structure.drag_drop_hint')}</p>
       {:else if active_tab === 'export'}
         <ExportPane
           bind:export_pane_open={export_open_dummy}

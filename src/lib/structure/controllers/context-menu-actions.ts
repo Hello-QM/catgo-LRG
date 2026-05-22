@@ -353,7 +353,26 @@ export function create_context_menu_actions(deps: ContextMenuDeps) {
       if (input) {
         const first_override = deps.get_site_color_overrides().get(targets[0])
         input.value = first_override ?? `#ff69b4`
-        input.click()
+        // Prefer the modern `showPicker()` API — explicitly designed to
+        // open the native picker dialog without the user-activation
+        // ambiguity of .click(). Chrome 99+ / Firefox 101+ / Tauri
+        // webview all support it. Falls back to .click() for very old
+        // webviews. Either path needs the input to be on-screen (see
+        // Structure.svelte: input is positioned at fixed 0,0 with 1px
+        // size + opacity 0, NOT off-viewport — Tauri refuses to open
+        // pickers for offscreen inputs).
+        const inputWithPicker = input as HTMLInputElement & { showPicker?: () => void }
+        if (typeof inputWithPicker.showPicker === `function`) {
+          try {
+            inputWithPicker.showPicker()
+          } catch (err) {
+            // showPicker throws InvalidStateError if user-activation lost
+            console.warn(`[Set Color] showPicker failed, falling back to .click()`, err)
+            input.click()
+          }
+        } else {
+          input.click()
+        }
       }
     } else if (option.value === `reset_color`) {
       const targets = get_target_indices()

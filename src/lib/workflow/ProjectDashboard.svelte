@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { t } from '$lib/i18n/index.svelte'
   import type { EnrichedResult, ProjectDetail } from '$lib/api/project'
   import type { StepInfo } from './workflow-types'
   import type { ConvergencePoint } from '$lib/api/workflow'
@@ -452,7 +453,7 @@
   async function create_workflow_in_project() {
     try {
       const graph_json = JSON.stringify({ nodes: [], edges: [] })
-      const wf = await workflow_api.create_workflow(`Untitled Workflow`, graph_json)
+      const wf = await workflow_api.create_workflow(t('workflow.pd_untitled_wf'), graph_json)
       await project_api.assign_workflow_to_project(wf.id, project_id)
       await load_data()
       ondbchange?.()
@@ -525,7 +526,8 @@
 
   async function delete_workflow(ev: MouseEvent, wf_id: string, wf_name: string) {
     ev.stopPropagation()
-    if (!confirm(`Delete workflow "${wf_name}"? This cannot be undone.`)) return
+    const confirmMsg = t('workflow.pd_delete_confirm', { wf_name })
+    if (!confirm(confirmMsg)) return
     try {
       await workflow_api.delete_workflow(wf_id)
       await load_data()
@@ -550,10 +552,10 @@
       >
         <path d="M19 12H5M12 19l-7-7 7-7" />
       </svg>
-      Back
+      {t('workflow.pd_back')}
     </button>
-    <input class="project-name-input" bind:value={edit_name} placeholder="Project name" />
-    <button class="icon-btn" onclick={save_project} disabled={is_saving_project} title="Save project">
+    <input class="project-name-input" bind:value={edit_name} placeholder={t('workflow.pd_project_name')} />
+    <button class="icon-btn" onclick={save_project} disabled={is_saving_project} title={t('workflow.pd_save_project')}>
       {#if save_project_flash}✓{:else if is_saving_project}...{:else}💾{/if}
     </button>
     <button class="icon-btn" onclick={load_data} title="Refresh">
@@ -573,7 +575,7 @@
       </svg>
     </button>
     {#if onclose}
-      <button class="icon-btn" onclick={onclose} title="Close workflow view">
+      <button class="icon-btn" onclick={onclose} title={t('workflow.pd_close_view')}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
@@ -590,19 +592,19 @@
     <div class="stats-bar">
       <div class="stat">
         <span class="stat-value">{results.length}</span>
-        <span class="stat-label">Calculations</span>
+        <span class="stat-label">{t('workflow.pd_calculations')}</span>
       </div>
       <div class="stat">
         <span class="stat-value">{unique_formulas.size}</span>
-        <span class="stat-label">Formulas</span>
+        <span class="stat-label">{t('workflow.pd_formulas')}</span>
       </div>
       <div class="stat">
         <span class="stat-value">{energy_range}</span>
-        <span class="stat-label">Energy Range (eV/atom)</span>
+        <span class="stat-label">{t('workflow.pd_energy_range')}</span>
       </div>
       <div class="stat">
         <span class="stat-value">{(project?.workflows?.length ?? 0) + engine_workflows.length}</span>
-        <span class="stat-label">Workflows</span>
+        <span class="stat-label">{t('workflow.pd_workflows')}</span>
       </div>
     </div>
   {/if}
@@ -611,9 +613,9 @@
   <div class="dash-body">
     <!-- Workflows sidebar -->
     <div class="sidebar">
-      <h3 class="sidebar-title">Workflows</h3>
+      <h3 class="sidebar-title">{t('workflow.pd_workflows')}</h3>
       {#if is_loading}
-        <div class="sidebar-loading">Loading...</div>
+        <div class="sidebar-loading">{t('workflow.pd_loading')}</div>
       {:else if project?.workflows}
         <div class="workflow-list">
           {#each project.workflows as wf}
@@ -642,7 +644,7 @@
               </button>
               <button
                 class="wf-delete-btn"
-                title="Delete workflow"
+                title={t('workflow.pd_delete_wf')}
                 onclick={(ev) => delete_workflow(ev, wf.id, wf.name)}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -655,10 +657,10 @@
       {/if}
       <div class="sidebar-actions">
         <button class="action-btn" onclick={create_workflow_in_project}
-          >+ New Workflow</button
+          >{t('workflow.pd_new_wf')}</button
         >
         <button class="action-btn" onclick={toggle_assign_picker}
-          >Assign Existing</button
+          >{t('workflow.pd_assign_existing')}</button
         >
       </div>
       {#if show_assign_picker && unassigned_workflows.length > 0}
@@ -671,11 +673,11 @@
         </div>
       {/if}
       {#if show_assign_picker && unassigned_workflows.length === 0}
-        <div class="assign-empty">No unassigned workflows available.</div>
+        <div class="assign-empty">{t('workflow.pd_no_unassigned')}</div>
       {/if}
 
       <!-- Engine workflows section -->
-        <h3 class="sidebar-title" style="margin-top: 20px;">Engine Workflows</h3>
+        <h3 class="sidebar-title" style="margin-top: 20px;">{t('workflow.pd_engine_workflows')}</h3>
         {#if engine_workflows.length > 0}
           <div class="workflow-list">
             {#each engine_workflows as ewf}
@@ -688,7 +690,7 @@
                       style="color: {STATUS_COLORS[ewf.status] ?? `#475569`}"
                       >{ewf.status.replace(/_/g, ` `)}</span
                     >
-                    <span class="wf-progress">{ewf.task_count} tasks</span>
+                    <span class="wf-progress">{t('workflow.pd_tasks', { n: ewf.task_count.toString() })}</span>
                   </div>
                 </button>
               </div>
@@ -697,7 +699,7 @@
         {/if}
         <div class="sidebar-actions">
           <button class="action-btn" onclick={toggle_engine_assign_picker}
-            >Assign Engine Workflow</button
+            >{t('workflow.pd_assign_engine_wf')}</button
           >
         </div>
         {#if show_engine_assign_picker && unassigned_engine_workflows.length > 0}
@@ -710,7 +712,7 @@
           </div>
         {/if}
         {#if show_engine_assign_picker && unassigned_engine_workflows.length === 0}
-          <div class="assign-empty">No unassigned engine workflows available.</div>
+          <div class="assign-empty">{t('workflow.pd_no_unassigned_engine')}</div>
         {/if}
     </div>
 
@@ -718,7 +720,7 @@
     <div class="results-area">
       {#if results.length === 0 && !is_loading && !has_mace_benchmark}
         <div class="empty-results">
-          <p>No results yet. Run a workflow to see calculation results here.</p>
+          <p>{t('workflow.pd_no_results')}</p>
         </div>
       {:else if results.length > 0 || has_mace_benchmark}
         <!-- Tab bar -->
@@ -728,14 +730,14 @@
             class:active={active_tab === `table`}
             onclick={() => (active_tab = `table`)}
           >
-            Table
+            {t('workflow.pd_tab_table')}
           </button>
           <button
             class="tab"
             class:active={active_tab === `plot`}
             onclick={() => (active_tab = `plot`)}
           >
-            Plot
+            {t('workflow.pd_tab_plot')}
           </button>
           {#if has_mace_benchmark}
             <button
@@ -743,7 +745,7 @@
               class:active={active_tab === `benchmark`}
               onclick={() => (active_tab = `benchmark`)}
             >
-              Benchmark
+              {t('workflow.pd_tab_benchmark')}
             </button>
           {/if}
         </div>

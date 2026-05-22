@@ -235,6 +235,67 @@ def list_pending_screenshots():
     return {"pending": pending}
 
 
+# --- catrender AI export bridge -------------------------------------------
+# Mirrors the screenshot request/upload/pending pattern above: the backend
+# (MCP plugin) asks the frontend to render the current structure with a
+# given style; an open Render pane polls /catrender/pending, renders via the
+# WASM core (so interactive bond overrides apply), and POSTs the SVG back.
+_pending_catrender: dict[str, asyncio.Future] = {}
+CATRENDER_TIMEOUT = 30.0
+
+
+@router.post("/catrender/request")
+async def request_catrender(payload: dict[str, Any]):
+    """AI asks the frontend to render the current structure with payload.style.
+
+    Mirrors the screenshot request/upload pattern."""
+    request_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future = loop.create_future()
+    _pending_catrender[request_id] = future
+    future._params = {  # type: ignore[attr-defined]
+        "request_id": request_id,
+        "style": payload.get("style", {}),
+        "format": payload.get("format", "svg"),
+    }
+    logger.info("catrender requested (id=%s, style=%s)", request_id, payload.get("style"))
+    try:
+        result = await asyncio.wait_for(future, timeout=CATRENDER_TIMEOUT)
+        return result
+    except asyncio.TimeoutError:
+        logger.warning("catrender request %s timed out", request_id)
+        raise HTTPException(
+            status_code=504,
+            detail=f"catrender timed out after {CATRENDER_TIMEOUT}s. "
+            "Is a Render pane open and connected?",
+        )
+    finally:
+        _pending_catrender.pop(request_id, None)
+
+
+@router.get("/catrender/pending")
+def list_pending_catrender():
+    return {
+        "pending": [
+            getattr(f, "_params", {})
+            for f in _pending_catrender.values()
+            if not f.done()
+        ]
+    }
+
+
+@router.post("/catrender/result")
+def upload_catrender(payload: dict[str, Any]):
+    future = _pending_catrender.get(payload.get("request_id", ""))
+    if future is None:
+        raise HTTPException(status_code=404, detail="No pending catrender request")
+    if future.done():
+        raise HTTPException(status_code=409, detail="Already fulfilled")
+    future.set_result(payload)
+    logger.info("catrender result received (id=%s, %d bytes)", payload.get("request_id"), len(payload.get("svg") or ""))
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Structure info endpoints
 # ---------------------------------------------------------------------------

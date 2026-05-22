@@ -1,21 +1,25 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
   import type { Snippet } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   export type BuildTab = 'lattice' | 'slab_cutter' | 'adsorption' | 'adsorbate' | 'water_layer' | 'pseudo_h' | 'moire' | 'nanotube' | 'heterostructure' | 'doping' | 'pathway'
 
-  const tab_defs: { id: BuildTab; label: string }[] = [
-    { id: 'lattice', label: 'Lattice' },
-    { id: 'slab_cutter', label: 'Slab' },
-    { id: 'adsorption', label: 'Sites' },
-    { id: 'adsorbate', label: 'Adsorbate' },
-    { id: 'water_layer', label: 'Water' },
-    { id: 'pseudo_h', label: 'Passivate' },
-    { id: 'moire', label: 'Moiré' },
-    { id: 'nanotube', label: 'Nanotube' },
-    { id: 'heterostructure', label: 'Hetero' },
-    { id: 'doping', label: 'Doping' },
-    { id: 'pathway', label: 'Pathway' },
+  const tab_defs: { id: BuildTab; label: () => string }[] = [
+    { id: 'lattice', label: () => t('structure.lattice_tab') },
+    { id: 'slab_cutter', label: () => t('structure.slab') },
+    { id: 'adsorption', label: () => t('structure.sites') },
+    { id: 'adsorbate', label: () => t('structure.adsorbate') },
+    { id: 'water_layer', label: () => t('structure.water') },
+    { id: 'pseudo_h', label: () => t('structure.passivate') },
+    { id: 'moire', label: () => t('structure.moire') },
+    { id: 'nanotube', label: () => t('structure.nanotube') },
+    { id: 'heterostructure', label: () => t('structure.hetero') },
+    { id: 'doping', label: () => t('structure.doping') },
+    { id: 'pathway', label: () => t('structure.pathway') },
   ]
 
   let {
@@ -44,7 +48,7 @@
   max_height={max_height || ``}
   pane_props={{ class: 'build-pane' }}
 >
-  <h4 class="pane-title">Build Tools</h4>
+  <h4 class="pane-title">{t('structure.build_tools')}</h4>
   <div class="tab-bar">
     {#each tab_defs as tab}
       <button
@@ -52,9 +56,9 @@
         class:disabled={disabled_ids.has(tab.id)}
         disabled={disabled_ids.has(tab.id)}
         onclick={() => active_tab = tab.id}
-        title={disabled_ids.has(tab.id) ? disabled_reason[tab.id] : tab.label}
+        title={disabled_ids.has(tab.id) ? disabled_reason[tab.id] : tab.label()}
       >
-        {tab.label}
+        {tab.label()}
       </button>
     {/each}
   </div>

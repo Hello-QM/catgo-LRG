@@ -1,5 +1,8 @@
 import type { ChatMessage, SessionSummary } from './types'
 import { get_display_text } from './types'
+import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+load_i18n_module('chat')
 
 export type { SessionSummary } from './types'
 
@@ -58,13 +61,13 @@ export async function run_slash(raw: string, ctx: SlashCtx): Promise<boolean> {
   if (!s.startsWith('/')) return false
   const m = match_slash(raw)
   if (!m) {
-    ctx.emit(`Unknown command. Type /help to see available commands.`)
+    ctx.emit(t('chat.unknown_command'))
     return true
   }
   try {
     await m.cmd.run({ ...ctx, args: m.args })
   } catch (e) {
-    ctx.emit(`Command /${m.cmd.name} failed: ${e instanceof Error ? e.message : String(e)}`)
+    ctx.emit(t('chat.slash_command_failed', { name: m.cmd.name, message: e instanceof Error ? e.message : String(e) }))
   }
   return true
 }
@@ -72,27 +75,27 @@ export async function run_slash(raw: string, ctx: SlashCtx): Promise<boolean> {
 SLASH_COMMANDS.push({
   name: 'help',
   hint: '',
-  summary: 'List all slash commands',
+  get summary() { return t('chat.slash_help_summary') },
   run(ctx) {
     const lines = SLASH_COMMANDS
       .slice()
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(c => `**/${c.name}**${c.hint ? ' ' + c.hint : ''} — ${c.summary}`)
-    ctx.emit(`**CatBot slash commands**\n\n${lines.join('\n')}`)
+    ctx.emit(`**${t('chat.slash_commands_title')}**\n\n${lines.join('\n')}`)
   },
 })
 
 SLASH_COMMANDS.push(
   {
-    name: 'new', hint: '', summary: 'Start a fresh chat session',
+    name: 'new', hint: '', get summary() { return t('chat.slash_new_summary') },
     run(ctx) { ctx.new_session() },
   },
   {
-    name: 'clear', hint: '', summary: 'Clear messages, keep the session',
+    name: 'clear', hint: '', get summary() { return t('chat.slash_clear_summary') },
     run(ctx) { ctx.clear_chat_history() },
   },
   {
-    name: 'stop', hint: '', summary: 'Stop the current streaming reply',
+    name: 'stop', hint: '', get summary() { return t('chat.slash_stop_summary') },
     run(ctx) { ctx.cancel_generation() },
   },
 )
@@ -100,11 +103,11 @@ SLASH_COMMANDS.push(
 function rel_time(ms: number): string {
   const d = Date.now() - ms
   const m = Math.round(d / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
+  if (m < 1) return t('chat.rel_time_just_now')
+  if (m < 60) return t('chat.rel_time_minutes_ago', { n: m })
   const h = Math.round(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.round(h / 24)}d ago`
+  if (h < 24) return t('chat.rel_time_hours_ago', { n: h })
+  return t('chat.rel_time_days_ago', { n: Math.round(h / 24) })
 }
 
 function snippet(ctx: SlashCtx, s: SessionSummary): string {
@@ -116,26 +119,26 @@ function snippet(ctx: SlashCtx, s: SessionSummary): string {
   // topic + preview when both exist; whichever exists alone otherwise.
   let text: string
   if (topic && preview) text = `${topic} — ${preview}`
-  else text = topic || preview || '(empty)'
+  else text = topic || preview || t('chat.session_empty')
   return text.length > 60 ? text.slice(0, 60) + '…' : text
 }
 
 SLASH_COMMANDS.push({
   name: 'resume',
   hint: '[n]',
-  summary: 'List recent sessions, or resume the nth',
+  get summary() { return t('chat.slash_resume_summary') },
   run(ctx) {
     const sorted = ctx.list_sessions().slice().sort((a, b) => b.last_active - a.last_active)
-    if (sorted.length === 0) { ctx.emit('No past sessions found.'); return }
+    if (sorted.length === 0) { ctx.emit(t('chat.no_past_sessions')); return }
     if (ctx.args.trim() === '') {
       const lines = sorted.map((s, i) =>
         `${i + 1}. ${snippet(ctx, s)} · ${rel_time(s.last_active)}`)
-      ctx.emit(`**Recent sessions** — /resume <n> to open one\n\n${lines.join('\n')}`)
+      ctx.emit(`**${t('chat.recent_sessions')}** — ${t('chat.resume_open_hint')}\n\n${lines.join('\n')}`)
       return
     }
     const n = Number.parseInt(ctx.args.trim(), 10)
     if (!Number.isInteger(n) || n < 1 || n > sorted.length) {
-      ctx.emit(`/resume expects a number 1–${sorted.length}.`)
+      ctx.emit(t('chat.resume_expect_number', { n: sorted.length }))
       return
     }
     const s = sorted[n - 1]
@@ -155,11 +158,11 @@ for (const r of RECIPES) {
   SLASH_COMMANDS.push({
     name: r.name,
     hint: '[mp-id]',
-    summary: `Quick-build a ${r.label} workflow (optional Materials Project id)`,
+    get summary() { return t('chat.quickbuild_workflow', { label: r.label }) },
     async run(ctx) {
       const a = ctx.args.trim()
       if (a !== '' && !/^mp-\d+$/i.test(a)) {
-        ctx.emit(`Usage: /${r.name} [mp-id] — e.g. /${r.name} mp-1019. Omit the id to use the current structure.`)
+        ctx.emit(t('chat.quickbuild_usage', { name: r.name }))
         return
       }
       await ctx.run_quickbuild(r.recipe, a === '' ? undefined : a)
@@ -170,30 +173,30 @@ for (const r of RECIPES) {
 SLASH_COMMANDS.push({
   name: 'structure',
   hint: '',
-  summary: 'Put the current structure into the Structure Input node',
+  get summary() { return t('chat.slash_structure_summary') },
   async run(ctx) { await ctx.inject_structure() },
 })
 
 SLASH_COMMANDS.push({
   name: 'skip-permission',
   hint: '[on|off]',
-  summary: 'Toggle the per-session tool-approval gate',
+  get summary() { return t('chat.slash_skip_permission_summary') },
   run(ctx) {
     const a = ctx.args.trim().toLowerCase()
     if (a === '') {
-      ctx.emit(`skip-permission is ${ctx.get_skip_permission() ? 'ON' : 'OFF'}. Use /skip-permission on|off.`)
+      ctx.emit(t('chat.skip_permission_status', { state: ctx.get_skip_permission() ? 'ON' : 'OFF' }))
       return
     }
     if (a === 'on') {
       ctx.set_skip_permission(true)
-      ctx.emit(`⚠️ Permission prompts disabled for this session — Bash and file tools will run without asking. /skip-permission off to re-enable.`)
+      ctx.emit(t('chat.skip_permission_on'))
       return
     }
     if (a === 'off') {
       ctx.set_skip_permission(false)
-      ctx.emit(`skip-permission OFF — tool calls will ask for approval again.`)
+      ctx.emit(t('chat.skip_permission_off'))
       return
     }
-    ctx.emit(`Usage: /skip-permission on|off`)
+    ctx.emit(t('chat.skip_permission_usage'))
   },
 })

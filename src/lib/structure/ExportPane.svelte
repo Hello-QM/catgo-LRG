@@ -15,6 +15,10 @@
     structure_to_poscar, structure_to_xyz,
     type StructureData,
   } from '$lib/structure/export/offline-serialize'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   // Sub-components
   import QeExport from '$lib/structure/export/QeExport.svelte'
@@ -27,6 +31,8 @@
   import AbacusExport from '$lib/structure/export/AbacusExport.svelte'
   import AmberExport from '$lib/structure/export/AmberExport.svelte'
   import SparkExport from '$lib/structure/export/SparkExport.svelte'
+  import CatRenderParamsPane from '$lib/structure/catrender/CatRenderParamsPane.svelte'
+  import CatRenderViewPane from '$lib/structure/catrender/CatRenderViewPane.svelte'
 
   let {
     export_pane_open = $bindable(false),
@@ -62,7 +68,18 @@
   } = $props()
 
   // Active section tab
-  let active_section = $state<'structure' | 'figure' | 'qe' | 'lammps' | 'vasp' | 'cp2k' | 'gaussian' | 'gromacs' | 'orca' | 'abacus' | 'amber' | 'spark'>('structure')
+  let active_section = $state<'structure' | 'figure' | 'qe' | 'lammps' | 'vasp' | 'cp2k' | 'gaussian' | 'gromacs' | 'orca' | 'abacus' | 'amber' | 'spark' | 'catrender'>('structure')
+
+  // RT13: catrender is now TWO independent floating DraggablePanes (Params +
+  // View) so the preview is never buried under the 17 knobs. The "Render"
+  // tab opens BOTH (mirrors the established bind:show DraggablePane pattern
+  // used by AnalysisPane et al.); they are then independently movable.
+  let catrender_params_open = $state(false)
+  let catrender_view_open = $state(false)
+  function open_catrender() {
+    catrender_params_open = true
+    catrender_view_open = true
+  }
 
   // Multi-frame export state
   let frame_spec = $state(``)
@@ -314,8 +331,8 @@
 {#snippet export_content()}
   <!-- Section tabs -->
   <div class="section-tabs">
-    <button class:active={active_section === 'structure'} onclick={() => active_section = 'structure'}>Structure</button>
-    <button class:active={active_section === 'figure'} onclick={() => active_section = 'figure'}>Figure</button>
+    <button class:active={active_section === 'structure'} onclick={() => active_section = 'structure'}>{t('structure.structure_tab')}</button>
+    <button class:active={active_section === 'figure'} onclick={() => active_section = 'figure'}>{t('structure.figure')}</button>
     <button class:active={active_section === 'qe'} onclick={() => active_section = 'qe'}>QE</button>
     <button class:active={active_section === 'lammps'} onclick={() => active_section = 'lammps'}>LAMMPS</button>
     <button class:active={active_section === 'vasp'} onclick={() => active_section = 'vasp'}>VASP</button>
@@ -326,37 +343,38 @@
     <button class:active={active_section === 'abacus'} onclick={() => active_section = 'abacus'}>ABACUS</button>
     <button class:active={active_section === 'amber'} onclick={() => active_section = 'amber'}>AMBER</button>
     <button class:active={active_section === 'spark'} onclick={() => active_section = 'spark'}>SPARK</button>
+    <button class:active={active_section === 'catrender'} onclick={() => { active_section = 'catrender'; open_catrender() }}>Render</button>
   </div>
 
   {#if active_section === 'structure'}
     <!-- Structure text formats -->
     <div class="section-content">
-      <label class="section-label">Text Formats</label>
+      <label class="section-label">{t('structure.text_formats')}</label>
       <div class="export-buttons">
         {#each text_export_formats as { label, format }}
           <div class="export-item">
             <span>{label}</span>
-            <button onclick={() => export_structure(format)} title="Download">⬇</button>
-            <button onclick={() => handle_copy(format)} title="Copy">{copy_status[format] ? '✓' : '📋'}</button>
+            <button onclick={() => export_structure(format)} title={t('common.download')}>⬇</button>
+            <button onclick={() => handle_copy(format)} title={t('common.copy')}>{copy_status[format] ? '✓' : '📋'}</button>
           </div>
         {/each}
       </div>
 
       <!-- Quick offline export — no backend needed -->
-      <label class="section-label" style="margin-top: 0.8em">Quick Export (offline)</label>
+      <label class="section-label" style="margin-top: 0.8em">{t('structure.quick_export')}</label>
       <div class="export-buttons">
         {#if has_lattice}
           <button class="quick-export-btn" onclick={quick_export_poscar}>POSCAR</button>
         {/if}
         <button class="quick-export-btn" onclick={quick_export_xyz}>XYZ</button>
       </div>
-      <div class="quick-export-hint">No backend required</div>
+      <div class="quick-export-hint">{t('structure.no_backend_required')}</div>
     </div>
 
   {:else if active_section === 'figure'}
     <!-- Image and 3D exports -->
     <div class="section-content">
-      <label class="section-label">Image</label>
+      <label class="section-label">{t('structure.image')}</label>
       <div class="export-buttons">
         <div class="export-item" style="flex: 1">
           <select bind:value={image_format} style="width: 5em; padding: 2px 4px; font-size: 0.85em; border-radius: 3px; border: 1px solid var(--border-color); background: var(--bg-color); color: inherit">
@@ -371,9 +389,9 @@
             if (canvas) export_canvas_as_image(canvas, structure, image_format, png_dpi, scene, camera, crop_region)
           }}>⬇</button>
           {#if image_format === 'svg' || image_format === 'pdf'}
-            <span class="dpi-input" title="Controls the pixel resolution of the embedded raster image. The {image_format.toUpperCase()} container itself is resolution-independent.">Raster DPI: <input type="number" min={72} max={600} bind:value={png_dpi} /></span>
+            <span class="dpi-input" title="Controls the pixel resolution of the embedded raster image. The {image_format.toUpperCase()} container itself is resolution-independent.">{t('structure.raster_dpi')}<input type="number" min={72} max={600} bind:value={png_dpi} /></span>
           {:else}
-            <span class="dpi-input">DPI: <input type="number" min={50} max={500} bind:value={png_dpi} /></span>
+            <span class="dpi-input">{t('structure.dpi')}<input type="number" min={50} max={500} bind:value={png_dpi} /></span>
           {/if}
         </div>
       </div>
@@ -388,34 +406,34 @@
             if (!crop_mode_active) crop_region = null
           }}
         >
-          {crop_mode_active ? `Cancel crop` : `Crop region`}
+          {crop_mode_active ? t('structure.cancel_crop') : t('structure.crop_region')}
         </button>
         {#if crop_region}
           <span class="crop-info">
             {Math.round(crop_region.width)} x {Math.round(crop_region.height)} px
           </span>
-          <button class="crop-clear" onclick={() => (crop_region = null)}>Clear</button>
+          <button class="crop-clear" onclick={() => (crop_region = null)}>{t('common.clear')}</button>
         {:else if crop_mode_active}
-          <span class="crop-hint">Click and drag on the canvas to select a region</span>
+          <span class="crop-hint">{t('structure.crop_hint')}</span>
         {/if}
       </div>
 
       {#if trajectory_context && trajectory_context.total_frames > 1}
-        <label class="section-label" style="margin-top: 0.8em">Multi-Frame Export</label>
+        <label class="section-label" style="margin-top: 0.8em">{t('structure.multi_frame_export')}</label>
         <div class="frame-spec-row">
           <input
             type="text"
             class="frame-spec-input"
             bind:value={frame_spec}
-            placeholder="e.g. 1, 3, 5, 9-22, 40-69"
+            placeholder={t('structure.frame_spec_placeholder')}
             disabled={seq_exporting}
           />
-          <span class="frame-count">{parsed_frames.length} frame{parsed_frames.length !== 1 ? 's' : ''}</span>
+          <span class="frame-count">{t('common.frames_count', { n: parsed_frames.length })}</span>
         </div>
-        <div class="frame-spec-hint">1-based. Total: {trajectory_context.total_frames}. e.g. 1-10, 15, 20-30</div>
+        <div class="frame-spec-hint">{t('structure.frame_spec_hint', { total: trajectory_context.total_frames })}</div>
         <div class="export-buttons" style="margin-top: 4px">
           <div class="export-item" style="flex: 1">
-            <span>PNG Sequence</span>
+            <span>{t('structure.png_sequence')}</span>
             <button
               disabled={!has_canvas || seq_exporting || parsed_frames.length === 0}
               onclick={async () => {
@@ -444,7 +462,7 @@
               {#if seq_exporting}
                 {Math.round(seq_progress)}%
               {:else}
-                ZIP
+                {t('structure.zip')}
               {/if}
             </button>
           </div>
@@ -456,7 +474,7 @@
         {/if}
       {/if}
 
-      <label class="section-label" style="margin-top: 0.8em">3D Model</label>
+      <label class="section-label" style="margin-top: 0.8em">{t('structure.model_3d')}</label>
       <div class="export-buttons">
         {#each model_3d_formats as { label, format, hint }}
           <div class="export-item">
@@ -580,6 +598,23 @@
       bind:generation_error
       bind:active_file
     />
+
+  {:else if active_section === 'catrender'}
+    <div class="catrender-launcher">
+      <p>
+        The renderer opens as two independent, draggable windows so the
+        preview is never buried under the parameter knobs.
+      </p>
+      <div class="catrender-launcher-btns">
+        <button onclick={() => (catrender_params_open = !catrender_params_open)}>
+          {catrender_params_open ? `Hide` : `Show`} Parameters
+        </button>
+        <button onclick={() => (catrender_view_open = !catrender_view_open)}>
+          {catrender_view_open ? `Hide` : `Show`} View
+        </button>
+        <button onclick={open_catrender}>Open both</button>
+      </div>
+    </div>
   {/if}
 
   <!-- Generated output preview -->
@@ -591,10 +626,10 @@
         {/each}
       </div>
       <div class="preview-actions">
-        <button onclick={() => handle_copy(active_file, generated_output[active_file])}>{copy_status[active_file] ? '✓' : 'Copy'}</button>
-        <button onclick={() => download_file(generated_output[active_file], active_file)}>Download</button>
+        <button onclick={() => handle_copy(active_file, generated_output[active_file])}>{copy_status[active_file] ? '✓' : t('common.copy')}</button>
+        <button onclick={() => download_file(generated_output[active_file], active_file)}>{t('common.download')}</button>
         {#if output_files.length > 1}
-          <button onclick={download_all}>All</button>
+          <button onclick={download_all}>{t('common.all')}</button>
         {/if}
       </div>
       <div class="monaco-preview" bind:this={monaco_container}></div>
@@ -616,19 +651,30 @@
     open_icon="Cross"
     closed_icon="Download"
     pane_props={{ ...pane_props, class: `export-pane ${pane_props?.class ?? ``}` }}
-    toggle_props={{ title: export_pane_open ? `` : `Export`, ...toggle_props }}
+    toggle_props={{ title: export_pane_open ? `` : t('common.export'), ...toggle_props }}
     max_width="none"
     {...rest}
   >
-    <h4>Export</h4>
+    <h4>{t('common.export')}</h4>
     {@render export_content()}
   </DraggablePane>
 {/if}
+
+<!-- RT13: the two independent catrender DraggablePanes. Mounted at the
+     component root (NOT inside ExportPane's own pane) so each floats and
+     drags independently and the View pane's drag-rotate surface is not an
+     ExportPane descendant. Each has its own bind:show toggled by the Render
+     tab — the established DraggablePane open pattern (cf. AnalysisPane). -->
+<CatRenderParamsPane bind:show={catrender_params_open} />
+<CatRenderViewPane bind:show={catrender_view_open} {structure} />
 
 <style>
   .export-embedded {
     font-size: 0.9em;
   }
+  .catrender-launcher { font-size: 0.9em; padding: 4px 2px; }
+  .catrender-launcher p { color: #666; margin: 0 0 8px; }
+  .catrender-launcher-btns { display: flex; flex-wrap: wrap; gap: 8px; }
   .section-tabs {
     display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 0.8em;
     border-bottom: 1px solid var(--btn-bg, light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.1))); padding-bottom: 0.5em;

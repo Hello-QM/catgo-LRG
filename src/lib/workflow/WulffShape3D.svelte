@@ -15,6 +15,7 @@
    *   Plotly 3D scene sizing issues with responsive mode.
    */
   import { lazy_load_plotly, make_target_writable, base_config, observe_resize } from './plotly-utils'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { untrack } from 'svelte'
 
   interface WulffFacet3D {
@@ -32,6 +33,8 @@
     facets_3d: WulffFacet3D[]
     height?: number
   } = $props()
+
+  load_i18n_module('workflow')
 
   let plot_div: HTMLDivElement | undefined = $state()
 
@@ -263,12 +266,12 @@
   <div class="wulff-3d-container">
     <div bind:this={plot_div} class="wulff-3d-plot"></div>
     <div class="export-bar">
-      <button class="export-btn" onclick={() => export_plot('png')} title="Export PNG">PNG</button>
-      <button class="export-btn" onclick={() => export_plot('svg')} title="Export SVG">SVG</button>
+      <button class="export-btn" onclick={() => export_plot('png')} title={t('workflow.wulff_export_png')}>PNG</button>
+      <button class="export-btn" onclick={() => export_plot('svg')} title={t('workflow.wulff_export_svg')}>SVG</button>
     </div>
   </div>
 {:else}
-  <div class="no-data">No 3D facet data available</div>
+  <div class="no-data">{t('workflow.wulff_no_3d_data')}</div>
 {/if}
 
 <style>

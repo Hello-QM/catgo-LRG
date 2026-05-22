@@ -1,5 +1,6 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t } from '$lib/i18n/index.svelte'
   import { API_BASE } from '$lib/api/config'
   import { parse_structure_file } from '$lib/structure/parse'
   import { get_current_structure } from '$lib/structure/current-structure.svelte'
@@ -120,7 +121,7 @@
         data = get_current_structure() as { sites?: unknown[] } | null
       }
       if (!data || !(data.sites?.length)) {
-        throw new Error(`No structure loaded — open one in a structure viewer first`)
+        throw new Error(t('workflow.si_no_struct_viewer'))
       }
       const json_str = JSON.stringify(data)
       pending_json = json_str
@@ -133,11 +134,11 @@
   }
 
   // ─── Tabs config ───
-  const tabs: { id: Tab; label: string }[] = [
-    { id: `paste`, label: `Paste / Upload` },
-    { id: `database`, label: `From Database` },
-    { id: `remote`, label: `From Server` },
-  ]
+  const tabs = $derived<{ id: Tab; label: string }[]>([
+    { id: `paste`, label: t('workflow.si_tab_paste') },
+    { id: `database`, label: t('workflow.si_tab_database') },
+    { id: `remote`, label: t('workflow.si_tab_remote') },
+  ])
 
   // ─── Reset state when dialog opens ───
   $effect(() => {
@@ -262,7 +263,7 @@
     if (file.size > size_limit) {
       const limit_mb = Math.round(size_limit / 1024 / 1024)
       const file_mb = Math.round(file.size / 1024 / 1024)
-      parse_error = `File too large (${file_mb} MB). Maximum is ${limit_mb} MB.`
+      parse_error = t('workflow.si_file_too_large', { file_mb: file_mb.toString(), limit_mb: limit_mb.toString() })
       return
     }
 
@@ -297,11 +298,11 @@
     traj_parse_loading = true
     traj_parse_error = ``
     parse_error = ``
-    traj_progress_msg = `Parsing trajectory file...`
+    traj_progress_msg = t('workflow.si_parsing_traj')
     try {
       const data = is_binary ? await file.arrayBuffer() : await file.text()
       const trajectory = await parse_trajectory_async(data, file.name, (progress) => {
-        traj_progress_msg = progress.stage || `Parsing... ${Math.round(progress.current)}%`
+        traj_progress_msg = progress.stage || `${t('workflow.si_parsing_traj')} ${Math.round(progress.current)}%`
       })
       return handle_trajectory_result(trajectory)
     } catch {
@@ -316,10 +317,10 @@
     traj_parse_loading = true
     traj_parse_error = ``
     parse_error = ``
-    traj_progress_msg = `Parsing trajectory file...`
+    traj_progress_msg = t('workflow.si_parsing_traj')
     try {
       const trajectory = await parse_trajectory_async(content, filename, (progress) => {
-        traj_progress_msg = progress.stage || `Parsing... ${Math.round(progress.current)}%`
+        traj_progress_msg = progress.stage || `${t('workflow.si_parsing_traj')} ${Math.round(progress.current)}%`
       })
       return handle_trajectory_result(trajectory)
     } catch {
@@ -459,7 +460,7 @@
       const hint = data.files?.length
         ? `\nFiles found: ${data.files.slice(0, 10).join(`, `)}`
         : ``
-      throw new Error(`Directory does not contain POSCAR or CONTCAR${hint}`)
+      throw new Error(`${t('workflow.si_no_poscar_dir')}${hint}`)
     }
     return data.resolved_path
   }
@@ -674,17 +675,15 @@
   <div class="backdrop dialog-backdrop" onclick={handle_backdrop} onkeydown={handle_keydown} role="dialog" aria-modal="true" tabindex="-1">
     <div class="modal dialog-modal">
 
-      <!-- Header -->
       <div class="modal-header">
-        <h2 class="modal-title">{title}</h2>
+        <h2 class="modal-title">{title || t('workflow.si_title')}</h2>
         <button class="close-btn" onclick={handle_close}>x</button>
       </div>
 
-      <!-- Capture from viewer -->
       {#if !is_view_mode}
         <div class="capture-row">
           <button class="capture-btn" onclick={capture_from_viewer} disabled={capture_loading}>
-            {capture_loading ? `Capturing...` : `Capture from Viewer`}
+            {capture_loading ? t('workflow.si_capturing') : t('workflow.si_capture')}
           </button>
           {#if capture_error}
             <span class="capture-error">{capture_error}</span>
@@ -713,8 +712,6 @@
         <!-- ═══ Paste / Upload Tab ═══ -->
         {#if active_tab === `paste` && !is_view_mode}
           <section class="section">
-            <!-- Drop zone -->
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="drop-zone"
               class:drag-over={drag_over}
@@ -723,21 +720,21 @@
               ondragleave={on_dragleave}
             >
               <div class="drop-icon">&#128196;</div>
-              <div class="drop-text">Drop structure file here</div>
+              <div class="drop-text">{t('workflow.si_drop_here')}</div>
               <div class="drop-formats">.cif, .xyz, POSCAR, .json, .vasp, .mol2, .pdb, .traj, .h5, XDATCAR, .data, .lammps, .lmp</div>
               <label class="file-btn">
-                Browse Files
+                {t('workflow.si_browse_files')}
                 <input type="file" accept=".cif,.xyz,.json,.vasp,.poscar,.mol2,.pdb,.traj,.h5,.hdf5,.xdatcar,.data,.lammps,.lmp" onchange={on_file_input} hidden />
               </label>
             </div>
           </section>
 
           <section class="section">
-            <h3 class="section-title">Paste Structure Data</h3>
+            <h3 class="section-title">{t('workflow.si_paste_data')}</h3>
             <textarea
               class="input textarea"
               rows={8}
-              placeholder="Paste pymatgen JSON, POSCAR, CIF, or XYZ content..."
+              placeholder={t('workflow.si_paste_placeholder')}
               bind:value={paste_text}
             ></textarea>
             <div class="parse-row">
@@ -746,7 +743,7 @@
                 disabled={!paste_text.trim() || parse_loading}
                 onclick={() => parse_client_side(paste_text)}
               >
-                {parse_loading ? `Parsing...` : `Parse`}
+                {parse_loading ? t('workflow.si_parsing') : t('workflow.si_parse')}
               </button>
               {#if parse_error}
                 <span class="error-text">{parse_error}</span>
@@ -757,17 +754,17 @@
         <!-- ═══ Database Tab ═══ -->
         {:else if active_tab === `database` && !is_view_mode}
           <section class="section">
-            <h3 class="section-title">Search Stored Structures</h3>
+            <h3 class="section-title">{t('workflow.si_search_stored')}</h3>
             <div class="search-row">
               <input
                 class="input"
                 type="text"
-                placeholder="Search by formula, workflow name..."
+                placeholder={t('workflow.si_search_placeholder')}
                 bind:value={db_search}
                 onkeydown={(e) => { if (e.key === `Enter`) search_database() }}
               />
               <button class="btn btn-search" onclick={search_database} disabled={db_loading}>
-                {db_loading ? `...` : `Search`}
+                {db_loading ? `...` : t('workflow.si_search_btn')}
               </button>
             </div>
             {#if db_error}
@@ -777,7 +774,7 @@
 
           <section class="section db-results">
             {#if db_results.length === 0 && !db_loading}
-              <div class="empty-text">No results. Click Search to browse stored structures.</div>
+              <div class="empty-text">{t('workflow.si_no_results')}</div>
             {/if}
             {#each db_results as result}
               <button class="db-row" onclick={() => select_db_result(result)}>
@@ -794,20 +791,20 @@
 
           <!-- ═══ External Databases ═══ -->
           <section class="section">
-            <h3 class="section-title">External Databases</h3>
+            <h3 class="section-title">{t('workflow.si_external_db')}</h3>
             <div class="db-sources">
               <button class="btn btn-db-source" onclick={() => show_optimade = true}>
                 <span class="db-source-icon">&#127760;</span>
                 <span class="db-source-info">
-                  <span class="db-source-name">OPTIMADE / Materials Project</span>
-                  <span class="db-source-desc">Search crystal structures from MP, AFLOW, and more</span>
+                  <span class="db-source-name">{t('workflow.si_optimade_mp')}</span>
+                  <span class="db-source-desc">{t('workflow.si_optimade_desc')}</span>
                 </span>
               </button>
               <button class="btn btn-db-source" onclick={() => show_pubchem = true}>
                 <span class="db-source-icon">&#9883;</span>
                 <span class="db-source-info">
-                  <span class="db-source-name">PubChem</span>
-                  <span class="db-source-desc">Search molecular structures by name or formula</span>
+                  <span class="db-source-name">{t('workflow.si_pubchem')}</span>
+                  <span class="db-source-desc">{t('workflow.si_pubchem_desc')}</span>
                 </span>
               </button>
             </div>
@@ -816,13 +813,13 @@
         <!-- ═══ Remote Tab ═══ -->
         {:else if active_tab === `remote` && !is_view_mode}
           <section class="section">
-            <h3 class="section-title">Fetch from Server</h3>
+            <h3 class="section-title">{t('workflow.si_fetch_hpc')}</h3>
             <div class="field">
-              <label class="field-label">Source</label>
+              <label class="field-label">{t('workflow.si_source')}</label>
               <div style="display: flex; gap: 6px; align-items: center">
                 <select class="input select" bind:value={remote_session_id} style="flex: 1">
-                  <option value="">-- Select source --</option>
-                  <option value={LOCAL_SESSION_ID}>Local (server filesystem)</option>
+                  <option value="">{t('workflow.si_select_source')}</option>
+                  <option value={LOCAL_SESSION_ID}>{t('workflow.si_local_server_fs')}</option>
                   {#each hpc_session_store.sessions as s}
                     <option value={s.session_id}>{s.username}@{s.host}</option>
                   {/each}
@@ -837,11 +834,11 @@
               </div>
             </div>
             <div class="field" style="margin-top: 8px">
-              <label class="field-label">Remote Path</label>
+              <label class="field-label">{t('workflow.si_remote_path')}</label>
               <input
                 class="input"
                 type="text"
-                placeholder="e.g. ~/calculations/relax/CONTCAR"
+                placeholder={t('workflow.si_remote_path_help')}
                 bind:value={remote_path}
               />
             </div>
@@ -851,7 +848,7 @@
                 disabled={remote_loading}
                 onclick={fetch_remote}
               >
-                {remote_loading ? `Fetching...` : `Fetch`}
+                {remote_loading ? t('workflow.si_fetching') : t('workflow.si_fetch')}
               </button>
               {#if remote_error}
                 <span class="error-text">{remote_error}</span>
@@ -870,25 +867,25 @@
         <!-- ═══ Structure Preview ═══ -->
         {#if has_structure && preview}
           <section class="section preview-section">
-            <h3 class="section-title">Structure Preview</h3>
+            <h3 class="section-title">{t('workflow.si_preview')}</h3>
             <div class="preview-grid">
               <div class="preview-item">
-                <span class="preview-label">Formula</span>
+                <span class="preview-label">{t('workflow.si_formula')}</span>
                 <span class="preview-value formula-value">{preview.formula}</span>
               </div>
               <div class="preview-item">
-                <span class="preview-label">Atoms</span>
+                <span class="preview-label">{t('workflow.si_atoms')}</span>
                 <span class="preview-value">{preview.n_atoms}</span>
               </div>
               {#if preview.n_frames && preview.n_frames > 1}
                 <div class="preview-item span-2">
-                  <span class="preview-label">Frames</span>
-                  <span class="preview-value traj-value">{preview.n_frames} frames (trajectory)</span>
+                  <span class="preview-label">{t('workflow.si_frames_label')}</span>
+                  <span class="preview-value traj-value">{t('workflow.si_frames_value', { n: preview.n_frames.toString() })}</span>
                 </div>
               {/if}
               {#if preview.spacegroup}
                 <div class="preview-item span-2">
-                  <span class="preview-label">Space Group</span>
+                  <span class="preview-label">{t('workflow.si_spacegroup')}</span>
                   <span class="preview-value">{preview.spacegroup}</span>
                 </div>
               {/if}
@@ -924,7 +921,7 @@
       <!-- Footer -->
       <div class="modal-footer">
         <button class="btn btn-cancel" onclick={handle_close}>
-          {is_view_mode ? `Close` : `Cancel`}
+          {is_view_mode ? t('workflow.si_close') : t('workflow.si_cancel')}
         </button>
         {#if !is_view_mode}
           <button
@@ -932,7 +929,7 @@
             disabled={!has_structure}
             onclick={handle_confirm}
           >
-            Confirm
+            {mode === 'edit' ? t('workflow.si_confirm_edit') : t('workflow.si_confirm_import')}
           </button>
         {/if}
       </div>

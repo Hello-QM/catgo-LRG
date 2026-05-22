@@ -39,9 +39,16 @@
     menu_element,
     ...rest
   }: HTMLAttributes<HTMLDivElement> & {
-    sections: Readonly<{ title: string; options: readonly MenuOption[] }[]>
+    /** Each section has a `title` (i18n-translated, used for display) and
+     *  an optional `id` (stable English key used for action dispatch).
+     *  When `id` is omitted we fall back to `title` for back-compat — but
+     *  callsites that need their actions to work across locales MUST set
+     *  `id` to a stable English string (e.g. `Atom Color`), otherwise the
+     *  handler's `switch (section_title)` will never match in non-English
+     *  locales. */
+    sections: Readonly<{ id?: string; title: string; options: readonly MenuOption[] }[]>
     selected_values?: Record<string, string>
-    on_select?: (section_title: string, option: MenuOption) => void
+    on_select?: (section_id: string, option: MenuOption) => void
     position: { x: number; y: number }
     visible: boolean
     on_close?: () => void
@@ -87,9 +94,14 @@
     if (event.key === `Escape` && visible) on_close?.()
   }
 
-  // Handle option selection
-  function handle_option_click(section_title: string, option: MenuOption) {
-    if (!option.disabled) on_select?.(section_title, option)
+  // Handle option selection. Dispatch with the section's stable `id` if
+  // available, else fall back to the display `title`. Without this the
+  // handler in context-menu-actions.ts (which `switch`es on English
+  // section names like `Atom Color`) silently never matches when the
+  // user has a non-English locale active — every right-click option
+  // becomes a no-op.
+  function handle_option_click(section: { id?: string; title: string }, option: MenuOption) {
+    if (!option.disabled) on_select?.(section.id ?? section.title, option)
   }
 
   // [2025-02] Portal: move the menu to document.body so it escapes any
@@ -117,21 +129,21 @@
   <!-- [2025-02] use:portal moves to document.body; onwheel stops Three.js orbit steal -->
   <div use:portal {...rest} class="context-menu {rest.class ?? ``}" {style} bind:this={menu_element}
     onwheel={(e) => e.stopPropagation()}>
-    {#each sections as { title, options } (title)}
-      {@const grouped = group_options(options)}
+    {#each sections as section (section.id ?? section.title)}
+      {@const grouped = group_options(section.options)}
       <div class="section">
-        <div class="header">{title}</div>
+        <div class="header">{section.title}</div>
         {#each grouped as group, gi (gi)}
           {#if group.length > 1 || group[0].inline}
             <div class="inline-group">
               {#each group as option (option.value)}
                 <button
                   class="inline"
-                  class:selected={selected_values[title] === option.value}
+                  class:selected={selected_values[section.id ?? section.title] === option.value}
                   class:disabled={option.disabled}
                   onclick={(event) => {
                     event.stopPropagation()
-                    handle_option_click(title, option)
+                    handle_option_click(section, option)
                   }}
                 >
                   {#if option.checked !== undefined}
@@ -144,11 +156,11 @@
           {:else}
             {@const option = group[0]}
             <button
-              class:selected={selected_values[title] === option.value}
+              class:selected={selected_values[section.id ?? section.title] === option.value}
               class:disabled={option.disabled}
               onclick={(event) => {
                 event.stopPropagation()
-                handle_option_click(title, option)
+                handle_option_click(section, option)
               }}
             >
               {#if option.checked !== undefined}

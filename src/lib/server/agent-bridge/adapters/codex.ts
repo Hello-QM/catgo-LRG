@@ -1,6 +1,35 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, SessionInfo, StreamParams } from '../types.js'
+
+// ---------------------------------------------------------------------------
+// Codex binary resolution.
+//
+// `@openai/codex-sdk` HARD-PINS an old `@openai/codex` as a dependency and its
+// findCodexPath() runs THAT vendored copy — so `npm i -g @openai/codex@latest`
+// has zero effect and newer models (e.g. gpt-5.5, which needs a codex newer
+// than the SDK's pin) stay rejected with "requires a newer version of Codex".
+// The SDK does expose `codexPathOverride`, which becomes the spawned
+// executable verbatim (no shell), so point it at the globally-installed
+// codex's NATIVE binary. Override with CATGO_CODEX_PATH (see catgo-native.bat).
+// ---------------------------------------------------------------------------
+
+function resolveCodexExecutable(): string | undefined {
+  const override = process.env.CATGO_CODEX_PATH
+  if (override && existsSync(override)) return override
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    // npm-global @openai/codex → per-platform native package layout.
+    const p = join(
+      process.env.APPDATA, 'npm', 'node_modules', '@openai', 'codex',
+      'node_modules', '@openai', 'codex-win32-x64', 'vendor',
+      'x86_64-pc-windows-msvc', 'codex', 'codex.exe',
+    )
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
 
 // ---------------------------------------------------------------------------
 // Helper: translate a single Codex SDK event to zero or more AgentEvents
@@ -149,16 +178,71 @@ export function createCodexAdapter(): AgentAdapter {
     agent: 'codex',
 
     async *stream(params: StreamParams): AsyncGenerator<AgentEvent> {
-      const { prompt, sessionId, model, cwd, abortSignal } = params
+      const { prompt, sessionId, model, cwd, abortSignal, mcpServerUrl, tabId, systemPrompt } =
+        params
 
       // Dynamic import — the package may not be installed everywhere.
       const { Codex } = (await import('@openai/codex-sdk')) as any
 
-      const codex = new Codex({ model: model ?? undefined }) as any
+      // MCP: wire CatGO's backend MCP server so Codex gets the same `catgo_*`
+      // tools Claude/Gemini do (this adapter previously dropped mcpServerUrl
+      // entirely — Codex had NO CatGO tools). codex-sdk flattens `config`
+      // into `--config mcp_servers.catgo.*` overrides; codex ≥0.132 speaks
+      // streamable-HTTP MCP from a `url` (+ `http_headers` for tab routing).
+      //
+      // dangerously_bypass_approvals_and_sandbox: codex-sdk's headless `exec`
+      // wires NO approval responder, so EVERY tool call — including MCP — is
+      // auto-cancelled ("user cancelled MCP tool call"). `approval_policy`
+      // only gates shell commands, NOT MCP elicitation/request_permissions,
+      // so 'never' alone didn't help. This flag disables all gating, the
+      // codex equivalent of Claude/Gemini auto-allowing the trusted `catgo_*`
+      // tools — required for ANY Codex tool-calling in this autonomous adapter
+      // (a real approval↔PermissionCard bridge would be the longer-term fix).
+      const codexConfig: Record<string, any> = {
+        dangerously_bypass_approvals_and_sandbox: true,
+      }
+      // System prompt → codex `developer_instructions` config (codex-sdk has
+      // no systemPrompt parameter, and exec mode's stdin is the user input).
+      // Empirically verified to reach the model as a system instruction
+      // (behavior fingerprint test, 2026-05-20). Without this the adapter
+      // silently dropped systemPrompt — Codex never saw the loaded
+      // structure / chat context that Claude got via `query({systemPrompt})`.
+      if (systemPrompt) {
+        codexConfig.developer_instructions = systemPrompt
+      }
+      if (mcpServerUrl) {
+        const catgo: Record<string, any> = {
+          url: mcpServerUrl,
+          startup_timeout_sec: 20,
+        }
+        if (tabId) catgo.http_headers = { 'X-CatGo-Tab-Id': tabId }
+        codexConfig.mcp_servers = { catgo }
+      }
+
+      // codex-sdk turns the model into a `--model` CLI flag, which OVERRIDES
+      // ~/.codex/config.toml. Leaving it unset does NOT — the user's global
+      // config wins, and a pinned `model = "gpt-5.5"` there is rejected by
+      // older Codex CLIs ("requires a newer version of Codex"), which stalled
+      // the chat. So when the UI sends no model, fall back to a known-good
+      // default. Override in one place via CATGO_CODEX_MODEL (catgo-native.bat).
+      //
+      // IMPORTANT: runStreamed() reads the model from the *thread* options
+      // (`this._threadOptions.model`), NOT the Codex() constructor — passing
+      // it to `new Codex({model})` alone is silently ignored. It must go to
+      // startThread()/resumeThread().
+      const resolvedModel =
+        model || process.env.CATGO_CODEX_MODEL || 'gpt-5-codex'
+
+      const codexExe = resolveCodexExecutable()
+      const codex = new Codex({
+        model: resolvedModel,
+        ...(codexExe ? { codexPathOverride: codexExe } : {}),
+        config: codexConfig,
+      }) as any
 
       const thread = sessionId
-        ? (codex.resumeThread(sessionId) as any)
-        : (codex.startThread() as any)
+        ? (codex.resumeThread(sessionId, { model: resolvedModel }) as any)
+        : (codex.startThread({ model: resolvedModel }) as any)
 
       const abortController = new AbortController()
       if (abortSignal) {
@@ -171,10 +255,17 @@ export function createCodexAdapter(): AgentAdapter {
       // lives on `.events` (AsyncGenerator<ThreadEvent>). Previously the call
       // was treated as if it already returned the iterable, producing
       // "streamIterable is not async iterable".
+      // approvalPolicy: this adapter wires NO interactive approval responder,
+      // so 'on-request' makes codex auto-CANCEL every tool call ("user
+      // cancelled MCP tool call") — Codex couldn't run a single CatGO tool.
+      // Claude/Gemini effectively auto-allow the trusted `catgo_*` MCP tools;
+      // 'never' is the codex equivalent (run tools without prompting) and is
+      // the only way Codex tool-calling works until a real approval↔
+      // PermissionCard bridge exists for this adapter.
       const streamedTurn = await thread.runStreamed(prompt, {
         abortController,
         cwd: cwd ?? undefined,
-        approvalPolicy: 'on-request',
+        approvalPolicy: 'never',
       })
       const streamIterable = streamedTurn.events as AsyncIterable<any>
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
   interface IrcStep {
     step: number | string
     dE?: number           // kcal/mol relative to TS
@@ -15,6 +17,8 @@
     points: IrcStep[]
     convergence_thresholds?: { max_grad: number; rms_grad: number }
   } = $props()
+
+  load_i18n_module('workflow')
 
   // Normalize — fall back to 0/undefined if missing
   const pts = $derived(
@@ -129,11 +133,11 @@
 <svg width={W} height={H1} class="irc-plot" viewBox="0 0 {W} {H1}">
   <!-- Legend -->
   <circle cx={ML + 6} cy={13} r="4" fill="#8b5cf6" />
-  <text x={ML + 14} y={17} font-size="11" fill="#64748b">Backward</text>
+  <text x={ML + 14} y={17} font-size="11" fill="#64748b">{t('workflow.irc_backward')}</text>
   <circle cx={ML + 80} cy={13} r="5" fill="#ef4444" />
-  <text x={ML + 89} y={17} font-size="11" fill="#64748b">TS</text>
+  <text x={ML + 89} y={17} font-size="11" fill="#64748b">{t('workflow.irc_ts')}</text>
   <circle cx={ML + 110} cy={13} r="4" fill="#10b981" />
-  <text x={ML + 118} y={17} font-size="11" fill="#64748b">Forward</text>
+  <text x={ML + 118} y={17} font-size="11" fill="#64748b">{t('workflow.irc_forward')}</text>
 
   <!-- Y-axis -->
   <line x1={ML - 5} y1={MT} x2={ML - 5} y2={MT + plot_h1} stroke="#64748b" stroke-width="1" />
@@ -142,7 +146,7 @@
     <text x={ML - 12} y={tick.y + 4} font-size="11" fill="#64748b" text-anchor="end">{tick.label}</text>
   {/each}
   <text x={14} y={MT + plot_h1 / 2} font-size="12" fill="#64748b" text-anchor="middle"
-    transform="rotate(-90 14 {MT + plot_h1 / 2})">ΔE (kcal/mol)</text>
+    transform="rotate(-90 14 {MT + plot_h1 / 2})">{t('workflow.irc_energy_axis')}</text>
 
   <!-- X-axis -->
   <line x1={ML} y1={MT + plot_h1} x2={ML + plot_w} y2={MT + plot_h1} stroke="#64748b" stroke-width="1" />
@@ -150,13 +154,13 @@
     <line x1={tick.x} y1={MT + plot_h1} x2={tick.x} y2={MT + plot_h1 + 5} stroke="#64748b" stroke-width="1" />
     <text x={tick.x} y={MT + plot_h1 + 18} font-size="11" fill="#64748b" text-anchor="middle">{tick.label}</text>
   {/each}
-  <text x={ML + plot_w / 2} y={H1 - 3} font-size="12" fill="#64748b" text-anchor="middle">IRC Step</text>
+  <text x={ML + plot_w / 2} y={H1 - 3} font-size="12" fill="#64748b" text-anchor="middle">{t('workflow.irc_step_axis')}</text>
 
   <!-- TS dashed vertical -->
   {#if ts_idx >= 0}
     <line x1={x_for(ts_idx)} y1={MT} x2={x_for(ts_idx)} y2={MT + plot_h1}
       stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,3" />
-    <text x={x_for(ts_idx) + 4} y={MT + 12} font-size="10" fill="#f59e0b">TS</text>
+    <text x={x_for(ts_idx) + 4} y={MT + 12} font-size="10" fill="#f59e0b">{t('workflow.irc_ts')}</text>
   {/if}
 
   <!-- Backward polyline — purple -->
@@ -190,7 +194,7 @@
       <text x={ML - 12} y={tick.y + 4} font-size="10" fill="#64748b" text-anchor="end">{tick.label}</text>
     {/each}
     <text x={14} y={MT + plot_h2 / 2} font-size="11" fill="#64748b" text-anchor="middle"
-      transform="rotate(-90 14 {MT + plot_h2 / 2})">Grad (Eh/bohr)</text>
+      transform="rotate(-90 14 {MT + plot_h2 / 2})">{t('workflow.irc_gradient_axis')}</text>
 
     <!-- X-axis -->
     <line x1={ML} y1={MT + plot_h2} x2={ML + plot_w} y2={MT + plot_h2} stroke="#64748b" stroke-width="1" />
@@ -198,7 +202,7 @@
       <line x1={tick.x} y1={MT + plot_h2} x2={tick.x} y2={MT + plot_h2 + 5} stroke="#64748b" stroke-width="1" />
       <text x={tick.x} y={MT + plot_h2 + 18} font-size="11" fill="#64748b" text-anchor="middle">{tick.label}</text>
     {/each}
-    <text x={ML + plot_w / 2} y={H2 - 3} font-size="11" fill="#64748b" text-anchor="middle">IRC Step</text>
+    <text x={ML + plot_w / 2} y={H2 - 3} font-size="11" fill="#64748b" text-anchor="middle">{t('workflow.irc_step_axis')}</text>
 
     <!-- TS dashed vertical -->
     {#if ts_idx >= 0}
@@ -210,12 +214,12 @@
     {#if max_thresh_y >= MT && max_thresh_y <= MT + plot_h2}
       <line x1={ML} y1={max_thresh_y} x2={ML + plot_w} y2={max_thresh_y}
         stroke="#ef4444" stroke-width="1" stroke-dasharray="3,3" opacity="0.55" />
-      <text x={ML + plot_w - 2} y={max_thresh_y - 3} font-size="9" fill="#ef4444" text-anchor="end">max|G| limit</text>
+      <text x={ML + plot_w - 2} y={max_thresh_y - 3} font-size="9" fill="#ef4444" text-anchor="end">{t('workflow.irc_max_gradient_limit')}</text>
     {/if}
     {#if rms_thresh_y >= MT && rms_thresh_y <= MT + plot_h2}
       <line x1={ML} y1={rms_thresh_y} x2={ML + plot_w} y2={rms_thresh_y}
         stroke="#a855f7" stroke-width="1" stroke-dasharray="3,3" opacity="0.55" />
-      <text x={ML + plot_w - 2} y={rms_thresh_y - 3} font-size="9" fill="#a855f7" text-anchor="end">RMS(G) limit</text>
+      <text x={ML + plot_w - 2} y={rms_thresh_y - 3} font-size="9" fill="#a855f7" text-anchor="end">{t('workflow.irc_rms_gradient_limit')}</text>
     {/if}
 
     <!-- Gradient polylines -->
@@ -227,9 +231,9 @@
 
     <!-- Legend -->
     <line x1={ML + 4} y1={MT + 10} x2={ML + 20} y2={MT + 10} stroke="#ef4444" stroke-width="1.5" />
-    <text x={ML + 23} y={MT + 14} font-size="9" fill="#64748b">max|G|</text>
+    <text x={ML + 23} y={MT + 14} font-size="9" fill="#64748b">{t('workflow.irc_max_gradient')}</text>
     <line x1={ML + 58} y1={MT + 10} x2={ML + 74} y2={MT + 10} stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4,2" />
-    <text x={ML + 77} y={MT + 14} font-size="9" fill="#64748b">RMS(G)</text>
+    <text x={ML + 77} y={MT + 14} font-size="9" fill="#64748b">{t('workflow.irc_rms_gradient')}</text>
   </svg>
 {/if}
 

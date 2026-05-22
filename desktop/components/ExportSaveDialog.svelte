@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ProjectSummary } from '$lib/api/project'
+  import { t } from '$lib/i18n/index.svelte'
   import { exp } from '../state/export-state.svelte'
   import { update_export_format } from '../pane-utils'
 
@@ -19,11 +20,11 @@
   <div class="modal-overlay" onclick={() => { exp.dialog = null; exp.close_after = null }}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-      <h3>{exp.dialog.mode === `project` ? `Save to CatGo database` : `Export to ${exp.dialog.mode === `hpc` ? `HPC` : `local computer`}`}</h3>
+      <h3>{exp.dialog.mode === `project` ? t('app.save_to_db') : t('app.export_to_local', { target: exp.dialog.mode === `hpc` ? t('app.export_to_hpc') : t('app.export_to_local') }).replace('Export to ', '').replace('导出至', '')}</h3>
       <div class="export-form">
         {#if exp.dialog.mode === `project`}
           <!-- Project folder picker -->
-          <span class="export-label-text">Folder <span class="export-hint">(optional)</span>:</span>
+          <span class="export-label-text">{t('common.folder')} <span class="export-hint">({t('common.optional')})</span>:</span>
           <div class="save-project-tree">
             {#if exp.close_save_projects.length > 0}
               <button
@@ -35,7 +36,7 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="10" /><path d="M8 12h8" />
                 </svg>
-                (Root)
+                {t('app.root_folder')}
               </button>
               {#snippet save_tree_node(projects: ProjectSummary[], depth: number)}
                 {#each projects as p (p.id)}
@@ -58,38 +59,38 @@
               {/snippet}
               {@render save_tree_node(save_project_roots, 0)}
             {:else}
-              <span class="export-fs-hint">No folders yet. Structure will be saved to root.</span>
+              <span class="export-fs-hint">{t('app.no_folders_saved_to_root')}</span>
             {/if}
           </div>
         {:else if exp.dialog.mode === `hpc`}
           <!-- HPC destination -->
           <label class="export-label">
-            <span>Destination:</span>
+            <span>{t('common.destination')}:</span>
             <span class="export-path">{hpc_path || `~`}</span>
           </label>
         {:else}
           <!-- Filesystem directory picker -->
-          <span class="export-label-text">Directory:</span>
+          <span class="export-label-text">{t('common.directory')}:</span>
           <div class="export-fs-browser">
             <div class="export-fs-pathbar">
               <button class="export-fs-up" onclick={() => {
                 const parent = exp.fs_dir.replace(/[/\\][^/\\]*$/, ``) || `/`
                 export_fs_browse(parent)
-              }} disabled={exp.fs_loading || exp.fs_dir === `/`} title="Parent directory">
+              }} disabled={exp.fs_loading || exp.fs_dir === `/`} title={t('app.parent_directory')}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
               </button>
               <input class="export-fs-path-input" type="text" value={exp.fs_dir} onkeydown={(e) => {
                 if (e.key === `Enter`) export_fs_browse((e.target as HTMLInputElement).value)
               }} />
-              <button class="export-fs-up" onclick={() => export_fs_browse(`~`)} title="Home directory">
+              <button class="export-fs-up" onclick={() => export_fs_browse(`~`)} title={t('app.home_directory')}>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12l9-9 9 9M5 10v10a1 1 0 001 1h3m10-11v10a1 1 0 01-1 1h-3"/></svg>
               </button>
             </div>
             <div class="export-fs-list">
               {#if exp.fs_loading}
-                <span class="export-fs-hint">Loading...</span>
+                <span class="export-fs-hint">{t('common.loading')}</span>
               {:else if exp.fs_items.length === 0}
-                <span class="export-fs-hint">No subdirectories</span>
+                <span class="export-fs-hint">{t('app.no_subdirectories')}</span>
               {:else}
                 {#each exp.fs_items as item (item.path)}
                   <button class="export-fs-item" ondblclick={() => export_fs_browse(item.path)}>
@@ -104,7 +105,7 @@
           </div>
         {/if}
         <label class="export-label">
-          <span>Filename:</span>
+          <span>{t('common.filename')}</span>
           <input
             type="text"
             class="export-input"
@@ -114,7 +115,7 @@
           />
         </label>
         <label class="export-label">
-          <span>Format:</span>
+          <span>{t('common.format')}</span>
           <select class="export-select" bind:value={exp.dialog.format} onchange={() => {
             if (!exp.dialog) return
             const ext_map: Record<string, string> = { poscar: `.poscar`, xyz: `.xyz`, extxyz: `.extxyz`, cif: `.cif` }
@@ -124,8 +125,8 @@
           }}>
             <option value="cif">CIF</option>
             <option value="poscar">POSCAR</option>
-            <option value="extxyz">Extended XYZ (keeps lattice)</option>
-            <option value="xyz">XYZ (no lattice)</option>
+            <option value="extxyz">{t('app.extxyz_desc')}</option>
+            <option value="xyz">{t('app.xyz_desc')}</option>
           </select>
         </label>
         {#if exp.error}
@@ -133,9 +134,9 @@
         {/if}
       </div>
       <div class="modal-actions">
-        <button class="modal-btn cancel" onclick={() => { exp.dialog = null; exp.close_after = null }}>Cancel</button>
+        <button class="modal-btn cancel" onclick={() => { exp.dialog = null; exp.close_after = null }}>{t('common.cancel')}</button>
         <button class="modal-btn confirm" disabled={exp.saving || !exp.dialog.filename || (exp.dialog.mode === `file` && !exp.fs_dir)} onclick={do_export}>
-          {exp.saving ? `Saving...` : exp.dialog.mode === `project` ? `Save` : `Export`}
+          {exp.saving ? t('common.saving') : exp.dialog.mode === `project` ? t('common.save') : t('common.export')}
         </button>
       </div>
     </div>

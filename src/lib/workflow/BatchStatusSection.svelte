@@ -6,6 +6,7 @@
    * Polls running sub-steps for live energy/force from OSZICAR.
    * Embedded in NodeStatusPanel when sub-steps are detected.
    */
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { get_convergence, type ConvergencePoint } from '$lib/api/workflow'
   import { pending_open_structure } from './workflow-state.svelte'
 
@@ -31,6 +32,8 @@
   }
 
   let { sub_steps, workflow_id, node_id, onview_file }: Props = $props()
+
+  load_i18n_module('workflow')
 
   let expanded_idx = $state<number | null>(null)
   let branch_files = $state<Record<number, string[]>>({})
@@ -107,10 +110,10 @@
   <!-- ═══ Summary ═══ -->
   <div class="bs-summary">
     <div class="bs-summary-row">
-      {#if counts.completed > 0}<span class="bs-stat" style:color="var(--bs-green, #22c55e)">{counts.completed} completed</span>{/if}
-      {#if counts.running > 0}<span class="bs-stat" style:color="var(--bs-blue, #3b82f6)">{counts.running} running</span>{/if}
-      {#if counts.pending > 0}<span class="bs-stat" style:color="var(--bs-gray, #94a3b8)">{counts.pending} pending</span>{/if}
-      {#if counts.failed > 0}<span class="bs-stat" style:color="var(--bs-red, #ef4444)">{counts.failed} failed</span>{/if}
+      {#if counts.completed > 0}<span class="bs-stat" style:color="var(--bs-green, #22c55e)">{t('workflow.batch_status_completed', { n: String(counts.completed) })}</span>{/if}
+      {#if counts.running > 0}<span class="bs-stat" style:color="var(--bs-blue, #3b82f6)">{t('workflow.batch_status_running', { n: String(counts.running) })}</span>{/if}
+      {#if counts.pending > 0}<span class="bs-stat" style:color="var(--bs-gray, #94a3b8)">{t('workflow.batch_status_pending', { n: String(counts.pending) })}</span>{/if}
+      {#if counts.failed > 0}<span class="bs-stat" style:color="var(--bs-red, #ef4444)">{t('workflow.batch_status_failed', { n: String(counts.failed) })}</span>{/if}
     </div>
     <div class="bs-progress-track">
       {#if counts.completed > 0}
@@ -124,11 +127,11 @@
       {/if}
     </div>
     <div class="bs-pct-row">
-      <span class="bs-pct">{progress_pct}% complete</span>
+      <span class="bs-pct">{t('workflow.batch_status_complete_pct', { n: String(progress_pct) })}</span>
       {#if has_running}
-        <label class="bs-live-toggle" title="Polls HPC for live energy/force (may be slow with many structures)">
+        <label class="bs-live-toggle" title={t('workflow.batch_status_live_polling_help')}>
           <input type="checkbox" bind:checked={live_polling} />
-          <span>Live{#if live_loading}...{/if}</span>
+          <span>{t('workflow.batch_status_live')}{#if live_loading}...{/if}</span>
         </label>
       {/if}
     </div>
@@ -143,11 +146,11 @@
         <button class="bs-item-header" onclick={() => expanded_idx = is_expanded ? null : step.index}>
           <span class="bs-icon" style:color={status_color(step.status)}>{status_icon(step.status)}</span>
           <span class="bs-idx">#{step.index + 1}</span>
-          <span class="bs-label">{step.composition || step.label || `Structure ${step.index + 1}`}</span>
+          <span class="bs-label">{step.composition || step.label || t('workflow.batch_status_structure_fallback', { n: String(step.index + 1) })}</span>
           <span class="bs-metrics">
             {#if (live_data[step.index]?.energy ?? step.energy) != null}<span class="bs-energy">{(live_data[step.index]?.energy ?? step.energy)?.toFixed(3)} eV</span>{/if}
             {#if (live_data[step.index]?.max_force ?? step.max_force) != null}<span class="bs-force">{(live_data[step.index]?.max_force ?? step.max_force)?.toFixed(3)} eV/A</span>{/if}
-            {#if live_data[step.index]?.step != null}<span class="bs-ionic-step">step {live_data[step.index].step}</span>{/if}
+            {#if live_data[step.index]?.step != null}<span class="bs-ionic-step">{t('workflow.batch_status_step', { n: String(live_data[step.index].step) })}</span>{/if}
           </span>
           <span class="bs-status-tag" style:color={status_color(step.status)}>{step.status}</span>
           <span class="bs-expand-icon" class:open={is_expanded}>▸</span>
@@ -158,37 +161,37 @@
           <div class="bs-detail">
             {#if step.job_id}
               <div class="bs-detail-row">
-                <span class="bs-detail-key">Job ID</span>
+                <span class="bs-detail-key">{t('workflow.batch_status_job_id')}</span>
                 <span class="bs-detail-val">{step.job_id}</span>
               </div>
             {/if}
             {#if step.work_dir}
               <div class="bs-detail-row">
-                <span class="bs-detail-key">Work Dir</span>
+                <span class="bs-detail-key">{t('workflow.batch_status_work_dir')}</span>
                 <span class="bs-detail-val bs-mono">{step.work_dir}</span>
               </div>
             {/if}
             {#if (live_data[step.index]?.energy ?? step.energy) != null}
               <div class="bs-detail-row">
-                <span class="bs-detail-key">Energy</span>
-                <span class="bs-detail-val">{(live_data[step.index]?.energy ?? step.energy)?.toFixed(6)} eV{#if live_data[step.index]} (live){/if}</span>
+                <span class="bs-detail-key">{t('workflow.batch_status_energy')}</span>
+                <span class="bs-detail-val">{(live_data[step.index]?.energy ?? step.energy)?.toFixed(6)} eV{#if live_data[step.index]} ({t('workflow.batch_status_live').toLowerCase()}){/if}</span>
               </div>
             {/if}
             {#if (live_data[step.index]?.max_force ?? step.max_force) != null}
               <div class="bs-detail-row">
-                <span class="bs-detail-key">Max Force</span>
-                <span class="bs-detail-val">{(live_data[step.index]?.max_force ?? step.max_force)?.toFixed(6)} eV/A{#if live_data[step.index]} (live){/if}</span>
+                <span class="bs-detail-key">{t('workflow.batch_status_max_force')}</span>
+                <span class="bs-detail-val">{(live_data[step.index]?.max_force ?? step.max_force)?.toFixed(6)} eV/A{#if live_data[step.index]} ({t('workflow.batch_status_live').toLowerCase()}){/if}</span>
               </div>
             {/if}
             {#if live_data[step.index]?.step != null}
               <div class="bs-detail-row">
-                <span class="bs-detail-key">Ionic Step</span>
+                <span class="bs-detail-key">{t('workflow.batch_status_ionic_step')}</span>
                 <span class="bs-detail-val">{live_data[step.index].step}</span>
               </div>
             {/if}
             {#if step.error}
               <div class="bs-detail-row bs-error">
-                <span class="bs-detail-key">Error</span>
+                <span class="bs-detail-key">{t('workflow.batch_status_error')}</span>
                 <span class="bs-detail-val">{step.error}</span>
               </div>
             {/if}
@@ -207,7 +210,7 @@
                     console.error(`Failed to parse structure:`, err)
                   }
                 }}>
-                  Open structure in another tab
+                  {t('workflow.batch_status_open_structure_in_tab')}
                 </button>
                 <button class="bs-files-btn" onclick={() => {
                   const blob = new Blob([step.contcar!], { type: 'chemical/x-vasp' })
@@ -216,7 +219,7 @@
                   a.href = url; a.download = `${(step.label ?? `branch_${step.index}`).replace(/[^a-zA-Z0-9()-]/g, '_')}_CONTCAR`; a.click()
                   URL.revokeObjectURL(url)
                 }}>
-                  Download CONTCAR
+                  {t('workflow.batch_status_download_contcar')}
                 </button>
               {/if}
               {#if step.work_dir}
@@ -239,7 +242,7 @@
                     console.error(`Failed to list files:`, err)
                   }
                 }}>
-                  List Output Files
+                  {t('workflow.batch_status_list_output_files')}
                 </button>
               {/if}
             </div>
@@ -259,7 +262,7 @@
                         if (resp.ok) {
                           const data = await resp.json()
                           if (data.success && data.content != null) {
-                            file_preview = { name: fname, content: data.content || '(empty file)' }
+                            file_preview = { name: fname, content: data.content || t('workflow.batch_status_empty_file') }
                           }
                         }
                       } catch (err) {
@@ -269,7 +272,7 @@
                       📄 {fname}
                     </button>
                   {:else}
-                    <span class="bs-file-item" style="opacity: 0.5; cursor: default;" title="Binary file">📦 {fname}</span>
+                    <span class="bs-file-item" style="opacity: 0.5; cursor: default;" title={t('workflow.batch_status_binary_file')}>📦 {fname}</span>
                   {/if}
                 {/each}
               </div>

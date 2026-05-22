@@ -39,6 +39,13 @@ import { get_movement_step } from '../manipulation'
 import { get_center_of_mass, get_rotation_center } from '$lib/structure'
 import { atom_clipboard } from '$lib/state.svelte'
 import { Euler, Plane, Quaternion, Raycaster, Vector2, Vector3 } from 'three'
+import {
+  screen_frame_from_camera,
+  pick_locked_axis,
+  rotate_points,
+  drag_delta_for_axis,
+  type LockAxis,
+} from '$lib/structure/rotation-math'
 import type { ElementSymbol } from '$lib'
 import type { AtomManipulationEvent } from '../index'
 import type { GestureConfig } from '$lib/gesture/gesture-types'
@@ -219,16 +226,15 @@ export function create_interaction_controller(deps: InteractionDeps) {
   // Shift + 右键拖拽: roll (绕相机 forward 轴)
   // ═══════════════════════════════════════════════════════════════════
   let is_rotating_atoms = $state(false)
-  let atom_rotation_prev_x = $state(0)
-  let atom_rotation_prev_y = $state(0)
   let atom_rotation_center = $state<[number, number, number] | null>(null)
   let atom_rotation_initial_positions = $state<Map<number, [number, number, number]>>(new Map())
-  let atom_rotation_cumulative_quat = $state<Quaternion>(new Quaternion())
   let atom_rotation_camera_quat = $state<Quaternion | null>(null)
-  let atom_rotation_roll_mode = $state(false)
   let atom_rotation_used_right = $state(false)
   let atom_rotation_axis = $state<[number, number, number] | null>(null)
   let atom_rotation_angle_deg = $state<number>(0)
+  let atom_rotation_start_x = $state(0)
+  let atom_rotation_start_y = $state(0)
+  let atom_rotation_locked_axis = $state<LockAxis | null>(null)
 
   // ═══════════════════════════════════════════════════════════════════
   // RAF 批处理 — 拖拽/旋转时用 requestAnimationFrame 批量更新位置,
@@ -262,6 +268,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
   let keyboard_rotation_undo_saved = $state(false)
   let keyboard_rotation_timeout: ReturnType<typeof setTimeout> | null = null
   const KEYBOARD_ROTATION_STEP = 0.05 // ~3 degrees per key press
+  const AXIS_LOCK_DEADZONE_PX = 4 // left-drag must exceed this before an axis locks
 
   // ═══════════════════════════════════════════════════════════════════
   // 框选状态 — Cmd/Ctrl+拖拽矩形选择多个原子
@@ -476,9 +483,11 @@ export function create_interaction_controller(deps: InteractionDeps) {
     if (save_undo) deps.push_to_undo()
 
     is_rotating_atoms = true
-    atom_rotation_prev_x = event.clientX
-    atom_rotation_prev_y = event.clientY
-    atom_rotation_cumulative_quat = new Quaternion()
+    atom_rotation_start_x = event.clientX
+    atom_rotation_start_y = event.clientY
+    // Default to left-drag (unlocked); the mousedown handlers override to 'x'
+    // for the right-button roll path AFTER this function returns.
+    atom_rotation_locked_axis = null
     atom_rotation_camera_quat = camera.quaternion.clone()
     atom_rotation_axis = null
     atom_rotation_angle_deg = 0
@@ -588,11 +597,12 @@ export function create_interaction_controller(deps: InteractionDeps) {
     is_rotating_atoms = false
     atom_rotation_center = null
     atom_rotation_initial_positions = new Map()
-    atom_rotation_cumulative_quat = new Quaternion()
     atom_rotation_camera_quat = null
-    atom_rotation_roll_mode = false
     atom_rotation_axis = null
     atom_rotation_angle_deg = 0
+    atom_rotation_locked_axis = null
+    atom_rotation_start_x = 0
+    atom_rotation_start_y = 0
     pending_rotation_positions = new Map()
     pending_rotation_update = false
     const orbit_controls = deps.get_orbit_controls()
@@ -698,18 +708,20 @@ export function create_interaction_controller(deps: InteractionDeps) {
 
     if (!keyboard_rotation_center) return
 
-    const camera_right = new Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize()
-    const camera_up = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize()
-    const camera_forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize()
+    // Same fixed screen frame as the drag path: x = screen normal toward
+    // viewer, y = screen right, z = screen up.
+    const frame = screen_frame_from_camera(camera.quaternion)
 
     let rotation_axis: Vector3
     let angle = KEYBOARD_ROTATION_STEP
-    if (direction === 'ArrowLeft') { rotation_axis = camera_up; angle = KEYBOARD_ROTATION_STEP }
-    else if (direction === 'ArrowRight') { rotation_axis = camera_up; angle = -KEYBOARD_ROTATION_STEP }
-    else if (direction === 'ArrowUp') { rotation_axis = camera_right; angle = KEYBOARD_ROTATION_STEP }
-    else if (direction === 'ArrowDown') { rotation_axis = camera_right; angle = -KEYBOARD_ROTATION_STEP }
-    else if (direction === 'Forward') { rotation_axis = camera_forward; angle = KEYBOARD_ROTATION_STEP }
-    else { rotation_axis = camera_forward; angle = -KEYBOARD_ROTATION_STEP }
+    // Left/Right = yaw about screen-up (z); Up/Down = pitch about screen-right
+    // (y); Forward/Backward = roll about screen-normal (x).
+    if (direction === 'ArrowLeft') { rotation_axis = frame.z; angle = KEYBOARD_ROTATION_STEP }
+    else if (direction === 'ArrowRight') { rotation_axis = frame.z; angle = -KEYBOARD_ROTATION_STEP }
+    else if (direction === 'ArrowUp') { rotation_axis = frame.y; angle = KEYBOARD_ROTATION_STEP }
+    else if (direction === 'ArrowDown') { rotation_axis = frame.y; angle = -KEYBOARD_ROTATION_STEP }
+    else if (direction === 'Forward') { rotation_axis = frame.x; angle = KEYBOARD_ROTATION_STEP }
+    else { rotation_axis = frame.x; angle = -KEYBOARD_ROTATION_STEP }
 
     const rotation_quat = new Quaternion().setFromAxisAngle(rotation_axis, angle)
     const new_overrides = new Map(realtime_position_overrides)
@@ -1116,8 +1128,8 @@ export function create_interaction_controller(deps: InteractionDeps) {
       const started = start_atom_rotation(event, true)
       if (started) {
         if (event.button === 2) {
-          atom_rotation_roll_mode = true
           atom_rotation_used_right = true
+          atom_rotation_locked_axis = 'x' // roll = rotate about screen normal
         }
         event.stopPropagation()
         event.preventDefault()
@@ -1151,8 +1163,8 @@ export function create_interaction_controller(deps: InteractionDeps) {
       const started = start_atom_rotation(event, !is_rotating_atoms)
       if (started) {
         if (event.button === 2) {
-          atom_rotation_roll_mode = true
           atom_rotation_used_right = true
+          atom_rotation_locked_axis = 'x' // roll = rotate about screen normal
         }
         event.preventDefault()
         event.stopPropagation()
@@ -1348,80 +1360,43 @@ export function create_interaction_controller(deps: InteractionDeps) {
       return
     }
 
-    // 原子旋转中
+    // 原子旋转中 — 固定屏幕坐标系，单轴锁定
     if (is_rotating_atoms && atom_rotation_center && deps.get_structure()) {
       if (!event.shiftKey || event.altKey) {
         finish_rotation()
         return
       }
 
-      const delta_x = event.clientX - atom_rotation_prev_x
-      const delta_y = event.clientY - atom_rotation_prev_y
-      atom_rotation_prev_x = event.clientX
-      atom_rotation_prev_y = event.clientY
+      // Total displacement from the fixed mousedown anchor (not per-frame).
+      const total_dx = event.clientX - atom_rotation_start_x
+      const total_dy = event.clientY - atom_rotation_start_y
+
+      // Lock the axis once for left-drag (roll already locked to 'x').
+      if (atom_rotation_locked_axis === null) {
+        atom_rotation_locked_axis = pick_locked_axis(total_dx, total_dy, AXIS_LOCK_DEADZONE_PX)
+        if (atom_rotation_locked_axis === null) return // still inside dead zone
+      }
+      const axis = atom_rotation_locked_axis
 
       const sensitivity = 0.01
-      const cam_quat = atom_rotation_camera_quat || (deps.get_camera() ? deps.get_camera().quaternion : null)
-      let rotation_up: Vector3, rotation_right: Vector3, rotation_forward: Vector3
+      const cam_quat = atom_rotation_camera_quat
+        || (deps.get_camera() ? deps.get_camera().quaternion : new Quaternion())
+      const frame = screen_frame_from_camera(cam_quat)
+      const axis_vec = frame[axis]
 
-      if (cam_quat) {
-        rotation_up = new Vector3(0, 1, 0).applyQuaternion(cam_quat).normalize()
-        rotation_right = new Vector3(1, 0, 0).applyQuaternion(cam_quat).normalize()
-        rotation_forward = new Vector3(0, 0, -1).applyQuaternion(cam_quat).normalize()
-      } else {
-        rotation_up = new Vector3(0, 1, 0)
-        rotation_right = new Vector3(1, 0, 0)
-        rotation_forward = new Vector3(0, 0, -1)
-      }
+      const angle = drag_delta_for_axis(axis, total_dx, total_dy) * sensitivity
 
-      let incremental_quat: Quaternion
-      if (atom_rotation_roll_mode) {
-        const angle_z = delta_x * sensitivity
-        incremental_quat = new Quaternion().setFromAxisAngle(rotation_forward, angle_z)
-      } else {
-        const abs_dx = Math.abs(delta_x)
-        const abs_dy = Math.abs(delta_y)
-        // Suppress the minor axis when one axis clearly dominates,
-        // so a horizontal drag doesn't accumulate pitch noise (and vice-versa).
-        const dominance = 3 // ratio threshold
-        const eff_dx = (abs_dy > dominance * abs_dx) ? 0 : delta_x
-        const eff_dy = (abs_dx > dominance * abs_dy) ? 0 : delta_y
-        const angle_y = eff_dx * sensitivity
-        const angle_x = eff_dy * sensitivity
-        const quat_y = new Quaternion().setFromAxisAngle(rotation_up, angle_y)
-        const quat_x = new Quaternion().setFromAxisAngle(rotation_right, angle_x)
-        incremental_quat = quat_y.multiply(quat_x)
-      }
+      // Visual feedback.
+      atom_rotation_axis = [axis_vec.x, axis_vec.y, axis_vec.z]
+      atom_rotation_angle_deg = Math.abs(angle) * 180 / Math.PI
 
-      atom_rotation_cumulative_quat = incremental_quat.multiply(atom_rotation_cumulative_quat)
-
-      // Extract axis-angle from cumulative quaternion for visual feedback
-      const _cum_angle = 2 * Math.acos(Math.min(1, Math.abs(atom_rotation_cumulative_quat.w)))
-      if (_cum_angle > 1e-6) {
-        const s = Math.sqrt(1 - atom_rotation_cumulative_quat.w * atom_rotation_cumulative_quat.w)
-        atom_rotation_axis = [
-          atom_rotation_cumulative_quat.x / s,
-          atom_rotation_cumulative_quat.y / s,
-          atom_rotation_cumulative_quat.z / s,
-        ]
-      }
-      atom_rotation_angle_deg = _cum_angle * 180 / Math.PI
-
-      for (const idx of atom_rotation_initial_positions.keys()) {
-        const initial_pos = atom_rotation_initial_positions.get(idx)
-        if (initial_pos && atom_rotation_center) {
-          const relative = new Vector3(
-            initial_pos[0] - atom_rotation_center[0],
-            initial_pos[1] - atom_rotation_center[1],
-            initial_pos[2] - atom_rotation_center[2],
-          )
-          relative.applyQuaternion(atom_rotation_cumulative_quat)
-          pending_rotation_positions.set(idx, [
-            atom_rotation_center[0] + relative.x,
-            atom_rotation_center[1] + relative.y,
-            atom_rotation_center[2] + relative.z,
-          ])
-        }
+      // Recompute every frame from the stored initial positions — idempotent,
+      // no incremental quaternion product.
+      const indices = [...atom_rotation_initial_positions.keys()]
+      const initial = indices.map((idx) => atom_rotation_initial_positions.get(idx)!)
+      const rotated = rotate_points(initial, atom_rotation_center, axis_vec, angle)
+      for (let i = 0; i < indices.length; i++) {
+        pending_rotation_positions.set(indices[i], rotated[i])
       }
 
       if (!pending_rotation_update && pending_rotation_positions.size > 0) {

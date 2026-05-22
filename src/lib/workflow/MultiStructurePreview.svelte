@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { PymatgenStructure } from '$lib/structure'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
 
   interface Props {
     structures_json: string[]
@@ -159,11 +162,11 @@
   <!-- Header with selection controls -->
   {#if !hide_selection}
   <div class="header-bar">
-    <span class="structure-count">{selected_count}/{total} selected</span>
+    <span class="structure-count">{t('workflow.batch_selected_count', { selected: selected_count, total })}</span>
     <div class="header-actions">
-      <button class="toggle-all-btn" onclick={toggle_all}>{all_selected ? 'None' : 'All'}</button>
-      <button class="toggle-all-btn" onclick={invert_selection}>Invert</button>
-      <button class="toggle-all-btn" onclick={() => show_grid = !show_grid}>{show_grid ? 'Hide' : 'Grid'}</button>
+      <button class="toggle-all-btn" onclick={toggle_all}>{all_selected ? t('common.deselect_all') : t('common.select_all')}</button>
+      <button class="toggle-all-btn" onclick={invert_selection}>{t('workflow.multi_preview_invert')}</button>
+      <button class="toggle-all-btn" onclick={() => show_grid = !show_grid}>{show_grid ? t('workflow.multi_preview_hide') : t('workflow.multi_preview_grid')}</button>
     </div>
   </div>
   {/if}
@@ -177,11 +180,11 @@
           class:chip-selected={selected_indices.has(idx)}
           class:chip-current={idx === current_frame}
           onclick={(e) => chip_click(idx, e)}
-          title="#{idx + 1} — Click to toggle, Shift+click for range"
+          title={t('workflow.multi_preview_click_toggle_shift_range')}
         >{idx + 1}</button>
       {/each}
     </div>
-    <div class="chip-hint">Click to toggle · Shift+click for range</div>
+    <div class="chip-hint">{t('workflow.multi_preview_click_toggle_shift_range')}</div>
   {/if}
 
   <!-- 3D Preview -->
@@ -189,19 +192,19 @@
     {#if current_structure}
       <StructurePreview structure={current_structure} />
       {#if on_expand}
-        <button class="viewport-expand-btn" onclick={on_expand} title="Open in full viewer">&#x26F6;</button>
+        <button class="viewport-expand-btn" onclick={on_expand} title={t('workflow.calc_open_full_viewer')}>&#x26F6;</button>
       {/if}
     {:else}
       <div class="preview-msg">
         <span class="msg-icon">&#x1F50D;</span>
-        <span>No structure at frame {current_frame}</span>
+        <span>{t('workflow.multi_preview_no_structure_at_frame', { n: current_frame })}</span>
       </div>
     {/if}
   </div>
 
   <!-- Frame controls -->
   <div class="frame-controls">
-    <button class="frame-btn" onclick={go_prev} disabled={current_frame === 0} title="Previous structure">&lsaquo;</button>
+    <button class="frame-btn" onclick={go_prev} disabled={current_frame === 0} title={t('workflow.multi_preview_previous_structure')}>&lsaquo;</button>
     <input
       type="range"
       class="frame-slider"
@@ -209,23 +212,23 @@
       max={Math.max(0, total - 1)}
       bind:value={current_frame}
     />
-    <button class="frame-btn" onclick={go_next} disabled={current_frame >= total - 1} title="Next structure">&rsaquo;</button>
+    <button class="frame-btn" onclick={go_next} disabled={current_frame >= total - 1} title={t('workflow.multi_preview_next_structure')}>&rsaquo;</button>
     <span class="frame-label">{current_frame + 1}/{total}</span>
   </div>
 
   <!-- Frame info: composition -->
   {#if frame_description}
-    <div class="frame-desc">#{current_frame + 1}: {frame_description} · {current_structure?.sites?.length ?? 0} atoms</div>
+    <div class="frame-desc">#{current_frame + 1}: {frame_description} · {t('common.atoms_count', { n: current_structure?.sites?.length ?? 0 })}</div>
   {/if}
 
   <!-- Selection checkbox for current frame -->
   {#if !hide_selection}
     <label class="include-checkbox" class:unchecked={!current_is_selected}>
       <input type="checkbox" checked={current_is_selected} onchange={toggle_current} />
-      <span>Include in calculation</span>
+      <span>{t('workflow.multi_preview_include_in_calculation')}</span>
     </label>
     {#if selected_count < total}
-      <div class="selection-hint">Only {selected_count} of {total} structures will be submitted for calculation. Uncheck structures to exclude them from batch execution.</div>
+      <div class="selection-hint">{t('workflow.multi_preview_selection_hint', { selected: selected_count, total })}</div>
     {/if}
   {/if}
 </div>

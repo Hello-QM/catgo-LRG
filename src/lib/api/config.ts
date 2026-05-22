@@ -64,7 +64,11 @@ export async function desktop_backend_available(): Promise<boolean> {
   if (typeof __CATGO_DESKTOP__ === `undefined` || !__CATGO_DESKTOP__) return false
   if (_backend_state !== null) return _backend_state
   try {
-    const resp = await fetch(`${API_BASE}/providers`, {
+    // Liveness probe: hit /health (always present when backend is up).
+    // Was /providers, which 404s — that route lives at /api/optimade/providers
+    // & /api/chat/providers, so the old probe made desktop_backend_available()
+    // always return false even with a healthy backend.
+    const resp = await fetch(`${API_BASE}/health`, {
       signal: AbortSignal.timeout(2000),
     })
     _backend_state = resp.ok

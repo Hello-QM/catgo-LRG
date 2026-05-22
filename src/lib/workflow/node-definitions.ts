@@ -1,14 +1,13 @@
 import type { NodeDefinition, ParamDef, ShowIfCondition, SidebarCategory } from './workflow-types'
 import { MD_MINIMIZE_NODE } from './node-defs/calculation/md-minimize'
 import { UVVIS_NODE } from './node-defs/calculation/uvvis'
-// ── Single-source-of-truth migration ─────────────────────────────────────────
-// The legacy inline definitions in this file have drifted from the modular
-// schemas under src/lib/workflow/node-defs/. As types are validated, prefer
-// the modular version — it's loaded from the canonical JSON / spec and avoids
-// double-maintenance. To migrate a type: delete its inline `<type>: { … }`
-// block below, add an `import { foo } from './node-defs/<group>/<file>'` here,
-// and reference it as `foo,` in the NODE_DEFINITIONS object literal.
 import { adsorbate_place } from './node-defs/utility/adsorbate-place'
+import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+// Lazy-load workflow translations
+load_i18n_module('workflow')
+
+// ── Single-source-of-truth migration ─────────────────────────────────────────
 
 // ====== Software periodicity classification ======
 
@@ -26,12 +25,12 @@ export const SOFTWARE_PERIODICITY: Record<string, (`periodic` | `molecular`)[]> 
 }
 
 const SYSTEM_TYPE_PARAM: ParamDef = {
-  key: `system_type`, label: `System Type`, type: `select`, default: `periodic`, group: `Software`,
+  key: `system_type`, label: t('workflow.node_system_type_label'), type: `select`, default: `periodic`, group: t('workflow.node_group_software'),
   options: [
-    { label: `Periodic (crystal/slab/bulk)`, value: `periodic` },
-    { label: `Molecular (cluster/molecule)`, value: `molecular` },
+    { label: t('workflow.node_system_type_periodic'), value: `periodic` },
+    { label: t('workflow.node_system_type_molecular'), value: `molecular` },
   ],
-  help: `Periodic systems use plane-wave codes (VASP, QE). Molecular systems use localized basis codes (Gaussian, ORCA). Some codes (CP2K, xTB, MLP) support both.`,
+  help: t('workflow.node_system_type_help'),
 }
 
 // ====== show_if helper functions ======
@@ -90,64 +89,64 @@ function sella_show(params: ParamDef[]): ParamDef[] {
 
 const INCAR_COMMON: ParamDef[] = [
   {
-    key: `ENCUT`, label: `Cutoff Energy (eV)`, type: `number`, default: 520,
-    group: `INCAR`, min: 200, max: 900, step: 10,
-    help: `Plane-wave energy cutoff. Higher = more accurate but slower. 520 eV is standard for most VASP PAW potentials.`,
+    key: `ENCUT`, label: t('workflow.node_encut_label'), type: `number`, default: 520,
+    group: t('workflow.node_group_incar'), min: 200, max: 900, step: 10,
+    help: t('workflow.node_encut_help'),
   },
   {
-    key: `EDIFF`, label: `SCF Convergence`, type: `select`, default: `1e-5`, group: `INCAR`,
+    key: `EDIFF`, label: t('workflow.node_ediff_label'), type: `select`, default: `1e-5`, group: t('workflow.node_group_incar'),
     options: [
-      { label: `1e-4 (loose)`, value: `1e-4` },
-      { label: `1e-5 (standard)`, value: `1e-5` },
-      { label: `1e-6 (tight)`, value: `1e-6` },
-      { label: `1e-7 (very tight)`, value: `1e-7` },
+      { label: t('workflow.node_ediff_loose'), value: `1e-4` },
+      { label: t('workflow.node_ediff_standard'), value: `1e-5` },
+      { label: t('workflow.node_ediff_tight'), value: `1e-6` },
+      { label: t('workflow.node_ediff_very_tight'), value: `1e-7` },
     ],
-    help: `Energy convergence criterion for the electronic self-consistency loop.`,
+    help: t('workflow.node_ediff_help'),
   },
   {
-    key: `ISMEAR`, label: `Smearing`, type: `select`, default: 0, group: `INCAR`,
+    key: `ISMEAR`, label: t('workflow.node_ismear_label'), type: `select`, default: 0, group: t('workflow.node_group_incar'),
     options: [
-      { label: `Gaussian (0)`, value: 0 },
-      { label: `Methfessel-Paxton (1)`, value: 1 },
-      { label: `Tetrahedron w/ Blöchl (-5)`, value: -5 },
+      { label: t('workflow.node_ismear_gaussian'), value: 0 },
+      { label: t('workflow.node_ismear_mp'), value: 1 },
+      { label: t('workflow.node_ismear_tetrahedron'), value: -5 },
     ],
-    help: `Electronic smearing method. Use Gaussian (0) for molecules/slabs, MP (1) for metals, Tetrahedron (-5) for DOS/accurate energies.`,
+    help: t('workflow.node_ismear_help'),
   },
   {
-    key: `ISPIN`, label: `Spin Polarized`, type: `select`, default: 2, group: `INCAR`,
+    key: `ISPIN`, label: t('workflow.node_ispin_label'), type: `select`, default: 2, group: t('workflow.node_group_incar'),
     options: [
-      { label: `No (1)`, value: 1 },
-      { label: `Yes (2)`, value: 2 },
+      { label: t('workflow.node_ispin_no'), value: 1 },
+      { label: t('workflow.node_ispin_yes'), value: 2 },
     ],
-    help: `Enable spin polarization. Required for magnetic systems (Fe, Co, Ni, Mn, etc.).`,
+    help: t('workflow.node_ispin_help'),
   },
   {
-    key: `PREC`, label: `Precision`, type: `select`, default: `Accurate`, group: `INCAR`,
+    key: `PREC`, label: t('workflow.node_prec_label'), type: `select`, default: `Accurate`, group: t('workflow.node_group_incar'),
     options: [
-      { label: `Normal`, value: `Normal` },
-      { label: `Accurate`, value: `Accurate` },
+      { label: t('workflow.node_prec_normal'), value: `Normal` },
+      { label: t('workflow.node_prec_accurate'), value: `Accurate` },
     ],
-    help: `Affects FFT grids and projection operators. Use Accurate for production runs.`,
+    help: t('workflow.node_prec_help'),
   },
 ]
 
 const KPOINTS_PARAM: ParamDef = {
-  key: `kpoints`, label: `K-Points Grid`, type: `kpoints`, default: `4×4×4`, group: `KPOINTS`,
-  help: `Monkhorst-Pack k-point mesh for Brillouin zone sampling. Denser grids = more accurate. Use odd numbers for Gamma-centered grids.`,
+  key: `kpoints`, label: t('workflow.node_kpoints_label'), type: `kpoints`, default: `4×4×4`, group: t('workflow.node_group_kpoints'),
+  help: t('workflow.node_kpoints_help'),
 }
 
 const PARALLELIZATION_PARAMS: ParamDef[] = [
   {
-    key: `NCORE`, label: `NCORE`, type: `number`, default: 4, group: `Advanced`, min: 1, max: 128,
-    help: `Number of cores per orbital. NCORE × NPAR should equal total cores. Typical: 4-8.`,
+    key: `NCORE`, label: `NCORE`, type: `number`, default: 4, group: t('workflow.node_group_advanced'), min: 1, max: 128,
+    help: t('workflow.node_ncore_help'),
   },
   {
-    key: `LWAVE`, label: `Write WAVECAR`, type: `boolean`, default: false, group: `Advanced`,
-    help: `Write wavefunction file. Required for restart or hybrid functional calculations. Large file size.`,
+    key: `LWAVE`, label: t('workflow.node_lwave_label'), type: `boolean`, default: false, group: t('workflow.node_group_advanced'),
+    help: t('workflow.node_lwave_help'),
   },
   {
-    key: `LCHARG`, label: `Write CHGCAR`, type: `boolean`, default: true, group: `Advanced`,
-    help: `Write charge density file. Required for non-SCF calculations (DOS, band structure).`,
+    key: `LCHARG`, label: t('workflow.node_lcharg_label'), type: `boolean`, default: true, group: t('workflow.node_group_advanced'),
+    help: t('workflow.node_lcharg_help'),
   },
 ]
 
@@ -155,7 +154,7 @@ const PARALLELIZATION_PARAMS: ParamDef[] = [
 
 const CP2K_DFT_PARAMS: ParamDef[] = [
   {
-    key: `functional`, label: `XC Functional`, type: `select`, default: `PBE`, group: `DFT`,
+    key: `functional`, label: t('workflow.node_xc_functional_label'), type: `select`, default: `PBE`, group: t('workflow.node_group_dft'),
     options: [
       { label: `PBE (GGA)`, value: `PBE` },
       { label: `BLYP (GGA)`, value: `BLYP` },
@@ -167,70 +166,70 @@ const CP2K_DFT_PARAMS: ParamDef[] = [
       { label: `B3LYP (Hybrid)`, value: `B3LYP` },
       { label: `HSE06 (Hybrid)`, value: `HSE06` },
     ],
-    help: `Exchange-correlation functional. PBE is the most common for solids.`,
+    help: t('workflow.node_xc_functional_help'),
   },
   {
-    key: `basis_set`, label: `Basis Set`, type: `select`, default: `DZVP-MOLOPT-SR-GTH`, group: `DFT`,
+    key: `basis_set`, label: t('workflow.node_basis_set_label'), type: `select`, default: `DZVP-MOLOPT-SR-GTH`, group: t('workflow.node_group_dft'),
     options: [
       { label: `DZVP-MOLOPT-SR-GTH (solids)`, value: `DZVP-MOLOPT-SR-GTH` },
       { label: `DZVP-MOLOPT-GTH (molecules)`, value: `DZVP-MOLOPT-GTH` },
       { label: `TZVP-MOLOPT-GTH (accurate)`, value: `TZVP-MOLOPT-GTH` },
       { label: `TZV2P-MOLOPT-GTH (high accuracy)`, value: `TZV2P-MOLOPT-GTH` },
     ],
-    help: `Gaussian basis set. SR (short-range) variants are optimized for periodic systems.`,
+    help: t('workflow.node_basis_set_help'),
   },
   {
-    key: `cutoff`, label: `CUTOFF (Ry)`, type: `number`, default: 350, group: `DFT`,
+    key: `cutoff`, label: t('workflow.node_cutoff_ry_label'), type: `number`, default: 350, group: t('workflow.node_group_dft'),
     min: 200, max: 1200, step: 50,
-    help: `Plane-wave cutoff for the auxiliary grid. Higher = more accurate.`,
+    help: t('workflow.node_cutoff_ry_help'),
   },
   {
-    key: `rel_cutoff`, label: `REL_CUTOFF (Ry)`, type: `number`, default: 50, group: `DFT`,
+    key: `rel_cutoff`, label: t('workflow.node_rel_cutoff_ry_label'), type: `number`, default: 50, group: t('workflow.node_group_dft'),
     min: 30, max: 120, step: 10,
-    help: `Relative cutoff controlling which grid level Gaussians are mapped to.`,
+    help: t('workflow.node_rel_cutoff_ry_help'),
   },
   {
-    key: `scf_method`, label: `SCF Method`, type: `select`, default: `OT`, group: `SCF`,
+    key: `scf_method`, label: t('workflow.node_scf_method_label'), type: `select`, default: `OT`, group: t('workflow.node_group_scf'),
     options: [
-      { label: `OT (Orbital Transformation)`, value: `OT` },
-      { label: `Diagonalization (metals)`, value: `DIAG` },
+      { label: t('workflow.node_scf_method_ot'), value: `OT` },
+      { label: t('workflow.node_scf_method_diag'), value: `DIAG` },
     ],
-    help: `OT is faster for insulators. Diag required for metals and smearing.`,
+    help: t('workflow.node_scf_method_help'),
   },
   {
-    key: `eps_scf`, label: `EPS_SCF`, type: `select`, default: `1e-6`, group: `SCF`,
+    key: `eps_scf`, label: `EPS_SCF`, type: `select`, default: `1e-6`, group: t('workflow.node_group_scf'),
     options: [
-      { label: `1e-5 (loose)`, value: `1e-5` },
-      { label: `1e-6 (standard)`, value: `1e-6` },
-      { label: `1e-7 (tight)`, value: `1e-7` },
+      { label: t('workflow.node_ediff_loose'), value: `1e-5` },
+      { label: t('workflow.node_ediff_standard'), value: `1e-6` },
+      { label: t('workflow.node_ediff_tight'), value: `1e-7` },
     ],
-    help: `SCF convergence threshold. 1e-6 standard, 1e-7 for frequencies/properties.`,
+    help: t('workflow.node_eps_scf_help'),
   },
   {
-    key: `vdw`, label: `Dispersion Correction`, type: `select`, default: `none`, group: `DFT`,
+    key: `vdw`, label: t('workflow.node_dispersion_correction_label'), type: `select`, default: `none`, group: t('workflow.node_group_dft'),
     options: [
-      { label: `None`, value: `none` },
+      { label: t('workflow.node_none'), value: `none` },
       { label: `DFT-D3(BJ)`, value: `DFTD3(BJ)` },
       { label: `DFT-D3`, value: `DFTD3` },
       { label: `DFT-D4`, value: `DFTD4` },
     ],
-    help: `Van der Waals dispersion correction. D3(BJ) is recommended.`,
+    help: t('workflow.node_dispersion_correction_help'),
   },
   {
-    key: `charge`, label: `Net Charge`, type: `number`, default: 0, group: `Advanced`, min: -10, max: 10, step: 1,
-    help: `Total system charge. 0=neutral, positive=cation, negative=anion.`,
+    key: `charge`, label: t('workflow.node_net_charge_label'), type: `number`, default: 0, group: t('workflow.node_group_advanced'), min: -10, max: 10, step: 1,
+    help: t('workflow.node_net_charge_help'),
   },
   {
-    key: `uks`, label: `Spin Polarized (UKS)`, type: `boolean`, default: false, group: `Advanced`,
-    help: `Unrestricted Kohn-Sham for open-shell / spin-polarized systems.`,
+    key: `uks`, label: t('workflow.node_uks_label'), type: `boolean`, default: false, group: t('workflow.node_group_advanced'),
+    help: t('workflow.node_uks_help'),
   },
   {
-    key: `multiplicity`, label: `Multiplicity`, type: `number`, default: 1, group: `Advanced`, min: 1, max: 12, step: 1,
-    help: `Spin multiplicity (2S+1). 1=singlet, 2=doublet, 3=triplet.`,
+    key: `multiplicity`, label: t('workflow.node_multiplicity_label'), type: `number`, default: 1, group: t('workflow.node_group_advanced'), min: 1, max: 12, step: 1,
+    help: t('workflow.node_multiplicity_help'),
   },
   {
-    key: `cp2k_command`, label: `CP2K Executable`, type: `string`, default: `cp2k.psmp`, group: `Advanced`,
-    help: `CP2K executable command (e.g., cp2k.psmp, cp2k.popt).`,
+    key: `cp2k_command`, label: t('workflow.node_cp2k_executable_label'), type: `string`, default: `cp2k.psmp`, group: t('workflow.node_group_advanced'),
+    help: t('workflow.node_cp2k_executable_help'),
   },
 ]
 
@@ -238,7 +237,7 @@ const CP2K_DFT_PARAMS: ParamDef[] = [
 
 const ORCA_QC_PARAMS: ParamDef[] = [
   {
-    key: `method`, label: `Method`, type: `select`, default: `B3LYP`, group: `Quantum`,
+    key: `method`, label: t('workflow.node_method_label'), type: `select`, default: `B3LYP`, group: t('workflow.node_group_quantum'),
     options: [
       { label: `HF`, value: `HF` },
       { label: `BP86`, value: `BP86` },
@@ -258,12 +257,12 @@ const ORCA_QC_PARAMS: ParamDef[] = [
       { label: `MP2`, value: `MP2` },
       { label: `DLPNO-CCSD(T)`, value: `DLPNO-CCSD(T)` },
     ],
-    help: `Quantum chemistry method. r2SCAN-3c/PBEh-3c are composite (basis included). DLPNO-CCSD(T) for benchmark accuracy.`,
+    help: t('workflow.node_method_help'),
   },
   {
-    key: `basis`, label: `Basis Set`, type: `select`, default: `def2-SVP`, group: `Quantum`,
+    key: `basis`, label: t('workflow.node_basis_set_label'), type: `select`, default: `def2-SVP`, group: t('workflow.node_group_quantum'),
     options: [
-      { label: `(none — composite method)`, value: `` },
+      { label: t('workflow.node_orca_basis_none_composite'), value: `` },
       { label: `STO-3G`, value: `STO-3G` },
       { label: `6-31G`, value: `6-31G` },
       { label: `6-31G*`, value: `6-31G*` },
@@ -279,12 +278,12 @@ const ORCA_QC_PARAMS: ParamDef[] = [
       { label: `cc-pVDZ-F12`, value: `cc-pVDZ-F12` },
       { label: `cc-pVTZ-F12`, value: `cc-pVTZ-F12` },
     ],
-    help: `Basis set. def2 family recommended for ORCA. def2-SVP for screening, def2-TZVP for production.`,
+    help: t('workflow.node_orca_basis_help'),
   },
   {
-    key: `wavefunction`, label: `Wavefunction`, type: `select`, default: ``, group: `Quantum`,
+    key: `wavefunction`, label: t('workflow.node_wavefunction_label'), type: `select`, default: ``, group: t('workflow.node_group_quantum'),
     options: [
-      { label: `Auto (default)`, value: `` },
+      { label: t('workflow.node_wavefunction_auto'), value: `` },
       { label: `RHF`, value: `RHF` },
       { label: `UHF`, value: `UHF` },
       { label: `ROHF`, value: `ROHF` },
@@ -292,53 +291,53 @@ const ORCA_QC_PARAMS: ParamDef[] = [
       { label: `UKS`, value: `UKS` },
       { label: `ROKS`, value: `ROKS` },
     ],
-    help: `Wavefunction reference. Auto lets ORCA choose (RHF for HF, RKS for DFT). Use UHF/UKS for open-shell systems.`,
+    help: t('workflow.node_wavefunction_help'),
   },
   {
-    key: `dispersion`, label: `Dispersion`, type: `select`, default: `none`, group: `Quantum`,
+    key: `dispersion`, label: t('workflow.node_dispersion_label'), type: `select`, default: `none`, group: t('workflow.node_group_quantum'),
     options: [
-      { label: `None`, value: `none` },
+      { label: t('workflow.node_none'), value: `none` },
       { label: `D2`, value: `D2` },
-      { label: `D3 (BJ damping)`, value: `D3` },
-      { label: `D3BJ (recommended)`, value: `D3BJ` },
-      { label: `D3ZERO (zero damping)`, value: `D3ZERO` },
-      { label: `D30 (= D3ZERO)`, value: `D30` },
-      { label: `D3TZ (triple-ζ params, D3ZERO only)`, value: `D3TZ` },
-      { label: `D4 (BJ + ATM, newer)`, value: `D4` },
-      { label: `NOVDW (disable D corrections)`, value: `NOVDW` },
+      { label: t('workflow.node_dispersion_d3_bj_damping'), value: `D3` },
+      { label: t('workflow.node_dispersion_d3bj_recommended'), value: `D3BJ` },
+      { label: t('workflow.node_dispersion_d3zero'), value: `D3ZERO` },
+      { label: t('workflow.node_dispersion_d30'), value: `D30` },
+      { label: t('workflow.node_dispersion_d3tz'), value: `D3TZ` },
+      { label: t('workflow.node_dispersion_d4_newer'), value: `D4` },
+      { label: t('workflow.node_dispersion_novdw'), value: `NOVDW` },
     ],
-    help: `ORCA simple-input dispersion keyword. D3BJ is the typical default for DFT functionals; D4 is newer and BJ-damped by default. NOVDW explicitly disables dispersion. Not every functional is parametrised for every damping — see ORCA manual §3.4.1.`,
+    help: t('workflow.node_dispersion_help'),
   },
   {
-    key: `three_body_dispersion`, label: `Three-body term (ABC/ATM)`, type: `boolean`, default: false, group: `Quantum`,
+    key: `three_body_dispersion`, label: t('workflow.node_three_body_dispersion_label'), type: `boolean`, default: false, group: t('workflow.node_group_quantum'),
     show_if: { key: `dispersion`, values: [`D2`, `D3`, `D3BJ`, `D3ZERO`, `D30`, `D3TZ`] },
-    help: `Adds the three-body Axilrod-Teller-Muto (ATM) term to the route line as 'ABC'. Only relevant for D3 variants — D4 already includes ATM by default.`,
+    help: t('workflow.node_three_body_dispersion_help'),
   },
   {
-    key: `charge`, label: `Charge`, type: `number`, default: 0, group: `System`,
-    help: `Total charge of the system.`,
+    key: `charge`, label: t('workflow.node_charge_label'), type: `number`, default: 0, group: t('workflow.node_group_system'),
+    help: t('workflow.node_charge_help'),
   },
   {
-    key: `multiplicity`, label: `Multiplicity`, type: `number`, default: 1, group: `System`,
-    help: `Spin multiplicity (1=singlet, 2=doublet, 3=triplet, etc).`,
+    key: `multiplicity`, label: t('workflow.node_multiplicity_label'), type: `number`, default: 1, group: t('workflow.node_group_system'),
+    help: t('workflow.node_multiplicity_help'),
   },
   {
-    key: `uno`, label: `Generate Natural Orbitals (UNO)`, type: `boolean`, default: false, group: `Output`,
-    help: `Generate natural orbitals and occupation numbers.`,
+    key: `uno`, label: t('workflow.node_uno_label'), type: `boolean`, default: false, group: `Output`,
+    help: t('workflow.node_uno_help'),
   },
   {
-    key: `uco`, label: `Corresponding Orbitals (UCO)`, type: `boolean`, default: false, group: `Output`,
-    help: `Generate corresponding orbitals.`,
+    key: `uco`, label: t('workflow.node_uco_label'), type: `boolean`, default: false, group: `Output`,
+    help: t('workflow.node_uco_help'),
   },
   {
-    key: `num_cores`, label: `CPU Cores (nprocs)`, type: `number`, default: 4, group: `Parallelization`,
+    key: `num_cores`, label: t('workflow.node_num_cores_label'), type: `number`, default: 4, group: `Parallelization`,
     min: 1, max: 256, step: 1,
-    help: `Number of MPI processes. Emitted as '%pal nprocs N end'. The simple-input '!PALn' keyword only supports 1-8; the block form CatGO emits is unrestricted but the SLURM allocation must match. Requires OpenMPI built against the same ORCA version.`,
+    help: t('workflow.node_num_cores_help'),
   },
   {
-    key: `max_core_mb`, label: `Memory per Core (MB)`, type: `number`, default: 4000, group: `Parallelization`,
+    key: `max_core_mb`, label: t('workflow.node_max_core_mb_label'), type: `number`, default: 4000, group: `Parallelization`,
     min: 256, max: 64000, step: 256,
-    help: `Memory per process in MB ('%maxcore'). Total job memory ≈ num_cores × max_core_mb. Keep this under ~0.75 × node RAM since ORCA can briefly exceed maxcore.`,
+    help: t('workflow.node_max_core_mb_help'),
   },
 ]
 
@@ -346,7 +345,7 @@ const ORCA_QC_PARAMS: ParamDef[] = [
 
 const XTB_METHOD_PARAMS: ParamDef[] = [
   {
-    key: `method`, label: `xTB Method`, type: `select`, default: `GFN2-xTB`, group: `Method`,
+    key: `method`, label: t('workflow.node_xtb_method_label'), type: `select`, default: `GFN2-xTB`, group: t('workflow.node_group_method'),
     options: [
       { label: `GFN2-xTB (recommended)`, value: `GFN2-xTB` },
       { label: `GFN1-xTB`, value: `GFN1-xTB` },
@@ -354,45 +353,45 @@ const XTB_METHOD_PARAMS: ParamDef[] = [
       { label: `GFN-FF`, value: `GFN-FF` },
       { label: `IPEA1-xTB`, value: `IPEA1-xTB` },
     ],
-    help: `Semi-empirical tight-binding method.`,
+    help: t('workflow.node_xtb_method_help'),
   },
   {
-    key: `accuracy`, label: `Accuracy`, type: `number`, default: 1.0, group: `Method`,
+    key: `accuracy`, label: t('workflow.node_accuracy_label'), type: `number`, default: 1.0, group: t('workflow.node_group_method'),
     min: 0.1, max: 3.0, step: 0.1,
-    help: `Numerical accuracy parameter. Lower = tighter (1.0 is standard).`,
+    help: t('workflow.node_accuracy_help'),
   },
   {
-    key: `electronic_temperature`, label: `Electronic Temperature (K)`, type: `number`, default: 300, group: `Method`,
+    key: `electronic_temperature`, label: t('workflow.node_electronic_temperature_label'), type: `number`, default: 300, group: t('workflow.node_group_method'),
     min: 0, max: 10000, step: 100,
-    help: `Electronic temperature for Fermi smearing. Higher values improve SCF convergence for metallic systems.`,
+    help: t('workflow.node_electronic_temperature_help'),
   },
 ]
 
 // ====== MLP common params ======
 
 const MLP_MODEL_PARAM: ParamDef = {
-  key: `model`, label: `ML Model`, type: `select`, default: `MACE`, group: `Model`,
+  key: `model`, label: t('workflow.node_ml_model_label'), type: `select`, default: `MACE`, group: t('workflow.node_group_model'),
   options: [
     { label: `MACE-MP (recommended)`, value: `MACE` },
     { label: `CHGNet`, value: `CHGNet` },
     { label: `M3GNet`, value: `M3GNet` },
   ],
-  help: `Pre-trained universal potential to use.`,
+  help: t('workflow.node_ml_model_help'),
 }
 
 const MLP_DEVICE_PARAM: ParamDef = {
-  key: `device`, label: `Device`, type: `select`, default: `auto`, group: `Model`,
+  key: `device`, label: t('workflow.node_device_label'), type: `select`, default: `auto`, group: t('workflow.node_group_model'),
   options: [
     { label: `Auto (CUDA if available)`, value: `auto` },
     { label: `CPU`, value: `cpu` },
     { label: `CUDA GPU`, value: `cuda` },
   ],
-  help: `Which device to run the ML potential on. "Auto" picks CUDA if available on the execution node, else falls back to CPU.`,
+  help: t('workflow.node_device_help'),
 }
 
 const MLP_MODEL_PATH_PARAM: ParamDef = {
-  key: `model_path`, label: `Custom Model Path (optional)`, type: `string`, default: ``, group: `Model`,
-  help: `Absolute path to a fine-tuned MACE .model checkpoint on the execution node. Leave empty to use the default mace-mp-0 medium foundation model.`,
+  key: `model_path`, label: t('workflow.node_model_path_label'), type: `string`, default: ``, group: t('workflow.node_group_model'),
+  help: t('workflow.node_model_path_help'),
 }
 
 /** Local bundle mirroring MLP_COMMON_PARAMS from node-defs/common.ts. */
@@ -406,7 +405,7 @@ const MLP_COMMON_PARAMS: ParamDef[] = [
 
 const GAUSSIAN_QC_PARAMS: ParamDef[] = [
   {
-    key: `method`, label: `Method`, type: `select`, default: `B3LYP`, group: `Method`,
+    key: `method`, label: t('workflow.node_method_label'), type: `select`, default: `B3LYP`, group: t('workflow.node_group_method'),
     options: [
       { label: `HF`, value: `HF` },
       { label: `B3LYP`, value: `B3LYP` },
@@ -419,7 +418,7 @@ const GAUSSIAN_QC_PARAMS: ParamDef[] = [
     help: `Level of theory. B3LYP general-purpose, M06-2X for thermochemistry, ωB97X-D includes dispersion.`,
   },
   {
-    key: `basis`, label: `Basis Set`, type: `select`, default: `6-31G(d)`, group: `Method`,
+    key: `basis`, label: t('workflow.node_basis_set_label'), type: `select`, default: `6-31G(d)`, group: t('workflow.node_group_method'),
     options: [
       { label: `STO-3G (minimal)`, value: `STO-3G` },
       { label: `6-31G(d)`, value: `6-31G(d)` },
@@ -433,28 +432,28 @@ const GAUSSIAN_QC_PARAMS: ParamDef[] = [
     help: `6-31G(d) standard. Add + for diffuse functions (anions), (d,p) for polarization on H.`,
   },
   {
-    key: `charge`, label: `Charge`, type: `number`, default: 0, group: `System`,
-    help: `Total molecular charge.`,
+    key: `charge`, label: t('workflow.node_charge_label'), type: `number`, default: 0, group: t('workflow.node_group_system'),
+    help: t('workflow.node_charge_help'),
   },
   {
-    key: `multiplicity`, label: `Multiplicity`, type: `number`, default: 1, group: `System`,
+    key: `multiplicity`, label: t('workflow.node_multiplicity_label'), type: `number`, default: 1, group: t('workflow.node_group_system'),
     min: 1, max: 12, step: 1,
-    help: `Spin multiplicity (2S+1). 1=singlet, 2=doublet, 3=triplet.`,
+    help: t('workflow.node_multiplicity_help'),
   },
   {
-    key: `solvent`, label: `Solvent Model`, type: `select`, default: `none`, group: `Environment`,
+    key: `solvent`, label: t('workflow.node_solvent_model_label'), type: `select`, default: `none`, group: t('workflow.node_group_environment'),
     options: [
       { label: `None (gas phase)`, value: `none` },
       { label: `PCM (water)`, value: `SCRF=(PCM,Solvent=Water)` },
       { label: `SMD (water)`, value: `SCRF=(SMD,Solvent=Water)` },
       { label: `PCM (DMSO)`, value: `SCRF=(PCM,Solvent=DMSO)` },
     ],
-    help: `Implicit solvation. PCM=polarizable continuum, SMD=density-based (better free energies).`,
+    help: t('workflow.node_solvent_model_help'),
   },
   {
-    key: `dispersion`, label: `Dispersion`, type: `select`, default: `none`, group: `Method`,
+    key: `dispersion`, label: t('workflow.node_dispersion_label'), type: `select`, default: `none`, group: t('workflow.node_group_method'),
     options: [
-      { label: `None`, value: `none` },
+      { label: t('workflow.node_none'), value: `none` },
       { label: `GD3BJ (recommended)`, value: `GD3BJ` },
       { label: `GD3`, value: `GD3` },
     ],
@@ -471,23 +470,15 @@ export const NODE_DEFINITIONS: Record<string, NodeDefinition> = {
   // === Input ===
   structure_input: {
     type: `structure_input`,
-    label: `Structure Input`,
+    label: t('workflow.node_structure_input_label'),
     color: `#64748b`,
     icon: `\u{1F4C2}`,
     category: `Input`,
-    description: `Load structure from file or database`,
+    description: t('workflow.node_structure_input_description'),
     inputs: [],
     outputs: [`structure`],
     default_params: {},
-    help_text: `**Structure Input** — Starting point for your workflow.
-
-Load a crystal structure from:
-- **File**: POSCAR, CIF, XYZ, LAMMPS data (.data/.lammps/.lmp), or any format supported by pymatgen
-- **Materials Project**: Search by formula or MP-ID
-- **ASE Database**: Load from previous calculations
-- **Editor**: Draw or modify structure in CatGo's 3D viewer
-
-The structure is passed to downstream nodes as input for calculations.`,
+    help_text: t('workflow.node_structure_input_help'),
     param_schema: [],
   },
 
@@ -498,24 +489,19 @@ The structure is passed to downstream nodes as input for calculations.`,
   // ─── Geometry Optimization ───
   geo_opt: {
     type: `geo_opt`,
-    label: `Geometry Optimization`,
+    label: t('workflow.node_geometry_optimization_label'),
     color: `#3b82f6`,
     icon: `\u26A1`,
     category: `Calculation`,
-    description: `Optimize atomic positions (ions only)`,
+    description: t('workflow.node_geometry_optimization_description'),
     inputs: [`structure`],
     outputs: [`structure`, `energy`],
     default_params: { system_type: `periodic`, software: `vasp`, ENCUT: 520, EDIFF: `1e-5`, ISIF: 2, NSW: 200, kpoints: `4×4×4` },
-    help_text: `**Geometry Optimization** — Relax atomic positions.
-
-Choose system type first — periodic (crystal/slab) or molecular (cluster/molecule) — then select a compatible software.
-
-**Periodic:** VASP, CP2K, xTB, MLP
-**Molecular:** ORCA, Gaussian, CP2K, xTB, MLP`,
+    help_text: t('workflow.node_geometry_optimization_help'),
     param_schema: [
       SYSTEM_TYPE_PARAM,
       {
-        key: `software`, label: `Software`, type: `select`, default: `vasp`, group: `Software`,
+        key: `software`, label: t('workflow.node_group_software'), type: `select`, default: `vasp`, group: t('workflow.node_group_software'),
         options: [
           { label: `VASP`, value: `vasp` },
           { label: `CP2K`, value: `cp2k` },
@@ -694,23 +680,19 @@ Choose system type first — periodic (crystal/slab) or molecular (cluster/molec
   // ─── Single Point ───
   single_point: {
     type: `single_point`,
-    label: `Single Point`,
+    label: t('workflow.node_single_point_label'),
     color: `#6366f1`,
     icon: `\u{1F52C}`,
     category: `Calculation`,
-    description: `Single-point energy calculation`,
+    description: t('workflow.node_single_point_description'),
     inputs: [`structure`],
     outputs: [`energy`, `dos`, `band`],
     default_params: { system_type: `periodic`, software: `vasp`, ENCUT: 520, EDIFF: `1e-6`, ISMEAR: -5, LORBIT: 11 },
-    help_text: `**Single Point Calculation** — Compute energy at fixed geometry.
-
-Choose system type, then select a compatible software.
-
-Use after geometry optimization for accurate energies, or as input for DOS/band structure analysis.`,
+    help_text: t('workflow.node_single_point_help'),
     param_schema: [
       SYSTEM_TYPE_PARAM,
       {
-        key: `software`, label: `Software`, type: `select`, default: `vasp`, group: `Software`,
+        key: `software`, label: t('workflow.node_group_software'), type: `select`, default: `vasp`, group: t('workflow.node_group_software'),
         options: [
           { label: `VASP`, value: `vasp` },
           { label: `CP2K`, value: `cp2k` },
@@ -754,21 +736,18 @@ Use after geometry optimization for accurate energies, or as input for DOS/band 
   // ─── Cell Optimization ───
   cell_opt: {
     type: `cell_opt`,
-    label: `Cell Optimization`,
+    label: t('workflow.node_cell_optimization_label'),
     color: `#0f766e`,
     icon: `\u{1F4D0}`,
     category: `Calculation`,
-    description: `Optimize cell parameters and atomic positions`,
+    description: t('workflow.node_cell_optimization_description'),
     inputs: [`structure`],
     outputs: [`structure`, `energy`],
     default_params: { software: `vasp`, ENCUT: 520, EDIFF: `1e-6`, ISIF: 3, kpoints: `9×9×9` },
-    help_text: `**Cell Optimization** — Relax both lattice and ionic positions.
-
-Optimizes cell parameters (volume, shape) along with atomic positions.
-Use for bulk crystal optimization.`,
+    help_text: t('workflow.node_cell_optimization_help'),
     param_schema: [
       {
-        key: `software`, label: `Software`, type: `select`, default: `vasp`, group: `Software`,
+        key: `software`, label: t('workflow.node_group_software'), type: `select`, default: `vasp`, group: t('workflow.node_group_software'),
         options: [
           { label: `VASP`, value: `vasp` },
           { label: `CP2K`, value: `cp2k` },
@@ -826,24 +805,19 @@ Use for bulk crystal optimization.`,
   // ─── Molecular Dynamics ───
   md: {
     type: `md`,
-    label: `Molecular Dynamics`,
+    label: t('workflow.node_molecular_dynamics_label'),
     color: `#8b5cf6`,
     icon: `\u{1F321}\uFE0F`,
     category: `Calculation`,
-    description: `Molecular dynamics simulation`,
+    description: t('workflow.node_molecular_dynamics_description'),
     inputs: [`structure`, `restart`],
     outputs: [`trajectory`, `energy`, `log`, `restart`],
     default_params: { system_type: `periodic`, software: `vasp`, TEBEG: 300, NSW: 5000, POTIM: 1.0, SMASS: 0 },
-    help_text: `**Molecular Dynamics** — Run MD simulations.
-
-Choose system type first, then select a compatible MD engine.
-
-**Periodic:** VASP, CP2K, LAMMPS, GROMACS, MLP
-**Molecular:** CP2K, LAMMPS, GROMACS, MLP`,
+    help_text: t('workflow.node_molecular_dynamics_help'),
     param_schema: [
       SYSTEM_TYPE_PARAM,
       {
-        key: `software`, label: `Software`, type: `select`, default: `vasp`, group: `Software`,
+        key: `software`, label: t('workflow.node_group_software'), type: `select`, default: `vasp`, group: t('workflow.node_group_software'),
         options: [
           { label: `VASP`, value: `vasp` },
           { label: `CP2K`, value: `cp2k` },
@@ -1244,7 +1218,7 @@ Used for ZPE corrections, thermodynamics, and TS verification.
     param_schema: [
       SYSTEM_TYPE_PARAM,
       {
-        key: `software`, label: `Software`, type: `select`, default: `vasp`, group: `Software`,
+        key: `software`, label: t('workflow.node_group_software'), type: `select`, default: `vasp`, group: t('workflow.node_group_software'),
         options: [
           { label: `VASP`, value: `vasp` },
           { label: `CP2K`, value: `cp2k` },
@@ -2784,9 +2758,9 @@ export const UNIFIED_CALC_TYPES = new Set([`geo_opt`, `single_point`, `cell_opt`
 /** Ordered list of calc types for the Calculation Type dropdown */
 export const CALC_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: `geo_opt`, label: `Geometry Optimization` },
-  { value: `single_point`, label: `Single Point` },
-  { value: `cell_opt`, label: `Cell Optimization` },
-  { value: `md`, label: `Molecular Dynamics` },
+  { value: `single_point`, label: t('workflow.node_single_point_label') },
+  { value: `cell_opt`, label: t('workflow.node_cell_optimization_label') },
+  { value: `md`, label: t('workflow.node_molecular_dynamics_label') },
   { value: `md_minimize`, label: `MD Minimize` },
   { value: `freq`, label: `Frequency Analysis` },
   { value: `ts_search`, label: `Transition State Search` },
@@ -2863,11 +2837,11 @@ export function get_sidebar_categories(): SidebarCategory[] {
   // Merge all unified calc types into a single "Calculation" palette entry
   const calc_entry: NodeDefinition = {
     type: `geo_opt`,
-    label: `Calculation`,
+    get label() { const trans = t('workflow.cat.Calculation'); return trans.startsWith('workflow.') ? 'Calculation' : trans },
     color: `#3b82f6`,
     icon: `\u26A1`,
     category: `Calculation`,
-    description: `DFT / ML / semi-empirical calculation`,
+    get description() { const trans = t('workflow.cat.Calculation_desc'); return trans.startsWith('workflow.') ? 'DFT / ML / semi-empirical calculation' : trans },
     inputs: [`structure`],
     outputs: [`structure`, `energy`],
     default_params: NODE_DEFINITIONS[`geo_opt`]?.default_params ?? {},
@@ -2876,11 +2850,11 @@ export function get_sidebar_categories(): SidebarCategory[] {
   // Merge all tool types into a single "Tools" palette entry
   const tools_entry: NodeDefinition = {
     type: `slab_gen`,
-    label: `Tools`,
+    get label() { const trans = t('workflow.cat.Tools'); return trans.startsWith('workflow.') ? 'Tools' : trans },
     color: `#0e7490`,
     icon: `\u{1F6E0}\uFE0F`,
     category: `Tools`,
-    description: `Structure manipulation & building tools`,
+    get description() { const trans = t('workflow.cat.Tools_desc'); return trans.startsWith('workflow.') ? 'Structure manipulation & building tools' : trans },
     inputs: [`structure`],
     outputs: [`structure`],
     default_params: NODE_DEFINITIONS[`slab_gen`]?.default_params ?? {},
@@ -2889,28 +2863,28 @@ export function get_sidebar_categories(): SidebarCategory[] {
   // Merge all analysis types into a single "Analysis" palette entry
   const analysis_entry: NodeDefinition = {
     type: `dos_analysis`,
-    label: `Analysis`,
+    get label() { const trans = t('workflow.cat.Analysis'); return trans.startsWith('workflow.') ? 'Analysis' : trans },
     color: `#db2777`,
     icon: `\u{1F4CA}`,
     category: `Analysis`,
-    description: `Post-processing & analysis`,
+    get description() { const trans = t('workflow.cat.Analysis_desc'); return trans.startsWith('workflow.') ? 'Post-processing & analysis' : trans },
     inputs: [`data`],
     outputs: [`result`],
     default_params: NODE_DEFINITIONS[`dos_analysis`]?.default_params ?? {},
   }
 
   const categories: SidebarCategory[] = [
-    { id: `Input`, label: `Input`, icon: `\u{1F4C2}`, nodes: by_cat(`Input`) },
-    { id: `Calculation`, label: `Calculation`, icon: `\u26A1`, nodes: [calc_entry] },
-    { id: `Tools`, label: `Tools`, icon: `\u{1F6E0}\uFE0F`, nodes: [tools_entry] },
-    { id: `Logic`, label: `Logic`, icon: `\u25C7`, nodes: by_cat(`Logic`) },
-    { id: `Analysis`, label: `Analysis`, icon: `\u{1F4CA}`, nodes: [analysis_entry] },
+    { id: `Input`, get label() { const trans = t('workflow.cat.Input'); return trans.startsWith('workflow.') ? 'Input' : trans }, icon: `\u{1F4C2}`, nodes: by_cat(`Input`) },
+    { id: `Calculation`, get label() { const trans = t('workflow.cat.Calculation'); return trans.startsWith('workflow.') ? 'Calculation' : trans }, icon: `\u26A1`, nodes: [calc_entry] },
+    { id: `Tools`, get label() { const trans = t('workflow.cat.Tools'); return trans.startsWith('workflow.') ? 'Tools' : trans }, icon: `\u{1F6E0}\uFE0F`, nodes: [tools_entry] },
+    { id: `Logic`, get label() { const trans = t('workflow.cat.Logic'); return trans.startsWith('workflow.') ? 'Logic' : trans }, icon: `\u25C7`, nodes: by_cat(`Logic`) },
+    { id: `Analysis`, get label() { const trans = t('workflow.cat.Analysis'); return trans.startsWith('workflow.') ? 'Analysis' : trans }, icon: `\u{1F4CA}`, nodes: [analysis_entry] },
   ]
 
   // Add Plugin category if any plugin nodes exist
   const plugin_nodes = by_cat(`Plugin`)
   if (plugin_nodes.length > 0) {
-    categories.push({ id: `Plugin`, label: `Plugin`, icon: `\u{1F9E9}`, nodes: plugin_nodes })
+    categories.push({ id: `Plugin`, get label() { const trans = t('workflow.cat.Plugin'); return trans.startsWith('workflow.') ? 'Plugin' : trans }, icon: `\u{1F9E9}`, nodes: plugin_nodes })
   }
 
   // Filter out empty categories
@@ -2949,4 +2923,54 @@ export async function load_plugin_nodes(api_base: string): Promise<void> {
 /** Check if a node type is from a plugin */
 export function is_plugin_node(type: string): boolean {
   return type in _plugin_nodes
+}
+
+// ====================================================================
+// i18n dynamic patching
+// ====================================================================
+
+function patch_node_i18n(node: NodeDefinition) {
+  const original_label = node.label
+  const original_desc = node.description
+
+  Object.defineProperty(node, 'label', {
+    get() {
+      const trans = t(`workflow.node.${node.type}.label`)
+      return trans.startsWith('workflow.') ? original_label : trans
+    },
+    enumerable: true,
+    configurable: true
+  })
+
+  if (original_desc) {
+    Object.defineProperty(node, 'description', {
+      get() {
+        const trans = t(`workflow.node.${node.type}.description`)
+        return trans.startsWith('workflow.') ? original_desc : trans
+      },
+      enumerable: true,
+      configurable: true
+    })
+  }
+}
+
+// Patch existing definitions
+for (const node of Object.values(NODE_DEFINITIONS)) {
+  patch_node_i18n(node)
+}
+
+// Patch option lists
+const option_lists = [CALC_TYPE_OPTIONS, TOOL_TYPE_OPTIONS, ANALYSIS_TYPE_OPTIONS]
+for (const list of option_lists) {
+  for (const opt of list) {
+    const original_label = opt.label
+    Object.defineProperty(opt, 'label', {
+      get() {
+        const trans = t(`workflow.node.${opt.value}.label`)
+        return trans.startsWith('workflow.') ? original_label : trans
+      },
+      enumerable: true,
+      configurable: true
+    })
+  }
 }

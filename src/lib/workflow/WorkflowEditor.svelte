@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { NODE_DEFINITIONS, NODE_TYPE_MIGRATION, get_node_categories, get_sidebar_categories, load_plugin_nodes, UNIFIED_CALC_TYPES, CALC_TYPE_OPTIONS, UNIFIED_TOOL_TYPES, TOOL_TYPE_OPTIONS, UNIFIED_ANALYSIS_TYPES, ANALYSIS_TYPE_OPTIONS } from './node-definitions'
   import { load_dynamic_engines, all_engine_specs } from './node-defs/dynamic'
   import { STATUS_COLORS } from './workflow-types'
@@ -118,6 +119,9 @@
   const hpc_banner = create_hpc_banner()
   const change_det = create_change_detection()
 
+  // ─── Load workflow i18n module ───
+  $effect(() => { load_i18n_module('workflow') })
+
   // ─── State ───
   // NOTE on reactivity for `nodes` / `edges`:
   //
@@ -154,7 +158,7 @@
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       quickbuild_recipes = await resp.json()
     } catch (e) {
-      quickbuild_error = e instanceof Error ? e.message : `Failed to load recipes`
+      quickbuild_error = e instanceof Error ? e.message : t('workflow.editor_quickbuild_load_failed')
     } finally {
       quickbuild_loading = false
     }
@@ -191,7 +195,7 @@
         } catch { /* ignore */ }
       }
     } catch (e) {
-      quickbuild_error = e instanceof Error ? e.message : `QuickBuild failed`
+      quickbuild_error = e instanceof Error ? e.message : t('workflow.editor_quickbuild_run_failed')
     }
   }
 
@@ -204,7 +208,7 @@
   let sidebar_open = $state(!untrack(() => compact))
   let rpanel_open = $state(!untrack(() => compact))
   let rpanel_width = $state(280)
-  let workflow_name = $state(`Untitled Workflow`)
+  let workflow_name = $state(t('workflow.editor_untitled_workflow'))
   let is_saving = $state(false)
   let save_flash = $state(false)
   let is_loaded = $state(false)
@@ -1937,26 +1941,6 @@
       } else {
         push_history()
       }
-      // Before reading run-status, ask the backend to reconcile this
-      // workflow's task statuses with HPC truth (probes each task's SLURM
-      // job_id and writes back the real state). Without this, the user's
-      // first view after re-opening CatGo can show stale "completed" /
-      // "running" cells from before the previous shutdown — the scanner
-      // would correct it on its next 15 s cycle, but that feels broken.
-      // Fire-and-forget with a short timeout so a slow reconcile doesn't
-      // block the editor from loading. The run-status fetch below will
-      // get fresh values once the reconcile finishes (or on next poll).
-      try {
-        const reconcile_url = `${API_BASE}/workflow/${workflow_id}/reconcile-from-hpc`
-        await Promise.race([
-          fetch(reconcile_url, { method: `POST` }),
-          new Promise((resolve) => setTimeout(resolve, 5000)),  // 5s cap
-        ])
-      } catch (e) {
-        // Non-fatal — scanner will catch up on its next cycle.
-        console.warn(`[load_workflow] reconcile-from-hpc failed:`, e)
-      }
-
       // Always check run-status via HTTP — WASM status is stale during execution
       try {
         const run_status = await api.get_run_status(workflow_id)
@@ -2193,6 +2177,10 @@
   $effect(() => {
     return () => { clear_workflow_state(tab_slice_id) }
   })
+
+  $effect(() => {
+    load_i18n_module('workflow')
+  })
 </script>
 
 <div class="wf-root"
@@ -2266,7 +2254,7 @@
   <!-- CENTER: Canvas -->
   <div class="center" bind:this={wf_wrapper_el}>
     <div class="toolbar">
-      {#if onclose}<button class="tbtn" onclick={onclose}>← Back</button><div class="tsep"></div>{/if}
+      {#if onclose}<button class="tbtn" onclick={onclose}>{t('workflow.we_back') || '← Back'}</button><div class="tsep"></div>{/if}
       <input class="name-input" bind:value={workflow_name} oninput={schedule_save} />
       <div class="tsep"></div>
       <button class="tbtn" onclick={undo} title="Ctrl+Z">↩</button>
@@ -2276,28 +2264,43 @@
       <button class="tbtn" onclick={paste}>📌</button>
       <button class="tbtn danger" onclick={delete_selected}>🗑</button>
       <div class="tsep"></div>
-      <button class="tbtn" onclick={do_auto_layout}>🔀 Layout</button>
-      <button class="tbtn" onclick={() => { canvas.reset_view() }}>⊙ Reset</button>
-      <button class="tbtn" onclick={() => show_import_dialog = true} title="Import workflow from template or file">📥 Import</button>
-      <button class="tbtn" onclick={handle_export_json} title="Export workflow as JSON">📤 Export</button>
-      <button class="tbtn" onclick={handle_manual_save} disabled={is_saving} title="Save workflow">
-        {#if save_flash}✓{:else if is_saving}...{:else}💾{/if}
-      </button>
+      <button class="tbtn" onclick={do_auto_layout}>{t('workflow.we_layout') || '🔀 Layout'}</button>
+      <button class="tbtn" onclick={() => { canvas.reset_view() }}>{t('workflow.we_reset') || '⊙ Reset'}</button>
+      <span class="toolbar-tooltip-wrap">
+        <button class="tbtn" onclick={() => show_import_dialog = true}>{t('workflow.we_import') || '📥 Import'}</button>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_import_title') || "Import workflow from template or file"}</span>
+      </span>
+      <span class="toolbar-tooltip-wrap">
+        <button class="tbtn" onclick={handle_export_json}>{t('workflow.we_export') || '📤 Export'}</button>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_export_title') || "Export workflow as JSON"}</span>
+      </span>
+      <span class="toolbar-tooltip-wrap">
+        <button class="tbtn" onclick={handle_manual_save} disabled={is_saving}>
+          {#if save_flash}✓{:else if is_saving}...{:else}💾{/if}
+        </button>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_save_title') || "Save workflow"}</span>
+      </span>
       <div class="tsep"></div>
-      <button class="tbtn" onclick={() => show_job_script_workplace = true} title="Manage job scripts">📝 Scripts</button>
+      <span class="toolbar-tooltip-wrap">
+        <button class="tbtn" onclick={() => show_job_script_workplace = true}>{t('workflow.we_scripts') || '📝 Scripts'}</button>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_scripts_title') || "Manage job scripts"}</span>
+      </span>
       <div class="tsep"></div>
-      <button class="tbtn" onclick={() => show_connect_dialog = true} title="Connect to HPC server">
-        🔌 Connect
-        {#if hpc_session_store.sessions.length > 0}
-          <span class="conn-badge">{hpc_session_store.sessions.length}</span>
-        {/if}
-      </button>
+      <span class="toolbar-tooltip-wrap">
+        <button class="tbtn" onclick={() => show_connect_dialog = true}>
+          {t('workflow.we_connect') || '🔌 Connect'}
+          {#if hpc_session_store.sessions.length > 0}
+            <span class="conn-badge">{hpc_session_store.sessions.length}</span>
+          {/if}
+        </button>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_connect_title') || "Connect to HPC server"}</span>
+      </span>
       {#if workflow_status === `paused` && has_running_jobs}
-        <button class="tbtn sim-stop" onclick={open_pause_dialog}>⏸ Cancel Jobs</button>
-        <button class="tbtn sim-go" onclick={handle_run_click}>▶ Resume</button>
+        <button class="tbtn sim-stop" onclick={open_pause_dialog}>{t('workflow.we_cancel_jobs') || '⏸ Cancel Jobs'}</button>
+        <button class="tbtn sim-go" onclick={handle_run_click}>{t('workflow.we_resume') || '▶ Resume'}</button>
       {:else}
         <button class="tbtn" class:sim-go={workflow_status !== `running`} class:sim-stop={workflow_status === `running`} onclick={handle_run_click}>
-          {#if sim_running || workflow_status === `running`}⏸ Pause{:else if workflow_status === `paused`}▶ Resume{:else}▶ Run{/if}
+          {#if sim_running || workflow_status === `running`}{t('workflow.we_pause') || '⏸ Pause'}{:else if workflow_status === `paused`}{t('workflow.we_resume') || '▶ Resume'}{:else}{t('workflow.we_run') || '▶ Run'}{/if}
         </button>
       {/if}
       {#if sim_running || workflow_status === `running`}
@@ -2309,55 +2312,69 @@
             exec.set_workflow_status(`failed`)
           } catch (e) { console.warn(`Stop failed:`, e) }
           await handle_reset()
-        }} title="Force stop all tasks">⏹ Stop</button>
+        }} title={t('workflow.we_stop_title') || "Force stop all tasks"}>{t('workflow.we_stop') || '⏹ Stop'}</button>
       {/if}
       {#if workflow_status !== `draft` && !sim_running && workflow_status !== `running`}
-        <button class="tbtn danger" onclick={handle_reset} title="Reset workflow status">⟲ Reset</button>
+        <button class="tbtn danger" onclick={handle_reset} title={t('workflow.we_reset_title') || "Reset workflow status"}>{t('workflow.we_reset') || '⟲ Reset'}</button>
       {/if}
       {#if workflow_status !== `draft`}
-        <button class="tbtn" onclick={async (e) => {
-          const btn = e.currentTarget as HTMLButtonElement
-          btn.textContent = `⏳`
-          btn.disabled = true
-          try {
-            const result = await api.recheck_jobs(workflow_id)
-            btn.textContent = result.updated > 0 ? `✅ ${result.updated}` : `🔄 0`
-            console.log(`[Workflow] Recheck:`, result)
-            setTimeout(() => { btn.textContent = `🔄`; btn.disabled = false }, 3000)
-          } catch (err) {
-            btn.textContent = `❌`
-            console.error(`Recheck failed:`, err)
-            setTimeout(() => { btn.textContent = `🔄`; btn.disabled = false }, 3000)
-          }
-        }} title="Check HPC job status">🔄</button>
+        <span class="toolbar-tooltip-wrap">
+          <button class="tbtn" onclick={async (e) => {
+            const btn = e.currentTarget as HTMLButtonElement
+            btn.textContent = `⏳`
+            btn.disabled = true
+            try {
+              const result = await api.recheck_jobs(workflow_id)
+              btn.textContent = result.updated > 0 ? `✅ ${result.updated}` : `🔄 0`
+              console.log(`[Workflow] Recheck:`, result)
+              setTimeout(() => { btn.textContent = `🔄`; btn.disabled = false }, 3000)
+            } catch (err) {
+              btn.textContent = `❌`
+              console.error(`Recheck failed:`, err)
+              setTimeout(() => { btn.textContent = `🔄`; btn.disabled = false }, 3000)
+            }
+          }}>{t('workflow.we_recheck') || '🔄'}</button>
+          <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_recheck_title') || "Check HPC job status"}</span>
+        </span>
       {/if}
-      <button class="tbtn" onclick={simulate_run} title="Simulate (test without HPC)">🧪</button>
+      <span class="toolbar-tooltip-wrap">
+        <button class="tbtn" onclick={simulate_run}>{t('workflow.we_simulate') || '🧪'}</button>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_simulate_title') || "Simulate (test without HPC)"}</span>
+      </span>
       {#if ontoggle_terminal}
-        <button class="tbtn" class:active={terminal_open} onclick={ontoggle_terminal} title={terminal_open ? `Close terminal` : `Open terminal`}>
-          ⌘ Terminal
-        </button>
+        <span class="toolbar-tooltip-wrap">
+          <button class="tbtn" class:active={terminal_open} onclick={ontoggle_terminal}>
+            {t('workflow.we_terminal') || '⌘ Terminal'}
+          </button>
+          <span class="toolbar-tooltip" role="tooltip">{terminal_open ? (t('workflow.we_terminal_open') || 'Close terminal') : (t('workflow.we_terminal_close') || 'Open terminal')}</span>
+        </span>
       {/if}
       {#if ontoggle_chat}
-        <button class="tbtn" class:active={chat_open} onclick={ontoggle_chat} title={chat_open ? `Close AI chat` : `Open AI chat`}>
-          💬 AI
-        </button>
+        <span class="toolbar-tooltip-wrap">
+          <button class="tbtn" class:active={chat_open} onclick={ontoggle_chat}>
+            {t('workflow.we_ai') || '💬 AI'}
+          </button>
+          <span class="toolbar-tooltip" role="tooltip">{chat_open ? (t('workflow.we_ai_open') || 'Close AI chat') : (t('workflow.we_ai_close') || 'Open AI chat')}</span>
+        </span>
       {/if}
-      <button
-        class="tbtn gesture-btn"
-        class:active={wf_gesture_active}
-        onclick={() => {
-          wf_gesture_active = !wf_gesture_active
-          wf_gesture_config = { ...wf_gesture_config, enabled: wf_gesture_active }
-        }}
-        title={wf_gesture_active ? `Disable gesture control` : `Enable gesture control`}
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
-          <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
-          <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
-          <path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
-        </svg>
-      </button>
+      <span class="toolbar-tooltip-wrap">
+        <button
+          class="tbtn gesture-btn"
+          class:active={wf_gesture_active}
+          onclick={() => {
+            wf_gesture_active = !wf_gesture_active
+            wf_gesture_config = { ...wf_gesture_config, enabled: wf_gesture_active }
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+            <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+            <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+            <path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" />
+          </svg>
+        </button>
+        <span class="toolbar-tooltip" role="tooltip">{wf_gesture_active ? (t('workflow.we_disable_gesture') || 'Disable gesture control') : (t('workflow.we_enable_gesture') || 'Enable gesture control')}</span>
+      </span>
       {#if onpopout}<button class="tbtn" onclick={onpopout}>⧉</button>{/if}
       {#if workflow_status !== `draft`}
         <div class="wf-status-badge" style="
@@ -2373,13 +2390,13 @@
           {:else if workflow_status === `paused`}
             {@const still_running = Object.values(node_statuses).filter(s => s === `running`).length}
             {#if still_running > 0}
-              <span class="wf-progress-info">({still_running} job{still_running > 1 ? `s` : ``} still running)</span>
+              <span class="wf-progress-info">{t('workflow.we_job_still_running', { n: still_running, s: still_running > 1 ? 's' : '' }) || `(${still_running} job${still_running > 1 ? 's' : ''} still running)`}</span>
             {/if}
           {/if}
         </div>
       {/if}
       <span class="tinfo">
-        {Math.round(zoom * 100)}% • {nodes.length}N {edges.length}E
+        {Math.round(zoom * 100)}% • {nodes.length}{t('workflow.we_nodes') || 'N'} {edges.length}{t('workflow.we_edges') || 'E'}
       </span>
     </div>
     {#if cycle_warning}
@@ -2396,9 +2413,9 @@
     {/if}
     {#if external_change_detected}
       <div class="external-change-bar">
-        <span>Workflow modified externally (MCP / another tab).</span>
-        <button onclick={reload_from_server}>Reload</button>
-        <button onclick={() => { change_det.set_external_change_detected(false); do_save() }}>Overwrite</button>
+        <span>{t('workflow.we_modified_externally') || 'Workflow modified externally (MCP / another tab).'}</span>
+        <button onclick={reload_from_server}>{t('workflow.we_reload') || 'Reload'}</button>
+        <button onclick={() => { change_det.set_external_change_detected(false); do_save() }}>{t('workflow.we_overwrite') || 'Overwrite'}</button>
         <button class="error-dismiss" onclick={() => change_det.set_external_change_detected(false)}>x</button>
       </div>
     {/if}
@@ -2406,27 +2423,27 @@
       <div class="hpc-banner">
         <span>
           {#if disconnected_hosts.length === 1 && disconnected_hosts[0] === `HPC`}
-            This workflow has HPC computation nodes. Connect to an HPC server to run.
+            {t('workflow.we_hpc_nodes_warn') || 'This workflow has HPC computation nodes. Connect to an HPC server to run.'}
           {:else}
-            This workflow requires HPC {disconnected_hosts.length === 1 ? `server` : `servers`} not currently connected:
+            {t('workflow.we_hpc_nodes_req', { host_count: disconnected_hosts.length }) || `This workflow requires HPC ${disconnected_hosts.length === 1 ? 'server' : 'servers'} not currently connected:`}
             {#each disconnected_hosts as host, i}
               <strong>{host}</strong>{#if i < disconnected_hosts.length - 1}, {/if}
             {/each}
           {/if}
         </span>
-        <button class="hpc-banner-connect" onclick={() => show_connect_dialog = true}>Connect</button>
+        <button class="hpc-banner-connect" onclick={() => show_connect_dialog = true}>{t('workflow.we_connect') || 'Connect'}</button>
         <button class="error-dismiss" onclick={() => hpc_banner.set_hpc_banner_dismissed(true)}>x</button>
       </div>
     {/if}
 
     {#if show_templates}
       <div class="tmpl-overlay">
-        <div class="tmpl-title">⚡ Quick Recipes (zero LLM, ~200&nbsp;ms)</div>
+        <div class="tmpl-title">{t('workflow.we_quick_recipes') || '⚡ Quick Recipes (zero LLM, ~200\u00A0ms)'}</div>
         {#if quickbuild_error}
           <div class="tmpl-quick-error">{quickbuild_error}</div>
         {/if}
         {#if quickbuild_loading}
-          <div class="tmpl-quick-hint">Loading recipes…</div>
+          <div class="tmpl-quick-hint">{t('workflow.we_loading_recipes') || 'Loading recipes…'}</div>
         {:else}
           <div class="tmpl-quick-strip">
             {#each quickbuild_recipes as r (r.id)}
@@ -2437,7 +2454,7 @@
             {/each}
           </div>
         {/if}
-        <div class="tmpl-title" style="margin-top: 12px">Workflow Templates</div>
+        <div class="tmpl-title" style="margin-top: 12px">{t('workflow.we_workflow_templates') || 'Workflow Templates'}</div>
         {#each TEMPLATE_GROUPS as group}
           <div class="tmpl-group-header">{group.label}</div>
           {#each group.keys as key}
@@ -2554,9 +2571,9 @@
               {/if}
               {#if node.type === `structure_list_input`}
                 {@const sli_count = (node.params.count as number) ?? 0}
-                <text x={NW / 2} y={46} fill={sli_count > 0 ? `#10b981` : `var(--accent-color, #60a5fa)`} font-size="10" text-anchor="middle" class="mono" opacity="0.8">{sli_count > 0 ? `${sli_count} structure${sli_count !== 1 ? `s` : ``}` : `No structures`}</text>
+                <text x={NW / 2} y={46} fill={sli_count > 0 ? `#10b981` : `var(--accent-color, #60a5fa)`} font-size="10" text-anchor="middle" class="mono" opacity="0.8">{sli_count > 0 ? `${sli_count} structure${sli_count !== 1 ? `s` : ``}` : (t('workflow.we_no_structures') || 'No structures')}</text>
               {:else if node.type === `structure_input` && !node.params.structure_json}
-                <text x={NW / 2} y={46} fill="var(--accent-color, #60a5fa)" font-size="10" text-anchor="middle" class="mono" opacity="0.8">Click to import</text>
+                <text x={NW / 2} y={46} fill="var(--accent-color, #60a5fa)" font-size="10" text-anchor="middle" class="mono" opacity="0.8">{t('workflow.we_click_to_import') || 'Click to import'}</text>
               {:else}
                 {@const formula_sub = node.type === `structure_input` && !!custom_label && !!node_formula}
                 {@const y_offset = formula_sub ? 14 : 0}
@@ -2568,7 +2585,7 @@
                   <text x={NW / 2} y={44 + y_offset + i * 14} fill="var(--text-color-dim, #5a7a9a)" font-size="9.5" text-anchor="middle" class="mono">{ptext.length > 32 ? ptext.slice(0, 30) + `\u2026` : ptext}</text>
                 {/each}
                 {#if Object.keys(node.params || {}).length > get_display_params(node.params).length}
-                  <text x={NW / 2} y={44 + y_offset + get_display_params(node.params).length * 14} fill="var(--text-color-dim, #3a5a7a)" font-size="9" text-anchor="middle" class="mono">+{Object.keys(node.params).length - get_display_params(node.params).length} more</text>
+                  <text x={NW / 2} y={44 + y_offset + get_display_params(node.params).length * 14} fill="var(--text-color-dim, #3a5a7a)" font-size="9" text-anchor="middle" class="mono">{t('workflow.we_more_params', { n: Object.keys(node.params).length - get_display_params(node.params).length }) || `+${Object.keys(node.params).length - get_display_params(node.params).length} more`}</text>
                 {/if}
               {/if}
               {#each { length: Math.max(inputs.length, 1) } as _, i}
@@ -2591,7 +2608,7 @@
                 </g>
               {/each}
               {#if is_orphan && !sim_running}
-                <text x={NW / 2} y={nh + 14} fill="#f59e0b" font-size="9" text-anchor="middle" class="mono">⚡ not connected</text>
+                <text x={NW / 2} y={nh + 14} fill="#f59e0b" font-size="9" text-anchor="middle" class="mono">{t('workflow.we_not_connected') || '⚡ not connected'}</text>
               {/if}
             </g>
           {/if}
@@ -2613,7 +2630,7 @@
         {/each}
       </svg>
     </div>
-    <div class="help">Scroll=Zoom • Drag=Pan • Shift+Drag=Select • ⌫=Delete • Ctrl+Z=Undo • Ctrl+C/V=Copy/Paste</div>
+    <div class="help">{t('workflow.we_help') || 'Scroll=Zoom • Drag=Pan • Shift+Drag=Select • ⌫=Delete • Ctrl+Z=Undo • Ctrl+C/V=Copy/Paste'}</div>
 
     <!-- Gesture Control Overlay -->
     {#if wf_gesture_active}
@@ -2630,7 +2647,7 @@
   <!-- RIGHT: Properties -->
   <div class="rpanel" class:collapsed={!rpanel_open}
     use:resizable={{ side: 'left', min: 220, max: 600, onresize: (w) => rpanel_width = w }}>
-    <button class="panel-toggle right" onclick={() => rpanel_open = !rpanel_open} title={rpanel_open ? `Hide properties` : `Show properties`}>
+    <button class="panel-toggle right" onclick={() => rpanel_open = !rpanel_open} title={rpanel_open ? (t('workflow.we_hide_properties') || `Hide properties`) : (t('workflow.we_show_properties') || `Show properties`)}>
       {rpanel_open ? `▸` : `◂`}
     </button>
     {#if rpanel_open}
@@ -2638,14 +2655,14 @@
     {@const _batch_structures = _sel_for_tabs && has_structure_io(_sel_for_tabs.type) ? resolve_input_structures(_sel_for_tabs.id) : null}
     {@const _show_batch_tab = _batch_structures && _batch_structures.length > 1}
     <div class="ptabs">
-      <button class="ptab" class:active={right_panel === `props`} onclick={() => right_panel = `props`}>Properties</button>
+      <button class="ptab" class:active={right_panel === `props`} onclick={() => right_panel = `props`}>{t('workflow.editor_props_tab') || 'Properties'}</button>
       {#if _show_batch_tab}
         <button class="ptab" class:active={right_panel === `batch`} onclick={() => right_panel = `batch`}>
-          Batch<span class="ptab-badge">{_batch_structures.length}</span>
+          {t('workflow.editor_batch_tab') || 'Batch'}<span class="ptab-badge">{_batch_structures.length}</span>
         </button>
       {/if}
-      <button class="ptab" class:active={right_panel === `status`} onclick={() => right_panel = `status`}>Status</button>
-      <button class="ptab-popout" onclick={popout_status} title="Detach panel to new window (follows selection)">⧉</button>
+      <button class="ptab" class:active={right_panel === `status`} onclick={() => right_panel = `status`}>{t('workflow.editor_status_tab') || 'Status'}</button>
+      <button class="ptab-popout" onclick={popout_status} title={t('workflow.we_detach_panel') || "Detach panel to new window (follows selection)"}>⧉</button>
     </div>
     <div class="pcontent">
       {#if right_panel === `batch`}
@@ -2733,8 +2750,8 @@
         {:else}
           <div class="empty-sel">
             <div class="empty-icon">📊</div>
-            <div class="empty-title">No node selected</div>
-            <div class="empty-hint">Select a node to view its execution status</div>
+            <div class="empty-title">{t('workflow.editor_no_node_selected') || 'No node selected'}</div>
+            <div class="empty-hint">{t('workflow.editor_select_node_hint') || 'Select a node to view its execution status'}</div>
           </div>
         {/if}
       {:else if selected_node}
@@ -2771,7 +2788,7 @@
             {#if UNIFIED_TOOL_TYPES.has(nd.type)}
               {@const show_thelp = tool_help_visible === nd.id}
               <div class="calc-type-row">
-                <label class="calc-type-label">Tool Type</label>
+                <label class="calc-type-label">{t('workflow.editor_tool_type_label')}</label>
                 <div class="calc-type-controls">
                   <select class="calc-type-select"
                     value={nd.type}
@@ -2873,7 +2890,7 @@
             {#if UNIFIED_CALC_TYPES.has(nd.type)}
               {@const show_help = calc_help_visible === nd.id}
               <div class="calc-type-row">
-                <label class="calc-type-label">Calculation Type</label>
+                <label class="calc-type-label">{t('workflow.editor_calc_type_label')}</label>
                 <div class="calc-type-controls">
                   <select class="calc-type-select"
                     value={nd.type}
@@ -2895,7 +2912,7 @@
             {#if UNIFIED_ANALYSIS_TYPES.has(nd.type)}
               {@const show_ahelp = analysis_help_visible === nd.id}
               <div class="calc-type-row">
-                <label class="calc-type-label">Analysis Type</label>
+                <label class="calc-type-label">{t('workflow.editor_analysis_type_label')}</label>
                 <div class="calc-type-controls">
                   <select class="calc-type-select"
                     value={nd.type}
@@ -3028,7 +3045,7 @@
                     onclick={() => open_structure_edit_3d(nd.id, `output`)}
                     style="margin-top: 4px; width: 100%; justify-content: center; background: color-mix(in srgb, #22c55e 15%, transparent); border-color: color-mix(in srgb, #22c55e 30%, transparent);"
                   >
-                    🔬 View Output Structure
+                     {t('workflow.editor_view_output_structure')}
                   </button>
                 {/if}
               {/if}
@@ -3076,7 +3093,7 @@
                   style="margin: 4px 12px; width: calc(100% - 24px); justify-content: center; background: color-mix(in srgb, var(--accent-color, #3b82f6) 12%, transparent); border-color: color-mix(in srgb, var(--accent-color, #3b82f6) 30%, transparent);"
                   onclick={() => open_energy_diagram(nd.id)}
                 >
-                  Open Diagram Editor
+                  {t('workflow.editor_open_diagram')}
                 </button>
               {/if}
             </NodeConfigPanel>
@@ -3088,7 +3105,7 @@
                 onclick={() => open_structure_dialog(nd.id)}
                 style="margin-top: 8px; width: 100%; justify-content: center;"
               >
-                {nd.params.structure_json ? '✏️ Edit Structure' : '📥 Import Structure'}
+                {nd.params.structure_json ? t('workflow.editor_edit_structure') : t('workflow.editor_import_structure')}
               </button>
               {#if nd.params.structure_json}
                 <button
@@ -3096,7 +3113,7 @@
                   onclick={() => open_structure_edit_3d(nd.id, `own`)}
                   style="margin-top: 4px; width: 100%; justify-content: center; background: color-mix(in srgb, var(--accent-color) 15%, transparent); border-color: color-mix(in srgb, var(--accent-color) 30%, transparent);"
                 >
-                  🔬 Edit 3D Structure
+                  {t('workflow.editor_edit_3d')}
                 </button>
               {/if}
             {/if}
@@ -3109,7 +3126,7 @@
                 const el = document.getElementById(`hpc-body-${nd.id}`)
                 if (el) el.classList.toggle('collapsed')
               }}>
-                <span class="hpc-header-label">HPC Settings</span>
+                <span class="hpc-header-label">{t('workflow.editor_hpc_settings')}</span>
                 {#if nd.params.hpc_session_id}
                   {@const s = hpc_sessions.find(ss => ss.session_id === nd.params.hpc_session_id)}
                   <span class="hpc-badge">{s ? `${s.username}@${s.host}` : `configured`}</span>
@@ -3117,12 +3134,12 @@
               </button>
               <div id="hpc-body-{nd.id}" class="hpc-body">
                 <!-- Cluster -->
-                <label class="hpc-label">Cluster</label>
+                <label class="hpc-label">{t('workflow.editor_cluster')}</label>
                 <select class="hpc-input hpc-select"
                   value={nd.params.hpc_session_id ?? ``}
                   onchange={(e) => update_node_param(nd.id, `hpc_session_id`, (e.target as HTMLSelectElement).value || undefined)}
                 >
-                  <option value="">Use default (from Run Config)</option>
+                  <option value="">{t('workflow.editor_use_default_cluster')}</option>
                   {#each hpc_sessions as s}
                     <option value={s.session_id}>{s.username}@{s.host}</option>
                   {/each}
@@ -3130,7 +3147,7 @@
 
                 {#if is_vasp_node(nd.type, nd.params)}
                   <!-- VASP executable -->
-                  <label class="hpc-label">VASP Executable</label>
+                  <label class="hpc-label">{t('workflow.editor_vasp_executable')}</label>
                   <select class="hpc-input hpc-select"
                     value={nd.params.vasp_executable ?? `vasp_std`}
                     onchange={(e) => update_node_param(nd.id, `vasp_executable`, (e.target as HTMLSelectElement).value)}
@@ -3146,7 +3163,7 @@
                       checked={(nd.params.sort_structure as any) ?? false}
                       onchange={(e) => update_node_param(nd.id, `sort_structure`, (e.target as HTMLInputElement).checked)}
                     />
-                    <span>Sort POSCAR by element</span>
+                    <span>{t('workflow.editor_sort_poscar')}</span>
                   </label>
                 {/if}
 
@@ -3204,7 +3221,7 @@
                 </div>
 
                 <!-- Job script selector + editor -->
-                <label class="hpc-label">Job Script</label>
+                <label class="hpc-label">{t('workflow.editor_job_script')}</label>
                 <div class="hpc-script-row">
                   <select class="hpc-input hpc-select"
                     value={nd.params.job_script_id ?? ``}
@@ -3222,7 +3239,7 @@
                       }
                     }}
                   >
-                    <option value="">Cluster default</option>
+                    <option value="">{t('workflow.editor_cluster_default')}</option>
                     {#each job_script_store.get_for_node(nd.type) as script}
                       <option value={script.id}>{script.name}</option>
                     {/each}
@@ -3250,7 +3267,7 @@
               onclick={() => open_file_browser(nd.id)}
               style="margin-top: 4px; width: 100%; justify-content: center;"
             >
-              📂 Browse Files
+              {t('workflow.editor_browse_files')}
             </button>
           {/if}
         {/if}
@@ -3275,14 +3292,14 @@
       {:else}
         <div class="empty-sel">
           <div class="empty-icon">⬡</div>
-          <div class="empty-title">No selection</div>
-          <div class="empty-hint">Select a node or edge to view properties</div>
+          <div class="empty-title">{t('workflow.editor_no_selection')}</div>
+          <div class="empty-hint">{t('workflow.editor_select_hint')}</div>
           <div class="qs">
-            <div class="qs-title">Quick start:</div>
-            <div>1. Drag nodes from left</div>
-            <div>2. Connect output → input</div>
-            <div>3. Edit params here</div>
-            <div>4. Click ▶ Run to execute on HPC</div>
+            <div class="qs-title">{t('workflow.editor_quickstart')}</div>
+            <div>{t('workflow.editor_qs_1')}</div>
+            <div>{t('workflow.editor_qs_2')}</div>
+            <div>{t('workflow.editor_qs_3')}</div>
+            <div>{t('workflow.editor_qs_4')}</div>
           </div>
         </div>
       {/if}
@@ -3531,6 +3548,50 @@
     border-radius: 5px; color: var(--text-color-muted); font-size: 11px; cursor: pointer;
     display: flex; align-items: center; gap: 4px; white-space: nowrap;
     font-family: inherit;
+  }
+  .toolbar-tooltip-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .toolbar-tooltip {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    transform: translateX(-50%) translateY(4px);
+    padding: 6px 9px;
+    border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    background: var(--surface-bg-hover, light-dark(#ffffff, #20232b));
+    color: var(--text-color);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    font-size: 10px;
+    line-height: 1.25;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    z-index: 30;
+    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+  }
+  .toolbar-tooltip-wrap:hover .toolbar-tooltip,
+  .toolbar-tooltip-wrap:focus-within .toolbar-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+  .toolbar-tooltip::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 100%;
+    width: 8px;
+    height: 8px;
+    background: inherit;
+    border-right: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--border-color) 80%, transparent);
+    transform: translate(-50%, -50%) rotate(45deg);
   }
   .tbtn:hover { background: var(--surface-bg-hover); border-color: var(--accent-hover-color, light-dark(#3730a3, #2563eb)); color: var(--text-color); }
   .tbtn.active { background: var(--surface-bg-hover); border-color: var(--accent-hover-color, light-dark(#3730a3, #2563eb)); color: var(--text-color); }

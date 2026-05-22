@@ -19,8 +19,14 @@ const apply_symmetry_ops = (
   const wrap = (
     v: Vec3,
   ): Vec3 => (wrap_frac ? v.map((c) => c - Math.floor(c)) as Vec3 : v)
+  // Dedup at 3-decimal precision (~0.001). This is the crystallographic
+  // standard for "same position". CIFs commonly truncate 1/3 to `0.3333`;
+  // applying different symmetry ops to it yields 0.6666 (= 0.3333-0.6667+1)
+  // and 0.6667 (= -0.3333+1) — same Wyckoff position differing only by
+  // input-precision artifacts. The previous `toFixed(12)` key kept all of
+  // them as distinct atoms; 0.001 tolerance collapses them correctly.
   const key = (v: Vec3): string =>
-    `${v[0].toFixed(12)},${v[1].toFixed(12)},${v[2].toFixed(12)}`
+    `${v[0].toFixed(3)},${v[1].toFixed(3)},${v[2].toFixed(3)}`
 
   // Always include base atom (optionally wrapped)
   const base_coords = wrap(atom.coords as Vec3)
@@ -38,52 +44,46 @@ const apply_symmetry_ops = (
     for (let dim = 0; dim < 3; dim++) {
       const part = parts[dim]
       let expr = part.replace(/\s+/g, ``)
+      if (!expr) continue
+
+      // Tokenize the expression into signed terms. Each term is either
+      // a variable (x/y/z, optionally signed) or a numeric constant
+      // (integer / decimal / fraction, optionally signed). This handles
+      // arbitrary CIF symmetry-op forms — single-variable ("x", "x+1/2"),
+      // multi-variable ("x-y", "-x+y", "x-y+1/2"), and numeric-only
+      // ("1/4", "-0.5"). The previous one-shot regex only captured the
+      // first variable and silently dropped the rest, so hexagonal /
+      // trigonal CIFs (P6/mmm, P-3m1, etc.) with `x-y` style ops
+      // generated wrong atom positions.
+      //
+      // Normalize so every term carries an explicit leading + or - sign,
+      // then split on signed boundaries.
+      if (expr[0] !== `+` && expr[0] !== `-`) expr = `+` + expr
+      const terms = expr.match(/[+-][^+-]*/g) ?? []
 
       let coord = 0
       let translation = 0
-
-      // Support both var+number and number+var forms, with optional sign on var
-      const var_match = expr.match(/([+-]?)(x|y|z)/)
-      if (var_match) {
-        const sign_char = var_match[1]
-        const var_char = var_match[2]
-        const var_index = var_char === `x` ? 0 : var_char === `y` ? 1 : 2
-        const var_sign = sign_char === `-` ? -1 : 1
-        coord = var_sign * atom.coords[var_index]
-        // Remove the variable term (including its sign) to leave pure translation
-        expr = expr.replace(var_match[0], ``)
-
-        // Normalize the remaining expression: trim whitespace and remove trailing operators
-        expr = expr.trim()
-        if (expr.endsWith(`+`) || expr.endsWith(`-`)) expr = expr.slice(0, -1)
-
-        // Treat empty expression as "0"
-        if (expr.length === 0) expr = `0`
-      }
-
-      if (expr.length > 0) {
-        // Remaining is numeric translation, possibly with leading sign
-        let sign = 1
-        let number_str = expr
-        if (expr[0] === `+` || expr[0] === `-`) {
-          sign = expr[0] === `-` ? -1 : 1
-          number_str = expr.slice(1)
-        }
-        if (number_str.includes(`/`)) {
-          const [num, den] = number_str.split(`/`)
-          const numerator = parseFloat(num)
-          const denominator = parseFloat(den)
+      for (const term of terms) {
+        const sign = term[0] === `-` ? -1 : 1
+        const body = term.slice(1)
+        if (!body) continue
+        if (body === `x` || body === `y` || body === `z`) {
+          const var_idx = body === `x` ? 0 : body === `y` ? 1 : 2
+          coord += sign * atom.coords[var_idx]
+        } else if (body.includes(`/`)) {
+          const [num_str, den_str] = body.split(`/`)
+          const numerator = parseFloat(num_str)
+          const denominator = parseFloat(den_str)
           if (isNaN(numerator) || isNaN(denominator)) {
-            console.warn(`Malformed fraction in symmetry operation: ${num}/${den}`)
+            console.warn(`Malformed fraction in symmetry operation: ${body}`)
           } else if (denominator === 0) {
-            console.warn(`Division by zero in symmetry operation: ${num}/${den}`)
-          } else translation = sign * (numerator / denominator)
+            console.warn(`Division by zero in symmetry operation: ${body}`)
+          } else translation += sign * (numerator / denominator)
         } else {
-          const val = parseFloat(number_str)
-          // Log malformed numeric value for debugging
+          const val = parseFloat(body)
           if (isNaN(val)) {
-            console.warn(`Malformed numeric value in symmetry operation: ${number_str}`)
-          } else translation = sign * val
+            console.warn(`Malformed numeric value in symmetry operation: ${body}`)
+          } else translation += sign * val
         }
       }
 
@@ -449,11 +449,12 @@ export function parse_cif(
 
     const ops_to_use = already_enumerated ? [] : normalized_ops
 
-    // Global deduplication of final sites (per element + coordinates + label)
+    // Global deduplication of final sites (per element + coordinates + label).
+    // 3-decimal precision matches the per-op dedup above; see comment there.
     const seen_site_keys = new Set<string>()
     const site_key = (element: string, abc: Vec3, label: string): string =>
-      `${element}|${label}|${abc[0].toFixed(12)},${abc[1].toFixed(12)},${
-        abc[2].toFixed(12)
+      `${element}|${label}|${abc[0].toFixed(3)},${abc[1].toFixed(3)},${
+        abc[2].toFixed(3)
       }`
 
     for (const atom of atoms) {

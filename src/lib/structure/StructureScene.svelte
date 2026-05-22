@@ -2058,6 +2058,11 @@
 
     const instances: { matrix: Float32Array; color_start: string; color_end: string }[] = []
 
+    // Subscribe to override-map mutations so this $derived re-runs when
+    // the right-click "Set Color" picker updates a hydrogen-bonded atom.
+    const _sco_size_hbond = site_color_overrides?.size ?? 0
+    void _sco_size_hbond
+
     for (const bond_data of h_bond_pairs) {
       const site_a = bond_struct.sites[bond_data.site_idx_1]
       const site_b = bond_struct.sites[bond_data.site_idx_2]
@@ -2067,10 +2072,16 @@
         bond_data.transform_matrix.some((val) => !Number.isFinite(val))
       ) continue
 
+      // Per-site override wins over element-default color (matches the
+      // covalent-bond path in atom_colors_buffer below).
+      const color_start = site_color_overrides?.get(bond_data.site_idx_1)
+        ?? get_majority_color(site_a, colors.element, bond_color)
+      const color_end = site_color_overrides?.get(bond_data.site_idx_2)
+        ?? get_majority_color(site_b, colors.element, bond_color)
       instances.push({
         matrix: bond_data.transform_matrix,
-        color_start: get_majority_color(site_a, colors.element, bond_color),
-        color_end: get_majority_color(site_b, colors.element, bond_color),
+        color_start,
+        color_end,
       })
     }
 
@@ -2684,6 +2695,8 @@
   let __x2_prev_prop_colors: unknown = null
   let __x2_prev_sro: unknown = null
   let __x2_prev_sco: unknown = null
+  let __x2_prev_sro_sig = ``
+  let __x2_prev_sco_sig = ``
   let __x2_prev_ero: unknown = null
   let __x2_prev_same_size = false
   let __x2_prev_atom_radius = -1
@@ -2782,11 +2795,27 @@
     // remaining "Nothing changed" early-return absorbs Svelte over-fires for
     // non-trajectory operations (drag, topology, selection) — preserved as
     // protection against unnecessary slow-path runs.
+    // Build content signatures for the reactive Maps. SvelteMap.set()
+    // mutates in place, so a `!==` ref comparison would always be false
+    // when the user changes per-site colors via the right-click picker
+    // — the gate below would short-circuit and the GPU instance colors
+    // would never repaint. The signature captures both size AND every
+    // key=value pair so any add / remove / change of a value triggers
+    // a sync, while ref-stable no-op fires still get filtered out.
+    let _sco_sig = ``
+    if (site_color_overrides && site_color_overrides.size > 0) {
+      for (const [k, v] of site_color_overrides) _sco_sig += `${k}=${v};`
+    }
+    let _sro_sig = ``
+    if (site_radius_overrides && site_radius_overrides.size > 0) {
+      for (const [k, v] of site_radius_overrides) _sro_sig += `${k}=${v};`
+    }
+
     if (__x2_initialized) {
       const struct_changed = structure !== __x2_prev_struct
       const prop_changed = _prop_colors_ref !== __x2_prev_prop_colors
-      const sro_changed = site_radius_overrides !== __x2_prev_sro
-      const sco_changed = site_color_overrides !== __x2_prev_sco
+      const sro_changed = _sro_sig !== __x2_prev_sro_sig
+      const sco_changed = _sco_sig !== __x2_prev_sco_sig
       const ero_changed = element_radius_overrides !== __x2_prev_ero
       const same_size_changed = _same_size !== __x2_prev_same_size
       const radius_changed = _atom_radius !== __x2_prev_atom_radius
@@ -2816,6 +2845,8 @@
     __x2_prev_prop_colors = _prop_colors_ref
     __x2_prev_sro = site_radius_overrides
     __x2_prev_sco = site_color_overrides
+    __x2_prev_sro_sig = _sro_sig
+    __x2_prev_sco_sig = _sco_sig
     __x2_prev_ero = element_radius_overrides
     __x2_prev_same_size = _same_size
     __x2_prev_atom_radius = _atom_radius
@@ -3244,14 +3275,24 @@
 
   // Flat linear-RGB buffer for BondManagerInstances' gradient shader.
   // One xyz triple per site; bonds look up colors by site_idx at render time.
+  // Per-site color overrides (from the right-click "Set Color" picker)
+  // take priority over the element-default color so that recoloring an
+  // atom also recolors the bond halves incident to it. The `.size` read
+  // subscribes this $derived to SvelteMap changes (set/delete/clear).
   let atom_colors_buffer = $derived.by(() => {
     if (import.meta.env?.DEV) __probe_acb_fires++
     const sites = structure?.sites
     if (!sites || sites.length === 0) return EMPTY_COLORS
     if (import.meta.env?.DEV) __probe_acb_meaningful++
+    // Subscribe to override-map mutations. `.size` is the cheapest read
+    // that reactively tracks adds/removes; SvelteMap.set on an existing
+    // key also triggers per-key .get() subscribers below.
+    const _sco_size = site_color_overrides?.size ?? 0
+    void _sco_size
     const out = new Float32Array(sites.length * 3)
     for (let i = 0; i < sites.length; i++) {
-      const hex = get_majority_color(sites[i], colors.element, bond_color)
+      const override_hex = site_color_overrides?.get(i)
+      const hex = override_hex ?? get_majority_color(sites[i], colors.element, bond_color)
       const [r, g, b] = __hex_to_linear_rgb(hex)
       out[i * 3]     = r
       out[i * 3 + 1] = g

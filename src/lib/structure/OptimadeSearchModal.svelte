@@ -28,6 +28,10 @@
   import type { PymatgenStructure } from './index'
   import { optimade_to_pymatgen, pubchem_to_pymatgen } from './parse'
   import { SvelteMap } from 'svelte/reactivity'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   interface Props {
     visible: boolean
@@ -183,7 +187,7 @@
         selected_provider = mp?.id ?? providers[0].id
       }
       if (fetched.length === 0) {
-        providers_error = `No OPTIMADE providers returned (PubChem still available)`
+        providers_error = t('structure.optimade_no_providers')
       }
     } catch (err) {
       console.error(`Failed to load OPTIMADE providers:`, err)
@@ -198,7 +202,7 @@
       if (selected_provider !== `pubchem`) {
         selected_provider = `pubchem`
       }
-      providers_error = `Failed to load OPTIMADE providers: ${err}`
+      providers_error = t('structure.optimade_load_failed', { error: String(err) })
     }
     loading_providers = false
   }
@@ -206,7 +210,7 @@
   // API key handling
   async function save_api_key() {
     if (!api_key_input.trim()) {
-      api_key_error = `Please enter an API key`
+      api_key_error = t('structure.api_key_required')
       return
     }
 
@@ -225,7 +229,7 @@
         fetch_mp_summaries()
       }
     } else {
-      api_key_error = `Invalid API key. Please check and try again.`
+      api_key_error = t('structure.api_key_invalid')
     }
 
     api_key_validating = false
@@ -387,10 +391,10 @@
         )
 
         if (pubchem_results.compounds.length === 0 && page === 0) {
-          search_error = `No compounds found for "${search_formula || search_elements}"`
+          search_error = null
         }
       } catch (err) {
-        search_error = `Search failed: ${err}`
+        search_error = t('structure.search_failed', { error: String(err) })
       }
       loading_search = false
       return
@@ -399,10 +403,10 @@
     // OPTIMADE search path
     // Ensure providers are loaded
     if (providers.length === 0) {
-      search_error = `Providers not loaded yet. Please wait...`
+      search_error = t('structure.providers_not_loaded')
       await load_providers()
       if (providers.length === 0) {
-        search_error = `Failed to load OPTIMADE providers`
+        search_error = t('structure.optimade_load_failed_short')
         return
       }
       search_error = null
@@ -424,7 +428,7 @@
           return do_search(page)
         }
       } else {
-        search_error = `No providers available`
+        search_error = t('structure.no_providers')
         return
       }
     }
@@ -499,7 +503,7 @@
       }
 
     } catch (err) {
-      search_error = `Search failed: ${err}`
+      search_error = t('structure.search_failed', { error: String(err) })
       console.error(`[OPTIMADE DEBUG] Search error:`, err)
     }
     loading_search = false
@@ -553,20 +557,20 @@
             onclose()
           }
         } else {
-          search_error = `Failed to parse structure data. The structure format may be unsupported.`
+          search_error = t('structure.structure_parse_failed')
         }
       } else {
-        search_error = `Could not fetch structure from ${selected_provider}. The server may be temporarily unavailable. Try a different database or try again later.`
+        search_error = t('structure.structure_fetch_failed', { provider: selected_provider })
       }
     } catch (err) {
       console.error(`Failed to import structure:`, err)
       const error_msg = err instanceof Error ? err.message : String(err)
       if (error_msg.includes(`503`) || error_msg.includes(`Service Unavailable`)) {
-        search_error = `The ${selected_provider} server is temporarily unavailable (503). Please try again later or select a different database.`
+        search_error = t('structure.provider_unavailable_503', { provider: selected_provider })
       } else if (error_msg.includes(`CORS`) || error_msg.includes(`fetch`)) {
-        search_error = `Network error connecting to ${selected_provider}. The server may be down or blocking requests.`
+        search_error = t('structure.provider_network_error', { provider: selected_provider })
       } else {
-        search_error = `Failed to import structure: ${error_msg}`
+        search_error = t('structure.structure_import_failed', { error: error_msg })
       }
     }
     loading_import = false
@@ -590,14 +594,14 @@
             onclose()
           }
         } else {
-          search_error = `Failed to convert compound structure`
+          search_error = t('structure.structure_conversion_failed')
         }
       } else {
-        search_error = `Failed to fetch compound data`
+        search_error = t('structure.compound_fetch_failed')
       }
     } catch (err) {
       console.error(`Failed to import structure:`, err)
-      search_error = `Failed to import structure: ${err}`
+      search_error = t('structure.structure_import_failed', { error: String(err) })
     }
     loading_import = false
   }
@@ -638,7 +642,7 @@
   <div class="modal-overlay" onclick={handle_click_outside}>
     <div class="modal-content" bind:this={modal_element} role="dialog" aria-modal="true">
       <div class="modal-header">
-        <h2>Search Database</h2>
+        <h2>{t('structure.search_database')}</h2>
         <button class="close-btn" onclick={onclose}>×</button>
       </div>
 
@@ -646,14 +650,13 @@
         {#if STATIC_ONLY}
           <div style="margin: 0 0 16px 0;">
             <StaticModeBanner
-              title="Search Limitations"
-              message="Online database searching is limited in the browser due to security (CORS) restrictions. For full access to Materials Project, PubChem, and all OPTIMADE providers, use the CatGo desktop app."
+              title={t('structure.search_limitations')}
+              message={t('structure.search_limitations_desc')}
             />
           </div>
         {/if}
 
-        <!-- Search mode tabs -->
-        <div class="mode-tabs" role="tablist" aria-label="Search mode">
+        <div class="mode-tabs" role="tablist" aria-label={t('structure.search_database')}>
           <button
             class="mode-tab"
             class:active={search_mode === `only`}
@@ -661,7 +664,7 @@
             aria-selected={search_mode === `only`}
             onclick={() => (search_mode = `only`)}
           >
-            Only Elements
+            {t('structure.only_elements')}
           </button>
           <button
             class="mode-tab"
@@ -670,7 +673,7 @@
             aria-selected={search_mode === `at_least`}
             onclick={() => (search_mode = `at_least`)}
           >
-            At Least Elements
+            {t('structure.at_least_elements')}
           </button>
           <button
             class="mode-tab"
@@ -679,7 +682,7 @@
             aria-selected={search_mode === `formula`}
             onclick={() => (search_mode = `formula`)}
           >
-            Formula
+            {t('structure.formula_label')}
           </button>
         </div>
 
@@ -688,11 +691,11 @@
           <div class="periodic-table-section">
             <p class="pt-hint">
               {search_mode === `only`
-                ? `Select elements to search for materials with only these elements`
-                : `Select elements to search for materials containing at least these elements`}
+                ? t('structure.select_only_elements')
+                : t('structure.select_at_least_elements')}
               {#if selected_elements.length > 0}
-                — selected: <strong>{selected_elements.join(`, `)}</strong>
-                <button class="clear-link" onclick={clear_selected_elements}>clear</button>
+                — {t('structure.selected_elements')} <strong>{selected_elements.join(`, `)}</strong>
+                <button class="clear-link" onclick={clear_selected_elements}>{t('common.clear')}</button>
               {/if}
             </p>
             <PeriodicTable
@@ -705,17 +708,16 @@
           </div>
         {/if}
 
-        <!-- Provider selection -->
         <div class="provider-section">
-          <label for="provider-select">Database:</label>
+          <label for="provider-select">{t('structure.database')}</label>
           {#if loading_providers}
-            <span class="loading-text">Loading providers...</span>
+            <span class="loading-text">{t('structure.loading_providers')}</span>
           {:else if providers_error && providers.length === 0}
             <span class="error-text">{providers_error}</span>
-            <button class="retry-btn" onclick={load_providers}>Retry</button>
+            <button class="retry-btn" onclick={load_providers}>{t('common.retry')}</button>
           {:else if providers.length === 0}
-            <span class="loading-text">No providers available</span>
-            <button class="retry-btn" onclick={load_providers}>Retry</button>
+            <span class="loading-text">{t('structure.no_providers')}</span>
+            <button class="retry-btn" onclick={load_providers}>{t('common.retry')}</button>
           {:else}
             <select id="provider-select" bind:value={selected_provider}>
               {#each providers as provider (provider.id)}
@@ -725,37 +727,36 @@
           {/if}
         </div>
 
-        <!-- Materials Project API Key (for full computed properties) -->
         {#if selected_provider === `mp`}
           <div class="api-key-section">
             {#if show_api_key_input}
               <div class="api-key-input-row">
                 <input
                   type="password"
-                  placeholder="Paste your Materials Project API key"
+                  placeholder={t('structure.paste_mp_key')}
                   bind:value={api_key_input}
                   onkeydown={(e) => e.key === `Enter` && save_api_key()}
                 />
                 <button class="api-key-btn save" onclick={save_api_key} disabled={api_key_validating}>
-                  {api_key_validating ? `Validating...` : `Save`}
+                  {api_key_validating ? t('structure.validating') : t('common.save')}
                 </button>
                 <button class="api-key-btn cancel" onclick={() => { show_api_key_input = false; api_key_error = null }}>
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </div>
               {#if api_key_error}
                 <span class="api-key-error">{api_key_error}</span>
               {/if}
               <span class="api-key-hint">
-                Get a free API key at <a href="https://materialsproject.org/api" target="_blank" rel="noopener">materialsproject.org/api</a>
+                {t('structure.get_mp_key')} <a href="https://materialsproject.org/api" target="_blank" rel="noopener">materialsproject.org/api</a>
               </span>
             {:else if mp_has_key}
-              <span class="api-key-status success">API key configured - showing full properties</span>
-              <button class="api-key-link" onclick={remove_api_key}>Remove key</button>
+              <span class="api-key-status success">{t('structure.api_key_configured')}</span>
+              <button class="api-key-link" onclick={remove_api_key}>{t('structure.remove_key')}</button>
             {:else}
-              <span class="api-key-status">Basic info only.</span>
+              <span class="api-key-status">{t('structure.basic_info_only')}</span>
               <button class="api-key-link" onclick={() => show_api_key_input = true}>
-                Add API key for band gap, energy, symmetry
+                {t('structure.add_api_key')}
               </button>
             {/if}
           </div>
@@ -765,22 +766,22 @@
         <div class="search-section">
           {#if search_mode === `formula`}
             <div class="search-field">
-              <label for="formula-input">{is_pubchem ? `Formula/Name:` : `Formula:`}</label>
+              <label for="formula-input">{is_pubchem ? t('structure.formula_name') : t('structure.formula_label')}</label>
               <input
                 id="formula-input"
                 type="text"
-                placeholder={is_pubchem ? `e.g., benzene, C6H6, H2O` : `e.g., NaCl, Fe2O3`}
+                placeholder={is_pubchem ? t('structure.pubchem_formula_hint') : t('structure.mp_formula_hint')}
                 bind:value={search_formula}
                 onkeydown={(e) => e.key === `Enter` && do_search()}
               />
             </div>
           {:else}
             <div class="search-field">
-              <label for="elements-input">Elements:</label>
+              <label for="elements-input">{t('structure.elements_label')}</label>
               <input
                 id="elements-input"
                 type="text"
-                placeholder="e.g., Fe, O (comma-separated)"
+                placeholder={t('structure.elements_hint')}
                 bind:value={search_elements}
                 onkeydown={(e) => e.key === `Enter` && do_search()}
               />
@@ -788,9 +789,9 @@
           {/if}
           <button class="search-btn" onclick={() => do_search()} disabled={loading_search}>
             {#if loading_search}
-              Searching...
+              {t('structure.searching')}
             {:else}
-              <Icon icon="Search" /> Search
+              <Icon icon="Search" /> {t('common.search')}
             {/if}
           </button>
         </div>
@@ -801,13 +802,13 @@
 
         <!-- Results -->
         <div class="results-section">
-          <h3>Results {results_count !== null ? `(${results_count})` : ``}</h3>
+          <h3>{t('structure.results')} {results_count !== null ? `(${results_count})` : ``}</h3>
 
           {#if is_pubchem}
             <!-- PubChem results -->
             {#if pubchem_results}
               {#if pubchem_results.compounds.length === 0}
-                <p class="no-results">No compounds found</p>
+                <p class="no-results">{t('structure.no_compounds_found')}</p>
               {:else}
                 <div class="results-list">
                   {#each pubchem_results.compounds as compound (compound.cid)}
@@ -816,7 +817,7 @@
                     <div class="result-item" class:selected={selected_pubchem_result?.cid === compound.cid}>
                       <div class="result-info">
                         <div class="result-header">
-                          <span class="result-id">CID: {compound.cid}</span>
+                          <span class="result-id">{t('structure.result_cid')}: {compound.cid}</span>
                           <span class="result-formula">{@html get_electro_neg_formula(formula)}</span>
                         </div>
                         {#if name}
@@ -824,42 +825,42 @@
                         {/if}
                         <div class="result-details">
                           {#if compound.weight && typeof compound.weight === `number`}
-                            <span class="result-detail" title="Molecular weight">
-                              <span class="detail-label">MW:</span> {compound.weight.toFixed(2)} g/mol
+                            <span class="result-detail" title={t('structure.molecular_weight')}>
+                              <span class="detail-label">{t('structure.result_mw')}:</span> {compound.weight.toFixed(2)} g/mol
                             </span>
                           {:else if compound.weight}
-                            <span class="result-detail" title="Molecular weight">
-                              <span class="detail-label">MW:</span> {compound.weight} g/mol
+                            <span class="result-detail" title={t('structure.molecular_weight')}>
+                              <span class="detail-label">{t('structure.result_mw')}:</span> {compound.weight} g/mol
                             </span>
                           {/if}
                           {#if compound.HeavyAtomCount !== undefined}
-                            <span class="result-detail" title="Heavy atom count">
-                              <span class="detail-label">Atoms:</span> {compound.HeavyAtomCount}
+                            <span class="result-detail" title={t('structure.heavy_atom_count')}>
+                              <span class="detail-label">{t('structure.result_atoms')}:</span> {compound.HeavyAtomCount}
                             </span>
                           {/if}
                           {#if compound.XLogP !== undefined && compound.XLogP !== null}
-                            <span class="result-detail" title="XLogP (lipophilicity)">
+                            <span class="result-detail" title={t('structure.xlogp_lipophilicity')}>
                               <span class="detail-label">XLogP:</span> {compound.XLogP}
                             </span>
                           {/if}
                           {#if compound.TPSA !== undefined && compound.TPSA !== null}
-                            <span class="result-detail" title="Topological Polar Surface Area">
+                            <span class="result-detail" title={t('structure.topological_polar_surface_area')}>
                               <span class="detail-label">TPSA:</span> {compound.TPSA} &#8491;&sup2;
                             </span>
                           {/if}
                           {#if compound.HBondDonorCount !== undefined}
-                            <span class="result-detail" title="Hydrogen bond donor count">
-                              <span class="detail-label">H-don:</span> {compound.HBondDonorCount}
+                            <span class="result-detail" title={t('structure.hydrogen_bond_donor_count')}>
+                              <span class="detail-label">{t('structure.result_h_don')}:</span> {compound.HBondDonorCount}
                             </span>
                           {/if}
                           {#if compound.HBondAcceptorCount !== undefined}
-                            <span class="result-detail" title="Hydrogen bond acceptor count">
-                              <span class="detail-label">H-acc:</span> {compound.HBondAcceptorCount}
+                            <span class="result-detail" title={t('structure.hydrogen_bond_acceptor_count')}>
+                              <span class="detail-label">{t('structure.result_h_acc')}:</span> {compound.HBondAcceptorCount}
                             </span>
                           {/if}
                           {#if compound.RotatableBondCount !== undefined}
-                            <span class="result-detail" title="Rotatable bond count">
-                              <span class="detail-label">Rot:</span> {compound.RotatableBondCount}
+                            <span class="result-detail" title={t('structure.rotatable_bond_count')}>
+                              <span class="detail-label">{t('structure.result_rot')}:</span> {compound.RotatableBondCount}
                             </span>
                           {/if}
                         </div>
@@ -877,9 +878,9 @@
                         disabled={loading_import && selected_pubchem_result?.cid === compound.cid}
                       >
                         {#if loading_import && selected_pubchem_result?.cid === compound.cid}
-                          Loading...
+                          {t('common.loading')}
                         {:else}
-                          <Icon icon="Download" /> Import
+                          <Icon icon="Download" /> {t('common.import')}
                         {/if}
                       </button>
                     </div>
@@ -887,13 +888,13 @@
                 </div>
               {/if}
             {:else if !loading_search}
-              <p class="no-results">Enter a formula, name, or elements to search PubChem</p>
+              <p class="no-results">{t('structure.pubchem_search_hint')}</p>
             {/if}
           {:else}
             <!-- OPTIMADE results -->
             {#if search_results}
               {#if search_results.structures.length === 0}
-                <p class="no-results">No structures found</p>
+                <p class="no-results">{t('structure.no_structures_found')}</p>
               {:else}
                 <div class="results-list">
                   {#each search_results.structures as struct (struct.id)}
@@ -922,57 +923,57 @@
                         </div>
                         <div class="result-details">
                           {#if n_sites}
-                            <span class="result-detail" title="Number of atomic sites">
-                              <span class="detail-label">Sites:</span> {n_sites}
+                            <span class="result-detail" title={t('structure.number_of_atomic_sites')}>
+                              <span class="detail-label">{t('structure.result_sites')}:</span> {n_sites}
                             </span>
                           {/if}
                           {#if n_elements}
-                            <span class="result-detail" title="Number of elements">
-                              <span class="detail-label">Elements:</span> {n_elements}
+                            <span class="result-detail" title={t('structure.number_of_elements')}>
+                              <span class="detail-label">{t('structure.result_elements')}:</span> {n_elements}
                             </span>
                           {/if}
                           {#if chem_system}
-                            <span class="result-detail" title="Chemical system">
-                              <span class="detail-label">Chem:</span> {chem_system}
+                            <span class="result-detail" title={t('structure.chemical_system')}>
+                              <span class="detail-label">{t('structure.result_chem')}:</span> {chem_system}
                             </span>
                           {/if}
                           {#if crystal_system}
-                            <span class="result-detail" title="Crystal system">
-                              <span class="detail-label">Crystal:</span> {crystal_system}
+                            <span class="result-detail" title={t('structure.crystal_system')}>
+                              <span class="detail-label">{t('structure.result_crystal')}:</span> {crystal_system}
                             </span>
                           {/if}
                           {#if spacegroup}
-                            <span class="result-detail" title="Space group{sg_number ? ` (#${sg_number})` : ``}">
-                              <span class="detail-label">SG:</span> {spacegroup}
+                            <span class="result-detail" title={t('structure.space_group_with_number', { number: sg_number ? ` (#${sg_number})` : `` })}>
+                              <span class="detail-label">{t('structure.result_sg')}:</span> {spacegroup}
                             </span>
                           {/if}
                           {#if volume}
-                            <span class="result-detail" title="Unit cell volume">
-                              <span class="detail-label">Vol:</span> {volume.toFixed(1)} &#x212B;&sup3;
+                            <span class="result-detail" title={t('structure.unit_cell_volume')}>
+                              <span class="detail-label">{t('structure.result_vol')}:</span> {volume.toFixed(1)} &#x212B;&sup3;
                             </span>
                           {/if}
                           {#if density}
-                            <span class="result-detail" title="Density (g/cm³)">
-                              <span class="detail-label">Density:</span> {density.toFixed(2)} g/cm³
+                            <span class="result-detail" title={t('structure.density_g_cm3')}>
+                              <span class="detail-label">{t('structure.result_density')}:</span> {density.toFixed(2)} g/cm³
                             </span>
                           {/if}
                           {#if e_above_hull !== undefined && e_above_hull !== null}
-                            <span class="result-detail" class:stable={is_stable || e_above_hull === 0} title="Energy above hull (eV/atom)">
+                            <span class="result-detail" class:stable={is_stable || e_above_hull === 0} title={t('structure.energy_above_hull_ev_atom')}>
                               <span class="detail-label">E<sub>hull</sub>:</span> {e_above_hull.toFixed(3)} eV
                             </span>
                           {/if}
                           {#if typeof formation_energy === `number`}
-                            <span class="result-detail" title="Formation energy per atom (eV/atom)">
+                            <span class="result-detail" title={t('structure.formation_energy_per_atom_ev_atom')}>
                               <span class="detail-label">E<sub>form</sub>:</span> {formation_energy.toFixed(3)} eV/atom
                             </span>
                           {/if}
                           {#if band_gap !== undefined && band_gap !== null}
-                            <span class="result-detail" title="Band gap (eV)">
-                              <span class="detail-label">Gap:</span> {band_gap.toFixed(2)} eV
+                            <span class="result-detail" title={t('structure.band_gap_ev')}>
+                              <span class="detail-label">{t('structure.result_gap')}:</span> {band_gap.toFixed(2)} eV
                             </span>
                           {/if}
                           {#if !comp && computing_details}
-                            <span class="result-detail computing" title="Computing symmetry...">
+                            <span class="result-detail computing" title={t('structure.computing_symmetry')}>
                               <span class="detail-label">...</span>
                             </span>
                           {/if}
@@ -991,9 +992,9 @@
                         disabled={loading_import && selected_result?.id === struct.id}
                       >
                         {#if loading_import && selected_result?.id === struct.id}
-                          Loading...
+                          {t('common.loading')}
                         {:else}
-                          <Icon icon="Download" /> Import
+                          <Icon icon="Download" /> {t('common.import')}
                         {/if}
                       </button>
                     </div>
@@ -1001,7 +1002,7 @@
                 </div>
               {/if}
             {:else if !loading_search}
-              <p class="no-results">Enter a formula or elements to search</p>
+              <p class="no-results">{t('structure.search_hint')}</p>
             {/if}
           {/if}
 
@@ -1009,16 +1010,16 @@
           {#if has_results}
             <div class="pagination">
               <button class="page-btn" onclick={go_prev_page} disabled={current_page === 0 || loading_search}>
-                &lsaquo; Prev
+                &lsaquo; {t('common.prev')}
               </button>
               <span class="page-info">
-                Page {current_page + 1}{total_count ? ` of ${is_pubchem ? `` : `~`}${Math.ceil(total_count / PAGE_SIZE)}` : ``}
+                {t('common.page')} {current_page + 1}{total_count ? ` ${t('common.of')} ${is_pubchem ? `` : `~`}${Math.ceil(total_count / PAGE_SIZE)}` : ``}
                 {#if total_count}
-                  <span class="total-count">({total_count} total)</span>
+                  <span class="total-count">({total_count} {t('common.total')})</span>
                 {/if}
               </span>
               <button class="page-btn" onclick={go_next_page} disabled={!has_more || loading_search}>
-                Next &rsaquo;
+                {t('common.next')} &rsaquo;
               </button>
             </div>
           {/if}

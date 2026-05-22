@@ -23,7 +23,7 @@ test.each([
 
     // Check formula shows correct atom count
     const formula_text = document.body.textContent || ``
-    expect(formula_text).toContain(`(${atom_count} sites)`)
+    expect(formula_text.toLowerCase()).toContain(`(${atom_count} sites)`)
 
     if (atom_count <= atom_count_thresholds[1]) {
       // Sites section should exist

@@ -2,7 +2,7 @@ import { query, listSessions as sdkListSessions } from '@anthropic-ai/claude-age
 import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
 import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '../types.js'
@@ -19,9 +19,33 @@ import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '.
 // Resolve the CLI ourselves here and pass `pathToClaudeCodeExecutable` to
 // the SDK so it skips its own (broken-for-our-case) lookup.  We cache the
 // result so we only run `which` once per process.
+//
+// Windows gotcha: `npm i -g @anthropic-ai/claude-code` drops THREE wrappers
+// in %APPDATA%\npm — `claude` (a /bin/sh shim), `claude.cmd`, `claude.ps1` —
+// all of which exec the real 200MB native binary vendored at
+// `<npm-prefix>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`.
+// `where claude` returns the extensionless sh-shim first; handing THAT to the
+// SDK makes it throw "Claude Code native binary not found" because it is not
+// a real executable on Windows.  So whenever a resolved path is one of these
+// npm wrappers, dereference it to the vendored native binary.
 // ---------------------------------------------------------------------------
 
 let _claudePath: string | null | undefined
+
+// Given any resolved `claude` path (possibly an npm `.cmd`/`.ps1`/sh shim),
+// prefer the real vendored native binary the shim ultimately execs.
+function nativeBinaryFor(p: string): string {
+  const exe = process.platform === 'win32' ? 'claude.exe' : 'claude'
+  const vendored = join(
+    dirname(p),
+    'node_modules',
+    '@anthropic-ai',
+    'claude-code',
+    'bin',
+    exe,
+  )
+  return existsSync(vendored) ? vendored : p
+}
 
 function resolveClaudeExecutable(): string | undefined {
   if (_claudePath !== undefined) return _claudePath ?? undefined
@@ -29,17 +53,20 @@ function resolveClaudeExecutable(): string | undefined {
   // 1. Explicit override
   const override = process.env.CATGO_CLAUDE_PATH
   if (override && existsSync(override)) {
-    _claudePath = override
-    return override
+    _claudePath = nativeBinaryFor(override)
+    return _claudePath
   }
 
-  // 2. PATH lookup via `which` / `where`
+  // 2. PATH lookup via `which` / `where` (scan every line — on Windows the
+  //    first is the unusable sh-shim; nativeBinaryFor() rescues it anyway).
   try {
     const cmd = process.platform === 'win32' ? 'where claude' : 'which claude'
-    const found = execSync(cmd, { encoding: 'utf8' }).trim().split(/\r?\n/)[0]
-    if (found && existsSync(found)) {
-      _claudePath = found
-      return found
+    const lines = execSync(cmd, { encoding: 'utf8' }).trim().split(/\r?\n/)
+    for (const found of lines) {
+      if (found && existsSync(found)) {
+        _claudePath = nativeBinaryFor(found)
+        return _claudePath
+      }
     }
   } catch {
     // not on PATH
@@ -53,10 +80,25 @@ function resolveClaudeExecutable(): string | undefined {
     '/usr/local/bin/claude',
     '/opt/homebrew/bin/claude',
   ]
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    // npm global prefix on Windows: %APPDATA%\npm
+    candidates.unshift(
+      join(
+        process.env.APPDATA,
+        'npm',
+        'node_modules',
+        '@anthropic-ai',
+        'claude-code',
+        'bin',
+        'claude.exe',
+      ),
+      join(process.env.APPDATA, 'npm', 'claude.cmd'),
+    )
+  }
   for (const c of candidates) {
     if (existsSync(c)) {
-      _claudePath = c
-      return c
+      _claudePath = nativeBinaryFor(c)
+      return _claudePath
     }
   }
 

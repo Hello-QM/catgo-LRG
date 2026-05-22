@@ -11,6 +11,8 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
+import { existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -28,8 +30,26 @@ export function find_gemini_cli(): string | null {
   try {
     const out = spawnSync(cmd, ['gemini'], { encoding: 'utf-8' })
     if (out.status === 0) {
-      const first = out.stdout.split(/\r?\n/).find(Boolean)
-      _gemini_cli_path = first?.trim() || null
+      const lines = out.stdout
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+      let pick: string | null = lines[0] ?? null
+      if (pick && process.platform === 'win32') {
+        // `where gemini` lists the extensionless /bin/sh shim first; Node's
+        // spawn() on Windows cannot execute it (ENOENT — the exact failure
+        // that left the Gemini chat hanging with an empty response). Prefer a
+        // real `.cmd` launcher: another `where` hit, or the sibling npm
+        // generates next to every shim.
+        const cmdHit =
+          lines.find((l) => /\.cmd$/i.test(l)) ??
+          (existsSync(`${pick}.cmd`) ? `${pick}.cmd` : null) ??
+          (existsSync(join(dirname(pick), 'gemini.cmd'))
+            ? join(dirname(pick), 'gemini.cmd')
+            : null)
+        if (cmdHit) pick = cmdHit
+      }
+      _gemini_cli_path = pick
       return _gemini_cli_path
     }
   } catch { /* fall through */ }
@@ -227,9 +247,15 @@ export async function spawn_gemini_acp(opts: {
   const args = ['--acp']
   if (opts.model) args.push('--model', opts.model)
 
+  // A Windows `.cmd`/`.bat` launcher is a batch script — Node ≥18.20/20.x
+  // refuses to spawn it without `shell:true` (and cmd.exe must interpret it).
+  const useShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(cliPath)
+
   const child = spawn(cliPath, args, {
     cwd: opts.cwd ?? process.cwd(),
     stdio: ['pipe', 'pipe', 'pipe'],
+    shell: useShell,
+    windowsHide: true,
     env: {
       ...process.env,
       // GEMINI_API_KEY required by the CLI; OAuth users have a real one in

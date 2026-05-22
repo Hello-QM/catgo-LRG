@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PymatgenStructure, AnyStructure } from '$lib/structure'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { structure_to_extxyz_str } from '$lib/structure/export'
   import { download } from '$lib/io/fetch'
   import { DraggablePane } from '$lib'
@@ -27,6 +28,8 @@
   } from '$lib/api/heterostructure'
   import { parse_structure_file, parsed_to_pymatgen } from '$lib/structure/parse'
   import { SERVER_URL } from '$lib/api/config'
+
+  load_i18n_module('structure')
 
   type Mode = `slab` | `bulk` | `lateral`
 
@@ -542,7 +545,7 @@
 </script>
 
 {#snippet pane_content()}
-  <h4>Heterostructure</h4>
+  <h4>{t('structure.heterostructure')}</h4>
 
   <!-- Mode tabs -->
   <div class="mode-tabs">
@@ -551,32 +554,32 @@
       class="mode-tab"
       class:active={mode === 'slab'}
       onclick={() => (mode = 'slab')}
-    >Slab (pre-cut)</button>
+    >{t('structure.heterostructure_mode_slab')}</button>
     <button
       type="button"
       class="mode-tab"
       class:active={mode === 'bulk'}
       onclick={() => (mode = 'bulk')}
-    >Bulk + Miller</button>
+    >{t('structure.heterostructure_mode_bulk')}</button>
     <button
       type="button"
       class="mode-tab"
       class:active={mode === 'lateral'}
       onclick={() => (mode = 'lateral')}
-    >Lateral (in-plane)</button>
+    >{t('structure.heterostructure_mode_lateral')}</button>
   </div>
 
   {#if mode === 'slab'}
-    <div class="hint">Provide two pre-cut slabs. Vacuum is auto-stripped before matching.</div>
+    <div class="hint">{t('structure.heterostructure_hint_slab')}</div>
   {:else if mode === 'bulk'}
-    <div class="hint">Provide two bulk crystals. Slabs are cut automatically via intermat.</div>
+    <div class="hint">{t('structure.heterostructure_hint_bulk')}</div>
   {:else}
-    <div class="hint">Join two 2D slabs side by side. Only one edge direction is matched.</div>
+    <div class="hint">{t('structure.heterostructure_hint_lateral')}</div>
   {/if}
 
   <!-- Substrate info -->
   <fieldset class="struct-fieldset">
-    <legend>Substrate (loaded structure)</legend>
+    <legend>{t('structure.heterostructure_substrate_loaded')}</legend>
     {#if structure}
       <div class="struct-info">
         {structure.sites.length} atoms
@@ -596,10 +599,10 @@
 
   <!-- Film input -->
   <fieldset class="struct-fieldset">
-    <legend>Film</legend>
+    <legend>{t('structure.heterostructure_film')}</legend>
     <div class="film-input-toggle">
-      <button type="button" class:active={film_input_mode === 'upload'} onclick={() => (film_input_mode = 'upload')}>Upload</button>
-      <button type="button" class:active={film_input_mode === 'paste'} onclick={() => (film_input_mode = 'paste')}>Paste</button>
+      <button type="button" class:active={film_input_mode === 'upload'} onclick={() => (film_input_mode = 'upload')}>{t('structure.heterostructure_upload')}</button>
+      <button type="button" class:active={film_input_mode === 'paste'} onclick={() => (film_input_mode = 'paste')}>{t('structure.heterostructure_paste')}</button>
     </div>
     {#if film_input_mode === 'upload'}
       <div class="file-upload-row">
@@ -1213,7 +1216,7 @@
     show_toggle={show_toggle && !embedded}
     pane_props={{ ...pane_props, class: `heterostructure-pane ${pane_props?.class ?? ``}` }}
     toggle_props={{
-      title: pane_open ? `` : `Heterostructure Builder`,
+      title: pane_open ? `` : t('structure.heterostructure_builder'),
       ...toggle_props,
       class: `heterostructure-toggle ${toggle_props?.class ?? ``}`,
     }}

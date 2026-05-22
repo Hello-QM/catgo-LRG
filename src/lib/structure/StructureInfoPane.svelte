@@ -7,6 +7,10 @@
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
   import { SvelteSet } from 'svelte/reactivity'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   let {
     structure,
@@ -56,12 +60,12 @@
     // Structure Info
     const structure_items: InfoItem[] = [
       {
-        label: `Formula`,
-        value: `${electro_neg_formula(structure)} (${structure.sites.length} sites)`,
+        label: t('structure.formula'),
+        value: `${electro_neg_formula(structure)} (${structure.sites.length} ${t('common.sites')})`,
         key: `structure-formula`,
       },
       {
-        label: `Charge`,
+        label: t('structure.charge'),
         value: `${structure.charge || 0}e`,
         key: `structure-charge`,
       },
@@ -80,7 +84,7 @@
         }
       }
     }
-    sections.push({ title: `Structure`, items: structure_items })
+    sections.push({ title: t('structure.structure_tab'), items: structure_items })
 
     // Cell Info
     if (`lattice` in structure && structure.lattice) {
@@ -97,10 +101,10 @@
         cell_volume = Math.abs(va[0] * cross_bc[0] + va[1] * cross_bc[1] + va[2] * cross_bc[2])
       }
       sections.push({
-        title: `Cell`,
+        title: t('structure.cell'),
         items: [
           {
-            label: `Volume, Density`,
+            label: t('structure.volume_density'),
             value: `${format_num(cell_volume, `.3~s`)} Å³, ${
               format_num(get_density(structure), `.3~f`)
             } g/cm³`,
@@ -138,27 +142,27 @@
       }
 
       sections.push({
-        title: `Symmetry`,
+        title: t('structure.symmetry'),
         items: [
           {
-            label: `Space Group`,
+            label: t('structure.space_group'),
             value: String(symmetry_data.number),
             key: `symmetry-space-group`,
           },
           {
-            label: `Hall Number`,
+            label: t('structure.hall_number'),
             value: String(symmetry_data.hall_number),
             key: `symmetry-hall-number`,
           },
           {
-            label: `Pearson Symbol`,
+            label: t('structure.pearson_symbol'),
             value: symmetry_data.pearson_symbol,
             key: `symmetry-pearson-symbol`,
           },
           {
-            label: `Symmetry Ops`,
+            label: t('structure.symmetry_ops'),
             value:
-              `${operations.length} (${translations} trans, ${rotations} rot, ${roto_translations} roto-trans)`,
+              `${operations.length} (${translations} ${t('structure.trans')}, ${rotations} ${t('structure.rot')}, ${roto_translations} ${t('structure.roto_trans')})`,
             key: `symmetry-operations-total`,
           },
         ],
@@ -173,15 +177,13 @@
       // Merged toggle button with Sites title
       if (atom_count >= min_threshold) {
         const toggle_label = sites_expanded
-          ? `Hide Sites`
-          : `Show ${atom_count} sites`
+          ? t('structure.hide_sites')
+          : t('structure.show_sites', { n: atom_count })
         site_items.push({
           label: toggle_label,
           value: sites_expanded ? `▲` : `▼`,
           key: `sites-toggle`,
-          tooltip: `Click to ${
-            sites_expanded ? `hide` : `show`
-          } all site information`,
+          tooltip: sites_expanded ? t('structure.click_to_hide_sites') : t('structure.click_to_show_sites'),
         })
       }
 
@@ -200,14 +202,14 @@
 
           if (site.abc) {
             site_items.push({
-              label: `  Fractional`,
+              label: `  ${t('structure.fractional')}`,
               value: `(${site.abc.map((x) => format_num(x, `.4~f`)).join(`, `)})`,
               key: `site-${idx}-fractional`,
             })
           }
           if (site.xyz) {
             site_items.push({
-              label: `  Cartesian`,
+              label: `  ${t('structure.cartesian')}`,
               value: `(${site.xyz.map((x) => format_num(x, `.4~f`)).join(`, `)}) Å`,
               key: `site-${idx}-cartesian`,
             })
@@ -234,7 +236,7 @@
                   const num_val = Number(prop_value)
                   if (isNaN(num_val)) continue
                   formatted_value = `${format_num(num_val, `.3~f`)} μB`
-                  tooltip = `Magnetic moment in Bohr magnetons`
+                  tooltip = t('structure.magmom_tooltip')
                 } else if (Array.isArray(prop_value)) {
                   formatted_value = `(${
                     prop_value.map((v) => {
@@ -263,7 +265,7 @@
 
       if (site_items.length > 0) {
         sections.push({
-          title: atom_count >= min_threshold ? `` : `Sites`,
+          title: atom_count >= min_threshold ? `` : t('structure.sites'),
           items: site_items,
         })
       }
@@ -271,52 +273,19 @@
 
     // Usage Tips
     sections.push({
-      title: `Usage Tips`,
+      title: t('structure.usage_tips'),
       items: [
-        {
-          label: `File Drop`,
-          value: `Drop POSCAR, XYZ, CIF or JSON files to load structures`,
-        },
-        {
-          label: `Camera`,
-          value: `Left-drag to rotate, right-drag to roll, scroll to zoom, Shift/Ctrl+drag to pan`,
-        },
-        {
-          label: `Camera Reset`,
-          value: `Double-click anywhere to reset camera to default view`,
-        },
-        {
-          label: `Selection`,
-          value: `Click atoms to select, Shift+click to add, Ctrl+A to select all`,
-        },
-        {
-          label: `Rotate Atoms`,
-          value: `Shift+drag selected atoms to rotate (left=pitch/yaw, right=roll)`,
-        },
-        {
-          label: `Move Atoms`,
-          value: `Shift+Alt+Arrow (or Ctrl+Arrow) to move selected atoms`,
-        },
-        {
-          label: `Trajectory`,
-          value: `A/D to prev/next frame, Space to play/pause, Ctrl+A/D to first/last`,
-        },
-        {
-          label: `Undo/Redo`,
-          value: `Ctrl+Z to undo, Ctrl+Shift+Z to redo structure changes`,
-        },
-        {
-          label: `Measure`,
-          value: `Click atoms then pick distance/angle mode to measure`,
-        },
-        {
-          label: `Colors`,
-          value: `Click legend labels to change colors, double-click to reset`,
-        },
-        {
-          label: `Keyboard`,
-          value: `'f' fullscreen, 'i' info pane, Delete to remove selected atoms`,
-        },
+        { label: t('structure.tip_file_drop'), value: t('structure.tip_file_drop_desc') },
+        { label: t('structure.tip_camera'), value: t('structure.tip_camera_desc') },
+        { label: t('structure.tip_camera_reset'), value: t('structure.tip_camera_reset_desc') },
+        { label: t('structure.tip_selection'), value: t('structure.tip_selection_desc') },
+        { label: t('structure.tip_rotate_atoms'), value: t('structure.tip_rotate_atoms_desc') },
+        { label: t('structure.tip_move_atoms'), value: t('structure.tip_move_atoms_desc') },
+        { label: t('structure.tip_trajectory'), value: t('structure.tip_trajectory_desc') },
+        { label: t('structure.tip_undo_redo'), value: t('structure.tip_undo_redo_desc') },
+        { label: t('structure.tip_measure'), value: t('structure.tip_measure_desc') },
+        { label: t('structure.tip_colors'), value: t('structure.tip_colors_desc') },
+        { label: t('structure.tip_keyboard'), value: t('structure.tip_keyboard_desc') },
       ],
     })
 
@@ -332,7 +301,7 @@
   max_width="24em"
   toggle_props={{
     class: `structure-info-toggle`,
-    title: `${pane_open ? `Close` : `Open`} structure info`,
+    title: t('structure.structure_info'),
     ...toggle_props,
   }}
   open_icon="Cross"
@@ -340,16 +309,16 @@
   pane_props={{ ...pane_props, class: `structure-info-pane ${pane_props?.class ?? ``}` }}
   {...rest}
 >
-  <h4 style="margin-top: 0">Structure Info</h4>
+  <h4 style="margin-top: 0">{t('structure.structure_info')}</h4>
   {#each pane_data as section, sec_idx (section.title)}
     {#if sec_idx > 0}<hr />{/if}
     <section>
-      {#if section.title && section.title !== `Structure`}
+      {#if section.title && section.title !== t('structure.structure_tab')}
         <h4>{section.title}</h4>
       {/if}
       {#each section.items as item (item.key ?? item.label)}
         {@const { key, label, value, tooltip } = item}
-        {#if section.title === `Usage Tips`}
+        {#if section.title === t('structure.usage_tips')}
           <div class="tips-item">
             <span>{label}</span>
             <span>{@html value}</span>
@@ -383,7 +352,7 @@
         {/if}
       {/each}
 
-      {#if section.title === `Symmetry` && wyckoff_positions.length > 0}
+      {#if section.title === t('structure.symmetry') && wyckoff_positions.length > 0}
         <WyckoffTable
           {wyckoff_positions}
           on_hover={(site_indices) => highlighted_sites = site_indices ?? []}

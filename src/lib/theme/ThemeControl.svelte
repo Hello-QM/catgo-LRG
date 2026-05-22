@@ -36,7 +36,7 @@
     background: var(--btn-bg);
     border: var(--pane-border);
     color: var(--text-color);
-    color-scheme: inherit;
+    color-scheme: light !important;
     border-radius: var(--theme-control-border-radius, 5pt);
     padding: var(--theme-control-padding, 1pt 2pt);
     backdrop-filter: blur(10px);
@@ -51,8 +51,17 @@
   .theme-control:focus {
     outline: 0.5px solid var(--accent-color);
   }
+  :global(:root[data-theme='dark']) .theme-control,
+  :global(:root[data-theme='black']) .theme-control {
+    color-scheme: dark !important;
+  }
   .theme-control option {
-    background: var(--btn-bg, #2a2a3e);
-    color: var(--text-color, #e2e8f0);
+    background: #ffffff;
+    color: #1f2937;
+  }
+  :global(:root[data-theme='dark']) .theme-control option,
+  :global(:root[data-theme='black']) .theme-control option {
+    background: #1f1f1f;
+    color: #f5f5f5;
   }
 </style>

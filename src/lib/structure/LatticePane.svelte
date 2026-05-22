@@ -15,6 +15,10 @@
   import type { Crystal } from './index'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  // Lazy-load structure translations
+  load_i18n_module('structure')
 
   let {
     structure = $bindable(),
@@ -282,20 +286,20 @@
 </script>
 
 {#snippet pane_content()}
-  <h4 style="margin-top: 0">Lattice Editor</h4>
+  <h4 style="margin-top: 0">{t('structure.lattice_editor')}</h4>
 
   {#if !has_lattice}
     <section>
-      <p class="no-lattice">No lattice defined. Add a periodic cell to this molecule.</p>
+      <p class="no-lattice">{t('structure.no_lattice_defined')}</p>
 
-      <h5>Cell Parameters</h5>
+      <h5>{t('structure.cell_parameters')}</h5>
       <div class="param-row">
-        <label>Padding</label>
+        <label>{t('structure.padding')}</label>
         <input type="number" step="1" min="0" bind:value={new_lattice_padding} style="width: 5em" />
         <span>A</span>
       </div>
 
-      <h5>Lattice Lengths (A)</h5>
+      <h5>{t('structure.lattice_lengths')}</h5>
       <div class="param-row">
         <label>a</label>
         <input type="number" step="0.1" bind:value={new_lattice_params.a} />
@@ -309,7 +313,7 @@
         <input type="number" step="0.1" bind:value={new_lattice_params.c} />
       </div>
 
-      <h5>Lattice Angles (deg)</h5>
+      <h5>{t('structure.lattice_angles')}</h5>
       <div class="param-row">
         <label>alpha</label>
         <input type="number" step="1" bind:value={new_lattice_params.alpha} />
@@ -324,7 +328,7 @@
       </div>
 
       <button class="apply-btn" onclick={create_lattice} disabled={!structure?.sites?.length}>
-        Create Lattice
+        {t('structure.create_lattice')}
       </button>
     </section>
   {:else}
@@ -334,25 +338,25 @@
         class:active={active_tab === 'params'}
         onclick={() => active_tab = 'params'}
       >
-        Parameters
+        {t('structure.parameters')}
       </button>
       <button
         class:active={active_tab === 'transform'}
         onclick={() => active_tab = 'transform'}
       >
-        Transform
+        {t('structure.transform')}
       </button>
       <button
         class:active={active_tab === 'vacuum'}
         onclick={() => active_tab = 'vacuum'}
       >
-        Vacuum
+        {t('structure.vacuum')}
       </button>
     </div>
 
     {#if active_tab === 'params'}
       <section>
-        <h5>Lattice Lengths (A)</h5>
+        <h5>{t('structure.lattice_lengths')}</h5>
         <div class="param-row">
           <label>a</label>
           <input type="number" step="0.01" bind:value={params.a} />
@@ -368,7 +372,7 @@
       </section>
 
       <section>
-        <h5>Lattice Angles (deg)</h5>
+        <h5>{t('structure.lattice_angles')}</h5>
         <div class="param-row">
           <label>alpha</label>
           <input type="number" step="0.1" bind:value={params.alpha} />
@@ -384,37 +388,37 @@
       </section>
 
       <button class="apply-btn" onclick={apply_params} disabled={!structure}>
-        Apply Parameters
+        {t('structure.apply_parameters')}
       </button>
     {:else if active_tab === 'transform'}
       <section>
-        <h5>Transform Mode</h5>
+        <h5>{t('structure.transform_mode')}</h5>
         <div class="button-group">
           <button
             class:active={transform_mode === 'supercell'}
             onclick={() => transform_mode = 'supercell'}
-            title="Create supercell: expand lattice AND replicate atoms"
+            title={t('structure.supercell_hint')}
           >
-            Supercell
+            {t('structure.supercell')}
           </button>
           <button
             class:active={transform_mode === 'lattice_only'}
             onclick={() => transform_mode = 'lattice_only'}
-            title="Only change lattice parameters, keep same atoms"
+            title={t('structure.lattice_only_hint')}
           >
-            Lattice Only
+            {t('structure.lattice_only')}
           </button>
         </div>
         <p class="hint">
           {transform_mode === 'supercell'
-            ? 'Expand lattice and replicate atoms (physical supercell)'
-            : 'Only change lattice vectors, keep atom count (strain/deform)'}
+            ? t('structure.supercell_hint')
+            : t('structure.lattice_only_hint')}
         </p>
       </section>
 
       <section>
-        <h5>Transformation Matrix</h5>
-        <p class="hint">New lattice = Old lattice × Transform</p>
+        <h5>{t('structure.transformation_matrix')}</h5>
+        <p class="hint">{t('structure.transformation_matrix_hint')}</p>
         <div class="matrix-grid">
           {#each [0, 1, 2] as row}
             <div class="matrix-row">
@@ -431,13 +435,13 @@
         </div>
         <div class="matrix-actions">
           <button class="secondary-btn" onclick={reset_transform}>
-            Reset to Identity
+            {t('structure.reset_to_identity')}
           </button>
         </div>
       </section>
 
       <section class="preset-transforms">
-        <h5>Presets</h5>
+        <h5>{t('structure.presets')}</h5>
         <div class="preset-grid">
           <button
             onclick={() => transform = [[1, 0, 0], [0, 1, 0], [0, 0, 2]]}
@@ -467,11 +471,11 @@
       </section>
 
       <button class="apply-btn" onclick={apply_transform} disabled={!structure || transform_loading}>
-        {transform_loading ? 'Applying...' : 'Apply Transform'}
+        {transform_loading ? t('common.applying') : t('structure.apply_transform')}
       </button>
     {:else if active_tab === 'vacuum'}
       <section>
-        <h5>Direction</h5>
+        <h5>{t('structure.direction')}</h5>
         <div class="button-group">
           <button
             class:active={vacuum_direction === 'x'}
@@ -495,7 +499,7 @@
       </section>
 
       <section>
-        <h5>Vacuum Thickness</h5>
+        <h5>{t('structure.vacuum_thickness')}</h5>
         <div class="param-row">
           <input
             type="number"
@@ -511,18 +515,18 @@
       <section>
         <label class="checkbox-row">
           <input type="checkbox" bind:checked={vacuum_center} />
-          <span>Center structure in cell</span>
+          <span>{t('structure.center_structure')}</span>
         </label>
       </section>
 
       <section class="preview">
-        <h5>Preview</h5>
+        <h5>{t('common.preview')}</h5>
         <div class="preview-row">
-          <span>Current {vacuum_direction}:</span>
+          <span>{t('common.current')} {vacuum_direction}:</span>
           <span>{format_num(params[vacuum_direction === 'x' ? 'a' : vacuum_direction === 'y' ? 'b' : 'c'])} A</span>
         </div>
         <div class="preview-row">
-          <span>New {vacuum_direction}:</span>
+          <span>{t('common.new')} {vacuum_direction}:</span>
           <span class="highlight">
             {format_num(
               (vacuum_direction === 'x' ? params.a :
@@ -533,7 +537,7 @@
       </section>
 
       <button class="apply-btn" onclick={apply_vacuum} disabled={!structure || !(vacuum_thickness > 0)}>
-        Add Vacuum Layer
+        {t('structure.add_vacuum_layer')}
       </button>
     {/if}
   {/if}

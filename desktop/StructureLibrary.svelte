@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { LibraryEntry } from './pane-utils'
+
+  load_i18n_module('app')
 
   let {
     entries,
@@ -37,9 +40,9 @@
     <span class="lib-count">{entries.length} file{entries.length === 1 ? `` : `s`}</span>
     <button
       class="lib-clear"
-      title="Clear list (keeps the open structure)"
+      title={t('app.clear_list_hint')}
       onclick={on_clear}
-    >Clear all</button>
+    >{t('common.clear')}</button>
   </div>
   <div class="lib-list">
     {#each entries as entry (entry.id)}
@@ -54,10 +57,10 @@
       >
         <span class="lib-dot" style:background-color={dot_color(entry.format)}></span>
         <span class="lib-name">{entry.filename}</span>
-        {#if entry.is_trajectory}<span class="lib-tag">traj</span>{/if}
+        {#if entry.is_trajectory}<span class="lib-tag">{t('common.trajectory')}</span>{/if}
         <button
           class="lib-remove"
-          title="Remove from list"
+          title={t('app.remove_from_list')}
           onclick={(e) => { e.stopPropagation(); on_remove(entry.id) }}
         >
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
