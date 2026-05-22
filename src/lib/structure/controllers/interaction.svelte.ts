@@ -226,13 +226,10 @@ export function create_interaction_controller(deps: InteractionDeps) {
   // Shift + 右键拖拽: roll (绕相机 forward 轴)
   // ═══════════════════════════════════════════════════════════════════
   let is_rotating_atoms = $state(false)
-  let atom_rotation_prev_x = $state(0)
-  let atom_rotation_prev_y = $state(0)
   let atom_rotation_center = $state<[number, number, number] | null>(null)
   let atom_rotation_initial_positions = $state<Map<number, [number, number, number]>>(new Map())
   let atom_rotation_cumulative_quat = $state<Quaternion>(new Quaternion())
   let atom_rotation_camera_quat = $state<Quaternion | null>(null)
-  let atom_rotation_roll_mode = $state(false)
   let atom_rotation_used_right = $state(false)
   let atom_rotation_axis = $state<[number, number, number] | null>(null)
   let atom_rotation_angle_deg = $state<number>(0)
@@ -487,8 +484,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
     if (save_undo) deps.push_to_undo()
 
     is_rotating_atoms = true
-    atom_rotation_prev_x = event.clientX
-    atom_rotation_prev_y = event.clientY
     atom_rotation_start_x = event.clientX
     atom_rotation_start_y = event.clientY
     // Default to left-drag (unlocked); the mousedown handlers override to 'x'
@@ -606,7 +601,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
     atom_rotation_initial_positions = new Map()
     atom_rotation_cumulative_quat = new Quaternion()
     atom_rotation_camera_quat = null
-    atom_rotation_roll_mode = false
     atom_rotation_axis = null
     atom_rotation_angle_deg = 0
     atom_rotation_locked_axis = null
@@ -1137,7 +1131,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
       const started = start_atom_rotation(event, true)
       if (started) {
         if (event.button === 2) {
-          atom_rotation_roll_mode = true
           atom_rotation_used_right = true
           atom_rotation_locked_axis = 'x' // roll = rotate about screen normal
         }
@@ -1173,7 +1166,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
       const started = start_atom_rotation(event, !is_rotating_atoms)
       if (started) {
         if (event.button === 2) {
-          atom_rotation_roll_mode = true
           atom_rotation_used_right = true
           atom_rotation_locked_axis = 'x' // roll = rotate about screen normal
         }
@@ -1377,9 +1369,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
         finish_rotation()
         return
       }
-
-      atom_rotation_prev_x = event.clientX
-      atom_rotation_prev_y = event.clientY
 
       // Total displacement from the fixed mousedown anchor (not per-frame).
       const total_dx = event.clientX - atom_rotation_start_x
