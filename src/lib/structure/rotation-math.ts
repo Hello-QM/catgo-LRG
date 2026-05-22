@@ -43,3 +43,29 @@ export function pick_locked_axis(
   if (Math.hypot(total_dx, total_dy) < deadzone_px) return null
   return Math.abs(total_dx) >= Math.abs(total_dy) ? 'z' : 'y'
 }
+
+/** Rotate each point about `center` by `angle` radians around `axis`.
+ *  Pure: inputs are tuples, output is fresh tuples. */
+export function rotate_points(
+  points: ReadonlyArray<readonly [number, number, number]>,
+  center: readonly [number, number, number],
+  axis: Vector3,
+  angle: number,
+): Array<[number, number, number]> {
+  const quat = new Quaternion().setFromAxisAngle(axis.clone().normalize(), angle)
+  const c = new Vector3(center[0], center[1], center[2])
+  return points.map((p) => {
+    const v = new Vector3(p[0], p[1], p[2]).sub(c).applyQuaternion(quat).add(c)
+    return [v.x, v.y, v.z] as [number, number, number]
+  })
+}
+
+/** Map the locked axis to the relevant pointer-displacement component.
+ *  Pitch (y) uses vertical drag; yaw (z) and roll (x) use horizontal drag. */
+export function drag_delta_for_axis(
+  axis: LockAxis,
+  total_dx: number,
+  total_dy: number,
+): number {
+  return axis === 'y' ? total_dy : total_dx
+}
