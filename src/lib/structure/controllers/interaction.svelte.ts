@@ -39,6 +39,13 @@ import { get_movement_step } from '../manipulation'
 import { get_center_of_mass, get_rotation_center } from '$lib/structure'
 import { atom_clipboard } from '$lib/state.svelte'
 import { Euler, Plane, Quaternion, Raycaster, Vector2, Vector3 } from 'three'
+import {
+  screen_frame_from_camera,
+  pick_locked_axis,
+  rotate_points,
+  drag_delta_for_axis,
+  type LockAxis,
+} from '$lib/structure/rotation-math'
 import type { ElementSymbol } from '$lib'
 import type { AtomManipulationEvent } from '../index'
 import type { GestureConfig } from '$lib/gesture/gesture-types'
@@ -229,6 +236,9 @@ export function create_interaction_controller(deps: InteractionDeps) {
   let atom_rotation_used_right = $state(false)
   let atom_rotation_axis = $state<[number, number, number] | null>(null)
   let atom_rotation_angle_deg = $state<number>(0)
+  let atom_rotation_start_x = $state(0)
+  let atom_rotation_start_y = $state(0)
+  let atom_rotation_locked_axis = $state<LockAxis | null>(null)
 
   // ═══════════════════════════════════════════════════════════════════
   // RAF 批处理 — 拖拽/旋转时用 requestAnimationFrame 批量更新位置,
@@ -262,6 +272,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
   let keyboard_rotation_undo_saved = $state(false)
   let keyboard_rotation_timeout: ReturnType<typeof setTimeout> | null = null
   const KEYBOARD_ROTATION_STEP = 0.05 // ~3 degrees per key press
+  const AXIS_LOCK_DEADZONE_PX = 4 // left-drag must exceed this before an axis locks
 
   // ═══════════════════════════════════════════════════════════════════
   // 框选状态 — Cmd/Ctrl+拖拽矩形选择多个原子
