@@ -717,18 +717,20 @@ export function create_interaction_controller(deps: InteractionDeps) {
 
     if (!keyboard_rotation_center) return
 
-    const camera_right = new Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize()
-    const camera_up = new Vector3(0, 1, 0).applyQuaternion(camera.quaternion).normalize()
-    const camera_forward = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize()
+    // Same fixed screen frame as the drag path: x = screen normal toward
+    // viewer, y = screen right, z = screen up.
+    const frame = screen_frame_from_camera(camera.quaternion)
 
     let rotation_axis: Vector3
     let angle = KEYBOARD_ROTATION_STEP
-    if (direction === 'ArrowLeft') { rotation_axis = camera_up; angle = KEYBOARD_ROTATION_STEP }
-    else if (direction === 'ArrowRight') { rotation_axis = camera_up; angle = -KEYBOARD_ROTATION_STEP }
-    else if (direction === 'ArrowUp') { rotation_axis = camera_right; angle = KEYBOARD_ROTATION_STEP }
-    else if (direction === 'ArrowDown') { rotation_axis = camera_right; angle = -KEYBOARD_ROTATION_STEP }
-    else if (direction === 'Forward') { rotation_axis = camera_forward; angle = KEYBOARD_ROTATION_STEP }
-    else { rotation_axis = camera_forward; angle = -KEYBOARD_ROTATION_STEP }
+    // Left/Right = yaw about screen-up (z); Up/Down = pitch about screen-right
+    // (y); Forward/Backward = roll about screen-normal (x).
+    if (direction === 'ArrowLeft') { rotation_axis = frame.z; angle = KEYBOARD_ROTATION_STEP }
+    else if (direction === 'ArrowRight') { rotation_axis = frame.z; angle = -KEYBOARD_ROTATION_STEP }
+    else if (direction === 'ArrowUp') { rotation_axis = frame.y; angle = KEYBOARD_ROTATION_STEP }
+    else if (direction === 'ArrowDown') { rotation_axis = frame.y; angle = -KEYBOARD_ROTATION_STEP }
+    else if (direction === 'Forward') { rotation_axis = frame.x; angle = KEYBOARD_ROTATION_STEP }
+    else { rotation_axis = frame.x; angle = -KEYBOARD_ROTATION_STEP }
 
     const rotation_quat = new Quaternion().setFromAxisAngle(rotation_axis, angle)
     const new_overrides = new Map(realtime_position_overrides)
