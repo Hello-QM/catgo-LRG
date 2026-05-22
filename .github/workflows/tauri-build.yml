@@ -58,7 +58,8 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             patchelf \
-            build-essential
+            build-essential \
+            libfuse2
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -162,6 +163,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # linuxdeploy (AppImage bundling) is itself an AppImage and needs FUSE,
+          # which GitHub runners lack → "failed to run linuxdeploy". Make all
+          # AppImage tooling extract-and-run instead of FUSE-mounting.
+          APPIMAGE_EXTRACT_AND_RUN: 1
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
