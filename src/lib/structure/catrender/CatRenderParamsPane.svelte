@@ -193,14 +193,6 @@
           oninput={() => (S.k_cell_color.on = true)} />
       </label>
     </div>
-    <label class="advanced">
-      Advanced overrides (raw JSON — ANY default.json knob):
-      <textarea
-        rows="3"
-        placeholder={'{ "vdw_opacity": 0.4, "label_color": "#333" }'}
-        bind:value={S.advanced_json}></textarea>
-    </label>
-    {#if S.overrides.err}<p class="err">{S.overrides.err}</p>{/if}
   </details>
 </DraggablePane>
 
@@ -226,7 +218,4 @@
   .knobs label.active { opacity: 1; font-weight: 600; }
   .knobs label input[type='range'] { flex: 1; min-width: 60px; }
   .knobs label span { min-width: 34px; text-align: right; }
-  .advanced { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
-  .advanced textarea { font-family: monospace; font-size: 12px; }
-  .err { color: #c00; font-size: 13px; }
 </style>
