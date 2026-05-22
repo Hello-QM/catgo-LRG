@@ -101,6 +101,46 @@ pub(crate) fn corrected_bond_rad(z: u32, hyb: u32) -> f64 {
     }
 }
 
+/// Angle (degrees) at vertex `c` between vectors c→a and c→b. OB `OBAtom::GetAngle`.
+pub(crate) fn angle_deg(a: [f64; 3], c: [f64; 3], b: [f64; 3]) -> f64 {
+    let v1 = [a[0] - c[0], a[1] - c[1], a[2] - c[2]];
+    let v2 = [b[0] - c[0], b[1] - c[1], b[2] - c[2]];
+    let dot = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2];
+    let n1 = (v1[0] * v1[0] + v1[1] * v1[1] + v1[2] * v1[2]).sqrt();
+    let n2 = (v2[0] * v2[0] + v2[1] * v2[1] + v2[2] * v2[2]).sqrt();
+    if n1 < 1e-9 || n2 < 1e-9 {
+        return 0.0;
+    }
+    let c = (dot / (n1 * n2)).clamp(-1.0, 1.0);
+    c.acos().to_degrees()
+}
+
+/// Signed torsion (degrees) for atoms a-b-c-d. OB `OBMol::GetTorsion`.
+pub(crate) fn torsion_deg(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3]) -> f64 {
+    let b1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let b2 = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
+    let b3 = [d[0] - c[0], d[1] - c[1], d[2] - c[2]];
+    let cross = |u: [f64; 3], v: [f64; 3]| {
+        [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ]
+    };
+    let n1 = cross(b1, b2);
+    let n2 = cross(b2, b3);
+    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let m1 = cross(n1, b2);
+    let b2len = dot(b2, b2).sqrt();
+    if b2len < 1e-9 {
+        return 0.0;
+    }
+    let m1n = [m1[0] / b2len, m1[1] / b2len, m1[2] / b2len];
+    let x = dot(n1, n2);
+    let y = dot(m1n, n2);
+    y.atan2(x).to_degrees()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +167,35 @@ mod tests {
         assert_eq!(corrected_bond_rad(6, 3), 0.76);
         assert!((corrected_bond_rad(6, 2) - 0.76 * 0.95).abs() < 1e-12);
         assert!((corrected_bond_rad(6, 1) - 0.76 * 0.90).abs() < 1e-12);
+    }
+
+    #[test]
+    fn angle_right_and_straight() {
+        // 90°: vertex at origin, arms along +x and +y
+        let a = angle_deg([1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        assert!((a - 90.0).abs() < 1e-6, "got {a}");
+        // 180°: collinear
+        let s = angle_deg([1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]);
+        assert!((s - 180.0).abs() < 1e-6, "got {s}");
+    }
+
+    #[test]
+    fn torsion_planar_cis_trans() {
+        // trans (180°): a and d on opposite sides of the b-c axis
+        let t = torsion_deg(
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, -1.0, 0.0],
+        );
+        assert!(t.abs() > 179.0, "expected ~180, got {t}");
+        // cis (0°): a and d same side
+        let c = torsion_deg(
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        );
+        assert!(c.abs() < 1.0, "expected ~0, got {c}");
     }
 }
