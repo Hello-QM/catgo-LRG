@@ -381,6 +381,183 @@ pub(crate) fn assign_aromatic(g: &mut Graph, rings: &[Vec<usize>]) -> bool {
     any
 }
 
+/// OB `OBBond::IsDoubleBondGeometry` (bond.cpp:481). True unless a neighbour
+/// torsion across the bond falls in (15°,160°) — i.e. non-planar.
+fn is_double_bond_geometry(g: &Graph, a: usize, b: usize) -> bool {
+    if g.hyb[a] == 1 || g.degree(a) > 3 || g.hyb[b] == 1 || g.degree(b) > 3 {
+        return true;
+    }
+    for &(ns, _) in &g.adj[a] {
+        if ns == b {
+            continue;
+        }
+        for &(ne, _) in &g.adj[b] {
+            if ne == a {
+                continue;
+            }
+            let t = torsion_deg(g.xyz[ns], g.xyz[a], g.xyz[b], g.xyz[ne]).abs();
+            if t > 15.0 && t < 160.0 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn bond_len(g: &Graph, a: usize, b: usize) -> f64 {
+    let p = g.xyz[a];
+    let q = g.xyz[b];
+    ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+}
+
+fn in_ring(rings: &[Vec<usize>], a: usize) -> bool {
+    rings.iter().any(|r| r.contains(&a))
+}
+
+/// Pass 6: assign remaining double/triple bonds, ordered by electronegativity.
+pub(crate) fn assign_multibonds(g: &mut Graph, rings: &[Vec<usize>]) {
+    let n = g.z.len();
+
+    // sort key: electroneg*1e6 + shortest heavy-atom bond length, DESC
+    let mut order_idx: Vec<usize> = (0..n).collect();
+    let key = |g: &Graph, a: usize| -> f64 {
+        let mut shortest = 1.0e5_f64;
+        for &(nb, bi) in &g.adj[a] {
+            if g.z[nb] != 1 {
+                shortest = shortest.min(bond_len(g, a, g.bonds[bi].0 + g.bonds[bi].1 - a));
+            }
+        }
+        electroneg(g.z[a]) * 1e6 + shortest
+    };
+    order_idx.sort_by(|&x, &y| {
+        key(g, y).partial_cmp(&key(g, x)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    for &atom in &order_idx {
+        let za = g.z[atom];
+        let maxb = max_bonds(za) as f64;
+
+        // sp candidate (triple)
+        if (g.hyb[atom] == 1 || g.degree(atom) == 1) && g.valence(atom) + 2.0 <= maxb {
+            if g.has_nonsingle(atom) || (za == 7 && g.valence(atom) + 2.0 > 3.0) {
+                continue;
+            }
+            let mut max_eneg = 0.0;
+            let mut shortest = 5000.0;
+            let mut chosen: Option<usize> = None;
+            for &(b, _) in &g.adj[atom].clone() {
+                let eneg_b = electroneg(g.z[b]);
+                let ok = (g.hyb[b] == 1 || g.degree(b) == 1)
+                    && g.valence(b) + 2.0 <= max_bonds(g.z[b]) as f64
+                    && (eneg_b > max_eneg
+                        || ((eneg_b - max_eneg).abs() < 1e-6 && bond_len(g, atom, b) < shortest));
+                if !ok {
+                    continue;
+                }
+                if g.has_nonsingle(b) || (g.z[b] == 7 && g.valence(b) + 2.0 > 3.0) {
+                    continue;
+                }
+                let bl = bond_len(g, atom, b);
+                if g.degree(atom) == 1 || g.degree(b) == 1 {
+                    let test = corrected_bond_rad(za, g.hyb[atom])
+                        + corrected_bond_rad(g.z[b], g.hyb[b]);
+                    if bl > 0.9 * test {
+                        continue;
+                    }
+                }
+                shortest = bl;
+                max_eneg = eneg_b;
+                chosen = Some(b);
+            }
+            if let Some(b) = chosen {
+                if let Some(bi) = g.bond_between(atom, b) {
+                    g.order[bi] = 3.0;
+                }
+            }
+        }
+        // sp2 candidate (double)
+        else if (g.hyb[atom] == 2 || g.degree(atom) == 1) && g.valence(atom) + 1.0 <= maxb {
+            if g.has_nonsingle(atom) || (za == 7 && g.valence(atom) + 1.0 > 3.0) {
+                continue;
+            }
+            // ring sulfur: skip (thiopyrylium charge case not modelled)
+            if in_ring(rings, atom) && za == 16 {
+                continue;
+            }
+            let mut max_eneg = 0.0;
+            let mut shortest = 5000.0_f64;
+            let mut chosen: Option<usize> = None;
+            for &(b, _) in &g.adj[atom].clone() {
+                let eneg_b = electroneg(g.z[b]);
+                let ok = (g.hyb[b] == 2 || g.degree(b) == 1)
+                    && g.valence(b) + 1.0 <= max_bonds(g.z[b]) as f64
+                    && is_double_bond_geometry(g, atom, b)
+                    && (eneg_b > max_eneg || (eneg_b - max_eneg).abs() < 1e-6);
+                if !ok {
+                    continue;
+                }
+                if g.has_nonsingle(b) || (g.z[b] == 7 && g.valence(b) + 1.0 > 3.0) {
+                    continue;
+                }
+                if in_ring(rings, b) && g.z[b] == 16 {
+                    continue;
+                }
+                let bl = bond_len(g, atom, b);
+                if g.degree(atom) == 1 || g.degree(b) == 1 {
+                    let test = corrected_bond_rad(za, g.hyb[atom])
+                        + corrected_bond_rad(g.z[b], g.hyb[b]);
+                    if bl > 0.93 * test {
+                        continue;
+                    }
+                }
+                let difference = shortest - bl;
+                let chosen_in_ring = chosen.map(|c| in_ring(rings, c)).unwrap_or(false);
+                // Verbatim OB ring-preference tie-break (mol.cpp:3540). OB's
+                // literal expression is logically redundant — the second
+                // disjunct is subsumed by the first — so clippy's
+                // `overly_complex_bool_expr` (deny-by-default) fires; keep the
+                // OB-faithful form and allow the lint here.
+                #[allow(clippy::overly_complex_bool_expr)]
+                let prefer = (difference > 0.1)
+                    || (difference > -0.01
+                        && ((!in_ring(rings, atom) || !chosen_in_ring || in_ring(rings, b))
+                            || (in_ring(rings, atom) && !chosen_in_ring && in_ring(rings, b))));
+                if prefer {
+                    shortest = bl;
+                    max_eneg = eneg_b;
+                    chosen = Some(b);
+                }
+            }
+            if let Some(b) = chosen {
+                if let Some(bi) = g.bond_between(atom, b) {
+                    g.order[bi] = 2.0;
+                }
+            }
+        }
+    }
+}
+
+/// Public entry. Resolves orders for `bonds` (parallel to the input bond list)
+/// from atom numbers `z` and coordinates `xyz`. Mutates `orders` in place.
+/// `orders.len()` MUST equal `bonds.len()`.
+pub fn perceive_bond_orders(
+    z: &[u32],
+    xyz: &[[f64; 3]],
+    bonds: &[(usize, usize)],
+    orders: &mut [f64],
+) {
+    if z.is_empty() || bonds.is_empty() {
+        return;
+    }
+    let mut g = Graph::build(z, xyz, bonds);
+    let rings = find_rings(&g);
+    assign_hybridization(&mut g, &rings);
+    assign_aromatic(&mut g, &rings);
+    assign_multibonds(&mut g, &rings);
+    let m = orders.len().min(g.order.len());
+    orders[..m].copy_from_slice(&g.order[..m]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +693,40 @@ mod tests {
                 g.order[bi]
             );
         }
+    }
+
+    #[test]
+    fn multibond_ethylene_double() {
+        let g0 = ethylene_graph();
+        let mut orders = vec![1.0; g0.bonds.len()];
+        perceive_bond_orders(&g0.z, &g0.xyz, &g0.bonds, &mut orders);
+        // bond 0 is C0-C1
+        assert!((orders[0] - 2.0).abs() < 1e-9, "C=C should be 2.0, got {}", orders[0]);
+    }
+
+    #[test]
+    fn multibond_benzene_aromatic() {
+        let g0 = benzene_graph();
+        let mut orders = vec![1.0; g0.bonds.len()];
+        perceive_bond_orders(&g0.z, &g0.xyz, &g0.bonds, &mut orders);
+        for (bi, o) in orders.iter().enumerate() {
+            assert!((o - 1.5).abs() < 1e-9, "benzene bond {bi} should be 1.5, got {o}");
+        }
+    }
+
+    #[test]
+    fn multibond_acetylene_triple() {
+        // HC≡CH: C-C 1.20, C-H 1.06, linear
+        let z = vec![6, 6, 1, 1];
+        let xyz = vec![
+            [0.0, 0.0, 0.0],
+            [1.20, 0.0, 0.0],
+            [-1.06, 0.0, 0.0],
+            [2.26, 0.0, 0.0],
+        ];
+        let bonds = vec![(0, 1), (0, 2), (1, 3)];
+        let mut orders = vec![1.0; bonds.len()];
+        perceive_bond_orders(&z, &xyz, &bonds, &mut orders);
+        assert!((orders[0] - 3.0).abs() < 1e-9, "C≡C should be 3.0, got {}", orders[0]);
     }
 }
