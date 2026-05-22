@@ -18,6 +18,7 @@
 export type AtomOverride =
   | { op: `hide`; idx: number }
   | { op: `recolor`; idx: number; hex: string }
+  | { op: `glow`; idx: number; hex: string }
 
 /**
  * Normalise the render-only atom override layer.
