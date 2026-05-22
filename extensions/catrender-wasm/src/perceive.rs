@@ -263,6 +263,99 @@ pub(crate) fn find_rings(g: &Graph) -> Vec<Vec<usize>> {
     rings
 }
 
+/// OB `OBAtom::AverageBondAngle` (atom.cpp:918) — mean over all neighbour pairs.
+fn average_bond_angle(g: &Graph, a: usize) -> f64 {
+    let nbrs: Vec<usize> = g.adj[a].iter().map(|&(nb, _)| nb).collect();
+    let mut sum = 0.0;
+    let mut n = 0;
+    for x in 0..nbrs.len() {
+        for y in (x + 1)..nbrs.len() {
+            sum += angle_deg(g.xyz[nbrs[x]], g.xyz[a], g.xyz[nbrs[y]]);
+            n += 1;
+        }
+    }
+    if n >= 1 {
+        sum / n as f64
+    } else {
+        0.0
+    }
+}
+
+/// Passes 1-3 of PerceiveBondOrders: assign `g.hyb`.
+pub(crate) fn assign_hybridization(g: &mut Graph, rings: &[Vec<usize>]) {
+    let n = g.z.len();
+
+    // Pass 1
+    for a in 0..n {
+        let angle = average_bond_angle(g, a);
+        if angle > 155.0 {
+            g.hyb[a] = 1;
+        } else if angle <= 155.0 && angle > 115.0 {
+            g.hyb[a] = 2;
+        }
+        let in_ring = rings.iter().any(|r| r.contains(&a));
+        // imine N
+        if g.z[a] == 7 && g.explicit_h_count(a) == 1 && g.degree(a) == 2 && angle > 109.5 {
+            g.hyb[a] = 2;
+        } else if g.z[a] == 7 && g.degree(a) == 2 && in_ring {
+            g.hyb[a] = 2;
+        }
+    }
+
+    // Pass 2: planar 5-/6-rings → ring atoms sp2
+    for ring in rings {
+        let p = ring;
+        let sz = p.len();
+        let tors = |q: &[usize]| {
+            torsion_deg(g.xyz[q[0]], g.xyz[q[1]], g.xyz[q[2]], g.xyz[q[3]]).abs()
+        };
+        if sz == 5 {
+            let t = (tors(&[p[0], p[1], p[2], p[3]])
+                + tors(&[p[1], p[2], p[3], p[4]])
+                + tors(&[p[2], p[3], p[4], p[0]])
+                + tors(&[p[3], p[4], p[0], p[1]])
+                + tors(&[p[4], p[0], p[1], p[2]]))
+                / 5.0;
+            if t <= 7.5 {
+                for &b in p {
+                    if g.degree(b) == 2 {
+                        g.hyb[b] = 2;
+                    }
+                }
+            }
+        } else if sz == 6 {
+            let t = (tors(&[p[0], p[1], p[2], p[3]])
+                + tors(&[p[1], p[2], p[3], p[4]])
+                + tors(&[p[2], p[3], p[4], p[5]])
+                + tors(&[p[3], p[4], p[5], p[0]])
+                + tors(&[p[4], p[5], p[0], p[1]])
+                + tors(&[p[5], p[0], p[1], p[2]]))
+                / 6.0;
+            if t <= 12.0 {
+                for &b in p {
+                    if g.degree(b) == 2 || g.degree(b) == 3 {
+                        g.hyb[b] = 2;
+                    }
+                }
+            }
+        }
+    }
+
+    // Pass 3: antialiasing — demote isolated sp/sp2
+    for a in 0..n {
+        if g.hyb[a] == 2 || g.hyb[a] == 1 {
+            let open_nbr = g.adj[a]
+                .iter()
+                .any(|&(nb, _)| g.hyb[nb] < 3 || g.degree(nb) == 1);
+            if !open_nbr && g.hyb[a] == 2 {
+                g.hyb[a] = 3;
+            } else if !open_nbr && g.hyb[a] == 1 {
+                g.hyb[a] = 2;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,5 +441,39 @@ mod tests {
         let rings = find_rings(&g);
         assert_eq!(rings.len(), 1, "benzene has one ring");
         assert_eq!(rings[0].len(), 6, "6-membered");
+    }
+
+    fn ethylene_graph() -> Graph {
+        // C2H4 planar; C-C 1.33, C-H 1.08
+        let z = vec![6, 6, 1, 1, 1, 1];
+        let xyz = vec![
+            [0.0, 0.0, 0.0],     // C0
+            [1.33, 0.0, 0.0],    // C1
+            [-0.5, 0.93, 0.0],   // H
+            [-0.5, -0.93, 0.0],  // H
+            [1.83, 0.93, 0.0],   // H
+            [1.83, -0.93, 0.0],  // H
+        ];
+        let bonds = vec![(0, 1), (0, 2), (0, 3), (1, 4), (1, 5)];
+        Graph::build(&z, &xyz, &bonds)
+    }
+
+    #[test]
+    fn hyb_ethylene_carbons_sp2() {
+        let mut g = ethylene_graph();
+        let rings = find_rings(&g);
+        assign_hybridization(&mut g, &rings);
+        assert_eq!(g.hyb[0], 2, "C0 sp2");
+        assert_eq!(g.hyb[1], 2, "C1 sp2");
+    }
+
+    #[test]
+    fn hyb_benzene_all_sp2() {
+        let mut g = benzene_graph();
+        let rings = find_rings(&g);
+        assign_hybridization(&mut g, &rings);
+        for c in 0..6 {
+            assert_eq!(g.hyb[c], 2, "benzene C{c} sp2");
+        }
     }
 }
