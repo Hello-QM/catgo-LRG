@@ -228,7 +228,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
   let is_rotating_atoms = $state(false)
   let atom_rotation_center = $state<[number, number, number] | null>(null)
   let atom_rotation_initial_positions = $state<Map<number, [number, number, number]>>(new Map())
-  let atom_rotation_cumulative_quat = $state<Quaternion>(new Quaternion())
   let atom_rotation_camera_quat = $state<Quaternion | null>(null)
   let atom_rotation_used_right = $state(false)
   let atom_rotation_axis = $state<[number, number, number] | null>(null)
@@ -489,7 +488,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
     // Default to left-drag (unlocked); the mousedown handlers override to 'x'
     // for the right-button roll path AFTER this function returns.
     atom_rotation_locked_axis = null
-    atom_rotation_cumulative_quat = new Quaternion()
     atom_rotation_camera_quat = camera.quaternion.clone()
     atom_rotation_axis = null
     atom_rotation_angle_deg = 0
@@ -599,7 +597,6 @@ export function create_interaction_controller(deps: InteractionDeps) {
     is_rotating_atoms = false
     atom_rotation_center = null
     atom_rotation_initial_positions = new Map()
-    atom_rotation_cumulative_quat = new Quaternion()
     atom_rotation_camera_quat = null
     atom_rotation_axis = null
     atom_rotation_angle_deg = 0
