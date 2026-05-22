@@ -806,20 +806,27 @@ fn detect_layers_in_rotated(
         .collect();
     by_z.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Cluster by Z with tolerance
+    // Cluster by Z with tolerance.
+    // Compare each atom to the FIRST atom in the current layer (NOT a rolling
+    // average): a drifting average merges adjacent layers, so the average-based
+    // clustering counted FEWER layers than the TS `detect_layers`
+    // (miller-slab.ts) which compares to the first atom. That mismatch made the
+    // layer-based slab cut produce fewer layers than the preview showed
+    // (request 6 -> got 4). Keep this identical to the TS implementation.
     let mut layers: Vec<(f64, Vec<usize>)> = Vec::new();
+    let mut cur_first_z = by_z[0].0;
     let mut cur_z_sum = by_z[0].0;
     let mut cur_indices = vec![by_z[0].1];
     let mut cur_count = 1usize;
 
     for &(z, idx) in &by_z[1..] {
-        let avg_z = cur_z_sum / cur_count as f64;
-        if (z - avg_z).abs() <= LAYER_TOLERANCE {
+        if (z - cur_first_z).abs() <= LAYER_TOLERANCE {
             cur_z_sum += z;
             cur_count += 1;
             cur_indices.push(idx);
         } else {
             layers.push((cur_z_sum / cur_count as f64, cur_indices));
+            cur_first_z = z;
             cur_z_sum = z;
             cur_count = 1;
             cur_indices = vec![idx];
