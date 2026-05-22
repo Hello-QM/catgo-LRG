@@ -418,7 +418,10 @@ fn in_ring(rings: &[Vec<usize>], a: usize) -> bool {
 pub(crate) fn assign_multibonds(g: &mut Graph, rings: &[Vec<usize>]) {
     let n = g.z.len();
 
-    // sort key: electroneg*1e6 + shortest heavy-atom bond length, DESC
+    // sort key: electroneg*1e6 + shortest heavy-atom bond length, ASC.
+    // OB `SortAtomZ` (mol.cpp:206) sorts ascending and iterates 0→max, so the
+    // least-electronegative atoms are processed first — load-bearing for the
+    // conjugated single/double assignment (OB comment at mol.cpp:3440).
     let mut order_idx: Vec<usize> = (0..n).collect();
     let key = |g: &Graph, a: usize| -> f64 {
         let mut shortest = 1.0e5_f64;
@@ -430,7 +433,7 @@ pub(crate) fn assign_multibonds(g: &mut Graph, rings: &[Vec<usize>]) {
         electroneg(g.z[a]) * 1e6 + shortest
     };
     order_idx.sort_by(|&x, &y| {
-        key(g, y).partial_cmp(&key(g, x)).unwrap_or(std::cmp::Ordering::Equal)
+        key(g, x).partial_cmp(&key(g, y)).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     for &atom in &order_idx {
@@ -728,5 +731,67 @@ mod tests {
         let mut orders = vec![1.0; bonds.len()];
         perceive_bond_orders(&z, &xyz, &bonds, &mut orders);
         assert!((orders[0] - 3.0).abs() < 1e-9, "C≡C should be 3.0, got {}", orders[0]);
+    }
+
+    #[test]
+    fn multibond_butadiene_matches_openbabel() {
+        // OB make3D + PerceiveBondOrders ground truth (C=C-C=C).
+        let z = vec![6, 6, 6, 6, 1, 1, 1, 1, 1, 1];
+        let xyz = vec![
+            [0.9296, 0.0770, -0.0346],
+            [0.2411, -0.9373, 0.5007],
+            [-1.1998, -0.9795, 0.5229],
+            [-1.8891, -1.9937, 1.0581],
+            [0.4390, 0.9331, -0.4864],
+            [2.0150, 0.0690, -0.0304],
+            [0.7830, -1.7718, 0.9410],
+            [-1.7417, -0.1449, 0.0825],
+            [-2.9745, -1.9853, 1.0537],
+            [-1.3988, -2.8499, 1.5100],
+        ];
+        let bonds = vec![
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (0, 4),
+            (0, 5),
+            (1, 6),
+            (2, 7),
+            (3, 8),
+            (3, 9),
+        ];
+        let mut orders = vec![1.0; bonds.len()];
+        perceive_bond_orders(&z, &xyz, &bonds, &mut orders);
+        // C-C bonds are indices 0,1,2; OB gives 2,1,2.
+        assert!(
+            (orders[0] - 2.0).abs() < 1e-9
+                && (orders[1] - 1.0).abs() < 1e-9
+                && (orders[2] - 2.0).abs() < 1e-9,
+            "butadiene C-C orders {:?} != OB [2.0, 1.0, 2.0]",
+            &orders[0..3]
+        );
+    }
+
+    #[test]
+    fn multibond_formamide_matches_openbabel() {
+        // OB ground truth for HC(=O)NH2.
+        let z = vec![6, 8, 7, 1, 1, 1];
+        let xyz = vec![
+            [0.9213, 0.0733, 0.0856],
+            [0.3261, -0.6932, -0.6552],
+            [0.2922, 0.9393, 0.9226],
+            [2.0199, 0.1348, 0.1451],
+            [0.7918, 1.5703, 1.5325],
+            [-0.7194, 0.9454, 0.9286],
+        ];
+        let bonds = vec![(0, 1), (0, 2), (0, 3), (2, 4), (2, 5)];
+        let mut orders = vec![1.0; bonds.len()];
+        perceive_bond_orders(&z, &xyz, &bonds, &mut orders);
+        // C-O bond (index 0) double, C-N bond (index 1) single.
+        assert!(
+            (orders[0] - 2.0).abs() < 1e-9 && (orders[1] - 1.0).abs() < 1e-9,
+            "formamide [C-O, C-N] orders {:?} != OB [2.0, 1.0]",
+            &orders[0..2]
+        );
     }
 }
