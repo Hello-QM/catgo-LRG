@@ -1,6 +1,6 @@
 import { Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
-import { screen_frame_from_camera } from '$lib/structure/rotation-math'
+import { screen_frame_from_camera, pick_locked_axis } from '$lib/structure/rotation-math'
 
 describe('screen_frame_from_camera', () => {
   it('identity camera: x toward viewer, y right, z up', () => {
@@ -16,5 +16,21 @@ describe('screen_frame_from_camera', () => {
     expect(f.x.dot(f.y)).toBeCloseTo(0, 6)
     expect(f.y.dot(f.z)).toBeCloseTo(0, 6)
     expect(f.x.dot(f.z)).toBeCloseTo(0, 6)
+  })
+})
+
+describe('pick_locked_axis', () => {
+  const dz = 4
+  it('returns null inside the dead zone', () => {
+    expect(pick_locked_axis(2, 2, dz)).toBeNull()
+  })
+  it('horizontal-dominant drag locks z (yaw)', () => {
+    expect(pick_locked_axis(10, 1, dz)).toBe('z')
+  })
+  it('vertical-dominant drag locks y (pitch)', () => {
+    expect(pick_locked_axis(1, 10, dz)).toBe('y')
+  })
+  it('ties favor horizontal (z)', () => {
+    expect(pick_locked_axis(5, 5, dz)).toBe('z')
   })
 })

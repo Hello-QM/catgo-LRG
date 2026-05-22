@@ -28,3 +28,18 @@ export function screen_frame_from_camera(cam_quat: Quaternion): ScreenFrame {
   )
   return { x: toward_viewer, y: right, z: up }
 }
+
+export type LockAxis = 'x' | 'y' | 'z'
+
+/** Decide which axis a left-button drag locks onto, from the total
+ *  displacement since mousedown. Returns null until the dead zone is
+ *  exceeded. Horizontal-dominant → z (yaw); vertical-dominant → y (pitch).
+ *  Ties favor horizontal. */
+export function pick_locked_axis(
+  total_dx: number,
+  total_dy: number,
+  deadzone_px: number,
+): 'y' | 'z' | null {
+  if (Math.hypot(total_dx, total_dy) < deadzone_px) return null
+  return Math.abs(total_dx) >= Math.abs(total_dy) ? 'z' : 'y'
+}
