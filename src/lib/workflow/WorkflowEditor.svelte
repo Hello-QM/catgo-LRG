@@ -1890,7 +1890,13 @@
           y: Number.isFinite(n.y) ? n.y : 0,
         }
       })
-      edges = graph.edges || []
+      // Ensure every loaded edge has a unique id — `to_workflow_json` does not
+      // persist `id`, so round-tripped graphs would otherwise yield duplicate
+      // `undefined` keys and crash the keyed {#each} (each_key_duplicate).
+      edges = (graph.edges || []).map((e: WfEdge, i: number) => ({
+        ...e,
+        id: e.id ?? `e${i}-${e.from ?? `?`}-${e.to ?? `?`}`,
+      }))
       fill_empty_structure_inputs()
       push_history()
       change_det.set_external_change_detected(false)
@@ -1932,7 +1938,13 @@
           y: Number.isFinite(n.y) ? n.y : 0,
         }
       })
-      edges = graph.edges || []
+      // Ensure every loaded edge has a unique id — `to_workflow_json` does not
+      // persist `id`, so round-tripped graphs would otherwise yield duplicate
+      // `undefined` keys and crash the keyed {#each} (each_key_duplicate).
+      edges = (graph.edges || []).map((e: WfEdge, i: number) => ({
+        ...e,
+        id: e.id ?? `e${i}-${e.from ?? `?`}-${e.to ?? `?`}`,
+      }))
       is_loaded = true
       fill_empty_structure_inputs()
       // Auto-layout if any nodes were missing coordinates
