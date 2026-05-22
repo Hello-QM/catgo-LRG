@@ -195,6 +195,15 @@ pub fn render_svg(inp: &RenderInput) -> String {
     let n_in = inp.atoms.len();
     let mut hidden_ov = vec![false; n_in];
     let mut recolor: Vec<Option<Color>> = vec![None; n_in];
+    // original-atom-index -> glow halo color hex (op == "glow"). The atom still
+    // draws normally; a blurred colored halo is painted behind it (render-level
+    // publication highlight, appears in PNG/SVG export). Default bright #ffd400.
+    let glow_atoms: std::collections::HashMap<usize, String> = inp
+        .atom_overrides
+        .iter()
+        .filter(|o| o.op == "glow")
+        .map(|o| (o.idx, o.hex.clone().unwrap_or_else(|| "#ffd400".to_string())))
+        .collect();
     for ov in &inp.atom_overrides {
         if ov.idx >= n_in {
             continue;
@@ -823,6 +832,21 @@ data-gizmo-basis=\"{g00},{g01},{g02},{g10},{g11},{g12},{g20},{g21},{g22}\">",
         vec![0; n]
     };
 
+    // --- glow halo filter <defs> (op:glow atom highlight) -------------
+    // Emitted once, independent of gradient mode. The id-prefix guard
+    // rewrites `id="`/`url(#` uniformly, so `catrender-glow` is prefixed
+    // consistently with the gradient ids when id_prefix is set.
+    if !glow_atoms.is_empty() {
+        svg.push("  <defs>".to_string());
+        svg.push(format!(
+            "    <filter id=\"catrender-glow\" x=\"-75%\" y=\"-75%\" width=\"250%\" height=\"250%\">\
+<feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"{:.1}\" result=\"b\"/>\
+<feMerge><feMergeNode in=\"b\"/><feMergeNode in=\"b\"/><feMergeNode in=\"SourceGraphic\"/></feMerge></filter>",
+            (6.0 * sr).max(3.0)
+        ));
+        svg.push("  </defs>".to_string());
+    }
+
     // --- radialGradient <defs> ----------------------------------------
     // Shared id `g{Z}_{hex[1:]}` keyed by (Z,hex); per-atom `g{ai}` w/ fog.
     if use_grad {
@@ -1040,6 +1064,17 @@ fill=\"{fill}\">{}</text>",
                 String::new()
             };
             let r = radii[ai] * scale;
+            // Glow halo behind this atom (render highlight; appears in export).
+            // Pushed BEFORE the atom circle so the atom stays crisp on top, and
+            // emitted in the SAME layer slot (after atom_layer_start) so it
+            // travels with its atom when atoms_above_bonds defers the layer.
+            if let Some(glow_hex) = glow_atoms.get(&orig) {
+                svg.push(format!(
+                    "  <circle class=\"atom-glow\" cx=\"{xi:.1}\" cy=\"{yi:.1}\" r=\"{gr:.1}\" \
+fill=\"{glow_hex}\" opacity=\"0.7\" filter=\"url(#catrender-glow)\"/>",
+                    gr = r * 1.6
+                ));
+            }
             if use_grad {
                 let (grad_id, fs_atom) = if use_per_atom_grad {
                     (
@@ -1852,6 +1887,40 @@ mod tests {
                 "style":{"preset":"default","auto_orient":false}}"#,
         );
         assert!(!s.contains("class=\"atom-index\""), "no index labels when off");
+    }
+
+    // ---- render-level glow halo (op:glow atom override) ----
+
+    #[test]
+    fn glow_atom_emits_halo() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "atom_overrides":[{"op":"glow","idx":0}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert!(s.contains("class=\"atom-glow\""), "glow halo circle present");
+        assert!(s.contains("catrender-glow"), "glow filter def + ref present");
+    }
+
+    #[test]
+    fn no_glow_without_override() {
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "style":{"preset":"default","auto_orient":false}}"#,
+        );
+        assert!(!s.contains("atom-glow"), "no halo without glow override");
+        assert!(!s.contains("catrender-glow"), "no glow filter without override");
+    }
+
+    #[test]
+    fn glow_custom_color() {
+        let s = render(
+            r##"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.2,0,0]}],
+                "atom_overrides":[{"op":"glow","idx":0,"hex":"#00ff00"}],
+                "style":{"preset":"default","auto_orient":false}}"##,
+        );
+        assert!(s.contains("class=\"atom-glow\""), "custom-color halo present");
+        assert!(s.contains("fill=\"#00ff00\""), "custom glow fill applied");
     }
 
     // ---- bond-length sanity prune filter ----
