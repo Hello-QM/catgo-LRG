@@ -12,10 +12,9 @@
   import type { BondingStrategy } from '$lib/structure/bonding'
   import { compute_bonds_sync } from '$lib/structure/workers/bond-worker-api'
   import { merge_bonds, prune_overrides, type Bond } from './bond-merge'
-  import { merge_atoms, prune_atom_overrides } from './atom-merge'
+  import { prune_atom_overrides } from './atom-merge'
   import { catrender_state as S, AXIS_COLORS } from './catrender-state.svelte'
   import { drag_rotate, type DragRotateHandlers } from './drag-rotate-action'
-  import { nearest_atom, nearest_bond } from './pick-hit'
 
   let {
     show = $bindable(false),
@@ -139,7 +138,6 @@
     down: on_pointer_down,
     move: on_pointer_move,
     up: on_pointer_up,
-    pick: (e) => { if (!dragging) pick(e) },
     wheel: on_wheel,
     dblclick: on_dblclick,
   }
@@ -180,222 +178,6 @@
     return { atoms, base, lattice, n: atoms.length }
   })
   $effect(() => { S.mirror = mirror })
-
-  // --- RT14: in-canvas direct-manipulation pick/select -------------------
-  // View-LOCAL selection (NOT shared state — selection is view-local UI).
-  // {kind:'atom',idx} → original atom idx; {kind:'bond',i,j} → original idxs.
-  type Selected =
-    | { kind: `atom`; idx: number }
-    | { kind: `bond`; i: number; j: number }
-    | null
-  let selected = $state<Selected>(null)
-
-  // Shared client→svg transform + rendered-circle parse. Returns the picked
-  // circle's projected coords in SVG-space, the full projected-atom array (in
-  // ORIGINAL atom index order — hidden atoms get a sentinel, never picked),
-  // plus the click point in svg-space and a svg→client back-transform so the
-  // overlay + inline ✕ align pixel-accurately with what the renderer drew.
-  //
-  // svg.rs paints circles in Z-ORDER (depth-sorted), NOT original-atom order,
-  // so the Nth rendered circle is NOT the Nth atom. With pick_attrs on, each
-  // circle carries data-atom-index="{orig}" (original input index) — we read
-  // that to scatter circles onto original indices. The visible-order remap is
-  // kept only as a fallback for circles lacking the attr (pick_attrs off).
-  function project_scene(e: { clientX: number; clientY: number }) {
-    const svg_el = preview_el?.querySelector(`svg`)
-    if (!svg_el) return null
-    const m = mirror
-    if (!m) return null
-    const circles = svg_el.querySelectorAll(`circle`)
-    if (!circles.length) return null
-    const rect = svg_el.getBoundingClientRect()
-    const vb = svg_el.viewBox.baseVal
-    // The rendered SVG is object-fit:contain inside .preview (max-width/height
-    // in CSS) — getBoundingClientRect() is the SVG element's OWN box (already
-    // letterbox-trimmed by the browser), so a uniform vb/rect scale per axis
-    // is the exact client→svg map the original click-pick used.
-    const sx = vb.width / rect.width
-    const sy = vb.height / rect.height
-    const to_svg = (clx: number, cly: number): [number, number] => [
-      (clx - rect.left) * sx + vb.x,
-      (cly - rect.top) * sy + vb.y,
-    ]
-    const to_client = (svx: number, svy: number): [number, number] => [
-      (svx - vb.x) / sx + rect.left,
-      (svy - vb.y) / sy + rect.top,
-    ]
-    const [px, py] = to_svg(e.clientX, e.clientY)
-
-    const a_ov = prune_atom_overrides($state.snapshot(S.atom_overrides), m.n)
-    const { hidden } = merge_atoms(m.n, a_ov)
-    const visible_idx: number[] = []
-    for (let i = 0; i < m.n; i++) if (!hidden.has(i)) visible_idx.push(i)
-
-    // proj[original_idx] = {x,y,r} for VISIBLE atoms; hidden → null sentinel
-    // (NaN coords ⇒ never the nearest, never a valid bond endpoint).
-    const proj: ({ x: number; y: number; r: number } | null)[] = new Array(
-      m.n,
-    ).fill(null)
-    circles.forEach((c, ord) => {
-      const cx = parseFloat(c.getAttribute(`cx`) ?? `NaN`)
-      const cy = parseFloat(c.getAttribute(`cy`) ?? `NaN`)
-      const r = parseFloat(c.getAttribute(`r`) ?? `NaN`)
-      if (Number.isNaN(cx) || Number.isNaN(cy)) return
-      // Prefer the renderer's explicit original-atom index (RT14). Circles are
-      // z-order-painted, so the DOM ordinal is the WRONG index — only this attr
-      // (or the visible-order fallback) recovers the real atom.
-      const idx_attr = c.getAttribute(`data-atom-index`)
-      const orig = idx_attr !== null
-        ? Number.parseInt(idx_attr, 10)
-        : (ord < visible_idx.length ? visible_idx[ord] : ord)
-      if (Number.isFinite(orig) && orig >= 0 && orig < m.n) {
-        proj[orig] = { x: cx, y: cy, r: Number.isNaN(r) ? 8 : r }
-      }
-    })
-    return { m, proj, px, py, vb, to_client }
-  }
-
-  // RT14 one-step pick: atom first, else bond. View-local selection only.
-  function pick(e: { clientX: number; clientY: number }) {
-    const sc = project_scene(e)
-    if (!sc) {
-      selected = null
-      return
-    }
-    const { m, proj, px, py } = sc
-    // nearest_atom over the SAME projected circle coords the renderer drew.
-    // Sentinel hidden atoms get an unreachable centre so they never win.
-    const atom_arr = proj.map((p) =>
-      p ? p : { x: Infinity, y: Infinity, r: 0 },
-    )
-    const ai = nearest_atom(px, py, atom_arr)
-    if (ai !== null && proj[ai]) {
-      selected = { kind: `atom`, idx: ai }
-      return
-    }
-    // No atom → bonds. Effective merged connectivity (base + overrides) minus
-    // any pair whose endpoint is hidden/missing (already-removed).
-    const pruned = prune_overrides($state.snapshot(S.bond_overrides), m.n)
-    const bonds = merge_bonds(m.base, pruned)
-    const pairs: [number, number][] = bonds
-      .filter((b) => proj[b.i] && proj[b.j])
-      .map((b) => [b.i, b.j])
-    const xy = proj.map((p) => (p ? { x: p.x, y: p.y } : { x: NaN, y: NaN }))
-    const bj = nearest_bond(px, py, pairs, xy, 8)
-    if (bj) selected = { kind: `bond`, i: bj[0], j: bj[1] }
-    else selected = null // empty-canvas click clears
-  }
-
-  // Overlay geometry for the current selection, in SVG-space + a client
-  // position for the floating ✕. Recomputed from a FRESH project_scene each
-  // time `svg`/`selected` change so it tracks re-renders & drag-rotate.
-  type Highlight =
-    | { kind: `atom`; cx: number; cy: number; r: number; bx: number; by: number }
-    | {
-        kind: `bond`
-        x1: number; y1: number; x2: number; y2: number
-        bx: number; by: number
-      }
-    | null
-  const highlight = $derived.by((): Highlight => {
-    // depend on svg (re-render) + selected so the ring follows the molecule
-    void svg
-    const sel = selected
-    if (!sel) return null
-    // Re-project from the live SVG (no click — use the element centre as a
-    // dummy point; we only need proj + to_client).
-    const sc = project_scene({ clientX: 0, clientY: 0 })
-    if (!sc) return null
-    const { proj, to_client } = sc
-    if (sel.kind === `atom`) {
-      const p = proj[sel.idx]
-      if (!p) return null
-      const [bx, by] = to_client(p.x + p.r, p.y - p.r)
-      return { kind: `atom`, cx: p.x, cy: p.y, r: p.r, bx, by }
-    }
-    const a = proj[sel.i]
-    const b = proj[sel.j]
-    if (!a || !b) return null
-    const [bx, by] = to_client((a.x + b.x) / 2, (a.y + b.y) / 2)
-    return {
-      kind: `bond`,
-      x1: a.x, y1: a.y, x2: b.x, y2: b.y, bx, by,
-    }
-  })
-
-  // viewBox string for the overlay <svg> so it shares the rendered SVG's
-  // coordinate system exactly (overlay drawn in svg-space, never mutates the
-  // {@html}).
-  const overlay_viewbox = $derived.by(() => {
-    void svg
-    const svg_el = preview_el?.querySelector(`svg`)
-    if (!svg_el) return null
-    const vb = svg_el.viewBox.baseVal
-    const r = svg_el.getBoundingClientRect()
-    const pr = preview_el?.getBoundingClientRect()
-    if (!pr) return null
-    return {
-      vb: `${vb.x} ${vb.y} ${vb.width} ${vb.height}`,
-      // Position the overlay svg EXACTLY over the rendered svg's box.
-      left: r.left - pr.left,
-      top: r.top - pr.top,
-      width: r.width,
-      height: r.height,
-    }
-  })
-
-  // --- RT14 direct delete (render-only, existing merge paths) ------------
-  function delete_selected() {
-    const sel = selected
-    if (!sel) return
-    if (sel.kind === `atom`) atom_hide(sel.idx) // → atom_overrides hide
-    else bond_remove_pair(sel.i, sel.j) // → bond_overrides remove
-    selected = null
-  }
-  function clear_selection() {
-    selected = null
-  }
-
-  // Keyboard: Del/Backspace deletes, Esc clears. Strict guard (pane open +
-  // something selected) + clean add/remove lifecycle in onMount.
-  //
-  // CAPTURE phase + stopPropagation: DraggablePane has its OWN
-  // `<svelte:window onkeydown>` that closes the pane on Escape (bubble phase).
-  // A bubble-phase listener here could not stop it, so Esc both cleared the
-  // selection AND closed the pane. Listening in capture lets us intercept the
-  // key first and stopPropagation() before DraggablePane's bubble listener
-  // runs — Esc now clears selection WITHOUT closing the pane. The shared
-  // DraggablePane stays untouched (same discipline as the RT13 drag fix).
-  function on_keydown(e: KeyboardEvent) {
-    if (!show || selected === null) return
-    // Never hijack keys while the user is typing in a field (knob inputs etc.).
-    const t = e.target as HTMLElement | null
-    if (t && (t.tagName === `INPUT` || t.tagName === `TEXTAREA` || t.isContentEditable)) {
-      return
-    }
-    if (e.key === `Delete` || e.key === `Backspace`) {
-      e.preventDefault()
-      e.stopPropagation()
-      delete_selected()
-    } else if (e.key === `Escape`) {
-      e.preventDefault()
-      e.stopPropagation()
-      clear_selection()
-    }
-  }
-  onMount(() => {
-    window.addEventListener(`keydown`, on_keydown, true)
-    return () => window.removeEventListener(`keydown`, on_keydown, true)
-  })
-
-  // Selection-clear on structure mirror atom-count change (prune invalid idx).
-  $effect(() => {
-    const n = mirror?.n ?? 0
-    const sel = selected
-    if (!sel) return
-    if (sel.kind === `atom` && sel.idx >= n) selected = null
-    else if (sel.kind === `bond` && (sel.i >= n || sel.j >= n)) selected = null
-  })
 
   // --- xyz axis gizmo: parse the core-surfaced (PCA·drag) basis ----------
   // svg.rs emits `data-gizmo-basis="r00,r01,..,r22"` (row-major; row k = the
@@ -457,10 +239,7 @@
           show_index: S.show_index,
           drag_rotation: S.drag_rot,
           cell: { show: S.show_cell, supercell: [1, 1, 1], pbc_wrap: S.pbc_wrap },
-          // pick_attrs: emit data-atom-index on every painted atom so the
-          // in-canvas click-pick (RT14) maps a z-order circle to the right
-          // original atom. Live preview only — export/AI-bridge render omits it.
-          overrides: { ...ov, pick_attrs: true },
+          overrides: { ...ov },
         },
       })
       try {
@@ -654,7 +433,6 @@
           {/each}
         </select>
       </label>
-      <span class="hint">or click an atom in the preview</span>
       <button
         disabled={selected_atom === null}
         onclick={() => selected_atom !== null && atom_hide(selected_atom)}>
@@ -686,11 +464,11 @@
   {#if render_err}<p class="err">{render_err}</p>{/if}
 
   <div class="preview-wrap">
-    <!-- Pointer-driven 3D manipulation surface (drag-rotate + click-pick).
+    <!-- Pointer-driven 3D manipulation surface (drag-rotate + wheel zoom).
          The `use:drag_rotate` action attaches DIRECT listeners on this node
          so they fire BEFORE the ancestor DraggablePane stopPropagation —
-         this is the RT13 root-cause fix; keyboard equivalents are the index
-         <select> + numeric edit rows. -->
+         this is the RT13 root-cause fix; atom/bond editing is done via the
+         index <select> + numeric edit rows. -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="preview"
@@ -700,67 +478,10 @@
       style:cursor={dragging ? `grabbing` : `grab`}>
       <!-- Zoom layer: pure CSS transform:scale on the rendered SVG only.
            Rotation is baked into the wasm SVG (drag_rot); this scale is an
-           independent visual layer on top. The overlay below reads the live
-           getBoundingClientRect of this scaled svg so the highlight tracks. -->
+           independent visual layer on top. -->
       <div class="zoom-layer" style:transform="scale({zoom})">
         {@html svg}
       </div>
-      <!-- RT14 highlight overlay: absolutely-positioned svg layered EXACTLY
-           over the rendered svg (same viewBox). Pure overlay — never mutates
-           the {@html} content. pointer-events:none so drag/click pass
-           through to .preview. -->
-      {#if highlight && overlay_viewbox}
-        <svg
-          class="hl-overlay"
-          viewBox={overlay_viewbox.vb}
-          preserveAspectRatio="none"
-          style:left="{overlay_viewbox.left}px"
-          style:top="{overlay_viewbox.top}px"
-          style:width="{overlay_viewbox.width}px"
-          style:height="{overlay_viewbox.height}px">
-          <defs>
-            <filter id="catrender-sel-glow" x="-75%" y="-75%" width="250%" height="250%">
-              <feGaussianBlur in="SourceGraphic" stdDeviation={highlight.kind === `atom` ? highlight.r * 0.35 : 7} result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
-          {#if highlight.kind === `atom`}
-            <circle
-              cx={highlight.cx} cy={highlight.cy} r={highlight.r * 1.15}
-              fill="#ff6a00" opacity="0.45" filter="url(#catrender-sel-glow)" />
-            <circle
-              cx={highlight.cx} cy={highlight.cy} r={highlight.r * 1.25}
-              fill="none" stroke="#ff6a00" stroke-width={highlight.r * 0.18}
-              opacity="0.95" />
-          {:else}
-            <line
-              x1={highlight.x1} y1={highlight.y1}
-              x2={highlight.x2} y2={highlight.y2}
-              stroke="#ff6a00" stroke-width="22" stroke-linecap="round"
-              opacity="0.45" filter="url(#catrender-sel-glow)" />
-            <line
-              x1={highlight.x1} y1={highlight.y1}
-              x2={highlight.x2} y2={highlight.y2}
-              stroke="#ff6a00" stroke-width="14" stroke-linecap="round"
-              opacity="0.5" />
-          {/if}
-        </svg>
-        <!-- Inline delete affordance — a small floating ✕ next to the picked
-             element (client coords from the svg→client back-transform). -->
-        <button
-          class="del-fab"
-          title="delete (or press Del / Backspace)"
-          style:left="{highlight.bx + 6}px"
-          style:top="{highlight.by - 22}px"
-          onpointerdown={(ev) => ev.stopPropagation()}
-          onclick={(ev) => { ev.stopPropagation(); delete_selected() }}>
-          ✕
-        </button>
-      {/if}
     </div>
     <!-- xyz axis gizmo: corner triad from the core (PCA·drag) basis -->
     <svg class="gizmo" viewBox="-1.2 -1.2 2.4 2.4" width="64" height="64">
@@ -792,7 +513,6 @@
     font-size: 12px; padding: 6px 0;
   }
   .edit-row input[type='number'] { width: 70px; }
-  .hint { color: #888; font-style: italic; }
   .row-list {
     list-style: none; margin: 4px 0 0; padding: 0;
     max-height: 140px; overflow-y: auto; font-size: 12px;
@@ -817,21 +537,6 @@
     display: grid; place-items: center;
     transform-origin: center center;
   }
-  /* RT14 highlight overlay — exactly over the rendered svg, click-through. */
-  .hl-overlay {
-    position: absolute; pointer-events: none; overflow: visible;
-    max-width: none !important; max-height: none !important;
-  }
-  /* RT14 inline delete affordance — small floating ✕ near the selection. */
-  .del-fab {
-    position: absolute; z-index: 5;
-    width: 22px; height: 22px; padding: 0;
-    border: none; border-radius: 50%;
-    background: #c0392b; color: #fff;
-    font-size: 13px; font-weight: 700; line-height: 22px;
-    cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-  }
-  .del-fab:hover { background: #e74c3c; }
   .gizmo {
     position: absolute; right: 8px; bottom: 8px;
     background: rgba(255, 255, 255, 0.7); border-radius: 6px;

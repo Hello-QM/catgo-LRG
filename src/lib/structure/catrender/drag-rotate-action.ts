@@ -20,10 +20,9 @@
 // it would risk every other pane). Pane-local, proven end-to-end.
 //
 // `setPointerCapture` is kept on the preview node so a drag that leaves the
-// element still tracks. `click`-to-pick is routed through pointerup-when-
-// not-dragging (same as the original code) for robustness — `click` is not
-// in DraggablePane's swallow list but staying on this code path keeps the
-// pick immune too.
+// element still tracks. A non-drag pointerup is still detected (the optional
+// `pick` hook) but the in-canvas click-to-select path it once drove has been
+// retired (misaligned overlay), so no caller supplies `pick` today.
 
 export type DragRotateHandlers = {
   /** pointerdown on the preview: begin a drag (capture pointer). */
@@ -32,8 +31,13 @@ export type DragRotateHandlers = {
   move: (e: PointerEvent) => void
   /** pointerup / pointerleave: end the drag (release capture). */
   up: (e: PointerEvent) => void
-  /** pointerup when NOT dragging: treat as a click → atom pick. */
-  pick: (e: PointerEvent) => void
+  /**
+   * pointerup when NOT dragging: treat as a click. Optional — the in-canvas
+   * click-to-pick path was retired (misaligned overlay), so callers no longer
+   * supply this. Kept on the type as optional in case a future consumer wants
+   * a non-drag click hook.
+   */
+  pick?: (e: PointerEvent) => void
   /** wheel over the preview: visual zoom (CSS scale). Optional. */
   wheel?: (e: WheelEvent) => void
   /** dblclick on the preview: reset visual zoom. Optional. */
@@ -65,8 +69,9 @@ export function drag_rotate(
     node.releasePointerCapture?.(e.pointerId)
     const h = get_handlers()
     h.up(e)
-    // a pointerup with no intervening drag == a click → pick an atom
-    if (!dragged) h.pick(e)
+    // a pointerup with no intervening drag == a click; pick is optional now
+    // that the in-canvas click-to-select path is retired.
+    if (!dragged) h.pick?.(e)
     dragged = false
   }
   function on_leave(e: PointerEvent) {
