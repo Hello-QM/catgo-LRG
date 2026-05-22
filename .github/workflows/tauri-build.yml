@@ -32,6 +32,9 @@ jobs:
             target: x86_64-unknown-linux-gnu
             backend_target: x86_64-unknown-linux-gnu
             name: Linux
+            # Skip AppImage: linuxdeploy hangs/fails on GitHub runners (FUSE +
+            # bundled-tool download). Ship .deb + .rpm, which build reliably.
+            bundles: deb,rpm
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.name }})
@@ -193,4 +196,4 @@ jobs:
             See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
           releaseDraft: true
           prerelease: false
-          args: --target ${{ matrix.target }}
+          args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}
