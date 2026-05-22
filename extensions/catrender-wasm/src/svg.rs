@@ -439,6 +439,9 @@ pub fn render_svg(inp: &RenderInput) -> String {
     // --- PCA auto-orient (fit-mask excludes `*`), then drag rotation ----
     let auto_orient = inp.style.auto_orient.unwrap_or(auto_orient_default);
     let (mut pca_drag, _) = (geom_identity(), ());
+    // Centroid PCA centered atoms around (zero when PCA didn't run). The cell
+    // box must take the SAME centering, or atoms drift off the lattice corners.
+    let mut orient_centroid = [0.0_f64; 3];
     if auto_orient && n > 1 {
         // RT5 fit_mask domain reconciliation: pca_orient_with_mask fits only
         // the masked subset but applies the rotation to ALL rows. We pass NO
@@ -448,6 +451,7 @@ pub fn render_svg(inp: &RenderInput) -> String {
         let atom_mask: Vec<bool> = symbols.iter().map(|s| *s != "*").collect();
         let mask_opt: Option<&[bool]> =
             if atom_mask.iter().all(|&b| b) { None } else { Some(&atom_mask) };
+        orient_centroid = crate::orient::fit_centroid(&pos, mask_opt);
         let (oriented, rot) = pca_orient_with_mask(&pos, None, mask_opt);
         pos = oriented;
         pca_drag = rot;
@@ -523,7 +527,18 @@ pub fn render_svg(inp: &RenderInput) -> String {
             let a = rotate_vec(&pca_drag, lat[0]);
             let b = rotate_vec(&pca_drag, lat[1]);
             let cc = rotate_vec(&pca_drag, lat[2]);
-            let origin = [0.0, 0.0, 0.0];
+            // Lattice origin gets the SAME affine atoms got: center by the PCA
+            // centroid, then rotate. Without the −centroid shift the box stays
+            // at the rotated raw origin while atoms move, so they no longer sit
+            // on the cell corners. (orient_centroid is zero when PCA didn't run.)
+            let origin = rotate_vec(
+                &pca_drag,
+                [
+                    -orient_centroid[0],
+                    -orient_centroid[1],
+                    -orient_centroid[2],
+                ],
+            );
             let mut vs = [[0.0; 3]; 8];
             let mut idx = 0;
             for i in 0..2 {
@@ -557,12 +572,47 @@ pub fn render_svg(inp: &RenderInput) -> String {
         None => (None, None),
     };
 
+    // Interactive (drag-rotate) renders must keep a FIXED square canvas, else
+    // the per-orientation aspect crop resizes the SVG element every frame
+    // (the viewport visibly jumps while rotating). Bound the 3D extent of every
+    // rendered point (atoms + cell box) about its centre; the projected extent
+    // in any orientation never exceeds this diameter, so nothing clips and the
+    // canvas size stays constant. Static (one-shot) renders keep the faithful
+    // xyzrender aspect crop (fixed_span = None).
+    let fixed_span = if inp.style.drag_rotation.is_some() {
+        let mut pts: Vec<[f64; 3]> = pos.clone();
+        if let Some(vs) = &cell_verts {
+            pts.extend_from_slice(vs);
+        }
+        let cnt = pts.len().max(1) as f64;
+        let mut mean = [0.0_f64; 3];
+        for p in &pts {
+            mean[0] += p[0];
+            mean[1] += p[1];
+            mean[2] += p[2];
+        }
+        mean[0] /= cnt;
+        mean[1] /= cnt;
+        mean[2] /= cnt;
+        let max_r = pts
+            .iter()
+            .map(|p| {
+                let d = [p[0] - mean[0], p[1] - mean[1], p[2] - mean[2]];
+                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+            })
+            .fold(0.0_f64, f64::max);
+        let max_rad = fit_radii.iter().cloned().fold(0.0_f64, f64::max);
+        Some((2.0 * (max_r + max_rad)).max(1e-6))
+    } else {
+        None
+    };
+
     let fit = fit_canvas_extra(
         &pos,
         &fit_radii,
         canvas_size,
         padding,
-        None,
+        fixed_span,
         extra_lo,
         extra_hi,
     );
@@ -1704,6 +1754,102 @@ mod tests {
             r#"{"atoms":[{"el":"C","xyz":[0,0,0]}],"lattice":[[4,0,0],[0,4,0],[0,0,4]],"style":{"preset":"default","cell":{"show":true}}}"#,
         );
         assert!(s.contains("stroke-dasharray") && s.contains("class=\"cell-edge\""));
+    }
+
+    // ---- Bug-fix regression: interactive canvas + cell centering --------
+
+    fn viewbox_wh(s: &str) -> (f64, f64) {
+        let head = s
+            .split("viewBox=\"0 0 ")
+            .nth(1)
+            .and_then(|v| v.split('"').next())
+            .expect("viewBox present");
+        let mut it = head.split_whitespace();
+        let w: f64 = it.next().unwrap().parse().unwrap();
+        let h: f64 = it.next().unwrap().parse().unwrap();
+        (w, h)
+    }
+
+    fn circle_centers(s: &str) -> Vec<(f64, f64)> {
+        let attr = |seg: &str, key: &str| -> Option<f64> {
+            seg.split(&format!("{key}=\""))
+                .nth(1)
+                .and_then(|x| x.split('"').next())
+                .and_then(|x| x.parse::<f64>().ok())
+        };
+        s.split("<circle")
+            .skip(1)
+            .filter_map(|seg| Some((attr(seg, "cx")?, attr(seg, "cy")?)))
+            .collect()
+    }
+
+    fn cell_vertices(s: &str) -> Vec<(f64, f64)> {
+        let mut out: Vec<(f64, f64)> = Vec::new();
+        for seg in s.split("class=\"cell-edge\"").skip(1) {
+            let g = |key: &str| -> Option<f64> {
+                seg.split(&format!("{key}=\""))
+                    .nth(1)
+                    .and_then(|x| x.split('"').next())
+                    .and_then(|x| x.parse::<f64>().ok())
+            };
+            for (kx, ky) in [("x1", "y1"), ("x2", "y2")] {
+                if let (Some(x), Some(y)) = (g(kx), g(ky)) {
+                    if !out
+                        .iter()
+                        .any(|&(a, b)| (a - x).abs() < 0.05 && (b - y).abs() < 0.05)
+                    {
+                        out.push((x, y));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn interactive_canvas_fixed_size_across_rotation() {
+        // Bug 1: a linear molecule cropped to its projected aspect makes the
+        // SVG width/height jump every frame while drag-rotating. With
+        // drag_rotation set (interactive pane) the canvas must be a fixed
+        // square so the viewport never resizes.
+        let mk = |dr: &str| {
+            render(&format!(
+                r#"{{"atoms":[{{"el":"C","xyz":[0,0,0]}},{{"el":"O","xyz":[3,0,0]}},{{"el":"N","xyz":[6,0,0]}}],"style":{{"preset":"default","auto_orient":false,"drag_rotation":{dr}}}}}"#
+            ))
+        };
+        let (w1, h1) = viewbox_wh(&mk("[0,0,30]"));
+        let (w2, h2) = viewbox_wh(&mk("[0,0,75]"));
+        assert_eq!(w1, h1, "interactive (drag_rotation) canvas must be square");
+        assert_eq!(
+            (w1, h1),
+            (w2, h2),
+            "interactive canvas size must stay fixed as the molecule rotates"
+        );
+    }
+
+    #[test]
+    fn cell_corner_atom_coincides_with_cell_vertex() {
+        // Bug 2: an atom sitting exactly at the lattice origin corner must
+        // render ON that cell vertex. PCA centers atoms by their centroid;
+        // the cell box must take the SAME centering, else atoms drift off the
+        // corners by the centroid vector.
+        let s = render(
+            r#"{"atoms":[{"el":"C","xyz":[0,0,0]},{"el":"O","xyz":[1.3,1.1,0.4]},{"el":"N","xyz":[2.0,0.5,1.7]}],"lattice":[[4,0,0],[0,4,0],[0,0,4]],"style":{"preset":"default","auto_orient":true,"cell":{"show":true}}}"#,
+        );
+        let centers = circle_centers(&s);
+        let verts = cell_vertices(&s);
+        let coincidences = centers
+            .iter()
+            .filter(|&&(cx, cy)| {
+                verts
+                    .iter()
+                    .any(|&(vx, vy)| (cx - vx).abs() < 0.6 && (cy - vy).abs() < 0.6)
+            })
+            .count();
+        assert_eq!(
+            coincidences, 1,
+            "atom at origin corner must land on its cell vertex (got {coincidences})"
+        );
     }
 
     // ---- Additional RT9 coverage (behavioral, deterministic) ----

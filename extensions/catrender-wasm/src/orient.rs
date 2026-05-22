@@ -81,6 +81,29 @@ pub fn pca_orient_with_mask(
     pca_orient_full(pos, priority, fit_mask)
 }
 
+/// Centroid PCA centers around: arithmetic mean of the *fit* atoms
+/// (`fit_mask == Some` selects the subset; `None` = all). Matches
+/// `utils.py:77-78`. Exposed so the cell box can take the SAME centering the
+/// atoms get (else atoms drift off the lattice corners).
+pub fn fit_centroid(pos: &[[f64; 3]], fit_mask: Option<&[bool]>) -> [f64; 3] {
+    let n = pos.len();
+    let fit_idx: Vec<usize> = match fit_mask {
+        Some(m) => (0..n).filter(|&i| m.get(i).copied().unwrap_or(false)).collect(),
+        None => (0..n).collect(),
+    };
+    let mut centroid = [0.0_f64; 3];
+    for &i in &fit_idx {
+        for k in 0..3 {
+            centroid[k] += pos[i][k];
+        }
+    }
+    let fc = fit_idx.len().max(1) as f64;
+    for k in 0..3 {
+        centroid[k] /= fc;
+    }
+    centroid
+}
+
 fn pca_orient_full(
     pos: &[[f64; 3]],
     priority: Option<&[(usize, usize)]>,
@@ -98,16 +121,7 @@ fn pca_orient_full(
     };
 
     // centroid = fit.mean(axis=0)                               (utils.py:78)
-    let mut centroid = [0.0_f64; 3];
-    for &i in &fit_idx {
-        for k in 0..3 {
-            centroid[k] += pos[i][k];
-        }
-    }
-    let fc = fit_idx.len().max(1) as f64;
-    for k in 0..3 {
-        centroid[k] /= fc;
-    }
+    let centroid = fit_centroid(pos, fit_mask);
 
     // c = pos - centroid (all);  c_fit = fit - centroid         (utils.py:79-80)
     let c: Vec<[f64; 3]> = pos
