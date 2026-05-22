@@ -611,7 +611,7 @@ const structure: Record<string, string> = {
   tip_selection: `原子选择`,
   tip_selection_desc: `点击原子进行选择，Shift+点击多选，Ctrl+A 全选`,
   tip_rotate_atoms: `旋转原子`,
-  tip_rotate_atoms_desc: `Shift+拖拽选中的原子进行旋转 (左键=俯仰/偏航，右键=滚动)`,
+  tip_rotate_atoms_desc: `Shift+拖拽旋转选中原子 — 水平拖拽偏航、垂直拖拽俯仰（每次拖拽锁定一个轴），右键拖拽滚动`,
   tip_move_atoms: `移动原子`,
   tip_move_atoms_desc: `Shift+Alt+方向键 (或 Ctrl+方向键) 移动选中的原子`,
   tip_trajectory: `轨迹播放`,

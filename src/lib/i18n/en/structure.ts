@@ -611,7 +611,7 @@ const structure: Record<string, string> = {
   tip_selection: `Selection`,
   tip_selection_desc: `Click atoms to select, Shift+click to add, Ctrl+A to select all`,
   tip_rotate_atoms: `Rotate Atoms`,
-  tip_rotate_atoms_desc: `Shift+drag selected atoms to rotate (left=pitch/yaw, right=roll)`,
+  tip_rotate_atoms_desc: `Shift+drag to rotate selected atoms — drag horizontally for yaw, vertically for pitch (one axis locks per drag); right-drag for roll`,
   tip_move_atoms: `Move Atoms`,
   tip_move_atoms_desc: `Shift+Alt+Arrow (or Ctrl+Arrow) to move selected atoms`,
   tip_trajectory: `Trajectory`,
