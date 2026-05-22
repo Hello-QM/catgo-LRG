@@ -79,3 +79,4 @@ deploy/hpc/bundle/wheels/
 
 # Git worktrees
 .worktrees/
+.claude/worktrees/
