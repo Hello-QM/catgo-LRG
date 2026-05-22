@@ -1369,80 +1369,46 @@ export function create_interaction_controller(deps: InteractionDeps) {
       return
     }
 
-    // 原子旋转中
+    // 原子旋转中 — 固定屏幕坐标系，单轴锁定
     if (is_rotating_atoms && atom_rotation_center && deps.get_structure()) {
       if (!event.shiftKey || event.altKey) {
         finish_rotation()
         return
       }
 
-      const delta_x = event.clientX - atom_rotation_prev_x
-      const delta_y = event.clientY - atom_rotation_prev_y
       atom_rotation_prev_x = event.clientX
       atom_rotation_prev_y = event.clientY
 
+      // Total displacement from the fixed mousedown anchor (not per-frame).
+      const total_dx = event.clientX - atom_rotation_start_x
+      const total_dy = event.clientY - atom_rotation_start_y
+
+      // Lock the axis once for left-drag (roll already locked to 'x').
+      if (atom_rotation_locked_axis === null) {
+        atom_rotation_locked_axis = pick_locked_axis(total_dx, total_dy, AXIS_LOCK_DEADZONE_PX)
+        if (atom_rotation_locked_axis === null) return // still inside dead zone
+      }
+      const axis = atom_rotation_locked_axis
+
       const sensitivity = 0.01
-      const cam_quat = atom_rotation_camera_quat || (deps.get_camera() ? deps.get_camera().quaternion : null)
-      let rotation_up: Vector3, rotation_right: Vector3, rotation_forward: Vector3
+      const cam_quat = atom_rotation_camera_quat
+        || (deps.get_camera() ? deps.get_camera().quaternion : new Quaternion())
+      const frame = screen_frame_from_camera(cam_quat)
+      const axis_vec = frame[axis]
 
-      if (cam_quat) {
-        rotation_up = new Vector3(0, 1, 0).applyQuaternion(cam_quat).normalize()
-        rotation_right = new Vector3(1, 0, 0).applyQuaternion(cam_quat).normalize()
-        rotation_forward = new Vector3(0, 0, -1).applyQuaternion(cam_quat).normalize()
-      } else {
-        rotation_up = new Vector3(0, 1, 0)
-        rotation_right = new Vector3(1, 0, 0)
-        rotation_forward = new Vector3(0, 0, -1)
-      }
+      const angle = drag_delta_for_axis(axis, total_dx, total_dy) * sensitivity
 
-      let incremental_quat: Quaternion
-      if (atom_rotation_roll_mode) {
-        const angle_z = delta_x * sensitivity
-        incremental_quat = new Quaternion().setFromAxisAngle(rotation_forward, angle_z)
-      } else {
-        const abs_dx = Math.abs(delta_x)
-        const abs_dy = Math.abs(delta_y)
-        // Suppress the minor axis when one axis clearly dominates,
-        // so a horizontal drag doesn't accumulate pitch noise (and vice-versa).
-        const dominance = 3 // ratio threshold
-        const eff_dx = (abs_dy > dominance * abs_dx) ? 0 : delta_x
-        const eff_dy = (abs_dx > dominance * abs_dy) ? 0 : delta_y
-        const angle_y = eff_dx * sensitivity
-        const angle_x = eff_dy * sensitivity
-        const quat_y = new Quaternion().setFromAxisAngle(rotation_up, angle_y)
-        const quat_x = new Quaternion().setFromAxisAngle(rotation_right, angle_x)
-        incremental_quat = quat_y.multiply(quat_x)
-      }
+      // Visual feedback.
+      atom_rotation_axis = [axis_vec.x, axis_vec.y, axis_vec.z]
+      atom_rotation_angle_deg = Math.abs(angle) * 180 / Math.PI
 
-      atom_rotation_cumulative_quat = incremental_quat.multiply(atom_rotation_cumulative_quat)
-
-      // Extract axis-angle from cumulative quaternion for visual feedback
-      const _cum_angle = 2 * Math.acos(Math.min(1, Math.abs(atom_rotation_cumulative_quat.w)))
-      if (_cum_angle > 1e-6) {
-        const s = Math.sqrt(1 - atom_rotation_cumulative_quat.w * atom_rotation_cumulative_quat.w)
-        atom_rotation_axis = [
-          atom_rotation_cumulative_quat.x / s,
-          atom_rotation_cumulative_quat.y / s,
-          atom_rotation_cumulative_quat.z / s,
-        ]
-      }
-      atom_rotation_angle_deg = _cum_angle * 180 / Math.PI
-
-      for (const idx of atom_rotation_initial_positions.keys()) {
-        const initial_pos = atom_rotation_initial_positions.get(idx)
-        if (initial_pos && atom_rotation_center) {
-          const relative = new Vector3(
-            initial_pos[0] - atom_rotation_center[0],
-            initial_pos[1] - atom_rotation_center[1],
-            initial_pos[2] - atom_rotation_center[2],
-          )
-          relative.applyQuaternion(atom_rotation_cumulative_quat)
-          pending_rotation_positions.set(idx, [
-            atom_rotation_center[0] + relative.x,
-            atom_rotation_center[1] + relative.y,
-            atom_rotation_center[2] + relative.z,
-          ])
-        }
+      // Recompute every frame from the stored initial positions — idempotent,
+      // no incremental quaternion product.
+      const indices = [...atom_rotation_initial_positions.keys()]
+      const initial = indices.map((idx) => atom_rotation_initial_positions.get(idx)!)
+      const rotated = rotate_points(initial, atom_rotation_center, axis_vec, angle)
+      for (let i = 0; i < indices.length; i++) {
+        pending_rotation_positions.set(indices[i], rotated[i])
       }
 
       if (!pending_rotation_update && pending_rotation_positions.size > 0) {
