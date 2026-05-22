@@ -77,6 +77,9 @@
     <label title="Drop bonds far longer than covalent-radii sum (removes spurious over-long bonds from distance-based connectivity)">
       <input type="checkbox" bind:checked={S.prune_long_bonds} /> prune long bonds
     </label>
+    <label title="Hide bonds crossing a periodic-cell boundary (drawn as long cell-spanning lines)">
+      <input type="checkbox" bind:checked={S.hide_cross_cell_bonds} /> hide cross-cell bonds
+    </label>
     <button onclick={() => S.reset_to_preset()}
       title="clear all knob overrides">Reset to preset</button>
   </div>

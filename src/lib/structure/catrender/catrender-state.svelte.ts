@@ -111,6 +111,7 @@ class CatRenderState {
   // Drop bonds far longer than the covalent-radii sum (removes spurious
   // over-long bonds from distance-based connectivity).
   prune_long_bonds = $state<boolean>(false)
+  hide_cross_cell_bonds = $state<boolean>(false)
   // Overlay atom indices (i/j) as an editing aid — off for clean figures.
   show_index = $state<boolean>(false)
 
