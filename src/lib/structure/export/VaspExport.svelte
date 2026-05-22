@@ -37,6 +37,9 @@
   // ====== VASP Settings ======
   let vasp_calculation = $state<VASPCalculationType>('scf')
   let vasp_optimizer = $state<VASPOptimizerType | ''>('')
+  // ISIF for OPT: 2 = ions only (fixed cell), 3 = ions + cell shape + volume
+  // (full cell relaxation), 4 = ions + cell shape (fixed volume).
+  let vasp_isif = $state(2)
   let vasp_encut = $state(450)
   let vasp_prec = $state('Accurate')
   let vasp_gga = $state('PE')
@@ -199,6 +202,7 @@
         system_title: structure.id || undefined,
         fixed_indices: fixed_indices,
         fixed_z_below: fixed_z_below,
+        isif: vasp_calculation === 'opt' ? vasp_isif : undefined,
         constant_potential: vasp_constant_potential !== 'none' ? vasp_constant_potential : undefined,
       }
 
@@ -323,6 +327,14 @@
         <option value="quasi_newton">Quasi-Newton (IBRION=1)</option>
       </select>
     </div>
+    <div class="param-row">
+      <span>Relaxation (ISIF) <span class="param-help" title="ISIF=2: relax ions only, fixed cell. ISIF=3: relax ions + cell shape + volume (full cell optimization). ISIF=4: relax ions + cell shape, fixed volume.">?</span></span>
+      <select bind:value={vasp_isif}>
+        <option value={2}>Ions only — fixed cell (ISIF=2)</option>
+        <option value={3}>Ions + cell + volume (ISIF=3)</option>
+        <option value={4}>Ions + cell shape, fixed volume (ISIF=4)</option>
+      </select>
+    </div>
   {/if}
 
   {#if vasp_calculation === 'md' || vasp_calculation === 'slow_growth'}
@@ -380,7 +392,7 @@
       <option value="PE">PE (PBE)</option>
       <option value="PS">PS (PBEsol)</option>
       <option value="AM">AM (AM05)</option>
-      <option value="PB">PB (original PBE)</option>
+      <option value="RP">RP (revPBE)</option>
     </select>
   </div>
   <div class="param-row">
