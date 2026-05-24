@@ -353,7 +353,11 @@ export function create_large_system_renderer(
   const context = canvas.getContext(`webgpu`)
   if (!context) throw new Error(`WebGPU canvas context unavailable`)
   const format = navigator.gpu.getPreferredCanvasFormat()
-  context.configure({ device, format, alphaMode: `premultiplied` })
+  // `opaque` (not `premultiplied`) forces opaque compositing and ignores the
+  // canvas alpha, so the overlay fully covers the WebGL canvas beneath it with
+  // no bleed-through. Combined with clearValue a=1 + alpha=1 in both fragment
+  // shaders, the overlay is a fully opaque replacement when active.
+  context.configure({ device, format, alphaMode: `opaque` })
 
   // Full camera uniform (view + proj + camPos), bound by the impostor pipeline.
   const camera_buffer = device.createBuffer({
