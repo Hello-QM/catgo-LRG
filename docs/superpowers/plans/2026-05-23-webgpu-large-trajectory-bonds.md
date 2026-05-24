@@ -11,7 +11,14 @@
 **Spec:** `docs/superpowers/specs/2026-05-23-webgpu-large-trajectory-bonds-design.md`
 
 **Reference facts (verified):**
-- Test runner: `pnpm exec vitest run` (RTK serves stale vitest output — bypass with `rtk proxy pnpm exec vitest run`). Tests colocate as `*.test.ts`.
+- Test runner: `pnpm exec vitest run` (RTK serves stale vitest output — bypass with `rtk proxy pnpm exec vitest run`).
+
+> **⚠️ TEST PLACEMENT & IMPORTS (overrides every per-task literal below).** Vitest `include` is `tests/vitest/**/*.test.ts` and `src/**/__tests__/**/*.test.ts` — tests do NOT colocate next to source. For every task:
+> - **Source** files go at `src/lib/structure/gpu/<name>.ts` (as written).
+> - **Test** files go at `tests/vitest/structure/gpu/<name>.test.ts` (NOT the `src/lib/structure/gpu/<name>.test.ts` shown in task "Files"/"Test" lines).
+> - Inside tests, import production code via the **`$lib` alias**: `import { X } from '$lib/structure/gpu/<name>'` (NOT the relative `./<name>` shown in test code). Helpers: `create_test_structure` from `../setup`, `test_molecules` from `$site/molecules`.
+> - `vitest run` and `git add` paths for tests use `tests/vitest/structure/gpu/...`.
+> Mirror `tests/vitest/structure/bonding.test.ts` for style.
 - Types (`src/lib/structure/index.ts`): `Site = { species: Species[]; abc: Vec3; xyz: Vec3 }`; `PymatgenLattice = { matrix: Matrix3x3 }`; `PymatgenStructure = PymatgenMolecule & { lattice: PymatgenLattice }`; `AnyStructure = PymatgenStructure | PymatgenMolecule`.
 - CPU bond oracle: `compute_bonds_sync(structure, 'atom_radii', options)` in `src/lib/structure/workers/bond-worker-api.ts:158` → `BondPair[] | null`. Rust path emits cross-cell `image` (jimage). `options` is `Record<string, number>` (keys include `max_bond_dist`, `tolerance`).
 - Covalent radii data: default-export numeric array in `src/lib/element/data.ts` (indexed by atomic number; see `src/lib/element/covalent_radii.d.ts`).
@@ -35,7 +42,7 @@
 | `src/lib/structure/gpu/camera-uniform.ts` | Pack a Three camera into view/proj uniform bytes. Pure. |
 | `src/lib/structure/gpu/large-system-renderer.ts` | WGSL render: impostor spheres + instanced bonds + selection + id-pick. |
 | `src/lib/structure/gpu/large-system-mode.svelte.ts` | Orchestrator: toggle state, canvas switch, frame upload, playback loop, readback-on-pause → `bond_state`. |
-| `src/lib/structure/gpu/*.test.ts` | Colocated tests per module. |
+| `tests/vitest/structure/gpu/*.test.ts` | Tests per module (see TEST PLACEMENT note above). |
 
 Each `gpu/` module has one responsibility and a narrow interface; `large-system-mode` is the only one that knows about `StructureScene`/`bond_state`.
 
@@ -86,7 +93,7 @@ describe('webgpu-context', () => {
 
 - [ ] **Step 2: Run test, verify it fails**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/webgpu-context.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/webgpu-context.test.ts`
 Expected: FAIL — cannot find module `./webgpu-context`.
 
 - [ ] **Step 3: Implement**
@@ -123,7 +130,7 @@ export function __reset_device_cache(): void { cached_device = null }
 
 - [ ] **Step 4: Run test, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/webgpu-context.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/webgpu-context.test.ts`
 Expected: PASS (4 tests). Note: the cache makes `acquire_webgpu_device` sticky — add `__reset_device_cache()` in `afterEach` if a later test needs isolation.
 
 - [ ] **Step 5: Commit**
@@ -175,7 +182,7 @@ describe('build_atom_radii', () => {
 
 - [ ] **Step 2: Run test, verify it fails**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/radius-lut.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/radius-lut.test.ts`
 Expected: FAIL — cannot find module `./radius-lut`.
 
 - [ ] **Step 3: Implement**
@@ -210,7 +217,7 @@ function covalent_radius_of(element: string | undefined): number | null {
 
 - [ ] **Step 4: Run test, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/radius-lut.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/radius-lut.test.ts`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Commit**
@@ -268,7 +275,7 @@ describe('pack_lattice', () => {
 
 - [ ] **Step 2: Run test, verify it fails**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/frame-buffers.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/frame-buffers.test.ts`
 Expected: FAIL — cannot find module `./frame-buffers`.
 
 - [ ] **Step 3: Implement**
@@ -305,7 +312,7 @@ export function pack_lattice(lattice: PymatgenLattice | undefined): Float32Array
 
 - [ ] **Step 4: Run test, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/frame-buffers.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/frame-buffers.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
@@ -383,7 +390,7 @@ describe('detect_bonds_reference', () => {
 
 - [ ] **Step 2: Run test, verify it fails**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/bond-detect-reference.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/bond-detect-reference.test.ts`
 Expected: FAIL — cannot find module `./bond-detect-reference`.
 
 - [ ] **Step 3: Implement**
@@ -449,7 +456,7 @@ function minimum_image(
 
 - [ ] **Step 4: Run test, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/bond-detect-reference.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/bond-detect-reference.test.ts`
 Expected: PASS (5 tests). If the min-image jimage sign disagrees with `compute_bonds_sync`'s convention, align the sign here and document it — this convention is the contract the WGSL shader and the readback bridge (Task 8) both follow.
 
 - [ ] **Step 5: Cross-check oracle against the production CPU detector**
@@ -505,7 +512,7 @@ describe('BOND_COMPUTE_WGSL', () => {
 
 - [ ] **Step 2: Run, verify fail**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/bond-compute.wgsl.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/bond-compute.wgsl.test.ts`
 Expected: FAIL — cannot find module.
 
 - [ ] **Step 3: Implement**
@@ -592,7 +599,7 @@ fn detect_bonds(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 - [ ] **Step 4: Run, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/bond-compute.wgsl.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/bond-compute.wgsl.test.ts`
 Expected: PASS (1 test).
 
 - [ ] **Step 5: Commit**
@@ -647,7 +654,7 @@ describe.skipIf(!globalThis.navigator?.gpu)('bond-compute (GPU)', () => {
 
 - [ ] **Step 2: Run, verify it fails (or skips cleanly)**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/bond-compute.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/bond-compute.test.ts`
 Expected: in CI (no GPU) the suite is SKIPPED; locally with a GPU it FAILS — `create_bond_compute` not found.
 
 - [ ] **Step 3: Implement**
@@ -758,7 +765,7 @@ function unpack_jimage(p: number): [number, number, number] {
 
 - [ ] **Step 4: Run the golden test (locally, with a GPU)**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/bond-compute.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/bond-compute.test.ts`
 Expected (with GPU): PASS — GPU pair set equals reference. (CI: SKIPPED.)
 If it fails on jimage, re-check the transpose in `pack_params` and the pack/unpack convention against Task 4.
 
@@ -807,7 +814,7 @@ describe('pack_camera_uniform', () => {
 
 - [ ] **Step 2: Run, verify fail**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/camera-uniform.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/camera-uniform.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement**
@@ -835,7 +842,7 @@ export function pack_camera_uniform(camera: Camera): Float32Array {
 
 - [ ] **Step 4: Run, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/camera-uniform.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/camera-uniform.test.ts`
 Expected: PASS (1 test).
 
 - [ ] **Step 5: Commit**
@@ -881,7 +888,7 @@ describe('result_to_connectivity', () => {
 
 - [ ] **Step 2: Run, verify fail**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/large-system-mode.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/large-system-mode.test.ts`
 Expected: FAIL — module not found.
 
 - [ ] **Step 3: Implement (state machine + bridge)**
@@ -929,7 +936,7 @@ export function create_large_system_mode(deps: {
 
 - [ ] **Step 4: Run, verify pass**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/large-system-mode.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/large-system-mode.test.ts`
 Expected: PASS (1 test). Add a `create_large_system_mode` test: with `has_webgpu:false`, `enable()` returns false and calls `on_fallback`; with `true`, `enable()` sets `enabled` true.
 
 - [ ] **Step 5: Commit**
@@ -1023,7 +1030,7 @@ it('maps bond options to compute params (custom bond distance)', () => {
 
 - [ ] **Step 2: Run, verify fail**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/large-system-mode.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/large-system-mode.test.ts`
 Expected: FAIL — `to_compute_options` not exported.
 
 - [ ] **Step 3: Implement**
@@ -1042,7 +1049,7 @@ export function to_compute_options(opts: Record<string, number>): { tolerance: n
 
 - [ ] **Step 4: Run, verify pass + wire**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu/large-system-mode.test.ts`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu/large-system-mode.test.ts`
 Expected: PASS. Then in StructureScene (Task 9 loop): on bond-option change while `enabled`, call `render()` (which re-dispatches with the new `Params`). Verify manually that dragging the slider re-bonds live.
 
 - [ ] **Step 5: Commit**
@@ -1058,7 +1065,7 @@ git commit -m "feat(gpu): live custom bond distance drives GPU compute params"
 
 - [ ] **Step 1: Run the whole gpu suite + lint/typecheck**
 
-Run: `rtk proxy pnpm exec vitest run src/lib/structure/gpu`
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/gpu`
 Expected: all pure-JS tests PASS; GPU device-gated tests PASS locally / SKIP in CI.
 Run: `rtk proxy pnpm exec svelte-check` (or the repo's typecheck script) — no new errors.
 
