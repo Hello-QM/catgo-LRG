@@ -66,6 +66,7 @@
     JobDetailPane,
     PluginHubPane,
   } from './index'
+  import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
   import { send_message, get_chat_slice, chat_position } from '$lib/chat/chat-state.svelte'
   import { build_structure_context } from '$lib/chat/context'
@@ -1900,6 +1901,9 @@
   let camera_is_moving = $state(false)
   let scene = $state<any>(undefined)
   let camera = $state<any>(undefined)
+  // Task 9: experimental WebGPU large-system render path. Default OFF — when
+  // off the overlay renders nothing and the WebGL viewer is unchanged.
+  let large_system_mode = $state(false)
   let pixels_per_angstrom = $state(0)
   let orbit_controls = $state<any>(undefined)
   let rotation_target_ref = $state<[number, number, number] | undefined>(undefined)
@@ -3534,6 +3538,7 @@
           selected_bonds={pencil.selected_bonds}
           {structure}
           bind:bond_distance_rules
+          bind:large_system_mode
           {supercell_loading}
           closed_icon="Sliders"
         />
@@ -3582,7 +3587,7 @@
 
       <!-- prevent HTML labels from rendering outside of the canvas -->
       <div style="overflow: hidden; height: 100%; position: relative; z-index: 0; pointer-events: none">
-        <div style="width: 100%; height: 100%; pointer-events: auto">
+        <div style="width: 100%; height: 100%; pointer-events: auto; position: relative">
         <Canvas {...{ rendererParameters: { antialias: true, powerPreference: `high-performance` } } as any}>
           <!--
             show_image_atoms is a separate bindable from scene_props.show_image_atoms
@@ -3752,6 +3757,23 @@
             cube_slice_color={cube_state_data.slice_plane.plane_color}
           />
         </Canvas>
+        <!--
+          Task 9: WebGPU large-system render overlay. A plain DOM canvas sibling
+          of the Threlte <Canvas> (NOT inside it). Gated by large_system_mode —
+          when off, {#if enabled} renders nothing and the WebGL path is untouched.
+          When on, it's absolutely positioned over the Canvas (z-index 1) and its
+          opaque clear pass covers the WebGL canvas underneath.
+        -->
+        <div style="position: absolute; inset: 0; z-index: 1; pointer-events: none">
+          <LargeSystemOverlay
+            enabled={large_system_mode}
+            {camera}
+            on_fallback={(reason) => {
+              large_system_mode = false
+              console.warn(`[CatGO] large-system mode: ${reason}`)
+            }}
+          />
+        </div>
         </div>
         <ScaleBar {pixels_per_angstrom} show={scene_props.show_scale_bar ?? false} />
       </div>
