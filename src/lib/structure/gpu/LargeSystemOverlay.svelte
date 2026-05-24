@@ -140,17 +140,35 @@
       cancelAnimationFrame(raf_id)
       raf_id = 0
     }
+    if (on_wake_event && typeof window !== `undefined`) {
+      window.removeEventListener(`pointerdown`, on_wake_event)
+      window.removeEventListener(`pointermove`, on_wake_event)
+      window.removeEventListener(`wheel`, on_wake_event)
+      window.removeEventListener(`keydown`, on_wake_event)
+    }
+    on_wake_event = null
     resize_observer?.disconnect()
     resize_observer = null
     renderer?.destroy()
     renderer = null
   }
 
-  // On-demand render state. We keep a RAF tick but only issue a GPU draw when
-  // something changed since the last drawn frame: camera moved, atom buffers
-  // re-uploaded, or a resize happened. Avoids continuous GPU load when idle.
+  // On-demand render state. The rAF loop is self-suspending: it only runs while
+  // there is motion (camera change, atom re-upload, or resize) and goes fully to
+  // sleep — cancelAnimationFrame + raf_id=0, NO further scheduling — once the
+  // camera has been stable for a short grace period. Interaction / data / size
+  // events call wake() to restart it. This keeps the compositor/GPU idle (fan
+  // quiet) when nothing is moving, instead of pinning a perpetual ~60fps tick.
   let last_camera_uniform: Float32Array | null = null
   let needs_render = true // force the first frame
+  // Consecutive frames with no change seen so far. When this reaches
+  // STABLE_FRAMES_TO_SLEEP the loop suspends. The grace tail (~0.4s @ 60fps)
+  // lets control inertia/momentum settle before we stop scheduling.
+  let stable_frames = 0
+  const STABLE_FRAMES_TO_SLEEP = 24
+
+  // Bound listener handles, kept so teardown can remove exactly what it added.
+  let on_wake_event: ((ev: Event) => void) | null = null
 
   /** True if `next` differs from the last uploaded camera uniform (epsilon
    *  compare). Updates the cached copy when it returns true. */
@@ -177,6 +195,64 @@
     needs_render = true // resized backing store/depth must repaint
   }
 
+  /** Restart the suspended rAF loop. Resets the stable-frame counter so the
+   *  loop runs for at least a full grace period, and schedules a frame only if
+   *  none is pending and the session is live. Idempotent while already awake. */
+  function wake(): void {
+    if (!enabled || !renderer) return
+    stable_frames = 0
+    if (raf_id === 0) raf_id = requestAnimationFrame(frame)
+  }
+
+  // Token the current loop belongs to. The `frame` closure lives at component
+  // scope (so wake()/listeners can reschedule it) and re-reads this to bail when
+  // its session has been superseded or torn down.
+  let frame_token = 0
+
+  function frame(): void {
+    if (frame_token !== session_token || !renderer) {
+      raf_id = 0
+      return
+    }
+    // Only issue a GPU draw when something changed since the last drawn frame.
+    let dirty = needs_render
+    needs_render = false
+
+    // Rebuild atom buffers only when the structure / colors / radius inputs
+    // changed; re-upload + mark dirty on that same change.
+    rebuild_atoms_if_needed()
+    if (atoms_dirty) {
+      renderer.set_atoms(atom_positions, atom_radii, atom_colors, atom_count)
+      atoms_dirty = false
+      dirty = true
+    }
+
+    // Camera: pack always (cheap), upload + mark dirty only when it moved.
+    if (camera) {
+      camera.updateMatrixWorld()
+      const packed = pack_camera_full(camera)
+      if (camera_changed(packed)) {
+        renderer.set_camera_full(packed)
+        dirty = true
+      }
+    }
+
+    if (dirty) {
+      renderer.render()
+      stable_frames = 0 // motion this frame ⇒ stay awake
+    } else {
+      stable_frames++
+    }
+
+    // Suspend once the scene has been stable through the grace period: cancel
+    // and stop scheduling entirely. wake() (interaction/data/resize) revives it.
+    if (stable_frames >= STABLE_FRAMES_TO_SLEEP) {
+      raf_id = 0
+      return
+    }
+    raf_id = requestAnimationFrame(frame)
+  }
+
   async function start_session(el: HTMLCanvasElement): Promise<void> {
     const token = ++session_token
     // Fresh renderer => fresh GPU buffers. Force a rebuild + re-upload on the
@@ -188,6 +264,7 @@
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     needs_render = true
+    stable_frames = 0
     const device = await acquire_webgpu_device()
     // Bail if disabled / unmounted / superseded while awaiting.
     if (token !== session_token) return
@@ -203,43 +280,31 @@
       return
     }
     renderer = r
+    frame_token = token
     size_to_client(el)
 
+    // Resize: repaint the new backing store and wake the loop if it had slept.
     resize_observer = new ResizeObserver(() => {
-      if (renderer && canvas) size_to_client(canvas)
+      if (renderer && canvas) {
+        size_to_client(canvas)
+        wake()
+      }
     })
     resize_observer.observe(el)
 
-    const frame = () => {
-      if (token !== session_token || !renderer) return
-      // Per-frame dirty check — only issue a GPU draw when something changed.
-      // We still rAF every frame (cheap) but early-return before render() when
-      // the scene is idle, so the GPU isn't redrawing a static frame forever.
-      let dirty = needs_render
-      needs_render = false
-
-      // Rebuild atom buffers only when the structure / colors / radius inputs
-      // changed; re-upload + mark dirty on that same change.
-      rebuild_atoms_if_needed()
-      if (atoms_dirty) {
-        renderer.set_atoms(atom_positions, atom_radii, atom_colors, atom_count)
-        atoms_dirty = false
-        dirty = true
-      }
-
-      // Camera: pack always (cheap), upload + mark dirty only when it moved.
-      if (camera) {
-        camera.updateMatrixWorld()
-        const packed = pack_camera_full(camera)
-        if (camera_changed(packed)) {
-          renderer.set_camera_full(packed)
-          dirty = true
-        }
-      }
-
-      if (dirty) renderer.render()
-      raf_id = requestAnimationFrame(frame)
+    // Interaction wake triggers. The overlay canvas is pointer-events:none, so
+    // we listen on `window` (passive — we never preventDefault). Each event just
+    // revives the suspended loop; the frame itself decides whether to redraw.
+    on_wake_event = () => wake()
+    if (typeof window !== `undefined`) {
+      window.addEventListener(`pointerdown`, on_wake_event, { passive: true })
+      window.addEventListener(`pointermove`, on_wake_event, { passive: true })
+      window.addEventListener(`wheel`, on_wake_event, { passive: true })
+      window.addEventListener(`keydown`, on_wake_event)
     }
+
+    // First frame: render once and start the loop. It self-suspends after the
+    // grace period if the camera never moves.
     raf_id = requestAnimationFrame(frame)
   }
 
@@ -253,6 +318,24 @@
     // disabled or no canvas yet: ensure nothing is running.
     stop_session()
     return undefined
+  })
+
+  $effect(() => {
+    // Atom-data wake trigger. Track the structure / color / radius inputs so a
+    // rebuild revives a suspended loop and the new atoms repaint once. Reading
+    // these here (not in the session effect) wakes without restarting the GPU
+    // session. The `frame` does the actual rebuild + upload via
+    // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
+    structure
+    element_colors
+    atom_radius
+    same_size_atoms
+    element_radius_overrides
+    site_radius_overrides
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
   })
 </script>
 
