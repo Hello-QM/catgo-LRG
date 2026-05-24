@@ -21,11 +21,18 @@
     element_radius_overrides = undefined,
     site_radius_overrides = undefined,
     bonding_options = undefined,
+    trajectory_positions_version = undefined,
+    get_trajectory_frame_positions = undefined,
+    trajectory_step_idx = -1,
     on_fallback = undefined,
   }: {
     enabled?: boolean
     camera?: Camera | undefined
-    /** Current displayed structure whose atoms render as impostor spheres. */
+    /** Current displayed structure whose atoms render as impostor spheres.
+     *  During trajectory playback this carries the BASE topology (elements,
+     *  count, and frame-0 xyz) — the per-frame xyz come from
+     *  get_trajectory_frame_positions, NOT from this object (whose identity /
+     *  .sites[i].xyz stay static across frames in the fast path). */
     structure?: AnyStructure | undefined
     /** Per-element hex colors (e.g. state colors.element). */
     element_colors?: Partial<Record<ElementSymbol, string>> | undefined
@@ -41,6 +48,22 @@
      *  detection. Same Record the CPU path reads (scene_props.bonding_options);
      *  mapped via to_compute_options. */
     bonding_options?: Record<string, number> | undefined
+    /** Per-frame position version, mirroring Structure.svelte's bindable prop.
+     *  `.v` bumps every time the trajectory frame's positions change (playback,
+     *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
+     *  it — not the structure ref — is the signal that drives per-frame
+     *  re-upload. `.all` (edit-all fan-out) is not needed here; we always
+     *  re-extract the whole frame. */
+    trajectory_positions_version?: { v: number; all: boolean } | undefined
+    /** Authoritative per-frame position source. Returns the frame's xyz as a
+     *  flat Float32Array(3N) indexed identically to `structure.sites` (same
+     *  array the CPU bond cache + WebGL atom write loop consume). null for
+     *  indexed/streaming frames not in memory (then we fall back to the
+     *  structure's own sites xyz). */
+    get_trajectory_frame_positions?: ((i: number) => Float32Array | null) | null | undefined
+    /** Current trajectory frame index; the argument to
+     *  get_trajectory_frame_positions. -1 when no trajectory is active. */
+    trajectory_step_idx?: number
     on_fallback?: (reason: string) => void
   } = $props()
 
@@ -81,6 +104,60 @@
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
 
+  // ── Per-frame trajectory state (milestone 9.4) ──────────────────────────
+  // The last position-version we re-uploaded. When the parent bumps
+  // trajectory_positions_version.v (playback / scrub / in-place edit) this
+  // diverges and we re-extract + re-upload ONLY the xyz (set_positions) — radii
+  // and colors are NOT rebuilt, since elements don't change between frames.
+  let last_pos_version = -1
+  // Current-frame xyz, indexed identically to structure.sites. Reused buffer.
+  let frame_positions: Float32Array = new Float32Array(0)
+  // Set when frame_positions changed and must be re-uploaded to the GPU.
+  let positions_dirty = false
+  // Lattice signature last pushed for bonds; for variable-cell trajectories the
+  // lattice changes per frame and the bond compute + bond render need the new
+  // one. Compared per frame so a static cell never re-uploads.
+  let frame_lattice_sig = ``
+
+  /** Re-extract the current frame's xyz from the authoritative per-frame
+   *  source and mark positions (+ bonds) dirty. Falls back to the structure's
+   *  own sites xyz when the getter yields nothing (indexed/streaming frames, or
+   *  no trajectory at all — in which case structure.sites already holds the
+   *  static positions and this is a harmless no-op re-upload). For variable-cell
+   *  trajectories also re-checks the lattice and re-pushes bond data when it
+   *  moved. */
+  function refresh_frame_positions(): void {
+    last_pos_version = trajectory_positions_version?.v ?? -1
+    const sites = structure?.sites
+    if (!sites || sites.length === 0) return
+    let pos: Float32Array | null = null
+    if (get_trajectory_frame_positions && trajectory_step_idx >= 0) {
+      pos = get_trajectory_frame_positions(trajectory_step_idx)
+    }
+    // The getter is indexed against the BASE frame sites; when the displayed
+    // structure carries supercell / PBC-image atoms it is longer than that
+    // array. Only adopt the getter's xyz when it covers every displayed atom —
+    // otherwise fall back to the structure's own (slow-path-updated) sites xyz,
+    // which always matches sites.length. (Guards against a short writeBuffer in
+    // set_positions; in that case image/supercell atoms just track sites.xyz.)
+    frame_positions = pos && pos.length >= sites.length * 3 ? pos : pack_positions(sites)
+    positions_dirty = true
+
+    // Variable-cell: if the displayed lattice changed, the bond compute + bond
+    // render must use the new lattice. Re-pack and flag bonds for re-push. (A
+    // static cell leaves frame_lattice_sig unchanged ⇒ no bond-input churn.)
+    const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
+    const packed = pack_lattice(lat)
+    let sig = ``
+    for (let i = 0; i < 9; i++) sig += `${packed[i]};`
+    if (sig !== frame_lattice_sig) {
+      frame_lattice_sig = sig
+      bond_lattice = packed
+      bond_periodic = !!lat
+      bonds_dirty = true
+    }
+  }
+
   /** Cheap signature of the bonding options Record; changes when any cutoff
    *  does so the GPU compute re-dispatches with the new value. */
   function bond_options_signature(): string {
@@ -112,6 +189,11 @@
     bond_lattice = pack_lattice(lat)
     bond_periodic = !!lat
     bond_compute_opts = to_compute_options(bonding_options ?? {})
+    // Keep the per-frame lattice signature in lockstep so refresh_frame_positions
+    // doesn't redundantly re-push the lattice it just packed here.
+    let lat_sig = ``
+    for (let i = 0; i < 9; i++) lat_sig += `${bond_lattice[i]};`
+    frame_lattice_sig = lat_sig
   }
 
   // Hex -> linear RGB, matching the WebGL path (Color.convertSRGBToLinear).
@@ -270,11 +352,29 @@
     needs_render = false
 
     // Rebuild atom buffers only when the structure / colors / radius inputs
-    // changed; re-upload + mark dirty on that same change.
+    // changed; re-upload + mark dirty on that same change. This uploads the
+    // BASE-frame positions packed from structure.sites — the per-frame override
+    // below replaces them with the live trajectory frame in the same frame.
     rebuild_atoms_if_needed()
     if (atoms_dirty) {
       renderer.set_atoms(atom_positions, atom_radii, atom_colors, atom_count)
       atoms_dirty = false
+      dirty = true
+      // Topology (and its base positions) just (re)uploaded ⇒ also re-extract
+      // the current frame's xyz so playback shows the live frame, not frame 0.
+      refresh_frame_positions()
+    }
+
+    // Per-frame positions: re-upload ONLY xyz when the trajectory frame moved
+    // (version bumped) — radii + colors stay as last uploaded. set_positions
+    // also flags the renderer's bonds dirty so the GPU bond compute re-runs
+    // against the moved atoms (bonds form/break as atoms move).
+    if ((trajectory_positions_version?.v ?? -1) !== last_pos_version) {
+      refresh_frame_positions()
+    }
+    if (positions_dirty) {
+      renderer.set_positions(frame_positions, atom_count)
+      positions_dirty = false
       dirty = true
     }
 
@@ -328,6 +428,11 @@
     bond_source = undefined
     bond_options_sig = ``
     bonds_dirty = true
+    // Fresh renderer ⇒ force a per-frame re-extract + re-upload on the first
+    // frame, and re-detect the lattice for variable-cell bonds.
+    last_pos_version = -1
+    frame_lattice_sig = ``
+    positions_dirty = false
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     needs_render = true
@@ -400,6 +505,23 @@
     element_radius_overrides
     site_radius_overrides
     bonding_options
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Per-frame wake trigger. Track ONLY the position version (and the step
+    // index it indexes) so a trajectory frame change — playback tick, scrub, or
+    // single step — revives a suspended loop and renders that one frame. The
+    // `frame` does the actual re-extract + re-upload via refresh_frame_positions
+    // (gated on .v ≠ last_pos_version). Force the next frame to draw. Reading
+    // these here (not in the session effect) wakes without restarting the GPU
+    // session; when playback stops, .v stops bumping ⇒ no more wakes ⇒ the loop
+    // suspends after its grace period (idle-quiet).
+    trajectory_positions_version?.v
+    trajectory_step_idx
     if (renderer) {
       needs_render = true
       wake()

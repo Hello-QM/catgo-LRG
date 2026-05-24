@@ -289,6 +289,13 @@ export type LargeSystemRenderer = {
     colors: Float32Array,
     count: number,
   ): void
+  /** Re-upload ONLY the atom xyz positions for the current trajectory frame.
+   *  `count` must match the previously uploaded atom count (same topology). No
+   *  radii/colors re-upload, no buffer realloc — the lightweight per-frame path.
+   *  Marks bonds dirty so the next render re-runs the GPU bond compute against
+   *  the moved atoms. No-op if the buffers haven't been allocated yet (call
+   *  set_atoms first to establish topology). */
+  set_positions(positions: Float32Array, count: number): void
   /** Provide bond-detection inputs. `covalent_radii` is the per-atom COVALENT
    *  radius (N entries, from build_atom_radii — distinct from the display radii
    *  used for sphere size). `lattice` is the 9-float row-major matrix (rows
@@ -648,6 +655,26 @@ export function create_large_system_renderer(
         colors.buffer, colors.byteOffset, atom_count * 3 * 4,
       )
       // Positions moved ⇒ bonds must be recomputed next render.
+      bonds_dirty = true
+    },
+    set_positions(positions: Float32Array, count: number): void {
+      if (destroyed) return
+      // Per-frame fast path: requires an existing positions buffer (topology
+      // already established by set_atoms). If the count somehow grew past
+      // capacity, bail — the caller should re-run set_atoms to reallocate.
+      const n = Math.max(0, count)
+      if (n === 0 || !positions_buffer || n > atom_capacity) return
+      // Never read past the supplied array: the caller guarantees length>=3n in
+      // the normal path, but clamp defensively so a short frame can't make
+      // writeBuffer throw (it would just upload the atoms it does have).
+      const floats = Math.min(n * 3, positions.length)
+      if (floats === 0) return
+      atom_count = n
+      device.queue.writeBuffer(
+        positions_buffer, 0,
+        positions.buffer, positions.byteOffset, floats * 4,
+      )
+      // Atoms moved ⇒ bonds must be recomputed against the new positions.
       bonds_dirty = true
     },
     set_bond_data(

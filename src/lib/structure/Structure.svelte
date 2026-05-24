@@ -3775,6 +3775,9 @@
             {element_radius_overrides}
             {site_radius_overrides}
             bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
+            {trajectory_positions_version}
+            {get_trajectory_frame_positions}
+            {trajectory_step_idx}
             on_fallback={(reason) => {
               large_system_mode = false
               console.warn(`[CatGO] large-system mode: ${reason}`)
