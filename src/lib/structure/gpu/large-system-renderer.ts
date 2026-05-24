@@ -154,7 +154,11 @@ fn fs_main(in : VsOut) -> FsOut {
 
 /** Tiny 1-thread compute: read the atomic bond `count`, clamp to capacity, and
  *  write draw-indirect args [vertex_count, instance_count, first_vertex,
- *  first_instance] so the bond draw uses drawIndirect with zero CPU readback. */
+ *  first_instance] so the bond draw uses drawIndirect with zero CPU readback.
+ *  Each detected bond renders as TWO half-cylinder instances (half 0 rooted at
+ *  atom A, half 1 rooted at atom B), so instance_count = 2 * clamped_bond_count.
+ *  The pairs buffer is unchanged (one entry per bond); the bond vertex shader
+ *  maps instance_index -> (bond_index = inst>>1, half = inst&1). */
 const INDIRECT_ARGS_WGSL = `
 struct Args {
   vertex_count : u32,
@@ -173,19 +177,29 @@ fn build_args() {
   let raw = count[0];
   let inst = min(raw, cfg.y);
   args.vertex_count = cfg.x;
-  args.instance_count = inst;
+  args.instance_count = inst * 2u; // two half-cylinders per bond
   args.first_vertex = 0u;
   args.first_instance = 0u;
 }
 `
 
-/** Instanced procedural-cylinder bond shader. One instance per detected bond.
- *  Per instance reads (a, b, jimage_packed) from the pairs buffer; endpoint B is
- *  shifted by jimage·lattice (min-image PBC partner) using the SAME lattice the
- *  compute used. Verts trace a unit side-wall triangle-strip that is oriented to
- *  the bond axis and scaled to span A→B with a fixed radius. Depth uses the SAME
- *  GL→WebGPU clip-z remap as the atom impostor so bonds share the depth buffer
- *  and occlude / are occluded correctly. */
+/** Instanced procedural-cylinder bond shader. Each detected bond renders as TWO
+ *  half-cylinder instances that meet at the bond midpoint, so PBC (cross-cell)
+ *  bonds become two short stubs each rooted at a REAL atom instead of one long
+ *  cylinder jutting out of the cell. Instance mapping: bond_index = inst>>1,
+ *  half = inst&1. Per bond reads (a, b, jimage_packed) from the pairs buffer
+ *  (unchanged — one entry per bond); the imaged partner is shifted by
+ *  jimage·lattice using the SAME lattice the compute used.
+ *    Let A = pos[a], partnerB = pos[b] + jimage·lattice (A's imaged partner),
+ *        B = pos[b], partnerA = pos[a] - jimage·lattice (B's imaged partner).
+ *    half 0: cylinder A      -> M0 = (A + partnerB) * 0.5
+ *    half 1: cylinder B      -> M1 = (B + partnerA) * 0.5
+ *  For intra-cell bonds (jimage = 0) partnerB = B and partnerA = A, so
+ *  M0 = M1 = (A+B)/2 and the two halves join into a seamless full cylinder.
+ *  Verts trace a unit side-wall triangle-strip oriented to the half's axis and
+ *  scaled to span start→end with a fixed radius. Depth uses the SAME GL→WebGPU
+ *  clip-z remap as the atom impostor so bonds share the depth buffer and occlude
+ *  / are occluded correctly. */
 const BOND_RENDER_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
@@ -221,9 +235,13 @@ fn atom_pos(i : u32) -> vec3<f32> {
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32,
            @builtin(instance_index) inst : u32) -> VsOut {
-  let a = pairs[inst*3u + 0u];
-  let b = pairs[inst*3u + 1u];
-  let jp = pairs[inst*3u + 2u];
+  // Two half-cylinder instances per bond: bond_index = inst>>1, half = inst&1.
+  let bond_index = inst >> 1u;
+  let half = inst & 1u;
+
+  let a = pairs[bond_index*3u + 0u];
+  let b = pairs[bond_index*3u + 1u];
+  let jp = pairs[bond_index*3u + 2u];
 
   // Unpack jimage {-1,0,1} from (na+1)|((nb+1)<<2)|((nc+1)<<4).
   let na = f32(i32(jp & 3u) - 1);
@@ -231,11 +249,21 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let nc = f32(i32((jp >> 4u) & 3u) - 1);
   let shift = na * bond.lat0.xyz + nb * bond.lat1.xyz + nc * bond.lat2.xyz;
 
-  let pa = atom_pos(a);
-  let pb = atom_pos(b) + shift;
+  let A = atom_pos(a);
+  let B = atom_pos(b);
+  // A's imaged partner is B + jimage·lattice; B's imaged partner is A - jimage·lattice.
+  let partnerB = B + shift;
+  let partnerA = A - shift;
 
-  // Orthonormal basis around the bond axis A->B.
-  let axis = pb - pa;
+  // half 0: A -> midpoint of (A, partnerB);  half 1: B -> midpoint of (B, partnerA).
+  // Intra-cell (jimage=0): partnerB=B, partnerA=A => both midpoints = (A+B)/2,
+  // so the two halves join into a seamless full cylinder.
+  let start = select(B, A, half == 0u);
+  let mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
+  let end = mid;
+
+  // Orthonormal basis around this half's axis start->end.
+  let axis = end - start;
   let len = length(axis);
   let dir = select(vec3<f32>(0.0, 0.0, 1.0), axis / max(len, 1e-6), len > 1e-6);
   let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(dir.y) > 0.9);
@@ -247,7 +275,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let is_top = (vi & 1u) == 1u;   // alternate bottom/top
   let ang = f32(seg) / f32(SEG) * PI2;
   let radial = cos(ang) * tangent + sin(ang) * bitangent;
-  let base = select(pa, pb, is_top);
+  let base = select(start, end, is_top);
   let world = base + radial * bond.radius_color.x;
 
   let vpos4 = camera.view * vec4<f32>(world, 1.0);
@@ -378,7 +406,9 @@ export function create_large_system_renderer(
     size: 64, // 4 × vec4
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // cfg for the indirect-args build: (verts_per_cylinder, capacity).
+  // cfg for the indirect-args build: (verts_per_cylinder, bond capacity). The
+  // build shader clamps the bond count to capacity then doubles it, so the draw
+  // issues instance_count = 2*min(count,capacity) (two half-cylinders per bond).
   const indirect_cfg_buffer = device.createBuffer({
     label: `large-system-indirect-cfg`,
     size: 8, // vec2<u32>
