@@ -49,6 +49,76 @@ const CLEAR_COLOR: GPUColor = { r: 0.02, g: 0.03, b: 0.05, a: 1 }
 
 const DEPTH_FORMAT: GPUTextureFormat = `depth24plus`
 
+/** WGSL cell-box line shader. Draws the 12 edges of the parallelepiped spanned
+ *  by lattice vectors a,b,c as a `line-list` (24 vertices = 12 edges × 2 ends).
+ *  Corners are generated in the vertex shader from a lattice uniform: the cell
+ *  spans from origin 0 to a+b+c, in the SAME coordinate space as the atom
+ *  positions (atoms render at raw site.xyz; the WebGL Lattice box likewise spans
+ *  origin→a+b+c within the shared scene group — see Lattice.svelte's
+ *  lattice_center = 0.5·(a+b+c) applied to an origin-centered box), so no extra
+ *  centering offset is needed.
+ *  Lattice convention: lat0/lat1/lat2 are rows a/b/c of the row-major 9-float
+ *  matrix (same as the bond render uniform), so corner(i) = bit0·a + bit1·b +
+ *  bit2·c. Depth uses the SAME GL→WebGPU clip-z remap as the atom impostor so the
+ *  box shares the depth buffer and is occluded by atoms in front. */
+const CELL_LINE_WGSL = `
+struct Camera {
+  view : mat4x4<f32>,
+  proj : mat4x4<f32>,
+  cam_pos : vec4<f32>,
+};
+// Cell uniform: lattice rows a,b,c (vec3+pad each) + color (rgb + pad).
+struct CellU {
+  lat0 : vec4<f32>,
+  lat1 : vec4<f32>,
+  lat2 : vec4<f32>,
+  color : vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> camera : Camera;
+@group(0) @binding(1) var<uniform> cell : CellU;
+
+struct VsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) color : vec3<f32>,
+};
+
+// 12 edges as corner-index pairs. Corner i = bit0·a + bit1·b + bit2·c.
+const EDGES = array<vec2<u32>, 12>(
+  vec2<u32>(0u, 1u), vec2<u32>(0u, 2u), vec2<u32>(0u, 4u),
+  vec2<u32>(1u, 3u), vec2<u32>(1u, 5u), vec2<u32>(2u, 3u),
+  vec2<u32>(2u, 6u), vec2<u32>(4u, 5u), vec2<u32>(4u, 6u),
+  vec2<u32>(3u, 7u), vec2<u32>(5u, 7u), vec2<u32>(6u, 7u),
+);
+
+fn corner(i : u32) -> vec3<f32> {
+  let fa = f32(i & 1u);
+  let fb = f32((i >> 1u) & 1u);
+  let fc = f32((i >> 2u) & 1u);
+  return fa * cell.lat0.xyz + fb * cell.lat1.xyz + fc * cell.lat2.xyz;
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
+  let edge = EDGES[vi / 2u];
+  let ci = select(edge.x, edge.y, (vi & 1u) == 1u);
+  let world = corner(ci);
+  var clip = camera.proj * (camera.view * vec4<f32>(world, 1.0));
+  // SAME GL->WebGPU NDC z remap as the atom impostor shader.
+  clip.z = (clip.z + clip.w) * 0.5;
+
+  var out : VsOut;
+  out.clip = clip;
+  out.color = cell.color.xyz;
+  return out;
+}
+
+@fragment
+fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  return vec4<f32>(in.color, 1.0);
+}
+`
+
 /** WGSL impostor-sphere shader. View-space billboard + per-fragment ray-sphere.
  *  - storage buffers: positions (3N), radii (N), colors (3N linear rgb)
  *  - camera uniform: view + proj (separate) + camPos
@@ -392,6 +462,18 @@ export type LargeSystemRenderer = {
    *  (so the background and atoms share one color space — dark atoms keep their
    *  contrast against the viewer's normal background). Alpha stays 1 (opaque). */
   set_background(rgb: [number, number, number]): void
+  /** Provide the unit-cell box. `lattice` is the 9-float row-major matrix (rows
+   *  a,b,c — same convention as set_bond_data / pack_lattice); pass null (or an
+   *  all-zero lattice) for non-periodic structures. `show` gates drawing; `color`
+   *  is the linear-RGB cell edge color (alpha is forced to 1). When `show` is true
+   *  AND the lattice is non-zero, render() draws the 12 cell edges as thin lines
+   *  (WebGPU core line width is 1px) sharing the atom depth buffer (occluded by
+   *  atoms in front). */
+  set_cell(
+    lattice: Float32Array | null,
+    show: boolean,
+    color: [number, number, number],
+  ): void
   /** Run one render pass: clear + (if bonds dirty) bond compute + indirect-args
    *  build, then (if atoms present) impostor sphere draw + (if bonds present)
    *  instanced cylinder draw, all sharing one depth attachment. */
@@ -466,6 +548,19 @@ export function create_large_system_renderer(
     size: 64, // 4 × vec4
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+  // Cell-box render uniform: lattice rows a,b,c (3×vec4) + color (vec4).
+  const cell_uniform = device.createBuffer({
+    label: `large-system-cell-uniform`,
+    size: 64, // 4 × vec4
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  // Cached cell inputs (uploaded only when set_cell changes them).
+  let cell_lattice = new Float32Array(9)
+  let cell_show = false
+  let cell_color: [number, number, number] = [0.5, 0.5, 0.5]
+  // True once the lattice is non-zero (a periodic structure has been provided).
+  let cell_has_lattice = false
+
   // cfg for the indirect-args build: (verts_per_cylinder, bond capacity). The
   // build shader clamps the bond count to capacity then doubles it, so the draw
   // issues instance_count = 2*min(count,capacity) (two half-cylinders per bond).
@@ -570,6 +665,51 @@ export function create_large_system_renderer(
       depthCompare: `less`,
     },
   })
+
+  // Cell-box render: 12 edges as a thin line-list. Binds camera + cell uniform.
+  const cell_module = device.createShaderModule({
+    label: `large-system-cell-line`,
+    code: CELL_LINE_WGSL,
+  })
+  const cell_bgl = device.createBindGroupLayout({
+    label: `large-system-cell-bgl`,
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+    ],
+  })
+  const cell_pipeline = device.createRenderPipeline({
+    label: `large-system-cell-line-pipeline`,
+    layout: device.createPipelineLayout({ bindGroupLayouts: [cell_bgl] }),
+    vertex: { module: cell_module, entryPoint: `vs_main` },
+    fragment: { module: cell_module, entryPoint: `fs_main`, targets: [{ format }] },
+    primitive: { topology: `line-list` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: true,
+      depthCompare: `less`,
+    },
+  })
+  const cell_bind_group = device.createBindGroup({
+    label: `large-system-cell-bg`,
+    layout: cell_bgl,
+    entries: [
+      { binding: 0, resource: { buffer: camera_buffer } },
+      { binding: 1, resource: { buffer: cell_uniform } },
+    ],
+  })
+
+  /** Pack + upload the cell render uniform: lattice rows a,b,c (each a vec3 + pad)
+   *  then color (rgb + pad). Same row convention as the bond render uniform. */
+  function upload_cell_uniform(): void {
+    const u = new Float32Array(16)
+    const L = cell_lattice
+    u[0] = L[0]; u[1] = L[1]; u[2] = L[2]; u[3] = 0
+    u[4] = L[3]; u[5] = L[4]; u[6] = L[5]; u[7] = 0
+    u[8] = L[6]; u[9] = L[7]; u[10] = L[8]; u[11] = 0
+    u[12] = cell_color[0]; u[13] = cell_color[1]; u[14] = cell_color[2]; u[15] = 1
+    device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, 64)
+  }
 
   // Static indirect-args cfg: (verts_per_cylinder, capacity) — capacity is
   // refreshed when the pairs buffer (re)allocates.
@@ -693,6 +833,28 @@ export function create_large_system_renderer(
       clear_color.g = rgb[1]
       clear_color.b = rgb[2]
       clear_color.a = 1
+    },
+    set_cell(
+      lattice: Float32Array | null,
+      show: boolean,
+      color: [number, number, number],
+    ): void {
+      if (destroyed) return
+      cell_show = show
+      cell_color = [color[0], color[1], color[2]]
+      // A null lattice (non-periodic structure) ⇒ no box. Otherwise detect a
+      // degenerate all-zero lattice (also no box) so molecules never draw one.
+      let nonzero = false
+      if (lattice && lattice.length >= 9) {
+        cell_lattice = lattice.slice(0, 9)
+        for (let i = 0; i < 9; i++) {
+          if (Math.abs(cell_lattice[i]) > 1e-12) { nonzero = true; break }
+        }
+      } else {
+        cell_lattice = new Float32Array(9)
+      }
+      cell_has_lattice = nonzero
+      upload_cell_uniform()
     },
     set_camera(uniform: Float32Array): void {
       if (destroyed) return
@@ -895,6 +1057,14 @@ export function create_large_system_renderer(
         pass.setBindGroup(0, bond_render_bg as GPUBindGroup)
         pass.drawIndirect(indirect_buffer, 0)
       }
+      // Cell box: 12 edges as a thin line-list. Drawn only when toggled on AND a
+      // non-zero lattice is present (periodic structure). Shares the depth
+      // attachment so atoms in front occlude the wireframe.
+      if (cell_show && cell_has_lattice) {
+        pass.setPipeline(cell_pipeline)
+        pass.setBindGroup(0, cell_bind_group)
+        pass.draw(24) // 12 edges × 2 line endpoints
+      }
       pass.end()
       device.queue.submit([encoder.finish()])
     },
@@ -924,6 +1094,7 @@ export function create_large_system_renderer(
       indirect_buffer.destroy()
       bond_params_buffer.destroy()
       bond_render_uniform.destroy()
+      cell_uniform.destroy()
       indirect_cfg_buffer.destroy()
       positions_buffer = null
       radii_buffer = null

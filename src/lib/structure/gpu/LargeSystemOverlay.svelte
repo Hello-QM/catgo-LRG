@@ -23,6 +23,8 @@
     bonding_options = undefined,
     background_color = undefined,
     background_opacity = 0.1,
+    show_cell = false,
+    cell_edge_color = `#808080`,
     trajectory_positions_version = undefined,
     get_trajectory_frame_positions = undefined,
     trajectory_step_idx = -1,
@@ -60,6 +62,14 @@
     /** Override strength of `background_color` over the theme bg: 0 → theme bg,
      *  1 → picked color, mid → lerp. Mirrors StructureScene's background_opacity. */
     background_opacity?: number
+    /** Whether to draw the unit-cell box (lattice wireframe), mirroring the WebGL
+     *  view's `scene_props.show_cell`. Default off ⇒ zero change. Only draws when
+     *  true AND the structure carries a non-zero lattice (periodic). */
+    show_cell?: boolean
+    /** Cell edge line color (hex), mirroring the WebGL Lattice's `cell_edge_color`
+     *  (DEFAULTS.structure.cell_edge_color = `#808080` grey). Converted to linear
+     *  RGB the SAME way atom colors are. */
+    cell_edge_color?: string
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
@@ -115,6 +125,30 @@
   let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
+
+  // ── Cell-box state ───────────────────────────────────────────────────────
+  // Signature of the cell inputs last pushed to the renderer (lattice + show +
+  // color), so set_cell is re-pushed only when one actually changes. The lattice
+  // is read from bond_lattice (kept in lockstep by rebuild_bonds_if_needed and
+  // refresh_frame_positions — including variable-cell trajectories).
+  let cell_sig = ``
+
+  /** Push the unit-cell box to the renderer when its inputs (lattice / show /
+   *  color) changed. Uses bond_lattice as the lattice source (already packed +
+   *  kept current). Returns true if it re-pushed (caller marks a redraw). */
+  function sync_cell(): boolean {
+    if (!renderer) return false
+    const [cr, cg, cb] = hex_to_linear_rgb(cell_edge_color)
+    let lat_sig = ``
+    for (let i = 0; i < 9; i++) lat_sig += `${bond_lattice[i]};`
+    const sig = `${show_cell}|${cr},${cg},${cb}|${lat_sig}`
+    if (sig === cell_sig) return false
+    cell_sig = sig
+    // bond_periodic is true exactly when the structure carries a lattice; pass
+    // null otherwise so molecules never draw a (degenerate) box.
+    renderer.set_cell(bond_periodic ? bond_lattice : null, show_cell, [cr, cg, cb])
+    return true
+  }
 
   // ── Per-frame trajectory state (milestone 9.4) ──────────────────────────
   // The last position-version we re-uploaded. When the parent bumps
@@ -471,6 +505,12 @@
       dirty = true
     }
 
+    // Cell box: push the lattice + show + color to the renderer when any of them
+    // changed. Runs after the bond rebuild above so bond_lattice (the cell's
+    // lattice source) is current for this frame — including variable-cell
+    // trajectories where refresh_frame_positions re-packs it per frame.
+    if (sync_cell()) dirty = true
+
     // Background: resolve the viewer's bg color (theme/opacity/picked) and push
     // it to the renderer only when it changed. A change repaints so the new
     // clear color shows. Cheap when static (string compare + no GPU work).
@@ -524,6 +564,8 @@
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
     last_bg = null
+    // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
+    cell_sig = ``
     needs_render = true
     stable_frames = 0
     const device = await acquire_webgpu_device()
@@ -625,6 +667,19 @@
     // source — consistent with the WebGL path's own mutation-observer resync.)
     background_color
     background_opacity
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Cell-box wake trigger. Track show_cell + cell_edge_color so toggling the
+    // cell on/off or recoloring it revives a suspended loop; the frame re-pushes
+    // via sync_cell and repaints once. (Lattice changes are caught by the
+    // structure/per-frame wakes, which update bond_lattice.)
+    show_cell
+    cell_edge_color
     if (renderer) {
       needs_render = true
       wake()

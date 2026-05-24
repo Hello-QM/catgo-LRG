@@ -3802,6 +3802,8 @@
             bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
             {background_color}
             {background_opacity}
+            show_cell={scene_props.show_cell}
+            cell_edge_color={scene_props.cell_edge_color}
             {trajectory_positions_version}
             {get_trajectory_frame_positions}
             {trajectory_step_idx}
