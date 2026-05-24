@@ -22,6 +22,7 @@
 import type { AnyStructure, ElementSymbol, Vec3 } from '$lib'
 import type { AtomArrayInverse } from '$lib/structure/state/selection-state.svelte'
 import { add_atom, delete_atoms, replace_atom } from '$lib/structure/atom-manipulation'
+import { get_orig_site_idx } from '$lib/structure/atom-properties'
 import type {
   AtomAddSpec,
   AtomFastOps,
@@ -142,15 +143,14 @@ export function create_context_menu_actions(deps: ContextMenuDeps) {
 
     if (!map_images) return raw_indices
 
-    // 映射 image 原子到原始原子
+    // 映射 image / supercell replica 原子到基础胞原子。
+    // get_orig_site_idx 统一处理三种情况:supercell replica(orig_unit_cell_idx)、
+    // PBC image(orig_site_idx)、普通原子(site_idx)。supercell 下显示结构比可编辑
+    // 基础胞大,必须折叠回基础胞索引,否则约束等操作命中越界索引而失效。
     const displayed = deps.get_displayed_structure() as any
-    const mapped = raw_indices.map((idx) => {
-      if (deps.is_image_atom(idx) && displayed?.image_to_original_map) {
-        const num_orig = displayed.num_original_sites ?? 0
-        return displayed.image_to_original_map[idx - num_orig] ?? idx
-      }
-      return idx
-    })
+    const mapped = raw_indices.map((idx) =>
+      get_orig_site_idx(displayed?.sites?.[idx], idx),
+    )
     const structure = deps.get_structure()
     const max_idx = structure?.sites?.length ?? 0
     return [...new Set(mapped.filter((idx) => idx < max_idx))]
@@ -241,8 +241,15 @@ export function create_context_menu_actions(deps: ContextMenuDeps) {
       }
       if (target !== null) {
         if (deps.is_image_atom(target)) return
-        push_atom_delete_entry(structure, [target])
-        run_delete([target])
+        // Map through the same base-cell resolver the multi-select path uses:
+        // a supercell replica's displayed index must collapse to its base atom,
+        // else delete_atoms() gets an out-of-range index against the editable
+        // base structure and silently no-ops (the supercell ≠ 1x1x1 bug).
+        const mapped = deps.get_original_atoms_only([target])
+        if (mapped.length === 0) return
+        const sorted = [...mapped].sort((a, b) => a - b)
+        push_atom_delete_entry(structure, sorted)
+        run_delete(sorted)
       } else {
         const original = deps.get_original_atoms_only(deps.get_selected_sites())
         if (original.length === 0) return

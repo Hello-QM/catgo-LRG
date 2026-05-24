@@ -55,18 +55,27 @@ export function get_original_atoms_only(
   const image_map = (displayed_structure as any)?.image_to_original_map
   const max_idx = structure?.sites?.length ?? 0
 
-  // Consistency guard: image_to_original_map is only meaningful while the PBC
-  // expansion still matches the base structure. The expansion records
-  // num_original_sites = base.sites.length at derivation time, so once the
-  // base count diverges (an atom was added/removed after expansion) the
-  // displayed_structure is stale: a freshly added atom's base index can
-  // collide with the stale image range [num_original, displayed_count) and be
-  // mis-mapped via image_map (e.g. image_map[0] → atom 0, dragging the wrong
-  // atom). When stale, pass indices through untouched — base indices are
-  // always real atoms; image remapping resumes once the expansion re-derives.
+  // Stale-expansion guard for the image_to_original_map fallback below: that map
+  // is only meaningful while the PBC expansion still matches the base structure
+  // (num_original_sites == base count at derivation time). Once the base count
+  // diverges (atom added/removed after expansion) a freshly added atom's base
+  // index can collide with the stale image range and be mis-mapped, so the
+  // fallback is skipped and the raw index passes through.
   const expansion_consistent = num_original === max_idx
 
   const mapped = indices.map((idx) => {
+    // Primary: each displayed site self-describes its base-cell origin —
+    // supercell replicas carry orig_unit_cell_idx (= base index), PBC images
+    // carry orig_site_idx. This is what makes editing work in a supercell,
+    // where displayed_structure is a separate expansion larger than the
+    // editable base: every replica/image of one base atom collapses to a
+    // single base index, so deleting any replica removes the atom from all
+    // mirrored cells (and from the 1x1x1 view once it re-derives).
+    const props = (displayed_structure as any)?.sites?.[idx]?.properties
+    if (typeof props?.orig_unit_cell_idx === `number`) return props.orig_unit_cell_idx
+    if (typeof props?.orig_site_idx === `number`) return props.orig_site_idx
+    // Fallback: legacy PBC expansions that recorded only image_to_original_map
+    // (no per-site origin property) still map under the consistency guard.
     if (expansion_consistent && num_original && image_map && idx >= num_original) {
       return image_map[idx - num_original] ?? idx
     }

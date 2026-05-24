@@ -169,6 +169,47 @@ describe('get_original_atoms_only', () => {
   test('handles undefined structures', () => {
     expect(get_original_atoms_only(undefined, undefined, [0])).toEqual([])
   })
+
+  // ─── Supercell (displayed > base) ───
+  // A supercell is a separate expansion larger than the editable base; each
+  // replica site carries orig_unit_cell_idx (= base index, set as i % base_n).
+  // Selecting any replica must collapse to its base atom so a delete removes
+  // the atom from every mirrored cell ("delete all mirrors").
+  describe('supercell replicas map back to the base cell', () => {
+    const base = make_structure([make_site('Fe', [0, 0, 0]), make_site('Fe', [1, 0, 0])])
+    // 2x2x1 of a 2-atom base => 8 sites, orig_unit_cell_idx = i % 2
+    const supercell = make_structure(
+      Array.from({ length: 8 }, (_, i) =>
+        make_site('Fe', [i, 0, 0], { orig_unit_cell_idx: i % 2 }),
+      ),
+    )
+
+    test('a single replica deletes its base atom', () => {
+      expect(get_original_atoms_only(supercell, base, [5])).toEqual([1])
+    })
+
+    test('all replicas of one base atom dedupe to a single base index', () => {
+      expect(get_original_atoms_only(supercell, base, [0, 2, 4, 6])).toEqual([0])
+    })
+
+    test('replicas of different base atoms map independently', () => {
+      expect(get_original_atoms_only(supercell, base, [4, 5]).sort()).toEqual([0, 1])
+    })
+
+    test('PBC image of a replica inherits orig_unit_cell_idx and maps to base', () => {
+      const supercell_with_image = make_structure(
+        [
+          ...Array.from({ length: 8 }, (_, i) =>
+            make_site('Fe', [i, 0, 0], { orig_unit_cell_idx: i % 2 }),
+          ),
+          // image of supercell site 3 (replica of base atom 1)
+          make_site('Fe', [9, 0, 0], { orig_unit_cell_idx: 1, orig_site_idx: 3 }),
+        ],
+        { num_original_sites: 8, image_to_original_map: [3] },
+      )
+      expect(get_original_atoms_only(supercell_with_image, base, [8])).toEqual([1])
+    })
+  })
 })
 
 describe('get_import_position_outside', () => {
