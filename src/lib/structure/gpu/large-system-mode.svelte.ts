@@ -36,3 +36,20 @@ export function create_large_system_mode(deps: {
     disable(): void { enabled = false },
   }
 }
+
+const DEFAULT_MIN_DIST = 0.1
+const DEFAULT_TOLERANCE = 0.45
+const DEFAULT_MAX_BOND_DIST = 3.0
+
+/** Map the app's bond options (the same tolerance / max_bond_dist the CPU path
+ *  uses, driven by the existing UI sliders) into the GPU compute options. This
+ *  is what makes "custom bond distance" live-tunable on the GPU path: the
+ *  StructureScene loop re-dispatches compute with these whenever a slider
+ *  changes. */
+export function to_compute_options(opts: Record<string, number>): { tolerance: number; max_bond_dist: number; min_dist: number } {
+  return {
+    tolerance: opts.tolerance ?? DEFAULT_TOLERANCE,
+    max_bond_dist: opts.max_bond_dist ?? DEFAULT_MAX_BOND_DIST,
+    min_dist: opts.min_dist ?? DEFAULT_MIN_DIST,
+  }
+}
