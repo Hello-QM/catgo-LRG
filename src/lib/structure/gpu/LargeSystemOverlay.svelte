@@ -1,7 +1,10 @@
 <script lang="ts">
-  import type { Camera } from 'three'
+  import { Color, type Camera } from 'three'
+  import type { AnyStructure, ElementSymbol } from '$lib/structure'
   import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
-  import { pack_camera_uniform } from '$lib/structure/gpu/camera-uniform'
+  import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
+  import { pack_positions } from '$lib/structure/gpu/frame-buffers'
+  import { build_atom_radii } from '$lib/structure/gpu/radius-lut'
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
@@ -10,10 +13,16 @@
   let {
     enabled = false,
     camera = undefined,
+    structure = undefined,
+    element_colors = undefined,
     on_fallback = undefined,
   }: {
     enabled?: boolean
     camera?: Camera | undefined
+    /** Current displayed structure whose atoms render as impostor spheres. */
+    structure?: AnyStructure | undefined
+    /** Per-element hex colors (e.g. state colors.element). */
+    element_colors?: Partial<Record<ElementSymbol, string>> | undefined
     on_fallback?: (reason: string) => void
   } = $props()
 
@@ -26,6 +35,55 @@
   let raf_id = 0
   let resize_observer: ResizeObserver | null = null
   let session_token = 0
+
+  // Cached atom buffers, rebuilt only when the structure identity changes (not
+  // every frame). `atom_source` is the identity sentinel we last built from.
+  let atom_source: AnyStructure | undefined = undefined
+  let atom_positions: Float32Array = new Float32Array(0)
+  let atom_radii: Float32Array = new Float32Array(0)
+  let atom_colors: Float32Array = new Float32Array(0)
+  let atom_count = 0
+  // Track the colors-object identity too, so a color-scheme swap rebuilds.
+  let atom_colors_source: Partial<Record<ElementSymbol, string>> | undefined = undefined
+  // Set when buffers were rebuilt and must be re-uploaded to the GPU.
+  let atoms_dirty = false
+
+  // Hex -> linear RGB, matching the WebGL path (Color.convertSRGBToLinear).
+  const _col = new Color()
+  function hex_to_linear_rgb(hex: string): [number, number, number] {
+    _col.set(hex).convertSRGBToLinear()
+    return [_col.r, _col.g, _col.b]
+  }
+
+  /** Rebuild the flat atom buffers from the current structure + element colors.
+   *  No-op (reuses cached arrays) when neither identity has changed. */
+  function rebuild_atoms_if_needed(): void {
+    if (structure === atom_source && element_colors === atom_colors_source) return
+    atom_source = structure
+    atom_colors_source = element_colors
+    atoms_dirty = true
+    const sites = structure?.sites
+    if (!sites || sites.length === 0) {
+      atom_positions = new Float32Array(0)
+      atom_radii = new Float32Array(0)
+      atom_colors = new Float32Array(0)
+      atom_count = 0
+      return
+    }
+    atom_positions = pack_positions(sites)
+    atom_radii = build_atom_radii(sites)
+    atom_count = sites.length
+    const cols = new Float32Array(sites.length * 3)
+    for (let i = 0; i < sites.length; i++) {
+      const elem = sites[i].species[0]?.element
+      const hex = (elem != null ? element_colors?.[elem] : undefined) ?? `#ffffff`
+      const [r, g, b] = hex_to_linear_rgb(hex)
+      cols[i * 3] = r
+      cols[i * 3 + 1] = g
+      cols[i * 3 + 2] = b
+    }
+    atom_colors = cols
+  }
 
   function stop_session(): void {
     session_token++ // invalidate any in-flight acquire_webgpu_device()
@@ -48,6 +106,11 @@
 
   async function start_session(el: HTMLCanvasElement): Promise<void> {
     const token = ++session_token
+    // Fresh renderer => fresh GPU buffers. Force a rebuild + re-upload on the
+    // first frame even if the structure identity hasn't changed since last time.
+    atom_source = undefined
+    atom_colors_source = undefined
+    atoms_dirty = true
     const device = await acquire_webgpu_device()
     // Bail if disabled / unmounted / superseded while awaiting.
     if (token !== session_token) return
@@ -72,9 +135,16 @@
 
     const frame = () => {
       if (token !== session_token || !renderer) return
+      // Rebuild atom buffers only when the structure / colors identity changed;
+      // re-upload to the GPU only on that same change (static frame otherwise).
+      rebuild_atoms_if_needed()
+      if (atoms_dirty) {
+        renderer.set_atoms(atom_positions, atom_radii, atom_colors, atom_count)
+        atoms_dirty = false
+      }
       if (camera) {
         camera.updateMatrixWorld()
-        renderer.set_camera(pack_camera_uniform(camera))
+        renderer.set_camera_full(pack_camera_full(camera))
       }
       renderer.render()
       raf_id = requestAnimationFrame(frame)

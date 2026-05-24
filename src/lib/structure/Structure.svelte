@@ -3768,6 +3768,8 @@
           <LargeSystemOverlay
             enabled={large_system_mode}
             {camera}
+            structure={displayed_structure}
+            element_colors={colors.element}
             on_fallback={(reason) => {
               large_system_mode = false
               console.warn(`[CatGO] large-system mode: ${reason}`)

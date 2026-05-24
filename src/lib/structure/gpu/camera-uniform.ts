@@ -17,3 +17,23 @@ export function pack_camera_uniform(camera: Camera): Float32Array {
   out[19] = 0
   return out
 }
+
+/** Pack view and projection matrices SEPARATELY (impostor spheres need both:
+ *  view for the view-space billboard + ray-sphere, proj for clip-space depth).
+ *  Layout (36 floats = 144 bytes, column-major, WebGPU-ready):
+ *    [0..15]  view (camera.matrixWorldInverse.elements)
+ *    [16..31] proj (camera.projectionMatrix.elements)
+ *    [32..34] camera world position (vec3)
+ *    [35]     pad
+ *  Three stores matrices column-major, so .elements uploads directly. Caller
+ *  must have called camera.updateMatrixWorld() so matrixWorldInverse is current. */
+export function pack_camera_full(camera: Camera): Float32Array {
+  const out = new Float32Array(36)
+  out.set(camera.matrixWorldInverse.elements, 0)
+  out.set(camera.projectionMatrix.elements, 16)
+  out[32] = camera.position.x
+  out[33] = camera.position.y
+  out[34] = camera.position.z
+  out[35] = 0
+  return out
+}
