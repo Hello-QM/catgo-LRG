@@ -3552,6 +3552,7 @@
           ongesture={on_gesture}
           onvoice={on_voice}
           on_ai_query={on_voice_ai_query}
+          ondisable={() => { gesture_active = false; gesture_config = { ...gesture_config, enabled: false } }}
         >
           <GestureOverlay container_el={wrapper} />
         </GestureProvider>

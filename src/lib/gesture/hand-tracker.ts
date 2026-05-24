@@ -31,20 +31,39 @@ export class HandTracker {
     if (this.running) return
     this.callback = callback
     this.on_error = on_error ?? null
-    this.running = true
 
-    // 1. Guard: check that the browser/webview exposes the camera API.
-    //    Tauri's WKWebView on macOS may not provide navigator.mediaDevices
-    //    even with private-API flags enabled, so we give a clear message
-    //    directing users to the web app (pnpm dev) in Chrome instead.
+    // ── Pre-flight checks — run BEFORE `this.running = true` and BEFORE any
+    //    getUserMedia call so a camera-less machine fails FAST instead of
+    //    hanging. getUserMedia stalls when no device exists — on Chrome it
+    //    blocks UI interaction, on Tauri's WebKitGTK the promise can hang —
+    //    freezing the whole app so the user can't even click "Disable".
+
+    // 1. The browser/webview must expose the camera API at all.
+    //    Tauri's WKWebView on macOS may not provide navigator.mediaDevices.
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error(
-        `Camera API not available. ` +
-        (typeof window !== `undefined` && (window as any).__TAURI__
-          ? `Webcam access is not supported in the Tauri desktop app. Please use the web app (pnpm dev) in Chrome instead.`
-          : `Your browser does not support camera access. Please use Chrome, Edge, or Safari.`),
+        typeof window !== `undefined` && (window as any).__TAURI__
+          ? `Webcam access isn't available in the desktop app. Open CatGO in Chrome or Edge instead.`
+          : `Your browser does not support camera access. Please use Chrome, Edge, or Safari.`,
       )
     }
+
+    // 2. Non-blocking probe: enumerateDevices() does NOT open the camera, so it
+    //    returns quickly even with no device — unlike getUserMedia, which is
+    //    the call that freezes the app on a camera-less machine. Bail here if
+    //    there's no video input at all, so getUserMedia is never reached.
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      if (!devices.some(d => d.kind === `videoinput`)) {
+        throw new Error(`No camera found. Please connect a camera and try again.`)
+      }
+    } catch (e: any) {
+      throw (e instanceof Error && e.message.startsWith(`No camera`))
+        ? e
+        : new Error(`No camera found. Please connect a camera and try again.`)
+    }
+
+    this.running = true
 
     // 2. Create hidden video element for webcam
     this.video = document.createElement(`video`)
@@ -53,17 +72,30 @@ export class HandTracker {
     this.video.style.display = `none`
     document.body.appendChild(this.video)
 
-    // 3. Request webcam access.
-    //    Wrap in try/catch to translate browser error names (NotAllowedError,
-    //    NotFoundError) into human-readable messages instead of [object Event].
+    // 4. Request webcam access. Race against an 8s timeout so a present-but-
+    //    stuck device (or a hung WebKitGTK getUserMedia) can't freeze start()
+    //    forever. The timer runs on the event loop, so it fires even if the
+    //    getUserMedia promise never settles.
     try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      const gum = navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: `user` },
         audio: false,
       })
+      let timer: ReturnType<typeof setTimeout> | undefined
+      this.stream = await Promise.race([
+        gum,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Camera request timed out — no response from the device.`)), 8000)
+        }),
+      ])
+      clearTimeout(timer)
+      // If getUserMedia lost the race but resolves later, release that stream
+      // so the camera light doesn't stay on.
+      void gum.then(s => { if (this.stream !== s) s.getTracks().forEach(t => t.stop()) }).catch(() => {})
     } catch (e: any) {
       const msg = e?.name === `NotAllowedError` ? `Camera permission denied. Please allow camera access and try again.`
         : e?.name === `NotFoundError` ? `No camera found. Please connect a camera and try again.`
+        : typeof e?.message === `string` && e.message.startsWith(`Camera request timed out`) ? e.message
         : `Camera access failed: ${e?.message ?? e?.name ?? e}`
       throw new Error(msg)
     }

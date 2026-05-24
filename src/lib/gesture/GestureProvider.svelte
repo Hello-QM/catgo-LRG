@@ -25,6 +25,7 @@
     onvoice,
     onhand_update,
     on_ai_query,
+    ondisable,
     children,
   }: {
     config: GestureConfig
@@ -33,6 +34,11 @@
     onvoice?: (event: VoiceEvent) => void
     onhand_update?: (hands: HandState[]) => void
     on_ai_query?: (text: string) => Promise<string>
+    // Ask the PARENT to disable gesture control. The parent owns `config`, so
+    // the child must never mutate `config.enabled` directly — doing so is an
+    // unbound-prop mutation that, combined with the enabled→active $effect,
+    // triggers `effect_update_depth_exceeded` and freezes the whole app.
+    ondisable?: () => void
     children?: import('svelte').Snippet
   } = $props()
 
@@ -607,8 +613,10 @@
     <span>{error_msg}</span>
     <button onclick={() => { error_msg = null; start() }}>Retry</button>
     <!-- stop() explicitly releases the webcam stream before disabling,
-         ensuring the camera light turns off even if start() failed partway -->
-    <button onclick={() => { stop(); error_msg = null; config.enabled = false }}>Disable</button>
+         ensuring the camera light turns off even if start() failed partway.
+         Disabling is delegated to the parent via ondisable() — the child must
+         not mutate the unbound `config` prop (see ondisable doc above). -->
+    <button onclick={() => { stop(); error_msg = null; ondisable?.() }}>Disable</button>
   </div>
 {/if}
 
