@@ -3770,6 +3770,10 @@
             {camera}
             structure={displayed_structure}
             element_colors={colors.element}
+            atom_radius={scene_props.atom_radius}
+            same_size_atoms={scene_props.same_size_atoms}
+            {element_radius_overrides}
+            {site_radius_overrides}
             on_fallback={(reason) => {
               large_system_mode = false
               console.warn(`[CatGO] large-system mode: ${reason}`)
