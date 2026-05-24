@@ -110,6 +110,13 @@
   // diverges and we re-extract + re-upload ONLY the xyz (set_positions) — radii
   // and colors are NOT rebuilt, since elements don't change between frames.
   let last_pos_version = -1
+  // The last frame index we re-uploaded. Normal playback ADVANCES the frame
+  // index (trajectory_step_idx) without necessarily bumping
+  // trajectory_positions_version.v — that version bumps when the CURRENT frame's
+  // positions change IN PLACE (editing), not on a plain frame advance. So we
+  // must re-extract on EITHER signal diverging, mirroring the CPU/WebGL bond
+  // cache which keys on both get_step_idx AND get_positions_version.
+  let last_step_idx = -1
   // Current-frame xyz, indexed identically to structure.sites. Reused buffer.
   let frame_positions: Float32Array = new Float32Array(0)
   // Set when frame_positions changed and must be re-uploaded to the GPU.
@@ -128,6 +135,7 @@
    *  moved. */
   function refresh_frame_positions(): void {
     last_pos_version = trajectory_positions_version?.v ?? -1
+    last_step_idx = trajectory_step_idx
     const sites = structure?.sites
     if (!sites || sites.length === 0) return
     let pos: Float32Array | null = null
@@ -365,11 +373,16 @@
       refresh_frame_positions()
     }
 
-    // Per-frame positions: re-upload ONLY xyz when the trajectory frame moved
-    // (version bumped) — radii + colors stay as last uploaded. set_positions
-    // also flags the renderer's bonds dirty so the GPU bond compute re-runs
-    // against the moved atoms (bonds form/break as atoms move).
-    if ((trajectory_positions_version?.v ?? -1) !== last_pos_version) {
+    // Per-frame positions: re-upload ONLY xyz when the trajectory frame moved —
+    // EITHER the frame index advanced (normal playback / single-step / scrub)
+    // OR the current frame's positions changed in place (version bump on edit).
+    // radii + colors stay as last uploaded. set_positions also flags the
+    // renderer's bonds dirty so the GPU bond compute re-runs against the moved
+    // atoms (bonds form/break as atoms move).
+    if (
+      trajectory_step_idx !== last_step_idx ||
+      (trajectory_positions_version?.v ?? -1) !== last_pos_version
+    ) {
       refresh_frame_positions()
     }
     if (positions_dirty) {
@@ -431,6 +444,7 @@
     // Fresh renderer ⇒ force a per-frame re-extract + re-upload on the first
     // frame, and re-detect the lattice for variable-cell bonds.
     last_pos_version = -1
+    last_step_idx = -1
     frame_lattice_sig = ``
     positions_dirty = false
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
