@@ -20,5 +20,6 @@ describe.skipIf(!globalThis.navigator?.gpu)(`bond-compute (GPU)`, () => {
     const gpu = await compute.run({ positions, radii, lattice, periodic: true, ...opts })
     expect(gpu.count).toBe(ref.length)
     expect(pair_set(gpu.pairs)).toEqual(pair_set(ref))
+    expect(gpu.overflowed).toBe(false)
   })
 })

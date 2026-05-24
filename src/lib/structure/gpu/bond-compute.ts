@@ -14,9 +14,18 @@ export type BondComputeRun = {
   periodic: boolean
 }
 
+/** Result of a bond-compute run.
+ *  - `count` is the number of pairs actually returned (clamped to `capacity`).
+ *  - `pairs` holds `count` entries.
+ *  - `raw_count` is the unclamped count the shader atomically accumulated; it may
+ *    exceed `capacity` because the shader `atomicAdd`s before checking the slot.
+ *  - `overflowed` is true when `raw_count > capacity`, meaning some pairs were
+ *    silently dropped and the caller should resize (`capacity`) and rerun. */
 export type BondComputeResult = {
   count: number
   pairs: { a: number; b: number; jimage: [number, number, number] }[]
+  overflowed: boolean
+  raw_count: number
 }
 
 /** Size of the packed Params uniform. WGSL pads each mat3x3 column (vec3) to 16
@@ -67,92 +76,107 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
   return {
     async run(r: BondComputeRun): Promise<BondComputeResult> {
       const n = r.radii.length
-
-      const positions_buf = device.createBuffer({
-        size: Math.max(r.positions.byteLength, 4),
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      })
-      device.queue.writeBuffer(positions_buf, 0, r.positions as BufferSource)
-
-      const radii_buf = device.createBuffer({
-        size: Math.max(r.radii.byteLength, 4),
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      })
-      device.queue.writeBuffer(radii_buf, 0, r.radii as BufferSource)
-
-      const params_buf = device.createBuffer({
-        size: PARAMS_BYTES,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      })
-      device.queue.writeBuffer(params_buf, 0, pack_params(n, capacity, r))
-
       const pairs_bytes = capacity * 3 * 4
-      const pairs_buf = device.createBuffer({
-        size: pairs_bytes,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
-      })
 
-      const count_buf = device.createBuffer({
-        size: 4,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-      })
-      device.queue.writeBuffer(count_buf, 0, new Uint32Array([0]))
+      // Declared before the try so finally can destroy whatever was created,
+      // even if buffer creation throws partway. run() is called repeatedly
+      // (the on-pause bridge), so a leak on the mapAsync error path would
+      // accumulate GPU memory.
+      let positions_buf: GPUBuffer | undefined
+      let radii_buf: GPUBuffer | undefined
+      let params_buf: GPUBuffer | undefined
+      let pairs_buf: GPUBuffer | undefined
+      let count_buf: GPUBuffer | undefined
+      let count_read: GPUBuffer | undefined
+      let pairs_read: GPUBuffer | undefined
 
-      const bind_group = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: positions_buf } },
-          { binding: 1, resource: { buffer: radii_buf } },
-          { binding: 2, resource: { buffer: params_buf } },
-          { binding: 3, resource: { buffer: pairs_buf } },
-          { binding: 4, resource: { buffer: count_buf } },
-        ],
-      })
+      try {
+        positions_buf = device.createBuffer({
+          size: Math.max(r.positions.byteLength, 4),
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(positions_buf, 0, r.positions as BufferSource)
 
-      const count_read = device.createBuffer({
-        size: 4,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-      })
-      const pairs_read = device.createBuffer({
-        size: pairs_bytes,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-      })
+        radii_buf = device.createBuffer({
+          size: Math.max(r.radii.byteLength, 4),
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(radii_buf, 0, r.radii as BufferSource)
 
-      const encoder = device.createCommandEncoder()
-      const pass = encoder.beginComputePass()
-      pass.setPipeline(pipeline)
-      pass.setBindGroup(0, bind_group)
-      pass.dispatchWorkgroups(Math.max(1, Math.ceil(n / 64)))
-      pass.end()
-      encoder.copyBufferToBuffer(count_buf, 0, count_read, 0, 4)
-      encoder.copyBufferToBuffer(pairs_buf, 0, pairs_read, 0, pairs_bytes)
-      device.queue.submit([encoder.finish()])
+        params_buf = device.createBuffer({
+          size: PARAMS_BYTES,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(params_buf, 0, pack_params(n, capacity, r))
 
-      await count_read.mapAsync(GPUMapMode.READ)
-      const raw_count = new Uint32Array(count_read.getMappedRange())[0]
-      count_read.unmap()
-      const count = Math.min(raw_count, capacity)
+        pairs_buf = device.createBuffer({
+          size: pairs_bytes,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        })
 
-      await pairs_read.mapAsync(GPUMapMode.READ)
-      const pairs_data = new Uint32Array(pairs_read.getMappedRange().slice(0))
-      pairs_read.unmap()
+        count_buf = device.createBuffer({
+          size: 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(count_buf, 0, new Uint32Array([0]))
 
-      const pairs: BondComputeResult[`pairs`] = []
-      for (let s = 0; s < count; s++) {
-        const a = pairs_data[s * 3 + 0]
-        const b = pairs_data[s * 3 + 1]
-        pairs.push({ a, b, jimage: unpack_jimage(pairs_data[s * 3 + 2]) })
+        const bind_group = device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: positions_buf } },
+            { binding: 1, resource: { buffer: radii_buf } },
+            { binding: 2, resource: { buffer: params_buf } },
+            { binding: 3, resource: { buffer: pairs_buf } },
+            { binding: 4, resource: { buffer: count_buf } },
+          ],
+        })
+
+        count_read = device.createBuffer({
+          size: 4,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        })
+        pairs_read = device.createBuffer({
+          size: pairs_bytes,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        })
+
+        const encoder = device.createCommandEncoder()
+        const pass = encoder.beginComputePass()
+        pass.setPipeline(pipeline)
+        pass.setBindGroup(0, bind_group)
+        pass.dispatchWorkgroups(Math.max(1, Math.ceil(n / 64)))
+        pass.end()
+        encoder.copyBufferToBuffer(count_buf, 0, count_read, 0, 4)
+        encoder.copyBufferToBuffer(pairs_buf, 0, pairs_read, 0, pairs_bytes)
+        device.queue.submit([encoder.finish()])
+
+        await count_read.mapAsync(GPUMapMode.READ)
+        const raw_count = new Uint32Array(count_read.getMappedRange())[0]
+        count_read.unmap()
+        const count = Math.min(raw_count, capacity)
+        const overflowed = raw_count > capacity
+
+        await pairs_read.mapAsync(GPUMapMode.READ)
+        const pairs_data = new Uint32Array(pairs_read.getMappedRange().slice(0))
+        pairs_read.unmap()
+
+        const pairs: BondComputeResult[`pairs`] = []
+        for (let s = 0; s < count; s++) {
+          const a = pairs_data[s * 3 + 0]
+          const b = pairs_data[s * 3 + 1]
+          pairs.push({ a, b, jimage: unpack_jimage(pairs_data[s * 3 + 2]) })
+        }
+
+        return { count, pairs, overflowed, raw_count }
+      } finally {
+        positions_buf?.destroy()
+        radii_buf?.destroy()
+        params_buf?.destroy()
+        pairs_buf?.destroy()
+        count_buf?.destroy()
+        count_read?.destroy()
+        pairs_read?.destroy()
       }
-
-      positions_buf.destroy()
-      radii_buf.destroy()
-      params_buf.destroy()
-      pairs_buf.destroy()
-      count_buf.destroy()
-      count_read.destroy()
-      pairs_read.destroy()
-
-      return { count, pairs }
     },
   }
 }
