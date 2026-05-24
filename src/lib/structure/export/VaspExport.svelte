@@ -51,7 +51,7 @@
   let vasp_kpoints_mode = $state<'auto' | 'preset' | 'custom'>('auto')
   let vasp_kpoints_preset = $state<'1x1x1' | '2x2x1' | '2x2x2' | '3x3x3' | '4x4x4'>('3x3x3')
   let vasp_kpoints_custom = $state<[number, number, number]>([3, 3, 3])
-  let vasp_kspacing = $state(0.04)
+  let vasp_kspacing = $state(0.3)
   let vasp_calc_types = $state<Record<string, string>>({})
   let vasp_optimizer_types = $state<Record<string, string>>({})
   let vasp_generating = $state(false)
@@ -274,12 +274,55 @@
       if (files.incar_nelect) generated_output['INCAR_NELECT'] = files.incar_nelect
       active_file = vasp_constant_potential !== 'none' ? 'INCAR_NELECT' : 'INCAR'
     } catch (e) {
-      // Backend unavailable — fallback to offline POSCAR serialization
+      // Backend unavailable — generate client-side with $lib/io/vasp-input.
       try {
         const poscar = structure_to_poscar(structure as unknown as StructureData)
-        generated_output = { 'POSCAR': poscar }
-        active_file = 'POSCAR'
-        generation_error = 'Backend unavailable — only POSCAR exported (offline mode). INCAR and KPOINTS require the Python backend.'
+        const { generate_incar_str, generate_kpoints_str, face_centered_from_symmetry, SUPPORTED_CALC_TYPES } =
+          await import('$lib/io/vasp-input')
+        if ((SUPPORTED_CALC_TYPES as string[]).includes(vasp_calculation)) {
+          const calc = vasp_calculation as 'opt' | 'scf' | 'freq' | 'dos' | 'bader'
+
+          let off_ediff = vasp_ediff
+          if (vasp_ediff_mode === 'custom') {
+            const p = parseFloat(vasp_ediff_custom); if (!isNaN(p) && p > 0) off_ediff = p
+          }
+          let off_ediffg: number | undefined = undefined
+          if (calc === 'opt') {
+            off_ediffg = vasp_ediffg
+            if (vasp_ediffg_mode === 'custom') { const p = parseFloat(vasp_ediffg_custom); if (!isNaN(p)) off_ediffg = p }
+          }
+          let off_kmesh: [number, number, number] | undefined = undefined
+          let off_kspacing: number | undefined = undefined
+          if (vasp_kpoints_mode === 'preset') {
+            const [kx, ky, kz] = vasp_kpoints_preset.split('x').map(Number); off_kmesh = [kx, ky, kz]
+          } else if (vasp_kpoints_mode === 'custom') {
+            off_kmesh = [vasp_kpoints_custom[0], vasp_kpoints_custom[1], vasp_kpoints_custom[2]]
+          } else {
+            off_kspacing = vasp_kspacing
+          }
+          const off_magmom = (vasp_ispin === 2 && vasp_magmom_enabled) ? vasp_magmom_value : undefined
+
+          // Face-centered detection (spglib via moyo-wasm) controls Gamma vs Monkhorst.
+          let off_fcc = false
+          try { off_fcc = await face_centered_from_symmetry(structure as AnyStructure) } catch { /* symmetry optional offline */ }
+
+          const incar = generate_incar_str({
+            calculation_type: calc, encut: vasp_encut, prec: vasp_prec, gga: vasp_gga,
+            ediff: off_ediff, ispin: vasp_ispin, ivdw: vasp_ivdw, ediffg: off_ediffg, magmom: off_magmom,
+          })
+          const kpoints_str = generate_kpoints_str(
+            structure as AnyStructure,
+            { calculation_type: calc, kmesh: off_kmesh, kspacing: off_kspacing },
+            { isFaceCentered: off_fcc },
+          )
+          generated_output = { 'INCAR': incar, 'POSCAR': poscar, 'KPOINTS': kpoints_str }
+          active_file = 'INCAR'
+          generation_error = 'Generated client-side (offline). Advanced options (MD / constant-potential / element-specific POTCAR & MAGMOM tuning) require the Python backend.'
+        } else {
+          generated_output = { 'POSCAR': poscar }
+          active_file = 'POSCAR'
+          generation_error = `Backend unavailable — '${vasp_calculation}' needs the Python backend; only POSCAR exported offline.`
+        }
       } catch (offlineErr) {
         generation_error = e instanceof Error ? e.message : 'Failed to generate VASP inputs'
       }
@@ -552,8 +595,8 @@
     </div>
     {#if vasp_kpoints_mode === 'auto'}
       <div class="param-row">
-        <span>KSPACING</span>
-        <input type="number" step="0.01" min="0.01" max="1" bind:value={vasp_kspacing} />
+        <span>KSPACING (1/Å) <span class="param-help" title="K-point spacing per reciprocal axis: N_i = max(1, ceil(|b_i| / KSPACING)). Smaller = denser mesh. ~0.3 fine, 0.5 coarse (VASP default). Large cells naturally give 1x1x1.">?</span></span>
+        <input type="number" step="0.05" min="0.1" max="1" bind:value={vasp_kspacing} />
       </div>
     {:else if vasp_kpoints_mode === 'preset'}
       <div class="param-row">
