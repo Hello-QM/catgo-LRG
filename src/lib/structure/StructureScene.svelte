@@ -2053,7 +2053,10 @@
   // H-bonds stay on the legacy Bond-like render path because DashedBond has
   // its own instanced mesh and there's no SoA-store integration for them.
   let instanced_hbond_groups = $derived.by(() => {
-    const bond_struct = bond_state.last_bond_structure
+    // Same fallback as filtered_bond_pairs (see comment there): when
+    // last_bond_structure is null, fall back to the current `structure` so
+    // H-bonds don't briefly disappear during async-compute transitions.
+    const bond_struct = bond_state.last_bond_structure ?? structure
     if (!bond_struct?.sites || h_bond_pairs.length === 0) return []
 
     const instances: { matrix: Float32Array; color_start: string; color_end: string }[] = []
@@ -2398,7 +2401,19 @@
     // Use last_bond_structure for site lookups — bond indices reference the
     // structure bonds were computed against. This also avoids a redundant
     // cascade (filtered → instanced → GPU) every time structure changes.
-    const bond_struct = bond_state.last_bond_structure
+    //
+    // Fallback to `structure` when `last_bond_structure` is null. The async
+    // bond compute path (bond-computation-controller.svelte.ts:336-337) and
+    // a couple of edge-case state transitions briefly set
+    // `last_bond_structure = null`. Without a fallback the user sees every
+    // bond disappear during that window — specifically reproducible when
+    // deleting an atom while the async path was mid-flight: the fast-delete
+    // reindexes bond_state.bond_connectivity correctly, but this $derived
+    // returns [] because last_bond_structure happened to be null at that
+    // instant. Post-delete `structure.sites` and `last_bond_structure.sites`
+    // share the same index space (apply_atom_delete_incremental keeps them
+    // in lockstep), so falling back to `structure` is safe.
+    const bond_struct = bond_state.last_bond_structure ?? structure
     if (!bond_struct?.sites) return []
     // Force reactivity — hidden_elements/hidden_sites/bond_distance_rules/deleted_bond_keys are read inside nested callbacks
     const _hidden_size = _hidden_elements?.size ?? 0
