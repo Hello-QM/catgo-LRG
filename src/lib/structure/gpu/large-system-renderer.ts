@@ -243,10 +243,6 @@ export function create_large_system_renderer(
 
   let destroyed = false
 
-  // TODO(9.2-debug) remove — capture the last full camera uniform + log once.
-  let _dbg_last_cam: Float32Array | null = null
-  let _dbg_logged_cam = false
-
   return {
     set_camera(uniform: Float32Array): void {
       if (destroyed) return
@@ -257,7 +253,6 @@ export function create_large_system_renderer(
     },
     set_camera_full(uniform: Float32Array): void {
       if (destroyed) return
-      _dbg_last_cam = uniform // TODO(9.2-debug) remove
       const bytes = Math.min(uniform.byteLength, CAMERA_FULL_BYTES)
       device.queue.writeBuffer(camera_buffer, 0, uniform.buffer, uniform.byteOffset, bytes)
     },
@@ -268,8 +263,6 @@ export function create_large_system_renderer(
       count: number,
     ): void {
       if (destroyed) return
-      // TODO(9.2-debug) remove
-      console.log(`[lsr] set_atoms count=`, count, `pos0=`, Array.from(positions.slice(0, 3)), `r0=`, radii[0], `col0=`, Array.from(colors.slice(0, 3)))
       atom_count = Math.max(0, count)
       if (atom_count === 0) return
 
@@ -314,16 +307,6 @@ export function create_large_system_renderer(
     },
     render(): void {
       if (destroyed) return
-      // TODO(9.2-debug) remove — log the camera uniform sample on the first frame.
-      if (!_dbg_logged_cam && _dbg_last_cam) {
-        _dbg_logged_cam = true
-        const u = _dbg_last_cam
-        console.log(
-          `[lsr] cam uniform view0..3=`, Array.from(u.slice(0, 4)),
-          `proj0..3=`, Array.from(u.slice(16, 20)),
-          `camPos=`, Array.from(u.slice(32, 35)),
-        )
-      }
       if (!depth_view) ensure_depth(canvas.width || 1, canvas.height || 1)
       const encoder = device.createCommandEncoder({ label: `large-system-frame` })
       const view = context.getCurrentTexture().createView()

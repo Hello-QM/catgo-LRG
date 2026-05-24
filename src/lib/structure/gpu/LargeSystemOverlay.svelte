@@ -63,12 +63,6 @@
     atom_colors_source = element_colors
     atoms_dirty = true
     const sites = structure?.sites
-    // TODO(9.2-debug) remove
-    console.log(
-      `[lsr] rebuild atoms, sites=`, sites?.length ?? 0,
-      `structure?`, structure != null,
-      `element_colors?`, element_colors != null,
-    )
     if (!sites || sites.length === 0) {
       atom_positions = new Float32Array(0)
       atom_radii = new Float32Array(0)
