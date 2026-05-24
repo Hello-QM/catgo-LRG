@@ -40,6 +40,8 @@ describe(`detect_bonds_reference`, () => {
     // b at 4.9, a at 0.2: dx = b-a = 4.7; shifting b by -a (na=-1 -> -5) gives
     // displacement -0.3, the shortest. So jimage = [-1,0,0].
     expect(bonds[0].jimage).toEqual([-1, 0, 0])
+    // Lock the minimum-image distance the WGSL shader must reproduce: 5 - 4.7 = 0.3 Å.
+    expect(bonds[0].dist).toBeCloseTo(0.3)
   })
 
   it(`drops coincident atoms (below min_dist)`, () => {
@@ -65,6 +67,10 @@ describe(`detect_bonds_reference`, () => {
       { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
     )
 
+    // NOTE: the lower bound (min_dist) is NOT parity-checked here. The JS side
+    // passes min_dist: 0.1 while compute_bonds_sync uses Rust's default (0.4),
+    // and this fixture has no pair landing in the (0.1, 0.4) gap, so the
+    // divergence is invisible to this cross-check.
     const key = (a: number, b: number) => `${Math.min(a, b)}-${Math.max(a, b)}`
     const cpu_set = new Set(cpu.map((b) => key(b.site_idx_1, b.site_idx_2)))
     const ref_set = new Set(ref.map((b) => key(b.a, b.b)))

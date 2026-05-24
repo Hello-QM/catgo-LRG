@@ -13,7 +13,15 @@ export type RefBond = { a: number; b: number; dist: number; jimage: [number, num
  *  image offset (in lattice units) applied to atom b so that b + jimage*L lands
  *  in the minimum-image position relative to a. i.e. the realized displacement
  *  is (pos_b - pos_a) + jimage·L. For two atoms straddling a boundary where the
- *  short contact is "wrap b backward by one cell", jimage is [-1,0,0]. */
+ *  short contact is "wrap b backward by one cell", jimage is [-1,0,0].
+ *
+ *  CORRECTNESS PRECONDITION (Tasks 5/6 inherit this): the 27-image search over
+ *  the {-1,0,1}^3 shell is not merely a perf shortcut — it is only *correct* when
+ *  the bond cutoff (max_bond_dist) is smaller than half the shortest cell
+ *  dimension. For larger cutoffs, or highly skewed / very short lattices, the
+ *  true minimum image can lie outside the {-1,0,1}^3 shell, so the closest image
+ *  is missed and genuine bonds are silently dropped. Callers must keep cutoffs
+ *  well inside half the minimum cell dimension. */
 export function detect_bonds_reference(
   positions: Float32Array, // 3N
   lattice: Float32Array, // 9, row-major (rows a,b,c); all-zero => non-periodic
@@ -41,7 +49,10 @@ export function detect_bonds_reference(
 
 /** Minimum-image displacement searching the 27 nearest images (offsets in
  *  {-1,0,1}); returns the closest with the integer image applied to atom b.
- *  Adequate for bond cutoffs << cell size (the large-trajectory regime). */
+ *  PRECONDITION (correctness, not just perf): valid only when the bond cutoff is
+ *  smaller than half the shortest cell dimension. For larger cutoffs or highly
+ *  skewed / short lattices the true minimum image can fall outside the
+ *  {-1,0,1}^3 shell and the closest image would be missed. */
 function minimum_image(
   dx: number,
   dy: number,
