@@ -39,8 +39,10 @@ const BOND_RADIUS = 0.16
 /** Neutral bond color (linear rgb). Half-A/half-B coloring is a later milestone. */
 const BOND_COLOR: [number, number, number] = [0.7, 0.7, 0.7]
 
-/** A distinct dark background so flipping the toggle visibly swaps which canvas
- *  paints. Near-black with a faint blue tint. */
+/** Default clear color when no background is threaded in: a distinct dark
+ *  background (near-black, faint blue tint) so flipping the toggle visibly
+ *  swaps which canvas paints. Overridden by set_background to match the WebGL
+ *  viewer's actual canvas background (so dark atoms keep their contrast). */
 const CLEAR_COLOR: GPUColor = { r: 0.02, g: 0.03, b: 0.05, a: 1 }
 
 const DEPTH_FORMAT: GPUTextureFormat = `depth24plus`
@@ -336,6 +338,11 @@ export type LargeSystemRenderer = {
     options: { tolerance: number; max_bond_dist: number; min_dist: number },
     periodic: boolean,
   ): void
+  /** Set the clear (background) color the render pass uses. `rgb` is LINEAR
+   *  float [r,g,b] in the SAME space as the atom colors uploaded via set_atoms
+   *  (so the background and atoms share one color space — dark atoms keep their
+   *  contrast against the viewer's normal background). Alpha stays 1 (opaque). */
+  set_background(rgb: [number, number, number]): void
   /** Run one render pass: clear + (if bonds dirty) bond compute + indirect-args
    *  build, then (if atoms present) impostor sphere draw + (if bonds present)
    *  instanced cylinder draw, all sharing one depth attachment. */
@@ -624,7 +631,19 @@ export function create_large_system_renderer(
 
   let destroyed = false
 
+  // Mutable clear color, defaulting to the near-black constant until the caller
+  // threads the viewer's background via set_background. Typed as the dict form
+  // (not the GPUColor union) so the .r/.g/.b/.a fields are writable.
+  const clear_color: GPUColorDict = { ...(CLEAR_COLOR as GPUColorDict) }
+
   return {
+    set_background(rgb: [number, number, number]): void {
+      if (destroyed) return
+      clear_color.r = rgb[0]
+      clear_color.g = rgb[1]
+      clear_color.b = rgb[2]
+      clear_color.a = 1
+    },
     set_camera(uniform: Float32Array): void {
       if (destroyed) return
       // Legacy 80-byte (proj*view) upload into the first bytes; harmless — the
@@ -801,7 +820,7 @@ export function create_large_system_renderer(
         colorAttachments: [
           {
             view,
-            clearValue: CLEAR_COLOR,
+            clearValue: clear_color,
             loadOp: `clear`,
             storeOp: `store`,
           },

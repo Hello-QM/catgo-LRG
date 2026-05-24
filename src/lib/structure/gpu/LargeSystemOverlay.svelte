@@ -21,6 +21,8 @@
     element_radius_overrides = undefined,
     site_radius_overrides = undefined,
     bonding_options = undefined,
+    background_color = undefined,
+    background_opacity = 0.1,
     trajectory_positions_version = undefined,
     get_trajectory_frame_positions = undefined,
     trajectory_step_idx = -1,
@@ -48,6 +50,16 @@
      *  detection. Same Record the CPU path reads (scene_props.bonding_options);
      *  mapped via to_compute_options. */
     bonding_options?: Record<string, number> | undefined
+    /** Viewer canvas background color (hex, e.g. `#000000`), mirroring the WebGL
+     *  path's StructureScene `background_color`. The overlay resolves this the
+     *  SAME way StructureScene's compute_canvas_bg does (lerp toward the theme
+     *  bg by `background_opacity`) and converts it to linear RGB with the SAME
+     *  conversion used for atom colors, so the overlay background matches the
+     *  WebGL viewer's background and dark atoms keep their contrast. */
+    background_color?: string | undefined
+    /** Override strength of `background_color` over the theme bg: 0 → theme bg,
+     *  1 → picked color, mid → lerp. Mirrors StructureScene's background_opacity. */
+    background_opacity?: number
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
@@ -209,6 +221,62 @@
   function hex_to_linear_rgb(hex: string): [number, number, number] {
     _col.set(hex).convertSRGBToLinear()
     return [_col.r, _col.g, _col.b]
+  }
+
+  // ── Background color (Fix 1) ────────────────────────────────────────────
+  // The last linear-RGB background pushed to the renderer, so we only re-push +
+  // re-render when the resolved color actually changes.
+  let last_bg: [number, number, number] | null = null
+  const _bg = new Color()
+
+  /** Walk up from the overlay canvas to find the first opaque CSS background
+   *  color (the theme bg). Mirrors StructureScene.find_theme_bg so the overlay
+   *  resolves the same theme background the WebGL clear color lerps toward. */
+  function find_theme_bg(target: Color): Color {
+    let el: HTMLElement | null = canvas ?? null
+    while (el) {
+      const bg = getComputedStyle(el).backgroundColor
+      const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/)
+      if (m) {
+        const a = m[4] !== undefined ? parseFloat(m[4]) : 1
+        if (a >= 0.5) return target.setRGB(+m[1] / 255, +m[2] / 255, +m[3] / 255)
+      }
+      el = el.parentElement
+    }
+    return target.setRGB(0, 0, 0)
+  }
+
+  /** Resolve the viewer background the SAME way StructureScene.compute_canvas_bg
+   *  does (picked hex, theme bg, or a lerp by background_opacity), then convert
+   *  to linear RGB with the SAME conversion used for atom colors. Returns the
+   *  linear-RGB triple to upload as the overlay clear color. */
+  function resolve_background_rgb(): [number, number, number] {
+    const picked = new Color(background_color ?? `#000000`)
+    const t = Math.max(0, Math.min(1, background_opacity))
+    if (t >= 0.999) _bg.copy(picked)
+    else if (t <= 0.001) find_theme_bg(_bg)
+    else find_theme_bg(_bg).lerp(picked, t)
+    // convertSRGBToLinear matches hex_to_linear_rgb (atom color space).
+    _bg.convertSRGBToLinear()
+    return [_bg.r, _bg.g, _bg.b]
+  }
+
+  /** Push the resolved background to the renderer when it changed. Marks a
+   *  redraw so the new clear color paints. Returns true if it changed. */
+  function sync_background(): boolean {
+    if (!renderer) return false
+    const rgb = resolve_background_rgb()
+    if (
+      last_bg &&
+      Math.abs(last_bg[0] - rgb[0]) < 1e-6 &&
+      Math.abs(last_bg[1] - rgb[1]) < 1e-6 &&
+      Math.abs(last_bg[2] - rgb[2]) < 1e-6
+    ) {
+      return false
+    }
+    last_bg = rgb
+    renderer.set_background(rgb)
+    return true
   }
 
   /** Cheap signature of the radius-affecting inputs; changes when any of them
@@ -403,6 +471,11 @@
       dirty = true
     }
 
+    // Background: resolve the viewer's bg color (theme/opacity/picked) and push
+    // it to the renderer only when it changed. A change repaints so the new
+    // clear color shows. Cheap when static (string compare + no GPU work).
+    if (sync_background()) dirty = true
+
     // Camera: pack always (cheap), upload + mark dirty only when it moved.
     if (camera) {
       camera.updateMatrixWorld()
@@ -449,6 +522,8 @@
     positions_dirty = false
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
+    // Fresh renderer ⇒ force the background to re-resolve + re-push.
+    last_bg = null
     needs_render = true
     stable_frames = 0
     const device = await acquire_webgpu_device()
@@ -536,6 +611,20 @@
     // suspends after its grace period (idle-quiet).
     trajectory_positions_version?.v
     trajectory_step_idx
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Background-color wake trigger. Track the bg inputs so a theme/opacity/
+    // picked-color change revives a suspended loop; the frame re-resolves the
+    // clear color via sync_background and repaints once. (Theme changes that
+    // don't bump these props are caught lazily on the next wake from any other
+    // source — consistent with the WebGL path's own mutation-observer resync.)
+    background_color
+    background_opacity
     if (renderer) {
       needs_render = true
       wake()

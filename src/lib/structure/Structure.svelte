@@ -1904,6 +1904,20 @@
   // Task 9: experimental WebGPU large-system render path. Default OFF — when
   // off the overlay renders nothing and the WebGL viewer is unchanged.
   let large_system_mode = $state(false)
+  // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
+  // turns OFF so the WebGL view (whose autoRender was paused while the overlay
+  // covered it) repaints once on the next frame and isn't left on a stale paint.
+  let webgl_repaint_trigger = $state(0)
+  let _last_large_system_mode = false
+  $effect(() => {
+    // Only act on the OFF transition (true → false). default-off ⇒ no-op at
+    // mount; ON ⇒ no-op (autoRender pauses, overlay paints). On OFF, autoRender
+    // flips back to true (the <Canvas> prop) and this bumps a repaint so the
+    // resumed WebGL render loop paints the current scene immediately.
+    const on = large_system_mode
+    if (_last_large_system_mode && !on) webgl_repaint_trigger++
+    _last_large_system_mode = on
+  })
   let pixels_per_angstrom = $state(0)
   let orbit_controls = $state<any>(undefined)
   let rotation_target_ref = $state<[number, number, number] | undefined>(undefined)
@@ -3588,7 +3602,17 @@
       <!-- prevent HTML labels from rendering outside of the canvas -->
       <div style="overflow: hidden; height: 100%; position: relative; z-index: 0; pointer-events: none">
         <div style="width: 100%; height: 100%; pointer-events: auto; position: relative">
-        <Canvas {...{ rendererParameters: { antialias: true, powerPreference: `high-performance` } } as any}>
+        <!--
+          autoRender is paused while large-system mode is ON: the WebGPU overlay
+          fully covers this WebGL canvas, so letting Threlte keep repainting the
+          whole scene every invalidate (each trajectory frame) just doubles GPU
+          load → lag. autoRender=false stops the WebGL PAINTS only; OrbitControls
+          still update the shared camera object the overlay reads, so camera
+          interaction keeps working under the overlay. Toggling the mode OFF
+          restores autoRender=true and an $effect below nudges a one-shot repaint
+          so the WebGL view isn't left on a stale/blank frame.
+        -->
+        <Canvas autoRender={!large_system_mode} {...{ rendererParameters: { antialias: true, powerPreference: `high-performance` } } as any}>
           <!--
             show_image_atoms is a separate bindable from scene_props.show_image_atoms
             (the UI checkbox binds to the local one). It must be passed AFTER the
@@ -3658,6 +3682,7 @@
             {center_camera_trigger}
             bind:lattice_align_trigger
             {reset_camera_up_trigger}
+            repaint_trigger={webgl_repaint_trigger}
             external_dragging={interaction.is_dragging_atom || interaction.is_rotating_atoms}
             is_box_selecting={interaction.is_box_selecting}
             is_rotating_atoms={interaction.is_rotating_atoms}
@@ -3775,6 +3800,8 @@
             {element_radius_overrides}
             {site_radius_overrides}
             bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
+            {background_color}
+            {background_opacity}
             {trajectory_positions_version}
             {get_trajectory_frame_positions}
             {trajectory_step_idx}

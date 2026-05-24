@@ -496,6 +496,7 @@
     center_camera_trigger = $bindable(0), // Increment this to trigger camera centering
     lattice_align_trigger = $bindable(0), // Increment to align camera with lattice a×b normal
     reset_camera_up_trigger = 0, // Increment to reset camera.up to [0,0,1] (Z-up) after slab cut
+    repaint_trigger = 0, // Increment to force ONE WebGL repaint (no side effects) — used when the large-system overlay closes and autoRender resumes
     external_dragging = false,
     is_box_selecting = false,
     is_rotating_atoms = false,
@@ -733,6 +734,7 @@
     center_camera_trigger?: number // Increment this to trigger camera centering
     lattice_align_trigger?: number // Increment to align camera with lattice a×b normal
     reset_camera_up_trigger?: number // Increment to reset camera.up to [0,0,1] (Z-up) after slab cut
+    repaint_trigger?: number // Increment to force ONE WebGL repaint (no side effects)
     hidden_elements?: Set<ElementSymbol>
     hidden_sites?: Set<number> // Track hidden individual sites (by site index)
     hidden_prop_vals?: Set<number | string> // Track hidden property values (e.g. coordination numbers, Wyckoff positions, charges)
@@ -994,6 +996,18 @@
   $effect(() => {
     void background_color; void background_opacity
     sync_clear_color()
+  })
+
+  // One-shot WebGL repaint on demand. The large-system overlay pauses this
+  // canvas's autoRender while it covers the view; when the overlay closes the
+  // parent bumps repaint_trigger so the resumed (on-demand) render loop paints
+  // the current scene once. mark_dirty() = threlte.invalidate(); no other side
+  // effects (no camera move). Default 0 ⇒ this never fires unless bumped.
+  let _last_repaint_trigger = repaint_trigger
+  $effect(() => {
+    if (repaint_trigger === _last_repaint_trigger) return
+    _last_repaint_trigger = repaint_trigger
+    mark_dirty()
   })
 
   $effect(() => {
