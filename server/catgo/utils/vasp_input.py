@@ -570,8 +570,14 @@ def generate_kpoints(
                 kpts=request.kpoints,
             )
     elif request.kspacing:
-        # Automatic k-points based on spacing
-        return Kpoints.automatic_density_by_vol(structure, request.kspacing)
+        # KSPACING (Å^-1, VASP semantics): N_i = max(1, ceil(|b_i| / kspacing)),
+        # where b_i are the 2*pi reciprocal-lattice vectors. (Previously this
+        # mis-used kspacing as a kppvol density, yielding 1x1x1 for small values.)
+        recip = structure.lattice.reciprocal_lattice.abc
+        mesh = [max(1, int(np.ceil(b / request.kspacing))) for b in recip]
+        if is_slab and mesh[2] > 1:
+            mesh[2] = 1
+        return Kpoints.gamma_automatic(kpts=(mesh[0], mesh[1], mesh[2]))
     else:
         # Default: automatic k-points
         kpts = Kpoints.automatic_density_by_vol(structure, 1000)
