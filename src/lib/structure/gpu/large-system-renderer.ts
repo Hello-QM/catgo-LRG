@@ -26,10 +26,12 @@ const CAMERA_FULL_BYTES = 144
 /** Bond Params uniform (BOND_COMPUTE_WGSL): 80 bytes, packed via pack_params. */
 const BOND_PARAMS_BYTES = 80
 
-/** Radial segments of the procedural cylinder. The side wall is a closed
- *  triangle-strip: 2 verts per segment boundary, (SEG+1) boundaries. */
+/** Radial segments of the procedural cylinder. The cylinder is a triangle-LIST
+ *  (no strip): SEG side-wall quads (2 tris = 6 verts each) plus two flat end-cap
+ *  fans (SEG tris = 3 verts each) so the cut ends are solid, not hollow tubes.
+ *  Side wall: SEG*6, each cap: SEG*3, two caps: SEG*6 => SEG*12 total. */
 const BOND_SEGMENTS = 12
-const BOND_VERTS_PER_CYLINDER = (BOND_SEGMENTS + 1) * 2
+const BOND_VERTS_PER_CYLINDER = BOND_SEGMENTS * 12
 
 /** Fixed bond cylinder radius (Å). Small constant; tunable. Uploaded to the
  *  bond render shader as part of its uniform so it can be retuned without a
@@ -198,8 +200,9 @@ fn build_args() {
  *    half 1: cylinder B      -> M1 = (B + partnerA) * 0.5
  *  For intra-cell bonds (jimage = 0) partnerB = B and partnerA = A, so
  *  M0 = M1 = (A+B)/2 and the two halves join into a seamless full cylinder.
- *  Verts trace a unit side-wall triangle-strip oriented to the half's axis and
- *  scaled to span start→end with a fixed radius. Depth uses the SAME GL→WebGPU
+ *  Verts trace a unit side-wall (triangle-list quads) plus two flat end-cap fans
+ *  oriented to the half's axis and scaled to span start→end with a fixed radius
+ *  so the cut ends read as solid disks, not hollow tubes. Depth uses the SAME GL→WebGPU
  *  clip-z remap as the atom impostor so bonds share the depth buffer and occlude
  *  / are occluded correctly. */
 const BOND_RENDER_WGSL = `
@@ -272,21 +275,67 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let tangent = normalize(cross(up, dir));
   let bitangent = cross(dir, tangent);
 
-  // Side-wall triangle-strip: pairs of (bottom, top) ring verts.
-  let seg = vi >> 1u;             // 0..SEG
-  let is_top = (vi & 1u) == 1u;   // alternate bottom/top
-  let ang = f32(seg) / f32(SEG) * PI2;
-  let radial = cos(ang) * tangent + sin(ang) * bitangent;
-  let base = select(start, end, is_top);
-  let world = base + radial * bond.radius_color.x;
+  // Triangle-LIST cylinder (no strip): SEG side-wall quads then two cap fans.
+  //   verts [0,             SEG*6)  -> side wall, 6 verts per segment quad
+  //   verts [SEG*6,         SEG*9)  -> start-end cap fan (faces -dir, toward atom)
+  //   verts [SEG*9,         SEG*12) -> end-end   cap fan (faces +dir, the midpoint)
+  let SIDE_END : u32 = SEG * 6u;
+  let CAP0_END : u32 = SEG * 9u;
+
+  var world : vec3<f32>;
+  var world_normal : vec3<f32>; // object-space normal at this vertex
+
+  if (vi < SIDE_END) {
+    // Side wall. Each segment is a quad (seg .. seg+1) split into 2 triangles:
+    //   tri layout per quad (6 verts): (b0,t0,b1)(b1,t0,t1)
+    //   b=bottom(start ring), t=top(end ring); 0=this angle, 1=next angle.
+    let seg = vi / 6u;            // 0..SEG-1
+    let k = vi % 6u;              // vertex within the quad's two triangles
+    // corner index ci in {0=b0,1=t0,2=b1,3=t1}
+    var ci : u32 = 0u;
+    if (k == 0u) { ci = 0u; }      // b0
+    else if (k == 1u) { ci = 1u; } // t0
+    else if (k == 2u) { ci = 2u; } // b1
+    else if (k == 3u) { ci = 2u; } // b1
+    else if (k == 4u) { ci = 1u; } // t0
+    else { ci = 3u; }              // t1
+    let next_ang = (ci == 2u) || (ci == 3u);
+    let is_top = (ci == 1u) || (ci == 3u);
+    let s = select(seg, seg + 1u, next_ang);
+    let ang = f32(s) / f32(SEG) * PI2;
+    let radial = cos(ang) * tangent + sin(ang) * bitangent;
+    let base = select(start, end, is_top);
+    world = base + radial * bond.radius_color.x;
+    world_normal = radial; // side-wall normal points radially outward
+  } else {
+    // Cap fan. Pick which end + facing direction, then build a triangle fan
+    // from the end-center to consecutive ring vertices.
+    let is_end_cap = vi >= CAP0_END;
+    let local = select(vi - SIDE_END, vi - CAP0_END, is_end_cap);
+    let center = select(start, end, is_end_cap);
+    // Cap normal is the axis direction: start cap faces -dir (toward atom),
+    // end cap faces +dir (the midpoint). Front-face winding handled by cullMode none.
+    let cap_normal = select(-dir, dir, is_end_cap);
+    let seg = local / 3u;          // 0..SEG-1
+    let corner = local % 3u;       // 0=center, 1=ring(seg), 2=ring(seg+1)
+    if (corner == 0u) {
+      world = center;
+    } else {
+      let s = select(seg, seg + 1u, corner == 2u);
+      let ang = f32(s) / f32(SEG) * PI2;
+      let radial = cos(ang) * tangent + sin(ang) * bitangent;
+      world = center + radial * bond.radius_color.x;
+    }
+    world_normal = cap_normal;
+  }
 
   let vpos4 = camera.view * vec4<f32>(world, 1.0);
   var clip = camera.proj * vpos4;
   // SAME GL->WebGPU NDC z remap as the atom impostor shader.
   clip.z = (clip.z + clip.w) * 0.5;
 
-  // View-space normal for lambert shading (radial direction in view space).
-  let vn4 = camera.view * vec4<f32>(radial, 0.0);
+  // View-space normal for lambert shading.
+  let vn4 = camera.view * vec4<f32>(world_normal, 0.0);
 
   var out : VsOut;
   out.clip = clip;
@@ -512,8 +561,9 @@ export function create_large_system_renderer(
     layout: device.createPipelineLayout({ bindGroupLayouts: [bond_render_bgl] }),
     vertex: { module: bond_render_module, entryPoint: `vs_main` },
     fragment: { module: bond_render_module, entryPoint: `fs_main`, targets: [{ format }] },
-    // Closed side-wall strip; cull nothing so thin cylinders never vanish.
-    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    // Capped cylinder is an explicit triangle-LIST (side-wall quads + 2 cap
+    // fans); cull nothing so caps render regardless of winding/view.
+    primitive: { topology: `triangle-list`, cullMode: `none` },
     depthStencil: {
       format: DEPTH_FORMAT,
       depthWriteEnabled: true,
