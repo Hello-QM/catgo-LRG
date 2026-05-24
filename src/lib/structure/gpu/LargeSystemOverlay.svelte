@@ -3,8 +3,9 @@
   import type { AnyStructure, ElementSymbol } from '$lib/structure'
   import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
   import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
-  import { pack_positions } from '$lib/structure/gpu/frame-buffers'
-  import { build_display_radii } from '$lib/structure/gpu/radius-lut'
+  import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
+  import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
+  import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
@@ -19,6 +20,7 @@
     same_size_atoms = false,
     element_radius_overrides = undefined,
     site_radius_overrides = undefined,
+    bonding_options = undefined,
     on_fallback = undefined,
   }: {
     enabled?: boolean
@@ -35,6 +37,10 @@
     element_radius_overrides?: Partial<Record<ElementSymbol, number>> | undefined
     /** Per-site radius overrides, mirrors the WebGL path. */
     site_radius_overrides?: Map<number, number> | undefined
+    /** App bond options (tolerance / max_bond_dist / …) driving GPU bond
+     *  detection. Same Record the CPU path reads (scene_props.bonding_options);
+     *  mapped via to_compute_options. */
+    bonding_options?: Record<string, number> | undefined
     on_fallback?: (reason: string) => void
   } = $props()
 
@@ -62,6 +68,51 @@
   let atom_radius_sig = ``
   // Set when buffers were rebuilt and must be re-uploaded to the GPU.
   let atoms_dirty = false
+
+  // Cached bond inputs, rebuilt only when the structure identity or bonding
+  // options change (not every frame). The renderer caches the compute dispatch
+  // by its own dirty flag; here we just decide WHEN to re-push set_bond_data.
+  let bond_source: AnyStructure | undefined = undefined
+  let bond_covalent: Float32Array = new Float32Array(0)
+  let bond_lattice: Float32Array = new Float32Array(9)
+  let bond_periodic = false
+  let bond_options_sig = ``
+  let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
+  // Set when bond inputs changed and must be re-pushed to the renderer.
+  let bonds_dirty = false
+
+  /** Cheap signature of the bonding options Record; changes when any cutoff
+   *  does so the GPU compute re-dispatches with the new value. */
+  function bond_options_signature(): string {
+    const o = bonding_options
+    if (!o) return ``
+    let s = ``
+    for (const k of Object.keys(o).sort()) s += `${k}=${o[k]};`
+    return s
+  }
+
+  /** Rebuild the bond inputs (covalent radii, lattice, options, periodicity)
+   *  when the structure identity or bonding options change. No-op otherwise. */
+  function rebuild_bonds_if_needed(): void {
+    const sig = bond_options_signature()
+    if (structure === bond_source && sig === bond_options_sig) return
+    bond_source = structure
+    bond_options_sig = sig
+    bonds_dirty = true
+    const sites = structure?.sites
+    if (!sites || sites.length === 0) {
+      bond_covalent = new Float32Array(0)
+      bond_lattice = new Float32Array(9)
+      bond_periodic = false
+      return
+    }
+    bond_covalent = build_atom_radii(sites)
+    // Periodic only when the structure carries a lattice (molecules don't).
+    const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
+    bond_lattice = pack_lattice(lat)
+    bond_periodic = !!lat
+    bond_compute_opts = to_compute_options(bonding_options ?? {})
+  }
 
   // Hex -> linear RGB, matching the WebGL path (Color.convertSRGBToLinear).
   const _col = new Color()
@@ -227,6 +278,18 @@
       dirty = true
     }
 
+    // Bond inputs: rebuild on structure/option change, then push to the renderer
+    // (which re-runs the GPU bond compute on its own dirty flag). Also re-push
+    // when atoms were re-uploaded, since set_atoms moves positions the compute
+    // depends on (the renderer already flags itself dirty there, but pushing
+    // keeps the covalent radii / count in lockstep with the atom buffer).
+    rebuild_bonds_if_needed()
+    if (bonds_dirty) {
+      renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_periodic)
+      bonds_dirty = false
+      dirty = true
+    }
+
     // Camera: pack always (cheap), upload + mark dirty only when it moved.
     if (camera) {
       camera.updateMatrixWorld()
@@ -261,6 +324,10 @@
     atom_colors_source = undefined
     atom_radius_sig = ``
     atoms_dirty = true
+    // Fresh renderer ⇒ fresh bond buffers; force a rebuild + re-push.
+    bond_source = undefined
+    bond_options_sig = ``
+    bonds_dirty = true
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     needs_render = true
@@ -332,6 +399,7 @@
     same_size_atoms
     element_radius_overrides
     site_radius_overrides
+    bonding_options
     if (renderer) {
       needs_render = true
       wake()
