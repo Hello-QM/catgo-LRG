@@ -78,7 +78,10 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let c = corner_for(vi);
   // Billboard in view space; bump radius slightly so the silhouette isn't clipped.
   let vpos = vc + vec3<f32>(c * r * 1.5, 0.0);
-  let clip = camera.proj * vec4<f32>(vpos, 1.0);
+  var clip = camera.proj * vec4<f32>(vpos, 1.0);
+  // three.js projectionMatrix uses GL NDC z in [-1,1]; WebGPU clip space needs
+  // 0 <= z <= w (NDC z in [0,1]). Remap before returning @builtin(position).
+  clip.z = (clip.z + clip.w) * 0.5;
 
   var out : VsOut;
   out.clip = clip;
@@ -113,11 +116,13 @@ fn fs_main(in : VsOut) -> FsOut {
   let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
   let lighting = 0.35 + 0.65 * max(dot(n, light_dir), 0.0);
 
-  // Correct depth: project the hit point and write NDC z (WebGPU range 0..1).
+  // Correct depth: project the hit point, apply the same GL->WebGPU z remap as
+  // the vertex stage, then perspective-divide into NDC z (WebGPU range 0..1).
   let clip_h = camera.proj * vec4<f32>(p, 1.0);
+  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
 
   var out : FsOut;
-  out.depth = clip_h.z / clip_h.w;
+  out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
   out.color = vec4<f32>(in.color * lighting, 1.0);
   return out;
 }
@@ -197,7 +202,9 @@ export function create_large_system_renderer(
     layout: device.createPipelineLayout({ bindGroupLayouts: [bind_group_layout] }),
     vertex: { module: shader, entryPoint: `vs_main` },
     fragment: { module: shader, entryPoint: `fs_main`, targets: [{ format }] },
-    primitive: { topology: `triangle-strip` },
+    // Camera-facing billboards must never be back-face culled — winding flips
+    // depending on view, so cull nothing.
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
     depthStencil: {
       format: DEPTH_FORMAT,
       depthWriteEnabled: true,
@@ -236,6 +243,10 @@ export function create_large_system_renderer(
 
   let destroyed = false
 
+  // TODO(9.2-debug) remove — capture the last full camera uniform + log once.
+  let _dbg_last_cam: Float32Array | null = null
+  let _dbg_logged_cam = false
+
   return {
     set_camera(uniform: Float32Array): void {
       if (destroyed) return
@@ -246,6 +257,7 @@ export function create_large_system_renderer(
     },
     set_camera_full(uniform: Float32Array): void {
       if (destroyed) return
+      _dbg_last_cam = uniform // TODO(9.2-debug) remove
       const bytes = Math.min(uniform.byteLength, CAMERA_FULL_BYTES)
       device.queue.writeBuffer(camera_buffer, 0, uniform.buffer, uniform.byteOffset, bytes)
     },
@@ -256,6 +268,8 @@ export function create_large_system_renderer(
       count: number,
     ): void {
       if (destroyed) return
+      // TODO(9.2-debug) remove
+      console.log(`[lsr] set_atoms count=`, count, `pos0=`, Array.from(positions.slice(0, 3)), `r0=`, radii[0], `col0=`, Array.from(colors.slice(0, 3)))
       atom_count = Math.max(0, count)
       if (atom_count === 0) return
 
@@ -300,6 +314,16 @@ export function create_large_system_renderer(
     },
     render(): void {
       if (destroyed) return
+      // TODO(9.2-debug) remove — log the camera uniform sample on the first frame.
+      if (!_dbg_logged_cam && _dbg_last_cam) {
+        _dbg_logged_cam = true
+        const u = _dbg_last_cam
+        console.log(
+          `[lsr] cam uniform view0..3=`, Array.from(u.slice(0, 4)),
+          `proj0..3=`, Array.from(u.slice(16, 20)),
+          `camPos=`, Array.from(u.slice(32, 35)),
+        )
+      }
       if (!depth_view) ensure_depth(canvas.width || 1, canvas.height || 1)
       const encoder = device.createCommandEncoder({ label: `large-system-frame` })
       const view = context.getCurrentTexture().createView()
