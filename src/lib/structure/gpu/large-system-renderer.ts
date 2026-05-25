@@ -62,6 +62,13 @@ const CLEAR_COLOR: GPUColor = { r: 0.02, g: 0.03, b: 0.05, a: 1 }
 
 const DEPTH_FORMAT: GPUTextureFormat = `depth24plus`
 
+/** MSAA sample count for the overlay. 4× MSAA + alpha-to-coverage gives the
+ *  impostor silhouettes (defined by fragment discard / ray-miss) smooth,
+ *  analytically-AA'd edges that match the WebGL view's `antialias:true`. Both
+ *  the color and depth render targets are multisampled at this count; the color
+ *  target resolves into the swapchain texture each frame. */
+const SAMPLE_COUNT = 4
+
 /** WGSL cell-box line shader. Draws the 12 edges of the parallelepiped spanned
  *  by lattice vectors a,b,c as a `line-list` (24 vertices = 12 edges × 2 ends).
  *  Corners are generated in the vertex shader from a lattice uniform: the cell
@@ -214,10 +221,23 @@ fn fs_main(in : VsOut) -> FsOut {
   let b = dot(oc, rd);
   let c = dot(oc, oc) - in.radius * in.radius;
   let disc = b * b - c;
-  if (disc < 0.0) {
+
+  // ── Analytic silhouette coverage (alpha-to-coverage AA) ────────────────────
+  // disc = r^2 - d_perp^2 where d_perp is the eye-ray's perpendicular distance
+  // to the center: >0 inside the disk, =0 exactly on the silhouette. This is a
+  // SMOOTH varying of the interpolated ray (in.vpos), so fwidth() gives the
+  // screen-space width of the silhouette band. coverage ramps 0->1 across that
+  // ~1px band; output as alpha so alpha-to-coverage turns it into fractional
+  // MSAA sample coverage -> smooth curved edges (plain MSAA can't smooth a
+  // hard discard edge).
+  let fw = fwidth(disc);
+  let coverage = clamp(disc / max(fw, 1e-8) + 0.5, 0.0, 1.0);
+  if (coverage <= 0.0) {
     discard;
   }
-  let t = -b - sqrt(disc); // near hit
+  // Near hit. In the thin edge band disc may be ~0 (sqrt≈0), so the hit point
+  // sits on the silhouette — its depth is the right value for that band.
+  let t = -b - sqrt(max(disc, 0.0)); // near hit
   if (t < 0.0) {
     discard;
   }
@@ -234,7 +254,9 @@ fn fs_main(in : VsOut) -> FsOut {
 
   var out : FsOut;
   out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
-  out.color = vec4<f32>(in.color * lighting, 1.0);
+  // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled, so
+  // the color target stays opaque.
+  out.color = vec4<f32>(in.color * lighting, coverage);
   return out;
 }
 `
@@ -524,7 +546,64 @@ fn fs_main(in : VsOut) -> FsOut {
     }
   }
 
-  if (!found) { discard; }
+  // ── Analytic capsule silhouette coverage (alpha-to-coverage AA) ─────────────
+  // The exact body/cap ray-test above sets found (a binary edge); plain MSAA
+  // can't smooth that. We deliberately do NOT discard on !found yet — a fragment
+  // just outside the solid still lies in the thin silhouette band below and must
+  // survive to receive fractional coverage. Build a SMOOTH signed inside-measure
+  // of the finite-capsule silhouette and convert it to fractional coverage so
+  // alpha-to-coverage AAs the body and cap edges.
+  //
+  // For the eye ray (origin 0, dir rd) we measure perpendicular distance to the
+  // axis SEGMENT [pa,pb] and combine with the two cap planes:
+  //   body_inside = r - dist(ray, axis-line)              (radial silhouette)
+  //   cap-axial   = clamp the closest-approach axial coord into [0,clen]
+  // We sample the ray at its closest approach to the axis line, clamp that
+  // point onto the segment, and take measure = r - |closest point on ray to the
+  // segment|. This is the standard ray↔segment capsule distance and is a smooth
+  // varying of the interpolated rd, so fwidth() yields the screen-space edge
+  // width. measure>0 inside the projected capsule, =0 on the silhouette.
+  //
+  // Closest approach between the eye ray (P=rd*t, t>=0) and the axis line
+  // (Q=pa+axis*s): solve the 2x2 least-squares for (t,s) using rd·rd=1.
+  let rda = dot(rd, axis);          // = rd_a, reuse-friendly
+  let denom_cl = 1.0 - rda * rda;   // = |rd x axis|^2 (rd is unit)
+  let w0 = -pa;                     // O - pa, O=0
+  let d_w = dot(rd, w0);
+  let e_w = dot(axis, w0);
+  // t along the ray, s along the axis line, at mutual closest approach.
+  var t_cl = 0.0;
+  var s_cl = 0.0;
+  if (denom_cl > 1e-7) {
+    t_cl = (rda * e_w - d_w) / denom_cl;
+    s_cl = (e_w - rda * d_w) / denom_cl;
+  } else {
+    // Ray ~parallel to axis (end-on): project onto the ray.
+    t_cl = -d_w;
+    s_cl = 0.0;
+  }
+  t_cl = max(t_cl, 0.0);            // ray only extends forward
+  s_cl = clamp(s_cl, 0.0, clen);    // clamp onto the finite axis SEGMENT
+  let p_ray = rd * t_cl;            // closest ray point
+  let p_seg = pa + axis * s_cl;     // closest segment point
+  let gap = length(p_ray - p_seg);  // capsule surface distance proxy
+  let measure = r - gap;            // >0 inside silhouette, =0 on edge
+  let fw = fwidth(measure);
+  let coverage = clamp(measure / max(fw, 1e-8) + 0.5, 0.0, 1.0);
+
+  // Inside the solid (found) → full coverage; only the thin silhouette band gets
+  // fractional coverage. If neither the exact solid test nor the analytic band
+  // covers this fragment, discard.
+  let cov = select(coverage, 1.0, found);
+  if (cov <= 0.0) { discard; }
+
+  // For the thin AA band where the exact ray-test missed, fall back to the
+  // capsule-surface point for normal + depth so the edge band shades/depths
+  // consistently with the solid body.
+  if (!found) {
+    hit_p = p_ray;
+    hit_n = normalize(p_ray - p_seg);
+  }
 
   let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
   let lighting = 0.35 + 0.65 * max(dot(hit_n, light_dir), 0.0);
@@ -536,7 +615,8 @@ fn fs_main(in : VsOut) -> FsOut {
 
   var out : FsOut;
   out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
-  out.color = vec4<f32>(in.color * lighting, 1.0);
+  // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled.
+  out.color = vec4<f32>(in.color * lighting, cov);
   return out;
 }
 `
@@ -630,7 +710,13 @@ export function create_large_system_renderer(
   let atom_capacity = 0 // instances the current buffers can hold
   let atom_count = 0 // instances to draw this frame
 
-  // Depth texture, sized to the canvas; recreated on resize.
+  // MSAA render targets, sized to the canvas backing store; recreated on resize.
+  // - msaa_color: 4× multisampled COLOR target (canvas format). The render pass
+  //   draws into this and RESOLVES into the swapchain texture each frame.
+  // - depth_texture: 4× multisampled DEPTH target (depth24plus). Must match the
+  //   color sampleCount so the pipelines (multisample.count = 4) are valid.
+  let msaa_color_texture: GPUTexture | null = null
+  let msaa_color_view: GPUTextureView | null = null
   let depth_texture: GPUTexture | null = null
   let depth_view: GPUTextureView | null = null
 
@@ -730,6 +816,11 @@ export function create_large_system_renderer(
       depthWriteEnabled: true,
       depthCompare: `less`,
     },
+    // 4× MSAA. alphaToCoverageEnabled turns the fragment's alpha (= analytic
+    // silhouette coverage) into fractional MSAA sample coverage, so the curved
+    // sphere edge — defined by ray-miss discard — gets antialiased. The color
+    // target stays opaque (no blend); alpha is consumed ONLY as coverage.
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
   })
 
   // Bond-detect compute (the already-validated BOND_COMPUTE_WGSL). auto layout
@@ -793,6 +884,10 @@ export function create_large_system_renderer(
       depthWriteEnabled: true,
       depthCompare: `less`,
     },
+    // 4× MSAA + alpha-to-coverage: same as the atom impostor. The capsule
+    // silhouette (body + caps), defined by ray-miss discard, outputs fractional
+    // coverage as alpha so the curved/grazing bond edges are smoothly AA'd.
+    multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
   })
 
   // Cell-box render: 12 edges as a thin line-list. Binds camera + cell uniform.
@@ -818,6 +913,10 @@ export function create_large_system_renderer(
       depthWriteEnabled: true,
       depthCompare: `less`,
     },
+    // 4× MSAA so the opaque cell lines share the multisampled targets and get
+    // geometric edge AA. No alpha-to-coverage — lines aren't silhouette-discard
+    // impostors, and the fragment alpha stays 1 (fully opaque).
+    multisample: { count: SAMPLE_COUNT },
   })
   const cell_bind_group = device.createBindGroup({
     label: `large-system-cell-bg`,
@@ -849,17 +948,34 @@ export function create_large_system_renderer(
     )
   }
 
-  function ensure_depth(w: number, h: number): void {
+  // (Re)create both MSAA render targets (color + depth) at the canvas backing
+  // size. Destroy the old textures first so resize never leaks. Both are
+  // multisampled at SAMPLE_COUNT — the color resolves into the swapchain, the
+  // depth is transient (storeOp:`discard` is fine but we keep `store` for
+  // simplicity; nothing reads it after the pass).
+  function ensure_targets(w: number, h: number): void {
+    const width = Math.max(1, w)
+    const height = Math.max(1, h)
+    msaa_color_texture?.destroy()
     depth_texture?.destroy()
+    msaa_color_texture = device.createTexture({
+      label: `large-system-msaa-color`,
+      size: { width, height },
+      format,
+      sampleCount: SAMPLE_COUNT,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    })
+    msaa_color_view = msaa_color_texture.createView()
     depth_texture = device.createTexture({
       label: `large-system-depth`,
-      size: { width: Math.max(1, w), height: Math.max(1, h) },
+      size: { width, height },
       format: DEPTH_FORMAT,
+      sampleCount: SAMPLE_COUNT,
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
     depth_view = depth_texture.createView()
   }
-  ensure_depth(canvas.width || 1, canvas.height || 1)
+  ensure_targets(canvas.width || 1, canvas.height || 1)
 
   function rebuild_bind_group(): void {
     if (!positions_buffer || !radii_buffer || !colors_buffer) {
@@ -1115,7 +1231,7 @@ export function create_large_system_renderer(
     },
     render(): void {
       if (destroyed) return
-      if (!depth_view) ensure_depth(canvas.width || 1, canvas.height || 1)
+      if (!depth_view || !msaa_color_view) ensure_targets(canvas.width || 1, canvas.height || 1)
       const encoder = device.createCommandEncoder({ label: `large-system-frame` })
 
       // Whether bonds are renderable this frame (inputs present + atoms).
@@ -1156,11 +1272,15 @@ export function create_large_system_renderer(
         bonds_dirty = false
       }
 
-      const view = context.getCurrentTexture().createView()
+      // Draw into the multisampled color target, RESOLVE into the swapchain
+      // texture. storeOp:`store` performs the MSAA→single-sample resolve into
+      // resolveTarget at the end of the pass.
+      const swapchain_view = context.getCurrentTexture().createView()
       const pass = encoder.beginRenderPass({
         colorAttachments: [
           {
-            view,
+            view: msaa_color_view as GPUTextureView,
+            resolveTarget: swapchain_view,
             clearValue: clear_color,
             loadOp: `clear`,
             storeOp: `store`,
@@ -1201,7 +1321,7 @@ export function create_large_system_renderer(
       if (destroyed) return
       canvas.width = Math.max(1, Math.floor(w))
       canvas.height = Math.max(1, Math.floor(h))
-      ensure_depth(canvas.width, canvas.height)
+      ensure_targets(canvas.width, canvas.height)
     },
     destroy(): void {
       if (destroyed) return
@@ -1215,6 +1335,7 @@ export function create_large_system_renderer(
       positions_buffer?.destroy()
       radii_buffer?.destroy()
       colors_buffer?.destroy()
+      msaa_color_texture?.destroy()
       depth_texture?.destroy()
       // Bond resources.
       covalent_buffer?.destroy()
@@ -1230,6 +1351,8 @@ export function create_large_system_renderer(
       colors_buffer = null
       covalent_buffer = null
       pairs_buffer = null
+      msaa_color_texture = null
+      msaa_color_view = null
       depth_texture = null
       depth_view = null
       bind_group = null
