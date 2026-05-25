@@ -43,8 +43,8 @@ RUN --mount=type=cache,target=/pnpm/store \
 # Full source (after manifests for cache reuse)
 COPY . .
 
-# Build WASM extension and place where frontend expects it
-# Crate is named "ferrox" but frontend imports "chgdiff_wasm" — rename outputs.
+# Build all WASM extensions and place where frontend expects them.
+# 1) ferrox (extensions/rust-wasm) → frontend expects "chgdiff_wasm"
 RUN cd extensions/rust-wasm && pnpm build \
     && cp -r pkg /app/src/lib/electronic/chgdiff-wasm-pkg \
     && cd /app/src/lib/electronic/chgdiff-wasm-pkg \
@@ -52,6 +52,12 @@ RUN cd extensions/rust-wasm && pnpm build \
     && mv ferrox_bg.wasm chgdiff_wasm_bg.wasm \
     && mv ferrox.d.ts chgdiff_wasm.d.ts 2>/dev/null || true \
     && sed -i 's/ferrox_bg\.wasm/chgdiff_wasm_bg.wasm/g' chgdiff_wasm.js
+
+# 2) catrender-wasm → frontend expects "catrender_wasm"
+RUN cd extensions/catrender-wasm \
+    && wasm-pack build --target web --out-dir /app/src/lib/structure/catrender/catrender-wasm-pkg \
+    && cd /app/src/lib/structure/catrender/catrender-wasm-pkg \
+    && mv catrender_wasm.js catrender_wasm.js 2>/dev/null || true
 
 # Generate docs-chunks.json for RAG
 RUN pnpm build:doc-chunks
