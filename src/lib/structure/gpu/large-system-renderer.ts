@@ -1146,8 +1146,8 @@ export function create_large_system_renderer(
   /** Fixed pixel geometry of the corner gizmo. The triad region is ~2·GIZMO_PX
    *  wide (each axis reaches GIZMO_PX from the origin), placed GIZMO_MARGIN_PX in
    *  from the bottom-left corner — matching the WebGL Gizmo's offset:{left,bottom}. */
-  const GIZMO_PX = 42
-  const GIZMO_MARGIN_PX = 12
+  const GIZMO_PX = 72
+  const GIZMO_MARGIN_PX = 20
 
   /** Pack + upload the gizmo placement uniform from the canvas backing size.
    *  - center_ndc: bottom-left corner anchor in NDC. NDC x∈[-1,1] (right), y∈
