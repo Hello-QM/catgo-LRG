@@ -104,11 +104,18 @@
         active_file = `${prefix}.in`
       }
     } catch (e) {
-      if (e instanceof TypeError && e.message.includes('fetch')) {
-        generated_output = { [`${prefix}.in`]: gen_qe_local() }
+      // Backend unavailable or errored (network failure, non-OK status, or
+      // {success:false}) — fall back to fully client-side generation so the web
+      // build can still produce a QE input.
+      try {
+        const inp = gen_qe_local()
+        generated_output = { [`${prefix}.in`]: inp }
         if (qe_dos_enabled) generated_output[`${prefix}.dos.in`] = gen_dos_input()
         active_file = `${prefix}.in`
-      } else generation_error = e instanceof Error ? e.message : 'Failed'
+      } catch (localErr) {
+        generation_error = localErr instanceof Error ? localErr.message
+          : (e instanceof Error ? e.message : 'Failed to generate QE input')
+      }
     }
   }
 </script>

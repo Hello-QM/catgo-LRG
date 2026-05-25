@@ -178,11 +178,17 @@
         }
       }
     } catch (e) {
-      if (e instanceof TypeError && e.message.includes('fetch')) {
+      // Backend unavailable or errored (network failure, non-OK status, or
+      // server-side failure) — fall back to fully client-side generation so the
+      // web build can still produce LAMMPS inputs.
+      try {
         const local = gen_lammps_local()
         generated_output = { [`${prefix}.in`]: local.input, [`${prefix}.data`]: local.data }
         active_file = `${prefix}.in`
-      } else generation_error = e instanceof Error ? e.message : 'Failed'
+      } catch (localErr) {
+        generation_error = localErr instanceof Error ? localErr.message
+          : (e instanceof Error ? e.message : 'Failed')
+      }
     }
   }
 
