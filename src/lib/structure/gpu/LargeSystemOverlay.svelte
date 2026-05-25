@@ -549,10 +549,16 @@
   const CLICK_MOVE_PX = 4
 
   /** Pick the atom under the given CLIENT (cursor) coords and notify the parent.
-   *  Maps client → canvas-local CSS px → device px (× devicePixelRatio), the same
-   *  space the pick id texture is rendered at. Only fires when the cursor is over
-   *  the canvas. Calls on_pick(site_idx) with the picked base site index, or -1
-   *  for background (empty space) so the parent can clear the selection. */
+   *  Maps client → canvas-local CSS px → DEVICE px, the space the pick id texture
+   *  is rendered at. The device scale is derived from the ACTUAL backing-store
+   *  size (`canvas.width/height`) over the CSS box (`rect.width/height`), NOT from
+   *  `devicePixelRatio` directly — the renderer sized the backing store to
+   *  `clientWidth * dpr` then floored it, so the true per-axis scale can differ
+   *  slightly from a bare `dpr` (fractional DPR, sub-pixel CSS rounding). Using
+   *  the real ratio keeps the cursor texel exact and matches how `pick()` indexes
+   *  the texture (sized to `canvas.width/height`). Only fires when the cursor is
+   *  over the canvas. Calls on_pick(site_idx) with the picked base site index, or
+   *  -1 for background (empty space) so the parent can clear the selection. */
   async function pick_at_client(client_x: number, client_y: number): Promise<void> {
     if (!renderer || !canvas || !on_pick) return
     const rect = canvas.getBoundingClientRect()
@@ -563,10 +569,23 @@
     ) {
       return
     }
+    // CSS-px offset within the canvas box, then scale by backing/CSS so the
+    // result lands in the pick texture's device-pixel space exactly.
+    const scale_x = rect.width > 0 ? canvas.width / rect.width : 1
+    const scale_y = rect.height > 0 ? canvas.height / rect.height : 1
+    const x = (client_x - rect.left) * scale_x
+    const y = (client_y - rect.top) * scale_y
+    // TODO(pick-debug): strip once verified. Logs the full client→device mapping.
     const dpr = typeof window !== `undefined` ? window.devicePixelRatio || 1 : 1
-    const x = (client_x - rect.left) * dpr
-    const y = (client_y - rect.top) * dpr
+    console.log(`[pick-debug] client`, { client_x, client_y }, `rect`, {
+      left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+    }, `dpr`, dpr, `canvas`, { w: canvas.width, h: canvas.height }, `scale`, {
+      scale_x, scale_y,
+    }, `device`, { x, y })
     const idx = await renderer.pick(x, y)
+    // TODO(pick-debug): strip once verified. Logs the picked index + selection.
+    console.log(`[pick-debug] on_pick(base_idx=`, idx, `) selected_sites(before)=`,
+      [...(selected_sites ?? [])])
     on_pick(idx)
   }
 
