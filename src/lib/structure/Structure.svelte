@@ -187,6 +187,14 @@
   // so the second allocation is discarded (small one-time cost).
   let scene_atom_manager = $state(new AtomManager())
 
+  // WebGPU overlay bridge: bound from StructureScene. Returns the live
+  // per-displayed-atom current-frame position array (3 × n_displayed) the
+  // WebGL atoms/bonds render at (StructureScene.atom_positions_buffer:
+  // displayed-topology base overlaid with the manager's per-frame positions).
+  // The overlay calls this so its positions match the WebGL view atom-for-atom
+  // instead of re-deriving from base-only trajectory data. Null until mount.
+  let scene_get_displayed_frame_positions = $state<(() => Float32Array) | null>(null)
+
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
   const charge_state = create_charge_labels_state()
@@ -1184,12 +1192,22 @@
   // here means an accidental Phase 4 leak into Phase 2.
   let __traj_write_warned_supercell = false
   $effect(() => {
-    // WebGPU overlay active: skip per-frame writes into the WebGL atom_manager.
-    // Read suspend FIRST (reactive) so resume (suspended→false) re-fires this
-    // effect and the manager catches up to the current frame. The overlay
-    // drives its own atoms from get_trajectory_frame_positions and does NOT
-    // read scene_atom_manager, so suspending here costs the overlay nothing.
-    if (webgl_suspended) return
+    // This effect writes the current frame's xyz into the WebGL atom_manager
+    // (a plain typed-array scatter — no GPU paint by itself; Threlte 8 is
+    // render-on-demand and autoRender is off while the overlay is active). It
+    // runs in BOTH modes on purpose:
+    //   - WebGL active: drives the WebGL atoms/bonds per frame as before.
+    //   - WebGPU overlay active (`webgl_suspended`): the EXPENSIVE WebGL
+    //     pipelines (X2 full diff, bond-pair rebuild, bond worker) stay gated
+    //     in StructureScene, but we still keep the manager's positions current
+    //     so StructureScene's `atom_positions_buffer` resolves the live frame.
+    //     That buffer is the SINGLE SOURCE OF TRUTH the overlay now consumes
+    //     (via get_displayed_frame_positions) so its atoms/bonds match the
+    //     WebGL view atom-for-atom — including the supercell base-block /
+    //     replica-static behaviour, which is decided HERE (max_slot bound) and
+    //     reused rather than re-guessed in the overlay.
+    // We do NOT early-return on webgl_suspended: the cheap manager write is
+    // what makes the overlay's positions identical to the WebGL resolver.
     const traj = trajectory_frame_positions
     if (!traj) {
       __traj_write_warned_supercell = false
@@ -3796,6 +3814,7 @@
             bond_manager={pencil.bond_manager}
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
+            bind:get_displayed_frame_positions={scene_get_displayed_frame_positions}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -3876,8 +3895,8 @@
             show_cell={scene_props.show_cell}
             cell_edge_color={scene_props.cell_edge_color}
             {trajectory_positions_version}
-            {get_trajectory_frame_positions}
             {trajectory_step_idx}
+            get_displayed_frame_positions={scene_get_displayed_frame_positions}
             selected_sites={overlay_selected_displayed}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {

@@ -32,7 +32,7 @@
     show_cell = false,
     cell_edge_color = `#808080`,
     trajectory_positions_version = undefined,
-    get_trajectory_frame_positions = undefined,
+    get_displayed_frame_positions = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
     selected_sites = [],
@@ -41,10 +41,12 @@
     enabled?: boolean
     camera?: Camera | undefined
     /** Current displayed structure whose atoms render as impostor spheres.
-     *  During trajectory playback this carries the BASE topology (elements,
-     *  count, and frame-0 xyz) — the per-frame xyz come from
-     *  get_trajectory_frame_positions, NOT from this object (whose identity /
-     *  .sites[i].xyz stay static across frames in the fast path). */
+     *  During trajectory playback this carries the BASE/displayed topology
+     *  (elements, count, supercell/PBC-image layout, and frame-0 xyz) — the
+     *  per-frame xyz come from get_displayed_frame_positions, NOT from this
+     *  object (whose identity / .sites[i].xyz stay static across frames in the
+     *  fast path). The element/count/layout here MUST match the resolver's
+     *  array index-for-index (both are the displayed-structure site order). */
     structure?: AnyStructure | undefined
     /** Per-element hex colors (e.g. state colors.element). */
     element_colors?: Partial<Record<ElementSymbol, string>> | undefined
@@ -103,14 +105,21 @@
      *  re-upload. `.all` (edit-all fan-out) is not needed here; we always
      *  re-extract the whole frame. */
     trajectory_positions_version?: { v: number; all: boolean } | undefined
-    /** Authoritative per-frame position source. Returns the frame's xyz as a
-     *  flat Float32Array(3N) indexed identically to `structure.sites` (same
-     *  array the CPU bond cache + WebGL atom write loop consume). null for
-     *  indexed/streaming frames not in memory (then we fall back to the
-     *  structure's own sites xyz). */
-    get_trajectory_frame_positions?: ((i: number) => Float32Array | null) | null | undefined
-    /** Current trajectory frame index; the argument to
-     *  get_trajectory_frame_positions. -1 when no trajectory is active. */
+    /** Authoritative per-DISPLAYED-atom position source. Returns the current
+     *  frame's xyz as a flat Float32Array(3 × n_displayed) indexed identically
+     *  to `structure.sites` (the SAME array the WebGL atoms/bonds are drawn at:
+     *  StructureScene.atom_positions_buffer — displayed-topology base overlaid
+     *  with the manager's per-frame positions via site_ids_buffer). The overlay
+     *  consumes this directly instead of re-deriving from base-only trajectory
+     *  data, so its atoms/bonds match the WebGL view atom-for-atom — including
+     *  the supercell base-block-animates / replica-static behaviour the WebGL
+     *  position-write loop decides. null/undefined ⇒ fall back to the
+     *  structure's own static sites xyz (no trajectory, or pre-mount). */
+    get_displayed_frame_positions?: (() => Float32Array) | null | undefined
+    /** Current trajectory frame index. -1 when no trajectory is active. Used
+     *  (with trajectory_positions_version.v) only as the per-frame REFRESH
+     *  TRIGGER — when it changes the overlay re-pulls get_displayed_frame_positions.
+     *  The position values themselves come from that getter, not this index. */
     trajectory_step_idx?: number
     on_fallback?: (reason: string) => void
     /** App selection state (base site indices, same as the WebGL path's
@@ -295,44 +304,39 @@
   // one. Compared per frame so a static cell never re-uploads.
   let frame_lattice_sig = ``
 
-  /** Re-extract the current frame's xyz from the authoritative per-frame
-   *  source and mark positions (+ bonds) dirty. Falls back to the structure's
-   *  own sites xyz when the getter yields nothing (indexed/streaming frames, or
-   *  no trajectory at all — in which case structure.sites already holds the
-   *  static positions and this is a harmless no-op re-upload). For variable-cell
-   *  trajectories also re-checks the lattice and re-pushes bond data when it
-   *  moved. */
+  /** Re-extract the current frame's per-DISPLAYED-atom xyz from the shared
+   *  WebGL resolver and mark positions (+ bonds) dirty. Falls back to the
+   *  structure's own static sites xyz when the getter is unavailable (no
+   *  trajectory active, or pre-mount before StructureScene bound the getter —
+   *  in which case structure.sites already holds the static positions and this
+   *  is a harmless re-upload). For variable-cell trajectories also re-checks the
+   *  lattice and re-pushes bond data when it moved. */
   function refresh_frame_positions(): void {
     last_pos_version = trajectory_positions_version?.v ?? -1
     last_step_idx = trajectory_step_idx
     const sites = structure?.sites
     if (!sites || sites.length === 0) return
+    // SINGLE SOURCE OF TRUTH: get_displayed_frame_positions() returns the exact
+    // per-displayed-atom position array the WebGL atoms/bonds are drawn at
+    // (StructureScene.atom_positions_buffer) — already resolved for supercell /
+    // PBC-image atoms (base atoms carry the current trajectory frame, replicas
+    // stay at their topology positions, exactly as the WebGL view shows). We
+    // consume it as-is: no base→displayed remapping, no partial-apply guess.
     let pos: Float32Array | null = null
-    if (get_trajectory_frame_positions && trajectory_step_idx >= 0) {
-      pos = get_trajectory_frame_positions(trajectory_step_idx)
+    if (get_displayed_frame_positions) pos = get_displayed_frame_positions()
+    // Guard against a length mismatch (e.g. the resolver lagging a supercell
+    // change by one tick): if the resolved array doesn't cover the current
+    // displayed atom set, fall back to the structure's own static sites xyz so
+    // we never index out of bounds or upload a short buffer. The topology_dirty
+    // path re-fires once the resolver catches up.
+    if (pos && pos.length === sites.length * 3) {
+      // Copy into a private buffer so a later in-place mutation of the shared
+      // $derived array can't corrupt what we already uploaded.
+      if (frame_positions.length !== pos.length) frame_positions = new Float32Array(pos.length)
+      frame_positions.set(pos)
+    } else {
+      frame_positions = pack_positions(sites)
     }
-    // The getter is indexed against the BASE frame sites; when the displayed
-    // structure carries supercell / PBC-image atoms it is LONGER than the
-    // getter's array (base + replicas). PARTIAL-APPLY rather than all-or-nothing:
-    //   1. Start from the static topology positions for EVERY displayed atom
-    //      (pack_positions(sites)) — this gives the replica/image atoms their
-    //      correct topology-load positions (the documented supercell limitation).
-    //   2. If the getter yielded per-frame xyz (non-null), OVERWRITE the leading
-    //      floats with it — those are the BASE atoms, which therefore ANIMATE per
-    //      frame. We copy min(frame_pos.length, topology.length) floats so a short
-    //      OR an oversized getter array can never write out of bounds.
-    //   3. Replica/image atoms (beyond the base block) keep their topology xyz.
-    // Result: non-supercell (frame_pos covers all atoms) ⇒ every atom gets its
-    // per-frame xyz, identical to before. Supercell (frame_pos covers only the
-    // base block) ⇒ base atoms animate, replicas stay at topology — the
-    // trajectory PLAYS instead of freezing on frame 1. Getter null/unavailable ⇒
-    // pure static topology positions, exactly as the prior fallback.
-    const topology = pack_positions(sites)
-    if (pos) {
-      const n = Math.min(pos.length, topology.length)
-      topology.set(pos.subarray(0, n))
-    }
-    frame_positions = topology
     positions_dirty = true
 
     // Variable-cell: if the displayed lattice changed, the bond compute + bond

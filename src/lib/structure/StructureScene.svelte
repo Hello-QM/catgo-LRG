@@ -557,6 +557,16 @@
     // Without the parent binding, this default keeps StructureScene self-
     // contained for any test harness that mounts it directly.
     atom_manager = $bindable<AtomManager>(new AtomManager()),
+    // WebGPU large-system overlay bridge: a getter the parent can call to read
+    // the AUTHORITATIVE per-displayed-atom current-frame position array the
+    // WebGL atoms/bonds are drawn at — `atom_positions_buffer` (topology base
+    // overlaid with the manager's per-frame positions via site_ids_buffer,
+    // indexed by displayed site index, 3 × n_displayed). The overlay consumes
+    // this instead of re-deriving from base-only trajectory data, so the two
+    // views match atom-for-atom (incl. supercell base-block / replica-static
+    // behaviour). Bound out as a function so the parent always reads the LIVE
+    // $derived value, not a stale snapshot.
+    get_displayed_frame_positions = $bindable<(() => Float32Array) | null>(null),
     deleted_bond_keys = new Set<string>(),
     selected_bonds = $bindable([] as import('./index').SelectedBond[]),
     bond_first_atom = null as number | null,
@@ -809,6 +819,9 @@
     atom_fast_ops?: AtomFastOps | null
     /** Plan v3 Phase 1: atom_manager $bindable for parent-driven position writes. */
     atom_manager?: AtomManager
+    /** WebGPU overlay bridge: getter returning the live per-displayed-atom
+     *  current-frame position array (3 × n_displayed) the WebGL view renders. */
+    get_displayed_frame_positions?: (() => Float32Array) | null
     deleted_bond_keys?: Set<string>
     selected_bonds?: import('./index').SelectedBond[]
     bond_first_atom?: number | null
@@ -3305,6 +3318,18 @@
       buf[sid * 3 + 2] = mgr.get_z(slot)
     }
     return buf
+  })
+
+  // WebGPU overlay bridge: expose `atom_positions_buffer` to the parent as a
+  // getter. The overlay calls this in its per-frame refresh to source the
+  // SAME resolved per-displayed-atom positions the WebGL bonds/atoms use —
+  // no independent re-derivation from base-only trajectory data. Reading the
+  // $derived inside the returned closure (not capturing a snapshot) means each
+  // call yields the live current-frame array. Assigned via $effect so the
+  // binding survives prop reassignment churn.
+  $effect(() => {
+    get_displayed_frame_positions = () => atom_positions_buffer
+    return () => { get_displayed_frame_positions = null }
   })
 
   // Flat row-major Float64Array(9) for BondManagerInstances. Rows are the
