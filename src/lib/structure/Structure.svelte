@@ -3690,6 +3690,8 @@
           sym_data={symmetry_data}
           loading={supercell_loading}
           direction="up"
+          {large_system_mode}
+          base_site_count={structure?.sites?.length ?? 0}
         />
       {/if}
     </AtomLegend>

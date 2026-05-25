@@ -170,6 +170,32 @@ export function make_supercell(
   } as SupercellType
 }
 
+// Threshold (in number of cells = nx·ny·nz) beyond which a CPU-side supercell
+// build (WASM `create_supercell` / TS `make_supercell`) is considered too large
+// to expand without freezing the main thread. When the WebGPU large-system
+// overlay is OFF and a requested factor exceeds this, the UI warns / guards
+// instead of building. With the overlay ON the build is skipped entirely (GPU
+// instances the base cell), so this threshold does NOT apply.
+export const CPU_SUPERCELL_CELL_WARN_THRESHOLD = 64
+
+// Soft cap on the EFFECTIVE GPU instance count (base atom count × number of
+// cells). Beyond this the GPU instancing path can hang on weaker hardware, so
+// the caller should warn and/or clamp. ~10M instances is a sane ceiling for a
+// single InstancedMesh on current WebGPU.
+export const GPU_SUPERCELL_MAX_INSTANCES = 10_000_000
+
+// Product of the [nx,ny,nz] factors parsed from a scaling input = number of
+// cells. Returns 1 (no supercell) for malformed input so callers can treat a
+// bad string as "no expansion" rather than throwing.
+export function supercell_cell_count(scaling: string | number | Vec3): number {
+  try {
+    const [nx, ny, nz] = parse_supercell_scaling(scaling)
+    return nx * ny * nz
+  } catch {
+    return 1
+  }
+}
+
 // Validate supercell input string
 // Takes user input string and returns true if valid, false otherwise
 export function is_valid_supercell_input(input: string): boolean {
