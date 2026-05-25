@@ -143,9 +143,15 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
  *  pixels, independent of zoom / structure scale. It replaces the WebGL Gizmo
  *  widget (which is gone when WebGL is suspended in overlay mode).
  *
- *  Geometry: a line-list of 6 vertices = 3 axes × 2 endpoints. Per vertex the
- *  axis index = vi/2 selects the unit axis (+X/+Y/+Z); the low bit picks origin
- *  vs. the axis tip. Orientation uses ONLY the camera view ROTATION (upper-3×3 of
+ *  Geometry: a line-list of 22 vertices.
+ *    - verts 0..5  = the 3 axis lines (3 axes × 2 endpoints): axis index = vi/2
+ *      selects the unit axis (+X/+Y/+Z); the low bit picks origin vs. axis tip.
+ *    - verts 6..21 = 16 LETTER-GLYPH endpoints (8 line segments × 2): tiny X/Y/Z
+ *      letters drawn at each axis tip, color-matched to the axis. X=2 segments,
+ *      Y=3, Z=3. Each glyph vertex offsets from its axis' PROJECTED tip by a 2D
+ *      template coordinate scaled to a small constant pixel size — the letters
+ *      stay SCREEN-FLAT (no 3D rotation), facing the viewer at the tip.
+ *  Orientation of the AXES uses ONLY the camera view ROTATION (upper-3×3 of
  *  camera.view, NOT its translation), so the triad spins with the camera like an
  *  orientation indicator. The rotated axis' XY (screen plane; camera looks down
  *  -Z in view space) is scaled to a small NDC region and offset to the corner.
@@ -154,8 +160,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
  *
  *  Depth: the gizmo must ALWAYS be visible (never occluded by atoms/bonds). Its
  *  pipeline runs with depthCompare:`always` + depthWriteEnabled:false, and it is
- *  drawn LAST in the pass, so it overwrites the corner regardless of scene depth.
- *  Colored per-axis; no labels (text is out of scope). */
+ *  drawn LAST in the pass, so it overwrites the corner regardless of scene depth. */
 const GIZMO_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
@@ -191,12 +196,40 @@ const AXIS_COLORS = array<vec3<f32>, 3>(
   vec3<f32>(0.10, 0.10, 0.85),
 );
 
+// Letter-glyph templates as 2D line segments on a [-1,1] square, screen-aligned.
+// 8 segments = 16 endpoints (glyph verts 0..15 = gizmo verts 6..21):
+//   X (axis 0): segs 0,1 -> two crossing diagonals.
+//   Y (axis 1): segs 2,3,4 -> two upper arms to center + stem down.
+//   Z (axis 2): segs 5,6,7 -> top bar, diagonal, bottom bar.
+const GLYPH_PTS = array<vec2<f32>, 16>(
+  // X: (-1,-1)->(1,1), (-1,1)->(1,-1)
+  vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0),
+  vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, -1.0),
+  // Y: (-1,1)->(0,0), (1,1)->(0,0), (0,0)->(0,-1)
+  vec2<f32>(-1.0, 1.0), vec2<f32>(0.0, 0.0),
+  vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 0.0),
+  vec2<f32>(0.0, 0.0), vec2<f32>(0.0, -1.0),
+  // Z: (-1,1)->(1,1), (1,1)->(-1,-1), (-1,-1)->(1,-1)
+  vec2<f32>(-1.0, 1.0), vec2<f32>(1.0, 1.0),
+  vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, -1.0),
+  vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0),
+);
+// Which axis (tip + color) each of the 16 glyph endpoints belongs to.
+const GLYPH_AXIS = array<u32, 16>(
+  0u, 0u, 0u, 0u,                 // X: 2 segs
+  1u, 1u, 1u, 1u, 1u, 1u,         // Y: 3 segs
+  2u, 2u, 2u, 2u, 2u, 2u,         // Z: 3 segs
+);
+// Glyph half-size in pixels (the template [-1,1] maps to +-GLYPH_PX). Sat past
+// the axis tip by GLYPH_TIP_SCALE so the letter clears the arrow end.
+const GLYPH_PX : f32 = 9.0;
+const GLYPH_TIP_SCALE : f32 = 1.18;
+// Mirrors the TS-side GIZMO_PX: scale_ndc spans GIZMO_PX pixels per unit axis, so
+// dividing GLYPH_PX by it converts the glyph half-size into the same NDC scale.
+const GIZMO_PX_F : f32 = 120.0;
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
-  let axis_i = vi / 2u;            // 0=X, 1=Y, 2=Z
-  let is_tip = (vi & 1u) == 1u;    // segment: origin -> tip
-  let unit = AXES[axis_i];
-
   // Camera view ROTATION only (upper-3x3 of camera.view). Drop translation so
   // the triad rotates with the camera but stays pinned to the corner.
   let rot = mat3x3<f32>(
@@ -204,16 +237,40 @@ fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
     camera.view[1].xyz,
     camera.view[2].xyz,
   );
-  let dir = rot * unit;            // rotated axis in view space (camera looks -Z)
 
-  // Endpoint: origin at the corner, tip offset by the rotated axis' screen XY.
-  // Output clip space with w=1 so these are already NDC (no perspective divide);
-  // depthCompare always ignores z, so z is parked at 0.
-  let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
-  let off = select(vec2<f32>(0.0, 0.0), tip_off, is_tip);
-  let pos = giz.center_ndc.xy + off;
+  // The glyph half-size in NDC reuses the per-axis pixel scale (scale_ndc spans
+  // GIZMO_PX), so a GLYPH_PX template is square in pixels and not skewed.
+  let glyph_ndc = vec2<f32>(
+    giz.scale_ndc.x * (GLYPH_PX / GIZMO_PX_F),
+    giz.scale_ndc.y * (GLYPH_PX / GIZMO_PX_F),
+  );
 
   var out : VsOut;
+
+  if (vi < 6u) {
+    // --- Axis lines: 3 axes x 2 endpoints (origin -> rotated tip). ---
+    let axis_i = vi / 2u;            // 0=X, 1=Y, 2=Z
+    let is_tip = (vi & 1u) == 1u;    // segment: origin -> tip
+    let dir = rot * AXES[axis_i];    // rotated axis in view space (camera looks -Z)
+    let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
+    let off = select(vec2<f32>(0.0, 0.0), tip_off, is_tip);
+    let pos = giz.center_ndc.xy + off;
+    out.clip = vec4<f32>(pos, 0.0, 1.0);
+    out.color = AXIS_COLORS[axis_i];
+    return out;
+  }
+
+  // --- Letter glyphs: verts 6..21 -> glyph endpoints 0..15. ---
+  let gvi = vi - 6u;
+  let axis_i = GLYPH_AXIS[gvi];
+  // Projected axis tip in NDC, pushed slightly BEYOND the tip so the letter sits
+  // past the arrow end (along the rotated axis' screen direction).
+  let dir = rot * AXES[axis_i];
+  let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
+  let tip_pos = giz.center_ndc.xy + tip_off * GLYPH_TIP_SCALE;
+  // Screen-flat template offset (NO 3D rotation): the letter faces the viewer.
+  let t = GLYPH_PTS[gvi];
+  let pos = tip_pos + vec2<f32>(t.x * glyph_ndc.x, t.y * glyph_ndc.y);
   out.clip = vec4<f32>(pos, 0.0, 1.0);
   out.color = AXIS_COLORS[axis_i];
   return out;
@@ -1352,7 +1409,8 @@ export function create_large_system_renderer(
     ],
   })
 
-  // Axis-orientation gizmo: a small corner XYZ triad as a line-list (6 verts).
+  // Axis-orientation gizmo: a small corner XYZ triad as a line-list (22 verts:
+  // 6 axis + 16 letter-glyph endpoints).
   // Binds the camera (for the view rotation) + the gizmo placement uniform. Runs
   // with depthCompare:`always` + no depth write, drawn LAST, so it is ALWAYS
   // visible (never occluded by atoms/bonds) and never disturbs scene depth.
@@ -1396,8 +1454,8 @@ export function create_large_system_renderer(
   /** Fixed pixel geometry of the corner gizmo. The triad region is ~2·GIZMO_PX
    *  wide (each axis reaches GIZMO_PX from the origin), placed GIZMO_MARGIN_PX in
    *  from the bottom-left corner — matching the WebGL Gizmo's offset:{left,bottom}. */
-  const GIZMO_PX = 72
-  const GIZMO_MARGIN_PX = 20
+  const GIZMO_PX = 120
+  const GIZMO_MARGIN_PX = 28
 
   /** Pack + upload the gizmo placement uniform from the canvas backing size.
    *  - center_ndc: bottom-left corner anchor in NDC. NDC x∈[-1,1] (right), y∈
@@ -2134,7 +2192,7 @@ export function create_large_system_renderer(
       // toggle/prop needed; it lives in the corner away from the structure.
       pass.setPipeline(gizmo_pipeline)
       pass.setBindGroup(0, gizmo_bind_group)
-      pass.draw(6) // 3 axes × 2 line endpoints
+      pass.draw(22) // 6 axis verts (3 axes × 2) + 16 letter-glyph verts (8 segs × 2)
       pass.end()
       device.queue.submit([encoder.finish()])
     },
