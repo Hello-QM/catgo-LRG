@@ -3,6 +3,7 @@
  *  pass (storage buffers, bind group, uniform packing, dispatch, readback).
  *  Readback is for tests + the future on-pause CPU bridge, NOT the playback loop. */
 import { BOND_COMPUTE_WGSL } from '$lib/structure/gpu/bond-compute.wgsl'
+import { plan_grid, type GridPlan } from '$lib/structure/gpu/bond-grid'
 
 export type BondComputeRun = {
   tolerance: number
@@ -37,13 +38,23 @@ export type BondComputeResult = {
 }
 
 /** Size of the packed Params uniform. WGSL pads each mat3x3 column (vec3) to 16
- *  bytes, so the matrix spans bytes 32..80 and the struct is 80 bytes total. */
-export const PARAMS_BYTES = 80
+ *  bytes, so the matrix spans bytes 32..80. The uniform-grid block (vec3+u32 dims,
+ *  vec3+u32 aabb/max, f32+3pad) appends three 16-byte rows ⇒ bytes 80..128. */
+export const PARAMS_BYTES = 128
 
-/** Pack the Params uniform (80 bytes). The lattice is uploaded TRANSPOSED so the
+/** Pack the Params uniform (128 bytes). The lattice is uploaded TRANSPOSED so the
  *  WGSL column-major mat3x3 columns equal the row-major lattice rows a,b,c:
- *  column k (f32 offsets 8/12/16, each 3 floats + 1 pad) = lattice row k. */
-export function pack_params(n: number, capacity: number, r: BondComputeRun): ArrayBuffer {
+ *  column k (f32 offsets 8/12/16, each 3 floats + 1 pad) = lattice row k.
+ *  `grid` (optional) appends the uniform-grid sizing the WGSL reads (dims,
+ *  use_grid, aabb_min, max_per_cell, inv_h). When omitted, use_grid packs 0 (the
+ *  shader takes the O(N²) fallback) — keeps the golden test + bond-compute.run
+ *  able to pack params without a grid plan. */
+export function pack_params(
+  n: number,
+  capacity: number,
+  r: BondComputeRun,
+  grid?: GridPlan,
+): ArrayBuffer {
   const buf = new ArrayBuffer(PARAMS_BYTES)
   const u32 = new Uint32Array(buf)
   const f32 = new Float32Array(buf)
@@ -62,6 +73,19 @@ export function pack_params(n: number, capacity: number, r: BondComputeRun): Arr
   f32[8] = L[0]; f32[9] = L[1]; f32[10] = L[2]; f32[11] = 0
   f32[12] = L[3]; f32[13] = L[4]; f32[14] = L[5]; f32[15] = 0
   f32[16] = L[6]; f32[17] = L[7]; f32[18] = L[8]; f32[19] = 0
+  // ── Uniform-grid block (f32/u32 words 20..31; bytes 80..128) ──
+  // word 20-22 = grid_dims.xyz (u32), word 23 = use_grid (u32)
+  // word 24-26 = aabb_min.xyz (f32), word 27 = max_per_cell (u32)
+  // word 28 = inv_h (f32), words 29-31 = pad
+  if (grid) {
+    u32[20] = grid.dims[0]; u32[21] = grid.dims[1]; u32[22] = grid.dims[2]
+    u32[23] = grid.use_grid ? 1 : 0
+    f32[24] = grid.aabb_min[0]; f32[25] = grid.aabb_min[1]; f32[26] = grid.aabb_min[2]
+    u32[27] = grid.max_per_cell
+    f32[28] = grid.inv_h
+  } else {
+    u32[23] = 0 // use_grid = 0 ⇒ O(N²) fallback
+  }
   return buf
 }
 
@@ -77,9 +101,39 @@ export function unpack_jimage(p: number): [number, number, number] {
 export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }) {
   const { capacity } = cfg
   const module = device.createShaderModule({ code: BOND_COMPUTE_WGSL })
+  // Explicit bind-group layout shared by all three grid passes (clear/bin/detect)
+  // so ONE bind group binds every pipeline. `auto` layout would give each entry
+  // point its own layout (only the bindings it uses), so the bind groups wouldn't
+  // be interchangeable; an explicit layout with all 10 bindings avoids that.
+  const storage = (rw: boolean): GPUBindGroupLayoutEntry[`buffer`] => ({
+    type: rw ? `storage` : `read-only-storage`,
+  })
+  const bgl = device.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: storage(false) },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: storage(false) },
+      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: `uniform` } },
+      { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: storage(true) },
+      { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: storage(true) },
+      { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: storage(false) },
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: storage(false) },
+      { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: storage(true) },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: storage(true) },
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: storage(true) },
+    ],
+  })
+  const compute_layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] })
   const pipeline = device.createComputePipeline({
-    layout: `auto`,
+    layout: compute_layout,
     compute: { module, entryPoint: `detect_bonds` },
+  })
+  const clear_pipeline = device.createComputePipeline({
+    layout: compute_layout,
+    compute: { module, entryPoint: `clear_grid` },
+  })
+  const bin_pipeline = device.createComputePipeline({
+    layout: compute_layout,
+    compute: { module, entryPoint: `bin_atoms` },
   })
 
   return {
@@ -98,10 +152,22 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
       let count_buf: GPUBuffer | undefined
       let elem_ids_buf: GPUBuffer | undefined
       let rules_buf: GPUBuffer | undefined
+      let cell_count_buf: GPUBuffer | undefined
+      let cell_atoms_buf: GPUBuffer | undefined
+      let overflow_buf: GPUBuffer | undefined
       let count_read: GPUBuffer | undefined
       let pairs_read: GPUBuffer | undefined
 
       try {
+        // Plan the uniform grid (CPU). For periodic small cells use_grid is false
+        // ⇒ the shader takes the exact O(N²) fallback; non-periodic always grids.
+        const grid = plan_grid({
+          periodic: r.periodic,
+          lattice: r.lattice,
+          max_bond_dist: r.max_bond_dist,
+          positions: r.positions,
+          n,
+        })
         positions_buf = device.createBuffer({
           size: Math.max(r.positions.byteLength, 4),
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -118,7 +184,7 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
           size: PARAMS_BYTES,
           usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         })
-        device.queue.writeBuffer(params_buf, 0, pack_params(n, capacity, r))
+        device.queue.writeBuffer(params_buf, 0, pack_params(n, capacity, r, grid))
 
         pairs_buf = device.createBuffer({
           size: pairs_bytes,
@@ -151,8 +217,26 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
         })
         if (rules.byteLength > 0) device.queue.writeBuffer(rules_buf, 0, rules as BufferSource)
 
+        // ── Grid storage (bindings 7/8/9). Sized from the plan; a 4-byte minimum
+        // keeps the bindings non-empty in the fallback (use_grid=0) path where the
+        // shader never touches them. ──
+        const n_cells = Math.max(1, grid.n_cells)
+        cell_count_buf = device.createBuffer({
+          size: Math.max(n_cells * 4, 4),
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        })
+        cell_atoms_buf = device.createBuffer({
+          size: Math.max(n_cells * grid.max_per_cell * 4, 4),
+          usage: GPUBufferUsage.STORAGE,
+        })
+        overflow_buf = device.createBuffer({
+          size: 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(overflow_buf, 0, new Uint32Array([0]))
+
         const bind_group = device.createBindGroup({
-          layout: pipeline.getBindGroupLayout(0),
+          layout: bgl,
           entries: [
             { binding: 0, resource: { buffer: positions_buf } },
             { binding: 1, resource: { buffer: radii_buf } },
@@ -161,6 +245,9 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
             { binding: 4, resource: { buffer: count_buf } },
             { binding: 5, resource: { buffer: elem_ids_buf } },
             { binding: 6, resource: { buffer: rules_buf } },
+            { binding: 7, resource: { buffer: cell_count_buf } },
+            { binding: 8, resource: { buffer: cell_atoms_buf } },
+            { binding: 9, resource: { buffer: overflow_buf } },
           ],
         })
 
@@ -175,8 +262,17 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
 
         const encoder = device.createCommandEncoder()
         const pass = encoder.beginComputePass()
-        pass.setPipeline(pipeline)
         pass.setBindGroup(0, bind_group)
+        // Three ordered passes in one submit: clear the grid, bin atoms, detect.
+        // The clear/bin passes are dispatched only on the grid path (use_grid);
+        // on the fallback detect_bonds ignores the grid buffers entirely.
+        if (grid.use_grid) {
+          pass.setPipeline(clear_pipeline)
+          pass.dispatchWorkgroups(Math.max(1, Math.ceil(n_cells / 64)))
+          pass.setPipeline(bin_pipeline)
+          pass.dispatchWorkgroups(Math.max(1, Math.ceil(n / 64)))
+        }
+        pass.setPipeline(pipeline)
         pass.dispatchWorkgroups(Math.max(1, Math.ceil(n / 64)))
         pass.end()
         encoder.copyBufferToBuffer(count_buf, 0, count_read, 0, 4)
@@ -209,6 +305,9 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
         count_buf?.destroy()
         elem_ids_buf?.destroy()
         rules_buf?.destroy()
+        cell_count_buf?.destroy()
+        cell_atoms_buf?.destroy()
+        overflow_buf?.destroy()
         count_read?.destroy()
         pairs_read?.destroy()
       }

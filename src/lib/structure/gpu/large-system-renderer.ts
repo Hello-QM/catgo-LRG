@@ -15,6 +15,7 @@
  *  correctly. No trajectory / picking yet — those arrive in later milestones. */
 import { BOND_COMPUTE_WGSL } from '$lib/structure/gpu/bond-compute.wgsl'
 import { pack_params, PARAMS_BYTES } from '$lib/structure/gpu/bond-compute'
+import { plan_grid, type GridPlan } from '$lib/structure/gpu/bond-grid'
 
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
@@ -895,6 +896,27 @@ export function create_large_system_renderer(
   // atomic count + indirect-args are tiny fixed buffers.
   let pairs_buffer: GPUBuffer | null = null
   let bond_capacity = 0 // pairs the current pairs buffer can hold
+  // ── Uniform-grid (cell-list) buffers (bindings 7/8/9). cell_count tallies atoms
+  // per cell (n_cells u32), cell_atoms holds up to max_per_cell atom ids per cell
+  // (n_cells*max u32), overflow is a single u32 flag. Sized from the grid plan;
+  // grown when the plan needs more cells/atoms. A 4-byte minimum keeps the
+  // bindings valid in the fallback (use_grid=0) path. ──
+  let cell_count_buffer: GPUBuffer | null = null
+  let cell_atoms_buffer: GPUBuffer | null = null
+  let cell_count_cells = 0 // cells the cell_count buffer can hold
+  let cell_atoms_slots = 0 // total (cells*max) slots cell_atoms can hold
+  const overflow_buffer = device.createBuffer({
+    label: `large-system-bond-overflow`,
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  // Last grid plan (recomputed at dispatch from the current bond inputs).
+  let grid_plan: GridPlan | null = null
+  // CPU copy of the current frame's atom xyz (3N), kept ONLY so the non-periodic
+  // grid plan can compute the atom AABB on the CPU (the periodic plan needs no
+  // positions). Updated by set_atoms / set_positions. For periodic structures this
+  // is still cached but never read by plan_grid.
+  let last_positions: Float32Array | null = null
   const count_buffer = device.createBuffer({
     label: `large-system-bond-count`,
     size: 4,
@@ -998,17 +1020,50 @@ export function create_large_system_renderer(
     multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
   })
 
-  // Bond-detect compute (the already-validated BOND_COMPUTE_WGSL). auto layout
-  // matches bond-compute.ts: 0 positions, 1 radii, 2 params, 3 out_pairs,
-  // 4 out_count.
+  // Bond-detect compute (BOND_COMPUTE_WGSL). Three entry points share ONE explicit
+  // bind-group layout (clear_grid / bin_atoms / detect_bonds) so a single bond
+  // compute bind group binds all three pipelines. Bindings: 0 positions, 1 radii,
+  // 2 params, 3 out_pairs, 4 out_count, 5 elem_ids, 6 rules, 7 cell_count,
+  // 8 cell_atoms, 9 overflow.
   const bond_compute_module = device.createShaderModule({
     label: `large-system-bond-compute`,
     code: BOND_COMPUTE_WGSL,
   })
+  const bc_storage = (rw: boolean): GPUBindGroupLayoutEntry[`buffer`] => ({
+    type: rw ? `storage` : `read-only-storage`,
+  })
+  const bond_compute_bgl = device.createBindGroupLayout({
+    label: `large-system-bond-compute-bgl`,
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(false) },
+      { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(false) },
+      { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: `uniform` } },
+      { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(true) },
+      { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(true) },
+      { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(false) },
+      { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(false) },
+      { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(true) },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(true) },
+      { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: bc_storage(true) },
+    ],
+  })
+  const bond_compute_layout = device.createPipelineLayout({
+    bindGroupLayouts: [bond_compute_bgl],
+  })
   const bond_compute_pipeline = device.createComputePipeline({
     label: `large-system-bond-compute-pipeline`,
-    layout: `auto`,
+    layout: bond_compute_layout,
     compute: { module: bond_compute_module, entryPoint: `detect_bonds` },
+  })
+  const bond_clear_pipeline = device.createComputePipeline({
+    label: `large-system-bond-clear-pipeline`,
+    layout: bond_compute_layout,
+    compute: { module: bond_compute_module, entryPoint: `clear_grid` },
+  })
+  const bond_bin_pipeline = device.createComputePipeline({
+    label: `large-system-bond-bin-pipeline`,
+    layout: bond_compute_layout,
+    compute: { module: bond_compute_module, entryPoint: `bin_atoms` },
   })
 
   // Indirect-args build: read atomic count, write drawIndirect args.
@@ -1288,6 +1343,39 @@ export function create_large_system_renderer(
     rebuild_bond_bind_groups()
   }
 
+  /** Ensure the uniform-grid storage buffers (bindings 7/8) can hold `n_cells`
+   *  cells and `n_cells * max_per_cell` atom slots. Re-created (never shrunk) when
+   *  the grid grows; rebuilds the bond bind groups when they reallocate (the
+   *  compute bind group references them). Returns true when a reallocation
+   *  happened (so the caller re-fetches the rebuilt bind group). */
+  function ensure_grid_capacity(n_cells: number, max_per_cell: number): boolean {
+    const want_cells = Math.max(n_cells, 1)
+    const want_slots = Math.max(n_cells * max_per_cell, 1)
+    let grew = false
+    if (want_cells > cell_count_cells || !cell_count_buffer) {
+      cell_count_buffer?.destroy()
+      cell_count_cells = Math.max(want_cells, Math.ceil(cell_count_cells * 2), 1)
+      cell_count_buffer = device.createBuffer({
+        label: `large-system-bond-cell-count`,
+        size: Math.max(cell_count_cells * 4, 4),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+      grew = true
+    }
+    if (want_slots > cell_atoms_slots || !cell_atoms_buffer) {
+      cell_atoms_buffer?.destroy()
+      cell_atoms_slots = Math.max(want_slots, Math.ceil(cell_atoms_slots * 2), 1)
+      cell_atoms_buffer = device.createBuffer({
+        label: `large-system-bond-cell-atoms`,
+        size: Math.max(cell_atoms_slots * 4, 4),
+        usage: GPUBufferUsage.STORAGE,
+      })
+      grew = true
+    }
+    if (grew) rebuild_bond_bind_groups()
+    return grew
+  }
+
   /** (Re)build the three bond bind groups. Depends on positions_buffer (atom
    *  realloc), covalent_buffer, pairs_buffer, and the elem-ids / rules buffers
    *  (bindings 5/6) — any of which may reallocate. The elem-ids / rules buffers
@@ -1317,10 +1405,28 @@ export function create_large_system_renderer(
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       })
     }
+    // Grid buffers (bindings 7/8): lazily create placeholders so the bind group
+    // is complete even before the first dispatch sizes them.
+    if (!cell_count_buffer) {
+      cell_count_cells = 1
+      cell_count_buffer = device.createBuffer({
+        label: `large-system-bond-cell-count`,
+        size: 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+    }
+    if (!cell_atoms_buffer) {
+      cell_atoms_slots = 1
+      cell_atoms_buffer = device.createBuffer({
+        label: `large-system-bond-cell-atoms`,
+        size: 4,
+        usage: GPUBufferUsage.STORAGE,
+      })
+    }
 
     bond_compute_bg = device.createBindGroup({
       label: `large-system-bond-compute-bg`,
-      layout: bond_compute_pipeline.getBindGroupLayout(0),
+      layout: bond_compute_bgl,
       entries: [
         { binding: 0, resource: { buffer: positions_buffer } },
         { binding: 1, resource: { buffer: covalent_buffer } },
@@ -1329,6 +1435,9 @@ export function create_large_system_renderer(
         { binding: 4, resource: { buffer: count_buffer } },
         { binding: 5, resource: { buffer: elem_ids_buffer } },
         { binding: 6, resource: { buffer: rules_buffer } },
+        { binding: 7, resource: { buffer: cell_count_buffer } },
+        { binding: 8, resource: { buffer: cell_atoms_buffer } },
+        { binding: 9, resource: { buffer: overflow_buffer } },
       ],
     })
     indirect_bg = device.createBindGroup({
@@ -1466,6 +1575,8 @@ export function create_large_system_renderer(
         colors_buffer as GPUBuffer, 0,
         colors.buffer, colors.byteOffset, atom_count * 3 * 4,
       )
+      // Cache positions for the non-periodic AABB grid plan (see last_positions).
+      last_positions = positions
       // Positions moved ⇒ bonds must be recomputed next render.
       bonds_dirty = true
     },
@@ -1486,6 +1597,8 @@ export function create_large_system_renderer(
         positions_buffer, 0,
         positions.buffer, positions.byteOffset, floats * 4,
       )
+      // Cache positions for the non-periodic AABB grid plan (see last_positions).
+      last_positions = positions
       // Atoms moved ⇒ bonds must be recomputed against the new positions.
       bonds_dirty = true
     },
@@ -1590,8 +1703,24 @@ export function create_large_system_renderer(
       // Cached by `bonds_dirty`: structure/option/atom changes flip it; a static
       // scene re-uses last frame's GPU-resident pairs with no recompute.
       if (bonds_ready && bonds_dirty) {
-        // Reset the atomic counter, then repack Params (n, capacity vary).
+        // Plan the uniform grid from the current bond inputs + this frame's atom
+        // positions (non-periodic AABB needs them). For periodic small cells the
+        // plan's use_grid is false ⇒ the shader takes the O(N²) fallback.
+        grid_plan = plan_grid({
+          periodic: bond_periodic,
+          lattice: bond_lattice,
+          max_bond_dist: bond_options.max_bond_dist,
+          positions: last_positions ?? new Float32Array(0),
+          n: bond_n,
+        })
+        // Grow the grid buffers if this plan needs more cells/atom slots. If they
+        // reallocate, the bond compute bind group was rebuilt — re-fetch it below.
+        ensure_grid_capacity(grid_plan.n_cells, grid_plan.max_per_cell)
+
+        // Reset the atomic counter + overflow flag, then repack Params (n,
+        // capacity, and the grid block vary).
         device.queue.writeBuffer(count_buffer, 0, new Uint32Array([0]))
+        device.queue.writeBuffer(overflow_buffer, 0, new Uint32Array([0]))
         device.queue.writeBuffer(
           bond_params_buffer, 0,
           pack_params(bond_n, bond_capacity, {
@@ -1606,12 +1735,20 @@ export function create_large_system_renderer(
             // shader's rules_keep returns early (no post-filter), identical to no
             // rules. The actual rule data lives in the binding-6 storage buffer.
             rules: bond_rules,
-          }),
+          }, grid_plan),
           0, PARAMS_BYTES,
         )
         const cpass = encoder.beginComputePass({ label: `large-system-bond-compute` })
-        cpass.setPipeline(bond_compute_pipeline)
         cpass.setBindGroup(0, bond_compute_bg as GPUBindGroup)
+        // Grid path: clear the per-cell counts, then bin atoms, then detect. The
+        // clear/bin passes are skipped on the fallback (detect ignores the grid).
+        if (grid_plan.use_grid) {
+          cpass.setPipeline(bond_clear_pipeline)
+          cpass.dispatchWorkgroups(Math.max(1, Math.ceil(grid_plan.n_cells / 64)))
+          cpass.setPipeline(bond_bin_pipeline)
+          cpass.dispatchWorkgroups(Math.max(1, Math.ceil(bond_n / 64)))
+        }
+        cpass.setPipeline(bond_compute_pipeline)
         cpass.dispatchWorkgroups(Math.max(1, Math.ceil(bond_n / 64)))
         // Build draw-indirect args from the atomic count (no CPU readback).
         cpass.setPipeline(indirect_pipeline)
@@ -1702,6 +1839,9 @@ export function create_large_system_renderer(
       elem_ids_buffer?.destroy()
       rules_buffer?.destroy()
       pairs_buffer?.destroy()
+      cell_count_buffer?.destroy()
+      cell_atoms_buffer?.destroy()
+      overflow_buffer.destroy()
       count_buffer.destroy()
       indirect_buffer.destroy()
       bond_params_buffer.destroy()
@@ -1716,6 +1856,9 @@ export function create_large_system_renderer(
       elem_ids_buffer = null
       rules_buffer = null
       pairs_buffer = null
+      cell_count_buffer = null
+      cell_atoms_buffer = null
+      last_positions = null
       msaa_color_texture = null
       msaa_color_view = null
       depth_texture = null

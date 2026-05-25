@@ -13,10 +13,11 @@ const make_run = (over: Partial<BondComputeRun> = {}): BondComputeRun => ({
 })
 
 describe(`pack_params`, () => {
-  it(`PARAMS_BYTES is 80 and the buffer is 80 bytes`, () => {
-    expect(PARAMS_BYTES).toBe(80)
+  it(`PARAMS_BYTES is 128 and the buffer is 128 bytes`, () => {
+    // 80 bytes (header + transposed lattice) + 48 bytes uniform-grid block.
+    expect(PARAMS_BYTES).toBe(128)
     const buf = pack_params(3, 1024, make_run())
-    expect(buf.byteLength).toBe(80)
+    expect(buf.byteLength).toBe(128)
   })
 
   it(`u32 header lands at word offsets 0..3`, () => {
@@ -62,6 +63,29 @@ describe(`pack_params`, () => {
     expect(dv.getFloat32(32, true)).toBe(1) // column0.x at byte 32
     expect(dv.getFloat32(48, true)).toBe(4) // column1.x at byte 48
     expect(dv.getFloat32(64, true)).toBe(7) // column2.x at byte 64
+  })
+
+  it(`grid block (words 20..28) defaults to use_grid 0 when no plan passed`, () => {
+    const u32 = new Uint32Array(pack_params(1, 8, make_run()))
+    expect(u32[23]).toBe(0) // use_grid = 0 ⇒ shader takes the O(N²) fallback
+  })
+
+  it(`packs the uniform-grid plan into words 20..28`, () => {
+    const buf = pack_params(1, 8, make_run({ periodic: false }), {
+      use_grid: true,
+      dims: [4, 5, 6],
+      n_cells: 120,
+      aabb_min: [-1, 2, -3],
+      inv_h: 0.5,
+      max_per_cell: 64,
+    })
+    const u32 = new Uint32Array(buf)
+    const f32 = new Float32Array(buf)
+    expect([u32[20], u32[21], u32[22]]).toEqual([4, 5, 6]) // grid_dims
+    expect(u32[23]).toBe(1) // use_grid
+    expect([f32[24], f32[25], f32[26]]).toEqual([-1, 2, -3]) // aabb_min
+    expect(u32[27]).toBe(64) // max_per_cell
+    expect(f32[28]).toBeCloseTo(0.5, 6) // inv_h
   })
 })
 
