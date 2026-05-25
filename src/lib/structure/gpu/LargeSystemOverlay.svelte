@@ -975,14 +975,14 @@
     // Bail if disabled / unmounted / superseded while awaiting.
     if (token !== session_token) return
     if (!device) {
-      on_fallback?.(`WebGPU unavailable — staying on the WebGL viewer.`)
+      on_fallback?.(`Large-system performance mode unavailable on this device — using the standard viewer.`)
       return
     }
     let r: LargeSystemRenderer
     try {
       r = create_large_system_renderer(device, el)
     } catch (err) {
-      on_fallback?.(`WebGPU renderer init failed: ${err instanceof Error ? err.message : String(err)}`)
+      on_fallback?.(`Large-system performance mode failed to start — using the standard viewer. (${err instanceof Error ? err.message : String(err)})`)
       return
     }
     renderer = r
