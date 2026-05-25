@@ -26,12 +26,14 @@ const CAMERA_FULL_BYTES = 144
 /** Bond Params uniform (BOND_COMPUTE_WGSL): 80 bytes, packed via pack_params. */
 const BOND_PARAMS_BYTES = 80
 
-/** Radial segments of the procedural cylinder. The cylinder is a triangle-LIST
- *  (no strip): SEG side-wall quads (2 tris = 6 verts each) plus two flat end-cap
- *  fans (SEG tris = 3 verts each) so the cut ends are solid, not hollow tubes.
- *  Side wall: SEG*6, each cap: SEG*3, two caps: SEG*6 => SEG*12 total. */
-const BOND_SEGMENTS = 12
-const BOND_VERTS_PER_CYLINDER = BOND_SEGMENTS * 12
+/** Vertices per bond half. Each half is now an IMPOSTOR cylinder: a single
+ *  camera-facing billboard quad (4 verts, triangle-STRIP) whose fragment shader
+ *  ray-traces a mathematically smooth, capped finite cylinder. Constant low
+ *  vertex count regardless of curvature (no facets), matching the atom impostor
+ *  approach. This is the single source of truth for the indirect-args
+ *  vertex_count (`cfg.x`) and MUST stay in sync with the render pipeline
+ *  topology (triangle-strip ⇒ 4 verts). */
+const BOND_VERTS_PER_CYLINDER = 4
 
 /** Fixed bond cylinder radius (Å). Small constant; tunable. Uploaded to the
  *  bond render shader as part of its uniform so it can be retuned without a
@@ -257,24 +259,39 @@ fn build_args() {
 }
 `
 
-/** Instanced procedural-cylinder bond shader. Each detected bond renders as TWO
- *  half-cylinder instances that meet at the bond midpoint, so PBC (cross-cell)
- *  bonds become two short stubs each rooted at a REAL atom instead of one long
- *  cylinder jutting out of the cell. Instance mapping: bond_index = inst>>1,
- *  half = inst&1. Per bond reads (a, b, jimage_packed) from the pairs buffer
- *  (unchanged — one entry per bond); the imaged partner is shifted by
- *  jimage·lattice using the SAME lattice the compute used.
+/** Instanced IMPOSTOR-cylinder bond shader. Each detected bond renders as TWO
+ *  half instances that meet at the bond midpoint, so PBC (cross-cell) bonds
+ *  become two short stubs each rooted at a REAL atom instead of one long cylinder
+ *  jutting out of the cell. Instance mapping: bond_index = inst>>1, half = inst&1.
+ *  Per bond reads (a, b, jimage_packed) from the pairs buffer (unchanged — one
+ *  entry per bond); the imaged partner is shifted by jimage·lattice using the
+ *  SAME lattice the compute used.
  *    Let A = pos[a], partnerB = pos[b] + jimage·lattice (A's imaged partner),
  *        B = pos[b], partnerA = pos[a] - jimage·lattice (B's imaged partner).
  *    half 0: cylinder A      -> M0 = (A + partnerB) * 0.5
  *    half 1: cylinder B      -> M1 = (B + partnerA) * 0.5
  *  For intra-cell bonds (jimage = 0) partnerB = B and partnerA = A, so
  *  M0 = M1 = (A+B)/2 and the two halves join into a seamless full cylinder.
- *  Verts trace a unit side-wall (triangle-list quads) plus two flat end-cap fans
- *  oriented to the half's axis and scaled to span start→end with a fixed radius
- *  so the cut ends read as solid disks, not hollow tubes. Depth uses the SAME GL→WebGPU
- *  clip-z remap as the atom impostor so bonds share the depth buffer and occlude
- *  / are occluded correctly. */
+ *
+ *  GEOMETRY (impostor, NGL/3Dmol-style — no facets, constant 4 verts/half):
+ *  Each half's segment endpoints P0=start, P1=end are transformed to VIEW space
+ *  (v0,v1). A camera-facing ribbon quad is built that fully covers the finite
+ *  capsule: the quad's long edge runs along the view-space axis â=normalize(v1-v0),
+ *  extended past BOTH ends by the radius r so the round caps are inside the quad;
+ *  the quad's width is ±r along a camera-facing perpendicular
+ *  side=normalize(cross(â, toEye)) (toEye = -mid, eye at origin), with a small
+ *  blow-up so the silhouette of the perspective-projected cylinder is never
+ *  clipped. The 4 triangle-strip corners map (vi&1)->±side, (vi&2)->P0/P1 end.
+ *
+ *  The fragment shader ray-traces the FINITE cylinder: eye ray O=0, d=normalize(vpos);
+ *  solve the infinite-cylinder quadratic, clamp the body hit's axial projection to
+ *  [0,len]; if out of range, intersect the two END-CAP disks (planes at v0,v1 with
+ *  normal ∓â, |radial|<=r) so the cylinder is SOLID (no hollow ends — caps are free
+ *  from the disk test). No hit anywhere => discard. Lambert shading like the atoms
+ *  (0.35 + 0.65·max(dot(N,L),0), same light dir) × grey color. Depth: project the
+ *  view-space hit Pv and apply the SAME GL→WebGPU clip-z remap + perspective divide
+ *  as the sphere impostor, so bonds share the depth buffer and occlude / are
+ *  occluded consistently with atoms. Degenerate (zero-length) halves discard cleanly. */
 const BOND_RENDER_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
@@ -296,12 +313,17 @@ struct BondU {
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
-  @location(0) vnormal : vec3<f32>, // view-space surface normal for shading
-  @location(1) color : vec3<f32>,
+  @location(0) v0 : vec3<f32>,      // view-space cylinder start (flat)
+  @location(1) v1 : vec3<f32>,      // view-space cylinder end   (flat)
+  @location(2) radius : f32,        // cylinder radius (flat)
+  @location(3) color : vec3<f32>,
+  @location(4) vpos : vec3<f32>,    // view-space position of this quad corner
 };
 
-const SEG : u32 = ${BOND_SEGMENTS}u;
-const PI2 : f32 = 6.28318530718;
+struct FsOut {
+  @builtin(frag_depth) depth : f32,
+  @location(0) color : vec4<f32>,
+};
 
 fn atom_pos(i : u32) -> vec3<f32> {
   return vec3<f32>(positions[i*3u], positions[i*3u+1u], positions[i*3u+2u]);
@@ -310,7 +332,7 @@ fn atom_pos(i : u32) -> vec3<f32> {
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32,
            @builtin(instance_index) inst : u32) -> VsOut {
-  // Two half-cylinder instances per bond: bond_index = inst>>1, half = inst&1.
+  // Two half instances per bond: bond_index = inst>>1, half = inst&1.
   let bond_index = inst >> 1u;
   let half = inst & 1u;
 
@@ -337,88 +359,151 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
   let end = mid;
 
-  // Orthonormal basis around this half's axis start->end.
-  let axis = end - start;
-  let len = length(axis);
-  let dir = select(vec3<f32>(0.0, 0.0, 1.0), axis / max(len, 1e-6), len > 1e-6);
-  let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(dir.y) > 0.9);
-  let tangent = normalize(cross(up, dir));
-  let bitangent = cross(dir, tangent);
+  let r = bond.radius_color.x;
 
-  // Triangle-LIST cylinder (no strip): SEG side-wall quads then two cap fans.
-  //   verts [0,             SEG*6)  -> side wall, 6 verts per segment quad
-  //   verts [SEG*6,         SEG*9)  -> start-end cap fan (faces -dir, toward atom)
-  //   verts [SEG*9,         SEG*12) -> end-end   cap fan (faces +dir, the midpoint)
-  let SIDE_END : u32 = SEG * 6u;
-  let CAP0_END : u32 = SEG * 9u;
+  // Endpoints in VIEW space (eye at origin). The impostor ray-trace + depth all
+  // happen in this space.
+  let v0 = (camera.view * vec4<f32>(start, 1.0)).xyz;
+  let v1 = (camera.view * vec4<f32>(end, 1.0)).xyz;
 
-  var world : vec3<f32>;
-  var world_normal : vec3<f32>; // object-space normal at this vertex
-
-  if (vi < SIDE_END) {
-    // Side wall. Each segment is a quad (seg .. seg+1) split into 2 triangles:
-    //   tri layout per quad (6 verts): (b0,t0,b1)(b1,t0,t1)
-    //   b=bottom(start ring), t=top(end ring); 0=this angle, 1=next angle.
-    let seg = vi / 6u;            // 0..SEG-1
-    let k = vi % 6u;              // vertex within the quad's two triangles
-    // corner index ci in {0=b0,1=t0,2=b1,3=t1}
-    var ci : u32 = 0u;
-    if (k == 0u) { ci = 0u; }      // b0
-    else if (k == 1u) { ci = 1u; } // t0
-    else if (k == 2u) { ci = 2u; } // b1
-    else if (k == 3u) { ci = 2u; } // b1
-    else if (k == 4u) { ci = 1u; } // t0
-    else { ci = 3u; }              // t1
-    let next_ang = (ci == 2u) || (ci == 3u);
-    let is_top = (ci == 1u) || (ci == 3u);
-    let s = select(seg, seg + 1u, next_ang);
-    let ang = f32(s) / f32(SEG) * PI2;
-    let radial = cos(ang) * tangent + sin(ang) * bitangent;
-    let base = select(start, end, is_top);
-    world = base + radial * bond.radius_color.x;
-    world_normal = radial; // side-wall normal points radially outward
-  } else {
-    // Cap fan. Pick which end + facing direction, then build a triangle fan
-    // from the end-center to consecutive ring vertices.
-    let is_end_cap = vi >= CAP0_END;
-    let local = select(vi - SIDE_END, vi - CAP0_END, is_end_cap);
-    let center = select(start, end, is_end_cap);
-    // Cap normal is the axis direction: start cap faces -dir (toward atom),
-    // end cap faces +dir (the midpoint). Front-face winding handled by cullMode none.
-    let cap_normal = select(-dir, dir, is_end_cap);
-    let seg = local / 3u;          // 0..SEG-1
-    let corner = local % 3u;       // 0=center, 1=ring(seg), 2=ring(seg+1)
-    if (corner == 0u) {
-      world = center;
-    } else {
-      let s = select(seg, seg + 1u, corner == 2u);
-      let ang = f32(s) / f32(SEG) * PI2;
-      let radial = cos(ang) * tangent + sin(ang) * bitangent;
-      world = center + radial * bond.radius_color.x;
+  // Camera-facing ribbon quad covering the finite capsule. axis = â (view space);
+  // a degenerate (zero-length) half falls back to a fixed axis so normalize never
+  // produces NaN — the fragment shader discards it anyway.
+  let av = v1 - v0;
+  let alen = length(av);
+  let axis = select(vec3<f32>(0.0, 0.0, 1.0), av / max(alen, 1e-6), alen > 1e-6);
+  // Toward the eye from the segment midpoint (eye at view-space origin).
+  let mid_v = (v0 + v1) * 0.5;
+  let to_eye = -mid_v;
+  // Camera-facing perpendicular; fall back if axis ∥ to_eye (segment pointing at
+  // the eye) so the cross product can't collapse to zero.
+  var side = cross(axis, to_eye);
+  if (length(side) < 1e-6) {
+    side = cross(axis, vec3<f32>(0.0, 1.0, 0.0));
+    if (length(side) < 1e-6) {
+      side = cross(axis, vec3<f32>(1.0, 0.0, 0.0));
     }
-    world_normal = cap_normal;
   }
+  side = normalize(side) * r;
+  // Extend the quad past both ends by r along the axis so the round caps are
+  // covered, with a little extra slack (1.5) on the width so the perspective
+  // silhouette of the cylinder is never clipped at grazing/foreshortened angles.
+  let cap_ext = axis * r;
+  let widen = side * 1.5;
 
-  let vpos4 = camera.view * vec4<f32>(world, 1.0);
-  var clip = camera.proj * vpos4;
+  // 4 triangle-strip corners: (vi&1) -> ±side, (vi&2) -> v0/v1 end.
+  let s_sign = select(-1.0, 1.0, (vi & 1u) == 1u);
+  let is_end = (vi & 2u) == 2u;
+  let base = select(v0 - cap_ext, v1 + cap_ext, is_end);
+  let vpos = base + s_sign * widen;
+
+  var clip = camera.proj * vec4<f32>(vpos, 1.0);
   // SAME GL->WebGPU NDC z remap as the atom impostor shader.
   clip.z = (clip.z + clip.w) * 0.5;
 
-  // View-space normal for lambert shading.
-  let vn4 = camera.view * vec4<f32>(world_normal, 0.0);
-
   var out : VsOut;
   out.clip = clip;
-  out.vnormal = normalize(vn4.xyz);
+  out.v0 = v0;
+  out.v1 = v1;
+  out.radius = r;
   out.color = bond.radius_color.yzw;
+  out.vpos = vpos;
   return out;
 }
 
 @fragment
-fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+fn fs_main(in : VsOut) -> FsOut {
+  let r = in.radius;
+  let pa = in.v0;            // cylinder axis point 0 (view space)
+  let ca = in.v1 - in.v0;    // axis vector
+  let clen = length(ca);
+  // Degenerate (coincident) half: nothing to draw, no NaN.
+  if (clen < 1e-6) { discard; }
+  let axis = ca / clen;      // unit axis
+
+  // Eye ray: origin at view-space 0, direction toward the interpolated corner.
+  let rd = normalize(in.vpos);
+
+  // Infinite-cylinder intersection. Project ray + origin offset off the axis.
+  // d_perp = rd - (rd·axis)axis ; oc = O - pa = -pa.
+  let oc = -pa;
+  let rd_a = dot(rd, axis);
+  let oc_a = dot(oc, axis);
+  let d_perp = rd - rd_a * axis;
+  let oc_perp = oc - oc_a * axis;
+  let qa = dot(d_perp, d_perp);
+  let qb = 2.0 * dot(d_perp, oc_perp);
+  let qc = dot(oc_perp, oc_perp) - r * r;
+
+  var best_t = 1e30;
+  var hit_p = vec3<f32>(0.0);
+  var hit_n = vec3<f32>(0.0);
+  var found = false;
+
+  // Body: solve quadratic, take the nearer positive root whose axial projection
+  // lands within [0, clen].
+  if (qa > 1e-12) {
+    let disc = qb * qb - 4.0 * qa * qc;
+    if (disc >= 0.0) {
+      let sq = sqrt(disc);
+      let inv = 1.0 / (2.0 * qa);
+      let t0 = (-qb - sq) * inv;
+      let t1 = (-qb + sq) * inv;
+      // Try the near root, then the far root (we may be inside the cylinder).
+      for (var k = 0; k < 2; k = k + 1) {
+        let t = select(t1, t0, k == 0);
+        if (t > 0.0 && t < best_t) {
+          let p = rd * t;
+          let h = dot(p - pa, axis); // axial coordinate along the cylinder
+          if (h >= 0.0 && h <= clen) {
+            best_t = t;
+            hit_p = p;
+            let axis_point = pa + axis * h;
+            hit_n = normalize(p - axis_point); // radial outward
+            found = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // End-cap disks: planes at pa (normal -axis) and pb (normal +axis), |radial|<=r.
+  // Tested independently so a body miss (or a cap-on view) still reads as solid.
+  let pb = in.v1;
+  for (var c = 0; c < 2; c = c + 1) {
+    let cap_center = select(pa, pb, c == 1);
+    let cap_n = select(-axis, axis, c == 1);
+    let denom = dot(rd, cap_n);
+    if (abs(denom) > 1e-6) {
+      let t = dot(cap_center, cap_n) / denom; // (cap_center - O)·n / (rd·n), O=0
+      if (t > 0.0 && t < best_t) {
+        let p = rd * t;
+        let radial = p - cap_center;
+        if (dot(radial, radial) <= r * r) {
+          best_t = t;
+          hit_p = p;
+          hit_n = cap_n;
+          found = true;
+        }
+      }
+    }
+  }
+
+  if (!found) { discard; }
+
   let light_dir = normalize(vec3<f32>(0.3, 0.5, 0.8));
-  let lighting = 0.35 + 0.65 * max(dot(normalize(in.vnormal), light_dir), 0.0);
-  return vec4<f32>(in.color * lighting, 1.0);
+  let lighting = 0.35 + 0.65 * max(dot(hit_n, light_dir), 0.0);
+
+  // Correct depth: project the view-space hit point, apply the SAME GL->WebGPU z
+  // remap as the vertex stage, then perspective-divide into NDC z (range 0..1).
+  let clip_h = camera.proj * vec4<f32>(hit_p, 1.0);
+  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
+
+  var out : FsOut;
+  out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
+  out.color = vec4<f32>(in.color * lighting, 1.0);
+  return out;
 }
 `
 
@@ -656,9 +741,11 @@ export function create_large_system_renderer(
     layout: device.createPipelineLayout({ bindGroupLayouts: [bond_render_bgl] }),
     vertex: { module: bond_render_module, entryPoint: `vs_main` },
     fragment: { module: bond_render_module, entryPoint: `fs_main`, targets: [{ format }] },
-    // Capped cylinder is an explicit triangle-LIST (side-wall quads + 2 cap
-    // fans); cull nothing so caps render regardless of winding/view.
-    primitive: { topology: `triangle-list`, cullMode: `none` },
+    // Impostor cylinder is a single camera-facing billboard (4-vert triangle-
+    // STRIP, matching BOND_VERTS_PER_CYLINDER); the fragment shader ray-traces
+    // the smooth capped finite cylinder. cullMode none — billboard winding flips
+    // with view, and the impostor is one-sided per-fragment regardless.
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
     depthStencil: {
       format: DEPTH_FORMAT,
       depthWriteEnabled: true,
