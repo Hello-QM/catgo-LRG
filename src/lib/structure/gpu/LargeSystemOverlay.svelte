@@ -417,6 +417,27 @@
       bond_lattice = packed
       bond_periodic = !!lat
       bonds_dirty = true
+      // Phase 3 — variable-cell supercell tracking: the GPU supercell uniform's
+      // base lattice (rows a,b,c) feeds each replica's offset (ix·a + iy·b +
+      // iz·c). For a VARIABLE-CELL trajectory that base cell changes per frame,
+      // so the uniform must be re-uploaded with the new lattice or the replicas
+      // keep their frame-0 spacing (drift / overlap as the cell breathes). Only
+      // when a real supercell is active (product > 1) — at 1×1×1 ncells is 1 and
+      // the offset is always zero, so this is a no-op cost we skip entirely. We
+      // reuse the lattice we JUST packed (no second pack_lattice) and keep the
+      // dims unchanged (they're constant during playback). sync_supercell() runs
+      // later in frame(); refreshing supercell_sig here keeps the two in lockstep
+      // so it doesn't redundantly re-push the same lattice it sees this frame.
+      const nx = Math.max(1, Math.floor(supercell?.[0] ?? 1))
+      const ny = Math.max(1, Math.floor(supercell?.[1] ?? 1))
+      const nz = Math.max(1, Math.floor(supercell?.[2] ?? 1))
+      if (renderer && nx * ny * nz > 1) {
+        const dims: [number, number, number] = [nx, ny, nz]
+        renderer.set_supercell(dims, packed)
+        let scs = `${nx}x${ny}x${nz}|`
+        for (let i = 0; i < 9; i++) scs += `${packed[i]};`
+        supercell_sig = scs
+      }
     }
   }
 
