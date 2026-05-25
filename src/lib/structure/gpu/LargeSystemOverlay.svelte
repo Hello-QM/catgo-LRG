@@ -37,6 +37,7 @@
     on_fallback = undefined,
     selected_sites = [],
     on_pick = undefined,
+    supercell = [1, 1, 1],
   }: {
     enabled?: boolean
     camera?: Camera | undefined
@@ -132,6 +133,12 @@
      *  The parent updates its `selected_sites` from this; the overlay then mirrors
      *  the new selection into the highlight buffer via the `selected_sites` prop. */
     on_pick?: ((site_idx: number) => void) | undefined
+    /** GPU supercell factors [nx,ny,nz] (Phase 1). When the product > 1 AND the
+     *  structure has a lattice, the parent keeps `structure` at the BASE cell and
+     *  the overlay instances `base_count × nx·ny·nz` spheres on the GPU, each
+     *  offset by ix·a + iy·b + iz·c. Default [1,1,1] ⇒ ncells = 1 ⇒ atom = inst,
+     *  zero offset ⇒ byte-identical to the non-supercell draw. */
+    supercell?: [number, number, number]
   } = $props()
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined)
@@ -278,6 +285,34 @@
   // is read from bond_lattice (kept in lockstep by rebuild_bonds_if_needed and
   // refresh_frame_positions — including variable-cell trajectories).
   let cell_sig = ``
+
+  // ── GPU supercell state (Phase 1) ──────────────────────────────────────────
+  // Signature of the supercell dims + base lattice last pushed, so set_supercell
+  // is re-pushed only when one actually changes (dims swap, or the base lattice
+  // moves — e.g. cell edit / variable-cell). Default [1,1,1] ⇒ ncells 1 ⇒ the
+  // renderer draws exactly as before.
+  let supercell_sig = ``
+
+  /** Push the GPU supercell dims + base lattice to the renderer when they
+   *  changed. The base lattice is packed from `structure.lattice` (the parent
+   *  keeps `structure` at the BASE cell while GPU-supercell is active). Returns
+   *  true if it re-pushed (caller marks a redraw). */
+  function sync_supercell(): boolean {
+    if (!renderer) return false
+    const dims: [number, number, number] = [
+      Math.max(1, Math.floor(supercell?.[0] ?? 1)),
+      Math.max(1, Math.floor(supercell?.[1] ?? 1)),
+      Math.max(1, Math.floor(supercell?.[2] ?? 1)),
+    ]
+    const lat = (structure as { lattice?: PymatgenLattice } | undefined)?.lattice
+    const base_lat = pack_lattice(lat)
+    let sig = `${dims[0]}x${dims[1]}x${dims[2]}|`
+    for (let i = 0; i < 9; i++) sig += `${base_lat[i]};`
+    if (sig === supercell_sig) return false
+    supercell_sig = sig
+    renderer.set_supercell(dims, base_lat)
+    return true
+  }
 
   // ── Selection highlight state ──────────────────────────────────────────────
   // Signature of the selection last pushed to the renderer, so set_selection is
@@ -799,6 +834,12 @@
     // trajectories where refresh_frame_positions re-packs it per frame.
     if (sync_cell()) dirty = true
 
+    // GPU supercell: push the instancing dims + base lattice when they changed.
+    // ncells > 1 makes the renderer draw base_count × nx·ny·nz sphere instances,
+    // each offset by ix·a + iy·b + iz·c (the CPU stays at the base cell). Default
+    // [1,1,1] ⇒ ncells 1 ⇒ identical draw to today.
+    if (sync_supercell()) dirty = true
+
     // Selection highlight: mirror the app's selected_sites into the GPU highlight
     // buffer when it changed (overlay click OR external selection change).
     if (sync_selection()) dirty = true
@@ -870,6 +911,9 @@
     last_bg = null
     // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
     cell_sig = ``
+    // Fresh renderer ⇒ its supercell defaults to [1,1,1]; force a re-push of the
+    // current dims + base lattice on the first frame.
+    supercell_sig = ``
     // Fresh renderer ⇒ its selection buffer is empty; force a re-push of the
     // current selection on the first frame.
     selection_sig = ``
@@ -1020,6 +1064,21 @@
     // structure/per-frame wakes, which update bond_lattice.)
     show_cell
     cell_edge_color
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // GPU-supercell wake trigger. Track the supercell dims so changing the
+    // requested supercell (e.g. 1×1×1 → 5×5×5) revives a suspended loop; the frame
+    // re-pushes via sync_supercell and repaints once with the new instance count.
+    // (Base-lattice changes are caught by the structure wake, which also drives
+    // the atom/cell rebuilds.)
+    supercell[0]
+    supercell[1]
+    supercell[2]
     if (renderer) {
       needs_render = true
       wake()

@@ -24,6 +24,10 @@ const CAMERA_UNIFORM_BYTES = 80
  *  floats = 144 bytes. Matches pack_camera_full's layout. */
 const CAMERA_FULL_BYTES = 144
 
+/** GPU supercell uniform (Phase 1): dims vec4<u32> (nx,ny,nz,base_count) + base
+ *  lattice rows a,b,c as 3×vec4<f32> = 4 vec4 = 64 bytes. */
+const SUPERCELL_BYTES = 64
+
 
 /** Vertices per bond half. Each half is an IMPOSTOR cylinder: a camera-facing
  *  billboard whose fragment shader ray-traces a mathematically smooth, capped
@@ -293,6 +297,17 @@ struct Camera {
   cam_pos : vec4<f32>,
 };
 
+// GPU supercell uniform (Phase 1). dims = [nx,ny,nz] tiling counts; base_count =
+// atoms in the BASE cell. lat0/lat1/lat2 are the base lattice rows a,b,c (xyz in
+// .xyz, w pad) — the per-cell offset is ix·a + iy·b + iz·c. Default dims (1,1,1)
+// + base_count = the instance count ⇒ atom = inst, zero offset ⇒ identical draw.
+struct Supercell {
+  dims : vec4<u32>,    // x=nx, y=ny, z=nz, w=base_count
+  lat0 : vec4<f32>,
+  lat1 : vec4<f32>,
+  lat2 : vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> radii : array<f32>;
@@ -301,6 +316,9 @@ struct Camera {
 // atoms get a visible highlight (brighten + rim ring). Always bound (a 4-byte
 // placeholder when nothing is selected), so 0 ⇒ unchanged appearance.
 @group(0) @binding(4) var<storage, read> selected : array<u32>;
+// GPU supercell instancing params. Read ONLY in the vertex stage (decode of
+// instance_index into atom + cell offset), so the BGL grants it VERTEX only.
+@group(0) @binding(5) var<uniform> supercell : Supercell;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -326,16 +344,34 @@ fn corner_for(vi : u32) -> vec2<f32> {
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32,
            @builtin(instance_index) inst : u32) -> VsOut {
+  // GPU supercell decode: instance = atom-within-base-cell + cell tiling index.
+  // base_count = supercell.dims.w; cell = inst / base_count; the per-cell integer
+  // (ix,iy,iz) gives the lattice offset ix·a + iy·b + iz·c. When dims = (1,1,1)
+  // and base_count = the instance count, atom = inst, cell = 0, offset = 0 ⇒
+  // byte-identical to the non-supercell path. Per-atom radii/colors/selected are
+  // indexed by atom (NOT inst) so every replica shares the base atom's look.
+  let base_count = max(supercell.dims.w, 1u);
+  let atom = inst % base_count;
+  let cell = inst / base_count;
+  let nx = max(supercell.dims.x, 1u);
+  let ny = max(supercell.dims.y, 1u);
+  let ix = cell % nx;
+  let iy = (cell / nx) % ny;
+  let iz = cell / (nx * ny);
+  let offset = f32(ix) * supercell.lat0.xyz
+             + f32(iy) * supercell.lat1.xyz
+             + f32(iz) * supercell.lat2.xyz;
+
   let center = vec3<f32>(
-    positions[inst * 3u + 0u],
-    positions[inst * 3u + 1u],
-    positions[inst * 3u + 2u],
-  );
-  let r = radii[inst];
+    positions[atom * 3u + 0u],
+    positions[atom * 3u + 1u],
+    positions[atom * 3u + 2u],
+  ) + offset;
+  let r = radii[atom];
   let col = vec3<f32>(
-    colors[inst * 3u + 0u],
-    colors[inst * 3u + 1u],
-    colors[inst * 3u + 2u],
+    colors[atom * 3u + 0u],
+    colors[atom * 3u + 1u],
+    colors[atom * 3u + 2u],
   );
 
   let vc4 = camera.view * vec4<f32>(center, 1.0);
@@ -355,7 +391,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.radius = r;
   out.color = col;
   out.vpos = vpos;
-  out.sel = selected[inst];
+  out.sel = selected[atom];
   return out;
 }
 
@@ -946,6 +982,14 @@ export type LargeSystemRenderer = {
    *  the moved atoms. No-op if the buffers haven't been allocated yet (call
    *  set_atoms first to establish topology). */
   set_positions(positions: Float32Array, count: number): void
+  /** Set the GPU supercell instancing params (Phase 1). `dims` = [nx,ny,nz]
+   *  tiling counts; the atom draw issues `atom_count × nx·ny·nz` sphere instances,
+   *  each offset by ix·a + iy·b + iz·c. `base_lattice` is the 9-float row-major
+   *  BASE-cell lattice (rows a,b,c — same convention as pack_lattice / set_cell).
+   *  dims [1,1,1] (the default) ⇒ ncells 1, zero offset ⇒ the draw is byte-
+   *  identical to the non-supercell path. The CPU stays at the base cell; this is
+   *  what scales the rendered atom count WITHOUT building N× Site objects. */
+  set_supercell(dims: [number, number, number], base_lattice: Float32Array): void
   /** Provide bond-detection inputs. `covalent_radii` is the per-atom COVALENT
    *  radius (N entries, from build_atom_radii — distinct from the display radii
    *  used for sphere size). `lattice` is the 9-float row-major matrix (rows
@@ -1033,6 +1077,26 @@ export function create_large_system_renderer(
     size: CAMERA_FULL_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+
+  // GPU supercell uniform (Phase 1), bound to the impostor vertex (binding 5).
+  // Defaults to dims (1,1,1) + base_count 0 + zero lattice ⇒ ncells 1, zero
+  // offset; the renderer fills base_count from the atom count when atoms upload
+  // and overwrites dims/lattice via set_supercell. Initialised to the identity
+  // (1,1,1) below so an un-configured overlay draws exactly as before.
+  const supercell_buffer = device.createBuffer({
+    label: `large-system-supercell`,
+    size: SUPERCELL_BYTES,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  // Cached supercell dims; ncells = product. Default [1,1,1] ⇒ ncells 1.
+  let supercell_dims: [number, number, number] = [1, 1, 1]
+  let supercell_ncells = 1
+  // Cached base lattice rows (9 floats, rows a,b,c) for the per-cell offset.
+  let supercell_lattice = new Float32Array(9)
+  // Initialise the supercell uniform to identity (dims 1,1,1 / zero lattice) so
+  // the binding is valid before any set_supercell/set_atoms — ncells 1, zero
+  // offset ⇒ the draw is identical to the non-supercell path.
+  upload_supercell_uniform()
 
   // Atom storage buffers — lazily (re)created when the atom count grows.
   let positions_buffer: GPUBuffer | null = null
@@ -1192,6 +1256,12 @@ export function create_large_system_renderer(
       // VERTEX is required; FRAGMENT is the highlight stage that plausibly reads
       // it, so OR both per the project's recurrence-proof rule.
       { binding: 4, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `read-only-storage` } },
+      // binding 5: GPU supercell uniform. Read ONLY in vs_main (decode of
+      // instance_index → atom + lattice offset); fs_main never touches it. Per the
+      // project's recurrence-proof rule, grant EXACTLY the stage that reads it —
+      // VERTEX only. (A spurious FRAGMENT here would not break, but VERTEX is the
+      // precise + minimal visibility the binding requires.)
+      { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
     ],
   })
 
@@ -1580,6 +1650,7 @@ export function create_large_system_renderer(
         { binding: 2, resource: { buffer: radii_buffer } },
         { binding: 3, resource: { buffer: colors_buffer } },
         { binding: 4, resource: { buffer: selected_buffer as GPUBuffer } },
+        { binding: 5, resource: { buffer: supercell_buffer } },
       ],
     })
     // Pick pass reuses camera + positions + radii (no colors/selected).
@@ -1763,6 +1834,31 @@ export function create_large_system_renderer(
 
   /** Pack + upload the bond render uniform: lattice columns (TRANSPOSED to match
    *  the compute's column layout) + (radius, color). */
+  /** Upload the GPU supercell uniform: dims (nx,ny,nz,base_count) as u32 + base
+   *  lattice rows a,b,c as 3×vec4<f32>. base_count = the current atom_count (the
+   *  BASE cell's atom count, since the CPU stays base-cell when GPU-supercell is
+   *  active). Stored as ROWS a/b/c (matching pack_lattice's row convention) — the
+   *  vertex offset reads supercell.lat{0,1,2}.xyz directly as a/b/c. Re-called by
+   *  set_supercell AND set_atoms/set_positions (so base_count tracks the atom
+   *  count). The 64-byte buffer: u32×4 (dims) then f32×12 (3 padded rows). */
+  function upload_supercell_uniform(): void {
+    const buf = new ArrayBuffer(SUPERCELL_BYTES)
+    const u32 = new Uint32Array(buf, 0, 4)
+    const f32 = new Float32Array(buf, 16, 12)
+    u32[0] = Math.max(1, supercell_dims[0] | 0)
+    u32[1] = Math.max(1, supercell_dims[1] | 0)
+    u32[2] = Math.max(1, supercell_dims[2] | 0)
+    // base_count = atoms in the base cell (the instance count is atom_count*ncells,
+    // decoded as inst % base_count). 0 atoms ⇒ no draw, value is irrelevant.
+    u32[3] = Math.max(0, atom_count)
+    const L = supercell_lattice
+    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz (w = 0 pad).
+    f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = 0
+    f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = 0
+    f32[8] = L[6]; f32[9] = L[7]; f32[10] = L[8]; f32[11] = 0
+    device.queue.writeBuffer(supercell_buffer, 0, buf, 0, SUPERCELL_BYTES)
+  }
+
   function upload_bond_render_uniform(): void {
     const u = new Float32Array(16)
     const L = bond_lattice
@@ -1880,6 +1976,9 @@ export function create_large_system_renderer(
       )
       // Cache positions for the non-periodic AABB grid plan (see last_positions).
       last_positions = positions
+      // base_count in the supercell uniform tracks the atom count (= base cell
+      // atoms while GPU-supercell is active). Re-upload so inst decode stays valid.
+      upload_supercell_uniform()
       // Positions moved ⇒ bonds must be recomputed next render.
       bonds_dirty = true
     },
@@ -1902,6 +2001,8 @@ export function create_large_system_renderer(
       )
       // Cache positions for the non-periodic AABB grid plan (see last_positions).
       last_positions = positions
+      // Keep base_count in sync if the count changed on the fast path.
+      upload_supercell_uniform()
       // Atoms moved ⇒ bonds must be recomputed against the new positions.
       bonds_dirty = true
     },
@@ -1987,6 +2088,23 @@ export function create_large_system_renderer(
       // Turning bonds back on must re-run the compute against the current atoms
       // (the cached pairs may be stale or were never computed while disabled).
       if (enabled) bonds_dirty = true
+    },
+    set_supercell(dims: [number, number, number], base_lattice: Float32Array): void {
+      if (destroyed) return
+      supercell_dims = [
+        Math.max(1, Math.floor(dims[0])),
+        Math.max(1, Math.floor(dims[1])),
+        Math.max(1, Math.floor(dims[2])),
+      ]
+      supercell_ncells = supercell_dims[0] * supercell_dims[1] * supercell_dims[2]
+      // Copy the 9-float base lattice (rows a,b,c) — never alias the caller's array.
+      supercell_lattice = base_lattice.slice(0, 9)
+      if (supercell_lattice.length < 9) {
+        const padded = new Float32Array(9)
+        padded.set(supercell_lattice)
+        supercell_lattice = padded
+      }
+      upload_supercell_uniform()
     },
     set_selection(indices: Uint32Array | number[]): void {
       if (destroyed) return
@@ -2159,7 +2277,10 @@ export function create_large_system_renderer(
       if (atom_count > 0 && bind_group) {
         pass.setPipeline(pipeline)
         pass.setBindGroup(0, bind_group)
-        pass.draw(4, atom_count) // triangle-strip quad, one instance per atom
+        // GPU supercell: atom_count × ncells instances (ncells = nx·ny·nz). The
+        // vertex decodes inst → atom (inst % base_count) + cell offset. ncells 1
+        // ⇒ atom_count instances, identical to the non-supercell draw.
+        pass.draw(4, atom_count * Math.max(1, supercell_ncells))
       }
       // Bonds: instanced procedural cylinders, instance count supplied by the
       // indirect buffer the compute wrote (this same submit, or last frame's).

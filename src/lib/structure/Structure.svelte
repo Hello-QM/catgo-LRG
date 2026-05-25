@@ -18,6 +18,7 @@
     align_to_principal_axes,
     get_elem_amounts,
   } from '$lib/structure'
+  import { parse_supercell_scaling } from '$lib/structure/supercell'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -997,6 +998,9 @@
     get_supercell_scaling: () => supercell_scaling,
     get_show_image_atoms: () => show_image_atoms,
     get_periodic_repeats: () => periodic_repeats,
+    // Phase 1: when the GPU overlay instances the supercell, the CPU keeps the
+    // base cell (no N× Site objects) — gates the supercell + PBC-image effects.
+    get_gpu_supercell_active: () => gpu_supercell_active,
     set_displayed_structure: (s) => { displayed_structure = s },
     set_saveable_structure: (s) => { saveable_structure = s },
   })
@@ -1990,6 +1994,26 @@
   // WebGL view fully resumes for the current frame. Default OFF ⇒ always false
   // ⇒ zero change to existing WebGL behavior.
   let webgl_suspended = $derived(large_system_mode)
+  // ── GPU supercell instancing (Phase 1) ──────────────────────────────────────
+  // Parsed [nx,ny,nz] from supercell_scaling. parse_supercell_scaling throws on
+  // malformed input, so guard — a bad string falls back to [1,1,1] (no supercell).
+  let gpu_supercell_factors = $derived.by((): Vec3 => {
+    try {
+      return parse_supercell_scaling(supercell_scaling)
+    } catch {
+      return [1, 1, 1]
+    }
+  })
+  // GPU-supercell is ACTIVE only when the overlay is on AND a real (>1) supercell
+  // is requested AND the structure carries a lattice (offsets need a,b,c). When
+  // active, the CPU keeps the base cell (transform-controller gate) and the GPU
+  // instances base_count × nx·ny·nz spheres. Off / overlay-off / 1×1×1 ⇒ false ⇒
+  // identical CPU + shader behaviour to today.
+  let gpu_supercell_active = $derived(
+    large_system_mode &&
+      gpu_supercell_factors[0] * gpu_supercell_factors[1] * gpu_supercell_factors[2] > 1 &&
+      !!(structure as { lattice?: unknown } | undefined)?.lattice,
+  )
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
   // covered it) repaints once on the next frame and isn't left on a stale paint.
@@ -3882,6 +3906,7 @@
             enabled={large_system_mode}
             {camera}
             structure={displayed_structure}
+            supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
             element_colors={colors.element}
             atom_radius={scene_props.atom_radius}
             same_size_atoms={scene_props.same_size_atoms}

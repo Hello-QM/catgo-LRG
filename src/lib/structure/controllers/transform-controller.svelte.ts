@@ -30,6 +30,12 @@ export interface TransformDeps {
   get_supercell_scaling: () => string
   get_show_image_atoms: () => boolean
   get_periodic_repeats: () => Vec3
+  /** When true, the GPU overlay renders the supercell by INSTANCING the base
+   *  cell on the GPU, so the CPU must NOT expand it. The supercell + PBC-image
+   *  effects then short-circuit to the BASE (cell-transformed) structure — net
+   *  `displayed_structure` stays base-cell sized, no N× Site objects built.
+   *  Defaults to () => false (absent dep) ⇒ unchanged CPU expansion behaviour. */
+  get_gpu_supercell_active?: () => boolean
   set_displayed_structure: (s: AnyStructure | undefined) => void
   set_saveable_structure: (s: AnyStructure | undefined) => void
 }
@@ -61,8 +67,16 @@ export function create_transform_controller(deps: TransformDeps) {
   $effect(() => {
     const base_structure = cell_transformed_structure
     const supercell_scaling = deps.get_supercell_scaling()
+    // GPU-supercell gate: when the overlay instances the base cell on the GPU,
+    // the CPU must keep `supercell_structure` at the BASE cell (no WASM expand,
+    // no N× Site objects). Read reactively so flipping it OFF re-fires this
+    // effect and the CPU resumes building the real supercell.
+    const gpu_supercell_active = deps.get_gpu_supercell_active?.() ?? false
 
-    if (!base_structure || !('lattice' in base_structure)) {
+    if (gpu_supercell_active) {
+      supercell_structure = base_structure
+      supercell_loading = false
+    } else if (!base_structure || !('lattice' in base_structure)) {
       supercell_structure = base_structure
       supercell_loading = false
     } else if (['', '1x1x1', '1'].includes(supercell_scaling)) {
@@ -111,8 +125,15 @@ export function create_transform_controller(deps: TransformDeps) {
     const show_image_atoms = deps.get_show_image_atoms()
     const repeats = deps.get_periodic_repeats()
     const ss = supercell_structure
+    // GPU-supercell gate: the overlay instances the base cell (+ later phases its
+    // PBC partners) entirely on the GPU, so the CPU must NOT append image atoms.
+    // `displayed_structure` stays the base cell (= ss, which the supercell effect
+    // above pinned to base). Read reactively so flipping OFF resumes CPU images.
+    const gpu_supercell_active = deps.get_gpu_supercell_active?.() ?? false
 
-    if (show_image_atoms && ss && 'lattice' in ss && ss.lattice) {
+    if (gpu_supercell_active) {
+      deps.set_displayed_structure(ss)
+    } else if (show_image_atoms && ss && 'lattice' in ss && ss.lattice) {
       const has_repeats = repeats[0] > 0 || repeats[1] > 0 || repeats[2] > 0
       if (has_repeats) {
         deps.set_displayed_structure(get_periodic_repeat_sites(ss, repeats))
@@ -179,6 +200,10 @@ export function create_transform_controller(deps: TransformDeps) {
   // ═══ Public Interface ═══
 
   return {
+    /** The BASE (cell-type-transformed) structure, BEFORE any supercell expansion
+     *  or PBC-image append. This is what the GPU overlay instances when
+     *  `get_gpu_supercell_active` is true. */
+    get base_structure() { return cell_transformed_structure },
     get supercell_structure() { return supercell_structure },
     get supercell_loading() { return supercell_loading },
 
