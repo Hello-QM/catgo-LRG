@@ -1182,6 +1182,12 @@
   // here means an accidental Phase 4 leak into Phase 2.
   let __traj_write_warned_supercell = false
   $effect(() => {
+    // WebGPU overlay active: skip per-frame writes into the WebGL atom_manager.
+    // Read suspend FIRST (reactive) so resume (suspended→false) re-fires this
+    // effect and the manager catches up to the current frame. The overlay
+    // drives its own atoms from get_trajectory_frame_positions and does NOT
+    // read scene_atom_manager, so suspending here costs the overlay nothing.
+    if (webgl_suspended) return
     const traj = trajectory_frame_positions
     if (!traj) {
       __traj_write_warned_supercell = false
@@ -1713,6 +1719,11 @@
     get_options: () => (scene_props?.bonding_options ?? {}) as Record<string, number>,
     set_connectivity: (v) => { trajectory_bond_connectivity_for_frame = v },
     get_connectivity: () => trajectory_bond_connectivity_for_frame,
+    // WebGPU overlay active ⇒ suspend the per-frame async bond recompute. The
+    // overlay computes its own GPU bonds and does not read
+    // trajectory_bond_connectivity_for_frame. Read reactively inside the driver
+    // effect so toggle-OFF re-primes the current frame's connectivity.
+    get_suspended: () => webgl_suspended,
   })
 
   // Track selection to restore after atom movement
@@ -1904,6 +1915,14 @@
   // Task 9: experimental WebGPU large-system render path. Default OFF — when
   // off the overlay renders nothing and the WebGL viewer is unchanged.
   let large_system_mode = $state(false)
+  // While the WebGPU overlay is active, the WebGL/Threlte path must do ZERO
+  // per-frame work (not just zero painting): the overlay computes its own GPU
+  // bonds/atoms, so any per-frame CPU recompute on the WebGL side is wasted and
+  // defeats the perf win. `webgl_suspended` is read REACTIVELY inside the gated
+  // effects so that flipping the overlay OFF (true→false) re-fires them and the
+  // WebGL view fully resumes for the current frame. Default OFF ⇒ always false
+  // ⇒ zero change to existing WebGL behavior.
+  let webgl_suspended = $derived(large_system_mode)
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
   // covered it) repaints once on the next frame and isn't left on a stale paint.
@@ -3623,6 +3642,7 @@
           <StructureScene
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
+            {webgl_suspended}
             {trajectory_frame_positions}
             {trajectory_frame_forces}
             trajectory_bond_connectivity={trajectory_bond_connectivity_for_frame}

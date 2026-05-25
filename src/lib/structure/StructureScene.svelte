@@ -514,6 +514,7 @@
     // null (cache miss), we fall back to `bond_state.bond_connectivity`
     // (frame-0 static).
     trajectory_bond_connectivity = null as Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> | null,
+    webgl_suspended = false,
     on_reset_rotation,
     on_atom_context_menu,
     // Cutting plane visualization
@@ -763,6 +764,12 @@
     trajectory_frame_forces?: Float32Array | null
     // Per-frame bond connectivity (from trajectory bond cache). Null = fall back to static.
     trajectory_bond_connectivity?: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> | null
+    /** WebGPU large-system overlay active. When true the WebGL scene is fully
+     *  covered by the overlay and `autoRender` is off, so this scene must do
+     *  ZERO per-frame work: the trajectory bond-pair rebuild is skipped. Read
+     *  reactively in the gated effect so toggle-OFF re-fires it and the scene
+     *  resumes correctly. Default false ⇒ unchanged WebGL behavior. */
+    webgl_suspended?: boolean
     // Cutting plane visualization for Miller slab cutter
     cutting_active?: boolean
     cutting_plane_normal?: Vec3
@@ -1485,6 +1492,12 @@
     requestAnimationFrame(() => { node.focus(); node.select() })
   }
   let charge_label_entries = $derived.by(() => {
+    // WebGPU overlay active: scene not painting + overlay draws no charge
+    // labels → skip the per-frame label recompute (it reads
+    // trajectory_frame_positions directly, which the parent still updates each
+    // frame). Read suspend reactively so toggle-OFF re-derives for the current
+    // frame. Default false ⇒ unchanged.
+    if (webgl_suspended) return []
     // Plan v3 follow-up I5: subscribe to atom_manager.version so labels
     // re-derive on per-frame trajectory writes. Under Architecture P
     // structure.sites is frozen at trajectory-load; without this
@@ -1819,7 +1832,20 @@
   // never updated → bonds visually freeze (Reviewer 2 HIGH).
   let __bbp_prev_traj: unknown = null
   let __bbp_skips = 0
+  let __bbp_was_suspended = false
   $effect.pre(() => {
+    // WebGPU overlay active: this WebGL scene is covered and not painting, and
+    // the overlay computes its own GPU bonds — so skip the per-frame trajectory
+    // bond-pair rebuild (compute_bond_connectivity_for_frame +
+    // build_trajectory_bond_pairs). Read suspend FIRST (reactive) so toggle-OFF
+    // (true→false) re-fires this effect; the resume branch then bypasses the
+    // memo so bonds rebuild for the current frame even if positions advanced
+    // (under the overlay) without `trajectory_frame_positions` identity having
+    // changed since the last build before suspension.
+    const __suspended = webgl_suspended
+    if (__suspended) { __bbp_was_suspended = true; return }
+    const __resuming_bbp = __bbp_was_suspended
+    __bbp_was_suspended = false
     if (import.meta.env?.DEV) __probe_bbp_fires++
     const __t0 = (import.meta.env?.DEV) ? performance.now() : 0
     // Read all deps up front so Svelte subscribes correctly.
@@ -1852,7 +1878,8 @@
       // in the memo so drag-filter and selection highlights still update
       // during trajectory playback when conn/lbs/traj are stable.
       if (
-        traj_conn === __bbp_prev_conn
+        !__resuming_bbp
+        && traj_conn === __bbp_prev_conn
         && lbs === __bbp_prev_lbs
         && traj_positions === __bbp_prev_traj
         && overrides === __bbp_prev_overrides
@@ -1904,7 +1931,8 @@
     const conn = conn_state
 
     const stable =
-      __bbp_prev_overrides_size !== -1
+      !__resuming_bbp
+      && __bbp_prev_overrides_size !== -1
       && conn === __bbp_prev_conn
       && lbs === __bbp_prev_lbs
       && struct_ref === __bbp_prev_struct
@@ -3756,6 +3784,12 @@
   //   3. atom_manager slot lookup                    — supercell-extra
   //   4. atom.position from atom_data                — load-time fallback
   let atom_derived_maps = $derived.by(() => {
+    // WebGPU overlay active: scene not painting → these maps (selection
+    // highlight / label positions) aren't rendered. Skip the per-frame rebuild
+    // (this derived reads trajectory_frame_positions directly, which the parent
+    // still bumps each frame). Read suspend reactively so toggle-OFF re-derives
+    // the full maps for the current frame. Default false ⇒ unchanged.
+    if (webgl_suspended) return { radius_map: new Map<number, number>(), position_map: new Map<number, Vec3>(), unique: [] as typeof atom_data }
     // R8.7 PROBE — load-cascade timing.
     const __t0 = (import.meta.env?.DEV) ? performance.now() : 0
     void atom_manager.version // subscribe to per-slot position writes
@@ -3824,6 +3858,10 @@
   })
 
   let force_data = $derived.by(() => {
+    // WebGPU overlay active: scene not painting + overlay renders no force
+    // vectors → skip the per-frame compute_force_data rebuild. Read suspend
+    // reactively so toggle-OFF re-derives for the current frame.
+    if (webgl_suspended) return []
     if (!show_force_vectors || !structure?.sites) return []
     // Override forces from trajectory Float32Array (positions are already
     // correct in structure.sites since the unified single-path always updates structure)

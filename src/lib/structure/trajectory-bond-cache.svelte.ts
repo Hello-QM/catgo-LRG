@@ -216,6 +216,13 @@ export function wire_trajectory_bond_cache(
     /** Optional. When the positions-version bump represents an edit-all
      *  fan-out, drop EVERY frame's bond cache rather than just `idx`. */
     get_positions_invalidate_all?: () => boolean
+    /** Optional. When true (WebGPU large-system overlay active), the WebGL
+     *  path is idle and the overlay computes its own GPU bonds — so the
+     *  per-frame async bond recompute here is wasted work. The driver effect
+     *  early-returns while suspended. Read reactively, so flipping back to
+     *  false re-fires the effect and re-primes the current frame's bonds
+     *  (cache may be stale: frames advanced under suspension were skipped). */
+    get_suspended?: () => boolean
   },
 ): void {
   // Reset cache on actual value changes (not parent-render proxy churn).
@@ -295,14 +302,49 @@ export function wire_trajectory_bond_cache(
   // bond-worker request, which spreads again, and Svelte 5's flush
   // overflow guard kicks in.
   let last_pos_version = -1
+  let was_suspended = false
   $effect(() => {
     const idx = deps.get_step_idx()
     const pv = deps.get_positions_version?.() ?? 0
-    if (idx < 0) return
+    // Read suspend reactively so toggle-OFF (true→false) re-fires this effect.
+    const suspended = deps.get_suspended?.() ?? false
+    if (idx < 0) {
+      was_suspended = suspended
+      return
+    }
+    if (suspended) {
+      // WebGPU overlay active: do NO per-frame bond compute. Keep the trackers
+      // in sync with the frames that advanced under the overlay so we don't
+      // replay stale work on resume; the resume branch below recomputes the
+      // landing frame. Read getter/base etc. is unnecessary here.
+      was_suspended = true
+      untrack(() => {
+        last_idx = idx
+        last_pos_version = pv
+      })
+      return
+    }
+    const resuming = was_suspended
+    was_suspended = false
     const idx_moved = idx !== last_idx
     const pos_changed = pv !== last_pos_version
-    if (!idx_moved && !pos_changed) return
+    // On resume the frame may not have moved since we last tracked it (we kept
+    // last_idx synced while suspended), so the normal guard would skip and the
+    // current frame's bonds would be stale/absent. Force a recompute on resume.
+    if (!idx_moved && !pos_changed && !resuming) return
     untrack(() => {
+      if (resuming && !idx_moved && !pos_changed) {
+        // Pure resume on a settled frame: re-prime just the current frame
+        // (and neighbours) so the WebGL bonds are correct for what's onscreen.
+        const getter = deps.get_positions()
+        const base = deps.get_base()
+        if (!getter || !base) return
+        last_idx = idx
+        last_pos_version = pv
+        cache.invalidate(idx)
+        cache.on_frame_change(idx, getter, base, deps.get_strategy(), deps.get_options())
+        return
+      }
       const getter = deps.get_positions()
       const base = deps.get_base()
       if (!getter || !base) return
