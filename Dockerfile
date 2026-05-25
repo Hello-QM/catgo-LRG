@@ -43,8 +43,9 @@ RUN --mount=type=cache,target=/pnpm/store \
 # Full source (after manifests for cache reuse)
 COPY . .
 
-# Build WASM extension (writes extensions/rust-wasm/pkg/)
-RUN cd extensions/rust-wasm && pnpm build
+# Build WASM extension and place where frontend expects it
+RUN cd extensions/rust-wasm && pnpm build \
+    && cp -r pkg /app/src/lib/electronic/chgdiff-wasm-pkg
 
 # Build static frontend → ./build-desktop
 ENV VITE_STATIC_ONLY=true
