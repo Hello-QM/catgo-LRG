@@ -1,0 +1,25 @@
+# SPA static server for the built SvelteKit frontend.
+# - Serves /app/build-desktop on port 3100
+# - Falls back to index.html for client-side routes
+# - Proxies /api/* and /docs/* (FastAPI OpenAPI) to the Python backend
+{
+        admin off
+        persist_config off
+        auto_https off
+}
+
+:3100 {
+        root * /app/build-desktop
+        encode zstd gzip
+        file_server
+
+        @api path /api/* /docs /docs/* /openapi.json
+        reverse_proxy @api 127.0.0.1:{$CATGO_BACKEND_PORT:8000}
+
+        try_files {path} /index.html
+
+        log {
+                output stderr
+                format console
+        }
+}

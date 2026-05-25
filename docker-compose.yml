@@ -1,0 +1,40 @@
+# catgo-LRG — single-service Docker Compose (web mode).
+# Usage:
+#   docker compose up --build       # first build + run
+#   docker compose up -d            # detached
+#   docker compose down
+# Then open http://localhost:3100 from any host (Windows / Linux / macOS).
+services:
+  catgo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Uncomment to build a multi-arch image with buildx (requires QEMU):
+      # platforms:
+      #   - linux/amd64
+      #   - linux/arm64
+    image: catgo-lrg:local
+    container_name: catgo-lrg
+    ports:
+      - "3100:3100"   # frontend (browser)
+      - "8000:8000"   # FastAPI backend (direct API access; optional)
+    environment:
+      CATGO_BACKEND_PORT: "8000"
+      CATGO_FRONTEND_PORT: "3100"
+      # Set if you want to plug in API keys for the agent sidecar (not started here).
+      # ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      # Persist user data (workflows, plugins, db) across container rebuilds.
+      - catgo_data:/root/.catgo
+      # Bind-mount a local workspace if you want to share project files in/out:
+      # - ./workspace:/workspace
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3100/", "-o", "/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  catgo_data:
