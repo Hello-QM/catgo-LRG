@@ -124,3 +124,28 @@ describe(`KPOINTS byte-exact vs pymatgen`, () => {
       .toBe(`Automatic kpoint scheme\n0\nGamma\n4 4 4\n`)
   })
 })
+
+// Edge-case guards (found via multi-CIF stress testing): degenerate inputs must
+// still yield a valid mesh (every division a positive integer), never NaN /
+// Infinity / 0 / negative.
+describe(`KPOINTS edge-case guards`, () => {
+  const GM = [[5, 0, 0], [0, 5, 0], [0, 0, 5]]
+  const struct = (n: number) => ({
+    lattice: { matrix: GM },
+    sites: Array.from({ length: n }, () => ({ species: [{ element: `Si` }] })),
+  } as never)
+  const mesh_of = (s: string) => s.split(`\n`)[3].split(/\s+/).map(Number)
+  const valid = (s: string) => { const m = mesh_of(s); return m.length === 3 && m.every((x) => Number.isInteger(x) && x >= 1) }
+
+  it(`empty structure (natoms=0) yields a valid mesh, not NaN`, () => {
+    expect(valid(generate_kpoints_str(struct(0), { calculation_type: `scf` }))).toBe(true)
+  })
+  it(`non-positive kspacing falls back to a valid mesh`, () => {
+    expect(valid(generate_kpoints_str(struct(2), { calculation_type: `scf`, kspacing: 0 }))).toBe(true)
+    expect(valid(generate_kpoints_str(struct(2), { calculation_type: `scf`, kspacing: -0.3 }))).toBe(true)
+  })
+  it(`zero / NaN kmesh components clamp to >= 1`, () => {
+    expect(generate_kpoints_str(struct(2), { calculation_type: `scf`, kmesh: [0, 0, 0] })).toContain(`\n1 1 1\n`)
+    expect(valid(generate_kpoints_str(struct(2), { calculation_type: `scf`, kmesh: [NaN, 2, 2] }))).toBe(true)
+  })
+})

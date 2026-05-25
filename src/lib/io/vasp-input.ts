@@ -204,7 +204,10 @@ export function automatic_density_by_vol(
   const L = lengths_of(matrix)
   const ngrid = kppa / natoms
   const mult = (ngrid * L[0] * L[1] * L[2]) ** (1 / 3)
-  const num_div = L.map((len) => Math.floor(Math.max(mult / len, 1)))
+  const num_div = L.map((len) => {
+    const n = Math.floor(Math.max(mult / len, 1))
+    return Number.isFinite(n) && n >= 1 ? n : 1 // guard natoms<1 / degenerate cell (NaN -> 1)
+  })
   const has_odd = num_div.some((n) => n % 2 === 1)
   const use_gamma =
     has_odd || (flags.isHexagonal ?? is_hexagonal(matrix)) || (flags.isFaceCentered ?? false) || (flags.forceGamma ?? false)
@@ -256,11 +259,12 @@ export function generate_kpoints_str(
   const is_slab = cvec > 15
 
   if (req.kmesh) {
-    const mesh: [number, number, number] = [...req.kmesh]
+    // Clamp each division to a positive integer (VASP requires >= 1).
+    const mesh = req.kmesh.map((n) => Math.max(1, Math.round(n) || 1)) as [number, number, number]
     if (is_slab && mesh[2] > 1) mesh[2] = 1
     return monkhorst_str(mesh)
   }
-  if (req.kspacing != null) {
+  if (req.kspacing != null && req.kspacing > 0) {
     // KSPACING (Å^-1, VASP semantics): N_i = max(1, ceil(|b_i| / kspacing)).
     const blen = reciprocal_lengths(matrix)
     const mesh = blen.map((bi) => Math.max(1, Math.ceil(bi / req.kspacing!))) as [number, number, number]
