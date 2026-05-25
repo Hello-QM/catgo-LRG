@@ -20,7 +20,7 @@ describe(`webgpu-context`, () => {
   })
   it(`acquire_webgpu_device returns the device on success`, async () => {
     const fake_device = { label: `d` }
-    vi.stubGlobal(`navigator`, { gpu: { requestAdapter: async () => ({ requestDevice: async () => fake_device }) } })
+    vi.stubGlobal(`navigator`, { gpu: { requestAdapter: async () => ({ limits: { maxStorageBuffersPerShaderStage: 16 }, requestDevice: async () => fake_device }) } })
     expect(await acquire_webgpu_device()).toBe(fake_device)
   })
 })

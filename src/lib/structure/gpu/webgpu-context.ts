@@ -15,7 +15,14 @@ export async function acquire_webgpu_device(): Promise<GPUDevice | null> {
   try {
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: `high-performance` })
     if (!adapter) return null
-    const device = await adapter.requestDevice()
+    // The spatial-grid bond compute pipeline binds 9 storage buffers; the default
+    // maxStorageBuffersPerShaderStage is 8. Raise it to what the adapter supports
+    // (capped at 16, plenty for 9). If an adapter reports < 9 (rare) the device
+    // still gets the max it can — we'd need to merge buffers to fully support it.
+    const want = Math.min(16, adapter.limits.maxStorageBuffersPerShaderStage)
+    const device = await adapter.requestDevice({
+      requiredLimits: { maxStorageBuffersPerShaderStage: want },
+    })
     cached_device = device
     return device
   } catch {

@@ -24,8 +24,6 @@ const CAMERA_UNIFORM_BYTES = 80
  *  floats = 144 bytes. Matches pack_camera_full's layout. */
 const CAMERA_FULL_BYTES = 144
 
-/** Bond Params uniform (BOND_COMPUTE_WGSL): 80 bytes, packed via pack_params. */
-const BOND_PARAMS_BYTES = 80
 
 /** Vertices per bond half. Each half is an IMPOSTOR cylinder: a camera-facing
  *  billboard whose fragment shader ray-traces a mathematically smooth, capped
@@ -930,7 +928,7 @@ export function create_large_system_renderer(
   })
   const bond_params_buffer = device.createBuffer({
     label: `large-system-bond-params`,
-    size: BOND_PARAMS_BYTES,
+    size: PARAMS_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
   // Bond render uniform: lattice columns (transposed, 3×vec4) + (radius,color).
