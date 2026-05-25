@@ -303,8 +303,13 @@ fn build_args() {
  *        B = pos[b], partnerA = pos[a] - jimage·lattice (B's imaged partner).
  *    half 0: cylinder A      -> M0 = (A + partnerB) * 0.5
  *    half 1: cylinder B      -> M1 = (B + partnerA) * 0.5
- *  For intra-cell bonds (jimage = 0) partnerB = B and partnerA = A, so
- *  M0 = M1 = (A+B)/2 and the two halves join into a seamless full cylinder.
+ *  For CROSS-cell bonds (jimage != 0) this yields the two short stubs above.
+ *  For INTRA-cell bonds (jimage = 0) the two halves would be collinear and their
+ *  flat midpoint cap planes coincide -> coincident depth -> alpha-to-coverage
+ *  z-fight that shows as a faint dotted seam across the cylinder. To avoid it,
+ *  intra-cell bonds instead draw ONE full cylinder (half 0: A -> B) and collapse
+ *  half 1 to a degenerate offscreen billboard (zero fragments). Detection:
+ *  jimage (0,0,0) packs to (0+1)|((0+1)<<2)|((0+1)<<4) = 21u.
  *
  *  GEOMETRY (impostor, NGL/3Dmol-style — no facets, constant 4 verts/half):
  *  Each half's segment endpoints P0=start, P1=end are transformed to VIEW space
@@ -385,12 +390,19 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let partnerB = B + shift;
   let partnerA = A - shift;
 
+  // INTRA-cell bonds (jimage = 0,0,0) pack to (0+1)|((0+1)<<2)|((0+1)<<4) = 21u.
+  // For those we render ONE full cylinder (half 0: A->B) and collapse half 1 to a
+  // degenerate offscreen billboard, so there is no coincident midpoint cap plane
+  // (which z-fights / shows as a dotted alpha-to-coverage seam across the surface).
+  let is_intra = jp == 21u;
+
   // half 0: A -> midpoint of (A, partnerB);  half 1: B -> midpoint of (B, partnerA).
-  // Intra-cell (jimage=0): partnerB=B, partnerA=A => both midpoints = (A+B)/2,
-  // so the two halves join into a seamless full cylinder.
-  let start = select(B, A, half == 0u);
-  let mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
-  let end = mid;
+  // Cross-cell (jimage != 0) keeps the two A->M0 / B->M1 stubs (the gap is intended).
+  // Intra-cell half 0 spans the whole bond A->B; half 1 is discarded below.
+  let cross_start = select(B, A, half == 0u);
+  let cross_mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
+  let start = select(cross_start, A, is_intra);
+  let end = select(cross_mid, B, is_intra);
 
   let r = bond.radius_color.x;
 
@@ -452,6 +464,21 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     default: { anchor = v1; ax_sign =  1.0; p_sign =  1.0; }
   }
   let vpos = anchor + ax_sign * off_axis + p_sign * off_perp;
+
+  // Intra-cell half 1 is redundant (half 0 already draws the full A->B cylinder):
+  // collapse ALL 6 strip vertices to the same offscreen clip position so the
+  // billboard has zero area and rasterizes no fragments (don't rely on fragment
+  // discard alone). Cross-cell halves are untouched.
+  if (is_intra && half == 1u) {
+    var out_deg : VsOut;
+    out_deg.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0); // outside the [-w,w] clip cube
+    out_deg.v0 = v0;
+    out_deg.v1 = v1;
+    out_deg.radius = r;
+    out_deg.color = bond.radius_color.yzw;
+    out_deg.vpos = vpos;
+    return out_deg;
+  }
 
   var clip = camera.proj * vec4<f32>(vpos, 1.0);
   // SAME GL->WebGPU NDC z remap as the atom impostor shader.
