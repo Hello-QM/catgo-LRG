@@ -1119,6 +1119,72 @@
     })
   })
 
+  // Restore the view when the projection type changes. The {#if camera_projection}
+  // block fully remounts the camera + TrackballControls, so the new controls lose
+  // the orbit target (reset to origin) and the camera lands on the stale
+  // `camera_position` prop — the structure jumps off-centre, rescales, and tilts,
+  // and switching back doesn't undo it. We re-centre on the structure, re-fit the
+  // distance, and preserve the user's current view direction + up (snapshotted on
+  // the previous camera before the swap).
+  // Capture the live camera view BEFORE a projection change remounts the camera.
+  // $effect.pre runs prior to DOM mutations, so `camera`/`orbit_controls` are still
+  // the OLD instances here and reflect the user's current orientation/zoom — even
+  // if they never moved the camera (onchange/onend wouldn't have fired).
+  $effect.pre(() => {
+    void camera_projection // dependency: re-run whenever the projection is about to change
+    untrack(() => snapshot_view())
+  })
+
+  let _last_projection: typeof camera_projection | undefined
+  $effect(() => {
+    const proj = camera_projection
+    if (_last_projection === undefined) { _last_projection = proj; return }  // skip initial mount
+    if (proj === _last_projection) return
+    _last_projection = proj
+    // Two rAFs: the first lets the new camera + TrackballControls finish mounting
+    // (bind:ref updates), the second applies the restored view after Threlte has
+    // written its declarative props, so our imperative values win.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!camera || !orbit_controls?.target) return
+      const cam = camera as any
+      // Preserve the user's pan (look-at point) if they moved; else re-centre on the structure.
+      const center = _view_target ? _view_target.clone() : new Vector3(...(current_camera_target || rotation_target || [0, 0, 0]))
+      const dir = (_view_dir.lengthSq() > 1e-6 ? _view_dir.clone() : new Vector3(0, -1, 0)).normalize()
+
+      if (cam.isPerspectiveCamera) {
+        // Match the previous apparent size: distance = vheight / (2·tan(fov/2)).
+        const fov_rad = (cam.fov || fov) * Math.PI / 180
+        const dist = _view_vheight > 0
+          ? _view_vheight / (2 * Math.tan(fov_rad / 2))
+          : Math.max(1, structure_size) * (60 / fov)
+        camera.position.copy(center).addScaledVector(dir, dist)
+      } else if (cam.isOrthographicCamera) {
+        // Distance is irrelevant to ortho scale; keep a stable viewpoint and set
+        // zoom to reproduce the previous apparent size.
+        camera.position.copy(center).addScaledVector(dir, Math.max(1, structure_size) * 2)
+        if (_view_vheight > 0 && (cam.top - cam.bottom) !== 0) {
+          cam.zoom = (cam.top - cam.bottom) / _view_vheight
+          cam.updateProjectionMatrix()
+        }
+      }
+      camera.up.copy(_view_up).normalize()
+      camera.lookAt(center)
+      orbit_controls.target.copy(center)
+      const ctrl = orbit_controls as any
+      ctrl._target0?.copy(center)
+      ctrl._eye0?.copy(new Vector3().subVectors(camera.position, center))
+      ctrl._up0?.copy(camera.up)
+      // Clear any pending TrackballControls rotation so update() doesn't re-apply
+      // a leftover delta and nudge the camera off the exact axis (the "not true y"
+      // gap on round-trip).
+      if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+      ctrl._lastAngle = 0
+      orbit_controls.update?.()
+      // mark_dirty: imperative camera + orbit_controls writes bypass the <T.> prop chain
+      mark_dirty()
+    }))
+  })
+
   // Re-apply orbit target when component becomes visible again (tab switch).
   let prev_canvas_visible = $state(false)
   $effect(() => {
@@ -1610,6 +1676,32 @@
     if (max_zoom && max_zoom > 0) new_zoom = Math.min(max_zoom, new_zoom)
     computed_zoom = new_zoom
   })
+
+  // Live camera view snapshot: direction (target→camera) and up vector, refreshed
+  // on every camera movement. Used to preserve the user's orientation across a
+  // projection switch, which fully remounts the camera + TrackballControls and
+  // would otherwise reset the view (see the camera_projection $effect below).
+  let _view_dir = new Vector3(0, -1, 0)
+  let _view_up = new Vector3(0, 0, 1)
+  let _view_target: Vector3 | null = null
+  let _view_vheight = 0  // visible world-height at the target plane (projection-independent)
+  function snapshot_view() {
+    if (!camera || !orbit_controls?.target) return
+    const cam = camera as any
+    const d = new Vector3().subVectors(camera.position, orbit_controls.target)
+    const dist = d.length()
+    if (dist > 1e-6) _view_dir = d.clone().normalize()
+    _view_up = camera.up.clone()
+    _view_target = orbit_controls.target.clone()
+    // Record the apparent size so it can be matched after a projection switch:
+    // perspective frames by distance+fov, orthographic by zoom — different maths,
+    // same on-screen height = (this value).
+    if (cam.isPerspectiveCamera) {
+      _view_vheight = 2 * dist * Math.tan((cam.fov * Math.PI / 180) / 2)
+    } else if (cam.isOrthographicCamera && cam.zoom) {
+      _view_vheight = (cam.top - cam.bottom) / cam.zoom
+    }
+  }
 
   // Pixels-per-Angstrom for scale bar — updated per-frame in useTask
 
@@ -4062,6 +4154,7 @@
     },
     onend: () => {
       camera_is_moving = false
+      snapshot_view()
       // Sync reset reference points with current state after every camera operation
       // This prevents Ctrl+click or any other operation from snapping back to an old position
       // TrackballControls uses _target0, _eye0, and _up0 as reset reference points
@@ -4080,6 +4173,7 @@
       }
     },
     onchange: () => {
+      snapshot_view()
       // Continuously sync reset reference points during camera movement
       // TrackballControls uses _target0, _eye0, and _up0 as reset reference points
       if (orbit_controls) {
