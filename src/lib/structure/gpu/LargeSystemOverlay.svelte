@@ -38,6 +38,7 @@
     selected_sites = [],
     on_pick = undefined,
     supercell = [1, 1, 1],
+    show_image_atoms = false,
   }: {
     enabled?: boolean
     camera?: Camera | undefined
@@ -139,6 +140,12 @@
      *  offset by ix·a + iy·b + iz·c. Default [1,1,1] ⇒ ncells = 1 ⇒ atom = inst,
      *  zero offset ⇒ byte-identical to the non-supercell draw. */
     supercell?: [number, number, number]
+    /** Whether DISPLAYED PBC image atoms exist (the viewer's `show_image_atoms`).
+     *  When true (non-supercell only), the renderer draws cross-cell bonds as FULL
+     *  cylinders reaching the imaged partner where the displayed image atom sits,
+     *  so image atoms gain bonds (matching the WebGL view). Default false ⇒ stubs
+     *  ⇒ zero change; supercell mode is unaffected (Phase-2 logic is authoritative). */
+    show_image_atoms?: boolean
   } = $props()
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined)
@@ -311,6 +318,22 @@
     if (sig === supercell_sig) return false
     supercell_sig = sig
     renderer.set_supercell(dims, base_lat)
+    return true
+  }
+
+  // Last show_image_atoms flag pushed to the renderer, so set_show_images fires
+  // only when it actually flips. -1 = never pushed (forces the first sync).
+  let show_images_sig = -1
+
+  /** Push the viewer's show_image_atoms flag to the renderer when it changed.
+   *  The renderer uses it (non-supercell path only) to draw cross-cell bonds full
+   *  to the displayed image atom instead of as stubs. Returns true if re-pushed. */
+  function sync_show_images(): boolean {
+    if (!renderer) return false
+    const next = show_image_atoms ? 1 : 0
+    if (next === show_images_sig) return false
+    show_images_sig = next
+    renderer.set_show_images(!!show_image_atoms)
     return true
   }
 
@@ -861,6 +884,11 @@
     // [1,1,1] ⇒ ncells 1 ⇒ identical draw to today.
     if (sync_supercell()) dirty = true
 
+    // PBC image atoms: push the viewer's show_image_atoms flag so cross-cell bonds
+    // reach the displayed image atoms (full cylinders) when it is on, or stay stubs
+    // when off. Non-supercell only; supercell mode ignores it. Default off ⇒ stubs.
+    if (sync_show_images()) dirty = true
+
     // Selection highlight: mirror the app's selected_sites into the GPU highlight
     // buffer when it changed (overlay click OR external selection change).
     if (sync_selection()) dirty = true
@@ -935,6 +963,9 @@
     // Fresh renderer ⇒ its supercell defaults to [1,1,1]; force a re-push of the
     // current dims + base lattice on the first frame.
     supercell_sig = ``
+    // Fresh renderer ⇒ its show_image_atoms defaults to false; force a re-push of
+    // the current flag on the first frame.
+    show_images_sig = -1
     // Fresh renderer ⇒ its selection buffer is empty; force a re-push of the
     // current selection on the first frame.
     selection_sig = ``
@@ -1100,6 +1131,18 @@
     supercell[0]
     supercell[1]
     supercell[2]
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // show_image_atoms wake trigger. Track the flag so toggling displayed PBC
+    // image atoms revives a suspended loop; the frame re-pushes via sync_show_images
+    // (which marks the renderer bonds dirty) and repaints once with full-to-image
+    // bonds (on) or stubs (off).
+    show_image_atoms
     if (renderer) {
       needs_render = true
       wake()

@@ -3907,6 +3907,7 @@
             {camera}
             structure={displayed_structure}
             supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
+            {show_image_atoms}
             element_colors={colors.element}
             atom_radius={scene_props.atom_radius}
             same_size_atoms={scene_props.same_size_atoms}

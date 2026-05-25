@@ -758,11 +758,23 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // jimage shift IS one cell step — so reuse partnerB as the real adjacent atom.
   let B_real = partnerB;
 
+  // show_images flag (viewer's show_image_atoms) packed into lat0.w by the TS
+  // upload (1=on). When ON and we are in the NON-supercell path (ncells==1), a
+  // cross-cell bond's imaged partner B+jimage·lattice coincides with a DISPLAYED
+  // PBC image atom → upgrade the boundary STUB to a FULL cylinder reaching it, so
+  // image atoms gain bonds (matching the WebGL view). Supercell mode (ncells>1)
+  // is left to the Phase-2 partner-cell-in-range logic untouched.
+  let ncells = nx * ny * nz;
+  let show_images = supercell.lat0.w > 0.5;
+  let image_full = (!inside) && ncells == 1u && show_images;
+
   // Render as ONE full cylinder when the partner is a real in-range atom (half 0:
   // A→B_real, half 1 degenerate) — same single-full-cylinder path the Phase-1
   // single-cell code used for intra-cell (jimage=0) bonds. When ncells=1, only
   // jimage=0 is ever inside [0,1)³, so this is exactly the old is_intra branch.
-  let is_full = inside;
+  // image_full upgrades a ncells==1 cross-cell boundary stub to that same full
+  // path (endpoint partnerB = the displayed image atom) when show_images is on.
+  let is_full = inside || image_full;
 
   // FULL: half 0 spans A→B_real; half 1 is collapsed offscreen below.
   // STUB (boundary): half 0 = A→mid(A,partnerB); half 1 = B→mid(B,partnerA) — the
@@ -1066,6 +1078,16 @@ export type LargeSystemRenderer = {
    *  identical to the non-supercell path. The CPU stays at the base cell; this is
    *  what scales the rendered atom count WITHOUT building N× Site objects. */
   set_supercell(dims: [number, number, number], base_lattice: Float32Array): void
+  /** Toggle whether DISPLAYED PBC image atoms exist (the viewer's
+   *  `show_image_atoms`, non-supercell only). When true, cross-cell bonds
+   *  (jimage != 0) in the ncells==1 path are drawn as FULL cylinders reaching the
+   *  imaged partner (B + jimage·lattice) — exactly where the displayed image atom
+   *  sits — so image atoms gain bonds (matching the WebGL view). When false (the
+   *  default) those bonds stay HALF-stubs (the "PBC bond too long, show half"
+   *  behaviour). NEVER affects supercell mode (ncells>1) — there the Phase-2
+   *  partner-cell-in-range logic is authoritative. Marks bonds dirty so the next
+   *  render re-emits with the new flag. */
+  set_show_images(show: boolean): void
   /** Provide bond-detection inputs. `covalent_radii` is the per-atom COVALENT
    *  radius (N entries, from build_atom_radii — distinct from the display radii
    *  used for sphere size). `lattice` is the 9-float row-major matrix (rows
@@ -1169,6 +1191,12 @@ export function create_large_system_renderer(
   let supercell_ncells = 1
   // Cached base lattice rows (9 floats, rows a,b,c) for the per-cell offset.
   let supercell_lattice = new Float32Array(9)
+  // Whether DISPLAYED PBC image atoms exist (viewer's show_image_atoms). Packed
+  // into the Supercell uniform's lat0.w pad slot (the atom impostor reads only
+  // .xyz, so this never perturbs it). Read in BOND_RENDER_WGSL to upgrade the
+  // ncells==1 cross-cell STUB to a FULL cylinder reaching the displayed image
+  // atom. Default false ⇒ stubs ⇒ zero change.
+  let show_image_atoms = false
 
   // Atom storage buffers — lazily (re)created when the atom count grows.
   let positions_buffer: GPUBuffer | null = null
@@ -1958,8 +1986,10 @@ export function create_large_system_renderer(
     // decoded as inst % base_count). 0 atoms ⇒ no draw, value is irrelevant.
     u32[3] = Math.max(0, atom_count)
     const L = supercell_lattice
-    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz (w = 0 pad).
-    f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = 0
+    // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz. The lat0.w pad
+    // slot carries show_image_atoms (1=on) for the bond render's ncells==1 full-
+    // to-image-atom path; the atom impostor reads only .xyz so it is unaffected.
+    f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = show_image_atoms ? 1 : 0
     f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = 0
     f32[8] = L[6]; f32[9] = L[7]; f32[10] = L[8]; f32[11] = 0
     device.queue.writeBuffer(supercell_buffer, 0, buf, 0, SUPERCELL_BYTES)
@@ -2216,6 +2246,16 @@ export function create_large_system_renderer(
       // re-runs the indirect-args build with the new ncells (and re-emits the per-
       // cell bond replicas). A static scene would otherwise keep the old count.
       write_indirect_cfg()
+      bonds_dirty = true
+    },
+    set_show_images(show: boolean): void {
+      if (destroyed) return
+      const next = !!show
+      if (next === show_image_atoms) return
+      show_image_atoms = next
+      // Re-pack the Supercell uniform (lat0.w flag) and re-emit bonds so the
+      // ncells==1 cross-cell halves switch between stub and full-to-image.
+      upload_supercell_uniform()
       bonds_dirty = true
     },
     set_selection(indices: Uint32Array | number[]): void {
