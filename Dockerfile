@@ -53,6 +53,9 @@ RUN cd extensions/rust-wasm && pnpm build \
     && mv ferrox.d.ts chgdiff_wasm.d.ts 2>/dev/null || true \
     && sed -i 's/ferrox_bg\.wasm/chgdiff_wasm_bg.wasm/g' chgdiff_wasm.js
 
+# Generate docs-chunks.json for RAG
+RUN pnpm build:doc-chunks
+
 # Build static frontend → ./build-desktop
 ENV VITE_STATIC_ONLY=true
 RUN pnpm desktop:build
