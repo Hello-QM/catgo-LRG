@@ -683,6 +683,15 @@ export type LargeSystemRenderer = {
     options: { tolerance: number; max_bond_dist: number; min_dist: number },
     periodic: boolean,
   ): void
+  /** Provide the per-element-pair bond_distance_rules POST-FILTER inputs (matches
+   *  src/lib/structure/scene/visibility.ts). `elem_ids` is the per-atom element id
+   *  (N entries) and `rules` is the packed rule buffer (4 floats per rule:
+   *  id_a, id_b, min, max with id_a ≤ id_b), both produced by
+   *  encode_bond_rules (bond-rules.ts) so their id mapping agrees. Empty `rules`
+   *  ⇒ rule_count 0 ⇒ no filtering (behaviour identical to no rules). Marks bonds
+   *  dirty so the next render re-runs the compute with the new rules — LIVE update
+   *  when the viewer edits a bond distance rule. */
+  set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void
   /** Set the clear (background) color the render pass uses. `rgb` is LINEAR
    *  float [r,g,b] in the SAME space as the atom colors uploaded via set_atoms
    *  (so the background and atoms share one color space — dark atoms keep their
@@ -761,6 +770,21 @@ export function create_large_system_renderer(
   // Covalent radii (N) for bond detection — distinct from the display radii.
   let covalent_buffer: GPUBuffer | null = null
   let covalent_capacity = 0
+  // Per-atom element ids (N, binding 5) + packed element-pair distance rules
+  // (binding 6) for the per-pair bond_distance_rules POST-FILTER in the compute
+  // (matches src/lib/structure/scene/visibility.ts). Both default to a 4-byte
+  // placeholder so the auto-layout bind group is always complete even before any
+  // rules are pushed; with rule_count 0 the shader applies no filtering. The
+  // elem-ids buffer grows with the atom count; the rules buffer is re-created on
+  // each set_bond_rules (rule arrays are tiny — a few entries).
+  let elem_ids_buffer: GPUBuffer | null = null
+  let elem_ids_capacity = 0
+  let rules_buffer: GPUBuffer | null = null
+  let rules_capacity_bytes = 0
+  // Packed rules last pushed; read at dispatch to repack Params.rule_count
+  // (rules.length / 4). The actual rule floats also live in rules_buffer
+  // (binding 6); this cache only drives the Params count + the upload.
+  let bond_rules: Float32Array = new Float32Array(0)
   // GPU-resident bond outputs. `pairs` holds capacity*3 u32 (a,b,jimage); the
   // atomic count + indirect-args are tiny fixed buffers.
   let pairs_buffer: GPUBuffer | null = null
@@ -1047,14 +1071,69 @@ export function create_large_system_renderer(
     rebuild_bond_bind_groups()
   }
 
+  /** Ensure the per-atom element-id buffer (binding 5) can hold at least `cap`
+   *  ids. Created/grown like the covalent buffer; a 4-byte minimum keeps the
+   *  binding valid before any ids are pushed. Rebuilds the bond bind groups when
+   *  it reallocates (the compute bind group references it). */
+  function ensure_elem_ids_capacity(cap: number): void {
+    const want = Math.max(cap, 1)
+    if (want <= elem_ids_capacity && elem_ids_buffer) return
+    elem_ids_buffer?.destroy()
+    elem_ids_capacity = Math.max(want, Math.ceil(elem_ids_capacity * 2), 1)
+    elem_ids_buffer = device.createBuffer({
+      label: `large-system-bond-elem-ids`,
+      size: Math.max(elem_ids_capacity * 4, 4),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    rebuild_bond_bind_groups()
+  }
+
+  /** Ensure the packed-rules buffer (binding 6) can hold at least `bytes` bytes.
+   *  Re-created (never shrunk) when the rule set grows; a 4-byte minimum keeps
+   *  the read-only storage binding non-empty when there are no rules. Rebuilds
+   *  the bond bind groups when it reallocates. */
+  function ensure_rules_capacity(bytes: number): void {
+    const want = Math.max(bytes, 4)
+    if (want <= rules_capacity_bytes && rules_buffer) return
+    rules_buffer?.destroy()
+    rules_capacity_bytes = Math.max(want, Math.ceil(rules_capacity_bytes * 2), 4)
+    rules_buffer = device.createBuffer({
+      label: `large-system-bond-rules`,
+      size: rules_capacity_bytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    rebuild_bond_bind_groups()
+  }
+
   /** (Re)build the three bond bind groups. Depends on positions_buffer (atom
-   *  realloc), covalent_buffer, and pairs_buffer — any of which may reallocate.
-   *  No-op until all are present. */
+   *  realloc), covalent_buffer, pairs_buffer, and the elem-ids / rules buffers
+   *  (bindings 5/6) — any of which may reallocate. The elem-ids / rules buffers
+   *  are auto-created here (with a placeholder if never set) so the auto-layout
+   *  compute bind group is always complete (bindings 5/6 are declared in the
+   *  WGSL). No-op until positions/covalent/pairs are present. */
   function rebuild_bond_bind_groups(): void {
     bond_compute_bg = null
     indirect_bg = null
     bond_render_bg = null
     if (!positions_buffer || !covalent_buffer || !pairs_buffer) return
+    // Bindings 5/6 must exist for the auto-layout bind group; lazily create the
+    // placeholders the first time (and avoid recursing back into this fn).
+    if (!elem_ids_buffer) {
+      elem_ids_capacity = 1
+      elem_ids_buffer = device.createBuffer({
+        label: `large-system-bond-elem-ids`,
+        size: 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+    }
+    if (!rules_buffer) {
+      rules_capacity_bytes = 4
+      rules_buffer = device.createBuffer({
+        label: `large-system-bond-rules`,
+        size: 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+    }
 
     bond_compute_bg = device.createBindGroup({
       label: `large-system-bond-compute-bg`,
@@ -1065,6 +1144,8 @@ export function create_large_system_renderer(
         { binding: 2, resource: { buffer: bond_params_buffer } },
         { binding: 3, resource: { buffer: pairs_buffer } },
         { binding: 4, resource: { buffer: count_buffer } },
+        { binding: 5, resource: { buffer: elem_ids_buffer } },
+        { binding: 6, resource: { buffer: rules_buffer } },
       ],
     })
     indirect_bg = device.createBindGroup({
@@ -1267,6 +1348,39 @@ export function create_large_system_renderer(
       upload_bond_render_uniform()
       bonds_dirty = true
     },
+    set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void {
+      if (destroyed) return
+      bond_rules = rules
+
+      // Per-atom element ids (binding 5). Grow + upload N entries. When elem_ids
+      // is shorter than the atom count the tail keeps its previous/zero id; that
+      // can only mis-key atoms with no element (none in practice). Empty elem_ids
+      // is fine — with rule_count 0 the buffer is never read.
+      if (elem_ids.length > 0) {
+        ensure_elem_ids_capacity(elem_ids.length)
+        if (elem_ids_buffer) {
+          device.queue.writeBuffer(
+            elem_ids_buffer, 0,
+            elem_ids.buffer, elem_ids.byteOffset, elem_ids.length * 4,
+          )
+        }
+      }
+
+      // Packed rules (binding 6). Grow + upload; empty ⇒ leave the placeholder
+      // buffer (rule_count 0 ⇒ the shader skips the scan entirely).
+      if (rules.length > 0) {
+        ensure_rules_capacity(rules.byteLength)
+        if (rules_buffer) {
+          device.queue.writeBuffer(
+            rules_buffer, 0,
+            rules.buffer, rules.byteOffset, rules.byteLength,
+          )
+        }
+      }
+
+      // Rules changed ⇒ re-run the compute so the post-filter is reapplied LIVE.
+      bonds_dirty = true
+    },
     set_bonds_enabled(enabled: boolean): void {
       if (destroyed) return
       if (enabled === bonds_enabled) return
@@ -1305,6 +1419,10 @@ export function create_large_system_renderer(
             radii: new Float32Array(0), // unused by pack_params
             lattice: bond_lattice,
             periodic: bond_periodic,
+            // rules drives Params.rule_count (rules.length / 4). Empty ⇒ 0 ⇒ the
+            // shader's rules_keep returns early (no post-filter), identical to no
+            // rules. The actual rule data lives in the binding-6 storage buffer.
+            rules: bond_rules,
           }),
           0, PARAMS_BYTES,
         )
@@ -1387,6 +1505,8 @@ export function create_large_system_renderer(
       depth_texture?.destroy()
       // Bond resources.
       covalent_buffer?.destroy()
+      elem_ids_buffer?.destroy()
+      rules_buffer?.destroy()
       pairs_buffer?.destroy()
       count_buffer.destroy()
       indirect_buffer.destroy()
@@ -1398,6 +1518,8 @@ export function create_large_system_renderer(
       radii_buffer = null
       colors_buffer = null
       covalent_buffer = null
+      elem_ids_buffer = null
+      rules_buffer = null
       pairs_buffer = null
       msaa_color_texture = null
       msaa_color_view = null

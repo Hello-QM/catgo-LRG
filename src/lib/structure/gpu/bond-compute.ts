@@ -12,6 +12,14 @@ export type BondComputeRun = {
   radii: Float32Array // N
   lattice: Float32Array // 9, row-major (rows a,b,c)
   periodic: boolean
+  /** Per-atom element id (N). Optional — defaults to all-zero (no rule matches
+   *  any pair, so behaviour is identical to no rules). Shares its id mapping
+   *  with `rules` (see bond-rules.ts encode_bond_rules). */
+  elem_ids?: Uint32Array
+  /** Packed element-pair distance rules: 4 floats per rule
+   *  [id_a, id_b, min, max] with id_a ≤ id_b. Optional — defaults to empty
+   *  (rule_count 0 ⇒ the shader applies no post-filter). */
+  rules?: Float32Array
 }
 
 /** Result of a bond-compute run.
@@ -46,7 +54,8 @@ export function pack_params(n: number, capacity: number, r: BondComputeRun): Arr
   f32[4] = r.tolerance
   f32[5] = r.max_bond_dist
   f32[6] = r.min_dist
-  f32[7] = 0
+  // u32[7] = rule_count (number of element-pair distance rules). 0 ⇒ no filter.
+  u32[7] = r.rules ? r.rules.length / 4 : 0
   const L = r.lattice
   // Transpose: WGSL reads lattice[k] as column k; write row k into column k.
   // Column 0 = row a (L[0..2]), column 1 = row b (L[3..5]), column 2 = row c (L[6..8]).
@@ -87,6 +96,8 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
       let params_buf: GPUBuffer | undefined
       let pairs_buf: GPUBuffer | undefined
       let count_buf: GPUBuffer | undefined
+      let elem_ids_buf: GPUBuffer | undefined
+      let rules_buf: GPUBuffer | undefined
       let count_read: GPUBuffer | undefined
       let pairs_read: GPUBuffer | undefined
 
@@ -120,6 +131,26 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
         })
         device.queue.writeBuffer(count_buf, 0, new Uint32Array([0]))
 
+        // Per-atom element ids (binding 5). Optional: default to all-zero (size n)
+        // so the rule scan sees every atom with id 0 — harmless because with no
+        // rules (rule_count 0) the scan is skipped entirely.
+        const elem_ids = r.elem_ids ?? new Uint32Array(n)
+        elem_ids_buf = device.createBuffer({
+          size: Math.max(elem_ids.byteLength, 4),
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        })
+        device.queue.writeBuffer(elem_ids_buf, 0, elem_ids as BufferSource)
+
+        // Packed element-pair rules (binding 6). Optional: default empty ⇒ the
+        // shader reads rule_count 0 from Params and applies no post-filter. A
+        // 4-byte minimum keeps the (read-only) storage binding non-empty.
+        const rules = r.rules ?? new Float32Array(0)
+        rules_buf = device.createBuffer({
+          size: Math.max(rules.byteLength, 4),
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        })
+        if (rules.byteLength > 0) device.queue.writeBuffer(rules_buf, 0, rules as BufferSource)
+
         const bind_group = device.createBindGroup({
           layout: pipeline.getBindGroupLayout(0),
           entries: [
@@ -128,6 +159,8 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
             { binding: 2, resource: { buffer: params_buf } },
             { binding: 3, resource: { buffer: pairs_buf } },
             { binding: 4, resource: { buffer: count_buf } },
+            { binding: 5, resource: { buffer: elem_ids_buf } },
+            { binding: 6, resource: { buffer: rules_buf } },
           ],
         })
 
@@ -174,6 +207,8 @@ export function create_bond_compute(device: GPUDevice, cfg: { capacity: number }
         params_buf?.destroy()
         pairs_buf?.destroy()
         count_buf?.destroy()
+        elem_ids_buf?.destroy()
+        rules_buf?.destroy()
         count_read?.destroy()
         pairs_read?.destroy()
       }

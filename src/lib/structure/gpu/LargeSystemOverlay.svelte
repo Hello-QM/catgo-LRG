@@ -5,6 +5,7 @@
   import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
   import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
   import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
+  import { encode_bond_rules, type BondDistanceRuleLike } from '$lib/structure/gpu/bond-rules'
   import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
   import { should_show_bonds } from '$lib/structure/scene'
   import type { ShowBonds } from '$lib/settings'
@@ -24,6 +25,7 @@
     element_radius_overrides = undefined,
     site_radius_overrides = undefined,
     bonding_options = undefined,
+    bond_distance_rules = undefined,
     show_bonds = `crystals`,
     background_color = undefined,
     background_opacity = 0.1,
@@ -56,6 +58,16 @@
      *  detection. Same Record the CPU path reads (scene_props.bonding_options);
      *  mapped via to_compute_options. */
     bonding_options?: Record<string, number> | undefined
+    /** Per-element-pair distance rules (the SAME `bond_distance_rules` the WebGL
+     *  path reads). The overlay applies them as a POST-FILTER on the GPU-detected
+     *  bonds, reproducing src/lib/structure/scene/visibility.ts exactly: for a
+     *  detected bond with length d and element pair (eA,eB), if a rule exists for
+     *  the SORTED pair it keeps the bond only when min ≤ d ≤ max, and if no rule
+     *  exists it keeps the bond. Rules can only REMOVE strategy-detected bonds.
+     *  Empty / undefined ⇒ no filtering (behaviour identical to no rules). */
+    bond_distance_rules?:
+      | { element_1: string; element_2: string; min_dist: number; max_dist: number }[]
+      | undefined
     /** Viewer's bond-visibility setting (`never`/`always`/`crystals`/`molecules`),
      *  mirroring the WebGL path's `scene_props.show_bonds`. The overlay feeds this
      *  through the SAME `should_show_bonds(show_bonds, lattice)` predicate the
@@ -137,6 +149,52 @@
   let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
+
+  // ── Per-element-pair distance-rule state ───────────────────────────────────
+  // Encoded inputs for the GPU rule POST-FILTER (per-atom element ids + packed
+  // rules), rebuilt when the structure identity OR the rules change. Pushed to
+  // the renderer via set_bond_rules; the renderer re-runs the compute so editing
+  // a rule updates the overlay bonds LIVE. Empty rules ⇒ no filtering.
+  let rules_source: AnyStructure | undefined = undefined
+  let rules_sig = ``
+  let rule_elem_ids: Uint32Array = new Uint32Array(0)
+  let rule_packed: Float32Array = new Float32Array(0)
+  // Set when the encoded rules changed and must be re-pushed to the renderer.
+  let rules_dirty = false
+
+  /** Cheap signature of the bond_distance_rules array; changes when any rule's
+   *  elements or min/max do, so the GPU post-filter re-encodes + re-dispatches. */
+  function bond_rules_signature(): string {
+    const rs = bond_distance_rules
+    if (!rs || rs.length === 0) return ``
+    let s = ``
+    for (const r of rs) s += `${r.element_1}-${r.element_2}:${r.min_dist},${r.max_dist};`
+    return s
+  }
+
+  /** Re-encode the per-atom element ids + packed rules when the structure identity
+   *  or the rules changed. Pure JS (encode_bond_rules); no-op otherwise. Note the
+   *  elem-id mapping is per-structure, so a structure swap MUST re-encode even if
+   *  the rules text is unchanged. */
+  function rebuild_rules_if_needed(): void {
+    const sig = bond_rules_signature()
+    if (structure === rules_source && sig === rules_sig) return
+    rules_source = structure
+    rules_sig = sig
+    rules_dirty = true
+    const sites = structure?.sites
+    if (!sites || sites.length === 0) {
+      rule_elem_ids = new Uint32Array(0)
+      rule_packed = new Float32Array(0)
+      return
+    }
+    const encoded = encode_bond_rules(
+      sites,
+      (bond_distance_rules ?? []) as BondDistanceRuleLike[],
+    )
+    rule_elem_ids = encoded.elem_ids
+    rule_packed = encoded.rules
+  }
   // Whether bonds should render at all, decided by the SAME predicate the WebGL
   // path uses (should_show_bonds against the structure's lattice). When false the
   // overlay skips the GPU bond compute push AND the renderer skips compute+draw,
@@ -547,6 +605,17 @@
         bonds_dirty = false
         dirty = true
       }
+      // Per-element-pair distance-rule POST-FILTER: re-encode on structure/rule
+      // change and push the per-atom element ids + packed rules. The renderer
+      // re-runs the bond compute so editing a rule updates the overlay LIVE.
+      // Pushed AFTER set_bond_data (which also flags the renderer bonds_dirty),
+      // so a combined change still results in a single recompute next render.
+      rebuild_rules_if_needed()
+      if (rules_dirty) {
+        renderer.set_bond_rules(rule_elem_ids, rule_packed)
+        rules_dirty = false
+        dirty = true
+      }
     }
 
     // Cell box: push the lattice + show + color to the renderer when any of them
@@ -598,6 +667,11 @@
     bond_source = undefined
     bond_options_sig = ``
     bonds_dirty = true
+    // Fresh renderer ⇒ its rule buffers are placeholders; force a re-encode +
+    // re-push of the per-atom element ids + packed rules on the first frame.
+    rules_source = undefined
+    rules_sig = ``
+    rules_dirty = true
     // Fresh renderer ⇒ its bonds_enabled defaults to true; match that here so the
     // first frame re-syncs set_bonds_enabled when bonds are currently hidden.
     last_bonds_enabled = true
@@ -683,6 +757,7 @@
     element_radius_overrides
     site_radius_overrides
     bonding_options
+    bond_distance_rules
     if (renderer) {
       needs_render = true
       wake()
