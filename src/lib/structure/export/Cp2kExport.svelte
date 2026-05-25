@@ -198,16 +198,16 @@
         throw new Error(r.message || 'Server returned failure')
       }
     } catch (e) {
-      if (e instanceof TypeError && e.message.includes('fetch')) {
-        try {
-          const inp = gen_cp2k_local()
-          generated_output = { [`${prefix}.inp`]: inp }
-          active_file = `${prefix}.inp`
-        } catch (localErr) {
-          generation_error = localErr instanceof Error ? localErr.message : 'Failed to generate CP2K input'
-        }
-      } else {
-        generation_error = e instanceof Error ? e.message : 'Failed to generate CP2K input'
+      // Backend unavailable or errored (network failure, non-OK status, or
+      // {success:false}) — fall back to fully client-side generation so the web
+      // build can still produce a CP2K input.
+      try {
+        const inp = gen_cp2k_local()
+        generated_output = { [`${prefix}.inp`]: inp }
+        active_file = `${prefix}.inp`
+      } catch (localErr) {
+        generation_error = localErr instanceof Error ? localErr.message
+          : (e instanceof Error ? e.message : 'Failed to generate CP2K input')
       }
     }
   }
