@@ -2020,11 +2020,6 @@ export function create_large_system_renderer(
       const h = pick_id_texture.height
       const px = Math.max(0, Math.min(w - 1, Math.floor(x)))
       const py = Math.max(0, Math.min(h - 1, Math.floor(y)))
-      // TODO(pick-debug): strip once verified. Logs the requested vs clamped
-      // device pixel against the pick id texture size + atom count.
-      // eslint-disable-next-line no-console
-      console.log(`[pick-debug] pick() in`, { x, y }, `clamped`, { px, py },
-        `pick_tex`, { w, h }, `atom_count`, atom_count)
 
       const encoder = device.createCommandEncoder({ label: `large-system-pick` })
       const pass = encoder.beginRenderPass({
@@ -2064,9 +2059,6 @@ export function create_large_system_renderer(
       }
       const id = new Uint32Array(pick_readback.getMappedRange(0, 4))[0]
       pick_readback.unmap()
-      // TODO(pick-debug): strip once verified. Logs the raw texel id read back.
-      // eslint-disable-next-line no-console
-      console.log(`[pick-debug] pick() readback id=`, id, `→ idx=`, id === 0 ? -1 : id - 1)
       // id 0 = background ⇒ -1; otherwise atom index = id - 1.
       return id === 0 ? -1 : id - 1
     },

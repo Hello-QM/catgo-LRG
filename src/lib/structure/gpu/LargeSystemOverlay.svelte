@@ -575,17 +575,7 @@
     const scale_y = rect.height > 0 ? canvas.height / rect.height : 1
     const x = (client_x - rect.left) * scale_x
     const y = (client_y - rect.top) * scale_y
-    // TODO(pick-debug): strip once verified. Logs the full client→device mapping.
-    const dpr = typeof window !== `undefined` ? window.devicePixelRatio || 1 : 1
-    console.log(`[pick-debug] client`, { client_x, client_y }, `rect`, {
-      left: rect.left, top: rect.top, width: rect.width, height: rect.height,
-    }, `dpr`, dpr, `canvas`, { w: canvas.width, h: canvas.height }, `scale`, {
-      scale_x, scale_y,
-    }, `device`, { x, y })
     const idx = await renderer.pick(x, y)
-    // TODO(pick-debug): strip once verified. Logs the picked index + selection.
-    console.log(`[pick-debug] on_pick(base_idx=`, idx, `) selected_sites(before)=`,
-      [...(selected_sites ?? [])])
     on_pick(idx)
   }
 
