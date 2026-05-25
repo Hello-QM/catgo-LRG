@@ -271,7 +271,6 @@ export function markdown_to_html(md: string): string {
     // Table: detect | col | col | pattern
     if (line.includes(`|`) && line.trim().startsWith(`|`)) {
       const table_lines: string[] = []
-      const save_idx = idx
       while (idx < lines.length && lines[idx].includes(`|`) && lines[idx].trim().startsWith(`|`)) {
         table_lines.push(lines[idx])
         idx++
@@ -290,8 +289,13 @@ export function markdown_to_html(md: string): string {
         out.push(html)
         continue
       }
-      // Not a valid table, revert and treat as paragraph
-      idx = save_idx
+      // Not a valid table yet — typically a lone `|` row that arrives mid-stream
+      // before the rest of the table. Render the consumed line(s) as a paragraph
+      // and DO NOT revert idx: the paragraph fallback below skips `|`-leading
+      // lines, so reverting would leave idx unadvanced and spin this outer loop
+      // forever (out grows until `Array.push` throws "Invalid array length").
+      out.push(`<p>${render_inline(esc(table_lines.join(`\n`)))}</p>`)
+      continue
     }
 
     // Headings
