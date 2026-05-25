@@ -178,11 +178,15 @@ export function make_supercell(
 // instances the base cell), so this threshold does NOT apply.
 export const CPU_SUPERCELL_CELL_WARN_THRESHOLD = 64
 
-// Soft cap on the EFFECTIVE GPU instance count (base atom count × number of
-// cells). Beyond this the GPU instancing path can hang on weaker hardware, so
-// the caller should warn and/or clamp. ~10M instances is a sane ceiling for a
-// single InstancedMesh on current WebGPU.
-export const GPU_SUPERCELL_MAX_INSTANCES = 10_000_000
+// Hard ceiling on the EFFECTIVE GPU instance count (base atom count × number of
+// cells) — a guard against pathological factors (e.g. a fat-fingered
+// 1000×1000×1000), NOT a perf budget. The GPU supercell path is pure
+// instancing: bonds are detected on the BASE cell only and GPU memory stays
+// base-cell-sized, so only the draw instance count grows — which GPUs handle
+// into the hundreds of millions (OVITO-class). 200M is comfortably above
+// 100M-atom visualization while still catching absurd input. Frame rate may
+// drop near the top (fill rate), but it degrades gracefully — it never freezes.
+export const GPU_SUPERCELL_MAX_INSTANCES = 200_000_000
 
 // Product of the [nx,ny,nz] factors parsed from a scaling input = number of
 // cells. Returns 1 (no supercell) for malformed input so callers can treat a
