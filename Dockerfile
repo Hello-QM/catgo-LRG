@@ -68,24 +68,26 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #   tini — proper PID-1 reaping
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl tini libgomp1 libopenblas0 libstdc++6 gnupg \
-        build-essential cmake libopenbabel-dev swig python3-dev \
+        python3-openbabel libopenbabel7 \
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
         | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
     && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
         | tee /etc/apt/sources.list.d/caddy-stable.list \
     && apt-get update && apt-get install -y --no-install-recommends caddy \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get purge -y --auto-remove gnupg \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/lib/python3/dist-packages/openbabel /usr/local/lib/python3.11/site-packages/openbabel
 
 WORKDIR /app
 
 # Python deps — install CPU-only torch first so mace-torch reuses it
 # (avoids pulling the multi-GB CUDA wheel inside the container).
+# openbabel is provided by system python3-openbabel above (skip from pip).
 COPY server/requirements.txt /tmp/requirements.txt
-RUN pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+RUN grep -v "^openbabel" /tmp/requirements.txt > /tmp/requirements_filtered.txt \
+    && pip install --extra-index-url https://download.pytorch.org/whl/cpu \
         "torch>=2.2,<2.8" \
-    && pip install -r /tmp/requirements.txt \
-    && apt-get purge -y --auto-remove build-essential cmake libopenbabel-dev swig python3-dev gnupg \
-    && rm -rf /var/lib/apt/lists/*
+    && pip install -r /tmp/requirements_filtered.txt
 
 # Backend code
 COPY server ./server
