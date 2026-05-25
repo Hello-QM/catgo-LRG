@@ -312,12 +312,27 @@
       pos = get_trajectory_frame_positions(trajectory_step_idx)
     }
     // The getter is indexed against the BASE frame sites; when the displayed
-    // structure carries supercell / PBC-image atoms it is longer than that
-    // array. Only adopt the getter's xyz when it covers every displayed atom —
-    // otherwise fall back to the structure's own (slow-path-updated) sites xyz,
-    // which always matches sites.length. (Guards against a short writeBuffer in
-    // set_positions; in that case image/supercell atoms just track sites.xyz.)
-    frame_positions = pos && pos.length >= sites.length * 3 ? pos : pack_positions(sites)
+    // structure carries supercell / PBC-image atoms it is LONGER than the
+    // getter's array (base + replicas). PARTIAL-APPLY rather than all-or-nothing:
+    //   1. Start from the static topology positions for EVERY displayed atom
+    //      (pack_positions(sites)) — this gives the replica/image atoms their
+    //      correct topology-load positions (the documented supercell limitation).
+    //   2. If the getter yielded per-frame xyz (non-null), OVERWRITE the leading
+    //      floats with it — those are the BASE atoms, which therefore ANIMATE per
+    //      frame. We copy min(frame_pos.length, topology.length) floats so a short
+    //      OR an oversized getter array can never write out of bounds.
+    //   3. Replica/image atoms (beyond the base block) keep their topology xyz.
+    // Result: non-supercell (frame_pos covers all atoms) ⇒ every atom gets its
+    // per-frame xyz, identical to before. Supercell (frame_pos covers only the
+    // base block) ⇒ base atoms animate, replicas stay at topology — the
+    // trajectory PLAYS instead of freezing on frame 1. Getter null/unavailable ⇒
+    // pure static topology positions, exactly as the prior fallback.
+    const topology = pack_positions(sites)
+    if (pos) {
+      const n = Math.min(pos.length, topology.length)
+      topology.set(pos.subarray(0, n))
+    }
+    frame_positions = topology
     positions_dirty = true
 
     // Variable-cell: if the displayed lattice changed, the bond compute + bond
