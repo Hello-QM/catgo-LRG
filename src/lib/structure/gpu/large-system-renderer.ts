@@ -463,14 +463,18 @@ fn fs_main(in : VsOut) -> FsOut {
 `
 
 /** WGSL atom PICK shader. Re-runs the SAME impostor sphere ray-trace as
- *  IMPOSTOR_WGSL, but writes the atom INDEX (instance_index + 1, so 0 stays free
- *  for "background") into an R32Uint id buffer instead of a shaded color. Renders
- *  single-sampled (no MSAA) with its own single-sample depth, so the front-most
- *  atom at each pixel wins the depth test and its id is what gets read back. Only
- *  the disk interior is written (the analytic AA band is skipped — a hard discard
- *  is correct for picking, no fractional ids). The fragment writes the same
- *  corrected sphere depth as the color pass so overlapping atoms resolve by true
- *  depth, not draw order. */
+ *  IMPOSTOR_WGSL, INCLUDING the identical GPU-supercell instance decode (Phase 4):
+ *  the pass is instanced exactly like the atom draw (atom_count·ncells instances),
+ *  so a click in supercell mode hits the right replica. It writes the GLOBAL
+ *  instance index + 1 (so 0 stays free for "background") into an R32Uint id buffer
+ *  instead of a shaded color; pick() decodes that raw id back to the BASE atom
+ *  index. Renders single-sampled (no MSAA) with its own single-sample depth, so
+ *  the front-most atom at each pixel wins the depth test and its id is what gets
+ *  read back. Only the disk interior is written (the analytic AA band is skipped —
+ *  a hard discard is correct for picking, no fractional ids). The fragment writes
+ *  the same corrected sphere depth as the color pass so overlapping atoms resolve
+ *  by true depth, not draw order. When dims = (1,1,1) the decode collapses to
+ *  atom = inst / id = inst + 1 ⇒ byte-identical to the pre-Phase-4 pick. */
 const PICK_WGSL = `
 struct Camera {
   view : mat4x4<f32>,
@@ -478,16 +482,29 @@ struct Camera {
   cam_pos : vec4<f32>,
 };
 
+// GPU supercell uniform (Phase 4). SAME layout as the atom impostor's Supercell:
+// dims = [nx,ny,nz,base_count]; lat0/1/2 = base lattice rows a,b,c (xyz + pad).
+// Read ONLY in vs_main (decode of instance_index into atom + cell offset), so the
+// BGL grants it VERTEX visibility only. Default dims (1,1,1) + base_count = the
+// instance count ⇒ atom = inst, cell = 0, zero offset ⇒ identical pick.
+struct Supercell {
+  dims : vec4<u32>,    // x=nx, y=ny, z=nz, w=base_count
+  lat0 : vec4<f32>,
+  lat1 : vec4<f32>,
+  lat2 : vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> radii : array<f32>;
+@group(0) @binding(3) var<uniform> supercell : Supercell;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
   @location(0) vc : vec3<f32>,
   @location(1) radius : f32,
   @location(2) vpos : vec3<f32>,
-  @location(3) @interpolate(flat) id : u32, // instance_index + 1
+  @location(3) @interpolate(flat) id : u32, // global instance_index + 1
 };
 
 struct FsOut {
@@ -504,12 +521,29 @@ fn corner_for(vi : u32) -> vec2<f32> {
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32,
            @builtin(instance_index) inst : u32) -> VsOut {
+  // SAME GPU supercell decode as IMPOSTOR_WGSL.vs_main: instance = atom-within-
+  // base-cell + cell tiling index. base_count = supercell.dims.w; the per-cell
+  // integer (ix,iy,iz) gives the lattice offset ix·a + iy·b + iz·c. When dims =
+  // (1,1,1) and base_count = the instance count, atom = inst, cell = 0, offset =
+  // 0 ⇒ center = positions[inst], byte-identical to the pre-Phase-4 pick.
+  let base_count = max(supercell.dims.w, 1u);
+  let atom = inst % base_count;
+  let cell = inst / base_count;
+  let nx = max(supercell.dims.x, 1u);
+  let ny = max(supercell.dims.y, 1u);
+  let ix = cell % nx;
+  let iy = (cell / nx) % ny;
+  let iz = cell / (nx * ny);
+  let offset = f32(ix) * supercell.lat0.xyz
+             + f32(iy) * supercell.lat1.xyz
+             + f32(iz) * supercell.lat2.xyz;
+
   let center = vec3<f32>(
-    positions[inst * 3u + 0u],
-    positions[inst * 3u + 1u],
-    positions[inst * 3u + 2u],
-  );
-  let r = radii[inst];
+    positions[atom * 3u + 0u],
+    positions[atom * 3u + 1u],
+    positions[atom * 3u + 2u],
+  ) + offset;
+  let r = radii[atom];
 
   let vc4 = camera.view * vec4<f32>(center, 1.0);
   let vc = vc4.xyz;
@@ -1365,7 +1399,9 @@ export function create_large_system_renderer(
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       // binding 4: per-atom selection flag `selected`. The BUFFER is indexed in
-      // vs_main (`selected[inst]` -> flat varying `out.sel`); fs_main reads only
+      // vs_main by the DECODED base atom (`selected[atom]`, atom = inst %
+      // base_count) -> flat varying `out.sel`, so EVERY supercell replica of a
+      // selected base atom glows (the buffer stays BASE-sized). fs_main reads only
       // that varying, never the buffer. So the binding's referencing stage is
       // VERTEX. (A prior layout granted FRAGMENT-only, mismatching vs_main and
       // invalidating the pipeline -> blank overlay.) Granted VERTEX|FRAGMENT —
@@ -1426,6 +1462,11 @@ export function create_large_system_renderer(
       // off interpolated VsOut varyings — so VERTEX-only.
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      // binding 3 = GPU supercell uniform (Phase 4). Read ONLY in vs_main (instance
+      // decode → atom + cell offset), so VERTEX-only — granting FRAGMENT here would
+      // mismatch the shader and invalidate the pick pipeline (the same bind-group-
+      // visibility rule that bit binding 0 above).
+      { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
     ],
   })
   const pick_pipeline = device.createRenderPipeline({
@@ -1781,7 +1822,9 @@ export function create_large_system_renderer(
         { binding: 5, resource: { buffer: supercell_buffer } },
       ],
     })
-    // Pick pass reuses camera + positions + radii (no colors/selected).
+    // Pick pass reuses camera + positions + radii (no colors/selected) PLUS the
+    // GPU supercell uniform (Phase 4) so the pick vs decodes the cell identically
+    // to the atom draw and clicks hit the right replica.
     pick_bind_group = device.createBindGroup({
       label: `large-system-pick-bg`,
       layout: pick_bgl,
@@ -1789,6 +1832,7 @@ export function create_large_system_renderer(
         { binding: 0, resource: { buffer: camera_buffer } },
         { binding: 1, resource: { buffer: positions_buffer } },
         { binding: 2, resource: { buffer: radii_buffer } },
+        { binding: 3, resource: { buffer: supercell_buffer } },
       ],
     })
   }
@@ -2312,7 +2356,10 @@ export function create_large_system_renderer(
       })
       pass.setPipeline(pick_pipeline)
       pass.setBindGroup(0, pick_bind_group)
-      pass.draw(4, atom_count)
+      // GPU supercell (Phase 4): draw atom_count × ncells instances, exactly like
+      // the atom render draw, so every replica is pickable. ncells 1 (default /
+      // 1×1×1) ⇒ atom_count instances ⇒ inst = atom, byte-identical to before.
+      pass.draw(4, atom_count * Math.max(1, supercell_ncells))
       pass.end()
       // Copy the single picked texel into the 256-byte readback buffer.
       encoder.copyTextureToBuffer(
@@ -2329,8 +2376,17 @@ export function create_large_system_renderer(
       }
       const id = new Uint32Array(pick_readback.getMappedRange(0, 4))[0]
       pick_readback.unmap()
-      // id 0 = background ⇒ -1; otherwise atom index = id - 1.
-      return id === 0 ? -1 : id - 1
+      // id 0 = background ⇒ -1. Otherwise the raw id is GLOBAL instance + 1; the
+      // global instance is atom + cell·base_count, so the BASE atom index is
+      // (id - 1) % base_count. The CPU holds the BASE cell (displayed_structure IS
+      // the base cell in supercell mode), so base_atom indexes displayed_structure
+      // .sites directly — the caller (handle_overlay_pick) needs no change. With
+      // 1×1×1 (ncells 1) base_count = atom_count and g < atom_count, so base_atom =
+      // g — byte-identical to the pre-Phase-4 `id - 1`.
+      if (id === 0) return -1
+      const g = id - 1
+      const base_count = Math.max(1, atom_count)
+      return g % base_count
     },
     render(): void {
       if (destroyed) return
