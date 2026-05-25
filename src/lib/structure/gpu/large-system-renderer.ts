@@ -730,7 +730,15 @@ export function create_large_system_renderer(
   const bond_render_bgl = device.createBindGroupLayout({
     label: `large-system-bond-render-bgl`,
     entries: [
-      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 0 = camera: read by BOTH vs_main (view+proj billboard) AND
+      // fs_main (camera.proj for the frag_depth projection of the ray-traced hit
+      // point). The impostor-cylinder rewrite moved that projection into the
+      // fragment stage, so this binding MUST be visible to FRAGMENT too —
+      // otherwise the pipeline is invalid ("entry point's stage is not in the
+      // binding visibility") and the whole frame submit fails (blank overlay).
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      // bindings 1-3 (positions, pairs, bond uniform) are read only by vs_main —
+      // fs_main works entirely off interpolated VsOut varyings — so VERTEX-only.
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
