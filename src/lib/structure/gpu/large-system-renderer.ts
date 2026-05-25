@@ -26,14 +26,25 @@ const CAMERA_FULL_BYTES = 144
 /** Bond Params uniform (BOND_COMPUTE_WGSL): 80 bytes, packed via pack_params. */
 const BOND_PARAMS_BYTES = 80
 
-/** Vertices per bond half. Each half is now an IMPOSTOR cylinder: a single
- *  camera-facing billboard quad (4 verts, triangle-STRIP) whose fragment shader
- *  ray-traces a mathematically smooth, capped finite cylinder. Constant low
- *  vertex count regardless of curvature (no facets), matching the atom impostor
- *  approach. This is the single source of truth for the indirect-args
- *  vertex_count (`cfg.x`) and MUST stay in sync with the render pipeline
- *  topology (triangle-strip ⇒ 4 verts). */
-const BOND_VERTS_PER_CYLINDER = 4
+/** Vertices per bond half. Each half is an IMPOSTOR cylinder: a camera-facing
+ *  billboard whose fragment shader ray-traces a mathematically smooth, capped
+ *  finite cylinder. Constant low vertex count regardless of curvature (no
+ *  facets), matching the atom impostor approach.
+ *
+ *  The billboard is a 6-vertex triangle-STRIP "hull" of two screen-aligned
+ *  squares (one per endpoint, each side ~2r) — a capsule-bounding hexagon. This
+ *  ALWAYS covers the full projected capsule silhouette from any view angle:
+ *  - end-on (axis pointing at the eye, v0≈v1 in screen XY): each square is still
+ *    a full 2r×2r screen quad, so the cap disk (radius r) is fully rasterized —
+ *    no hollow ring. A degenerate single-vertex ribbon could not do this.
+ *  - side / oblique long bonds: each endpoint square is anchored at that
+ *    endpoint's OWN view-space depth, so perspective foreshortening can't clip
+ *    the silhouette at grazing angles (a single-depth screen quad would).
+ *
+ *  This is the single source of truth for the indirect-args vertex_count
+ *  (`cfg.x`) and MUST stay in sync with the render pipeline topology
+ *  (triangle-strip ⇒ this many verts). */
+const BOND_VERTS_PER_CYLINDER = 6
 
 /** Fixed bond cylinder radius (Å). Small constant; tunable. Uploaded to the
  *  bond render shader as part of its uniform so it can be retuned without a
@@ -366,36 +377,59 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   let v0 = (camera.view * vec4<f32>(start, 1.0)).xyz;
   let v1 = (camera.view * vec4<f32>(end, 1.0)).xyz;
 
-  // Camera-facing ribbon quad covering the finite capsule. axis = â (view space);
-  // a degenerate (zero-length) half falls back to a fixed axis so normalize never
-  // produces NaN — the fragment shader discards it anyway.
-  let av = v1 - v0;
-  let alen = length(av);
-  let axis = select(vec3<f32>(0.0, 0.0, 1.0), av / max(alen, 1e-6), alen > 1e-6);
-  // Toward the eye from the segment midpoint (eye at view-space origin).
-  let mid_v = (v0 + v1) * 0.5;
-  let to_eye = -mid_v;
-  // Camera-facing perpendicular; fall back if axis ∥ to_eye (segment pointing at
-  // the eye) so the cross product can't collapse to zero.
-  var side = cross(axis, to_eye);
-  if (length(side) < 1e-6) {
-    side = cross(axis, vec3<f32>(0.0, 1.0, 0.0));
-    if (length(side) < 1e-6) {
-      side = cross(axis, vec3<f32>(1.0, 0.0, 0.0));
-    }
-  }
-  side = normalize(side) * r;
-  // Extend the quad past both ends by r along the axis so the round caps are
-  // covered, with a little extra slack (1.5) on the width so the perspective
-  // silhouette of the cylinder is never clipped at grazing/foreshortened angles.
-  let cap_ext = axis * r;
-  let widen = side * 1.5;
+  // SCREEN-ALIGNED capsule-bounding hull. The old camera-facing ribbon was
+  // built from side = cross(axis, to_eye); when the bond axis points at the eye
+  // (end-on) that cross product collapses and the quad turns edge-on, leaving
+  // the projected cap disk uncovered -> hollow ring. Instead we wrap BOTH
+  // endpoint disks with a 6-vertex hull of two screen-aligned squares (each side
+  // 2r, in the view-space XY plane the camera looks down -Z). Whatever the bond
+  // orientation, each square keeps its full 2r×2r screen footprint, so the cap
+  // circle is always fully rasterized; the fragment ray-test discards the slack.
+  //
+  // The hull is laid out along the bond's SCREEN-PROJECTED direction (so it
+  // hugs the capsule for long side-on bonds), with each endpoint's billboard
+  // corners anchored at that endpoint's OWN view-space depth -> no perspective
+  // clipping of the silhouette at oblique/foreshortened angles.
+  let w = r * 1.5; // half-extent per square; slack so grazing silhouette never clips.
 
-  // 4 triangle-strip corners: (vi&1) -> ±side, (vi&2) -> v0/v1 end.
-  let s_sign = select(-1.0, 1.0, (vi & 1u) == 1u);
-  let is_end = (vi & 2u) == 2u;
-  let base = select(v0 - cap_ext, v1 + cap_ext, is_end);
-  let vpos = base + s_sign * widen;
+  // Screen-space (view XY) direction from v0 to v1. End-on bonds project to a
+  // ~zero-length 2D segment -> fall back to +X so the perp axis is well defined;
+  // the two squares simply stack into one 2r×2r quad, which is exactly what an
+  // end-on cap needs.
+  let d2 = v1.xy - v0.xy;
+  let d2len = length(d2);
+  let sdir = select(vec2<f32>(1.0, 0.0), d2 / max(d2len, 1e-6), d2len > 1e-6);
+  let sperp = vec2<f32>(-sdir.y, sdir.x);
+  // View-space screen offsets: along the projected axis (so caps extend past the
+  // endpoints by w) and across it (capsule width). Both live in the XY plane.
+  let off_axis = vec3<f32>(sdir * w, 0.0);
+  let off_perp = vec3<f32>(sperp * w, 0.0);
+
+  // 6-vertex triangle-STRIP hull of the two endpoint squares (a capsule-bounding
+  // hexagon). The strip's 4 triangles — (0,1,2),(1,2,3),(2,3,4),(3,4,5) — tile a
+  // convex hexagon whose 6 corners wrap both squares:
+  //   0: v0 - axis - perp        (v0 far-cap, perp -)
+  //   1: v0 - axis + perp        (v0 far-cap, perp +)
+  //   2: v1       - perp         (v1 body edge, perp -)   [shares v0's near side
+  //   3: v0       + perp          via the strip's quad coverage]
+  //   4: v1 + axis - perp        (v1 far-cap, perp -)
+  //   5: v1 + axis + perp        (v1 far-cap, perp +)
+  // Each corner is anchored at its OWN endpoint's view-space depth (v0 vs v1) so
+  // perspective foreshortening never clips the silhouette of an oblique long
+  // bond. End-on (off_axis along the +X fallback) every corner still sits at
+  // ±w, so the union is a full 2w×2w screen square over the cap — solid, no ring.
+  var anchor = v0;
+  var ax_sign = 0.0;
+  var p_sign = -1.0;
+  switch vi % 6u {
+    case 0u: { anchor = v0; ax_sign = -1.0; p_sign = -1.0; }
+    case 1u: { anchor = v0; ax_sign = -1.0; p_sign =  1.0; }
+    case 2u: { anchor = v1; ax_sign =  0.0; p_sign = -1.0; }
+    case 3u: { anchor = v0; ax_sign =  0.0; p_sign =  1.0; }
+    case 4u: { anchor = v1; ax_sign =  1.0; p_sign = -1.0; }
+    default: { anchor = v1; ax_sign =  1.0; p_sign =  1.0; }
+  }
+  let vpos = anchor + ax_sign * off_axis + p_sign * off_perp;
 
   var clip = camera.proj * vec4<f32>(vpos, 1.0);
   // SAME GL->WebGPU NDC z remap as the atom impostor shader.
@@ -749,10 +783,10 @@ export function create_large_system_renderer(
     layout: device.createPipelineLayout({ bindGroupLayouts: [bond_render_bgl] }),
     vertex: { module: bond_render_module, entryPoint: `vs_main` },
     fragment: { module: bond_render_module, entryPoint: `fs_main`, targets: [{ format }] },
-    // Impostor cylinder is a single camera-facing billboard (4-vert triangle-
-    // STRIP, matching BOND_VERTS_PER_CYLINDER); the fragment shader ray-traces
-    // the smooth capped finite cylinder. cullMode none — billboard winding flips
-    // with view, and the impostor is one-sided per-fragment regardless.
+    // Impostor cylinder is a screen-aligned capsule-bounding billboard (6-vert
+    // triangle-STRIP hull, matching BOND_VERTS_PER_CYLINDER); the fragment shader
+    // ray-traces the smooth capped finite cylinder. cullMode none — the hull
+    // winding flips with view, and the impostor is one-sided per-fragment regardless.
     primitive: { topology: `triangle-strip`, cullMode: `none` },
     depthStencil: {
       format: DEPTH_FORMAT,
