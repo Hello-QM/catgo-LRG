@@ -570,17 +570,28 @@ struct Args {
 @group(0) @binding(0) var<storage, read> count : array<u32>;
 @group(0) @binding(1) var<storage, read_write> args : Args;
 
-// uniforms: x = vertex_count_per_cylinder, y = capacity (clamp)
-@group(0) @binding(2) var<uniform> cfg : vec2<u32>;
+// cfg: x = vertex_count_per_cylinder, y = capacity (clamp), z = ncells (supercell
+// tiling product nx·ny·nz). GPU supercell Phase 2 replicates each bond into every
+// cell, so the bond draw issues 2 · bond_count · ncells instances (two half-
+// cylinders per bond per cell). ncells defaults to 1 ⇒ 2·bond_count, the Phase-1
+// single-cell count (byte-identical).
+@group(0) @binding(2) var<uniform> cfg : vec3<u32>;
+// Clamped bond_count, written here so the bond RENDER vertex shader can decode
+// inst → (cell, bond_index, half) without reading the atomic count buffer. The
+// render shader needs the SAME clamped value used for instance_count below.
+@group(0) @binding(3) var<storage, read_write> bond_meta : array<u32>;
 
 @compute @workgroup_size(1)
 fn build_args() {
   let raw = count[0];
   let inst = min(raw, cfg.y);
+  let ncells = max(cfg.z, 1u);
   args.vertex_count = cfg.x;
-  args.instance_count = inst * 2u; // two half-cylinders per bond
+  // two half-cylinders per bond, replicated into every supercell cell.
+  args.instance_count = inst * 2u * ncells;
   args.first_vertex = 0u;
   args.first_instance = 0u;
+  bond_meta[0] = inst; // clamped bond_count for the render-side decode
 }
 `
 
@@ -636,10 +647,26 @@ struct BondU {
   radius_color : vec4<f32>, // x=radius, yzw=color
 };
 
+// GPU supercell uniform (Phase 2). Same layout as the atom impostor's Supercell:
+// dims = [nx,ny,nz,base_count] (base_count unused here — bond_count comes from
+// bond_meta), lat0/1/2 = base lattice ROWS a,b,c. The per-cell offset is
+// ix·a + iy·b + iz·c. Read ONLY in vs_main (cell decode + partner-cell test).
+struct Supercell {
+  dims : vec4<u32>,
+  lat0 : vec4<f32>,
+  lat1 : vec4<f32>,
+  lat2 : vec4<f32>,
+};
+
 @group(0) @binding(0) var<uniform> camera : Camera;
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> pairs : array<u32>;
 @group(0) @binding(3) var<uniform> bond : BondU;
+// Clamped bond_count (written by the indirect-args build). Drives the inst decode
+// cell = inst / (2·bond_count). Read ONLY in vs_main.
+@group(0) @binding(4) var<storage, read> bond_meta : array<u32>;
+// GPU supercell instancing params (dims + base lattice). Read ONLY in vs_main.
+@group(0) @binding(5) var<uniform> supercell : Supercell;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -667,39 +694,88 @@ fn atom_pos(i : u32) -> vec3<f32> {
 @vertex
 fn vs_main(@builtin(vertex_index) vi : u32,
            @builtin(instance_index) inst : u32) -> VsOut {
-  // Two half instances per bond: bond_index = inst>>1, half = inst&1.
-  let bond_index = inst >> 1u;
-  let half = inst & 1u;
+  // ── GPU supercell Phase 2 bond decode ──────────────────────────────────────
+  // Bonds are computed ONCE on the base cell (pairs = (a,b,jimage)). Each base
+  // bond is replicated into every cell (ix,iy,iz) of the nx·ny·nz supercell, each
+  // as TWO half instances (matching the Phase-1 atom replication). Instance
+  // layout: inst = cell·(2·bond_count) + bond_index·2 + half.
+  //   cell       = inst / (2·bond_count)
+  //   local      = inst % (2·bond_count)
+  //   bond_index = local >> 1
+  //   half       = local & 1
+  // When ncells = 1 (dims 1,1,1) cell = 0 and this collapses to the Phase-1
+  // mapping bond_index = inst>>1, half = inst&1 — byte-identical.
+  let bond_count = max(bond_meta[0], 1u);
+  let per_cell = bond_count * 2u;
+  let cell = inst / per_cell;
+  let local = inst % per_cell;
+  let bond_index = local >> 1u;
+  let half = local & 1u;
+
+  // Decode the cell index → (ix,iy,iz) and its lattice offset ix·a+iy·b+iz·c.
+  let nx = max(supercell.dims.x, 1u);
+  let ny = max(supercell.dims.y, 1u);
+  let nz = max(supercell.dims.z, 1u);
+  let ix = cell % nx;
+  let iy = (cell / nx) % ny;
+  let iz = cell / (nx * ny);
+  let cell_offset = f32(ix) * supercell.lat0.xyz
+                  + f32(iy) * supercell.lat1.xyz
+                  + f32(iz) * supercell.lat2.xyz;
 
   let a = pairs[bond_index*3u + 0u];
   let b = pairs[bond_index*3u + 1u];
   let jp = pairs[bond_index*3u + 2u];
 
   // Unpack jimage {-1,0,1} from (na+1)|((nb+1)<<2)|((nc+1)<<4).
-  let na = f32(i32(jp & 3u) - 1);
-  let nb = f32(i32((jp >> 2u) & 3u) - 1);
-  let nc = f32(i32((jp >> 4u) & 3u) - 1);
+  let ji = i32(jp & 3u) - 1;
+  let jj = i32((jp >> 2u) & 3u) - 1;
+  let jk = i32((jp >> 4u) & 3u) - 1;
+  let na = f32(ji);
+  let nb = f32(jj);
+  let nc = f32(jk);
   let shift = na * bond.lat0.xyz + nb * bond.lat1.xyz + nc * bond.lat2.xyz;
 
-  let A = atom_pos(a);
-  let B = atom_pos(b);
-  // A's imaged partner is B + jimage·lattice; B's imaged partner is A - jimage·lattice.
-  let partnerB = B + shift;
-  let partnerA = A - shift;
+  // A is atom a in THIS cell; partnerB is atom b imaged by jimage (still relative
+  // to this cell). Both carry the per-cell offset so every replica is positioned.
+  let A = atom_pos(a) + cell_offset;
+  let B = atom_pos(b) + cell_offset;
+  let partnerB = B + shift;       // A's imaged partner
+  let partnerA = A - shift;       // (unused when inside; kept for the stub path)
 
-  // INTRA-cell bonds (jimage = 0,0,0) pack to (0+1)|((0+1)<<2)|((0+1)<<4) = 21u.
-  // For those we render ONE full cylinder (half 0: A->B) and collapse half 1 to a
-  // degenerate offscreen billboard, so there is no coincident midpoint cap plane
-  // (which z-fights / shows as a dotted alpha-to-coverage seam across the surface).
-  let is_intra = jp == 21u;
+  // Partner cell = this cell + jimage. If it lies INSIDE [0,nx)×[0,ny)×[0,nz) the
+  // partner is a REAL replica atom one cell over → draw a FULL cylinder A→B_real
+  // (no spike, it's an actual adjacent atom). Otherwise (true outer boundary) draw
+  // the boundary STUB exactly as the single-cell path does.
+  let px = i32(ix) + ji;
+  let py = i32(iy) + jj;
+  let pz = i32(iz) + jk;
+  let inside = px >= 0 && px < i32(nx)
+            && py >= 0 && py < i32(ny)
+            && pz >= 0 && pz < i32(nz);
+  // B_real: atom b in the partner cell = base_pos[b] + (px·a + py·b + pz·c). This
+  // equals B + shift (= partnerB) whenever the partner cell is in range — the
+  // jimage shift IS one cell step — so reuse partnerB as the real adjacent atom.
+  let B_real = partnerB;
 
-  // half 0: A -> midpoint of (A, partnerB);  half 1: B -> midpoint of (B, partnerA).
-  // Cross-cell (jimage != 0) keeps the two A->M0 / B->M1 stubs (the gap is intended).
-  // Intra-cell half 0 spans the whole bond A->B; half 1 is discarded below.
+  // Render as ONE full cylinder when the partner is a real in-range atom (half 0:
+  // A→B_real, half 1 degenerate) — same single-full-cylinder path the Phase-1
+  // single-cell code used for intra-cell (jimage=0) bonds. When ncells=1, only
+  // jimage=0 is ever inside [0,1)³, so this is exactly the old is_intra branch.
+  let is_full = inside;
+
+  // FULL: half 0 spans A→B_real; half 1 is collapsed offscreen below.
+  // STUB (boundary): half 0 = A→mid(A,partnerB); half 1 = B→mid(B,partnerA) — the
+  // two short stubs of the single-cell cross-cell path, shifted by cell_offset.
   let cross_start = select(B, A, half == 0u);
   let cross_mid = select((B + partnerA) * 0.5, (A + partnerB) * 0.5, half == 0u);
-  let start = select(cross_start, A, is_intra);
-  let end = select(cross_mid, B, is_intra);
+  let start = select(cross_start, A, is_full);
+  let end = select(cross_mid, B_real, is_full);
+
+  // Keep the downstream variable name the rest of vs_main uses (is_intra) so the
+  // degenerate-half collapse + is_stub flag below are untouched: a full cylinder
+  // behaves exactly like an intra-cell bond (half 1 redundant, no depth bias).
+  let is_intra = is_full;
 
   let r = bond.radius_color.x;
 
@@ -1211,13 +1287,24 @@ export function create_large_system_renderer(
   // True once the lattice is non-zero (a periodic structure has been provided).
   let cell_has_lattice = false
 
-  // cfg for the indirect-args build: (verts_per_cylinder, bond capacity). The
-  // build shader clamps the bond count to capacity then doubles it, so the draw
-  // issues instance_count = 2*min(count,capacity) (two half-cylinders per bond).
+  // cfg for the indirect-args build: (verts_per_cylinder, bond capacity, ncells).
+  // The build shader clamps the bond count to capacity, doubles it (two half-
+  // cylinders per bond), then multiplies by ncells (GPU supercell Phase 2 bond
+  // replication) ⇒ instance_count = 2·min(count,capacity)·ncells. ncells defaults
+  // to 1 ⇒ the Phase-1 single-cell count. A vec3<u32> uniform is 12 bytes; round
+  // the buffer to 16 (uniform buffers bind in 16-byte granularity anyway).
   const indirect_cfg_buffer = device.createBuffer({
     label: `large-system-indirect-cfg`,
-    size: 8, // vec2<u32>
+    size: 16, // vec3<u32> (12 bytes, padded to 16)
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  // bond_meta: clamped bond_count written by the indirect-args build, read by the
+  // bond RENDER vertex shader to decode inst → (cell, bond_index, half). A tiny
+  // 4-byte storage buffer.
+  const bond_meta_buffer = device.createBuffer({
+    label: `large-system-bond-meta`,
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   })
   // Cached bond inputs, re-uploaded only when set_bond_data changes them.
   let bond_lattice = new Float32Array(9)
@@ -1420,6 +1507,13 @@ export function create_large_system_renderer(
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 4 = bond_meta (clamped bond_count) and binding 5 = the GPU
+      // supercell uniform (dims + base lattice). Both are read ONLY in vs_main
+      // (the Phase-2 inst → cell/bond/half decode + partner-cell test); fs_main
+      // never touches them. Per the project's recurrence-proof bind-group rule,
+      // grant EXACTLY the reading stage — VERTEX only.
+      { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
     ],
   })
   const bond_render_pipeline = device.createRenderPipeline({
@@ -1562,12 +1656,17 @@ export function create_large_system_renderer(
     device.queue.writeBuffer(cell_uniform, 0, u.buffer, u.byteOffset, 64)
   }
 
-  // Static indirect-args cfg: (verts_per_cylinder, capacity) — capacity is
-  // refreshed when the pairs buffer (re)allocates.
+  // Indirect-args cfg: (verts_per_cylinder, capacity, ncells). capacity is
+  // refreshed when the pairs buffer (re)allocates; ncells when set_supercell
+  // changes the tiling. ncells defaults to 1 ⇒ the single-cell instance count.
   function write_indirect_cfg(): void {
     device.queue.writeBuffer(
       indirect_cfg_buffer, 0,
-      new Uint32Array([BOND_VERTS_PER_CYLINDER, bond_capacity]),
+      new Uint32Array([
+        BOND_VERTS_PER_CYLINDER,
+        bond_capacity,
+        Math.max(1, supercell_ncells),
+      ]),
     )
   }
 
@@ -1819,6 +1918,8 @@ export function create_large_system_renderer(
         { binding: 0, resource: { buffer: count_buffer } },
         { binding: 1, resource: { buffer: indirect_buffer } },
         { binding: 2, resource: { buffer: indirect_cfg_buffer } },
+        // binding 3: bond_meta — the build writes the clamped bond_count here.
+        { binding: 3, resource: { buffer: bond_meta_buffer } },
       ],
     })
     bond_render_bg = device.createBindGroup({
@@ -1829,6 +1930,10 @@ export function create_large_system_renderer(
         { binding: 1, resource: { buffer: positions_buffer } },
         { binding: 2, resource: { buffer: pairs_buffer } },
         { binding: 3, resource: { buffer: bond_render_uniform } },
+        // binding 4: clamped bond_count (Phase-2 inst decode). binding 5: the GPU
+        // supercell uniform (dims + base lattice) for the per-cell offset.
+        { binding: 4, resource: { buffer: bond_meta_buffer } },
+        { binding: 5, resource: { buffer: supercell_buffer } },
       ],
     })
   }
@@ -2106,6 +2211,12 @@ export function create_large_system_renderer(
         supercell_lattice = padded
       }
       upload_supercell_uniform()
+      // ncells changed ⇒ the bond draw's instance count (2·bond_count·ncells) must
+      // be rebuilt. Refresh the cfg uniform and mark bonds dirty so the next render
+      // re-runs the indirect-args build with the new ncells (and re-emits the per-
+      // cell bond replicas). A static scene would otherwise keep the old count.
+      write_indirect_cfg()
+      bonds_dirty = true
     },
     set_selection(indices: Uint32Array | number[]): void {
       if (destroyed) return
@@ -2347,6 +2458,7 @@ export function create_large_system_renderer(
       overflow_buffer.destroy()
       count_buffer.destroy()
       indirect_buffer.destroy()
+      bond_meta_buffer.destroy()
       bond_params_buffer.destroy()
       bond_render_uniform.destroy()
       cell_uniform.destroy()
