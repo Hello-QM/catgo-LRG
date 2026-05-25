@@ -1093,10 +1093,6 @@ export function create_large_system_renderer(
   let supercell_ncells = 1
   // Cached base lattice rows (9 floats, rows a,b,c) for the per-cell offset.
   let supercell_lattice = new Float32Array(9)
-  // Initialise the supercell uniform to identity (dims 1,1,1 / zero lattice) so
-  // the binding is valid before any set_supercell/set_atoms — ncells 1, zero
-  // offset ⇒ the draw is identical to the non-supercell path.
-  upload_supercell_uniform()
 
   // Atom storage buffers — lazily (re)created when the atom count grows.
   let positions_buffer: GPUBuffer | null = null
@@ -1104,6 +1100,11 @@ export function create_large_system_renderer(
   let colors_buffer: GPUBuffer | null = null
   let atom_capacity = 0 // instances the current buffers can hold
   let atom_count = 0 // instances to draw this frame
+  // Initialise the supercell uniform to identity (dims 1,1,1 / zero lattice) so
+  // the binding is valid before any set_supercell/set_atoms — ncells 1, zero
+  // offset ⇒ the draw is identical to the non-supercell path. Must run AFTER
+  // `atom_count` is declared (upload_supercell_uniform reads it) — else TDZ.
+  upload_supercell_uniform()
   // Per-atom selection flag buffer (u32 per atom, 1 = selected), bound to the
   // impostor fragment (binding 4). Grows with the atom buffers; a 4-byte minimum
   // keeps the binding valid (and reads as "nothing selected") before any
