@@ -149,6 +149,16 @@
   let atom_radius_sig = ``
   // Set when buffers were rebuilt and must be re-uploaded to the GPU.
   let atoms_dirty = false
+  // Set when the structure IDENTITY or atom COUNT changed (supercell repeats,
+  // structure swap) — i.e. the atom SET itself changed, not just its colors /
+  // display radii. A color/radius-only change flips atoms_dirty (re-upload) but
+  // NOT this. Used to force a full per-frame position re-extract + bond recompute
+  // for the NEW atom set in the SAME frame, instead of waiting for a trajectory
+  // frame event. `topology_count` is the count we last saw, so a supercell that
+  // changes the count (e.g. 1x1x1 -> 3x3x3) is detected even if the structure
+  // object identity comparison alone were insufficient.
+  let topology_dirty = false
+  let topology_count = -1
 
   // Cached bond inputs, rebuilt only when the structure identity or bonding
   // options change (not every frame). The renderer caches the compute dispatch
@@ -448,6 +458,17 @@
    *  affects them has changed. */
   function rebuild_atoms_if_needed(): void {
     const sig = radius_signature()
+    // Detect a structure-IDENTITY or atom-COUNT change (supercell repeats,
+    // structure swap) BEFORE we overwrite atom_source — independent of the
+    // color/radius-only path below. A new identity OR a changed count means the
+    // atom SET itself changed, so the current per-frame positions + bond compute
+    // are stale for the new set and must be re-extracted/recomputed in THIS
+    // frame (handled by the topology_dirty branch in frame()).
+    const next_count = structure?.sites?.length ?? 0
+    if (structure !== atom_source || next_count !== topology_count) {
+      topology_dirty = true
+      topology_count = next_count
+    }
     if (
       structure === atom_source &&
       element_colors === atom_colors_source &&
@@ -636,9 +657,25 @@
       renderer.set_atoms(atom_positions, atom_radii, atom_colors, atom_count)
       atoms_dirty = false
       dirty = true
-      // Topology (and its base positions) just (re)uploaded ⇒ also re-extract
-      // the current frame's xyz so playback shows the live frame, not frame 0.
-      refresh_frame_positions()
+    }
+    // Structure IDENTITY / atom COUNT changed (supercell repeats, structure
+    // swap). The atom buffers above are now sized to the NEW set, but the
+    // per-frame POSITION buffer + GPU bond compute are still aligned to the OLD
+    // set — left stale they connect atoms at wrong positions (garbled
+    // bonds/spikes) until a later frame event bumps the version. So re-extract
+    // the CURRENT frame's positions for the NEW set NOW and force a bond
+    // recompute, in this same frame, AFTER set_atoms (buffers sized) and BEFORE
+    // the per-frame/bond push below. We reset the version/step trackers first so
+    // this forced refresh isn't skipped by the "≠ last_*" guard, and so the
+    // SUBSEQUENT genuine frame change (≠ these reset values) still triggers
+    // refresh_frame_positions normally.
+    if (topology_dirty) {
+      topology_dirty = false
+      last_pos_version = -1
+      last_step_idx = -1
+      refresh_frame_positions() // sets positions_dirty (+ bonds_dirty if lattice moved)
+      bonds_dirty = true // force the GPU bond compute against the consistent new positions
+      dirty = true
     }
 
     // Per-frame positions: re-upload ONLY xyz when the trajectory frame moved —
@@ -749,6 +786,10 @@
     atom_colors_source = undefined
     atom_radius_sig = ``
     atoms_dirty = true
+    // Fresh renderer ⇒ treat the topology as new so the first frame forces a
+    // per-frame position re-extract + bond recompute for the current atom set.
+    topology_dirty = false
+    topology_count = -1
     // Fresh renderer ⇒ fresh bond buffers; force a rebuild + re-push.
     bond_source = undefined
     bond_options_sig = ``
