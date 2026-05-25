@@ -1,5 +1,6 @@
 import { gen_qe_local, gen_dos_input } from '$lib/structure/export/qe-export'
 import type { QEParams, QEDosParams } from '$lib/structure/export/qe-export'
+import { ATOMIC_WEIGHTS_SMALL } from '$lib/structure/export/common-export'
 import { describe, expect, it } from 'vitest'
 
 // Contract / smoke tests for the client-side QE generator. gen_qe_local is an
@@ -203,5 +204,21 @@ describe(`gen_dos_input produces valid DOS namelist`, () => {
     expect(inp).toContain(`-20`)
     expect(inp).toContain(`20`)
     expect(inp).toContain(`0.05`)
+  })
+})
+
+// Regression for the ATOMIC_WEIGHTS_SMALL gap that gave QE/LAMMPS a placeholder
+// mass of 1.000 for any element outside a 10-element stub (found via multi-CIF
+// stress testing). The map is now backed by the full ATOMIC_MASSES table.
+describe(`ATOMIC_WEIGHTS_SMALL coverage (QE/LAMMPS mass regression)`, () => {
+  it(`has correct masses for less-common elements, not the 1.000 placeholder`, () => {
+    const expected: Record<string, number> = {
+      Li: 6.941, F: 18.998, Mg: 24.305, P: 30.974, S: 32.065, Ti: 47.867,
+      Co: 58.933, Ni: 58.693, Ge: 72.630, Ru: 101.07, Zr: 91.224,
+    }
+    for (const [el, mass] of Object.entries(expected)) {
+      expect(ATOMIC_WEIGHTS_SMALL[el], `${el} missing from ATOMIC_WEIGHTS_SMALL`).toBeDefined()
+      expect(ATOMIC_WEIGHTS_SMALL[el]).toBeCloseTo(mass, 1)
+    }
   })
 })

@@ -32,11 +32,10 @@ export function get_atom_mass(element: string): number {
   return ATOMIC_MASSES[element] ?? 0
 }
 
-/** Smaller atomic weight map used by QE/LAMMPS/ABACUS local generators */
-export const ATOMIC_WEIGHTS_SMALL: Record<string, number> = {
-  H: 1.008, C: 12.01, N: 14.01, O: 16.00, Na: 22.99, Al: 26.98,
-  Si: 28.09, Fe: 55.85, Cu: 63.55, Au: 197.0,
-}
+/** Atomic weight map used by the QE / LAMMPS local generators. Backed by the full
+ *  ATOMIC_MASSES table so less-common elements (Li, P, Ge, S, F, Mg, Ni, Ti, Ru,
+ *  Co, Zr, …) get correct masses instead of a placeholder 1.000. */
+export const ATOMIC_WEIGHTS_SMALL: Record<string, number> = { ...ATOMIC_MASSES }
 
 /** Extended atomic weight map used by ABACUS */
 export const ATOMIC_WEIGHTS_ABACUS: Record<string, number> = {
