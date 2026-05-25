@@ -2929,6 +2929,8 @@
               bind:structure
               pane_open={true}
               bind:center_camera_trigger
+              bind:supercell_scaling
+              {large_system_mode}
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
               on_push_undo={push_to_undo}
               on_reset_view={() => align_view_to_lattice()}
