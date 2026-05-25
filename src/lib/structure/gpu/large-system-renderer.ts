@@ -1127,8 +1127,14 @@ export function create_large_system_renderer(
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
-      // binding 4: per-atom selection flag, read by the FRAGMENT stage (highlight).
-      { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `read-only-storage` } },
+      // binding 4: per-atom selection flag `selected`. The BUFFER is indexed in
+      // vs_main (`selected[inst]` -> flat varying `out.sel`); fs_main reads only
+      // that varying, never the buffer. So the binding's referencing stage is
+      // VERTEX. (A prior layout granted FRAGMENT-only, mismatching vs_main and
+      // invalidating the pipeline -> blank overlay.) Granted VERTEX|FRAGMENT —
+      // VERTEX is required; FRAGMENT is the highlight stage that plausibly reads
+      // it, so OR both per the project's recurrence-proof rule.
+      { binding: 4, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `read-only-storage` } },
     ],
   })
 
@@ -1166,7 +1172,15 @@ export function create_large_system_renderer(
   const pick_bgl = device.createBindGroupLayout({
     label: `large-system-pick-bgl`,
     entries: [
-      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // binding 0 = camera: read by BOTH vs_main (view+proj billboard) AND
+      // fs_main (camera.proj projects the ray-traced view-space hit point for
+      // frag_depth). A prior layout granted VERTEX-only, mismatching fs_main and
+      // invalidating the pick pipeline ("fragment stage is not in binding
+      // visibility") -> the whole frame submit failed (blank overlay). Must be
+      // VERTEX|FRAGMENT.
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: `uniform` } },
+      // bindings 1-2 (positions, radii) are read only by vs_main — fs_main works
+      // off interpolated VsOut varyings — so VERTEX-only.
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
