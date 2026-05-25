@@ -355,6 +355,20 @@
       {/if}
     </div>
 
+    <!-- === Large-system performance mode (always visible — also in trajectory/large views) === -->
+    <span class="struct-toolbar-tooltip-wrap">
+      <button
+        type="button"
+        onclick={() => { large_system_mode = !large_system_mode }}
+        class="build-tools-toggle"
+        class:active={large_system_mode}
+        aria-pressed={large_system_mode}
+      >
+        <Icon icon="Gauge" />
+      </button>
+      <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.large_system_mode')}</span>
+    </span>
+
     {#if !hide_extra_tools}
       <!-- === Build Tools === -->
       <span class="struct-toolbar-tooltip-wrap">
@@ -439,20 +453,6 @@
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.plugin_hub')}</span>
       </span>
       {/if}
-
-      <!-- === Large-system performance mode (WebGPU) === -->
-      <span class="struct-toolbar-tooltip-wrap">
-        <button
-          type="button"
-          onclick={() => { large_system_mode = !large_system_mode }}
-          class="build-tools-toggle"
-          class:active={large_system_mode}
-          aria-pressed={large_system_mode}
-        >
-          <Icon icon="Gauge" />
-        </button>
-        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.large_system_mode')}</span>
-      </span>
 
       {#if !hidden_toolbar_items.includes('chat') && !STATIC_ONLY}
       <!-- === AI Chat === -->

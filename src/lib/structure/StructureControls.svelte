@@ -968,14 +968,6 @@
           />
         </label>
       {/if}
-      <label
-        {@attach tooltip({
-          content: `Render very large systems through the experimental high-performance path. Falls back to the standard viewer if unavailable.`,
-        })}
-      >
-        <input type="checkbox" bind:checked={large_system_mode} />
-        Large-system performance mode
-      </label>
     </SettingsSection>
   {/if}
 
