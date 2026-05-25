@@ -26,6 +26,59 @@ const FORMAT_EXT: Record<SupercellExportFormat, string> = {
   extxyz: `extxyz`,
 }
 
+/**
+ * Extract a PLAIN, structured-cloneable `CoreStructure` POJO from `base`.
+ *
+ * `base` (= the displayed/base cell) is a Svelte 5 `$state` proxy and may carry
+ * class instances / functions / reactive wrappers — none of which survive the
+ * structured-clone algorithm `worker.postMessage` uses (it throws
+ * "could not be cloned"). The worker core (`supercell-export-core`) only ever
+ * reads the fields copied below, so we rebuild a fresh object made of plain
+ * primitives / arrays / objects only. Built ONCE here, before posting.
+ */
+function sanitize_base(base: CoreStructure): CoreStructure {
+  const sites = base.sites.map((site) => {
+    const xyz = site.xyz
+    const out: CoreStructure[`sites`][number] = {
+      species: (site.species ?? []).map((sp) => ({
+        element: sp.element,
+        occu: sp.occu,
+        oxidation_state: sp.oxidation_state,
+      })),
+      xyz: [xyz[0], xyz[1], xyz[2]],
+    }
+    if (site.abc) out.abc = [site.abc[0], site.abc[1], site.abc[2]]
+    if (site.label !== undefined) out.label = site.label
+    // The core only reads `selective_dynamics` (boolean[]) and `force`
+    // (number[]). A defensive JSON round-trip strips any proxy/class wrapping
+    // while keeping plain data; `$state.snapshot` is unnecessary here because
+    // JSON serialization already unwraps the reactive proxy.
+    if (site.properties) {
+      out.properties = JSON.parse(JSON.stringify(site.properties)) as Record<string, unknown>
+    }
+    return out
+  })
+
+  const out: CoreStructure = { sites }
+  if (base.lattice?.matrix) {
+    const m = base.lattice.matrix
+    out.lattice = {
+      matrix: [
+        [m[0][0], m[0][1], m[0][2]],
+        [m[1][0], m[1][1], m[1][2]],
+        [m[2][0], m[2][1], m[2][2]],
+      ],
+    }
+    if (base.lattice.pbc) {
+      out.lattice.pbc = [base.lattice.pbc[0], base.lattice.pbc[1], base.lattice.pbc[2]]
+    }
+  }
+  if (base.charge !== undefined) out.charge = base.charge
+  if (base.id !== undefined) out.id = base.id
+  if (base.formula !== undefined) out.formula = base.formula
+  return out
+}
+
 let _worker: Worker | undefined
 let _next_id = 1
 
@@ -102,7 +155,16 @@ export async function export_supercell_via_worker(
       }
       worker.addEventListener(`message`, handle_message)
       worker.addEventListener(`error`, handle_error)
-      const req: SupercellExportRequest = { id, base_structure: base, factors, format }
+      // `base` is a Svelte $state proxy / may hold class instances — not
+      // structured-cloneable. Post a plain POJO extracted ONCE (the worker core
+      // only reads the fields `sanitize_base` copies). `factors` (number[]) and
+      // `format` (string) are already cloneable primitives.
+      const req: SupercellExportRequest = {
+        id,
+        base_structure: sanitize_base(base),
+        factors: [factors[0], factors[1], factors[2]],
+        format,
+      }
       worker.postMessage(req)
     })
 
