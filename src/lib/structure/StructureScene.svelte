@@ -1390,6 +1390,14 @@
     // Prevent camera rotation/movement when clicking on atoms
     evt?.stopPropagation?.()
 
+    // WebGPU large-system overlay active: the overlay (pointer-events:none) is the
+    // sole selection authority. The same click also reaches the WebGL canvas
+    // underneath; if we let the WebGL atom-pick run, it would toggle the site the
+    // overlay just selected back OFF (set→toggle-off race) → highlight flashes for
+    // one frame then clears. Suppress the WebGL click→selection mutation while
+    // suspended. Reactive: toggle-OFF restores normal click selection.
+    if (webgl_suspended) return
+
     const result = toggle_site_selection(site_index, selected_sites)
     if (result === null) {
       console.warn(
@@ -4498,12 +4506,16 @@
 <T.Mesh
   position={[0, 0, -1000]}
   onclick={() => {
+    // WebGPU overlay active: overlay owns selection; ignore empty-space WebGL clicks.
+    if (webgl_suspended) return
     // Bond mode: clicking empty space clears bond selection (skip during drag)
     if (bond_mode_active && on_bond_select && !bond_drag_active) {
       on_bond_select(null)
     }
   }}
   ondblclick={(event: MouseEvent) => {
+    // WebGPU overlay active: overlay owns selection; do not clear from WebGL.
+    if (webgl_suspended) return
     // Only double-click clears selection - single click and drag do not
     // Clear selection when double-clicking empty space
     selected_sites = []
