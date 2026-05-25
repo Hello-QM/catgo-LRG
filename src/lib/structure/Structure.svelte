@@ -117,6 +117,8 @@
   import ScaleBar from '$lib/structure/ScaleBar.svelte'
 
   import type { AtomColorConfig } from './atom-properties'
+  import { get_orig_site_idx } from './atom-properties'
+  import { toggle_site_selection } from './scene/picking'
 
   import { delete_atoms, move_atom, move_atoms_by_displacement, concatenate_structures, merge_structures } from './atom-manipulation'
   import OptimadeSearchModal from './OptimadeSearchModal.svelte'
@@ -1626,6 +1628,42 @@
     loading: false,
     error: null,
   })
+
+  // ── WebGPU overlay selection bridge ────────────────────────────────────────
+  // The overlay renders displayed_structure.sites in order, so its picked index
+  // and its highlight buffer are DISPLAYED-site indices. The app's selection
+  // model (selected_sites) is BASE-site indices (matching the WebGL path). Map
+  // between the two: the overlay highlights every displayed site whose base index
+  // (orig_site_idx) is currently selected, and an overlay pick is mapped back to
+  // its base index before toggling selected_sites (exactly like the WebGL
+  // handle_atom_click → toggle_selection(atom.site_idx) path).
+  let overlay_selected_displayed = $derived.by(() => {
+    const sites = displayed_structure?.sites
+    if (!sites || selected_sites.length === 0) return [] as number[]
+    const sel = new Set(selected_sites)
+    const out: number[] = []
+    for (let i = 0; i < sites.length; i++) {
+      if (sel.has(get_orig_site_idx(sites[i], i))) out.push(i)
+    }
+    return out
+  })
+
+  /** Handle an atom pick from the WebGPU overlay. `displayed_idx` is the picked
+   *  displayed-site index, or -1 for empty space. Maps to the base index and
+   *  toggles selected_sites the same way the WebGL click path does; a background
+   *  click (-1) clears the selection (mirroring clicking empty space). */
+  function handle_overlay_pick(displayed_idx: number): void {
+    if (displayed_idx < 0) {
+      if (selected_sites.length > 0) selected_sites = []
+      return
+    }
+    const sites = displayed_structure?.sites
+    const site = sites?.[displayed_idx]
+    if (!site) return
+    const base_idx = get_orig_site_idx(site, displayed_idx)
+    const result = toggle_site_selection(base_idx, selected_sites)
+    if (result) selected_sites = result
+  }
 
   // Slice split-view state
   let slice_result = $state<SliceResult | null>(null)
@@ -3829,6 +3867,8 @@
             {trajectory_positions_version}
             {get_trajectory_frame_positions}
             {trajectory_step_idx}
+            selected_sites={overlay_selected_displayed}
+            on_pick={handle_overlay_pick}
             on_fallback={(reason) => {
               large_system_mode = false
               console.warn(`[CatGO] large-system mode: ${reason}`)

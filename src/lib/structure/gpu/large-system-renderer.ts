@@ -240,6 +240,10 @@ struct Camera {
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> radii : array<f32>;
 @group(0) @binding(3) var<storage, read> colors : array<f32>;
+// Per-atom selection flag (1 = selected). Read in the fragment stage so selected
+// atoms get a visible highlight (brighten + rim ring). Always bound (a 4-byte
+// placeholder when nothing is selected), so 0 ⇒ unchanged appearance.
+@group(0) @binding(4) var<storage, read> selected : array<u32>;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -247,6 +251,7 @@ struct VsOut {
   @location(1) radius : f32,
   @location(2) color : vec3<f32>,
   @location(3) vpos : vec3<f32>,    // view-space position of this quad corner
+  @location(4) @interpolate(flat) sel : u32, // 1 = this atom is selected
 };
 
 struct FsOut {
@@ -293,6 +298,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.radius = r;
   out.color = col;
   out.vpos = vpos;
+  out.sel = selected[inst];
   return out;
 }
 
@@ -338,11 +344,118 @@ fn fs_main(in : VsOut) -> FsOut {
   let clip_h = camera.proj * vec4<f32>(p, 1.0);
   let remapped_z = (clip_h.z + clip_h.w) * 0.5;
 
+  var shaded = in.color * lighting;
+  // ── Selection highlight ──────────────────────────────────────────────────
+  // Selected atoms (sel == 1) get a clearly-distinct look: brighten the body and
+  // add a bright cyan-tinted RIM where the eye ray grazes the silhouette (rim is
+  // strong when the surface normal is near-perpendicular to the view direction —
+  // i.e. 1 - |n·view|). This reads as a glowing outline ring on the sphere,
+  // matching the "this atom is selected" affordance of the WebGL view. Non-
+  // selected atoms (sel == 0) are untouched.
+  if (in.sel == 1u) {
+    let view_dir = normalize(-p);            // toward the eye (eye at origin)
+    let rim = pow(1.0 - clamp(dot(n, view_dir), 0.0, 1.0), 2.0);
+    let highlight_tint = vec3<f32>(0.25, 0.95, 1.0); // bright cyan
+    // Brighten the body and mix toward the tint at the rim.
+    shaded = mix(shaded * 1.35 + highlight_tint * 0.25, highlight_tint, rim * 0.85);
+  }
+
   var out : FsOut;
   out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled, so
   // the color target stays opaque.
-  out.color = vec4<f32>(in.color * lighting, coverage);
+  out.color = vec4<f32>(shaded, coverage);
+  return out;
+}
+`
+
+/** WGSL atom PICK shader. Re-runs the SAME impostor sphere ray-trace as
+ *  IMPOSTOR_WGSL, but writes the atom INDEX (instance_index + 1, so 0 stays free
+ *  for "background") into an R32Uint id buffer instead of a shaded color. Renders
+ *  single-sampled (no MSAA) with its own single-sample depth, so the front-most
+ *  atom at each pixel wins the depth test and its id is what gets read back. Only
+ *  the disk interior is written (the analytic AA band is skipped — a hard discard
+ *  is correct for picking, no fractional ids). The fragment writes the same
+ *  corrected sphere depth as the color pass so overlapping atoms resolve by true
+ *  depth, not draw order. */
+const PICK_WGSL = `
+struct Camera {
+  view : mat4x4<f32>,
+  proj : mat4x4<f32>,
+  cam_pos : vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> camera : Camera;
+@group(0) @binding(1) var<storage, read> positions : array<f32>;
+@group(0) @binding(2) var<storage, read> radii : array<f32>;
+
+struct VsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) vc : vec3<f32>,
+  @location(1) radius : f32,
+  @location(2) vpos : vec3<f32>,
+  @location(3) @interpolate(flat) id : u32, // instance_index + 1
+};
+
+struct FsOut {
+  @builtin(frag_depth) depth : f32,
+  @location(0) id : u32,
+};
+
+fn corner_for(vi : u32) -> vec2<f32> {
+  let x = select(-1.0, 1.0, (vi & 1u) == 1u);
+  let y = select(-1.0, 1.0, (vi & 2u) == 2u);
+  return vec2<f32>(x, y);
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi : u32,
+           @builtin(instance_index) inst : u32) -> VsOut {
+  let center = vec3<f32>(
+    positions[inst * 3u + 0u],
+    positions[inst * 3u + 1u],
+    positions[inst * 3u + 2u],
+  );
+  let r = radii[inst];
+
+  let vc4 = camera.view * vec4<f32>(center, 1.0);
+  let vc = vc4.xyz;
+
+  let c = corner_for(vi);
+  let vpos = vc + vec3<f32>(c * r * 1.5, 0.0);
+  var clip = camera.proj * vec4<f32>(vpos, 1.0);
+  clip.z = (clip.z + clip.w) * 0.5;
+
+  var out : VsOut;
+  out.clip = clip;
+  out.vc = vc;
+  out.radius = r;
+  out.vpos = vpos;
+  out.id = inst + 1u;
+  return out;
+}
+
+@fragment
+fn fs_main(in : VsOut) -> FsOut {
+  let ro = vec3<f32>(0.0, 0.0, 0.0);
+  let rd = normalize(in.vpos);
+
+  let oc = ro - in.vc;
+  let b = dot(oc, rd);
+  let c = dot(oc, oc) - in.radius * in.radius;
+  let disc = b * b - c;
+  // Hard silhouette for picking — no AA band (an id can't be fractional).
+  if (disc < 0.0) { discard; }
+  let t = -b - sqrt(disc);
+  if (t < 0.0) { discard; }
+  let p = ro + t * rd;
+
+  let clip_h = camera.proj * vec4<f32>(p, 1.0);
+  let remapped_z = (clip_h.z + clip_h.w) * 0.5;
+
+  var out : FsOut;
+  out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
+  out.id = in.id;
   return out;
 }
 `
@@ -821,6 +934,19 @@ export type LargeSystemRenderer = {
     show: boolean,
     color: [number, number, number],
   ): void
+  /** Set which atoms are highlighted as "selected". `indices` is the list of atom
+   *  indices (same indexing as the uploaded positions / structure.sites order) to
+   *  highlight; pass an empty array to clear. Uploads a per-atom u32 flag buffer
+   *  (1 = selected) bound to the atom impostor fragment shader, so selected atoms
+   *  render with a distinct highlight (brighten + rim ring) on the next render.
+   *  Cheap; safe to call every frame the selection might have changed. */
+  set_selection(indices: Uint32Array | number[]): void
+  /** GPU atom picking. Renders the atoms once into an offscreen R32Uint id buffer
+   *  (single-sampled, depth-tested so the front atom wins), then copies the single
+   *  texel at the given DEVICE-pixel (x,y) to a readback buffer and returns the
+   *  atom index under that pixel, or -1 for background. (x,y) are in device pixels
+   *  (CSS px × devicePixelRatio); the caller maps cursor→canvas→device. */
+  pick(x: number, y: number): Promise<number>
   /** Run one render pass: clear + (if bonds dirty) bond compute + indirect-args
    *  build, then (if atoms present) impostor sphere draw + (if bonds present)
    *  instanced cylinder draw, all sharing one depth attachment. */
@@ -857,6 +983,12 @@ export function create_large_system_renderer(
   let colors_buffer: GPUBuffer | null = null
   let atom_capacity = 0 // instances the current buffers can hold
   let atom_count = 0 // instances to draw this frame
+  // Per-atom selection flag buffer (u32 per atom, 1 = selected), bound to the
+  // impostor fragment (binding 4). Grows with the atom buffers; a 4-byte minimum
+  // keeps the binding valid (and reads as "nothing selected") before any
+  // selection is set. Re-created alongside positions when capacity grows.
+  let selected_buffer: GPUBuffer | null = null
+  let selected_capacity = 0
 
   // MSAA render targets, sized to the canvas backing store; recreated on resize.
   // - msaa_color: 4× multisampled COLOR target (canvas format). The render pass
@@ -995,6 +1127,8 @@ export function create_large_system_renderer(
       { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      // binding 4: per-atom selection flag, read by the FRAGMENT stage (highlight).
+      { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: { type: `read-only-storage` } },
     ],
   })
 
@@ -1016,6 +1150,55 @@ export function create_large_system_renderer(
     // sphere edge — defined by ray-miss discard — gets antialiased. The color
     // target stays opaque (no blend); alpha is consumed ONLY as coverage.
     multisample: { count: SAMPLE_COUNT, alphaToCoverageEnabled: true },
+  })
+
+  // ── Atom PICK pipeline (id-buffer) ───────────────────────────────────────
+  // Re-renders the atoms single-sampled into an R32Uint id texture (atom_index+1)
+  // with its own single-sample depth so the front atom wins. Reuses the camera +
+  // positions + radii buffers (a subset of the color pass's bind group), with its
+  // OWN bind group layout (no colors / selected). pick() runs this pass on demand
+  // and copies one texel back to the CPU.
+  const PICK_ID_FORMAT: GPUTextureFormat = `r32uint`
+  const pick_module = device.createShaderModule({
+    label: `large-system-pick`,
+    code: PICK_WGSL,
+  })
+  const pick_bgl = device.createBindGroupLayout({
+    label: `large-system-pick-bgl`,
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+    ],
+  })
+  const pick_pipeline = device.createRenderPipeline({
+    label: `large-system-pick-pipeline`,
+    layout: device.createPipelineLayout({ bindGroupLayouts: [pick_bgl] }),
+    vertex: { module: pick_module, entryPoint: `vs_main` },
+    fragment: { module: pick_module, entryPoint: `fs_main`, targets: [{ format: PICK_ID_FORMAT }] },
+    primitive: { topology: `triangle-strip`, cullMode: `none` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      depthWriteEnabled: true,
+      depthCompare: `less`,
+    },
+    // Single-sampled — picking needs exact per-pixel ids, no MSAA resolve.
+    multisample: { count: 1 },
+  })
+  // Pick render targets (single-sample), sized to the canvas backing store and
+  // recreated on resize alongside the MSAA targets.
+  let pick_id_texture: GPUTexture | null = null
+  let pick_id_view: GPUTextureView | null = null
+  let pick_depth_texture: GPUTexture | null = null
+  let pick_depth_view: GPUTextureView | null = null
+  let pick_bind_group: GPUBindGroup | null = null
+  // 256-byte-aligned readback staging buffer for a single R32Uint texel. WebGPU
+  // requires bytesPerRow be a multiple of 256 for texture→buffer copies, so we
+  // copy a 1×1 region into a 256-byte buffer and read the first 4 bytes.
+  const pick_readback = device.createBuffer({
+    label: `large-system-pick-readback`,
+    size: 256,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
   })
 
   // Bond-detect compute (BOND_COMPUTE_WGSL). Three entry points share ONE explicit
@@ -1271,15 +1454,51 @@ export function create_large_system_renderer(
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     })
     depth_view = depth_texture.createView()
+
+    // Single-sample PICK targets at the SAME device-pixel size so a (x,y) read
+    // maps 1:1 to the color view. The id texture needs COPY_SRC for the readback.
+    pick_id_texture?.destroy()
+    pick_depth_texture?.destroy()
+    pick_id_texture = device.createTexture({
+      label: `large-system-pick-id`,
+      size: { width, height },
+      format: PICK_ID_FORMAT,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    })
+    pick_id_view = pick_id_texture.createView()
+    pick_depth_texture = device.createTexture({
+      label: `large-system-pick-depth`,
+      size: { width, height },
+      format: DEPTH_FORMAT,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    })
+    pick_depth_view = pick_depth_texture.createView()
   }
   ensure_targets(canvas.width || 1, canvas.height || 1)
   upload_gizmo_uniform() // seed corner placement from the initial canvas size
+
+  /** Ensure the per-atom selection buffer (binding 4) holds at least `cap`
+   *  entries. Created/grown with a 4-byte minimum so the binding is always valid
+   *  (reads 0 = nothing selected) before any selection is pushed. */
+  function ensure_selected_capacity(cap: number): void {
+    const want = Math.max(cap, 1)
+    if (want <= selected_capacity && selected_buffer) return
+    selected_buffer?.destroy()
+    selected_capacity = Math.max(want, Math.ceil(selected_capacity * 2), 1)
+    selected_buffer = device.createBuffer({
+      label: `large-system-selected`,
+      size: Math.max(selected_capacity * 4, 4),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+  }
 
   function rebuild_bind_group(): void {
     if (!positions_buffer || !radii_buffer || !colors_buffer) {
       bind_group = null
       return
     }
+    // binding 4 must exist for the layout; lazily create the placeholder.
+    if (!selected_buffer) ensure_selected_capacity(atom_capacity)
     bind_group = device.createBindGroup({
       label: `large-system-impostor-bg`,
       layout: bind_group_layout,
@@ -1288,6 +1507,17 @@ export function create_large_system_renderer(
         { binding: 1, resource: { buffer: positions_buffer } },
         { binding: 2, resource: { buffer: radii_buffer } },
         { binding: 3, resource: { buffer: colors_buffer } },
+        { binding: 4, resource: { buffer: selected_buffer as GPUBuffer } },
+      ],
+    })
+    // Pick pass reuses camera + positions + radii (no colors/selected).
+    pick_bind_group = device.createBindGroup({
+      label: `large-system-pick-bg`,
+      layout: pick_bgl,
+      entries: [
+        { binding: 0, resource: { buffer: camera_buffer } },
+        { binding: 1, resource: { buffer: positions_buffer } },
+        { binding: 2, resource: { buffer: radii_buffer } },
       ],
     })
   }
@@ -1555,6 +1785,9 @@ export function create_large_system_renderer(
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         })
         atom_capacity = new_cap
+        // Grow the selection buffer in lockstep so binding 4 covers every atom.
+        // (Newly-grown slots default to 0 = unselected; set_selection re-uploads.)
+        ensure_selected_capacity(new_cap)
         rebuild_bind_group()
         // positions_buffer just reallocated ⇒ rebuild the bond bind groups that
         // reference it (they may have been null before, that's fine).
@@ -1682,6 +1915,80 @@ export function create_large_system_renderer(
       // Turning bonds back on must re-run the compute against the current atoms
       // (the cached pairs may be stale or were never computed while disabled).
       if (enabled) bonds_dirty = true
+    },
+    set_selection(indices: Uint32Array | number[]): void {
+      if (destroyed) return
+      // Build a dense per-atom flag array (1 = selected) over the current atom
+      // capacity, then upload. We always rewrite the whole buffer (clearing old
+      // selections), so an empty `indices` clears the highlight. Sized to the
+      // atom buffer; out-of-range indices are ignored.
+      ensure_selected_capacity(Math.max(atom_capacity, 1))
+      // rebuild the bind group if the buffer was (re)created without atoms yet.
+      if (!bind_group && positions_buffer && radii_buffer && colors_buffer) {
+        rebuild_bind_group()
+      }
+      const n = Math.max(atom_capacity, 1)
+      const flags = new Uint32Array(n)
+      for (let k = 0; k < indices.length; k++) {
+        const i = indices[k]
+        if (i >= 0 && i < n) flags[i] = 1
+      }
+      if (selected_buffer) {
+        device.queue.writeBuffer(selected_buffer, 0, flags.buffer, flags.byteOffset, n * 4)
+      }
+    },
+    async pick(x: number, y: number): Promise<number> {
+      if (destroyed) return -1
+      if (atom_count <= 0 || !pick_bind_group || !pick_id_view || !pick_depth_view) {
+        return -1
+      }
+      if (!pick_id_texture) return -1
+      // Clamp the requested device pixel to the texture bounds.
+      const w = pick_id_texture.width
+      const h = pick_id_texture.height
+      const px = Math.max(0, Math.min(w - 1, Math.floor(x)))
+      const py = Math.max(0, Math.min(h - 1, Math.floor(y)))
+
+      const encoder = device.createCommandEncoder({ label: `large-system-pick` })
+      const pass = encoder.beginRenderPass({
+        label: `large-system-pick-pass`,
+        colorAttachments: [
+          {
+            view: pick_id_view,
+            // 0 = background (no atom). Atom ids are instance_index + 1.
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: `clear`,
+            storeOp: `store`,
+          },
+        ],
+        depthStencilAttachment: {
+          view: pick_depth_view,
+          depthClearValue: 1.0,
+          depthLoadOp: `clear`,
+          depthStoreOp: `store`,
+        },
+      })
+      pass.setPipeline(pick_pipeline)
+      pass.setBindGroup(0, pick_bind_group)
+      pass.draw(4, atom_count)
+      pass.end()
+      // Copy the single picked texel into the 256-byte readback buffer.
+      encoder.copyTextureToBuffer(
+        { texture: pick_id_texture, origin: { x: px, y: py, z: 0 } },
+        { buffer: pick_readback, bytesPerRow: 256, rowsPerImage: 1 },
+        { width: 1, height: 1, depthOrArrayLayers: 1 },
+      )
+      device.queue.submit([encoder.finish()])
+
+      await pick_readback.mapAsync(GPUMapMode.READ, 0, 4)
+      if (destroyed) {
+        try { pick_readback.unmap() } catch { /* already torn down */ }
+        return -1
+      }
+      const id = new Uint32Array(pick_readback.getMappedRange(0, 4))[0]
+      pick_readback.unmap()
+      // id 0 = background ⇒ -1; otherwise atom index = id - 1.
+      return id === 0 ? -1 : id - 1
     },
     render(): void {
       if (destroyed) return
@@ -1830,8 +2137,12 @@ export function create_large_system_renderer(
       positions_buffer?.destroy()
       radii_buffer?.destroy()
       colors_buffer?.destroy()
+      selected_buffer?.destroy()
       msaa_color_texture?.destroy()
       depth_texture?.destroy()
+      pick_id_texture?.destroy()
+      pick_depth_texture?.destroy()
+      pick_readback.destroy()
       // Bond resources.
       covalent_buffer?.destroy()
       elem_ids_buffer?.destroy()
@@ -1850,6 +2161,12 @@ export function create_large_system_renderer(
       positions_buffer = null
       radii_buffer = null
       colors_buffer = null
+      selected_buffer = null
+      pick_id_texture = null
+      pick_id_view = null
+      pick_depth_texture = null
+      pick_depth_view = null
+      pick_bind_group = null
       covalent_buffer = null
       elem_ids_buffer = null
       rules_buffer = null

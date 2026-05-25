@@ -35,6 +35,8 @@
     get_trajectory_frame_positions = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
+    selected_sites = [],
+    on_pick = undefined,
   }: {
     enabled?: boolean
     camera?: Camera | undefined
@@ -111,6 +113,16 @@
      *  get_trajectory_frame_positions. -1 when no trajectory is active. */
     trajectory_step_idx?: number
     on_fallback?: (reason: string) => void
+    /** App selection state (base site indices, same as the WebGL path's
+     *  `selected_sites`). Mirrored into the overlay's GPU highlight buffer so the
+     *  selected atoms glow — kept in sync whether selection changes via an overlay
+     *  click (on_pick) or externally (toolbar, other panes). */
+    selected_sites?: number[]
+    /** Called when the user CLICKS (not drags) an atom in the overlay. `site_idx`
+     *  is the picked atom's base site index, or -1 for empty space (background).
+     *  The parent updates its `selected_sites` from this; the overlay then mirrors
+     *  the new selection into the highlight buffer via the `selected_sites` prop. */
+    on_pick?: ((site_idx: number) => void) | undefined
   } = $props()
 
   let canvas = $state<HTMLCanvasElement | undefined>(undefined)
@@ -216,6 +228,23 @@
   // is read from bond_lattice (kept in lockstep by rebuild_bonds_if_needed and
   // refresh_frame_positions — including variable-cell trajectories).
   let cell_sig = ``
+
+  // ── Selection highlight state ──────────────────────────────────────────────
+  // Signature of the selection last pushed to the renderer, so set_selection is
+  // re-uploaded only when selected_sites actually changes (whether from an overlay
+  // click or an external selection change).
+  let selection_sig = ``
+
+  /** Mirror the app's `selected_sites` into the renderer's GPU highlight buffer
+   *  when it changed. Returns true if it re-pushed (caller marks a redraw). */
+  function sync_selection(): boolean {
+    if (!renderer) return false
+    const sig = (selected_sites ?? []).join(`,`)
+    if (sig === selection_sig) return false
+    selection_sig = sig
+    renderer.set_selection(selected_sites ?? [])
+    return true
+  }
 
   /** Push the unit-cell box to the renderer when its inputs (lattice / show /
    *  color) changed. Uses bond_lattice as the lattice source (already packed +
@@ -467,13 +496,19 @@
       cancelAnimationFrame(raf_id)
       raf_id = 0
     }
-    if (on_wake_event && typeof window !== `undefined`) {
-      window.removeEventListener(`pointerdown`, on_wake_event)
-      window.removeEventListener(`pointermove`, on_wake_event)
-      window.removeEventListener(`wheel`, on_wake_event)
-      window.removeEventListener(`keydown`, on_wake_event)
+    if (typeof window !== `undefined`) {
+      if (on_wake_event) {
+        window.removeEventListener(`pointerdown`, on_wake_event)
+        window.removeEventListener(`pointermove`, on_wake_event)
+        window.removeEventListener(`wheel`, on_wake_event)
+        window.removeEventListener(`keydown`, on_wake_event)
+      }
+      if (on_pointer_down) window.removeEventListener(`pointerdown`, on_pointer_down)
+      if (on_pointer_up) window.removeEventListener(`pointerup`, on_pointer_up)
     }
     on_wake_event = null
+    on_pointer_down = null
+    on_pointer_up = null
     resize_observer?.disconnect()
     resize_observer = null
     renderer?.destroy()
@@ -496,6 +531,44 @@
 
   // Bound listener handles, kept so teardown can remove exactly what it added.
   let on_wake_event: ((ev: Event) => void) | null = null
+
+  // ── Click-to-pick state ────────────────────────────────────────────────────
+  // The overlay canvas is pointer-events:none so camera drags pass through to the
+  // WebGL controls underneath. To pick WITHOUT stealing camera control we watch
+  // window pointerdown/up: a pointerup close to the pointerdown (minimal movement)
+  // is a CLICK ⇒ pick; movement beyond the threshold is a DRAG (camera rotate) ⇒
+  // ignore. We never preventDefault, so the underlying controls always get the
+  // drag. Bound listener handles for exact teardown.
+  let on_pointer_down: ((ev: PointerEvent) => void) | null = null
+  let on_pointer_up: ((ev: PointerEvent) => void) | null = null
+  // pointerdown anchor (client coords) + button, used to classify the gesture.
+  let down_x = 0
+  let down_y = 0
+  let down_button = -1
+  // Max client-pixel movement between down and up that still counts as a click.
+  const CLICK_MOVE_PX = 4
+
+  /** Pick the atom under the given CLIENT (cursor) coords and notify the parent.
+   *  Maps client → canvas-local CSS px → device px (× devicePixelRatio), the same
+   *  space the pick id texture is rendered at. Only fires when the cursor is over
+   *  the canvas. Calls on_pick(site_idx) with the picked base site index, or -1
+   *  for background (empty space) so the parent can clear the selection. */
+  async function pick_at_client(client_x: number, client_y: number): Promise<void> {
+    if (!renderer || !canvas || !on_pick) return
+    const rect = canvas.getBoundingClientRect()
+    // Ignore clicks outside the viewer canvas (e.g. on toolbars / panes).
+    if (
+      client_x < rect.left || client_x > rect.right ||
+      client_y < rect.top || client_y > rect.bottom
+    ) {
+      return
+    }
+    const dpr = typeof window !== `undefined` ? window.devicePixelRatio || 1 : 1
+    const x = (client_x - rect.left) * dpr
+    const y = (client_y - rect.top) * dpr
+    const idx = await renderer.pick(x, y)
+    on_pick(idx)
+  }
 
   /** True if `next` differs from the last uploaded camera uniform (epsilon
    *  compare). Updates the cached copy when it returns true. */
@@ -624,6 +697,10 @@
     // trajectories where refresh_frame_positions re-packs it per frame.
     if (sync_cell()) dirty = true
 
+    // Selection highlight: mirror the app's selected_sites into the GPU highlight
+    // buffer when it changed (overlay click OR external selection change).
+    if (sync_selection()) dirty = true
+
     // Background: resolve the viewer's bg color (theme/opacity/picked) and push
     // it to the renderer only when it changed. A change repaints so the new
     // clear color shows. Cheap when static (string compare + no GPU work).
@@ -687,6 +764,9 @@
     last_bg = null
     // Fresh renderer ⇒ force the cell box to re-resolve + re-push.
     cell_sig = ``
+    // Fresh renderer ⇒ its selection buffer is empty; force a re-push of the
+    // current selection on the first frame.
+    selection_sig = ``
     needs_render = true
     stable_frames = 0
     const device = await acquire_webgpu_device()
@@ -720,11 +800,29 @@
     // we listen on `window` (passive — we never preventDefault). Each event just
     // revives the suspended loop; the frame itself decides whether to redraw.
     on_wake_event = () => wake()
+    // Click-to-pick: record the pointerdown anchor; on pointerup decide click vs
+    // drag. Only the primary (left) button picks; we never preventDefault so the
+    // underlying WebGL orbit/trackball controls still receive every drag.
+    on_pointer_down = (ev: PointerEvent) => {
+      down_x = ev.clientX
+      down_y = ev.clientY
+      down_button = ev.button
+    }
+    on_pointer_up = (ev: PointerEvent) => {
+      if (ev.button !== 0 || down_button !== 0) return
+      const moved = Math.hypot(ev.clientX - down_x, ev.clientY - down_y)
+      if (moved > CLICK_MOVE_PX) return // a drag (camera rotate) — not a pick
+      // A click: render a fresh pick frame and feed the result to the parent.
+      // (fire-and-forget; the async readback resolves shortly after.)
+      void pick_at_client(ev.clientX, ev.clientY)
+    }
     if (typeof window !== `undefined`) {
       window.addEventListener(`pointerdown`, on_wake_event, { passive: true })
       window.addEventListener(`pointermove`, on_wake_event, { passive: true })
       window.addEventListener(`wheel`, on_wake_event, { passive: true })
       window.addEventListener(`keydown`, on_wake_event)
+      window.addEventListener(`pointerdown`, on_pointer_down, { passive: true })
+      window.addEventListener(`pointerup`, on_pointer_up, { passive: true })
     }
 
     // First frame: render once and start the loop. It self-suspends after the
@@ -816,6 +914,19 @@
     // structure/per-frame wakes, which update bond_lattice.)
     show_cell
     cell_edge_color
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Selection wake trigger. Track selected_sites so an external selection change
+    // (toolbar, other panes, or our own on_pick round-trip) revives a suspended
+    // loop; the frame mirrors it into the GPU highlight buffer via sync_selection
+    // and repaints once. Reading it here (not in the session effect) wakes without
+    // restarting the GPU session.
+    selected_sites
     if (renderer) {
       needs_render = true
       wake()
