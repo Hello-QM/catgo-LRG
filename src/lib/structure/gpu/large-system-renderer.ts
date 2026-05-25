@@ -139,6 +139,93 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
 }
 `
 
+/** WGSL axis-orientation gizmo shader. Draws a small camera-oriented XYZ triad
+ *  (X=red, Y=green, Z=blue) pinned to a fixed SCREEN CORNER, sized in constant
+ *  pixels, independent of zoom / structure scale. It replaces the WebGL Gizmo
+ *  widget (which is gone when WebGL is suspended in overlay mode).
+ *
+ *  Geometry: a line-list of 6 vertices = 3 axes × 2 endpoints. Per vertex the
+ *  axis index = vi/2 selects the unit axis (+X/+Y/+Z); the low bit picks origin
+ *  vs. the axis tip. Orientation uses ONLY the camera view ROTATION (upper-3×3 of
+ *  camera.view, NOT its translation), so the triad spins with the camera like an
+ *  orientation indicator. The rotated axis' XY (screen plane; camera looks down
+ *  -Z in view space) is scaled to a small NDC region and offset to the corner.
+ *  The corner center + per-pixel NDC scale (aspect-corrected so the region is
+ *  square in pixels) come from a uniform the renderer fills from the canvas size.
+ *
+ *  Depth: the gizmo must ALWAYS be visible (never occluded by atoms/bonds). Its
+ *  pipeline runs with depthCompare:`always` + depthWriteEnabled:false, and it is
+ *  drawn LAST in the pass, so it overwrites the corner regardless of scene depth.
+ *  Colored per-axis; no labels (text is out of scope). */
+const GIZMO_WGSL = `
+struct Camera {
+  view : mat4x4<f32>,
+  proj : mat4x4<f32>,
+  cam_pos : vec4<f32>,
+};
+// Gizmo placement uniform:
+//   center_ndc : corner anchor in clip/NDC space (xy), z/w unused.
+//   scale_ndc  : per-unit-axis NDC half-extent (x,y) — y carries the aspect
+//                correction so the triad is square in pixels.
+struct GizmoU {
+  center_ndc : vec4<f32>,
+  scale_ndc : vec4<f32>,
+};
+
+@group(0) @binding(0) var<uniform> camera : Camera;
+@group(0) @binding(1) var<uniform> giz : GizmoU;
+
+struct VsOut {
+  @builtin(position) clip : vec4<f32>,
+  @location(0) color : vec3<f32>,
+};
+
+// Axis unit vectors and their (linear-ish) colors. X red, Y green, Z blue.
+const AXES = array<vec3<f32>, 3>(
+  vec3<f32>(1.0, 0.0, 0.0),
+  vec3<f32>(0.0, 1.0, 0.0),
+  vec3<f32>(0.0, 0.0, 1.0),
+);
+const AXIS_COLORS = array<vec3<f32>, 3>(
+  vec3<f32>(0.85, 0.10, 0.10),
+  vec3<f32>(0.10, 0.70, 0.10),
+  vec3<f32>(0.10, 0.10, 0.85),
+);
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi : u32) -> VsOut {
+  let axis_i = vi / 2u;            // 0=X, 1=Y, 2=Z
+  let is_tip = (vi & 1u) == 1u;    // segment: origin -> tip
+  let unit = AXES[axis_i];
+
+  // Camera view ROTATION only (upper-3x3 of camera.view). Drop translation so
+  // the triad rotates with the camera but stays pinned to the corner.
+  let rot = mat3x3<f32>(
+    camera.view[0].xyz,
+    camera.view[1].xyz,
+    camera.view[2].xyz,
+  );
+  let dir = rot * unit;            // rotated axis in view space (camera looks -Z)
+
+  // Endpoint: origin at the corner, tip offset by the rotated axis' screen XY.
+  // Output clip space with w=1 so these are already NDC (no perspective divide);
+  // depthCompare always ignores z, so z is parked at 0.
+  let tip_off = vec2<f32>(dir.x * giz.scale_ndc.x, dir.y * giz.scale_ndc.y);
+  let off = select(vec2<f32>(0.0, 0.0), tip_off, is_tip);
+  let pos = giz.center_ndc.xy + off;
+
+  var out : VsOut;
+  out.clip = vec4<f32>(pos, 0.0, 1.0);
+  out.color = AXIS_COLORS[axis_i];
+  return out;
+}
+
+@fragment
+fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
+  return vec4<f32>(in.color, 1.0);
+}
+`
+
 /** WGSL impostor-sphere shader. View-space billboard + per-fragment ray-sphere.
  *  - storage buffers: positions (3N), radii (N), colors (3N linear rgb)
  *  - camera uniform: view + proj (separate) + camPos
@@ -356,6 +443,11 @@ struct VsOut {
   @location(2) radius : f32,        // cylinder radius (flat)
   @location(3) color : vec3<f32>,
   @location(4) vpos : vec3<f32>,    // view-space position of this quad corner
+  // 1.0 for CROSS-cell stubs, 0.0 for INTRA-cell full cylinders. Flat-interp.
+  // The fragment shader pushes cross-cell stubs slightly BACKWARD in depth so a
+  // stub coincident with an intra-cell bond at a shared atom loses the depth tie
+  // (intra always wins) — kills the faint alpha-to-coverage dotted seam.
+  @location(5) is_stub : f32,
 };
 
 struct FsOut {
@@ -477,6 +569,7 @@ fn vs_main(@builtin(vertex_index) vi : u32,
     out_deg.radius = r;
     out_deg.color = bond.radius_color.yzw;
     out_deg.vpos = vpos;
+    out_deg.is_stub = 0.0; // degenerate (discarded) — value irrelevant
     return out_deg;
   }
 
@@ -491,6 +584,8 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   out.radius = r;
   out.color = bond.radius_color.yzw;
   out.vpos = vpos;
+  // Cross-cell stubs (jimage != 0, !is_intra) get the fragment depth bias.
+  out.is_stub = select(1.0, 0.0, is_intra);
   return out;
 }
 
@@ -640,8 +735,19 @@ fn fs_main(in : VsOut) -> FsOut {
   let clip_h = camera.proj * vec4<f32>(hit_p, 1.0);
   let remapped_z = (clip_h.z + clip_h.w) * 0.5;
 
+  var depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
+  // Cross-cell stub depth bias: where a stub overlaps the START of an intra-cell
+  // full cylinder at a shared atom, the two grey surfaces are coincident -> a
+  // depth tie -> alpha-to-coverage stipple (faint dotted seam). Push the stub
+  // slightly BACKWARD (larger depth) so the intra-cell bond consistently wins the
+  // depth test there. Epsilon is tiny enough to be invisible elsewhere but breaks
+  // the tie at typical near/far. Intra-cell bonds (is_stub == 0) are NOT biased.
+  if (in.is_stub > 0.5) {
+    depth = clamp(depth + 1e-4, 0.0, 1.0);
+  }
+
   var out : FsOut;
-  out.depth = clamp(remapped_z / clip_h.w, 0.0, 1.0);
+  out.depth = depth;
   // alpha = coverage feeds alpha-to-coverage; no alpha blending is enabled.
   out.color = vec4<f32>(in.color * lighting, cov);
   return out;
@@ -817,6 +923,13 @@ export function create_large_system_renderer(
     size: 64, // 4 × vec4
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
+  // Gizmo placement uniform: center_ndc (vec4) + scale_ndc (vec4). Filled from
+  // the canvas backing size so the triad sits in a fixed pixel-sized corner.
+  const gizmo_uniform = device.createBuffer({
+    label: `large-system-gizmo-uniform`,
+    size: 32, // 2 × vec4
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
   // Cached cell inputs (uploaded only when set_cell changes them).
   let cell_lattice = new Float32Array(9)
   let cell_show = false
@@ -989,6 +1102,75 @@ export function create_large_system_renderer(
     ],
   })
 
+  // Axis-orientation gizmo: a small corner XYZ triad as a line-list (6 verts).
+  // Binds the camera (for the view rotation) + the gizmo placement uniform. Runs
+  // with depthCompare:`always` + no depth write, drawn LAST, so it is ALWAYS
+  // visible (never occluded by atoms/bonds) and never disturbs scene depth.
+  const gizmo_module = device.createShaderModule({
+    label: `large-system-gizmo`,
+    code: GIZMO_WGSL,
+  })
+  const gizmo_bgl = device.createBindGroupLayout({
+    label: `large-system-gizmo-bgl`,
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+    ],
+  })
+  const gizmo_pipeline = device.createRenderPipeline({
+    label: `large-system-gizmo-pipeline`,
+    layout: device.createPipelineLayout({ bindGroupLayouts: [gizmo_bgl] }),
+    vertex: { module: gizmo_module, entryPoint: `vs_main` },
+    fragment: { module: gizmo_module, entryPoint: `fs_main`, targets: [{ format }] },
+    primitive: { topology: `line-list` },
+    depthStencil: {
+      format: DEPTH_FORMAT,
+      // Always visible: never write depth, never fail the depth test. The gizmo
+      // overwrites its corner regardless of what atoms/bonds drew there.
+      depthWriteEnabled: false,
+      depthCompare: `always`,
+    },
+    // Share the multisampled targets (count must match). No alpha-to-coverage —
+    // opaque colored lines.
+    multisample: { count: SAMPLE_COUNT },
+  })
+  const gizmo_bind_group = device.createBindGroup({
+    label: `large-system-gizmo-bg`,
+    layout: gizmo_bgl,
+    entries: [
+      { binding: 0, resource: { buffer: camera_buffer } },
+      { binding: 1, resource: { buffer: gizmo_uniform } },
+    ],
+  })
+
+  /** Fixed pixel geometry of the corner gizmo. The triad region is ~2·GIZMO_PX
+   *  wide (each axis reaches GIZMO_PX from the origin), placed GIZMO_MARGIN_PX in
+   *  from the bottom-left corner — matching the WebGL Gizmo's offset:{left,bottom}. */
+  const GIZMO_PX = 42
+  const GIZMO_MARGIN_PX = 12
+
+  /** Pack + upload the gizmo placement uniform from the canvas backing size.
+   *  - center_ndc: bottom-left corner anchor in NDC. NDC x∈[-1,1] (right), y∈
+   *    [-1,1] (UP). Pixel→NDC: dx_ndc = 2·px/width, dy_ndc = 2·px/height. We seat
+   *    the triad ORIGIN one (margin + axis reach) in from the bottom-left so the
+   *    whole triad stays on-screen whatever its rotation.
+   *  - scale_ndc: per-unit-axis half-extent. x = 2·GIZMO_PX/width; y =
+   *    2·GIZMO_PX/height (independent per-axis pixel scale ⇒ square in pixels,
+   *    aspect-corrected — a unit axis reaches exactly GIZMO_PX pixels either way). */
+  function upload_gizmo_uniform(): void {
+    const w = Math.max(1, canvas.width)
+    const h = Math.max(1, canvas.height)
+    const inset = GIZMO_MARGIN_PX + GIZMO_PX
+    const cx = -1 + (2 * inset) / w // from the LEFT edge
+    const cy = -1 + (2 * inset) / h // from the BOTTOM edge (NDC y up)
+    const sx = (2 * GIZMO_PX) / w
+    const sy = (2 * GIZMO_PX) / h
+    const u = new Float32Array(8)
+    u[0] = cx; u[1] = cy; u[2] = 0; u[3] = 0
+    u[4] = sx; u[5] = sy; u[6] = 0; u[7] = 0
+    device.queue.writeBuffer(gizmo_uniform, 0, u.buffer, u.byteOffset, 32)
+  }
+
   /** Pack + upload the cell render uniform: lattice rows a,b,c (each a vec3 + pad)
    *  then color (rgb + pad). Same row convention as the bond render uniform. */
   function upload_cell_uniform(): void {
@@ -1038,6 +1220,7 @@ export function create_large_system_renderer(
     depth_view = depth_texture.createView()
   }
   ensure_targets(canvas.width || 1, canvas.height || 1)
+  upload_gizmo_uniform() // seed corner placement from the initial canvas size
 
   function rebuild_bind_group(): void {
     if (!positions_buffer || !radii_buffer || !colors_buffer) {
@@ -1480,6 +1663,14 @@ export function create_large_system_renderer(
         pass.setBindGroup(0, cell_bind_group)
         pass.draw(24) // 12 edges × 2 line endpoints
       }
+      // Axis-orientation gizmo: drawn LAST with depthCompare:`always` + no depth
+      // write so the corner XYZ triad is ALWAYS visible (atoms/bonds never occlude
+      // it). Reuses the camera uniform (the shader extracts the view rotation), so
+      // it spins with the camera. Always drawn while the overlay is active — no
+      // toggle/prop needed; it lives in the corner away from the structure.
+      pass.setPipeline(gizmo_pipeline)
+      pass.setBindGroup(0, gizmo_bind_group)
+      pass.draw(6) // 3 axes × 2 line endpoints
       pass.end()
       device.queue.submit([encoder.finish()])
     },
@@ -1488,6 +1679,9 @@ export function create_large_system_renderer(
       canvas.width = Math.max(1, Math.floor(w))
       canvas.height = Math.max(1, Math.floor(h))
       ensure_targets(canvas.width, canvas.height)
+      // Re-derive the corner gizmo placement for the new canvas size so it stays
+      // a constant pixel size in the corner (not stretched by the aspect change).
+      upload_gizmo_uniform()
     },
     destroy(): void {
       if (destroyed) return
@@ -1513,6 +1707,7 @@ export function create_large_system_renderer(
       bond_params_buffer.destroy()
       bond_render_uniform.destroy()
       cell_uniform.destroy()
+      gizmo_uniform.destroy()
       indirect_cfg_buffer.destroy()
       positions_buffer = null
       radii_buffer = null
