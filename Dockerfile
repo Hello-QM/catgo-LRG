@@ -19,7 +19,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_NET_GIT_FETCH_WITH_CLI=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git build-essential pkg-config libssl-dev \
+        ca-certificates curl git build-essential pkg-config libssl-dev python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # pnpm pinned to packageManager field
