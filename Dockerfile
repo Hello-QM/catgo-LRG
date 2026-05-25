@@ -44,8 +44,14 @@ RUN --mount=type=cache,target=/pnpm/store \
 COPY . .
 
 # Build WASM extension and place where frontend expects it
+# Crate is named "ferrox" but frontend imports "chgdiff_wasm" — rename outputs.
 RUN cd extensions/rust-wasm && pnpm build \
-    && cp -r pkg /app/src/lib/electronic/chgdiff-wasm-pkg
+    && cp -r pkg /app/src/lib/electronic/chgdiff-wasm-pkg \
+    && cd /app/src/lib/electronic/chgdiff-wasm-pkg \
+    && mv ferrox.js chgdiff_wasm.js \
+    && mv ferrox_bg.wasm chgdiff_wasm_bg.wasm \
+    && mv ferrox.d.ts chgdiff_wasm.d.ts 2>/dev/null || true \
+    && sed -i 's/ferrox_bg\.wasm/chgdiff_wasm_bg.wasm/g' chgdiff_wasm.js
 
 # Build static frontend → ./build-desktop
 ENV VITE_STATIC_ONLY=true
