@@ -43,6 +43,16 @@ def create_mcp_sse_app() -> Starlette:
         _handle_workflow,
         _handle_analyze,
         _handle_view,
+        _handle_catalysis,
+        _handle_file,
+        _handle_system,
+        _handle_quickbuild,
+        _handle_heterostructure,
+        _handle_nanotube,
+        _handle_moire,
+        _handle_workflow_engine,
+        _handle_diagnose,
+        _handle_skills,
         API_BASE,
     )
 
@@ -75,6 +85,26 @@ def create_mcp_sse_app() -> Starlette:
                     return await _handle_analyze(client, arguments)
                 elif name == "catgo_view":
                     return await _handle_view(client, arguments)
+                elif name == "catgo_catalysis":
+                    return await _handle_catalysis(client, arguments)
+                elif name == "catgo_file":
+                    return await _handle_file(client, arguments)
+                elif name == "catgo_system":
+                    return await _handle_system(client, arguments)
+                elif name == "catgo_quickbuild":
+                    return await _handle_quickbuild(client, arguments)
+                elif name == "catgo_heterostructure":
+                    return await _handle_heterostructure(client, arguments)
+                elif name == "catgo_nanotube":
+                    return await _handle_nanotube(client, arguments)
+                elif name == "catgo_moire":
+                    return await _handle_moire(client, arguments)
+                elif name == "catgo_workflow_engine":
+                    return await _handle_workflow_engine(arguments)
+                elif name == "catgo_diagnose":
+                    return await _handle_diagnose(arguments)
+                elif name == "catgo_skills":
+                    return await _handle_skills(arguments)
                 else:
                     return [T(type="text", text=f"Unknown tool: {name}")]
         except httpx.ConnectError:

@@ -184,6 +184,32 @@ def _compute_deformation_2d(
     return s.T @ np.linalg.inv(f.T)
 
 
+def _wrap_inplane_fracs(structure: Structure) -> Structure:
+    """Wrap a/b fractional coords into [0,1), leave c untouched.
+
+    The pymatgen CoherentInterfaceBuilder and the intermat/JARVIS pipeline
+    both return interface structures whose in-plane (a,b) fractional
+    coordinates can fall outside [0,1) — atoms then render outside the
+    lattice box in the viewer even though their Cartesian positions are
+    physically correct. `_stack_slabs` already does `frac_coords % 1.0`;
+    these two paths don't. Wrap a/b here to match.
+
+    c is deliberately NOT wrapped: a slab/heterostructure sits inside a
+    tall c-cell with vacuum, and `% 1.0` on c could split a contiguous
+    slab across the cell boundary (an atom at z-frac 0.99 and another at
+    0.01 would look detached). All builder outputs observed keep c well
+    inside [0,1), so leaving it alone is safe and avoids that hazard.
+
+    Returns a plain Structure (site_properties dropped — callers compute
+    film/substrate counts BEFORE calling this, and _native_to_model does
+    not read site_properties).
+    """
+    fracs = structure.frac_coords.copy()
+    fracs[:, 0] = fracs[:, 0] % 1.0
+    fracs[:, 1] = fracs[:, 1] % 1.0
+    return Structure(structure.lattice, structure.species, fracs)
+
+
 def _stack_slabs(
     substrate: Structure,
     film: Structure,
@@ -975,7 +1001,7 @@ def build_interface(
         )
 
     return {
-        "structure": interface,
+        "structure": _wrap_inplane_fracs(interface),
         "n_atoms": n_atoms,
         "n_atoms_substrate": n_substrate,
         "n_atoms_film": n_film,
@@ -1133,7 +1159,7 @@ def build_interface_intermat(
     )
 
     return {
-        "structure": interface,
+        "structure": _wrap_inplane_fracs(interface),
         "n_atoms": len(interface),
         "n_atoms_substrate": n_substrate,
         "n_atoms_film": n_film,

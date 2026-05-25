@@ -625,6 +625,316 @@ TOOLS = [
             "required": ["action"],
         },
     ),
+    Tool(
+        name="catgo_heterostructure",
+        description=(
+            "Build heterostructures / interfaces / van der Waals stacks "
+            "between two crystalline materials. ONE call gets you a full "
+            "3D atomic structure — no need to bash + Python + pymatgen.\n"
+            "\n"
+            "USE THIS WHEN the user asks to: build/stack/搭/做 a "
+            "heterostructure / 异质结 / interface / 界面 / epitaxial film / "
+            "two-material bilayer between two crystals (e.g. MoS2/WSe2, "
+            "Cu2O/ZnO, graphene/hBN, Ag on TiO2). This is the PREFERRED "
+            "tool for ANY two-material interface request.\n"
+            "\n"
+            "DO NOT call bash + write Python + import pymatgen.interfaces / "
+            "intermat / ASE to do this manually. This tool wraps the "
+            "canonical Zur-McGill (ZSL) algorithm + intermat pipeline; "
+            "hand-rolling produces wrong strain values and miss valid "
+            "matches. DO NOT manually cut slabs first — this tool handles "
+            "slab cutting internally.\n"
+            "\n"
+            "Actions:\n"
+            "  build      — ONE-SHOT (default, RECOMMENDED): substrate "
+            "+ film + optional miller_index = full heterostructure. Uses "
+            "intermat pipeline, auto-picks lowest-strain ZSL match.\n"
+            "  search     — return list of (match_id, strain, area) "
+            "candidates without building. Use when user wants to browse "
+            "options before committing.\n"
+            "  build_match — build a specific match_id from a prior search. "
+            "Use after `search` when user picked a candidate.\n"
+            "\n"
+            "EFFICIENT PATTERN — do NOT fetch+export+parse POSCARs first:\n"
+            "  Just pass mp_ids directly. The tool auto-fetches both materials.\n"
+            "  catgo_heterostructure{action:'build', substrate:{mp_id:'mp-30'}, "
+            "film:{mp_id:'mp-81'}, substrate_miller:[1,1,1], film_miller:[1,1,1]}\n"
+            "  → ONE call, done. No catgo_fetch, no catgo_structure export, no "
+            "manual dict rebuild. (You may still catgo_fetch first if you want "
+            "the user to SEE each bulk in the viewer, but it's not required.)\n"
+            "\n"
+            "EXAMPLES of prompts that should trigger THIS tool (not bash):\n"
+            "  '帮我搭 Cu2O/ZnO 异质结' → build (substrate={mp_id:Cu2O id}, film={mp_id:ZnO id})\n"
+            "  'build Au111 on Cu111' → build (substrate={mp_id:'mp-30'}, "
+            "film={mp_id:'mp-81'}, substrate_miller=[1,1,1], film_miller=[1,1,1])\n"
+            "  'epitaxial Ag on TiO2(110)' → build (substrate={mp_id:TiO2 id}, "
+            "substrate_miller=[1,1,0], film={mp_id:Ag id})\n"
+            "  'search heterostructure matches for Cu/Pt' → search first, "
+            "then build_match.\n"
+            "\n"
+            "If only ONE structure is loaded in the viewer, ask the user "
+            "for the second one (or its MP id) before calling this tool."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["build", "search", "build_match"],
+                    "default": "build",
+                    "description": "build = one-shot (intermat); search = enumerate matches; "
+                                   "build_match = build from prior search.match_id.",
+                },
+                "substrate": {
+                    "type": "object",
+                    "description": (
+                        "Substrate material. SHORTCUT: pass {\"mp_id\": \"mp-30\"} and "
+                        "the tool auto-fetches it — you do NOT need to fetch + export "
+                        "POSCAR + rebuild a Structure dict first. A full pymatgen "
+                        ".as_dict() also works. Omit entirely to use the current viewer "
+                        "structure."
+                    ),
+                },
+                "film": {
+                    "type": "object",
+                    "description": (
+                        "Film material — the second one to stack. REQUIRED. SHORTCUT: "
+                        "pass {\"mp_id\": \"mp-81\"} and the tool auto-fetches it. Do NOT "
+                        "fetch+export+parse first — just give the mp_id. A full "
+                        "pymatgen .as_dict() also works."
+                    ),
+                },
+                "substrate_miller": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "default": [0, 0, 1],
+                    "description": "Miller indices for substrate surface, e.g. [1,1,0]",
+                },
+                "film_miller": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "default": [0, 0, 1],
+                    "description": "Miller indices for film surface",
+                },
+                "substrate_thickness": {
+                    "type": "number",
+                    "default": 10.0,
+                    "description": "Substrate slab thickness in Å",
+                },
+                "film_thickness": {
+                    "type": "number",
+                    "default": 10.0,
+                    "description": "Film slab thickness in Å",
+                },
+                "separation": {
+                    "type": "number",
+                    "default": 3.0,
+                    "description": "Interface gap (Å) between substrate and film",
+                },
+                "vacuum": {
+                    "type": "number",
+                    "default": 20.0,
+                    "description": "Vacuum spacing above the assembled stack",
+                },
+                "max_area": {
+                    "type": "number",
+                    "default": 400,
+                    "description": "Max in-plane area (Å²) for ZSL lattice match search",
+                },
+                "max_strain": {
+                    "type": "number",
+                    "default": 0.09,
+                    "description": "Max allowed lattice mismatch (0.09 = 9%)",
+                },
+                "match_id": {
+                    "type": "integer",
+                    "description": "Match id from a prior `search` call (only for build_match action).",
+                },
+            },
+            "required": ["film"],
+        },
+    ),
+    Tool(
+        name="catgo_nanotube",
+        description=(
+            "Build a nanotube by rolling up a 2D material sheet (graphene → "
+            "CNT, hBN → BN nanotube, MoS2 → MoS2 nanotube). ONE call gets you "
+            "a full 3D tube structure — no bash + Python + ASE.\n"
+            "\n"
+            "USE THIS WHEN the user asks to: build/roll/卷/做 a nanotube / "
+            "碳纳米管 / 纳米管 / CNT / SWNT / MWNT / single- or multi-walled "
+            "tube from a 2D sheet, with chiral indices (n,m) "
+            "(e.g. '搭一个 (5,5) 碳纳米管', 'build an armchair CNT', "
+            "'roll graphene into a (10,0) zigzag tube').\n"
+            "\n"
+            "DO NOT call bash + write Python + import ase/pymatgen to roll a "
+            "sheet manually. This tool wraps the canonical chiral-vector "
+            "rolling algorithm and returns a ready structure in the viewer.\n"
+            "\n"
+            "The LAYER to roll is a 2D material. SHORTCUT: omit `layer` and the "
+            "tool rolls whatever 2D sheet is currently in the viewer (the usual "
+            "case — user has graphene/hBN/MoS2 loaded). You can also pass a full "
+            "Structure dict, or {mp_id:'mp-N'}. The layer must be a 2D sheet "
+            "(atoms in the ab-plane, vacuum along c) — a bulk crystal will not "
+            "roll correctly.\n"
+            "\n"
+            "Actions:\n"
+            "  build — (default) roll the sheet into a tube. Needs n, m.\n"
+            "  info  — compute geometry (diameter, chiral angle, atom count) "
+            "WITHOUT building. Use to preview before committing.\n"
+            "\n"
+            "Chirality: m=0 → zigzag, n=m → armchair, else chiral.\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  '把当前石墨烯卷成 (5,5) 碳纳米管' → build {n:5, m:5}  (layer omitted = viewer)\n"
+            "  'build a (10,0) zigzag CNT, 4 unit cells long' → build {n:10, m:0, NL:4}\n"
+            "  'double-walled CNT (5,5)@(10,10)' → build {n:10, m:10, n_walls:2}\n"
+            "  'what diameter is a (12,6) tube?' → info {n:12, m:6}"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["build", "info"],
+                    "default": "build",
+                    "description": "build = construct the tube; info = geometry only (no build).",
+                },
+                "layer": {
+                    "type": "object",
+                    "description": (
+                        "The 2D material sheet to roll. OMIT to use the current "
+                        "viewer structure (recommended — user usually has the "
+                        "sheet loaded). Or a full pymatgen Structure dict, or "
+                        "{mp_id:'mp-N'}. Must be a 2D sheet, not a bulk crystal."
+                    ),
+                },
+                "n": {"type": "integer", "minimum": 0, "description": "First chiral index n."},
+                "m": {"type": "integer", "minimum": 0, "description": "Second chiral index m."},
+                "NL": {
+                    "type": "integer",
+                    "default": 3,
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Number of unit cells along the tube axis (tube length).",
+                },
+                "vacuum": {
+                    "type": "number",
+                    "default": 15.0,
+                    "description": "Vacuum padding from the tube wall (Å).",
+                },
+                "n_walls": {
+                    "type": "integer",
+                    "default": 1,
+                    "minimum": 1,
+                    "maximum": 10,
+                    "description": "Number of walls (1 = SWNT, 2+ = MWNT).",
+                },
+                "interlayer_spacing": {
+                    "type": "number",
+                    "default": 3.4,
+                    "description": "Spacing between walls for MWNT (Å).",
+                },
+            },
+            "required": ["n", "m"],
+        },
+    ),
+    Tool(
+        name="catgo_moire",
+        description=(
+            "Build a twisted / moiré bilayer (twisted bilayer graphene, magic "
+            "angle, twisted TMDs) from a 2D material. ONE call stacks two layers "
+            "at a commensurate twist angle — no bash + Python.\n"
+            "\n"
+            "USE THIS WHEN the user asks to: build/搭/做 a moiré / 魔角 / 转角 / "
+            "扭转双层 / 莫尔 superlattice, twisted bilayer, magic-angle graphene, "
+            "twisted TMD heterobilayer (e.g. '搭一个 21.8° 转角石墨烯', "
+            "'build twisted bilayer graphene', 'magic angle moiré').\n"
+            "\n"
+            "DO NOT hand-roll the coincidence-lattice / twist math in Python — "
+            "this tool wraps the commensurate-angle search and bilayer builder.\n"
+            "\n"
+            "The LAYER is a 2D material. SHORTCUT: omit `layer_a` to use the "
+            "current viewer structure. For a homobilayer (e.g. twisted graphene) "
+            "leave `layer_b` unset — it reuses layer_a. Pass `layer_b` only for a "
+            "twisted HETERObilayer. Each layer = full Structure dict, "
+            "{mp_id:'mp-N'}, or omitted (viewer). Must be a 2D sheet.\n"
+            "\n"
+            "Actions:\n"
+            "  build  — (default) build a bilayer near a target twist `angle` "
+            "(degrees). The tool searches commensurate angles internally and "
+            "snaps to the nearest one (twist angles are discrete), then builds.\n"
+            "  search — enumerate commensurate twist angles + atom counts so the "
+            "user can pick. Use when the user wants to browse before committing.\n"
+            "\n"
+            "⚠️ PERFORMANCE: the commensurate search is CPU-bound and grows with "
+            "max_index (≈4 s at 6, ≈11 s at 10). Keep max_index ≤ 8 unless the "
+            "user needs a very small angle. Small magic angles (~1°) require a "
+            "large max_index and produce thousand-atom cells — warn the user it "
+            "will be slow and large.\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  '把石墨烯做成 21.8° 转角双层' → build {angle:21.8}  (layer omitted = viewer)\n"
+            "  'twisted bilayer graphene at 13.2°' → build {angle:13.2}\n"
+            "  'list possible twist angles for graphene below 15°' → search {angle_max:15}\n"
+            "  'twisted MoS2/WSe2 heterobilayer at 5°' → build {angle:5, layer_a:{mp_id:..}, layer_b:{mp_id:..}}"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["build", "search"],
+                    "default": "build",
+                    "description": "build = construct bilayer near target angle; search = list commensurate angles.",
+                },
+                "angle": {
+                    "type": "number",
+                    "description": "Target twist angle (degrees) for build. The tool snaps to the nearest commensurate angle.",
+                },
+                "layer_a": {
+                    "type": "object",
+                    "description": "First 2D layer. OMIT to use the current viewer structure. Full Structure dict or {mp_id:'mp-N'}.",
+                },
+                "layer_b": {
+                    "type": "object",
+                    "description": "Second 2D layer — ONLY for a twisted heterobilayer. Omit for a homobilayer (reuses layer_a).",
+                },
+                "angle_min": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "Min twist angle for search (degrees).",
+                },
+                "angle_max": {
+                    "type": "number",
+                    "default": 30.0,
+                    "description": "Max twist angle for search (degrees).",
+                },
+                "max_index": {
+                    "type": "integer",
+                    "default": 6,
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Superlattice search index. Higher = more/smaller angles but SLOWER (≈4 s@6, ≈11 s@10). Keep ≤ 8.",
+                },
+                "vacuum": {
+                    "type": "number",
+                    "default": 15.0,
+                    "description": "Vacuum spacing above the bilayer (Å).",
+                },
+                "translate_z": {
+                    "type": "number",
+                    "default": 3.35,
+                    "description": "Interlayer spacing between the two layers (Å).",
+                },
+                "candidate": {
+                    "type": "object",
+                    "description": "Optional full MoireCandidate dict from a prior `search` to build exactly that one (skips the internal re-search).",
+                },
+            },
+            "required": [],
+        },
+    ),
 ]
 
 
@@ -1948,6 +2258,451 @@ async def _handle_quickbuild(client: httpx.AsyncClient, args: dict) -> list[Text
     )]
 
 
+async def _resolve_hetero_material(
+    client: httpx.AsyncClient, material: object | None, role: str = "material",
+) -> dict | str:
+    """Normalize substrate/film arg into a full Structure dict.
+
+    Accepts:
+      - dict with 'sites' / 'lattice' → already a Structure dict, pass through
+      - dict with only {'mp_id': 'mp-N'} → fetch from Materials Project
+      - {'structure_id': 'mp-N'}        → same
+      - None (only for substrate)       → fall back to current viewer
+      - bare string 'mp-N'              → fetch from MP
+
+    Returns dict on success, error string on failure. LLM kept passing
+    {mp_id:'...'} expecting the tool to auto-fetch (which is the natural
+    shorthand from the catgo_fetch response); without this normalization
+    every call 422s on `body.{substrate,film}.sites: Field required`.
+    """
+    # None → viewer fallback (substrate only)
+    if material is None:
+        if role == "substrate":
+            cur = await _get_current_structure(client)
+            if cur is not None:
+                return cur
+        return f"`{role}` is required. Either pass a full Structure dict, an mp_id ('mp-N'), or load it into the viewer first."
+
+    # Bare string is interpreted as mp_id
+    if isinstance(material, str):
+        material = {"mp_id": material}
+
+    if not isinstance(material, dict):
+        return f"`{role}` must be a dict (Structure) or mp_id string, got {type(material).__name__}"
+
+    # Already a full Structure dict — pass through
+    if "sites" in material and "lattice" in material:
+        return material
+
+    # Just mp_id / structure_id — auto-fetch via OPTIMADE (same path as
+    # catgo_fetch crystal). There is NO `GET /fetch/crystal` REST endpoint;
+    # the MCP fetch handler resolves IDs through OPTIMADE provider APIs
+    # directly. Reuse those helpers so a {mp_id:'mp-N'} shorthand resolves
+    # to a real Structure dict instead of 404ing.
+    mp_id = material.get("mp_id") or material.get("structure_id") or material.get("id")
+    if isinstance(mp_id, str) and mp_id.strip():
+        # Provider inferred from id prefix; default to mp.
+        provider = "mp"
+        try:
+            from catgo.mcp_tools.structure_tools import (
+                _optimade_fetch_by_id_direct,
+                _optimade_to_pymatgen,
+            )
+            entry = await _optimade_fetch_by_id_direct(client, provider, mp_id)
+            if not entry:
+                return f"Could not fetch {role}={mp_id} from provider '{provider}'. Pass a full Structure dict instead, or load it in the viewer."
+            struct_dict = _optimade_to_pymatgen(entry)
+            # Standardize to conventional cell so Miller indices are correct
+            # (mirrors _handle_fetch_crystal).
+            try:
+                conv = await client.post(
+                    f"{API_BASE}/structure-ops/conventional-cell",
+                    json={"structure": struct_dict}, timeout=15.0,
+                )
+                if conv.status_code == 200 and conv.json().get("structure"):
+                    struct_dict = conv.json()["structure"]
+            except Exception:
+                pass
+            return struct_dict
+        except Exception as exc:
+            return f"Failed to fetch {role}={mp_id}: {exc}"
+
+    return f"`{role}` shape unrecognized; need full Structure dict or {{mp_id:'mp-N'}}. Got keys: {list(material.keys())[:5]}"
+
+
+async def _handle_heterostructure(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    """Build / search heterostructures between two crystal structures.
+
+    Routes:
+      - build       → /heterostructure/build-intermat (one-shot, default)
+      - search      → /heterostructure/search        (enumerate ZSL matches)
+      - build_match → /heterostructure/build         (build a specific match_id from search)
+
+    Robustness:
+      - If `substrate` / `film` is None or {mp_id: 'mp-N'}, auto-fetch the
+        full Structure dict from Materials Project via /fetch/crystal.
+      - For build_match, the LLM only needs to pass match_id — we re-run the
+        underlying /search internally to recover the full match dict the
+        backend wants (HeterostructureMatch with sl_vectors, transformations,
+        ...). Without this the LLM has no way to construct match dict from
+        scratch and every build_match call 422s.
+      - High-strain results (>15%) get a clear WARNING in the message so the
+        LLM doesn't accept a 273% mismatch as "success" and move on.
+    """
+    T = TextContent
+    action = (args.get("action") or "build").lower()
+
+    substrate = args.get("substrate")
+    film = args.get("film")
+    substrate = await _resolve_hetero_material(client, substrate, role="substrate")
+    if isinstance(substrate, str):  # error message
+        return [T(type="text", text=substrate)]
+    film = await _resolve_hetero_material(client, film, role="film")
+    if isinstance(film, str):
+        return [T(type="text", text=film)]
+
+    # Build params payload from the optional knobs.
+    params = {
+        "substrate_miller": args.get("substrate_miller", [0, 0, 1]),
+        "film_miller": args.get("film_miller", [0, 0, 1]),
+        "substrate_thickness": args.get("substrate_thickness", 10.0),
+        "film_thickness": args.get("film_thickness", 10.0),
+        "max_area": args.get("max_area", 400),
+    }
+    if "max_strain" in args:
+        params["max_area_ratio_tol"] = args["max_strain"]
+        params["max_length_tol"] = args["max_strain"]
+
+    if action == "build":
+        params["separation"] = args.get("separation", 3.0)
+        params["vacuum"] = args.get("vacuum", 20.0)
+        payload = {"substrate": substrate, "film": film, "params": params}
+        resp = await client.post(f"{API_BASE}/heterostructure/build-intermat", json=payload)
+    elif action == "search":
+        payload = {"substrate": substrate, "film": film, "params": params}
+        resp = await client.post(f"{API_BASE}/heterostructure/search", json=payload)
+    elif action == "build_match":
+        match_id = args.get("match_id")
+        if match_id is None:
+            return [T(type="text", text="action=build_match needs `match_id` from a prior `search`.")]
+        # Re-run search to recover the full match dict — backend's /build
+        # needs match_area / transformations / sl_vectors which the LLM
+        # cannot provide on its own. This is one extra RTT (~few s) but
+        # makes build_match actually usable from the agent.
+        search_payload = {"substrate": substrate, "film": film, "params": params}
+        sresp = await client.post(f"{API_BASE}/heterostructure/search", json=search_payload)
+        if sresp.status_code != 200:
+            return [T(type="text", text=f"build_match needs prior search; search failed ({sresp.status_code}): {sresp.text[:300]}")]
+        sdata = sresp.json()
+        all_matches = sdata.get("matches") or []
+        target_match = next((m for m in all_matches if m.get("match_id") == int(match_id)), None)
+        if target_match is None:
+            ids = [m.get("match_id") for m in all_matches]
+            return [T(type="text", text=f"match_id={match_id} not in search results. Available ids: {ids[:20]}")]
+        build_params = {
+            "gap": args.get("separation", 2.0),
+            "vacuum": args.get("vacuum", 20.0),
+            "substrate_thickness": params["substrate_thickness"],
+            "film_thickness": params["film_thickness"],
+        }
+        payload = {
+            "substrate": substrate,
+            "film": film,
+            "match": target_match,
+            "termination_index": args.get("termination_index", 0),
+            "params": build_params,
+            "search_params": params,
+        }
+        resp = await client.post(f"{API_BASE}/heterostructure/build", json=payload)
+    else:
+        return [T(type="text", text=f"Unknown heterostructure action: {action!r}. Valid: build, search, build_match.")]
+
+    if resp.status_code != 200:
+        return [T(
+            type="text",
+            text=f"Heterostructure {action} failed ({resp.status_code}): {resp.text[:400]}",
+        )]
+    data = resp.json()
+
+    # Push the built structure into the viewer so the user sees it immediately.
+    if action in ("build", "build_match"):
+        new_struct = data.get("structure") or data.get("interface_structure")
+        if new_struct:
+            push_err = await _push_structure(client, new_struct)
+            n_sites = (new_struct.get("sites") and len(new_struct["sites"])) or "?"
+            # Backend's strain field is a percent value (e.g. 4.0 = 4%). NOT a
+            # 0-1 ratio. Use literal %f formatting; the previous .3% format
+            # added an extra ×100 which masked the issue but produced
+            # nonsense like "273.290%" when the underlying strain was 2.73
+            # (= 273% — already unusable, but the format made it look like
+            # we agreed). High-strain warning helps the LLM realize the
+            # interface is bad and try different miller indices / max_area.
+            strain = data.get("strain")
+            if not isinstance(strain, (int, float)):
+                strain = (data.get("match") or {}).get("strain")
+            strain_str = ""
+            warning = ""
+            if isinstance(strain, (int, float)):
+                strain_str = f", strain={strain:.2f}%"
+                if strain > 15:
+                    warning = (
+                        f"\n⚠️  STRAIN {strain:.1f}% IS UNUSABLY HIGH. The interface as "
+                        f"built is not physically reasonable. Try one of:\n"
+                        f"   - increase max_area to 600-1200 (current {params['max_area']})\n"
+                        f"   - try different miller indices (current substrate={params['substrate_miller']}, film={params['film_miller']})\n"
+                        f"   - call action='search' first to browse all candidates with strain values"
+                    )
+            mm_u = data.get("mismatch_u")
+            mm_v = data.get("mismatch_v")
+            mm_str = ""
+            if isinstance(mm_u, (int, float)) and isinstance(mm_v, (int, float)):
+                mm_str = f", mismatch u={mm_u:.2f}% v={mm_v:.2f}%"
+            msg = f"Heterostructure built: {n_sites} atoms{strain_str}{mm_str}. Viewer updated.{warning}"
+            if push_err:
+                msg += f"\n⚠️ Viewer push failed: {push_err}"
+            return [T(type="text", text=msg)]
+        return [T(type="text", text=f"Heterostructure {action} returned no structure. Response: {json.dumps(data)[:400]}")]
+
+    # search: report matches so LLM can pick one
+    matches = data.get("matches") or []
+    if not matches:
+        return [T(type="text", text="No lattice matches found. Try increasing max_area or max_strain.")]
+    lines = [f"Found {len(matches)} matches (lower strain = better):"]
+    for i, m in enumerate(matches[:10]):
+        mid = m.get("match_id", i)
+        area = m.get("area") or m.get("supercell_area", "?")
+        strain = m.get("strain") or m.get("max_strain", "?")
+        lines.append(f"  match_id={mid}: area={area} Å², strain={strain}")
+    lines.append("\nCall action=build_match with match_id to construct the chosen interface.")
+    return [T(type="text", text="\n".join(lines))]
+
+
+async def _resolve_layer(
+    client: httpx.AsyncClient, layer: object | None, role: str = "layer",
+) -> dict | str:
+    """Normalize a 2D-layer arg (nanotube/moire) into a {structure: dict}.
+
+    Unlike _resolve_hetero_material, the layer is the PRIMARY input for these
+    tools, so None always falls back to the current viewer (the user usually
+    has the 2D sheet loaded). Accepts a full Structure dict, {mp_id:'mp-N'},
+    or a pre-wrapped {structure: {...}}. mp_id is fetched via OPTIMADE but NOT
+    conventional-cell standardized — that can break a 2D sheet's vacuum axis.
+
+    Returns a layer-input dict {"structure": <dict>} on success, or an error
+    string on failure.
+    """
+    # Already wrapped as a layer input — pass through.
+    if isinstance(layer, dict) and "structure" in layer and isinstance(layer["structure"], dict):
+        return layer
+
+    # None → viewer fallback.
+    if layer is None:
+        cur = await _get_current_structure(client)
+        if cur is not None:
+            return {"structure": cur}
+        return (
+            f"No {role} given and nothing in the viewer. Load a 2D material "
+            f"(graphene/hBN/MoS2) first, or pass a Structure dict / {{mp_id:'mp-N'}}."
+        )
+
+    if isinstance(layer, str):
+        layer = {"mp_id": layer}
+
+    if not isinstance(layer, dict):
+        return f"`{role}` must be a Structure dict or mp_id string, got {type(layer).__name__}"
+
+    # Full Structure dict — wrap it.
+    if "sites" in layer and "lattice" in layer:
+        return {"structure": layer}
+
+    # mp_id / structure_id → OPTIMADE fetch (no conventional-cell).
+    mp_id = layer.get("mp_id") or layer.get("structure_id") or layer.get("id")
+    if isinstance(mp_id, str) and mp_id.strip():
+        try:
+            from catgo.mcp_tools.structure_tools import (
+                _optimade_fetch_by_id_direct,
+                _optimade_to_pymatgen,
+            )
+            entry = await _optimade_fetch_by_id_direct(client, "mp", mp_id)
+            if not entry:
+                return f"Could not fetch {role}={mp_id}. Pass a Structure dict, or load the sheet in the viewer."
+            return {"structure": _optimade_to_pymatgen(entry)}
+        except Exception as exc:
+            return f"Failed to fetch {role}={mp_id}: {exc}"
+
+    return f"`{role}` shape unrecognized; need a Structure dict or {{mp_id:'mp-N'}}. Got keys: {list(layer.keys())[:5]}"
+
+
+async def _handle_nanotube(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    """Build / inspect a nanotube rolled from a 2D sheet.
+
+    Routes:
+      - build → /nanotube/build (roll the sheet, push tube to viewer)
+      - info  → /nanotube/info  (geometry only, no structure)
+
+    The layer defaults to the current viewer structure (user usually has the
+    2D sheet loaded). n, m are required chiral indices.
+    """
+    T = TextContent
+    action = (args.get("action") or "build").lower()
+
+    n = args.get("n")
+    m = args.get("m")
+    if n is None or m is None:
+        return [T(type="text", text="catgo_nanotube needs chiral indices `n` and `m` (e.g. {n:5, m:5}).")]
+    if int(n) == 0 and int(m) == 0:
+        return [T(type="text", text="Both chiral indices cannot be zero — use e.g. (5,5) armchair or (10,0) zigzag.")]
+
+    layer = await _resolve_layer(client, args.get("layer"), role="layer")
+    if isinstance(layer, str):
+        return [T(type="text", text=layer)]
+
+    if action == "info":
+        payload = {"layer": layer, "params": {"n": int(n), "m": int(m), "NL": int(args.get("NL", 1))}}
+        resp = await client.post(f"{API_BASE}/nanotube/info", json=payload)
+        if resp.status_code != 200:
+            return [T(type="text", text=f"Nanotube info failed ({resp.status_code}): {resp.text[:400]}")]
+        d = resp.json()
+        return [T(type="text", text=d.get("message") or json.dumps(d, ensure_ascii=False)[:400])]
+
+    if action != "build":
+        return [T(type="text", text=f"Unknown nanotube action: {action!r}. Valid: build, info.")]
+
+    params = {
+        "n": int(n),
+        "m": int(m),
+        "NL": int(args.get("NL", 3)),
+        "vacuum": float(args.get("vacuum", 15.0)),
+        "n_walls": int(args.get("n_walls", 1)),
+        "interlayer_spacing": float(args.get("interlayer_spacing", 3.4)),
+    }
+    resp = await client.post(f"{API_BASE}/nanotube/build", json={"layer": layer, "params": params})
+    if resp.status_code != 200:
+        return [T(type="text", text=f"Nanotube build failed ({resp.status_code}): {resp.text[:400]}")]
+    data = resp.json()
+    new_struct = data.get("structure")
+    if not new_struct:
+        return [T(type="text", text=f"Nanotube build returned no structure. Response: {json.dumps(data)[:400]}")]
+    push_err = await _push_structure(client, new_struct)
+    msg = data.get("message") or f"Nanotube built: {data.get('n_atoms', '?')} atoms."
+    msg += " Viewer updated."
+    if push_err:
+        msg += f"\n⚠️ Viewer push failed: {push_err}"
+    return [T(type="text", text=msg)]
+
+
+async def _handle_moire(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    """Build / search a twisted (moiré) bilayer from a 2D sheet.
+
+    Routes:
+      - build  → /moire/build  (snap to nearest commensurate angle, push to viewer)
+      - search → /moire/search (enumerate commensurate twist angles)
+
+    Robustness (mirrors heterostructure build_match):
+      - layer_a defaults to the viewer; layer_b defaults to layer_a (homobilayer).
+      - For build, the backend needs a full MoireCandidate (angle, m, n, p, q,
+        m2..q2, mismatch, area_ratio). The LLM can't construct that, so given a
+        target `angle` we re-run /search internally and snap to the nearest
+        commensurate candidate. A pre-fetched `candidate` dict is used directly.
+    """
+    T = TextContent
+    action = (args.get("action") or "build").lower()
+
+    layer_a = await _resolve_layer(client, args.get("layer_a"), role="layer_a")
+    if isinstance(layer_a, str):
+        return [T(type="text", text=layer_a)]
+    layer_b = None
+    if args.get("layer_b") is not None:
+        layer_b = await _resolve_layer(client, args.get("layer_b"), role="layer_b")
+        if isinstance(layer_b, str):
+            return [T(type="text", text=layer_b)]
+
+    def _search_payload(angle_min: float, angle_max: float, max_index: int) -> dict:
+        p = {
+            "layer_a": layer_a,
+            "params": {
+                "angle_min": float(angle_min),
+                "angle_max": float(angle_max),
+                "max_index": int(max_index),
+            },
+        }
+        if layer_b is not None:
+            p["layer_b"] = layer_b
+        return p
+
+    if action == "search":
+        payload = _search_payload(
+            args.get("angle_min", 0.0), args.get("angle_max", 30.0), args.get("max_index", 6),
+        )
+        resp = await client.post(f"{API_BASE}/moire/search", json=payload)
+        if resp.status_code != 200:
+            return [T(type="text", text=f"Moiré search failed ({resp.status_code}): {resp.text[:400]}")]
+        cands = resp.json().get("candidates") or []
+        if not cands:
+            return [T(type="text", text="No commensurate angles found in range. Try widening angle_min/angle_max or raising max_index.")]
+        # Sort by atom count so the user sees the cheapest cells first.
+        cands = sorted(cands, key=lambda c: c.get("n_atoms", 1e9))
+        lines = [f"Found {len(cands)} commensurate twist angles (smaller cell = cheaper):"]
+        for c in cands[:12]:
+            lines.append(
+                f"  angle={c.get('angle'):.2f}°  n_atoms≈{c.get('n_atoms')}  "
+                f"mismatch={c.get('mismatch', 0):.4f} Å  area_ratio={c.get('area_ratio', 0):.1f}"
+            )
+        lines.append("\nCall action=build with `angle` to construct the bilayer at the nearest angle.")
+        return [T(type="text", text="\n".join(lines))]
+
+    if action != "build":
+        return [T(type="text", text=f"Unknown moiré action: {action!r}. Valid: build, search.")]
+
+    build_params = {
+        "translate_z": float(args.get("translate_z", 3.35)),
+        "vacuum": float(args.get("vacuum", 15.0)),
+    }
+
+    # Prefer an explicitly-provided full candidate; else snap to nearest angle.
+    candidate = args.get("candidate")
+    if not (isinstance(candidate, dict) and candidate.get("angle") is not None and "m" in candidate):
+        target = args.get("angle")
+        if target is None:
+            return [T(type="text", text="action=build needs a target `angle` (degrees), or a full `candidate` from a prior search.")]
+        target = float(target)
+        # Search a window around the target so we find a nearby commensurate angle.
+        win = max(3.0, target * 0.5)
+        a_min = max(0.0, target - win)
+        a_max = min(60.0, target + win)
+        sresp = await client.post(
+            f"{API_BASE}/moire/search",
+            json=_search_payload(a_min, a_max, args.get("max_index", 8)),
+        )
+        if sresp.status_code != 200:
+            return [T(type="text", text=f"Could not search for angle {target}° ({sresp.status_code}): {sresp.text[:300]}")]
+        cands = sresp.json().get("candidates") or []
+        if not cands:
+            return [T(type="text", text=f"No commensurate angle found near {target}°. Try a different angle or raise max_index (slower).")]
+        candidate = min(cands, key=lambda c: abs(c.get("angle", 1e9) - target))
+
+    payload = {"layer_a": layer_a, "candidate": candidate, "params": build_params}
+    if layer_b is not None:
+        payload["layer_b"] = layer_b
+    resp = await client.post(f"{API_BASE}/moire/build", json=payload)
+    if resp.status_code != 200:
+        return [T(type="text", text=f"Moiré build failed ({resp.status_code}): {resp.text[:400]}")]
+    data = resp.json()
+    new_struct = data.get("structure")
+    if not new_struct:
+        return [T(type="text", text=f"Moiré build returned no structure. Response: {json.dumps(data)[:400]}")]
+    push_err = await _push_structure(client, new_struct)
+    achieved = data.get("angle", candidate.get("angle"))
+    msg = data.get("message") or f"Moiré bilayer built: {data.get('n_atoms', '?')} atoms at {achieved}°."
+    requested = args.get("angle")
+    if requested is not None and isinstance(achieved, (int, float)) and abs(float(achieved) - float(requested)) > 0.05:
+        msg += f" (snapped to nearest commensurate angle {achieved:.2f}° from requested {float(requested):.2f}°.)"
+    msg += " Viewer updated."
+    if push_err:
+        msg += f"\n⚠️ Viewer push failed: {push_err}"
+    return [T(type="text", text=msg)]
+
+
 # ---------------------------------------------------------------------------
 # Tool Dispatcher
 # ---------------------------------------------------------------------------
@@ -1984,6 +2739,12 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 return await _handle_skills(arguments)
             elif name == "catgo_quickbuild":
                 return await _handle_quickbuild(client, arguments)
+            elif name == "catgo_heterostructure":
+                return await _handle_heterostructure(client, arguments)
+            elif name == "catgo_nanotube":
+                return await _handle_nanotube(client, arguments)
+            elif name == "catgo_moire":
+                return await _handle_moire(client, arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:

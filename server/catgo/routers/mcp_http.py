@@ -47,6 +47,12 @@ from catgo.mcp_tools.server_claude_code import (
     _handle_file,
     _handle_system,
     _handle_quickbuild,
+    _handle_heterostructure,
+    _handle_nanotube,
+    _handle_moire,
+    _handle_workflow_engine,
+    _handle_diagnose,
+    _handle_skills,
     API_BASE,
 )
 
@@ -222,6 +228,18 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
                 return await _handle_file(client, arguments)
             elif name == "catgo_system":
                 return await _handle_system(client, arguments)
+            elif name == "catgo_heterostructure":
+                return await _handle_heterostructure(client, arguments)
+            elif name == "catgo_nanotube":
+                return await _handle_nanotube(client, arguments)
+            elif name == "catgo_moire":
+                return await _handle_moire(client, arguments)
+            elif name == "catgo_workflow_engine":
+                return await _handle_workflow_engine(arguments)
+            elif name == "catgo_diagnose":
+                return await _handle_diagnose(arguments)
+            elif name == "catgo_skills":
+                return await _handle_skills(arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:

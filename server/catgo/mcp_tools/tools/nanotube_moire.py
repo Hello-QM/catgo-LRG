@@ -6,7 +6,16 @@ TOOLS: list[dict] = [
     # ─── Nanotube ───
     {
         "name": "catgo_nanotube_info",
-        "description": "Compute nanotube geometry information for given chiral indices (n, m).",
+        "description": (
+            "Preview nanotube geometry (radius, chiral angle, atom count, "
+            "translational period) for given chiral indices (n, m). "
+            "USE THIS WHEN the user asks for nanotube geometry / "
+            "chirality info / 'how big is a (5,5) CNT' / 纳米管参数 / "
+            "without committing to building atoms yet. "
+            "Pair with catgo_nanotube_build to actually construct the tube. "
+            "DO NOT compute these by hand or write Python — this tool "
+            "returns exact values from the chiral vector math."
+        ),
         "endpoint": "/nanotube/info",
         "method": "POST",
         "inputSchema": {
@@ -20,7 +29,19 @@ TOOLS: list[dict] = [
     },
     {
         "name": "catgo_nanotube_build",
-        "description": "Build a nanotube structure from chiral indices.",
+        "description": (
+            "Build a nanotube structure (CNT, BNNT, or any 2D-sheet-rolled "
+            "tube) from chiral indices. "
+            "USE THIS WHEN the user asks to build/create/make a nanotube, "
+            "CNT, carbon nanotube, BN nanotube, BNNT, 碳纳米管, 纳米管, "
+            "boron nitride tube, or rolls a 2D sheet into a tube with "
+            "specific (n, m). "
+            "DO NOT use pymatgen / ASE / write Python — this tool handles "
+            "the chiral vector → cylindrical coordinates conversion + "
+            "vacuum padding natively. "
+            "Example: user says 'build a (10,10) armchair CNT' → call "
+            "this with n=10, m=10, length=20."
+        ),
         "endpoint": "/nanotube/build",
         "method": "POST",
         "inputSchema": {
@@ -37,7 +58,17 @@ TOOLS: list[dict] = [
     # ─── Moire ───
     {
         "name": "catgo_moire_search",
-        "description": "Search for commensurate moiré twist angles for a bilayer structure.",
+        "description": (
+            "Search commensurate twist angles + supercell sizes for a "
+            "moiré bilayer. Returns a list of (angle, supercell, atom_count) "
+            "candidates so the user / agent can pick one. "
+            "USE THIS WHEN the user asks for moiré structures / twisted "
+            "bilayers / 扭转双层 / 转角石墨烯 / magic-angle graphene / "
+            "twistronics — and you don't yet know which specific angle to use. "
+            "Pair with catgo_moire_build for the chosen angle. "
+            "DO NOT enumerate angles in Python by hand — this tool runs the "
+            "coincidence lattice search efficiently."
+        ),
         "endpoint": "/moire/search",
         "method": "POST",
         "inputSchema": {
@@ -52,7 +83,17 @@ TOOLS: list[dict] = [
     },
     {
         "name": "catgo_moire_build",
-        "description": "Build a moiré bilayer supercell at a specified twist angle.",
+        "description": (
+            "Build a moiré bilayer supercell at a specified twist angle. "
+            "USE THIS WHEN the user wants to construct a twisted bilayer "
+            "with a specific angle (e.g. 'magic angle 1.1° graphene', "
+            "'5° twist of MoS2 bilayer', 12 度扭转双层石墨烯). "
+            "DO NOT manually duplicate + rotate atoms with Python — this "
+            "tool generates the commensurate supercell correctly and "
+            "stacks the two layers. "
+            "If you don't know the right angle yet, call catgo_moire_search "
+            "first to enumerate candidates."
+        ),
         "endpoint": "/moire/build",
         "method": "POST",
         "inputSchema": {
@@ -69,8 +110,29 @@ TOOLS: list[dict] = [
     # ─── Heterostructure ───
     {
         "name": "catgo_hetero_search",
-        "description": "Search for lattice-matched superlattices between substrate and film structures. "
-        "Uses Zur-McGill (ZSL) algorithm. Returns matches sorted by area and available terminations.",
+        "description": (
+            "Find lattice-matched heterostructure / interface / epitaxial-stack "
+            "configurations between two materials (substrate + film). Uses the "
+            "Zur-McGill (ZSL) algorithm. Returns matches sorted by area + "
+            "strain, with available terminations. "
+            "\n\n"
+            "USE THIS WHEN the user asks to build, design, or analyze a "
+            "heterostructure / 异质结 / interface / 界面 / van der Waals stack / "
+            "epitaxial film / two-material bilayer / MoS2-on-WSe2 / Cu2O/ZnO / "
+            "graphene/hBN — basically any 'two crystals stacked' scenario. "
+            "\n\n"
+            "DO NOT call bash + write Python + import pymatgen to compute ZSL / "
+            "lattice matching / strain manually. This tool already does that "
+            "with the canonical Zur-McGill algorithm. Hand-rolling it will "
+            "give wrong strain values and miss valid matches. "
+            "\n\n"
+            "USAGE PATTERN: "
+            "1) catgo_hetero_search(substrate, film) → list of matches "
+            "2) Pick the best match_id (lowest strain, reasonable area) "
+            "3) catgo_hetero_build(match_id) → final 3D structure. "
+            "OR for one-shot: catgo_hetero_build_intermat(substrate, film) "
+            "if you don't need to pick a specific match interactively."
+        ),
         "endpoint": "/heterostructure/search",
         "method": "POST",
         "inputSchema": {
@@ -97,8 +159,23 @@ TOOLS: list[dict] = [
     },
     {
         "name": "catgo_hetero_build",
-        "description": "Build a heterostructure interface for a selected match from catgo_hetero_search. "
-        "Specify match_id and termination_index from the search results.",
+        "description": (
+            "Build the actual 3D heterostructure / interface atoms for a "
+            "specific match returned by catgo_hetero_search. "
+            "\n\n"
+            "USE THIS WHEN you've already called catgo_hetero_search and "
+            "picked a match_id (lowest strain or whatever criterion), and "
+            "now need the assembled atomic structure with the substrate "
+            "slab + film slab + interface gap + vacuum. "
+            "\n\n"
+            "DO NOT use pymatgen.interfaces or write Python — this tool "
+            "handles slab cutting, lattice transformation, termination "
+            "selection, and vacuum padding natively. "
+            "\n\n"
+            "If you DIDN'T call catgo_hetero_search first and want a single "
+            "shot 'just give me a Cu2O/ZnO heterostructure' answer, use "
+            "catgo_hetero_build_intermat instead — it's the one-call entry."
+        ),
         "endpoint": "/heterostructure/build",
         "method": "POST",
         "inputSchema": {
@@ -139,7 +216,30 @@ TOOLS: list[dict] = [
     },
     {
         "name": "catgo_hetero_build_intermat",
-        "description": "Build a heterostructure using the intermat/JARVIS pipeline (one-step, no separate search).",
+        "description": (
+            "ONE-CALL heterostructure builder. Give two material structures "
+            "(substrate + film) + optional Miller indices + thickness/vacuum, "
+            "get back a complete heterostructure with optimal lattice match "
+            "automatically picked. No search→pick→build dance — this is the "
+            "fast path. "
+            "\n\n"
+            "USE THIS WHEN the user just wants ONE answer for 'build a "
+            "Cu2O/ZnO heterostructure' / 'stack MoS2 on WSe2' / '异质结' / "
+            "'interface between A and B' without iterating over candidates. "
+            "Built on the intermat/JARVIS pipeline (auto-picks lowest-strain "
+            "ZSL match). This is the PREFERRED default tool for heterostructure "
+            "requests unless the user explicitly wants to browse multiple matches. "
+            "\n\n"
+            "DO NOT write Python with pymatgen / ASE / intermat directly — "
+            "this tool wraps the canonical implementation and handles all "
+            "edge cases (slab orientation, vacuum, in-plane strain) for you. "
+            "\n\n"
+            "EXAMPLES of prompts that should trigger this tool: "
+            "'帮我搭 MoS2/WSe2 异质结', "
+            "'build Cu2O on ZnO(0001)', "
+            "'make a graphene/hBN interface', "
+            "'epitaxial Ag film on TiO2 (110) substrate'."
+        ),
         "endpoint": "/heterostructure/build-intermat",
         "method": "POST",
         "inputSchema": {
