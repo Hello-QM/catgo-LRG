@@ -268,7 +268,7 @@
           disabled={factor_blocked || factor_string === supercell_scaling}
           onclick={apply_factors}
           title={cpu_freeze_risk
-          ? `Enable WebGPU large-system mode to apply`
+          ? `Enable large-system performance mode to apply`
           : gpu_over_cap
           ? `Exceeds GPU instance cap`
           : `Apply ${factor_string} (${cell_count} cells)`}
@@ -279,7 +279,7 @@
 
       {#if cpu_freeze_risk}
         <div class="factor-warn" role="alert">
-          Large supercell ({cell_count} cells) — enable WebGPU large-system mode to
+          Large supercell ({cell_count} cells) — enable large-system performance mode to
           view without freezing.
         </div>
       {:else if gpu_over_cap}

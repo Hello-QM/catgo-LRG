@@ -485,7 +485,7 @@ const structure: Record<string, string> = {
   import_export: `Import / Export`,
   server_hpc: `Server (HPC)`,
   plugin_hub: `Plugin Hub`,
-  large_system_mode: `Large-system performance mode (WebGPU)`,
+  large_system_mode: `Large-system performance mode`,
   ai_assistant: `AI Assistant`,
   restore_terminal: `Restore terminal`,
   minimize_terminal: `Minimize terminal`,
