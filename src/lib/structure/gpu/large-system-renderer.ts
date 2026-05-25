@@ -661,6 +661,13 @@ export type LargeSystemRenderer = {
    *  (so the background and atoms share one color space — dark atoms keep their
    *  contrast against the viewer's normal background). Alpha stays 1 (opaque). */
   set_background(rgb: [number, number, number]): void
+  /** Gate bond detection + bond rendering. When `false`, render() skips BOTH the
+   *  GPU bond compute pass AND the bond draw (atoms + cell box still render), so
+   *  the overlay shows no bonds — mirroring the WebGL view when the viewer's
+   *  `show_bonds` setting (via should_show_bonds) resolves to hidden. Defaults to
+   *  true. Flipping it back to true re-enables the compute on the next render
+   *  (the caller should also re-push set_bond_data / mark bonds dirty). */
+  set_bonds_enabled(enabled: boolean): void
   /** Provide the unit-cell box. `lattice` is the 9-float row-major matrix (rows
    *  a,b,c — same convention as set_bond_data / pack_lattice); pass null (or an
    *  all-zero lattice) for non-periodic structures. `show` gates drawing; `color`
@@ -782,6 +789,10 @@ export function create_large_system_renderer(
   // True when the bond inputs (or atoms) changed and the compute must re-run.
   let bonds_dirty = false
   let bonds_configured = false // set once set_bond_data has provided inputs
+  // Gates the bond compute + bond draw. When false the overlay shows no bonds
+  // (atoms + cell still render), mirroring the WebGL view's should_show_bonds.
+  // Default true ⇒ unchanged behaviour until the caller threads visibility in.
+  let bonds_enabled = true
 
   // Bind groups rebuilt when the underlying buffers (re)allocate.
   let bond_compute_bg: GPUBindGroup | null = null
@@ -1229,14 +1240,24 @@ export function create_large_system_renderer(
       upload_bond_render_uniform()
       bonds_dirty = true
     },
+    set_bonds_enabled(enabled: boolean): void {
+      if (destroyed) return
+      if (enabled === bonds_enabled) return
+      bonds_enabled = enabled
+      // Turning bonds back on must re-run the compute against the current atoms
+      // (the cached pairs may be stale or were never computed while disabled).
+      if (enabled) bonds_dirty = true
+    },
     render(): void {
       if (destroyed) return
       if (!depth_view || !msaa_color_view) ensure_targets(canvas.width || 1, canvas.height || 1)
       const encoder = device.createCommandEncoder({ label: `large-system-frame` })
 
-      // Whether bonds are renderable this frame (inputs present + atoms).
+      // Whether bonds are renderable this frame (visible + inputs present +
+      // atoms). bonds_enabled gates BOTH the compute pass below AND the bond
+      // draw, so a hidden show_bonds setting skips all bond work entirely.
       const bonds_ready =
-        bonds_configured && atom_count > 0 && bond_n > 0 &&
+        bonds_enabled && bonds_configured && atom_count > 0 && bond_n > 0 &&
         !!bond_compute_bg && !!indirect_bg && !!bond_render_bg && !!pairs_buffer
 
       // ── Bond compute (only when dirty) ───────────────────────────────────

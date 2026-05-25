@@ -6,6 +6,9 @@
   import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
   import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
   import { to_compute_options } from '$lib/structure/gpu/large-system-mode.svelte'
+  import { should_show_bonds } from '$lib/structure/scene'
+  import type { ShowBonds } from '$lib/settings'
+  import type { PymatgenLattice } from '$lib/structure'
   import {
     create_large_system_renderer,
     type LargeSystemRenderer,
@@ -21,6 +24,7 @@
     element_radius_overrides = undefined,
     site_radius_overrides = undefined,
     bonding_options = undefined,
+    show_bonds = `crystals`,
     background_color = undefined,
     background_opacity = 0.1,
     show_cell = false,
@@ -52,6 +56,14 @@
      *  detection. Same Record the CPU path reads (scene_props.bonding_options);
      *  mapped via to_compute_options. */
     bonding_options?: Record<string, number> | undefined
+    /** Viewer's bond-visibility setting (`never`/`always`/`crystals`/`molecules`),
+     *  mirroring the WebGL path's `scene_props.show_bonds`. The overlay feeds this
+     *  through the SAME `should_show_bonds(show_bonds, lattice)` predicate the
+     *  WebGL view uses to decide whether bonds appear, so the two stay in lockstep:
+     *  when bonds are hidden the overlay skips the GPU bond compute AND the bond
+     *  draw (atoms + cell box still render). Defaults to `crystals` (the app
+     *  default) so an absent prop matches the typical periodic-structure view. */
+    show_bonds?: ShowBonds
     /** Viewer canvas background color (hex, e.g. `#000000`), mirroring the WebGL
      *  path's StructureScene `background_color`. The overlay resolves this the
      *  SAME way StructureScene's compute_canvas_bg does (lerp toward the theme
@@ -125,6 +137,20 @@
   let bond_compute_opts = { tolerance: 0, max_bond_dist: 0, min_dist: 0 }
   // Set when bond inputs changed and must be re-pushed to the renderer.
   let bonds_dirty = false
+  // Whether bonds should render at all, decided by the SAME predicate the WebGL
+  // path uses (should_show_bonds against the structure's lattice). When false the
+  // overlay skips the GPU bond compute push AND the renderer skips compute+draw,
+  // so flipping the viewer's show_bonds off clears the overlay's bonds while atoms
+  // + cell box keep rendering. Reactive ⇒ toggling show_bonds repaints live.
+  let bonds_visible = $derived(
+    should_show_bonds(
+      show_bonds,
+      ((structure as { lattice?: PymatgenLattice } | undefined)?.lattice) ?? null,
+    ),
+  )
+  // The enabled-state last pushed to the renderer, so we only call
+  // set_bonds_enabled (+ re-push bond data on re-enable) when it actually flips.
+  let last_bonds_enabled = true
 
   // ── Cell-box state ───────────────────────────────────────────────────────
   // Signature of the cell inputs last pushed to the renderer (lattice + show +
@@ -498,11 +524,29 @@
     // when atoms were re-uploaded, since set_atoms moves positions the compute
     // depends on (the renderer already flags itself dirty there, but pushing
     // keeps the covalent radii / count in lockstep with the atom buffer).
-    rebuild_bonds_if_needed()
-    if (bonds_dirty) {
-      renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_periodic)
-      bonds_dirty = false
+    // Sync bond visibility (should_show_bonds) to the renderer FIRST. Toggling it
+    // gates the renderer's bond compute pass AND bond draw; a flip always forces a
+    // repaint so bonds appear/disappear immediately. On re-enable, the renderer
+    // flags itself bonds_dirty and we also re-push set_bond_data below so the
+    // compute runs against the current atoms/lattice.
+    if (bonds_visible !== last_bonds_enabled) {
+      last_bonds_enabled = bonds_visible
+      renderer.set_bonds_enabled(bonds_visible)
+      if (bonds_visible) bonds_dirty = true // force a re-push + recompute on enable
       dirty = true
+    }
+    // Bond inputs: rebuild + push ONLY while bonds are visible. While hidden we
+    // skip the GPU bond compute push entirely (and the renderer skips compute +
+    // draw), so the overlay shows no bonds — atoms + cell box still render. We
+    // still track the rebuild state so the next time bonds turn back on the
+    // changed inputs are re-pushed (bonds_dirty was set on enable above).
+    if (bonds_visible) {
+      rebuild_bonds_if_needed()
+      if (bonds_dirty) {
+        renderer.set_bond_data(bond_covalent, bond_lattice, bond_compute_opts, bond_periodic)
+        bonds_dirty = false
+        dirty = true
+      }
     }
 
     // Cell box: push the lattice + show + color to the renderer when any of them
@@ -554,6 +598,9 @@
     bond_source = undefined
     bond_options_sig = ``
     bonds_dirty = true
+    // Fresh renderer ⇒ its bonds_enabled defaults to true; match that here so the
+    // first frame re-syncs set_bonds_enabled when bonds are currently hidden.
+    last_bonds_enabled = true
     // Fresh renderer ⇒ force a per-frame re-extract + re-upload on the first
     // frame, and re-detect the lattice for variable-cell bonds.
     last_pos_version = -1
@@ -667,6 +714,20 @@
     // source — consistent with the WebGL path's own mutation-observer resync.)
     background_color
     background_opacity
+    if (renderer) {
+      needs_render = true
+      wake()
+    }
+  })
+
+  $effect(() => {
+    // Bond-visibility wake trigger. Read bonds_visible (derived from show_bonds +
+    // the structure's lattice) so flipping the viewer's "show bonds" setting
+    // revives a suspended loop; the frame syncs set_bonds_enabled and repaints
+    // once — bonds appear/disappear while atoms + cell box stay. Reading the
+    // derived here (not in the session effect) wakes without restarting the GPU
+    // session.
+    bonds_visible
     if (renderer) {
       needs_render = true
       wake()

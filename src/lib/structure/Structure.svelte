@@ -3820,6 +3820,7 @@
             {element_radius_overrides}
             {site_radius_overrides}
             bonding_options={(scene_props.bonding_options ?? {}) as Record<string, number>}
+            show_bonds={scene_props.show_bonds}
             {background_color}
             {background_opacity}
             show_cell={scene_props.show_cell}
