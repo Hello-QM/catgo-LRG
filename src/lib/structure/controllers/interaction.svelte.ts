@@ -276,6 +276,13 @@ export function create_interaction_controller(deps: InteractionDeps) {
   let is_box_selecting = $state(false)
   let box_select_start = $state<{ x: number; y: number } | null>(null)
   let box_select_end = $state<{ x: number; y: number } | null>(null)
+  // performance.now() timestamp of the most recent committed box-select. Used by
+  // the WebGPU overlay's empty-space-clear path: the overlay watches window
+  // pointerup and (lacking the box-select modifier check) can misclassify a small
+  // /dense Cmd/Ctrl+drag box-select as a background click → its async pick returns
+  // -1 → the parent would clear the selection the box just set. The parent reads
+  // this stamp and suppresses that one clear. -Infinity = never box-selected.
+  let last_box_select_commit_ms = $state(-Infinity)
 
   // ═══════════════════════════════════════════════════════════════════
   // 裁剪导出状态 — 绘制矩形区域 → 导出 PNG → 退出
@@ -1247,6 +1254,12 @@ export function create_interaction_controller(deps: InteractionDeps) {
       }
       deps.set_selected_bonds(new_bonds)
 
+      // Stamp the commit so the WebGPU overlay's async empty-space clear (which
+      // can fire for this same pointerup on a small/dense box) is suppressed by
+      // the parent. Stamp even when the box caught nothing — a Cmd/Ctrl+drag that
+      // selected zero atoms must still NOT be reinterpreted as a clear-all click.
+      last_box_select_commit_ms = (typeof performance !== `undefined` ? performance.now() : Date.now())
+
       is_box_selecting = false
       box_select_start = null
       box_select_end = null
@@ -1519,6 +1532,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
     get is_box_selecting() { return is_box_selecting },
     get box_select_start() { return box_select_start },
     get box_select_end() { return box_select_end },
+    get last_box_select_commit_ms() { return last_box_select_commit_ms },
     get crop_mode_active() { return crop_mode_active },
     set crop_mode_active(v: boolean) { crop_mode_active = v },
     get crop_region() { return crop_region },

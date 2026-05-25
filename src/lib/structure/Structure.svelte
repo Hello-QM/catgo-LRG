@@ -1654,6 +1654,17 @@
    *  click (-1) clears the selection (mirroring clicking empty space). */
   function handle_overlay_pick(displayed_idx: number): void {
     if (displayed_idx < 0) {
+      // Empty-space pick ⇒ would clear the selection. But the overlay watches
+      // window pointerup and classifies click-vs-drag purely by movement
+      // distance (it can't see the Cmd/Ctrl box-select modifier). A small/dense
+      // box-select drag is therefore misclassified as a background click and its
+      // async pick (GPU readback) resolves AFTER the WebGL box-select already set
+      // selected_sites — clearing here would wipe the box result one frame later
+      // (the flash). Suppress this clear if a box-select committed in the last
+      // ~400ms (covers the pick readback latency without swallowing a genuine
+      // later empty-space click). Box-select set persists.
+      const now = (typeof performance !== `undefined` ? performance.now() : Date.now())
+      if (now - interaction.last_box_select_commit_ms < 400) return
       if (selected_sites.length > 0) selected_sites = []
       return
     }
