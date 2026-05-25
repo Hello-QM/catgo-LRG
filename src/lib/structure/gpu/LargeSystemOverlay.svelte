@@ -193,6 +193,30 @@
   // Set when the encoded rules changed and must be re-pushed to the renderer.
   let rules_dirty = false
 
+  /** Count of HOME (non-image) atoms in the displayed structure — the atoms the
+   *  GPU bond compute must run over, matching the WebGL bond path which computes
+   *  bonds on `bond_input_structure` (= supercell_structure, BEFORE PBC image
+   *  expansion). When `show_image_atoms` is ON, find_pbc_images_fast APPENDS
+   *  boundary replica atoms to displayed_structure.sites (indices ≥
+   *  num_original_sites), each sitting ~one lattice vector OUTSIDE the cell. If
+   *  those replicas were fed into the PERIODIC min-image bond compute (which uses
+   *  the supercell lattice), the search would wrap a replica back across a full
+   *  lattice vector → a bond cylinder spanning the whole supercell = the "spike"
+   *  artefact. The home atoms are always the FIRST num_original_sites entries
+   *  (create_supercell home block first, then find_pbc_images_fast pushes
+   *  replicas after), so slicing the bond inputs to this count feeds the compute
+   *  the exact home-atom set the WebGL path uses. Cross-cell bonds still appear
+   *  via the periodic search's jimage on those home atoms; the replica spheres
+   *  render but never participate in bonding (no double-count, no wrap). When no
+   *  images are present (toggle OFF, or molecule) this is just sites.length. */
+  function bond_home_count(): number {
+    const sites = structure?.sites
+    const n = sites?.length ?? 0
+    const num_orig = (structure as { num_original_sites?: number } | undefined)?.num_original_sites
+    if (typeof num_orig === `number` && num_orig > 0 && num_orig <= n) return num_orig
+    return n
+  }
+
   /** Cheap signature of the bond_distance_rules array; changes when any rule's
    *  elements or min/max do, so the GPU post-filter re-encodes + re-dispatches. */
   function bond_rules_signature(): string {
@@ -219,8 +243,15 @@
       rule_packed = new Float32Array(0)
       return
     }
+    // Encode element ids over the HOME atoms only, in lockstep with bond_covalent
+    // (the compute indexes elem_ids[i]/elem_ids[j] by the same atom index it uses
+    // for radii). Slicing off appended PBC-image replicas keeps the two buffers
+    // the same length (= bond_n) so the per-element-pair rule post-filter stays
+    // aligned with the home-atom bond compute.
+    const home_n = bond_home_count()
+    const bond_sites = home_n < sites.length ? sites.slice(0, home_n) : sites
     const encoded = encode_bond_rules(
-      sites,
+      bond_sites,
       (bond_distance_rules ?? []) as BondDistanceRuleLike[],
     )
     rule_elem_ids = encoded.elem_ids
@@ -379,7 +410,13 @@
       bond_periodic = false
       return
     }
-    bond_covalent = build_atom_radii(sites)
+    // Bond compute runs over HOME atoms only (see bond_home_count): slice off
+    // any appended PBC-image replicas so the periodic min-image search can't wrap
+    // a replica across a full lattice vector → no spikes. Matches the WebGL bond
+    // path (bonds on supercell_structure, replicas drawn but not bonded).
+    const home_n = bond_home_count()
+    const bond_sites = home_n < sites.length ? sites.slice(0, home_n) : sites
+    bond_covalent = build_atom_radii(bond_sites)
     // Periodic only when the structure carries a lattice (molecules don't).
     const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
     bond_lattice = pack_lattice(lat)
