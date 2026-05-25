@@ -2896,6 +2896,7 @@
       bind:io_pane_open
       bind:server_pane_open
       bind:plugin_hub_open
+      bind:large_system_mode
       bind:chat_pane_open
       on_popout_chat={popout_chat}
       bind:show_terminal

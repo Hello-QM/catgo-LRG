@@ -579,6 +579,11 @@ export const icon_data = {
     path:
       `<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9"/></g>`,
   },
+  Gauge: { // lucide:gauge — speedometer dial for large-system performance mode
+    viewBox: `0 0 24 24`,
+    path:
+      `<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></g>`,
+  },
 } as const
 
 export type IconName = keyof typeof icon_data

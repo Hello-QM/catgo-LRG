@@ -485,6 +485,7 @@ const structure: Record<string, string> = {
   import_export: `导入 / 导出`,
   server_hpc: `服务器 (HPC)`,
   plugin_hub: `插件中心`,
+  large_system_mode: `大体系性能模式 (WebGPU)`,
   ai_assistant: `AI 助手`,
   restore_terminal: `还原终端`,
   minimize_terminal: `最小化终端`,
