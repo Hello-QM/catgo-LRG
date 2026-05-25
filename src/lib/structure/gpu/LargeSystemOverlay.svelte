@@ -1050,14 +1050,7 @@
     // these here (not in the session effect) wakes without restarting the GPU
     // session. The `frame` does the actual rebuild + upload via
     // rebuild_atoms_if_needed(). Force the next frame to draw regardless.
-    structure
-    element_colors
-    atom_radius
-    same_size_atoms
-    element_radius_overrides
-    site_radius_overrides
-    bonding_options
-    bond_distance_rules
+    void [structure, element_colors, atom_radius, same_size_atoms, element_radius_overrides, site_radius_overrides, bonding_options, bond_distance_rules]
     if (renderer) {
       needs_render = true
       wake()
@@ -1073,8 +1066,7 @@
     // these here (not in the session effect) wakes without restarting the GPU
     // session; when playback stops, .v stops bumping ⇒ no more wakes ⇒ the loop
     // suspends after its grace period (idle-quiet).
-    trajectory_positions_version?.v
-    trajectory_step_idx
+    void [trajectory_positions_version?.v, trajectory_step_idx]
     if (renderer) {
       needs_render = true
       wake()
@@ -1087,8 +1079,7 @@
     // clear color via sync_background and repaints once. (Theme changes that
     // don't bump these props are caught lazily on the next wake from any other
     // source — consistent with the WebGL path's own mutation-observer resync.)
-    background_color
-    background_opacity
+    void [background_color, background_opacity]
     if (renderer) {
       needs_render = true
       wake()
@@ -1102,7 +1093,7 @@
     // once — bonds appear/disappear while atoms + cell box stay. Reading the
     // derived here (not in the session effect) wakes without restarting the GPU
     // session.
-    bonds_visible
+    void bonds_visible
     if (renderer) {
       needs_render = true
       wake()
@@ -1114,8 +1105,7 @@
     // cell on/off or recoloring it revives a suspended loop; the frame re-pushes
     // via sync_cell and repaints once. (Lattice changes are caught by the
     // structure/per-frame wakes, which update bond_lattice.)
-    show_cell
-    cell_edge_color
+    void [show_cell, cell_edge_color]
     if (renderer) {
       needs_render = true
       wake()
@@ -1128,9 +1118,7 @@
     // re-pushes via sync_supercell and repaints once with the new instance count.
     // (Base-lattice changes are caught by the structure wake, which also drives
     // the atom/cell rebuilds.)
-    supercell[0]
-    supercell[1]
-    supercell[2]
+    void [supercell[0], supercell[1], supercell[2]]
     if (renderer) {
       needs_render = true
       wake()
@@ -1142,7 +1130,7 @@
     // image atoms revives a suspended loop; the frame re-pushes via sync_show_images
     // (which marks the renderer bonds dirty) and repaints once with full-to-image
     // bonds (on) or stubs (off).
-    show_image_atoms
+    void show_image_atoms
     if (renderer) {
       needs_render = true
       wake()
@@ -1155,7 +1143,7 @@
     // loop; the frame mirrors it into the GPU highlight buffer via sync_selection
     // and repaints once. Reading it here (not in the session effect) wakes without
     // restarting the GPU session.
-    selected_sites
+    void selected_sites
     if (renderer) {
       needs_render = true
       wake()
