@@ -3529,6 +3529,9 @@
             bind:crop_mode_active={interaction.crop_mode_active}
             bind:crop_region={interaction.crop_region}
             {trajectory_context}
+            {gpu_supercell_active}
+            {gpu_supercell_factors}
+            gpu_supercell_base={displayed_structure}
           />
 
           <ServerPane
