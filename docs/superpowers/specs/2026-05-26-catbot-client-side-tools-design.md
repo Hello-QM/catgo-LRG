@@ -37,7 +37,9 @@ feeds results back.
 
 ## Non-Goals (YAGNI)
 
-- A CORS proxy for providers that block browser requests. Document the caveat; do not build.
+- A *Python* backend in the chat/tool path. (A thin edge CORS relay — see below — is in
+  scope and does **not** count as a backend: zero-ops, no Python, runs on existing
+  Cloudflare Worker infra.)
 - Migrating the SDK or universal paths. They remain unchanged.
 - Packmol bulk-liquid fill, POTCAR/vaspkit, DFT/HPC execution — genuinely backend/binary
   work, out of scope and unrelated to client-side structure manipulation.
@@ -50,6 +52,7 @@ feeds results back.
 | Provider format | OpenAI-compat function-calling | One code path covers DeepSeek / Qwen(通义) / Kimi(Moonshot) / Zhipu(智谱) / OpenAI + Gemini compat. Most Chinese providers allow browser CORS. |
 | Tool scope | Full ferrox surface | Engine already exists; expose viewer ops + full structure-manipulation set. |
 | Approval UX | Reuse `PermissionCard`; auto-approve reads | Mutating ops gated; pure reads (fetch/symmetry/XRD/distance/info) auto-run. Matches existing UX, safe on destructive edits. |
+| CORS-blocked origins | Thin Cloudflare Worker relay | Measured (2026-05-26): MP OPTIMADE (`optimade.materialsproject.org`) returns **no** `Access-Control-Allow-Origin` even for `localhost` → browser-direct fetch blocked. Alexandria / odbx return `ACAO: *` (fine direct). Some LLM provider chat endpoints likewise block browser CORS. A pure-passthrough Worker (no Python, existing wrangler infra) fixes both. |
 
 ## Architecture
 
@@ -63,6 +66,9 @@ ChatPane.svelte (UI — unchanged)
                  ├─ client-llm.ts        browser → provider /chat/completions, function-calling
                  ├─ permission gate       reuse active_permission_blocks / PermissionCard
                  └─ structure-tools.ts   ToolDefinition[] + ToolExecutor → ferrox WASM / current-structure
+
+  CORS-blocked targets (MP OPTIMADE, some LLM endpoints) route through:
+    cors-relay Worker (Cloudflare, pure passthrough, host-allowlisted)
 ```
 
 ### When the client-direct branch activates
@@ -81,6 +87,7 @@ Selection logic lives in `chat-state.send()`, alongside the existing
 | `src/lib/chat/client-llm.ts` | Browser-direct transport: build OpenAI function-calling request (messages + `tools`), `fetch` to `${base_url}/chat/completions`, parse streamed `delta.content` and assembled `tool_calls`. Yields a typed event stream (`text` / `tool_calls` / `done` / `error`). | provider base_url + api_key from `ChatConfig` |
 | `src/lib/chat/structure-tools.ts` | Define `ToolDefinition[]` for the full ferrox surface + the viewer tools already in `tools.ts`; provide a `ToolExecutor` registry mapping tool name → async fn that calls ferrox-wasm / current-structure controllers and returns a JSON result string. Tag each tool `read` or `mutate`. | `ferrox-wasm.ts`, `current-structure.svelte.ts`, `pubchem.ts`, `optimade.ts` |
 | `src/lib/chat/tool-loop.ts` | Agentic loop: send messages+tools via `client-llm`; on `tool_calls`, gate each (auto-run reads; await `PermissionCard` for mutates), execute via registry, append `role:tool` results, re-call until the model returns no tool calls; surface `tool_start`/`tool_end`/`permission_request` events compatible with `chat-state`'s existing switch. | `client-llm.ts`, `structure-tools.ts`, permission state |
+| `workers/cors-relay/` (+ `wrangler.relay.toml`) | Cloudflare Worker, pure passthrough for CORS-blocked targets (MP OPTIMADE, CORS-blocked LLM endpoints). Host-allowlisted, forwards method/body/whitelisted-headers, returns `ACAO: *`, handles preflight. No logging, no key persistence. | Cloudflare Workers runtime |
 
 ### Reuse (no new copies)
 
@@ -120,9 +127,35 @@ Selection logic lives in `chat-state.send()`, alongside the existing
 - API key from `chat_config.api_key` (already persisted client-side via settings panel).
 - Provider `base_url` from `ChatConfig` (per-provider endpoints already modeled for
   `custom`/`ollama`; extend the known-provider table with browser-direct endpoints).
-- CORS: DeepSeek / Moonshot / Zhipu and other OpenAI-compat endpoints generally allow
-  browser cross-origin. For providers that block it, surface a clear error directing the
-  user to the desktop app / backend mode. **No proxy built this pass.**
+- CORS routing — two tiers:
+  - **Direct** when the target sets permissive `ACAO` (Alexandria / odbx / MC3D / OMDB
+    OPTIMADE providers, PubChem, and OpenAI-compat LLM endpoints that allow browser
+    origins, e.g. DeepSeek / Moonshot / Zhipu in most cases). Browser fetches the origin
+    directly — no relay hop.
+  - **Via relay** when the target blocks browser CORS. Confirmed: **Materials Project
+    OPTIMADE**. The browser fetches `${RELAY_URL}/?url=<encoded target>` instead; the
+    Worker forwards the request (preserving method/body/auth headers) and returns the
+    response with `Access-Control-Allow-Origin: *`.
+- A per-target `needs_relay` flag (small allowlist, default direct) decides the path so we
+  never add a relay hop where it isn't needed. MP is on the relay list from day one.
+
+## CORS Relay Worker
+
+A new Cloudflare Worker (`workers/cors-relay/` + a `wrangler.relay.toml`), pure passthrough:
+
+- Accepts `GET ?url=<encoded>` and `POST ?url=<encoded>` (POST for LLM chat endpoints).
+- Forwards method, body, and a **strict allowlist** of forwardable headers
+  (`Authorization`, `X-Api-Key`, `Content-Type`, `Accept`) to the target.
+- Returns the upstream response with `Access-Control-Allow-Origin: *` and handles the
+  `OPTIONS` preflight.
+- **Target allowlist** (env-configured): only forwards to known hosts
+  (`optimade.materialsproject.org`, configured LLM endpoints). Refuses arbitrary URLs so
+  the relay can't be abused as an open proxy.
+- No request/response body logging; no key persistence — keys pass through in-flight only.
+
+Security note: a relay that forwards `Authorization` is sensitive. The host allowlist +
+no-logging + forward-only-known-headers keep it from becoming an open credential proxy.
+Users who object can run desktop/backend mode instead (keys never touch the edge).
 
 ## Error Handling
 
@@ -142,7 +175,13 @@ Selection logic lives in `chat-state.send()`, alongside the existing
   read-vs-mutate gating, `role:tool` result re-injection, termination, iteration cap, abort.
 - `client-llm` parsing (vitest): mock SSE chunks → assert text-delta + `tool_calls`
   assembly (including split-across-chunk argument fragments) + `[DONE]` handling.
-- Run via `rtk proxy pnpm exec vitest` (RTK serves stale vitest cache otherwise).
+- CORS relay routing (vitest): assert `needs_relay` targets (MP) get rewritten to
+  `${RELAY_URL}/?url=…` while open targets (Alexandria/odbx/PubChem) fetch directly.
+- CORS Worker (`workers/cors-relay`): unit-test host-allowlist enforcement (reject
+  non-allowlisted URL), header forwarding/stripping, preflight `OPTIONS`, `ACAO: *` on
+  responses. Run with the Worker test runner (vitest + `@cloudflare/vitest-pool-workers`
+  or miniflare), separate from the app suite.
+- Run app tests via `rtk proxy pnpm exec vitest` (RTK serves stale vitest cache otherwise).
 
 ## Engineering Constraints
 
