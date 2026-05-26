@@ -10,11 +10,32 @@ iterate and break at our own cap. Round-trip identity for a single MOF is
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 
 from pymatgen.core import Structure
 
 logger = logging.getLogger(__name__)
+
+# Wall-clock cap for any MOFX-DB network call. mofdb_client's requests.get has no
+# timeout, so an unreachable/slow host would otherwise block a worker forever.
+_MOFDB_TIMEOUT_S = 30.0
+
+
+def _with_timeout(fn, *args, **kwargs):
+    """Run a blocking mofdb_client call with a hard wall-clock timeout.
+
+    Raises TimeoutError on expiry (router maps it to 504). The orphaned worker
+    thread is daemonic and will exit when the process does.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        future = ex.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=_MOFDB_TIMEOUT_S)
+        except concurrent.futures.TimeoutError as exc:
+            raise TimeoutError(
+                f"MOFX-DB did not respond within {_MOFDB_TIMEOUT_S:.0f}s"
+            ) from exc
 
 
 def _fetch():
@@ -36,7 +57,11 @@ def _fetch():
 
 def search_mofs(name: str | None, database: str | None, limit: int = 50) -> dict:
     """Search MOFX-DB; return {hits, count}. Caps at `limit` client-side (does NOT
-    pass limit to fetch(), whose limit path is buggy)."""
+    pass limit to fetch(), whose limit path is buggy). Network call is time-bounded."""
+    return _with_timeout(_search_mofs_impl, name, database, limit)
+
+
+def _search_mofs_impl(name: str | None, database: str | None, limit: int) -> dict:
     fetch = _fetch()
     kwargs: dict = {}
     if name:
@@ -63,7 +88,11 @@ def search_mofs(name: str | None, database: str | None, limit: int = 50) -> dict
 
 def get_mof_structure(name: str, database: str | None = None) -> tuple[Structure, str]:
     """Re-fetch a single MOF by (name, database) and parse its CIF to a pymatgen
-    Structure. (name, database) is the unique round-trip key."""
+    Structure. (name, database) is the unique round-trip key. Network is time-bounded."""
+    return _with_timeout(_get_mof_structure_impl, name, database)
+
+
+def _get_mof_structure_impl(name: str, database: str | None) -> tuple[Structure, str]:
     fetch = _fetch()
     kwargs: dict = {"name": name}
     if database:

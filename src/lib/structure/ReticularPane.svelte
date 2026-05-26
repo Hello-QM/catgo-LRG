@@ -362,8 +362,9 @@
     <p class="hint">{t(`structure.reticular_hint_search`)}</p>
     <label class="field">
       <span>{t(`structure.reticular_search_name`)}</span>
-      <input type="text" bind:value={search_name} placeholder="MOF-5, HKUST, ZIF…" />
+      <input type="text" bind:value={search_name} placeholder="ABAVIJ_clean / hMOF-5 …" />
     </label>
+    <p class="hint">{t(`structure.reticular_search_name_hint`)}</p>
     <label class="field">
       <span>{t(`structure.reticular_search_database`)}</span>
       <select bind:value={search_database}>
@@ -383,7 +384,7 @@
         <p class="hint">{t(`structure.reticular_search_no_results`)}</p>
       {/if}
       <ul class="mof-results">
-        {#each search_hits as hit (hit.id)}
+        {#each search_hits as hit (`${hit.database}/${hit.name}`)}
           <li class="mof-hit">
             <div class="mof-hit-info">
               <strong>{hit.name}</strong>

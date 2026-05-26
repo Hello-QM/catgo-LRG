@@ -476,6 +476,7 @@ const structure: Record<string, string> = {
   reticular_mode_search: `搜索`,
   reticular_hint_search: `搜索 MOFX-DB 数据库，加载已有 MOF 结构。`,
   reticular_search_name: `名称`,
+  reticular_search_name_hint: `MOFX-DB 没有俗名 —— 留空可浏览全库，或用 CSD refcode（CoREMOF/CSD）、hMOF-编号。要 MOF-5、UiO-66 这类命名 MOF 请用 Preset 标签页。`,
   reticular_search_database: `数据库`,
   reticular_search_button: `搜索`,
   reticular_search_load: `加载`,

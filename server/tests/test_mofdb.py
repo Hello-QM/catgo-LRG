@@ -161,6 +161,26 @@ def test_router_search_not_installed_503(monkeypatch):
     assert ei.value.status_code == 503
 
 
+def test_search_times_out(monkeypatch):
+    """A slow MOFX-DB call must raise TimeoutError (router maps it to 504)."""
+    import time
+
+    fake = types.ModuleType("mofdb_client")
+
+    def fetch(**kwargs):
+        time.sleep(2.0)
+        yield _FakeMof(1, "x", "hMOF", ["C"], _CIF)
+
+    fake.fetch = fetch
+    monkeypatch.setitem(sys.modules, "mofdb_client", fake)
+
+    import catgo.utils.mofdb_search as ms
+
+    monkeypatch.setattr(ms, "_MOFDB_TIMEOUT_S", 0.2)
+    with pytest.raises(TimeoutError):
+        ms.search_mofs(name=None, database="hMOF", limit=5)
+
+
 @pytest.mark.skipif(
     not os.environ.get("CATGO_LIVE_TESTS"),
     reason="live MOFX-DB network test; set CATGO_LIVE_TESTS=1 to run",

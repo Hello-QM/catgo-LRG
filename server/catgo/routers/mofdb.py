@@ -51,6 +51,8 @@ def search_mofs_route(request: MofSearchRequest) -> MofSearchResult:
     try:
         res = search_mofs(name=request.name, database=request.database, limit=request.limit)
         return MofSearchResult(hits=[MofHit(**h) for h in res["hits"]], count=res["count"])
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
     except RuntimeError as e:  # mofdb_client not installed
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -69,6 +71,8 @@ def get_mof_structure_route(name: str, database: str | None = None) -> MofStruct
             name=resolved_name,
             database=database or "",
         )
+    except TimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LookupError as e:

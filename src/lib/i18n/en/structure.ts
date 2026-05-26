@@ -476,6 +476,7 @@ const structure: Record<string, string> = {
   reticular_mode_search: `Search`,
   reticular_hint_search: `Search the MOFX-DB database and load an existing MOF structure.`,
   reticular_search_name: `Name`,
+  reticular_search_name_hint: `MOFX-DB has no common names — leave empty to browse the database, or use a CSD refcode (CoREMOF/CSD) or hMOF-N id. For named MOFs (MOF-5, UiO-66…) use the Preset tab.`,
   reticular_search_database: `Database`,
   reticular_search_button: `Search`,
   reticular_search_load: `Load`,
