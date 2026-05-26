@@ -83,6 +83,10 @@ export async function* stream_client_llm(
 ): AsyncGenerator<LlmEvent> {
   const endpoint = `${config.base_url.replace(/\/$/, ``)}/chat/completions`
   const url = needs_relay(endpoint) ? relay_url(endpoint) : endpoint
+  // INVARIANT: tools must be sent on EVERY turn. The chat-completions API is
+  // stateless — omitting `tools` on a follow-up turn makes providers (e.g. DeepSeek)
+  // stop emitting structured tool_calls and leak raw tool-call markup into content.
+  // (Verified against the live DeepSeek API, 2026-05-26.)
   const openai_tools = tools.map((t) => ({
     type: `function`,
     function: { name: t.name, description: t.description, parameters: t.input_schema },

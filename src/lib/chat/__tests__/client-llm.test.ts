@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { parse_openai_stream, to_openai_message, type LlmEvent } from '../client-llm'
-import type { ChatMessage } from '../types'
+import { describe, it, expect, vi } from 'vitest'
+import { parse_openai_stream, stream_client_llm, to_openai_message, type LlmEvent } from '../client-llm'
+import type { ChatConfig, ChatMessage, ClientTool } from '../types'
 
 function sse(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
   const enc = new TextEncoder()
@@ -93,5 +93,47 @@ describe(`to_openai_message`, () => {
       timestamp: 0,
     }
     expect(to_openai_message(m)).toEqual({ role: `assistant`, content: `foobar` })
+  })
+})
+
+describe(`stream_client_llm request body`, () => {
+  it(`always includes the tools array in the request`, async () => {
+    let captured_body: Record<string, unknown> = {}
+    const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (_url, init) => {
+      captured_body = JSON.parse((init as RequestInit).body as string)
+      // minimal valid SSE stream so the generator completes
+      const enc = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode(`data: [DONE]\n\n`))
+          c.close()
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    const config: ChatConfig = {
+      provider: `deepseek`,
+      model: `deepseek-chat`,
+      temperature: 0.2,
+      max_tokens: 1024,
+      api_key: `sk-test`,
+      base_url: `https://api.deepseek.com`,
+      api_format: `openai`,
+      fetched_models: {},
+      mode: `universal`,
+    }
+    const tools: ClientTool[] = [
+      { name: `make_supercell`, description: `d`, kind: `mutate`, input_schema: { type: `object`, properties: {} } },
+    ]
+    const events: LlmEvent[] = []
+    for await (
+      const e of stream_client_llm([{ role: `user`, content: `hi`, timestamp: 0 }], config, `sys`, tools, undefined)
+    ) events.push(e)
+    const captured_tools = captured_body.tools as { type: string; function: { name: string } }[]
+    expect(Array.isArray(captured_tools)).toBe(true)
+    expect(captured_tools.length).toBeGreaterThan(0)
+    expect(captured_tools[0].type).toBe(`function`)
+    expect(captured_tools[0].function.name).toBe(`make_supercell`)
+    spy.mockRestore()
   })
 })
