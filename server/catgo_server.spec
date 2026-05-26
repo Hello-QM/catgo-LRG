@@ -54,6 +54,9 @@ a = Analysis(
         # Workflow Jinja2 templates
         ('workflow/templates/xtb/*.j2', 'workflow/templates/xtb'),
         ('workflow/templates/mlp/*.j2', 'workflow/templates/mlp'),
+        # Workflow preset modules (loose .py loaded by file path as a fallback;
+        # the MCP vasp_presets action reads server/workflow/presets/vasp.py)
+        ('workflow/presets/*.py', 'workflow/presets'),
         # Skill documentation (recursive SKILL.md files)
         ('catgo/workflow/skills', 'catgo/workflow/skills'),
         # Tool JSON schemas

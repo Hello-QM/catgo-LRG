@@ -33,7 +33,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-# Ensure server/ is on sys.path so we can reuse helpers from the full server
+# Ensure server/catgo is on sys.path so we can reuse helpers from the full server
 _server_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
@@ -1031,7 +1031,7 @@ TOOLS = [
                 "simulation_type": {"type": "string", "description": "LAMMPS (action=lammps): minimize|nvt|npt|..."},
                 "stages": {"type": "array", "items": {"type": "object"},
                            "description": "LAMMPS (action=lammps_sequential): ordered list of stage specs."},
-                "preset_name": {"type": "string", "enum": ["relax", "static", "slab_relax", "freq", "band", "md"],
+                "preset_name": {"type": "string", "enum": ["relax", "static", "slab_relax", "freq", "band", "md", "slow_growth"],
                                 "description": "VASP INCAR preset name (action=vasp_presets)."},
             },
             "required": ["action"],
@@ -2876,25 +2876,35 @@ async def _handle_input(client: httpx.AsyncClient, args: dict) -> list[TextConte
     action = args.get("action", "")
 
     if action == "vasp_presets":
+        # In the PyInstaller bundle, `workflow.presets.vasp` is a frozen module and
+        # imports cleanly. In the dev source tree, this module inserts server/catgo
+        # on sys.path (see top of file) so a bare `import workflow` resolves to
+        # catgo/workflow (the workflow ENGINE, no presets) — there we load the real
+        # server/workflow/presets/vasp.py by file path. Try both: frozen-import for
+        # the bundle, file-path fallback for the dev source-shadow.
+        get_preset = None
         try:
-            # NOTE: this module inserts server/catgo onto sys.path (see top of
-            # file), so a bare `import workflow` resolves to catgo/workflow (the
-            # workflow ENGINE), which has no `presets`. The VASP INCAR presets
-            # live in the top-level server/workflow/presets. Load that file
-            # directly by absolute path to avoid the name collision.
-            import importlib.util
-            _server_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            _vasp_presets_path = os.path.join(_server_root, "workflow", "presets", "vasp.py")
-            _spec = importlib.util.spec_from_file_location("_catgo_vasp_presets", _vasp_presets_path)
-            _mod = importlib.util.module_from_spec(_spec)
-            _spec.loader.exec_module(_mod)
-            get_preset = _mod.get_preset
+            from workflow.presets.vasp import get_preset  # bundle / unshadowed
+        except Exception:
+            try:
+                import importlib.util
+                _vasp_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                    "workflow", "presets", "vasp.py",
+                )
+                _spec = importlib.util.spec_from_file_location("_catgo_vasp_presets", _vasp_path)
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                get_preset = _mod.get_preset
+            except Exception as e:
+                return [T(type="text", text=f"vasp_presets unavailable (could not load presets module): {e}")]
+        try:
             preset = get_preset(args.get("preset_name", "relax"))
-            if not preset:
-                return [T(type="text", text=f"Unknown preset '{args.get('preset_name')}'. Valid: relax, static, slab_relax, freq, band, md.")]
-            return [T(type="text", text=json.dumps(preset, indent=2))]
         except Exception as e:
             return [T(type="text", text=f"vasp_presets failed: {e}")]
+        if not preset:
+            return [T(type="text", text=f"Unknown preset '{args.get('preset_name')}'. Valid: relax, static, slab_relax, freq, band, md, slow_growth.")]
+        return [T(type="text", text=json.dumps(preset, indent=2))]
 
     route = _INPUT_ROUTES.get(action)
     if route is None:
