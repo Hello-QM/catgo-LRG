@@ -1,8 +1,6 @@
 from collections import defaultdict
 from itertools import product
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 import scipy as sp
 import scipy.optimize
@@ -205,37 +203,29 @@ class Scaler:
             """
             # diff becames n x n x 3 tensor with element of
             # diff[i, j, :] = si - sj.
-            diff = s[jnp.newaxis, :, :] - s[:, jnp.newaxis, :]
+            diff = s[np.newaxis, :, :] - s[:, np.newaxis, :]
 
             ij_vecs = (diff[ij[:, 0], ij[:, 1], :] + ij_image) @ c
             ik_vecs = (diff[ik[:, 0], ik[:, 1], :] + ik_image) @ c
 
-            dots = jnp.sum(ij_vecs * ik_vecs, axis=-1)
+            dots = np.sum(ij_vecs * ik_vecs, axis=-1)
 
             return dots
 
         def objective(s, c):
             dots = calc_dots(s, c)
-            return jnp.mean(jnp.square(dots - target_dots) * weights)
+            return np.mean(np.square(dots - target_dots) * weights)
 
         # Functions for scipy interface.
         def fun(x):
             n = topology.n_slots
 
-            s = jnp.reshape(x[:-9], (n, 3))
-            c = jnp.reshape(x[-9:], (3, 3))
+            s = np.reshape(x[:-9], (n, 3))
+            c = np.reshape(x[-9:], (3, 3))
 
             v = objective(s, c)
 
             return v
-
-        jac = jax.jit(jax.grad(fun))
-
-        def fun_numpy(x):
-            return np.array(fun(x), dtype=np.float64)
-
-        def jac_numpy(x):
-            return np.array(jac(x), dtype=np.float64)
 
         # Prepare geometry optimization.
         # Make initial value.
@@ -258,8 +248,7 @@ class Scaler:
         # Perform optimization.
         result = sp.optimize.minimize(
             x0=x0,
-            fun=fun_numpy,
-            jac=jac_numpy,
+            fun=fun,
             method="L-BFGS-B",
             bounds=bounds,
             options={"maxiter": 1000, "disp": False},
