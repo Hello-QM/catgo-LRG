@@ -246,5 +246,37 @@
       },
       "required": ["substrate", "film"]
     }
+  },
+  {
+    "name": "catgo_reticular_build",
+    "description": "Build a MOF or COF crystal structure from reticular chemistry: an RCSR topology (net) plus building blocks. Use a curated preset (mof-5, hkust-1, zif-8, cof-300) for the common case, or advanced mode with an explicit topology + per-node/edge building-block assignment. Triggers: build a MOF, make HKUST-1, ZIF-8, MOF-5, COF-300, reticular framework, metal-organic framework, covalent organic framework.",
+    "endpoint": "/reticular/build",
+    "method": "POST",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["preset", "advanced"],
+          "default": "preset",
+          "description": "preset uses a named recipe; advanced takes topology+BBs"
+        },
+        "preset": {
+          "type": "string",
+          "enum": ["mof-5", "hkust-1", "zif-8", "cof-300"],
+          "description": "Preset id (mode=preset)"
+        },
+        "topology": {"type": "string", "description": "RCSR net name (mode=advanced)"},
+        "node_bbs": {
+          "type": "object",
+          "description": "{node_type: bb_id} (mode=advanced)"
+        },
+        "edge_bbs": {
+          "type": "object",
+          "description": "{'i,j': bb_id} edge-type keys (mode=advanced)"
+        }
+      },
+      "required": []
+    }
   }
 ]
