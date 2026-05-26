@@ -37,4 +37,16 @@ describe(`parse_openai_stream`, () => {
     const tc = events.find((e): e is Extract<LlmEvent, { type: `tool_calls` }> => e.type === `tool_calls`)
     expect(tc?.calls[0]).toEqual({ id: `c1`, name: `make_supercell`, arguments: { nx: 2, ny: 1, nz: 1 } })
   })
+
+  it(`yields an error event (not a throw) on malformed tool-call args`, async () => {
+    const events: LlmEvent[] = []
+    await expect((async () => {
+      for await (const e of parse_openai_stream(sse([
+        JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `c1`, function: { name: `x`, arguments: `{"nx":` } }] } }] }),
+        JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
+      ]))) events.push(e)
+    })()).resolves.not.toThrow()
+    expect(events.some((e) => e.type === `error`)).toBe(true)
+    expect(events.some((e) => e.type === `done`)).toBe(true)
+  })
 })

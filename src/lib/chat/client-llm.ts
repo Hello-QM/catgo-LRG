@@ -59,12 +59,16 @@ export async function* parse_openai_stream(
   }
 
   if (saw_tool_calls) {
-    const calls: ToolCall[] = [...acc.values()].map((t) => ({
-      id: t.id,
-      name: t.name,
-      arguments: t.args ? JSON.parse(t.args) : {},
-    }))
-    yield { type: `tool_calls`, calls }
+    try {
+      const calls: ToolCall[] = [...acc.values()].map((t) => ({
+        id: t.id,
+        name: t.name,
+        arguments: t.args ? JSON.parse(t.args) : {},
+      }))
+      yield { type: `tool_calls`, calls }
+    } catch (err) {
+      yield { type: `error`, message: err instanceof Error ? `Bad tool args: ${err.message}` : `Bad tool args` }
+    }
   }
   yield { type: `done` }
 }
