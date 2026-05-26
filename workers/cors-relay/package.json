@@ -1,0 +1,10 @@
+{
+  "name": "catgo-cors-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "deploy": "wrangler deploy -c wrangler.relay.toml"
+  },
+  "devDependencies": { "vitest": "^2.0.0", "wrangler": "^3.0.0" }
+}
