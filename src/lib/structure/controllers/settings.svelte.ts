@@ -116,6 +116,20 @@ function load_persisted(): PersistedSettings {
         ;(parsed as Record<string, unknown>)._site_idx_default_false_migrated = true
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)) } catch { /* ignore */ }
       }
+      // One-time cleanup: an earlier bug re-wrapped site_label_bg_color in an
+      // extra `color-mix(...)` on every mount, so the persisted value
+      // accumulated dozens of nesting levels. A deeply nested color-mix() is
+      // O(2^depth) for the CSS engine to resolve, freezing the main thread when
+      // site labels/indices rendered. Drop any value with >1 color-mix() so the
+      // default re-applies; the code fix (parse_label_bg) keeps it single-level.
+      if (is_plain_object(parsed.scene_props)) {
+        const sp = parsed.scene_props as Record<string, unknown>
+        const bg = sp.site_label_bg_color
+        if (typeof bg === `string` && (bg.match(/color-mix\(/g) ?? []).length > 1) {
+          delete sp.site_label_bg_color
+          try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)) } catch { /* ignore */ }
+        }
+      }
       return parsed as PersistedSettings
     }
 
