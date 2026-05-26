@@ -44,9 +44,26 @@ Scope is deliberately bounded: **static capability gap-fill + transport unificat
 - `mcp_http.py` / `mcp_sse.py` are unchanged (already import Menu B).
 - `tools/*.py` declarative registry is no longer served (kept on disk, marked deprecated).
 
+## Migration is test-gated (hard rule)
+
+**No capability is folded into Menu B until it has a passing test. A capability that fails its test is NOT folded in.**
+
+Each Menu A capability is migrated one at a time through this gate:
+
+0. **Dedup pre-check.** Before folding, confirm the capability's backend endpoint is **not already reachable** via an existing Menu B `(tool, action)`. If it is, it is a duplicate — **skip it** (do not add a redundant action). Also collapse Menu A's own duplicates (e.g. `catgo_build_slab` and `catgo_generate_slab` both hit `/structure-ops/generate-slab`; `catgo_dos_compute` → `/dos/compute` already equals `catgo_analyze:dos`). Record skipped duplicates in the PR.
+1. **Write the test first** (TDD): a routing test (fake httpx client — correct endpoint/method/body) **and** a live functional test against the real backend on `:8000` (the action returns 200 with a plausible result for a representative input).
+2. **Run both.** Only if **both pass green** is the action kept in Menu B.
+3. **If the live test fails** (endpoint 404/500/contract-broken — i.e. the Menu A capability was already dead from drift), the action is **not folded in**. It is recorded in a "broken / excluded" list in the PR with the failure, and tracked as a separate backend fix — *not* silently shipped as a non-working tool.
+
+Consequence: the final tool/action set is **whatever is unique AND passes the gate**. The target below (15 → 18) is the ceiling; the floor is "only what's not-duplicate and verified working." The PR reports three lists: folded, skipped-as-duplicate, excluded-as-broken.
+
+### Endpoint-diff is the source of truth, not tool names
+
+Menu A has ~70 tools but many are **already covered by Menu B** (structure edits, fetch, hetero/moire/nanotube, catalysis, set-lattice, view, `/dos/compute`, `/optimize/structure`, generate-slab). The migration candidates are **only the endpoints in Menu A that no Menu B action reaches** — enumerated in the tables below. The dedup pre-check (step 0) re-verifies this per capability at implementation time, since Menu B may have gained coverage by then.
+
 ## Capability migration (Menu A → Menu B)
 
-New tool count: **15 → 18** (only `catgo_md`, `catgo_input`, `catgo_simulate` added; everything else folds into existing mega-tools as actions).
+Target tool count: **15 → 18** (only `catgo_md`, `catgo_input`, `catgo_simulate` added; everything else folds into existing mega-tools as actions) — *subject to the test gate above; a capability that fails its live test is dropped from this set.*
 
 ### 1. `catgo_structure` — +5 building actions
 | action | backend endpoint |
@@ -126,7 +143,8 @@ Each migrated action follows the existing Menu B handler conventions:
 - **Schema tests** (extend `test_lateral_hetero_mcp.py` style / a new `test_consolidated_registry.py`): every new action appears in the right tool's enum; `catgo_md`/`catgo_input`/`catgo_simulate` exist with expected actions; tool count == 18.
 - **Routing tests** (fake httpx client, as in the lateral tests): each new action POSTs/GETs the correct endpoint with the expected body keys; structure auto-injection fires only where intended; viewer push fires for structure-returning actions.
 - **Parity test:** assert that every backend endpoint previously reachable via Menu A is reachable via some Menu B `(tool, action)` — a static map check so future drift is caught.
-- **Live smoke** (against `:8000`, opt-in): one representative call per new tool (`catgo_structure:defect`, `catgo_md:rdf` on a sample trajectory, `catgo_input:vasp`, `catgo_simulate:kmc_simulate`) returns 200.
+- **Live functional test per migrated action** (against `:8000`) — **this is the migration gate, not optional**: every candidate action gets one representative live call that must return 200 with a plausible result before the action is kept. Actions whose live call fails are excluded (see test-gate rule) and listed as broken.
+- **Dedup check:** the parity map also flags any candidate whose endpoint an existing Menu B action already covers, so duplicates are skipped rather than added.
 - **Regression:** existing consolidated handler tests still pass. (Note the pre-existing 10 stale failures in `test_claude_code_mcp.py` — tool count 11 vs 15; this work makes it 18, so that test must be updated to the new count and the ≤300-char description assertion relaxed or scoped, as part of this PR.)
 
 ## Out of scope (follow-up)
