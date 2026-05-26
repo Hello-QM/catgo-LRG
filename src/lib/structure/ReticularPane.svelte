@@ -16,6 +16,7 @@
     type TopologyDetail,
     type BuildingBlockInfo,
   } from '$lib/api/reticular'
+  import { searchMofs, getMofStructure, MOFDB_DATABASES, type MofHit } from '$lib/api/mofdb'
 
   load_i18n_module(`structure`)
 
@@ -42,12 +43,50 @@
   } = $props()
 
   // -- Mode --
-  let mode = $state<`preset` | `advanced`>(`preset`)
+  let mode = $state<`preset` | `advanced` | `search`>(`preset`)
 
   // -- Status --
   let build_status = $state<`idle` | `building` | `done` | `error`>(`idle`)
   let error_message = $state<string | null>(null)
   let result_message = $state<string | null>(null)
+
+  // -- Search mode (MOFX-DB) --
+  let search_name = $state(``)
+  let search_database = $state(``) // empty = all databases
+  let search_status = $state<`idle` | `searching` | `done` | `error`>(`idle`)
+  let search_hits = $state<MofHit[]>([])
+  let search_count = $state(0)
+
+  async function do_search() {
+    search_status = `searching`
+    error_message = null
+    try {
+      const res = await searchMofs(
+        { name: search_name || undefined, database: search_database || undefined, limit: 50 },
+        server_url,
+      )
+      search_hits = res.hits
+      search_count = res.count
+      search_status = `done`
+    } catch (err) {
+      search_status = `error`
+      error_message = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function load_hit(hit: MofHit) {
+    on_push_undo?.()
+    error_message = null
+    try {
+      // Round-trip key is (name, database) — NOT an id/mofid.
+      const res = await getMofStructure(hit.name, hit.database, server_url)
+      structure = res.structure
+      on_structure_change?.(res.structure)
+      result_message = `Loaded ${res.name}`
+    } catch (err) {
+      error_message = err instanceof Error ? err.message : String(err)
+    }
+  }
 
   // -- Preset mode --
   let presets = $state<PresetInfo[]>([])
@@ -191,7 +230,9 @@
         mode === `preset`
           ? { mode, preset: String(selected_preset[0]?.value ?? ``) }
           : {
-              mode,
+              // build button is hidden in `search` mode, so this branch is only
+              // ever reached in `advanced` mode — narrow accordingly for the API
+              mode: `advanced` as const,
               topology: String(selected_topology[0]?.value ?? ``),
               node_bbs: collect_node_bbs(),
               edge_bbs: collect_edge_bbs(),
@@ -236,6 +277,9 @@
     >
       {t(`structure.reticular_mode_advanced`)}
     </button>
+    <button type="button" class:active={mode === `search`} onclick={() => (mode = `search`)}>
+      {t(`structure.reticular_mode_search`)}
+    </button>
   </div>
 
   {#if mode === `preset`}
@@ -253,7 +297,7 @@
         style="min-width: 0;"
       />
     </label>
-  {:else}
+  {:else if mode === `advanced`}
     <p class="hint">{t(`structure.reticular_hint_advanced`)}</p>
     <label class="field">
       <span>{t(`structure.reticular_topology`)}</span>
@@ -314,8 +358,47 @@
         </fieldset>
       {/if}
     {/if}
+  {:else if mode === `search`}
+    <p class="hint">{t(`structure.reticular_hint_search`)}</p>
+    <label class="field">
+      <span>{t(`structure.reticular_search_name`)}</span>
+      <input type="text" bind:value={search_name} placeholder="MOF-5, HKUST, ZIF…" />
+    </label>
+    <label class="field">
+      <span>{t(`structure.reticular_search_database`)}</span>
+      <select bind:value={search_database}>
+        <option value="">—</option>
+        {#each MOFDB_DATABASES as db (db)}
+          <option value={db}>{db}</option>
+        {/each}
+      </select>
+    </label>
+    <button type="button" class="primary" onclick={do_search} disabled={search_status === `searching`}>
+      {search_status === `searching` ? `…` : t(`structure.reticular_search_button`)}
+    </button>
+
+    {#if search_status === `done`}
+      <p class="hint">{search_count} {t(`structure.reticular_search_count`)}</p>
+      {#if search_hits.length === 0}
+        <p class="hint">{t(`structure.reticular_search_no_results`)}</p>
+      {/if}
+      <ul class="mof-results">
+        {#each search_hits as hit (hit.id)}
+          <li class="mof-hit">
+            <div class="mof-hit-info">
+              <strong>{hit.name}</strong>
+              <small>{hit.database}{hit.elements.length ? ` · ${hit.elements.join(`, `)}` : ``}</small>
+            </div>
+            <button type="button" onclick={() => load_hit(hit)}>
+              {t(`structure.reticular_search_load`)}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 
+  {#if mode !== `search`}
   <div class="controls">
     <button
       type="button"
@@ -326,6 +409,7 @@
       {build_status === `building` ? t(`structure.building`) : t(`structure.reticular_build`)}
     </button>
   </div>
+  {/if}
 
   {#if error_message}
     <div class="error">{error_message}</div>
@@ -465,4 +549,9 @@
     border-radius: 3pt;
     color: #2e7d32;
   }
+
+  .mof-results { list-style: none; margin: 0.5em 0 0; padding: 0; max-height: 16em; overflow-y: auto; }
+  .mof-hit { display: flex; align-items: center; justify-content: space-between; gap: 0.5em; padding: 0.25em 0; border-bottom: 1px solid var(--border-color, #8884); }
+  .mof-hit-info { display: flex; flex-direction: column; min-width: 0; }
+  .mof-hit-info small { opacity: 0.7; }
 </style>
