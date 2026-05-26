@@ -19,6 +19,17 @@ export interface ToolLoopDeps {
   signal?: AbortSignal
 }
 
+/** A tool result is an error iff it parses to an object with a string `error` field. */
+function is_error_result(result: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(result)
+    return typeof parsed === `object` && parsed !== null
+      && typeof (parsed as { error?: unknown }).error === `string`
+  } catch {
+    return false
+  }
+}
+
 /** Run the agentic loop until the model returns no tool calls (or the cap is hit). */
 export async function run_tool_loop(deps: ToolLoopDeps): Promise<void> {
   const max = deps.max_iterations ?? 25
@@ -44,7 +55,7 @@ export async function run_tool_loop(deps: ToolLoopDeps): Promise<void> {
       }
       deps.on_event({ type: `tool_start`, id: call.id, name: call.name, input: call.arguments })
       const result = await deps.execute(call.name, call.arguments)
-      const isError = result.includes(`"error"`)
+      const isError = is_error_result(result)
       deps.on_event({ type: `tool_end`, id: call.id, name: call.name, result, isError })
     }
   }

@@ -56,4 +56,22 @@ describe(`run_tool_loop`, () => {
     const toolEnds = events.filter((e) => e.type === `tool_end`).length
     expect(toolEnds).toBeLessThanOrEqual(3)
   })
+
+  it(`flags isError structurally, not by substring`, async () => {
+    const errEvents: Array<{ type: string; isError?: boolean }> = []
+    await run_tool_loop({
+      transport: gen([{ type: `tool_calls`, calls: [{ id: `e1`, name: `t`, arguments: {} }] }, { type: `done` }], [{ type: `done` }]),
+      execute: vi.fn().mockResolvedValue(`{"error":"boom"}`),
+      kind_of: () => `read`, request_permission: vi.fn(), on_event: (e) => errEvents.push(e),
+    })
+    expect(errEvents.find((e) => e.type === `tool_end`)?.isError).toBe(true)
+
+    const okEvents: Array<{ type: string; isError?: boolean }> = []
+    await run_tool_loop({
+      transport: gen([{ type: `tool_calls`, calls: [{ id: `o1`, name: `t`, arguments: {} }] }, { type: `done` }], [{ type: `done` }]),
+      execute: vi.fn().mockResolvedValue(`{"note":"error bars are small","value":1}`),
+      kind_of: () => `read`, request_permission: vi.fn(), on_event: (e) => okEvents.push(e),
+    })
+    expect(okEvents.find((e) => e.type === `tool_end`)?.isError).toBe(false)
+  })
 })
