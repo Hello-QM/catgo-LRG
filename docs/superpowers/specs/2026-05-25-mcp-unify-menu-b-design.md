@@ -68,45 +68,57 @@ Consequence: the final tool/action set is **whatever is unique AND passes a real
 
 Menu A has ~70 tools but many are **already covered by Menu B** (structure edits, fetch, hetero/moire/nanotube, catalysis, set-lattice, view, `/dos/compute`, `/optimize/structure`, generate-slab). The migration candidates are **only the endpoints in Menu A that no Menu B action reaches** — enumerated in the tables below. The dedup pre-check (step 0) re-verifies this per capability at implementation time, since Menu B may have gained coverage by then.
 
-## Capability migration (Menu A → Menu B)
+## Recon outcome (2026-05-26) — gate applied before implementation
 
-Target tool count: **15 → 18** (only `catgo_md`, `catgo_input`, `catgo_simulate` added; everything else folds into existing mega-tools as actions) — *subject to the test gate above; a capability that fails its live test is dropped from this set.*
+Reading the backend contracts up front already excluded three groups (the gate working as intended):
 
-### 1. `catgo_structure` — +5 building actions
-| action | backend endpoint |
-|---|---|
-| `defect` | `POST /build/defect` |
-| `strain` | `POST /build/strain` |
-| `passivate` | `POST /pseudo-hydrogen/passivate` |
-| `water_layer` | `POST /water-layer/add` |
-| `reticular` | `POST /reticular/build` |
+- **`reticular` (MOF/COF) — EXCLUDED, no endpoint.** `/reticular/build` is not implemented in the main backend (code lives only in `.worktrees/reticular/`). Nothing to fold. Follow-up: port the reticular router, then add the action.
+- **Electronic-structure bucket (`bands*`, `cohp`, `dos_total`, `dos_dband`, `dos_from_dir`) — EXCLUDED, unverifiable.** These are **session-based** (require a prior multipart `/upload` of `vaspout.h5`/`COHPCAR`/`PROCAR` to mint a `session_id`) or **HPC-remote** (`/from-directory` needs an SSH session + remote path). The repo has **no real DFT-output fixtures**, so the real-functional gate cannot pass. Follow-up: commit minimal real DFT outputs as fixtures, then fold (including the upload→session flow).
+- **`catgo_analyze:dft_input` is already broken** — it POSTs to `/dft-input/generate`, which **does not exist**. The new `catgo_input` tool (real `/vasp/generate`, `/qe/input`, `/lammps/input`) supersedes it; the dead `dft_input` action is removed.
 
-### 2. `catgo_analyze` — +9 electronic-structure / info actions
-| action | backend endpoint |
-|---|---|
-| `bands` | `POST /bands/data` |
-| `bands_from_dir` | `POST /bands/from-directory` |
-| `bands_projections` | `POST /bands/projections` |
-| `cohp` | `POST /cohp/data` |
-| `dos_total` | `POST /dos/total` |
-| `dos_dband` | `POST /dos/dband` |
-| `dos_from_dir` | `POST /dos/from-directory` |
-| `energy` | `POST /optimize/energy` |
-| `calculators` | `GET /optimize/calculators` |
+**`catgo_simulate` (kMC) is conditional:** `/kmc/*` is backed by the external `mykmc` package. If `mykmc` is not importable in the env, the live test fails → kMC is excluded this round (recorded), folded later once the dep is present.
 
-(Existing `dos` → `/dos/compute` stays. The bands trio may be grouped under one `bands` action with a sub-mode if it keeps the enum tidy — decided at plan time.)
+## Capability migration (Menu A → Menu B) — verifiable set
 
-### 3. `catgo_md` — NEW, 16 trajectory-analysis actions
-| action | endpoint | | action | endpoint |
-|---|---|---|---|---|
-| `rdf` | `/md/distances/rdf` | | `hbonds` | `/md/hbonds/detect` |
-| `msd` | `/md/dynamics/msd` | | `hbond_lifetime` | `/md/hbonds/lifetime` |
-| `rmsd` | `/md/rmsd/rmsd` | | `water_orientation` | `/md/orientation/water` |
-| `rmsf` | `/md/rmsd/rmsf` | | `dihedrals` | `/md/angles/dihedrals` |
-| `clustering` | `/md/clustering/rmsd-cluster` | | `planar_density` | `/md/density/planar` |
-| `dimreduce` | `/md/clustering/dimreduce` | | `cavitation` | `/md/cavitation/profile` |
+Target after exclusions: **15 → ~18** (`catgo_md`, `catgo_input`, `catgo_simulate` added; building + two analyze actions folded). Final set = whatever passes the gate at implementation time.
 
-(Note: backend `/md/distances/rdf` is *trajectory* RDF, distinct from `catgo_analyze:rdf` → `/analysis/rdf` which is single-structure RDF. Both retained.)
+### 1. `catgo_structure` — +4 building actions
+| action | backend endpoint | request shape | fixture |
+|---|---|---|---|
+| `defect` | `POST /build/defect` | `{structure: dict (raw as_dict), defect_type, site_index, substitute_element?, supercell}` | conftest `cu_structure` |
+| `strain` | `POST /build/strain` | `{structure: dict, strain_type, axis, magnitude, n_steps}` | conftest `cu_structure` |
+| `passivate` | `POST /pseudo-hydrogen/passivate` | `{slab: PymatgenStructure, bulk: PymatgenStructure, params?}` | TiO2/quartz slab + bulk CIF |
+| `water_layer` | `POST /water-layer/add` | `{structure: PymatgenStructure, params?{z_start,z_end,density,…}}` | slab with vacuum |
+
+(`reticular` excluded — see Recon outcome.)
+
+### 2. `catgo_analyze` — +2 actions (ES bucket excluded)
+| action | backend endpoint | notes |
+|---|---|---|
+| `energy` | `POST /optimize/energy` | single-point energy; structure input, auto-injectable |
+| `calculators` | `GET /optimize/calculators` | list available calculators; no input |
+
+(Existing `dos` → `/dos/compute` stays. `bands*`/`cohp`/`dos_total`/`dos_dband`/`dos_from_dir` excluded — session/HPC-based, no fixtures. The broken `dft_input` action is removed; `catgo_input` replaces it.)
+
+### 3. `catgo_md` — NEW, 12 trajectory-analysis actions
+All share a base input: `trajectory_b64: str` (base64 of a trajectory file) + `format: str` (e.g. `extxyz`,`xyz`,`h5`,`traj`,`pdb`,`xtc`…); binary formats also need `topology_b64`. Per-action extras below.
+
+| action | endpoint | key extra params | result keys to assert |
+|---|---|---|---|
+| `rdf` | `/md/distances/rdf` | `selection_1`,`selection_2` (`{indices?\|element?}`), `r_range`,`n_bins` | `r`,`g_r`,`coordination_number` |
+| `msd` | `/md/dynamics/msd` | `element?`/`atom_indices?`,`timestep_ps`,`directions` | `tau_ps`,`msd_angstrom2`,`n_frames` |
+| `rmsd` | `/md/rmsd/rmsd` | `ref_frame`,`atom_indices?` | `rmsd_angstroms`,`n_frames` |
+| `rmsf` | `/md/rmsd/rmsf` | `atom_indices?`,`ref_frame?` | `rmsf_angstroms`,`n_atoms` |
+| `clustering` | `/md/clustering/rmsd-cluster` | `method`(req),`eps`/`n_clusters` | `labels`,`n_clusters_found` |
+| `dimreduce` | `/md/clustering/dimreduce` | `method`(req),`n_components` | `embedding`,`method` |
+| `hbonds` | `/md/hbonds/detect` | `method`,`distance_cutoff`,`angle_cutoff` | `count_per_frame`,`n_unique` |
+| `hbond_lifetime` | `/md/hbonds/lifetime` | `distance_cutoff`,`time_step` | `autocorrelation`,`average_lifetime_ps` |
+| `water_orientation` | `/md/orientation/water` | `axis`,`n_bins` | `bin_centers_angstrom`,`cos_phi_mean` |
+| `dihedrals` | `/md/angles/dihedrals` | `atom_quartets`(req) | `dihedrals_deg`,`n_dihedrals` |
+| `planar_density` | `/md/density/planar` | `plane`(req),`n_bins` | `density`,`x_edges`,`y_edges` |
+| `cavitation` | `/md/cavitation/profile` | `solvent_element`,`probe_radii_angstrom` | `delta_g_cav_eV`,`z_bin_centers_angstrom` |
+
+Real fixture: `src/site/trajectories/mp-1184225.extxyz` (6 frames). `catgo_analyze:rdf`→`/analysis/rdf` (single-structure) is distinct and retained.
 
 ### 4. `catgo_input` — NEW, 9 input-generation actions
 | action | endpoint |
@@ -121,11 +133,13 @@ Target tool count: **15 → 18** (only `catgo_md`, `catgo_input`, `catgo_simulat
 | `vasp_calc_types` | `GET /vasp/calculation-types` |
 | `vasp_presets` | `POST __direct__/vasp_presets` |
 
-### 5. `catgo_simulate` — NEW, 2 kMC actions
-| action | endpoint |
-|---|---|
-| `kmc_scan` | `POST /kmc/scan-potential` |
-| `kmc_simulate` | `POST /kmc/simulate` |
+### 5. `catgo_simulate` — NEW, 2 kMC actions (conditional on `mykmc`)
+| action | endpoint | request |
+|---|---|---|
+| `kmc_scan` | `POST /kmc/scan-potential` | `{model: KMCModelJSON, temperature, u_min, u_max, u_steps, method, lattice_size, kmc_steps}` |
+| `kmc_simulate` | `POST /kmc/simulate` | `{model: KMCModelJSON, temperature, potential, lattice_size, steps}` |
+
+`KMCModelJSON = {meta, species:[{name}], parameters:[{name,value}], processes:[{name,rate_constant,conditions:[{species}],actions:[{species}]}], lattice:{layers:[{sites:[{name}]}]}}`. Backed by external `mykmc`; folded only if the live test passes (else excluded this round).
 
 ### Already covered by Menu B (no migration)
 Structure edits (`/structure-ops/*`, set-lattice, generate-slab, merge), fetch (crystal/search/molecule), heterostructure (+lateral), moire, nanotube, catalysis, symmetry, coordination, adsorption sites, dft_input, optimize, view (screenshot/selection/structure-info via `get_state`), workflow, workflow_engine.
