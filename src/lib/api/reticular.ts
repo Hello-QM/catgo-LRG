@@ -32,6 +32,8 @@ export interface TopologyInfo {
 export interface BuildingBlockInfo {
   name: string
   n_connection_points: number
+  formula: string
+  elements: string[]
 }
 
 export interface TopologyDetail {
@@ -70,10 +72,14 @@ export async function listTopologies(
 
 export async function listBuildingBlocks(
   q = ``,
+  cn?: number,
   server_url = SERVER_URL,
 ): Promise<BuildingBlockInfo[]> {
-  const qs = q ? `?q=${encodeURIComponent(q)}` : ``
-  return get_json(`${server_url}/api/reticular/building-blocks${qs}`)
+  const params = new URLSearchParams()
+  if (q) params.set(`q`, q)
+  if (cn != null) params.set(`cn`, String(cn))
+  const qs = params.toString()
+  return get_json(`${server_url}/api/reticular/building-blocks${qs ? `?${qs}` : ``}`)
 }
 
 export async function getTopology(

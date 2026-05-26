@@ -14,6 +14,7 @@
     getTopology,
     type PresetInfo,
     type TopologyDetail,
+    type BuildingBlockInfo,
   } from '$lib/api/reticular'
 
   load_i18n_module(`structure`)
@@ -61,9 +62,20 @@
   let selected_topology = $state<ObjectOption[]>([])
   let topo_detail = $state<TopologyDetail | null>(null)
 
-  // Building-block options pool (shared across all BB selects).
+  // Building-block pool (raw enriched BBs, shared across all BB selects).
+  // Each slot derives its own connection-compatible, richly-labelled options
+  // from this pool via `bb_options_for(cn)`.
   let bb_search = $state(``)
-  let bb_options = $state<ObjectOption[]>([])
+  let bb_pool = $state<BuildingBlockInfo[]>([])
+
+  function bb_options_for(cn: number): ObjectOption[] {
+    return bb_pool
+      .filter((b) => b.n_connection_points === cn)
+      .map((b): ObjectOption => ({
+        label: `${b.name} — ${b.formula} (${b.n_connection_points}-c)`,
+        value: b.name,
+      }))
+  }
 
   // Assignments: node_type -> bb id, "i,j" -> bb id.
   let node_assignment = $state<Record<number, ObjectOption[]>>({})
@@ -99,10 +111,10 @@
     const q = bb_search
     if (mode !== `advanced` || !topo_detail) return
     let cancelled = false
-    listBuildingBlocks(q, server_url)
+    listBuildingBlocks(q, undefined, server_url)
       .then((list) => {
         if (cancelled) return
-        bb_options = list.map((x): ObjectOption => ({ label: x.name, value: x.name }))
+        bb_pool = list
       })
       .catch((err) => {
         if (!cancelled) error_message = err instanceof Error ? err.message : String(err)
@@ -248,11 +260,12 @@
     {#if topo_detail}
       <fieldset class="bb-fieldset">
         <legend>{t(`structure.reticular_node_bb`)}</legend>
+        <p class="hint">Search by element (e.g. "Cu", "Zn") or formula. Only connection-compatible building blocks are shown.</p>
         {#each topo_detail.node_types as nt, i (nt)}
           <label class="field">
             <span>node {nt} (cn {topo_detail.node_cn[i]})</span>
             <Select
-              options={bb_options}
+              options={bb_options_for(topo_detail.node_cn[i])}
               maxSelect={1}
               bind:selected={node_assignment[nt]}
               bind:searchText={bb_search}
@@ -272,7 +285,7 @@
           <label class="field">
             <span>edge {et.join(`–`)}</span>
             <Select
-              options={bb_options}
+              options={bb_options_for(2)}
               maxSelect={1}
               bind:selected={edge_assignment[et.join(`,`)]}
               bind:searchText={bb_search}
