@@ -101,6 +101,7 @@ TOOLS = [
                         "get", "export", "add_atom", "add_atoms", "delete", "replace",
                         "move", "supercell", "set_lattice", "slab", "doping",
                         "merge", "add_molecule", "add_cluster", "load_file",
+                        "defect", "strain", "passivate", "water_layer",
                     ],
                     "description": "Operation to perform",
                 },
@@ -165,6 +166,17 @@ TOOLS = [
                 },
                 "file_content": {"type": "string", "description": "Raw POSCAR/CIF/XYZ text for load_file (Read the user's path first)."},
                 "file_format": {"type": "string", "description": "Format for load_file (input hint) or export (output choice). poscar | cif | xyz | extxyz | mol2 | pdb. Default: poscar."},
+                "defect_type": {"type": "string", "description": "For defect: 'vacancy' | 'substitution' | 'interstitial'."},
+                "site_index": {"type": "integer", "description": "For defect: 0-based site index to operate on."},
+                "substitute_element": {"type": "string", "description": "For defect substitution: replacement element symbol."},
+                "supercell": {"type": "string", "description": "For defect/strain: supercell as 'NxNxN' (e.g. '2x2x1')."},
+                "strain_type": {"type": "string", "description": "For strain: 'uniaxial' | 'biaxial' | 'hydrostatic' | 'shear'."},
+                "axis": {"type": "string", "description": "For strain: axis/plane the strain is applied along (e.g. 'x', 'a', 'xy')."},
+                "magnitude": {"type": "number", "description": "For strain: strain magnitude as a fraction (e.g. 0.05 = 5%)."},
+                "n_steps": {"type": "integer", "description": "For strain: number of strain steps to generate (default 1)."},
+                "slab": {"type": "object", "description": "For passivate: slab structure (raw pymatgen dict)."},
+                "bulk": {"type": "object", "description": "For passivate: reference bulk structure (raw pymatgen dict)."},
+                "params": {"type": "object", "description": "Optional parameters object for water_layer / passivate (e.g. z_start, z_end, density)."},
             },
             "required": ["action"],
         },
@@ -1271,6 +1283,42 @@ async def _handle_structure(client: httpx.AsyncClient, args: dict) -> list[TextC
 
     action = args.get("action", "")
     T = TextContent
+
+    # ---- Building actions (folded from Menu A; real-test gated) ----
+    _BUILD = {
+        "defect":      ("/build/defect",               "structure", "structures"),
+        "strain":      ("/build/strain",               "structure", "structures"),
+        "passivate":   ("/pseudo-hydrogen/passivate",  "slab",      "structure"),
+        "water_layer": ("/water-layer/add",            "structure", "structure"),
+    }
+    if action in _BUILD:
+        endpoint, in_key, out_key = _BUILD[action]
+        payload = {k: v for k, v in args.items() if k != "action"}
+        if in_key not in payload:
+            cur = await _get_current_structure(client)
+            if cur is None:
+                return [T(type="text", text=f"action '{action}' needs `{in_key}` (or a structure loaded in the viewer).")]
+            payload[in_key] = cur
+        resp = await client.post(f"{API_BASE}{endpoint}", json=payload)
+        if resp.status_code != 200:
+            return [T(type="text", text=f"{action} failed ({resp.status_code}): {resp.text[:300]}")]
+        data = resp.json()
+        new_struct = data.get("structures", [None])[0] if out_key == "structures" else data.get("structure")
+        if not new_struct:
+            return [T(type="text", text=f"{action} returned no structure. Response: {json.dumps(data)[:300]}")]
+        push_err = await _push_structure(client, new_struct)
+        n = len(new_struct.get("sites", []))
+        extra = ""
+        if action == "passivate":
+            extra = f" (+{data.get('n_pseudo_h', '?')} pseudo-H)"
+        elif action == "water_layer":
+            extra = f" (+{data.get('n_water_molecules', '?')} H2O)"
+        elif out_key == "structures":
+            extra = f" ({data.get('count', 1)} structure(s), showing #1)"
+        msg = f"{action}: {n} atoms{extra}. Viewer updated."
+        if push_err:
+            msg += f"\n⚠️ Viewer push failed: {push_err}"
+        return [T(type="text", text=msg)]
 
     if action == "get":
         struct = await _get_current_structure(client)
