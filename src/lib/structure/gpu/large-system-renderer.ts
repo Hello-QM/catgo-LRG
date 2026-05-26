@@ -2369,7 +2369,18 @@ export function create_large_system_renderer(
       )
       device.queue.submit([encoder.finish()])
 
-      await pick_readback.mapAsync(GPUMapMode.READ, 0, 4)
+      try {
+        await pick_readback.mapAsync(GPUMapMode.READ, 0, 4)
+      } catch {
+        // The buffer was destroyed before the map resolved. This happens when
+        // the overlay is torn down mid-pick — e.g. the user toggles large-system
+        // (WebGPU) mode off while a pick is in flight. WebGPU rejects the pending
+        // mapAsync with an AbortError ("Buffer was destroyed before mapping was
+        // resolved"); swallow it and abort the pick instead of leaking an
+        // unhandled rejection. The post-resolve `destroyed` guard below only
+        // covers the resolve-then-destroy race, not this reject-on-destroy one.
+        return -1
+      }
       if (destroyed) {
         try { pick_readback.unmap() } catch { /* already torn down */ }
         return -1
