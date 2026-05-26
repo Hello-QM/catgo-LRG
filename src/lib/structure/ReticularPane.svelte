@@ -77,9 +77,18 @@
       }))
   }
 
-  // Assignments: node_type -> bb id, "i,j" -> bb id.
-  let node_assignment = $state<Record<number, ObjectOption[]>>({})
-  let edge_assignment = $state<Record<string, ObjectOption[]>>({})
+  // Distinct node connection numbers present in the current topology, sorted.
+  // Building blocks are assigned BY connection number, not per node/edge type:
+  // one selector per distinct node cn, plus a single selector for all edges
+  // (edges are always 2-connected).
+  let node_cns = $derived(
+    topo_detail ? Array.from(new Set(topo_detail.node_cn)).sort((a, b) => a - b) : [],
+  )
+  let has_edges = $derived((topo_detail?.edge_types?.length ?? 0) > 0)
+
+  // selected BB per node cn group, and a single edge BB (all edges are 2-connected)
+  let node_bb_by_cn = $state<Record<number, ObjectOption[]>>({})
+  let edge_bb = $state<ObjectOption[]>([])
 
   // Load presets once.
   $effect(() => {
@@ -133,11 +142,12 @@
     error_message = null
     try {
       const detail = await getTopology(name, server_url)
-      // Pre-seed every assignment slot with an empty array BEFORE topo_detail
-      // is set, so the per-slot <Select bind:selected> never binds `undefined`
+      // Pre-seed every cn slot with an empty array BEFORE topo_detail is set, so
+      // each per-cn <Select bind:selected> never binds `undefined`
       // (svelte-multiselect's `selected` has a fallback and rejects undefined).
-      node_assignment = Object.fromEntries(detail.node_types.map((nt) => [nt, []]))
-      edge_assignment = Object.fromEntries(detail.edge_types.map((et) => [et.join(`,`), []]))
+      const cns = Array.from(new Set(detail.node_cn))
+      node_bb_by_cn = Object.fromEntries(cns.map((cn) => [cn, []]))
+      edge_bb = []
       topo_detail = detail
     } catch (err) {
       error_message = err instanceof Error ? err.message : String(err)
@@ -152,19 +162,21 @@
 
   function collect_node_bbs(): Record<number, string> {
     const out: Record<number, string> = {}
-    for (const nt of topo_detail?.node_types ?? []) {
-      const id = bb_id(node_assignment[nt])
+    if (!topo_detail) return out
+    topo_detail.node_types.forEach((nt, i) => {
+      const cn = topo_detail!.node_cn[i]
+      const id = bb_id(node_bb_by_cn[cn])
       if (id) out[nt] = id
-    }
+    })
     return out
   }
 
   function collect_edge_bbs(): Record<string, string> {
     const out: Record<string, string> = {}
-    for (const et of topo_detail?.edge_types ?? []) {
-      const key = et.join(`,`)
-      const id = bb_id(edge_assignment[key])
-      if (id) out[key] = id
+    if (!topo_detail) return out
+    const id = bb_id(edge_bb)
+    if (id) {
+      for (const et of topo_detail.edge_types) out[et.join(`,`)] = id
     }
     return out
   }
@@ -198,7 +210,10 @@
   let can_build = $derived(
     mode === `preset`
       ? selected_preset.length > 0
-      : selected_topology.length > 0 && topo_detail != null,
+      : selected_topology.length > 0 &&
+          topo_detail != null &&
+          node_cns.length > 0 &&
+          node_cns.every((cn) => (node_bb_by_cn[cn]?.length ?? 0) > 0),
   )
 </script>
 
@@ -261,13 +276,13 @@
       <fieldset class="bb-fieldset">
         <legend>{t(`structure.reticular_node_bb`)}</legend>
         <p class="hint">Search by element (e.g. "Cu", "Zn") or formula. Only connection-compatible building blocks are shown.</p>
-        {#each topo_detail.node_types as nt, i (nt)}
+        {#each node_cns as cn (cn)}
           <label class="field">
-            <span>node {nt} (cn {topo_detail.node_cn[i]})</span>
+            <span>{cn}-connected node</span>
             <Select
-              options={bb_options_for(topo_detail.node_cn[i])}
+              options={bb_options_for(cn)}
               maxSelect={1}
-              bind:selected={node_assignment[nt]}
+              bind:selected={node_bb_by_cn[cn]}
               bind:searchText={bb_search}
               placeholder={t(`structure.reticular_node_bb`)}
               liOptionStyle="padding: 3pt 6pt;"
@@ -279,15 +294,15 @@
         {/each}
       </fieldset>
 
-      <fieldset class="bb-fieldset">
-        <legend>{t(`structure.reticular_edge_bb`)}</legend>
-        {#each topo_detail.edge_types as et (et.join(`,`))}
+      {#if has_edges}
+        <fieldset class="bb-fieldset">
+          <legend>{t(`structure.reticular_edge_bb`)}</legend>
           <label class="field">
-            <span>edge {et.join(`–`)}</span>
+            <span>2-connected edge</span>
             <Select
               options={bb_options_for(2)}
               maxSelect={1}
-              bind:selected={edge_assignment[et.join(`,`)]}
+              bind:selected={edge_bb}
               bind:searchText={bb_search}
               placeholder={t(`structure.reticular_edge_bb`)}
               liOptionStyle="padding: 3pt 6pt;"
@@ -296,8 +311,8 @@
               style="min-width: 0;"
             />
           </label>
-        {/each}
-      </fieldset>
+        </fieldset>
+      {/if}
     {/if}
   {/if}
 
