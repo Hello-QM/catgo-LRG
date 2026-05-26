@@ -65,3 +65,41 @@ PRESETS: dict[str, dict] = {
         "edge_bbs": {"0,0": "E35"},
     },
 }
+
+
+class ReticularBuildRequest(BaseModel):
+    """Build request. mode='preset' uses `preset`; mode='advanced' uses the rest."""
+
+    mode: Literal["preset", "advanced"] = "preset"
+    preset: Optional[str] = Field(default=None, description="Preset id, e.g. 'mof-5'")
+    topology: Optional[str] = Field(default=None, description="RCSR net name (advanced)")
+    node_bbs: dict[int, str] = Field(
+        default_factory=dict, description="{node_type: bb_id} (advanced)"
+    )
+    edge_bbs: dict[str, str] = Field(
+        default_factory=dict, description="{'i,j': bb_id} edge-type keys (advanced)"
+    )
+
+
+class ReticularBuildResult(BaseModel):
+    structure: PymatgenStructure
+    n_atoms: int = Field(description="Total number of atoms")
+    topology: str
+    formula: str
+    message: str = ""
+
+
+class TopologyInfo(BaseModel):
+    name: str
+
+
+class BuildingBlockInfo(BaseModel):
+    name: str
+    n_connection_points: int
+
+
+class TopologyDetail(BaseModel):
+    name: str
+    node_types: list[int]
+    node_cn: list[int]
+    edge_types: list[list[int]]
