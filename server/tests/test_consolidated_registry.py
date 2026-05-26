@@ -223,3 +223,11 @@ async def test_input_vasp_presets_direct():
         out = await _handle_input(c, {"action": "vasp_presets", "preset_name": "relax"})
     text = out[0].text
     assert "ENCUT" in text and "IBRION" in text
+
+
+def test_stdio_server_serves_menu_b():
+    from catgo.mcp_tools.server_claude_code import TOOLS as MENU_B
+    import catgo.mcp_tools.server as stdio
+    served = {t.name for t in stdio.list_tools_sync()}
+    expected = {t.name for t in MENU_B}
+    assert expected.issubset(served), f"stdio missing: {expected - served}"

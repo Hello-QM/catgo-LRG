@@ -38,7 +38,10 @@ if _server_dir not in sys.path:
     sys.path.insert(0, _server_dir)
 
 from plugin_loader import get_plugin_tool_defs, dispatch_plugin
-from catgo.mcp_tools.tools import TOOLS
+from catgo.mcp_tools.server_claude_code import TOOLS
+# Granular "Menu A" registry kept importable for the declarative/plugin
+# fallback dispatch below (it is no longer the advertised tool set).
+from catgo.mcp_tools.tools import TOOLS as _GRANULAR_TOOLS
 
 # Import helpers and sub-modules
 from catgo.mcp_tools.helpers import API_BASE, _strip_structure_from_schema, _summarize_structure_result
@@ -66,16 +69,17 @@ logger = logging.getLogger(__name__)
 server = Server("catgo")
 
 
+def list_tools_sync():
+    """Tool list the stdio server advertises (consolidated Menu B + plugins)."""
+    from catgo.mcp_tools.server_claude_code import TOOLS as _B
+    return list(_B)
+
+
 @server.list_tools()
 async def handle_list_tools() -> list[Tool]:
-    all_tools = [
-        Tool(
-            name=t["name"],
-            description=t["description"],
-            inputSchema=_strip_structure_from_schema(t["inputSchema"]),
-        )
-        for t in TOOLS
-    ]
+    # Serve the consolidated "Menu B" tool set so all transports
+    # (stdio / HTTP / SSE) advertise the same mega-tools.
+    all_tools = list(TOOLS)
 
     # Hot-reload user plugins from ~/.catgo/plugins/
     for pdef in get_plugin_tool_defs():
@@ -503,8 +507,41 @@ async def _handle_direct_tool(tool_name: str, arguments: dict) -> list[TextConte
 async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent]:
     arguments = arguments or {}
 
-    # Find tool definition
-    tool_def = next((t for t in TOOLS if t["name"] == name), None)
+    # --- Consolidated "Menu B" dispatch (handled first) ---------------------
+    # Route the mega-tool names to the shared server_claude_code handlers so
+    # stdio behaves identically to the HTTP/SSE transports. Everything else
+    # falls through to the granular/plugin dispatch below.
+    from catgo.mcp_tools.server_claude_code import (
+        _handle_structure, _handle_fetch, _handle_workflow, _handle_analyze,
+        _handle_view, _handle_catalysis, _handle_system, _handle_workflow_engine,
+        _handle_file, _handle_diagnose, _handle_skills, _handle_heterostructure,
+        _handle_nanotube, _handle_moire, _handle_quickbuild, _handle_md, _handle_input,
+    )
+    # Handlers that take (client, args).
+    _CONSOLIDATED = {
+        "catgo_structure": _handle_structure, "catgo_fetch": _handle_fetch,
+        "catgo_workflow": _handle_workflow, "catgo_analyze": _handle_analyze,
+        "catgo_view": _handle_view, "catgo_catalysis": _handle_catalysis,
+        "catgo_system": _handle_system, "catgo_file": _handle_file,
+        "catgo_heterostructure": _handle_heterostructure, "catgo_nanotube": _handle_nanotube,
+        "catgo_moire": _handle_moire, "catgo_quickbuild": _handle_quickbuild,
+        "catgo_md": _handle_md, "catgo_input": _handle_input,
+    }
+    # Handlers that take (args) only — no httpx client.
+    _CONSOLIDATED_ARGS_ONLY = {
+        "catgo_workflow_engine": _handle_workflow_engine,
+        "catgo_skills": _handle_skills,
+        "catgo_diagnose": _handle_diagnose,
+    }
+    if name in _CONSOLIDATED:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            return await _CONSOLIDATED[name](client, arguments or {})
+    if name in _CONSOLIDATED_ARGS_ONLY:
+        return await _CONSOLIDATED_ARGS_ONLY[name](arguments or {})
+
+    # Find tool definition (granular "Menu A" registry, kept for plugin
+    # fallback / declarative dispatch of any non-Menu-B name).
+    tool_def = next((t for t in _GRANULAR_TOOLS if t["name"] == name), None)
     if not tool_def:
         # Try hot-loaded user plugins from ~/.catgo/plugins/
         async with httpx.AsyncClient(timeout=30.0) as client:

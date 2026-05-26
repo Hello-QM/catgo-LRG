@@ -15,4 +15,8 @@ Package structure:
 
 __all__ = ["main", "server"]
 
-from .server import main, server
+# Import the entry point, and bind ``server`` to the SUBMODULE (not the
+# Server instance) so ``import catgo.mcp_tools.server`` resolves to the module
+# and exposes module-level helpers like ``list_tools_sync``.
+from .server import main
+from . import server
