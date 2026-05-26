@@ -159,3 +159,22 @@ def test_router_search_not_installed_503(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         search_mofs_route(MofSearchRequest(name="x"))
     assert ei.value.status_code == 503
+
+
+@pytest.mark.skipif(
+    not os.environ.get("CATGO_LIVE_TESTS"),
+    reason="live MOFX-DB network test; set CATGO_LIVE_TESTS=1 to run",
+)
+def test_live_mofx_roundtrip():
+    """Real MOFX-DB call (skipped unless CATGO_LIVE_TESTS=1).
+
+    Confirms search -> get_structure round-trips by (name, database) against the
+    live API. Verified manually 2026-05-26: CoREMOF 2019 / ABAVIJ_clean -> 108 sites.
+    """
+    from catgo.utils.mofdb_search import get_mof_structure, search_mofs
+
+    res = search_mofs(name=None, database="CoREMOF 2019", limit=3)
+    assert res["count"] >= 1
+    first = res["hits"][0]
+    struct, name = get_mof_structure(first["name"], first["database"])
+    assert struct.num_sites > 0
