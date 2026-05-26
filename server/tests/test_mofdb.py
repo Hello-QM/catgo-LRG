@@ -115,3 +115,47 @@ def test_search_without_client_raises_runtimeerror(monkeypatch):
 
     with pytest.raises(RuntimeError, match="not installed"):
         search_mofs(name="x", database=None, limit=10)
+
+
+def test_router_search_returns_hits(monkeypatch):
+    mofs = [_FakeMof(101, "MOF-5", "CoREMOF 2019", ["Zn", "O", "C"], _CIF)]
+    _install_fake(monkeypatch, mofs)
+    from catgo.models.mofdb import MofSearchRequest
+    from catgo.routers.mofdb import search_mofs_route
+
+    res = search_mofs_route(MofSearchRequest(name="MOF", database="CoREMOF 2019"))
+    assert res.count == 1
+    assert res.hits[0].name == "MOF-5"
+    assert res.hits[0].id == 101
+
+
+def test_router_structure_returns_pymatgen(monkeypatch):
+    mofs = [_FakeMof(202, "MOF-5", "CoREMOF 2019", ["Zn", "O"], _CIF)]
+    _install_fake(monkeypatch, mofs)
+    from catgo.routers.mofdb import get_mof_structure_route
+
+    res = get_mof_structure_route(name="MOF-5", database="CoREMOF 2019")
+    assert len(res.structure.sites) == 2
+    assert res.name == "MOF-5"
+    assert res.database == "CoREMOF 2019"
+
+
+def test_router_structure_unknown_404(monkeypatch):
+    from fastapi import HTTPException
+    _install_fake(monkeypatch, [])
+    from catgo.routers.mofdb import get_mof_structure_route
+
+    with pytest.raises(HTTPException) as ei:
+        get_mof_structure_route(name="nope", database="CoREMOF 2019")
+    assert ei.value.status_code == 404
+
+
+def test_router_search_not_installed_503(monkeypatch):
+    from fastapi import HTTPException
+    monkeypatch.setitem(sys.modules, "mofdb_client", None)
+    from catgo.models.mofdb import MofSearchRequest
+    from catgo.routers.mofdb import search_mofs_route
+
+    with pytest.raises(HTTPException) as ei:
+        search_mofs_route(MofSearchRequest(name="x"))
+    assert ei.value.status_code == 503

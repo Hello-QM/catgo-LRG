@@ -32,6 +32,7 @@ _ROUTERS: dict[str, str] = {
     "nanotube_router": "nanotube",
     "heterostructure_router": "heterostructure",
     "reticular_router": "reticular",
+    "mofdb_router": "mofdb",
     "md_distances_router": "md_distances",
     "md_angles_router": "md_angles",
     "md_rmsd_router": "md_rmsd",

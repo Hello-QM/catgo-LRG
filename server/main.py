@@ -71,6 +71,7 @@ from catgo.routers import (
     moire_router,
     nanotube_router,
     reticular_router,
+    mofdb_router,
     dos_router,
     cohp_router,
     bands_router,
@@ -390,6 +391,7 @@ app.include_router(water_layer_router, prefix="/api")
 app.include_router(moire_router, prefix="/api")
 app.include_router(nanotube_router, prefix="/api")
 app.include_router(reticular_router, prefix="/api")
+app.include_router(mofdb_router, prefix="/api")
 app.include_router(dos_router, prefix="/api")
 app.include_router(cohp_router, prefix="/api")
 app.include_router(bands_router, prefix="/api")
