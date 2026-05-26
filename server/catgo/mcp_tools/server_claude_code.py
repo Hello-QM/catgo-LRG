@@ -49,6 +49,23 @@ server = Server("catgo-claude-code")
 # Tool Definitions (8 consolidated tools)
 # ---------------------------------------------------------------------------
 
+# MD trajectory-analysis action → backend endpoint. Defined here (above TOOLS)
+# because the catgo_md schema enumerates these keys; _handle_md uses it too.
+_MD_ROUTES = {
+    "rdf":               "/md/distances/rdf",
+    "msd":               "/md/dynamics/msd",
+    "rmsd":              "/md/rmsd/rmsd",
+    "rmsf":              "/md/rmsd/rmsf",
+    "clustering":        "/md/clustering/rmsd-cluster",
+    "dimreduce":         "/md/clustering/dimreduce",
+    "hbonds":            "/md/hbonds/detect",
+    "hbond_lifetime":    "/md/hbonds/lifetime",
+    "water_orientation": "/md/orientation/water",
+    "dihedrals":         "/md/angles/dihedrals",
+    "planar_density":    "/md/density/planar",
+    "cavitation":        "/md/cavitation/profile",
+}
+
 TOOLS = [
     Tool(
         name="catgo_structure",
@@ -943,6 +960,38 @@ TOOLS = [
                 },
             },
             "required": [],
+        },
+    ),
+    Tool(
+        name="catgo_md",
+        description=(
+            "Analyze a MOLECULAR DYNAMICS TRAJECTORY (RDF, MSD/diffusion, RMSD/RMSF, "
+            "clustering, H-bonds, water orientation, dihedrals, planar density, "
+            "interfacial cavitation). Pass the trajectory as base64 in `trajectory_b64` "
+            "with its `format` (extxyz/xyz/h5/traj/pdb/xtc/...). Returns JSON arrays. "
+            "DO NOT hand-roll mdtraj/MDAnalysis — this wraps the canonical analyses."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(_MD_ROUTES.keys()),
+                           "description": "Which trajectory analysis to run."},
+                "trajectory_b64": {"type": "string", "description": "Base64 of the trajectory file."},
+                "format": {"type": "string", "description": "Trajectory format, e.g. extxyz, xyz, h5, traj, pdb, xtc."},
+                "topology_b64": {"type": "string", "description": "Base64 topology (only for binary formats xtc/trr/dcd)."},
+                "selection_1": {"type": "object", "description": "rdf: {indices:[...]} or {element:'O'}"},
+                "selection_2": {"type": "object", "description": "rdf: second selection."},
+                "element": {"type": "string", "description": "msd: element to track."},
+                "atom_indices": {"type": "array", "items": {"type": "integer"}},
+                "atom_quartets": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}},
+                                  "description": "dihedrals: [[i,j,k,l],...]"},
+                "method": {"type": "string", "description": "clustering/dimreduce: dbscan|hierarchical|kmeans / pca|tsne|umap; hbonds: baker_hubbard|wernet_nilsson."},
+                "plane": {"type": "string", "enum": ["xy", "xz", "yz"], "description": "planar_density plane."},
+                "axis": {"type": "string", "description": "water_orientation/cavitation axis."},
+                "timestep_ps": {"type": "number"},
+                "n_bins": {"type": "integer"},
+            },
+            "required": ["action"],
         },
     ),
 ]
@@ -2751,6 +2800,28 @@ async def _handle_moire(client: httpx.AsyncClient, args: dict) -> list[TextConte
 
 
 # ---------------------------------------------------------------------------
+# MD trajectory analysis
+# ---------------------------------------------------------------------------
+
+
+async def _handle_md(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    """MD trajectory analysis. All actions take trajectory_b64 + format (+ extras).
+    Pure analysis — returns JSON; never pushes to the viewer."""
+    T = TextContent
+    action = args.get("action", "")
+    endpoint = _MD_ROUTES.get(action)
+    if endpoint is None:
+        return [T(type="text", text=f"Unknown md action '{action}'. Valid: {', '.join(_MD_ROUTES)}")]
+    if not args.get("trajectory_b64"):
+        return [T(type="text", text=f"md action '{action}' requires `trajectory_b64` (base64 of a trajectory) and `format`.")]
+    payload = {k: v for k, v in args.items() if k != "action"}
+    resp = await client.post(f"{API_BASE}{endpoint}", json=payload)
+    if resp.status_code != 200:
+        return [T(type="text", text=f"md {action} failed ({resp.status_code}): {resp.text[:300]}")]
+    return [T(type="text", text=json.dumps(resp.json(), ensure_ascii=False))]
+
+
+# ---------------------------------------------------------------------------
 # Tool Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -2792,6 +2863,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 return await _handle_nanotube(client, arguments)
             elif name == "catgo_moire":
                 return await _handle_moire(client, arguments)
+            elif name == "catgo_md":
+                return await _handle_md(client, arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:

@@ -50,6 +50,7 @@ from catgo.mcp_tools.server_claude_code import (
     _handle_heterostructure,
     _handle_nanotube,
     _handle_moire,
+    _handle_md,
     _handle_workflow_engine,
     _handle_diagnose,
     _handle_skills,
@@ -234,6 +235,8 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
                 return await _handle_nanotube(client, arguments)
             elif name == "catgo_moire":
                 return await _handle_moire(client, arguments)
+            elif name == "catgo_md":
+                return await _handle_md(client, arguments)
             elif name == "catgo_workflow_engine":
                 return await _handle_workflow_engine(arguments)
             elif name == "catgo_diagnose":
