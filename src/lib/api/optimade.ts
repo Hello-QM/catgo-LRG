@@ -3,6 +3,7 @@
 
 declare const __CATGO_STATIC_ONLY__: boolean
 import { API_BASE as _DEFAULT_API } from './config'
+import { relay_fetch } from '$lib/chat/provider-routing'
 
 // API base URL - same as compute.ts
 let API_BASE = _DEFAULT_API
@@ -100,8 +101,10 @@ async function fetch_json_smart(url: string): Promise<unknown> {
     return await fetch_via_vscode(url)
   }
 
-  // In web context: direct fetch (backend will handle routing)
-  const response = await fetch(url, {
+  // In web context: relay-aware fetch. For backend-proxy URLs (${API_BASE}/...)
+  // and open-CORS OPTIMADE providers this is a direct fetch; for CORS-blocked
+  // providers (Materials Project) it transparently routes through the relay.
+  const response = await relay_fetch(url, {
     headers: { 'Accept': `application/vnd.api+json` },
   })
   if (!response.ok) {
@@ -601,13 +604,13 @@ export async function search_optimade_structures(
       if (response_fields) url += `&response_fields=${encodeURIComponent(response_fields)}`
       if (sort) url += `&sort=${encodeURIComponent(sort)}`
 
-      let response = await fetch(url, {
+      let response = await relay_fetch(url, {
         headers: { 'Accept': `application/vnd.api+json` },
       })
       // If the provider rejects the sort field, retry without it
       if (!response.ok && sort) {
         const fallback_url = url.replace(/&sort=[^&]*/, ``)
-        response = await fetch(fallback_url, {
+        response = await relay_fetch(fallback_url, {
           headers: { 'Accept': `application/vnd.api+json` },
         })
       }
