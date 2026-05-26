@@ -68,6 +68,7 @@
     PluginHubPane,
   } from './index'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
+  import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
   import { send_message, get_chat_slice, chat_position } from '$lib/chat/chat-state.svelte'
   import { build_structure_context } from '$lib/chat/context'
@@ -3025,6 +3026,14 @@
             />
           {:else if build.active_build_tab === 'nanotube'}
             <NanotubePane
+              embedded={true}
+              bind:structure={structure as PymatgenStructure}
+              pane_open={true}
+              on_push_undo={push_to_undo}
+              on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
+            />
+          {:else if build.active_build_tab === 'reticular'}
+            <ReticularPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
               pane_open={true}
