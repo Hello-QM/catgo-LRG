@@ -78,3 +78,32 @@ async def test_structure_passivate_adds_pseudo_h():
     text = out[0].text.lower()
     assert "passivate" in text and "pseudo-h" in text
     assert "failed" not in text and "viewer updated" in text
+
+
+@requires_backend
+@pytest.mark.asyncio
+async def test_analyze_calculators_lists():
+    from catgo.mcp_tools.server_claude_code import _handle_analyze
+    async with httpx.AsyncClient(timeout=30) as c:
+        out = await _handle_analyze(c, {"action": "calculators"})
+    text = out[0].text
+    assert "calculators" in text
+    # guard against the "Unknown analyze action 'calculators'. Valid: ..." echo,
+    # which also contains the word "calculators"
+    assert "unknown analyze action" not in text.lower()
+
+
+@requires_backend
+@pytest.mark.asyncio
+async def test_analyze_energy_returns_number():
+    from catgo.mcp_tools.server_claude_code import _handle_analyze
+    from tests._mcp_fixtures import load_cif_as_dict, TIO2_CIF
+    async with httpx.AsyncClient(timeout=120) as c:
+        out = await _handle_analyze(c, {
+            "action": "energy", "structure": load_cif_as_dict(TIO2_CIF), "model": "mace",
+        })
+    text = out[0].text
+    assert "energy" in text.lower() and "failed" not in text.lower()
+    # guard against the "Unknown analyze action 'energy'. Valid: ..." echo,
+    # which also contains the word "energy"
+    assert "unknown analyze action" not in text.lower()

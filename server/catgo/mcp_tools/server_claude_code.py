@@ -369,7 +369,8 @@ TOOLS = [
         name="catgo_analyze",
         description=(
             "Analyze structures and manage Plugin Hub. "
-            "Analysis: symmetry, DOS, RDF, optimize, DFT input (VASP/QE/LAMMPS), "
+            "Analysis: symmetry, DOS, RDF, optimize, energy (single-point), "
+            "calculators (list available ML/empirical calculators), "
             "adsorption sites, coordination. "
             "Hub: hub_search (find plugins by keyword), hub_install (install a plugin by ID), "
             "hub_list (list installed plugins)."
@@ -381,14 +382,11 @@ TOOLS = [
                     "type": "string",
                     "enum": [
                         "symmetry", "dos", "rdf", "optimize",
-                        "dft_input", "adsorption_sites", "coordination",
+                        "energy", "calculators",
+                        "adsorption_sites", "coordination",
                         "hub_search", "hub_install", "hub_list",
                     ],
                     "description": "Analysis type or hub action",
-                },
-                "software": {
-                    "type": "string", "enum": ["vasp", "qe", "lammps"],
-                    "description": "DFT software for dft_input",
                 },
                 "calc_type": {"type": "string", "description": "Calculation type (relax, static, md)"},
                 "model": {"type": "string", "description": "ML model for optimize (MACE, CHGNet)"},
@@ -1716,7 +1714,8 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
         "dos":              ("POST", "/dos/compute"),
         "rdf":              ("POST", "/analysis/rdf"),
         "optimize":         ("POST", "/optimize/structure"),
-        "dft_input":        ("POST", "/dft-input/generate"),
+        "energy":           ("POST", "/optimize/energy"),
+        "calculators":      ("GET",  "/optimize/calculators"),
         "adsorption_sites": ("GET",  "/adsorption/sites"),
         "coordination":     ("POST", "/analysis/coordination"),
     }
@@ -1730,7 +1729,7 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
     payload = {k: v for k, v in args.items() if k != "action"}
 
     # Normalize optimize params: MCP uses "model", backend uses "calculator"
-    if action == "optimize":
+    if action in ("optimize", "energy"):
         if "model" in payload and "calculator" not in payload:
             payload["calculator"] = payload.pop("model").lower()
 
