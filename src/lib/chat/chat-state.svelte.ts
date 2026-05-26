@@ -603,6 +603,11 @@ export async function send_message(
       ]
 
       let full_text = ``
+      // LoopEvent.tool_end carries no input, but the real tool arguments are
+      // available at tool_start. Stash them by call id so the assistant
+      // tool_use block we replay into history carries real `arguments` for
+      // subsequent turns (not `{}`, which silently drops them).
+      const tool_inputs = new SvelteMap<string, Record<string, unknown>>()
       await run_tool_loop({
         transport: () => stream_client_llm(
           history,
@@ -616,13 +621,27 @@ export async function send_message(
         request_permission: (call) => new Promise<boolean>((resolve) => {
           // Session-scoped bypass: approve immediately, no card.
           if (slice.skip_permission.value) { resolve(true); return }
+          // If the user already aborted (Stop / tab close), don't park a
+          // promise no card will ever settle — resolve false immediately so
+          // the loop emits a skipped tool_end and unwinds to the finally.
+          const signal = slice.abort_controller?.signal
+          if (signal?.aborted) { resolve(false); return }
+          // Resolve false once when the stream is aborted while a card is
+          // pending. Without this the awaited promise never settles → the
+          // loop never finishes → finally never clears loading (wedge).
+          const on_abort = () => resolve(false)
+          signal?.addEventListener(`abort`, on_abort, { once: true })
           slice.active_permission_blocks.entries[call.id] = {
             toolName: call.name,
             input: call.arguments,
             status: `pending`,
             // PermissionCard's approve/deny handler calls this to settle the
-            // promise the loop is awaiting (see PermissionCard.svelte).
-            resolve,
+            // promise the loop is awaiting (see PermissionCard.svelte). It
+            // also detaches the abort listener so abort can't double-settle.
+            resolve: (ok: boolean) => {
+              signal?.removeEventListener(`abort`, on_abort)
+              resolve(ok)
+            },
           }
         }),
         on_event: (e) => {
@@ -632,6 +651,7 @@ export async function send_message(
               update_last_message(slice, full_text)
               break
             case `tool_start`:
+              tool_inputs.set(e.id, e.input)
               slice.active_tool_blocks.entries[e.id] = {
                 toolName: e.name,
                 input: e.input,
@@ -651,7 +671,7 @@ export async function send_message(
               // assistant tool_calls message to be followed by its result).
               history.push({
                 role: `assistant`,
-                content: [{ type: `tool_use`, id: e.id, name: e.name, input: {} }],
+                content: [{ type: `tool_use`, id: e.id, name: e.name, input: tool_inputs.get(e.id) ?? {} }],
                 timestamp: Date.now(),
               })
               history.push({
@@ -787,6 +807,16 @@ export function cancel_generation(tab_id: string = `default`): void {
   // mid-stream — otherwise it would surprise them by firing after Stop.
   slice.pending_send.value = null
   slice.abort_controller?.abort()
+  // Belt-and-suspenders: settle any still-pending client-direct permission
+  // promise. The abort listener in request_permission already does this when
+  // the signal fires, but resolving here too is idempotent (resolve() removes
+  // the listener; a Promise ignores a second settle) and guards teardown paths
+  // that may not route through abort(). SDK entries have no `resolve` and are
+  // left untouched — they settle via the backend round-trip.
+  for (const id in slice.active_permission_blocks.entries) {
+    const pb = slice.active_permission_blocks.entries[id]
+    if (pb && pb.status === `pending` && pb.resolve) pb.resolve(false)
+  }
 }
 
 // ─── Session list — tracks all sessions for the Sessions tab ───
