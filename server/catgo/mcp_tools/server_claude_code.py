@@ -66,6 +66,21 @@ _MD_ROUTES = {
     "cavitation":        "/md/cavitation/profile",
 }
 
+# Input-generation action → (HTTP method, backend endpoint, needs structure).
+# Defined above TOOLS because the catgo_input schema enumerates these keys and
+# _handle_input uses it for dispatch. "vasp_presets" is NOT here — it is a
+# direct in-process call to workflow.presets.vasp.get_preset (no HTTP endpoint).
+_INPUT_ROUTES = {
+    "lammps":            ("POST", "/lammps/input",            True),
+    "lammps_pair_styles":("GET",  "/lammps/pair_styles",      False),
+    "lammps_sequential": ("POST", "/lammps/sequential",       True),
+    "lammps_validate":   ("POST", "/lammps/validate",         True),
+    "qe":                ("POST", "/qe/input",                True),
+    "qe_templates":      ("GET",  "/qe/templates",            False),
+    "vasp":              ("POST", "/vasp/generate",           True),
+    "vasp_calc_types":   ("GET",  "/vasp/calculation-types",  False),
+}
+
 TOOLS = [
     Tool(
         name="catgo_structure",
@@ -990,6 +1005,34 @@ TOOLS = [
                 "axis": {"type": "string", "description": "water_orientation/cavitation axis."},
                 "timestep_ps": {"type": "number"},
                 "n_bins": {"type": "integer"},
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
+        name="catgo_input",
+        description=(
+            "Generate simulation INPUT FILES in ONE call: LAMMPS (input_script + "
+            "data_file), Quantum ESPRESSO (pw.x input), or VASP (INCAR/POSCAR/KPOINTS). "
+            "Also lists pair styles / QE templates / VASP calc-types, validates LAMMPS "
+            "scripts, and returns canonical VASP INCAR presets via `vasp_presets`. "
+            "Pass `structure` (or rely on the one loaded in the viewer). "
+            "DO NOT hand-roll INCAR/pw.in/in.lammps — this wraps the canonical generators."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(_INPUT_ROUTES) + ["vasp_presets"],
+                           "description": "Which input to generate / query."},
+                "structure": {"type": "object", "description": "pymatgen Structure dict; omit to use the viewer's current structure."},
+                "calculation_type": {"type": "string", "description": "VASP (action=vasp): scf|relax|band|dos|..."},
+                "calculation": {"type": "string", "description": "QE (action=qe): scf|relax|vc-relax|bands|..."},
+                "pair_style": {"type": "string", "description": "LAMMPS (action=lammps): pair style, e.g. lj/cut."},
+                "simulation_type": {"type": "string", "description": "LAMMPS (action=lammps): minimize|nvt|npt|..."},
+                "stages": {"type": "array", "items": {"type": "object"},
+                           "description": "LAMMPS (action=lammps_sequential): ordered list of stage specs."},
+                "preset_name": {"type": "string", "enum": ["relax", "static", "slab_relax", "freq", "band", "md"],
+                                "description": "VASP INCAR preset name (action=vasp_presets)."},
             },
             "required": ["action"],
         },
@@ -2822,6 +2865,63 @@ async def _handle_md(client: httpx.AsyncClient, args: dict) -> list[TextContent]
 
 
 # ---------------------------------------------------------------------------
+# Simulation input generation (LAMMPS / QE / VASP)
+# ---------------------------------------------------------------------------
+
+
+async def _handle_input(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    """Generate simulation input files (LAMMPS / QE / VASP). Replaces the dead
+    analyze:dft_input. Returns the generated text; does not touch the viewer."""
+    T = TextContent
+    action = args.get("action", "")
+
+    if action == "vasp_presets":
+        try:
+            # NOTE: this module inserts server/catgo onto sys.path (see top of
+            # file), so a bare `import workflow` resolves to catgo/workflow (the
+            # workflow ENGINE), which has no `presets`. The VASP INCAR presets
+            # live in the top-level server/workflow/presets. Load that file
+            # directly by absolute path to avoid the name collision.
+            import importlib.util
+            _server_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            _vasp_presets_path = os.path.join(_server_root, "workflow", "presets", "vasp.py")
+            _spec = importlib.util.spec_from_file_location("_catgo_vasp_presets", _vasp_presets_path)
+            _mod = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            get_preset = _mod.get_preset
+            preset = get_preset(args.get("preset_name", "relax"))
+            if not preset:
+                return [T(type="text", text=f"Unknown preset '{args.get('preset_name')}'. Valid: relax, static, slab_relax, freq, band, md.")]
+            return [T(type="text", text=json.dumps(preset, indent=2))]
+        except Exception as e:
+            return [T(type="text", text=f"vasp_presets failed: {e}")]
+
+    route = _INPUT_ROUTES.get(action)
+    if route is None:
+        valid = ", ".join(list(_INPUT_ROUTES) + ["vasp_presets"])
+        return [T(type="text", text=f"Unknown input action '{action}'. Valid: {valid}")]
+    method, endpoint, needs_struct = route
+    payload = {k: v for k, v in args.items() if k != "action"}
+    if needs_struct and "structure" not in payload:
+        cur = await _get_current_structure(client)
+        if cur is None:
+            return [T(type="text", text=f"input '{action}' needs `structure` (or one loaded in the viewer).")]
+        payload["structure"] = cur
+    if method == "GET":
+        resp = await client.get(f"{API_BASE}{endpoint}", params=payload or None)
+    else:
+        resp = await client.post(f"{API_BASE}{endpoint}", json=payload)
+    if resp.status_code != 200:
+        return [T(type="text", text=f"input {action} failed ({resp.status_code}): {resp.text[:300]}")]
+    data = resp.json()
+    for key in ("incar", "input_file", "input_script", "combined_input"):
+        if isinstance(data, dict) and data.get(key):
+            blocks = {k: data[k] for k in ("incar", "poscar", "kpoints", "data_file", "input_file", "input_script", "combined_input") if data.get(k)}
+            return [T(type="text", text="\n\n".join(f"=== {k} ===\n{v}" for k, v in blocks.items()))]
+    return [T(type="text", text=json.dumps(data, ensure_ascii=False, indent=2))]
+
+
+# ---------------------------------------------------------------------------
 # Tool Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -2865,6 +2965,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 return await _handle_moire(client, arguments)
             elif name == "catgo_md":
                 return await _handle_md(client, arguments)
+            elif name == "catgo_input":
+                return await _handle_input(client, arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:

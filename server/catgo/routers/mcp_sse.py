@@ -51,6 +51,7 @@ def create_mcp_sse_app() -> Starlette:
         _handle_nanotube,
         _handle_moire,
         _handle_md,
+        _handle_input,
         _handle_workflow_engine,
         _handle_diagnose,
         _handle_skills,
@@ -102,6 +103,8 @@ def create_mcp_sse_app() -> Starlette:
                     return await _handle_moire(client, arguments)
                 elif name == "catgo_md":
                     return await _handle_md(client, arguments)
+                elif name == "catgo_input":
+                    return await _handle_input(client, arguments)
                 elif name == "catgo_workflow_engine":
                     return await _handle_workflow_engine(arguments)
                 elif name == "catgo_diagnose":

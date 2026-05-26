@@ -175,3 +175,51 @@ async def test_md_actions_water(action, extra, keys):
     data = _j.loads(text)
     for k in keys:
         assert k in data, f"{action} result missing {k}"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.1 — catgo_input (LAMMPS / QE / VASP input generation + vasp_presets)
+# ---------------------------------------------------------------------------
+
+
+@requires_backend
+@pytest.mark.asyncio
+async def test_input_vasp_incar_content():
+    from catgo.mcp_tools.server_claude_code import _handle_input
+    from tests._mcp_fixtures import load_cif_as_dict, TIO2_CIF
+    async with httpx.AsyncClient(timeout=60) as c:
+        out = await _handle_input(c, {"action": "vasp", "structure": load_cif_as_dict(TIO2_CIF),
+                                      "calculation_type": "scf"})
+    text = out[0].text
+    assert "ENCUT" in text and "PREC" in text, text[:200]
+
+
+@requires_backend
+@pytest.mark.asyncio
+async def test_input_qe_control_namelist():
+    from catgo.mcp_tools.server_claude_code import _handle_input
+    from tests._mcp_fixtures import load_cif_as_dict, TIO2_CIF
+    async with httpx.AsyncClient(timeout=60) as c:
+        out = await _handle_input(c, {"action": "qe", "structure": load_cif_as_dict(TIO2_CIF),
+                                      "calculation": "scf"})
+    assert "&control" in out[0].text.lower()
+
+
+@requires_backend
+@pytest.mark.asyncio
+async def test_input_lammps_pair_style():
+    from catgo.mcp_tools.server_claude_code import _handle_input
+    from tests._mcp_fixtures import load_cif_as_dict, TIO2_CIF
+    async with httpx.AsyncClient(timeout=60) as c:
+        out = await _handle_input(c, {"action": "lammps", "structure": load_cif_as_dict(TIO2_CIF)})
+    assert "pair_style" in out[0].text
+
+
+@requires_backend
+@pytest.mark.asyncio
+async def test_input_vasp_presets_direct():
+    from catgo.mcp_tools.server_claude_code import _handle_input
+    async with httpx.AsyncClient(timeout=30) as c:
+        out = await _handle_input(c, {"action": "vasp_presets", "preset_name": "relax"})
+    text = out[0].text
+    assert "ENCUT" in text and "IBRION" in text
