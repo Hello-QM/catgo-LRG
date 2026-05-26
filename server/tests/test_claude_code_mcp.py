@@ -23,11 +23,19 @@ def _get_tools():
 
 
 class TestClaudeCodeToolDefinitions:
-    """Validate the 11 consolidated tools."""
+    """Validate the 17 consolidated tools."""
+
+    # Tools that legitimately do NOT use an `action` enum:
+    #   catgo_diagnose -> keyed on task_id
+    #   catgo_quickbuild -> keyed on recipe
+    NO_ACTION_TOOLS = {"catgo_diagnose", "catgo_quickbuild"}
 
     def test_tool_count(self):
         tools = _get_tools()
-        assert len(tools) == 11, f"Expected 11 tools, got {len(tools)}"
+        # No brittle hardcoded number: every tool name must be unique, and the
+        # consolidated registry has grown to at least the current 17 tools.
+        assert len(tools) == len({t.name for t in tools}), "duplicate tool names"
+        assert len(tools) >= 17, f"Expected >=17 tools, got {len(tools)}"
 
     def test_tool_names(self):
         tools = _get_tools()
@@ -35,26 +43,37 @@ class TestClaudeCodeToolDefinitions:
         expected = {
             "catgo_structure", "catgo_fetch", "catgo_workflow", "catgo_analyze",
             "catgo_view", "catgo_catalysis", "catgo_system", "catgo_workflow_engine",
-            "catgo_file", "catgo_diagnose", "catgo_skills",
+            "catgo_file", "catgo_diagnose", "catgo_quickbuild", "catgo_skills",
+            "catgo_heterostructure", "catgo_nanotube", "catgo_moire",
+            "catgo_md", "catgo_input",
         }
         assert names == expected, f"Tool names mismatch: {names}"
 
     def test_all_tools_have_action_enum(self):
         tools = _get_tools()
-        # catgo_diagnose uses task_id instead of action
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
+        tools_with_action = [t for t in tools if t.name not in self.NO_ACTION_TOOLS]
         for tool in tools_with_action:
             schema = tool.inputSchema
             assert "action" in schema["properties"], f"{tool.name} missing 'action' property"
             assert "enum" in schema["properties"]["action"], f"{tool.name} action missing enum"
 
     def test_all_tools_require_action(self):
+        """Every action-driven tool must either REQUIRE `action` or supply a
+        default for it.
+
+        The one-shot builder mega-tools (catgo_heterostructure/nanotube/moire)
+        deliberately make `action` optional with default="build" so a bare call
+        does the common thing; they require their domain inputs (film / n,m)
+        instead. That is still a well-defined action contract.
+        """
         tools = _get_tools()
-        # catgo_diagnose requires task_id, not action
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
+        tools_with_action = [t for t in tools if t.name not in self.NO_ACTION_TOOLS]
         for tool in tools_with_action:
-            assert "action" in tool.inputSchema.get("required", []), (
-                f"{tool.name} does not require 'action'"
+            schema = tool.inputSchema
+            action_required = "action" in schema.get("required", [])
+            action_has_default = "default" in schema["properties"].get("action", {})
+            assert action_required or action_has_default, (
+                f"{tool.name} neither requires 'action' nor gives it a default"
             )
 
     def test_diagnose_requires_task_id(self):
@@ -63,19 +82,20 @@ class TestClaudeCodeToolDefinitions:
         assert "task_id" in diagnose_tool.inputSchema.get("required", [])
 
     def test_descriptions_are_concise(self):
-        """Descriptions should be under 300 chars for token efficiency.
+        """Every tool must have a non-empty description that isn't absurdly long.
 
-        catgo_workflow has a long description with building guide, which is expected.
+        The consolidated mega-tools (catgo_workflow embeds a full building guide,
+        catgo_structure/heterostructure/moire/nanotube/quickbuild ship usage
+        recipes) legitimately run into the thousands of chars, so the old 300-char
+        cap no longer reflects intent. Assert presence + a sane upper bound.
         """
         tools = _get_tools()
-        # Workflow, workflow_engine, and skills have intentionally long descriptions
-        exempt = {"catgo_workflow", "catgo_workflow_engine", "catgo_skills",
-                  "catgo_structure", "catgo_catalysis"}
         for tool in tools:
-            if tool.name in exempt:
-                continue
-            assert len(tool.description) < 300, (
-                f"{tool.name} description is {len(tool.description)} chars (max 300)"
+            assert tool.description and tool.description.strip(), (
+                f"{tool.name} has an empty description"
+            )
+            assert len(tool.description) < 8000, (
+                f"{tool.name} description is {len(tool.description)} chars (absurdly long)"
             )
 
     def test_structure_actions_complete(self):
@@ -83,9 +103,10 @@ class TestClaudeCodeToolDefinitions:
         struct_tool = next(t for t in tools if t.name == "catgo_structure")
         actions = struct_tool.inputSchema["properties"]["action"]["enum"]
         expected = [
-            "get", "add_atom", "add_atoms", "delete", "replace",
+            "get", "export", "add_atom", "add_atoms", "delete", "replace",
             "move", "supercell", "set_lattice", "slab", "doping",
-            "merge", "add_molecule", "load_file",
+            "merge", "add_molecule", "add_cluster", "load_file",
+            "defect", "strain", "passivate", "water_layer",
         ]
         assert actions == expected
 
@@ -107,8 +128,8 @@ class TestClaudeCodeToolDefinitions:
         workflow_tool = next(t for t in tools if t.name == "catgo_workflow")
         actions = workflow_tool.inputSchema["properties"]["action"]["enum"]
         expected = {
-            "list", "templates", "node_types", "node_details", "create", "get",
-            "add_node", "remove_node", "connect", "set_params", "batch",
+            "list", "templates", "node_types", "node_details", "create", "rename",
+            "get", "add_node", "remove_node", "connect", "set_params", "batch",
             "run", "pause", "resume", "validate", "status", "step_error",
             "retry", "batch_status", "batch_results", "list_presets",
         }
@@ -119,9 +140,10 @@ class TestClaudeCodeToolDefinitions:
         tools = _get_tools()
         analyze_tool = next(t for t in tools if t.name == "catgo_analyze")
         actions = analyze_tool.inputSchema["properties"]["action"]["enum"]
+        # dft_input dropped; energy/calculators added during consolidation.
         expected = {
-            "symmetry", "dos", "rdf", "optimize",
-            "dft_input", "adsorption_sites", "coordination",
+            "symmetry", "dos", "rdf", "optimize", "energy", "calculators",
+            "adsorption_sites", "coordination",
             "hub_search", "hub_install", "hub_list",
         }
         assert set(actions) == expected
@@ -201,6 +223,11 @@ class TestClaudeCodeToolDefinitions:
             "dopant", "host_element", "concentration", "enumerate",
             "structure", "query", "count", "spacing",
             "file_content", "file_format",
+            # added during consolidation (export / clusters / defect / strain /
+            # passivate / water_layer building actions)
+            "axis", "offset", "size", "cluster_type", "substitute_element",
+            "defect_type", "site_index", "supercell",
+            "strain_type", "magnitude", "n_steps", "params", "bulk", "slab",
         }
         assert set(props.keys()) == expected_params, (
             f"Structure params mismatch. Got: {set(props.keys())}"
@@ -237,8 +264,9 @@ class TestClaudeCodeToolDefinitions:
         analyze_tool = next(t for t in tools if t.name == "catgo_analyze")
         props = analyze_tool.inputSchema["properties"]
 
+        # `software` dropped with the dft_input action during consolidation.
         expected_params = {
-            "action", "software", "calc_type", "model", "fmax",
+            "action", "calc_type", "model", "fmax",
             "params", "query", "plugin_id",
         }
         assert set(props.keys()) == expected_params, (
@@ -267,8 +295,7 @@ class TestClaudeCodeToolDefinitions:
     def test_action_properties_have_descriptions(self):
         """All action enums should have descriptions."""
         tools = _get_tools()
-        # catgo_diagnose uses task_id instead of action
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
+        tools_with_action = [t for t in tools if t.name not in self.NO_ACTION_TOOLS]
         for tool in tools_with_action:
             action_prop = tool.inputSchema["properties"].get("action", {})
             assert "description" in action_prop, (
@@ -316,8 +343,7 @@ class TestClaudeCodeToolDefinitions:
     def test_no_duplicate_actions_in_any_tool(self):
         """Each tool should have unique action values (no duplicates in enum)."""
         tools = _get_tools()
-        # catgo_diagnose has no action enum
-        tools_with_action = [t for t in tools if t.name != "catgo_diagnose"]
+        tools_with_action = [t for t in tools if t.name not in self.NO_ACTION_TOOLS]
         for tool in tools_with_action:
             actions = tool.inputSchema["properties"]["action"]["enum"]
             assert len(actions) == len(set(actions)), (

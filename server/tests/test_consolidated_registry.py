@@ -231,3 +231,76 @@ def test_stdio_server_serves_menu_b():
     served = {t.name for t in stdio.list_tools_sync()}
     expected = {t.name for t in MENU_B}
     assert expected.issubset(served), f"stdio missing: {expected - served}"
+
+
+# ---------------------------------------------------------------------------
+# Task 6.1 — schema + parity drift-guard tests (pure introspection, no backend)
+# ---------------------------------------------------------------------------
+
+
+def test_new_tools_present():
+    from catgo.mcp_tools.server_claude_code import TOOLS
+    names = {t.name for t in TOOLS}
+    assert {"catgo_md", "catgo_input"}.issubset(names)
+
+
+def test_new_actions_in_enums():
+    from catgo.mcp_tools.server_claude_code import TOOLS
+    by = {t.name: t for t in TOOLS}
+    s = by["catgo_structure"].inputSchema["properties"]["action"]["enum"]
+    assert {"defect", "strain", "water_layer"}.issubset(set(s))
+    a = by["catgo_analyze"].inputSchema["properties"]["action"]["enum"]
+    assert {"energy", "calculators"}.issubset(set(a))
+    assert "dft_input" not in a   # dead action removed
+
+
+def test_drift_guard_every_menu_a_endpoint_folded_or_excluded():
+    """Every backend endpoint reachable via the granular Menu A registry must be
+    EITHER reachable via a consolidated Menu B (tool, action) OR on the explicit
+    EXCLUDED list with a documented reason. A future new Menu A endpoint with
+    neither a fold nor an exclusion entry FAILS this test (drift guard).
+    """
+    from catgo.mcp_tools.tools import TOOLS as MENU_A
+    from catgo.mcp_tools.server_claude_code import _MD_ROUTES, _INPUT_ROUTES
+    menu_a_endpoints = {t.get("endpoint") for t in MENU_A if isinstance(t.get("endpoint"), str)}
+
+    # Endpoints deliberately NOT folded into a Menu B mega-tool, each with a reason.
+    EXCLUDED = {
+        # bands/cohp/dos-from-file analysis: session-based, require completed-calc
+        # output directories as fixtures that the consolidated suite does not ship.
+        "/bands/data", "/bands/from-directory", "/bands/projections",
+        "/cohp/data", "/dos/total", "/dos/dband", "/dos/from-directory",
+        # kmc: depends on the optional `mykmc` package which is absent in this env.
+        "kmc/scan-potential", "kmc/simulate",
+    }
+
+    # Endpoints reachable via a Menu B mega-tool action.
+    folded = set(_MD_ROUTES.values()) | {ep for _, ep, _ in _INPUT_ROUTES.values()}
+    folded |= {"/build/defect", "/build/strain", "/pseudo-hydrogen/passivate",
+               "/water-layer/add", "/optimize/energy", "/optimize/calculators"}
+
+    # Endpoint families covered by Menu B mega-tools (catgo_structure ops,
+    # catgo_heterostructure/moire/nanotube, catgo_view, catgo_input qe/vasp/lammps,
+    # catgo_analyze dos/optimize/symmetry/analysis/adsorption, catgo_system chat,
+    # catgo_fetch).
+    COVERED_PREFIXES = ("/structure-ops", "/heterostructure", "/moire", "/nanotube",
+                        "/view", "/qe", "/vasp", "/lammps", "/dos", "/optimize",
+                        "/symmetry", "/analysis", "/adsorption", "/chat", "/fetch")
+
+    unaccounted = []
+    for ep in menu_a_endpoints:
+        # __direct__/__special__ are pseudo-endpoints handled inline by the Menu B
+        # mega-tools (catalysis/fetch/workflow/set-lattice/vasp_presets), not HTTP routes.
+        if ep.startswith("__direct__") or ep.startswith("__special__"):
+            continue
+        norm = ep if ep.startswith("/") else "/" + ep
+        # EXCLUDED is checked before COVERED_PREFIXES so /dos/total etc. count as
+        # excluded rather than being silently swallowed by the /dos prefix.
+        if ep in EXCLUDED or norm in EXCLUDED:
+            continue
+        if norm in folded or ep in folded:
+            continue
+        if ep.startswith(COVERED_PREFIXES) or norm.startswith(COVERED_PREFIXES):
+            continue
+        unaccounted.append(ep)
+    assert not unaccounted, f"endpoints neither folded nor excluded: {unaccounted}"
