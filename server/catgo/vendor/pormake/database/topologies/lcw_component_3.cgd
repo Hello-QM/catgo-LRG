@@ -1,0 +1,7 @@
+CRYSTAL
+  NAME lcw_component_3
+  GROUP opm
+  NODE V1 2  0.00000
+  EDGE  0.00000   1.00000
+# EDGE_CENTER  0.50000
+END
