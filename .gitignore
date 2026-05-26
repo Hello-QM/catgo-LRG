@@ -80,3 +80,6 @@ deploy/hpc/bundle/wheels/
 # Git worktrees
 .worktrees/
 .claude/worktrees/
+
+# Vendored PORMAKE runtime topology caches (regenerated from .cgd on first use)
+server/catgo/vendor/pormake/database/**/*.pickle
