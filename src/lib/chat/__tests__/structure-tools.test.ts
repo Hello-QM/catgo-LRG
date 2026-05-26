@@ -117,3 +117,26 @@ describe(`mutating tools`, () => {
     expect(added.xyz[2]).toBeCloseTo(2.8)
   })
 })
+
+describe(`more read tools`, () => {
+  beforeEach(() => set_current_structure(CUBIC_NACL as never))
+
+  it(`get_distance returns a positive distance (executor wiring)`, async () => {
+    expect(tool_kind(`get_distance`)).toBe(`read`)
+    // get_distance hits real ferrox-wasm (Rust→WASM), which cannot initialize
+    // in vitest/node. Mock the wrapper so the test exercises executor wiring.
+    const spy = vi.spyOn(ferrox, `get_distance`).mockResolvedValue({ ok: 4.85 })
+    const out = JSON.parse(await execute_tool(`get_distance`, { i: 0, j: 1 }))
+    expect(out.distance).toBeGreaterThan(0)
+    expect(out.distance).toBe(4.85)
+    spy.mockRestore()
+  })
+
+  it(`get_spacegroup is a read tool`, () => {
+    expect(tool_kind(`get_spacegroup`)).toBe(`read`)
+  })
+
+  it(`compute_xrd is a read tool`, () => {
+    expect(tool_kind(`compute_xrd`)).toBe(`read`)
+  })
+})

@@ -2,7 +2,12 @@ import type { AnyStructure } from '$lib'
 import type { ClientTool, ToolKind } from './types'
 import { get_current_structure, set_current_structure } from '$lib/structure/current-structure.svelte'
 import { relay_fetch } from './provider-routing'
-import { create_supercell } from '$lib/structure/ferrox-wasm'
+import {
+  create_supercell,
+  get_spacegroup as ferrox_spacegroup,
+  get_distance as ferrox_distance,
+  wasm_compute_xrd as ferrox_xrd,
+} from '$lib/structure/ferrox-wasm'
 import { generate_slab as ferrox_generate_slab } from '$lib/structure/miller-slab'
 import { cartesian_to_fractional } from '$lib/structure/lattice-ops'
 
@@ -271,6 +276,66 @@ register(
     next.sites.push(site)
     set_current_structure(next as never)
     return { num_sites: next.sites.length }
+  },
+)
+
+// ── get_spacegroup (read) ──
+register(
+  {
+    name: `get_spacegroup`,
+    description: `Determine the international spacegroup number of the current structure (symmetry analysis).`,
+    kind: `read`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        symprec: { type: `number`, description: `Symmetry precision in Angstroms (default 1e-4).` },
+      },
+    },
+  },
+  async (input) => {
+    const symprec = input.symprec === undefined ? 1e-4 : Number(input.symprec)
+    const res = await ferrox_spacegroup(require_structure() as never, symprec)
+    if (`error` in res) throw new Error(res.error)
+    return { spacegroup_number: res.ok }
+  },
+)
+
+// ── get_distance (read) ──
+register(
+  {
+    name: `get_distance`,
+    description: `Compute the minimum-image distance (Angstroms) between two atoms by site index.`,
+    kind: `read`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        i: { type: `integer`, minimum: 0, description: `First site index (0-based).` },
+        j: { type: `integer`, minimum: 0, description: `Second site index (0-based).` },
+      },
+      required: [`i`, `j`],
+    },
+  },
+  async (input) => {
+    const i = Math.trunc(Number(input.i))
+    const j = Math.trunc(Number(input.j))
+    const res = await ferrox_distance(require_structure() as never, i, j)
+    if (`error` in res) throw new Error(res.error)
+    return { distance: res.ok }
+  },
+)
+
+// ── compute_xrd (read) ──
+register(
+  {
+    name: `compute_xrd`,
+    description: `Compute the simulated powder X-ray diffraction (XRD) pattern of the current structure.`,
+    kind: `read`,
+    input_schema: { type: `object`, properties: {} },
+  },
+  async () => {
+    const res = await ferrox_xrd(require_structure() as never)
+    if (`error` in res) throw new Error(res.error)
+    return res.ok
   },
 )
 
