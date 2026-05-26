@@ -4,6 +4,7 @@ import { get_current_structure, set_current_structure } from '$lib/structure/cur
 import { relay_fetch } from './provider-routing'
 import { create_supercell } from '$lib/structure/ferrox-wasm'
 import { generate_slab as ferrox_generate_slab } from '$lib/structure/miller-slab'
+import { cartesian_to_fractional } from '$lib/structure/lattice-ops'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
 interface MutSite {
@@ -19,7 +20,9 @@ interface MutStructure {
 
 /** Deep-clone the current structure. `structuredClone` cannot handle the
  *  Svelte `$state` proxy the store holds ("could not be cloned"), so we use a
- *  JSON round-trip — safe for plain pymatgen structures (no functions/cycles). */
+ *  JSON round-trip — safe for plain pymatgen structures (no functions/cycles).
+ *  NOTE: requires JSON-safe `properties` (no functions, cycles, or class
+ *  instances); anything not JSON-serializable is silently dropped. */
 function clone_structure(): MutStructure {
   return JSON.parse(JSON.stringify(require_structure())) as MutStructure
 }
@@ -254,7 +257,18 @@ register(
     const element = String(input.element)
     const position = (input.position as number[]).map(Number)
     const next = clone_structure()
-    next.sites.push({ species: [{ element, occu: 1 }], xyz: position, abc: position, label: element })
+    const site: MutSite = { species: [{ element, occu: 1 }], xyz: [...position], label: element }
+    // `abc` must be FRACTIONAL coordinates — downstream consumers (e.g.
+    // lattice-ops) prefer `abc` over `xyz` when present. With a lattice,
+    // convert the Cartesian position to fractional; without one (molecule),
+    // omit `abc` so consumers derive it from `xyz`.
+    if (next.lattice?.matrix) {
+      site.abc = cartesian_to_fractional(
+        position as [number, number, number],
+        next.lattice.matrix as [[number, number, number], [number, number, number], [number, number, number]],
+      )
+    }
+    next.sites.push(site)
     set_current_structure(next as never)
     return { num_sites: next.sites.length }
   },

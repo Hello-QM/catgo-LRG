@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { CLIENT_TOOLS, execute_tool, tool_kind } from '../structure-tools'
-import { set_current_structure } from '$lib/structure/current-structure.svelte'
+import { set_current_structure, get_current_structure } from '$lib/structure/current-structure.svelte'
 import * as routing from '../provider-routing'
 import * as ferrox from '$lib/structure/ferrox-wasm'
 
@@ -102,5 +102,18 @@ describe(`mutating tools`, () => {
 
   it(`place_adsorbate is a mutate tool`, () => {
     expect(tool_kind(`place_adsorbate`)).toBe(`mutate`)
+  })
+
+  it(`place_adsorbate computes fractional abc from cartesian position`, async () => {
+    const out = JSON.parse(await execute_tool(`place_adsorbate`, { element: `H`, position: [2.8, 2.8, 2.8] }))
+    expect(out.num_sites).toBe(3)
+    const added = (get_current_structure() as never as { sites: { abc: number[]; xyz: number[] }[] }).sites[2]
+    // abc must be FRACTIONAL (0.5,0.5,0.5 in a 5.6 Å cubic cell), NOT the raw cartesian.
+    expect(added.abc[0]).toBeCloseTo(0.5)
+    expect(added.abc[1]).toBeCloseTo(0.5)
+    expect(added.abc[2]).toBeCloseTo(0.5)
+    expect(added.xyz[0]).toBeCloseTo(2.8)
+    expect(added.xyz[1]).toBeCloseTo(2.8)
+    expect(added.xyz[2]).toBeCloseTo(2.8)
   })
 })
