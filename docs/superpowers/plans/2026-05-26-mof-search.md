@@ -111,7 +111,11 @@ class MofSearchRequest(BaseModel):
 
 
 class MofHit(BaseModel):
-    mofid: str = Field(description="Identifier used to re-fetch this MOF's structure")
+    # Round-trip key is (name, database) — mofdb_client.fetch() has no `id` kwarg,
+    # `mofid` is None in CoREMOF, and `name` alone is not unique (mirrored across
+    # CoREMOF 2014/2019). `id` is the true unique int key (shown for reference/dedup
+    # but cannot be queried back). Task-0 introspection confirmed this.
+    id: int = 0
     name: str
     database: str = ""
     elements: list[str] = Field(default_factory=list)
@@ -126,8 +130,15 @@ class MofSearchResult(BaseModel):
 class MofStructureResult(BaseModel):
     structure: PymatgenStructure
     name: str
-    mofid: str
+    database: str
 ```
+
+> **Task-0 corrections applied throughout this plan:** the round-trip identifier is
+> **(`name`, `database`)**, NOT `mofid`. The structure endpoint takes `name` +
+> `database` query params. `mofdb_client.fetch()` has a `limit` StopIteration/PEP-479
+> bug (raises `RuntimeError: generator raised StopIteration` when matches < limit) —
+> so the wrapper does NOT pass `limit` to `fetch()`; it iterates and breaks at the cap
+> client-side. `cif` is present on list-response MOF objects (no separate detail call).
 
 - [ ] **Step 2: Verify import**
 
