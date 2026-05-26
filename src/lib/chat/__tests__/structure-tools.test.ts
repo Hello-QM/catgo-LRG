@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { CLIENT_TOOLS, execute_tool, tool_kind } from '../structure-tools'
 import { set_current_structure } from '$lib/structure/current-structure.svelte'
 import * as routing from '../provider-routing'
+import * as ferrox from '$lib/structure/ferrox-wasm'
 
 const CUBIC_NACL = {
   '@module': `pymatgen.core.structure`,
@@ -58,5 +59,48 @@ describe(`fetch_pubchem tool`, () => {
     expect(out.cid).toBe(962)
     expect(out.smiles).toBe(`O`)
     spy.mockRestore()
+  })
+})
+
+describe(`mutating tools`, () => {
+  beforeEach(() => set_current_structure(CUBIC_NACL as never))
+
+  it(`make_supercell is a mutate tool and grows site count`, async () => {
+    // create_supercell calls real ferrox-wasm (Rust→WASM), which cannot
+    // initialize in the vitest/node environment. Mock it to return a 4-site
+    // structure so the test verifies the executor wiring (kind, write-back,
+    // return shape) rather than the WASM math.
+    const four_site = {
+      ...CUBIC_NACL,
+      lattice: { matrix: [[11.2, 0, 0], [0, 5.6, 0], [0, 0, 5.6]] },
+      sites: [
+        { species: [{ element: `Na`, occu: 1 }], abc: [0, 0, 0], xyz: [0, 0, 0], label: `Na` },
+        { species: [{ element: `Na`, occu: 1 }], abc: [0.5, 0, 0], xyz: [5.6, 0, 0], label: `Na` },
+        { species: [{ element: `Cl`, occu: 1 }], abc: [0.25, 0.5, 0.5], xyz: [2.8, 2.8, 2.8], label: `Cl` },
+        { species: [{ element: `Cl`, occu: 1 }], abc: [0.75, 0.5, 0.5], xyz: [8.4, 2.8, 2.8], label: `Cl` },
+      ],
+    }
+    const spy = vi.spyOn(ferrox, `create_supercell`).mockResolvedValue({ ok: four_site as never })
+    expect(tool_kind(`make_supercell`)).toBe(`mutate`)
+    const out = JSON.parse(await execute_tool(`make_supercell`, { nx: 2, ny: 1, nz: 1 }))
+    expect(out.num_sites).toBe(4)
+    spy.mockRestore()
+  })
+
+  it(`substitute_element replaces species and writes structure back`, async () => {
+    expect(tool_kind(`substitute_element`)).toBe(`mutate`)
+    const out = JSON.parse(await execute_tool(`substitute_element`, { from: `Na`, to: `K` }))
+    expect(out.replaced).toBe(1)
+    const info = JSON.parse(await execute_tool(`get_structure_info`, {}))
+    expect(info.elements).toContain(`K`)
+    expect(info.elements).not.toContain(`Na`)
+  })
+
+  it(`generate_slab is a mutate tool`, () => {
+    expect(tool_kind(`generate_slab`)).toBe(`mutate`)
+  })
+
+  it(`place_adsorbate is a mutate tool`, () => {
+    expect(tool_kind(`place_adsorbate`)).toBe(`mutate`)
   })
 })
