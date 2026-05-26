@@ -680,10 +680,17 @@ TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["build", "search", "build_match"],
+                    "enum": ["build", "search", "build_match",
+                             "search_lateral", "build_lateral"],
                     "default": "build",
-                    "description": "build = one-shot (intermat); search = enumerate matches; "
-                                   "build_match = build from prior search.match_id.",
+                    "description": "build = one-shot vertical stack (intermat); "
+                                   "search = enumerate vertical ZSL matches; "
+                                   "build_match = build from prior search.match_id. "
+                                   "search_lateral = enumerate 1D edge matches for a "
+                                   "LATERAL (side-by-side, in-plane) heterojunction; "
+                                   "build_lateral = build the lateral junction. "
+                                   "Lateral takes two pre-cut SLABS (substrate/slab_A "
+                                   "+ film/slab_B), not bulk + miller.",
                 },
                 "substrate": {
                     "type": "object",
@@ -748,10 +755,59 @@ TOOLS = [
                 },
                 "match_id": {
                     "type": "integer",
-                    "description": "Match id from a prior `search` call (only for build_match action).",
+                    "description": "Match id from a prior `search`/`search_lateral` call "
+                                   "(build_match / build_lateral). For build_lateral, "
+                                   "omit to auto-pick the lowest-strain / smallest match.",
+                },
+                "slab_A": {
+                    "type": "object",
+                    "description": "LATERAL only — first pre-cut slab (alias of `substrate`). "
+                                   "Pass a full Structure dict, or omit to use the current "
+                                   "viewer slab. mp_id is NOT appropriate here (lateral needs "
+                                   "a slab, not a bulk).",
+                },
+                "slab_B": {
+                    "type": "object",
+                    "description": "LATERAL only — second pre-cut slab (alias of `film`).",
+                },
+                "interface_axis": {
+                    "type": "integer",
+                    "enum": [0, 1],
+                    "default": 0,
+                    "description": "LATERAL only — which in-plane edge to match: 0 = a-vector, "
+                                   "1 = b-vector. The other axis is filled by width repetition.",
+                },
+                "lateral_max_length": {
+                    "type": "number",
+                    "default": 100.0,
+                    "description": "LATERAL only — max matched edge length (Å) when searching.",
+                },
+                "lateral_max_strain": {
+                    "type": "number",
+                    "default": 5.0,
+                    "description": "LATERAL only — max 1D edge strain tolerance in PERCENT "
+                                   "(e.g. 5.0 = 5%). Distinct from `max_strain` (a 0-1 ratio "
+                                   "used by the vertical ZSL search).",
+                },
+                "width_A": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "LATERAL only — repetitions of slab A perpendicular to the "
+                                   "interface.",
+                },
+                "width_B": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "LATERAL only — repetitions of slab B perpendicular to the "
+                                   "interface.",
+                },
+                "buffer": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "LATERAL only — gap (Å) inserted at the side-by-side seam.",
                 },
             },
-            "required": ["film"],
+            "required": [],
         },
     ),
     Tool(
@@ -2330,6 +2386,140 @@ async def _resolve_hetero_material(
     return f"`{role}` shape unrecognized; need full Structure dict or {{mp_id:'mp-N'}}. Got keys: {list(material.keys())[:5]}"
 
 
+async def _handle_lateral_heterostructure(
+    client: httpx.AsyncClient, args: dict,
+) -> list[TextContent]:
+    """Search / build a LATERAL (in-plane, side-by-side) heterojunction.
+
+    Routes:
+      - search_lateral → /heterostructure/search-lateral  (1D edge matches)
+      - build_lateral  → /heterostructure/build-lateral   (join two slabs)
+
+    Inputs are two PRE-CUT slabs, accepted under `slab_A`/`slab_B` (preferred)
+    or the `substrate`/`film` aliases shared with the vertical path. `slab_A`
+    falls back to the current viewer structure when omitted. mp_id is NOT a
+    sensible input here (lateral needs a slab, not a bulk) — _resolve_hetero_material
+    still accepts it, but we don't conventional-cell-standardize.
+
+    build_lateral mirrors build_match: it re-runs search-lateral internally to
+    recover the full LateralMatch dict (the backend's /build-lateral body needs
+    n1/n2/edge lengths the LLM can't supply), picking the requested match_id or
+    the best (lowest-strain) candidate when none is given.
+    """
+    T = TextContent
+    action = (args.get("action") or "").lower()
+
+    slab_A_arg = args.get("slab_A", args.get("substrate"))
+    slab_B_arg = args.get("slab_B", args.get("film"))
+    slab_A = await _resolve_hetero_material(client, slab_A_arg, role="substrate")
+    if isinstance(slab_A, str):
+        return [T(type="text", text=slab_A)]
+    slab_B = await _resolve_hetero_material(client, slab_B_arg, role="film")
+    if isinstance(slab_B, str):
+        return [T(type="text", text=slab_B)]
+
+    # Clamp to the backend's accepted ranges (LateralSearchParams /
+    # LateralBuildParams Field bounds). The LLM frequently passes values just
+    # outside these (e.g. max_strain=0.01 for "as tight as possible"); without
+    # clamping the backend 422s with a raw pydantic error that the model can't
+    # act on. Clamping turns it into a sensible run instead.
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, v))
+
+    search_params = {
+        "interface_axis": 1 if int(args.get("interface_axis", 0)) >= 1 else 0,
+        "max_length": _clamp(float(args.get("lateral_max_length", 100.0)), 5.0, 500.0),
+        "max_strain": _clamp(float(args.get("lateral_max_strain", 5.0)), 0.1, 20.0),
+        "max_results": int(_clamp(int(args.get("max_results", 50)), 1, 200)),
+    }
+
+    # Always run the edge-match search first (both actions need it).
+    sresp = await client.post(
+        f"{API_BASE}/heterostructure/search-lateral",
+        json={"slab_A": slab_A, "slab_B": slab_B, "params": search_params},
+    )
+    if sresp.status_code != 200:
+        return [T(type="text", text=(
+            f"Lateral search failed ({sresp.status_code}): {sresp.text[:400]}"
+        ))]
+    matches = sresp.json().get("matches") or []
+
+    if action == "search_lateral":
+        if not matches:
+            return [T(type="text", text=(
+                "No lateral edge matches found. Try a larger lateral_max_length "
+                "or lateral_max_strain, or the other interface_axis."
+            ))]
+        lines = [f"Found {len(matches)} lateral edge matches "
+                 f"(axis={search_params['interface_axis']}, lower strain = better):"]
+        for m in matches[:10]:
+            lines.append(
+                f"  match_id={m.get('match_id')}: n1={m.get('n1')} n2={m.get('n2')}, "
+                f"edge≈{m.get('edge_length_A')} Å, strain={m.get('strain_percent')}%, "
+                f"atoms={m.get('n_atoms_A', 0) + m.get('n_atoms_B', 0)}"
+            )
+        lines.append("\nCall action=build_lateral with match_id to construct the junction.")
+        return [T(type="text", text="\n".join(lines))]
+
+    # action == build_lateral
+    if not matches:
+        return [T(type="text", text=(
+            "Cannot build lateral junction — no edge matches at the current "
+            "tolerances. Loosen lateral_max_strain / lateral_max_length first."
+        ))]
+
+    match_id = args.get("match_id")
+    if match_id is None:
+        # matches are already sorted by (total atoms, strain) — first is best.
+        target = matches[0]
+    else:
+        target = next((m for m in matches if m.get("match_id") == int(match_id)), None)
+        if target is None:
+            ids = [m.get("match_id") for m in matches]
+            return [T(type="text", text=(
+                f"match_id={match_id} not in lateral search results. Available: {ids[:20]}"
+            ))]
+
+    build_params = {
+        "width_A": int(_clamp(int(args.get("width_A", 1)), 1, 10)),
+        "width_B": int(_clamp(int(args.get("width_B", 1)), 1, 10)),
+        "buffer": _clamp(float(args.get("buffer", 0.0)), 0.0, 10.0),
+        "vacuum": _clamp(float(args.get("vacuum", 20.0)), 0.0, 60.0),
+    }
+    resp = await client.post(
+        f"{API_BASE}/heterostructure/build-lateral",
+        json={
+            "slab_A": slab_A,
+            "slab_B": slab_B,
+            "match": target,
+            "params": build_params,
+            "search_params": search_params,
+        },
+    )
+    if resp.status_code != 200:
+        return [T(type="text", text=(
+            f"Lateral build failed ({resp.status_code}): {resp.text[:400]}"
+        ))]
+    data = resp.json()
+    new_struct = data.get("structure")
+    if not new_struct:
+        return [T(type="text", text=(
+            f"Lateral build returned no structure. Response: {json.dumps(data)[:400]}"
+        ))]
+
+    push_err = await _push_structure(client, new_struct)
+    strain = data.get("strain")
+    strain_str = f", strain={strain:.2f}%" if isinstance(strain, (int, float)) else ""
+    msg = (
+        f"Lateral heterojunction built: {data.get('n_atoms', '?')} atoms "
+        f"({data.get('n_atoms_A', '?')} A + {data.get('n_atoms_B', '?')} B), "
+        f"interface={data.get('interface_length', 0):.2f} Å{strain_str}. Viewer updated."
+    )
+    if push_err:
+        msg += f"\n⚠️ Viewer push failed: {push_err}"
+    return [T(type="text", text=msg)]
+
+
 async def _handle_heterostructure(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
     """Build / search heterostructures between two crystal structures.
 
@@ -2351,6 +2541,14 @@ async def _handle_heterostructure(client: httpx.AsyncClient, args: dict) -> list
     """
     T = TextContent
     action = (args.get("action") or "build").lower()
+
+    # Lateral (in-plane, side-by-side) heterojunction is a distinct code path:
+    # it joins two PRE-CUT slabs along one in-plane edge via 1D edge matching,
+    # rather than cutting slabs from bulk + miller and ZSL-stacking them. It
+    # takes slab_A/slab_B (aliased to substrate/film) and lateral-specific
+    # params, so handle and return before the bulk param assembly below.
+    if action in ("search_lateral", "build_lateral"):
+        return await _handle_lateral_heterostructure(client, args)
 
     substrate = args.get("substrate")
     film = args.get("film")

@@ -268,4 +268,96 @@ TOOLS: list[dict] = [
             "required": ["substrate", "film"],
         },
     },
+
+    # ─── Lateral (in-plane) heterojunction ───
+    {
+        "name": "catgo_hetero_search_lateral",
+        "description": (
+            "Find 1D edge-matched supercell pairs for a LATERAL (in-plane, "
+            "side-by-side) heterojunction between two pre-cut slabs. "
+            "\n\n"
+            "USE THIS WHEN the user wants two 2D materials joined SIDE BY SIDE "
+            "in the same plane (横向异质结 / in-plane / lateral junction / "
+            "graphene–hBN lateral / MoS2–WSe2 in-plane stitch), as opposed to "
+            "VERTICALLY stacked (use catgo_hetero_search/_build_intermat for "
+            "stacking). Lateral matches only ONE edge direction; the other "
+            "in-plane axis is filled by width repetition. "
+            "\n\n"
+            "Inputs are two SLABS already cut (vacuum along c), not bulk "
+            "crystals + Miller indices. Returns matches sorted by (atoms, "
+            "strain); pick a match_id then call catgo_hetero_build_lateral."
+        ),
+        "endpoint": "/heterostructure/search-lateral",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slab_A": {"type": "object", "description": "First slab Structure dict"},
+                "slab_B": {"type": "object", "description": "Second slab Structure dict"},
+                "params": {
+                    "type": "object",
+                    "properties": {
+                        "interface_axis": {"type": "integer", "enum": [0, 1], "default": 0,
+                                            "description": "0 = match a-vector, 1 = match b-vector"},
+                        "max_length": {"type": "number", "default": 100.0,
+                                       "description": "Max matched edge length (Å)"},
+                        "max_strain": {"type": "number", "default": 5.0,
+                                       "description": "Max 1D strain tolerance (percent)"},
+                        "max_results": {"type": "integer", "default": 50},
+                    },
+                },
+            },
+            "required": ["slab_A", "slab_B"],
+        },
+    },
+    {
+        "name": "catgo_hetero_build_lateral",
+        "description": (
+            "Build the 3D atoms of a LATERAL (in-plane, side-by-side) "
+            "heterojunction from a match returned by catgo_hetero_search_lateral. "
+            "\n\n"
+            "USE THIS AFTER catgo_hetero_search_lateral once you've picked a "
+            "match_id. Joins the two slabs along the chosen in-plane edge, "
+            "strain-matching slab B's edge to slab A, with optional width "
+            "repetition perpendicular to the seam, a seam buffer gap, and "
+            "vacuum above/below the plane. Returns the assembled slab."
+        ),
+        "endpoint": "/heterostructure/build-lateral",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "slab_A": {"type": "object"},
+                "slab_B": {"type": "object"},
+                "match": {
+                    "type": "object",
+                    "properties": {"match_id": {"type": "integer"}},
+                    "required": ["match_id"],
+                    "description": "A match object from catgo_hetero_search_lateral",
+                },
+                "params": {
+                    "type": "object",
+                    "properties": {
+                        "width_A": {"type": "integer", "default": 1,
+                                    "description": "Repetitions of slab A perpendicular to seam"},
+                        "width_B": {"type": "integer", "default": 1,
+                                    "description": "Repetitions of slab B perpendicular to seam"},
+                        "buffer": {"type": "number", "default": 0.0,
+                                   "description": "Gap at the seam (Å)"},
+                        "vacuum": {"type": "number", "default": 20.0,
+                                   "description": "Vacuum above/below the plane (Å)"},
+                    },
+                },
+                "search_params": {
+                    "type": "object",
+                    "properties": {
+                        "interface_axis": {"type": "integer", "enum": [0, 1], "default": 0},
+                        "max_length": {"type": "number", "default": 100.0},
+                        "max_strain": {"type": "number", "default": 5.0},
+                    },
+                },
+            },
+            "required": ["slab_A", "slab_B", "match"],
+        },
+    },
 ]
