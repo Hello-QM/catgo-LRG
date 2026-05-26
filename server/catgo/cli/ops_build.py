@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from pymatgen.core import Structure
 
-from catgo.cli.adapter import call_route, require_structure
+from catgo.cli.adapter import OpError, call_route, require_structure
 from catgo.cli.registry import OpResult
+from catgo.models.reticular import ReticularBuildRequest
+from catgo.routers.reticular import build_reticular_structure
 from catgo.routers.structure_ops import (
     GenerateSlabRequest, SupercellRequest,
     create_supercell, generate_slab,
@@ -46,3 +48,35 @@ def slab(session, params: dict) -> OpResult:
                 f"({res.num_slabs} termination(s))",
         structure=first,
     )
+
+
+def _parse_assignment(spec: str | None) -> dict:
+    """'0=N10,1=N409' -> {'0': 'N10', '1': 'N409'}."""
+    if not spec:
+        return {}
+    out = {}
+    for part in spec.split(","):
+        if "=" not in part:
+            raise OpError(f"bad assignment '{part}', expected key=bb_id")
+        k, v = part.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def reticular(session, params: dict) -> OpResult:
+    # Builds FROM SCRATCH — no active structure required.
+    mode = params.get("mode", "preset")
+    if mode == "preset":
+        req = ReticularBuildRequest(mode="preset", preset=(params.get("preset") or None))
+    else:
+        node_raw = _parse_assignment(params.get("node"))
+        req = ReticularBuildRequest(
+            mode="advanced",
+            topology=(params.get("topology") or None),
+            node_bbs={int(k): v for k, v in node_raw.items()},
+            edge_bbs=_parse_assignment(params.get("edge")),
+        )
+    res = call_route(build_reticular_structure, ReticularBuildRequest, **req.model_dump())
+    new = Structure.from_dict(res.structure.model_dump())
+    return OpResult(ok=True, message=f"reticular {res.topology} -> {new.num_sites} sites",
+                    structure=new)

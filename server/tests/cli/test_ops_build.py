@@ -34,3 +34,27 @@ def test_slab_all_zero_miller_errors():
 def test_no_active_structure_errors():
     with pytest.raises(OpError):
         ops_build.supercell(Session(), {"scaling": [2, 2, 2]})
+
+
+def test_reticular_preset_builds_without_input_structure():
+    session = Session()  # no active structure
+    res = ops_build.reticular(session, {"mode": "preset", "preset": "hkust-1"})
+    assert res.ok
+    assert res.structure is not None
+    assert res.structure.num_sites > 0
+
+
+def test_reticular_advanced_build():
+    session = Session()
+    res = ops_build.reticular(
+        session,
+        {"mode": "advanced", "topology": "tbo", "node": "0=N10,1=N409"},
+    )
+    assert res.ok
+    assert res.structure.num_sites > 0
+
+
+def test_reticular_unknown_preset_errors():
+    session = Session()
+    with pytest.raises(OpError):
+        ops_build.reticular(session, {"mode": "preset", "preset": "not-a-preset"})

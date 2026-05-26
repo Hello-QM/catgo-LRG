@@ -22,6 +22,24 @@ def build_registry() -> OperationRegistry:
         handler=ops_build.supercell,
     ))
     reg.add(Operation(
+        name="reticular", group="build",
+        summary="MOF/COF from topology + building blocks",
+        params=[
+            Param("mode", str, default="preset",
+                  choices=["preset", "advanced"], help="preset|advanced"),
+            Param("preset", str, default="",
+                  help="preset id: mof-5|hkust-1|zif-8|cof-300"),
+            Param("topology", str, default="", help="RCSR net name (advanced)"),
+            Param("node", str, default="",
+                  help="node BB assignment, e.g. 0=N10,1=N409"),
+            Param("edge", str, default="",
+                  help="edge BB assignment, e.g. 0,0=E1"),
+        ],
+        handler=ops_build.reticular,
+        needs_server=False,
+        mutates=True,
+    ))
+    reg.add(Operation(
         name="convert", group="convert",
         summary="write active structure to another format",
         params=[Param("out", str, help="output path; ext sets format")],
