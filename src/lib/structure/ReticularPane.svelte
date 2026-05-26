@@ -120,9 +120,13 @@
     }
     error_message = null
     try {
-      topo_detail = await getTopology(name, server_url)
-      node_assignment = {}
-      edge_assignment = {}
+      const detail = await getTopology(name, server_url)
+      // Pre-seed every assignment slot with an empty array BEFORE topo_detail
+      // is set, so the per-slot <Select bind:selected> never binds `undefined`
+      // (svelte-multiselect's `selected` has a fallback and rejects undefined).
+      node_assignment = Object.fromEntries(detail.node_types.map((nt) => [nt, []]))
+      edge_assignment = Object.fromEntries(detail.edge_types.map((et) => [et.join(`,`), []]))
+      topo_detail = detail
     } catch (err) {
       error_message = err instanceof Error ? err.message : String(err)
       topo_detail = null
