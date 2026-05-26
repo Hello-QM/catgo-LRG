@@ -51,11 +51,18 @@ Scope is deliberately bounded: **static capability gap-fill + transport unificat
 Each Menu A capability is migrated one at a time through this gate:
 
 0. **Dedup pre-check.** Before folding, confirm the capability's backend endpoint is **not already reachable** via an existing Menu B `(tool, action)`. If it is, it is a duplicate — **skip it** (do not add a redundant action). Also collapse Menu A's own duplicates (e.g. `catgo_build_slab` and `catgo_generate_slab` both hit `/structure-ops/generate-slab`; `catgo_dos_compute` → `/dos/compute` already equals `catgo_analyze:dos`). Record skipped duplicates in the PR.
-1. **Write the test first** (TDD): a routing test (fake httpx client — correct endpoint/method/body) **and** a live functional test against the real backend on `:8000` (the action returns 200 with a plausible result for a representative input).
-2. **Run both.** Only if **both pass green** is the action kept in Menu B.
-3. **If the live test fails** (endpoint 404/500/contract-broken — i.e. the Menu A capability was already dead from drift), the action is **not folded in**. It is recorded in a "broken / excluded" list in the PR with the failure, and tracked as a separate backend fix — *not* silently shipped as a non-working tool.
+1. **The gate is a REAL functional test — not a mock, not a status-code check.** Drive the action through the consolidated handler against the **real backend on `:8000`** with a **real, representative input** (an actual structure / trajectory / DFT-output directory), and **assert on the actual result content**:
+   - building (`defect`/`strain`/`passivate`/`water_layer`/`reticular`): parse the returned structure and assert it changed correctly — atom count, composition, lattice, vacancy/dopant present, strained lattice parameter, added H/water, etc.
+   - MD analysis (`rdf`/`msd`/…): feed a real trajectory; assert the returned arrays have the right shape and physically sane values (g(r)→1 at large r, MSD monotonic, etc.).
+   - input gen (`vasp`/`qe`/`lammps`): assert the generated text contains the expected blocks (INCAR tags, `&control`, `pair_style`, …).
+   - electronic structure (`bands`/`cohp`/`dos_*`): feed a real DFT output dir; assert parsed Fermi level / band count / DOS grid are present and numeric.
 
-Consequence: the final tool/action set is **whatever is unique AND passes the gate**. The target below (15 → 18) is the ceiling; the floor is "only what's not-duplicate and verified working." The PR reports three lists: folded, skipped-as-duplicate, excluded-as-broken.
+   A bare HTTP 200 does **not** pass the gate — the assertion on the result does.
+2. **Optional wiring check:** a fake-httpx routing test (correct endpoint/method/body) may accompany the functional test for fast regression, but it is **not** the gate and never substitutes for the real test.
+3. **Real test data required.** Each capability needs a real fixture (structure/trajectory/DFT dir). Reuse existing fixtures in `server/tests/` where present; add minimal real ones otherwise. **If no real fixture can be produced for a capability, it cannot be verified → it is NOT folded in** (recorded as "unverifiable — needs fixture").
+4. **If the functional test fails** (404/500, contract drift, or wrong/empty result — i.e. the Menu A capability was already dead), the action is **not folded in**. Recorded in the PR's "broken / excluded" list with the failure and tracked as a separate backend fix — *not* silently shipped as a non-working tool.
+
+Consequence: the final tool/action set is **whatever is unique AND passes a real functional test**. The target below (15 → 18) is the ceiling; the floor is "only what's not-duplicate and verified working with real data." The PR reports four lists: folded, skipped-as-duplicate, excluded-as-broken, unverifiable-needs-fixture.
 
 ### Endpoint-diff is the source of truth, not tool names
 
@@ -140,12 +147,12 @@ Each migrated action follows the existing Menu B handler conventions:
 
 ## Testing
 
-- **Schema tests** (extend `test_lateral_hetero_mcp.py` style / a new `test_consolidated_registry.py`): every new action appears in the right tool's enum; `catgo_md`/`catgo_input`/`catgo_simulate` exist with expected actions; tool count == 18.
-- **Routing tests** (fake httpx client, as in the lateral tests): each new action POSTs/GETs the correct endpoint with the expected body keys; structure auto-injection fires only where intended; viewer push fires for structure-returning actions.
-- **Parity test:** assert that every backend endpoint previously reachable via Menu A is reachable via some Menu B `(tool, action)` — a static map check so future drift is caught.
-- **Live functional test per migrated action** (against `:8000`) — **this is the migration gate, not optional**: every candidate action gets one representative live call that must return 200 with a plausible result before the action is kept. Actions whose live call fails are excluded (see test-gate rule) and listed as broken.
-- **Dedup check:** the parity map also flags any candidate whose endpoint an existing Menu B action already covers, so duplicates are skipped rather than added.
-- **Regression:** existing consolidated handler tests still pass. (Note the pre-existing 10 stale failures in `test_claude_code_mcp.py` — tool count 11 vs 15; this work makes it 18, so that test must be updated to the new count and the ≤300-char description assertion relaxed or scoped, as part of this PR.)
+1. **Real functional test per migrated action — THE GATE** (against `:8000`, real fixture, assert on result content). Defined fully in the test-gate section above. Not a mock, not a status-code check. Decides whether the action is folded at all.
+2. **Fixtures:** reuse real structures / trajectories / DFT-output dirs already in `server/tests/`; add minimal real ones where missing. No synthetic-only happy-path stand-ins for the gate.
+3. **Schema test:** every *folded* action appears in the right tool's enum; `catgo_md`/`catgo_input`/`catgo_simulate` exist with their folded actions. Tool count is asserted against the **actually-folded set** (≤ 18), not a hardcoded number.
+4. **Optional fake-client routing test** for fast dispatch-wiring regression — supplementary, never the gate.
+5. **Drift-guard parity test:** a static map asserts every backend endpoint is either (a) reachable via a Menu B `(tool, action)`, or (b) on the explicit excluded/unverifiable list. This catches future drift — a new endpoint with neither a fold nor an exclusion entry fails the test.
+6. **Regression:** existing consolidated handler tests still pass. The pre-existing 10 stale failures in `test_claude_code_mcp.py` (asserts 11 tools / ≤300-char descriptions vs the real 15) must be updated as part of this PR: tool count → folded set, and the description-length assertion relaxed (mega-tools legitimately exceed 300 chars).
 
 ## Out of scope (follow-up)
 
