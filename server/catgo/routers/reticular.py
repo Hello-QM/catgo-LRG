@@ -95,8 +95,8 @@ def list_topologies_route(q: str | None = None) -> list[TopologyInfo]:
 
 
 @router.get("/building-blocks", response_model=list[BuildingBlockInfo])
-def list_building_blocks_route(q: str | None = None) -> list[BuildingBlockInfo]:
-    return [BuildingBlockInfo(**b) for b in list_building_blocks(query=q)]
+def list_building_blocks_route(q: str | None = None, cn: int | None = None) -> list[BuildingBlockInfo]:
+    return [BuildingBlockInfo(**b) for b in list_building_blocks(query=q, cn=cn)]
 
 
 @router.get("/topology/{name}", response_model=TopologyDetail)

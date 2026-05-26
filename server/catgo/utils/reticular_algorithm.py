@@ -35,18 +35,42 @@ def list_topologies(query: str | None = None) -> list[dict]:
     return [{"name": n} for n in sorted(names)]
 
 
-def list_building_blocks(query: str | None = None) -> list[dict]:
-    """Return [{name, n_connection_points}] for bundled BBs (optionally filtered)."""
+def list_building_blocks(query: str | None = None, cn: int | None = None) -> list[dict]:
+    """Return enriched BB records for bundled BBs (optionally filtered).
+
+    Each record: {name, n_connection_points, formula, elements}.
+    `formula` and `elements` exclude connection-point dummy atoms (symbol "X").
+    `cn` restricts to BBs with that connection-point count. `query` is a
+    case-insensitive substring match against name, formula, or any element.
+    """
+    from collections import Counter
+
     db = _db()
-    names = db.bb_list
-    if query:
-        q = query.lower()
-        names = [n for n in names if q in n.lower()]
+    q = query.lower() if query else None
     out = []
-    for n in sorted(names):
+    for n in sorted(db.bb_list):
         try:
             bb = db.get_bb(n)
-            out.append({"name": n, "n_connection_points": int(bb.n_connection_points)})
+            n_cp = int(bb.n_connection_points)
+            if cn is not None and n_cp != cn:
+                continue
+            counts = Counter(s for s in bb.atoms.get_chemical_symbols() if s != "X")
+            formula = "".join(f"{el}{c}" for el, c in sorted(counts.items()))
+            elements = sorted(counts)
+            if q is not None and not (
+                q in n.lower()
+                or q in formula.lower()
+                or any(q == e.lower() or q in e.lower() for e in elements)
+            ):
+                continue
+            out.append(
+                {
+                    "name": n,
+                    "n_connection_points": n_cp,
+                    "formula": formula,
+                    "elements": elements,
+                }
+            )
         except Exception:
             continue
     return out

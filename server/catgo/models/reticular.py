@@ -96,6 +96,8 @@ class TopologyInfo(BaseModel):
 class BuildingBlockInfo(BaseModel):
     name: str
     n_connection_points: int
+    formula: str = ""
+    elements: list[str] = Field(default_factory=list)
 
 
 class TopologyDetail(BaseModel):
