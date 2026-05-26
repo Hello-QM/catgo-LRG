@@ -24,12 +24,6 @@ function register(def: ClientTool, run: Executor): void {
   if (!CLIENT_TOOLS.some((t) => t.name === def.name)) CLIENT_TOOLS.push(def)
 }
 
-/** Rebuild the exported list from the registry (kept for later-task convenience). */
-function rebuild_tool_list(): void {
-  CLIENT_TOOLS.length = 0
-  for (const { def } of REGISTRY.values()) CLIENT_TOOLS.push(def)
-}
-
 /** Require an active structure or throw a user-facing error. */
 function require_structure(): AnyStructure {
   const s = get_current_structure()
@@ -75,4 +69,4 @@ export async function execute_tool(
 }
 
 // Re-export so later tasks can register mutating tools that write structures back.
-export { set_current_structure, rebuild_tool_list, register }
+export { set_current_structure, register }
