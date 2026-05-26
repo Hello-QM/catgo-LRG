@@ -47,6 +47,9 @@ analyze = [
     "scienceplots>=2.1",
     "pylustrator>=1.3",
 ]
+mofsearch = [
+    "mofdb-client>=0.10.0",
+]
 
 [project.scripts]
 catgo = "catgo.cli:main"
