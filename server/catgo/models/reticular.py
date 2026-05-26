@@ -38,28 +38,30 @@ PRESETS: dict[str, dict] = {
     "zif-8": {
         "label": "ZIF-8",
         "topology": "sod",
-        # SUBSTITUTION: the bundled DB has no bare tetrahedral Zn node. N238 is
-        # the smallest Zn 4-connected node (C4O8X4Zn, a Zn-carboxylate unit), so
-        # the framework carries spurious carboxylate O vs. ideal ZnN4 ZIF-8.
-        "node_bbs": {0: "N238"},
-        # SUBSTITUTION: no 2-methylimidazolate edge in the DB. E15 = imidazolate
-        # (C3H3N2X2), the unmethylated parent of 2-methylimidazolate, 2-connected.
-        # Build: sod/N238/E15 -> 348 atoms, C120H72N48O96Zn12, vol 27373.5.
+        # N2 = bare tetrahedral 4-connected Zn-imidazolate node (elements
+        # C,H,N,X,Zn -- NO oxygen), i.e. genuine ZnN4 ZIF coordination.
+        "node_bbs": {0: "N2"},
+        # E15 = imidazolate (C3H3N2X2), 2-connected. The 2-methyl substituent of
+        # true ZIF-8 (2-methylimidazolate) has no BB in the DB, so this is the
+        # unmethylated ZIF-8 framework analog -- chemically Zn(imidazolate)2 on the
+        # SOD net (zero spurious O).
+        # Build: sod/N2/E15 -> 684 atoms, C312H264N96Zn12 (no oxygen).
         "edge_bbs": {"0,0": "E15"},
     },
-    "cof-5": {
-        "label": "COF-5",
-        # SUBSTITUTION: the hcb (honeycomb) net is absent from the vendored
-        # topology set. ths is a bundled single-node-type 3-connected net used as
-        # the closest 3-c substitute for the COF-5 hexagonal layer topology.
-        "topology": "ths",
-        # N610 = triphenylene-hexaol core (C27H27O6X3, 6 oxygens), 3-connected ->
-        # HHTP (2,3,6,7,10,11-hexahydroxytriphenylene) node.
-        "node_bbs": {0: "N610"},
-        # SUBSTITUTION: no benzene diboronic-acid edge in the DB. E14 = 1,4-phenylene
-        # (C6H4X2) is the BDBA aromatic backbone (boronate-ester chemistry to the
-        # HHTP catechol O is implicit), 2-connected.
-        # Build: ths/N610/E14 -> 600 atoms, C288H264O48, vol 87042.3.
-        "edge_bbs": {"0,0": "E14"},
+    "cof-300": {
+        "label": "COF-300",
+        # The 2D COF-5 (hcb honeycomb) net is not buildable: PORMAKE ships no 2D
+        # nets (hcb/sql/kgm/hxl all absent) and its scaler targets 3D periodic
+        # nets. Replaced with a genuine 3D dia-net imine COF (COF-300 family).
+        "topology": "dia",
+        # N600 = tetraphenylmethane core (C25H16X4), the tetrahedral 4-connected
+        # organic node of the tetra(aminophenyl)methane building block of COF-300.
+        "node_bbs": {0: "N600"},
+        # E35 = N-bearing linear aromatic linker (C10H6N2X2), 2-connected, supplying
+        # the imine/azine-type linkage of the dia-net 3D COF. The exact COF-300
+        # monomers may differ from these bundled BBs; named by topology + chemistry
+        # (dia-net tetrahedral-node + linear N-linker imine COF analog).
+        # Build: dia/N600/E35 -> 616 atoms, C360H224N32 (all-organic), vol 86422.9.
+        "edge_bbs": {"0,0": "E35"},
     },
 }
