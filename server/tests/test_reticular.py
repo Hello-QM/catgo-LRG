@@ -83,7 +83,10 @@ def test_build_unknown_topology_raises():
         build_reticular(topology="definitely_not_a_net", node_bbs={0: "N10"}, edge_bbs={})
 
 
-@pytest.mark.parametrize("preset", ["mof-5", "hkust-1", "zif-8", "cof-300"])
+from catgo.models.reticular import PRESETS  # noqa: E402
+
+
+@pytest.mark.parametrize("preset", sorted(PRESETS))
 def test_build_each_preset(preset):
     struct = build_preset(preset)
     assert struct.num_sites > 0
@@ -164,4 +167,5 @@ def test_router_list_presets():
 
     res = list_presets_route()
     ids = {p["id"] for p in res}
-    assert {"mof-5", "hkust-1", "zif-8", "cof-300"} == ids
+    # The original four must always be present; the library is expandable.
+    assert {"mof-5", "hkust-1", "zif-8", "cof-300"} <= ids
