@@ -4,6 +4,10 @@ import type { ChatConfig, ChatMessage, ContentBlock, SessionSummary } from './ty
 import { get_display_text, SDK_PROVIDERS, agent_from_provider } from './types'
 import { stream_chat, build_sdk_system_prompt } from './llm-client'
 import { stream_sdk_agent } from './sdk-stream'
+import { is_client_direct } from './provider-routing'
+import { stream_client_llm } from './client-llm'
+import { run_tool_loop } from './tool-loop'
+import { CLIENT_TOOLS, execute_tool, tool_kind } from './structure-tools'
 import { retrieve } from './rag'
 import { get_workflow_slice, clear_workflow_events } from '$lib/workflow/workflow-state.svelte'
 import { build_paper_context, build_paper_context_from_doi } from './context'
@@ -144,6 +148,10 @@ export interface PermissionEntry {
   suggestions?: unknown[]
   decisionReason?: string
   status: string
+  // Client-direct path only: the tool-loop awaits this to learn the user's
+  // decision. The SDK path resolves permissions via a backend round-trip
+  // (sdk-stream.resolve_permission) and leaves this undefined.
+  resolve?: (ok: boolean) => void
 }
 
 export interface PaperSession {
@@ -571,6 +579,98 @@ export async function send_message(
             break
         }
       }
+    } else if (is_client_direct(chat_config)) {
+      // ── Client-direct path: in-browser agentic tool-calling loop ──
+      // No backend proxy — stream_client_llm hits the provider directly and
+      // run_tool_loop executes CLIENT_TOOLS in the browser, gating mutating
+      // tools through the same PermissionCard the SDK path uses.
+      slice.active_tool_blocks.entries = {}
+      slice.active_permission_blocks.entries = {}
+
+      const combined_context = [
+        slice.structure_context.value,
+        slice.workflow_context.value,
+        slice.paper_context.value,
+      ].filter(Boolean).join(`\n\n`) || undefined
+      const system = build_sdk_system_prompt(chat_config.provider, combined_context, false)
+
+      // Local rolling conversation. Start from the prior turns (drop the empty
+      // assistant placeholder we just pushed), append the user's new message,
+      // and grow it with assistant tool_use / user tool_result pairs as the
+      // loop progresses so each transport() turn sees the full history.
+      const history: ChatMessage[] = [
+        ...slice.messages.list.slice(0, -1),
+      ]
+
+      let full_text = ``
+      await run_tool_loop({
+        transport: () => stream_client_llm(
+          history,
+          chat_config,
+          system,
+          CLIENT_TOOLS,
+          slice.abort_controller?.signal,
+        ),
+        execute: execute_tool,
+        kind_of: tool_kind,
+        request_permission: (call) => new Promise<boolean>((resolve) => {
+          // Session-scoped bypass: approve immediately, no card.
+          if (slice.skip_permission.value) { resolve(true); return }
+          slice.active_permission_blocks.entries[call.id] = {
+            toolName: call.name,
+            input: call.arguments,
+            status: `pending`,
+            // PermissionCard's approve/deny handler calls this to settle the
+            // promise the loop is awaiting (see PermissionCard.svelte).
+            resolve,
+          }
+        }),
+        on_event: (e) => {
+          switch (e.type) {
+            case `text`:
+              full_text += e.text
+              update_last_message(slice, full_text)
+              break
+            case `tool_start`:
+              slice.active_tool_blocks.entries[e.id] = {
+                toolName: e.name,
+                input: e.input,
+                output: ``,
+                status: `running`,
+                elapsedSeconds: 0,
+              }
+              break
+            case `tool_end`: {
+              const te = slice.active_tool_blocks.entries[e.id]
+              if (te) {
+                te.output = e.result
+                te.status = e.isError ? `error` : `complete`
+              }
+              // Feed the tool call + result back into history so the next
+              // transport() turn includes them (OpenAI requires the
+              // assistant tool_calls message to be followed by its result).
+              history.push({
+                role: `assistant`,
+                content: [{ type: `tool_use`, id: e.id, name: e.name, input: {} }],
+                timestamp: Date.now(),
+              })
+              history.push({
+                role: `user`,
+                content: [{ type: `tool_result`, tool_use_id: e.id, content: e.result }],
+                timestamp: Date.now(),
+              })
+              break
+            }
+            case `error`:
+              slice.error.value = e.message
+              break
+            case `done`:
+              finalize_stream_indicators(slice)
+              break
+          }
+        },
+        signal: slice.abort_controller?.signal,
+      })
     } else {
       // ── Universal (OpenAI-compat) path — unchanged ──
       const rag_chunks = await retrieve(content, 5)

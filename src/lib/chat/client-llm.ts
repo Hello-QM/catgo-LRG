@@ -1,4 +1,4 @@
-import type { ChatConfig, ChatMessage, ClientTool, ToolCall } from './types'
+import type { ChatConfig, ChatMessage, ClientTool, ToolCall, ToolUseBlock, ToolResultBlock } from './types'
 import { needs_relay, relay_url } from './provider-routing'
 
 export type LlmEvent =
@@ -115,12 +115,49 @@ export async function* stream_client_llm(
 }
 
 /** Convert in-app ChatMessage to OpenAI wire format.
- *  Text-only for now; tool_use/tool_result block mapping is added in Task 8. */
+ *
+ *  OpenAI function-calling wire shapes:
+ *    - assistant tool call → { role:'assistant', content:null,
+ *        tool_calls:[{ id, type:'function', function:{ name, arguments:<JSON string> } }] }
+ *    - tool result → { role:'tool', tool_call_id, content:<string> }
+ *    - plain text → { role, content }
+ *
+ *  ASSUMPTION: this returns exactly ONE wire object per ChatMessage. Task 8's
+ *  client-direct branch constructs history with one block per ChatMessage (one
+ *  tool_use block → one assistant message; one tool_result block → one user
+ *  message), so handling the FIRST relevant block by priority
+ *  (tool_result → tool_use → text) is sufficient and keeps the
+ *  assistant-tool_calls / tool-result pairing OpenAI requires. */
 export function to_openai_message(m: ChatMessage): Record<string, unknown> {
   if (typeof m.content === `string`) return { role: m.role, content: m.content }
+
+  // tool_result → role:'tool' (highest priority; a single result block per msg).
+  const result_block = m.content.find((b): b is ToolResultBlock => b.type === `tool_result`)
+  if (result_block) {
+    const content = typeof result_block.content === `string`
+      ? result_block.content
+      : JSON.stringify(result_block.content)
+    return { role: `tool`, tool_call_id: result_block.tool_use_id, content }
+  }
+
+  // tool_use → assistant message carrying tool_calls.
+  const use_blocks = m.content.filter((b): b is ToolUseBlock => b.type === `tool_use`)
+  if (use_blocks.length > 0) {
+    return {
+      role: `assistant`,
+      content: null,
+      tool_calls: use_blocks.map((b) => ({
+        id: b.id,
+        type: `function`,
+        function: { name: b.name, arguments: JSON.stringify(b.input) },
+      })),
+    }
+  }
+
+  // Otherwise: join text blocks (unchanged behavior).
   const text = m.content
-    .filter((b) => b.type === `text`)
-    .map((b) => (b as { text: string }).text)
+    .filter((b): b is import('./types').TextBlock => b.type === `text`)
+    .map((b) => b.text)
     .join(``)
   return { role: m.role, content: text }
 }

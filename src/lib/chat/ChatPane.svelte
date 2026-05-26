@@ -1349,6 +1349,7 @@
                     input={pb.input}
                     suggestions={pb.suggestions}
                     decisionReason={pb.decisionReason}
+                    onResolve={pb.resolve}
                   />
                 {/each}
                 <ThinkingSummary tools={slice.active_tool_blocks.entries}>

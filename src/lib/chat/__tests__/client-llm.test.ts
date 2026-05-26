@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { parse_openai_stream, type LlmEvent } from '../client-llm'
+import { parse_openai_stream, to_openai_message, type LlmEvent } from '../client-llm'
+import type { ChatMessage } from '../types'
 
 function sse(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
   const enc = new TextEncoder()
@@ -48,5 +49,49 @@ describe(`parse_openai_stream`, () => {
     })()).resolves.not.toThrow()
     expect(events.some((e) => e.type === `error`)).toBe(true)
     expect(events.some((e) => e.type === `done`)).toBe(true)
+  })
+})
+
+describe(`to_openai_message`, () => {
+  it(`maps a string-content message unchanged`, () => {
+    const m: ChatMessage = { role: `user`, content: `hi`, timestamp: 0 }
+    expect(to_openai_message(m)).toEqual({ role: `user`, content: `hi` })
+  })
+
+  it(`maps a tool_use block to an assistant tool_calls message`, () => {
+    const m: ChatMessage = {
+      role: `assistant`,
+      content: [{ type: `tool_use`, id: `a`, name: `f`, input: { x: 1 } }],
+      timestamp: 0,
+    }
+    const out = to_openai_message(m) as {
+      role: string
+      content: null
+      tool_calls: { id: string; type: string; function: { name: string; arguments: string } }[]
+    }
+    expect(out.role).toBe(`assistant`)
+    expect(out.content).toBeNull()
+    expect(out.tool_calls[0].id).toBe(`a`)
+    expect(out.tool_calls[0].type).toBe(`function`)
+    expect(out.tool_calls[0].function.name).toBe(`f`)
+    expect(JSON.parse(out.tool_calls[0].function.arguments).x).toBe(1)
+  })
+
+  it(`maps a tool_result block to a role:tool message`, () => {
+    const m: ChatMessage = {
+      role: `user`,
+      content: [{ type: `tool_result`, tool_use_id: `a`, content: `{"ok":1}` }],
+      timestamp: 0,
+    }
+    expect(to_openai_message(m)).toEqual({ role: `tool`, tool_call_id: `a`, content: `{"ok":1}` })
+  })
+
+  it(`joins text blocks into a single content string`, () => {
+    const m: ChatMessage = {
+      role: `assistant`,
+      content: [{ type: `text`, text: `foo` }, { type: `text`, text: `bar` }],
+      timestamp: 0,
+    }
+    expect(to_openai_message(m)).toEqual({ role: `assistant`, content: `foobar` })
   })
 })
