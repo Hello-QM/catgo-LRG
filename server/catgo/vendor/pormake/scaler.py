@@ -265,6 +265,17 @@ class Scaler:
         logger.info("ITER: %s", result.nit)
         logger.info("OBJ: %.3f", result.fun)
 
+        # CatGO vendor adaptation: the analytic jax gradient was replaced by
+        # scipy's finite-difference gradient, so non-convergence is more likely
+        # on large/ill-conditioned nets. Surface it as a WARNING (the vendored
+        # logger is quiet by default) rather than silently returning a bad cell.
+        if not result.success:
+            logger.warning(
+                "Topology scaling did not converge (obj=%.3g): %s",
+                result.fun,
+                result.message,
+            )
+
         # Update neigbors list in topology.
         new_data = [[] for _ in range(topology.n_slots)]
         # Rescaling cell to original scale.
