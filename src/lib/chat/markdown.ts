@@ -144,7 +144,26 @@ export function markdown_to_html(md: string): string {
   const out: string[] = []
   let idx = 0
 
+  // No-progress guard (belt-and-suspenders): every branch below is expected to
+  // advance `idx` by ≥1. If any branch ever leaves `idx` unchanged (e.g. an
+  // inner consume-loop captured zero lines while its `continue` skips the
+  // normal fall-through), the same line would be reprocessed forever and `out`
+  // would grow until `Array.push` throws "RangeError: Invalid array length",
+  // crashing the whole app. This guard detects a repeated `idx` and force-emits
+  // the offending line as escaped text, guaranteeing termination for ANY input.
+  let _stuck_at = -1
+
   while (idx < lines.length) {
+    if (idx === _stuck_at) {
+      // Same line as the previous iteration → a branch failed to advance idx.
+      // Emit the raw (escaped) line and force progress.
+      out.push(esc(lines[idx]))
+      idx++
+      _stuck_at = -1
+      continue
+    }
+    _stuck_at = idx
+
     const line = lines[idx]
 
     // Skip empty lines that were left after stripping (but keep intentional blank lines)
