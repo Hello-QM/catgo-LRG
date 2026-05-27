@@ -148,3 +148,23 @@ describe(`more read tools`, () => {
     expect(tool_kind(`load_optimade_structure`)).toBe(`mutate`)
   })
 })
+
+describe(`client-direct builder tools (#144 wasm)`, () => {
+  // These call real ferrox-wasm builders, which cannot initialize in
+  // vitest/node — so we assert only on `kind`, matching how generate_slab and
+  // place_adsorbate are tested above.
+  it(`build_nanotube is a mutate tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `build_nanotube`)).toBeTruthy()
+    expect(tool_kind(`build_nanotube`)).toBe(`mutate`)
+  })
+
+  it(`build_nanoscroll is a mutate tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `build_nanoscroll`)).toBeTruthy()
+    expect(tool_kind(`build_nanoscroll`)).toBe(`mutate`)
+  })
+
+  it(`build_moire is a mutate tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `build_moire`)).toBeTruthy()
+    expect(tool_kind(`build_moire`)).toBe(`mutate`)
+  })
+})

@@ -12,6 +12,9 @@ import {
 } from '$lib/structure/ferrox-wasm'
 import { generate_slab as ferrox_generate_slab } from '$lib/structure/miller-slab'
 import { cartesian_to_fractional } from '$lib/structure/lattice-ops'
+import { buildNanotube } from '$lib/api/nanotube'
+import { buildNanoscroll } from '$lib/api/nanoscroll'
+import { searchMoireAngles, buildMoireBilayer } from '$lib/api/moire'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
 interface MutSite {
@@ -385,6 +388,101 @@ register(
     const res = await ferrox_xrd(require_structure() as never)
     if (`error` in res) throw new Error(res.error)
     return res.ok
+  },
+)
+
+// ── build_nanotube (mutate) ──
+register(
+  {
+    name: `build_nanotube`,
+    description: `Roll the currently-loaded 2D sheet into an (n, m) nanotube and load the resulting tube as the current structure. The current structure must be a periodic 2D material (it provides the layer that is rolled up).`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        n: { type: `integer`, description: `Chiral index n.` },
+        m: { type: `integer`, description: `Chiral index m.` },
+        NL: { type: `integer`, minimum: 1, description: `Number of unit cells along the tube axis (default 1).` },
+        vacuum: { type: `number`, description: `Vacuum padding around the tube in Angstroms (default 15).` },
+      },
+      required: [`n`, `m`],
+    },
+  },
+  async (input) => {
+    const n = Math.trunc(Number(input.n))
+    const m = Math.trunc(Number(input.m))
+    const result = await buildNanotube(
+      { structure: require_structure() as never },
+      {
+        n,
+        m,
+        NL: input.NL === undefined ? 1 : Math.trunc(Number(input.NL)),
+        vacuum: input.vacuum === undefined ? 15 : Number(input.vacuum),
+      },
+    )
+    set_current_structure(result.structure as never)
+    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+  },
+)
+
+// ── build_nanoscroll (mutate) ──
+register(
+  {
+    name: `build_nanoscroll`,
+    description: `Roll the currently-loaded 2D monolayer into an Archimedean-spiral nanoscroll and load the result as the current structure. The current structure must be a single 2D layer (not a 3D bulk).`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        turns: { type: `number`, description: `Number of windings/turns (default 6).` },
+        inner_radius: { type: `number`, description: `Inner winding radius in Angstroms (default 25).` },
+        length: { type: `number`, description: `Scroll height along z in Angstroms (default 12).` },
+      },
+    },
+  },
+  async (input) => {
+    const params: { turns?: number; inner_radius?: number; length?: number } = {}
+    if (input.turns !== undefined) params.turns = Number(input.turns)
+    if (input.inner_radius !== undefined) params.inner_radius = Number(input.inner_radius)
+    if (input.length !== undefined) params.length = Number(input.length)
+    const result = await buildNanoscroll(require_structure() as never, params)
+    set_current_structure(result.structure as never)
+    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+  },
+)
+
+// ── build_moire (mutate) ──
+register(
+  {
+    name: `build_moire`,
+    description: `Build a twisted bilayer (moiré superlattice) of the currently-loaded 2D sheet at the requested twist angle (in degrees) and load it as the current structure. The current structure is used as both layers. Searches commensurate twist angles near the target and uses the closest match.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        twist_angle: { type: `number`, description: `Target twist angle between the two layers, in degrees.` },
+        max_index: { type: `integer`, minimum: 1, description: `Max search index for commensurate cells (default 10).` },
+      },
+      required: [`twist_angle`],
+    },
+  },
+  async (input) => {
+    const twist_angle = Number(input.twist_angle)
+    const layer = { structure: require_structure() as never }
+    const search = await searchMoireAngles(layer, null, {
+      angle_min: Math.max(0, twist_angle - 5),
+      angle_max: twist_angle + 5,
+      max_index: input.max_index === undefined ? 10 : Math.trunc(Number(input.max_index)),
+      fix_angle: true,
+      fixed_angle_value: twist_angle,
+    })
+    const candidate = search.candidates?.[0]
+    if (!candidate) {
+      throw new Error(`No commensurate moiré cell found near ${twist_angle}°.`)
+    }
+    const result = await buildMoireBilayer(layer, candidate, null, {})
+    set_current_structure(result.structure as never)
+    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
   },
 )
 
