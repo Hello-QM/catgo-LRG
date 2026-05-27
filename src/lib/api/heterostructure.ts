@@ -1,5 +1,34 @@
 import type { PymatgenStructure } from '$lib/structure'
-import { SERVER_URL } from './config'
+import {
+  wasm_build_hetero,
+  wasm_build_hetero_manual,
+  wasm_hetero_search,
+} from '$lib/structure/ferrox-wasm'
+import { desktop_backend_available, SERVER_URL, STATIC_ONLY } from './config'
+
+declare const __CATGO_DESKTOP__: boolean
+
+/** True when the SLAB-mode heterostructure path must run client-side via WASM
+ *  instead of the Python backend.
+ *
+ *  - STATIC_ONLY build: always WASM (no backend exists).
+ *  - Desktop build: WASM only when the bundled backend is NOT live
+ *    (desktop_backend_available() probes /health).
+ *  - Plain web app: never — keep using the configured SERVER_URL backend.
+ *
+ *  Only the CORE slab path (search / build / build-manual) is covered by WASM;
+ *  bulk mode and the deferred endpoints always use the backend. */
+async function slab_use_wasm_path(): Promise<boolean> {
+  if (STATIC_ONLY) return true
+  if (typeof __CATGO_DESKTOP__ !== `undefined` && __CATGO_DESKTOP__) {
+    try {
+      return !(await desktop_backend_available())
+    } catch {
+      return true
+    }
+  }
+  return false
+}
 
 function format_error_detail(detail: unknown): string {
   if (typeof detail === `string`) return detail
@@ -84,8 +113,24 @@ export async function buildHeterostructureManual(
   gap = 2.0,
   vacuum = 20.0,
   twist_angle = 0.0,
-  server_url = `http://localhost:8000`,
+  server_url = SERVER_URL,
 ): Promise<HeterostructureBuildResult> {
+  // build-manual is always slab mode. Use the client-side WASM path when no
+  // backend is available. (twist_angle is not yet supported by the WASM path;
+  // it is ignored there, matching the manual build's default of 0.0.)
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_hetero_manual(
+      substrate as never,
+      film as never,
+      substrate_transform,
+      film_transform,
+      gap,
+      vacuum,
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureBuildResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/build-manual`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -106,6 +151,24 @@ export async function searchHeterostructureMatches(
   params: HeterostructureSearchParams = {},
   server_url = SERVER_URL,
 ): Promise<HeterostructureSearchResult> {
+  // Client-side SLAB path (no Python backend). Only slab mode is supported by
+  // WASM; bulk mode falls through to the backend below.
+  if (params.mode === `slab` && (await slab_use_wasm_path())) {
+    const result = await wasm_hetero_search(
+      substrate as never,
+      film as never,
+      {
+        max_area: params.max_area,
+        max_area_ratio_tol: params.max_area_ratio_tol,
+        max_length_tol: params.max_length_tol,
+        max_angle_tol: params.max_angle_tol,
+        max_results: params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureSearchResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/search`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -129,6 +192,27 @@ export async function buildHeterostructure(
   search_params: HeterostructureSearchParams = {},
   server_url = SERVER_URL,
 ): Promise<HeterostructureBuildResult> {
+  // Client-side SLAB path. match.match_id is the generation-order index that
+  // the WASM build_hetero expects (same contract as the backend slab build).
+  if (search_params.mode === `slab` && (await slab_use_wasm_path())) {
+    const result = await wasm_build_hetero(
+      substrate as never,
+      film as never,
+      match.match_id,
+      params.gap ?? 2.0,
+      params.vacuum ?? 20.0,
+      {
+        max_area: search_params.max_area,
+        max_area_ratio_tol: search_params.max_area_ratio_tol,
+        max_length_tol: search_params.max_length_tol,
+        max_angle_tol: search_params.max_angle_tol,
+        max_results: search_params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureBuildResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/build`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
