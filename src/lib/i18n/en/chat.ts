@@ -44,6 +44,7 @@ const chat: Record<string, string> = {
   run_terminal_hint: `Run this in your terminal, then restart CatGO.`,
   sdk_mode_desc: `SDK agent mode — tools and streaming via Agent SDK bridge.`,
   universal_mode_desc: `OpenAI-compatible mode via backend`,
+  client_direct_mode_desc: `Browser-direct mode — calls the provider API directly, no backend.`,
   proxy_mode_desc: `Backend proxy mode (requires server with API key)`,
   tool: `Tool`,
   catbot_asking: `CatBot is asking`,
