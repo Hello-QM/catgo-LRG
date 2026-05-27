@@ -210,12 +210,14 @@ export async function fetch_optimade_providers(): Promise<OptimadeProvider[]> {
     return cached_providers
   }
 
-  // In static-only mode, use hardcoded providers (CORS blocks providers.optimade.org).
-  // Note: OPTIMADE search APIs also lack CORS, so only PubChem works in static mode.
-  // OPTIMADE providers are excluded until a CORS proxy (e.g. Cloudflare Workers) is set up.
+  // In static-only mode (no backend), use the hardcoded provider list. The
+  // CatGo CORS relay Worker now fronts CORS-blocked OPTIMADE APIs (Materials
+  // Project) and Alexandria allows browser requests directly, so search works
+  // client-side (search_optimade_structures routes MP via relay_fetch).
+  // PubChem is appended separately by the modal.
   const is_static = typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__
   if (is_static) {
-    cached_providers = []  // No OPTIMADE providers — PubChem is added by the modal
+    cached_providers = STATIC_PROVIDERS
     providers_cache_time = now
     return cached_providers
   }
