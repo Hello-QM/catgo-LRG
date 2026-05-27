@@ -3,6 +3,9 @@ import { CLIENT_TOOLS, execute_tool, tool_kind } from '../structure-tools'
 import { set_current_structure, get_current_structure } from '$lib/structure/current-structure.svelte'
 import * as routing from '../provider-routing'
 import * as ferrox from '$lib/structure/ferrox-wasm'
+import * as hetero_api from '$lib/api/heterostructure'
+import { set_film_stash, set_hetero_matches } from '../hetero-stash.svelte'
+import type { HeterostructureMatch } from '$lib/api/heterostructure'
 
 const CUBIC_NACL = {
   '@module': `pymatgen.core.structure`,
@@ -166,5 +169,107 @@ describe(`client-direct builder tools (#144 wasm)`, () => {
   it(`build_moire is a mutate tool`, () => {
     expect(CLIENT_TOOLS.find((t) => t.name === `build_moire`)).toBeTruthy()
     expect(tool_kind(`build_moire`)).toBe(`mutate`)
+  })
+})
+
+describe(`heterostructure tools`, () => {
+  const FAKE_MATCH: HeterostructureMatch = {
+    match_id: 0,
+    strain: 0.5,
+    match_area: 50,
+    n_atoms_substrate: 4,
+    n_atoms_film: 4,
+    substrate_transformation: [[1, 0], [0, 1]],
+    film_transformation: [[1, 0], [0, 1]],
+    film_miller: [0, 0, 1],
+    substrate_miller: [0, 0, 1],
+    film_sl_vectors: [],
+    substrate_sl_vectors: [],
+  }
+
+  beforeEach(() => set_current_structure(CUBIC_NACL as never))
+
+  it(`set_film is a read tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `set_film`)).toBeTruthy()
+    expect(tool_kind(`set_film`)).toBe(`read`)
+  })
+
+  it(`heterostructure_search is a read tool`, () => {
+    expect(tool_kind(`heterostructure_search`)).toBe(`read`)
+  })
+
+  it(`build_heterostructure is a mutate tool`, () => {
+    expect(tool_kind(`build_heterostructure`)).toBe(`mutate`)
+  })
+
+  it(`set_film stashes the current structure and returns formula + site count`, async () => {
+    const out = JSON.parse(await execute_tool(`set_film`, {}))
+    expect(out.film_num_sites).toBe(2)
+    expect(out.film_formula).toContain(`Na`)
+    expect(out.film_formula).toContain(`Cl`)
+  })
+
+  it(`heterostructure_search stashes matches and returns a compact summary`, async () => {
+    // Stash a film, then mock the api so no WASM/backend is hit.
+    set_film_stash(CUBIC_NACL as never)
+    const spy = vi.spyOn(hetero_api, `searchHeterostructureMatches`).mockResolvedValue({
+      matches: [FAKE_MATCH],
+      terminations: [],
+      n_matches: 1,
+      n_terminations: 0,
+      message: `ok`,
+    })
+    const out = JSON.parse(await execute_tool(`heterostructure_search`, {}))
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(out.n_matches).toBe(1)
+    expect(out.matches[0].index).toBe(0)
+    expect(out.matches[0].strain).toBe(0.5)
+    expect(out.matches[0].n_atoms_substrate).toBe(4)
+    spy.mockRestore()
+  })
+
+  it(`heterostructure_search errors when no film is stashed`, async () => {
+    set_film_stash(null as never)
+    const out = JSON.parse(await execute_tool(`heterostructure_search`, {}))
+    expect(out.error).toMatch(/set_film/i)
+  })
+
+  it(`build_heterostructure uses stashed transforms and writes the result back`, async () => {
+    set_film_stash(CUBIC_NACL as never)
+    set_hetero_matches([FAKE_MATCH])
+    const built = {
+      ...CUBIC_NACL,
+      sites: Array.from({ length: 8 }, (_, i) => ({
+        species: [{ element: i < 4 ? `Na` : `Cl`, occu: 1 }],
+        abc: [0, 0, 0],
+        xyz: [0, 0, 0],
+        label: i < 4 ? `Na` : `Cl`,
+      })),
+    }
+    const spy = vi.spyOn(hetero_api, `buildHeterostructureManual`).mockResolvedValue({
+      structure: built as never,
+      n_atoms: 8,
+      n_atoms_substrate: 4,
+      n_atoms_film: 4,
+      match_area: 50,
+      strain: 0.5,
+      message: `ok`,
+    })
+    const out = JSON.parse(await execute_tool(`build_heterostructure`, { match_index: 0 }))
+    expect(spy).toHaveBeenCalledTimes(1)
+    // called with the stashed substrate/film transforms (args 3 and 4)
+    expect(spy.mock.calls[0][2]).toEqual(FAKE_MATCH.substrate_transformation)
+    expect(spy.mock.calls[0][3]).toEqual(FAKE_MATCH.film_transformation)
+    expect(out.num_sites).toBe(8)
+    expect(out.strain).toBe(0.5)
+    // set_current_structure received the built (8-site) structure
+    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(8)
+    spy.mockRestore()
+  })
+
+  it(`build_heterostructure errors when no matches are stashed`, async () => {
+    set_hetero_matches([])
+    const out = JSON.parse(await execute_tool(`build_heterostructure`, {}))
+    expect(out.error).toMatch(/heterostructure_search/i)
   })
 })
