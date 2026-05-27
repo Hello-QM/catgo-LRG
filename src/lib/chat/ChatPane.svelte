@@ -32,6 +32,7 @@
   import ThinkingSummary from './ThinkingSummary.svelte'
   import { SDK_PROVIDERS, default_mode_for } from './types'
   import { fetch_providers } from './llm-client'
+  import { PROVIDER_BASE_URLS } from './client-llm'
   import { TTSEngine } from '$lib/gesture/tts-engine'
   import {
     FALLBACK_MODELS, CLI_INSTALL_INFO, PROVIDER_META, AGENT_LABELS, VOICE_LANGUAGES,
@@ -1045,7 +1046,9 @@
               provider,
               model: default_model,
               mode,
-              base_url: provider === `custom` || provider === `ollama` ? backend_info?.base_url ?? chat_config.base_url : backend_info?.base_url ?? ``,
+              base_url: provider === `custom` || provider === `ollama`
+                ? backend_info?.base_url ?? chat_config.base_url
+                : backend_info?.base_url ?? PROVIDER_BASE_URLS[provider] ?? ``,
             })
           }}
         >

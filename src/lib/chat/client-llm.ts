@@ -1,5 +1,17 @@
-import type { ChatConfig, ChatMessage, ClientTool, ToolCall, ToolUseBlock, ToolResultBlock } from './types'
+import type { ChatConfig, ChatMessage, ClientTool, ToolCall, ToolUseBlock, ToolResultBlock, LLMProvider } from './types'
 import { needs_relay, relay_url } from './provider-routing'
+
+/** Default OpenAI-compatible base URLs for known API providers, mirrored from
+ *  the backend (server/catgo/routers/chat.py). Used in client-direct mode where
+ *  the backend /chat/providers list (which normally supplies base_url) is absent. */
+export const PROVIDER_BASE_URLS: Partial<Record<LLMProvider, string>> = {
+  deepseek: `https://api.deepseek.com`,
+  qwen: `https://dashscope.aliyuncs.com/compatible-mode/v1`,
+  kimi: `https://api.moonshot.cn/v1`,
+  zhipu: `https://open.bigmodel.cn/api/paas/v4`,
+  gemini: `https://generativelanguage.googleapis.com/v1beta/openai`,
+  anthropic: `https://api.anthropic.com/v1`,
+}
 
 export type LlmEvent =
   | { type: `text`; text: string }
@@ -81,7 +93,12 @@ export async function* stream_client_llm(
   tools: ClientTool[],
   signal?: AbortSignal,
 ): AsyncGenerator<LlmEvent> {
-  const endpoint = `${config.base_url.replace(/\/$/, ``)}/chat/completions`
+  const base = (config.base_url || PROVIDER_BASE_URLS[config.provider] || ``).replace(/\/$/, ``)
+  if (!base) {
+    yield { type: `error`, message: `No base URL configured for provider "${config.provider}". Set a base URL in CatBot settings.` }
+    return
+  }
+  const endpoint = `${base}/chat/completions`
   const url = needs_relay(endpoint) ? relay_url(endpoint) : endpoint
   // INVARIANT: tools must be sent on EVERY turn. The chat-completions API is
   // stateless — omitting `tools` on a follow-up turn makes providers (e.g. DeepSeek)

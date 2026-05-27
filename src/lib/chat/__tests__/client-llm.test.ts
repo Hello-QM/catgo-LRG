@@ -136,4 +136,31 @@ describe(`stream_client_llm request body`, () => {
     expect(captured_tools[0].function.name).toBe(`make_supercell`)
     spy.mockRestore()
   })
+
+  it(`falls back to the provider base URL when config.base_url is empty (client-direct)`, async () => {
+    let called_url: string | undefined
+    const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (url) => {
+      called_url = String(url)
+      const enc = new TextEncoder()
+      const stream = new ReadableStream({ start(c) { c.enqueue(enc.encode(`data: [DONE]\n\n`)); c.close() } })
+      return new Response(stream, { status: 200 })
+    })
+    const config = { provider: `deepseek`, model: `deepseek-chat`, temperature: 0.2, max_tokens: 1024, api_key: `sk-x`, base_url: ``, api_format: `openai`, fetched_models: {}, mode: `universal` } as never
+    const events = []
+    for await (const e of stream_client_llm([{ role: `user`, content: `hi`, timestamp: 0 }] as never, config, `sys`, [] as never, undefined)) events.push(e)
+    expect(called_url).toBe(`https://api.deepseek.com/chat/completions`)
+    spy.mockRestore()
+  })
+
+  it(`yields an error event (and does not fetch) when both base_url and provider map are empty`, async () => {
+    const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async () => {
+      throw new Error(`fetch should not be called`)
+    })
+    const config = { provider: `custom`, model: `m`, temperature: 0.2, max_tokens: 1024, api_key: `sk-x`, base_url: ``, api_format: `openai`, fetched_models: {}, mode: `universal` } as never
+    const events: LlmEvent[] = []
+    for await (const e of stream_client_llm([{ role: `user`, content: `hi`, timestamp: 0 }] as never, config, `sys`, [] as never, undefined)) events.push(e)
+    expect(spy).not.toHaveBeenCalled()
+    expect(events.some((e) => e.type === `error`)).toBe(true)
+    spy.mockRestore()
+  })
 })
