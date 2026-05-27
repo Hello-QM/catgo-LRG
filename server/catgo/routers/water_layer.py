@@ -284,7 +284,17 @@ def pack_water_spc216(
     from ase import Atoms as AseAtoms
     from ase.neighborlist import neighbor_list as ase_neighbor_list
 
-    OH_CUTOFF = 1.3  # Å — same as standard O-H bond detection cutoff
+    # Per-pair clash thresholds (Å). Below these, two DIFFERENT water molecules
+    # interpenetrate → non-physical. The previous check only looked at O···H
+    # and missed overlapping oxygens (e.g. O-O at 1.6 Å with no O-H < 1.3),
+    # which is exactly what happens where misaligned spc216 tiles meet across
+    # the cell's a/b PBC faces. O···H stays at 1.3 (well under the ~1.8 Å
+    # hydrogen-bond distance, so real H-bonds survive); O-O catches overlapping
+    # oxygens (real nearest O-O is ~2.8 Å, so 2.0 only flags clashes); H-H 1.3.
+    CLASH_OO = 2.0
+    CLASH_OH = 1.3
+    CLASH_HH = 1.3
+    max_clash = max(CLASH_OO, CLASH_OH, CLASH_HH)
 
     # Build temporary ASE Atoms with just water for PBC distance check.
     # Atom order is [O, H, H] per molecule, so molecule index = atom_idx // 3
@@ -302,19 +312,25 @@ def pack_water_spc216(
         pbc=True,
     )
 
-    # Any cross-molecule O···H contact within OH_CUTOFF means the two rigid
-    # molecules interpenetrate (intramolecular O-H is ~0.96 Å). Drop the
-    # higher-indexed molecule of each clashing pair. Intramolecular pairs
-    # (same molecule) are skipped, matching the original O_i–H_j criterion.
-    i_arr, j_arr = ase_neighbor_list("ij", water_atoms, OH_CUTOFF)
+    # One PBC-aware neighbor_list at the largest threshold finds every close
+    # cross-molecule contact; each pair is then judged against its type's
+    # threshold. Drop the higher-indexed molecule of each clashing pair.
+    i_arr, j_arr, d_arr = ase_neighbor_list("ijd", water_atoms, max_clash)
     remove_set: set[int] = set()
     for k in range(len(i_arr)):
         ai, aj = int(i_arr[k]), int(j_arr[k])
         mol_ai, mol_aj = ai // 3, aj // 3
-        if mol_ai == mol_aj:
+        if mol_ai == mol_aj:  # skip intramolecular pairs
             continue
-        # require exactly one O and one H (matches the original criterion)
-        if (ai % 3 == 0) == (aj % 3 == 0):
+        ai_is_o = ai % 3 == 0
+        aj_is_o = aj % 3 == 0
+        if ai_is_o and aj_is_o:
+            thresh = CLASH_OO
+        elif ai_is_o or aj_is_o:
+            thresh = CLASH_OH
+        else:
+            thresh = CLASH_HH
+        if d_arr[k] >= thresh:
             continue
         if mol_ai in remove_set or mol_aj in remove_set:
             continue

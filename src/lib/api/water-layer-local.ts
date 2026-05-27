@@ -285,28 +285,38 @@ function pack_water_spc216(
 
   if (kept.length === 0) return []
 
-  // Remove water-water overlaps across cell PBC boundaries.
-  // Two molecules overlap if an H from one is within OH_CUTOFF of the O of another.
-  const OH_CUTOFF = 1.3
-  const oh_cutoff_d2 = OH_CUTOFF * OH_CUTOFF
+  // Remove water-water overlaps across cell PBC boundaries. Where misaligned
+  // spc216 tiles meet at the a/b PBC faces, atoms from different molecules can
+  // interpenetrate. Check ALL cross-molecule atom pairs (not just O···H, which
+  // missed overlapping oxygens — e.g. O-O at 1.6 Å with no O-H < 1.3). Per-pair
+  // thresholds: O-O 2.0 Å (real nearest is ~2.8), O-H 1.3 Å (below the ~1.8 Å
+  // H-bond distance so real H-bonds survive), H-H 1.3 Å. Drop the
+  // higher-indexed molecule of each clashing pair.
+  const CLASH_OO = 2.0
+  const CLASH_OH = 1.3
+  const CLASH_HH = 1.3
   const water_pbc: [boolean, boolean, boolean] = [true, true, true]
   const n_w = kept.length
   const remove_set: Set<number> = new Set()
   for (let i_mol = 0; i_mol < n_w; i_mol++) {
     if (remove_set.has(i_mol)) continue
-    const o = kept[i_mol][0]
-    for (let j_mol = 0; j_mol < n_w; j_mol++) {
-      if (j_mol === i_mol || remove_set.has(j_mol)) continue
-      const h1 = kept[j_mol][1]
-      const h2 = kept[j_mol][2]
-      const d1 = mic_distance(o, h1, cell, water_pbc)
-      const d2 = mic_distance(o, h2, cell, water_pbc)
-      if (d1 < OH_CUTOFF || d2 < OH_CUTOFF) {
-        remove_set.add(Math.max(i_mol, j_mol))
-      }
+    const [oi, hi1, hi2] = kept[i_mol]
+    for (let j_mol = i_mol + 1; j_mol < n_w; j_mol++) {
+      if (remove_set.has(j_mol)) continue
+      const [oj, hj1, hj2] = kept[j_mol]
+      const clash =
+        mic_distance(oi, oj, cell, water_pbc) < CLASH_OO ||
+        mic_distance(oi, hj1, cell, water_pbc) < CLASH_OH ||
+        mic_distance(oi, hj2, cell, water_pbc) < CLASH_OH ||
+        mic_distance(oj, hi1, cell, water_pbc) < CLASH_OH ||
+        mic_distance(oj, hi2, cell, water_pbc) < CLASH_OH ||
+        mic_distance(hi1, hj1, cell, water_pbc) < CLASH_HH ||
+        mic_distance(hi1, hj2, cell, water_pbc) < CLASH_HH ||
+        mic_distance(hi2, hj1, cell, water_pbc) < CLASH_HH ||
+        mic_distance(hi2, hj2, cell, water_pbc) < CLASH_HH
+      if (clash) remove_set.add(j_mol)
     }
   }
-  void oh_cutoff_d2 // kept for potential future inline-distance optimization
   if (remove_set.size > 0) {
     const filtered: Mol[] = []
     for (let i = 0; i < kept.length; i++) if (!remove_set.has(i)) filtered.push(kept[i])

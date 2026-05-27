@@ -1,8 +1,6 @@
 import type { PymatgenStructure } from '$lib/structure'
 import { SERVER_URL } from './config'
 
-declare const __CATGO_VSCODE_EXTENSION__: boolean | undefined
-
 function format_error_detail(detail: unknown): string {
   if (typeof detail === `string`) return detail
   if (Array.isArray(detail)) {
@@ -48,10 +46,15 @@ export async function addWaterLayer(
   params: WaterLayerParams = {},
   server_url = SERVER_URL,
 ): Promise<WaterLayerResult> {
-  if (typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` && __CATGO_VSCODE_EXTENSION__) {
+  // Water packing (spc216 tiling + clash removal) runs fully client-side — no
+  // backend round-trip needed. The only step that requires the Python backend
+  // is the optional TIP4P/LAMMPS equilibration, which is currently hidden in
+  // the UI; if it is ever requested explicitly, fall back to the backend.
+  if (!params.equilibrate) {
     const { add_water_layer_local } = await import('./water-layer-local')
     return add_water_layer_local(structure, params)
   }
+
   const response = await fetch(`${server_url}/api/water-layer/add`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -63,7 +66,5 @@ export async function addWaterLayer(
     throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
   }
 
-  const data = await response.json()
-  console.log(`[water-layer API] response sites: ${data.structure?.sites?.length}, O count: ${data.structure?.sites?.filter((s: any) => s.species?.[0]?.element === 'O').length}`)
-  return data
+  return await response.json()
 }
