@@ -196,11 +196,12 @@ export function detect_provider_from_slug(slug: string, providers: OptimadeProvi
 // so we can't fetch the list from the browser. These are the working providers.
 // base_url is required for direct browser queries in static mode.
 const STATIC_PROVIDERS: OptimadeProvider[] = [
+  // Static (no-backend) mode only lists providers that actually work from the
+  // browser: MP via the CatGo CORS relay, Alexandria via permissive ACAO. MC3D/
+  // MC2D (404) and OMDB (unreachable) were dropped — they failed server-side too,
+  // not just CORS. PubChem molecule search is a separate modal, unaffected.
   { id: `mp`, type: `links`, attributes: { name: `The Materials Project`, description: `Materials data`, base_url: `https://optimade.materialsproject.org` } } as OptimadeProvider,
   { id: `alexandria`, type: `links`, attributes: { name: `Alexandria`, description: `PBE & PBEsol crystal structures`, base_url: `https://alexandria.icams.rub.de/pbe` } } as OptimadeProvider,
-  { id: `mc3d`, type: `links`, attributes: { name: `MC3D`, description: `Materials Cloud 3D crystals`, base_url: `https://aiida.materialscloud.org/mc3d/optimade` } } as OptimadeProvider,
-  { id: `mc2d`, type: `links`, attributes: { name: `MC2D`, description: `Materials Cloud 2D materials`, base_url: `https://aiida.materialscloud.org/mc2d/optimade` } } as OptimadeProvider,
-  { id: `omdb`, type: `links`, attributes: { name: `Open Materials Database`, description: `Organic materials`, base_url: `https://optimade.openmaterialsdb.se` } } as OptimadeProvider,
 ]
 
 export async function fetch_optimade_providers(): Promise<OptimadeProvider[]> {
