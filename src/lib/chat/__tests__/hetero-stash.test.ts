@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+  get_bulk_stash,
   get_film_stash,
   get_hetero_matches,
+  set_bulk_stash,
   set_film_stash,
   set_hetero_matches,
 } from '../hetero-stash.svelte'
@@ -40,5 +42,11 @@ describe(`hetero-stash`, () => {
     expect(out).toHaveLength(1)
     expect(out[0].match_id).toBe(0)
     expect(out[0].substrate_transformation).toEqual([[1, 0], [0, 1]])
+  })
+
+  it(`bulk set/get round-trips`, () => {
+    expect(get_bulk_stash()).toBeNull()
+    set_bulk_stash(CUBIC as never)
+    expect(get_bulk_stash()).toStrictEqual(CUBIC as never)
   })
 })

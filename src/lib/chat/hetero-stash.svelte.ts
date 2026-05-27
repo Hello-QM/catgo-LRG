@@ -18,7 +18,8 @@ import type { HeterostructureMatch } from '$lib/api/heterostructure'
 const _state = $state<{
   film: AnyStructure | null
   matches: HeterostructureMatch[]
-}>({ film: null, matches: [] })
+  bulk: AnyStructure | null
+}>({ film: null, matches: [], bulk: null })
 
 /** Stash the FILM structure for the next heterostructure search/build. */
 export function set_film_stash(s: AnyStructure): void {
@@ -38,4 +39,15 @@ export function set_hetero_matches(m: HeterostructureMatch[]): void {
 /** The candidate matches from the most recent search (empty if none yet). */
 export function get_hetero_matches(): HeterostructureMatch[] {
   return _state.matches
+}
+
+/** Stash the BULK reference crystal for surface passivation (pseudo-hydrogen).
+ *  Used to compute reference coordination numbers when capping a slab. */
+export function set_bulk_stash(s: AnyStructure | null): void {
+  _state.bulk = s
+}
+
+/** The stashed BULK reference, or null if `set_bulk_reference` was never called. */
+export function get_bulk_stash(): AnyStructure | null {
+  return _state.bulk
 }

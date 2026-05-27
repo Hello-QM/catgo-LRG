@@ -17,9 +17,13 @@ import { buildNanoscroll } from '$lib/api/nanoscroll'
 import { searchMoireAngles, buildMoireBilayer } from '$lib/api/moire'
 import { buildHeterostructureManual, searchHeterostructureMatches } from '$lib/api/heterostructure'
 import type { HeterostructureSearchParams } from '$lib/api/heterostructure'
+import { passivateSlab } from '$lib/api/pseudo-hydrogen'
+import type { PseudoHydrogenParams } from '$lib/api/pseudo-hydrogen'
 import {
+  get_bulk_stash,
   get_film_stash,
   get_hetero_matches,
+  set_bulk_stash,
   set_film_stash,
   set_hetero_matches,
 } from './hetero-stash.svelte'
@@ -659,6 +663,69 @@ register(
     )
     set_current_structure(result.structure as never)
     return { num_sites: result.n_atoms, strain: result.strain, match_area: result.match_area }
+  },
+)
+
+// ── set_bulk_reference (read) ──
+register(
+  {
+    name: `set_bulk_reference`,
+    description: `Mark the currently-loaded structure as the BULK reference for surface passivation (used to compute correct coordination numbers). Then load/cut the slab and call passivate_surface. Typical flow: load bulk → set_bulk_reference → generate_slab → passivate_surface.`,
+    kind: `read`,
+    input_schema: { type: `object`, properties: {} },
+  },
+  () => {
+    const bulk = require_structure()
+    set_bulk_stash(bulk)
+    const sites = (bulk as { sites?: unknown[] }).sites ?? []
+    return { bulk_formula: plain_formula(bulk), bulk_num_sites: sites.length }
+  },
+)
+
+// ── passivate_surface (mutate) ──
+register(
+  {
+    name: `passivate_surface`,
+    description: `Passivate dangling bonds on the current slab with pseudo-hydrogen. Requires a bulk reference (set_bulk_reference) or an explicit bulk_coordination map.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        bulk_coordination: {
+          type: `object`,
+          additionalProperties: { type: `number` },
+          description: `Optional map of element → expected (bulk) coordination number, e.g. {"Si": 4}. Overrides the bulk-derived coordination; lets you passivate without a stashed bulk reference.`,
+        },
+      },
+    },
+  },
+  async (input) => {
+    const slab = require_structure()
+    const bulk = get_bulk_stash()
+    const bulk_coordination = input.bulk_coordination as Record<string, number> | undefined
+
+    if (!bulk && !bulk_coordination) {
+      throw new Error(
+        `Set a bulk reference first (set_bulk_reference on the parent crystal), or pass bulk_coordination.`,
+      )
+    }
+
+    const params: PseudoHydrogenParams = {}
+    if (bulk_coordination) params.bulk_coordination = bulk_coordination
+
+    // With a stashed bulk, reference coordination is derived from it (params may
+    // still carry an explicit override). Without a bulk, the explicit
+    // bulk_coordination map is authoritative — pass the slab itself as the bulk
+    // arg (it is ignored once bulk_coordination is set).
+    const bulk_arg = bulk ?? slab
+    const result = await passivateSlab(slab as never, bulk_arg as never, params)
+
+    set_current_structure(result.structure as never)
+    const n_added = (result as { n_pseudo_h?: number }).n_pseudo_h
+    const sites = (result.structure as { sites?: unknown[] }).sites ?? []
+    return n_added === undefined
+      ? { num_sites: sites.length }
+      : { num_sites: sites.length, n_hydrogens_added: n_added }
   },
 )
 

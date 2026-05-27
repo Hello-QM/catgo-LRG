@@ -4,7 +4,8 @@ import { set_current_structure, get_current_structure } from '$lib/structure/cur
 import * as routing from '../provider-routing'
 import * as ferrox from '$lib/structure/ferrox-wasm'
 import * as hetero_api from '$lib/api/heterostructure'
-import { set_film_stash, set_hetero_matches } from '../hetero-stash.svelte'
+import * as pseudo_h from '$lib/api/pseudo-hydrogen'
+import { set_bulk_stash, set_film_stash, set_hetero_matches } from '../hetero-stash.svelte'
 import type { HeterostructureMatch } from '$lib/api/heterostructure'
 
 const CUBIC_NACL = {
@@ -271,5 +272,104 @@ describe(`heterostructure tools`, () => {
     set_hetero_matches([])
     const out = JSON.parse(await execute_tool(`build_heterostructure`, {}))
     expect(out.error).toMatch(/heterostructure_search/i)
+  })
+})
+
+describe(`pseudo-hydrogen passivation tools`, () => {
+  // A distinct cubic "bulk" reference, separate from the slab (CUBIC_NACL).
+  const CUBIC_BULK = {
+    '@module': `pymatgen.core.structure`,
+    '@class': `Structure`,
+    lattice: { matrix: [[3.5, 0, 0], [0, 3.5, 0], [0, 0, 3.5]] },
+    sites: [{ species: [{ element: `Cu`, occu: 1 }], abc: [0, 0, 0], xyz: [0, 0, 0], label: `Cu` }],
+  }
+
+  beforeEach(() => {
+    set_current_structure(CUBIC_NACL as never)
+    set_bulk_stash(null as never)
+  })
+
+  it(`set_bulk_reference is a read tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `set_bulk_reference`)).toBeTruthy()
+    expect(tool_kind(`set_bulk_reference`)).toBe(`read`)
+  })
+
+  it(`passivate_surface is a mutate tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `passivate_surface`)).toBeTruthy()
+    expect(tool_kind(`passivate_surface`)).toBe(`mutate`)
+  })
+
+  it(`set_bulk_reference stashes the current structure and returns formula + site count`, async () => {
+    set_current_structure(CUBIC_BULK as never)
+    const out = JSON.parse(await execute_tool(`set_bulk_reference`, {}))
+    expect(out.bulk_num_sites).toBe(1)
+    expect(out.bulk_formula).toContain(`Cu`)
+  })
+
+  it(`passivate_surface errors when no bulk stashed and no bulk_coordination given`, async () => {
+    set_bulk_stash(null as never)
+    const out = JSON.parse(await execute_tool(`passivate_surface`, {}))
+    expect(out.error).toMatch(/bulk reference|bulk_coordination/i)
+  })
+
+  it(`passivate_surface passes (slab, bulk, params) and writes the result back`, async () => {
+    // Stash a distinct bulk; current = the slab.
+    set_bulk_stash(CUBIC_BULK as never)
+    set_current_structure(CUBIC_NACL as never)
+    const passivated = {
+      ...CUBIC_NACL,
+      sites: Array.from({ length: 6 }, (_, i) => ({
+        species: [{ element: i < 2 ? (i === 0 ? `Na` : `Cl`) : `H`, occu: 1 }],
+        abc: [0, 0, 0],
+        xyz: [0, 0, 0],
+        label: `X`,
+      })),
+    }
+    const spy = vi.spyOn(pseudo_h, `passivateSlab`).mockResolvedValue({
+      structure: passivated as never,
+      n_pseudo_h: 4,
+      bulk_coordination: { Na: 6, Cl: 6 },
+      valence_used: {},
+      pseudo_h_list: [],
+      unique_potcars: [],
+      bond_warnings: [],
+      message: `ok`,
+    })
+    const out = JSON.parse(await execute_tool(`passivate_surface`, {}))
+    expect(spy).toHaveBeenCalledTimes(1)
+    // arg 0 = slab (current), arg 1 = stashed bulk
+    expect((spy.mock.calls[0][0] as { sites: unknown[] }).sites).toHaveLength(2)
+    expect((spy.mock.calls[0][1] as { sites: unknown[] }).sites).toHaveLength(1)
+    expect(out.num_sites).toBe(6)
+    expect(out.n_hydrogens_added).toBe(4)
+    // set_current_structure received the passivated structure
+    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(6)
+    spy.mockRestore()
+  })
+
+  it(`passivate_surface accepts explicit bulk_coordination without a stashed bulk`, async () => {
+    set_bulk_stash(null as never)
+    set_current_structure(CUBIC_NACL as never)
+    const spy = vi.spyOn(pseudo_h, `passivateSlab`).mockResolvedValue({
+      structure: CUBIC_NACL as never,
+      n_pseudo_h: 0,
+      bulk_coordination: { Na: 6, Cl: 6 },
+      valence_used: {},
+      pseudo_h_list: [],
+      unique_potcars: [],
+      bond_warnings: [],
+      message: `ok`,
+    })
+    const out = JSON.parse(
+      await execute_tool(`passivate_surface`, { bulk_coordination: { Na: 6, Cl: 6 } }),
+    )
+    expect(spy).toHaveBeenCalledTimes(1)
+    // explicit coordination passed through params (arg 2)
+    expect((spy.mock.calls[0][2] as { bulk_coordination?: unknown }).bulk_coordination).toEqual({
+      Na: 6,
+      Cl: 6,
+    })
+    expect(out.num_sites).toBe(2)
+    spy.mockRestore()
   })
 })
