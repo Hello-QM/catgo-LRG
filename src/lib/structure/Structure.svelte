@@ -73,7 +73,7 @@
   import { build_structure_context } from '$lib/chat/context'
   import { analysis_sessions, get_analysis_session, get_session_blob } from '$lib/chat/analysis-session-store.svelte'
   import { start_mcp_bridge, type McpBridgeDeps } from './controllers/tool-handler'
-  import { set_current_structure } from './current-structure.svelte'
+  import { set_current_structure, current_structure_state } from './current-structure.svelte'
   import { molecular_fragments, type MolecularFragment } from './controllers/fragments'
   import { create_xrd_controller, format_hkl } from './controllers/xrd-state.svelte'
   import { create_build_tools_controller } from './controllers/build-tools.svelte'
@@ -2141,9 +2141,25 @@
   // resolution still find it after this pane is closed / unmounted (e.g.
   // full-screen Workflow editor). Only real structures with a tab_id are
   // recorded — preview/popup instances (no tab_id) must not clobber it.
+  let _last_mirrored_to_store: typeof structure | undefined = undefined
   $effect(() => {
     if (tab_id === undefined) return
-    if (structure) set_current_structure(structure)
+    if (structure) { _last_mirrored_to_store = structure; set_current_structure(structure) }
+  })
+
+  // Reverse sync: store → viewer. The CatBot client-direct tool loop (STATIC_ONLY,
+  // no backend) mutates structures via set_current_structure() in structure-tools.ts;
+  // unlike the SDK/MCP path there's no SSE bridge to push the result back into the
+  // viewer. Pull it here. Guard against the mirror effect above: only adopt a store
+  // value that is a DIFFERENT object than what we last wrote (so the viewer's own
+  // structure→store mirror can't ping-pong). New ref from a tool → adopt it.
+  const _cur_store = current_structure_state()
+  $effect(() => {
+    if (tab_id === undefined) return
+    const v = _cur_store.value
+    if (v && v !== structure && v !== _last_mirrored_to_store) {
+      structure = v as typeof structure
+    }
   })
 
   let mcp_request_push: (() => void) | null = null
