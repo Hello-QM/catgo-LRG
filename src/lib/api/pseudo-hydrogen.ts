@@ -1,5 +1,5 @@
 import type { PymatgenStructure } from '$lib/structure'
-import { SERVER_URL } from './config'
+import { SERVER_URL, STATIC_ONLY } from './config'
 
 function format_error_detail(detail: unknown): string {
   if (typeof detail === `string`) return detail
@@ -49,22 +49,53 @@ export interface PseudoHydrogenResult {
   message: string
 }
 
+// Client-side fallback: run passivation entirely in the browser via ferrox-wasm.
+// Used in STATIC_ONLY builds (no Python backend) and when the backend fetch fails.
+async function passivateSlabWasm(
+  slab: PymatgenStructure,
+  bulk: PymatgenStructure,
+  params?: PseudoHydrogenParams,
+): Promise<PseudoHydrogenResult> {
+  const { wasm_passivate_slab } = await import('$lib/structure/ferrox-wasm')
+  const result = await wasm_passivate_slab(
+    slab as unknown as import('$lib/structure/ferrox-wasm').Crystal,
+    bulk as unknown as import('$lib/structure/ferrox-wasm').Crystal,
+    params as Record<string, unknown> | undefined,
+  )
+  return result as PseudoHydrogenResult
+}
+
 export async function passivateSlab(
   slab: PymatgenStructure,
   bulk: PymatgenStructure,
   params?: PseudoHydrogenParams,
   server_url = SERVER_URL,
 ): Promise<PseudoHydrogenResult> {
-  const response = await fetch(`${server_url}/api/pseudo-hydrogen/passivate`, {
-    method: `POST`,
-    headers: { 'Content-Type': `application/json` },
-    body: JSON.stringify({ slab, bulk, params }),
-  })
-
-  if (!response.ok) {
-    const error_data = await response.json().catch(() => ({ detail: response.statusText }))
-    throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
+  // STATIC_ONLY builds have no Python backend — go straight to WASM.
+  if (STATIC_ONLY) {
+    return passivateSlabWasm(slab, bulk, params)
   }
 
-  return response.json()
+  try {
+    const response = await fetch(`${server_url}/api/pseudo-hydrogen/passivate`, {
+      method: `POST`,
+      headers: { 'Content-Type': `application/json` },
+      body: JSON.stringify({ slab, bulk, params }),
+    })
+
+    if (!response.ok) {
+      const error_data = await response.json().catch(() => ({ detail: response.statusText }))
+      throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
+    }
+
+    return response.json()
+  } catch (err) {
+    // Backend unavailable (network error / connection refused) — fall back to WASM.
+    // Re-throw genuine server-side errors (HTTP errors thrown above) only if WASM also fails.
+    try {
+      return await passivateSlabWasm(slab, bulk, params)
+    } catch (wasm_err) {
+      throw err instanceof Error ? err : new Error(String(wasm_err))
+    }
+  }
 }

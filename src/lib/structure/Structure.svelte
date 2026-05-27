@@ -55,6 +55,7 @@
     PseudoHydrogenPane,
     MoirePane,
     NanotubePane,
+    NanoscrollPane,
     HeterostructurePane,
     DopingPane,
     DopingPTPanel,
@@ -3025,6 +3026,14 @@
             />
           {:else if build.active_build_tab === 'nanotube'}
             <NanotubePane
+              embedded={true}
+              bind:structure={structure as PymatgenStructure}
+              pane_open={true}
+              on_push_undo={push_to_undo}
+              on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
+            />
+          {:else if build.active_build_tab === 'nanoscroll'}
+            <NanoscrollPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
               pane_open={true}
