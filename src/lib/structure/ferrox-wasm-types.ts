@@ -311,3 +311,42 @@ export interface EnergyBreakdown {
   non_bonded: number
   total: number
 }
+
+// =============================================================================
+// Nanoscroll builder
+// =============================================================================
+
+/** Parameters controlling nanoscroll construction. All fields optional —
+ *  the WASM core fills missing keys with its own defaults. */
+export interface NanoscrollParams {
+  /** Number of windings (turns). Default 6. */
+  turns?: number
+  /** Inner winding radius (Å). Default 25. */
+  inner_radius?: number
+  /** Scroll height along z (Å). Default 12. */
+  length?: number
+  /** Roll direction: which in-plane lattice vector is rolled. Default "a1". */
+  roll_dir?: 'a1' | 'a2'
+  /** Van-der-Waals interlayer gap between windings (Å). Default 3.3. */
+  interlayer_gap?: number
+  /** Local-strain threshold (fraction) above which a curvature warning fires. Default 0.15. */
+  strain_warn_threshold?: number
+}
+
+/** Metadata describing a constructed nanoscroll. */
+export interface NanoscrollInfo {
+  turns: number
+  inner_radius: number
+  outer_radius: number
+  length: number
+  monolayer_thickness: number
+  interlayer_gap: number
+  arc_length: number
+  /** Supercell tiling [nx, ny] used to cover the spiral. */
+  supercell: [number, number]
+  n_atoms: number
+  /** Maximum local bending strain (fraction; ~thickness / (2·inner_radius)). */
+  max_local_strain: number
+  /** Curvature-strain warning, present only when the inner radius is too small. */
+  warning?: string | null
+}

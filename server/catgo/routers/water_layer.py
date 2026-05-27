@@ -278,19 +278,32 @@ def pack_water_spc216(
     # Remove water-water overlaps across cell PBC boundaries.
     # The spc216 tile boundaries don't align with the triclinic cell,
     # so molecules at opposite cell faces can be too close through PBC.
-    # Use ASE's MIC (minimum image convention) for correct PBC distances.
+    # A single ASE neighbor_list call (PBC-aware, MIC) finds every close
+    # contact in ~O(N); the previous O(N²) per-pair get_distance(mic=True)
+    # loop took minutes for layers with hundreds of molecules.
     from ase import Atoms as AseAtoms
+    from ase.neighborlist import neighbor_list as ase_neighbor_list
 
-    OH_CUTOFF = 1.3  # Å — same as standard O-H bond detection cutoff
+    # Per-pair clash thresholds (Å). Below these, two DIFFERENT water molecules
+    # interpenetrate → non-physical. The previous check only looked at O···H
+    # and missed overlapping oxygens (e.g. O-O at 1.6 Å with no O-H < 1.3),
+    # which is exactly what happens where misaligned spc216 tiles meet across
+    # the cell's a/b PBC faces. O···H stays at 1.3 (well under the ~1.8 Å
+    # hydrogen-bond distance, so real H-bonds survive); O-O catches overlapping
+    # oxygens (real nearest O-O is ~2.8 Å, so 2.0 only flags clashes); H-H 1.3.
+    CLASH_OO = 2.0
+    CLASH_OH = 1.3
+    CLASH_HH = 1.3
+    max_clash = max(CLASH_OO, CLASH_OH, CLASH_HH)
 
-    # Build temporary ASE Atoms with just water for PBC distance check
+    # Build temporary ASE Atoms with just water for PBC distance check.
+    # Atom order is [O, H, H] per molecule, so molecule index = atom_idx // 3
+    # and O atoms are those with atom_idx % 3 == 0.
     water_syms: list[str] = []
     water_pos: list[np.ndarray] = []
-    mol_of_atom: list[int] = []  # maps atom index → molecule index
-    for i, (o, h1, h2) in enumerate(kept):
+    for o, h1, h2 in kept:
         water_syms.extend(["O", "H", "H"])
         water_pos.extend([o, h1, h2])
-        mol_of_atom.extend([i, i, i])
 
     water_atoms = AseAtoms(
         symbols=water_syms,
@@ -299,27 +312,29 @@ def pack_water_spc216(
         pbc=True,
     )
 
-    n_w = len(kept)
+    # One PBC-aware neighbor_list at the largest threshold finds every close
+    # cross-molecule contact; each pair is then judged against its type's
+    # threshold. Drop the higher-indexed molecule of each clashing pair.
+    i_arr, j_arr, d_arr = ase_neighbor_list("ijd", water_atoms, max_clash)
     remove_set: set[int] = set()
-
-    # For each water O, check if any H from a DIFFERENT molecule is
-    # within OH_CUTOFF (using MIC).  If so, the two molecules overlap.
-    o_atom_indices = list(range(0, len(water_atoms), 3))  # O at 0,3,6,...
-    h_atom_indices = []
-    for m in range(n_w):
-        h_atom_indices.append(m * 3 + 1)
-        h_atom_indices.append(m * 3 + 2)
-
-    for i_mol, o_idx in enumerate(o_atom_indices):
-        if i_mol in remove_set:
+    for k in range(len(i_arr)):
+        ai, aj = int(i_arr[k]), int(j_arr[k])
+        mol_ai, mol_aj = ai // 3, aj // 3
+        if mol_ai == mol_aj:  # skip intramolecular pairs
             continue
-        for h_idx in h_atom_indices:
-            j_mol = mol_of_atom[h_idx]
-            if j_mol == i_mol or j_mol in remove_set:
-                continue
-            dist = water_atoms.get_distance(o_idx, h_idx, mic=True)
-            if dist < OH_CUTOFF:
-                remove_set.add(max(i_mol, j_mol))
+        ai_is_o = ai % 3 == 0
+        aj_is_o = aj % 3 == 0
+        if ai_is_o and aj_is_o:
+            thresh = CLASH_OO
+        elif ai_is_o or aj_is_o:
+            thresh = CLASH_OH
+        else:
+            thresh = CLASH_HH
+        if d_arr[k] >= thresh:
+            continue
+        if mol_ai in remove_set or mol_aj in remove_set:
+            continue
+        remove_set.add(max(mol_ai, mol_aj))
 
     if remove_set:
         kept = [m for i, m in enumerate(kept) if i not in remove_set]
@@ -733,10 +748,18 @@ def add_water_layer(request: WaterLayerRequest) -> WaterLayerResult:
             else:
                 site.properties = {"selective_dynamics": [True, True, True]}
 
-        # Compute actual water density in fill region
+        # Compute actual water density over the column the water ACTUALLY
+        # occupies, not the full requested [z_start, z_end]. Dividing by the
+        # full height counts the empty depletion gap left by min_distance
+        # above the slab (and any sub-slab volume when z_start is set low),
+        # which understates the density — often reading ~0.5 g/cm³ when the
+        # water itself is ~1.0. Mirror the desktop water-layer-local.ts
+        # measure: from the lowest placed water atom up to z_end.
         molecular_weight = 18.015
         avogadro = 6.022e23
-        fill_volume_ang3 = xy_area * water_height  # Å³
+        min_water_z = float(water_positions[:, 2].min())
+        effective_water_height = max(z_end - min_water_z, 1e-6)
+        fill_volume_ang3 = xy_area * effective_water_height  # Å³
         fill_volume_cm3 = fill_volume_ang3 * 1e-24
         actual_density = (n_water_placed * molecular_weight) / (avogadro * fill_volume_cm3) if fill_volume_cm3 > 0 else 0.0
         logger.info(

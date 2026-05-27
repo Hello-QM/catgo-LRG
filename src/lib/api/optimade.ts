@@ -3,6 +3,7 @@
 
 declare const __CATGO_STATIC_ONLY__: boolean
 import { API_BASE as _DEFAULT_API } from './config'
+import { relay_fetch } from '$lib/chat/provider-routing'
 
 // API base URL - same as compute.ts
 let API_BASE = _DEFAULT_API
@@ -100,8 +101,10 @@ async function fetch_json_smart(url: string): Promise<unknown> {
     return await fetch_via_vscode(url)
   }
 
-  // In web context: direct fetch (backend will handle routing)
-  const response = await fetch(url, {
+  // In web context: relay-aware fetch. For backend-proxy URLs (${API_BASE}/...)
+  // and open-CORS OPTIMADE providers this is a direct fetch; for CORS-blocked
+  // providers (Materials Project) it transparently routes through the relay.
+  const response = await relay_fetch(url, {
     headers: { 'Accept': `application/vnd.api+json` },
   })
   if (!response.ok) {
@@ -193,11 +196,12 @@ export function detect_provider_from_slug(slug: string, providers: OptimadeProvi
 // so we can't fetch the list from the browser. These are the working providers.
 // base_url is required for direct browser queries in static mode.
 const STATIC_PROVIDERS: OptimadeProvider[] = [
+  // Static (no-backend) mode only lists providers that actually work from the
+  // browser: MP via the CatGo CORS relay, Alexandria via permissive ACAO. MC3D/
+  // MC2D (404) and OMDB (unreachable) were dropped — they failed server-side too,
+  // not just CORS. PubChem molecule search is a separate modal, unaffected.
   { id: `mp`, type: `links`, attributes: { name: `The Materials Project`, description: `Materials data`, base_url: `https://optimade.materialsproject.org` } } as OptimadeProvider,
   { id: `alexandria`, type: `links`, attributes: { name: `Alexandria`, description: `PBE & PBEsol crystal structures`, base_url: `https://alexandria.icams.rub.de/pbe` } } as OptimadeProvider,
-  { id: `mc3d`, type: `links`, attributes: { name: `MC3D`, description: `Materials Cloud 3D crystals`, base_url: `https://aiida.materialscloud.org/mc3d/optimade` } } as OptimadeProvider,
-  { id: `mc2d`, type: `links`, attributes: { name: `MC2D`, description: `Materials Cloud 2D materials`, base_url: `https://aiida.materialscloud.org/mc2d/optimade` } } as OptimadeProvider,
-  { id: `omdb`, type: `links`, attributes: { name: `Open Materials Database`, description: `Organic materials`, base_url: `https://optimade.openmaterialsdb.se` } } as OptimadeProvider,
 ]
 
 export async function fetch_optimade_providers(): Promise<OptimadeProvider[]> {
@@ -206,12 +210,14 @@ export async function fetch_optimade_providers(): Promise<OptimadeProvider[]> {
     return cached_providers
   }
 
-  // In static-only mode, use hardcoded providers (CORS blocks providers.optimade.org).
-  // Note: OPTIMADE search APIs also lack CORS, so only PubChem works in static mode.
-  // OPTIMADE providers are excluded until a CORS proxy (e.g. Cloudflare Workers) is set up.
+  // In static-only mode (no backend), use the hardcoded provider list. The
+  // CatGo CORS relay Worker now fronts CORS-blocked OPTIMADE APIs (Materials
+  // Project) and Alexandria allows browser requests directly, so search works
+  // client-side (search_optimade_structures routes MP via relay_fetch).
+  // PubChem is appended separately by the modal.
   const is_static = typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__
   if (is_static) {
-    cached_providers = []  // No OPTIMADE providers — PubChem is added by the modal
+    cached_providers = STATIC_PROVIDERS
     providers_cache_time = now
     return cached_providers
   }
@@ -601,13 +607,13 @@ export async function search_optimade_structures(
       if (response_fields) url += `&response_fields=${encodeURIComponent(response_fields)}`
       if (sort) url += `&sort=${encodeURIComponent(sort)}`
 
-      let response = await fetch(url, {
+      let response = await relay_fetch(url, {
         headers: { 'Accept': `application/vnd.api+json` },
       })
       // If the provider rejects the sort field, retry without it
       if (!response.ok && sort) {
         const fallback_url = url.replace(/&sort=[^&]*/, ``)
-        response = await fetch(fallback_url, {
+        response = await relay_fetch(fallback_url, {
           headers: { 'Accept': `application/vnd.api+json` },
         })
       }

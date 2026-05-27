@@ -32,6 +32,8 @@
   import ThinkingSummary from './ThinkingSummary.svelte'
   import { SDK_PROVIDERS, default_mode_for } from './types'
   import { fetch_providers } from './llm-client'
+  import { PROVIDER_BASE_URLS } from './client-llm'
+import { is_client_direct, relay_fetch } from './provider-routing'
   import { TTSEngine } from '$lib/gesture/tts-engine'
   import {
     FALLBACK_MODELS, CLI_INSTALL_INFO, PROVIDER_META, AGENT_LABELS, VOICE_LANGUAGES,
@@ -93,6 +95,26 @@
   async function test_provider_connection() {
     test_status = `testing`
     test_message = ``
+
+    // Client-direct (STATIC_ONLY / no backend): ping the provider's /models
+    // endpoint from the browser to validate base_url + API key.
+    if (is_client_direct(chat_config)) {
+      try {
+        const base = resolved_base_url()
+        if (!base) throw new Error(`no base_url`)
+        const t0 = performance.now()
+        const resp = await relay_fetch(`${base}/models`, { headers: { Authorization: `Bearer ${chat_config.api_key}` } })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        test_status = `success`
+        test_latency = Math.round(performance.now() - t0)
+        test_message = t(`chat.provider_test_connected`, { ms: test_latency })
+      } catch {
+        test_status = `error`
+        test_message = t(`chat.provider_test_failed`)
+      }
+      return
+    }
+
     try {
       const resp = await fetch(`${API_BASE}/chat/providers/test`, {
         method: `POST`,
@@ -120,9 +142,39 @@
     }
   }
 
+  /** Resolve the OpenAI-compatible base URL for the current provider (client-direct). */
+  function resolved_base_url(): string {
+    return (chat_config.base_url || PROVIDER_BASE_URLS[chat_config.provider] || ``).replace(/\/$/, ``)
+  }
+
   async function fetch_provider_models() {
     fetch_models_status = `loading`
     fetch_models_message = ``
+
+    // Client-direct (STATIC_ONLY / no backend): query the provider's /models
+    // endpoint straight from the browser instead of the absent backend.
+    if (is_client_direct(chat_config)) {
+      try {
+        const base = resolved_base_url()
+        if (!base) throw new Error(`no base_url`)
+        const resp = await relay_fetch(`${base}/models`, { headers: { Authorization: `Bearer ${chat_config.api_key}` } })
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        const data = await resp.json() as { data?: { id: string }[] }
+        const models = (data.data ?? []).map((m) => ({ id: m.id, label: m.id }))
+        if (models.length === 0) throw new Error(`empty model list`)
+        update_config({
+          fetched_models: { ...(chat_config.fetched_models ?? {}), [chat_config.provider]: models },
+          model: models.find((m) => m.id === chat_config.model)?.id ?? models[0].id,
+        })
+        fetch_models_status = `success`
+        fetch_models_message = t(`chat.models_loaded`, { n: models.length.toString() })
+      } catch {
+        fetch_models_status = `error`
+        fetch_models_message = t(`chat.models_load_failed`)
+      }
+      return
+    }
+
     try {
       const resp = await fetch(`${API_BASE}/chat/providers/models`, {
         method: `POST`,
@@ -1045,7 +1097,9 @@
               provider,
               model: default_model,
               mode,
-              base_url: provider === `custom` || provider === `ollama` ? backend_info?.base_url ?? chat_config.base_url : backend_info?.base_url ?? ``,
+              base_url: provider === `custom` || provider === `ollama`
+                ? backend_info?.base_url ?? chat_config.base_url
+                : backend_info?.base_url ?? PROVIDER_BASE_URLS[provider] ?? ``,
             })
           }}
         >
@@ -1236,6 +1290,8 @@
           Free local inference &mdash; no API key needed. Install Ollama and pull a model to get started.
         {:else if chat_config.mode === `sdk`}
           {t('chat.sdk_mode_desc')}
+        {:else if is_client_direct(chat_config)}
+          {t(`chat.client_direct_mode_desc`)}
         {:else if chat_config.mode === `universal`}
           {t('chat.universal_mode_desc')}
         {:else}
@@ -1349,6 +1405,7 @@
                     input={pb.input}
                     suggestions={pb.suggestions}
                     decisionReason={pb.decisionReason}
+                    onResolve={pb.resolve}
                   />
                 {/each}
                 <ThinkingSummary tools={slice.active_tool_blocks.entries}>

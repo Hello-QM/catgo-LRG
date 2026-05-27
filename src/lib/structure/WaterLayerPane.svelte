@@ -4,6 +4,7 @@
   import type { ComponentProps } from 'svelte'
   import { addWaterLayer, type WaterLayerParams, type WaterLayerResult } from '$lib/api/water-layer'
   import { SERVER_URL } from '$lib/api/config'
+  import { show_toast } from '$lib/toast-state.svelte'
 
   // __CATGO_VSCODE_EXTENSION__ is a vite `define` token; its type lives in
   // src/app.d.ts (declare global) — an in-component `declare const` is a
@@ -40,6 +41,11 @@
   let equil_steps = $state(1000)
   let equil_temperature = $state(300.0)
 
+  // TIP4P/LAMMPS equilibration is hidden for now: the frontend packs water by
+  // tiling pre-equilibrated spc216 + clash removal (already clash-free), and
+  // there is no in-browser MD engine. Flip to true to restore the UI option.
+  const show_equilibrate = false
+
   let status = $state<'idle' | 'running' | 'complete' | 'error'>(`idle`)
   let error_message = $state<string | null>(null)
   let result_message = $state<string | null>(null)
@@ -49,6 +55,49 @@
   let c_z_height = $derived.by(() => {
     if (!structure?.lattice) return 0
     return structure.lattice.matrix[2][2]
+  })
+
+  // Auto-suggest the fill region from the structure: surface solvation puts
+  // water in the vacuum ABOVE the topmost atom. z_start = highest atom z (the
+  // 2 Å min_distance then offsets the first water layer above the surface);
+  // z_end = z_start + FILL_HEIGHT, capped at the cell's c-axis height. Only
+  // re-suggested when a new structure loads, so manual edits are preserved.
+  const FILL_HEIGHT = 15
+  const C_TOP_BUFFER = 2 // keep z_end at least 2 Å below the cell top
+  let auto_suggested_for: object | null = null
+  $effect(() => {
+    // Defensive: a malformed structure must never throw out of this $effect
+    // (that would crash the component render, like any uncaught reactive error).
+    try {
+      const sites = structure?.sites
+      const lattice = structure?.lattice
+      if (!sites?.length || !lattice) return
+      if (structure === auto_suggested_for) return
+      auto_suggested_for = structure ?? null
+      let max_z = -Infinity
+      for (const s of sites) {
+        const z = s.xyz?.[2]
+        if (typeof z === `number` && z > max_z) max_z = z
+      }
+      if (!Number.isFinite(max_z)) return
+      const c_height = lattice.matrix?.[2]?.[2] ?? 0
+      const round1 = (v: number) => Math.round(v * 10) / 10
+      const start = Math.max(0, round1(max_z))
+      const desired = start + FILL_HEIGHT
+      // Prefer a full FILL_HEIGHT layer (so z_end is always > z_start). Only
+      // shrink it to leave the 2 Å top buffer when the cell HAS vacuum above
+      // the slab but not enough for the full layer. If there's essentially no
+      // vacuum, keep the full layer and let the fill step expand the c-axis —
+      // that expansion already leaves a 2 Å gap above the water, so the buffer
+      // is preserved without us collapsing the range here.
+      const end = (c_height > 0 && desired + C_TOP_BUFFER > c_height && c_height - C_TOP_BUFFER > start)
+        ? c_height - C_TOP_BUFFER
+        : desired
+      z_start = start
+      z_end = round1(end)
+    } catch (err) {
+      console.warn(`[WaterLayerPane] auto-suggest z range failed:`, err)
+    }
   })
 
   // Derived: check if z_end exceeds c-axis
@@ -75,13 +124,19 @@
     return Math.round((density * volume_cm3 * avogadro) / molecular_weight)
   })
 
+  function fail(msg: string, variant: 'error' | 'warning' = `error`) {
+    status = `error`
+    error_message = msg
+    show_toast({ message: msg, variant })
+  }
+
   async function add_water() {
     if (!structure) {
-      error_message = `No structure loaded`
+      fail(`Add water: no structure loaded.`)
       return
     }
-    if (z_start >= z_end) {
-      error_message = `z_start must be less than z_end`
+    if (!(z_start < z_end)) {
+      fail(`Add water: z start (${z_start.toFixed(1)} Å) must be below z end (${z_end.toFixed(1)} Å). Adjust the range, or add vacuum above the slab.`)
       return
     }
 
@@ -103,24 +158,40 @@
 
       const result: WaterLayerResult = await addWaterLayer(structure, params, server_url)
 
+      // Defensive validation — never trust the result blindly, so a malformed
+      // payload surfaces as a clear message instead of corrupting the viewer
+      // or throwing somewhere downstream.
+      if (!result || !Array.isArray(result.structure?.sites)) {
+        throw new Error(`water layer returned no structure`)
+      }
       if (result.n_water_molecules === 0) {
-        status = `error`
-        error_message = result.message
+        fail(result.message || `No water could be placed in this region. Try a larger z range or a smaller min distance.`, `warning`)
         return
       }
+      const has_bad_coords = result.structure.sites.some(
+        (s) => !s.xyz || s.xyz.some((v) => !Number.isFinite(v)),
+      )
+      if (has_bad_coords) {
+        throw new Error(`water layer produced non-finite coordinates`)
+      }
 
-      console.log(`[WaterLayerPane] result.structure.sites: ${result.structure?.sites?.length}, O: ${result.structure?.sites?.filter(s => s.species?.[0]?.element === 'O').length}`)
       structure = result.structure
       on_structure_change?.(result.structure)
       status = `complete`
       result_message = result.message
+      show_toast({
+        message: result.message || `Added ${result.n_water_molecules} water molecules.`,
+        variant: `success`,
+        duration: 4000,
+      })
 
       if (result.c_axis_adjusted) {
         c_axis_warning = `c-axis was expanded to ${result.new_c_length.toFixed(1)} Å to accommodate z_end`
       }
     } catch (err) {
-      status = `error`
-      error_message = err instanceof Error ? err.message : String(err)
+      const msg = err instanceof Error ? err.message : String(err)
+      fail(`Add water failed: ${msg}`)
+      console.error(`[WaterLayerPane] add water failed:`, err)
     }
   }
 </script>
@@ -158,7 +229,7 @@
     </div>
   {/if}
 
-  {#if !is_vscode_extension}
+  {#if show_equilibrate && !is_vscode_extension}
     <div class="equilibrate-section">
       <label class="checkbox-row">
         <input type="checkbox" bind:checked={equilibrate} />
@@ -177,10 +248,6 @@
           </label>
         </div>
       {/if}
-    </div>
-  {:else}
-    <div class="equilibrate-section">
-      <span class="hint">Equilibration unavailable in the VS Code extension (runs locally without LAMMPS).</span>
     </div>
   {/if}
 

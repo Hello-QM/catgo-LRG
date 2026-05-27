@@ -44,6 +44,7 @@ const chat: Record<string, string> = {
   run_terminal_hint: `请在终端中运行，然后重启 CatGO。`,
   sdk_mode_desc: `SDK 代理模式 - 通过 Agent SDK 桥接工具调用和流式输出。`,
   universal_mode_desc: `通过后端使用 OpenAI 兼容模式`,
+  client_direct_mode_desc: `浏览器直连模式 — 直接调用 provider API,无需后端。`,
   proxy_mode_desc: `后端代理模式（需要服务器 API Key）`,
   tool: `工具`,
   catbot_asking: `CatBot 正在提问`,

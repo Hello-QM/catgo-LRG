@@ -1800,6 +1800,26 @@
                       </div>
                     </button>
 
+                    <!-- AI Chat: shown in STATIC_ONLY too — CatBot runs client-direct
+                         in-browser (no backend) and can fetch/build structures from empty state. -->
+                    <button class="import-card chat-card" onclick={() => {
+                      console.log(`[CatGo:UI] Welcome card clicked: AI Chat → loading structure + opening Chat panel`)
+                      ts.panes[idx].structure = water as unknown as AnyStructure
+                      ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
+                      ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
+                      ts.panes[idx].initial_panel = `chat`
+                      ts.active_pane = idx
+                      update_tab_label(tab.id)
+                    }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+                      </svg>
+                      <div class="import-text">
+                        <span class="import-title">{t('app.ai_chat')}</span>
+                        <span class="import-desc">{t('app.ask_questions')}</span>
+                      </div>
+                    </button>
+
                     {#if !STATIC_ONLY}
                     <button class="import-card hpc-card" onclick={() => {
                       console.log(`[CatGo:UI] Welcome card clicked: HPC → loading structure + opening HPC panel`)
@@ -1816,24 +1836,6 @@
                       <div class="import-text">
                         <span class="import-title">{t('app.hpc')}</span>
                         <span class="import-desc">{t('app.remote_connect')}</span>
-                      </div>
-                    </button>
-
-                    <button class="import-card chat-card" onclick={() => {
-                      console.log(`[CatGo:UI] Welcome card clicked: AI Chat → loading structure + opening Chat panel`)
-                      ts.panes[idx].structure = water as unknown as AnyStructure
-                      ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
-                      ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
-                      ts.panes[idx].initial_panel = `chat`
-                      ts.active_pane = idx
-                      update_tab_label(tab.id)
-                    }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t('app.ai_chat')}</span>
-                        <span class="import-desc">{t('app.ask_questions')}</span>
                       </div>
                     </button>
 

@@ -1,0 +1,6 @@
+name = "catgo-cors-relay"
+main = "src/index.ts"
+compatibility_date = "2026-05-26"
+
+[vars]
+ALLOWED_HOSTS = "optimade.materialsproject.org"

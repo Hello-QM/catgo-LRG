@@ -10,9 +10,13 @@
         input: Record<string, unknown>
         suggestions?: unknown[]
         decisionReason?: string
+        // Client-direct path only: when set, the card settles the in-browser
+        // tool-loop's pending permission promise instead of (and in addition
+        // to skipping) the SDK backend round-trip. Undefined on the SDK path.
+        onResolve?: (approved: boolean) => void
     }
 
-    let { permissionId, toolName, input, suggestions, decisionReason }: Props = $props()
+    let { permissionId, toolName, input, suggestions, decisionReason, onResolve }: Props = $props()
 
     let status = $state<'pending' | 'allowed' | 'denied'>(`pending`)
     let resolving = $state(false)
@@ -37,8 +41,15 @@
         if (resolving) return
         resolving = true
         try {
-            await resolve_permission(permissionId, behavior, suggestions)
-            status = behavior === `deny` ? `denied` : `allowed`
+            const approved = behavior !== `deny`
+            if (onResolve) {
+                // Client-direct: resolve the in-browser tool-loop's promise.
+                onResolve(approved)
+            } else {
+                // SDK path: backend round-trip.
+                await resolve_permission(permissionId, behavior, suggestions)
+            }
+            status = approved ? `allowed` : `denied`
         } catch (err) {
             console.error(`[PermissionCard] resolve_permission failed:`, err)
         } finally {

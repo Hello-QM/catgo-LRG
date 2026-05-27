@@ -16,9 +16,6 @@
   } from '$lib/api/materials-project'
   import type { PubChemCompound, PubChemSearchResponse, PubChemSearchCompound } from '$lib/api/pubchem'
   import { fetch_pubchem_compound, search_pubchem_compounds } from '$lib/api/pubchem'
-
-  import { STATIC_ONLY } from '$lib/api/config'
-  import StaticModeBanner from '$lib/StaticModeBanner.svelte'
   import { Composition } from '$lib/composition'
   import { get_electro_neg_formula } from '$lib/composition/parse'
   import { analyze_structure_symmetry } from '$lib/symmetry'
@@ -647,15 +644,6 @@
       </div>
 
       <div class="modal-body">
-        {#if STATIC_ONLY}
-          <div style="margin: 0 0 16px 0;">
-            <StaticModeBanner
-              title={t('structure.search_limitations')}
-              message={t('structure.search_limitations_desc')}
-            />
-          </div>
-        {/if}
-
         <div class="mode-tabs" role="tablist" aria-label={t('structure.search_database')}>
           <button
             class="mode-tab"

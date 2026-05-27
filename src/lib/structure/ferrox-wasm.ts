@@ -13,6 +13,8 @@ import type {
   EwaldAutoResult,
   EwaldResult,
   MatcherOptions,
+  NanoscrollInfo,
+  NanoscrollParams,
   NeighborListResult,
   ReductionAlgorithm,
   SolidAngleBondingOptions,
@@ -241,6 +243,67 @@ interface FerroxWasmModule {
   // Supercell (takes JsCrystal object, returns WasmResult<JsCrystal>)
   make_supercell_diag: (structure: unknown, nx: number, ny: number, nz: number) => WasmResult<unknown>
   make_supercell: (structure: unknown, matrix: number[][]) => WasmResult<unknown>
+  // Heterostructure (SLAB mode) — takes JsCrystal objects, returns WasmResult
+  hetero_search: (
+    substrate: unknown,
+    film: unknown,
+    params: unknown,
+  ) => WasmResult<unknown>
+  build_hetero: (
+    substrate: unknown,
+    film: unknown,
+    match_id: number,
+    gap: number,
+    vacuum: number,
+    twist_angle: number,
+    params: unknown,
+  ) => WasmResult<unknown>
+  lateral_search: (
+    slab_a: unknown,
+    slab_b: unknown,
+    params: unknown,
+  ) => WasmResult<unknown>
+  build_lateral: (
+    slab_a: unknown,
+    slab_b: unknown,
+    match_id: number,
+    interface_axis: number,
+    width_a: number,
+    width_b: number,
+    buffer: number,
+    vacuum: number,
+    max_length: number,
+    max_strain: number,
+  ) => WasmResult<unknown>
+  build_hetero_manual: (
+    substrate: unknown,
+    film: unknown,
+    substrate_transform: Int32Array | number[],
+    film_transform: Int32Array | number[],
+    gap: number,
+    vacuum: number,
+    xy_shift_a: number,
+    xy_shift_b: number,
+  ) => WasmResult<unknown>
+  build_hetero_registry: (
+    substrate: unknown,
+    film: unknown,
+    match_id: number,
+    n_shift: number,
+    gap: number,
+    vacuum: number,
+    step_angstrom: number,
+    target_z: number,
+    params: unknown,
+  ) => WasmResult<unknown>
+  build_hetero_grid_scan: (
+    heterostructure: unknown,
+    film: unknown,
+    n_atoms_substrate: number,
+    n_grid_x: number,
+    n_grid_y: number,
+    symprec: number,
+  ) => WasmResult<unknown>
   // Reorientation (takes JsCrystal object, returns WasmResult<JsCrystal>)
   reorient_lattice: (structure: unknown) => WasmResult<unknown>
   // Symmetry (takes JsCrystal object, returns WasmResult)
@@ -299,6 +362,9 @@ interface FerroxWasmModule {
     supercell_a: number,
     supercell_b: number,
   ) => WasmResult<string>
+  // Moiré (twisted-bilayer) construction (takes JSON string, returns WasmResult<string>)
+  moire_search: (request_json: string) => WasmResult<string>
+  build_moire: (request_json: string) => WasmResult<string>
   // Ewald summation (returns JSON strings)
   compute_ewald: (
     structure_json: string,
@@ -328,6 +394,11 @@ interface FerroxWasmModule {
   compute_xrd: (structure: unknown, options?: unknown) => WasmResult<unknown>
   // Adsorption site finding (Alpha Shape V7 algorithm)
   adsorbate_find_sites: (slab: unknown, params_json: string) => WasmResult<string>
+  // Nanoscroll builder (takes JsCrystal monolayer + params JSON, returns WasmResult<JsNanoscrollResult>)
+  build_nanoscroll: (monolayer: unknown, params_json: string) => WasmResult<{
+    structure: unknown
+    info: NanoscrollInfo
+  }>
   // MOF topology analysis
   detect_mof_sbus?: (structure_json: string, bonds_json: string) => string
   // MOF Phase 2: RAC descriptors, WL hash, cap replacement
@@ -344,6 +415,19 @@ interface FerroxWasmModule {
     positions_abc: [number, number, number][]
     num_translational: number
   }>
+  // Nanotube builder (takes a 2D layer object + chiral indices)
+  nanotube_info: (layer: unknown, n: number, m: number, nl: number) => WasmResult<unknown>
+  build_nanotube: (
+    layer: unknown,
+    n: number,
+    m: number,
+    nl: number,
+    vacuum: number,
+    n_walls: number,
+    interlayer_spacing: number,
+  ) => WasmResult<unknown>
+  // Pseudo-hydrogen passivation (returns JSON string of PseudoHydrogenResult)
+  passivate_slab: (slab: unknown, bulk: unknown, params_json: string) => WasmResult<string>
 }
 
 // Lazy Initialization
@@ -581,6 +665,28 @@ export async function create_supercell(
   return { ok: jscrystal_to_pymatgen(result.ok) }
 }
 
+// Roll a 2D monolayer into an Archimedean-spiral nanoscroll.
+// `monolayer` must be a single 2D layer (any composition); rolling a 3D bulk
+// is meaningless. Returns the rolled (non-periodic) structure plus build
+// metadata, including a curvature-strain `warning` when the inner radius is
+// too small for the monolayer thickness.
+export async function build_nanoscroll(
+  monolayer: Crystal,
+  params: NanoscrollParams = {},
+): Promise<WasmResult<{ structure: Crystal; info: NanoscrollInfo }>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const jsCrystal = pymatgen_to_jscrystal(monolayer)
+  const cleanCrystal = JSON.parse(JSON.stringify(jsCrystal))
+  const result = mod.build_nanoscroll(cleanCrystal, JSON.stringify(params))
+  if (`error` in result) return result as { error: string }
+  return {
+    ok: {
+      structure: jscrystal_to_pymatgen(result.ok.structure),
+      info: result.ok.info,
+    },
+  }
+}
+
 // Reduce lattice using Niggli or LLL algorithm
 // NOTE: This function is not yet implemented in WASM backend
 export async function reduce_lattice(
@@ -802,6 +908,271 @@ export async function create_supercell_matrix(
     console.error(`[ferrox-wasm] Clean crystal pbc:`, cleanCrystal.lattice?.pbc)
     console.error(`[ferrox-wasm] Original structure pbc:`, structure.lattice?.pbc)
     return { error: `WASM supercell failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+// Heterostructure (SLAB mode) — client-side ZSL search + coherent interface build
+
+/** SLAB-mode ZSL search params (subset relevant to the WASM path). */
+export interface WasmHeteroSearchParams {
+  max_area?: number
+  max_area_ratio_tol?: number
+  max_length_tol?: number
+  max_angle_tol?: number
+  max_results?: number
+}
+
+/** SLAB-mode ZSL search between two slabs (substrate, film). Mirrors the
+ *  backend `POST /api/heterostructure/search` with `params.mode = "slab"`. */
+export async function wasm_hetero_search(
+  substrate: Crystal,
+  film: Crystal,
+  params: WasmHeteroSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  if (!substrate?.sites?.length || !film?.sites?.length) {
+    return { error: `Heterostructure search: substrate and film must have sites` }
+  }
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  const p = {
+    max_area: params.max_area ?? 400.0,
+    max_area_ratio_tol: params.max_area_ratio_tol ?? 0.09,
+    max_length_tol: params.max_length_tol ?? 0.03,
+    max_angle_tol: params.max_angle_tol ?? 0.01,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.hetero_search(sub, flm, p)
+    return result as WasmResult<unknown>
+  } catch (err) {
+    return { error: `WASM hetero_search failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** SLAB-mode build for a selected ZSL match (by generation-order match_id).
+ *  Mirrors the backend `POST /api/heterostructure/build` slab path. The
+ *  returned `structure` is converted back to the pymatgen/Crystal JSON shape. */
+export async function wasm_build_hetero(
+  substrate: Crystal,
+  film: Crystal,
+  match_id: number,
+  gap: number,
+  vacuum: number,
+  twist_angle: number,
+  params: WasmHeteroSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  const p = {
+    max_area: params.max_area ?? 400.0,
+    max_area_ratio_tol: params.max_area_ratio_tol ?? 0.09,
+    max_length_tol: params.max_length_tol ?? 0.03,
+    max_angle_tol: params.max_angle_tol ?? 0.01,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.build_hetero(sub, flm, match_id, gap, vacuum, twist_angle, p)
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as { structure: unknown; [k: string]: unknown }
+    return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
+  } catch (err) {
+    return { error: `WASM build_hetero failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** SLAB-mode manual build with user-specified 2x2 integer transforms.
+ *  Mirrors the backend `POST /api/heterostructure/build-manual`. `xy_shift`
+ *  is the fractional (fa, fb) in-plane shift of the film (default (0, 0)). */
+export async function wasm_build_hetero_manual(
+  substrate: Crystal,
+  film: Crystal,
+  substrate_transform: number[][],
+  film_transform: number[][],
+  gap: number,
+  vacuum: number,
+  xy_shift: [number, number] = [0, 0],
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  // Flatten 2x2 -> row-major Int32Array of 4 ints.
+  const st = Int32Array.from([
+    Math.round(substrate_transform[0][0]), Math.round(substrate_transform[0][1]),
+    Math.round(substrate_transform[1][0]), Math.round(substrate_transform[1][1]),
+  ])
+  const ft = Int32Array.from([
+    Math.round(film_transform[0][0]), Math.round(film_transform[0][1]),
+    Math.round(film_transform[1][0]), Math.round(film_transform[1][1]),
+  ])
+  try {
+    const result = mod.build_hetero_manual(sub, flm, st, ft, gap, vacuum, xy_shift[0], xy_shift[1])
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as { structure: unknown; [k: string]: unknown }
+    return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
+  } catch (err) {
+    return { error: `WASM build_hetero_manual failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** SLAB-mode registry candidates: build the same ZSL match at a family of
+ *  in-plane xy shifts. Mirrors the backend `POST /api/heterostructure/batch-build`
+ *  (returns the built structures so the caller can assemble the same archive).
+ *  Each returned candidate's `structure` is converted to pymatgen JSON. */
+export async function wasm_build_hetero_registry(
+  substrate: Crystal,
+  film: Crystal,
+  match_id: number,
+  n_shift: number,
+  gap: number,
+  vacuum: number,
+  step_angstrom: number,
+  target_z: number,
+  params: WasmHeteroSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  const p = {
+    max_area: params.max_area ?? 400.0,
+    max_area_ratio_tol: params.max_area_ratio_tol ?? 0.09,
+    max_length_tol: params.max_length_tol ?? 0.03,
+    max_angle_tol: params.max_angle_tol ?? 0.01,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.build_hetero_registry(
+      sub,
+      flm,
+      match_id,
+      n_shift,
+      gap,
+      vacuum,
+      step_angstrom,
+      target_z,
+      p,
+    )
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as {
+      candidates: { structure: unknown; [k: string]: unknown }[]
+      [k: string]: unknown
+    }
+    const candidates = out.candidates.map((c) => ({
+      ...c,
+      structure: jscrystal_to_pymatgen(c.structure),
+    }))
+    return { ok: { ...out, candidates } }
+  } catch (err) {
+    return { error: `WASM build_hetero_registry failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** SLAB-mode grid scan: shift the film atoms of an already-built heterostructure
+ *  across the irreducible wedge of the film slab. Mirrors the backend
+ *  `POST /api/heterostructure/grid-scan`. Each entry/structure is converted to
+ *  pymatgen JSON. */
+export async function wasm_build_hetero_grid_scan(
+  heterostructure: Crystal,
+  film: Crystal,
+  n_atoms_substrate: number,
+  n_grid_x: number,
+  n_grid_y: number,
+  symprec: number,
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const hetero = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(heterostructure)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  try {
+    const result = mod.build_hetero_grid_scan(hetero, flm, n_atoms_substrate, n_grid_x, n_grid_y, symprec)
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as {
+      entries: { structure: unknown; [k: string]: unknown }[]
+      structures: unknown[]
+      [k: string]: unknown
+    }
+    const entries = out.entries.map((e) => ({
+      ...e,
+      structure: jscrystal_to_pymatgen(e.structure),
+    }))
+    const structures = out.structures.map((s) => jscrystal_to_pymatgen(s))
+    return { ok: { ...out, entries, structures } }
+  } catch (err) {
+    return { error: `WASM build_hetero_grid_scan failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** Lateral-search parameters for the WASM `lateral_search` export. */
+export interface WasmLateralSearchParams {
+  interface_axis?: number
+  max_length?: number
+  max_strain?: number
+  max_results?: number
+}
+
+/** Lateral (in-plane) edge-match search between two 2D slabs. Mirrors the
+ *  backend `POST /api/heterostructure/search-lateral`. */
+export async function wasm_lateral_search(
+  slab_A: Crystal,
+  slab_B: Crystal,
+  params: WasmLateralSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  if (!slab_A?.sites?.length || !slab_B?.sites?.length) {
+    return { error: `Lateral search: slab_A and slab_B must have sites` }
+  }
+  const mod = await ensure_ferrox_wasm_ready()
+  const a = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_A)))
+  const b = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_B)))
+  const p = {
+    interface_axis: params.interface_axis ?? 0,
+    max_length: params.max_length ?? 100.0,
+    max_strain: params.max_strain ?? 5.0,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.lateral_search(a, b, p)
+    return result as WasmResult<unknown>
+  } catch (err) {
+    return { error: `WASM lateral_search failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** Build a lateral heterojunction for a selected edge-match (by match_id).
+ *  Mirrors the backend `POST /api/heterostructure/build-lateral`. The returned
+ *  `structure` is converted back to the pymatgen/Crystal JSON shape. */
+export async function wasm_build_lateral(
+  slab_A: Crystal,
+  slab_B: Crystal,
+  match_id: number,
+  interface_axis: number,
+  width_A: number,
+  width_B: number,
+  buffer: number,
+  vacuum: number,
+  max_length: number,
+  max_strain: number,
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const a = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_A)))
+  const b = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_B)))
+  try {
+    const result = mod.build_lateral(
+      a,
+      b,
+      match_id,
+      interface_axis,
+      width_A,
+      width_B,
+      buffer,
+      vacuum,
+      max_length,
+      max_strain,
+    )
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as { structure: unknown; [k: string]: unknown }
+    return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
+  } catch (err) {
+    return { error: `WASM build_lateral failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 
@@ -1141,6 +1512,49 @@ export async function wasm_generate_slab_layers(
     return { ok: slab }
   } catch (err) {
     return { error: `generate_slab_layers failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+// =============================================================================
+// Moiré (twisted-bilayer) Functions (WASM)
+// =============================================================================
+//
+// These mirror the /api/moire/search and /api/moire/build backend endpoints so
+// they can run 100% client-side (STATIC_ONLY). Request/response JSON shapes
+// match src/lib/api/moire.ts. The WASM exports take a JSON string request and
+// return WasmResult<string> whose ok field is a JSON string of the response.
+
+// Search for commensurate Moiré twist angles (WASM backend).
+// `request` is the full { layer_a, layer_b, params } object (matches the
+// backend request body). Returns the parsed MoireAngleSearchResult-shaped JSON.
+export async function wasm_moire_search<TResult = unknown>(
+  request: unknown,
+): Promise<WasmResult<TResult>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const json = JSON.stringify(request)
+  try {
+    const result = mod.moire_search(json)
+    if (`error` in result) return result as { error: string }
+    return { ok: JSON.parse(result.ok) as TResult }
+  } catch (err) {
+    return { error: `Moiré search failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+// Build a Moiré bilayer supercell from a candidate (WASM backend).
+// `request` is the full { layer_a, layer_b, candidate, params } object.
+// Returns the parsed MoireBuildResult-shaped JSON.
+export async function wasm_build_moire<TResult = unknown>(
+  request: unknown,
+): Promise<WasmResult<TResult>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const json = JSON.stringify(request)
+  try {
+    const result = mod.build_moire(json)
+    if (`error` in result) return result as { error: string }
+    return { ok: JSON.parse(result.ok) as TResult }
+  } catch (err) {
+    return { error: `Moiré build failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 
@@ -1543,4 +1957,141 @@ export async function wasm_find_pbc_images(
     console.warn('[ferrox-wasm] find_pbc_image_sites error:', e)
     return null
   }
+}
+
+// =============================================================================
+// Nanotube Builder (WASM)
+// =============================================================================
+
+/** 2D layer input for the nanotube builder (matches Rust JsNanotubeLayer). */
+export interface WasmNanotubeLayer {
+  lattice_vectors: [[number, number], [number, number]]
+  elements: string[]
+  basis_coords: [number, number][]
+  z_coords?: number[]
+}
+
+/** Geometry-only result of nanotube_info (matches Rust JsNanotubeInfo). */
+export interface WasmNanotubeInfo {
+  chiral_angle_deg: number
+  circumference: number
+  diameter: number
+  radius: number
+  trans_length: number
+  tube_length: number
+  n_atoms_estimate: number
+  t1: number
+  t2: number
+  chirality: string
+  message: string
+}
+
+/** Per-wall info returned by the nanotube builder. */
+export interface WasmNanotubeWall {
+  n: number
+  m: number
+  radius: number
+  n_atoms: number
+}
+
+/** Build result from build_nanotube (structure converted back to pymatgen). */
+export interface WasmNanotubeBuild {
+  structure: Crystal
+  n_atoms: number
+  chiral_angle_deg: number
+  circumference: number
+  diameter: number
+  tube_length: number
+  chirality: string
+  n_walls: number
+  walls: WasmNanotubeWall[]
+  message: string
+}
+
+/** Compute nanotube geometry info entirely in the browser (no backend). */
+export async function wasm_nanotube_info(
+  layer: WasmNanotubeLayer,
+  n: number,
+  m: number,
+  nl = 1,
+): Promise<WasmResult<WasmNanotubeInfo>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  // Clean plain object to avoid Svelte Proxy / prototype issues in serde.
+  const cleanLayer = JSON.parse(JSON.stringify(layer))
+  try {
+    const result = mod.nanotube_info(cleanLayer, n, m, nl)
+    if (`error` in result) return result as { error: string }
+    return { ok: result.ok as WasmNanotubeInfo }
+  } catch (err) {
+    return { error: `nanotube_info failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** Build a nanotube entirely in the browser (no backend). */
+export async function wasm_build_nanotube(
+  layer: WasmNanotubeLayer,
+  n: number,
+  m: number,
+  options?: {
+    nl?: number
+    vacuum?: number
+    n_walls?: number
+    interlayer_spacing?: number
+  },
+): Promise<WasmResult<WasmNanotubeBuild>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const nl = options?.nl ?? 1
+  const vacuum = options?.vacuum ?? 15.0
+  const n_walls = options?.n_walls ?? 1
+  const interlayer = options?.interlayer_spacing ?? 3.4
+  const cleanLayer = JSON.parse(JSON.stringify(layer))
+  try {
+    const result = mod.build_nanotube(cleanLayer, n, m, nl, vacuum, n_walls, interlayer)
+    if (`error` in result) return result as { error: string }
+    const raw = result.ok as Record<string, unknown>
+    return {
+      ok: {
+        structure: jscrystal_to_pymatgen(raw.structure),
+        n_atoms: raw.n_atoms as number,
+        chiral_angle_deg: raw.chiral_angle_deg as number,
+        circumference: raw.circumference as number,
+        diameter: raw.diameter as number,
+        tube_length: raw.tube_length as number,
+        chirality: raw.chirality as string,
+        n_walls: raw.n_walls as number,
+        walls: raw.walls as WasmNanotubeWall[],
+        message: raw.message as string,
+      },
+    }
+  } catch (err) {
+    return { error: `build_nanotube failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+// =============================================================================
+// Pseudo-Hydrogen Passivation (client-side, no backend needed)
+// =============================================================================
+
+/**
+ * Passivate slab surface dangling bonds with pseudo-hydrogen atoms.
+ *
+ * Faithful client-side port of `/api/pseudo-hydrogen/passivate`. Requires a
+ * slab and a bulk reference structure. The result JSON matches the backend's
+ * `PseudoHydrogenResult` shape exactly (structure, n_pseudo_h, pseudo_h_list,
+ * bulk_coordination, valence_used, unique_potcars, bond_warnings, message).
+ *
+ * Returns the parsed result object. Throws on WASM error.
+ */
+export async function wasm_passivate_slab(
+  slab: Crystal,
+  bulk: Crystal,
+  params?: Record<string, unknown>,
+): Promise<unknown> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const slab_js = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab)))
+  const bulk_js = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(bulk)))
+  const params_json = params && Object.keys(params).length > 0 ? JSON.stringify(params) : ``
+  const result = mod.passivate_slab(slab_js, bulk_js, params_json)
+  if (`error` in result) throw new Error((result as { error: string }).error)
+  return JSON.parse((result as { ok: string }).ok)
 }

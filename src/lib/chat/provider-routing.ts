@@ -1,0 +1,35 @@
+import { STATIC_ONLY } from '$lib/api/config'
+import type { ChatConfig } from './types'
+import { SDK_PROVIDERS } from './types'
+
+/** Edge CORS relay base URL. Override at build time via VITE_CORS_RELAY_URL;
+ *  falls back to the deployed catgo-cors-relay Worker. */
+export const RELAY_URL: string =
+  (typeof import.meta.env.VITE_CORS_RELAY_URL === `string` && import.meta.env.VITE_CORS_RELAY_URL) ||
+  `https://catgo-cors-relay.guangshengliu2021.workers.dev`
+
+/** Hosts known to block browser CORS — fetches to these must go through the relay. */
+const RELAY_HOSTS = new Set<string>([`optimade.materialsproject.org`])
+
+export function needs_relay(url: string): boolean {
+  try {
+    return RELAY_HOSTS.has(new URL(url).host)
+  } catch {
+    return false
+  }
+}
+
+export function relay_url(url: string): string {
+  return `${RELAY_URL}/?url=${encodeURIComponent(url)}`
+}
+
+/** A fetch wrapper that transparently routes CORS-blocked hosts via the relay. */
+export function relay_fetch(url: string, init?: RequestInit): Promise<Response> {
+  return fetch(needs_relay(url) ? relay_url(url) : url, init)
+}
+
+/** True when the tool-calling loop should run in-browser (no backend proxy). */
+export function is_client_direct(config: ChatConfig): boolean {
+  if (SDK_PROVIDERS.has(config.provider)) return false // SDK agents always backend
+  return STATIC_ONLY || config.client_direct === true
+}

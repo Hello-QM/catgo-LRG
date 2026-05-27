@@ -4,6 +4,10 @@ import type { ChatConfig, ChatMessage, ContentBlock, SessionSummary } from './ty
 import { get_display_text, SDK_PROVIDERS, agent_from_provider } from './types'
 import { stream_chat, build_sdk_system_prompt } from './llm-client'
 import { stream_sdk_agent } from './sdk-stream'
+import { is_client_direct } from './provider-routing'
+import { stream_client_llm } from './client-llm'
+import { run_tool_loop } from './tool-loop'
+import { CLIENT_TOOLS, execute_tool, tool_kind } from './structure-tools'
 import { retrieve } from './rag'
 import { get_workflow_slice, clear_workflow_events } from '$lib/workflow/workflow-state.svelte'
 import { build_paper_context, build_paper_context_from_doi } from './context'
@@ -144,6 +148,10 @@ export interface PermissionEntry {
   suggestions?: unknown[]
   decisionReason?: string
   status: string
+  // Client-direct path only: the tool-loop awaits this to learn the user's
+  // decision. The SDK path resolves permissions via a backend round-trip
+  // (sdk-stream.resolve_permission) and leaves this undefined.
+  resolve?: (ok: boolean) => void
 }
 
 export interface PaperSession {
@@ -571,6 +579,118 @@ export async function send_message(
             break
         }
       }
+    } else if (is_client_direct(chat_config)) {
+      // ── Client-direct path: in-browser agentic tool-calling loop ──
+      // No backend proxy — stream_client_llm hits the provider directly and
+      // run_tool_loop executes CLIENT_TOOLS in the browser, gating mutating
+      // tools through the same PermissionCard the SDK path uses.
+      slice.active_tool_blocks.entries = {}
+      slice.active_permission_blocks.entries = {}
+
+      const combined_context = [
+        slice.structure_context.value,
+        slice.workflow_context.value,
+        slice.paper_context.value,
+      ].filter(Boolean).join(`\n\n`) || undefined
+      const system = build_sdk_system_prompt(chat_config.provider, combined_context, false)
+
+      // Local rolling conversation. Start from the prior turns (drop the empty
+      // assistant placeholder we just pushed), append the user's new message,
+      // and grow it with assistant tool_use / user tool_result pairs as the
+      // loop progresses so each transport() turn sees the full history.
+      const history: ChatMessage[] = [
+        ...slice.messages.list.slice(0, -1),
+      ]
+
+      let full_text = ``
+      // LoopEvent.tool_end carries no input, but the real tool arguments are
+      // available at tool_start. Stash them by call id so the assistant
+      // tool_use block we replay into history carries real `arguments` for
+      // subsequent turns (not `{}`, which silently drops them).
+      const tool_inputs = new SvelteMap<string, Record<string, unknown>>()
+      await run_tool_loop({
+        transport: () => stream_client_llm(
+          history,
+          chat_config,
+          system,
+          CLIENT_TOOLS,
+          slice.abort_controller?.signal,
+        ),
+        execute: execute_tool,
+        kind_of: tool_kind,
+        request_permission: (call) => new Promise<boolean>((resolve) => {
+          // Session-scoped bypass: approve immediately, no card.
+          if (slice.skip_permission.value) { resolve(true); return }
+          // If the user already aborted (Stop / tab close), don't park a
+          // promise no card will ever settle — resolve false immediately so
+          // the loop emits a skipped tool_end and unwinds to the finally.
+          const signal = slice.abort_controller?.signal
+          if (signal?.aborted) { resolve(false); return }
+          // Resolve false once when the stream is aborted while a card is
+          // pending. Without this the awaited promise never settles → the
+          // loop never finishes → finally never clears loading (wedge).
+          const on_abort = () => resolve(false)
+          signal?.addEventListener(`abort`, on_abort, { once: true })
+          slice.active_permission_blocks.entries[call.id] = {
+            toolName: call.name,
+            input: call.arguments,
+            status: `pending`,
+            // PermissionCard's approve/deny handler calls this to settle the
+            // promise the loop is awaiting (see PermissionCard.svelte). It
+            // also detaches the abort listener so abort can't double-settle.
+            resolve: (ok: boolean) => {
+              signal?.removeEventListener(`abort`, on_abort)
+              resolve(ok)
+            },
+          }
+        }),
+        on_event: (e) => {
+          switch (e.type) {
+            case `text`:
+              full_text += e.text
+              update_last_message(slice, full_text)
+              break
+            case `tool_start`:
+              tool_inputs.set(e.id, e.input)
+              slice.active_tool_blocks.entries[e.id] = {
+                toolName: e.name,
+                input: e.input,
+                output: ``,
+                status: `running`,
+                elapsedSeconds: 0,
+              }
+              break
+            case `tool_end`: {
+              const te = slice.active_tool_blocks.entries[e.id]
+              if (te) {
+                te.output = e.result
+                te.status = e.isError ? `error` : `complete`
+              }
+              // Feed the tool call + result back into history so the next
+              // transport() turn includes them (OpenAI requires the
+              // assistant tool_calls message to be followed by its result).
+              history.push({
+                role: `assistant`,
+                content: [{ type: `tool_use`, id: e.id, name: e.name, input: tool_inputs.get(e.id) ?? {}, reasoning_content: e.reasoning_content }],
+                timestamp: Date.now(),
+              })
+              history.push({
+                role: `user`,
+                content: [{ type: `tool_result`, tool_use_id: e.id, content: e.result }],
+                timestamp: Date.now(),
+              })
+              break
+            }
+            case `error`:
+              slice.error.value = e.message
+              break
+            case `done`:
+              finalize_stream_indicators(slice)
+              break
+          }
+        },
+        signal: slice.abort_controller?.signal,
+      })
     } else {
       // ── Universal (OpenAI-compat) path — unchanged ──
       const rag_chunks = await retrieve(content, 5)
@@ -687,6 +807,16 @@ export function cancel_generation(tab_id: string = `default`): void {
   // mid-stream — otherwise it would surprise them by firing after Stop.
   slice.pending_send.value = null
   slice.abort_controller?.abort()
+  // Belt-and-suspenders: settle any still-pending client-direct permission
+  // promise. The abort listener in request_permission already does this when
+  // the signal fires, but resolving here too is idempotent (resolve() removes
+  // the listener; a Promise ignores a second settle) and guards teardown paths
+  // that may not route through abort(). SDK entries have no `resolve` and are
+  // left untouched — they settle via the backend round-trip.
+  for (const id in slice.active_permission_blocks.entries) {
+    const pb = slice.active_permission_blocks.entries[id]
+    if (pb && pb.status === `pending` && pb.resolve) pb.resolve(false)
+  }
 }
 
 // ─── Session list — tracks all sessions for the Sessions tab ───

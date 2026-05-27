@@ -26,6 +26,7 @@ export interface ToolUseBlock {
   id: string
   name: string
   input: Record<string, unknown>
+  reasoning_content?: string // DeepSeek thinking models: must be echoed back on the tool-call assistant message
 }
 
 export interface ToolResultBlock {
@@ -61,6 +62,7 @@ export interface ChatConfig {
   api_format: ApiFormat
   fetched_models: Partial<Record<LLMProvider, { id: string; label: string }[]>>
   mode: ProviderMode // how to connect
+  client_direct?: boolean // run tool-calling loop in-browser (no backend); auto-on under STATIC_ONLY
 }
 
 /** Provider info returned by GET /chat/providers */
@@ -129,4 +131,20 @@ export function agent_from_provider(provider: LLMProvider): AgentType | null {
   if (provider === `sdk-codex`) return `codex`
   if (provider === `sdk-gemini`) return `gemini`
   return null
+}
+
+export type ToolKind = `read` | `mutate`
+
+export interface ClientTool {
+  name: string
+  description: string
+  kind: ToolKind
+  input_schema: Record<string, unknown>
+}
+
+/** A tool call parsed from the model's response. */
+export interface ToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
 }

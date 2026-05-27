@@ -85,14 +85,35 @@
   })
 
   // Atom label color management
+  //
+  // `scene_props.site_label_bg_color` is the *composed* value the renderer
+  // consumes: `color-mix(in srgb, <picker color> <opacity%>, transparent)`.
+  // The two $state vars below hold the *raw* inputs (color picker + opacity
+  // slider) and the $effect recomposes them. Seeding the raw color directly
+  // from the composed value re-wrapped it in another color-mix() on every
+  // mount; the result persisted to localStorage, so the nesting depth grew by
+  // one each session. A deeply nested color-mix() is O(2^depth) for the CSS
+  // engine to resolve, so once site labels/indices became visible the main
+  // thread froze (no JS error — pure style computation). Parse the composed
+  // value back into its raw parts so the round-trip is idempotent.
+  function parse_label_bg(raw: unknown): { color: string; opacity: number } {
+    const fallback = { color: DEFAULTS.structure.site_label_bg_color, opacity: 0 }
+    if (typeof raw !== `string` || raw === ``) return fallback
+    const mix_count = (raw.match(/color-mix\(/g) ?? []).length
+    if (mix_count === 0) return { color: raw, opacity: 0 } // legacy plain color
+    if (mix_count > 1) return fallback // corrupted nested value → reset
+    const m = raw.match(/^color-mix\(in srgb,\s*(.+?)\s+([\d.]+)%\s*,\s*transparent\)$/)
+    if (!m) return fallback
+    return { color: m[1], opacity: Number(m[2]) / 100 }
+  }
+
   // untrack: intentional initial value capture from scene_props
   let site_label_hex_color = $state(
     untrack(() => scene_props.site_label_color) || DEFAULTS.structure.site_label_color,
   )
-  let site_label_bg_hex_color = $state(
-    untrack(() => scene_props.site_label_bg_color) || DEFAULTS.structure.site_label_bg_color,
-  )
-  let site_label_background_opacity = $state(0)
+  const __label_bg_seed = untrack(() => parse_label_bg(scene_props.site_label_bg_color))
+  let site_label_bg_hex_color = $state(__label_bg_seed.color)
+  let site_label_background_opacity = $state(__label_bg_seed.opacity)
 
   $effect(() => {
     scene_props.site_label_color = site_label_hex_color
