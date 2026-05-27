@@ -180,11 +180,15 @@ fn align_sl_vectors(
 
 /// Stack `film` on top of `substrate` with the given gap and vacuum.
 /// Faithful port of Python `_stack_slabs` (Cartesian deformation-gradient
-/// path, no twist, no xy-shift, target_z=0).
+/// path, no twist, `target_z=0`).
 ///
 /// Both slabs must already be supercells. The film's in-plane lattice is
 /// strained to match the substrate via the deformation gradient D computed
-/// from the matched super-lattice vectors. The result is wrapped to [0,1).
+/// from the matched super-lattice vectors. `xy_shift` is a fractional
+/// `(fa, fb)` in-plane shift of the film along the interface a,b vectors
+/// (substrate sl_vectors when available, else raw substrate vectors),
+/// applied after strain, before vertical stacking. The result is wrapped
+/// to [0,1).
 #[allow(clippy::too_many_arguments)]
 fn stack_slabs(
     substrate: &Structure,
@@ -193,6 +197,7 @@ fn stack_slabs(
     vacuum: f64,
     film_sl: Option<&[Vector3<f64>; 2]>,
     sub_sl: Option<&[Vector3<f64>; 2]>,
+    xy_shift: (f64, f64),
 ) -> Structure {
     let sub_mat = substrate.lattice.matrix();
     let sub_cart = substrate.cart_coords();
@@ -224,6 +229,24 @@ fn stack_slabs(
         );
         let strained_lat = Lattice::new(strained);
         film_cart = strained_lat.get_cartesian_coords(&film.frac_coords);
+    }
+
+    // Apply in-plane fractional shift along interface a,b vectors. Matches
+    // Python `_stack_slabs`: shift_xy = fa*a_vec + fb*b_vec (full 3D vectors).
+    let (fa, fb) = xy_shift;
+    if fa.abs() > 1e-10 || fb.abs() > 1e-10 {
+        let (a_vec, b_vec) = if let Some(ssl) = sub_sl {
+            (ssl[0], ssl[1])
+        } else {
+            (
+                Vector3::new(sub_mat[(0, 0)], sub_mat[(0, 1)], sub_mat[(0, 2)]),
+                Vector3::new(sub_mat[(1, 0)], sub_mat[(1, 1)], sub_mat[(1, 2)]),
+            )
+        };
+        let shift_xy = a_vec * fa + b_vec * fb;
+        for p in film_cart.iter_mut() {
+            *p += shift_xy;
+        }
     }
 
     // Substrate c direction.
@@ -467,6 +490,7 @@ pub fn build_interface_slab(
         vacuum,
         Some(&film_sl),
         Some(&sub_sl),
+        (0.0, 0.0),
     );
 
     let m = interface.lattice.matrix();
@@ -489,6 +513,9 @@ pub fn build_interface_slab(
 /// SLAB-mode manual build: apply user-specified 2x2 transforms and stack.
 /// Faithful port of Python `build_interface_manual` (no ZSL search; legacy
 /// fractional-coordinate strain path).
+///
+/// `xy_shift` is a fractional `(fa, fb)` in-plane shift of the film along the
+/// raw substrate-supercell a,b vectors (sl_vectors are None in manual mode).
 #[allow(clippy::too_many_arguments)]
 pub fn build_interface_manual(
     substrate_slab: &Structure,
@@ -497,6 +524,7 @@ pub fn build_interface_manual(
     film_transform: &[[i64; 2]; 2],
     gap: f64,
     vacuum: f64,
+    xy_shift: (f64, f64),
 ) -> Result<BuildResult, String> {
     let sub = strip_vacuum(substrate_slab, 0.5);
     let film = strip_vacuum(film_slab, 0.5);
@@ -508,7 +536,7 @@ pub fn build_interface_manual(
     let n_film = film_super.num_sites();
 
     // Manual mode uses the legacy fractional path (sl_vectors = None).
-    let interface = stack_slabs(&sub_super, &film_super, gap, vacuum, None, None);
+    let interface = stack_slabs(&sub_super, &film_super, gap, vacuum, None, None, xy_shift);
 
     let m = interface.lattice.matrix();
     let a = Vector3::new(m[(0, 0)], m[(0, 1)], m[(0, 2)]);
@@ -528,6 +556,525 @@ pub fn build_interface_manual(
         match_area: round2(match_area),
         strain: round4(strain),
     })
+}
+
+/// One registry candidate: an interface built at a particular in-plane shift.
+/// Mirrors the per-candidate dict returned by Python `build_registry_candidates`.
+#[derive(Debug, Clone)]
+pub struct RegistryCandidate {
+    /// The built interface structure.
+    pub structure: Structure,
+    /// Fractional shift along interface a (rounded to 4 dp).
+    pub shift_a: f64,
+    /// Fractional shift along interface b (rounded to 4 dp).
+    pub shift_b: f64,
+    /// Candidate label (used for filenames).
+    pub label: String,
+    /// Total atom count.
+    pub n_atoms: usize,
+    /// Interface in-plane area (Å²).
+    pub match_area: f64,
+    /// Von Mises strain (%).
+    pub strain: f64,
+}
+
+/// Extract unique surface atom xy positions (top-most layer) in Cartesian.
+/// Faithful port of Python `_get_surface_sites_cart`.
+///
+/// Returns (x, y) for the top z-layer (within `tol` of the max c-projection),
+/// deduplicated by Cartesian proximity (< 0.2 Å).
+fn get_surface_sites_cart(structure: &Structure, tol: f64) -> Vec<(f64, f64)> {
+    let mat = structure.lattice.matrix();
+    let c_vec = Vector3::new(mat[(2, 0)], mat[(2, 1)], mat[(2, 2)]);
+    let c_unit = c_vec / c_vec.norm();
+    let cart = structure.cart_coords();
+    let projections: Vec<f64> = cart.iter().map(|p| p.dot(&c_unit)).collect();
+    let z_max = projections.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+    let mut surface: Vec<(f64, f64)> = Vec::new();
+    for (i, p) in cart.iter().enumerate() {
+        if (projections[i] - z_max).abs() < tol {
+            surface.push((p.x, p.y));
+        }
+    }
+
+    let mut unique: Vec<(f64, f64)> = Vec::new();
+    for (x, y) in surface {
+        let mut is_dup = false;
+        for &(ux, uy) in &unique {
+            if (x - ux).abs() < 0.2 && (y - uy).abs() < 0.2 {
+                is_dup = true;
+                break;
+            }
+        }
+        if !is_dup {
+            unique.push((x, y));
+        }
+    }
+    unique
+}
+
+/// Generate registry candidates for a selected ZSL match: build the SAME match
+/// at a family of in-plane xy shifts. Faithful port of Python
+/// `build_registry_candidates`.
+///
+/// Shift-grid priority (matches Python):
+///   - `step_angstrom > 0`  →  regular grid stepping `step_angstrom` Å along
+///                             each sl_vector; last partial step discarded.
+///   - `n_shift > 0`        →  `n_shift × n_shift` uniform fractional grid.
+///   - `n_shift == 0`       →  surface-atom-based shifts (baseline + each
+///                             unique substrate surface site).
+#[allow(clippy::too_many_arguments)]
+pub fn build_registry_candidates(
+    substrate_slab: &Structure,
+    film_slab: &Structure,
+    match_index: usize,
+    n_shift: usize,
+    gap: f64,
+    vacuum: f64,
+    max_area: f64,
+    max_area_ratio_tol: f64,
+    max_length_tol: f64,
+    max_angle_tol: f64,
+    step_angstrom: f64,
+    target_z: f64,
+) -> Result<Vec<RegistryCandidate>, String> {
+    let sub = strip_vacuum(substrate_slab, 0.5);
+    let film = strip_vacuum(film_slab, 0.5);
+
+    let sub_vecs = inplane_vectors(&sub);
+    let film_vecs = inplane_vectors(&film);
+    let original_sub_a = sub_vecs[0];
+
+    let zgen = ZslGenerator {
+        max_area,
+        max_area_ratio_tol,
+        max_length_tol,
+        max_angle_tol,
+        bidirectional: false,
+    };
+
+    let zsl_matches = zgen.generate(&film_vecs, &sub_vecs);
+    if match_index >= zsl_matches.len() {
+        return Err(format!(
+            "Match index {match_index} out of range (have {} matches).",
+            zsl_matches.len()
+        ));
+    }
+    let selected = &zsl_matches[match_index];
+
+    let sub_super =
+        make_supercell_2d(&sub, &selected.substrate_transformation).map_err(|e| e.to_string())?;
+    let film_super =
+        make_supercell_2d(&film, &selected.film_transformation).map_err(|e| e.to_string())?;
+
+    // Normalize a/b ordering to match original substrate convention.
+    let (sub_sl, film_sl) = align_sl_vectors(
+        selected.substrate_sl_vectors,
+        selected.film_sl_vectors,
+        &original_sub_a,
+    );
+
+    let strain = compute_strain_percent(&film_sl, &sub_sl);
+
+    // Determine shift grid: list of (fa, fb, label).
+    let mut shifts: Vec<(f64, f64, String)> = Vec::new();
+    if step_angstrom > 0.0 {
+        let a_len = sub_sl[0].norm();
+        let b_len = sub_sl[1].norm();
+        let n_a = (a_len / step_angstrom).floor().max(1.0) as usize;
+        let n_b = (b_len / step_angstrom).floor().max(1.0) as usize;
+        for i in 0..n_a {
+            for j in 0..n_b {
+                let fa = (i as f64) * step_angstrom / a_len;
+                let fb = (j as f64) * step_angstrom / b_len;
+                let label = format!(
+                    "s{:.2}_{:.2}",
+                    (i as f64) * step_angstrom,
+                    (j as f64) * step_angstrom
+                );
+                shifts.push((fa, fb, label));
+            }
+        }
+    } else if n_shift > 0 {
+        let n = n_shift as f64;
+        for i in 0..n_shift {
+            for j in 0..n_shift {
+                let fa = (i as f64) / n;
+                let fb = (j as f64) / n;
+                let label = format!("s{fa:.2}_{fb:.2}");
+                shifts.push((fa, fb, label));
+            }
+        }
+    } else {
+        // Surface-atom-based shifts: align film ref atom over each substrate
+        // surface site. Cartesian → fractional in the interface (sl) lattice.
+        let d = compute_deformation_2d(&film_sl, &sub_sl);
+        let film_ref0 = film_super.cart_coords()[0];
+        let film_ref_xy = d * Vector2::new(film_ref0.x, film_ref0.y);
+
+        let surface_sites = get_surface_sites_cart(&sub_super, 0.5);
+
+        // 2x2 inverse of [a_sl; b_sl]^T (columns = sl vectors).
+        let a_sl = Vector2::new(sub_sl[0].x, sub_sl[0].y);
+        let b_sl = Vector2::new(sub_sl[1].x, sub_sl[1].y);
+        let m = Matrix2::new(a_sl.x, b_sl.x, a_sl.y, b_sl.y);
+        let m_inv = m.try_inverse().unwrap_or_else(Matrix2::identity);
+
+        // Baseline (0,0) is always first.
+        shifts.push((0.0, 0.0, "baseline".to_string()));
+        for (sx, sy) in surface_sites {
+            let delta = Vector2::new(sx, sy) - film_ref_xy;
+            let fab = m_inv * delta;
+            let fa = wrap01(fab.x);
+            let fb = wrap01(fab.y);
+            // Dedup against existing shifts with periodic distance < 0.02.
+            let mut is_dup = false;
+            for (ea, eb, _) in &shifts {
+                let da = (fa - ea).abs().min(1.0 - (fa - ea).abs());
+                let db = (fb - eb).abs().min(1.0 - (fb - eb).abs());
+                if da < 0.02 && db < 0.02 {
+                    is_dup = true;
+                    break;
+                }
+            }
+            if !is_dup {
+                let label = format!("site_{fa:.3}_{fb:.3}");
+                shifts.push((fa, fb, label));
+            }
+        }
+    }
+
+    let mut candidates: Vec<RegistryCandidate> = Vec::with_capacity(shifts.len());
+    for (fa, fb, label) in shifts {
+        let interface = stack_slabs_target_z(
+            &sub_super,
+            &film_super,
+            gap,
+            vacuum,
+            Some(&film_sl),
+            Some(&sub_sl),
+            (fa, fb),
+            target_z,
+        );
+
+        let m = interface.lattice.matrix();
+        let a = Vector3::new(m[(0, 0)], m[(0, 1)], m[(0, 2)]);
+        let b = Vector3::new(m[(1, 0)], m[(1, 1)], m[(1, 2)]);
+        let match_area = vec_area(&a, &b);
+        let n_atoms = interface.num_sites();
+
+        candidates.push(RegistryCandidate {
+            structure: interface,
+            shift_a: round4(fa),
+            shift_b: round4(fb),
+            label,
+            n_atoms,
+            match_area: round2(match_area),
+            strain: round4(strain),
+        });
+    }
+
+    Ok(candidates)
+}
+
+/// Like [`stack_slabs`] but with an explicit `target_z` (when `> 0`, the new
+/// c-length is fixed to `target_z` instead of `total_top + vacuum`).
+/// Used by [`build_registry_candidates`] (Python `_stack_slabs` `target_z`).
+#[allow(clippy::too_many_arguments)]
+fn stack_slabs_target_z(
+    substrate: &Structure,
+    film: &Structure,
+    gap: f64,
+    vacuum: f64,
+    film_sl: Option<&[Vector3<f64>; 2]>,
+    sub_sl: Option<&[Vector3<f64>; 2]>,
+    xy_shift: (f64, f64),
+    target_z: f64,
+) -> Structure {
+    if target_z <= 0.0 {
+        return stack_slabs(substrate, film, gap, vacuum, film_sl, sub_sl, xy_shift);
+    }
+    // target_z path: replicate stack_slabs but override new_c_len.
+    let sub_mat = substrate.lattice.matrix();
+    let sub_cart = substrate.cart_coords();
+
+    let mut film_cart = film.cart_coords();
+    if let (Some(fsl), Some(ssl)) = (film_sl, sub_sl) {
+        let d = compute_deformation_2d(fsl, ssl);
+        for p in film_cart.iter_mut() {
+            let xy = Vector2::new(p.x, p.y);
+            let nxy = d * xy;
+            p.x = nxy.x;
+            p.y = nxy.y;
+        }
+    } else {
+        let fm = film.lattice.matrix();
+        let strained = Matrix3::new(
+            sub_mat[(0, 0)], sub_mat[(0, 1)], sub_mat[(0, 2)],
+            sub_mat[(1, 0)], sub_mat[(1, 1)], sub_mat[(1, 2)],
+            fm[(2, 0)], fm[(2, 1)], fm[(2, 2)],
+        );
+        let strained_lat = Lattice::new(strained);
+        film_cart = strained_lat.get_cartesian_coords(&film.frac_coords);
+    }
+
+    let (fa, fb) = xy_shift;
+    if fa.abs() > 1e-10 || fb.abs() > 1e-10 {
+        let (a_vec, b_vec) = if let Some(ssl) = sub_sl {
+            (ssl[0], ssl[1])
+        } else {
+            (
+                Vector3::new(sub_mat[(0, 0)], sub_mat[(0, 1)], sub_mat[(0, 2)]),
+                Vector3::new(sub_mat[(1, 0)], sub_mat[(1, 1)], sub_mat[(1, 2)]),
+            )
+        };
+        let shift_xy = a_vec * fa + b_vec * fb;
+        for p in film_cart.iter_mut() {
+            *p += shift_xy;
+        }
+    }
+
+    let sub_c = Vector3::new(sub_mat[(2, 0)], sub_mat[(2, 1)], sub_mat[(2, 2)]);
+    let sub_c_unit = sub_c / sub_c.norm();
+    let sub_top = sub_cart
+        .iter()
+        .map(|p| p.dot(&sub_c_unit))
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let film_mat = film.lattice.matrix();
+    let film_c = Vector3::new(film_mat[(2, 0)], film_mat[(2, 1)], film_mat[(2, 2)]);
+    let film_c_unit = film_c / film_c.norm();
+    let film_bottom = film_cart
+        .iter()
+        .map(|p| p.dot(&film_c_unit))
+        .fold(f64::INFINITY, f64::min);
+
+    let shift = sub_c_unit * (sub_top + gap - film_bottom);
+    let film_cart_shifted: Vec<Vector3<f64>> = film_cart.iter().map(|p| p + shift).collect();
+
+    let _ = vacuum; // vacuum unused on the target_z path (matches Python).
+    let new_c_len = target_z;
+
+    let (a_vec, b_vec) = if let Some(ssl) = sub_sl {
+        (ssl[0], ssl[1])
+    } else {
+        (
+            Vector3::new(sub_mat[(0, 0)], sub_mat[(0, 1)], sub_mat[(0, 2)]),
+            Vector3::new(sub_mat[(1, 0)], sub_mat[(1, 1)], sub_mat[(1, 2)]),
+        )
+    };
+    let new_c = sub_c_unit * new_c_len;
+    let new_matrix = Matrix3::new(
+        a_vec.x, a_vec.y, a_vec.z, b_vec.x, b_vec.y, b_vec.z, new_c.x, new_c.y, new_c.z,
+    );
+    let new_lattice = Lattice::new(new_matrix);
+
+    let mut all_cart = sub_cart;
+    all_cart.extend(film_cart_shifted);
+    let mut species: Vec<Species> = substrate.species().into_iter().copied().collect();
+    species.extend(film.species().into_iter().copied());
+
+    let frac = new_lattice.get_fractional_coords(&all_cart);
+    let wrapped: Vec<Vector3<f64>> = frac
+        .iter()
+        .map(|f| Vector3::new(wrap01(f.x), wrap01(f.y), wrap01(f.z)))
+        .collect();
+
+    Structure::new(new_lattice, species, wrapped)
+}
+
+/// A single grid-scan entry: an in-plane shift applied to the film atoms of an
+/// already-built heterostructure. Mirrors Python `GridScanEntry`.
+#[derive(Debug, Clone)]
+pub struct GridScanEntry {
+    /// Fractional (fx, fy) shift.
+    pub shift_frac: (f64, f64),
+    /// Cartesian (x, y, z) shift.
+    pub shift_cart: (f64, f64, f64),
+    /// The shifted structure.
+    pub structure: Structure,
+    /// Total atom count.
+    pub n_atoms: usize,
+    /// Substrate atom count.
+    pub n_atoms_substrate: usize,
+    /// Film atom count.
+    pub n_atoms_film: usize,
+}
+
+/// Result of [`grid_scan`]: the shifted structures plus reduction metadata.
+#[derive(Debug, Clone)]
+pub struct GridScanResult {
+    /// One entry per irreducible grid point.
+    pub entries: Vec<GridScanEntry>,
+    /// Fractional extent of the irreducible zone.
+    pub zone_extent: (f64, f64),
+    /// Number of in-plane symmetry operations found.
+    pub n_symmetry_ops: usize,
+}
+
+/// Extract 2D in-plane symmetry operations from a slab. Faithful port of
+/// Python `get_2d_symmetry_operations`: take all space-group operations
+/// (fractional rotation + translation) and keep those acting purely in the
+/// a-b plane (no z mixing, |R22|≈1, t_z≈0). Falls back to identity-only.
+fn get_2d_symmetry_operations(
+    slab: &Structure,
+    symprec: f64,
+) -> Vec<(Matrix2<f64>, Vector2<f64>)> {
+    let ops = match slab.get_symmetry_operations(symprec) {
+        Ok(o) => o,
+        Err(_) => return vec![(Matrix2::identity(), Vector2::zeros())],
+    };
+
+    let tol = 1e-4;
+    let mut ops_2d: Vec<(Matrix2<f64>, Vector2<f64>)> = Vec::new();
+    for (rot, trans) in &ops {
+        let r = |i: usize, j: usize| rot[i][j] as f64;
+        if r(2, 0).abs() < tol
+            && r(2, 1).abs() < tol
+            && r(0, 2).abs() < tol
+            && r(1, 2).abs() < tol
+            && (r(2, 2).abs() - 1.0).abs() < tol
+            && trans[2].abs() < tol
+        {
+            let rot_2d = Matrix2::new(r(0, 0), r(0, 1), r(1, 0), r(1, 1));
+            let trans_2d = Vector2::new(trans[0], trans[1]);
+            ops_2d.push((rot_2d, trans_2d));
+        }
+    }
+
+    if ops_2d.is_empty() {
+        ops_2d.push((Matrix2::identity(), Vector2::zeros()));
+    }
+    ops_2d
+}
+
+/// Determine the bounding box (fx_max, fy_max) of the irreducible wedge.
+/// Faithful port of Python `get_irreducible_zone_extent` (N=120 fine grid,
+/// canonical-point tuple ordering, +0.5/N boundary padding).
+fn get_irreducible_zone_extent(
+    sym_ops_2d: &[(Matrix2<f64>, Vector2<f64>)],
+) -> (f64, f64) {
+    const N: i64 = 120;
+    let nf = N as f64;
+    let mut seen: std::collections::HashSet<(i64, i64)> = std::collections::HashSet::new();
+
+    for i in 0..N {
+        for j in 0..N {
+            let fx = (i as f64) / nf;
+            let fy = (j as f64) / nf;
+            let pt = Vector2::new(fx, fy);
+            let mut canonical = (i, j);
+            for (rot, trans) in sym_ops_2d {
+                let transformed = rot * pt + trans;
+                let wx = transformed.x - transformed.x.floor();
+                let wy = transformed.y - transformed.y.floor();
+                let ix = (((wx * nf).round() as i64) % N + N) % N;
+                let iy = (((wy * nf).round() as i64) % N + N) % N;
+                if (ix, iy) < canonical {
+                    canonical = (ix, iy);
+                }
+            }
+            seen.insert(canonical);
+        }
+    }
+
+    if seen.is_empty() {
+        return (1.0, 1.0);
+    }
+
+    let fx_max = seen.iter().map(|c| c.0).max().unwrap() as f64 / nf;
+    let fy_max = seen.iter().map(|c| c.1).max().unwrap() as f64 / nf;
+    let fx_max = (fx_max + 0.5 / nf).min(1.0);
+    let fy_max = (fy_max + 0.5 / nf).min(1.0);
+    (fx_max, fy_max)
+}
+
+/// Generate the uniform n_grid_x × n_grid_y grid within the irreducible zone.
+/// Faithful port of Python `get_irreducible_grid_points` (count = nx*ny, no
+/// reduction; symmetry sets the REGION, density is user-controlled).
+fn get_irreducible_grid_points(
+    sym_ops_2d: &[(Matrix2<f64>, Vector2<f64>)],
+    n_grid_x: usize,
+    n_grid_y: usize,
+) -> (Vec<(f64, f64)>, (f64, f64)) {
+    let (fx_max, fy_max) = get_irreducible_zone_extent(sym_ops_2d);
+    let mut points = Vec::with_capacity(n_grid_x * n_grid_y);
+    for i in 0..n_grid_x {
+        for j in 0..n_grid_y {
+            let fx = (i as f64) / (n_grid_x as f64) * fx_max;
+            let fy = (j as f64) / (n_grid_y as f64) * fy_max;
+            points.push((fx, fy));
+        }
+    }
+    (points, (fx_max, fy_max))
+}
+
+/// Shift only the film atoms (indices >= n_atoms_substrate) in-plane for each
+/// irreducible point. Faithful port of Python `generate_grid_scan_structures`:
+/// the lattice, gap and vacuum are preserved as-is, z is untouched.
+fn generate_grid_scan_structures(
+    heterostructure: &Structure,
+    n_atoms_substrate: usize,
+    irreducible_points: &[(f64, f64)],
+) -> Vec<GridScanEntry> {
+    let n_total = heterostructure.num_sites();
+    let n_film = n_total.saturating_sub(n_atoms_substrate);
+    let mat = heterostructure.lattice.matrix();
+    let a_vec = Vector3::new(mat[(0, 0)], mat[(0, 1)], mat[(0, 2)]);
+    let b_vec = Vector3::new(mat[(1, 0)], mat[(1, 1)], mat[(1, 2)]);
+
+    let base_cart = heterostructure.cart_coords();
+    let species: Vec<Species> = heterostructure.species().into_iter().copied().collect();
+
+    let mut entries = Vec::with_capacity(irreducible_points.len());
+    for &(fx, fy) in irreducible_points {
+        let shift_cart = a_vec * fx + b_vec * fy;
+        let mut cart = base_cart.clone();
+        for p in cart.iter_mut().skip(n_atoms_substrate) {
+            p.x += shift_cart.x;
+            p.y += shift_cart.y;
+            // z unchanged.
+        }
+        let frac = heterostructure.lattice.get_fractional_coords(&cart);
+        let shifted = Structure::new(heterostructure.lattice.clone(), species.clone(), frac);
+
+        entries.push(GridScanEntry {
+            shift_frac: (fx, fy),
+            shift_cart: (shift_cart.x, shift_cart.y, shift_cart.z),
+            structure: shifted,
+            n_atoms: n_total,
+            n_atoms_substrate,
+            n_atoms_film: n_film,
+        });
+    }
+    entries
+}
+
+/// Grid-scan an already-built heterostructure over the irreducible wedge of the
+/// (vacuum-stripped) film slab. Faithful port of the Python `/grid-scan`
+/// pipeline: 2D symmetry of the film → irreducible zone extent → uniform grid
+/// → shift film atoms per point.
+pub fn grid_scan(
+    heterostructure: &Structure,
+    film_slab: &Structure,
+    n_atoms_substrate: usize,
+    n_grid_x: usize,
+    n_grid_y: usize,
+    symprec: f64,
+) -> GridScanResult {
+    let film_stripped = strip_vacuum(film_slab, 0.5);
+    let sym_ops_2d = get_2d_symmetry_operations(&film_stripped, symprec);
+    let (irr_points, zone_extent) =
+        get_irreducible_grid_points(&sym_ops_2d, n_grid_x, n_grid_y);
+    let entries =
+        generate_grid_scan_structures(heterostructure, n_atoms_substrate, &irr_points);
+
+    GridScanResult {
+        entries,
+        zone_extent,
+        n_symmetry_ops: sym_ops_2d.len(),
+    }
 }
 
 #[cfg(test)]

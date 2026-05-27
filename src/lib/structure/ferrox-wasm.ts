@@ -264,6 +264,27 @@ interface FerroxWasmModule {
     film_transform: Int32Array | number[],
     gap: number,
     vacuum: number,
+    xy_shift_a: number,
+    xy_shift_b: number,
+  ) => WasmResult<unknown>
+  build_hetero_registry: (
+    substrate: unknown,
+    film: unknown,
+    match_id: number,
+    n_shift: number,
+    gap: number,
+    vacuum: number,
+    step_angstrom: number,
+    target_z: number,
+    params: unknown,
+  ) => WasmResult<unknown>
+  build_hetero_grid_scan: (
+    heterostructure: unknown,
+    film: unknown,
+    n_atoms_substrate: number,
+    n_grid_x: number,
+    n_grid_y: number,
+    symprec: number,
   ) => WasmResult<unknown>
   // Reorientation (takes JsCrystal object, returns WasmResult<JsCrystal>)
   reorient_lattice: (structure: unknown) => WasmResult<unknown>
@@ -943,7 +964,8 @@ export async function wasm_build_hetero(
 }
 
 /** SLAB-mode manual build with user-specified 2x2 integer transforms.
- *  Mirrors the backend `POST /api/heterostructure/build-manual`. */
+ *  Mirrors the backend `POST /api/heterostructure/build-manual`. `xy_shift`
+ *  is the fractional (fa, fb) in-plane shift of the film (default (0, 0)). */
 export async function wasm_build_hetero_manual(
   substrate: Crystal,
   film: Crystal,
@@ -951,6 +973,7 @@ export async function wasm_build_hetero_manual(
   film_transform: number[][],
   gap: number,
   vacuum: number,
+  xy_shift: [number, number] = [0, 0],
 ): Promise<WasmResult<unknown>> {
   const mod = await ensure_ferrox_wasm_ready()
   const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
@@ -965,12 +988,98 @@ export async function wasm_build_hetero_manual(
     Math.round(film_transform[1][0]), Math.round(film_transform[1][1]),
   ])
   try {
-    const result = mod.build_hetero_manual(sub, flm, st, ft, gap, vacuum)
+    const result = mod.build_hetero_manual(sub, flm, st, ft, gap, vacuum, xy_shift[0], xy_shift[1])
     if (`error` in result) return result as { error: string }
     const out = result.ok as { structure: unknown; [k: string]: unknown }
     return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
   } catch (err) {
     return { error: `WASM build_hetero_manual failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** SLAB-mode registry candidates: build the same ZSL match at a family of
+ *  in-plane xy shifts. Mirrors the backend `POST /api/heterostructure/batch-build`
+ *  (returns the built structures so the caller can assemble the same archive).
+ *  Each returned candidate's `structure` is converted to pymatgen JSON. */
+export async function wasm_build_hetero_registry(
+  substrate: Crystal,
+  film: Crystal,
+  match_id: number,
+  n_shift: number,
+  gap: number,
+  vacuum: number,
+  step_angstrom: number,
+  target_z: number,
+  params: WasmHeteroSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  const p = {
+    max_area: params.max_area ?? 400.0,
+    max_area_ratio_tol: params.max_area_ratio_tol ?? 0.09,
+    max_length_tol: params.max_length_tol ?? 0.03,
+    max_angle_tol: params.max_angle_tol ?? 0.01,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.build_hetero_registry(
+      sub,
+      flm,
+      match_id,
+      n_shift,
+      gap,
+      vacuum,
+      step_angstrom,
+      target_z,
+      p,
+    )
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as {
+      candidates: { structure: unknown; [k: string]: unknown }[]
+      [k: string]: unknown
+    }
+    const candidates = out.candidates.map((c) => ({
+      ...c,
+      structure: jscrystal_to_pymatgen(c.structure),
+    }))
+    return { ok: { ...out, candidates } }
+  } catch (err) {
+    return { error: `WASM build_hetero_registry failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** SLAB-mode grid scan: shift the film atoms of an already-built heterostructure
+ *  across the irreducible wedge of the film slab. Mirrors the backend
+ *  `POST /api/heterostructure/grid-scan`. Each entry/structure is converted to
+ *  pymatgen JSON. */
+export async function wasm_build_hetero_grid_scan(
+  heterostructure: Crystal,
+  film: Crystal,
+  n_atoms_substrate: number,
+  n_grid_x: number,
+  n_grid_y: number,
+  symprec: number,
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const hetero = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(heterostructure)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  try {
+    const result = mod.build_hetero_grid_scan(hetero, flm, n_atoms_substrate, n_grid_x, n_grid_y, symprec)
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as {
+      entries: { structure: unknown; [k: string]: unknown }[]
+      structures: unknown[]
+      [k: string]: unknown
+    }
+    const entries = out.entries.map((e) => ({
+      ...e,
+      structure: jscrystal_to_pymatgen(e.structure),
+    }))
+    const structures = out.structures.map((s) => jscrystal_to_pymatgen(s))
+    return { ok: { ...out, entries, structures } }
+  } catch (err) {
+    return { error: `WASM build_hetero_grid_scan failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 

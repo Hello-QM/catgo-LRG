@@ -1,7 +1,15 @@
-import type { PymatgenStructure } from '$lib/structure'
+import type { AnyStructure, PymatgenStructure } from '$lib/structure'
+import {
+  structure_to_cif_str,
+  structure_to_extxyz_str,
+  structure_to_poscar_str,
+  structure_to_xyz_str,
+} from '$lib/structure/export'
 import {
   wasm_build_hetero,
+  wasm_build_hetero_grid_scan,
   wasm_build_hetero_manual,
+  wasm_build_hetero_registry,
   wasm_hetero_search,
 } from '$lib/structure/ferrox-wasm'
 import { desktop_backend_available, SERVER_URL, STATIC_ONLY } from './config'
@@ -113,6 +121,7 @@ export async function buildHeterostructureManual(
   gap = 2.0,
   vacuum = 20.0,
   twist_angle = 0.0,
+  xy_shift: [number, number] = [0, 0],
   server_url = SERVER_URL,
 ): Promise<HeterostructureBuildResult> {
   // build-manual is always slab mode. Use the client-side WASM path when no
@@ -126,11 +135,15 @@ export async function buildHeterostructureManual(
       film_transform,
       gap,
       vacuum,
+      xy_shift,
     )
     if (`error` in result) throw new Error(result.error)
     return result.ok as HeterostructureBuildResult
   }
 
+  // NOTE: the backend `/build-manual` model does not (yet) accept an xy_shift
+  // field, so it is only applied on the client-side WASM path above. The
+  // backend body is left unchanged to preserve its existing behavior.
   const response = await fetch(`${server_url}/api/heterostructure/build-manual`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -285,6 +298,35 @@ export async function buildHeterostructureIntermat(
 // Registry candidates (batch build)
 // ---------------------------------------------------------------------------
 
+/** Serialize a structure to the requested format string, matching the backend
+ *  `Structure.to(fmt=...)` used by `/batch-build` (cif / poscar / xyz / extxyz). */
+function serialize_structure(structure: PymatgenStructure, fmt: string): string {
+  const s = structure as unknown as AnyStructure
+  switch (fmt.toLowerCase()) {
+    case `poscar`:
+      return structure_to_poscar_str(s)
+    case `xyz`:
+      return structure_to_xyz_str(s)
+    case `extxyz`:
+      return structure_to_extxyz_str(s)
+    case `cif`:
+    default:
+      return structure_to_cif_str(s)
+  }
+}
+
+/** Trigger a browser download of a Blob under the given filename. */
+function trigger_download(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement(`a`)
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export async function downloadRegistryCandidates(
   substrate: PymatgenStructure,
   film: PymatgenStructure,
@@ -298,6 +340,75 @@ export async function downloadRegistryCandidates(
   target_z: number = 0.0,
   server_url = SERVER_URL,
 ): Promise<void> {
+  // Client-side SLAB path: build candidates in-browser and assemble the same
+  // zip archive (one structure file per candidate + manifest.json) the backend
+  // `/batch-build` returns, then trigger the download. Matches the existing
+  // contract / UX exactly.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_hetero_registry(
+      substrate as never,
+      film as never,
+      match.match_id,
+      n_shift,
+      gap,
+      vacuum,
+      step_angstrom,
+      target_z,
+      {
+        max_area: search_params.max_area,
+        max_area_ratio_tol: search_params.max_area_ratio_tol,
+        max_length_tol: search_params.max_length_tol,
+        max_angle_tol: search_params.max_angle_tol,
+        max_results: search_params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    const { candidates } = result.ok as {
+      candidates: {
+        structure: PymatgenStructure
+        shift_a: number
+        shift_b: number
+        label: string
+        n_atoms: number
+        match_area: number
+        strain: number
+      }[]
+    }
+
+    const file_ext = ({ cif: `.cif`, poscar: `.vasp`, xyz: `.xyz`, extxyz: `.extxyz` } as Record<
+      string,
+      string
+    >)[fmt.toLowerCase()] ?? `.cif`
+
+    const JSZip = (await import(`jszip`)).default
+    const zip = new JSZip()
+    const manifest: {
+      filename: string
+      shift_a: number
+      shift_b: number
+      n_atoms: number
+      match_area: number
+      strain: number
+    }[] = []
+    for (const cand of candidates) {
+      const filename = `hetero_${cand.label}${file_ext}`
+      zip.file(filename, serialize_structure(cand.structure, fmt))
+      manifest.push({
+        filename,
+        shift_a: cand.shift_a,
+        shift_b: cand.shift_b,
+        n_atoms: cand.n_atoms,
+        match_area: cand.match_area,
+        strain: cand.strain,
+      })
+    }
+    zip.file(`manifest.json`, JSON.stringify(manifest, null, 2))
+
+    const blob = await zip.generateAsync({ type: `blob`, compression: `DEFLATE` })
+    trigger_download(blob, `registry_candidates_${candidates.length}.zip`)
+    return
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/batch-build`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -446,6 +557,22 @@ export async function gridScanHeterostructure(
   params: GridScanParams = {},
   server_url = SERVER_URL,
 ): Promise<GridScanResult> {
+  // Client-side SLAB path: reduce the shift grid to the film's irreducible
+  // wedge and shift the film atoms per point, all in-browser. Matches the
+  // backend `/grid-scan` response shape exactly.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_hetero_grid_scan(
+      heterostructure as never,
+      film as never,
+      n_atoms_substrate,
+      params.n_grid_x ?? 6,
+      params.n_grid_y ?? 6,
+      params.symprec ?? 0.1,
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as GridScanResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/grid-scan`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
