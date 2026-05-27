@@ -832,6 +832,7 @@
     vibration_data = null as { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null,
     initial_bulk = null as PymatgenStructure | null,
     tab_id,
+    is_active = true,
     ...rest
   }:
     & {
@@ -978,6 +979,12 @@
       // correct tab instead of colliding on a single "default" panel.
       // Defaults to "default" for callers that don't supply one.
       tab_id?: string
+      // True when this pane is the active/focused one in its tab. Only the
+      // active pane adopts global current-structure store mutations (CatBot
+      // client-direct edits); background panes in a split view must NOT be
+      // clobbered by a load/edit that targeted a sibling pane. Defaults true
+      // so single-pane and preview usages behave as before.
+      is_active?: boolean
     }
     & Omit<ComponentProps<typeof StructureControls>, `children` | `onclose`>
     & Omit<HTMLAttributes<HTMLDivElement>, `children`> = $props()
@@ -2158,6 +2165,12 @@
   const _cur_store = current_structure_state()
   $effect(() => {
     if (tab_id === undefined) return
+    // Only the active pane adopts store mutations. In a split view every pane
+    // shares this one global store; without this guard, loading/editing one
+    // pane (which writes the store) makes every sibling pane's effect re-run
+    // and overwrite itself with that structure — all panes collapse to the
+    // same structure. The active pane is the one CatBot/loads target.
+    if (!is_active) return
     const v = _cur_store.value
     if (v && v !== structure && v !== _last_mirrored_to_store) {
       structure = v as typeof structure
@@ -2456,9 +2469,14 @@
     get_atom_fast_ops: () => scene_atom_fast_ops,
   })
 
-  // Handle OPTIMADE / PubChem structure import.
-  //   • empty pane  → load the imported structure (with a full camera reset)
-  //   • loaded pane → merge the import into the current structure
+  // Handle OPTIMADE / PubChem structure import — always REPLACES the pane.
+  // Previously a loaded pane MERGED the import into its current structure. That
+  // silently combined a freshly-imported crystal with whatever was left in the
+  // pane (e.g. a leftover water molecule) and — because merge_structures keeps
+  // only the base's lattice — dropped the crystal's own cell, demoting a
+  // periodic TiO2 to a lattice-less molecular cluster. Importing a database
+  // structure means "show me this structure", so replace (undo-able). Composite
+  // building (adsorbate-on-surface) has dedicated tools/paste for that.
   // Because `structure` is bound to the active pane, the write-back targets the
   // correct pane in multi-pane layouts — no parent routing required.
   function handle_optimade_import(imported_structure: PymatgenStructure) {
@@ -2466,22 +2484,13 @@
       return
     }
 
-    if (structure?.sites?.length) {
-      // Save current state for undo, then merge the import outside the existing
-      // structure (offset with padding).
-      push_to_undo()
-      const import_position = get_import_position_outside(structure, imported_structure)
-      const merged = merge_structures(structure, imported_structure, import_position)
-      // Mark _aligned so align_on_load doesn't re-rotate the merged structure,
-      // which would shift the original atoms and cause overlap.
-      structure = { ...merged, _aligned: true } as any as typeof structure
-    } else {
-      // Empty pane: load the import directly with a full camera reset.
-      scene_props.camera_position = [0, 0, 0] // triggers auto-positioning at correct distance
-      center_camera_trigger++ // re-center orbit target on structure
-      camera_has_moved = false
-      structure = imported_structure
-    }
+    // Keep the prior content undo-able when replacing a non-empty pane.
+    if (structure?.sites?.length) push_to_undo()
+
+    scene_props.camera_position = [0, 0, 0] // triggers auto-positioning at correct distance
+    center_camera_trigger++ // re-center orbit target on structure
+    camera_has_moved = false
+    structure = imported_structure
 
     selected_sites = []
     optimade_import_position = null

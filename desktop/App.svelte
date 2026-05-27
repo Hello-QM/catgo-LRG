@@ -1639,6 +1639,7 @@
               {:else if pane.structure}
                 <Structure
                   tab_id={tab.id}
+                  is_active={ts.active_pane === idx}
                   bind:structure={ts.panes[idx].structure}
                   bind:saveable_structure={ts.panes[idx].saveable_structure}
                   bind:selected_sites={ts.panes[idx].selected_sites}

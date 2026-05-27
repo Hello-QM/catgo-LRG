@@ -176,14 +176,24 @@ export function merge_structures(
     position[2] - incoming_center[2],
   ]
 
-  // Check if base has a lattice
+  // Pick the lattice for the merged result. Prefer the base's lattice; but if
+  // the base is lattice-less (a molecule) while the incoming structure is a
+  // periodic crystal, ADOPT the incoming lattice — otherwise merging a crystal
+  // onto a molecule silently drops the crystal's cell and demotes it to a
+  // molecule (the TiO2-becomes-molecular bug).
   const base_lattice = (base as PymatgenStructure).lattice
-  const has_lattice = base_lattice?.matrix
+  const incoming_lattice = (incoming as PymatgenStructure).lattice
+  const merged_lattice = base_lattice?.matrix
+    ? base_lattice
+    : (incoming_lattice?.matrix ? incoming_lattice : null)
+  // True when we took the incoming lattice because base had none — base sites'
+  // abc are then cartesian placeholders and must be recomputed below.
+  const adopted_incoming_lattice = !base_lattice?.matrix && !!merged_lattice?.matrix
 
   // Calculate inverse lattice matrix for converting xyz to abc
   let inv_matrix: Matrix3x3 | null = null
-  if (has_lattice) {
-    inv_matrix = matrix_inverse_3x3(transpose_3x3_matrix(base_lattice.matrix))
+  if (merged_lattice?.matrix) {
+    inv_matrix = matrix_inverse_3x3(transpose_3x3_matrix(merged_lattice.matrix))
   }
 
   // Add incoming sites with offset applied
@@ -209,19 +219,26 @@ export function merge_structures(
     }
   })
 
-  // Combine sites
-  const combined_sites = [...base.sites, ...incoming_sites]
+  // When we adopted the incoming lattice, the base sites' abc were cartesian
+  // placeholders (base had no cell) — recompute them against the merged lattice.
+  const base_sites: Site[] = (adopted_incoming_lattice && inv_matrix)
+    ? base.sites.map(site => ({ ...site, abc: mat3x3_vec3_multiply(inv_matrix!, site.xyz) }))
+    : base.sites
 
-  // Return with base's lattice preserved
-  if (has_lattice) {
+  // Combine sites
+  const combined_sites = [...base_sites, ...incoming_sites]
+
+  // Return with the merged lattice (base's, or incoming's if base had none).
+  if (merged_lattice?.matrix) {
     return {
       ...(base as PymatgenStructure),
+      lattice: merged_lattice,
       sites: combined_sites,
       charge: (base.charge || 0) + (incoming.charge || 0),
     }
   }
 
-  // No lattice - return as molecule
+  // Neither structure has a lattice - return as molecule
   return {
     sites: combined_sites,
     charge: (base.charge || 0) + (incoming.charge || 0),
