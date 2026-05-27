@@ -2,10 +2,11 @@ import { STATIC_ONLY } from '$lib/api/config'
 import type { ChatConfig } from './types'
 import { SDK_PROVIDERS } from './types'
 
-/** Edge CORS relay base URL. Build-time injected; falls back to a default deploy. */
+/** Edge CORS relay base URL. Override at build time via VITE_CORS_RELAY_URL;
+ *  falls back to the deployed catgo-cors-relay Worker. */
 export const RELAY_URL: string =
   (typeof import.meta.env.VITE_CORS_RELAY_URL === `string` && import.meta.env.VITE_CORS_RELAY_URL) ||
-  `https://catgo-cors-relay.workers.dev`
+  `https://catgo-cors-relay.guangshengliu2021.workers.dev`
 
 /** Hosts known to block browser CORS — fetches to these must go through the relay. */
 const RELAY_HOSTS = new Set<string>([`optimade.materialsproject.org`])
