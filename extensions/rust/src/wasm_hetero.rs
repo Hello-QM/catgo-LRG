@@ -11,8 +11,9 @@ use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::heterostructure::{
-    build_interface_manual, build_interface_slab, build_registry_candidates, grid_scan,
-    search_matches_slab, BuildResult, MatchCandidate,
+    build_interface_manual, build_interface_slab, build_lateral_interface,
+    build_registry_candidates, grid_scan, search_lateral_matches, search_matches_slab, BuildResult,
+    LateralBuildResult, LateralMatchCandidate, MatchCandidate,
 };
 use crate::wasm_types::{JsCrystal, WasmResult};
 
@@ -212,7 +213,8 @@ pub fn hetero_search(
 ///
 /// Equivalent to `POST /api/heterostructure/build` with
 /// `search_params.mode = "slab"`. `match_id` is the generation-order index
-/// from a [`hetero_search`] result (the `match_id` field).
+/// from a [`hetero_search`] result (the `match_id` field). `twist_angle`
+/// (degrees) rotates the film in-plane around its centroid before stacking.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn build_hetero(
@@ -221,6 +223,7 @@ pub fn build_hetero(
     match_id: usize,
     gap: f64,
     vacuum: f64,
+    twist_angle: f64,
     params: JsHeteroSearchParams,
 ) -> WasmResult<JsHeteroBuildResult> {
     let result: Result<JsHeteroBuildResult, String> = (|| {
@@ -233,6 +236,7 @@ pub fn build_hetero(
             match_id,
             gap,
             vacuum,
+            twist_angle,
             params.max_area,
             params.max_area_ratio_tol,
             params.max_length_tol,
@@ -488,4 +492,215 @@ pub fn build_hetero_grid_scan(
         })
     })();
     result.into()
+}
+
+// =====================================================================
+// Lateral (in-plane) heterojunction WASM bindings.
+// JSON in/out mirrors the lateral types in `src/lib/api/heterostructure.ts`
+// (`LateralSearchResult`, `LateralBuildResult`).
+// =====================================================================
+
+/// Lateral search parameters. Mirrors the TS `LateralSearchParams`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(from_wasm_abi)]
+pub struct JsLateralSearchParams {
+    /// Interface direction: 0 = a-vector, 1 = b-vector.
+    #[serde(default)]
+    pub interface_axis: usize,
+    /// Maximum matched edge length (Å).
+    #[serde(default = "default_lateral_max_length")]
+    pub max_length: f64,
+    /// Maximum 1D strain tolerance (%).
+    #[serde(default = "default_lateral_max_strain")]
+    pub max_strain: f64,
+    /// Maximum number of match candidates to return.
+    #[serde(default = "default_max_results")]
+    pub max_results: usize,
+}
+
+fn default_lateral_max_length() -> f64 {
+    100.0
+}
+fn default_lateral_max_strain() -> f64 {
+    5.0
+}
+
+impl Default for JsLateralSearchParams {
+    fn default() -> Self {
+        Self {
+            interface_axis: 0,
+            max_length: default_lateral_max_length(),
+            max_strain: default_lateral_max_strain(),
+            max_results: default_max_results(),
+        }
+    }
+}
+
+/// One lateral edge-match in the search result. Field names match the TS
+/// `LateralMatch` interface.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct JsLateralMatch {
+    /// Stable id (index into the sorted list, used by build).
+    pub match_id: usize,
+    /// Supercell multiplier for slab A along the interface edge.
+    pub n1: usize,
+    /// Supercell multiplier for slab B along the interface edge.
+    pub n2: usize,
+    /// Matched edge length for slab A (Å).
+    #[serde(rename = "edge_length_A")]
+    pub edge_length_a: f64,
+    /// Matched edge length for slab B (Å).
+    #[serde(rename = "edge_length_B")]
+    pub edge_length_b: f64,
+    /// 1D mismatch strain (%).
+    pub strain_percent: f64,
+    /// Atom count for slab A supercell.
+    #[serde(rename = "n_atoms_A")]
+    pub n_atoms_a: usize,
+    /// Atom count for slab B supercell.
+    #[serde(rename = "n_atoms_B")]
+    pub n_atoms_b: usize,
+}
+
+impl JsLateralMatch {
+    fn from_candidate(c: &LateralMatchCandidate) -> Self {
+        Self {
+            match_id: c.match_id,
+            n1: c.n1,
+            n2: c.n2,
+            edge_length_a: c.edge_length_a,
+            edge_length_b: c.edge_length_b,
+            strain_percent: c.strain_percent,
+            n_atoms_a: c.n_atoms_a,
+            n_atoms_b: c.n_atoms_b,
+        }
+    }
+}
+
+/// Lateral search result. Mirrors the TS `LateralSearchResult`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct JsLateralSearchResult {
+    /// Matches sorted by (total atoms, strain).
+    pub matches: Vec<JsLateralMatch>,
+    /// Number of matches.
+    pub n_matches: usize,
+    /// Human-readable message.
+    pub message: String,
+}
+
+/// Lateral build result. Mirrors the TS `LateralBuildResult`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct JsLateralBuildResult {
+    /// The joined lateral heterojunction.
+    pub structure: JsCrystal,
+    /// Total atom count.
+    pub n_atoms: usize,
+    /// Slab A atom count (× width_A).
+    #[serde(rename = "n_atoms_A")]
+    pub n_atoms_a: usize,
+    /// Slab B atom count (× width_B).
+    #[serde(rename = "n_atoms_B")]
+    pub n_atoms_b: usize,
+    /// Matched edge length (Å).
+    pub interface_length: f64,
+    /// 1D mismatch strain (%).
+    pub strain: f64,
+    /// Human-readable message.
+    pub message: String,
+}
+
+/// Lateral edge-match search between two 2D slabs.
+///
+/// Equivalent to `POST /api/heterostructure/search-lateral`.
+#[wasm_bindgen]
+pub fn lateral_search(
+    slab_a: JsCrystal,
+    slab_b: JsCrystal,
+    params: JsLateralSearchParams,
+) -> WasmResult<JsLateralSearchResult> {
+    let result: Result<JsLateralSearchResult, String> = (|| {
+        let a = slab_a.to_structure()?;
+        let b = slab_b.to_structure()?;
+
+        let matches = search_lateral_matches(
+            &a,
+            &b,
+            params.interface_axis,
+            params.max_length,
+            params.max_strain,
+            params.max_results,
+        );
+
+        let js_matches: Vec<JsLateralMatch> =
+            matches.iter().map(JsLateralMatch::from_candidate).collect();
+        let n = js_matches.len();
+        Ok(JsLateralSearchResult {
+            matches: js_matches,
+            n_matches: n,
+            message: format!("Found {n} lateral edge matches"),
+        })
+    })();
+    result.into()
+}
+
+/// Build a lateral heterojunction for a selected edge-match.
+///
+/// Equivalent to `POST /api/heterostructure/build-lateral`. `match_id` is the
+/// index into the sorted lateral-search result. `interface_axis` /
+/// `max_length` / `max_strain` are the search params (re-run inside the build,
+/// matching the backend). `width_a` / `width_b` repeat each slab perpendicular
+/// to the interface; `buffer` is the interface gap and `vacuum` the out-of-plane
+/// padding (Å).
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn build_lateral(
+    slab_a: JsCrystal,
+    slab_b: JsCrystal,
+    match_id: usize,
+    interface_axis: usize,
+    width_a: usize,
+    width_b: usize,
+    buffer: f64,
+    vacuum: f64,
+    max_length: f64,
+    max_strain: f64,
+) -> WasmResult<JsLateralBuildResult> {
+    let result: Result<JsLateralBuildResult, String> = (|| {
+        let a = slab_a.to_structure()?;
+        let b = slab_b.to_structure()?;
+
+        let r = build_lateral_interface(
+            &a,
+            &b,
+            match_id,
+            interface_axis,
+            width_a,
+            width_b,
+            buffer,
+            vacuum,
+            max_length,
+            max_strain,
+        )?;
+        Ok(lateral_build_result_to_js(r))
+    })();
+    result.into()
+}
+
+fn lateral_build_result_to_js(r: LateralBuildResult) -> JsLateralBuildResult {
+    let msg = format!(
+        "Lateral: {} atoms ({} A + {} B), interface={:.2} Å, strain={:.2}%",
+        r.n_atoms, r.n_atoms_a, r.n_atoms_b, r.interface_length, r.strain
+    );
+    JsLateralBuildResult {
+        structure: JsCrystal::from_structure(&r.structure),
+        n_atoms: r.n_atoms,
+        n_atoms_a: r.n_atoms_a,
+        n_atoms_b: r.n_atoms_b,
+        interface_length: r.interface_length,
+        strain: r.strain,
+        message: msg,
+    }
 }

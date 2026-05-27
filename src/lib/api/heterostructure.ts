@@ -10,7 +10,9 @@ import {
   wasm_build_hetero_grid_scan,
   wasm_build_hetero_manual,
   wasm_build_hetero_registry,
+  wasm_build_lateral,
   wasm_hetero_search,
+  wasm_lateral_search,
 } from '$lib/structure/ferrox-wasm'
 import { desktop_backend_available, SERVER_URL, STATIC_ONLY } from './config'
 
@@ -214,6 +216,7 @@ export async function buildHeterostructure(
       match.match_id,
       params.gap ?? 2.0,
       params.vacuum ?? 20.0,
+      params.twist_angle ?? 0.0,
       {
         max_area: search_params.max_area,
         max_area_ratio_tol: search_params.max_area_ratio_tol,
@@ -484,6 +487,18 @@ export async function searchLateralMatches(
   params: LateralSearchParams = {},
   server_url = `http://localhost:8000`,
 ): Promise<LateralSearchResult> {
+  // Client-side path (no Python backend) — lateral edge-match search in WASM.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_lateral_search(slab_A as never, slab_B as never, {
+      interface_axis: params.interface_axis,
+      max_length: params.max_length,
+      max_strain: params.max_strain,
+      max_results: params.max_results,
+    })
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as LateralSearchResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/search-lateral`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -506,6 +521,26 @@ export async function buildLateralInterface(
   search_params: LateralSearchParams = {},
   server_url = `http://localhost:8000`,
 ): Promise<LateralBuildResult> {
+  // Client-side path: re-run the edge-match search inside the WASM build and
+  // join the slabs side-by-side. Mirrors the backend `/build-lateral`, which
+  // also re-runs the search and selects `match.match_id`.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_lateral(
+      slab_A as never,
+      slab_B as never,
+      match.match_id,
+      search_params.interface_axis ?? 0,
+      params.width_A ?? 1,
+      params.width_B ?? 1,
+      params.buffer ?? 0.0,
+      params.vacuum ?? 20.0,
+      search_params.max_length ?? 100.0,
+      search_params.max_strain ?? 5.0,
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as LateralBuildResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/build-lateral`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },

@@ -255,7 +255,25 @@ interface FerroxWasmModule {
     match_id: number,
     gap: number,
     vacuum: number,
+    twist_angle: number,
     params: unknown,
+  ) => WasmResult<unknown>
+  lateral_search: (
+    slab_a: unknown,
+    slab_b: unknown,
+    params: unknown,
+  ) => WasmResult<unknown>
+  build_lateral: (
+    slab_a: unknown,
+    slab_b: unknown,
+    match_id: number,
+    interface_axis: number,
+    width_a: number,
+    width_b: number,
+    buffer: number,
+    vacuum: number,
+    max_length: number,
+    max_strain: number,
   ) => WasmResult<unknown>
   build_hetero_manual: (
     substrate: unknown,
@@ -941,6 +959,7 @@ export async function wasm_build_hetero(
   match_id: number,
   gap: number,
   vacuum: number,
+  twist_angle: number,
   params: WasmHeteroSearchParams = {},
 ): Promise<WasmResult<unknown>> {
   const mod = await ensure_ferrox_wasm_ready()
@@ -954,7 +973,7 @@ export async function wasm_build_hetero(
     max_results: params.max_results ?? 50,
   }
   try {
-    const result = mod.build_hetero(sub, flm, match_id, gap, vacuum, p)
+    const result = mod.build_hetero(sub, flm, match_id, gap, vacuum, twist_angle, p)
     if (`error` in result) return result as { error: string }
     const out = result.ok as { structure: unknown; [k: string]: unknown }
     return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
@@ -1080,6 +1099,80 @@ export async function wasm_build_hetero_grid_scan(
     return { ok: { ...out, entries, structures } }
   } catch (err) {
     return { error: `WASM build_hetero_grid_scan failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** Lateral-search parameters for the WASM `lateral_search` export. */
+export interface WasmLateralSearchParams {
+  interface_axis?: number
+  max_length?: number
+  max_strain?: number
+  max_results?: number
+}
+
+/** Lateral (in-plane) edge-match search between two 2D slabs. Mirrors the
+ *  backend `POST /api/heterostructure/search-lateral`. */
+export async function wasm_lateral_search(
+  slab_A: Crystal,
+  slab_B: Crystal,
+  params: WasmLateralSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  if (!slab_A?.sites?.length || !slab_B?.sites?.length) {
+    return { error: `Lateral search: slab_A and slab_B must have sites` }
+  }
+  const mod = await ensure_ferrox_wasm_ready()
+  const a = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_A)))
+  const b = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_B)))
+  const p = {
+    interface_axis: params.interface_axis ?? 0,
+    max_length: params.max_length ?? 100.0,
+    max_strain: params.max_strain ?? 5.0,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.lateral_search(a, b, p)
+    return result as WasmResult<unknown>
+  } catch (err) {
+    return { error: `WASM lateral_search failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** Build a lateral heterojunction for a selected edge-match (by match_id).
+ *  Mirrors the backend `POST /api/heterostructure/build-lateral`. The returned
+ *  `structure` is converted back to the pymatgen/Crystal JSON shape. */
+export async function wasm_build_lateral(
+  slab_A: Crystal,
+  slab_B: Crystal,
+  match_id: number,
+  interface_axis: number,
+  width_A: number,
+  width_B: number,
+  buffer: number,
+  vacuum: number,
+  max_length: number,
+  max_strain: number,
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const a = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_A)))
+  const b = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(slab_B)))
+  try {
+    const result = mod.build_lateral(
+      a,
+      b,
+      match_id,
+      interface_axis,
+      width_A,
+      width_B,
+      buffer,
+      vacuum,
+      max_length,
+      max_strain,
+    )
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as { structure: unknown; [k: string]: unknown }
+    return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
+  } catch (err) {
+    return { error: `WASM build_lateral failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 

@@ -180,21 +180,23 @@ fn align_sl_vectors(
 
 /// Stack `film` on top of `substrate` with the given gap and vacuum.
 /// Faithful port of Python `_stack_slabs` (Cartesian deformation-gradient
-/// path, no twist, `target_z=0`).
+/// path, `target_z=0`).
 ///
 /// Both slabs must already be supercells. The film's in-plane lattice is
 /// strained to match the substrate via the deformation gradient D computed
-/// from the matched super-lattice vectors. `xy_shift` is a fractional
-/// `(fa, fb)` in-plane shift of the film along the interface a,b vectors
-/// (substrate sl_vectors when available, else raw substrate vectors),
-/// applied after strain, before vertical stacking. The result is wrapped
-/// to [0,1).
+/// from the matched super-lattice vectors. `twist_angle` (degrees) rotates
+/// the strained film in-plane around its centroid before stacking.
+/// `xy_shift` is a fractional `(fa, fb)` in-plane shift of the film along the
+/// interface a,b vectors (substrate sl_vectors when available, else raw
+/// substrate vectors), applied after strain+twist, before vertical stacking.
+/// The result is wrapped to [0,1).
 #[allow(clippy::too_many_arguments)]
 fn stack_slabs(
     substrate: &Structure,
     film: &Structure,
     gap: f64,
     vacuum: f64,
+    twist_angle: f64,
     film_sl: Option<&[Vector3<f64>; 2]>,
     sub_sl: Option<&[Vector3<f64>; 2]>,
     xy_shift: (f64, f64),
@@ -230,6 +232,9 @@ fn stack_slabs(
         let strained_lat = Lattice::new(strained);
         film_cart = strained_lat.get_cartesian_coords(&film.frac_coords);
     }
+
+    // Apply twist (rotation around c-axis) about the film centroid, in-plane.
+    apply_twist(&mut film_cart, twist_angle);
 
     // Apply in-plane fractional shift along interface a,b vectors. Matches
     // Python `_stack_slabs`: shift_xy = fa*a_vec + fb*b_vec (full 3D vectors).
@@ -305,6 +310,26 @@ fn stack_slabs(
         .collect();
 
     Structure::new(new_lattice, species, wrapped)
+}
+
+/// Rotate the in-plane (x, y) components of `cart` by `twist_angle` degrees
+/// around the centroid of the points. Faithful port of the twist block in
+/// Python `_stack_slabs` (z preserved, rotation about film-atom centroid).
+fn apply_twist(cart: &mut [Vector3<f64>], twist_angle: f64) {
+    if twist_angle.abs() <= 1e-10 || cart.is_empty() {
+        return;
+    }
+    let theta = twist_angle.to_radians();
+    let (cos_t, sin_t) = (theta.cos(), theta.sin());
+    let n = cart.len() as f64;
+    let cx = cart.iter().map(|p| p.x).sum::<f64>() / n;
+    let cy = cart.iter().map(|p| p.y).sum::<f64>() / n;
+    for p in cart.iter_mut() {
+        let rx = p.x - cx;
+        let ry = p.y - cy;
+        p.x = rx * cos_t - ry * sin_t + cx;
+        p.y = rx * sin_t + ry * cos_t + cy;
+    }
 }
 
 /// Wrap a fractional coordinate into [0, 1) like numpy `% 1.0`.
@@ -444,6 +469,7 @@ pub fn build_interface_slab(
     match_index: usize,
     gap: f64,
     vacuum: f64,
+    twist_angle: f64,
     max_area: f64,
     max_area_ratio_tol: f64,
     max_length_tol: f64,
@@ -488,6 +514,7 @@ pub fn build_interface_slab(
         &film_super,
         gap,
         vacuum,
+        twist_angle,
         Some(&film_sl),
         Some(&sub_sl),
         (0.0, 0.0),
@@ -535,8 +562,10 @@ pub fn build_interface_manual(
     let n_sub = sub_super.num_sites();
     let n_film = film_super.num_sites();
 
-    // Manual mode uses the legacy fractional path (sl_vectors = None).
-    let interface = stack_slabs(&sub_super, &film_super, gap, vacuum, None, None, xy_shift);
+    // Manual mode uses the legacy fractional path (sl_vectors = None) and no
+    // twist (matches the WASM manual build's default of twist_angle = 0.0).
+    let interface =
+        stack_slabs(&sub_super, &film_super, gap, vacuum, 0.0, None, None, xy_shift);
 
     let m = interface.lattice.matrix();
     let a = Vector3::new(m[(0, 0)], m[(0, 1)], m[(0, 2)]);
@@ -555,6 +584,296 @@ pub fn build_interface_manual(
         n_atoms_film: n_film,
         match_area: round2(match_area),
         strain: round4(strain),
+    })
+}
+
+// =====================================================================
+// Lateral (in-plane) heterojunction — side-by-side stitching of two slabs.
+// Faithful port of Python `search_lateral_matches` / `_join_lateral` /
+// `build_lateral_interface`.
+// =====================================================================
+
+/// A 1D edge-match candidate for a lateral heterojunction. Mirrors the Python
+/// `LateralMatchCandidate` dataclass.
+#[derive(Debug, Clone)]
+pub struct LateralMatchCandidate {
+    /// Stable id (== index into the unsorted-then-sorted match list).
+    pub match_id: usize,
+    /// Supercell multiplier for slab A along the interface edge.
+    pub n1: usize,
+    /// Supercell multiplier for slab B along the interface edge.
+    pub n2: usize,
+    /// |n1 * edge_A| (Å), rounded to 4 dp.
+    pub edge_length_a: f64,
+    /// |n2 * edge_B| (Å), rounded to 4 dp.
+    pub edge_length_b: f64,
+    /// 1D mismatch percentage, rounded to 4 dp.
+    pub strain_percent: f64,
+    /// Slab A atom count after the supercell multiplier.
+    pub n_atoms_a: usize,
+    /// Slab B atom count after the supercell multiplier.
+    pub n_atoms_b: usize,
+}
+
+/// Result of [`build_lateral_interface`].
+#[derive(Debug, Clone)]
+pub struct LateralBuildResult {
+    /// The joined lateral heterojunction.
+    pub structure: Structure,
+    /// Total atom count.
+    pub n_atoms: usize,
+    /// Slab A atom count (× width_A).
+    pub n_atoms_a: usize,
+    /// Slab B atom count (× width_B).
+    pub n_atoms_b: usize,
+    /// Matched edge length (average of A and B), rounded to 4 dp.
+    pub interface_length: f64,
+    /// 1D mismatch percentage.
+    pub strain: f64,
+}
+
+/// Find 1D edge-matched supercell pairs for a lateral heterojunction.
+/// Faithful port of Python `search_lateral_matches`.
+///
+/// `interface_axis` is 0 (match along a) or 1 (match along b). Strips vacuum
+/// from both slabs, enumerates `(n1, n2)` supercell multipliers whose matched
+/// edge lengths fall within `max_length`/`max_strain`, then sorts by
+/// (total atoms, strain) and truncates to `max_results`.
+pub fn search_lateral_matches(
+    slab_a: &Structure,
+    slab_b: &Structure,
+    interface_axis: usize,
+    max_length: f64,
+    max_strain: f64,
+    max_results: usize,
+) -> Vec<LateralMatchCandidate> {
+    let stripped_a = strip_vacuum(slab_a, 0.5);
+    let stripped_b = strip_vacuum(slab_b, 0.5);
+
+    let ma = stripped_a.lattice.matrix();
+    let mb = stripped_b.lattice.matrix();
+    let axis_vec = |m: &Matrix3<f64>, ax: usize| {
+        Vector3::new(m[(ax, 0)], m[(ax, 1)], m[(ax, 2)])
+    };
+    let len_a = axis_vec(&ma, interface_axis).norm();
+    let len_b = axis_vec(&mb, interface_axis).norm();
+
+    let n_atoms_a_base = stripped_a.num_sites();
+    let n_atoms_b_base = stripped_b.num_sites();
+
+    let n_max_a = ((max_length / len_a) as i64).max(1) as usize;
+    let n_max_b = ((max_length / len_b) as i64).max(1) as usize;
+
+    let mut matches: Vec<LateralMatchCandidate> = Vec::new();
+    let mut match_id = 0usize;
+    for n1 in 1..=n_max_a {
+        let l_a = (n1 as f64) * len_a;
+        if l_a > max_length {
+            break;
+        }
+        for n2 in 1..=n_max_b {
+            let l_b = (n2 as f64) * len_b;
+            if l_b > max_length {
+                break;
+            }
+            let avg = (l_a + l_b) / 2.0;
+            let strain = (l_a - l_b).abs() / avg * 100.0;
+            if strain > max_strain {
+                continue;
+            }
+            matches.push(LateralMatchCandidate {
+                match_id,
+                n1,
+                n2,
+                edge_length_a: round4(l_a),
+                edge_length_b: round4(l_b),
+                strain_percent: round4(strain),
+                n_atoms_a: n_atoms_a_base * n1,
+                n_atoms_b: n_atoms_b_base * n2,
+            });
+            match_id += 1;
+        }
+    }
+
+    // Sort by total atoms first, then strain (stable, mirrors Python).
+    matches.sort_by(|a, b| {
+        let ta = a.n_atoms_a + a.n_atoms_b;
+        let tb = b.n_atoms_a + b.n_atoms_b;
+        ta.cmp(&tb).then(
+            a.strain_percent
+                .partial_cmp(&b.strain_percent)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+
+    matches.truncate(max_results);
+    matches
+}
+
+/// Build a diagonal 3x3 supercell scaling matrix with `mult_interface` along
+/// `interface_axis`, `mult_perp` along the perpendicular axis, and 1 along c.
+fn lateral_supercell_matrix(
+    interface_axis: usize,
+    perp_axis: usize,
+    mult_interface: usize,
+    mult_perp: usize,
+) -> [[i32; 3]; 3] {
+    let mut t = [[0i32; 3]; 3];
+    t[2][2] = 1;
+    t[interface_axis][interface_axis] = mult_interface as i32;
+    t[perp_axis][perp_axis] = mult_perp as i32;
+    t
+}
+
+/// Join two slabs side-by-side to form a lateral heterojunction.
+/// Faithful port of Python `_join_lateral`.
+#[allow(clippy::too_many_arguments)]
+fn join_lateral(
+    slab_a: &Structure,
+    slab_b: &Structure,
+    n1: usize,
+    n2: usize,
+    interface_axis: usize,
+    width_a: usize,
+    width_b: usize,
+    buffer: f64,
+    vacuum: f64,
+) -> crate::error::Result<Structure> {
+    let stripped_a = strip_vacuum(slab_a, 0.5);
+    let stripped_b = strip_vacuum(slab_b, 0.5);
+
+    let perp_axis = 1 - interface_axis;
+
+    let t_a = lateral_supercell_matrix(interface_axis, perp_axis, n1, width_a);
+    let t_b = lateral_supercell_matrix(interface_axis, perp_axis, n2, width_b);
+    let sc_a = stripped_a.make_supercell(t_a)?;
+    let sc_b = stripped_b.make_supercell(t_b)?;
+
+    let mat_a = *sc_a.lattice.matrix();
+    let mat_b = *sc_b.lattice.matrix();
+    let row = |m: &Matrix3<f64>, r: usize| Vector3::new(m[(r, 0)], m[(r, 1)], m[(r, 2)]);
+
+    // Target interface edge length from slab A.
+    let target_edge = row(&mat_a, interface_axis);
+
+    // Strain B: replace its interface-axis vector with A's.
+    let mut strained_b_mat = mat_b;
+    strained_b_mat[(interface_axis, 0)] = target_edge.x;
+    strained_b_mat[(interface_axis, 1)] = target_edge.y;
+    strained_b_mat[(interface_axis, 2)] = target_edge.z;
+    let strained_b_lattice = Lattice::new(strained_b_mat);
+    let b_cart = strained_b_lattice.get_cartesian_coords(&sc_b.frac_coords);
+
+    let a_cart = sc_a.cart_coords();
+
+    // Perpendicular extent of slab A.
+    let perp_vec_a = row(&mat_a, perp_axis);
+    let perp_len_a = perp_vec_a.norm();
+    let perp_unit = if perp_len_a > 1e-10 {
+        perp_vec_a / perp_len_a
+    } else {
+        Vector3::new(0.0, 1.0, 0.0)
+    };
+
+    // Shift B atoms after A along the perpendicular direction.
+    let shift_b = perp_vec_a + perp_unit * buffer;
+    let b_cart_shifted: Vec<Vector3<f64>> = b_cart.iter().map(|p| p + shift_b).collect();
+
+    // Combined perpendicular vector.
+    let perp_vec_b = row(&strained_b_mat, perp_axis);
+    let combined_perp = perp_vec_a + perp_unit * buffer + perp_vec_b;
+
+    // c-axis: max thickness + vacuum, along A's c direction.
+    let c_a_vec = row(&mat_a, 2);
+    let c_a = c_a_vec.norm();
+    let c_b = row(&strained_b_mat, 2).norm();
+    let c_hat_a = if c_a > 1e-10 {
+        c_a_vec / c_a
+    } else {
+        Vector3::new(0.0, 0.0, 1.0)
+    };
+    let new_c_len = c_a.max(c_b) + vacuum;
+    let new_c_vec = c_hat_a * new_c_len;
+
+    // Assemble the new lattice (rows by axis index).
+    let mut new_mat = Matrix3::zeros();
+    let set_row = |m: &mut Matrix3<f64>, r: usize, v: &Vector3<f64>| {
+        m[(r, 0)] = v.x;
+        m[(r, 1)] = v.y;
+        m[(r, 2)] = v.z;
+    };
+    set_row(&mut new_mat, interface_axis, &target_edge);
+    set_row(&mut new_mat, perp_axis, &combined_perp);
+    set_row(&mut new_mat, 2, &new_c_vec);
+    let new_lattice = Lattice::new(new_mat);
+
+    let mut all_cart = a_cart;
+    all_cart.extend(b_cart_shifted);
+    let mut species: Vec<Species> = sc_a.species().into_iter().copied().collect();
+    species.extend(sc_b.species().into_iter().copied());
+
+    let frac = new_lattice.get_fractional_coords(&all_cart);
+    Ok(Structure::new(new_lattice, species, frac))
+}
+
+/// Build a lateral heterojunction from two slabs. Faithful port of Python
+/// `build_lateral_interface`: runs [`search_lateral_matches`], selects the
+/// match at `match_index`, and joins the slabs side-by-side via [`join_lateral`].
+#[allow(clippy::too_many_arguments)]
+pub fn build_lateral_interface(
+    slab_a: &Structure,
+    slab_b: &Structure,
+    match_index: usize,
+    interface_axis: usize,
+    width_a: usize,
+    width_b: usize,
+    buffer: f64,
+    vacuum: f64,
+    max_length: f64,
+    max_strain: f64,
+) -> Result<LateralBuildResult, String> {
+    let matches = search_lateral_matches(
+        slab_a,
+        slab_b,
+        interface_axis,
+        max_length,
+        max_strain,
+        (match_index + 1).max(50),
+    );
+
+    if matches.is_empty() {
+        return Err("No lateral matches found with given tolerances.".to_string());
+    }
+    if match_index >= matches.len() {
+        return Err(format!(
+            "match_index={match_index} out of range (found {} matches)",
+            matches.len()
+        ));
+    }
+    let m = &matches[match_index];
+
+    let interface = join_lateral(
+        slab_a,
+        slab_b,
+        m.n1,
+        m.n2,
+        interface_axis,
+        width_a,
+        width_b,
+        buffer,
+        vacuum,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let interface_length = (m.edge_length_a + m.edge_length_b) / 2.0;
+
+    Ok(LateralBuildResult {
+        structure: interface,
+        n_atoms: m.n_atoms_a * width_a + m.n_atoms_b * width_b,
+        n_atoms_a: m.n_atoms_a * width_a,
+        n_atoms_b: m.n_atoms_b * width_b,
+        interface_length: round4(interface_length),
+        strain: m.strain_percent,
     })
 }
 
@@ -752,6 +1071,7 @@ pub fn build_registry_candidates(
             &film_super,
             gap,
             vacuum,
+            0.0,
             Some(&film_sl),
             Some(&sub_sl),
             (fa, fb),
@@ -787,13 +1107,16 @@ fn stack_slabs_target_z(
     film: &Structure,
     gap: f64,
     vacuum: f64,
+    twist_angle: f64,
     film_sl: Option<&[Vector3<f64>; 2]>,
     sub_sl: Option<&[Vector3<f64>; 2]>,
     xy_shift: (f64, f64),
     target_z: f64,
 ) -> Structure {
     if target_z <= 0.0 {
-        return stack_slabs(substrate, film, gap, vacuum, film_sl, sub_sl, xy_shift);
+        return stack_slabs(
+            substrate, film, gap, vacuum, twist_angle, film_sl, sub_sl, xy_shift,
+        );
     }
     // target_z path: replicate stack_slabs but override new_c_len.
     let sub_mat = substrate.lattice.matrix();
@@ -818,6 +1141,8 @@ fn stack_slabs_target_z(
         let strained_lat = Lattice::new(strained);
         film_cart = strained_lat.get_cartesian_coords(&film.frac_coords);
     }
+
+    apply_twist(&mut film_cart, twist_angle);
 
     let (fa, fb) = xy_shift;
     if fa.abs() > 1e-10 || fb.abs() > 1e-10 {
@@ -1119,6 +1444,7 @@ mod tests {
             clean.match_id,
             2.0,
             20.0,
+            0.0,
             200.0,
             0.09,
             0.06,
