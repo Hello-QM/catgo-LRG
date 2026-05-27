@@ -2,7 +2,8 @@ import type { AnyStructure } from '$lib'
 import type { ClientTool, ToolKind } from './types'
 import { get_current_structure, set_current_structure } from '$lib/structure/current-structure.svelte'
 import { relay_fetch } from './provider-routing'
-import { search_optimade_structures } from '$lib/api/optimade'
+import { search_optimade_structures, fetch_optimade_structure } from '$lib/api/optimade'
+import { optimade_to_pymatgen } from '$lib/structure/parse'
 import {
   create_supercell,
   get_spacegroup as ferrox_spacegroup,
@@ -90,7 +91,7 @@ const OPTIMADE_BASES: Record<string, string> = {
 register(
   {
     name: `fetch_optimade`,
-    description: `Search an OPTIMADE crystal-structure database by chemical formula. Providers: mp (Materials Project), alexandria, odbx.`,
+    description: `SEARCH an OPTIMADE crystal-structure database by chemical formula; returns a list of {id, formula}. This does NOT load anything into the viewer — call load_optimade_structure with a chosen id to actually load it. Providers: mp (Materials Project), alexandria, odbx.`,
     kind: `read`,
     input_schema: {
       type: `object`,
@@ -124,6 +125,43 @@ register(
         id: s.id,
         formula: (s.attributes as { chemical_formula_reduced?: string } | undefined)?.chemical_formula_reduced,
       })),
+    }
+  },
+)
+
+// ── load_optimade_structure (mutate) ──
+register(
+  {
+    name: `load_optimade_structure`,
+    description: `Load a specific OPTIMADE structure (by its id, e.g. "mp-22851") into the viewer so it becomes the current structure. Use the id from fetch_optimade results. This replaces the currently loaded structure.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        provider: { type: `string`, enum: [`mp`, `alexandria`, `odbx`], description: `Database provider id.` },
+        id: { type: `string`, description: `OPTIMADE structure id, e.g. "mp-22851".` },
+      },
+      required: [`provider`, `id`],
+    },
+  },
+  async (input) => {
+    const provider = String(input.provider)
+    const base = OPTIMADE_BASES[provider]
+    if (!base) throw new Error(`Unknown OPTIMADE provider: ${provider}`)
+    const providers = [{
+      id: provider, type: `links`,
+      attributes: { name: provider, description: ``, base_url: base },
+    }]
+    const struct = await fetch_optimade_structure(String(input.id), provider, providers as never)
+    if (!struct) throw new Error(`Structure "${input.id}" not found on ${provider}.`)
+    const pymatgen = optimade_to_pymatgen(struct)
+    if (!pymatgen) throw new Error(`Could not parse structure "${input.id}".`)
+    set_current_structure(pymatgen as never)
+    const sites = (pymatgen as { sites?: unknown[] }).sites ?? []
+    return {
+      loaded: String(input.id),
+      formula: (struct.attributes as { chemical_formula_reduced?: string } | undefined)?.chemical_formula_reduced,
+      num_sites: sites.length,
     }
   },
 )

@@ -143,4 +143,8 @@ describe(`more read tools`, () => {
   it(`compute_xrd is a read tool`, () => {
     expect(tool_kind(`compute_xrd`)).toBe(`read`)
   })
+
+  it(`load_optimade_structure is a mutate tool`, () => {
+    expect(tool_kind(`load_optimade_structure`)).toBe(`mutate`)
+  })
 })
