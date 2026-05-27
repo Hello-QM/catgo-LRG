@@ -671,7 +671,7 @@ export async function send_message(
               // assistant tool_calls message to be followed by its result).
               history.push({
                 role: `assistant`,
-                content: [{ type: `tool_use`, id: e.id, name: e.name, input: tool_inputs.get(e.id) ?? {} }],
+                content: [{ type: `tool_use`, id: e.id, name: e.name, input: tool_inputs.get(e.id) ?? {}, reasoning_content: e.reasoning_content }],
                 timestamp: Date.now(),
               })
               history.push({

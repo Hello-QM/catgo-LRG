@@ -39,6 +39,18 @@ describe(`parse_openai_stream`, () => {
     expect(tc?.calls[0]).toEqual({ id: `c1`, name: `make_supercell`, arguments: { nx: 2, ny: 1, nz: 1 } })
   })
 
+  it(`captures reasoning_content (DeepSeek thinking) on the tool_calls event`, async () => {
+    const events: LlmEvent[] = []
+    for await (const e of parse_openai_stream(sse([
+      JSON.stringify({ choices: [{ delta: { reasoning_content: `Let me ` } }] }),
+      JSON.stringify({ choices: [{ delta: { reasoning_content: `think.` } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `c1`, function: { name: `fetch_optimade`, arguments: `{"q":"x"}` } }] } }] }),
+      JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
+    ]))) events.push(e)
+    const tc = events.find((e): e is Extract<LlmEvent, { type: `tool_calls` }> => e.type === `tool_calls`)
+    expect(tc?.reasoning_content).toBe(`Let me think.`)
+  })
+
   it(`yields an error event (not a throw) on malformed tool-call args`, async () => {
     const events: LlmEvent[] = []
     await expect((async () => {
@@ -75,6 +87,22 @@ describe(`to_openai_message`, () => {
     expect(out.tool_calls[0].type).toBe(`function`)
     expect(out.tool_calls[0].function.name).toBe(`f`)
     expect(JSON.parse(out.tool_calls[0].function.arguments).x).toBe(1)
+  })
+
+  it(`echoes reasoning_content on the assistant tool_calls message (DeepSeek thinking)`, () => {
+    const m: ChatMessage = {
+      role: `assistant`,
+      content: [{ type: `tool_use`, id: `a`, name: `f`, input: { x: 1 }, reasoning_content: `think` }],
+      timestamp: 0,
+    }
+    const out = to_openai_message(m) as {
+      role: string
+      reasoning_content?: string
+      tool_calls: { id: string }[]
+    }
+    expect(out.reasoning_content).toBe(`think`)
+    expect(Array.isArray(out.tool_calls)).toBe(true)
+    expect(out.tool_calls[0].id).toBe(`a`)
   })
 
   it(`maps a tool_result block to a role:tool message`, () => {

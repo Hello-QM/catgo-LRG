@@ -26,6 +26,7 @@ export interface ToolUseBlock {
   id: string
   name: string
   input: Record<string, unknown>
+  reasoning_content?: string // DeepSeek thinking models: must be echoed back on the tool-call assistant message
 }
 
 export interface ToolResultBlock {

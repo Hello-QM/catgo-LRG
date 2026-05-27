@@ -15,7 +15,7 @@ export const PROVIDER_BASE_URLS: Partial<Record<LLMProvider, string>> = {
 
 export type LlmEvent =
   | { type: `text`; text: string }
-  | { type: `tool_calls`; calls: ToolCall[] }
+  | { type: `tool_calls`; calls: ToolCall[]; reasoning_content?: string }
   | { type: `done` }
   | { type: `error`; message: string }
 
@@ -36,6 +36,9 @@ export async function* parse_openai_stream(
   let buffer = ``
   const acc = new Map<number, AccTool>()
   let saw_tool_calls = false
+  // DeepSeek thinking models stream chain-of-thought via delta.reasoning_content.
+  // It must be echoed back on the assistant tool-call message (see to_openai_message).
+  let reasoning = ``
 
   while (true) {
     const { done, value } = await reader.read()
@@ -56,6 +59,7 @@ export async function* parse_openai_stream(
       const choice = data.choices?.[0]
       const delta = choice?.delta
       if (delta?.content) yield { type: `text`, text: delta.content as string }
+      if (delta?.reasoning_content) reasoning += delta.reasoning_content as string
       if (delta?.tool_calls) {
         saw_tool_calls = true
         for (const tc of delta.tool_calls as ToolCallDelta[]) {
@@ -77,7 +81,7 @@ export async function* parse_openai_stream(
         name: t.name,
         arguments: t.args ? JSON.parse(t.args) : {},
       }))
-      yield { type: `tool_calls`, calls }
+      yield { type: `tool_calls`, calls, reasoning_content: reasoning || undefined }
     } catch (err) {
       yield { type: `error`, message: err instanceof Error ? `Bad tool args: ${err.message}` : `Bad tool args` }
     }
@@ -164,9 +168,13 @@ export function to_openai_message(m: ChatMessage): Record<string, unknown> {
   // tool_use → assistant message carrying tool_calls.
   const use_blocks = m.content.filter((b): b is ToolUseBlock => b.type === `tool_use`)
   if (use_blocks.length > 0) {
+    // DeepSeek thinking models reject the follow-up request unless the assistant
+    // message that emitted the tool_calls carries back its reasoning_content.
+    const reasoning_content = use_blocks.find((b) => b.reasoning_content)?.reasoning_content
     return {
       role: `assistant`,
       content: null,
+      ...(reasoning_content ? { reasoning_content } : {}),
       tool_calls: use_blocks.map((b) => ({
         id: b.id,
         type: `function`,
