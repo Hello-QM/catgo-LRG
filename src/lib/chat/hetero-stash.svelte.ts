@@ -13,13 +13,14 @@
 // pane is visible.
 
 import type { AnyStructure } from '$lib'
-import type { HeterostructureMatch } from '$lib/api/heterostructure'
+import type { HeterostructureMatch, LateralMatch } from '$lib/api/heterostructure'
 
 const _state = $state<{
   film: AnyStructure | null
   matches: HeterostructureMatch[]
+  lateral_matches: LateralMatch[]
   bulk: AnyStructure | null
-}>({ film: null, matches: [], bulk: null })
+}>({ film: null, matches: [], lateral_matches: [], bulk: null })
 
 /** Stash the FILM structure for the next heterostructure search/build. */
 export function set_film_stash(s: AnyStructure): void {
@@ -39,6 +40,16 @@ export function set_hetero_matches(m: HeterostructureMatch[]): void {
 /** The candidate matches from the most recent search (empty if none yet). */
 export function get_hetero_matches(): HeterostructureMatch[] {
   return _state.matches
+}
+
+/** Stash the candidate matches from the most recent LATERAL (in-plane) search. */
+export function set_lateral_matches(m: LateralMatch[]): void {
+  _state.lateral_matches = m
+}
+
+/** The candidate LATERAL matches from the most recent search (empty if none yet). */
+export function get_lateral_matches(): LateralMatch[] {
+  return _state.lateral_matches
 }
 
 /** Stash the BULK reference crystal for surface passivation (pseudo-hydrogen).

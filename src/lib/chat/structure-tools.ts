@@ -15,17 +15,28 @@ import { cartesian_to_fractional } from '$lib/structure/lattice-ops'
 import { buildNanotube } from '$lib/api/nanotube'
 import { buildNanoscroll } from '$lib/api/nanoscroll'
 import { searchMoireAngles, buildMoireBilayer } from '$lib/api/moire'
-import { buildHeterostructureManual, searchHeterostructureMatches } from '$lib/api/heterostructure'
-import type { HeterostructureSearchParams } from '$lib/api/heterostructure'
+import {
+  buildHeterostructureManual,
+  buildLateralInterface,
+  searchHeterostructureMatches,
+  searchLateralMatches,
+} from '$lib/api/heterostructure'
+import type {
+  HeterostructureSearchParams,
+  LateralBuildParams,
+  LateralSearchParams,
+} from '$lib/api/heterostructure'
 import { passivateSlab } from '$lib/api/pseudo-hydrogen'
 import type { PseudoHydrogenParams } from '$lib/api/pseudo-hydrogen'
 import {
   get_bulk_stash,
   get_film_stash,
   get_hetero_matches,
+  get_lateral_matches,
   set_bulk_stash,
   set_film_stash,
   set_hetero_matches,
+  set_lateral_matches,
 } from './hetero-stash.svelte'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
@@ -663,6 +674,107 @@ register(
     )
     set_current_structure(result.structure as never)
     return { num_sites: result.n_atoms, strain: result.strain, match_area: result.match_area }
+  },
+)
+
+// ── lateral_heterostructure_search (read) ──
+register(
+  {
+    name: `lateral_heterostructure_search`,
+    description: `Search for LATERAL (in-plane) heterojunction edge-matches between the FILM (set earlier via set_film) and the SUBSTRATE (the currently-loaded structure). This is an IN-PLANE junction where the two slabs are stitched side-by-side along a shared edge — distinct from build_heterostructure, which stacks them vertically (one on top of the other). Returns candidate matches sorted by strain; use the match's index with build_lateral_heterostructure. Requires set_film to have been called first.`,
+    kind: `read`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        interface_axis: {
+          type: `integer`,
+          enum: [0, 1],
+          description: `In-plane lattice axis along which the two slabs share their edge: 0=a, 1=b (default 0).`,
+        },
+        max_strain_pct: { type: `number`, description: `Max allowed edge-length mismatch strain, in percent (default 5).` },
+        max_length: { type: `number`, description: `Max interface edge length to consider, in Å (default 100).` },
+        max_results: { type: `integer`, minimum: 1, description: `Max candidate matches to return (default 10).` },
+      },
+    },
+  },
+  async (input) => {
+    const film = get_film_stash()
+    if (!film) throw new Error(`No film set. Call set_film first to mark the current structure as the film.`)
+    const substrate = require_structure()
+
+    const max_strain_pct = input.max_strain_pct === undefined ? 5 : Number(input.max_strain_pct)
+    const params: LateralSearchParams = {
+      interface_axis: input.interface_axis === undefined ? 0 : Math.trunc(Number(input.interface_axis)),
+      // The lateral API's `max_strain` is already expressed in percent.
+      max_strain: max_strain_pct,
+      max_length: input.max_length === undefined ? 100 : Number(input.max_length),
+      max_results: input.max_results === undefined ? 10 : Math.trunc(Number(input.max_results)),
+    }
+
+    const result = await searchLateralMatches(substrate as never, film as never, params)
+    set_lateral_matches(result.matches)
+    return {
+      n_matches: result.matches.length,
+      matches: result.matches.map((m, i) => ({
+        index: i,
+        strain: m.strain_percent,
+        edge_length_A: m.edge_length_A,
+        edge_length_B: m.edge_length_B,
+        n_atoms_A: m.n_atoms_A,
+        n_atoms_B: m.n_atoms_B,
+      })),
+    }
+  },
+)
+
+// ── build_lateral_heterostructure (mutate) ──
+register(
+  {
+    name: `build_lateral_heterostructure`,
+    description: `Build a LATERAL (in-plane) heterojunction for a chosen candidate match (from lateral_heterostructure_search) and load it into the viewer. The SUBSTRATE (current structure) and FILM (set via set_film) are stitched side-by-side along a shared in-plane edge — distinct from build_heterostructure, which stacks them vertically. Requires lateral_heterostructure_search to have been run first.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        match_index: { type: `integer`, minimum: 0, description: `Index of the match from lateral_heterostructure_search (default 0 = lowest strain).` },
+        width_A: { type: `integer`, minimum: 1, description: `Number of substrate (A) repeat units along the interface (default 1).` },
+        width_B: { type: `integer`, minimum: 1, description: `Number of film (B) repeat units along the interface (default 1).` },
+        buffer: { type: `number`, description: `Buffer gap between the two slabs at the junction, in Å (default 0).` },
+        vacuum: { type: `number`, description: `Vacuum padding in Å (default 20.0).` },
+      },
+    },
+  },
+  async (input) => {
+    const matches = get_lateral_matches()
+    if (matches.length === 0) {
+      throw new Error(`No lateral heterostructure matches available. Run lateral_heterostructure_search first.`)
+    }
+    const match_index = input.match_index === undefined ? 0 : Math.trunc(Number(input.match_index))
+    const m = matches[match_index]
+    if (!m) {
+      throw new Error(`match_index ${match_index} is out of range (0–${matches.length - 1}). Run lateral_heterostructure_search again or pick a valid index.`)
+    }
+
+    const substrate = require_structure()
+    const film = get_film_stash()
+    if (!film) throw new Error(`No film set. Call set_film first.`)
+
+    const params: LateralBuildParams = {
+      width_A: input.width_A === undefined ? 1 : Math.trunc(Number(input.width_A)),
+      width_B: input.width_B === undefined ? 1 : Math.trunc(Number(input.width_B)),
+      buffer: input.buffer === undefined ? 0 : Number(input.buffer),
+      vacuum: input.vacuum === undefined ? 20.0 : Number(input.vacuum),
+    }
+
+    const result = await buildLateralInterface(substrate as never, film as never, m, params)
+    set_current_structure(result.structure as never)
+    return {
+      num_sites: result.n_atoms,
+      strain: result.strain,
+      n_atoms_A: result.n_atoms_A,
+      n_atoms_B: result.n_atoms_B,
+      interface_length: result.interface_length,
+    }
   },
 )
 

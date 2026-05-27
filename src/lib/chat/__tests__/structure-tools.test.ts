@@ -5,8 +5,8 @@ import * as routing from '../provider-routing'
 import * as ferrox from '$lib/structure/ferrox-wasm'
 import * as hetero_api from '$lib/api/heterostructure'
 import * as pseudo_h from '$lib/api/pseudo-hydrogen'
-import { set_bulk_stash, set_film_stash, set_hetero_matches } from '../hetero-stash.svelte'
-import type { HeterostructureMatch } from '$lib/api/heterostructure'
+import { set_bulk_stash, set_film_stash, set_hetero_matches, set_lateral_matches } from '../hetero-stash.svelte'
+import type { HeterostructureMatch, LateralMatch } from '$lib/api/heterostructure'
 
 const CUBIC_NACL = {
   '@module': `pymatgen.core.structure`,
@@ -272,6 +272,96 @@ describe(`heterostructure tools`, () => {
     set_hetero_matches([])
     const out = JSON.parse(await execute_tool(`build_heterostructure`, {}))
     expect(out.error).toMatch(/heterostructure_search/i)
+  })
+})
+
+describe(`lateral heterostructure tools`, () => {
+  const FAKE_LATERAL: LateralMatch = {
+    match_id: 0,
+    n1: 2,
+    n2: 3,
+    edge_length_A: 10.0,
+    edge_length_B: 9.8,
+    strain_percent: 1.2,
+    n_atoms_A: 6,
+    n_atoms_B: 8,
+  }
+
+  beforeEach(() => {
+    set_current_structure(CUBIC_NACL as never)
+    set_film_stash(null as never)
+    set_lateral_matches([])
+  })
+
+  it(`lateral_heterostructure_search is a read tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `lateral_heterostructure_search`)).toBeTruthy()
+    expect(tool_kind(`lateral_heterostructure_search`)).toBe(`read`)
+  })
+
+  it(`build_lateral_heterostructure is a mutate tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `build_lateral_heterostructure`)).toBeTruthy()
+    expect(tool_kind(`build_lateral_heterostructure`)).toBe(`mutate`)
+  })
+
+  it(`lateral_heterostructure_search stashes matches and returns a compact summary`, async () => {
+    set_film_stash(CUBIC_NACL as never)
+    const spy = vi.spyOn(hetero_api, `searchLateralMatches`).mockResolvedValue({
+      matches: [FAKE_LATERAL],
+      n_matches: 1,
+      message: `ok`,
+    })
+    const out = JSON.parse(await execute_tool(`lateral_heterostructure_search`, {}))
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(out.n_matches).toBe(1)
+    expect(out.matches[0].index).toBe(0)
+    expect(out.matches[0].strain).toBe(1.2)
+    expect(out.matches[0].edge_length_A).toBe(10.0)
+    expect(out.matches[0].n_atoms_A).toBe(6)
+    spy.mockRestore()
+  })
+
+  it(`lateral_heterostructure_search errors when no film is stashed`, async () => {
+    set_film_stash(null as never)
+    const out = JSON.parse(await execute_tool(`lateral_heterostructure_search`, {}))
+    expect(out.error).toMatch(/set_film/i)
+  })
+
+  it(`build_lateral_heterostructure uses the stashed match and writes the result back`, async () => {
+    set_film_stash(CUBIC_NACL as never)
+    set_lateral_matches([FAKE_LATERAL])
+    const built = {
+      ...CUBIC_NACL,
+      sites: Array.from({ length: 14 }, () => ({
+        species: [{ element: `Na`, occu: 1 }],
+        abc: [0, 0, 0],
+        xyz: [0, 0, 0],
+        label: `Na`,
+      })),
+    }
+    const spy = vi.spyOn(hetero_api, `buildLateralInterface`).mockResolvedValue({
+      structure: built as never,
+      n_atoms: 14,
+      n_atoms_A: 6,
+      n_atoms_B: 8,
+      interface_length: 10.0,
+      strain: 1.2,
+      message: `ok`,
+    })
+    const out = JSON.parse(await execute_tool(`build_lateral_heterostructure`, { match_index: 0 }))
+    expect(spy).toHaveBeenCalledTimes(1)
+    // called with the stashed match object as the 3rd arg
+    expect(spy.mock.calls[0][2]).toEqual(FAKE_LATERAL)
+    expect(out.num_sites).toBe(14)
+    expect(out.strain).toBe(1.2)
+    expect(out.n_atoms_A).toBe(6)
+    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(14)
+    spy.mockRestore()
+  })
+
+  it(`build_lateral_heterostructure errors when no matches are stashed`, async () => {
+    set_lateral_matches([])
+    const out = JSON.parse(await execute_tool(`build_lateral_heterostructure`, {}))
+    expect(out.error).toMatch(/lateral_heterostructure_search/i)
   })
 })
 

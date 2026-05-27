@@ -3,11 +3,13 @@ import {
   get_bulk_stash,
   get_film_stash,
   get_hetero_matches,
+  get_lateral_matches,
   set_bulk_stash,
   set_film_stash,
   set_hetero_matches,
+  set_lateral_matches,
 } from '../hetero-stash.svelte'
-import type { HeterostructureMatch } from '$lib/api/heterostructure'
+import type { HeterostructureMatch, LateralMatch } from '$lib/api/heterostructure'
 
 const CUBIC = {
   '@module': `pymatgen.core.structure`,
@@ -48,5 +50,24 @@ describe(`hetero-stash`, () => {
     expect(get_bulk_stash()).toBeNull()
     set_bulk_stash(CUBIC as never)
     expect(get_bulk_stash()).toStrictEqual(CUBIC as never)
+  })
+
+  it(`lateral-matches set/get round-trips`, () => {
+    const lateral: LateralMatch = {
+      match_id: 3,
+      n1: 2,
+      n2: 3,
+      edge_length_A: 10.2,
+      edge_length_B: 10.1,
+      strain_percent: 0.9,
+      n_atoms_A: 6,
+      n_atoms_B: 8,
+    }
+    set_lateral_matches([lateral])
+    const out = get_lateral_matches()
+    expect(out).toHaveLength(1)
+    expect(out[0].match_id).toBe(3)
+    expect(out[0].strain_percent).toBe(0.9)
+    expect(out[0].edge_length_A).toBe(10.2)
   })
 })
