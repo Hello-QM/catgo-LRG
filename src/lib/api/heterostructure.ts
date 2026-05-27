@@ -1,5 +1,44 @@
-import type { PymatgenStructure } from '$lib/structure'
-import { SERVER_URL } from './config'
+import type { AnyStructure, PymatgenStructure } from '$lib/structure'
+import {
+  structure_to_cif_str,
+  structure_to_extxyz_str,
+  structure_to_poscar_str,
+  structure_to_xyz_str,
+} from '$lib/structure/export'
+import {
+  wasm_build_hetero,
+  wasm_build_hetero_grid_scan,
+  wasm_build_hetero_manual,
+  wasm_build_hetero_registry,
+  wasm_build_lateral,
+  wasm_hetero_search,
+  wasm_lateral_search,
+} from '$lib/structure/ferrox-wasm'
+import { desktop_backend_available, SERVER_URL, STATIC_ONLY } from './config'
+
+declare const __CATGO_DESKTOP__: boolean
+
+/** True when the SLAB-mode heterostructure path must run client-side via WASM
+ *  instead of the Python backend.
+ *
+ *  - STATIC_ONLY build: always WASM (no backend exists).
+ *  - Desktop build: WASM only when the bundled backend is NOT live
+ *    (desktop_backend_available() probes /health).
+ *  - Plain web app: never — keep using the configured SERVER_URL backend.
+ *
+ *  Only the CORE slab path (search / build / build-manual) is covered by WASM;
+ *  bulk mode and the deferred endpoints always use the backend. */
+async function slab_use_wasm_path(): Promise<boolean> {
+  if (STATIC_ONLY) return true
+  if (typeof __CATGO_DESKTOP__ !== `undefined` && __CATGO_DESKTOP__) {
+    try {
+      return !(await desktop_backend_available())
+    } catch {
+      return true
+    }
+  }
+  return false
+}
 
 function format_error_detail(detail: unknown): string {
   if (typeof detail === `string`) return detail
@@ -84,8 +123,29 @@ export async function buildHeterostructureManual(
   gap = 2.0,
   vacuum = 20.0,
   twist_angle = 0.0,
-  server_url = `http://localhost:8000`,
+  xy_shift: [number, number] = [0, 0],
+  server_url = SERVER_URL,
 ): Promise<HeterostructureBuildResult> {
+  // build-manual is always slab mode. Use the client-side WASM path when no
+  // backend is available. (twist_angle is not yet supported by the WASM path;
+  // it is ignored there, matching the manual build's default of 0.0.)
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_hetero_manual(
+      substrate as never,
+      film as never,
+      substrate_transform,
+      film_transform,
+      gap,
+      vacuum,
+      xy_shift,
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureBuildResult
+  }
+
+  // NOTE: the backend `/build-manual` model does not (yet) accept an xy_shift
+  // field, so it is only applied on the client-side WASM path above. The
+  // backend body is left unchanged to preserve its existing behavior.
   const response = await fetch(`${server_url}/api/heterostructure/build-manual`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -106,6 +166,24 @@ export async function searchHeterostructureMatches(
   params: HeterostructureSearchParams = {},
   server_url = SERVER_URL,
 ): Promise<HeterostructureSearchResult> {
+  // Client-side SLAB path (no Python backend). Only slab mode is supported by
+  // WASM; bulk mode falls through to the backend below.
+  if (params.mode === `slab` && (await slab_use_wasm_path())) {
+    const result = await wasm_hetero_search(
+      substrate as never,
+      film as never,
+      {
+        max_area: params.max_area,
+        max_area_ratio_tol: params.max_area_ratio_tol,
+        max_length_tol: params.max_length_tol,
+        max_angle_tol: params.max_angle_tol,
+        max_results: params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureSearchResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/search`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -129,6 +207,28 @@ export async function buildHeterostructure(
   search_params: HeterostructureSearchParams = {},
   server_url = SERVER_URL,
 ): Promise<HeterostructureBuildResult> {
+  // Client-side SLAB path. match.match_id is the generation-order index that
+  // the WASM build_hetero expects (same contract as the backend slab build).
+  if (search_params.mode === `slab` && (await slab_use_wasm_path())) {
+    const result = await wasm_build_hetero(
+      substrate as never,
+      film as never,
+      match.match_id,
+      params.gap ?? 2.0,
+      params.vacuum ?? 20.0,
+      params.twist_angle ?? 0.0,
+      {
+        max_area: search_params.max_area,
+        max_area_ratio_tol: search_params.max_area_ratio_tol,
+        max_length_tol: search_params.max_length_tol,
+        max_angle_tol: search_params.max_angle_tol,
+        max_results: search_params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureBuildResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/build`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -201,6 +301,35 @@ export async function buildHeterostructureIntermat(
 // Registry candidates (batch build)
 // ---------------------------------------------------------------------------
 
+/** Serialize a structure to the requested format string, matching the backend
+ *  `Structure.to(fmt=...)` used by `/batch-build` (cif / poscar / xyz / extxyz). */
+function serialize_structure(structure: PymatgenStructure, fmt: string): string {
+  const s = structure as unknown as AnyStructure
+  switch (fmt.toLowerCase()) {
+    case `poscar`:
+      return structure_to_poscar_str(s)
+    case `xyz`:
+      return structure_to_xyz_str(s)
+    case `extxyz`:
+      return structure_to_extxyz_str(s)
+    case `cif`:
+    default:
+      return structure_to_cif_str(s)
+  }
+}
+
+/** Trigger a browser download of a Blob under the given filename. */
+function trigger_download(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement(`a`)
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export async function downloadRegistryCandidates(
   substrate: PymatgenStructure,
   film: PymatgenStructure,
@@ -214,6 +343,75 @@ export async function downloadRegistryCandidates(
   target_z: number = 0.0,
   server_url = SERVER_URL,
 ): Promise<void> {
+  // Client-side SLAB path: build candidates in-browser and assemble the same
+  // zip archive (one structure file per candidate + manifest.json) the backend
+  // `/batch-build` returns, then trigger the download. Matches the existing
+  // contract / UX exactly.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_hetero_registry(
+      substrate as never,
+      film as never,
+      match.match_id,
+      n_shift,
+      gap,
+      vacuum,
+      step_angstrom,
+      target_z,
+      {
+        max_area: search_params.max_area,
+        max_area_ratio_tol: search_params.max_area_ratio_tol,
+        max_length_tol: search_params.max_length_tol,
+        max_angle_tol: search_params.max_angle_tol,
+        max_results: search_params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    const { candidates } = result.ok as {
+      candidates: {
+        structure: PymatgenStructure
+        shift_a: number
+        shift_b: number
+        label: string
+        n_atoms: number
+        match_area: number
+        strain: number
+      }[]
+    }
+
+    const file_ext = ({ cif: `.cif`, poscar: `.vasp`, xyz: `.xyz`, extxyz: `.extxyz` } as Record<
+      string,
+      string
+    >)[fmt.toLowerCase()] ?? `.cif`
+
+    const JSZip = (await import(`jszip`)).default
+    const zip = new JSZip()
+    const manifest: {
+      filename: string
+      shift_a: number
+      shift_b: number
+      n_atoms: number
+      match_area: number
+      strain: number
+    }[] = []
+    for (const cand of candidates) {
+      const filename = `hetero_${cand.label}${file_ext}`
+      zip.file(filename, serialize_structure(cand.structure, fmt))
+      manifest.push({
+        filename,
+        shift_a: cand.shift_a,
+        shift_b: cand.shift_b,
+        n_atoms: cand.n_atoms,
+        match_area: cand.match_area,
+        strain: cand.strain,
+      })
+    }
+    zip.file(`manifest.json`, JSON.stringify(manifest, null, 2))
+
+    const blob = await zip.generateAsync({ type: `blob`, compression: `DEFLATE` })
+    trigger_download(blob, `registry_candidates_${candidates.length}.zip`)
+    return
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/batch-build`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -289,6 +487,18 @@ export async function searchLateralMatches(
   params: LateralSearchParams = {},
   server_url = `http://localhost:8000`,
 ): Promise<LateralSearchResult> {
+  // Client-side path (no Python backend) — lateral edge-match search in WASM.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_lateral_search(slab_A as never, slab_B as never, {
+      interface_axis: params.interface_axis,
+      max_length: params.max_length,
+      max_strain: params.max_strain,
+      max_results: params.max_results,
+    })
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as LateralSearchResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/search-lateral`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -311,6 +521,26 @@ export async function buildLateralInterface(
   search_params: LateralSearchParams = {},
   server_url = `http://localhost:8000`,
 ): Promise<LateralBuildResult> {
+  // Client-side path: re-run the edge-match search inside the WASM build and
+  // join the slabs side-by-side. Mirrors the backend `/build-lateral`, which
+  // also re-runs the search and selects `match.match_id`.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_lateral(
+      slab_A as never,
+      slab_B as never,
+      match.match_id,
+      search_params.interface_axis ?? 0,
+      params.width_A ?? 1,
+      params.width_B ?? 1,
+      params.buffer ?? 0.0,
+      params.vacuum ?? 20.0,
+      search_params.max_length ?? 100.0,
+      search_params.max_strain ?? 5.0,
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as LateralBuildResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/build-lateral`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -362,6 +592,22 @@ export async function gridScanHeterostructure(
   params: GridScanParams = {},
   server_url = SERVER_URL,
 ): Promise<GridScanResult> {
+  // Client-side SLAB path: reduce the shift grid to the film's irreducible
+  // wedge and shift the film atoms per point, all in-browser. Matches the
+  // backend `/grid-scan` response shape exactly.
+  if (await slab_use_wasm_path()) {
+    const result = await wasm_build_hetero_grid_scan(
+      heterostructure as never,
+      film as never,
+      n_atoms_substrate,
+      params.n_grid_x ?? 6,
+      params.n_grid_y ?? 6,
+      params.symprec ?? 0.1,
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as GridScanResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/grid-scan`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },

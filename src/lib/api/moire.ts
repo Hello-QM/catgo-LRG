@@ -1,5 +1,5 @@
 import type { PymatgenStructure } from '$lib/structure'
-import { SERVER_URL } from './config'
+import { SERVER_URL, STATIC_ONLY } from './config'
 
 export type StrainLayer = `top` | `bottom` | `both`
 
@@ -87,24 +87,64 @@ function format_error_detail(detail: unknown): string {
   return JSON.stringify(detail)
 }
 
+// Client-side (WASM) fallback used when no Python backend is available
+// (STATIC_ONLY deployments) or when the backend request fails. Mirrors the
+// /api/moire/search endpoint via the ferrox-wasm `moire_search` export.
+async function searchMoireAnglesWasm(
+  layer_a: MoireLayerInput,
+  layer_b: MoireLayerInput | null,
+  params: MoireAngleSearchParams,
+): Promise<MoireAngleSearchResult> {
+  const { wasm_moire_search } = await import('$lib/structure/ferrox-wasm')
+  const result = await wasm_moire_search<MoireAngleSearchResult>({ layer_a, layer_b, params })
+  if (`error` in result) throw new Error(result.error)
+  return result.ok
+}
+
+// Client-side (WASM) fallback for /api/moire/build.
+async function buildMoireBilayerWasm(
+  layer_a: MoireLayerInput,
+  candidate: MoireCandidate,
+  layer_b: MoireLayerInput | null,
+  params: MoireBuildParams,
+): Promise<MoireBuildResult> {
+  const { wasm_build_moire } = await import('$lib/structure/ferrox-wasm')
+  const result = await wasm_build_moire<MoireBuildResult>({ layer_a, layer_b, candidate, params })
+  if (`error` in result) throw new Error(result.error)
+  return result.ok
+}
+
 export async function searchMoireAngles(
   layer_a: MoireLayerInput,
   layer_b: MoireLayerInput | null = null,
   params: MoireAngleSearchParams = {},
   server_url = SERVER_URL,
 ): Promise<MoireAngleSearchResult> {
-  const response = await fetch(`${server_url}/api/moire/search`, {
-    method: `POST`,
-    headers: { 'Content-Type': `application/json` },
-    body: JSON.stringify({ layer_a, layer_b, params }),
-  })
-
-  if (!response.ok) {
-    const error_data = await response.json().catch(() => ({ detail: response.statusText }))
-    throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
+  // No Python backend in static deployments — run the WASM path directly.
+  if (STATIC_ONLY) {
+    return searchMoireAnglesWasm(layer_a, layer_b, params)
   }
 
-  return response.json()
+  try {
+    const response = await fetch(`${server_url}/api/moire/search`, {
+      method: `POST`,
+      headers: { 'Content-Type': `application/json` },
+      body: JSON.stringify({ layer_a, layer_b, params }),
+    })
+
+    if (!response.ok) {
+      const error_data = await response.json().catch(() => ({ detail: response.statusText }))
+      throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    // Backend unreachable (e.g. desktop FE-only) — fall back to WASM.
+    if (err instanceof TypeError) {
+      return searchMoireAnglesWasm(layer_a, layer_b, params)
+    }
+    throw err
+  }
 }
 
 export async function buildMoireBilayer(
@@ -114,16 +154,27 @@ export async function buildMoireBilayer(
   params: MoireBuildParams = {},
   server_url = SERVER_URL,
 ): Promise<MoireBuildResult> {
-  const response = await fetch(`${server_url}/api/moire/build`, {
-    method: `POST`,
-    headers: { 'Content-Type': `application/json` },
-    body: JSON.stringify({ layer_a, layer_b, candidate, params }),
-  })
-
-  if (!response.ok) {
-    const error_data = await response.json().catch(() => ({ detail: response.statusText }))
-    throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
+  if (STATIC_ONLY) {
+    return buildMoireBilayerWasm(layer_a, candidate, layer_b, params)
   }
 
-  return response.json()
+  try {
+    const response = await fetch(`${server_url}/api/moire/build`, {
+      method: `POST`,
+      headers: { 'Content-Type': `application/json` },
+      body: JSON.stringify({ layer_a, layer_b, candidate, params }),
+    })
+
+    if (!response.ok) {
+      const error_data = await response.json().catch(() => ({ detail: response.statusText }))
+      throw new Error(format_error_detail(error_data.detail) || `Server error: ${response.status}`)
+    }
+
+    return await response.json()
+  } catch (err) {
+    if (err instanceof TypeError) {
+      return buildMoireBilayerWasm(layer_a, candidate, layer_b, params)
+    }
+    throw err
+  }
 }

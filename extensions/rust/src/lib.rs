@@ -65,8 +65,14 @@ pub mod bonding;
 pub mod ewald;
 pub mod matcher;
 pub mod mof;
+pub mod heterostructure;
+pub mod moire;
+pub mod nanoscroll;
+pub mod nanotube;
 pub mod optimizer;
+pub mod passivate;
 pub mod slab;
+pub mod zsl;
 pub mod uff_bridge;
 pub mod voronoi_cell;
 
@@ -99,6 +105,15 @@ use pyo3::prelude::*;
 // WASM bindings (optional)
 #[cfg(feature = "wasm")]
 pub mod wasm;
+
+#[cfg(feature = "wasm")]
+pub mod wasm_hetero;
+
+#[cfg(feature = "wasm")]
+pub mod wasm_moire;
+
+#[cfg(feature = "wasm")]
+pub mod wasm_nanoscroll;
 
 #[cfg(feature = "wasm")]
 pub mod wasm_types;

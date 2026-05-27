@@ -5557,3 +5557,410 @@ pub fn find_pbc_image_sites(
     })();
     result.into()
 }
+
+// ─── nanotube (client-side build) ───
+
+// === Nanotube Builder ===
+
+/// 2D layer input for the nanotube builder.
+///
+/// Mirrors the explicit-arrays form of the backend `NanotubeLayerInput`
+/// (lattice_vectors + elements + basis_coords + z_coords). The TS wrapper
+/// extracts these from a structure when the user supplies one.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(from_wasm_abi)]
+pub struct JsNanotubeLayer {
+    /// Two 2D lattice vectors [[a1x, a1y], [a2x, a2y]] (Å).
+    pub lattice_vectors: [[f64; 2]; 2],
+    /// Element symbol for each basis atom.
+    pub elements: Vec<String>,
+    /// Fractional [a, b] coordinates of each basis atom.
+    pub basis_coords: Vec<[f64; 2]>,
+    /// Out-of-plane z offset (Å) of each basis atom (defaults to all zeros).
+    #[serde(default)]
+    pub z_coords: Vec<f64>,
+}
+
+/// Per-wall info returned by the nanotube builder.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct JsNanotubeWall {
+    /// Chiral index n.
+    pub n: i32,
+    /// Chiral index m.
+    pub m: i32,
+    /// Wall radius (Å).
+    pub radius: f64,
+    /// Atom count for this wall.
+    pub n_atoms: u32,
+}
+
+/// Geometry-only result of `nanotube_info`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct JsNanotubeInfo {
+    /// Chiral angle (degrees).
+    pub chiral_angle_deg: f64,
+    /// Circumference |C| (Å).
+    pub circumference: f64,
+    /// Diameter (Å).
+    pub diameter: f64,
+    /// Radius (Å).
+    pub radius: f64,
+    /// Translational vector length |T| (Å).
+    pub trans_length: f64,
+    /// Tube length NL*|T| (Å).
+    pub tube_length: f64,
+    /// Estimated atom count.
+    pub n_atoms_estimate: u32,
+    /// Translational vector index t1.
+    pub t1: i32,
+    /// Translational vector index t2.
+    pub t2: i32,
+    /// Chirality class ("zigzag" / "armchair" / "chiral").
+    pub chirality: String,
+    /// Human-readable summary.
+    pub message: String,
+}
+
+/// Full result of `build_nanotube`.
+#[derive(Debug, Clone, Serialize, Deserialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct JsNanotubeBuild {
+    /// The rolled-up tube as a crystal structure.
+    pub structure: JsCrystal,
+    /// Total atom count.
+    pub n_atoms: u32,
+    /// Inner-wall chiral angle (degrees).
+    pub chiral_angle_deg: f64,
+    /// Inner-wall circumference (Å).
+    pub circumference: f64,
+    /// Inner-wall diameter (Å).
+    pub diameter: f64,
+    /// Common tube length (Å).
+    pub tube_length: f64,
+    /// Chirality class.
+    pub chirality: String,
+    /// Number of walls.
+    pub n_walls: u32,
+    /// Per-wall info.
+    pub walls: Vec<JsNanotubeWall>,
+    /// Human-readable summary.
+    pub message: String,
+}
+
+fn nanotube_layer_to_input(layer: &JsNanotubeLayer) -> Result<crate::nanotube::LayerInput, String> {
+    if layer.elements.is_empty() {
+        return Err("Layer has no elements".to_string());
+    }
+    if layer.basis_coords.len() != layer.elements.len() {
+        return Err(format!(
+            "elements ({}) and basis_coords ({}) must have the same length",
+            layer.elements.len(),
+            layer.basis_coords.len()
+        ));
+    }
+    let z_coords = if layer.z_coords.is_empty() {
+        vec![0.0; layer.elements.len()]
+    } else if layer.z_coords.len() == layer.elements.len() {
+        layer.z_coords.clone()
+    } else {
+        return Err(format!(
+            "z_coords ({}) must match elements ({}) when provided",
+            layer.z_coords.len(),
+            layer.elements.len()
+        ));
+    };
+    Ok(crate::nanotube::LayerInput {
+        a1: layer.lattice_vectors[0],
+        a2: layer.lattice_vectors[1],
+        elements: layer.elements.clone(),
+        basis_frac: layer.basis_coords.clone(),
+        z_coords,
+    })
+}
+
+/// Compute nanotube geometry information without building the structure.
+#[wasm_bindgen]
+pub fn nanotube_info(layer: JsNanotubeLayer, n: i32, m: i32, nl: i32) -> WasmResult<JsNanotubeInfo> {
+    let result: Result<JsNanotubeInfo, String> = (|| {
+        if n == 0 && m == 0 {
+            return Err("Both chiral indices cannot be zero".to_string());
+        }
+        let input = nanotube_layer_to_input(&layer)?;
+        let info =
+            crate::nanotube::compute_nanotube_info(input.a1, input.a2, n, m, nl, input.elements.len());
+        let chirality = crate::nanotube::classify_chirality(n, m);
+        let message = format!(
+            "({n},{m}) {chirality} nanotube: D={:.2} Å, L={:.2} Å, ~{} atoms",
+            info.diameter, info.tube_length, info.n_atoms
+        );
+        Ok(JsNanotubeInfo {
+            chiral_angle_deg: info.chiral_angle_deg,
+            circumference: info.circumference,
+            diameter: info.diameter,
+            radius: info.radius,
+            trans_length: info.trans_length,
+            tube_length: info.tube_length,
+            n_atoms_estimate: info.n_atoms as u32,
+            t1: info.t1,
+            t2: info.t2,
+            chirality: chirality.to_string(),
+            message,
+        })
+    })();
+    result.into()
+}
+
+/// Build a nanotube by rolling up a 2D material sheet.
+///
+/// `n_walls` > 1 builds a multi-wall nanotube using `interlayer_spacing` (Å).
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn build_nanotube(
+    layer: JsNanotubeLayer,
+    n: i32,
+    m: i32,
+    nl: i32,
+    vacuum: f64,
+    n_walls: i32,
+    interlayer_spacing: f64,
+) -> WasmResult<JsNanotubeBuild> {
+    let result: Result<JsNanotubeBuild, String> = (|| {
+        if n == 0 && m == 0 {
+            return Err("Both chiral indices cannot be zero".to_string());
+        }
+        let input = nanotube_layer_to_input(&layer)?;
+        let n_walls = if n_walls < 1 { 1 } else { n_walls };
+
+        let build = if n_walls > 1 {
+            crate::nanotube::build_mwnt(&input, n, m, n_walls, interlayer_spacing, nl, vacuum)?
+        } else {
+            crate::nanotube::build_single_wall(&input, n, m, nl, vacuum)?
+        };
+
+        let chirality = crate::nanotube::classify_chirality(n, m);
+        let walls: Vec<JsNanotubeWall> = build
+            .walls
+            .iter()
+            .map(|w| JsNanotubeWall {
+                n: w.n,
+                m: w.m,
+                radius: w.radius,
+                n_atoms: w.n_atoms as u32,
+            })
+            .collect();
+
+        let message = if n_walls > 1 {
+            let wall_strs: Vec<String> = walls
+                .iter()
+                .map(|w| format!("({},{}) R={:.1}Å", w.n, w.m, w.radius))
+                .collect();
+            format!(
+                "Built {n_walls}-wall nanotube: {} atoms, L={:.2} Å. Walls: {}",
+                build.n_atoms,
+                build.tube_length,
+                wall_strs.join(", ")
+            )
+        } else {
+            format!(
+                "Built ({n},{m}) {chirality} nanotube: {} atoms, D={:.2} Å, L={:.2} Å",
+                build.n_atoms, build.inner_info.diameter, build.tube_length
+            )
+        };
+
+        Ok(JsNanotubeBuild {
+            structure: JsCrystal::from_structure(&build.structure),
+            n_atoms: build.n_atoms as u32,
+            chiral_angle_deg: build.inner_info.chiral_angle_deg,
+            circumference: build.inner_info.circumference,
+            diameter: build.inner_info.diameter,
+            tube_length: build.tube_length,
+            chirality: chirality.to_string(),
+            n_walls: n_walls as u32,
+            walls,
+            message,
+        })
+    })();
+    result.into()
+}
+
+// ─── passivate / pseudo-hydrogen (client-side build) ───
+
+// === Pseudo-Hydrogen Passivation ===
+
+/// Add pseudo-hydrogen atoms to passivate slab surface dangling bonds.
+///
+/// Faithful client-side port of the Python `/api/pseudo-hydrogen/passivate`
+/// endpoint. Takes a slab and a bulk reference structure plus a params JSON
+/// object (all fields optional; see `PseudoHydrogenParams` in
+/// `src/lib/api/pseudo-hydrogen.ts`).
+///
+/// Returns a JSON string matching `PseudoHydrogenResult`:
+/// `{ structure, n_pseudo_h, bulk_coordination, valence_used, pseudo_h_list,
+///    unique_potcars, bond_warnings, message }`.
+#[wasm_bindgen]
+pub fn passivate_slab(
+    slab: JsCrystal,
+    bulk: JsCrystal,
+    params_json: &str,
+) -> WasmResult<String> {
+    use crate::passivate::{passivate, PassivateParams};
+    use std::collections::HashMap;
+
+    let result: Result<String, String> = (|| {
+        let slab_struc = slab.to_structure()?;
+        let bulk_struc = bulk.to_structure()?;
+        let n_slab_atoms = slab_struc.num_sites();
+
+        // Parse params (JSON object with optional fields). Empty/"null" -> defaults.
+        let mut params = PassivateParams::default();
+        let trimmed = params_json.trim();
+        if !trimmed.is_empty() && trimmed != "null" {
+            let v: serde_json::Value = serde_json::from_str(trimmed)
+                .map_err(|e| format!("Invalid params JSON: {e}"))?;
+            if let Some(b) = v.get("passivate_top").and_then(|x| x.as_bool()) {
+                params.passivate_top = b;
+            }
+            if let Some(b) = v.get("passivate_bottom").and_then(|x| x.as_bool()) {
+                params.passivate_bottom = b;
+            }
+            if let Some(f) = v.get("surface_depth").and_then(|x| x.as_f64()) {
+                params.surface_depth = f;
+            }
+            if let Some(f) = v.get("bond_length_scale").and_then(|x| x.as_f64()) {
+                params.bond_length_scale = f;
+            }
+            if let Some(f) = v.get("cutoff_mult").and_then(|x| x.as_f64()) {
+                params.cutoff_mult = f;
+            }
+            if let Some(arr) = v.get("selected_indices").and_then(|x| x.as_array()) {
+                let idx: Vec<usize> = arr
+                    .iter()
+                    .filter_map(|n| n.as_u64().map(|u| u as usize))
+                    .collect();
+                params.selected_indices = Some(idx);
+            }
+            if let Some(obj) = v.get("valence_electrons").and_then(|x| x.as_object()) {
+                let mut m = HashMap::new();
+                for (k, val) in obj {
+                    if let Some(f) = val.as_f64() {
+                        m.insert(k.clone(), f);
+                    }
+                }
+                params.valence_electrons = Some(m);
+            }
+            if let Some(obj) = v.get("bulk_coordination").and_then(|x| x.as_object()) {
+                let mut m = HashMap::new();
+                for (k, val) in obj {
+                    if let Some(u) = val.as_u64() {
+                        m.insert(k.clone(), u as usize);
+                    }
+                }
+                params.bulk_coordination = Some(m);
+            }
+        }
+
+        let res = passivate(&bulk_struc, &slab_struc, &params)?;
+
+        // Build pseudo_h_list response (creation order, charge rounded to 4dp).
+        let pseudo_h_list: Vec<serde_json::Value> = res
+            .pseudo_h_list
+            .iter()
+            .map(|h| {
+                serde_json::json!({
+                    "position": [h.position.x, h.position.y, h.position.z],
+                    "charge": (h.charge * 1.0e4).round() / 1.0e4,
+                    "vasp_charge": h.vasp_charge,
+                    "potcar_name": h.potcar_name,
+                    "parent_index": h.parent_index,
+                    "parent_symbol": h.parent_symbol,
+                    "missing_symbol": h.missing_symbol,
+                })
+            })
+            .collect();
+
+        let bulk_coordination = serde_json::to_value(&res.bulk_coordination)
+            .map_err(|e| e.to_string())?;
+        let valence_used =
+            serde_json::to_value(&res.valence_used).map_err(|e| e.to_string())?;
+
+        // Empty result: return the original slab structure unchanged.
+        if res.pseudo_h_list.is_empty() {
+            let structure_json = JsCrystal::from_structure(&slab_struc);
+            let out = serde_json::json!({
+                "structure": structure_json,
+                "n_pseudo_h": 0,
+                "bulk_coordination": bulk_coordination,
+                "valence_used": valence_used,
+                "pseudo_h_list": [],
+                "unique_potcars": [],
+                "bond_warnings": res.bond_warnings,
+                "message": "No undercoordinated atoms found. No pseudo-H added.",
+            });
+            return serde_json::to_string(&out).map_err(|e| e.to_string());
+        }
+
+        // Convert the passivated structure to JsCrystal, then patch pseudo-H
+        // site labels to the POTCAR name (matching the router behavior). The
+        // selective_dynamics / pseudo_h_* properties are already carried on the
+        // appended sites via SiteOccupancy.properties.
+        let mut structure_json = JsCrystal::from_structure(&res.slab);
+
+        // Recompute appended-site order: grouped by vasp_charge ascending, then
+        // creation order within group (identical to passivate()).
+        let mut charge_groups: std::collections::BTreeMap<i64, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (i, h) in res.pseudo_h_list.iter().enumerate() {
+            let key = (h.vasp_charge * 1.0e6).round() as i64;
+            charge_groups.entry(key).or_default().push(i);
+        }
+        let mut site_idx = n_slab_atoms;
+        for (_k, his) in &charge_groups {
+            for &hi in his {
+                let potcar = &res.pseudo_h_list[hi].potcar_name;
+                if let Some(site) = structure_json.sites.get_mut(site_idx) {
+                    site.label = Some(potcar.clone());
+                }
+                site_idx += 1;
+            }
+        }
+
+        // Summary message (matches router formatting).
+        let mut by_type: std::collections::BTreeMap<(String, String, i64), usize> =
+            std::collections::BTreeMap::new();
+        for h in &res.pseudo_h_list {
+            let key = (
+                h.parent_symbol.clone(),
+                h.missing_symbol.clone(),
+                (h.vasp_charge * 1.0e6).round() as i64,
+            );
+            *by_type.entry(key).or_insert(0) += 1;
+        }
+        let parts: Vec<String> = by_type
+            .iter()
+            .map(|((parent, missing, charge_k), count)| {
+                let charge = (*charge_k as f64) / 1.0e6;
+                format!("{parent}(missing {missing}): {count}x H(Z={charge:.2})")
+            })
+            .collect();
+        let message = format!(
+            "Added {} pseudo-H atoms. {}",
+            res.pseudo_h_list.len(),
+            parts.join("; ")
+        );
+
+        let out = serde_json::json!({
+            "structure": structure_json,
+            "n_pseudo_h": res.pseudo_h_list.len(),
+            "bulk_coordination": bulk_coordination,
+            "valence_used": valence_used,
+            "pseudo_h_list": pseudo_h_list,
+            "unique_potcars": res.unique_potcars,
+            "bond_warnings": res.bond_warnings,
+            "message": message,
+        });
+        serde_json::to_string(&out).map_err(|e| e.to_string())
+    })();
+    result.into()
+}
