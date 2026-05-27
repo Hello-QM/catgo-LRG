@@ -454,8 +454,11 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('chat') && !STATIC_ONLY}
+      {#if !hidden_toolbar_items.includes('chat')}
       <!-- === AI Chat === -->
+      <!-- Shown in STATIC_ONLY too: CatBot runs the client-direct tool-calling
+           loop in-browser (no backend) under static deploys. See is_client_direct. -->
+
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
