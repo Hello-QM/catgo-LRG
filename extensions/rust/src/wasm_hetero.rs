@@ -11,9 +11,9 @@ use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
 use crate::heterostructure::{
-    build_interface_manual, build_interface_slab, build_lateral_interface,
-    build_registry_candidates, grid_scan, search_lateral_matches, search_matches_slab, BuildResult,
-    LateralBuildResult, LateralMatchCandidate, MatchCandidate,
+    build_interface_bulk, build_interface_manual, build_interface_slab, build_lateral_interface,
+    build_registry_candidates, grid_scan, search_lateral_matches, search_matches_bulk,
+    search_matches_slab, BuildResult, LateralBuildResult, LateralMatchCandidate, MatchCandidate,
 };
 use crate::wasm_types::{JsCrystal, WasmResult};
 
@@ -117,6 +117,27 @@ impl JsHeteroMatch {
             n_atoms_film: c.n_atoms_film,
         }
     }
+
+    /// Like [`from_candidate`] but echoes the real Miller indices (bulk mode,
+    /// where the surfaces were cut from bulk crystals at these indices).
+    fn from_candidate_with_miller(
+        c: &MatchCandidate,
+        substrate_miller: [i32; 3],
+        film_miller: [i32; 3],
+    ) -> Self {
+        let mut m = Self::from_candidate(c);
+        m.substrate_miller = substrate_miller;
+        m.film_miller = film_miller;
+        m
+    }
+}
+
+/// Parse a 3-element Miller index from a JS number array.
+fn miller3(v: &[i32]) -> Result<[i32; 3], String> {
+    if v.len() != 3 {
+        return Err(format!("Miller index must be 3 integers, got {}", v.len()));
+    }
+    Ok([v[0], v[1], v[2]])
 }
 
 /// Search result. Mirrors `HeterostructureSearchResult` (terminations are
@@ -233,6 +254,116 @@ pub fn build_hetero(
         let r = build_interface_slab(
             &sub,
             &flm,
+            match_id,
+            gap,
+            vacuum,
+            twist_angle,
+            params.max_area,
+            params.max_area_ratio_tol,
+            params.max_length_tol,
+            params.max_angle_tol,
+        )?;
+        Ok(build_result_to_js(r))
+    })();
+    result.into()
+}
+
+/// BULK-mode ZSL search: cut surface slabs from two BULK crystals (Miller +
+/// layer count + termination) and run the slab-mode ZSL search on them.
+///
+/// Equivalent to `POST /api/heterostructure/search` with `params.mode = "bulk"`
+/// (pymatgen `CoherentInterfaceBuilder` + `ZSLGenerator`). `substrate_miller`
+/// and `film_miller` are 3-element `[h,k,l]` arrays; `*_layers` are slab
+/// thicknesses in atomic layers; `*_termination` select the surface
+/// termination (0 = first).
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn hetero_search_bulk(
+    substrate: JsCrystal,
+    film: JsCrystal,
+    substrate_miller: Vec<i32>,
+    film_miller: Vec<i32>,
+    substrate_layers: usize,
+    film_layers: usize,
+    substrate_termination: usize,
+    film_termination: usize,
+    params: JsHeteroSearchParams,
+) -> WasmResult<JsHeteroSearchResult> {
+    let result: Result<JsHeteroSearchResult, String> = (|| {
+        let sub = substrate.to_structure()?;
+        let flm = film.to_structure()?;
+        let sm = miller3(&substrate_miller)?;
+        let fm = miller3(&film_miller)?;
+
+        let matches = search_matches_bulk(
+            &sub,
+            &flm,
+            sm,
+            fm,
+            substrate_layers,
+            film_layers,
+            substrate_termination,
+            film_termination,
+            params.max_area,
+            params.max_area_ratio_tol,
+            params.max_length_tol,
+            params.max_angle_tol,
+            params.max_results,
+        )?;
+
+        let js_matches: Vec<JsHeteroMatch> = matches
+            .iter()
+            .map(|c| JsHeteroMatch::from_candidate_with_miller(c, sm, fm))
+            .collect();
+        let n = js_matches.len();
+        Ok(JsHeteroSearchResult {
+            matches: js_matches,
+            terminations: Vec::new(),
+            n_matches: n,
+            n_terminations: 0,
+            message: format!("Found {n} lattice matches (bulk mode)"),
+        })
+    })();
+    result.into()
+}
+
+/// BULK-mode build for a selected ZSL match. Cuts surface slabs from the two
+/// bulk crystals, then builds the chosen match via the slab-mode builder.
+///
+/// Equivalent to `POST /api/heterostructure/build` with
+/// `search_params.mode = "bulk"`.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn build_hetero_bulk(
+    substrate: JsCrystal,
+    film: JsCrystal,
+    substrate_miller: Vec<i32>,
+    film_miller: Vec<i32>,
+    substrate_layers: usize,
+    film_layers: usize,
+    substrate_termination: usize,
+    film_termination: usize,
+    match_id: usize,
+    gap: f64,
+    vacuum: f64,
+    twist_angle: f64,
+    params: JsHeteroSearchParams,
+) -> WasmResult<JsHeteroBuildResult> {
+    let result: Result<JsHeteroBuildResult, String> = (|| {
+        let sub = substrate.to_structure()?;
+        let flm = film.to_structure()?;
+        let sm = miller3(&substrate_miller)?;
+        let fm = miller3(&film_miller)?;
+
+        let r = build_interface_bulk(
+            &sub,
+            &flm,
+            sm,
+            fm,
+            substrate_layers,
+            film_layers,
+            substrate_termination,
+            film_termination,
             match_id,
             gap,
             vacuum,

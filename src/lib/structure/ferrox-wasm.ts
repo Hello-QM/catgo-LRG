@@ -258,6 +258,32 @@ interface FerroxWasmModule {
     twist_angle: number,
     params: unknown,
   ) => WasmResult<unknown>
+  hetero_search_bulk: (
+    substrate: unknown,
+    film: unknown,
+    substrate_miller: Int32Array | number[],
+    film_miller: Int32Array | number[],
+    substrate_layers: number,
+    film_layers: number,
+    substrate_termination: number,
+    film_termination: number,
+    params: unknown,
+  ) => WasmResult<unknown>
+  build_hetero_bulk: (
+    substrate: unknown,
+    film: unknown,
+    substrate_miller: Int32Array | number[],
+    film_miller: Int32Array | number[],
+    substrate_layers: number,
+    film_layers: number,
+    substrate_termination: number,
+    film_termination: number,
+    match_id: number,
+    gap: number,
+    vacuum: number,
+    twist_angle: number,
+    params: unknown,
+  ) => WasmResult<unknown>
   lateral_search: (
     slab_a: unknown,
     slab_b: unknown,
@@ -979,6 +1005,104 @@ export async function wasm_build_hetero(
     return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
   } catch (err) {
     return { error: `WASM build_hetero failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** BULK-mode ZSL search: cut surface slabs from two bulk crystals (Miller +
+ *  layer count + termination) and ZSL-match them. Mirrors the backend
+ *  `POST /api/heterostructure/search` bulk path. */
+export async function wasm_hetero_search_bulk(
+  substrate: Crystal,
+  film: Crystal,
+  substrate_miller: [number, number, number],
+  film_miller: [number, number, number],
+  substrate_layers: number,
+  film_layers: number,
+  substrate_termination: number,
+  film_termination: number,
+  params: WasmHeteroSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  if (!substrate?.sites?.length || !film?.sites?.length) {
+    return { error: `Heterostructure search: substrate and film must have sites` }
+  }
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  const p = {
+    max_area: params.max_area ?? 400.0,
+    max_area_ratio_tol: params.max_area_ratio_tol ?? 0.09,
+    max_length_tol: params.max_length_tol ?? 0.03,
+    max_angle_tol: params.max_angle_tol ?? 0.01,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.hetero_search_bulk(
+      sub,
+      flm,
+      Int32Array.from(substrate_miller),
+      Int32Array.from(film_miller),
+      substrate_layers,
+      film_layers,
+      substrate_termination,
+      film_termination,
+      p,
+    )
+    return result as WasmResult<unknown>
+  } catch (err) {
+    return { error: `WASM hetero_search_bulk failed: ${err instanceof Error ? err.message : String(err)}` }
+  }
+}
+
+/** BULK-mode build for a selected ZSL match. Cuts slabs from the two bulk
+ *  crystals then builds the chosen match. Mirrors the backend
+ *  `POST /api/heterostructure/build` bulk path; the returned `structure` is
+ *  converted back to the pymatgen/Crystal JSON shape. */
+export async function wasm_build_hetero_bulk(
+  substrate: Crystal,
+  film: Crystal,
+  substrate_miller: [number, number, number],
+  film_miller: [number, number, number],
+  substrate_layers: number,
+  film_layers: number,
+  substrate_termination: number,
+  film_termination: number,
+  match_id: number,
+  gap: number,
+  vacuum: number,
+  twist_angle: number,
+  params: WasmHeteroSearchParams = {},
+): Promise<WasmResult<unknown>> {
+  const mod = await ensure_ferrox_wasm_ready()
+  const sub = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(substrate)))
+  const flm = JSON.parse(JSON.stringify(pymatgen_to_jscrystal(film)))
+  const p = {
+    max_area: params.max_area ?? 400.0,
+    max_area_ratio_tol: params.max_area_ratio_tol ?? 0.09,
+    max_length_tol: params.max_length_tol ?? 0.03,
+    max_angle_tol: params.max_angle_tol ?? 0.01,
+    max_results: params.max_results ?? 50,
+  }
+  try {
+    const result = mod.build_hetero_bulk(
+      sub,
+      flm,
+      Int32Array.from(substrate_miller),
+      Int32Array.from(film_miller),
+      substrate_layers,
+      film_layers,
+      substrate_termination,
+      film_termination,
+      match_id,
+      gap,
+      vacuum,
+      twist_angle,
+      p,
+    )
+    if (`error` in result) return result as { error: string }
+    const out = result.ok as { structure: unknown; [k: string]: unknown }
+    return { ok: { ...out, structure: jscrystal_to_pymatgen(out.structure) } }
+  } catch (err) {
+    return { error: `WASM build_hetero_bulk failed: ${err instanceof Error ? err.message : String(err)}` }
   }
 }
 

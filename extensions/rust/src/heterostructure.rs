@@ -17,6 +17,7 @@
 use nalgebra::{Matrix2, Matrix3, Vector2, Vector3};
 
 use crate::lattice::Lattice;
+use crate::slab::generate_slab_layers;
 use crate::species::Species;
 use crate::structure::Structure;
 use crate::zsl::{vec_area, ZslGenerator, ZslMatch};
@@ -309,7 +310,41 @@ fn stack_slabs(
         .map(|f| Vector3::new(wrap01(f.x), wrap01(f.y), wrap01(f.z)))
         .collect();
 
-    Structure::new(new_lattice, species, wrapped)
+    // Deduplicate coincident atoms. After wrapping the supercell-expanded
+    // slabs to [0,1), boundary atoms can collapse onto each other (e.g. a
+    // surface layer doubled by the in-plane supercell expansion), leaving
+    // spurious overlapping atoms. Drop any atom whose fractional coords
+    // coincide (PBC-aware, within DEDUP_TOL) with an already-kept atom of the
+    // same element. Real crystal atoms are never this close, so this removes
+    // only genuine duplicates.
+    const DEDUP_TOL: f64 = 1e-3;
+    let mut keep_frac: Vec<Vector3<f64>> = Vec::with_capacity(wrapped.len());
+    let mut keep_species: Vec<Species> = Vec::with_capacity(wrapped.len());
+    'outer: for (i, f) in wrapped.iter().enumerate() {
+        for (kf, ks) in keep_frac.iter().zip(keep_species.iter()) {
+            if ks.element != species[i].element {
+                continue;
+            }
+            let mut coincident = true;
+            for axis in 0..3 {
+                let mut d = (f[axis] - kf[axis]).abs();
+                if d > 0.5 {
+                    d = 1.0 - d; // minimum-image convention in fractional space
+                }
+                if d > DEDUP_TOL {
+                    coincident = false;
+                    break;
+                }
+            }
+            if coincident {
+                continue 'outer;
+            }
+        }
+        keep_frac.push(*f);
+        keep_species.push(species[i].clone());
+    }
+
+    Structure::new(new_lattice, keep_species, keep_frac)
 }
 
 /// Rotate the in-plane (x, y) components of `cart` by `twist_angle` degrees
@@ -330,6 +365,45 @@ fn apply_twist(cart: &mut [Vector3<f64>], twist_angle: f64) {
         p.x = rx * cos_t - ry * sin_t + cx;
         p.y = rx * sin_t + ry * cos_t + cy;
     }
+}
+
+/// Wrap a supercell's fractional coords to [0,1) and drop coincident
+/// same-element atoms. After `make_supercell_2d`, a surface layer can be
+/// doubled by the in-plane expansion (a boundary replica collapses onto the
+/// original once wrapped); without this, those overlapping atoms survive and
+/// the atom count is inflated. Removing only exact coincident same-element
+/// atoms is always safe — real crystal atoms are never this close.
+fn dedup_supercell(structure: &Structure) -> Structure {
+    const DEDUP_TOL: f64 = 1e-3;
+    let frac = &structure.frac_coords;
+    let species: Vec<Species> = structure.species().into_iter().copied().collect();
+    let mut keep_frac: Vec<Vector3<f64>> = Vec::with_capacity(frac.len());
+    let mut keep_species: Vec<Species> = Vec::with_capacity(frac.len());
+    'outer: for (i, f) in frac.iter().enumerate() {
+        let wf = Vector3::new(wrap01(f.x), wrap01(f.y), wrap01(f.z));
+        for (kf, ks) in keep_frac.iter().zip(keep_species.iter()) {
+            if ks.element != species[i].element {
+                continue;
+            }
+            let mut coincident = true;
+            for axis in 0..3 {
+                let mut d = (wf[axis] - kf[axis]).abs();
+                if d > 0.5 {
+                    d = 1.0 - d; // minimum-image in fractional space
+                }
+                if d > DEDUP_TOL {
+                    coincident = false;
+                    break;
+                }
+            }
+            if coincident {
+                continue 'outer;
+            }
+        }
+        keep_frac.push(wf);
+        keep_species.push(species[i].clone());
+    }
+    Structure::new(structure.lattice.clone(), keep_species, keep_frac)
 }
 
 /// Wrap a fractional coordinate into [0, 1) like numpy `% 1.0`.
@@ -506,8 +580,8 @@ pub fn build_interface_slab(
     let film_sl = selected.film_sl_vectors;
     let sub_sl = selected.substrate_sl_vectors;
 
-    let n_sub = sub_super.num_sites();
-    let n_film = film_super.num_sites();
+    let n_sub = dedup_supercell(&sub_super).num_sites();
+    let n_film = dedup_supercell(&film_super).num_sites();
 
     let interface = stack_slabs(
         &sub_super,
@@ -559,8 +633,8 @@ pub fn build_interface_manual(
     let sub_super = make_supercell_2d(&sub, substrate_transform).map_err(|e| e.to_string())?;
     let film_super = make_supercell_2d(&film, film_transform).map_err(|e| e.to_string())?;
 
-    let n_sub = sub_super.num_sites();
-    let n_film = film_super.num_sites();
+    let n_sub = dedup_supercell(&sub_super).num_sites();
+    let n_film = dedup_supercell(&film_super).num_sites();
 
     // Manual mode uses the legacy fractional path (sl_vectors = None) and no
     // twist (matches the WASM manual build's default of twist_angle = 0.0).
@@ -585,6 +659,122 @@ pub fn build_interface_manual(
         match_area: round2(match_area),
         strain: round4(strain),
     })
+}
+
+// =====================================================================
+// Bulk mode — cut surface slabs from two BULK crystals (Miller index +
+// layer count + termination) and run the slab-mode ZSL pipeline on them.
+// Functional equivalent of pymatgen's `CoherentInterfaceBuilder`: instead
+// of receiving pre-cut slabs, we cut them here with `generate_slab_layers`
+// (the same layer/termination logic the slab generator already exposes),
+// then delegate to `search_matches_slab` / `build_interface_slab`.
+// =====================================================================
+
+/// BULK-mode ZSL search. Cuts surface slabs from `substrate_bulk` / `film_bulk`
+/// for the given Miller indices, layer counts and termination indices, then
+/// runs the slab-mode ZSL search. Mirrors `POST /api/heterostructure/search`
+/// with `params.mode = "bulk"`.
+#[allow(clippy::too_many_arguments)]
+pub fn search_matches_bulk(
+    substrate_bulk: &Structure,
+    film_bulk: &Structure,
+    substrate_miller: [i32; 3],
+    film_miller: [i32; 3],
+    substrate_layers: usize,
+    film_layers: usize,
+    substrate_termination: usize,
+    film_termination: usize,
+    max_area: f64,
+    max_area_ratio_tol: f64,
+    max_length_tol: f64,
+    max_angle_tol: f64,
+    max_results: usize,
+) -> Result<Vec<MatchCandidate>, String> {
+    // Vacuum is stripped by `search_matches_slab` before the ZSL step, so any
+    // positive value works for the intermediate slab.
+    const SLAB_VACUUM: f64 = 15.0;
+    let sub_slab = generate_slab_layers(
+        substrate_bulk,
+        substrate_miller,
+        substrate_layers.max(1),
+        substrate_termination,
+        SLAB_VACUUM,
+        [1, 1],
+    )
+    .map_err(|e| format!("substrate slab generation failed: {e}"))?;
+    let film_slab = generate_slab_layers(
+        film_bulk,
+        film_miller,
+        film_layers.max(1),
+        film_termination,
+        SLAB_VACUUM,
+        [1, 1],
+    )
+    .map_err(|e| format!("film slab generation failed: {e}"))?;
+    Ok(search_matches_slab(
+        &sub_slab,
+        &film_slab,
+        max_area,
+        max_area_ratio_tol,
+        max_length_tol,
+        max_angle_tol,
+        max_results,
+    ))
+}
+
+/// BULK-mode build for a selected ZSL match. Cuts surface slabs from the two
+/// bulk crystals, then builds the chosen match via the slab-mode builder.
+/// Mirrors `POST /api/heterostructure/build` with `search_params.mode = "bulk"`.
+#[allow(clippy::too_many_arguments)]
+pub fn build_interface_bulk(
+    substrate_bulk: &Structure,
+    film_bulk: &Structure,
+    substrate_miller: [i32; 3],
+    film_miller: [i32; 3],
+    substrate_layers: usize,
+    film_layers: usize,
+    substrate_termination: usize,
+    film_termination: usize,
+    match_index: usize,
+    gap: f64,
+    vacuum: f64,
+    twist_angle: f64,
+    max_area: f64,
+    max_area_ratio_tol: f64,
+    max_length_tol: f64,
+    max_angle_tol: f64,
+) -> Result<BuildResult, String> {
+    const SLAB_VACUUM: f64 = 15.0;
+    let sub_slab = generate_slab_layers(
+        substrate_bulk,
+        substrate_miller,
+        substrate_layers.max(1),
+        substrate_termination,
+        SLAB_VACUUM,
+        [1, 1],
+    )
+    .map_err(|e| format!("substrate slab generation failed: {e}"))?;
+    let film_slab = generate_slab_layers(
+        film_bulk,
+        film_miller,
+        film_layers.max(1),
+        film_termination,
+        SLAB_VACUUM,
+        [1, 1],
+    )
+    .map_err(|e| format!("film slab generation failed: {e}"))?;
+    build_interface_slab(
+        &sub_slab,
+        &film_slab,
+        match_index,
+        gap,
+        vacuum,
+        twist_angle,
+        max_area,
+        max_area_ratio_tol,
+        max_length_tol,
+        max_angle_tol,
+    )
 }
 
 // =====================================================================
@@ -1206,7 +1396,41 @@ fn stack_slabs_target_z(
         .map(|f| Vector3::new(wrap01(f.x), wrap01(f.y), wrap01(f.z)))
         .collect();
 
-    Structure::new(new_lattice, species, wrapped)
+    // Deduplicate coincident atoms. After wrapping the supercell-expanded
+    // slabs to [0,1), boundary atoms can collapse onto each other (e.g. a
+    // surface layer doubled by the in-plane supercell expansion), leaving
+    // spurious overlapping atoms. Drop any atom whose fractional coords
+    // coincide (PBC-aware, within DEDUP_TOL) with an already-kept atom of the
+    // same element. Real crystal atoms are never this close, so this removes
+    // only genuine duplicates.
+    const DEDUP_TOL: f64 = 1e-3;
+    let mut keep_frac: Vec<Vector3<f64>> = Vec::with_capacity(wrapped.len());
+    let mut keep_species: Vec<Species> = Vec::with_capacity(wrapped.len());
+    'outer: for (i, f) in wrapped.iter().enumerate() {
+        for (kf, ks) in keep_frac.iter().zip(keep_species.iter()) {
+            if ks.element != species[i].element {
+                continue;
+            }
+            let mut coincident = true;
+            for axis in 0..3 {
+                let mut d = (f[axis] - kf[axis]).abs();
+                if d > 0.5 {
+                    d = 1.0 - d; // minimum-image convention in fractional space
+                }
+                if d > DEDUP_TOL {
+                    coincident = false;
+                    break;
+                }
+            }
+            if coincident {
+                continue 'outer;
+            }
+        }
+        keep_frac.push(*f);
+        keep_species.push(species[i].clone());
+    }
+
+    Structure::new(new_lattice, keep_species, keep_frac)
 }
 
 /// A single grid-scan entry: an in-plane shift applied to the film atoms of an

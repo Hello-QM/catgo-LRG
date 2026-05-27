@@ -7,11 +7,13 @@ import {
 } from '$lib/structure/export'
 import {
   wasm_build_hetero,
+  wasm_build_hetero_bulk,
   wasm_build_hetero_grid_scan,
   wasm_build_hetero_manual,
   wasm_build_hetero_registry,
   wasm_build_lateral,
   wasm_hetero_search,
+  wasm_hetero_search_bulk,
   wasm_lateral_search,
 } from '$lib/structure/ferrox-wasm'
 import { desktop_backend_available, SERVER_URL, STATIC_ONLY } from './config'
@@ -184,6 +186,32 @@ export async function searchHeterostructureMatches(
     return result.ok as HeterostructureSearchResult
   }
 
+  // Client-side BULK path: cut surface slabs from the bulk crystals (Miller
+  // index), then ZSL-match. Search is thickness-independent (the surface a/b
+  // cell depends only on the Miller index), so a small fixed slab thickness is
+  // used here; the build step applies the real thickness.
+  if (params.mode === `bulk` && (await slab_use_wasm_path())) {
+    const result = await wasm_hetero_search_bulk(
+      substrate as never,
+      film as never,
+      params.substrate_miller ?? [0, 0, 1],
+      params.film_miller ?? [0, 0, 1],
+      3,
+      3,
+      0,
+      0,
+      {
+        max_area: params.max_area,
+        max_area_ratio_tol: params.max_area_ratio_tol,
+        max_length_tol: params.max_length_tol,
+        max_angle_tol: params.max_angle_tol,
+        max_results: params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureSearchResult
+  }
+
   const response = await fetch(`${server_url}/api/heterostructure/search`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -213,6 +241,34 @@ export async function buildHeterostructure(
     const result = await wasm_build_hetero(
       substrate as never,
       film as never,
+      match.match_id,
+      params.gap ?? 2.0,
+      params.vacuum ?? 20.0,
+      params.twist_angle ?? 0.0,
+      {
+        max_area: search_params.max_area,
+        max_area_ratio_tol: search_params.max_area_ratio_tol,
+        max_length_tol: search_params.max_length_tol,
+        max_angle_tol: search_params.max_angle_tol,
+        max_results: search_params.max_results,
+      },
+    )
+    if (`error` in result) throw new Error(result.error)
+    return result.ok as HeterostructureBuildResult
+  }
+
+  // Client-side BULK path: cut slabs from the two bulk crystals (Miller +
+  // thickness in layers + default termination) and build the chosen match.
+  if (search_params.mode === `bulk` && (await slab_use_wasm_path())) {
+    const result = await wasm_build_hetero_bulk(
+      substrate as never,
+      film as never,
+      search_params.substrate_miller ?? [0, 0, 1],
+      search_params.film_miller ?? [0, 0, 1],
+      params.substrate_thickness ?? 3,
+      params.film_thickness ?? 3,
+      0,
+      0,
       match.match_id,
       params.gap ?? 2.0,
       params.vacuum ?? 20.0,
