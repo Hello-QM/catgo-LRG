@@ -8,8 +8,13 @@ export const RELAY_URL: string =
   (typeof import.meta.env.VITE_CORS_RELAY_URL === `string` && import.meta.env.VITE_CORS_RELAY_URL) ||
   `https://catgo-cors-relay.guangshengliu2021.workers.dev`
 
-/** Hosts known to block browser CORS — fetches to these must go through the relay. */
-const RELAY_HOSTS = new Set<string>([`optimade.materialsproject.org`])
+/** Hosts known to block browser CORS — fetches to these must go through the relay.
+ *  Both Materials Project surfaces (OPTIMADE + the REST API that serves energies/
+ *  band gaps) send no Access-Control-Allow-Origin, so they must be relayed. */
+const RELAY_HOSTS = new Set<string>([
+  `optimade.materialsproject.org`,
+  `api.materialsproject.org`,
+])
 
 export function needs_relay(url: string): boolean {
   try {

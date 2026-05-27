@@ -1,7 +1,11 @@
-// Materials Project API utilities (via backend proxy to avoid CORS)
+// Materials Project API utilities.
 // Requires user's API key from https://materialsproject.org/
+// Three transports: VSCode extension host proxy, FastAPI backend proxy, and
+// (STATIC_ONLY web build) browser-direct via the CORS relay — api.materialsproject.org
+// sends no Access-Control-Allow-Origin, so direct browser fetches are blocked.
 
-import { API_BASE as _DEFAULT_API } from './config'
+import { API_BASE as _DEFAULT_API, STATIC_ONLY } from './config'
+import { relay_fetch } from '$lib/chat/provider-routing'
 
 // API base URL - same as other API modules
 let API_BASE = _DEFAULT_API
@@ -109,7 +113,10 @@ async function fetch_json_smart(url: string, api_key: string): Promise<unknown> 
     }
   }
 
-  const response = await fetch(url, {
+  // Web context: relay-aware fetch. api.materialsproject.org is CORS-blocked, so
+  // relay_fetch transparently routes it through the edge relay (which forwards the
+  // X-API-KEY header). Open hosts/backend-proxy URLs go direct.
+  const response = await relay_fetch(url, {
     headers: {
       'Content-Type': `application/json`,
       'X-API-KEY': api_key,
@@ -155,8 +162,8 @@ export async function search_mp_structures(
   let url: string
   let data: { data?: MPSummaryData[] }
 
-  if (vscode_api) {
-    // Direct Materials Project API call
+  if (vscode_api || STATIC_ONLY) {
+    // Direct Materials Project API call (relay-routed in the web build)
     const params = new URLSearchParams({
       _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal`,
       _limit: String(limit),
@@ -216,8 +223,8 @@ export async function get_mp_structure_summary(material_id: string): Promise<MPS
     let url: string
     let data: { data?: MPSummaryData }
 
-    if (vscode_api) {
-      // Direct API call
+    if (vscode_api || STATIC_ONLY) {
+      // Direct API call (relay-routed in the web build)
       const params = new URLSearchParams({
         _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal`,
       })
@@ -261,6 +268,13 @@ export async function validate_mp_api_key(key: string): Promise<boolean> {
       url = `https://api.materialsproject.org/materials/summary/?_limit=1`
       await fetch_json_smart(url, key)
       return true // If we got here without error, key is valid
+    } else if (STATIC_ONLY) {
+      // Web build: validate via the new MP API summary endpoint through the relay
+      // (the www.materialsproject.org api_check host is not relay-allowlisted).
+      // fetch_json_smart throws on a non-2xx (e.g. 401 invalid key) → caught below.
+      url = `https://api.materialsproject.org/materials/summary/?_limit=1`
+      await fetch_json_smart(url, key)
+      return true
     } else {
       // Backend proxy
       const response = await fetch(`${API_BASE}/mp/validate-key`, {

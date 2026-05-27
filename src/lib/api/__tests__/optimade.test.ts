@@ -8,6 +8,12 @@ describe(`optimade static MP routing`, () => {
     expect(needs_relay(`https://optimade.materialsproject.org/v1/structures`)).toBe(true)
     expect(needs_relay(`https://alexandria.icams.rub.de/pbe/v1/structures`)).toBe(false)
   })
+
+  it(`MP REST API host (energies/band gaps) needs relay`, () => {
+    // api.materialsproject.org also sends no ACAO; the API-key validation +
+    // summary enrichment must traverse the relay in the static web build.
+    expect(needs_relay(`https://api.materialsproject.org/materials/summary/?_limit=1`)).toBe(true)
+  })
 })
 
 // Stronger integration: in static mode the OPTIMADE search must go out through
