@@ -70,16 +70,25 @@ server = Server("catgo")
 
 
 def list_tools_sync():
-    """Tool list the stdio server advertises (consolidated Menu B + plugins)."""
-    from catgo.mcp_tools.server_claude_code import TOOLS as _B
-    return list(_B)
+    """Tool list the stdio server advertises (consolidated Menu B + dynamic).
+
+    Synchronous mirror of :func:`build_full_tool_list` for tests / introspection.
+    """
+    return build_full_tool_list()
 
 
-@server.list_tools()
-async def handle_list_tools() -> list[Tool]:
-    # Serve the consolidated "Menu B" tool set so all transports
-    # (stdio / HTTP / SSE) advertise the same mega-tools.
-    all_tools = list(TOOLS)
+def build_dynamic_tool_list() -> list[Tool]:
+    """Build the *extra* (non-Menu-B) tools advertised by every transport.
+
+    Returns the dynamic tools that supplement the consolidated ``TOOLS``
+    registry: user plugins (~/.catgo/plugins), saved ext tools
+    (``catgo_ext_*``), the import-template / screening tools, the sandbox
+    file-writing tools (``catgo_write_file`` / ``catgo_get_template``), and the
+    tool-lifecycle tools (``catgo_create_tool`` / save / upgrade / delete /
+    list). Hosted here so the stdio, HTTP and SSE transports all advertise an
+    identical surface — see ``build_full_tool_list``.
+    """
+    all_tools: list[Tool] = []
 
     # Hot-reload user plugins from ~/.catgo/plugins/
     for pdef in get_plugin_tool_defs():
@@ -413,6 +422,23 @@ async def handle_list_tools() -> list[Tool]:
     return all_tools
 
 
+def build_full_tool_list() -> list[Tool]:
+    """Full advertised tool surface: consolidated Menu B + dynamic tools.
+
+    Shared by all three transports (stdio / HTTP / SSE) so they advertise
+    an identical set. Menu B comes first (schema as-shipped), followed by
+    the dynamic tools from :func:`build_dynamic_tool_list`.
+    """
+    return list(TOOLS) + build_dynamic_tool_list()
+
+
+@server.list_tools()
+async def handle_list_tools() -> list[Tool]:
+    # Serve the consolidated "Menu B" tool set + dynamic tools so all
+    # transports (stdio / HTTP / SSE) advertise the same surface.
+    return build_full_tool_list()
+
+
 # ---------------------------------------------------------------------------
 # Special tool dispatch
 # ---------------------------------------------------------------------------
@@ -539,6 +565,59 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     if name in _CONSOLIDATED_ARGS_ONLY:
         return await _CONSOLIDATED_ARGS_ONLY[name](arguments or {})
 
+    # Non-Menu-B names: plugins / catgo_ext_* / lifecycle / import-template /
+    # Menu-A declarative dispatch. Shared with the HTTP and SSE transports.
+    return await dispatch_dynamic_tool(name, arguments)
+
+
+async def _default_fetch_current_structure(panel_id: str = "default") -> dict | None:
+    """Fetch the viewer's current structure over HTTP (stdio default).
+
+    The HTTP transport runs in-process with the FastAPI worker and would
+    deadlock calling back into ``/view/*``; it passes its own in-process
+    fetcher to :func:`dispatch_dynamic_tool` instead.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as sc:
+            resp = await sc.get(
+                f"{API_BASE}/view/structure/current",
+                params={"panel_id": panel_id},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return None
+
+
+async def dispatch_dynamic_tool(
+    name: str,
+    arguments: dict,
+    *,
+    fetch_current_structure=None,
+) -> list[TextContent]:
+    """Dispatch any non-Menu-B tool name.
+
+    Covers, in order: hot-loaded user plugins (~/.catgo/plugins), plugin
+    analyzer/reader tools (``catgo_analyze_*`` / ``catgo_read_*``), workflow
+    import + screening templates, the tool-lifecycle tools (create / save /
+    upgrade / delete / list), sandbox file-writing tools (``catgo_write_file``
+    / ``catgo_get_template``), saved ext tools (``catgo_ext_*``), and finally
+    the granular "Menu A" declarative REST / special / direct dispatch.
+
+    Shared by all three transports so HTTP/SSE advertise *and* execute the
+    same surface stdio does.
+
+    Args:
+        fetch_current_structure: optional ``async (panel_id) -> dict | None``
+            used to auto-inject the viewer structure. Defaults to an HTTP
+            fetch; the HTTP transport supplies an in-process variant to avoid
+            a self-HTTP deadlock.
+    """
+    arguments = arguments or {}
+    if fetch_current_structure is None:
+        fetch_current_structure = _default_fetch_current_structure
+
     # Find tool definition (granular "Menu A" registry, kept for plugin
     # fallback / declarative dispatch of any non-Menu-B name).
     tool_def = next((t for t in _GRANULAR_TOOLS if t["name"] == name), None)
@@ -568,17 +647,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
 
         # Auto-fetch current structure from viewer for tool lifecycle / registry tools
         panel_id = arguments.pop("panel_id", "default")
-        auto_structure = None
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as sc:
-                resp = await sc.get(
-                    f"{API_BASE}/view/structure/current",
-                    params={"panel_id": panel_id},
-                )
-                if resp.status_code == 200:
-                    auto_structure = resp.json()
-        except Exception:
-            pass
+        auto_structure = await fetch_current_structure(panel_id)
 
         # Tool lifecycle MCP tools
         if name == "catgo_create_tool":
@@ -706,18 +775,11 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
     schema = tool_def.get("inputSchema", {})
     needs_structure = "structure" in schema.get("required", [])
     if needs_structure and "structure" not in arguments:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    f"{API_BASE}/view/structure/current",
-                    params={"panel_id": panel_id},
-                )
-                if resp.status_code == 200:
-                    arguments["structure"] = resp.json()
-                else:
-                    return [TextContent(type="text", text="No structure loaded in viewer. Load a structure first.")]
-        except Exception:
-            return [TextContent(type="text", text="Cannot fetch current structure from viewer.")]
+        fetched = await fetch_current_structure(panel_id)
+        if fetched is not None:
+            arguments["structure"] = fetched
+        else:
+            return [TextContent(type="text", text="No structure loaded in viewer. Load a structure first.")]
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:

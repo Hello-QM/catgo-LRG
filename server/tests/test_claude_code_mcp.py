@@ -30,12 +30,19 @@ class TestClaudeCodeToolDefinitions:
     #   catgo_quickbuild -> keyed on recipe
     NO_ACTION_TOOLS = {"catgo_diagnose", "catgo_quickbuild"}
 
+    # The consolidated Menu B surface is exactly these 17 tools. Asserting the
+    # EXACT count (not >=) is the tripwire: an accidentally added or removed
+    # mega-tool trips this test. (Bump this number deliberately when a tool is
+    # added on purpose — and update test_tool_names below to match.)
+    EXPECTED_TOOL_COUNT = 17
+
     def test_tool_count(self):
         tools = _get_tools()
-        # No brittle hardcoded number: every tool name must be unique, and the
-        # consolidated registry has grown to at least the current 17 tools.
         assert len(tools) == len({t.name for t in tools}), "duplicate tool names"
-        assert len(tools) >= 17, f"Expected >=17 tools, got {len(tools)}"
+        # Exact count, not >=: catches accidental registry bloat or loss.
+        assert len(tools) == self.EXPECTED_TOOL_COUNT, (
+            f"Expected exactly {self.EXPECTED_TOOL_COUNT} tools, got {len(tools)}"
+        )
 
     def test_tool_names(self):
         tools = _get_tools()
@@ -81,22 +88,49 @@ class TestClaudeCodeToolDefinitions:
         diagnose_tool = next(t for t in tools if t.name == "catgo_diagnose")
         assert "task_id" in diagnose_tool.inputSchema.get("required", [])
 
-    def test_descriptions_are_concise(self):
-        """Every tool must have a non-empty description that isn't absurdly long.
+    # Token-efficiency guard. The MCP tool list is re-sent on every session
+    # init, so description length is a real cost. The consolidated mega-tools
+    # ship usage recipes and so legitimately run longer than the old granular
+    # 300-char tools, but they are NOT unbounded.
+    #
+    # As of the 17-tool consolidation the largest NON-exempt description is
+    # catgo_structure at 2451 chars; the rest are smaller. We cap normal tools
+    # at 3000 (= ~2451 rounded up with ~20% headroom) so any future unbounded
+    # bloat fails. catgo_workflow is the single legitimate outlier: it embeds
+    # the full CATBOT building guide (~7.6k chars). It is exempted from the tight
+    # cap but still bounded by EXEMPT_DESC_CAP so even it cannot grow unbounded.
+    DESC_CAP = 3000
+    EXEMPT_DESC_CAP = 9000
+    # tool -> reason it is allowed a longer description.
+    DESC_EXEMPT = {
+        "catgo_workflow": "embeds the full CATBOT workflow-building guide",
+    }
 
-        The consolidated mega-tools (catgo_workflow embeds a full building guide,
-        catgo_structure/heterostructure/moire/nanotube/quickbuild ship usage
-        recipes) legitimately run into the thousands of chars, so the old 300-char
-        cap no longer reflects intent. Assert presence + a sane upper bound.
+    def test_descriptions_are_concise(self):
+        """Every tool must have a non-empty, length-bounded description.
+
+        Normal tools must stay under DESC_CAP; only explicitly-exempt tools may
+        exceed it, and even they are bounded by EXEMPT_DESC_CAP. A future
+        unbounded description (the regression this guards) fails the test.
         """
         tools = _get_tools()
         for tool in tools:
             assert tool.description and tool.description.strip(), (
                 f"{tool.name} has an empty description"
             )
-            assert len(tool.description) < 8000, (
-                f"{tool.name} description is {len(tool.description)} chars (absurdly long)"
-            )
+            length = len(tool.description)
+            if tool.name in self.DESC_EXEMPT:
+                assert length < self.EXEMPT_DESC_CAP, (
+                    f"{tool.name} description is {length} chars, over the "
+                    f"exempt cap {self.EXEMPT_DESC_CAP} "
+                    f"({self.DESC_EXEMPT[tool.name]})"
+                )
+            else:
+                assert length < self.DESC_CAP, (
+                    f"{tool.name} description is {length} chars, over the "
+                    f"{self.DESC_CAP}-char cap (add to DESC_EXEMPT only with a "
+                    f"documented reason)"
+                )
 
     def test_structure_actions_complete(self):
         tools = _get_tools()

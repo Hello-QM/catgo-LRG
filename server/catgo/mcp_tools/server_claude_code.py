@@ -201,9 +201,9 @@ TOOLS = [
                 "defect_type": {"type": "string", "description": "For defect: 'vacancy' | 'substitution' | 'interstitial'."},
                 "site_index": {"type": "integer", "description": "For defect: 0-based site index to operate on."},
                 "substitute_element": {"type": "string", "description": "For defect substitution: replacement element symbol."},
-                "supercell": {"type": "string", "description": "For defect/strain: supercell as 'NxNxN' (e.g. '2x2x1')."},
+                "supercell": {"type": "string", "description": "For defect: supercell as 'NxNxN' (e.g. '2x2x1') applied BEFORE making the defect. DEFAULT IS '2x2x2' — omitting it expands the cell 8x before creating the vacancy/substitution. Pass '1x1x1' for an in-place defect in the original cell."},
                 "strain_type": {"type": "string", "description": "For strain: 'uniaxial' | 'biaxial' | 'hydrostatic' | 'shear'."},
-                "axis": {"type": "string", "description": "For strain: axis/plane the strain is applied along (e.g. 'x', 'a', 'xy')."},
+                "axis": {"type": "string", "description": "For strain_type=uniaxial only: which lattice vector to strain — accepts 'a', 'b', or 'c' (anything else silently defaults to 'c'). Ignored for biaxial (always strains a+b), hydrostatic (all directions), and shear (fixed a-b shear); no 'x/y/z' or plane tokens."},
                 "magnitude": {"type": "number", "description": "For strain: strain magnitude as a fraction (e.g. 0.05 = 5%)."},
                 "n_steps": {"type": "integer", "description": "For strain: number of strain steps to generate (default 1)."},
                 "slab": {"type": "object", "description": "For passivate: slab structure (raw pymatgen dict)."},
@@ -994,6 +994,7 @@ TOOLS = [
                 "trajectory_b64": {"type": "string", "description": "Base64 of the trajectory file."},
                 "format": {"type": "string", "description": "Trajectory format, e.g. extxyz, xyz, h5, traj, pdb, xtc."},
                 "topology_b64": {"type": "string", "description": "Base64 topology (only for binary formats xtc/trr/dcd)."},
+                "topology_format": {"type": "string", "description": "Format of the topology file given in topology_b64 (e.g. 'pdb', 'gro'). Required alongside topology_b64 for binary trajectory formats (xtc/trr/dcd) so the backend can load the topology."},
                 "selection_1": {"type": "object", "description": "rdf: {indices:[...]} or {element:'O'}"},
                 "selection_2": {"type": "object", "description": "rdf: second selection."},
                 "element": {"type": "string", "description": "msd: element to track."},
@@ -1025,7 +1026,7 @@ TOOLS = [
                 "action": {"type": "string", "enum": list(_INPUT_ROUTES) + ["vasp_presets"],
                            "description": "Which input to generate / query."},
                 "structure": {"type": "object", "description": "pymatgen Structure dict; omit to use the viewer's current structure."},
-                "calculation_type": {"type": "string", "description": "VASP (action=vasp): scf|relax|band|dos|..."},
+                "calculation_type": {"type": "string", "description": "VASP (action=vasp): opt|scf|freq|bader|dos|ddec|elf|md|slow_growth (use 'opt' for geometry optimization — there is no 'relax' or 'band')."},
                 "calculation": {"type": "string", "description": "QE (action=qe): scf|relax|vc-relax|bands|..."},
                 "pair_style": {"type": "string", "description": "LAMMPS (action=lammps): pair style, e.g. lj/cut."},
                 "simulation_type": {"type": "string", "description": "LAMMPS (action=lammps): minimize|nvt|npt|..."},
@@ -1384,6 +1385,17 @@ async def _handle_structure(client: httpx.AsyncClient, args: dict) -> list[TextC
     if action in _BUILD:
         endpoint, in_key, out_key = _BUILD[action]
         payload = {k: v for k, v in args.items() if k != "action"}
+        # passivate needs BOTH slab (auto-injected below) AND a bulk reference
+        # (PseudoHydrogenRequest.bulk is required, no default) — fail clearly
+        # instead of letting the backend 422.
+        if action == "passivate" and "bulk" not in payload:
+            return [T(type="text", text=(
+                "passivate needs a bulk reference structure. Pass the bulk crystal "
+                "(the un-cleaved 3D material the slab was cut from) as the `bulk` "
+                "parameter (raw pymatgen dict); it is used to determine each surface "
+                "atom's missing coordination. The `slab` is taken from the viewer if "
+                "omitted, but `bulk` cannot be inferred."
+            ))]
         if in_key not in payload:
             cur = await _get_current_structure(client)
             if cur is None:
@@ -1393,7 +1405,7 @@ async def _handle_structure(client: httpx.AsyncClient, args: dict) -> list[TextC
         if resp.status_code != 200:
             return [T(type="text", text=f"{action} failed ({resp.status_code}): {resp.text[:300]}")]
         data = resp.json()
-        new_struct = data.get("structures", [None])[0] if out_key == "structures" else data.get("structure")
+        new_struct = (data.get("structures") or [None])[0] if out_key == "structures" else data.get("structure")
         if not new_struct:
             return [T(type="text", text=f"{action} returned no structure. Response: {json.dumps(data)[:300]}")]
         push_err = await _push_structure(client, new_struct)
@@ -1514,7 +1526,7 @@ async def _handle_structure(client: httpx.AsyncClient, args: dict) -> list[TextC
                     if resp.status_code == 200:
                         data = resp.json()
                         result_struct = data.get("structure")
-                        n_placed = data.get("n_water_placed", 0)
+                        n_placed = data.get("n_water_molecules", 0)
                         if result_struct:
                             push_err = await _push_structure(client, result_struct)
                             summary = _summarize({"structure": result_struct})
@@ -1879,6 +1891,32 @@ async def _handle_view(client: httpx.AsyncClient, args: dict) -> list[TextConten
     return [T(type="text", text=f"Unknown view action '{action}'. Valid: get_state, selection, screenshot")]
 
 
+def _load_catalysis_module(mod: str):
+    """Load workflow.catalysis.<mod>, working around the dev source-tree shadow.
+
+    In the PyInstaller bundle `workflow.catalysis.<mod>` is frozen and imports
+    cleanly. In the dev source tree the top of this file inserts server/catgo on
+    sys.path, so a bare `import workflow` resolves to server/catgo/workflow (the
+    workflow ENGINE — it has NO catalysis submodule) and the import fails with
+    `No module named workflow.catalysis`. Mirror the vasp_presets fix: try the
+    normal import first, then fall back to loading the real
+    server/workflow/catalysis/<mod>.py by file path.
+    """
+    import importlib
+    import importlib.util
+    try:
+        return importlib.import_module(f"workflow.catalysis.{mod}")  # bundle / unshadowed
+    except ImportError:
+        _mod_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            "workflow", "catalysis", f"{mod}.py",
+        )
+        _spec = importlib.util.spec_from_file_location(f"_catgo_catalysis_{mod}", _mod_path)
+        _loaded = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_loaded)
+        return _loaded
+
+
 async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
     """Dispatch catgo_catalysis actions."""
     action = args.get("action", "")
@@ -1887,26 +1925,19 @@ async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextC
 
     try:
         if action == "oer":
-            from workflow.catalysis.oer import compute_oer_overpotential
-            result = compute_oer_overpotential(**params)
+            result = _load_catalysis_module("oer").compute_oer_overpotential(**params)
         elif action == "co2rr":
-            from workflow.catalysis.co2rr import compute_co2rr_limiting_potential
-            result = compute_co2rr_limiting_potential(**params)
+            result = _load_catalysis_module("co2rr").compute_co2rr_limiting_potential(**params)
         elif action == "nrr":
-            from workflow.catalysis.nrr import compute_nrr_overpotential
-            result = compute_nrr_overpotential(**params)
+            result = _load_catalysis_module("nrr").compute_nrr_overpotential(**params)
         elif action == "free_energy":
-            from workflow.catalysis.free_energy import gibbs_free_energy
-            result = gibbs_free_energy(**params)
+            result = _load_catalysis_module("free_energy").gibbs_free_energy(**params)
         elif action == "volcano":
-            from workflow.catalysis.volcano import generate_volcano_data
-            result = generate_volcano_data(**params)
+            result = _load_catalysis_module("volcano").generate_volcano_data(**params)
         elif action == "d_band_center":
-            from workflow.catalysis.descriptors import compute_d_band_center
-            result = compute_d_band_center(**params)
+            result = _load_catalysis_module("descriptors").compute_d_band_center(**params)
         elif action == "adsorption_energy":
-            from workflow.catalysis.oer import compute_adsorption_free_energy
-            result = {"dG_ads": compute_adsorption_free_energy(**params)}
+            result = {"dG_ads": _load_catalysis_module("oer").compute_adsorption_free_energy(**params)}
         else:
             valid = "oer, co2rr, nrr, free_energy, volcano, d_band_center, adsorption_energy"
             return [T(type="text", text=f"Unknown catalysis action '{action}'. Valid: {valid}")]
@@ -2926,8 +2957,20 @@ async def _handle_input(client: httpx.AsyncClient, args: dict) -> list[TextConte
     data = resp.json()
     for key in ("incar", "input_file", "input_script", "combined_input"):
         if isinstance(data, dict) and data.get(key):
-            blocks = {k: data[k] for k in ("incar", "poscar", "kpoints", "data_file", "input_file", "input_script", "combined_input") if data.get(k)}
-            return [T(type="text", text="\n\n".join(f"=== {k} ===\n{v}" for k, v in blocks.items()))]
+            # File blocks are TEXT. VASP's `kpoints` is the KPOINTS file (a string),
+            # but QE's `kpoints` is a list[int] k-grid — rendering it as a file block
+            # produces a bogus "=== kpoints ===\n[4, 4, 4]". Only render string-valued
+            # keys as file blocks; surface a non-string k-grid on its own labeled line.
+            blocks = {
+                k: data[k]
+                for k in ("incar", "poscar", "kpoints", "data_file", "input_file", "input_script", "combined_input")
+                if isinstance(data.get(k), str) and data.get(k)
+            }
+            text = "\n\n".join(f"=== {k} ===\n{v}" for k, v in blocks.items())
+            kgrid = data.get("kpoints")
+            if kgrid is not None and not isinstance(kgrid, str):
+                text += f"\n\nK-point grid: {kgrid}"
+            return [T(type="text", text=text)]
     return [T(type="text", text=json.dumps(data, ensure_ascii=False, indent=2))]
 
 

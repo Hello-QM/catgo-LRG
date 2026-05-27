@@ -60,6 +60,10 @@ def create_mcp_sse_app() -> Starlette:
 
     import httpx
 
+    # Shared full-surface list + dynamic dispatch so SSE advertises and
+    # executes the same tools as the stdio / HTTP transports.
+    from catgo.mcp_tools.server import build_full_tool_list, dispatch_dynamic_tool
+
     # Create a fresh MCP Server instance (separate from the stdio one)
     mcp_server = Server("catgo-claude-code-sse")
 
@@ -69,7 +73,9 @@ def create_mcp_sse_app() -> Starlette:
 
     @mcp_server.list_tools()
     async def list_tools() -> list[Tool]:
-        return TOOLS
+        # Full surface: consolidated Menu B + dynamic (plugins / ext /
+        # lifecycle / import-template) tools, matching stdio and HTTP.
+        return build_full_tool_list()
 
     @mcp_server.call_tool()
     async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
@@ -112,7 +118,11 @@ def create_mcp_sse_app() -> Starlette:
                 elif name == "catgo_skills":
                     return await _handle_skills(arguments)
                 else:
-                    return [T(type="text", text=f"Unknown tool: {name}")]
+                    # Non-Menu-B names → shared dynamic dispatch (plugins, ext,
+                    # lifecycle, import templates, Menu-A declarative). Uses the
+                    # default HTTP structure fetch, consistent with how SSE
+                    # already serves its Menu-B viewer ops over self-HTTP.
+                    return await dispatch_dynamic_tool(name, arguments)
         except httpx.ConnectError:
             return [T(
                 type="text",

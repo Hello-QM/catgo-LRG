@@ -201,9 +201,23 @@ session_manager = StreamableHTTPSessionManager(
 )
 
 
+from catgo.mcp_tools.server import build_full_tool_list, dispatch_dynamic_tool
+
+
+async def _fetch_current_structure_inproc(panel_id: str = "default") -> dict | None:
+    """In-process structure fetch for the dynamic-tool fallback.
+
+    Mirrors ``_get_current_structure_direct`` so plugin / ext / lifecycle
+    tools auto-inject the viewer structure without a self-HTTP deadlock.
+    """
+    return await _get_current_structure_direct(None, panel_id)  # type: ignore[arg-type]
+
+
 @mcp_server.list_tools()
 async def list_tools() -> list[Tool]:
-    return TOOLS
+    # Full surface: consolidated Menu B + dynamic (plugins / ext / lifecycle /
+    # import-template) tools — identical to what the stdio transport advertises.
+    return build_full_tool_list()
 
 
 @mcp_server.call_tool()
@@ -247,7 +261,13 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
             elif name == "catgo_skills":
                 return await _handle_skills(arguments)
             else:
-                return [T(type="text", text=f"Unknown tool: {name}")]
+                # Non-Menu-B names → shared dynamic dispatch (plugins, ext,
+                # lifecycle, import templates, Menu-A declarative). Uses an
+                # in-process structure fetch to avoid self-HTTP deadlock.
+                return await dispatch_dynamic_tool(
+                    name, arguments,
+                    fetch_current_structure=_fetch_current_structure_inproc,
+                )
     except httpx.ConnectError:
         return [T(
             type="text",
