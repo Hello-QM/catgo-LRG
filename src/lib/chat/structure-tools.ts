@@ -2,6 +2,7 @@ import type { AnyStructure } from '$lib'
 import type { ClientTool, ToolKind } from './types'
 import { get_current_structure, set_current_structure } from '$lib/structure/current-structure.svelte'
 import { relay_fetch } from './provider-routing'
+import { search_optimade_structures } from '$lib/api/optimade'
 import {
   create_supercell,
   get_spacegroup as ferrox_spacegroup,
@@ -105,14 +106,24 @@ register(
     const provider = String(input.provider)
     const base = OPTIMADE_BASES[provider]
     if (!base) throw new Error(`Unknown OPTIMADE provider: ${provider}`)
-    const limit = Number(input.limit ?? 5)
-    const filter = `chemical_formula_reduced="${String(input.formula)}"`
-    const url = `${base}/v1/structures?page_limit=${limit}&filter=${encodeURIComponent(filter)}`
-    const resp = await relay_fetch(url, { headers: { Accept: `application/vnd.api+json` } })
-    if (!resp.ok) throw new Error(`OPTIMADE error ${resp.status}`)
-    const data = (await resp.json()) as { data?: { id: string; attributes?: Record<string, unknown> }[] }
+    // Delegate to the shared search used by the Search-Database modal so the
+    // formula is normalized correctly: element-only formulas like "NaCl" become
+    // an `elements HAS ALL` query (chemical_formula_reduced is alphabetical+reduced,
+    // i.e. "ClNa", so a literal "NaCl" match returns nothing). relay routing,
+    // provider base_url resolution, and sorting are reused.
+    const providers = [{
+      id: provider, type: `links`,
+      attributes: { name: provider, description: ``, base_url: base },
+    }]
+    const res = await search_optimade_structures(provider, providers as never, {
+      formula: String(input.formula),
+      limit: Number(input.limit ?? 5),
+    })
     return {
-      results: (data.data ?? []).map((d) => ({ id: d.id, formula: d.attributes?.chemical_formula_reduced })),
+      results: res.structures.map((s) => ({
+        id: s.id,
+        formula: (s.attributes as { chemical_formula_reduced?: string } | undefined)?.chemical_formula_reduced,
+      })),
     }
   },
 )

@@ -37,8 +37,11 @@ describe(`structure-tools registry`, () => {
 describe(`fetch_optimade tool`, () => {
   it(`is a read tool and routes MP through the relay`, async () => {
     expect(routing.needs_relay(`https://optimade.materialsproject.org/v1/structures`)).toBe(true)
+    // fetch_optimade delegates to search_optimade_structures, whose browser-direct
+    // (relay) path is gated on STATIC_ONLY — set it so MP routes through the relay.
+    ;(globalThis as { __CATGO_STATIC_ONLY__?: boolean }).__CATGO_STATIC_ONLY__ = true
     const spy = vi.spyOn(globalThis, `fetch`).mockResolvedValue(
-      new Response(JSON.stringify({ data: [{ id: `mp-1`, attributes: { chemical_formula_reduced: `NaCl` } }] }), {
+      new Response(JSON.stringify({ data: [{ id: `mp-1`, attributes: { chemical_formula_reduced: `ClNa` } }] }), {
         status: 200, headers: { 'Content-Type': `application/json` },
       }),
     )
@@ -46,6 +49,7 @@ describe(`fetch_optimade tool`, () => {
     expect(out.results[0].id).toBe(`mp-1`)
     expect(spy.mock.calls[0][0]).toContain(routing.RELAY_URL)
     spy.mockRestore()
+    delete (globalThis as { __CATGO_STATIC_ONLY__?: boolean }).__CATGO_STATIC_ONLY__
   })
 })
 
