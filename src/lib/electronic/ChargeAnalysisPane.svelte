@@ -1,6 +1,10 @@
 <script lang="ts">
   import FileSourceDialog from './FileSourceDialog.svelte'
   import { API_BASE } from '$lib/api/config'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     on_load_chgcar,
@@ -134,7 +138,7 @@
       })
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-        throw new Error(err.detail || `Compute diff failed: ${resp.statusText}`)
+        throw new Error(err.detail || t('structure.charge_compute_diff_failed', { reason: resp.statusText }))
       }
 
       const cube_text = await resp.text()
@@ -157,10 +161,10 @@
     ondrop={handle_drop}
   >
     {#if loading}
-      <div class="charge-loading">Loading...</div>
+      <div class="charge-loading">{t('common.loading')}</div>
     {:else}
       <div class="charge-drop-text">
-        <strong>Drag & drop charge file</strong>
+        <strong>{t('structure.charge_drop_file')}</strong>
         <span class="charge-hint">CHGCAR / LOCPOT / ELFCAR / .cube / ACF.dat</span>
       </div>
     {/if}
@@ -168,42 +172,42 @@
 
   <!-- Charge density (CHGCAR) section -->
   <div class="charge-section">
-    <div class="charge-section-title">Charge Density Isosurface</div>
+    <div class="charge-section-title">{t('structure.charge_density_isosurface')}</div>
     <div class="charge-section-desc">
-      Load CHGCAR, LOCPOT, ELFCAR, PARCHG, or .cube for 3D isosurface visualization
+      {t('structure.charge_density_desc')}
     </div>
     <div class="charge-btn-row">
       <label class="charge-btn">
-        Browse Local
+        {t('structure.browse_local')}
         <input type="file" hidden onchange={(e) => {
           const f = (e.target as HTMLInputElement).files?.[0]
           if (f) on_load_chgcar?.(f)
         }} />
       </label>
       <button class="charge-btn" onclick={() => show_chgcar_dialog = true}>
-        Browse Remote
+        {t('structure.browse_remote')}
       </button>
     </div>
   </div>
 
   <!-- Difference charge density section -->
   <div class="charge-section">
-    <div class="charge-section-title">Difference Charge Density</div>
+    <div class="charge-section-title">{t('structure.difference_charge_density')}</div>
     <div class="charge-section-desc">
-      Compute ρ(AB) − ρ(A) − ρ(B) from three CHGCAR files
+      {t('structure.difference_charge_density_desc')}
     </div>
     <div class="diff-slots">
       <button class="diff-slot" onclick={() => pick_diff_file('ab')}>
         <span class="diff-label">AB</span>
-        <span class="diff-file">{diff_file_ab?.name ?? 'Select CHGCAR_AB'}</span>
+        <span class="diff-file">{diff_file_ab?.name ?? t('structure.select_chgcar_ab')}</span>
       </button>
       <button class="diff-slot" onclick={() => pick_diff_file('a')}>
         <span class="diff-label">A</span>
-        <span class="diff-file">{diff_file_a?.name ?? 'Select CHGCAR_A'}</span>
+        <span class="diff-file">{diff_file_a?.name ?? t('structure.select_chgcar_a')}</span>
       </button>
       <button class="diff-slot" onclick={() => pick_diff_file('b')}>
         <span class="diff-label">B</span>
-        <span class="diff-file">{diff_file_b?.name ?? 'Select CHGCAR_B'}</span>
+        <span class="diff-file">{diff_file_b?.name ?? t('structure.select_chgcar_b')}</span>
       </button>
     </div>
     <button
@@ -211,7 +215,7 @@
       disabled={!can_compute}
       onclick={compute_diff}
     >
-      {diff_loading ? 'Computing...' : 'Compute Difference'}
+      {diff_loading ? t('structure.computing') : t('structure.compute_difference')}
     </button>
     {#if diff_error}
       <div class="charge-error">{diff_error}</div>
@@ -220,20 +224,20 @@
 
   <!-- Bader charges section -->
   <div class="charge-section">
-    <div class="charge-section-title">Bader Charge Analysis</div>
+    <div class="charge-section-title">{t('structure.bader_charge_analysis')}</div>
     <div class="charge-section-desc">
-      Load ACF.dat from Bader analysis to color atoms by charge
+      {t('structure.bader_charge_desc')}
     </div>
     <div class="charge-btn-row">
       <label class="charge-btn">
-        Browse Local
+        {t('structure.browse_local')}
         <input type="file" hidden onchange={(e) => {
           const f = (e.target as HTMLInputElement).files?.[0]
           if (f) load_bader_file(f)
         }} />
       </label>
       <button class="charge-btn" onclick={() => show_bader_dialog = true}>
-        Browse Remote
+        {t('structure.browse_remote')}
       </button>
     </div>
   </div>
@@ -245,7 +249,7 @@
 
 {#if show_chgcar_dialog}
   <FileSourceDialog
-    title="Load CHGCAR / LOCPOT"
+    title={t('structure.load_chgcar_locpot')}
     file_types={['CHGCAR', 'LOCPOT', 'ELFCAR', 'PARCHG', 'AECCAR0', 'AECCAR2']}
     onremote_path={handle_remote_chgcar}
     onclose={() => show_chgcar_dialog = false}
@@ -253,7 +257,7 @@
 {/if}
 {#if show_bader_dialog}
   <FileSourceDialog
-    title="Load ACF.dat (Bader)"
+    title={t('structure.load_acf_bader')}
     file_types={['ACF.dat', '.dat']}
     onremote_path={handle_remote_bader}
     onclose={() => show_bader_dialog = false}

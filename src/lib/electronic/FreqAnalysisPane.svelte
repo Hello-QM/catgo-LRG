@@ -1,7 +1,11 @@
 <script lang="ts">
   import { API_BASE } from '$lib/api/config'
   import type { VaspFrequencyData } from '$lib/api/workflow'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     on_play_vibration,
@@ -41,7 +45,7 @@
       const resp = await fetch(`${API_BASE}/freq-analysis/upload`, { method: 'POST', body: form })
       if (!resp.ok) throw new Error(await resp.text())
       const data = await resp.json()
-      if (!data.success) throw new Error(data.message || 'Parse failed')
+      if (!data.success) throw new Error(data.message || t('structure.freq_parse_failed'))
       freq_data = data
     } catch (err: any) {
       error = err.message || String(err)
@@ -63,7 +67,7 @@
       })
       if (!resp.ok) throw new Error(await resp.text())
       const data = await resp.json()
-      if (!data.success) throw new Error(data.message || 'Parse failed')
+      if (!data.success) throw new Error(data.message || t('structure.freq_parse_failed'))
       freq_data = data
     } catch (err: any) {
       error = err.message || String(err)
@@ -157,22 +161,22 @@
       ondrop={handle_drop}
     >
       {#if loading}
-        <div class="freq-loading">Loading...</div>
+        <div class="freq-loading">{t('common.loading')}</div>
       {:else}
         <div class="freq-drop-text">
-          <strong>Drag & drop OUTCAR here</strong>
-          <span>or</span>
+          <strong>{t('structure.freq_drop_outcar')}</strong>
+          <span>{t('common.or')}</span>
         </div>
         <div class="freq-btn-row">
           <label class="freq-browse-btn">
-            Browse Local
+            {t('structure.browse_local')}
             <input type="file" accept="*" hidden onchange={(e) => {
               const f = (e.target as HTMLInputElement).files?.[0]
               if (f) handle_file_upload(f)
             }} />
           </label>
           <button class="freq-browse-btn" onclick={() => show_source_dialog = true}>
-            Browse Remote
+            {t('structure.browse_remote')}
           </button>
         </div>
       {/if}
@@ -184,17 +188,17 @@
     <!-- Frequency data display -->
     <div class="freq-header">
       <span class="freq-summary">
-        {freq_data.num_imaginary} imaginary, {freq_data.real_freqs?.length ?? 0} real frequencies
+        {t('structure.freq_summary', { imaginary: freq_data.num_imaginary ?? 0, real: freq_data.real_freqs?.length ?? 0 })}
       </span>
       <button class="freq-reset-btn" onclick={() => { freq_data = null; gibbs_result = null; vib_playing = false; on_stop_vibration?.() }}>
-        Load New
+        {t('structure.load_new')}
       </button>
     </div>
 
     <!-- Frequency table -->
     <div class="freq-table-section">
       {#if freq_data.imag_freqs?.length}
-        <div class="freq-table-title">Imaginary (cm⁻¹)</div>
+        <div class="freq-table-title">{t('structure.freq_imaginary_cm')}</div>
         <div class="freq-table">
           {#each freq_data.imag_freqs as f}
             <div class="freq-row freq-imag">
@@ -205,7 +209,7 @@
           {/each}
         </div>
       {/if}
-      <div class="freq-table-title">Real (cm⁻¹)</div>
+      <div class="freq-table-title">{t('structure.freq_real_cm')}</div>
       <div class="freq-table">
         {#each (freq_data.real_freqs ?? []) as f}
           <div class="freq-row">
@@ -219,13 +223,13 @@
 
     <!-- Gibbs Calculator -->
     <div class="freq-gibbs-section">
-      <div class="freq-section-title">Gibbs Free Energy Correction</div>
+      <div class="freq-section-title">{t('structure.gibbs_free_energy_correction')}</div>
       <div class="freq-gibbs-form">
         <div class="freq-form-row">
-          <label>Mode</label>
+          <label>{t('structure.mode')}</label>
           <div class="freq-radio-group">
-            <label><input type="radio" bind:group={gibbs_mode} value="adsorbed" /> Adsorbed</label>
-            <label><input type="radio" bind:group={gibbs_mode} value="gas" /> Gas</label>
+            <label><input type="radio" bind:group={gibbs_mode} value="adsorbed" /> {t('structure.adsorbed')}</label>
+            <label><input type="radio" bind:group={gibbs_mode} value="gas" /> {t('structure.gas')}</label>
           </div>
         </div>
         <div class="freq-form-row">
@@ -234,7 +238,7 @@
         </div>
         {#if gibbs_mode === 'adsorbed'}
           <div class="freq-form-row">
-            <label>Cutoff (cm⁻¹)</label>
+            <label>{t('structure.freq_cutoff_cm')}</label>
             <input type="number" bind:value={gibbs_freq_cutoff} step="1" min="0" />
           </div>
         {:else}
@@ -243,12 +247,12 @@
             <input type="number" bind:value={gibbs_pressure_atm} step="0.01" min="0" />
           </div>
           <div class="freq-form-row">
-            <label>Unpaired e⁻</label>
+            <label>{t('structure.unpaired_electrons')}</label>
             <input type="number" bind:value={gibbs_n_unpaired} step="1" min="0" />
           </div>
         {/if}
         <button class="freq-calc-btn" onclick={calculate_gibbs} disabled={gibbs_loading}>
-          {gibbs_loading ? 'Calculating...' : 'Calculate'}
+          {gibbs_loading ? t('structure.calculating') : t('structure.calculate')}
         </button>
       </div>
       {#if gibbs_error}
@@ -269,7 +273,7 @@
             <span>H(T) - E_elec</span>
             <span class="mono">{(gibbs_result.h_corr_ev as number)?.toFixed(6)} eV</span>
           </div>
-          <div class="freq-gibbs-hint">G_total = E_DFT + G_corr</div>
+          <div class="freq-gibbs-hint">{t('structure.gibbs_total_formula')}</div>
         </div>
       {/if}
     </div>
@@ -277,21 +281,21 @@
     <!-- Vibration mode selector -->
     {#if freq_data.eigenvectors?.length && freq_data.positions?.length}
       <div class="freq-vib-section">
-        <div class="freq-section-title">Vibration Modes</div>
+        <div class="freq-section-title">{t('structure.vibration_modes')}</div>
         <div class="freq-form-row">
           <select class="freq-vib-select" bind:value={vib_selected} onchange={() => { if (vib_playing) play_vibration() }}>
             {#each all_modes as mode, i}
-              <option value={i}>{mode.index}: {mode.frequency_cm.toFixed(1)} cm⁻¹{mode.imaginary ? ' (imag)' : ''}</option>
+              <option value={i}>{mode.index}: {mode.frequency_cm.toFixed(1)} cm⁻¹{mode.imaginary ? ` (${t('structure.freq_imag_short')})` : ''}</option>
             {/each}
           </select>
         </div>
         <div class="freq-form-row">
-          <label>Amplitude</label>
+          <label>{t('structure.amplitude')}</label>
           <input type="range" min="0.1" max="2.0" step="0.1" bind:value={vib_amplitude} class="freq-vib-slider" />
           <span class="mono">{vib_amplitude.toFixed(1)} Å</span>
         </div>
         <button class="freq-calc-btn" class:freq-stop-btn={vib_playing} onclick={toggle_vibration}>
-          {vib_playing ? '■ Stop' : '▶ Play'}
+          {vib_playing ? `■ ${t('common.stop')}` : `▶ ${t('structure.play')}`}
         </button>
       </div>
     {/if}
@@ -300,7 +304,7 @@
 
 {#if show_source_dialog}
   <FileSourceDialog
-    title="Load OUTCAR"
+    title={t('structure.load_outcar')}
     file_types={['.OUTCAR', 'OUTCAR']}
     onremote_path={handle_remote}
     onclose={() => show_source_dialog = false}
