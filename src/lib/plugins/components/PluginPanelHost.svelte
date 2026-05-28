@@ -8,6 +8,9 @@
    */
   import { pluginManager } from '../manager.svelte'
   import { SettingsSection } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   interface Props {
     location: string
@@ -83,7 +86,7 @@
           }
         } catch (err) {
           console.error(`[PluginPanelHost] Error rendering panel ${panel.id}:`, err)
-          container.innerHTML = `<p class="plugin-error">Error rendering panel</p>`
+          container.innerHTML = `<p class="plugin-error">${t('structure.plugin_error_rendering_panel')}</p>`
         }
       }
     }
@@ -96,9 +99,9 @@
 </script>
 
 {#if pluginManager.panelPlugins.length > 0 && enabledPanels.length === 0}
-  <SettingsSection title="Plugins" current_values={{}}>
+  <SettingsSection title={t('structure.plugins')} current_values={{}}>
     <p class="plugin-placeholder">
-      No active plugins for this panel. Enable a plugin in the Plugins view.
+      {t('structure.plugin_no_active_for_panel')}
     </p>
   </SettingsSection>
 {/if}
@@ -120,7 +123,7 @@
         {/if}
       {:else}
         <p class="plugin-placeholder">
-          Panel component not found: {panel.id}
+          {t('structure.plugin_panel_component_missing', { id: panel.id })}
         </p>
       {/if}
     </div>

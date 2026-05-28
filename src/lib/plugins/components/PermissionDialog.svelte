@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { Permission, PluginManifest } from '../sdk/types'
   import { getPermissionDescription, getPermissionRisk } from '../loader'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   interface Props {
     manifest: PluginManifest
@@ -45,7 +49,7 @@
 >
   <div class="dialog">
     <header>
-      <h2>Install Plugin</h2>
+      <h2>{t('structure.install_plugin')}</h2>
     </header>
 
     <div class="plugin-info">
@@ -56,16 +60,16 @@
       {/if}
       {#if manifest.author}
         <p class="author">
-          By {typeof manifest.author === 'string'
+          {t('structure.plugin_author_by', { author: typeof manifest.author === 'string'
             ? manifest.author
-            : manifest.author?.name ?? 'Unknown'}
+            : manifest.author?.name ?? t('common.unknown') })}
         </p>
       {/if}
     </div>
 
     {#if permissions.length > 0}
       <div class="permissions">
-        <h4>Requested Permissions</h4>
+        <h4>{t('structure.plugin_requested_permissions')}</h4>
         <ul>
           {#each permissions as permission}
             {@const risk = getPermissionRisk(permission)}
@@ -83,13 +87,13 @@
       </div>
     {:else}
       <div class="permissions">
-        <p class="no-permissions">This plugin requires no special permissions.</p>
+        <p class="no-permissions">{t('structure.plugin_no_special_permissions')}</p>
       </div>
     {/if}
 
     <footer>
-      <button class="cancel" onclick={(e) => { e.stopPropagation(); onCancel() }}>Cancel</button>
-      <button class="confirm" onclick={(e) => { e.stopPropagation(); onConfirm() }}>Install</button>
+      <button class="cancel" onclick={(e) => { e.stopPropagation(); onCancel() }}>{t('common.cancel')}</button>
+      <button class="confirm" onclick={(e) => { e.stopPropagation(); onConfirm() }}>{t('structure.install')}</button>
     </footer>
   </div>
 </div>

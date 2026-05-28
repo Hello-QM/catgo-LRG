@@ -2,6 +2,10 @@
   import { loadFromZip, loadFromUrl, type LoadedPluginData } from '../loader'
   import { pluginManager } from '../manager.svelte'
   import PermissionDialog from './PermissionDialog.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   interface Props {
     onInstalled?: () => void
@@ -36,7 +40,7 @@
       console.log('[PluginInstaller] Processing ZIP file:', file.name)
       await processFile(file)
     } else {
-      error = 'Please drop a ZIP file'
+      error = t('structure.plugin_drop_zip_required')
     }
   }
 
@@ -57,7 +61,7 @@
 
   async function handleUrlSubmit() {
     if (!urlInput.trim()) {
-      error = 'Please enter a URL'
+      error = t('structure.plugin_enter_url')
       return
     }
 
@@ -90,7 +94,7 @@
       onInstalled?.()
     } catch (err) {
       console.error('[PluginInstaller] Installation error:', err)
-      error = err instanceof Error ? err.message : 'Installation failed'
+      error = err instanceof Error ? err.message : t('structure.plugin_installation_failed')
     }
 
     loading = false
@@ -123,9 +127,9 @@
 
 <div class="installer">
   <header>
-    <h2>Install Plugin</h2>
+    <h2>{t('structure.install_plugin')}</h2>
     {#if onClose}
-      <button class="close-btn" onclick={onClose} aria-label="Close">X</button>
+      <button class="close-btn" onclick={onClose} aria-label={t('common.close')}>X</button>
     {/if}
   </header>
 
@@ -135,14 +139,14 @@
       class:active={mode === 'select'}
       onclick={() => (mode = 'select')}
     >
-      Upload ZIP
+      {t('structure.plugin_upload_zip')}
     </button>
     <button
       class="tab"
       class:active={mode === 'url'}
       onclick={() => (mode = 'url')}
     >
-      From URL
+      {t('structure.plugin_from_url')}
     </button>
   </div>
 
@@ -159,10 +163,10 @@
       >
         <div class="drop-content">
           <span class="drop-icon">+</span>
-          <p>Drag & drop plugin ZIP file here</p>
-          <p class="or">or</p>
+          <p>{t('structure.plugin_drag_drop_zip')}</p>
+          <p class="or">{t('common.or')}</p>
           <label class="file-btn">
-            Browse Files
+            {t('common.browse_files')}
             <input
               type="file"
               accept=".zip"
@@ -174,7 +178,7 @@
       </div>
     {:else}
       <div class="url-input">
-        <label for="plugin-url">Plugin URL</label>
+        <label for="plugin-url">{t('structure.plugin_url')}</label>
         <input
           id="plugin-url"
           type="url"
@@ -187,12 +191,11 @@
           onclick={handleUrlSubmit}
           disabled={loading || !urlInput.trim()}
         >
-          {loading ? 'Loading...' : 'Fetch'}
+          {loading ? t('common.loading') : t('structure.plugin_fetch')}
         </button>
       </div>
       <p class="url-hint">
-        Enter a URL to a plugin ZIP file or a plugin directory containing
-        catgo-plugin.json
+        {t('structure.plugin_url_hint')}
       </p>
     {/if}
 
@@ -206,7 +209,7 @@
     {#if loading}
       <div class="loading">
         <div class="spinner"></div>
-        <span>Loading plugin...</span>
+        <span>{t('structure.plugin_loading')}</span>
       </div>
     {/if}
   </div>

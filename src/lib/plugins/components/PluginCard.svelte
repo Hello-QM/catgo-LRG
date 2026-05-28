@@ -1,6 +1,10 @@
 <script lang="ts">
   import type { LoadedPlugin } from '../sdk/types'
   import { pluginManager } from '../manager.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   interface Props {
     plugin: LoadedPlugin
@@ -30,7 +34,7 @@
   async function uninstall() {
     if (
       confirm(
-        `Are you sure you want to uninstall "${manifest.displayName || manifest.name}"?`
+        t('structure.plugin_uninstall_confirm', { name: manifest.displayName || manifest.name })
       )
     ) {
       await pluginManager.uninstallPlugin(plugin.id)
@@ -61,22 +65,22 @@
   <div class="plugin-meta">
     {#if manifest.author}
       <span class="author">
-        By {typeof manifest.author === 'string'
+        {t('structure.plugin_author_by', { author: typeof manifest.author === 'string'
           ? manifest.author
-          : manifest.author?.name ?? 'Unknown'}
+          : manifest.author?.name ?? t('common.unknown') })}
       </span>
     {/if}
   </div>
 
   <div class="contributions">
     {#if hasViews}
-      <span class="badge views">Views</span>
+      <span class="badge views">{t('structure.plugin_views')}</span>
     {/if}
     {#if hasPanels}
-      <span class="badge panels">Panels</span>
+      <span class="badge panels">{t('structure.plugin_panels')}</span>
     {/if}
     {#if hasHooks}
-      <span class="badge hooks">Hooks</span>
+      <span class="badge hooks">{t('structure.plugin_hooks')}</span>
     {/if}
     {#if manifest.catgo?.frontend?.wasm}
       <span class="badge wasm">WASM</span>
@@ -84,8 +88,8 @@
   </div>
 
   <div class="plugin-actions">
-    <button class="action-btn settings" disabled>Settings</button>
-    <button class="action-btn uninstall" onclick={uninstall}>Uninstall</button>
+    <button class="action-btn settings" disabled>{t('common.settings')}</button>
+    <button class="action-btn uninstall" onclick={uninstall}>{t('structure.uninstall')}</button>
   </div>
 </div>
 

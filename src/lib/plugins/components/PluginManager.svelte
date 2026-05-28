@@ -3,6 +3,10 @@
   import PluginCard from './PluginCard.svelte'
   import PluginInstaller from './PluginInstaller.svelte'
   import { onMount } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   let showInstaller = $state(false)
   let loading = $state(true)
@@ -22,11 +26,11 @@
 <div class="plugin-manager">
   <header>
     <div class="header-content">
-      <h1>Plugins</h1>
-      <p class="subtitle">Extend CatGo with custom functionality</p>
+      <h1>{t('structure.plugins')}</h1>
+      <p class="subtitle">{t('structure.plugins_extend_catgo')}</p>
     </div>
     <button class="add-btn" onclick={() => (showInstaller = !showInstaller)}>
-      {showInstaller ? 'Cancel' : '+ Add Plugin'}
+      {showInstaller ? t('common.cancel') : t('structure.add_plugin')}
     </button>
   </header>
 
@@ -43,18 +47,17 @@
     {#if loading}
       <div class="loading">
         <div class="spinner"></div>
-        <span>Loading plugins...</span>
+        <span>{t('structure.loading_plugins')}</span>
       </div>
     {:else if plugins.length === 0}
       <div class="empty-state">
         <div class="empty-icon">+</div>
-        <h2>No plugins installed</h2>
+        <h2>{t('structure.plugins_none_installed_title')}</h2>
         <p>
-          Install plugins to extend CatGo with new views, panels, and
-          functionality.
+          {t('structure.plugins_install_desc')}
         </p>
         <button class="install-btn" onclick={() => (showInstaller = true)}>
-          Install a Plugin
+          {t('structure.install_plugin')}
         </button>
       </div>
     {:else}
@@ -68,9 +71,9 @@
 
   <footer>
     <div class="footer-info">
-      <span>{plugins.length} plugin{plugins.length !== 1 ? 's' : ''} installed</span>
+      <span>{t('structure.plugins_installed_count', { n: plugins.length })}</span>
       <span class="separator"></span>
-      <span>{plugins.filter((p) => p.enabled).length} enabled</span>
+      <span>{t('structure.plugins_enabled_count', { n: plugins.filter((p) => p.enabled).length })}</span>
     </div>
   </footer>
 </div>
