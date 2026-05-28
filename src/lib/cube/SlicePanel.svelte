@@ -8,6 +8,9 @@
     type ColormapName,
   } from './slice'
   import { colors } from '$lib/state.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     slice_result,
@@ -60,11 +63,11 @@
 
 <div class="slice-panel">
   <div class="slice-panel-header">
-    <span class="slice-panel-title">Slice</span>
+    <span class="slice-panel-title">{t('structure.cube_slice')}</span>
     <div class="slice-panel-controls">
       <button
         class="slice-layout-btn"
-        title="Toggle horizontal/vertical layout"
+        title={t('structure.cube_toggle_slice_layout')}
         onclick={on_layout_toggle}
       >&#x2194;</button>
       <button
@@ -73,7 +76,7 @@
       >PNG</button>
       <button
         class="slice-close-btn"
-        title="Close slice panel"
+        title={t('structure.cube_close_slice_panel')}
         onclick={on_close}
       >&times;</button>
     </div>
@@ -82,7 +85,7 @@
   <div class="slice-plot-area">
     <div class="slice-canvases">
       <div class="slice-view-single">
-        <span class="slice-view-label">Heatmap</span>
+        <span class="slice-view-label">{t('structure.cube_heatmap')}</span>
         <div class="canvas-with-colorbar">
           <canvas bind:this={heatmap_canvas} class="slice-canvas"></canvas>
           {#if slice_range}
@@ -98,7 +101,7 @@
         </div>
       </div>
       <div class="slice-view-single">
-        <span class="slice-view-label">Atoms</span>
+        <span class="slice-view-label">{t('structure.atoms')}</span>
         <div class="canvas-with-colorbar">
           <canvas bind:this={atoms_canvas} class="slice-canvas"></canvas>
         </div>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CubeState, IsosurfaceResult, CubeAtom } from './api'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     extractIsosurface,
     uploadCubeFile,
@@ -17,6 +18,9 @@
     onslice?: (blob: Blob) => void
   } = $props()
 
+  load_i18n_module('common')
+  load_i18n_module('structure')
+
   let file_input: HTMLInputElement
   let selecting_atoms = $state(false)
 
@@ -31,7 +35,7 @@
       cube_state.filepath = result.path
       await handle_extract_isosurface()
     } catch (err) {
-      cube_state.error = `Upload failed: ${(err as Error).message}`
+      cube_state.error = t('structure.upload_failed', { error: (err as Error).message })
     } finally {
       cube_state.loading = false
     }
@@ -51,7 +55,7 @@
       cube_state.header = result.header
       onisosurface?.(result)
     } catch (err) {
-      cube_state.error = `Isosurface extraction failed: ${(err as Error).message}`
+      cube_state.error = t('structure.cube_isosurface_failed', { error: (err as Error).message })
     } finally {
       cube_state.loading = false
     }
@@ -100,7 +104,7 @@
       })
       onslice?.(blob)
     } catch (err) {
-      cube_state.error = `Slice extraction failed: ${(err as Error).message}`
+      cube_state.error = t('structure.cube_slice_failed', { error: (err as Error).message })
     } finally {
       cube_state.loading = false
     }
@@ -196,7 +200,7 @@
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
-      cube_state.error = `Export failed: ${(err as Error).message}`
+      cube_state.error = t('structure.cube_export_failed', { error: (err as Error).message })
     } finally {
       cube_state.loading = false
     }
@@ -221,7 +225,7 @@
 
 <div class="cube-controls">
   <section class="section">
-    <h4>Cube File</h4>
+    <h4>{t('structure.cube_file')}</h4>
     <input
       type="file"
       accept=".cube,.cub"
@@ -230,9 +234,9 @@
     />
     {#if cube_state.header}
       <div class="info">
-        <span>{cube_state.header.n_atoms} atoms</span>
+        <span>{t('structure.md_atoms_count', { n: cube_state.header.n_atoms })}</span>
         <span>
-          {cube_state.header.dims[0]}x{cube_state.header.dims[1]}x{cube_state.header.dims[2]} grid
+          {t('structure.cube_grid_dims', { x: cube_state.header.dims[0], y: cube_state.header.dims[1], z: cube_state.header.dims[2] })}
         </span>
       </div>
     {/if}
@@ -240,9 +244,9 @@
 
   {#if cube_state.filepath}
     <section class="section">
-      <h4>Isosurface</h4>
+      <h4>{t('structure.isosurface')}</h4>
       <label>
-        Isovalue
+        {t('structure.cube_isovalue')}
         <input
           type="range"
           min="0.001"
@@ -263,11 +267,11 @@
 
       <label>
         <input type="checkbox" bind:checked={cube_state.dual} />
-        Show ± isosurfaces
+        {t('structure.cube_show_pm_isosurfaces')}
       </label>
 
       <label>
-        Opacity
+        {t('structure.opacity')}
         <input
           type="range"
           min="0.1"
@@ -279,24 +283,24 @@
 
       <label>
         <input type="checkbox" bind:checked={cube_state.wireframe} />
-        Wireframe
+        {t('structure.cube_wireframe')}
       </label>
 
       <div class="color-row">
         <label>
-          + Color
+          {t('structure.cube_positive_color')}
           <input type="color" bind:value={cube_state.positive_color} />
         </label>
         {#if cube_state.dual}
           <label>
-            - Color
+            {t('structure.cube_negative_color')}
             <input type="color" bind:value={cube_state.negative_color} />
           </label>
         {/if}
       </div>
 
       <label>
-        Mesh Simplification (Å)
+        {t('structure.cube_mesh_simplification')}
         <input
           type="number"
           min="0"
@@ -308,17 +312,17 @@
       </label>
 
       <button onclick={handle_extract_isosurface} disabled={cube_state.loading}>
-        {cube_state.loading ? `Processing...` : `Update Isosurface`}
+        {cube_state.loading ? t('structure.processing') : t('structure.cube_update_isosurface')}
       </button>
     </section>
 
     <section class="section">
-      <h4>Slice Plane</h4>
+      <h4>{t('structure.cube_slice_plane')}</h4>
 
       <div class="slice-info">
         {#if cube_state.slice_plane.selected_atoms.length > 0 && cube_state.header}
           <span class="selected-atoms">
-            Atoms:
+            {t('structure.atoms')}:
             {#each cube_state.slice_plane.selected_atoms as idx}
               <span class="atom-tag">
                 {atom_symbol(cube_state.header.atoms[idx].atomic_number)}{idx + 1}
@@ -326,7 +330,7 @@
             {/each}
           </span>
         {:else}
-          <span class="hint">Select 3 atoms to define a plane</span>
+          <span class="hint">{t('structure.cube_select_3_atoms_plane')}</span>
         {/if}
       </div>
 
@@ -335,18 +339,18 @@
         class:active={selecting_atoms}
       >
         {selecting_atoms
-          ? `Selecting... (${cube_state.slice_plane.selected_atoms.length}/3)`
-          : `Pick Atoms`}
+          ? t('structure.cube_selecting_atoms_count', { n: cube_state.slice_plane.selected_atoms.length })
+          : t('structure.cube_pick_atoms')}
       </button>
 
       {#if cube_state.slice_plane.selected_atoms.length >= 2}
         <label>
           <input type="checkbox" bind:checked={cube_state.slice_plane.show_plane} />
-          Show plane preview
+          {t('structure.cube_show_plane_preview')}
         </label>
 
         <label>
-          Tilt X
+          {t('structure.cube_tilt_x')}
           <input
             type="range"
             min="-90"
@@ -358,7 +362,7 @@
         </label>
 
         <label>
-          Tilt Y
+          {t('structure.cube_tilt_y')}
           <input
             type="range"
             min="-90"
@@ -370,7 +374,7 @@
         </label>
 
         <label>
-          Tilt Z
+          {t('structure.cube_tilt_z')}
           <input
             type="range"
             min="-90"
@@ -382,13 +386,13 @@
         </label>
 
         <button onclick={handle_extract_plane_slice} disabled={cube_state.loading}>
-          {cube_state.loading ? `Extracting...` : `Extract Slice`}
+          {cube_state.loading ? t('structure.cube_extracting') : t('structure.cube_extract_slice')}
         </button>
       {/if}
     </section>
 
     <section class="section">
-      <h4>Export</h4>
+      <h4>{t('common.export')}</h4>
       <div class="btn-row">
         <button onclick={() => handle_export(`glb`)} disabled={cube_state.loading}>
           GLB

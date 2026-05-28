@@ -4,6 +4,9 @@
   import CubeControls from './CubeControls.svelte'
   import type { CubeState, IsosurfaceResult, CubeMesh, CubeAtom } from './api'
   import { uploadCubeFile, extractIsosurface } from './api'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     initial_file = undefined,
@@ -188,10 +191,10 @@
     {#if slice_image_url}
       <div class="slice-preview">
         <div class="slice-header">
-          <h4>Slice Result</h4>
-          <button class="export-btn" onclick={download_slice}>Save PNG</button>
+          <h4>{t('structure.cube_slice_result')}</h4>
+          <button class="export-btn" onclick={download_slice}>{t('structure.cube_save_png')}</button>
         </div>
-        <img src={slice_image_url} alt="Cube plane slice" />
+        <img src={slice_image_url} alt={t('structure.cube_plane_slice_alt')} />
       </div>
     {/if}
   </div>
