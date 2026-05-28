@@ -1,5 +1,9 @@
 <script lang="ts">
   import { API_BASE } from '$lib/api/config'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   let status = $state<any>(null)
   let errors = $state<any[]>([])
@@ -24,19 +28,19 @@
 
 <div class="diagnostics">
   <div class="diag-header">
-    <h3>System Diagnostics</h3>
-    <button class="diag-refresh" onclick={refresh}>Refresh</button>
+    <h3>{t('structure.system_diagnostics')}</h3>
+    <button class="diag-refresh" onclick={refresh}>{t('common.refresh')}</button>
   </div>
 
   {#if loading}
-    <p class="diag-loading">Loading...</p>
+    <p class="diag-loading">{t('common.loading')}</p>
   {:else}
     <div class="diag-section">
-      <h4>Status</h4>
+      <h4>{t('common.status')}</h4>
       {#if status}
         <div class="diag-status-row">
-          <span>Backend: <span class="diag-ok">{status.backend}</span></span>
-          <span>HPC: <span class="diag-mono">{status.hpc_connections}</span> connections</span>
+          <span>{t('structure.backend_status', { status: status.backend })}</span>
+          <span>{t('structure.hpc_connections_count', { n: status.hpc_connections })}</span>
         </div>
         {#if status.hpc_sessions?.length}
           <div class="diag-sessions">
@@ -46,14 +50,14 @@
           </div>
         {/if}
       {:else}
-        <p class="diag-error">Backend unreachable</p>
+        <p class="diag-error">{t('structure.backend_unreachable')}</p>
       {/if}
     </div>
 
     <div class="diag-section">
-      <h4>Recent Errors ({errors.length})</h4>
+      <h4>{t('structure.recent_errors_count', { n: errors.length })}</h4>
       {#if errors.length === 0}
-        <p class="diag-empty">No recent errors</p>
+        <p class="diag-empty">{t('structure.no_recent_errors')}</p>
       {:else}
         <div class="diag-error-list">
           {#each errors as err}

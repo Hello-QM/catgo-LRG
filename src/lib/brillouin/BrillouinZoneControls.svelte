@@ -1,6 +1,9 @@
 <script lang="ts">
   import { DraggablePane, SettingsSection } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { CameraProjection } from '$lib/settings'
+
+  load_i18n_module('structure')
 
   let {
     controls_open = $bindable(false),
@@ -28,10 +31,10 @@
   open_icon="Cross"
   closed_icon="Settings"
   pane_props={{ class: `bz-controls` }}
-  toggle_props={{ class: `controls-toggle`, title: `Brillouin zone controls` }}
+  toggle_props={{ class: `controls-toggle`, title: t('structure.brillouin_zone_controls') }}
 >
   <SettingsSection
-    title="Brillouin Zone Controls"
+    title={t('structure.brillouin_zone_controls')}
     current_values={{ bz_order, show_vectors }}
     on_reset={() => {
       bz_order = 1
@@ -40,21 +43,21 @@
     style="display: flex; gap: 2ex; flex-wrap: wrap"
   >
     <label>
-      <span>Order:</span>
+      <span>{t('structure.order')}:</span>
       <select bind:value={bz_order}>
-        <option value={1}>1st BZ</option>
-        <option value={2}>2nd BZ</option>
-        <option value={3}>3rd BZ</option>
+        <option value={1}>{t('structure.bz_order_1')}</option>
+        <option value={2}>{t('structure.bz_order_2')}</option>
+        <option value={3}>{t('structure.bz_order_3')}</option>
       </select>
     </label>
     <label>
-      <span>Show Vectors:</span>
+      <span>{t('structure.show_vectors')}:</span>
       <input type="checkbox" bind:checked={show_vectors} />
     </label>
   </SettingsSection>
 
   <SettingsSection
-    title="Surface"
+    title={t('structure.surface')}
     current_values={{ surface_color, surface_opacity }}
     on_reset={() => {
       surface_color = `#4488ff`
@@ -62,18 +65,18 @@
     }}
   >
     <label>
-      <span>Color:</span>
+      <span>{t('structure.color')}:</span>
       <input type="color" bind:value={surface_color} />
     </label>
     <label>
-      <span>Opacity:</span>
+      <span>{t('structure.opacity')}:</span>
       <input type="range" min="0" max="1" step="0.01" bind:value={surface_opacity} />
       <span class="value">{surface_opacity.toFixed(2)}</span>
     </label>
   </SettingsSection>
 
   <SettingsSection
-    title="Edges"
+    title={t('structure.edges')}
     current_values={{ edge_color, edge_width }}
     on_reset={() => {
       edge_color = `#000000`
@@ -81,28 +84,28 @@
     }}
   >
     <label>
-      <span>Color:</span>
+      <span>{t('structure.color')}:</span>
       <input type="color" bind:value={edge_color} />
     </label>
     <label>
-      <span>Width:</span>
+      <span>{t('structure.width')}:</span>
       <input type="range" min="0.01" max="0.2" step="0.01" bind:value={edge_width} />
       <span class="value">{edge_width.toFixed(2)}</span>
     </label>
   </SettingsSection>
 
   <SettingsSection
-    title="Camera"
+    title={t('structure.camera')}
     current_values={{ camera_projection }}
     on_reset={() => {
       camera_projection = `perspective`
     }}
   >
     <label>
-      <span>Projection:</span>
+      <span>{t('structure.projection')}:</span>
       <select bind:value={camera_projection}>
-        <option value="perspective">Perspective</option>
-        <option value="orthographic">Orthographic</option>
+        <option value="perspective">{t('structure.perspective')}</option>
+        <option value="orthographic">{t('structure.orthographic')}</option>
       </select>
     </label>
   </SettingsSection>

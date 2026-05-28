@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Icon, Spinner, toggle_fullscreen } from '$lib'
   import { decompress_file, handle_url_drop, load_from_url } from '$lib/io'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { Vec3 } from '$lib/math'
   import { type CameraProjection, DEFAULTS } from '$lib/settings'
   import type { PymatgenStructure } from '$lib/structure'
@@ -16,6 +17,9 @@
   import BrillouinZoneScene from './BrillouinZoneScene.svelte'
   import { compute_brillouin_zone, reciprocal_lattice } from './compute'
   import type { BrillouinZoneData } from './types'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   type BZHandlerData = {
     structure?: PymatgenStructure
@@ -261,7 +265,7 @@
   class:dragover
   class:active={info_pane_open || controls_open || export_pane_open}
   role="region"
-  aria-label="Brillouin zone viewer"
+  aria-label={t('structure.brillouin_zone_viewer')}
   bind:this={wrapper}
   bind:clientWidth={width}
   bind:clientHeight={height}
@@ -283,11 +287,11 @@
 >
   {@render children?.({ structure, bz_data })}
   {#if loading}
-    <Spinner text="Loading structure..." {...spinner_props} />
+    <Spinner text={t('structure.loading_structure')} {...spinner_props} />
   {:else if error_msg}
     <div class="error-state">
       <p class="error">{error_msg}</p>
-      <button onclick={() => (error_msg = undefined)}>Dismiss</button>
+      <button onclick={() => (error_msg = undefined)}>{t('common.dismiss')}</button>
     </div>
   {:else if structure && `lattice` in structure}
     <section class:visible={visible_buttons} class="control-buttons">
@@ -300,7 +304,7 @@
           <button
             type="button"
             onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
-            title="{fullscreen ? `Exit` : `Enter`} fullscreen"
+            title={fullscreen ? t('structure.exit_fullscreen') : t('structure.enter_fullscreen')}
             aria-pressed={fullscreen}
             class="fullscreen-toggle"
             style="padding: 0"
@@ -362,12 +366,12 @@
       </div>
     {/if}
   {:else if structure}
-    <p class="warn">Structure must have a lattice to compute Brillouin zone</p>
+    <p class="warn">{t('structure.bz_requires_lattice')}</p>
   {:else}
     <div class="empty-state">
-      <h3>Drop Structure File</h3>
+      <h3>{t('structure.drop_structure_file')}</h3>
       <p>
-        Supports CIF, POSCAR, JSON, (ext)XYZ, (+ .gz)
+        {t('structure.bz_supported_formats')}
       </p>
     </div>
   {/if}

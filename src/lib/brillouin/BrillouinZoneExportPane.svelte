@@ -1,10 +1,13 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
   import { export_canvas_as_png } from '$lib/io/export'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
   import type { Camera, Scene } from 'three'
   import type { BrillouinZoneData } from './types'
+
+  load_i18n_module('structure')
 
   let {
     export_pane_open = $bindable(false),
@@ -83,17 +86,17 @@
   pane_props={{ ...rest, class: `export-pane ${rest.class ?? ``}` }}
   toggle_props={{
     class: `bz-export-toggle`,
-    title: export_pane_open ? `` : `Export Brillouin zone`,
+    title: export_pane_open ? `` : t('structure.export_brillouin_zone'),
   }}
 >
-  <h4>Export as image</h4>
+  <h4>{t('structure.export_as_image')}</h4>
   <label>
     PNG
     <button
       type="button"
       onclick={export_as_png}
       disabled={!scene || !camera}
-      title="PNG ({png_dpi} DPI)"
+      title={t('structure.png_dpi_title', { dpi: png_dpi })}
     >
       ⬇
     </button>
@@ -102,16 +105,16 @@
       min={72}
       max={600}
       bind:value={png_dpi}
-      title="Export resolution in dots per inch"
+      title={t('structure.export_resolution_dpi')}
     />)
   </label>
 
   <h4
     {@attach tooltip({
-      content: `Includes vertices, faces, edges, and reciprocal lattice vectors`,
+      content: t('structure.bz_json_tooltip'),
     })}
   >
-    Export as data
+    {t('structure.export_as_data')}
   </h4>
   <label>
     JSON
@@ -119,7 +122,7 @@
       type="button"
       onclick={export_as_json}
       disabled={!bz_data}
-      title="Download JSON"
+      title={t('structure.download_json')}
     >
       ⬇
     </button>
@@ -127,7 +130,7 @@
       type="button"
       onclick={copy_json}
       disabled={!bz_data}
-      title="Copy JSON to clipboard"
+      title={t('structure.copy_json_clipboard')}
     >
       {copy_status ? copy_confirm : `📋`}
     </button>
