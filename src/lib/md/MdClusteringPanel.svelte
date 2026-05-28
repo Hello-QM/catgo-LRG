@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type {
     RMSDClusterRequest,
     RMSDClusterResponse,
@@ -10,6 +11,8 @@
     DimReduceResponse,
     DimReduceClusteringParams,
   } from './types'
+
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -97,13 +100,13 @@
           y: mask.map((j) => embedding[j][1]),
           type: `scatter` as const,
           mode: `markers` as const,
-          name: label === -1 ? `Noise` : `Cluster ${label}`,
+          name: label === -1 ? t('structure.md_noise') : t('structure.md_cluster_label', { label }),
           marker: {
             color: label === -1 ? `#666` : CLUSTER_COLORS[idx % CLUSTER_COLORS.length],
             size: 6,
             opacity: label === -1 ? 0.4 : 0.7,
           },
-          text: mask.map((j) => `Frame ${frame_indices[j]}, Cluster ${label === -1 ? `Noise` : label}`),
+          text: mask.map((j) => t('structure.md_frame_cluster_hover', { frame: frame_indices[j], cluster: label === -1 ? t('structure.md_noise') : label })),
           hoverinfo: `text+name`,
         }
       })
@@ -123,12 +126,12 @@
               size: 6,
               opacity: 0.7,
               colorbar: {
-                title: `Frame`,
+                title: t('structure.md_frame'),
                 titlefont: { color: `#ccc` },
                 tickfont: { color: `#ccc` },
               },
             },
-            text: frame_indices.map((i) => `Frame ${i}`),
+            text: frame_indices.map((i) => t('structure.md_frame_index', { frame: i })),
             hoverinfo: `text`,
             showlegend: false,
           },
@@ -173,13 +176,13 @@
           z: mask.map((j) => embedding[j][2]),
           type: `scatter3d` as const,
           mode: `markers` as const,
-          name: label === -1 ? `Noise` : `Cluster ${label}`,
+          name: label === -1 ? t('structure.md_noise') : t('structure.md_cluster_label', { label }),
           marker: {
             color: label === -1 ? `#666` : CLUSTER_COLORS[idx % CLUSTER_COLORS.length],
             size: 3,
             opacity: label === -1 ? 0.4 : 0.7,
           },
-          text: mask.map((j) => `Frame ${frame_indices[j]}, Cluster ${label === -1 ? `Noise` : label}`),
+          text: mask.map((j) => t('structure.md_frame_cluster_hover', { frame: frame_indices[j], cluster: label === -1 ? t('structure.md_noise') : label })),
           hoverinfo: `text+name`,
         }
       })
@@ -199,12 +202,12 @@
               size: 3,
               opacity: 0.7,
               colorbar: {
-                title: `Frame`,
+                title: t('structure.md_frame'),
                 titlefont: { color: `#ccc` },
                 tickfont: { color: `#ccc` },
               },
             },
-            text: frame_indices.map((i) => `Frame ${i}`),
+            text: frame_indices.map((i) => t('structure.md_frame_index', { frame: i })),
             hoverinfo: `text`,
             showlegend: false,
           },
@@ -264,7 +267,7 @@
 
       rmsd_result = await resp.json()
     } catch (e: any) {
-      rmsd_error = e.message || `RMSD clustering failed`
+      rmsd_error = e.message || t('structure.md_rmsd_clustering_failed')
     } finally {
       rmsd_computing = false
     }
@@ -280,7 +283,7 @@
       `PC`,
       rmsd_result.pca_explained_variance,
     )
-    on_plot?.({ traces, title: `RMSD Clustering (PCA projection)`, x_label, y_label })
+    on_plot?.({ traces, title: t('structure.md_rmsd_clustering_pca'), x_label, y_label })
   })
 
   // =========================================================================
@@ -320,7 +323,7 @@
       if (cv_type === `distances` || (cv_type === `mixed` && cv_mixed_distances)) {
         const pairs = parse_int_groups(cv_pairs_text, 2)
         if (!pairs && (cv_type === `distances` || cv_mixed_distances)) {
-          throw new Error(`Invalid atom pairs. Use format: 0,1 ; 2,3 ; ...`)
+          throw new Error(t('structure.md_invalid_atom_pairs'))
         }
         cv_params.atom_pairs = pairs
       }
@@ -328,7 +331,7 @@
       if (cv_type === `angles` || (cv_type === `mixed` && cv_mixed_angles)) {
         const triplets = parse_int_groups(cv_triplets_text, 3)
         if (!triplets && (cv_type === `angles` || cv_mixed_angles)) {
-          throw new Error(`Invalid atom triplets. Use format: 0,1,2 ; 3,4,5 ; ...`)
+          throw new Error(t('structure.md_invalid_atom_triplets'))
         }
         cv_params.atom_triplets = triplets
       }
@@ -336,7 +339,7 @@
       if (cv_type === `dihedrals` || (cv_type === `mixed` && cv_mixed_dihedrals)) {
         const quartets = parse_int_groups(cv_quartets_text, 4)
         if (!quartets && (cv_type === `dihedrals` || cv_mixed_dihedrals)) {
-          throw new Error(`Invalid atom quartets. Use format: 0,1,2,3 ; 4,5,6,7 ; ...`)
+          throw new Error(t('structure.md_invalid_atom_quartets'))
         }
         cv_params.atom_quartets = quartets
       }
@@ -372,7 +375,7 @@
 
       cv_result = await resp.json()
     } catch (e: any) {
-      cv_error = e.message || `CV clustering failed`
+      cv_error = e.message || t('structure.md_cv_clustering_failed')
     } finally {
       cv_computing = false
     }
@@ -388,7 +391,7 @@
       `PC`,
       cv_result.pca_explained_variance,
     )
-    on_plot?.({ traces, title: `CV Clustering (PCA projection)`, x_label, y_label })
+    on_plot?.({ traces, title: t('structure.md_cv_clustering_pca'), x_label, y_label })
   })
 
   // =========================================================================
@@ -502,7 +505,7 @@
 
       dr_result = await resp.json()
     } catch (e: any) {
-      dr_error = e.message || `Dimensionality reduction failed`
+      dr_error = e.message || t('structure.md_dim_reduce_failed')
     } finally {
       dr_computing = false
     }
@@ -556,11 +559,11 @@
        Section 1: RMSD-based Clustering
        =================================================================== -->
   <details open>
-    <summary>RMSD-based Clustering</summary>
+    <summary>{t('structure.md_rmsd_based_clustering')}</summary>
 
     <div class="param-grid">
       <label>
-        Method
+        {t('structure.method')}
         <select bind:value={rmsd_method}>
           <option value="dbscan">DBSCAN</option>
           <option value="kmeans">KMeans</option>
@@ -570,49 +573,49 @@
 
       {#if rmsd_method === `dbscan`}
         <label>
-          Epsilon (A)
+          {t('structure.md_epsilon_angstrom')}
           <input type="number" bind:value={rmsd_eps} step="0.1" min="0.01" />
         </label>
         <label>
-          Min samples
+          {t('structure.md_min_samples')}
           <input type="number" bind:value={rmsd_min_samples} step="1" min="1" />
         </label>
       {/if}
 
       {#if rmsd_method === `kmeans`}
         <label>
-          N clusters
+          {t('structure.md_n_clusters')}
           <input type="number" bind:value={rmsd_n_clusters} step="1" min="2" />
         </label>
       {/if}
 
       {#if rmsd_method === `hierarchical`}
         <label>
-          N clusters
+          {t('structure.md_n_clusters')}
           <input type="number" bind:value={rmsd_n_clusters} step="1" min="2" />
         </label>
         <label>
-          Linkage
+          {t('structure.md_linkage')}
           <select bind:value={rmsd_linkage}>
-            <option value="ward">Ward</option>
-            <option value="average">Average</option>
-            <option value="complete">Complete</option>
+            <option value="ward">{t('structure.md_linkage_ward')}</option>
+            <option value="average">{t('structure.md_linkage_average')}</option>
+            <option value="complete">{t('structure.md_linkage_complete')}</option>
           </select>
         </label>
       {/if}
 
       <label>
-        Atom indices
+        {t('structure.md_atom_indices')}
         <input
           type="text"
           bind:value={rmsd_atom_indices_text}
           placeholder="e.g. 0,1,2,5,8"
-          title="Comma-separated 0-indexed atom indices (empty = all)"
+          title={t('structure.md_atom_indices_empty_all_hint')}
         />
       </label>
 
       <label>
-        Stride
+        {t('structure.md_stride')}
         <input type="number" bind:value={rmsd_stride} step="1" min="1" />
       </label>
     </div>
@@ -623,9 +626,9 @@
       disabled={rmsd_computing}
     >
       {#if rmsd_computing}
-        <Spinner /> Clustering...
+        <Spinner /> {t('structure.md_clustering')}
       {:else}
-        Cluster
+        {t('structure.md_cluster')}
       {/if}
     </button>
 
@@ -635,16 +638,16 @@
 
     {#if rmsd_result}
       <div class="cluster-info">
-        <strong>Clusters found: {rmsd_result.n_clusters_found}</strong>
+        <strong>{t('structure.md_clusters_found', { n: rmsd_result.n_clusters_found })}</strong>
         <ul class="cluster-sizes">
           {#each Object.entries(rmsd_result.cluster_sizes).sort(([a], [b]) => parseInt(a) - parseInt(b)) as [label, count]}
             <li>
               <span class="cluster-badge" style:background={label === `-1` ? `#666` : CLUSTER_COLORS[parseInt(label) % CLUSTER_COLORS.length]}>
-                {label === `-1` ? `Noise` : `Cluster ${label}`}
+                {label === `-1` ? t('structure.md_noise') : t('structure.md_cluster_label', { label })}
               </span>
-              {count} frames
+              {t('structure.md_frames_count', { n: count })}
               {#if rmsd_result.representative_frames[label] !== undefined}
-                <span class="rep-frame">(rep: frame {rmsd_result.representative_frames[label]})</span>
+                <span class="rep-frame">{t('structure.md_rep_frame', { frame: rmsd_result.representative_frames[label] })}</span>
               {/if}
             </li>
           {/each}
@@ -657,17 +660,17 @@
        Section 2: CV-based Clustering
        =================================================================== -->
   <details>
-    <summary>CV-based Clustering</summary>
+    <summary>{t('structure.md_cv_based_clustering')}</summary>
 
     <div class="param-grid">
       <label>
-        CV type
+        {t('structure.md_cv_type')}
         <select bind:value={cv_type}>
-          <option value="distances">Distances</option>
-          <option value="angles">Angles</option>
-          <option value="dihedrals">Dihedrals</option>
-          <option value="contacts">Contacts</option>
-          <option value="mixed">Mixed</option>
+          <option value="distances">{t('structure.md_distances')}</option>
+          <option value="angles">{t('structure.md_angles')}</option>
+          <option value="dihedrals">{t('structure.md_dihedrals')}</option>
+          <option value="contacts">{t('structure.md_contacts')}</option>
+          <option value="mixed">{t('structure.md_mixed')}</option>
         </select>
       </label>
     </div>
@@ -676,50 +679,50 @@
     {#if cv_type === `distances`}
       <div class="cv-inputs">
         <label>
-          Atom pairs (0-indexed)
+          {t('structure.md_atom_pairs_zero_indexed')}
           <input
             type="text"
             bind:value={cv_pairs_text}
             placeholder="0,1 ; 2,3 ; 4,5"
-            title="Semicolon-separated atom index pairs"
+            title={t('structure.md_atom_index_pairs_hint')}
           />
         </label>
       </div>
     {:else if cv_type === `angles`}
       <div class="cv-inputs">
         <label>
-          Atom triplets (0-indexed)
+          {t('structure.md_atom_triplets_zero_indexed')}
           <input
             type="text"
             bind:value={cv_triplets_text}
             placeholder="0,1,2 ; 3,4,5"
-            title="Semicolon-separated atom index triplets (j is vertex)"
+            title={t('structure.md_atom_index_triplets_hint')}
           />
         </label>
       </div>
     {:else if cv_type === `dihedrals`}
       <div class="cv-inputs">
         <label>
-          Atom quartets (0-indexed)
+          {t('structure.md_atom_quartets_zero_indexed')}
           <input
             type="text"
             bind:value={cv_quartets_text}
             placeholder="0,1,2,3 ; 4,5,6,7"
-            title="Semicolon-separated atom index quartets"
+            title={t('structure.md_atom_index_quartets_hint')}
           />
         </label>
       </div>
     {:else if cv_type === `contacts`}
       <div class="cv-inputs">
         <label>
-          Scheme
+          {t('structure.md_scheme')}
           <select bind:value={cv_scheme}>
-            <option value="closest-heavy">Closest heavy</option>
+            <option value="closest-heavy">{t('structure.md_closest_heavy')}</option>
             <option value="ca">C-alpha</option>
           </select>
         </label>
         <label>
-          Cutoff (A)
+          {t('structure.md_cutoff_angstrom')}
           <input type="number" bind:value={cv_cutoff} step="0.5" min="0.1" />
         </label>
       </div>
@@ -727,12 +730,12 @@
       <div class="cv-mixed-section">
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cv_mixed_distances} />
-          Distances
+          {t('structure.md_distances')}
         </label>
         {#if cv_mixed_distances}
           <div class="cv-inputs indented">
             <label>
-              Atom pairs
+              {t('structure.md_atom_pairs')}
               <input type="text" bind:value={cv_pairs_text} placeholder="0,1 ; 2,3" />
             </label>
           </div>
@@ -740,12 +743,12 @@
 
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cv_mixed_angles} />
-          Angles
+          {t('structure.md_angles')}
         </label>
         {#if cv_mixed_angles}
           <div class="cv-inputs indented">
             <label>
-              Atom triplets
+              {t('structure.md_atom_triplets')}
               <input type="text" bind:value={cv_triplets_text} placeholder="0,1,2 ; 3,4,5" />
             </label>
           </div>
@@ -753,12 +756,12 @@
 
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cv_mixed_dihedrals} />
-          Dihedrals
+          {t('structure.md_dihedrals')}
         </label>
         {#if cv_mixed_dihedrals}
           <div class="cv-inputs indented">
             <label>
-              Atom quartets
+              {t('structure.md_atom_quartets')}
               <input type="text" bind:value={cv_quartets_text} placeholder="0,1,2,3 ; 4,5,6,7" />
             </label>
           </div>
@@ -766,19 +769,19 @@
 
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cv_mixed_contacts} />
-          Contacts
+          {t('structure.md_contacts')}
         </label>
         {#if cv_mixed_contacts}
           <div class="cv-inputs indented">
             <label>
-              Scheme
+              {t('structure.md_scheme')}
               <select bind:value={cv_scheme}>
-                <option value="closest-heavy">Closest heavy</option>
+                <option value="closest-heavy">{t('structure.md_closest_heavy')}</option>
                 <option value="ca">C-alpha</option>
               </select>
             </label>
             <label>
-              Cutoff (A)
+              {t('structure.md_cutoff_angstrom')}
               <input type="number" bind:value={cv_cutoff} step="0.5" min="0.1" />
             </label>
           </div>
@@ -788,7 +791,7 @@
 
     <div class="param-grid" style="margin-top: 8px;">
       <label>
-        Clustering method
+        {t('structure.md_clustering_method')}
         <select bind:value={cv_cluster_method}>
           <option value="dbscan">DBSCAN</option>
           <option value="kmeans">KMeans</option>
@@ -798,39 +801,39 @@
 
       {#if cv_cluster_method === `dbscan`}
         <label>
-          Epsilon
+          {t('structure.md_epsilon')}
           <input type="number" bind:value={cv_eps} step="0.1" min="0.01" />
         </label>
         <label>
-          Min samples
+          {t('structure.md_min_samples')}
           <input type="number" bind:value={cv_min_samples} step="1" min="1" />
         </label>
       {/if}
 
       {#if cv_cluster_method === `kmeans`}
         <label>
-          N clusters
+          {t('structure.md_n_clusters')}
           <input type="number" bind:value={cv_n_clusters} step="1" min="2" />
         </label>
       {/if}
 
       {#if cv_cluster_method === `hierarchical`}
         <label>
-          N clusters
+          {t('structure.md_n_clusters')}
           <input type="number" bind:value={cv_n_clusters} step="1" min="2" />
         </label>
         <label>
-          Linkage
+          {t('structure.md_linkage')}
           <select bind:value={cv_linkage}>
-            <option value="ward">Ward</option>
-            <option value="average">Average</option>
-            <option value="complete">Complete</option>
+            <option value="ward">{t('structure.md_linkage_ward')}</option>
+            <option value="average">{t('structure.md_linkage_average')}</option>
+            <option value="complete">{t('structure.md_linkage_complete')}</option>
           </select>
         </label>
       {/if}
 
       <label>
-        Stride
+        {t('structure.md_stride')}
         <input type="number" bind:value={cv_stride} step="1" min="1" />
       </label>
     </div>
@@ -841,9 +844,9 @@
       disabled={cv_computing}
     >
       {#if cv_computing}
-        <Spinner /> Clustering...
+        <Spinner /> {t('structure.md_clustering')}
       {:else}
-        Cluster
+        {t('structure.md_cluster')}
       {/if}
     </button>
 
@@ -853,15 +856,15 @@
 
     {#if cv_result}
       <div class="cluster-info">
-        <strong>Clusters found: {cv_result.n_clusters_found}</strong>
+        <strong>{t('structure.md_clusters_found', { n: cv_result.n_clusters_found })}</strong>
         <span class="cv-dims">{cv_result.cv_names.length} CVs: {cv_result.cv_names.join(`, `)}</span>
         <ul class="cluster-sizes">
           {#each Object.entries(cv_result.cluster_sizes).sort(([a], [b]) => parseInt(a) - parseInt(b)) as [label, count]}
             <li>
               <span class="cluster-badge" style:background={label === `-1` ? `#666` : CLUSTER_COLORS[parseInt(label) % CLUSTER_COLORS.length]}>
-                {label === `-1` ? `Noise` : `Cluster ${label}`}
+                {label === `-1` ? t('structure.md_noise') : t('structure.md_cluster_label', { label })}
               </span>
-              {count} frames
+              {t('structure.md_frames_count', { n: count })}
             </li>
           {/each}
         </ul>
@@ -873,20 +876,20 @@
        Section 3: Dimensionality Reduction
        =================================================================== -->
   <details>
-    <summary>Dimensionality Reduction</summary>
+    <summary>{t('structure.md_dimensionality_reduction')}</summary>
 
     <div class="param-grid">
       <label>
-        Feature source
+        {t('structure.md_feature_source')}
         <select bind:value={dr_feature_type}>
-          <option value="coordinates">Coordinates</option>
-          <option value="rmsd_matrix">RMSD matrix</option>
-          <option value="custom_cv">Custom CV</option>
+          <option value="coordinates">{t('structure.md_coordinates')}</option>
+          <option value="rmsd_matrix">{t('structure.md_rmsd_matrix')}</option>
+          <option value="custom_cv">{t('structure.md_custom_cv')}</option>
         </select>
       </label>
 
       <label>
-        Method
+        {t('structure.method')}
         <select bind:value={dr_method}>
           <option value="pca">PCA</option>
           <option value="tsne">t-SNE</option>
@@ -895,7 +898,7 @@
       </label>
 
       <label>
-        Components
+        {t('structure.md_components')}
         <select bind:value={dr_n_components}>
           <option value={2}>2D</option>
           <option value={3}>3D</option>
@@ -906,48 +909,48 @@
     <!-- Custom CV params (when feature_type = custom_cv) -->
     {#if dr_feature_type === `custom_cv`}
       <div class="subsection">
-        <span class="subsection-title">Custom CV Parameters</span>
+        <span class="subsection-title">{t('structure.md_custom_cv_parameters')}</span>
         <div class="param-grid">
           <label>
-            CV type
+            {t('structure.md_cv_type')}
             <select bind:value={dr_cv_type}>
-              <option value="distances">Distances</option>
-              <option value="angles">Angles</option>
-              <option value="dihedrals">Dihedrals</option>
-              <option value="contacts">Contacts</option>
-              <option value="mixed">Mixed</option>
+              <option value="distances">{t('structure.md_distances')}</option>
+              <option value="angles">{t('structure.md_angles')}</option>
+              <option value="dihedrals">{t('structure.md_dihedrals')}</option>
+              <option value="contacts">{t('structure.md_contacts')}</option>
+              <option value="mixed">{t('structure.md_mixed')}</option>
             </select>
           </label>
         </div>
         <div class="cv-inputs">
           {#if dr_cv_type === `distances` || dr_cv_type === `mixed`}
             <label>
-              Atom pairs
+              {t('structure.md_atom_pairs')}
               <input type="text" bind:value={dr_cv_pairs_text} placeholder="0,1 ; 2,3" />
             </label>
           {/if}
           {#if dr_cv_type === `angles` || dr_cv_type === `mixed`}
             <label>
-              Atom triplets
+              {t('structure.md_atom_triplets')}
               <input type="text" bind:value={dr_cv_triplets_text} placeholder="0,1,2 ; 3,4,5" />
             </label>
           {/if}
           {#if dr_cv_type === `dihedrals` || dr_cv_type === `mixed`}
             <label>
-              Atom quartets
+              {t('structure.md_atom_quartets')}
               <input type="text" bind:value={dr_cv_quartets_text} placeholder="0,1,2,3 ; 4,5,6,7" />
             </label>
           {/if}
           {#if dr_cv_type === `contacts` || dr_cv_type === `mixed`}
             <label>
-              Scheme
+              {t('structure.md_scheme')}
               <select bind:value={dr_cv_scheme}>
-                <option value="closest-heavy">Closest heavy</option>
+                <option value="closest-heavy">{t('structure.md_closest_heavy')}</option>
                 <option value="ca">C-alpha</option>
               </select>
             </label>
             <label>
-              Cutoff (A)
+              {t('structure.md_cutoff_angstrom')}
               <input type="number" bind:value={dr_cv_cutoff} step="0.5" min="0.1" />
             </label>
           {/if}
@@ -959,11 +962,11 @@
     {#if dr_method === `tsne`}
       <div class="param-grid">
         <label>
-          Perplexity
+          {t('structure.md_perplexity')}
           <input type="number" bind:value={dr_perplexity} step="5" min="1" />
         </label>
         <label>
-          Learning rate
+          {t('structure.md_learning_rate')}
           <input type="number" bind:value={dr_learning_rate} step="50" min="1" />
         </label>
       </div>
@@ -972,11 +975,11 @@
     {#if dr_method === `umap`}
       <div class="param-grid">
         <label>
-          N neighbors
+          {t('structure.md_n_neighbors')}
           <input type="number" bind:value={dr_n_neighbors} step="1" min="2" />
         </label>
         <label>
-          Min dist
+          {t('structure.md_min_dist')}
           <input type="number" bind:value={dr_min_dist} step="0.05" min="0" />
         </label>
       </div>
@@ -984,17 +987,17 @@
 
     <div class="param-grid">
       <label>
-        Atom indices
+        {t('structure.md_atom_indices')}
         <input
           type="text"
           bind:value={dr_atom_indices_text}
           placeholder="e.g. 0,1,2,5,8"
-          title="Comma-separated 0-indexed atom indices (empty = all)"
+          title={t('structure.md_atom_indices_empty_all_hint')}
         />
       </label>
 
       <label>
-        Stride
+        {t('structure.md_stride')}
         <input type="number" bind:value={dr_stride} step="1" min="1" />
       </label>
     </div>
@@ -1003,13 +1006,13 @@
     <div class="subsection">
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={dr_cluster_enabled} />
-        Cluster on embedding
+        {t('structure.md_cluster_on_embedding')}
       </label>
 
       {#if dr_cluster_enabled}
         <div class="param-grid">
           <label>
-            Method
+            {t('structure.method')}
             <select bind:value={dr_cluster_method}>
               <option value="dbscan">DBSCAN</option>
               <option value="kmeans">KMeans</option>
@@ -1019,33 +1022,33 @@
 
           {#if dr_cluster_method === `dbscan`}
             <label>
-              Epsilon
+              {t('structure.md_epsilon')}
               <input type="number" bind:value={dr_cluster_eps} step="0.1" min="0.01" />
             </label>
             <label>
-              Min samples
+              {t('structure.md_min_samples')}
               <input type="number" bind:value={dr_cluster_min_samples} step="1" min="1" />
             </label>
           {/if}
 
           {#if dr_cluster_method === `kmeans`}
             <label>
-              N clusters
+              {t('structure.md_n_clusters')}
               <input type="number" bind:value={dr_cluster_n_clusters} step="1" min="2" />
             </label>
           {/if}
 
           {#if dr_cluster_method === `hierarchical`}
             <label>
-              N clusters
+              {t('structure.md_n_clusters')}
               <input type="number" bind:value={dr_cluster_n_clusters} step="1" min="2" />
             </label>
             <label>
-              Linkage
+              {t('structure.md_linkage')}
               <select bind:value={dr_cluster_linkage}>
-                <option value="ward">Ward</option>
-                <option value="average">Average</option>
-                <option value="complete">Complete</option>
+                <option value="ward">{t('structure.md_linkage_ward')}</option>
+                <option value="average">{t('structure.md_linkage_average')}</option>
+                <option value="complete">{t('structure.md_linkage_complete')}</option>
               </select>
             </label>
           {/if}
@@ -1059,9 +1062,9 @@
       disabled={dr_computing}
     >
       {#if dr_computing}
-        <Spinner /> Reducing...
+        <Spinner /> {t('structure.md_reducing')}
       {:else}
-        Reduce
+        {t('structure.md_reduce')}
       {/if}
     </button>
 
@@ -1074,27 +1077,27 @@
         <span class="method-badge">{dr_result.method.toUpperCase()}</span>
         {#if dr_result.explained_variance}
           <span class="variance-info">
-            Explained variance:
+            {t('structure.md_explained_variance')}:
             {dr_result.explained_variance.map((v) => `${(v * 100).toFixed(1)}%`).join(`, `)}
           </span>
         {/if}
         {#if dr_result.labels}
           {@const unique_labels = [...new Set(dr_result.labels)].sort((a, b) => a - b)}
           {@const n_clusters = unique_labels.filter((l) => l !== -1).length}
-          <strong>{n_clusters} cluster{n_clusters !== 1 ? `s` : ``} found</strong>
+          <strong>{t('structure.md_clusters_found', { n: n_clusters })}</strong>
           <ul class="cluster-sizes">
             {#each unique_labels as label}
               {@const count = dr_result.labels.filter((l) => l === label).length}
               <li>
                 <span class="cluster-badge" style:background={label === -1 ? `#666` : CLUSTER_COLORS[label % CLUSTER_COLORS.length]}>
-                  {label === -1 ? `Noise` : `Cluster ${label}`}
+                  {label === -1 ? t('structure.md_noise') : t('structure.md_cluster_label', { label })}
                 </span>
-                {count} frames
+                {t('structure.md_frames_count', { n: count })}
               </li>
             {/each}
           </ul>
         {:else}
-          <span class="info-text">{dr_result.frame_indices.length} frames embedded (colored by frame index)</span>
+          <span class="info-text">{t('structure.md_frames_embedded', { n: dr_result.frame_indices.length })}</span>
         {/if}
       </div>
     {/if}

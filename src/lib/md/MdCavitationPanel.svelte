@@ -1,5 +1,8 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -93,9 +96,9 @@
             colorbar: { title: `ΔG_cav (eV)` },
           },
         ],
-        title: `ΔG_cav(R, z) = -k_BT ln P₀`,
+        title: t('structure.md_cav_heatmap_title'),
         x_label: `${res.axis.toUpperCase()} (Å)`,
-        y_label: `Probe radius R (Å)`,
+        y_label: t('structure.md_probe_radius_angstrom'),
         layout_overrides: { hovermode: `closest` },
       })
       return
@@ -128,16 +131,16 @@
       if (traces.length === 0) {
         on_plot({
           traces: [],
-          title: `LCW scaling (provide IHP / Stern z ranges to populate)`,
-          x_label: `Cavity volume V (Å³)`,
+          title: t('structure.md_lcw_scaling_hint_title'),
+          x_label: t('structure.md_cavity_volume_ang3'),
           y_label: `ΔG_cav (eV)`,
         })
         return
       }
       on_plot({
         traces,
-        title: `LCW: ΔG_cav vs cavity volume`,
-        x_label: `Cavity volume V (Å³)`,
+        title: t('structure.md_lcw_cav_vs_volume'),
+        x_label: t('structure.md_cavity_volume_ang3'),
         y_label: `ΔG_cav (eV)`,
       })
       return
@@ -154,7 +157,7 @@
     }))
     on_plot({
       traces,
-      title: `Cavitation free energy profile`,
+      title: t('structure.md_cav_free_energy_profile'),
       x_label: `${res.axis.toUpperCase()} (Å)`,
       y_label: `ΔG_cav (eV)`,
     })
@@ -167,7 +170,7 @@
 
     try {
       const radii = parse_float_list(probe_radii_text)
-      if (!radii) throw new Error(`Probe radii must be a comma-separated list of positive numbers`)
+      if (!radii) throw new Error(t('structure.md_probe_radii_invalid'))
 
       const body: Record<string, any> = {
         trajectory_b64,
@@ -214,7 +217,7 @@
       result = await resp.json()
       emit_plot(result!)
     } catch (e: any) {
-      error = e.message || `Computation failed`
+      error = e.message || t('structure.computation_failed')
     } finally {
       computing = false
     }
@@ -227,15 +230,15 @@
 
 <div class="cav-panel">
   <details open>
-    <summary>LCW cavitation free energy ΔG_cav(R, z)</summary>
+    <summary>{t('structure.md_lcw_cav_free_energy')}</summary>
 
     <div class="param-grid">
       <label>
-        Solvent element
+        {t('structure.md_solvent_element')}
         <input type="text" bind:value={solvent_element} />
       </label>
       <label>
-        Surface normal
+        {t('structure.md_surface_normal')}
         <select bind:value={axis}>
           <option value="x">x</option>
           <option value="y">y</option>
@@ -243,40 +246,40 @@
         </select>
       </label>
       <label class="wide">
-        Probe radii (Å, comma-separated)
+        {t('structure.md_probe_radii_comma')}
         <input type="text" bind:value={probe_radii_text} />
       </label>
       <label>
-        Number of z bins
+        {t('structure.md_number_z_bins')}
         <input type="number" bind:value={n_z_bins} min="1" max="1000" />
       </label>
       <label>
-        Grid spacing (Å)
+        {t('structure.md_grid_spacing_angstrom')}
         <input type="number" bind:value={grid_spacing} min="0.1" step="0.1" />
       </label>
       <label>
-        Z min (Å)
+        {t('structure.md_z_min_angstrom')}
         <input type="text" placeholder="auto" bind:value={z_min} />
       </label>
       <label>
-        Z max (Å)
+        {t('structure.md_z_max_angstrom')}
         <input type="text" placeholder="auto" bind:value={z_max} />
       </label>
       <label>
-        Frame stride
+        {t('structure.md_frame_stride')}
         <input type="number" bind:value={frame_stride} min="1" />
       </label>
       <label>
-        Temperature (K)
+        {t('structure.md_temperature_k')}
         <input type="number" bind:value={temperature_K} min="1" step="10" />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={periodic} />
-        Periodic (PBC)
+        {t('structure.md_periodic_pbc')}
       </label>
     </div>
 
-    <div class="subheading">LCW windows (optional)</div>
+    <div class="subheading">{t('structure.md_lcw_windows_optional')}</div>
     <div class="param-grid">
       <label>
         IHP z min (Å)
@@ -297,17 +300,17 @@
     </div>
 
     <div class="plot-mode-row">
-      <span>Plot:</span>
+      <span>{t('structure.md_plot')}:</span>
       <label><input type="radio" value="profile" bind:group={plot_mode} /> ΔG_cav(z)</label>
       <label><input type="radio" value="heatmap" bind:group={plot_mode} /> heatmap</label>
-      <label><input type="radio" value="lcw" bind:group={plot_mode} /> LCW fit</label>
+      <label><input type="radio" value="lcw" bind:group={plot_mode} /> {t('structure.md_lcw_fit')}</label>
     </div>
 
     <button class="btn-compute" onclick={compute_cavitation} disabled={computing}>
       {#if computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute ΔG_cav
+        {t('structure.md_compute_dg_cav')}
       {/if}
     </button>
 
@@ -317,28 +320,28 @@
 
     {#if result}
       <div class="info-bar">
-        <span title="Frames used">{result.n_frames_used} frames</span>
-        <span title="Solvent atoms">{result.n_solvent_atoms} solvent</span>
+        <span title={t('structure.md_frames_used')}>{t('structure.md_frames_count', { n: result.n_frames_used })}</span>
+        <span title={t('structure.md_solvent_atoms')}>{t('structure.md_solvent_count', { n: result.n_solvent_atoms })}</span>
         <span>T = {result.temperature_K} K</span>
       </div>
 
       {#if result.lcw_ihp?.linear_fit_slope_eV_per_A3 !== null && result.lcw_ihp?.linear_fit_slope_eV_per_A3 !== undefined}
         <div class="lcw-summary">
-          <strong>IHP LCW fit:</strong>
+          <strong>{t('structure.md_ihp_lcw_fit')}:</strong>
           slope = {result.lcw_ihp.linear_fit_slope_eV_per_A3.toExponential(3)} eV/Å³,
           R² = {result.lcw_ihp.linear_fit_r_squared?.toFixed(4) ?? `—`}
         </div>
       {/if}
       {#if result.lcw_stern?.linear_fit_slope_eV_per_A3 !== null && result.lcw_stern?.linear_fit_slope_eV_per_A3 !== undefined}
         <div class="lcw-summary">
-          <strong>Stern LCW fit:</strong>
+          <strong>{t('structure.md_stern_lcw_fit')}:</strong>
           slope = {result.lcw_stern.linear_fit_slope_eV_per_A3.toExponential(3)} eV/Å³,
           R² = {result.lcw_stern.linear_fit_r_squared?.toFixed(4) ?? `—`}
         </div>
       {/if}
       {#if result.migration_descriptor_eV}
         <div class="lcw-summary migration">
-          <strong>Migration descriptor ΔG_cav^IHP − ΔG_cav^Stern (eV):</strong>
+          <strong>{t('structure.md_migration_descriptor')}:</strong>
           {#each result.migration_descriptor_eV as dg, i}
             <span>R={result.probe_radii_angstrom[i].toFixed(2)}: {dg.toFixed(4)}</span>
           {/each}
