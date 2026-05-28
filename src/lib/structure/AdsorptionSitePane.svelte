@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Crystal } from '$lib/structure'
   import { DraggablePane } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { ComponentProps } from 'svelte'
   import type {
     AdsorptionSite,
@@ -8,6 +9,9 @@
     AdsorptionSiteResult,
   } from './ferrox-wasm-types'
   import { wasm_find_adsorption_sites } from './ferrox-wasm'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     structure = $bindable(),
@@ -105,7 +109,7 @@
 
   async function find_sites() {
     if (!structure) {
-      error_message = `No structure loaded`
+      error_message = t('structure.ads_site_no_structure_loaded')
       return
     }
 
@@ -178,10 +182,20 @@
     hollow3: `#FF9800`,
     hollow4: `#9C27B0`,
   }
+
+  function site_type_label(site_type: string): string {
+    switch (site_type) {
+      case `top`: return t('structure.ads_site_top')
+      case `bridge`: return t('structure.ads_site_bridge')
+      case `hollow3`: return t('structure.ads_site_hollow3')
+      case `hollow4`: return t('structure.ads_site_hollow4')
+      default: return site_type
+    }
+  }
 </script>
 
 {#snippet pane_content()}
-  <h4>Adsorption Site Finder</h4>
+  <h4>{t('structure.ads_site_finder')}</h4>
 
   <div class="controls">
     <button
@@ -190,7 +204,7 @@
       disabled={is_computing || !structure}
       class="primary"
     >
-      {is_computing ? `Computing...` : `Find Sites`}
+      {is_computing ? t('structure.computing') : t('structure.ads_site_find_sites')}
     </button>
 
     <button
@@ -198,12 +212,12 @@
       onclick={clear_sites}
       disabled={all_sites.length === 0}
     >
-      Clear
+      {t('common.clear')}
     </button>
 
     <label class="checkbox">
       <input type="checkbox" bind:checked={show_sites} />
-      Show
+      {t('structure.ads_site_show')}
     </label>
   </div>
 
@@ -214,96 +228,96 @@
   <!-- Key parameters (Alpha Shape V7) -->
   <div class="key-params">
     <label>
-      <span>Alpha (Å)</span>
+      <span>{t('structure.ads_site_alpha_a')}</span>
       <input type="number" bind:value={alpha} min={0.5} max={10} step={0.1} />
     </label>
     <label>
-      <span>Height (Å)</span>
+      <span>{t('structure.ads_site_height_a')}</span>
       <input type="number" bind:value={height} min={0.5} max={5} step={0.1} />
     </label>
     <label>
-      <span>Merge (Å)</span>
+      <span>{t('structure.ads_site_merge_a')}</span>
       <input type="number" bind:value={merge} min={0} max={3} step={0.1} />
     </label>
   </div>
 
   {#if result_summary}
     <div class="summary">
-      <span class="site-badge top">{result_summary.n_top} Top</span>
-      <span class="site-badge bridge">{result_summary.n_bridge} Bridge</span>
-      <span class="site-badge hollow3">{result_summary.n_hollow3} Hollow3</span>
-      <span class="site-badge hollow4">{result_summary.n_hollow4} Hollow4</span>
+      <span class="site-badge top">{t('structure.ads_site_type_count', { n: result_summary.n_top, type: t('structure.ads_site_top') })}</span>
+      <span class="site-badge bridge">{t('structure.ads_site_type_count', { n: result_summary.n_bridge, type: t('structure.ads_site_bridge') })}</span>
+      <span class="site-badge hollow3">{t('structure.ads_site_type_count', { n: result_summary.n_hollow3, type: t('structure.ads_site_hollow3') })}</span>
+      <span class="site-badge hollow4">{t('structure.ads_site_type_count', { n: result_summary.n_hollow4, type: t('structure.ads_site_hollow4') })}</span>
     </div>
 
     <div class="filters">
       <label class="filter-checkbox">
         <input type="checkbox" bind:checked={show_top} />
         <span class="dot" style:background={site_colors.top}></span>
-        Top ({result_summary.n_top})
+        {t('structure.ads_site_filter_count', { type: t('structure.ads_site_top'), n: result_summary.n_top })}
       </label>
       <label class="filter-checkbox">
         <input type="checkbox" bind:checked={show_bridge} />
         <span class="dot" style:background={site_colors.bridge}></span>
-        Bridge ({result_summary.n_bridge})
+        {t('structure.ads_site_filter_count', { type: t('structure.ads_site_bridge'), n: result_summary.n_bridge })}
       </label>
       <label class="filter-checkbox">
         <input type="checkbox" bind:checked={show_hollow3} />
         <span class="dot" style:background={site_colors.hollow3}></span>
-        Hollow3 ({result_summary.n_hollow3})
+        {t('structure.ads_site_filter_count', { type: t('structure.ads_site_hollow3'), n: result_summary.n_hollow3 })}
       </label>
       <label class="filter-checkbox">
         <input type="checkbox" bind:checked={show_hollow4} />
         <span class="dot" style:background={site_colors.hollow4}></span>
-        Hollow4 ({result_summary.n_hollow4})
+        {t('structure.ads_site_filter_count', { type: t('structure.ads_site_hollow4'), n: result_summary.n_hollow4 })}
       </label>
       <label class="filter-checkbox">
         <input type="checkbox" bind:checked={deduplicate} />
-        Deduplicate ({filtered_sites.length})
+        {t('structure.ads_site_deduplicate_count', { n: filtered_sites.length })}
       </label>
     </div>
   {/if}
 
   <details bind:open={show_advanced}>
-    <summary>Advanced Parameters</summary>
+    <summary>{t('structure.ads_site_advanced_parameters')}</summary>
     <div class="params">
       <label>
-        <span>Gap ratio</span>
+        <span>{t('structure.ads_site_gap_ratio')}</span>
         <input type="number" bind:value={gap_ratio} min={1.0} max={2.0} step={0.05} />
       </label>
       <label>
-        <span>Blocking</span>
+        <span>{t('structure.ads_site_blocking')}</span>
         <input type="number" bind:value={blocking} min={0.1} max={2.0} step={0.1} />
       </label>
       <label>
-        <span>Bottom fraction</span>
+        <span>{t('structure.ads_site_bottom_fraction')}</span>
         <input type="number" bind:value={bottom_fraction} min={0.1} max={0.9} step={0.05} />
       </label>
       <label>
-        <span>Expansion (Å)</span>
+        <span>{t('structure.ads_site_expansion_a')}</span>
         <input type="number" bind:value={expansion_distance} min={1} max={10} step={0.5} />
       </label>
       <label>
-        <span>Filter radius (Å)</span>
+        <span>{t('structure.ads_site_filter_radius_a')}</span>
         <input type="number" bind:value={filter_radius} min={1} max={10} step={0.5} />
       </label>
       <label>
-        <span>Filter threshold</span>
+        <span>{t('structure.ads_site_filter_threshold')}</span>
         <input type="number" bind:value={filter_threshold} min={0.1} max={1.0} step={0.05} />
       </label>
       <label class="checkbox-row">
         <input type="checkbox" bind:checked={keep_bottom} />
-        <span>Keep bottom surface</span>
+        <span>{t('structure.ads_site_keep_bottom_surface')}</span>
       </label>
       <label class="checkbox-row">
         <input type="checkbox" bind:checked={filter_internal} />
-        <span>Filter internal sites</span>
+        <span>{t('structure.ads_site_filter_internal_sites')}</span>
       </label>
     </div>
   </details>
 
   {#if filtered_sites.length > 0}
     <div class="site-list">
-      <h5>Sites ({filtered_sites.length})</h5>
+      <h5>{t('structure.ads_site_sites_count', { n: filtered_sites.length })}</h5>
       <div class="sites-scroll">
         {#each filtered_sites as site, idx (site.id)}
           <div class="site-row">
@@ -315,14 +329,14 @@
             >
               <span class="site-id">#{site.id}</span>
               <span class="dot" style:background={site_colors[site.site_type]}></span>
-              <span class="type">{site.site_type}</span>
+              <span class="type">{site_type_label(site.site_type)}</span>
               <span class="env">{site.env_signature}</span>
             </button>
             <button
               type="button"
               class="delete-btn"
               onclick={() => delete_site(site.id)}
-              title="Delete site"
+              title={t('structure.ads_site_delete_site')}
             >
               ×
             </button>
@@ -341,7 +355,7 @@
     show_toggle={!embedded}
     pane_props={{ ...pane_props, class: `adsorption-site-pane ${pane_props?.class ?? ``}` }}
     toggle_props={{
-      title: pane_open ? `` : `Find Adsorption Sites`,
+      title: pane_open ? `` : t('structure.ads_site_find_adsorption_sites'),
       ...toggle_props,
       class: `adsorption-site-toggle ${toggle_props?.class ?? ``}`,
     }}
