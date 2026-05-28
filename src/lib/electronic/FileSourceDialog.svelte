@@ -2,11 +2,14 @@
   import '$lib/dialog-shared.css'
   import { API_BASE } from '$lib/api/config'
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
 
   let {
     show = $bindable(false),
     file_types = [`.h5`, `.hdf5`],
-    title = `Select File`,
+    title = ``,
     description = ``,
     onfile,
     onremote_path,
@@ -180,7 +183,7 @@
     const file = input.files?.[0]
     if (!file) return
     if (!validate_file(file)) {
-      error_msg = `Invalid file type. Expected: ${file_types.join(`, `)}`
+      error_msg = t('common.invalid_file_type_expected', { types: file_types.join(`, `) })
       return
     }
     emit_file(file)
@@ -192,7 +195,7 @@
     const file = e.dataTransfer?.files[0]
     if (!file) return
     if (!validate_file(file)) {
-      error_msg = `Invalid file type. Expected: ${file_types.join(`, `)}`
+      error_msg = t('common.invalid_file_type_expected', { types: file_types.join(`, `) })
       return
     }
     emit_file(file)
@@ -245,10 +248,10 @@
     const data = await resp.json()
     if (data.is_dir && !data.found) {
       const hint = data.files?.length
-        ? `\nFiles found: ${data.files.slice(0, 10).join(`, `)}`
+        ? `\n${t('common.files_found')}: ${data.files.slice(0, 10).join(`, `)}`
         : ``
       throw new Error(
-        `Directory does not contain ${targets.join(` or `)}${hint}`
+        t('common.directory_missing_targets', { targets: targets.join(` or `), hint })
       )
     }
     return data.resolved_path
@@ -257,7 +260,7 @@
   // ─── Tab 2: Remote download ───
   async function download_remote() {
     if (!selected_session || !remote_path.trim()) {
-      error_msg = `Select a session and enter a file path`
+      error_msg = t('common.select_session_enter_path')
       return
     }
     loading = true
@@ -285,7 +288,7 @@
           await download_remote_as_text(resolved)
           return
         }
-        throw new Error(`Download failed: ${resp.statusText}`)
+        throw new Error(t('common.download_failed_reason', { reason: resp.statusText }))
       }
 
       const blob = await resp.blob()
@@ -303,7 +306,7 @@
           // fall through to error
         }
       }
-      error_msg = e.message || `Download failed`
+      error_msg = e.message || t('common.download_failed')
     } finally {
       loading = false
     }
@@ -322,7 +325,7 @@
     })
 
     if (!resp.ok) {
-      throw new Error(`Read failed: ${resp.statusText}`)
+      throw new Error(t('common.read_failed_reason', { reason: resp.statusText }))
     }
 
     const data = await resp.json()
@@ -335,7 +338,7 @@
   // ─── Tab 3: Workflow file load ───
   async function load_workflow_file() {
     if (!selected_workflow || !selected_step || !selected_file) {
-      error_msg = `Select a workflow, step, and file`
+      error_msg = t('common.select_workflow_step_file')
       return
     }
     loading = true
@@ -345,14 +348,14 @@
       const resp = await fetch(
         `${API_BASE}/workflow/${encodeURIComponent(selected_workflow)}/steps/${encodeURIComponent(selected_step)}/output/${encodeURIComponent(selected_file)}`,
       )
-      if (!resp.ok) throw new Error(`Failed to fetch file: ${resp.statusText}`)
+      if (!resp.ok) throw new Error(t('common.failed_fetch_file_reason', { reason: resp.statusText }))
 
       const data = await resp.json()
       const content = data.content || ``
       const file = new File([content], selected_file, { type: `text/plain` })
       emit_file(file)
     } catch (e: any) {
-      error_msg = e.message || `Failed to load file from workflow`
+      error_msg = e.message || t('common.failed_load_workflow_file')
     } finally {
       loading = false
     }
@@ -385,7 +388,7 @@
     <div class="modal dialog-modal">
       <!-- Header -->
       <div class="modal-header">
-        <h2 class="modal-title">{title}</h2>
+        <h2 class="modal-title">{title || t('common.select_file')}</h2>
         <button class="close-btn" onclick={close_dialog}>&times;</button>
       </div>
 
@@ -399,17 +402,17 @@
           class="tab"
           class:active={active_tab === `local`}
           onclick={() => { active_tab = `local`; error_msg = `` }}
-        >Local Upload</button>
+        >{t('common.local_upload')}</button>
         <button
           class="tab"
           class:active={active_tab === `remote`}
           onclick={() => { active_tab = `remote`; error_msg = `` }}
-        >Browse Server</button>
+        >{t('common.browse_server')}</button>
         <button
           class="tab"
           class:active={active_tab === `workflow`}
           onclick={() => { active_tab = `workflow`; error_msg = `` }}
-        >From Workflow</button>
+        >{t('common.from_workflow')}</button>
       </div>
 
       <!-- Tab content -->
@@ -433,10 +436,10 @@
                 <line x1="12" y1="3" x2="12" y2="15" />
               </svg>
             </div>
-            <p class="drop-text">Drag & drop file here</p>
-            <p class="drop-hint">or</p>
+            <p class="drop-text">{t('common.drag_drop_file_here')}</p>
+            <p class="drop-hint">{t('common.or')}</p>
             <label class="browse-btn">
-              Browse Files
+              {t('common.browse_files')}
               <input
                 type="file"
                 accept={accept_string}
@@ -444,7 +447,7 @@
                 hidden
               />
             </label>
-            <p class="file-hint">Accepted: {file_types.join(`, `)}</p>
+            <p class="file-hint">{t('common.accepted_types', { types: file_types.join(`, `) })}</p>
           </div>
 
         <!-- Tab 2: Browse Server -->
@@ -452,14 +455,14 @@
           <div class="remote-content">
             <!-- Session selector -->
             <div class="field">
-              <label class="field-label">Connection</label>
+              <label class="field-label">{t('common.connection')}</label>
               {#if sessions.length === 0}
-                <div class="empty-state">No connections available</div>
+                <div class="empty-state">{t('common.no_connections_available')}</div>
               {:else}
                 <select class="input select" bind:value={selected_session}>
                   {#each sessions as s}
                     <option value={s.id}>
-                      {s.id === '__local__' ? `Local Machine (${s.host})` : `${s.username}@${s.host}`}
+                      {s.id === '__local__' ? t('common.local_machine_host', { host: s.host }) : `${s.username}@${s.host}`}
                     </option>
                   {/each}
                 </select>
@@ -468,7 +471,7 @@
 
             <!-- Remote path input -->
             <div class="field">
-              <label class="field-label">File or Directory Path</label>
+              <label class="field-label">{t('common.file_or_directory_path')}</label>
               <input
                 class="input"
                 type="text"
@@ -479,7 +482,7 @@
 
             {#if !remote_path.trim()}
               <div class="info-text">
-                Enter a file path or a directory — the target file ({file_types.join(`, `)}) will be found automatically.
+                {t('common.file_path_auto_find_hint', { types: file_types.join(`, `) })}
               </div>
             {/if}
 
@@ -489,9 +492,9 @@
               disabled={loading || !selected_session || !remote_path.trim()}
             >
               {#if loading}
-                <Spinner /> Downloading...
+                <Spinner /> {t('common.downloading')}
               {:else}
-                Download & Load
+                {t('common.download_and_load')}
               {/if}
             </button>
           </div>
@@ -501,12 +504,12 @@
           <div class="workflow-content">
             <!-- Workflow selector -->
             <div class="field">
-              <label class="field-label">Workflow</label>
+              <label class="field-label">{t('common.workflow')}</label>
               {#if workflows.length === 0}
-                <div class="empty-state">No workflows found</div>
+                <div class="empty-state">{t('common.no_workflows_found')}</div>
               {:else}
                 <select class="input select" bind:value={selected_workflow}>
-                  <option value="">Select a workflow...</option>
+                  <option value="">{t('common.select_workflow_placeholder')}</option>
                   {#each workflows as wf}
                     <option value={wf.id}>{wf.name} ({wf.status})</option>
                   {/each}
@@ -517,12 +520,12 @@
             <!-- Step selector -->
             {#if selected_workflow}
               <div class="field">
-                <label class="field-label">Completed Step</label>
+                <label class="field-label">{t('common.completed_step')}</label>
                 {#if steps.length === 0}
-                  <div class="empty-state">No completed steps with output files</div>
+                  <div class="empty-state">{t('common.no_completed_steps_with_outputs')}</div>
                 {:else}
                   <select class="input select" bind:value={selected_step}>
-                    <option value="">Select a step...</option>
+                    <option value="">{t('common.select_step_placeholder')}</option>
                     {#each steps as step}
                       <option value={step.id}>{step.label} ({step.node_type})</option>
                     {/each}
@@ -534,12 +537,12 @@
             <!-- File selector -->
             {#if selected_step}
               <div class="field">
-                <label class="field-label">Output File</label>
+                <label class="field-label">{t('common.output_file')}</label>
                 {#if step_files.length === 0}
-                  <div class="empty-state">No matching output files</div>
+                  <div class="empty-state">{t('common.no_matching_output_files')}</div>
                 {:else}
                   <select class="input select" bind:value={selected_file}>
-                    <option value="">Select a file...</option>
+                    <option value="">{t('common.select_file_placeholder')}</option>
                     {#each step_files as f}
                       <option value={f.name}>{f.name} ({f.size})</option>
                     {/each}
@@ -554,9 +557,9 @@
               disabled={loading || !selected_workflow || !selected_step || !selected_file}
             >
               {#if loading}
-                <Spinner /> Loading...
+                <Spinner /> {t('common.loading')}
               {:else}
-                Load File
+                {t('common.load_file')}
               {/if}
             </button>
           </div>
