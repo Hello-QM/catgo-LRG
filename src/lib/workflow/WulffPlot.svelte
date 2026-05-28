@@ -5,8 +5,11 @@
    *
    * Standard visualization for nanoparticle morphology prediction in
    * computational catalysis papers (replaces pymatgen WulffShape.get_plot()).
-   */
+  */
   import { lazy_load_plotly, make_target_writable, base_layout, base_config, observe_resize } from './plotly-utils'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
 
   let {
     facet_table = [],
@@ -77,7 +80,7 @@
     const layout = base_layout({
       height,
       xaxis: {
-        title: `Area Fraction (%)`,
+        title: t('workflow.wulff_area_fraction'),
         showgrid: true,
         gridcolor: `rgba(128, 128, 128, 0.15)`,
         color: axis_color,
@@ -89,7 +92,7 @@
       },
       margin: { l: 70, r: 20, t: 30, b: 50 },
       title: {
-        text: `Wulff Shape — Dominant: (${dominant_facet})`,
+        text: t('workflow.wulff_shape_dominant', { facet: dominant_facet }),
         font: { size: 13 },
         x: 0.5,
       },
@@ -121,8 +124,8 @@
 <div class="wulff-plot-container">
   <div bind:this={plot_div} class="wulff-plot"></div>
   <div class="export-bar">
-    <button class="export-btn" onclick={() => export_plot('png')} title="Export PNG">PNG</button>
-    <button class="export-btn" onclick={() => export_plot('svg')} title="Export SVG">SVG</button>
+    <button class="export-btn" onclick={() => export_plot('png')} title={t('workflow.wulff_export_png')}>PNG</button>
+    <button class="export-btn" onclick={() => export_plot('svg')} title={t('workflow.wulff_export_svg')}>SVG</button>
   </div>
 </div>
 

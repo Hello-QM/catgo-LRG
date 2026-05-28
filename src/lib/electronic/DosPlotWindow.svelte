@@ -2,6 +2,9 @@
   import { DraggablePane } from '$lib'
   import type { PDOSResult, DBandResult } from './types'
   import DosPlot from './DosPlot.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     show = $bindable(false),
@@ -98,7 +101,7 @@
       <button class="btn-small" onclick={export_json}>JSON</button>
     </div>
   {:else}
-    <div class="empty-state">No DOS data computed yet</div>
+    <div class="empty-state">{t('structure.dos_no_data_computed')}</div>
   {/if}
 </DraggablePane>
 

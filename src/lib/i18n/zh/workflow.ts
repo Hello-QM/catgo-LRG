@@ -254,6 +254,8 @@ const workflow: Record<string, string> = {
   batch_status_error: `错误`,
   wulff_export_png: `导出 PNG`,
   wulff_export_svg: `导出 SVG`,
+  wulff_area_fraction: `面积占比 (%)`,
+  wulff_shape_dominant: `Wulff 形貌 — 主导晶面：({facet})`,
   wulff_no_3d_data: `暂无 3D 晶面数据`,
   irc_backward: `反向`,
   irc_ts: `TS`,
@@ -573,6 +575,9 @@ const workflow: Record<string, string> = {
   pd_assign_existing: `分配现有工作流`,
   pd_no_unassigned: `没有可分配的未分配工作流。`,
   pd_engine_workflows: `引擎工作流`,
+  wlv2_failed_load_workflows: `加载工作流失败`,
+  wlv2_no_engine_workflows: `暂无引擎工作流。请通过 MCP 或 Python API 创建。`,
+  wlv2_created: `创建时间`,
   pd_assign_engine_wf: `分配引擎工作流`,
   pd_no_unassigned_engine: `没有可分配的未分配引擎工作流。`,
   pd_no_results: `暂无结果。运行工作流以在此处查看计算结果。`,
@@ -582,6 +587,14 @@ const workflow: Record<string, string> = {
   pd_delete_wf: `删除工作流`,
   pd_tasks: `{n} 个任务`,
   pd_untitled_wf: `未命名工作流`,
+  pause_workflow: `暂停工作流`,
+  pause_no_active_hpc_jobs: `没有活动的 HPC 作业`,
+  pause_select_jobs_desc: `选择要取消的作业。未勾选的作业会继续在 HPC 上运行。`,
+  pause_select_none: `全不选`,
+  pause_selected_count: `已选择 {selected}/{total}`,
+  pause_only: `仅暂停`,
+  pause_cancel_all: `全部取消并暂停`,
+  pause_cancel_count: `取消 {n} 个并暂停`,
 
   // NodeStatusPanel
   nsp_loading: `正在加载执行数据...`,
@@ -862,4 +875,3 @@ const workflow: Record<string, string> = {
 }
 
 export default workflow
-

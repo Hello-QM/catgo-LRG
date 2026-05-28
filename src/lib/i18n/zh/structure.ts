@@ -1252,6 +1252,7 @@ const structure: Record<string, string> = {
   dos_remote_load_failed: `远程加载失败`,
   dos_upload_failed: `上传失败`,
   dos_no_atoms_selection: `未找到符合选择条件的原子`,
+  dos_no_data_computed: `尚未计算 DOS 数据`,
   dos_computation_failed: `计算失败`,
   dos_no_atoms_dband: `未找到用于 d-band 分析的原子`,
   dos_parsing_file: `正在解析文件...`,

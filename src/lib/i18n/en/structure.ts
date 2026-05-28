@@ -1252,6 +1252,7 @@ const structure: Record<string, string> = {
   dos_remote_load_failed: `Remote load failed`,
   dos_upload_failed: `Upload failed`,
   dos_no_atoms_selection: `No atoms found for selection`,
+  dos_no_data_computed: `No DOS data computed yet`,
   dos_computation_failed: `Computation failed`,
   dos_no_atoms_dband: `No atoms found for d-band analysis`,
   dos_parsing_file: `Parsing file...`,

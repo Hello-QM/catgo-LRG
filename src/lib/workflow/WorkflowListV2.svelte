@@ -1,6 +1,10 @@
 <!-- src/lib/workflow/WorkflowListV2.svelte -->
 <script lang="ts">
   import { list_v2_workflows, type V2WorkflowSummary } from '$lib/api/workflow-v2'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   interface Props {
     onselect?: (id: string) => void
@@ -17,7 +21,7 @@
     try {
       workflows = await list_v2_workflows()
     } catch (e: any) {
-      error = e.message || 'Failed to load workflows'
+      error = e.message || t('workflow.wlv2_failed_load_workflows')
     } finally {
       loading = false
     }
@@ -41,8 +45,8 @@
 
 <div class="v2list">
   <div class="header">
-    <h3>Engine Workflows</h3>
-    <button onclick={load} class="refresh-btn">↻ Refresh</button>
+    <h3>{t('workflow.pd_engine_workflows')}</h3>
+    <button onclick={load} class="refresh-btn">↻ {t('common.refresh')}</button>
   </div>
 
   {#if error}
@@ -50,17 +54,17 @@
   {/if}
 
   {#if loading}
-    <div class="loading">Loading…</div>
+    <div class="loading">{t('common.loading')}</div>
   {:else if workflows.length === 0}
-    <div class="empty">No engine workflows yet. Create one via MCP or Python API.</div>
+    <div class="empty">{t('workflow.wlv2_no_engine_workflows')}</div>
   {:else}
     <table>
       <thead>
         <tr>
-          <th>Name</th>
-          <th>Status</th>
-          <th>Tasks</th>
-          <th>Created</th>
+          <th>{t('common.name')}</th>
+          <th>{t('common.status')}</th>
+          <th>{t('common.tasks')}</th>
+          <th>{t('workflow.wlv2_created')}</th>
         </tr>
       </thead>
       <tbody>

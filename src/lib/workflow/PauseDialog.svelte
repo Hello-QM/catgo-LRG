@@ -1,6 +1,10 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
   import { STATUS_COLORS } from './workflow-types'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   export interface PauseJob {
     step_id: string
@@ -53,20 +57,20 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="dialog-modal pause-dialog" onclick={e => e.stopPropagation()}>
       <div class="modal-header">
-        <h3 class="modal-title">Pause Workflow</h3>
-        <button class="close-btn" onclick={onclose}>✕</button>
+        <h3 class="modal-title">{t('workflow.pause_workflow')}</h3>
+        <button class="close-btn" onclick={onclose} aria-label={t('common.close')}>✕</button>
       </div>
 
       <div class="pd-body">
         {#if jobs.length === 0}
-          <div class="pd-empty">No active HPC jobs</div>
+          <div class="pd-empty">{t('workflow.pause_no_active_hpc_jobs')}</div>
         {:else}
-          <div class="pd-desc">Select jobs to cancel. Unchecked jobs will continue running on the HPC.</div>
+          <div class="pd-desc">{t('workflow.pause_select_jobs_desc')}</div>
           <div class="pd-select-bar">
-            <button class="pd-link" onclick={select_all}>Select All</button>
+            <button class="pd-link" onclick={select_all}>{t('common.select_all')}</button>
             <span class="pd-sep">|</span>
-            <button class="pd-link" onclick={select_none}>Select None</button>
-            <span class="pd-count">{selected.size}/{jobs.length} selected</span>
+            <button class="pd-link" onclick={select_none}>{t('workflow.pause_select_none')}</button>
+            <span class="pd-count">{t('workflow.pause_selected_count', { selected: selected.size, total: jobs.length })}</span>
           </div>
           <div class="pd-list">
             {#each jobs as job (job.step_id)}
@@ -93,17 +97,17 @@
       </div>
 
       <div class="pd-footer">
-        <button class="pd-btn secondary" onclick={onclose}>Cancel</button>
+        <button class="pd-btn secondary" onclick={onclose}>{t('common.cancel')}</button>
         <button class="pd-btn secondary" onclick={() => onpause?.([])}>
-          Pause Only
+          {t('workflow.pause_only')}
         </button>
         <button class="pd-btn primary" onclick={() => onpause?.([...selected])}>
           {#if selected.size === 0}
-            Pause Only
+            {t('workflow.pause_only')}
           {:else if selected.size === jobs.length}
-            Cancel All & Pause
+            {t('workflow.pause_cancel_all')}
           {:else}
-            Cancel {selected.size} & Pause
+            {t('workflow.pause_cancel_count', { n: selected.size })}
           {/if}
         </button>
       </div>

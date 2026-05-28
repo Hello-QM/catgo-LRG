@@ -253,6 +253,8 @@ const workflow: Record<string, string> = {
   batch_status_error: `Error`,
   wulff_export_png: `Export PNG`,
   wulff_export_svg: `Export SVG`,
+  wulff_area_fraction: `Area Fraction (%)`,
+  wulff_shape_dominant: `Wulff Shape — Dominant: ({facet})`,
   wulff_no_3d_data: `No 3D facet data available`,
   irc_backward: `Backward`,
   irc_ts: `TS`,
@@ -574,6 +576,9 @@ const workflow: Record<string, string> = {
   pd_assign_existing: `Assign Existing`,
   pd_no_unassigned: `No unassigned workflows available.`,
   pd_engine_workflows: `Engine Workflows`,
+  wlv2_failed_load_workflows: `Failed to load workflows`,
+  wlv2_no_engine_workflows: `No engine workflows yet. Create one via MCP or Python API.`,
+  wlv2_created: `Created`,
   pd_assign_engine_wf: `Assign Engine Workflow`,
   pd_no_unassigned_engine: `No unassigned engine workflows available.`,
   pd_no_results: `No results yet. Run a workflow to see calculation results here.`,
@@ -583,6 +588,14 @@ const workflow: Record<string, string> = {
   pd_delete_wf: `Delete workflow`,
   pd_tasks: `{n} tasks`,
   pd_untitled_wf: `Untitled Workflow`,
+  pause_workflow: `Pause Workflow`,
+  pause_no_active_hpc_jobs: `No active HPC jobs`,
+  pause_select_jobs_desc: `Select jobs to cancel. Unchecked jobs will continue running on the HPC.`,
+  pause_select_none: `Select None`,
+  pause_selected_count: `{selected}/{total} selected`,
+  pause_only: `Pause Only`,
+  pause_cancel_all: `Cancel All & Pause`,
+  pause_cancel_count: `Cancel {n} & Pause`,
 
   // NodeStatusPanel
   nsp_loading: `Loading execution data...`,
@@ -863,4 +876,3 @@ const workflow: Record<string, string> = {
 }
 
 export default workflow
-
