@@ -45,6 +45,9 @@
   } from './sidebar-utils'
 
   load_i18n_module('app')
+  load_i18n_module('common')
+  load_i18n_module('sidebar')
+  load_i18n_module('structure')
 
   // ========== Props ==========
   // [2025-02] Default source changed to localdb
@@ -995,7 +998,7 @@
         <option value="catgo">{t('app.catgo_examples')}</option>
         {#if !STATIC_ONLY}
         <option value="localdb">{t('app.catgo_db')}</option>
-        <option value={LOCAL_SESSION_ID}>Local Files</option>
+        <option value={LOCAL_SESSION_ID}>{t('sidebar.local_files')}</option>
         {#each hpc_sessions as session}
           <option value={session.session_id}>
             {session.username}@{session.host}
@@ -1353,7 +1356,7 @@
 
           {#if structures_section_open}
             {#if root_projects.length === 0}
-              <div class="db-empty">No project folders yet. Click + to create one.</div>
+              <div class="db-empty">{t('sidebar.no_project_folders')}</div>
             {/if}
 
             <!-- Recursive project tree (structures + workflows inside projects) -->
@@ -1364,7 +1367,7 @@
             <!-- Unassigned workflows (not in any project) -->
             {#if unassigned_workflows.length > 0}
               <div class="section-header db-section-header" style="margin-top: 4px; padding-left: 22px">
-                <span class="section-title" style="font-size: 10px; opacity: 0.7">Unassigned</span>
+                <span class="section-title" style="font-size: 10px; opacity: 0.7">{t('sidebar.unassigned')}</span>
                 <span class="section-badge">{unassigned_workflows.length}</span>
               </div>
               {#each unassigned_workflows as wf (wf.id)}
@@ -1381,7 +1384,7 @@
           <!-- Upload toolbar -->
           <div class="hpc-toolbar">
             <label class="hpc-upload-btn">
-              Upload
+              {t('common.upload')}
               <input type="file" onchange={hpc.hpc_upload} multiple hidden />
             </label>
             {#if hpc.hpc_upload_progress !== null}
@@ -1397,7 +1400,7 @@
           {#if hpc.hpc_loading_file}
             <div class="hpc-loading-bar">
               <div class="hpc-loading-bar-inner"></div>
-              <span class="hpc-loading-text">Loading {hpc.hpc_loading_file.name}{hpc.hpc_loading_file.size ? ` (${format_file_size(hpc.hpc_loading_file.size)})` : ``}...</span>
+              <span class="hpc-loading-text">{t('structure.loading_file', { name: hpc.hpc_loading_file.name, size: hpc.hpc_loading_file.size ? ` (${format_file_size(hpc.hpc_loading_file.size)})` : `` })}</span>
             </div>
           {/if}
           {#key hpc.hpc_file_tree_key}
@@ -1444,7 +1447,7 @@
           <circle cx="12" cy="12" r="10" />
           <path d="M12 16v-4M12 8h.01" />
         </svg>
-        System
+        {t('common.system')}
       </button>
     </div>
   </div>
@@ -1456,8 +1459,8 @@
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="diagnostics-overlay-content" onclick={(e) => e.stopPropagation()}>
       <div class="diagnostics-overlay-header">
-        <span>System Diagnostics</span>
-        <button class="diagnostics-close-btn" onclick={() => show_diagnostics = false}>&times;</button>
+        <span>{t('structure.system_diagnostics')}</span>
+        <button class="diagnostics-close-btn" onclick={() => show_diagnostics = false} title={t('common.close')}>&times;</button>
       </div>
       <DiagnosticsPanel />
     </div>

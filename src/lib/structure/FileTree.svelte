@@ -1,8 +1,14 @@
 <script lang="ts">
   import { listFiles, type RemoteFile } from '$lib/api/hpc'
   import { Icon } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { untrack } from 'svelte'
   import { slide } from 'svelte/transition'
+
+  load_i18n_module('common')
+  load_i18n_module('app')
+  load_i18n_module('sidebar')
+  load_i18n_module('structure')
 
   let {
     session_id,
@@ -139,7 +145,7 @@
 
   function start_new_folder_inline() {
     new_folder_parent = current_root
-    new_folder_name = `New Folder`
+    new_folder_name = t('sidebar.new_folder')
   }
 
   // ====== Drag-and-drop upload ======
@@ -374,7 +380,7 @@
       console.error(`Failed to list ${path}:`, e)
       // Don't retry on session errors
       if (msg.includes(`not found`) || msg.includes(`expired`)) {
-        root_error = `Session expired`
+        root_error = t('sidebar.session_expired')
         return []
       }
       root_error = msg
@@ -513,7 +519,7 @@
 
   <!-- Path bar -->
   <div class="tree-path-bar">
-    <button class="tree-nav-btn" onclick={go_up} title="Go up">&#x2191;</button>
+    <button class="tree-nav-btn" onclick={go_up} title={t('sidebar.go_up')}>&#x2191;</button>
     {#if path_editing}
       <input
         class="tree-path-input"
@@ -545,7 +551,7 @@
           path_input_value = current_root
           requestAnimationFrame(() => path_input_el?.select())
         }}
-        title="Click to edit path"
+        title={t('sidebar.click_to_edit_path')}
       >
         {#each breadcrumb_segments as seg, idx}
           {#if idx > 0}
@@ -568,10 +574,10 @@
     {/if}
     <button
       class="tree-nav-btn"
-      title={copy_feedback || `Copy path`}
+      title={copy_feedback || t('sidebar.copy_path')}
       onclick={() => {
         navigator.clipboard.writeText(current_root).then(() => {
-          copy_feedback = `Copied!`
+          copy_feedback = t('sidebar.copied_to_clipboard')
           if (copy_feedback_timer) clearTimeout(copy_feedback_timer)
           copy_feedback_timer = setTimeout(() => { copy_feedback = null }, 1500)
         }).catch(() => {}) // Clipboard API may be unavailable (non-HTTPS, iframe sandbox)
@@ -585,16 +591,16 @@
         </svg>
       {/if}
     </button>
-    <button class="tree-nav-btn" onclick={() => { _loaded_path = null; load_root(current_root) }} title="Refresh">&#x21BB;</button>
+    <button class="tree-nav-btn" onclick={() => { _loaded_path = null; load_root(current_root) }} title={t('common.refresh')}>&#x21BB;</button>
     {#if on_mkdir}
-      <button class="tree-nav-btn" onclick={start_new_folder_inline} title="New Folder">&#x2795;</button>
+      <button class="tree-nav-btn" onclick={start_new_folder_inline} title={t('sidebar.new_folder')}>&#x2795;</button>
     {/if}
   </div>
 
   {#if root_error}
     <div class="tree-error">{root_error}</div>
   {:else if root_loading}
-    <div class="tree-loading">Loading...</div>
+    <div class="tree-loading">{t('common.loading')}</div>
   {:else}
     <!-- New folder inline input -->
     {#if new_folder_parent}
@@ -607,7 +613,7 @@
             if (e.key === `Escape`) { new_folder_parent = null; new_folder_name = `` }
           }}
           onblur={() => { new_folder_parent = null; new_folder_name = `` }}
-          placeholder="Folder name..."
+          placeholder={t('sidebar.folder_name')}
         />
       </div>
     {/if}
@@ -626,9 +632,9 @@
   <!-- Clipboard indicator -->
   {#if clipboard}
     <div class="clipboard-indicator">
-      <span class="clipboard-op">{clipboard.op === `copy` ? `Copied` : `Cut`}:</span>
+      <span class="clipboard-op">{clipboard.op === `copy` ? t('sidebar.copied') : t('common.cut')}:</span>
       <span class="clipboard-name">{clipboard.file.name}</span>
-      <button class="clipboard-clear" onclick={() => clipboard = null}>&#x2715;</button>
+      <button class="clipboard-clear" onclick={() => clipboard = null} title={t('structure.clear_clipboard')}>&#x2715;</button>
     </div>
   {/if}
 </div>
@@ -640,32 +646,32 @@
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="ft-ctx-menu" style="left: {ctx_menu.x}px; top: {ctx_menu.y}px" onclick={(e) => e.stopPropagation()}>
       {#if ctx_menu.node.file.is_dir && on_mkdir}
-        <button class="ft-ctx-item" onclick={() => { new_folder_parent = ctx_menu?.node.file.path ?? current_root; new_folder_name = `New Folder`; close_ctx_menu() }}>New Folder</button>
+        <button class="ft-ctx-item" onclick={() => { new_folder_parent = ctx_menu?.node.file.path ?? current_root; new_folder_name = t('sidebar.new_folder'); close_ctx_menu() }}>{t('sidebar.new_folder')}</button>
       {/if}
       {#if on_rename}
-        <button class="ft-ctx-item" onclick={() => { renaming_node = ctx_menu?.node ?? null; rename_value = ctx_menu?.node.file.name ?? ``; close_ctx_menu() }}>Rename</button>
+        <button class="ft-ctx-item" onclick={() => { renaming_node = ctx_menu?.node ?? null; rename_value = ctx_menu?.node.file.name ?? ``; close_ctx_menu() }}>{t('common.rename')}</button>
       {/if}
       {#if on_copy_file}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) clipboard = { file: ctx_menu.node.file, op: `copy` }; close_ctx_menu() }}>Copy</button>
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) clipboard = { file: ctx_menu.node.file, op: `copy` }; close_ctx_menu() }}>{t('common.copy')}</button>
       {/if}
       {#if on_move_file}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) clipboard = { file: ctx_menu.node.file, op: `cut` }; close_ctx_menu() }}>Cut</button>
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) clipboard = { file: ctx_menu.node.file, op: `cut` }; close_ctx_menu() }}>{t('common.cut')}</button>
       {/if}
       {#if clipboard && (on_copy_file || on_move_file)}
-        <button class="ft-ctx-item" onclick={() => { do_paste(); close_ctx_menu() }}>Paste</button>
+        <button class="ft-ctx-item" onclick={() => { do_paste(); close_ctx_menu() }}>{t('common.paste')}</button>
       {/if}
       {#if on_download}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_download?.(ctx_menu.node.file); close_ctx_menu() }}>Download</button>
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_download?.(ctx_menu.node.file); close_ctx_menu() }}>{t('common.download')}</button>
       {/if}
       {#if on_copy_path}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_copy_path?.(ctx_menu.node.file); close_ctx_menu() }}>Copy Path</button>
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_copy_path?.(ctx_menu.node.file); close_ctx_menu() }}>{t('sidebar.copy_path')}</button>
       {/if}
       {#if on_analyze_report && !ctx_menu.node.file.is_dir && is_report_file(ctx_menu.node.file.name)}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_analyze_report?.(ctx_menu.node.file); close_ctx_menu() }}>Slow-Growth Analysis</button>
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_analyze_report?.(ctx_menu.node.file); close_ctx_menu() }}>{t('structure.slow_growth_post_processing')}</button>
       {/if}
       <hr class="ft-ctx-divider" />
       {#if on_delete}
-        <button class="ft-ctx-item danger" onclick={() => { delete_confirm_file = ctx_menu?.node.file ?? null; close_ctx_menu() }}>Delete</button>
+        <button class="ft-ctx-item danger" onclick={() => { delete_confirm_file = ctx_menu?.node.file ?? null; close_ctx_menu() }}>{t('common.delete')}</button>
       {/if}
     </div>
   </div>
@@ -677,11 +683,11 @@
   <div class="ft-ctx-overlay" onclick={() => delete_confirm_file = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="ft-delete-dialog" onclick={(e) => e.stopPropagation()}>
-      <p>Delete <strong>{delete_confirm_file.name}</strong>?</p>
+      <p>{t('app.delete_item_confirm', { name: delete_confirm_file.name })}</p>
       <p class="ft-delete-path">{delete_confirm_file.path}</p>
       <div class="ft-delete-actions">
-        <button class="ft-delete-btn cancel" onclick={() => delete_confirm_file = null}>Cancel</button>
-        <button class="ft-delete-btn confirm" disabled={op_loading} onclick={do_delete}>{op_loading ? `Deleting...` : `Delete`}</button>
+        <button class="ft-delete-btn cancel" onclick={() => delete_confirm_file = null}>{t('common.cancel')}</button>
+        <button class="ft-delete-btn confirm" disabled={op_loading} onclick={do_delete}>{op_loading ? t('app.deleting') : t('common.delete')}</button>
       </div>
     </div>
   </div>
@@ -693,15 +699,15 @@
   <div class="ft-ctx-overlay" onclick={() => renaming_node = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="ft-delete-dialog" onclick={(e) => e.stopPropagation()}>
-      <p>Rename <strong>{renaming_node.file.name}</strong></p>
+      <p>{t('app.rename_item', { name: renaming_node.file.name })}</p>
       <input
         class="ft-rename-input"
         bind:value={rename_value}
         onkeydown={(e) => { if (e.key === `Enter`) do_rename(); if (e.key === `Escape`) renaming_node = null }}
       />
       <div class="ft-delete-actions">
-        <button class="ft-delete-btn cancel" onclick={() => renaming_node = null}>Cancel</button>
-        <button class="ft-delete-btn confirm" disabled={op_loading || !rename_value.trim()} onclick={do_rename}>{op_loading ? `Renaming...` : `Rename`}</button>
+        <button class="ft-delete-btn cancel" onclick={() => renaming_node = null}>{t('common.cancel')}</button>
+        <button class="ft-delete-btn confirm" disabled={op_loading || !rename_value.trim()} onclick={do_rename}>{op_loading ? t('app.renaming') : t('common.rename')}</button>
       </div>
     </div>
   </div>
@@ -732,14 +738,14 @@
       </button>
       <span class="tree-chevron"><Icon icon="ChevronRight" style="width: 12px; height: 12px;" /></span>
       {#if merging_dir === node.file.name}
-        <span class="merge-spinner" title="Merging structures...">Merging...</span>
+        <span class="merge-spinner" title={t('sidebar.merging_structures')}>{t('sidebar.merging')}</span>
       {:else if on_load_trajectory}
         <div class="merge-wrap">
           <button
             class="merge-btn"
-            title="Merge structures as trajectory"
+            title={t('sidebar.merge_structures_as_trajectory')}
             onclick={(e) => { e.stopPropagation(); merge_menu_path = merge_menu_path === node.file.path ? null : node.file.path }}
-          >Merge</button>
+          >{t('sidebar.merge')}</button>
           {#if merge_menu_path === node.file.path}
             <div class="merge-menu">
               {#each MERGE_PATTERNS as pat}
@@ -755,7 +761,7 @@
         </div>
       {/if}
       {#if on_copy_path}
-        <button class="tree-action-btn copy" onclick={(e) => { e.stopPropagation(); on_copy_path?.(node.file) }} title="Copy path">
+        <button class="tree-action-btn copy" onclick={(e) => { e.stopPropagation(); on_copy_path?.(node.file) }} title={t('sidebar.copy_path')}>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
         </button>
       {/if}
@@ -768,7 +774,7 @@
         class:is-editable={action === `edit`}
         class:is-preview={action === `preview`}
         onclick={() => handle_file_click(node)}
-        title={action === `load` ? `Click to load structure` : action === `preview` ? `Click to preview` : action === `edit` ? `Click to edit` : node.file.name}
+        title={action === `load` ? t('sidebar.click_to_load_structure') : action === `preview` ? t('sidebar.click_to_preview') : action === `edit` ? t('sidebar.click_to_edit') : node.file.name}
       >
         <span class="tree-icon-wrap" style="background: {item_color}1a;">
           <Icon icon="File" style="width: 14px; height: 14px; color: {item_color};" />
@@ -776,32 +782,32 @@
         <span class="tree-name">{node.file.name}</span>
         <span class="tree-size">{format_size(node.file.size_bytes)}</span>
         {#if action === `load`}
-          <span class="tree-badge load-badge" title="Loadable structure">▶</span>
+          <span class="tree-badge load-badge" title={t('sidebar.loadable_structure')}>▶</span>
         {:else if action === `preview`}
-          <span class="tree-badge preview-badge" title="Preview">&#x1F441;</span>
+          <span class="tree-badge preview-badge" title={t('sidebar.preview')}>&#x1F441;</span>
         {:else if action === `edit`}
-          <span class="tree-badge edit-badge" title="Editable">&#x270E;</span>
+          <span class="tree-badge edit-badge" title={t('sidebar.editable')}>&#x270E;</span>
         {/if}
       </button>
       <!-- Separate action buttons for alternative actions -->
       {#if action === `load` && on_open_editor && is_text(node.file.name)}
         <!-- Loadable file can also be edited as text -->
-        <button class="tree-action-btn edit" onclick={(e) => { e.stopPropagation(); on_open_editor?.(node.file) }} title="Edit as text">
+        <button class="tree-action-btn edit" onclick={(e) => { e.stopPropagation(); on_open_editor?.(node.file) }} title={t('structure.edit_as_text')}>
           &#x270E;
         </button>
       {/if}
       {#if action === `preview` && on_open_editor && is_text(node.file.name)}
-        <button class="tree-action-btn edit" onclick={(e) => { e.stopPropagation(); on_open_editor?.(node.file) }} title="Edit as text">
+        <button class="tree-action-btn edit" onclick={(e) => { e.stopPropagation(); on_open_editor?.(node.file) }} title={t('structure.edit_as_text')}>
           &#x270E;
         </button>
       {/if}
       {#if on_download}
-        <button class="tree-action-btn download" onclick={(e) => { e.stopPropagation(); on_download?.(node.file) }} title="Download">
+        <button class="tree-action-btn download" onclick={(e) => { e.stopPropagation(); on_download?.(node.file) }} title={t('common.download')}>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         </button>
       {/if}
       {#if on_copy_path}
-        <button class="tree-action-btn copy" onclick={(e) => { e.stopPropagation(); on_copy_path?.(node.file) }} title="Copy path">
+        <button class="tree-action-btn copy" onclick={(e) => { e.stopPropagation(); on_copy_path?.(node.file) }} title={t('sidebar.copy_path')}>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
         </button>
       {/if}
@@ -810,7 +816,7 @@
   {#if node.file.is_dir && node.expanded && node.children}
     {#if node.children.length === 0}
       <div class="tree-row tree-empty" style="padding-left: {8 + (depth + 1) * 16}px">
-        <span class="tree-name dim">(empty)</span>
+        <span class="tree-name dim">({t('common.empty')})</span>
       </div>
     {:else}
       {@render tree_children(node.children, depth + 1)}
@@ -833,7 +839,7 @@
       <span class="hidden-toggle-chevron" class:expanded={show_hidden}>
         <Icon icon="ChevronRight" style="width: 12px; height: 12px;" />
       </span>
-      Hidden items ({hidden.length})
+      {t('sidebar.hidden_items', { n: hidden.length })}
     </button>
     {#if show_hidden}
       <div transition:slide={{ duration: 200 }}>

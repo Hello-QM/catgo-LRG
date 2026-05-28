@@ -186,13 +186,13 @@
         method: `POST`,
         headers: { 'Content-Type': `application/json` },
         body: JSON.stringify({
-          name: `New Workflow`,
+          name: t('structure.workflow_new'),
           graph_json: JSON.stringify(init_graph),
         }),
       })
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-        throw new Error(err.detail || `Failed to create workflow`)
+        throw new Error(err.detail || t('structure.failed_create_workflow'))
       }
       const wf = await resp.json()
       // Open in editor
@@ -212,20 +212,20 @@
     try {
       const current = await get_current_structure()
       if (!current?.sites?.length) {
-        error_msg = `No structure loaded in viewer`
+        error_msg = t('structure.no_structure_loaded_in_viewer')
         return
       }
 
       // Fetch the workflow graph
       const resp = await fetch(`${API_BASE}/workflow/${wf_id}`)
-      if (!resp.ok) throw new Error(`Failed to load workflow`)
+      if (!resp.ok) throw new Error(t('structure.failed_load_workflow'))
       const wf = await resp.json()
       const graph = JSON.parse(wf.graph_json || `{"nodes":[],"edges":[]}`)
       const nodes = graph.nodes || []
 
       // Find the structure_input node
       const si_node = nodes.find((n: Record<string, unknown>) => n.type === `structure_input`)
-      if (!si_node) throw new Error(`Workflow has no structure_input node`)
+      if (!si_node) throw new Error(t('structure.workflow_has_no_structure_input'))
 
       // Update its params with the current structure
       if (!si_node.params) si_node.params = {}
@@ -248,7 +248,7 @@
         headers: { 'Content-Type': `application/json` },
         body: JSON.stringify({ graph_json: JSON.stringify(graph) }),
       })
-      if (!update_resp.ok) throw new Error(`Failed to update workflow`)
+      if (!update_resp.ok) throw new Error(t('structure.failed_update_workflow'))
 
       // Open in editor
       open_editor(wf_id)
@@ -261,11 +261,11 @@
   }
 
   async function delete_workflow(wf_id: string, wf_name: string) {
-    if (!confirm(`Delete "${wf_name}"?`)) return
+    if (!confirm(t('app.delete_item_confirm', { name: wf_name }))) return
     try {
       const resp = await fetch(`${API_BASE}/workflow/${wf_id}`, { method: `DELETE` })
       if (!resp.ok) {
-        error_msg = `Failed to delete: ${resp.statusText}`
+        error_msg = t('structure.failed_delete_reason', { reason: resp.statusText })
         return
       }
       workflows = workflows.filter(w => w.id !== wf_id)
@@ -274,7 +274,7 @@
         await fetch_steps()
       }
     } catch (err) {
-      error_msg = `Delete failed: ${err}`
+      error_msg = t('structure.delete_failed_reason', { reason: String(err) })
       console.error(`[WorkflowPane] delete:`, err)
     }
   }
@@ -319,7 +319,7 @@
           </div>
 
           {#if active_steps.length > 0}
-            <div class="wf-progress">{active_workflow.completed_steps}/{active_workflow.step_count} steps</div>
+            <div class="wf-progress">{active_workflow.completed_steps}/{t('common.steps_count', { n: active_workflow.step_count })}</div>
             <div class="steps-list">
               {#each active_steps as step (step.id)}
                 <div class="step-row {status_class(step.status)}">

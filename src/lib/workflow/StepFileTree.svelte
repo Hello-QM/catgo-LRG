@@ -8,6 +8,12 @@
    */
   import { Icon } from '$lib'
   import * as api from '$lib/api/workflow'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('sidebar')
+  load_i18n_module('structure')
+  load_i18n_module('workflow')
 
   interface FileEntry {
     name: string
@@ -156,21 +162,21 @@
   <div class="sft-header">
     <button class="sft-collapse-btn" onclick={() => (collapsed = !collapsed)}>
       <span class="sft-chevron" class:open={!collapsed}>{collapsed ? `▸` : `▾`}</span>
-      <span class="sft-title">Output Files</span>
+      <span class="sft-title">{t('workflow.nsp_output_files')}</span>
     </button>
     {#if !collapsed}
       <div class="sft-controls">
-        <button class="sft-ctrl-btn" onclick={() => onrefresh?.()} title="Refresh now">&#x21BB;</button>
+        <button class="sft-ctrl-btn" onclick={() => onrefresh?.()} title={t('workflow.refresh_now')}>&#x21BB;</button>
         {#if status === `running` || status === `queued`}
           <button
             class="sft-ctrl-btn"
             class:active={poll_enabled}
             onclick={() => (poll_enabled = !poll_enabled)}
-            title={poll_enabled ? `Pause auto-refresh` : `Resume auto-refresh`}
+            title={poll_enabled ? t('workflow.pause_auto_refresh') : t('workflow.resume_auto_refresh')}
           >
             {poll_enabled ? `⏸` : `▶`}
           </button>
-          <select class="sft-ctrl-select" bind:value={poll_interval_ms} title="Poll interval">
+          <select class="sft-ctrl-select" bind:value={poll_interval_ms} title={t('workflow.rc_poll_interval')}>
             {#each POLL_OPTIONS as opt}
               <option value={opt}>{format_poll_label(opt)}</option>
             {/each}
@@ -185,7 +191,7 @@
     {#if work_dir}
       <div class="sft-path-bar">
         <span class="sft-path-text" title={work_dir}>{work_dir}</span>
-        <button class="sft-copy-btn" onclick={copy_work_dir} title="Copy path">
+        <button class="sft-copy-btn" onclick={copy_work_dir} title={t('sidebar.copy_path')}>
           {#if copy_feedback}
             <span style="color:#34D399;font-weight:700">&#x2713;</span>
           {:else}
@@ -200,7 +206,7 @@
     {#if file_loading}
       <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;color:var(--text-color-dim,#888);font-size:11px;">
         <div style="width:14px;height:14px;border:2px solid #333;border-top-color:#3b82f6;border-radius:50%;animation:spin 0.6s linear infinite;"></div>
-        Loading...
+        {t('common.loading')}
       </div>
     {/if}
 
@@ -239,9 +245,9 @@
               <!-- Action buttons (visible on hover) -->
               <span class="sft-actions">
                 {#if can_load(f.name)}
-                  <button class="sft-action" onclick={(e) => handle_load(e, f.name)} title="Load structure">&#9654;</button>
+                  <button class="sft-action" onclick={(e) => handle_load(e, f.name)} title={t('structure.load_structure')}>&#9654;</button>
                 {/if}
-                <button class="sft-action" onclick={(e) => handle_download(e, f.name)} title="Download">
+                <button class="sft-action" onclick={(e) => handle_download(e, f.name)} title={t('common.download')}>
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                     <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
                   </svg>
@@ -252,7 +258,7 @@
         {/each}
       </div>
     {:else}
-      <div class="sft-empty">No output files yet</div>
+      <div class="sft-empty">{t('workflow.no_output_files_yet')}</div>
     {/if}
   {/if}
 </div>

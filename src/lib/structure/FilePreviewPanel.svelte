@@ -1,6 +1,11 @@
 <script lang="ts">
   import { markdown_to_html } from '$lib/chat/markdown'
   import { download as unified_download } from '$lib/io/fetch'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('sidebar')
+  load_i18n_module('structure')
 
   let {
     mode,
@@ -166,7 +171,7 @@
         }
         excel_sheets = sheets
       } catch (e: any) {
-        excel_error = e.message || `Failed to parse Excel file`
+        excel_error = e.message || t('structure.failed_parse_excel_file')
       }
     })()
   })
@@ -299,8 +304,8 @@
       const full_el = wrapper?.querySelector(`.code-full code`) ?? wrapper?.querySelector(`code`)
       if (!full_el) return
       navigator.clipboard.writeText(full_el.textContent ?? ``).then(() => {
-        target.textContent = `Copied!`
-        setTimeout(() => { target.textContent = `Copy` }, 1500)
+        target.textContent = t('sidebar.copied_to_clipboard')
+        setTimeout(() => { target.textContent = t('common.copy') }, 1500)
       }).catch(() => {}) // Clipboard API may be unavailable (non-HTTPS, iframe sandbox)
       return
     }
@@ -316,7 +321,7 @@
         preview.style.display = collapsed ? `none` : ``
         full.style.display = collapsed ? `` : `none`
         wrapper.setAttribute(`data-collapsed`, collapsed ? `false` : `true`)
-        target.textContent = collapsed ? `Collapse` : `Show all ${wrapper.getAttribute(`data-lines`) ?? ``} lines`
+        target.textContent = collapsed ? t('common.collapse') : t('structure.show_all_lines', { n: wrapper.getAttribute(`data-lines`) ?? `` })
       }
       return
     }
@@ -325,23 +330,23 @@
 
 <div class="preview-panel">
   <div class="preview-header">
-    <div class="preview-title" title={filename || `Preview`}>
-      {filename || `Preview`}
+    <div class="preview-title" title={filename || t('sidebar.preview')}>
+      {filename || t('sidebar.preview')}
     </div>
     <div class="preview-info">
       {mode_info}
     </div>
     <div class="preview-controls">
       {#if mode === `markdown`}
-        <button class="preview-btn download-btn" onclick={export_pdf} title="Export as PDF">
+        <button class="preview-btn download-btn" onclick={export_pdf} title={t('structure.export_as_pdf')}>
           PDF
         </button>
       {/if}
-      <button class="preview-btn download-btn" onclick={download_file} title="Download">
-        Download
+      <button class="preview-btn download-btn" onclick={download_file} title={t('common.download')}>
+        {t('common.download')}
       </button>
       {#if onclose}
-        <button class="preview-btn close-btn" onclick={onclose} title="Close preview">
+        <button class="preview-btn close-btn" onclick={onclose} title={t('structure.close_preview')}>
           &times;
         </button>
       {/if}
@@ -363,7 +368,7 @@
       {#if pdf_blob_url}
         <iframe
           src={pdf_blob_url}
-          title={filename || `PDF Preview`}
+          title={filename || t('structure.pdf_preview')}
           class="pdf-frame"
         ></iframe>
       {/if}
