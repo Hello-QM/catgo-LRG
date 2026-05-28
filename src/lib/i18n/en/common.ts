@@ -50,6 +50,7 @@ const common: Record<string, string> = {
   yes:                `Yes`,
   no:                 `No`,
   retry:              `Retry`,
+  try_again:          `Try Again`,
   run:                `Run`,
   stop:               `Stop`,
   pause:              `Pause`,

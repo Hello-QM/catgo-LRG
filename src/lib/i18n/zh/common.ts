@@ -49,6 +49,7 @@ const common: Record<string, string> = {
   yes:                `是`,
   no:                 `否`,
   retry:              `重试`,
+  try_again:          `重试`,
   run:                `运行`,
   stop:               `停止`,
   pause:              `暂停`,

@@ -17,6 +17,7 @@
   import { hpc_session_store, refresh_hpc_sessions, add_session, remove_session } from '$lib/hpc-sessions.svelte'
 
   load_i18n_module('common')
+  load_i18n_module('structure')
 
   let {
     show = $bindable(false),
@@ -319,10 +320,10 @@
     <div class="dialog-modal connect-modal">
       <div class="modal-header">
         <div class="header-copy">
-          <h2 class="modal-title">Connect to Server</h2>
-          <p class="modal-subtitle">Create or reuse an HPC connection for workflow execution.</p>
+          <h2 class="modal-title">{t('structure.connect_to_server')}</h2>
+          <p class="modal-subtitle">{t('structure.connect_to_server_desc')}</p>
         </div>
-        <button class="close-btn" onclick={close} aria-label="Close dialog">✕</button>
+        <button class="close-btn" onclick={close} aria-label={t('common.close')}>✕</button>
       </div>
 
       <div class="modal-body">
@@ -330,8 +331,8 @@
         {#if hpc_session_store.sessions.length > 0}
           <section class="conn-section conn-card conn-card-compact">
             <div class="section-heading">
-              <h4 class="section-label">Active Connections</h4>
-              <span class="section-meta">{hpc_session_store.sessions.length} active</span>
+              <h4 class="section-label">{t('structure.active_connections')}</h4>
+              <span class="section-meta">{t('structure.active_count', { n: hpc_session_store.sessions.length })}</span>
             </div>
             <div class="session-list">
               {#each hpc_session_store.sessions as s}
@@ -344,8 +345,8 @@
                   <button
                     class="session-disconnect"
                     onclick={() => do_disconnect(s.session_id)}
-                    title="Disconnect"
-                  >Disconnect</button>
+                    title={t('common.disconnect')}
+                  >{t('common.disconnect')}</button>
                 </div>
               {/each}
             </div>
@@ -355,40 +356,40 @@
         <!-- Status Messages -->
         {#if conn_status === `connecting`}
           <section class="conn-section status-section status-connecting">
-            <div class="status-eyebrow">Connection status</div>
-            <div class="status-msg connecting">Connecting to server...</div>
-            <p class="status-description">Please keep this dialog open while the secure session is being established.</p>
+            <div class="status-eyebrow">{t('structure.connection_status')}</div>
+            <div class="status-msg connecting">{t('structure.connecting_to_server')}</div>
+            <p class="status-description">{t('structure.keep_dialog_open_connecting')}</p>
           </section>
         {:else if conn_status === `otp_required`}
           <section class="conn-section status-section status-otp">
-            <div class="status-eyebrow">Verification required</div>
-            <h4 class="section-label no-divider">Two-Factor Authentication</h4>
+            <div class="status-eyebrow">{t('structure.verification_required')}</div>
+            <h4 class="section-label no-divider">{t('structure.two_factor_auth')}</h4>
             <p class="status-description">{otp_prompt}</p>
             <div class="otp-row">
               <input
                 type="text"
                 bind:value={otp_code}
-                placeholder="Enter code"
+                placeholder={t('structure.enter_code')}
                 maxlength="8"
                 class="otp-input"
                 onkeydown={(e) => e.key === `Enter` && submit_otp()}
               />
-              <button class="btn-primary" onclick={submit_otp} disabled={!otp_code}>Submit</button>
+              <button class="btn-primary" onclick={submit_otp} disabled={!otp_code}>{t('common.submit')}</button>
             </div>
           </section>
         {:else if conn_status === `connected`}
           <section class="conn-section status-section status-success">
-            <div class="status-eyebrow">Connection status</div>
-            <div class="status-msg success">Connected to {connected_username}@{connected_host}</div>
-            <p class="status-description">You can proceed with workflow execution or open another connection.</p>
-            <button class="btn-new" onclick={reset_form}>Connect Another</button>
+            <div class="status-eyebrow">{t('structure.connection_status')}</div>
+            <div class="status-msg success">{t('structure.connected_to_user_host', { user: connected_username, host: connected_host })}</div>
+            <p class="status-description">{t('structure.connected_dialog_desc')}</p>
+            <button class="btn-new" onclick={reset_form}>{t('structure.connect_another')}</button>
           </section>
         {:else if conn_status === `error`}
           <section class="conn-section status-section status-error">
-            <div class="status-eyebrow">Connection failed</div>
+            <div class="status-eyebrow">{t('structure.connection_failed')}</div>
             <div class="status-msg error-msg">{conn_error}</div>
-            <p class="status-description">Check the connection details and try again.</p>
-            <button class="btn-new" onclick={reset_form}>Try Again</button>
+            <p class="status-description">{t('structure.check_connection_details')}</p>
+            <button class="btn-new" onclick={reset_form}>{t('common.try_again')}</button>
           </section>
         {/if}
 
@@ -398,21 +399,21 @@
           {#if profiles.length > 0}
             <section class="conn-section conn-card conn-card-compact">
               <div class="section-heading">
-                <h4 class="section-label">Saved Profiles</h4>
-                <span class="section-meta">{profiles.length} saved</span>
+                <h4 class="section-label">{t('structure.saved_profiles')}</h4>
+                <span class="section-meta">{t('structure.saved_count', { n: profiles.length })}</span>
               </div>
               <div class="profile-row">
                 <select
                   bind:value={selected_profile}
                   onchange={() => apply_profile(selected_profile)}
                 >
-                  <option value="">Select profile...</option>
+                  <option value="">{t('structure.select_profile_placeholder')}</option>
                   {#each profiles as p}
                     <option value={p.name}>{p.name}</option>
                   {/each}
                 </select>
                 {#if selected_profile}
-                  <button class="icon-btn danger" onclick={delete_current_profile} title="Delete profile">✕</button>
+                  <button class="icon-btn danger" onclick={delete_current_profile} title={t('structure.delete_profile')}>✕</button>
                 {/if}
               </div>
             </section>
@@ -421,51 +422,51 @@
           <!-- New Connection -->
           <section class="conn-section conn-card">
             <div class="section-heading">
-              <h4 class="section-label">New Connection</h4>
-              <span class="section-meta">Secure shell setup</span>
+              <h4 class="section-label">{t('structure.new_connection')}</h4>
+              <span class="section-meta">{t('structure.secure_shell_setup')}</span>
             </div>
             <div class="form-grid">
               <label>
-                Auth
+                {t('structure.auth')}
                 <select bind:value={auth_method}>
-                  <option value="password">Password</option>
-                  <option value="password_otp">Password + OTP</option>
-                  <option value="key">SSH Key</option>
-                  <option value="key_otp">SSH Key + OTP</option>
-                  <option value="ssh_config">SSH Config</option>
+                  <option value="password">{t('structure.password')}</option>
+                  <option value="password_otp">{t('structure.password_otp')}</option>
+                  <option value="key">{t('structure.ssh_key')}</option>
+                  <option value="key_otp">{t('structure.ssh_key_otp')}</option>
+                  <option value="ssh_config">{t('structure.ssh_config')}</option>
                 </select>
               </label>
               {#if auth_method === `ssh_config`}
                 <label class="full-span">
-                  SSH Alias <span class="hint">(from ~/.ssh/config)</span>
-                  <input type="text" bind:value={ssh_alias} placeholder="e.g. Shaheen" />
+                  {t('structure.ssh_alias')} <span class="hint">{t('structure.ssh_alias_hint')}</span>
+                  <input type="text" bind:value={ssh_alias} placeholder={t('structure.ssh_alias_placeholder')} />
                 </label>
               {:else}
                 <label>
-                  Host
+                  {t('structure.host')}
                   <input type="text" bind:value={host} placeholder="hpc.example.com" />
                 </label>
                 <label>
-                  Port
+                  {t('structure.port')}
                   <input type="number" bind:value={port} min={1} max={65535} />
                 </label>
                 <label>
-                  Username
+                  {t('structure.username')}
                   <input type="text" bind:value={username} placeholder="user" />
                 </label>
                 {#if auth_method === `password` || auth_method === `password_otp`}
                   <label class="full-span">
-                    Password
+                    {t('structure.password')}
                     <input type="password" bind:value={password} placeholder="••••••" />
                   </label>
                 {/if}
                 <label class="full-span">
-                  Key File <span class="hint">(optional)</span>
-                  <input type="text" bind:value={key_file} placeholder="~/.ssh/id_rsa" />
+                  {t('structure.key_file')} <span class="hint">{t('common.optional')}</span>
+                  <input type="text" bind:value={key_file} placeholder={t('structure.key_file_placeholder')} />
                 </label>
               {/if}
               <label>
-                Scheduler
+                {t('structure.scheduler')}
                 <select bind:value={scheduler}>
                   <option value="slurm">SLURM</option>
                   <option value="pbs">PBS/Torque</option>
@@ -477,35 +478,35 @@
             <label class="checkbox-row toggle-row">
               <input type="checkbox" bind:checked={use_jump} />
               <span class="toggle-copy">
-                <span class="toggle-title">Use jump host</span>
-                <span class="toggle-description">Route the connection through a bastion server.</span>
+                <span class="toggle-title">{t('structure.use_jump_host')}</span>
+                <span class="toggle-description">{t('structure.jump_host_desc')}</span>
               </span>
             </label>
 
             {#if use_jump}
               <div class="form-grid option-card jump-fields">
                 <label>
-                  Jump Host
+                  {t('structure.jump_host')}
                   <input type="text" bind:value={jump_host} placeholder="bastion.example.com" />
                 </label>
                 <label>
-                  Port
+                  {t('structure.port')}
                   <input type="number" bind:value={jump_port} min={1} max={65535} />
                 </label>
                 <label class="full-span">
-                  Jump Username
-                  <input type="text" bind:value={jump_username} placeholder="Same as above" />
+                  {t('structure.jump_username')}
+                  <input type="text" bind:value={jump_username} placeholder={t('structure.same_as_above')} />
                 </label>
                 <label>
-                  Jump Auth
+                  {t('structure.jump_auth')}
                   <select bind:value={jump_use_key} onchange={() => { if (jump_use_key) jump_password = `` }}>
-                    <option value={true}>SSH Key</option>
-                    <option value={false}>Password</option>
+                    <option value={true}>{t('structure.ssh_key')}</option>
+                    <option value={false}>{t('structure.password')}</option>
                   </select>
                 </label>
                 {#if !jump_use_key}
                   <label>
-                    Jump Password
+                    {t('structure.jump_password')}
                     <input type="password" bind:value={jump_password} placeholder="••••••" />
                   </label>
                 {/if}
@@ -516,27 +517,27 @@
             <label class="checkbox-row toggle-row">
               <input type="checkbox" bind:checked={use_proxy} />
               <span class="toggle-copy">
-                <span class="toggle-title">Use SOCKS5 proxy</span>
-                <span class="toggle-description">Forward traffic through an existing proxy endpoint.</span>
+                <span class="toggle-title">{t('structure.use_socks_proxy')}</span>
+                <span class="toggle-description">{t('structure.socks_proxy_desc')}</span>
               </span>
             </label>
 
             {#if use_proxy}
               <div class="form-grid option-card jump-fields">
                 <label>
-                  Proxy Host
+                  {t('structure.proxy_host')}
                   <input type="text" bind:value={proxy_host} placeholder="127.0.0.1" />
                 </label>
                 <label>
-                  Port
+                  {t('structure.port')}
                   <input type="number" bind:value={proxy_port} min={1} max={65535} />
                 </label>
                 <label>
-                  Username <span class="hint">(optional)</span>
-                  <input type="text" bind:value={proxy_username} placeholder="Leave empty for no auth" />
+                  {t('structure.username')} <span class="hint">{t('common.optional')}</span>
+                  <input type="text" bind:value={proxy_username} placeholder={t('structure.no_proxy_auth_placeholder')} />
                 </label>
                 <label>
-                  Password <span class="hint">(optional)</span>
+                  {t('structure.password')} <span class="hint">{t('common.optional')}</span>
                   <input type="password" bind:value={proxy_password} placeholder="••••••" />
                 </label>
               </div>
@@ -544,8 +545,8 @@
 
             <!-- Save Profile Row -->
             <div class="profile-save-row">
-              <input type="text" bind:value={profile_name} placeholder="Profile name" class="profile-name-input" />
-              <button class="btn-secondary" onclick={save_current_profile} disabled={!profile_name.trim() || (!host && auth_method !== `ssh_config`)}>Save</button>
+              <input type="text" bind:value={profile_name} placeholder={t('structure.profile_name')} class="profile-name-input" />
+              <button class="btn-secondary" onclick={save_current_profile} disabled={!profile_name.trim() || (!host && auth_method !== `ssh_config`)}>{t('common.save')}</button>
             </div>
           </section>
         {/if}
@@ -554,10 +555,10 @@
       <!-- Footer -->
       <div class="modal-footer">
         <button class="btn-cancel" onclick={close}>
-          {conn_status === `connected` ? `Done` : `Cancel`}
+          {conn_status === `connected` ? t('common.done') : t('common.cancel')}
         </button>
         {#if conn_status === `idle`}
-          <button class="btn-primary" onclick={do_connect} disabled={!can_connect}>Connect</button>
+          <button class="btn-primary" onclick={do_connect} disabled={!can_connect}>{t('common.connect')}</button>
         {/if}
       </div>
     </div>
