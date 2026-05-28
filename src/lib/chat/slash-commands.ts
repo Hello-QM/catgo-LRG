@@ -2,7 +2,7 @@ import type { ChatMessage, SessionSummary } from './types'
 import { get_display_text } from './types'
 import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
-load_i18n_module('chat')
+const chat_i18n_ready = load_i18n_module('chat')
 
 export type { SessionSummary } from './types'
 
@@ -59,6 +59,7 @@ export function match_slash(raw: string): { cmd: SlashCommand; args: string } | 
 export async function run_slash(raw: string, ctx: SlashCtx): Promise<boolean> {
   const s = raw.trimStart()
   if (!s.startsWith('/')) return false
+  await chat_i18n_ready
   const m = match_slash(raw)
   if (!m) {
     ctx.emit(t('chat.unknown_command'))
