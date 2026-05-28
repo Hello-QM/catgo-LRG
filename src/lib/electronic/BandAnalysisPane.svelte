@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     upload_band_vasprun,
     get_band_data,
@@ -17,6 +18,9 @@
     BandViewState,
   } from './band_types'
   import type { PymatgenStructure } from '$lib/structure'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     on_structure_loaded = (_s: PymatgenStructure) => {},
@@ -36,7 +40,7 @@
       untrack(() => register_analysis_session({
         type: `bands`,
         session_id,
-        label: `Bands (${elements?.join(`, `) ?? `uploaded`})`,
+        label: `Bands (${elements?.join(`, `) ?? t('structure.dos_uploaded')})`,
         meta: { elements, efermi, is_metal, band_gap },
         created_at: Date.now(),
       }))
@@ -85,7 +89,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || `Upload failed`
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
@@ -107,7 +111,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || `Upload failed`
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
@@ -125,7 +129,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || 'Remote load failed'
+      error_msg = e.message || t('structure.dos_remote_load_failed')
     } finally {
       uploading = false
     }
@@ -140,7 +144,7 @@
       band_state.band_data = await get_band_data(session.session_id, { emin, emax })
       band_state.projections = null
     } catch (e: any) {
-      error_msg = e.message || `Failed to load bands`
+      error_msg = e.message || t('structure.band_load_failed')
     } finally {
       loading_bands = false
     }
@@ -160,7 +164,7 @@
       }
 
       if (atoms.length === 0) {
-        error_msg = `No atoms found`
+        error_msg = t('structure.band_no_atoms_found')
         return
       }
 
@@ -188,7 +192,7 @@
       band_state.band_data = result  // BandProjectionResponse extends BandDataResponse
       band_state.projections = result.projections
     } catch (e: any) {
-      error_msg = e.message || `Projection failed`
+      error_msg = e.message || t('structure.band_projection_failed')
     } finally {
       loading_projections = false
     }
@@ -222,21 +226,21 @@
     >
       {#if uploading}
         <Spinner />
-        <span>Parsing...</span>
+        <span>{t('structure.band_parsing')}</span>
       {:else}
-        <p>Drop <code>vasprun.xml</code> here or</p>
+        <p>{t('structure.dos_drop_prefix')} <code>vasprun.xml</code> {t('structure.dos_drop_suffix')} {t('common.or')}</p>
         <div class="source-buttons">
           <label class="upload-btn">
-            Browse Local
+            {t('structure.browse_local')}
             <input type="file" accept=".xml" onchange={handle_upload} hidden />
           </label>
           <button class="upload-btn remote-btn" onclick={() => show_file_dialog = true}>
-            Browse Remote
+            {t('structure.browse_remote')}
           </button>
         </div>
         <div class="kpoints-row">
           <label class="kpoints-label">
-            KPOINTS (optional):
+            {t('structure.band_kpoints_optional')}
             <input
               type="file"
               accept="KPOINTS,*"
@@ -249,15 +253,15 @@
   {:else}
     <!-- Session Info -->
     <div class="info-bar">
-      <span title="Elements">{session.ion_types.join(`, `)}</span>
-      <span title="K-points">{session.nkpts}k</span>
-      <span title="Bands">{session.nbands}b</span>
-      <span title="Spin">{session.nspin > 1 ? `spin-pol` : `non-spin`}</span>
-      <span title="Metal?">{session.is_metal ? `metal` : `semicond`}</span>
+      <span title={t('structure.elements_label')}>{session.ion_types.join(`, `)}</span>
+      <span title={t('structure.dos_kpoints')}>{session.nkpts}k</span>
+      <span title={t('structure.dos_bands')}>{session.nbands}b</span>
+      <span title={t('structure.dos_spin')}>{session.nspin > 1 ? t('structure.dos_spin_pol') : t('structure.dos_non_spin')}</span>
+      <span title={t('structure.band_metal_status')}>{session.is_metal ? t('structure.band_metal') : t('structure.band_semicond')}</span>
       {#if session.band_gap}
-        <span title="Band gap">{session.band_gap.energy.toFixed(3)} eV</span>
+        <span title={t('structure.band_gap')}>{session.band_gap.energy.toFixed(3)} eV</span>
       {/if}
-      <button class="btn-small danger" title="Close session" onclick={close_session}>
+      <button class="btn-small danger" title={t('structure.dos_close_session')} onclick={close_session}>
         &times;
       </button>
     </div>
@@ -269,33 +273,33 @@
       disabled={loading_bands}
     >
       {#if loading_bands}
-        <Spinner /> Loading...
+        <Spinner /> {t('common.loading')}
       {:else}
-        Load Bands
+        {t('structure.band_load_bands')}
       {/if}
     </button>
 
     <!-- Projection Groups -->
     <details>
-      <summary>Fat Bands / Projections ({proj_groups.length})</summary>
+      <summary>{t('structure.band_fat_projections', { n: proj_groups.length })}</summary>
 
       <div class="tab-bar">
         <button
           class="tab-btn"
           class:active={selection_mode === `element`}
           onclick={() => selection_mode = `element`}
-        >Element</button>
+        >{t('structure.dos_element')}</button>
         <button
           class="tab-btn"
           class:active={selection_mode === `index`}
           onclick={() => selection_mode = `index`}
-        >Index</button>
+        >{t('structure.dos_index')}</button>
       </div>
 
       <div class="group-form">
         {#if selection_mode === `element`}
           <select bind:value={new_element}>
-            <option value="">Element</option>
+            <option value="">{t('structure.dos_element')}</option>
             {#each unique_elements as el}
               <option value={el}>{el}</option>
             {/each}
@@ -306,7 +310,7 @@
             placeholder="1-5,8-10"
             bind:value={new_index_spec}
             class="index-input"
-            title="1-based atom indices"
+            title={t('structure.dos_index_title_short')}
           />
         {/if}
 
@@ -326,7 +330,7 @@
 
         <input
           type="text"
-          placeholder="Label"
+          placeholder={t('common.label')}
           bind:value={new_label}
           class="label-input"
         />
@@ -344,7 +348,7 @@
             <li>
               <span class="group-label">{g.label}</span>
               <span class="group-detail">
-                {g.atoms.length} atoms, {g.channels}
+                {t('structure.dos_group_detail', { atoms: g.atoms.length, channels: g.channels })}
               </span>
               <button class="btn-tiny" onclick={() => remove_group(i)}>&times;</button>
             </li>
@@ -357,9 +361,9 @@
           disabled={loading_projections}
         >
           {#if loading_projections}
-            <Spinner /> Computing...
+            <Spinner /> {t('structure.computing')}
           {:else}
-            Load Projections
+            {t('structure.band_load_projections')}
           {/if}
         </button>
       {/if}
@@ -367,22 +371,22 @@
 
     <!-- Display Options -->
     <details>
-      <summary>Display Options</summary>
+      <summary>{t('structure.dos_display_options')}</summary>
       <div class="display-opts">
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={band_state.show_fermi_line} />
-          Fermi level line
+          {t('structure.dos_fermi_level_line')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={band_state.show_band_gap} />
-          Band gap annotation
+          {t('structure.band_gap_annotation')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={band_state.show_spin_down} />
-          Show spin down
+          {t('structure.dos_show_spin_down')}
         </label>
         <div class="range-row">
-          <span>E min (eV):</span>
+          <span>{t('structure.band_e_min_ev')}</span>
           <input
             type="number"
             bind:value={band_state.energy_range[0]}
@@ -391,7 +395,7 @@
           />
         </div>
         <div class="range-row">
-          <span>E max (eV):</span>
+          <span>{t('structure.band_e_max_ev')}</span>
           <input
             type="number"
             bind:value={band_state.energy_range[1]}
@@ -400,7 +404,7 @@
           />
         </div>
         <div class="range-row">
-          <span>Fat band scale:</span>
+          <span>{t('structure.band_fat_scale')}</span>
           <input
             type="number"
             bind:value={band_state.fat_band_scale}
@@ -413,15 +417,15 @@
 
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={band_state.legend_visible} />
-          Show legend
+          {t('structure.dos_show_legend')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={band_state.show_gridlines} />
-          Show gridlines
+          {t('structure.dos_show_gridlines')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={band_state.show_axis_lines} />
-          Show axis lines
+          {t('structure.dos_show_axis_lines')}
         </label>
       </div>
     </details>
@@ -435,8 +439,8 @@
 <FileSourceDialog
   bind:show={show_file_dialog}
   file_types={['.xml']}
-  title="Load Band Structure"
-  description="Select a vasprun.xml file or provide a remote directory containing vasprun.xml (+ optional KPOINTS)."
+  title={t('structure.band_load_structure')}
+  description={t('structure.band_load_structure_desc')}
   onfile={async (file) => {
     uploading = true
     error_msg = ''
@@ -449,7 +453,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || 'Upload failed'
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
