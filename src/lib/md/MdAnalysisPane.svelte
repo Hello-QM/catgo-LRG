@@ -18,6 +18,7 @@
   import MdCavitationPanel from "./MdCavitationPanel.svelte";
   import { t, load_i18n_module } from "$lib/i18n/index.svelte";
 
+  load_i18n_module("common");
   load_i18n_module("structure");
 
   type MdSubTab =
@@ -30,15 +31,15 @@
     | `orientation`
     | `cavitation`;
 
-  const sub_tabs: { id: MdSubTab; label: string }[] = [
-    { id: `rdf`, label: `RDF` },
-    { id: `dynamics`, label: `Dynamics` },
-    { id: `density`, label: `Density` },
-    { id: `hbonds`, label: `H-bonds` },
-    { id: `msd`, label: `MSD` },
-    { id: `orientation`, label: `Orientation` },
-    { id: `cavitation`, label: `Cavitation` },
-    { id: `clustering`, label: `Clustering` },
+  const sub_tabs: { id: MdSubTab; label_key: string }[] = [
+    { id: `rdf`, label_key: `structure.md_tab_rdf` },
+    { id: `dynamics`, label_key: `structure.md_tab_dynamics` },
+    { id: `density`, label_key: `structure.md_tab_density` },
+    { id: `hbonds`, label_key: `structure.md_tab_hbonds` },
+    { id: `msd`, label_key: `structure.md_tab_msd` },
+    { id: `orientation`, label_key: `structure.md_tab_orientation` },
+    { id: `cavitation`, label_key: `structure.md_tab_cavitation` },
+    { id: `clustering`, label_key: `structure.md_tab_clustering` },
   ];
 
   let {
@@ -97,7 +98,7 @@
         register_analysis_session({
           type: "md",
           session_id: sid,
-          label: `MD trajectory (${fmt})`,
+          label: t("structure.md_trajectory_label", { format: fmt }),
           meta: { format: fmt },
           created_at: Date.now(),
         });
@@ -130,7 +131,7 @@
       local_traj_b64 = await file_to_b64(file);
       local_traj_format = file.name.split(`.`).pop()?.toLowerCase() || ``;
     } catch (e: any) {
-      error_msg = e.message || `Failed to read file`;
+      error_msg = e.message || t("structure.failed_read_file");
     } finally {
       importing = false;
     }
@@ -143,7 +144,7 @@
       const resp = await fetch(
         `${API_BASE}/hpc/download?session_id=${encodeURIComponent(session_id)}&remote_path=${encodeURIComponent(path)}`,
       );
-      if (!resp.ok) throw new Error(`Download failed: ${resp.statusText}`);
+      if (!resp.ok) throw new Error(t("structure.download_failed_status", { status: resp.statusText }));
       const blob = await resp.blob();
       const arr = new Uint8Array(await blob.arrayBuffer());
       let binary = ``;
@@ -152,7 +153,7 @@
       local_traj_b64 = btoa(binary);
       local_traj_format = path.split(`.`).pop()?.toLowerCase() || ``;
     } catch (e: any) {
-      error_msg = e.message || `Download failed`;
+      error_msg = e.message || t("common.download_failed");
     } finally {
       importing = false;
     }
@@ -175,7 +176,7 @@
           <button
             class="tab-btn"
             class:active={active_sub_tab === tab.id}
-            onclick={() => (active_sub_tab = tab.id)}>{tab.label}</button
+            onclick={() => (active_sub_tab = tab.id)}>{t(tab.label_key)}</button
           >
         {/each}
       </div>
@@ -277,8 +278,8 @@
     `.lammpstrj`,
     `.nc`,
   ]}
-  title="Load Trajectory"
-  description="Select a trajectory file for MD analysis."
+  title={t("structure.load_trajectory")}
+  description={t("structure.select_trajectory_md")}
   onfile={handle_local_file}
   onremote_path={handle_remote_trajectory}
   onclose={() => (show_file_dialog = false)}

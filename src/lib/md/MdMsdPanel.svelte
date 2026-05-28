@@ -1,5 +1,9 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -130,18 +134,18 @@
           type: `scatter`,
           mode: `lines`,
           line: { color: `#d62728`, width: 1.5, dash: `dash` },
-          name: `Einstein fit`,
+          name: t('structure.md_einstein_fit'),
         })
       }
 
       on_plot({
         traces,
-        title: `Mean Squared Displacement`,
+        title: t('structure.md_mean_squared_displacement'),
         x_label: `τ (ps)`,
         y_label: `MSD (Å²)`,
       })
     } catch (e: any) {
-      error = e.message || `Computation failed`
+      error = e.message || t('structure.computation_failed')
     } finally {
       computing = false
     }
@@ -150,11 +154,11 @@
 
 <div class="msd-panel">
   <details open>
-    <summary>MSD &amp; Self-diffusion coefficient</summary>
+    <summary>{t('structure.md_msd_self_diffusion')}</summary>
 
     <div class="param-grid">
       <label>
-        Element filter
+        {t('structure.md_element_filter')}
         <input
           type="text"
           placeholder="e.g. O"
@@ -162,7 +166,7 @@
         />
       </label>
       <label>
-        Atom indices (if element empty)
+        {t('structure.md_atom_indices_if_empty')}
         <input
           type="text"
           placeholder="0,1,2,5"
@@ -170,42 +174,42 @@
         />
       </label>
       <label>
-        Timestep (ps/frame)
+        {t('structure.md_timestep_ps_frame')}
         <input type="number" step="0.001" min="0.001" bind:value={timestep_ps} />
       </label>
       <label>
-        Max τ (frames)
+        {t('structure.md_max_tau_frames')}
         <input type="text" placeholder="n_frames/2" bind:value={max_tau_frames} />
       </label>
       <label>
-        Directions
+        {t('structure.md_directions')}
         <select bind:value={directions}>
           <option value="xyz">xyz (3D, d=3)</option>
           <option value="xy">xy (2D, d=2)</option>
-          <option value="x">x only</option>
-          <option value="y">y only</option>
-          <option value="z">z only</option>
+          <option value="x">{t('structure.md_x_only')}</option>
+          <option value="y">{t('structure.md_y_only')}</option>
+          <option value="z">{t('structure.md_z_only')}</option>
         </select>
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={unwrap_pbc} />
-        Unwrap PBC
+        {t('structure.md_unwrap_pbc')}
       </label>
       <label>
-        Fit τ min (ps)
+        {t('structure.md_fit_tau_min_ps')}
         <input type="text" placeholder="auto" bind:value={fit_tau_min} />
       </label>
       <label>
-        Fit τ max (ps)
+        {t('structure.md_fit_tau_max_ps')}
         <input type="text" placeholder="auto" bind:value={fit_tau_max} />
       </label>
     </div>
 
     <button class="btn-compute" onclick={compute_msd} disabled={computing}>
       {#if computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute MSD
+        {t('structure.md_compute_msd')}
       {/if}
     </button>
 
@@ -215,16 +219,16 @@
 
     {#if result}
       <div class="info-bar">
-        <span title="Atoms used">{result.n_atoms_used} atoms</span>
-        <span title="Frames">{result.n_frames} frames</span>
-        <span title="Dimensionality d in MSD=2dDτ">d = {result.dimensionality}</span>
+        <span title={t('structure.md_atoms_used')}>{t('structure.md_atoms_count', { n: result.n_atoms_used })}</span>
+        <span title={t('structure.md_frames')}>{t('structure.md_frames_count', { n: result.n_frames })}</span>
+        <span title={t('structure.md_dimensionality_title')}>d = {result.dimensionality}</span>
         {#if result.diffusion_coefficient_cm2_s !== null}
-          <span class="d-value" title="Self-diffusion coefficient">
+          <span class="d-value" title={t('structure.md_self_diffusion_coefficient')}>
             D = {result.diffusion_coefficient_cm2_s.toExponential(3)} cm²/s
           </span>
         {/if}
         {#if result.fit_r_squared !== null}
-          <span title="R² of Einstein fit">R² = {result.fit_r_squared.toFixed(4)}</span>
+          <span title={t('structure.md_r2_einstein_fit')}>R² = {result.fit_r_squared.toFixed(4)}</span>
         {/if}
       </div>
     {/if}

@@ -1,5 +1,9 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -109,12 +113,12 @@
 
       on_plot({
         traces,
-        title: `Water orientation order parameter`,
+        title: t('structure.md_water_orientation_order_parameter'),
         x_label: `${result!.axis.toUpperCase()} (Å)`,
-        y_label: `Order parameter`,
+        y_label: t('structure.md_order_parameter'),
       })
     } catch (e: any) {
-      error = e.message || `Computation failed`
+      error = e.message || t('structure.computation_failed')
     } finally {
       computing = false
     }
@@ -123,11 +127,11 @@
 
 <div class="orientation-panel">
   <details open>
-    <summary>Water orientation ⟨cos φ⟩(z)</summary>
+    <summary>{t('structure.md_water_orientation_summary')}</summary>
 
     <div class="param-grid">
       <label>
-        Surface normal
+        {t('structure.md_surface_normal')}
         <select bind:value={axis}>
           <option value="x">x</option>
           <option value="y">y</option>
@@ -135,44 +139,44 @@
         </select>
       </label>
       <label>
-        Number of bins
+        {t('structure.md_number_of_bins')}
         <input type="number" bind:value={n_bins} min="1" max="5000" step="10" />
       </label>
       <label>
-        Z min (Å)
+        {t('structure.md_z_min_angstrom')}
         <input type="text" placeholder="auto" bind:value={z_min} />
       </label>
       <label>
-        Z max (Å)
+        {t('structure.md_z_max_angstrom')}
         <input type="text" placeholder="auto" bind:value={z_max} />
       </label>
       <label>
-        O-H cutoff (Å)
+        {t('structure.md_oh_cutoff_angstrom')}
         <input type="number" bind:value={oh_cutoff} min="0.5" max="2" step="0.05" />
       </label>
       <label>
-        Frame start
+        {t('structure.md_frame_start')}
         <input type="text" placeholder="(optional)" bind:value={frame_start} />
       </label>
       <label>
-        Frame end
+        {t('structure.md_frame_end')}
         <input type="text" placeholder="(optional)" bind:value={frame_end} />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={periodic} />
-        Periodic (PBC)
+        {t('structure.md_periodic_pbc')}
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={compute_p2} />
-        Also ⟨P₂⟩
+        {t('structure.md_also_p2')}
       </label>
     </div>
 
     <button class="btn-compute" onclick={compute_orientation} disabled={computing}>
       {#if computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Orientation Profile
+        {t('structure.md_compute_orientation_profile')}
       {/if}
     </button>
 
@@ -182,8 +186,8 @@
 
     {#if result}
       <div class="info-bar">
-        <span title="Frames used">{result.n_frames_used} frames</span>
-        <span title="Average water molecules per frame">
+        <span title={t('structure.md_frames_used')}>{t('structure.md_frames_count', { n: result.n_frames_used })}</span>
+        <span title={t('structure.md_avg_water_per_frame')}>
           {result.n_waters_mean.toFixed(1)} H₂O/frame
         </span>
         <span>axis = {result.axis}</span>
