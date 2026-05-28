@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     upload_h5,
     upload_procar,
@@ -20,6 +21,9 @@
     DosViewState,
   } from './types'
   import type { PymatgenStructure } from '$lib/structure'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     on_structure_loaded = (_s: PymatgenStructure) => {},
@@ -53,7 +57,7 @@
       untrack(() => register_analysis_session({
         type: `dos`,
         session_id,
-        label: `DOS (${elements?.join(`, `) ?? `uploaded`})`,
+        label: `DOS (${elements?.join(`, `) ?? t('structure.dos_uploaded')})`,
         meta: { elements, efermi, nions },
         created_at: Date.now(),
       }))
@@ -167,7 +171,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || 'Remote load failed'
+      error_msg = e.message || t('structure.dos_remote_load_failed')
     } finally {
       uploading = false
     }
@@ -185,7 +189,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || `Upload failed`
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
@@ -239,7 +243,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || `Upload failed`
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
       procar_pending = null
@@ -270,7 +274,7 @@
       }
 
       if (atoms.length === 0) {
-        error_msg = `No atoms found for selection`
+        error_msg = t('structure.dos_no_atoms_selection')
         return
       }
 
@@ -310,7 +314,7 @@
 
       dos_state.dos_result = pdos
     } catch (e: any) {
-      error_msg = e.message || `Computation failed`
+      error_msg = e.message || t('structure.dos_computation_failed')
     } finally {
       computing = false
     }
@@ -331,7 +335,7 @@
       }
 
       if (atoms.length === 0) {
-        error_msg = `No atoms found for d-band analysis`
+        error_msg = t('structure.dos_no_atoms_dband')
         dband_computing = false
         return
       }
@@ -376,16 +380,16 @@
     >
       {#if uploading}
         <Spinner />
-        <span>Parsing file...</span>
+        <span>{t('structure.dos_parsing_file')}</span>
       {:else}
-        <p>Drop <code>vaspout.h5</code> or <code>PROCAR</code> here or</p>
+        <p>{t('structure.dos_drop_prefix')} <code>vaspout.h5</code> {t('common.or')} <code>PROCAR</code> {t('structure.dos_drop_suffix')} {t('common.or')}</p>
         <div class="source-buttons">
           <label class="upload-btn">
-            Browse Local
+            {t('structure.browse_local')}
             <input type="file" onchange={handle_upload} hidden />
           </label>
           <button class="upload-btn remote-btn" onclick={() => show_file_dialog = true}>
-            Browse Remote / Workflow
+            {t('structure.dos_browse_remote_workflow')}
           </button>
         </div>
       {/if}
@@ -393,19 +397,19 @@
   {:else}
     <!-- Session Info -->
     <div class="info-bar">
-      <span title="Elements">{session.ion_types.join(`, `)}</span>
-      <span title="Atoms">{session.nions} ions</span>
-      <span title="K-points">{session.nkpts}k</span>
-      <span title="Bands">{session.nbands}b</span>
-      <span title="Spin">{session.nspin > 1 ? `spin-pol` : `non-spin`}</span>
-      <button class="btn-small danger" title="Close session" onclick={close_session}>
+      <span title={t('structure.elements_label')}>{session.ion_types.join(`, `)}</span>
+      <span title={t('common.atoms')}>{t('structure.dos_ions_count', { n: session.nions })}</span>
+      <span title={t('structure.dos_kpoints')}>{session.nkpts}k</span>
+      <span title={t('structure.dos_bands')}>{session.nbands}b</span>
+      <span title={t('structure.dos_spin')}>{session.nspin > 1 ? t('structure.dos_spin_pol') : t('structure.dos_non_spin')}</span>
+      <button class="btn-small danger" title={t('structure.dos_close_session')} onclick={close_session}>
         &times;
       </button>
     </div>
 
     <!-- Group Builder -->
     <details open>
-      <summary>PDOS Groups ({groups.length})</summary>
+      <summary>{t('structure.dos_pdos_groups', { n: groups.length })}</summary>
 
       <!-- Selection mode tabs -->
       <div class="tab-bar">
@@ -413,18 +417,18 @@
           class="tab-btn"
           class:active={selection_mode === `element`}
           onclick={() => selection_mode = `element`}
-        >Element</button>
+        >{t('structure.dos_element')}</button>
         <button
           class="tab-btn"
           class:active={selection_mode === `index`}
           onclick={() => selection_mode = `index`}
-        >Index</button>
+        >{t('structure.dos_index')}</button>
       </div>
 
       <div class="group-form">
         {#if selection_mode === `element`}
           <select bind:value={new_element}>
-            <option value="">Element</option>
+            <option value="">{t('structure.dos_element')}</option>
             {#each unique_elements as el}
               <option value={el}>{el}</option>
             {/each}
@@ -435,7 +439,7 @@
             placeholder="1-5,8-10"
             bind:value={new_index_spec}
             class="index-input"
-            title="1-based atom indices (e.g. 1-5,8-10)"
+            title={t('structure.dos_index_title')}
           />
         {/if}
 
@@ -451,7 +455,7 @@
           <option value="dz2">dz2</option>
           <option value="dxz">dxz</option>
           <option value="dx2-y2">dx2-y2</option>
-          <option value="custom">Custom...</option>
+          <option value="custom">{t('structure.dos_custom_orbital')}</option>
         </select>
 
         {#if new_orbital === `custom`}
@@ -460,20 +464,20 @@
             placeholder="dxy,dz2"
             bind:value={new_orbital_custom}
             class="orbital-input"
-            title="Comma-separated orbital names"
+            title={t('structure.dos_orbital_title')}
           />
         {/if}
 
         <input
           type="text"
-          placeholder="Label"
+          placeholder={t('common.label')}
           bind:value={new_label}
           class="label-input"
         />
 
-        <label class="norm-toggle" title="Per-atom normalization">
+        <label class="norm-toggle" title={t('structure.dos_per_atom_normalization')}>
           <input type="checkbox" bind:checked={new_normalize} />
-          norm
+          {t('structure.dos_norm_short')}
         </label>
 
         <button
@@ -489,7 +493,7 @@
             <li>
               <span class="group-label">{g.label}</span>
               <span class="group-detail">
-                {g.atoms.length} atoms, {g.channels}{g.normalize ? ` (norm)` : ``}
+                {t('structure.dos_group_detail', { atoms: g.atoms.length, channels: g.channels })}{g.normalize ? ` (${t('structure.dos_norm_short')})` : ``}
               </span>
               <button class="btn-tiny" onclick={() => remove_group(i)}>&times;</button>
             </li>
@@ -500,85 +504,85 @@
 
     <!-- Parameters -->
     <details>
-      <summary>Parameters</summary>
+      <summary>{t('structure.dos_parameters')}</summary>
       <div class="param-grid">
         <label>
-          Sigma (eV)
+          {t('structure.dos_sigma_ev')}
           <input type="number" bind:value={sigma} step="0.01" min="0.001" max="1" />
         </label>
         <label>
-          E min (eV)
+          {t('structure.dos_e_min_ev')}
           <input type="number" bind:value={emin} step="0.5" />
         </label>
         <label>
-          E max (eV)
+          {t('structure.dos_e_max_ev')}
           <input type="number" bind:value={emax} step="0.5" />
         </label>
         <label>
-          Grid pts
+          {t('structure.dos_grid_pts')}
           <input type="number" bind:value={ngrid} step="100" min="100" max="10000" />
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={include_total} />
-          Include total DOS
+          {t('structure.dos_include_total')}
         </label>
       </div>
     </details>
 
     <!-- Display Options -->
     <details>
-      <summary>Display Options</summary>
+      <summary>{t('structure.dos_display_options')}</summary>
       <div class="display-opts">
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.show_fermi_line} />
-          Fermi level line
+          {t('structure.dos_fermi_level_line')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.show_fill} />
-          Fill under curves
+          {t('structure.dos_fill_under_curves')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.show_spin_down} />
-          Show spin down
+          {t('structure.dos_show_spin_down')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.show_dband_line} />
-          D-band center line
+          {t('structure.dos_dband_center_line')}
         </label>
         <label>
-          Orientation
+          {t('structure.dos_orientation')}
           <select bind:value={dos_state.orientation}>
-            <option value="vertical">Energy on X</option>
-            <option value="horizontal">Energy on Y</option>
+            <option value="vertical">{t('structure.dos_energy_on_x')}</option>
+            <option value="horizontal">{t('structure.dos_energy_on_y')}</option>
           </select>
         </label>
         <div class="range-row">
-          <span>X range:</span>
-          <input type="text" placeholder="min" bind:value={x_range_min} class="range-input" />
-          <input type="text" placeholder="max" bind:value={x_range_max} class="range-input" />
+          <span>{t('structure.dos_x_range')}</span>
+          <input type="text" placeholder={t('structure.dos_min')} bind:value={x_range_min} class="range-input" />
+          <input type="text" placeholder={t('structure.dos_max')} bind:value={x_range_max} class="range-input" />
         </div>
         <div class="range-row">
-          <span>Y range:</span>
-          <input type="text" placeholder="min" bind:value={y_range_min} class="range-input" />
-          <input type="text" placeholder="max" bind:value={y_range_max} class="range-input" />
+          <span>{t('structure.dos_y_range')}</span>
+          <input type="text" placeholder={t('structure.dos_min')} bind:value={y_range_min} class="range-input" />
+          <input type="text" placeholder={t('structure.dos_max')} bind:value={y_range_max} class="range-input" />
         </div>
 
         <hr class="section-divider" />
 
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.legend_visible} />
-          Show legend
+          {t('structure.dos_show_legend')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.show_gridlines} />
-          Show gridlines
+          {t('structure.dos_show_gridlines')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dos_state.show_axis_lines} />
-          Show axis lines
+          {t('structure.dos_show_axis_lines')}
         </label>
         <div class="range-row">
-          <span>Axis width:</span>
+          <span>{t('structure.dos_axis_width')}</span>
           <input
             type="number"
             bind:value={dos_state.axis_line_width}
@@ -587,7 +591,7 @@
           />
         </div>
         <div class="range-row">
-          <span>Tick length:</span>
+          <span>{t('structure.dos_tick_length')}</span>
           <input
             type="number"
             bind:value={dos_state.tick_length}
@@ -596,7 +600,7 @@
           />
         </div>
         <div class="range-row">
-          <span>Tick width:</span>
+          <span>{t('structure.dos_tick_width')}</span>
           <input
             type="number"
             bind:value={dos_state.tick_width}
@@ -610,7 +614,7 @@
     <!-- Series Visibility -->
     {#if dos_state.dos_result && dos_state.dos_result.series.length > 0}
       <details>
-        <summary>Series Visibility</summary>
+        <summary>{t('structure.dos_series_visibility')}</summary>
         <div class="display-opts">
           {#each dos_state.dos_result.series as s}
             <label class="checkbox-label">
@@ -636,7 +640,7 @@
     <!-- Line style overrides per group -->
     {#if groups.length > 0}
       <details>
-        <summary>Line Styles</summary>
+        <summary>{t('structure.dos_line_styles')}</summary>
         <div class="line-styles">
           {#each groups as g}
             <div class="line-style-row">
@@ -648,10 +652,10 @@
                   dos_state.line_styles = { ...dos_state.line_styles, [g.label]: { ...dos_state.line_styles[g.label], dash: target.value } }
                 }}
               >
-                <option value="solid">Solid</option>
-                <option value="dash">Dashed</option>
-                <option value="dot">Dotted</option>
-                <option value="dashdot">Dash-dot</option>
+                <option value="solid">{t('structure.dos_line_solid')}</option>
+                <option value="dash">{t('structure.dos_line_dashed')}</option>
+                <option value="dot">{t('structure.dos_line_dotted')}</option>
+                <option value="dashdot">{t('structure.dos_line_dashdot')}</option>
               </select>
               <input
                 type="number"
@@ -678,31 +682,31 @@
       disabled={computing || groups.length === 0}
     >
       {#if computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute PDOS
+        {t('structure.dos_compute_pdos')}
       {/if}
     </button>
 
     <!-- D-band Analysis -->
     <details bind:open={show_dband}>
-      <summary>D-band Analysis</summary>
+      <summary>{t('structure.dos_dband_analysis')}</summary>
       <div class="tab-bar">
         <button
           class="tab-btn"
           class:active={dband_sel_mode === `element`}
           onclick={() => dband_sel_mode = `element`}
-        >Element</button>
+        >{t('structure.dos_element')}</button>
         <button
           class="tab-btn"
           class:active={dband_sel_mode === `index`}
           onclick={() => dband_sel_mode = `index`}
-        >Index</button>
+        >{t('structure.dos_index')}</button>
       </div>
       <div class="dband-form">
         {#if dband_sel_mode === `element`}
           <select bind:value={dband_element}>
-            <option value="">Element</option>
+            <option value="">{t('structure.dos_element')}</option>
             {#each unique_elements as el}
               <option value={el}>{el}</option>
             {/each}
@@ -713,12 +717,12 @@
             placeholder="1-5,8-10"
             bind:value={dband_index_spec}
             class="index-input"
-            title="1-based atom indices"
+            title={t('structure.dos_index_title_short')}
           />
         {/if}
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={dband_occupied_only} />
-          Occupied only
+          {t('structure.dos_occupied_only')}
         </label>
         <button
           class="btn-small"
@@ -728,7 +732,7 @@
           {#if dband_computing}
             <Spinner />
           {:else}
-            Analyze
+            {t('structure.dos_analyze')}
           {/if}
         </button>
       </div>
@@ -736,17 +740,17 @@
       {#if dos_state.dband_result}
         <table class="dband-table">
           <tbody>
-            <tr><td>Center (abs)</td><td>{dos_state.dband_result.center_abs.toFixed(4)} eV</td></tr>
-            <tr><td>Center (rel E<sub>f</sub>)</td><td>{dos_state.dband_result.center_rel.toFixed(4)} eV</td></tr>
-            <tr><td>Width (RMS)</td><td>{dos_state.dband_result.width.toFixed(4)} eV</td></tr>
-            <tr><td>Variance</td><td>{dos_state.dband_result.variance.toFixed(4)} eV&sup2;</td></tr>
+            <tr><td>{t('structure.dos_center_abs')}</td><td>{dos_state.dband_result.center_abs.toFixed(4)} eV</td></tr>
+            <tr><td>{t('structure.dos_center_rel_ef')}</td><td>{dos_state.dband_result.center_rel.toFixed(4)} eV</td></tr>
+            <tr><td>{t('structure.dos_width_rms')}</td><td>{dos_state.dband_result.width.toFixed(4)} eV</td></tr>
+            <tr><td>{t('structure.dos_variance')}</td><td>{dos_state.dband_result.variance.toFixed(4)} eV&sup2;</td></tr>
             <tr><td>n<sub>d</sub></td><td>{dos_state.dband_result.n_d.toFixed(3)}</td></tr>
-            <tr><td>Total d-weight</td><td>{dos_state.dband_result.total_d_weight.toFixed(3)}</td></tr>
-            <tr><td>Filling</td><td>{(dos_state.dband_result.filling_fraction * 100).toFixed(1)}%</td></tr>
-            <tr><td>Skewness</td><td>{dos_state.dband_result.skewness.toFixed(4)}</td></tr>
-            <tr><td>Kurtosis</td><td>{dos_state.dband_result.kurtosis.toFixed(4)}</td></tr>
+            <tr><td>{t('structure.dos_total_d_weight')}</td><td>{dos_state.dband_result.total_d_weight.toFixed(3)}</td></tr>
+            <tr><td>{t('structure.dos_filling')}</td><td>{(dos_state.dband_result.filling_fraction * 100).toFixed(1)}%</td></tr>
+            <tr><td>{t('structure.dos_skewness')}</td><td>{dos_state.dband_result.skewness.toFixed(4)}</td></tr>
+            <tr><td>{t('structure.dos_kurtosis')}</td><td>{dos_state.dband_result.kurtosis.toFixed(4)}</td></tr>
             <tr>
-              <td>Band edges</td>
+              <td>{t('structure.dos_band_edges')}</td>
               <td>{dos_state.dband_result.lower_edge.toFixed(2)} ~ {dos_state.dband_result.upper_edge.toFixed(2)} eV</td>
             </tr>
           </tbody>
@@ -763,8 +767,8 @@
 <FileSourceDialog
   bind:show={show_file_dialog}
   file_types={['.h5', '.hdf5', 'PROCAR']}
-  title="Load DOS Data"
-  description="Select a vaspout.h5 or PROCAR file, or provide a remote directory containing PROCAR + OUTCAR + CONTCAR."
+  title={t('structure.dos_load_data')}
+  description={t('structure.dos_load_data_desc')}
   onfile={async (file) => {
     if (is_procar(file)) {
       open_procar_dialog(file)
@@ -782,7 +786,7 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="procar-modal" onclick={(e) => e.stopPropagation()}>
       <div class="procar-header">
-        <h3>Upload PROCAR</h3>
+        <h3>{t('structure.dos_upload_procar')}</h3>
         <button class="close-btn" onclick={cancel_procar_dialog}>&times;</button>
       </div>
 
@@ -814,7 +818,7 @@
             </span>
           {:else}
             <label class="slot-browse">
-              Drop or browse
+              {t('structure.dos_drop_or_browse')}
               <input type="file" onchange={(e) => {
                 const f = (e.target as HTMLInputElement).files?.[0]
                 if (f) outcar_file = f
@@ -822,7 +826,7 @@
             </label>
           {/if}
           {#if !outcar_file}
-            <span class="slot-warn">Without OUTCAR, Fermi energy defaults to 0</span>
+            <span class="slot-warn">{t('structure.dos_without_outcar')}</span>
           {/if}
         </div>
 
@@ -847,7 +851,7 @@
             </span>
           {:else}
             <label class="slot-browse">
-              Drop or browse
+              {t('structure.dos_drop_or_browse')}
               <input type="file" onchange={(e) => {
                 const f = (e.target as HTMLInputElement).files?.[0]
                 if (f) poscar_file = f
@@ -855,17 +859,17 @@
             </label>
           {/if}
           {#if !poscar_file}
-            <span class="slot-warn">Without POSCAR, atoms cannot be selected by element</span>
+            <span class="slot-warn">{t('structure.dos_without_poscar')}</span>
           {/if}
         </div>
       </div>
 
       <div class="procar-footer">
         <button class="btn-cancel" onclick={submit_procar_upload}>
-          Skip (PROCAR only)
+          {t('structure.dos_skip_procar_only')}
         </button>
         <button class="btn-upload" onclick={submit_procar_upload}>
-          Upload
+          {t('common.upload')}
         </button>
       </div>
     </div>
