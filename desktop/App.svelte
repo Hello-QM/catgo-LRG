@@ -2081,11 +2081,11 @@
     <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-        <h3>Close tab "{confirm_tab.label}"?</h3>
-        <p>{structure_count} loaded structure{structure_count !== 1 ? 's' : ''} will be removed.</p>
+        <h3>{t('app.confirm_close_tab', { label: confirm_tab.label })}</h3>
+        <p>{t('app.structures_will_be_removed', { count: structure_count })}</p>
         <div class="modal-actions">
-          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>Cancel</button>
-          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>Close Tab</button>
+          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>{t('common.cancel')}</button>
+          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t('app.close_tab')}</button>
         </div>
       </div>
     </div>
@@ -2101,11 +2101,11 @@
   <div class="modal-overlay" onclick={() => tm.pending_layout_change = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-      <h3>Change layout?</h3>
-      <p>{tm.pending_layout_change.lost_count} structure{tm.pending_layout_change.lost_count !== 1 ? 's' : ''} will be removed.</p>
+      <h3>{t('app.change_layout')}</h3>
+      <p>{t('app.structures_will_be_removed', { count: tm.pending_layout_change.lost_count })}</p>
       <div class="modal-actions">
-        <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>Cancel</button>
-        <button class="modal-btn danger" onclick={confirm_layout_change}>Continue</button>
+        <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>{t('common.cancel')}</button>
+        <button class="modal-btn danger" onclick={confirm_layout_change}>{t('app.continue')}</button>
       </div>
     </div>
   </div>
