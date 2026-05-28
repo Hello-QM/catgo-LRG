@@ -1,5 +1,9 @@
 <script lang="ts">
   import EnergyDiagramEditor from './EnergyDiagramEditor.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     show = $bindable(false),
@@ -35,10 +39,10 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="ed-modal" onclick={(e) => e.stopPropagation()}>
       <div class="ed-header">
-        <h3 class="ed-title">Free Energy Diagram</h3>
+        <h3 class="ed-title">{t('workflow.energy_diagram_title')}</h3>
         <div class="ed-actions">
-          <button class="ed-save-btn" onclick={save_and_close}>Save & Close</button>
-          <button class="ed-close-btn" onclick={close}>&times;</button>
+          <button class="ed-save-btn" onclick={save_and_close}>{t('common.save_and_close')}</button>
+          <button class="ed-close-btn" onclick={close} title={t('common.close')}>&times;</button>
         </div>
       </div>
       <div class="ed-body">

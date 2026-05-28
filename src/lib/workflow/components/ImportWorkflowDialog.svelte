@@ -20,6 +20,10 @@
   import '$lib/dialog-shared.css'
   import { API_BASE } from '$lib/api/config'
   import { uid, TEMPLATES, TEMPLATE_GROUPS, type WfNode, type WfEdge } from '../graph-model'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   /**
    * Props for ImportWorkflowDialog.
@@ -79,8 +83,8 @@
   let selected_template_graph = $derived.by(() => {
     if (!selected_template_key) return null
     if (template_source === 'catgo') {
-      const t = TEMPLATES[selected_template_key]
-      return t ? { nodes: t.nodes, edges: t.edges } : null
+      const tpl = TEMPLATES[selected_template_key]
+      return tpl ? { nodes: tpl.nodes, edges: tpl.edges } : null
     }
     // Remote template — look up in remote_templates
     const rt = remote_templates.find(t => t.id === selected_template_key)
@@ -230,7 +234,7 @@
       json_text = reader.result as string
     }
     reader.onerror = () => {
-      json_error = 'Failed to read file'
+      json_error = t('workflow.import_dialog_failed_read_file')
     }
     reader.readAsText(file)
   }
@@ -248,7 +252,7 @@
       try {
         parsed = JSON.parse(json_text)
       } catch {
-        json_error = 'Invalid JSON — check syntax and try again.'
+        json_error = t('workflow.import_dialog_invalid_json')
         return
       }
 
@@ -260,7 +264,7 @@
       ) {
         const g = parsed as { nodes: WfNode[]; edges: WfEdge[] }
         json_result = g
-        json_warnings = ['Detected CatGo-format graph (skipped atomate2 conversion).']
+        json_warnings = [t('workflow.import_dialog_catgo_graph_detected')]
         return
       }
 
@@ -276,7 +280,7 @@
 
       if (!res.ok) {
         const detail = await res.json().catch(() => null)
-        json_error = detail?.detail ?? `Server error: HTTP ${res.status}`
+        json_error = detail?.detail ?? t('workflow.import_dialog_server_error', { status: res.status })
         return
       }
 
@@ -319,7 +323,7 @@
 
       if (!res.ok) {
         const detail = await res.json().catch(() => null)
-        python_error = detail?.detail ?? `Server error: HTTP ${res.status}`
+        python_error = detail?.detail ?? t('workflow.import_dialog_server_error', { status: res.status })
         return
       }
 
@@ -359,20 +363,20 @@
     <div class="dialog-modal import-dialog" onclick={e => e.stopPropagation()}>
       <!-- Header -->
       <div class="modal-header">
-        <h3 class="modal-title">Import Workflow</h3>
+        <h3 class="modal-title">{t('workflow.import_dialog_title')}</h3>
         <button class="close-btn" onclick={close}>&#x2715;</button>
       </div>
 
       <!-- Tab bar -->
       <div class="tab-bar">
         <button class="tab-btn" class:active={active_tab === 'templates'} onclick={() => active_tab = 'templates'}>
-          Templates
+          {t('common.templates')}
         </button>
         <button class="tab-btn" class:active={active_tab === 'json'} onclick={() => active_tab = 'json'}>
-          Import from JSON
+          {t('workflow.import_dialog_from_json')}
         </button>
         <button class="tab-btn" class:active={active_tab === 'python'} onclick={() => active_tab = 'python'}>
-          Import from Python
+          {t('workflow.import_dialog_from_python')}
         </button>
       </div>
 
@@ -383,7 +387,7 @@
           <div class="tab-content templates-tab">
             <!-- Source selector -->
             <div class="source-selector">
-              <label class="source-label">Source:</label>
+              <label class="source-label">{t('workflow.import_dialog_source')}:</label>
               <div class="source-btns">
                 {#each (['catgo', 'atomate2', 'quacc'] as const) as src}
                   <button
@@ -404,17 +408,17 @@
                 {#each TEMPLATE_GROUPS as group}
                   <div class="tmpl-section-header">{group.label}</div>
                   {#each group.keys as key}
-                    {@const t = TEMPLATES[key]}
-                    {#if t}
+                    {@const tpl = TEMPLATES[key]}
+                    {#if tpl}
                       <button
                         class="tmpl-card-import"
                         class:selected={selected_template_key === key}
                         onclick={() => selected_template_key = key}
                       >
-                        <div class="tci-name">{t.name}</div>
-                        <div class="tci-desc">{t.desc}</div>
+                        <div class="tci-name">{tpl.name}</div>
+                        <div class="tci-desc">{tpl.desc}</div>
                         <div class="tci-meta">
-                          <span class="tci-count">{t.nodes.length} nodes &bull; {t.edges.length} edges</span>
+                          <span class="tci-count">{t('workflow.import_dialog_graph_counts', { nodes: tpl.nodes.length, edges: tpl.edges.length })}</span>
                         </div>
                       </button>
                     {/if}
@@ -422,13 +426,13 @@
                 {/each}
 
               {:else if remote_loading}
-                <div class="loading-msg">Loading templates...</div>
+                <div class="loading-msg">{t('workflow.import_dialog_loading_templates')}</div>
 
               {:else if remote_error}
-                <div class="error-msg">Failed to load templates: {remote_error}</div>
+                <div class="error-msg">{t('workflow.import_dialog_failed_load_templates', { error: remote_error })}</div>
 
               {:else if remote_templates.length === 0}
-                <div class="empty-msg">No templates available from {template_source}.</div>
+                <div class="empty-msg">{t('workflow.import_dialog_no_templates', { source: template_source })}</div>
 
               {:else}
                 <!-- Remote templates (atomate2 / quacc) -->
@@ -459,14 +463,14 @@
             {#if selected_template_graph}
               <div class="import-footer">
                 <span class="import-summary">
-                  {selected_template_graph.nodes.length} nodes, {selected_template_graph.edges.length} edges will be added
+                  {t('workflow.import_dialog_will_add', { nodes: selected_template_graph.nodes.length, edges: selected_template_graph.edges.length })}
                 </span>
-                <button class="import-btn primary" onclick={do_import_template}>Import</button>
+                <button class="import-btn primary" onclick={do_import_template}>{t('common.import')}</button>
               </div>
             {:else if selected_template_key}
               <div class="import-footer">
-                <span class="import-summary">Select to preview</span>
-                <button class="import-btn primary" onclick={do_import_template}>Import</button>
+                <span class="import-summary">{t('workflow.import_dialog_select_preview')}</span>
+                <button class="import-btn primary" onclick={do_import_template}>{t('common.import')}</button>
               </div>
             {/if}
           </div>
@@ -474,7 +478,7 @@
         <!-- ──────────── Tab 2: Import from JSON ──────────── -->
         {:else if active_tab === 'json'}
           <div class="tab-content json-tab">
-            <p class="tab-hint">Upload or paste an atomate2 Flow JSON (from <code>flow.as_dict()</code>) or a CatGo graph JSON.</p>
+            <p class="tab-hint">{t('workflow.import_dialog_json_hint_prefix')} <code>flow.as_dict()</code>{t('workflow.import_dialog_json_hint_suffix')}</p>
 
             <!-- File drop zone -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -491,9 +495,9 @@
               }}
             >
               <span class="drop-icon">&#128196;</span>
-              <span>Drag &amp; drop a JSON file here</span>
+              <span>{t('workflow.import_dialog_drop_json')}</span>
               <label class="file-browse-label">
-                or <span class="browse-link">browse</span>
+                {t('workflow.import_dialog_or')} <span class="browse-link">{t('workflow.import_dialog_browse')}</span>
                 <input type="file" accept=".json,application/json" class="hidden-input"
                   onchange={e => {
                     const f = (e.target as HTMLInputElement).files?.[0]
@@ -507,13 +511,13 @@
             </div>
 
             <!-- Paste area -->
-            <label class="paste-label">Or paste JSON directly:</label>
+            <label class="paste-label">{t('workflow.import_dialog_paste_json')}:</label>
             <textarea class="json-textarea" bind:value={json_text} rows={8} placeholder={'{"@module": "jobflow.core.flow", ...}'}></textarea>
 
             <!-- Convert button -->
             <div class="action-row">
               <button class="import-btn primary" onclick={do_convert_json} disabled={!json_text.trim() || json_converting}>
-                {json_converting ? 'Converting...' : 'Convert & Preview'}
+                {json_converting ? t('workflow.import_dialog_converting') : t('workflow.import_dialog_convert_preview')}
               </button>
             </div>
 
@@ -535,7 +539,7 @@
             {#if json_result}
               <div class="result-preview">
                 <div class="result-summary">
-                  Converted: {json_result.nodes.length} nodes, {json_result.edges.length} edges
+                  {t('workflow.import_dialog_converted', { nodes: json_result.nodes.length, edges: json_result.edges.length })}
                 </div>
                 <div class="node-list-preview">
                   {#each json_result.nodes as n}
@@ -543,7 +547,7 @@
                   {/each}
                 </div>
                 <div class="action-row">
-                  <button class="import-btn primary" onclick={do_import_json}>Import into Workflow</button>
+                  <button class="import-btn primary" onclick={do_import_json}>{t('workflow.import_dialog_import_into_workflow')}</button>
                 </div>
               </div>
             {/if}
@@ -552,13 +556,13 @@
         <!-- ──────────── Tab 3: Import from Python ──────────── -->
         {:else if active_tab === 'python'}
           <div class="tab-content python-tab">
-            <p class="tab-hint">Paste quacc or atomate2 Python code containing a <code>@flow</code> function or recipe calls.</p>
+            <p class="tab-hint">{t('workflow.import_dialog_python_hint_prefix')} <code>@flow</code> {t('workflow.import_dialog_python_hint_suffix')}</p>
 
             <textarea class="python-textarea" bind:value={python_text} rows={12} spellcheck={false}></textarea>
 
             <div class="action-row">
               <button class="import-btn primary" onclick={do_convert_python} disabled={!python_text.trim() || python_converting}>
-                {python_converting ? 'Parsing...' : 'Parse & Preview'}
+                {python_converting ? t('workflow.import_dialog_parsing') : t('workflow.import_dialog_parse_preview')}
               </button>
             </div>
 
@@ -580,7 +584,7 @@
             {#if python_result}
               <div class="result-preview">
                 <div class="result-summary">
-                  Parsed: {python_result.nodes.length} nodes, {python_result.edges.length} edges
+                  {t('workflow.import_dialog_parsed', { nodes: python_result.nodes.length, edges: python_result.edges.length })}
                 </div>
                 <div class="node-list-preview">
                   {#each python_result.nodes as n}
@@ -588,7 +592,7 @@
                   {/each}
                 </div>
                 <div class="action-row">
-                  <button class="import-btn primary" onclick={do_import_python}>Import into Workflow</button>
+                  <button class="import-btn primary" onclick={do_import_python}>{t('workflow.import_dialog_import_into_workflow')}</button>
                 </div>
               </div>
             {/if}

@@ -1,9 +1,13 @@
 <script lang="ts">
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     show = $bindable(),
-    label = `Input File`,
+    label = ``,
     filename,
     generating,
     error,
@@ -30,15 +34,15 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <div class="modal-header">
-        <h3 class="modal-title">{label}</h3>
+        <h3 class="modal-title">{label || t('workflow.input_file')}</h3>
         <div class="modal-actions">
-          <button class="save-btn" onclick={onsave}>Save to Node</button>
-          <button class="close-btn" onclick={onclose}>&times;</button>
+          <button class="save-btn" onclick={onsave}>{t('workflow.save_to_node')}</button>
+          <button class="close-btn" onclick={onclose} title={t('common.close')}>&times;</button>
         </div>
       </div>
       <div class="modal-body">
         {#if generating}
-          <div class="loading">Generating {filename}...</div>
+          <div class="loading">{t('workflow.generating_file', { name: filename })}</div>
         {:else if error}
           <div class="error-msg">{error}</div>
         {:else}

@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
+
   let {
     points = [],
     ideal_line = null,
@@ -90,7 +94,7 @@
 
 <div class="vp-root">
   {#if points.length === 0}
-    <div class="vp-empty">No volcano data</div>
+    <div class="vp-empty">{t('workflow.volcano_no_data')}</div>
   {:else}
     <svg
       viewBox="0 0 {width} {height}"

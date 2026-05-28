@@ -5,6 +5,10 @@
   import { STATUS_COLORS } from './workflow-types'
   import { parse_any_structure } from '$lib/structure/parse'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     node,
@@ -99,7 +103,7 @@
     }
 
     if (errors.length > 0) {
-      upload_error = `Failed to parse: ${errors.join(`, `)}`
+      upload_error = t('workflow.structure_list_failed_parse', { files: errors.join(`, `) })
     }
 
     uploading = false
@@ -147,7 +151,7 @@
         class="help-btn"
         class:active={show_help}
         onclick={() => show_help = !show_help}
-        title="Toggle help"
+        title={t('workflow.config_toggle_help')}
       >?</button>
     </div>
     {#if show_help}
@@ -166,7 +170,7 @@
 
   <!-- Display Name -->
   <div class="label-row">
-    <label class="field-label">Display Name</label>
+    <label class="field-label">{t('workflow.config_display_name')}</label>
     <input
       type="text"
       class="field-input"
@@ -178,7 +182,7 @@
 
   <!-- Upload Section -->
   <div class="upload-section">
-    <div class="section-label">Upload Structures</div>
+    <div class="section-label">{t('workflow.structure_list_upload_structures')}</div>
     <input
       bind:this={file_input_el}
       type="file"
@@ -188,10 +192,10 @@
       style="display:none"
     />
     <button class="action-btn import-btn" onclick={handle_upload_click} disabled={uploading}>
-      {uploading ? `Parsing...` : `Upload Structure Files`}
+      {uploading ? t('workflow.structure_list_parsing') : t('workflow.structure_list_upload_files')}
     </button>
     <div class="upload-hint">
-      Supports POSCAR, CIF, XYZ, PDB, MOL2, LAMMPS, JSON, YAML, etc.
+      {t('workflow.structure_list_supported_formats')}
     </div>
     {#if upload_error}
       <div class="upload-error">{upload_error}</div>
@@ -202,15 +206,15 @@
   <div class="count-section">
     <div class="count-badge" class:has-structures={count > 0}>
       <span class="count-number">{count}</span>
-      <span class="count-text">structure{count !== 1 ? `s` : ``} loaded</span>
+      <span class="count-text">{t('workflow.structure_list_loaded_count', { n: count })}</span>
     </div>
     {#if count > 0}
       <div class="count-actions">
-        <button class="small-btn remove-btn" onclick={remove_current} title="Remove current structure">
-          Remove #{frame_idx + 1}
+        <button class="small-btn remove-btn" onclick={remove_current} title={t('workflow.structure_list_remove_current')}>
+          {t('workflow.structure_list_remove_n', { n: frame_idx + 1 })}
         </button>
-        <button class="small-btn clear-btn" onclick={clear_all} title="Remove all structures">
-          Clear All
+        <button class="small-btn clear-btn" onclick={clear_all} title={t('workflow.structure_list_remove_all')}>
+          {t('common.clear_all')}
         </button>
       </div>
     {/if}
@@ -239,9 +243,9 @@
         >&rsaquo;</button>
       </div>
       <div class="frame-label">
-        Structure {frame_idx + 1} / {count}
+        {t('workflow.structure_list_structure_n_of_total', { n: frame_idx + 1, total: count })}
         {#if current_info}
-          &middot; {current_info.formula} &middot; {current_info.n_atoms} atoms
+          &middot; {current_info.formula} &middot; {t('workflow.structure_panel_atoms_count', { n: current_info.n_atoms })}
         {/if}
       </div>
       {#if current_structure}
@@ -256,15 +260,15 @@
 
   <!-- Inputs / Outputs -->
   <div class="io-section">
-    <div class="section-label">Inputs / Outputs</div>
+    <div class="section-label">{t('workflow.config_inputs_outputs')}</div>
     <div class="io-row">
       <div class="io-col">
-        <span class="io-heading">IN</span>
-        <span class="io-item io-none">none</span>
+        <span class="io-heading">{t('common.input')}</span>
+        <span class="io-item io-none">{t('workflow.node_none')}</span>
       </div>
       <div class="io-arrow">&rarr;</div>
       <div class="io-col">
-        <span class="io-heading">OUT</span>
+        <span class="io-heading">{t('common.output')}</span>
         {#each definition.outputs as out}
           <span class="io-item">{out}</span>
         {/each}
@@ -279,7 +283,7 @@
       frame_idx = 0
       upload_error = null
     }}>
-      Reset to Defaults
+      {t('workflow.config_reset_to_defaults')}
     </button>
   </div>
 </div>

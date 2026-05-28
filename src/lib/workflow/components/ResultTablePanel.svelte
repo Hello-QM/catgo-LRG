@@ -19,6 +19,10 @@
 -->
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   /**
    * A single candidate result from the Aggregate node output.
@@ -290,19 +294,19 @@
 {#if show}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div class="dialog-backdrop" onclick={(e: MouseEvent) => { if (e.target === e.currentTarget) show = false }}>
-    <div class="dialog-modal result-panel" role="dialog" aria-label="Screening Results">
+    <div class="dialog-modal result-panel" role="dialog" aria-label={t('workflow.result_panel_title')}>
       <!-- Header -->
       <div class="modal-header">
-        <h2 class="modal-title">Screening Results</h2>
+        <h2 class="modal-title">{t('workflow.result_panel_title')}</h2>
         <button class="close-btn" onclick={() => (show = false)}>&times;</button>
       </div>
 
       <!-- Summary line -->
       <div class="summary-section">
         <div class="summary-line">
-          <span class="summary-total">{results.total_count} candidates</span>
+          <span class="summary-total">{t('workflow.result_panel_candidates', { n: results.total_count })}</span>
           <span class="summary-arrow">&rarr;</span>
-          <span class="summary-filtered">{results.filtered_count} passed</span>
+          <span class="summary-filtered">{t('workflow.result_panel_passed', { n: results.filtered_count })}</span>
           {#if results.filter_expression}
             <span class="summary-expr">({results.filter_expression})</span>
           {/if}
@@ -312,17 +316,17 @@
         <div class="controls-row">
           <label class="toggle-label">
             <input type="checkbox" bind:checked={show_failed} />
-            Show failed
+            {t('workflow.result_panel_show_failed')}
           </label>
           <label class="toggle-label">
             <input type="checkbox" bind:checked={show_filtered_out} />
-            Show filtered-out
+            {t('workflow.result_panel_show_filtered_out')}
           </label>
           <button
             class="columns-btn"
             onclick={() => (show_columns_picker = !show_columns_picker)}
           >
-            Columns {show_columns_picker ? '\u25B2' : '\u25BC'}
+            {t('workflow.result_panel_columns')} {show_columns_picker ? '\u25B2' : '\u25BC'}
           </button>
         </div>
 
@@ -344,11 +348,11 @@
 
         <!-- Filter input -->
         <div class="filter-row">
-          <span class="filter-label">Filter:</span>
+          <span class="filter-label">{t('workflow.result_panel_filter')}:</span>
           <input
             type="text"
             class="filter-input"
-            placeholder="e.g. band_gap > 1.5 and energy_per_atom < -5"
+            placeholder={t('workflow.result_panel_filter_placeholder')}
             bind:value={filter_input}
           />
         </div>
@@ -360,13 +364,13 @@
           <thead>
             <tr>
               <th class="sortable" onclick={() => toggle_sort('index')}>#{sort_arrow('index')}</th>
-              <th class="sortable" onclick={() => toggle_sort('label')}>Label{sort_arrow('label')}</th>
+              <th class="sortable" onclick={() => toggle_sort('label')}>{t('common.label')}{sort_arrow('label')}</th>
               {#each all_property_keys.filter(k => visible_columns.has(k)) as key}
                 <th class="sortable" onclick={() => toggle_sort(key)}>
                   {col_label(key)}{sort_arrow(key)}
                 </th>
               {/each}
-              <th class="col-action">View</th>
+              <th class="col-action">{t('workflow.result_panel_view')}</th>
             </tr>
           </thead>
           <tbody>
@@ -401,7 +405,7 @@
                     <button
                       class="view-btn"
                       onclick={() => on_view_structure?.(cand.structure_json!)}
-                    >View</button>
+                    >{t('workflow.result_panel_view')}</button>
                   {:else}
                     <span class="no-structure">\u2014</span>
                   {/if}
@@ -411,7 +415,7 @@
             {#if display_candidates.length === 0}
               <tr>
                 <td colspan={all_property_keys.filter(k => visible_columns.has(k)).length + 3} class="empty-msg">
-                  No candidates match the current filters.
+                  {t('workflow.result_panel_no_candidates')}
                 </td>
               </tr>
             {/if}
@@ -421,7 +425,7 @@
         <!-- Inline bar chart section for sort column -->
         {#if results.summary[sort_col]}
           <div class="stats-section">
-            <div class="stats-title">{col_label(sort_col)} Statistics</div>
+            <div class="stats-title">{t('workflow.result_panel_statistics', { column: col_label(sort_col) })}</div>
             <div class="stats-row">
               <span>Min: {results.summary[sort_col].min.toFixed(4)}</span>
               <span>Max: {results.summary[sort_col].max.toFixed(4)}</span>
@@ -434,14 +438,14 @@
 
       <!-- Footer actions -->
       <div class="panel-footer">
-        <button class="btn-action" onclick={export_csv}>Export CSV</button>
-        <button class="btn-action" onclick={export_json}>Export JSON</button>
+        <button class="btn-action" onclick={export_csv}>{t('workflow.result_panel_export_csv')}</button>
+        <button class="btn-action" onclick={export_json}>{t('workflow.result_panel_export_json')}</button>
         <button
           class="btn-action btn-primary-action"
           onclick={() => open_top_n(5)}
           disabled={display_candidates.filter(c => c.structure_json).length === 0}
         >
-          Open Top 5 in Viewer
+          {t('workflow.result_panel_open_top', { n: 5 })}
         </button>
       </div>
     </div>

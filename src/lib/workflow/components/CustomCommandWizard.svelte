@@ -1,4 +1,9 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
+
   let {
     api_base,
     onclose,
@@ -68,9 +73,9 @@
 
   // ─── Submit ───
   async function handle_submit() {
-    if (!name.trim()) { submit_error = 'Name is required.'; return }
+    if (!name.trim()) { submit_error = t('workflow.custom_command_name_required'); return }
     const valid_commands = commands.filter(c => c.trim())
-    if (valid_commands.length === 0) { submit_error = 'At least one command is required.'; return }
+    if (valid_commands.length === 0) { submit_error = t('workflow.custom_command_command_required'); return }
 
     submitting = true
     submit_error = ''
@@ -114,14 +119,14 @@
 
     <!-- Header -->
     <div class="ccw-header">
-      <h3 class="ccw-title">New Custom Command Node</h3>
+      <h3 class="ccw-title">{t('workflow.custom_command_title')}</h3>
       <button class="ccw-close-btn" onclick={onclose}>&times;</button>
     </div>
 
     <!-- Warning banner -->
     <div class="ccw-warning">
       <span class="ccw-warning-icon">⚠</span>
-      Custom commands run directly on HPC. Review carefully before submitting.
+      {t('workflow.custom_command_warning')}
     </div>
 
     <!-- Form body -->
@@ -129,11 +134,11 @@
 
       <!-- Name -->
       <div class="ccw-section">
-        <label class="ccw-label">Name <span class="ccw-req">*</span></label>
+        <label class="ccw-label">{t('common.name')} <span class="ccw-req">*</span></label>
         <input
           class="ccw-input"
           type="text"
-          placeholder="e.g. My VASP Postprocess"
+          placeholder={t('workflow.custom_command_name_placeholder')}
           bind:value={name}
         />
       </div>
@@ -141,10 +146,10 @@
       <!-- Commands -->
       <div class="ccw-section">
         <div class="ccw-section-header">
-          <span class="ccw-label">Commands <span class="ccw-req">*</span></span>
-          <button class="ccw-add-btn" onclick={add_command}>+ Add</button>
+          <span class="ccw-label">{t('workflow.custom_command_commands')} <span class="ccw-req">*</span></span>
+          <button class="ccw-add-btn" onclick={add_command}>+ {t('common.add')}</button>
         </div>
-        <div class="ccw-help">Shell commands executed in order on the HPC node.</div>
+        <div class="ccw-help">{t('workflow.custom_command_commands_help')}</div>
         {#each commands as cmd, i}
           <div class="ccw-row">
             <input
@@ -164,10 +169,10 @@
       <!-- Input Files -->
       <div class="ccw-section">
         <div class="ccw-section-header">
-          <span class="ccw-label">Input Files</span>
-          <button class="ccw-add-btn" onclick={add_input_file}>+ Add</button>
+          <span class="ccw-label">{t('workflow.custom_command_input_files')}</span>
+          <button class="ccw-add-btn" onclick={add_input_file}>+ {t('common.add')}</button>
         </div>
-        <div class="ccw-help">Files this node needs. Source: <em>editor</em> = you provide content, <em>upstream</em> = from a connected node.</div>
+        <div class="ccw-help">{t('workflow.custom_command_input_files_help_prefix')} <em>editor</em> = {t('workflow.custom_command_input_files_help_editor')}, <em>upstream</em> = {t('workflow.custom_command_input_files_help_upstream')}.</div>
         {#each input_files as file, i}
           <div class="ccw-row">
             <input
@@ -182,24 +187,24 @@
               value={file.source}
               onchange={(e) => set_input_file_source(i, e.currentTarget.value as 'editor' | 'upstream')}
             >
-              <option value="upstream">Upstream</option>
-              <option value="editor">Editor</option>
+              <option value="upstream">{t('workflow.custom_command_upstream')}</option>
+              <option value="editor">{t('workflow.custom_command_editor')}</option>
             </select>
             <button class="ccw-rm-btn" onclick={() => remove_input_file(i)}>×</button>
           </div>
         {/each}
         {#if input_files.length === 0}
-          <div class="ccw-empty">No input files — click "+ Add" to add one.</div>
+          <div class="ccw-empty">{t('workflow.custom_command_no_input_files')}</div>
         {/if}
       </div>
 
       <!-- Output Files -->
       <div class="ccw-section">
         <div class="ccw-section-header">
-          <span class="ccw-label">Output Files</span>
-          <button class="ccw-add-btn" onclick={add_output_file}>+ Add</button>
+          <span class="ccw-label">{t('workflow.custom_command_output_files')}</span>
+          <button class="ccw-add-btn" onclick={add_output_file}>+ {t('common.add')}</button>
         </div>
-        <div class="ccw-help">Files produced by this node that downstream nodes can use.</div>
+        <div class="ccw-help">{t('workflow.custom_command_output_files_help')}</div>
         {#each output_files as file, i}
           <div class="ccw-row">
             <input
@@ -219,10 +224,10 @@
       <!-- HPC Modules -->
       <div class="ccw-section">
         <div class="ccw-section-header">
-          <span class="ccw-label">HPC Modules</span>
-          <button class="ccw-add-btn" onclick={add_module}>+ Add</button>
+          <span class="ccw-label">{t('workflow.custom_command_hpc_modules')}</span>
+          <button class="ccw-add-btn" onclick={add_module}>+ {t('common.add')}</button>
         </div>
-        <div class="ccw-help">Modules to load via <code>module load</code> before running commands.</div>
+        <div class="ccw-help">{t('workflow.custom_command_hpc_modules_help_prefix')} <code>module load</code>{t('workflow.custom_command_hpc_modules_help_suffix')}</div>
         {#each hpc_modules as mod, i}
           <div class="ccw-row">
             <input
@@ -238,7 +243,7 @@
           </div>
         {/each}
         {#if hpc_modules.length === 0}
-          <div class="ccw-empty">No modules — click "+ Add" to add one.</div>
+          <div class="ccw-empty">{t('workflow.custom_command_no_modules')}</div>
         {/if}
       </div>
 
@@ -250,9 +255,9 @@
         <div class="ccw-error">{submit_error}</div>
       {/if}
       <div class="ccw-footer-actions">
-        <button class="ccw-cancel-btn" onclick={onclose} disabled={submitting}>Cancel</button>
+        <button class="ccw-cancel-btn" onclick={onclose} disabled={submitting}>{t('common.cancel')}</button>
         <button class="ccw-submit-btn" onclick={handle_submit} disabled={submitting}>
-          {submitting ? 'Creating...' : 'Create Node'}
+          {submitting ? t('workflow.custom_command_creating') : t('workflow.custom_command_create_node')}
         </button>
       </div>
     </div>

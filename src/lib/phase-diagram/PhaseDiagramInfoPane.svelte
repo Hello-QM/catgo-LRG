@@ -1,9 +1,12 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
   import PhaseDiagramStats from './PhaseDiagramStats.svelte'
   import type { PhaseStats, PlotEntry3D } from './types'
+
+  load_i18n_module('structure')
 
   let {
     phase_stats,
@@ -33,7 +36,7 @@
   bind:show={pane_open}
   max_width="24em"
   toggle_props={{
-    title: pane_open ? `` : `Phase diagram info`,
+    title: pane_open ? `` : t('structure.phase_diagram_info'),
     class: `phase-diagram-info-toggle`,
     ...toggle_props,
   }}
@@ -53,44 +56,44 @@
   />
 
   <section class="vis-settings">
-    <h5>Visualization Settings</h5>
+    <h5>{t('structure.phase_visualization_settings')}</h5>
     <div class="setting-item" data-testid="pd-visible-stable">
-      <span>Visible stable:</span>
+      <span>{t('structure.phase_visible_stable')}:</span>
       <span>{stable_entries.filter((entry) => entry.visible).length} / {
           stable_entries.length
         }</span>
     </div>
     <div class="setting-item" data-testid="pd-visible-unstable">
-      <span>Visible unstable:</span>
+      <span>{t('structure.phase_visible_unstable')}:</span>
       <span>{unstable_entries.filter((entry) => entry.visible).length} / {
           unstable_entries.length
         }</span>
     </div>
     <div class="setting-item" data-testid="pd-show-threshold">
-      <span>Points threshold:</span>
+      <span>{t('structure.phase_points_threshold')}:</span>
       <span>{max_hull_dist_show_phases.toFixed(3)} eV/atom</span>
     </div>
     <div class="setting-item" data-testid="pd-label-threshold">
-      <span>Label threshold:</span>
+      <span>{t('structure.phase_label_threshold')}:</span>
       <span>{max_hull_dist_show_labels.toFixed(3)} eV/atom</span>
     </div>
     <div class="setting-item" data-testid="pd-entry-limit-labels">
-      <span>Entry limit for labels:</span>
-      <span>{label_threshold} entries</span>
+      <span>{t('structure.phase_entry_limit_labels')}:</span>
+      <span>{t('structure.phase_entries_count', { n: label_threshold })}</span>
     </div>
   </section>
 
   <section class="usage-tips">
-    <h5>Usage Tips</h5>
-    <div class="tips-item"><span>Single click:</span><span>Select point</span></div>
-    <div class="tips-item"><span>Double click:</span><span>Copy info</span></div>
-    <div class="tips-item"><span>Drag:</span><span>Rotate view</span></div>
-    <div class="tips-item"><span>Scroll:</span><span>Zoom in/out</span></div>
-    <div class="tips-item"><span>Key 'r':</span><span>Reset camera</span></div>
-    <div class="tips-item"><span>Key 'b':</span><span>Toggle color mode</span></div>
-    <div class="tips-item"><span>Key 's':</span><span>Toggle stable points</span></div>
-    <div class="tips-item"><span>Key 'u':</span><span>Toggle unstable points</span></div>
-    <div class="tips-item"><span>Key 'l':</span><span>Toggle labels</span></div>
+    <h5>{t('structure.phase_usage_tips')}</h5>
+    <div class="tips-item"><span>{t('structure.phase_tip_single_click')}:</span><span>{t('structure.phase_tip_select_point')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_double_click')}:</span><span>{t('structure.phase_tip_copy_info')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_drag')}:</span><span>{t('structure.phase_tip_rotate_view')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_scroll')}:</span><span>{t('structure.phase_tip_zoom')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_key_r')}:</span><span>{t('structure.phase_tip_reset_camera')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_key_b')}:</span><span>{t('structure.phase_tip_toggle_color_mode')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_key_s')}:</span><span>{t('structure.phase_tip_toggle_stable')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_key_u')}:</span><span>{t('structure.phase_tip_toggle_unstable')}</span></div>
+    <div class="tips-item"><span>{t('structure.phase_tip_key_l')}:</span><span>{t('structure.phase_tip_toggle_labels')}</span></div>
   </section>
 </DraggablePane>
 

@@ -1,6 +1,10 @@
 <script lang="ts">
   import { API_BASE } from '$lib/api/config'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { lazy_load_plotly, base_layout, base_config, make_target_writable } from './plotly-utils'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   // Pre-load Plotly so it's ready when user clicks Preview
   let Plotly: any = null
@@ -22,9 +26,9 @@
   // Plain data — NOT $state to avoid Svelte 5 deep proxy overhead
   let pathways: Pathway[] = initial_pathways.length > 0
     ? JSON.parse(JSON.stringify(initial_pathways))
-    : [{ name: `Path 1`, color: COLORS[0], steps: [
-        { label: `Reactant`, energy: 0, is_ts: false },
-        { label: `Product`, energy: -0.5, is_ts: false },
+    : [{ name: t('workflow.energy_path_n', { n: 1 }), color: COLORS[0], steps: [
+        { label: t('workflow.reactant'), energy: 0, is_ts: false },
+        { label: t('workflow.product'), energy: -0.5, is_ts: false },
       ]}]
 
   // Manual render trigger — increment to force Svelte to re-render the {#each} blocks
@@ -38,11 +42,11 @@
 
   function add_pathway() {
     pathways.push({
-      name: `Path ${pathways.length + 1}`,
+      name: t('workflow.energy_path_n', { n: pathways.length + 1 }),
       color: COLORS[pathways.length % COLORS.length],
       steps: [
-        { label: `Reactant`, energy: 0, is_ts: false },
-        { label: `Product`, energy: -0.5, is_ts: false },
+        { label: t('workflow.reactant'), energy: 0, is_ts: false },
+        { label: t('workflow.product'), energy: -0.5, is_ts: false },
       ],
     })
     refresh()
@@ -58,7 +62,7 @@
   function add_step(p_idx: number) {
     const steps = pathways[p_idx].steps
     const last_e = steps.length > 0 ? steps[steps.length - 1].energy : 0
-    steps.push({ label: `Step ${steps.length + 1}`, energy: last_e, is_ts: false })
+    steps.push({ label: t('workflow.step_n', { n: steps.length + 1 }), energy: last_e, is_ts: false })
     refresh()
     save()
   }
@@ -150,7 +154,7 @@
         Plotly.react(plot_div, data.traces, layout, config)
         preview_ready = true
       } else if (!Plotly) {
-        preview_error = `Plotly still loading, try again in a moment`
+        preview_error = t('workflow.plotly_loading_retry')
       }
     } catch (e) {
       preview_error = String(e)
@@ -179,9 +183,9 @@
         <input type="color" class="ed-color" value={pathway.color}
           onchange={(e) => on_color_change(e, p_idx)} />
         <input type="text" class="ed-name" value={pathway.name}
-          onblur={(e) => on_name_blur(e, p_idx)} placeholder="Pathway name" />
+          onblur={(e) => on_name_blur(e, p_idx)} placeholder={t('workflow.pathway_name')} />
         {#if pathways.length > 1}
-          <button class="ed-remove-path" onclick={() => remove_pathway(p_idx)} title="Remove pathway">&times;</button>
+          <button class="ed-remove-path" onclick={() => remove_pathway(p_idx)} title={t('workflow.remove_pathway')}>&times;</button>
         {/if}
       </div>
 
@@ -189,8 +193,8 @@
       <div class="ed-table-wrap" onpaste={(e) => handle_paste(e, p_idx)}>
         <table class="ed-table">
           <thead><tr>
-            <th class="col-label">Label</th>
-            <th class="col-energy">Energy (eV)</th>
+            <th class="col-label">{t('common.label')}</th>
+            <th class="col-energy">{t('workflow.energy_ev')}</th>
             <th class="col-ts">TS</th>
             <th class="col-action"></th>
           </tr></thead>
@@ -202,20 +206,20 @@
                 <td><input type="number" class="ed-input ed-energy" value={step.energy} step="0.01"
                   onblur={(e) => on_step_blur(e, p_idx, s_idx, 'energy')} /></td>
                 <td class="td-center"><input type="checkbox" checked={step.is_ts}
-                  onchange={(e) => on_ts_toggle(p_idx, s_idx, e.currentTarget.checked)} title="Transition state" /></td>
+                  onchange={(e) => on_ts_toggle(p_idx, s_idx, e.currentTarget.checked)} title={t('workflow.transition_state')} /></td>
                 <td class="td-center"><button class="ed-remove-step"
-                  onclick={() => remove_step(p_idx, s_idx)} title="Remove">&times;</button></td>
+                  onclick={() => remove_step(p_idx, s_idx)} title={t('common.remove')}>&times;</button></td>
               </tr>
             {/each}
           </tbody>
         </table>
-        <button class="ed-add-step" onclick={() => add_step(p_idx)}>+ Add Step</button>
-        <div class="ed-paste-hint">Tip: paste from Excel (Label | Energy | TS columns)</div>
+        <button class="ed-add-step" onclick={() => add_step(p_idx)}>{t('workflow.add_step')}</button>
+        <div class="ed-paste-hint">{t('workflow.energy_paste_hint')}</div>
       </div>
     </div>
   {/each}
 
-  <button class="ed-add-pathway" onclick={add_pathway}>+ Add Pathway</button>
+  <button class="ed-add-pathway" onclick={add_pathway}>{t('workflow.add_pathway')}</button>
 </div>
 {/key}
 
@@ -223,11 +227,11 @@
 <div class="ed-preview">
   <div bind:this={plot_div} class="ed-plot-div" class:ed-hidden={!preview_ready}></div>
   {#if preview_loading}
-    <div class="ed-preview-msg">Updating preview...</div>
+    <div class="ed-preview-msg">{t('workflow.updating_preview')}</div>
   {:else if preview_error}
     <div class="ed-preview-msg ed-error">{preview_error}</div>
   {:else if !preview_ready}
-    <button class="ed-preview-btn" onclick={fetch_preview}>Preview Diagram</button>
+    <button class="ed-preview-btn" onclick={fetch_preview}>{t('workflow.preview_diagram')}</button>
   {/if}
   {#if preview_ready}
     <div class="export-bar">

@@ -3,6 +3,10 @@
   import type { TrajectoryType } from '$lib/trajectory'
   import type { AdsorptionSite } from '$lib/structure/ferrox-wasm-types'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     show = $bindable(),
@@ -98,22 +102,22 @@
         {#if has_generated}
           <div class="edit3d-tabs">
             <button class="edit3d-tab" class:active={active_tab === 'structure'} onclick={() => active_tab = 'structure'}>
-              Original
+              {t('workflow.original')}
             </button>
             <button class="edit3d-tab" class:active={active_tab === 'generated'} onclick={() => active_tab = 'generated'}>
-              Generated ({gen_count})
+              {t('workflow.generated_count', { n: gen_count })}
             </button>
           </div>
         {/if}
         <div class="struct-edit3d-actions">
           {#if show_confirm && onconfirm}
-            <button class="struct-edit3d-save" onclick={onconfirm}>Confirm</button>
+            <button class="struct-edit3d-save" onclick={onconfirm}>{t('common.confirm')}</button>
           {:else if !readonly}
             <button class="struct-edit3d-save" onclick={handle_save}>
-              {has_generated ? `Save All & Close` : `Save & Close`}
+              {has_generated ? t('workflow.save_all_and_close') : t('common.save_and_close')}
             </button>
           {/if}
-          <button class="struct-preview-close" onclick={onclose}>&times;</button>
+          <button class="struct-preview-close" onclick={onclose} title={t('common.close')}>&times;</button>
         </div>
       </div>
       {#if freeze_mode}
@@ -121,7 +125,7 @@
         {@const n_total = structure?.sites?.length ?? 0}
         <div class="freeze-toolbar">
           <span class="freeze-toolbar-stat">
-            <strong>{n_frozen}</strong> frozen / <strong>{n_total - n_frozen}</strong> free
+            {@html t('workflow.frozen_free_count', { frozen: n_frozen, free: n_total - n_frozen })}
           </span>
           <button class="freeze-tb-btn" disabled={editor_selected_sites.length === 0}
             onclick={() => {
@@ -129,7 +133,7 @@
               for (const i of editor_selected_sites) next.add(i)
               onfreeze_save?.([...next].sort((a, b) => a - b))
             }}>
-            Freeze Selected ({editor_selected_sites.length})
+            {t('workflow.freeze_selected_count', { n: editor_selected_sites.length })}
           </button>
           <button class="freeze-tb-btn" disabled={editor_selected_sites.length === 0}
             onclick={() => {
@@ -137,7 +141,7 @@
               for (const i of editor_selected_sites) next.delete(i)
               onfreeze_save?.([...next].sort((a, b) => a - b))
             }}>
-            Unfreeze Selected
+            {t('workflow.unfreeze_selected')}
           </button>
           <button class="freeze-tb-btn"
             onclick={() => {
@@ -145,13 +149,13 @@
               const inverted = new Set([...all].filter(i => !(frozen_indices?.has(i))))
               onfreeze_save?.([...inverted].sort((a, b) => a - b))
             }}>
-            Invert
+            {t('workflow.multi_preview_invert')}
           </button>
         </div>
       {:else if preview_banner}
-        <div class="struct-edit3d-hint" style="background: var(--warning-bg, light-dark(#fef3c7, #44360a)); color: var(--warning-text, light-dark(#92400e, #fbbf24));">Recommend to edit this structure in Adsorbate Place panel below</div>
+        <div class="struct-edit3d-hint" style="background: var(--warning-bg, light-dark(#fef3c7, #44360a)); color: var(--warning-text, light-dark(#92400e, #fbbf24));">{t('workflow.recommend_adsorbate_place_edit')}</div>
       {:else if show_confirm}
-        <div class="struct-edit3d-hint">Only move the adsorbate — do not move slab atoms</div>
+        <div class="struct-edit3d-hint">{t('workflow.only_move_adsorbate_hint')}</div>
       {/if}
       <div class="struct-edit3d-body">
         {#if adsorption_sites.length > 0 && readonly && structure}
@@ -161,7 +165,7 @@
         {:else if StructureEditorComponent && structure}
           <StructureEditorComponent bind:structure={structure} bind:selected_sites={editor_selected_sites} hide_extra_tools={false} vibration_data={vibration} {scene_props} {initial_bulk} {initial_panel} on_file_load={handle_file_load} />
         {:else}
-          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-color-dim);">Loading editor...</div>
+          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-color-dim);">{t('workflow.loading_editor')}</div>
         {/if}
       </div>
     </div>

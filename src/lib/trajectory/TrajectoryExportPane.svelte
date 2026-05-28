@@ -11,6 +11,9 @@
   import type { TrajectoryType } from '$lib/trajectory'
   import type { ComponentProps } from 'svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     export_pane_open = $bindable(false),
@@ -122,12 +125,12 @@
     // Validate
     if (!trajectory || !on_step_change || !canvas || export_frame_count === 0) {
       export_error = !trajectory
-        ? `No trajectory`
+        ? t('structure.no_trajectory')
         : !on_step_change
-        ? `Step change handler not available`
+        ? t('structure.step_change_handler_missing')
         : !canvas
-        ? `Canvas not ready`
-        : `Invalid frame range`
+        ? t('structure.canvas_not_ready')
+        : t('structure.invalid_frame_range')
       return
     }
 
@@ -171,12 +174,12 @@
 
     if (!trajectory || !on_step_change || !canvas || export_frame_count === 0) {
       export_error = !trajectory
-        ? `No trajectory`
+        ? t('structure.no_trajectory')
         : !on_step_change
-        ? `Step change handler not available`
+        ? t('structure.step_change_handler_missing')
         : !canvas
-        ? `Canvas not ready`
-        : `Invalid frame range`
+        ? t('structure.canvas_not_ready')
+        : t('structure.invalid_frame_range')
       return
     }
 
@@ -208,7 +211,7 @@
   function handle_xyz_export() {
     export_error = null
     if (!trajectory || export_frame_count === 0) {
-      export_error = !trajectory ? `No trajectory` : `Invalid frame range`
+      export_error = !trajectory ? t('structure.no_trajectory') : t('structure.invalid_frame_range')
       return
     }
     // Materialize any pending cross-frame ops before slicing — so the
@@ -247,16 +250,16 @@
   closed_icon="Export"
   pane_props={{ ...pane_props, class: `export-pane ${pane_props?.class ?? ``}` }}
   toggle_props={{
-    title: export_pane_open ? `` : `Export Trajectory`,
+    title: export_pane_open ? `` : t('structure.export_trajectory'),
     ...toggle_props,
     class: `trajectory-export-toggle ${toggle_props?.class ?? ``}`,
   }}
   {...rest}
 >
-  <h4>Export Trajectory</h4>
+  <h4>{t('structure.export_trajectory')}</h4>
 
   <SettingsSection
-    title="Export Settings"
+    title={t('structure.export_settings')}
     current_values={{ video_fps, resolution_multiplier, png_dpi, start_frame, end_frame }}
     on_reset={() => {
       video_fps = 30
@@ -267,7 +270,7 @@
     }}
     >
       <label>
-        Frame Rate (FPS)
+        {t('structure.frame_rate_fps')}
         <input type="number" min={10} max={60} bind:value={video_fps} />
         <input
           type="range"
@@ -279,7 +282,7 @@
       </label>
 
       <label>
-        Resolution
+        {t('structure.resolution')}
         <div class="resolution-buttons">
           {#each [0.5, 1, 2, 4, 8] as multiplier (multiplier)}
             {@const w = canvas ? Math.round(canvas.width * multiplier) : 0}
@@ -299,7 +302,7 @@
       </label>
 
       <label>
-        Start Frame
+        {t('structure.start_frame')}
         <input
           type="number"
           min={0}
@@ -316,7 +319,7 @@
       </label>
 
       <label>
-        End Frame
+        {t('structure.end_frame')}
         <input
           type="number"
           min={start_frame}
@@ -345,7 +348,7 @@
       </label>
     </SettingsSection>
 
-    <h4>Export Formats</h4>
+    <h4>{t('structure.export_formats')}</h4>
 
     {#if export_error}
       <div class="error-message">{export_error}</div>
@@ -358,19 +361,19 @@
           type="button"
           onclick={handle_xyz_export}
           disabled={is_exporting || is_exporting_pngs || !trajectory}
-          {@attach tooltip({ content: `Export frames ${start_frame}–${end_frame} as multi-frame XYZ` })}
+          {@attach tooltip({ content: t('structure.export_xyz_hint', { start: start_frame, end: end_frame }) })}
         >
           ⬇
         </button>
       </div>
 
       <div style="display: flex; align-items: center; gap: 4pt">
-        PNG Sequence
+        {t('structure.png_sequence')}
         <button
           type="button"
           onclick={handle_png_sequence_export}
           disabled={is_exporting || is_exporting_pngs || !trajectory || !has_canvas}
-          {@attach tooltip({ content: `Export frames as numbered PNGs in a ZIP` })}
+          {@attach tooltip({ content: t('structure.export_png_sequence_hint') })}
         >
           {#if is_exporting_pngs}
             {png_export_progress.toFixed(0)}%
@@ -380,13 +383,12 @@
 
       {#if is_video_supported}
         {#each [
-          { label: `WebM`, format: `webm`, hint: `Export as WebM video` },
+          { label: `WebM`, format: `webm`, hint: t('structure.export_webm_hint') },
           {
             label: `MP4*`,
             format: `mp4`,
             hint:
-              `Browsers can't record MP4 — downloads a WebM and copies an ` +
-              `ffmpeg command to your clipboard to convert it to MP4`,
+              t('structure.export_mp4_hint'),
           },
         ] as const as
           { label, format, hint }
@@ -410,9 +412,7 @@
     </div>
 
     <div class="export-info">
-      {(export_frame_count / video_fps).toFixed(1)}s ({export_frame_count} frames: {
-        start_frame
-      }–{end_frame})
+      {t('structure.export_info', { seconds: (export_frame_count / video_fps).toFixed(1), frames: export_frame_count, start: start_frame, end: end_frame })}
       {#if file_size_mb > 0}
         • ~{
           file_size_mb < 1
@@ -423,7 +423,7 @@
     </div>
 
     {#if trajectory && !has_canvas}
-      <div class="warning">Waiting for canvas...</div>
+      <div class="warning">{t('structure.waiting_for_canvas')}</div>
     {/if}
 </DraggablePane>
 

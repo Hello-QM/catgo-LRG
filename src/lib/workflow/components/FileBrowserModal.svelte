@@ -1,5 +1,9 @@
 <script lang="ts">
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     show = $bindable(),
@@ -36,11 +40,11 @@
     <div class="vasp-modal" onclick={(e) => e.stopPropagation()}>
       <div class="vasp-modal-header">
         <h3 class="vasp-modal-title">
-          {view === 'editor' ? filename : 'Step Files'}
+          {view === 'editor' ? filename : t('workflow.file_browser_step_files')}
         </h3>
         {#if view === 'editor'}
           <button class="vasp-tab" onclick={onback_to_list}>
-            Back to Files
+            {t('workflow.file_browser_back_to_files')}
           </button>
         {/if}
         <div style="flex:1"></div>
@@ -50,14 +54,14 @@
       </div>
       <div class="vasp-modal-body">
         {#if loading}
-          <div class="vasp-loading">Loading...</div>
+          <div class="vasp-loading">{t('common.loading')}</div>
         {:else if view === 'list'}
           <div class="file-list-panel">
             {#if work_dir}
               <div class="file-work-dir">{work_dir}</div>
             {/if}
             {#if files.length === 0}
-              <div class="file-empty">No files found in work directory</div>
+              <div class="file-empty">{t('workflow.file_browser_no_workdir_files')}</div>
             {:else}
               <div class="file-list">
                 {#each files as file}

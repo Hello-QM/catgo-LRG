@@ -6,6 +6,9 @@
   import { tooltip as create_tooltip } from 'svelte-multiselect/attachments'
   import { SvelteSet } from 'svelte/reactivity'
   import type { TrajectoryType } from './index'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     trajectory,
@@ -300,7 +303,7 @@
   bind:show={pane_open}
   max_width="24em"
   toggle_props={{
-    title: pane_open ? `` : `Trajectory info`,
+    title: pane_open ? `` : t('structure.trajectory_info'),
     ...toggle_props,
     class: `trajectory-info-toggle ${toggle_props?.class ?? ``}`,
   }}
@@ -309,7 +312,7 @@
   pane_props={{ ...pane_props, class: `trajectory-info-pane ${pane_props?.class ?? ``}` }}
   {...rest}
 >
-  <h4 style="margin-top: 0">Trajectory Info</h4>
+  <h4 style="margin-top: 0">{t('structure.trajectory_info')}</h4>
   {#each info_pane_data as section, sec_idx (section.title)}
     {#if sec_idx > 0}<hr />{/if}
     <section>
@@ -320,7 +323,7 @@
         {@const { key, label, value, tooltip } = item}
         <div
           class="clickable"
-          aria-label="Click to copy: {label}: {value}"
+          aria-label={t('structure.click_to_copy_value', { label, value })}
           onclick={() => copy_item(label, value, key ?? label)}
           role="button"
           tabindex="0"

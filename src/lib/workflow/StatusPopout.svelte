@@ -15,6 +15,9 @@
     send_command, type StatusContext,
   } from './status-sync.svelte'
   import * as api from '$lib/api/workflow'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('workflow')
 
   const EMPTY_CTX: StatusContext = {
     workflow_id: ``, node_id: ``, node_type: ``, node_label: ``, status: ``, node_params: {},
@@ -239,8 +242,8 @@
           <path d="M28 16v8M28 32v8M16 28h8M32 28h8" stroke="var(--text-color-dim, #484f58)" stroke-width="1" opacity="0.25"/>
         </svg>
       </div>
-      <div class="empty-label">Waiting for Selection</div>
-      <div class="empty-sub">Click a node in the editor — this window will follow your selection automatically.</div>
+      <div class="empty-label">{t('workflow.status_popout_waiting_selection')}</div>
+      <div class="empty-sub">{t('workflow.status_popout_click_node_hint')}</div>
     </div>
   {/if}
 </div>

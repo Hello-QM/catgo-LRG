@@ -2,10 +2,14 @@
   import { DraggablePane, format_num } from '$lib'
   import type { D3InterpolateName } from '$lib/colors'
   import { ColorScaleSelect } from '$lib/plot'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { ComponentProps } from 'svelte'
   import { tooltip } from 'svelte-multiselect'
   import type { HTMLAttributes } from 'svelte/elements'
   import type { PDControlsType, PlotEntry3D } from './types'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   interface CameraState {
     elevation?: number // Elevation angle in degrees (for ternary)
@@ -90,7 +94,7 @@
     class: `phase-diagram-controls-pane ${pane_props?.class ?? ``}`,
   }}
   toggle_props={{
-    title: controls_open ? `` : `Phase diagram controls`,
+    title: controls_open ? `` : t('structure.phase_diagram_controls'),
     class: `phase-diagram-controls-toggle`,
     ...toggle_props,
   }}
@@ -98,59 +102,59 @@
   open_icon="Cross"
   {...rest}
 >
-  <h4 style="margin: 0">{merged_controls.title || `Phase Diagram Controls`}</h4>
+  <h4 style="margin: 0">{merged_controls.title || t('structure.phase_diagram_controls')}</h4>
 
   <!-- Energy source selection (only if both options are available) -->
   {#if has_precomputed_e_form && has_precomputed_hull && can_compute_e_form &&
       can_compute_hull}
     <div class="control-row">
-      <span class="control-label">Energy source</span>
+      <span class="control-label">{t('structure.phase_energy_source')}</span>
       <button
         class="toggle-btn {energy_source_mode === `precomputed` ? `active` : ``}"
         onclick={() => energy_source_mode = `precomputed`}
         {@attach tooltip({
-          content: `Use precomputed formation energies (E<sub>form</sub>)`,
+          content: t('structure.phase_use_precomputed_energy'),
         })}
       >
-        Precomputed
+        {t('structure.phase_precomputed')}
       </button>
       <button
         class="toggle-btn {energy_source_mode === `on-the-fly` ? `active` : ``}"
         onclick={() => energy_source_mode = `on-the-fly`}
         {@attach tooltip({
-          content: `Compute formation energies and hull distances on the fly`,
+          content: t('structure.phase_compute_on_the_fly_hint'),
         })}
       >
-        On the fly
+        {t('structure.phase_on_the_fly')}
       </button>
     </div>
   {/if}
 
   <!-- Color mode toggle -->
   <div class="control-row">
-    <span class="control-label">Color mode</span>
+    <span class="control-label">{t('structure.phase_color_mode')}</span>
     <button
       class="toggle-btn {color_mode === `stability` ? `active` : ``}"
       onclick={() => color_mode = `stability`}
-      {@attach tooltip({ content: `Color points by stable/unstable` })}
+      {@attach tooltip({ content: t('structure.phase_color_by_stability') })}
     >
-      Stability
+      {t('structure.phase_stability')}
     </button>
     <button
       class="toggle-btn {color_mode === `energy` ? `active` : ``}"
       onclick={() => color_mode = `energy`}
-      {@attach tooltip({ content: `Color points by energy above hull` })}
+      {@attach tooltip({ content: t('structure.phase_color_by_energy') })}
     >
-      Energy
+      {t('common.energy')}
     </button>
   </div>
 
   <!-- Energy threshold slider - shown in both color modes -->
   <div
     class="control-row"
-    {@attach tooltip({ content: `Max eV/atom above hull to display unstable points` })}
+    {@attach tooltip({ content: t('structure.phase_points_threshold_hint') })}
   >
-    <span class="control-label">Points threshold</span>
+    <span class="control-label">{t('structure.phase_points_threshold')}</span>
     <label style="display: flex; align-items: center; gap: 4px; flex: 1">
       <input
         type="number"
@@ -174,7 +178,7 @@
 
   {#if color_mode === `stability`}
     <div class="control-row">
-      <span class="control-label">Points</span>
+      <span class="control-label">{t('structure.phase_points')}</span>
       <div class="legend-items-container">
         <div
           class="legend-item clickable {show_stable ? `active` : `inactive`}"
@@ -183,10 +187,10 @@
           [`Enter`, ` `].includes(evt.key) && (show_stable = !show_stable)}
           role="button"
           tabindex="0"
-          {@attach tooltip({ content: `Toggle visibility of stable points` })}
+          {@attach tooltip({ content: t('structure.phase_toggle_stable_points') })}
         >
           <div class="marker stable"></div>
-          <span>Stable{
+          <span>{t('structure.phase_stable')}{
               merged_controls.show_counts ? ` (${stable_entries.length})` : ``
             }</span>
         </div>
@@ -197,10 +201,10 @@
           [`Enter`, ` `].includes(evt.key) && (show_unstable = !show_unstable)}
           role="button"
           tabindex="0"
-          {@attach tooltip({ content: `Toggle visibility of above-hull points` })}
+          {@attach tooltip({ content: t('structure.phase_toggle_above_hull_points') })}
         >
           <div class="marker unstable"></div>
-          <span>Above hull{
+          <span>{t('structure.phase_above_hull')}{
               merged_controls.show_counts
               ? ` (${
                 unstable_entries.filter((e) => e.visible).length
@@ -213,21 +217,21 @@
   {:else}
     <!-- Color scale selector -->
     <div style="display: grid; gap: 8px; grid-template-columns: auto 1fr">
-      <span {@attach tooltip({ content: `Choose energy colormap` })}>Color scale</span>
+      <span {@attach tooltip({ content: t('structure.phase_choose_energy_colormap') })}>{t('structure.phase_color_scale')}</span>
       <ColorScaleSelect
         bind:value={color_scale}
         selected={[color_scale]}
-        placeholder="Select color scale"
-        {@attach tooltip({ content: `Set interpolator for energy colors` })}
+        placeholder={t('structure.phase_select_color_scale')}
+        {@attach tooltip({ content: t('structure.phase_set_energy_interpolator') })}
       />
     </div>
   {/if}
 
   {#if merged_controls.show_label_controls}
     <div class="control-row">
-      <span class="control-label">Labels</span>
+      <span class="control-label">{t('structure.phase_labels')}</span>
       <div style="display: flex; gap: 12px; flex: 1">
-        <label {@attach tooltip({ content: `Show labels for stable points` })}>
+        <label {@attach tooltip({ content: t('structure.phase_show_stable_labels') })}>
           <input
             type="checkbox"
             checked={show_stable_labels}
@@ -235,9 +239,9 @@
               evt,
             ) => (show_stable_labels = (evt.target as HTMLInputElement).checked)}
           />
-          <span>Stable</span>
+          <span>{t('structure.phase_stable')}</span>
         </label>
-        <label {@attach tooltip({ content: `Show labels for unstable points` })}>
+        <label {@attach tooltip({ content: t('structure.phase_show_unstable_labels') })}>
           <input
             type="checkbox"
             checked={show_unstable_labels}
@@ -246,7 +250,7 @@
             ) => (show_unstable_labels =
               (evt.target as HTMLInputElement).checked)}
           />
-          <span>Unstable</span>
+          <span>{t('structure.phase_unstable')}</span>
         </label>
       </div>
     </div>
@@ -254,9 +258,9 @@
     {#if show_unstable_labels}
       <div
         class="control-row"
-        {@attach tooltip({ content: `Max eV/atom for labeling unstable points` })}
+        {@attach tooltip({ content: t('structure.phase_label_threshold_hint') })}
       >
-        <span class="control-label">Label threshold</span>
+        <span class="control-label">{t('structure.phase_label_threshold')}</span>
         <label style="display: flex; align-items: center; gap: 4px; flex: 1">
           <span style="white-space: nowrap; font-size: 0.85em">{
               max_hull_dist_show_labels.toFixed(2)
@@ -277,21 +281,21 @@
   <!-- Hull faces toggle (for 3D ternary and 4D quaternary diagrams) -->
   {#if show_hull_faces !== undefined}
     <div class="control-row">
-      <span class="control-label">Hull Faces</span>
-      <label {@attach tooltip({ content: `Toggle convex hull faces` })}>
+      <span class="control-label">{t('structure.phase_hull_faces')}</span>
+      <label {@attach tooltip({ content: t('structure.phase_toggle_hull_faces') })}>
         <input
           type="checkbox"
           checked={show_hull_faces}
           oninput={(e) => on_hull_faces_change?.((e.target as HTMLInputElement).checked)}
         />
-        <span>Show</span>
+        <span>{t('structure.phase_show')}</span>
       </label>
       <div style="display: flex; gap: 6px; align-items: center; flex: 1">
         <input
           type="color"
           value={hull_face_color}
           oninput={(e) => on_hull_face_color_change?.((e.target as HTMLInputElement).value)}
-          {@attach tooltip({ content: `Set hull face color` })}
+          {@attach tooltip({ content: t('structure.phase_set_hull_face_color') })}
           style="width: 40px; height: 28px"
         />
         <input
@@ -299,10 +303,10 @@
           min="0"
           max="1"
           step="0.01"
-          aria-label="Hull face opacity"
+          aria-label={t('structure.phase_hull_face_opacity')}
           bind:value={hull_face_opacity}
           oninput={() => on_hull_face_opacity_change?.(hull_face_opacity)}
-          {@attach tooltip({ content: `Hull face opacity (0 = transparent, 1 = opaque)` })}
+          {@attach tooltip({ content: t('structure.phase_hull_face_opacity_hint') })}
           class="threshold-slider"
           style="flex: 1; min-width: 80px"
         />
@@ -314,17 +318,17 @@
   {/if}
 
   <div class="camera-controls">
-    <span class="control-label">Camera</span>
+    <span class="control-label">{t('structure.phase_camera')}</span>
     {#if camera.elevation !== undefined && camera.azimuth !== undefined}
       <!-- Ternary camera controls (elevation/azimuth) -->
       <label
         class="angle-input"
         {@attach tooltip({
           content:
-            `Elevation angle (0° = look down z-axis, 90° = side view, 180° = look up z-axis)`,
+            t('structure.phase_elevation_hint'),
         })}
       >
-        <span>Elev</span>
+        <span>{t('structure.phase_elev')}</span>
         <input
           type="number"
           value={camera.elevation.toFixed(0)}
@@ -339,9 +343,9 @@
       </label>
       <label
         class="angle-input"
-        {@attach tooltip({ content: `Azimuth rotation around z-axis` })}
+        {@attach tooltip({ content: t('structure.phase_azimuth_hint') })}
       >
-        <span>Azim</span>
+        <span>{t('structure.phase_azim')}</span>
         <input
           type="number"
           value={camera.azimuth.toFixed(0)}
@@ -358,7 +362,7 @@
       <!-- Quaternary camera controls (rotation_x/rotation_y) -->
       <label
         class="angle-input"
-        {@attach tooltip({ content: `Vertical tilt (up/down rotation)` })}
+        {@attach tooltip({ content: t('structure.phase_vertical_tilt_hint') })}
       >
         <span>φ</span>
         <input
@@ -376,7 +380,7 @@
       </label>
       <label
         class="angle-input"
-        {@attach tooltip({ content: `Horizontal rotation (left/right)` })}
+        {@attach tooltip({ content: t('structure.phase_horizontal_rotation_hint') })}
       >
         <span>θ</span>
         <input

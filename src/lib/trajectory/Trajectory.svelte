@@ -57,6 +57,9 @@
     get_keyboard_action,
   } from './trajectory-controls'
   import { apply_displacements, sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   type EventHandlers = {
     on_play?: (data: TrajHandlerData) => void
@@ -1956,30 +1959,30 @@
     </div>
   {:else}
     <div class="empty-state">
-      <h3>Load Trajectory</h3>
+      <h3>{t('structure.trajectory_load_title')}</h3>
       <p>
-        Drop a trajectory file here or use the buttons below
+        {t('structure.trajectory_load_hint')}
       </p>
       <div class="source-buttons">
         <label class="traj-browse-btn">
-          Browse Local
+          {t('structure.browse_local')}
           <input type="file" accept=".xyz,.extxyz,.json,.json.gz,.traj,.h5,.hdf5,XDATCAR*" onchange={async (e) => {
             const file = (e.target as HTMLInputElement).files?.[0]
             if (file) await handle_dialog_file(file)
           }} hidden />
         </label>
         <button class="traj-browse-btn traj-remote-btn" onclick={() => show_file_dialog = true}>
-          Browse Remote
+          {t('structure.browse_remote')}
         </button>
       </div>
-      <strong style="display: block; margin-block: 1em 1ex">Supported formats:</strong>
+      <strong style="display: block; margin-block: 1em 1ex">{t('structure.trajectory_supported_formats')}:</strong>
       <ul>
-        <li>VASP XDATCAR files</li>
-        <li>Multi-frame XYZ (.xyz, .extxyz)</li>
-        <li>HDF5 trajectory (.h5, .hdf5)</li>
-        <li>ASE trajectory (.traj)</li>
-        <li>Pymatgen trajectory JSON</li>
-        <li>Compressed files (.gz)</li>
+        <li>{t('structure.trajectory_format_xdatcar')}</li>
+        <li>{t('structure.trajectory_format_xyz')}</li>
+        <li>{t('structure.trajectory_format_hdf5')}</li>
+        <li>{t('structure.trajectory_format_ase')}</li>
+        <li>{t('structure.trajectory_format_pymatgen')}</li>
+        <li>{t('structure.trajectory_format_compressed')}</li>
       </ul>
     </div>
   {/if}
@@ -1988,8 +1991,8 @@
 <FileSourceDialog
   bind:show={show_file_dialog}
   file_types={['.h5', '.hdf5', '.xyz', '.extxyz', '.traj', 'XDATCAR']}
-  title="Load Trajectory"
-  description="Select an XDATCAR, vaspout.h5, .xyz, or other trajectory file from a local file, remote HPC server, or workflow."
+  title={t('structure.trajectory_load_title')}
+  description={t('structure.trajectory_load_description')}
   onfile={handle_dialog_file}
   onclose={() => show_file_dialog = false}
 />

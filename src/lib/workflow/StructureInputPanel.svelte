@@ -5,6 +5,10 @@
   import { STATUS_COLORS } from './workflow-types'
   import { validate_frame_selection, parse_frame_selection } from './frame-selection'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     node,
@@ -138,7 +142,7 @@
         class="help-btn"
         class:active={show_help}
         onclick={() => show_help = !show_help}
-        title="Toggle help"
+        title={t('workflow.config_toggle_help')}
       >?</button>
     </div>
     {#if show_help}
@@ -157,7 +161,7 @@
 
   <!-- Display Name -->
   <div class="label-row">
-    <label class="field-label">Display Name</label>
+    <label class="field-label">{t('workflow.config_display_name')}</label>
     <input
       type="text"
       class="field-input"
@@ -171,14 +175,14 @@
   <div class="info-area">
     {#if has_structure && preview}
       <div class="struct-section">
-        <div class="section-label">Structure</div>
+        <div class="section-label">{t('common.structure')}</div>
         <div class="info-grid">
           <div class="info-item formula-item">
-            <span class="info-label">Formula</span>
+            <span class="info-label">{t('common.formula')}</span>
             <span class="info-value formula-value">{preview.formula}</span>
           </div>
           <div class="info-item">
-            <span class="info-label">Atoms</span>
+            <span class="info-label">{t('common.atoms')}</span>
             <span class="info-value">{preview.n_atoms}</span>
           </div>
           {#if preview.lattice}
@@ -213,15 +217,15 @@
       <!-- Frame Selector (multi-frame only) -->
       {#if is_trajectory}
         <div class="frame-section">
-          <div class="section-label">Trajectory</div>
-          <div class="frame-count">{n_frames} frames loaded</div>
+          <div class="section-label">{t('common.trajectory')}</div>
+          <div class="frame-count">{t('workflow.structure_panel_frames_loaded', { n: n_frames })}</div>
           <div class="frame-field">
-            <label class="field-label" for="frame-sel">Frame Selection</label>
+            <label class="field-label" for="frame-sel">{t('workflow.structure_panel_frame_selection')}</label>
             <input
               id="frame-sel"
               class="field-input"
               type="text"
-              placeholder="e.g. 1,3,5-10 (all if empty)"
+              placeholder={t('workflow.structure_panel_frame_placeholder')}
               value={frame_selection_str}
               oninput={handle_frame_input}
             />
@@ -229,11 +233,11 @@
               <div class="frame-error">{frame_error}</div>
             {/if}
             <div class="output-type">
-              Output: <strong>{output_type}</strong>
+              {t('common.output')}: <strong>{output_type === `structure` ? t('common.structure') : t('common.trajectory')}</strong>
               {#if frame_selection_str.trim()}
-                ({parse_frame_selection(frame_selection_str, n_frames).length} frame{parse_frame_selection(frame_selection_str, n_frames).length !== 1 ? `s` : ``})
+                ({t('workflow.structure_panel_frame_count', { n: parse_frame_selection(frame_selection_str, n_frames).length })})
               {:else}
-                (all {n_frames} frames)
+                ({t('workflow.structure_panel_all_frames', { n: n_frames })})
               {/if}
             </div>
           </div>
@@ -242,8 +246,8 @@
     {:else}
       <div class="empty-struct">
         <div class="empty-icon">&#128196;</div>
-        <div class="empty-text">No structure loaded</div>
-        <div class="empty-hint">Click Import to load a structure</div>
+        <div class="empty-text">{t('workflow.structure_panel_no_structure')}</div>
+        <div class="empty-hint">{t('workflow.structure_panel_click_import')}</div>
       </div>
     {/if}
   </div>
@@ -255,9 +259,9 @@
         <StructurePreview structure={preview_structure} />
       </div>
       <div class="preview-bar">
-        <span>{preview?.formula ?? ``} &middot; {preview?.n_atoms ?? 0} atoms</span>
+        <span>{preview?.formula ?? ``} &middot; {t('workflow.structure_panel_atoms_count', { n: preview?.n_atoms ?? 0 })}</span>
         {#if onedit_3d}
-          <button class="preview-expand" onclick={() => onedit_3d?.()} title="Open in full viewer">&#x26F6;</button>
+          <button class="preview-expand" onclick={() => onedit_3d?.()} title={t('workflow.calc_open_full_viewer')}>&#x26F6;</button>
         {/if}
       </div>
     </div>
@@ -266,26 +270,26 @@
   <!-- Action Buttons -->
   <div class="actions-section">
     <button class="action-btn import-btn" onclick={() => onimport?.()}>
-      {has_structure ? `📥 Re-import Structure` : `📥 Import Structure`}
+      {has_structure ? t('workflow.structure_panel_reimport_structure') : t('workflow.structure_panel_import_structure')}
     </button>
     {#if has_structure}
       <button class="action-btn edit3d-btn" onclick={() => onedit_3d?.()}>
-        🔬 Edit 3D
+        {t('workflow.structure_panel_edit_3d')}
       </button>
     {/if}
   </div>
 
   <!-- Inputs / Outputs -->
   <div class="io-section">
-    <div class="section-label">Inputs / Outputs</div>
+    <div class="section-label">{t('workflow.config_inputs_outputs')}</div>
     <div class="io-row">
       <div class="io-col">
-        <span class="io-heading">IN</span>
-        <span class="io-item io-none">none</span>
+        <span class="io-heading">{t('common.input')}</span>
+        <span class="io-item io-none">{t('workflow.node_none')}</span>
       </div>
       <div class="io-arrow">&rarr;</div>
       <div class="io-col">
-        <span class="io-heading">OUT</span>
+        <span class="io-heading">{t('common.output')}</span>
         {#each definition.outputs as out}
           <span class="io-item">{out}</span>
         {/each}
@@ -296,7 +300,7 @@
   <!-- Reset -->
   <div class="footer-actions">
     <button class="reset-btn" onclick={reset_to_defaults}>
-      Reset to Defaults
+      {t('workflow.config_reset_to_defaults')}
     </button>
   </div>
 </div>

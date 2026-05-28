@@ -1,8 +1,11 @@
 <script lang="ts">
   import { format_num, Histogram, Icon, type InfoItem } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { HTMLAttributes } from 'svelte/elements'
   import { SvelteSet } from 'svelte/reactivity'
   import type { PhaseStats, PlotEntry3D } from './types'
+
+  load_i18n_module('structure')
 
   let { phase_stats, stable_entries, unstable_entries, ...rest }:
     & HTMLAttributes<HTMLDivElement>
@@ -33,7 +36,7 @@
     return [{
       x: [],
       y: energies,
-      label: `Formation Energy`,
+      label: t('structure.phase_formation_energy'),
       line_style: { stroke: `steelblue` },
     }]
   })
@@ -46,14 +49,14 @@
     return [{
       x: [],
       y: distances,
-      label: `E above hull`,
+      label: t('structure.phase_e_above_hull'),
       line_style: { stroke: `coral` },
     }]
   })
 
   let pane_data = $derived.by(() => {
     if (!phase_stats) return []
-    const sections: { title: string; items: InfoItem[] }[] = []
+    const sections: { key: string; title: string; items: InfoItem[] }[] = []
 
     // Determine system dimensionality from chemical_system string (count elements)
     const num_elements = phase_stats.chemical_system.split(`-`).length
@@ -70,7 +73,7 @@
 
     const phase_items: InfoItem[] = [
       {
-        label: `Total entries in ${phase_stats.chemical_system} system`,
+        label: t('structure.phase_total_entries_system', { system: phase_stats.chemical_system }),
         value: format_num(phase_stats.total),
         key: `total-entries`,
       },
@@ -79,7 +82,7 @@
     // Only show phase types that exist or are within expected dimensionality
     if (phase_stats.unary > 0 || max_arity >= 1) {
       phase_items.push({
-        label: `Unary phases`,
+        label: t('structure.phase_unary_phases'),
         value: `${format_num(phase_stats.unary)} (${
           format_num(phase_stats.unary / phase_stats.total, `.2~%`)
         })`,
@@ -88,7 +91,7 @@
     }
     if (phase_stats.binary > 0 || max_arity >= 2) {
       phase_items.push({
-        label: `Binary phases`,
+        label: t('structure.phase_binary_phases'),
         value: `${format_num(phase_stats.binary)} (${
           format_num(phase_stats.binary / phase_stats.total, `.2~%`)
         })`,
@@ -97,7 +100,7 @@
     }
     if (phase_stats.ternary > 0 || max_arity >= 3) {
       phase_items.push({
-        label: `Ternary phases`,
+        label: t('structure.phase_ternary_phases'),
         value: `${format_num(phase_stats.ternary)} (${
           format_num(phase_stats.ternary / phase_stats.total, `.2~%`)
         })`,
@@ -106,7 +109,7 @@
     }
     if (phase_stats.quaternary > 0 || max_arity >= 4) {
       phase_items.push({
-        label: `Quaternary phases`,
+        label: t('structure.phase_quaternary_phases'),
         value: `${format_num(phase_stats.quaternary)} (${
           format_num(phase_stats.quaternary / phase_stats.total, `.2~%`)
         })`,
@@ -115,23 +118,25 @@
     }
 
     sections.push({
+      key: `summary`,
       title: ``,
       items: phase_items,
     })
 
     // Stability
     sections.push({
-      title: `Stability`,
+      key: `stability`,
+      title: t('structure.phase_stability'),
       items: [
         {
-          label: `Stable phases`,
+          label: t('structure.phase_stable_phases'),
           value: `${format_num(phase_stats.stable)} (${
             format_num(phase_stats.stable / phase_stats.total, `.2~%`)
           })`,
           key: `stable-phases`,
         },
         {
-          label: `Unstable phases`,
+          label: t('structure.phase_unstable_phases'),
           value: `${format_num(phase_stats.unstable)} (${
             format_num(phase_stats.unstable / phase_stats.total, `.2~%`)
           })`,
@@ -142,20 +147,21 @@
 
     // Energy Statistics
     sections.push({
-      title: `Energy Statistics (eV/atom)`,
+      key: `energy-statistics`,
+      title: t('structure.phase_energy_statistics_ev_atom'),
       items: [
         {
-          label: `Min formation energy`,
+          label: t('structure.phase_min_formation_energy'),
           value: format_num(phase_stats.energy_range.min, `.3f`),
           key: `min-formation-energy`,
         },
         {
-          label: `Max formation energy`,
+          label: t('structure.phase_max_formation_energy'),
           value: format_num(phase_stats.energy_range.max, `.3f`),
           key: `max-formation-energy`,
         },
         {
-          label: `Avg formation energy`,
+          label: t('structure.phase_avg_formation_energy'),
           value: format_num(phase_stats.energy_range.avg, `.3f`),
           key: `avg-formation-energy`,
         },
@@ -164,15 +170,16 @@
 
     // Hull Distance
     sections.push({
-      title: `Hull Distance (eV/atom)`,
+      key: `hull-distance`,
+      title: t('structure.phase_hull_distance_ev_atom'),
       items: [
         {
-          label: `Max above hull`,
+          label: t('structure.phase_max_above_hull'),
           value: format_num(phase_stats.hull_distance.max, `.3f`),
           key: `max-hull-distance`,
         },
         {
-          label: `Avg above hull`,
+          label: t('structure.phase_avg_above_hull'),
           value: format_num(phase_stats.hull_distance.avg, `.3f`),
           key: `avg-hull-distance`,
         },
@@ -184,8 +191,8 @@
 </script>
 
 <div {...rest} class="phase-diagram-stats {rest.class ?? ``}">
-  <h4 style="margin-top: 0">Phase Diagram Stats</h4>
-  {#each pane_data as section, sec_idx (section.title)}
+  <h4 style="margin-top: 0">{t('structure.phase_diagram_stats')}</h4>
+  {#each pane_data as section, sec_idx (section.key)}
     {#if sec_idx > 0}<hr />{/if}
     <section>
       {#if section.title}
@@ -196,7 +203,7 @@
         <div
           class="clickable stat-item"
           data-testid={key ? `pd-${key}` : undefined}
-          title="Click to copy: {label}: {value}"
+          title={t('structure.click_to_copy_value', { label, value })}
           onclick={() => copy_to_clipboard(item.label, String(item.value), key ?? item.label)}
           role="button"
           tabindex="0"
@@ -219,7 +226,7 @@
         </div>
       {/each}
 
-      {#if section.title === `Energy Statistics (eV/atom)` &&
+      {#if section.key === `energy-statistics` &&
         e_form_data[0].y.length > 0}
         <Histogram
           series={e_form_data}
@@ -234,7 +241,7 @@
         />
       {/if}
 
-      {#if section.title === `Hull Distance (eV/atom)` &&
+      {#if section.key === `hull-distance` &&
         hull_distance_data[0].y.length > 0}
         <Histogram
           series={hull_distance_data}

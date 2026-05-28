@@ -1,5 +1,9 @@
 <script lang="ts">
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   let {
     show = $bindable(),
@@ -29,20 +33,20 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="vasp-modal" onclick={(e) => e.stopPropagation()}>
       <div class="vasp-modal-header">
-        <h3 class="vasp-modal-title">VASP Input Files</h3>
+        <h3 class="vasp-modal-title">{t('workflow.vasp_input_files')}</h3>
         <div class="vasp-tabs">
           <button class="vasp-tab" class:active={vasp_editor_tab === 'incar'} onclick={() => vasp_editor_tab = 'incar'}>INCAR</button>
           <button class="vasp-tab" class:active={vasp_editor_tab === 'kpoints'} onclick={() => vasp_editor_tab = 'kpoints'}>KPOINTS</button>
           <button class="vasp-tab" class:active={vasp_editor_tab === 'poscar'} onclick={() => vasp_editor_tab = 'poscar'}>POSCAR</button>
         </div>
         <div class="vasp-modal-actions">
-          <button class="vasp-save-btn" onclick={onsave}>Save to Node</button>
-          <button class="vasp-close-btn" onclick={onclose}>&times;</button>
+          <button class="vasp-save-btn" onclick={onsave}>{t('workflow.save_to_node')}</button>
+          <button class="vasp-close-btn" onclick={onclose} title={t('common.close')}>&times;</button>
         </div>
       </div>
       <div class="vasp-modal-body">
         {#if vasp_generating}
-          <div class="vasp-loading">Generating VASP input files...</div>
+          <div class="vasp-loading">{t('workflow.generating_vasp_input_files')}</div>
         {:else if vasp_error}
           <div class="vasp-error">{vasp_error}</div>
         {:else}

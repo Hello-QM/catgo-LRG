@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
 
   let { error_msg, on_dismiss, error_snippet, ...rest }:
     & HTMLAttributes<HTMLDivElement>
@@ -18,11 +21,11 @@
   {:else if error_msg.startsWith(`<`)}
     <!-- Render HTML content for unsupported format messages -->
     {@html error_msg}
-    <button onclick={on_dismiss}>Dismiss</button>
+    <button onclick={on_dismiss}>{t('common.dismiss')}</button>
   {:else}
-    <h3>Error</h3>
+    <h3>{t('common.error')}</h3>
     <p>{error_msg}</p>
-    <button onclick={on_dismiss}>Dismiss</button>
+    <button onclick={on_dismiss}>{t('common.dismiss')}</button>
   {/if}
 </div>
 

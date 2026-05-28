@@ -20,6 +20,10 @@
 -->
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('workflow')
 
   /**
    * Status of a single parallel branch spawned by a Map node.
@@ -150,6 +154,10 @@
     return order[s] ?? 9
   }
 
+  function status_label(s: BranchInfo['status']): string {
+    return t(`workflow.branch_status_status_${s}`)
+  }
+
   /** Toggle sort column; if already active, flip direction */
   function toggle_sort(col: SortCol) {
     if (sort_col === col) {
@@ -213,20 +221,20 @@
 </script>
 
 {#if show}
-  <div class="branch-panel" role="complementary" aria-label="Branch Status">
+  <div class="branch-panel" role="complementary" aria-label={t('workflow.branch_status_title')}>
     <!-- Header -->
     <div class="panel-header">
       <div class="panel-title">
         <span class="panel-icon">&#9889;</span>
-        Branch Status
+        {t('workflow.branch_status_title')}
       </div>
-      <button class="close-btn" onclick={() => (show = false)} title="Close panel">&times;</button>
+      <button class="close-btn" onclick={() => (show = false)} title={t('workflow.branch_status_close_panel')}>&times;</button>
     </div>
 
     <!-- Progress section -->
     <div class="progress-section">
       <div class="progress-label">
-        Screening: {total} structures &mdash; {finished_count}/{total} finished ({progress_pct}%)
+        {t('workflow.branch_status_progress', { total, finished: finished_count, percent: progress_pct })}
       </div>
       <div class="progress-track" role="progressbar" aria-valuenow={progress_pct} aria-valuemin={0} aria-valuemax={100}>
         <div class="progress-fill" style:width="{progress_pct}%"></div>
@@ -234,19 +242,19 @@
       <!-- Status summary counts -->
       <div class="status-counts">
         {#if completed_count > 0}
-          <span class="count-chip completed" title="Completed">&#10003; {completed_count}</span>
+          <span class="count-chip completed" title={t('common.completed')}>&#10003; {completed_count}</span>
         {/if}
         {#if running_count > 0}
-          <span class="count-chip running" title="Running">&#x25B6; {running_count}</span>
+          <span class="count-chip running" title={t('common.running')}>&#x25B6; {running_count}</span>
         {/if}
         {#if pending_count > 0}
-          <span class="count-chip pending" title="Pending/Queued">&#x23F3; {pending_count}</span>
+          <span class="count-chip pending" title={t('workflow.branch_status_pending_queued')}>&#x23F3; {pending_count}</span>
         {/if}
         {#if failed_count > 0}
-          <span class="count-chip failed" title="Failed">&#10007; {failed_count}</span>
+          <span class="count-chip failed" title={t('common.failed')}>&#10007; {failed_count}</span>
         {/if}
         {#if skipped_count > 0}
-          <span class="count-chip skipped" title="Skipped">&#x23ED; {skipped_count}</span>
+          <span class="count-chip skipped" title={t('workflow.branch_status_skipped')}>&#x23ED; {skipped_count}</span>
         {/if}
       </div>
     </div>
@@ -257,8 +265,8 @@
         <thead>
           <tr>
             <th class="sortable" onclick={() => toggle_sort('index')}>#{sort_arrow('index')}</th>
-            <th class="sortable" onclick={() => toggle_sort('label')}>Label{sort_arrow('label')}</th>
-            <th class="sortable" onclick={() => toggle_sort('status')}>Status{sort_arrow('status')}</th>
+            <th class="sortable" onclick={() => toggle_sort('label')}>{t('common.label')}{sort_arrow('label')}</th>
+            <th class="sortable" onclick={() => toggle_sort('status')}>{t('common.status')}{sort_arrow('status')}</th>
             <th class="sortable" onclick={() => toggle_sort('result')}>{result_col_label}{sort_arrow('result')}</th>
           </tr>
         </thead>
@@ -281,16 +289,16 @@
                   class="status-pill"
                   style:background={pill.bg}
                   style:color={pill.text}
-                >{branch.status}</span>
+                >{status_label(branch.status)}</span>
               </td>
               <td class="col-result">
                 {#if branch.status === 'failed' && branch.error}
                   <button
                     class="error-toggle"
                     onclick={(e: MouseEvent) => { e.stopPropagation(); toggle_error(branch.index) }}
-                    title="Show error details"
+                    title={t('workflow.branch_status_show_error')}
                   >
-                    {expanded_errors.has(branch.index) ? '\u25BC' : '\u25B6'} Error
+                    {expanded_errors.has(branch.index) ? '\u25BC' : '\u25B6'} {t('common.error')}
                   </button>
                 {:else}
                   {fmt(branch.result?.[result_key])}
@@ -307,7 +315,7 @@
           {/each}
           {#if branches.length === 0}
             <tr>
-              <td colspan="4" class="empty-msg">No branches yet. Start the workflow to see progress.</td>
+              <td colspan="4" class="empty-msg">{t('workflow.branch_status_no_branches')}</td>
             </tr>
           {/if}
         </tbody>
@@ -318,16 +326,16 @@
     <div class="panel-actions">
       {#if failed_count > 0 && on_retry_failed}
         <button class="btn action-btn retry-btn" onclick={() => on_retry_failed?.()}>
-          &#x21BB; Retry Failed ({failed_count})
+          &#x21BB; {t('workflow.branch_status_retry_failed', { n: failed_count })}
         </button>
       {/if}
       {#if (running_count > 0 || pending_count > 0) && on_abort_all}
         <button class="btn action-btn abort-btn" onclick={() => on_abort_all?.()}>
-          &#x26D4; Abort All
+          &#x26D4; {t('workflow.branch_status_abort_all')}
         </button>
       {/if}
       <button class="btn action-btn export-btn" onclick={export_csv} disabled={branches.length === 0}>
-        &#x2913; Export CSV
+        &#x2913; {t('workflow.result_panel_export_csv')}
       </button>
     </div>
   </div>
