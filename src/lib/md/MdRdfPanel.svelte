@@ -1,5 +1,8 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -288,9 +291,9 @@
         name: labels[dim],
         line: { color: COLORS[dim], width: 1.5 },
       }))
-      on_plot({ traces, title: `Center of Mass`, x_label: `Frame`, y_label: `Position (Å)` })
+      on_plot({ traces, title: t('structure.md_center_of_mass'), x_label: t('structure.md_frame'), y_label: t('structure.md_position_angstrom') })
     } catch (e: any) {
-      com_error = e.message || `Center-of-mass computation failed`
+      com_error = e.message || t('structure.md_com_failed')
     } finally {
       com_loading = false
     }
@@ -300,22 +303,22 @@
 <div class="md-rdf-panel">
   <!-- RDF Analysis -->
   <details open>
-    <summary>RDF Analysis</summary>
+    <summary>{t('structure.md_rdf_analysis')}</summary>
 
     <!-- Selection 1 -->
     <div class="selection-block">
-      <span class="sel-label">Selection 1</span>
+      <span class="sel-label">{t('structure.md_selection_1')}</span>
       <div class="tab-bar">
         <button
           class="tab-btn"
           class:active={rdf_sel_mode_1 === `element`}
           onclick={() => rdf_sel_mode_1 = `element`}
-        >Element</button>
+        >{t('structure.md_element')}</button>
         <button
           class="tab-btn"
           class:active={rdf_sel_mode_1 === `indices`}
           onclick={() => rdf_sel_mode_1 = `indices`}
-        >Indices</button>
+        >{t('structure.md_indices')}</button>
       </div>
       {#if rdf_sel_mode_1 === `element`}
         <input
@@ -323,7 +326,7 @@
           placeholder="e.g. O"
           bind:value={rdf_element_1}
           class="text-input"
-          title="Element symbol (e.g. O, Cu, H)"
+          title={t('structure.md_element_symbol_hint')}
         />
       {:else}
         <input
@@ -331,25 +334,25 @@
           placeholder="0,1,2,3"
           bind:value={rdf_indices_1}
           class="text-input"
-          title="Comma-separated 0-indexed atom indices"
+          title={t('structure.md_atom_indices_hint')}
         />
       {/if}
     </div>
 
     <!-- Selection 2 -->
     <div class="selection-block">
-      <span class="sel-label">Selection 2</span>
+      <span class="sel-label">{t('structure.md_selection_2')}</span>
       <div class="tab-bar">
         <button
           class="tab-btn"
           class:active={rdf_sel_mode_2 === `element`}
           onclick={() => rdf_sel_mode_2 = `element`}
-        >Element</button>
+        >{t('structure.md_element')}</button>
         <button
           class="tab-btn"
           class:active={rdf_sel_mode_2 === `indices`}
           onclick={() => rdf_sel_mode_2 = `indices`}
-        >Indices</button>
+        >{t('structure.md_indices')}</button>
       </div>
       {#if rdf_sel_mode_2 === `element`}
         <input
@@ -357,7 +360,7 @@
           placeholder="e.g. H"
           bind:value={rdf_element_2}
           class="text-input"
-          title="Element symbol (e.g. O, Cu, H)"
+          title={t('structure.md_element_symbol_hint')}
         />
       {:else}
         <input
@@ -365,7 +368,7 @@
           placeholder="4,5,6,7"
           bind:value={rdf_indices_2}
           class="text-input"
-          title="Comma-separated 0-indexed atom indices"
+          title={t('structure.md_atom_indices_hint')}
         />
       {/if}
     </div>
@@ -381,16 +384,16 @@
         <input type="number" bind:value={rdf_r_max} step="0.5" min="0.1" />
       </label>
       <label>
-        Bins
+        {t('structure.md_bins')}
         <input type="number" bind:value={rdf_n_bins} step="10" min="10" max="2000" />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={rdf_periodic} />
-        Periodic
+        {t('structure.md_periodic')}
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={rdf_show_coord} />
-        Show coordination number
+        {t('structure.md_show_coordination_number')}
       </label>
     </div>
 
@@ -400,9 +403,9 @@
       disabled={rdf_loading}
     >
       {#if rdf_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute RDF
+        {t('structure.md_compute_rdf')}
       {/if}
     </button>
 
@@ -412,29 +415,29 @@
 
     {#if rdf_result}
       <div class="result-info">
-        <span>Pairs: {rdf_result.n_pairs}</span>
+        <span>{t('structure.md_pairs_count', { n: rdf_result.n_pairs })}</span>
       </div>
     {/if}
   </details>
 
   <!-- Pairwise Distances -->
   <details>
-    <summary>Pairwise Distances</summary>
+    <summary>{t('structure.md_pairwise_distances')}</summary>
 
     <div class="param-grid">
       <label class="full-width">
-        Atom pairs (semicolon-separated)
+        {t('structure.md_atom_pairs_semicolon')}
         <input
           type="text"
           placeholder="0,1 ; 2,3 ; 4,5"
           bind:value={dist_pairs_text}
           class="text-input wide"
-          title="Semicolon-separated atom pairs, e.g. 0,1 ; 2,3"
+          title={t('structure.md_atom_pairs_hint')}
         />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={dist_periodic} />
-        Periodic
+        {t('structure.md_periodic')}
       </label>
     </div>
 
@@ -444,9 +447,9 @@
       disabled={dist_loading}
     >
       {#if dist_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Distances
+        {t('structure.md_compute_distances')}
       {/if}
     </button>
 
@@ -458,7 +461,7 @@
       {#if dist_stats.length > 0}
         <table class="stats-table">
           <thead>
-            <tr><th>Pair</th><th>Mean (A)</th><th>Std (A)</th></tr>
+            <tr><th>{t('structure.md_pair')}</th><th>{t('structure.md_mean_angstrom')}</th><th>{t('structure.md_std_angstrom')}</th></tr>
           </thead>
           <tbody>
             {#each dist_stats as s}
@@ -476,17 +479,17 @@
 
   <!-- Center of Mass -->
   <details>
-    <summary>Center of Mass</summary>
+    <summary>{t('structure.md_center_of_mass')}</summary>
 
     <div class="param-grid">
       <label class="full-width">
-        Atom indices
+        {t('structure.md_atom_indices')}
         <input
           type="text"
           placeholder="0,1,2,3"
           bind:value={com_indices_text}
           class="text-input wide"
-          title="Comma-separated 0-indexed atom indices"
+          title={t('structure.md_atom_indices_hint')}
         />
       </label>
     </div>
@@ -497,9 +500,9 @@
       disabled={com_loading}
     >
       {#if com_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute CoM
+        {t('structure.md_compute_com')}
       {/if}
     </button>
 

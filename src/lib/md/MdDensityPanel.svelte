@@ -1,5 +1,8 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -202,11 +205,11 @@
 <div class="density-panel">
   <!-- ===== 1D Density Profile ===== -->
   <details open>
-    <summary>1D Density Profile</summary>
+    <summary>{t('structure.md_density_profile_1d')}</summary>
 
     <div class="param-grid">
       <label>
-        Axis
+        {t('structure.md_axis')}
         <select bind:value={profile_axis}>
           <option value="x">x</option>
           <option value="y">y</option>
@@ -214,18 +217,18 @@
         </select>
       </label>
       <label>
-        Number of bins
+        {t('structure.md_number_of_bins')}
         <input type="number" bind:value={profile_n_bins} min="1" max="10000" step="10" />
       </label>
       <label>
-        Density type
+        {t('structure.md_density_type')}
         <select bind:value={profile_density_type}>
-          <option value="number">Number density</option>
-          <option value="mass">Mass density</option>
+          <option value="number">{t('structure.md_number_density')}</option>
+          <option value="mass">{t('structure.md_mass_density')}</option>
         </select>
       </label>
       <label>
-        Atom indices
+        {t('structure.md_atom_indices')}
         <input
           type="text"
           placeholder="0,1,2,5 (optional)"
@@ -233,11 +236,11 @@
         />
       </label>
       <label>
-        Frame start
+        {t('structure.md_frame_start')}
         <input type="text" placeholder="(optional)" bind:value={profile_frame_start} />
       </label>
       <label>
-        Frame end
+        {t('structure.md_frame_end')}
         <input type="text" placeholder="(optional)" bind:value={profile_frame_end} />
       </label>
     </div>
@@ -248,9 +251,9 @@
       disabled={profile_computing}
     >
       {#if profile_computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Profile
+        {t('structure.md_compute_profile')}
       {/if}
     </button>
 
@@ -260,20 +263,20 @@
 
     {#if profile_result}
       <div class="info-bar">
-        <span title="Atoms selected">{profile_result.n_atoms_selected} atoms</span>
-        <span title="Total frames">{profile_result.total_frames} frames</span>
-        <span title="Bin width">{profile_result.bin_width.toFixed(3)} A/bin</span>
+        <span title={t('structure.md_atoms_selected')}>{t('structure.md_atoms_count', { n: profile_result.n_atoms_selected })}</span>
+        <span title={t('structure.md_total_frames')}>{t('structure.md_frames_count', { n: profile_result.total_frames })}</span>
+        <span title={t('structure.md_bin_width')}>{profile_result.bin_width.toFixed(3)} A/bin</span>
       </div>
     {/if}
   </details>
 
   <!-- ===== 2D Planar Density ===== -->
   <details>
-    <summary>2D Planar Density</summary>
+    <summary>{t('structure.md_planar_density_2d')}</summary>
 
     <div class="param-grid">
       <label>
-        Plane
+        {t('structure.md_plane')}
         <select bind:value={planar_plane}>
           <option value="xy">xy</option>
           <option value="xz">xz</option>
@@ -281,23 +284,23 @@
         </select>
       </label>
       <label>
-        Grid bins (nx)
+        {t('structure.md_grid_bins_nx')}
         <input type="number" bind:value={planar_nx} min="1" max="10000" step="10" />
       </label>
       <label>
-        Grid bins (ny)
+        {t('structure.md_grid_bins_ny')}
         <input type="number" bind:value={planar_ny} min="1" max="10000" step="10" />
       </label>
       <label>
-        {planar_plane === `xy` ? `Z` : planar_plane === `xz` ? `Y` : `X`} range min (A)
+        {t('structure.md_axis_range_min_angstrom', { axis: planar_plane === `xy` ? `Z` : planar_plane === `xz` ? `Y` : `X` })}
         <input type="text" placeholder="(optional)" bind:value={planar_z_min} />
       </label>
       <label>
-        {planar_plane === `xy` ? `Z` : planar_plane === `xz` ? `Y` : `X`} range max (A)
+        {t('structure.md_axis_range_max_angstrom', { axis: planar_plane === `xy` ? `Z` : planar_plane === `xz` ? `Y` : `X` })}
         <input type="text" placeholder="(optional)" bind:value={planar_z_max} />
       </label>
       <label>
-        Atom indices
+        {t('structure.md_atom_indices')}
         <input
           type="text"
           placeholder="0,1,2,5 (optional)"
@@ -305,11 +308,11 @@
         />
       </label>
       <label>
-        Frame start
+        {t('structure.md_frame_start')}
         <input type="text" placeholder="(optional)" bind:value={planar_frame_start} />
       </label>
       <label>
-        Frame end
+        {t('structure.md_frame_end')}
         <input type="text" placeholder="(optional)" bind:value={planar_frame_end} />
       </label>
     </div>
@@ -320,9 +323,9 @@
       disabled={planar_computing}
     >
       {#if planar_computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Density Map
+        {t('structure.md_compute_density_map')}
       {/if}
     </button>
 
@@ -332,8 +335,8 @@
 
     {#if planar_result}
       <div class="info-bar">
-        <span title="Total frames">{planar_result.total_frames} frames</span>
-        <span title="Atoms selected">{planar_result.n_atoms_selected} atoms</span>
+        <span title={t('structure.md_total_frames')}>{t('structure.md_frames_count', { n: planar_result.total_frames })}</span>
+        <span title={t('structure.md_atoms_selected')}>{t('structure.md_atoms_count', { n: planar_result.n_atoms_selected })}</span>
       </div>
     {/if}
   </details>

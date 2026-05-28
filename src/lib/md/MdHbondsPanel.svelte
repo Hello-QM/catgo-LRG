@@ -1,5 +1,8 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -256,12 +259,12 @@
       }
       on_plot({
         traces: [trace],
-        title: `H-bonds in Slab`,
-        x_label: `Frame`,
+        title: t('structure.md_hbonds_in_slab'),
+        x_label: t('structure.md_frame'),
         y_label: `H-bonds`,
       })
     } catch (e: any) {
-      hbdensity_error = e.message || `Density computation failed`
+      hbdensity_error = e.message || t('structure.md_density_failed')
     } finally {
       hbdensity_computing = false
     }
@@ -271,42 +274,42 @@
 <div class="hbonds-panel">
   <!-- ===== H-bond Detection ===== -->
   <details open>
-    <summary>H-bond Detection</summary>
+    <summary>{t('structure.md_hbond_detection')}</summary>
 
     <div class="param-grid">
       <label>
-        Method
+        {t('structure.method')}
         <select bind:value={detect_method}>
           <option value="baker_hubbard">Baker-Hubbard</option>
           <option value="wernet_nilsson">Wernet-Nilsson</option>
         </select>
       </label>
       <label>
-        Distance cutoff (A)
+        {t('structure.md_distance_cutoff_angstrom')}
         <input type="number" bind:value={detect_distance_cutoff} min="1" max="10" step="0.1" />
       </label>
       <label>
-        Angle cutoff (deg)
+        {t('structure.md_angle_cutoff_deg')}
         <input type="number" bind:value={detect_angle_cutoff} min="90" max="180" step="1" />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={detect_exclude_water} />
-        Exclude water
+        {t('structure.md_exclude_water')}
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={detect_periodic} />
-        Periodic
+        {t('structure.md_periodic')}
       </label>
 
       {#if detect_method === `baker_hubbard`}
         <label>
-          Frequency threshold
+          {t('structure.md_frequency_threshold')}
           <input type="number" bind:value={detect_freq} min="0" max="1" step="0.05" />
         </label>
       {/if}
 
       <label>
-        Donor indices
+        {t('structure.md_donor_indices')}
         <input
           type="text"
           placeholder="0,1,2 (optional)"
@@ -314,7 +317,7 @@
         />
       </label>
       <label>
-        Acceptor indices
+        {t('structure.md_acceptor_indices')}
         <input
           type="text"
           placeholder="3,4,5 (optional)"
@@ -329,9 +332,9 @@
       disabled={detect_computing}
     >
       {#if detect_computing}
-        <Spinner /> Detecting...
+        <Spinner /> {t('structure.md_detecting')}
       {:else}
-        Detect H-bonds
+        {t('structure.md_detect_hbonds')}
       {/if}
     </button>
 
@@ -341,16 +344,16 @@
 
     {#if detect_result}
       <div class="info-bar">
-        <span>Found {detect_result.n_unique} unique H-bonds across {detect_result.n_frames} frames</span>
+        <span>{t('structure.md_hbonds_found_summary', { count: detect_result.n_unique, frames: detect_result.n_frames })}</span>
       </div>
 
       {#if detect_table_rows.length > 0}
         <table class="hbond-table">
           <thead>
             <tr>
-              <th>Donor</th>
+              <th>{t('structure.md_donor')}</th>
               <th>H</th>
-              <th>Acceptor</th>
+              <th>{t('structure.md_acceptor')}</th>
             </tr>
           </thead>
           <tbody>
@@ -365,7 +368,7 @@
         </table>
         {#if detect_result.unique_hbonds.length > 20}
           <div class="table-note">
-            Showing first 20 of {detect_result.unique_hbonds.length} unique H-bonds
+            {t('structure.md_showing_first_hbonds', { n: detect_result.unique_hbonds.length })}
           </div>
         {/if}
       {/if}
@@ -374,21 +377,21 @@
 
   <!-- ===== H-bond Lifetime ===== -->
   <details>
-    <summary>H-bond Lifetime</summary>
+    <summary>{t('structure.md_hbond_lifetime')}</summary>
 
     <div class="param-grid">
       <label>
-        Time step (ps)
+        {t('structure.md_time_step_ps')}
         <input type="number" bind:value={lifetime_time_step} min="0.001" max="100" step="0.1" />
       </label>
       <label>
-        Max lag (frames)
+        {t('structure.md_max_lag_frames')}
         <input type="number" bind:value={lifetime_max_lag} min="1" max="10000" step="10" />
       </label>
     </div>
 
     <div class="param-note">
-      Uses detection parameters above (method, cutoffs, periodicity).
+      {t('structure.md_hbond_lifetime_note')}
     </div>
 
     <button
@@ -397,9 +400,9 @@
       disabled={lifetime_computing}
     >
       {#if lifetime_computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Lifetime
+        {t('structure.md_compute_lifetime')}
       {/if}
     </button>
 
@@ -409,29 +412,29 @@
 
     {#if lifetime_result}
       <div class="info-bar">
-        <span>Average lifetime: {lifetime_result.average_lifetime_ps.toFixed(3)} ps</span>
-        <span>{lifetime_result.n_hbonds_sampled} H-bonds tracked</span>
+        <span>{t('structure.md_average_lifetime_ps', { value: lifetime_result.average_lifetime_ps.toFixed(3) })}</span>
+        <span>{t('structure.md_hbonds_tracked', { n: lifetime_result.n_hbonds_sampled })}</span>
       </div>
     {/if}
   </details>
 
   <!-- ===== H-bond Density ===== -->
   <details>
-    <summary>H-bond Density</summary>
+    <summary>{t('structure.md_hbond_density')}</summary>
 
     <div class="param-grid">
       <label>
-        Z range min (A)
+        {t('structure.md_z_range_min_angstrom')}
         <input type="text" placeholder="e.g. 5.0" bind:value={hbdensity_z_min} />
       </label>
       <label>
-        Z range max (A)
+        {t('structure.md_z_range_max_angstrom')}
         <input type="text" placeholder="e.g. 15.0" bind:value={hbdensity_z_max} />
       </label>
     </div>
 
     <div class="param-note">
-      Uses detection parameters from H-bond Detection section above.
+      {t('structure.md_hbond_density_note')}
     </div>
 
     <button
@@ -440,9 +443,9 @@
       disabled={hbdensity_computing || !hbdensity_z_min.trim() || !hbdensity_z_max.trim()}
     >
       {#if hbdensity_computing}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Density
+        {t('structure.md_compute_density')}
       {/if}
     </button>
 
@@ -452,12 +455,12 @@
 
     {#if hbdensity_result}
       <div class="info-bar">
-        <span>Avg density: {hbdensity_result.average_density.toExponential(3)} H-bonds/A^3</span>
-        <span>Region volume: {hbdensity_result.region_volume_ang3.toFixed(1)} A^3</span>
+        <span>{t('structure.md_avg_density_hbonds', { value: hbdensity_result.average_density.toExponential(3) })}</span>
+        <span>{t('structure.md_region_volume_ang3', { value: hbdensity_result.region_volume_ang3.toFixed(1) })}</span>
       </div>
       <div class="info-bar">
-        <span>Avg count/frame: {hbdensity_result.average_count.toFixed(1)}</span>
-        <span>{hbdensity_result.n_frames} frames</span>
+        <span>{t('structure.md_avg_count_frame', { value: hbdensity_result.average_count.toFixed(1) })}</span>
+        <span>{t('structure.md_frames_count', { n: hbdensity_result.n_frames })}</span>
       </div>
     {/if}
   </details>

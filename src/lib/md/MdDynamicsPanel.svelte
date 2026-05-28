@@ -1,5 +1,8 @@
 <script lang="ts">
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('structure')
 
   let {
     trajectory_b64,
@@ -336,12 +339,12 @@
       }))
       on_plot({
         traces,
-        title: `Dihedral Angles`,
-        x_label: `Frame`,
-        y_label: `Angle (\u00B0)`,
+        title: t('structure.md_dihedral_angles'),
+        x_label: t('structure.md_frame'),
+        y_label: t('structure.md_angle_degree'),
       })
     } catch (e: any) {
-      dihedrals_error = e.message || `Dihedral computation failed`
+      dihedrals_error = e.message || t('structure.md_dihedral_failed')
     } finally {
       dihedrals_loading = false
     }
@@ -355,22 +358,22 @@
 
     <div class="param-grid">
       <label>
-        Reference frame
+        {t('structure.md_reference_frame')}
         <input type="number" bind:value={rmsd_ref_frame} step="1" min="0" />
       </label>
       <label>
-        Atom indices (optional)
+        {t('structure.md_atom_indices_optional')}
         <input
           type="text"
           placeholder="0,1,2,..."
           bind:value={rmsd_atom_indices_text}
           class="text-input"
-          title="Comma-separated 0-indexed atom indices. Leave blank for all atoms."
+          title={t('structure.md_atom_indices_all_hint')}
         />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={rmsd_precentered} />
-        Precentered
+        {t('structure.md_precentered')}
       </label>
     </div>
 
@@ -380,9 +383,9 @@
       disabled={rmsd_loading}
     >
       {#if rmsd_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute RMSD
+        {t('structure.md_compute_rmsd')}
       {/if}
     </button>
 
@@ -392,8 +395,8 @@
 
     {#if rmsd_result}
       <div class="result-info">
-        <span>Frames: {rmsd_result.n_frames}</span>
-        <span>Atoms used: {rmsd_result.n_atoms_used}</span>
+        <span>{t('structure.md_frames_label_count', { n: rmsd_result.n_frames })}</span>
+        <span>{t('structure.md_atoms_used_count', { n: rmsd_result.n_atoms_used })}</span>
       </div>
     {/if}
   </details>
@@ -404,23 +407,23 @@
 
     <div class="param-grid">
       <label>
-        Atom indices (optional)
+        {t('structure.md_atom_indices_optional')}
         <input
           type="text"
           placeholder="0,1,2,..."
           bind:value={rmsf_atom_indices_text}
           class="text-input"
-          title="Comma-separated 0-indexed atom indices. Leave blank for all atoms."
+          title={t('structure.md_atom_indices_all_hint')}
         />
       </label>
       <label>
-        Reference frame (optional)
+        {t('structure.md_reference_frame_optional')}
         <input
           type="text"
           placeholder="avg structure"
           bind:value={rmsf_ref_frame_text}
           class="text-input"
-          title="Frame index for reference. Leave blank to use average structure."
+          title={t('structure.md_reference_frame_hint')}
         />
       </label>
     </div>
@@ -431,9 +434,9 @@
       disabled={rmsf_loading}
     >
       {#if rmsf_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute RMSF
+        {t('structure.md_compute_rmsf')}
       {/if}
     </button>
 
@@ -443,31 +446,31 @@
 
     {#if rmsf_result}
       <div class="result-info">
-        <span>Atoms: {rmsf_result.n_atoms}</span>
-        <span>Frames: {rmsf_result.n_frames}</span>
-        <span>Ref: {rmsf_result.reference}</span>
+        <span>{t('structure.md_atoms_label_count', { n: rmsf_result.n_atoms })}</span>
+        <span>{t('structure.md_frames_label_count', { n: rmsf_result.n_frames })}</span>
+        <span>{t('structure.md_ref_label', { ref: rmsf_result.reference })}</span>
       </div>
     {/if}
   </details>
 
   <!-- Bond Angles -->
   <details>
-    <summary>Bond Angles</summary>
+    <summary>{t('structure.md_bond_angles')}</summary>
 
     <div class="param-grid">
       <label class="full-width">
-        Atom triplets (semicolon-separated)
+        {t('structure.md_atom_triplets_semicolon')}
         <input
           type="text"
           placeholder="0,1,2 ; 3,4,5"
           bind:value={angles_triplets_text}
           class="text-input wide"
-          title="Semicolon-separated atom triplets. Middle atom is the vertex. e.g. 0,1,2 ; 3,4,5"
+          title={t('structure.md_atom_triplets_hint')}
         />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={angles_periodic} />
-        Periodic
+        {t('structure.md_periodic')}
       </label>
     </div>
 
@@ -477,9 +480,9 @@
       disabled={angles_loading}
     >
       {#if angles_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Angles
+        {t('structure.md_compute_angles')}
       {/if}
     </button>
 
@@ -489,30 +492,30 @@
 
     {#if angles_result}
       <div class="result-info">
-        <span>Frames: {angles_result.n_frames}</span>
-        <span>Angles: {angles_result.n_angles}</span>
+        <span>{t('structure.md_frames_label_count', { n: angles_result.n_frames })}</span>
+        <span>{t('structure.md_angles_label_count', { n: angles_result.n_angles })}</span>
       </div>
     {/if}
   </details>
 
   <!-- Dihedral Angles -->
   <details>
-    <summary>Dihedral Angles</summary>
+    <summary>{t('structure.md_dihedral_angles')}</summary>
 
     <div class="param-grid">
       <label class="full-width">
-        Atom quartets (semicolon-separated)
+        {t('structure.md_atom_quartets_semicolon')}
         <input
           type="text"
           placeholder="0,1,2,3 ; 4,5,6,7"
           bind:value={dihedrals_quartets_text}
           class="text-input wide"
-          title="Semicolon-separated atom quartets. e.g. 0,1,2,3 ; 4,5,6,7"
+          title={t('structure.md_atom_quartets_hint')}
         />
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={dihedrals_periodic} />
-        Periodic
+        {t('structure.md_periodic')}
       </label>
     </div>
 
@@ -522,9 +525,9 @@
       disabled={dihedrals_loading}
     >
       {#if dihedrals_loading}
-        <Spinner /> Computing...
+        <Spinner /> {t('structure.computing')}
       {:else}
-        Compute Dihedrals
+        {t('structure.md_compute_dihedrals')}
       {/if}
     </button>
 
@@ -534,8 +537,8 @@
 
     {#if dihedrals_result}
       <div class="result-info">
-        <span>Frames: {dihedrals_result.n_frames}</span>
-        <span>Dihedrals: {dihedrals_result.n_dihedrals}</span>
+        <span>{t('structure.md_frames_label_count', { n: dihedrals_result.n_frames })}</span>
+        <span>{t('structure.md_dihedrals_label_count', { n: dihedrals_result.n_dihedrals })}</span>
       </div>
     {/if}
   </details>
