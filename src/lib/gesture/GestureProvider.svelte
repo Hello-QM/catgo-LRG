@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   /**
    * Master gesture controller.
    *
@@ -17,6 +18,9 @@
     type HandState, type GestureEvent, type GestureAction, type VoiceEvent,
     type GestureConfig,
   } from './gesture-types'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   let {
     config,
@@ -611,19 +615,19 @@
 {#if error_msg}
   <div class="gesture-error">
     <span>{error_msg}</span>
-    <button onclick={() => { error_msg = null; start() }}>Retry</button>
+    <button onclick={() => { error_msg = null; start() }}>{t('common.retry')}</button>
     <!-- stop() explicitly releases the webcam stream before disabling,
          ensuring the camera light turns off even if start() failed partway.
          Disabling is delegated to the parent via ondisable() — the child must
          not mutate the unbound `config` prop (see ondisable doc above). -->
-    <button onclick={() => { stop(); error_msg = null; ondisable?.() }}>Disable</button>
+    <button onclick={() => { stop(); error_msg = null; ondisable?.() }}>{t('structure.disable')}</button>
   </div>
 {/if}
 
 {#if voice_warning}
   <div class="gesture-warning">
     <span>{voice_warning}</span>
-    <button onclick={() => { voice_warning = null }}>OK</button>
+    <button onclick={() => { voice_warning = null }}>{t('common.ok')}</button>
   </div>
 {/if}
 

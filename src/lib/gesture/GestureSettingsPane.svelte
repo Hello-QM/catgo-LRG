@@ -9,6 +9,10 @@
   import type { GestureConfig, VoiceMethod, WhisperMode } from './gesture-types'
   import type { ModelStatus } from './local-whisper'
   import { save_gesture_config } from './gesture-config-store'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module('common')
+  load_i18n_module('structure')
 
   let {
     config = $bindable(),
@@ -73,16 +77,16 @@
     { value: `es-ES`, label: `Español` },
   ]
 
-  const METHODS: Array<{ value: VoiceMethod; label: string; desc: string }> = [
-    { value: `auto`, label: `Auto`, desc: `Web Speech → Whisper` },
-    { value: `web_speech`, label: `Web Speech API`, desc: `Free, Chrome/Edge` },
-    { value: `whisper`, label: `Whisper`, desc: `Local or Cloud, works everywhere` },
+  const METHODS: Array<{ value: VoiceMethod; label_key: string; desc_key: string }> = [
+    { value: `auto`, label_key: `structure.gesture_auto`, desc_key: `structure.gesture_web_speech_to_whisper` },
+    { value: `web_speech`, label_key: `structure.gesture_web_speech_api`, desc_key: `structure.gesture_free_chrome_edge` },
+    { value: `whisper`, label_key: `structure.gesture_whisper`, desc_key: `structure.gesture_local_or_cloud` },
   ]
 
-  const WHISPER_MODES: Array<{ value: WhisperMode; label: string; desc: string }> = [
-    { value: `auto`, label: `Auto`, desc: `Local → Cloud fallback` },
-    { value: `local`, label: `Local`, desc: `In-browser, no API key` },
-    { value: `cloud`, label: `Cloud`, desc: `OpenAI API, needs key` },
+  const WHISPER_MODES: Array<{ value: WhisperMode; label_key: string; desc_key: string }> = [
+    { value: `auto`, label_key: `structure.gesture_auto`, desc_key: `structure.gesture_local_cloud_fallback` },
+    { value: `local`, label_key: `structure.gesture_local`, desc_key: `structure.gesture_in_browser_no_key` },
+    { value: `cloud`, label_key: `structure.gesture_cloud`, desc_key: `structure.gesture_openai_needs_key` },
   ]
 
   function on_click_outside(e: PointerEvent | MouseEvent) {
@@ -101,33 +105,33 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="gesture-settings" bind:this={panel_el} onclick={(e) => e.stopPropagation()}>
     <div class="panel-header">
-      <h4>Voice & Gesture</h4>
-      <button class="close-btn" onclick={() => { pane_open = false }}>&times;</button>
+      <h4>{t('structure.voice_gesture')}</h4>
+      <button class="close-btn" onclick={() => { pane_open = false }} aria-label={t('common.close')}>&times;</button>
     </div>
 
     <div class="panel-body">
       <!-- Section 1: Voice Recognition -->
       <section>
-        <h5>Voice Recognition</h5>
+        <h5>{t('structure.voice_recognition')}</h5>
 
         <div class="param-row">
-          <span class="label">Method</span>
+          <span class="label">{t('structure.method')}</span>
           <select
             value={config.voice_method ?? `auto`}
             onchange={(e) => update({ voice_method: (e.target as HTMLSelectElement).value as VoiceMethod })}
           >
             {#each METHODS as m}
-              <option value={m.value}>{m.label} ({m.desc})</option>
+              <option value={m.value}>{t(m.label_key)} ({t(m.desc_key)})</option>
             {/each}
           </select>
         </div>
 
         {#if config.voice_method === `web_speech` && !web_speech_supported}
-          <p class="warning">Web Speech API not available. Use Chrome/Edge or switch to Whisper.</p>
+          <p class="warning">{t('structure.gesture_web_speech_unavailable')}</p>
         {/if}
 
         <div class="param-row">
-          <span class="label">Language</span>
+          <span class="label">{t('common.language')}</span>
           <select
             value={config.voice_language}
             onchange={(e) => update({ voice_language: (e.target as HTMLSelectElement).value })}
@@ -140,33 +144,33 @@
 
         {#if show_whisper_options}
           <div class="param-row">
-            <span class="label">Backend</span>
+            <span class="label">{t('structure.gesture_backend')}</span>
             <select
               value={config.whisper_mode ?? `auto`}
               onchange={(e) => update({ whisper_mode: (e.target as HTMLSelectElement).value as WhisperMode })}
             >
               {#each WHISPER_MODES as m}
-                <option value={m.value}>{m.label} ({m.desc})</option>
+                <option value={m.value}>{t(m.label_key)} ({t(m.desc_key)})</option>
               {/each}
             </select>
           </div>
 
           {#if model_download_status === `downloading`}
             <div class="progress-row">
-              <span class="label">Model</span>
+              <span class="label">{t('structure.gesture_model')}</span>
               <div class="progress-bar">
                 <div class="progress-fill" style:width="{Math.round(model_download_progress)}%"></div>
               </div>
               <span class="range-val">{Math.round(model_download_progress)}%</span>
             </div>
           {:else if model_download_status === `loading`}
-            <p class="info-text">Loading model...</p>
+            <p class="info-text">{t('structure.gesture_loading_model')}</p>
           {/if}
         {/if}
 
         {#if needs_whisper_key}
           <div class="param-row">
-            <span class="label">API Key</span>
+            <span class="label">{t('structure.gesture_api_key')}</span>
             <input
               type="password"
               value={config.whisper_api_key ?? ``}
@@ -182,7 +186,7 @@
             checked={config.noise_suppression}
             onchange={() => update({ noise_suppression: !config.noise_suppression })}
           />
-          <span>Noise suppression</span>
+          <span>{t('structure.gesture_noise_suppression')}</span>
         </label>
 
         <label class="checkbox-row">
@@ -191,13 +195,13 @@
             checked={config.voice_ai_enabled}
             onchange={() => update({ voice_ai_enabled: !config.voice_ai_enabled })}
           />
-          <span>Route unknown commands to AI</span>
+          <span>{t('structure.gesture_route_unknown_ai')}</span>
         </label>
       </section>
 
       <!-- Section 2: Text-to-Speech -->
       <section>
-        <h5>Text-to-Speech</h5>
+        <h5>{t('structure.text_to_speech')}</h5>
 
         <label class="checkbox-row">
           <input
@@ -205,26 +209,26 @@
             checked={config.tts_enabled}
             onchange={() => update({ tts_enabled: !config.tts_enabled })}
           />
-          <span>Enable voice responses</span>
+          <span>{t('structure.gesture_enable_voice_responses')}</span>
         </label>
 
         {#if config.tts_enabled}
           <div class="param-row">
-            <span class="label">Voice</span>
+            <span class="label">{t('structure.gesture_voice')}</span>
             <select
               value={config.tts_voice ?? ``}
               onchange={(e) => update({ tts_voice: (e.target as HTMLSelectElement).value })}
             >
-              <option value="">Auto (by language)</option>
+              <option value="">{t('structure.gesture_auto_by_language')}</option>
               {#if matching_voices.length > 0}
-                <optgroup label="Matching language">
+                <optgroup label={t('structure.gesture_matching_language')}>
                   {#each matching_voices as v}
                     <option value={v.name}>{v.name}</option>
                   {/each}
                 </optgroup>
               {/if}
               {#if other_voices.length > 0}
-                <optgroup label="Other">
+                <optgroup label={t('structure.gesture_other')}>
                   {#each other_voices as v}
                     <option value={v.name}>{v.name} ({v.lang})</option>
                   {/each}
@@ -234,7 +238,7 @@
           </div>
 
           <div class="param-row">
-            <span class="label">Volume</span>
+            <span class="label">{t('structure.gesture_volume')}</span>
             <input
               type="range" min="0" max="1" step="0.05"
               value={config.tts_volume}
@@ -244,7 +248,7 @@
           </div>
 
           <div class="param-row">
-            <span class="label">Rate</span>
+            <span class="label">{t('structure.gesture_rate')}</span>
             <input
               type="range" min="0.5" max="2" step="0.1"
               value={config.tts_rate}
@@ -257,7 +261,7 @@
 
       <!-- Section 3: Gesture Display -->
       <section>
-        <h5>Gesture Display</h5>
+        <h5>{t('structure.gesture_display')}</h5>
 
         <label class="checkbox-row">
           <input
@@ -265,7 +269,7 @@
             checked={config.show_webcam_pip}
             onchange={() => update({ show_webcam_pip: !config.show_webcam_pip })}
           />
-          <span>Webcam PiP</span>
+          <span>{t('structure.gesture_webcam_pip')}</span>
         </label>
 
         <label class="checkbox-row">
@@ -274,11 +278,11 @@
             checked={config.show_skeleton}
             onchange={() => update({ show_skeleton: !config.show_skeleton })}
           />
-          <span>Skeleton overlay</span>
+          <span>{t('structure.gesture_skeleton_overlay')}</span>
         </label>
 
         <div class="param-row">
-          <span class="label">Neon color</span>
+          <span class="label">{t('structure.gesture_neon_color')}</span>
           <input
             type="color"
             value={config.neon_color ?? `#00fff7`}
@@ -287,7 +291,7 @@
         </div>
 
         <div class="param-row">
-          <span class="label">Sensitivity</span>
+          <span class="label">{t('structure.gesture_sensitivity')}</span>
           <input
             type="range" min="0.1" max="3" step="0.1"
             value={config.sensitivity}
