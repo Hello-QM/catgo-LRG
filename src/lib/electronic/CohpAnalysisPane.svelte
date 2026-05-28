@@ -1,6 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
   import { Spinner } from '$lib'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     upload_cohpcar,
     get_cohp_data,
@@ -15,6 +16,9 @@
     COHPSessionInfo,
     CohpViewState,
   } from './cohp_types'
+
+  load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     cohp_state = $bindable(),
@@ -32,7 +36,7 @@
       untrack(() => register_analysis_session({
         type: `cohp`,
         session_id,
-        label: `COHP (${all_bonds?.length ?? 0} bonds)`,
+        label: t('structure.cohp_session_label', { n: all_bonds?.length ?? 0 }),
         meta: { efermi, nbonds: all_bonds?.length },
         created_at: Date.now(),
       }))
@@ -90,7 +94,7 @@
       cohp_state.cohp_result = null
       cohp_state.icohp_entries = null
     } catch (e: any) {
-      error_msg = e.message || `Upload failed`
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
@@ -109,7 +113,7 @@
       cohp_state.cohp_result = null
       cohp_state.icohp_entries = null
     } catch (e: any) {
-      error_msg = e.message || `Upload failed`
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
@@ -125,7 +129,7 @@
       const result = await upload_icohplist(file)
       cohp_state.icohp_entries = result.entries
     } catch (e: any) {
-      error_msg = e.message || `ICOHPLIST upload failed`
+      error_msg = e.message || t('structure.cohp_icohplist_upload_failed')
     }
   }
 
@@ -163,7 +167,7 @@
       )
       cohp_state.cohp_result = result
     } catch (e: any) {
-      error_msg = e.message || `Failed to load COHP data`
+      error_msg = e.message || t('structure.cohp_load_failed')
     } finally {
       loading_data = false
     }
@@ -198,16 +202,16 @@
     >
       {#if uploading}
         <Spinner />
-        <span>Parsing COHPCAR...</span>
+        <span>{t('structure.cohp_parsing')}</span>
       {:else}
-        <p>Drop <code>COHPCAR.lobster</code> here or</p>
+        <p>{t('structure.dos_drop_prefix')} <code>COHPCAR.lobster</code> {t('structure.dos_drop_suffix')} {t('common.or')}</p>
         <div class="source-buttons">
           <label class="upload-btn">
-            Browse Local
+            {t('structure.browse_local')}
             <input type="file" accept=".lobster,.txt" onchange={handle_upload} hidden />
           </label>
           <button class="upload-btn remote-btn" onclick={() => show_file_dialog = true}>
-            Browse Remote / Workflow
+            {t('structure.dos_browse_remote_workflow')}
           </button>
         </div>
       {/if}
@@ -215,21 +219,21 @@
   {:else}
     <!-- Session Info -->
     <div class="info-bar">
-      <span title="Spin">{session.nspin > 1 ? `spin-pol` : `non-spin`}</span>
-      <span title="Energy points">{session.npoints} pts</span>
-      <span title="Bonds">{session.bonds.length} bonds</span>
-      <span title="Energy range">{session.emin.toFixed(1)}~{session.emax.toFixed(1)} eV</span>
-      <button class="btn-small danger" title="Close session" onclick={close_session}>
+      <span title={t('structure.dos_spin')}>{session.nspin > 1 ? t('structure.dos_spin_pol') : t('structure.dos_non_spin')}</span>
+      <span title={t('structure.cohp_energy_points')}>{t('structure.cohp_points_count', { n: session.npoints })}</span>
+      <span title={t('structure.cohp_bonds')}>{t('structure.cohp_bonds_count', { n: session.bonds.length })}</span>
+      <span title={t('structure.cohp_energy_range')}>{session.emin.toFixed(1)}~{session.emax.toFixed(1)} eV</span>
+      <button class="btn-small danger" title={t('structure.dos_close_session')} onclick={close_session}>
         &times;
       </button>
     </div>
 
     <!-- Bond Selection -->
     <details open>
-      <summary>Bonds ({selected_bond_indices.length}/{session.bonds.length} selected)</summary>
+      <summary>{t('structure.cohp_bonds_selected', { selected: selected_bond_indices.length, total: session.bonds.length })}</summary>
       <div class="bond-actions">
-        <button class="btn-tiny" onclick={select_all_bonds}>Select all</button>
-        <button class="btn-tiny" onclick={deselect_all_bonds}>Clear</button>
+        <button class="btn-tiny" onclick={select_all_bonds}>{t('common.select_all')}</button>
+        <button class="btn-tiny" onclick={deselect_all_bonds}>{t('common.clear')}</button>
       </div>
       <div class="bond-list">
         {#each session.bonds as bond}
@@ -248,21 +252,21 @@
 
     <!-- Orbital Options -->
     <details>
-      <summary>Orbital Options</summary>
+      <summary>{t('structure.cohp_orbital_options')}</summary>
       <div class="display-opts">
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={include_orbitals} />
-          Show individual orbitals
+          {t('structure.cohp_show_individual_orbitals')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={aggregate_orbitals} />
-          Aggregate orbitals
+          {t('structure.cohp_aggregate_orbitals')}
         </label>
         {#if include_orbitals || aggregate_orbitals}
           <label>
-            Orbital filter
+            {t('structure.cohp_orbital_filter')}
             <select bind:value={orbital_filter}>
-              <option value="all">All orbitals</option>
+              <option value="all">{t('structure.cohp_all_orbitals')}</option>
               <option value="s-s">s-s</option>
               <option value="s-p">s-p</option>
               <option value="s-d">s-d</option>
@@ -277,19 +281,19 @@
 
     <!-- Display Options -->
     <details>
-      <summary>Display Options</summary>
+      <summary>{t('structure.dos_display_options')}</summary>
       <div class="display-opts">
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cohp_state.show_fermi_line} />
-          Fermi level line
+          {t('structure.dos_fermi_level_line')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cohp_state.show_fill} />
-          Fill under curves
+          {t('structure.dos_fill_under_curves')}
         </label>
         {#if cohp_state.show_fill}
           <div class="range-row">
-            <span>Fill opacity:</span>
+            <span>{t('structure.cohp_fill_opacity')}</span>
             <input
               type="range"
               bind:value={cohp_state.fill_opacity}
@@ -301,61 +305,61 @@
         {/if}
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cohp_state.invert_cohp} />
-          Invert COHP (bonding &rarr; positive)
+          {t('structure.cohp_invert')}
         </label>
 
         <hr class="section-divider" />
 
         {#if session && session.nspin > 1}
           <label>
-            Spin handling
+            {t('structure.cohp_spin_handling')}
             <select bind:value={cohp_state.spin_mode}>
-              <option value="separate">Separate (up/down)</option>
-              <option value="summed">Summed (up+down)</option>
+              <option value="separate">{t('structure.cohp_spin_separate')}</option>
+              <option value="summed">{t('structure.cohp_spin_summed')}</option>
             </select>
           </label>
           {#if cohp_state.spin_mode === `separate`}
             <label class="checkbox-label">
               <input type="checkbox" bind:checked={cohp_state.show_spin_down} />
-              Show spin down
+              {t('structure.dos_show_spin_down')}
             </label>
           {/if}
         {/if}
 
         <label>
-          Orientation
+          {t('structure.dos_orientation')}
           <select bind:value={cohp_state.orientation}>
-            <option value="horizontal">Energy on Y (standard)</option>
-            <option value="vertical">Energy on X</option>
+            <option value="horizontal">{t('structure.cohp_energy_on_y_standard')}</option>
+            <option value="vertical">{t('structure.dos_energy_on_x')}</option>
           </select>
         </label>
         <div class="range-row">
-          <span>X range:</span>
-          <input type="text" placeholder="min" bind:value={x_range_min} class="range-input" />
-          <input type="text" placeholder="max" bind:value={x_range_max} class="range-input" />
+          <span>{t('structure.dos_x_range')}</span>
+          <input type="text" placeholder={t('structure.dos_min')} bind:value={x_range_min} class="range-input" />
+          <input type="text" placeholder={t('structure.dos_max')} bind:value={x_range_max} class="range-input" />
         </div>
         <div class="range-row">
-          <span>Y range:</span>
-          <input type="text" placeholder="min" bind:value={y_range_min} class="range-input" />
-          <input type="text" placeholder="max" bind:value={y_range_max} class="range-input" />
+          <span>{t('structure.dos_y_range')}</span>
+          <input type="text" placeholder={t('structure.dos_min')} bind:value={y_range_min} class="range-input" />
+          <input type="text" placeholder={t('structure.dos_max')} bind:value={y_range_max} class="range-input" />
         </div>
 
         <hr class="section-divider" />
 
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cohp_state.legend_visible} />
-          Show legend
+          {t('structure.dos_show_legend')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cohp_state.show_gridlines} />
-          Show gridlines
+          {t('structure.dos_show_gridlines')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={cohp_state.show_axis_lines} />
-          Show axis lines
+          {t('structure.dos_show_axis_lines')}
         </label>
         <div class="range-row">
-          <span>Axis width:</span>
+          <span>{t('structure.dos_axis_width')}</span>
           <input
             type="number"
             bind:value={cohp_state.axis_line_width}
@@ -364,7 +368,7 @@
           />
         </div>
         <div class="range-row">
-          <span>Tick length:</span>
+          <span>{t('structure.dos_tick_length')}</span>
           <input
             type="number"
             bind:value={cohp_state.tick_length}
@@ -373,7 +377,7 @@
           />
         </div>
         <div class="range-row">
-          <span>Tick width:</span>
+          <span>{t('structure.dos_tick_width')}</span>
           <input
             type="number"
             bind:value={cohp_state.tick_width}
@@ -387,7 +391,7 @@
     <!-- Series Visibility -->
     {#if cohp_state.cohp_result && cohp_state.cohp_result.series.length > 0}
       <details>
-        <summary>Series Visibility</summary>
+        <summary>{t('structure.dos_series_visibility')}</summary>
         <div class="display-opts">
           {#each cohp_state.cohp_result.series as s}
             <label class="checkbox-label">
@@ -413,7 +417,7 @@
     <!-- Line Styles -->
     {#if cohp_state.cohp_result && cohp_state.cohp_result.series.length > 0}
       <details>
-        <summary>Line Styles</summary>
+        <summary>{t('structure.dos_line_styles')}</summary>
         <div class="line-styles">
           {#each cohp_state.cohp_result.series as s, idx}
             <div class="line-style-group">
@@ -423,7 +427,7 @@
                   type="color"
                   value={cohp_state.line_styles[s.label]?.color ?? DEFAULT_COLORS[idx % DEFAULT_COLORS.length]}
                   class="color-input"
-                  title="Line color"
+                  title={t('structure.cohp_line_color')}
                   oninput={(e) => {
                     const target = e.target as HTMLInputElement
                     cohp_state.line_styles = { ...cohp_state.line_styles, [s.label]: { ...cohp_state.line_styles[s.label], color: target.value } }
@@ -436,10 +440,10 @@
                     cohp_state.line_styles = { ...cohp_state.line_styles, [s.label]: { ...cohp_state.line_styles[s.label], dash: target.value } }
                   }}
                 >
-                  <option value="solid">Solid</option>
-                  <option value="dash">Dashed</option>
-                  <option value="dot">Dotted</option>
-                  <option value="dashdot">Dash-dot</option>
+                  <option value="solid">{t('structure.dos_line_solid')}</option>
+                  <option value="dash">{t('structure.dos_line_dashed')}</option>
+                  <option value="dot">{t('structure.dos_line_dotted')}</option>
+                  <option value="dashdot">{t('structure.dos_line_dashdot')}</option>
                 </select>
                 <input
                   type="number"
@@ -448,7 +452,7 @@
                   max="5"
                   step="0.5"
                   class="width-input"
-                  title="Line width"
+                  title={t('structure.cohp_line_width')}
                   onchange={(e) => {
                     const target = e.target as HTMLInputElement
                     cohp_state.line_styles = { ...cohp_state.line_styles, [s.label]: { ...cohp_state.line_styles[s.label], width: parseFloat(target.value) } }
@@ -459,7 +463,7 @@
                     type="color"
                     value={cohp_state.line_styles[s.label]?.fill_color ?? cohp_state.line_styles[s.label]?.color ?? DEFAULT_COLORS[idx % DEFAULT_COLORS.length]}
                     class="color-input"
-                    title="Fill color"
+                    title={t('structure.cohp_fill_color')}
                     oninput={(e) => {
                       const target = e.target as HTMLInputElement
                       cohp_state.line_styles = { ...cohp_state.line_styles, [s.label]: { ...cohp_state.line_styles[s.label], fill_color: target.value } }
@@ -480,26 +484,26 @@
       disabled={loading_data || selected_bond_indices.length === 0}
     >
       {#if loading_data}
-        <Spinner /> Loading...
+        <Spinner /> {t('common.loading')}
       {:else}
-        Load COHP
+        {t('structure.cohp_load_cohp')}
       {/if}
     </button>
 
     <!-- ICOHPLIST Upload -->
     <details>
-      <summary>ICOHP Values</summary>
+      <summary>{t('structure.cohp_icohp_values')}</summary>
       <div class="icohp-section">
         {#if !cohp_state.icohp_entries}
           <label class="upload-btn-small">
-            Upload ICOHPLIST.lobster
+            {t('structure.cohp_upload_icohplist')}
             <input type="file" accept=".lobster,.txt" onchange={handle_icohp_upload} hidden />
           </label>
         {:else}
           <table class="icohp-table">
             <thead>
               <tr>
-                <th>Bond</th>
+                <th>{t('structure.cohp_bond')}</th>
                 <th>d (A)</th>
                 <th>ICOHP (eV)</th>
               </tr>
@@ -527,8 +531,8 @@
 <FileSourceDialog
   bind:show={show_file_dialog}
   file_types={['.lobster', '.txt']}
-  title="Load COHPCAR.lobster"
-  description="Select a COHPCAR.lobster file from local, remote HPC, or workflow output."
+  title={t('structure.cohp_load_cohpcar')}
+  description={t('structure.cohp_load_cohpcar_desc')}
   onfile={async (file) => {
     uploading = true
     error_msg = ''
@@ -538,7 +542,7 @@
       cohp_state.cohp_result = null
       cohp_state.icohp_entries = null
     } catch (e: any) {
-      error_msg = e.message || 'Upload failed'
+      error_msg = e.message || t('structure.dos_upload_failed')
     } finally {
       uploading = false
     }
@@ -552,7 +556,7 @@
       cohp_state.cohp_result = null
       cohp_state.icohp_entries = null
     } catch (e: any) {
-      error_msg = e.message || 'Remote load failed'
+      error_msg = e.message || t('structure.dos_remote_load_failed')
     } finally {
       uploading = false
     }
