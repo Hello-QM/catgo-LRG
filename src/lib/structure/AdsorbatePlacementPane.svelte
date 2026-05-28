@@ -30,6 +30,7 @@
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
+  load_i18n_module('common')
 
   let {
     structure = $bindable(),
@@ -139,20 +140,20 @@
 
   function parse_xyz_text(text: string): { atoms: AdsorbateAtom[]; error: string | null } {
     const lines = text.trim().split(`\n`).filter((l) => l.trim())
-    if (lines.length === 0) return { atoms: [], error: `No atoms defined` }
+    if (lines.length === 0) return { atoms: [], error: t('structure.ads_place_no_atoms_defined') }
 
     const atoms: AdsorbateAtom[] = []
     for (let i = 0; i < lines.length; i++) {
       const parts = lines[i].trim().split(/\s+/)
       if (parts.length < 4) {
-        return { atoms: [], error: `Line ${i + 1}: need "Element x y z"` }
+        return { atoms: [], error: t('structure.ads_place_xyz_line_need', { line: i + 1 }) }
       }
       const [symbol, xs, ys, zs] = parts
       const x = parseFloat(xs)
       const y = parseFloat(ys)
       const z = parseFloat(zs)
       if (!symbol.match(/^[A-Z][a-z]?$/) || isNaN(x) || isNaN(y) || isNaN(z)) {
-        return { atoms: [], error: `Line ${i + 1}: invalid format` }
+        return { atoms: [], error: t('structure.ads_place_xyz_line_invalid', { line: i + 1 }) }
       }
       atoms.push({ symbol, position: [x, y, z] })
     }
@@ -194,12 +195,12 @@
     try {
       const compound = await fetch_pubchem_compound(cid)
       if (!compound) {
-        pubchem_error = `No 3D structure available for CID ${cid}`
+        pubchem_error = t('structure.ads_place_no_3d_for_cid', { cid })
         return
       }
       const { atoms } = extract_atoms_from_pubchem(compound)
       if (atoms.length === 0) {
-        pubchem_error = `No atoms in PubChem compound`
+        pubchem_error = t('structure.ads_place_no_atoms_pubchem')
         return
       }
       custom_atoms = atoms.map((a) => ({
@@ -305,9 +306,9 @@
         if (is_ok(result)) {
           on_push_undo?.()
           on_structure_change?.(result.ok.structure as unknown as AnyStructure)
-          success_message = `UFF optimization complete`
+          success_message = t('structure.ads_place_optimization_complete', { method: FF_LABELS.uff })
         } else {
-          error_message = `UFF optimization failed`
+          error_message = t('structure.ads_place_optimization_failed', { method: FF_LABELS.uff })
         }
       } else {
         // Server-side calculator
@@ -324,9 +325,9 @@
         if (result.success && result.structure) {
           on_push_undo?.()
           on_structure_change?.(result.structure)
-          success_message = `${FF_LABELS[selected_ff]} optimization complete`
+          success_message = t('structure.ads_place_optimization_complete', { method: FF_LABELS[selected_ff] })
         } else {
-          error_message = result.message || `${FF_LABELS[selected_ff]} optimization failed`
+          error_message = result.message || t('structure.ads_place_optimization_failed', { method: FF_LABELS[selected_ff] })
         }
       }
     } catch (err) {
@@ -404,19 +405,19 @@
         class="tab"
         class:active={source_type === 'preset'}
         onclick={() => (source_type = 'preset')}
-      >Preset</button>
+      >{t('structure.ads_place_preset')}</button>
       <button
         type="button"
         class="tab"
         class:active={source_type === 'xyz'}
         onclick={() => (source_type = 'xyz')}
-      >Custom XYZ</button>
+      >{t('structure.ads_place_custom_xyz')}</button>
       <button
         type="button"
         class="tab"
         class:active={source_type === 'pubchem'}
         onclick={() => (source_type = 'pubchem')}
-      >PubChem</button>
+      >{t('structure.ads_place_pubchem')}</button>
     </div>
 
     <!-- Preset source -->
@@ -438,7 +439,7 @@
     {:else if source_type === 'xyz'}
       <div class="section">
         <label class="section-label">
-          Atoms (one per line: Element x y z)
+          {t('structure.ads_place_atoms_xyz_label')}
         </label>
         <textarea
           class="xyz-input"
@@ -450,23 +451,23 @@
         {#if xyz_parse_error}
           <div class="parse-error">{xyz_parse_error}</div>
         {:else if custom_atoms.length > 0}
-          <div class="parse-ok">{custom_atoms.length} atom{custom_atoms.length > 1 ? `s` : ``} parsed</div>
+          <div class="parse-ok">{t('structure.ads_place_atoms_parsed', { n: custom_atoms.length })}</div>
         {/if}
       </div>
 
     <!-- PubChem source -->
     {:else if source_type === 'pubchem'}
       <div class="section">
-        <label class="section-label">Search by name or formula</label>
+        <label class="section-label">{t('structure.ads_place_search_by_name_formula')}</label>
         <input
           type="text"
           class="pubchem-input"
           bind:value={pubchem_query}
           oninput={on_pubchem_input}
-          placeholder="e.g. ethanol, CH3OH, aspirin..."
+          placeholder={t('structure.ads_place_pubchem_placeholder')}
         />
         {#if pubchem_searching}
-          <div class="hint">Searching...</div>
+          <div class="hint">{t('structure.searching')}</div>
         {/if}
         {#if pubchem_error}
           <div class="parse-error">{pubchem_error}</div>
@@ -492,7 +493,7 @@
         {/if}
         {#if custom_atoms.length > 0 && source_type === 'pubchem'}
           <div class="parse-ok">
-            Loaded: {custom_atoms.length} atoms
+            {t('structure.ads_place_loaded_atoms', { n: custom_atoms.length })}
             ({[...new Set(custom_atoms.map((a) => a.symbol))].join(`, `)})
           </div>
         {/if}
@@ -529,8 +530,8 @@
     {#if active_atoms.length > 1}
       <div class="section">
         <label class="section-label">
-          Binding atom{binding_atom_indices.length > 1 ? `s (multi-dentate)` : ``}
-          <span class="dentate-hint">click to toggle, multi-select for polydentate</span>
+          {binding_atom_indices.length > 1 ? t('structure.ads_place_binding_atoms_multidentate') : t('structure.ads_place_binding_atom')}
+          <span class="dentate-hint">{t('structure.ads_place_binding_hint')}</span>
         </label>
         <div class="atom-badges">
           {#each active_atoms as atom, idx}
@@ -548,7 +549,9 @@
                   binding_atom_indices = [...binding_atom_indices, idx]
                 }
               }}
-              title={`${atom.symbol} (#${idx + 1})${binding_atom_indices.includes(idx) ? ` — binding` : ``}`}
+              title={binding_atom_indices.includes(idx)
+                ? t('structure.ads_place_atom_binding_title', { symbol: atom.symbol, index: idx + 1 })
+                : t('structure.ads_place_atom_title', { symbol: atom.symbol, index: idx + 1 })}
             >
               {atom.symbol}<sub>{idx + 1}</sub>
             </button>
@@ -560,7 +563,7 @@
     <!-- Controls -->
     <div class="section controls-row">
       <label class="height-label">
-        <span>Height offset (Å)</span>
+        <span>{t('structure.ads_place_height_offset_a')}</span>
         <input
           type="range"
           min={-2}
@@ -572,7 +575,7 @@
       </label>
       <label class="checkbox-label">
         <input type="checkbox" bind:checked={auto_rotate} />
-        Auto-rotate
+        {t('structure.ads_place_auto_rotate')}
       </label>
     </div>
 
@@ -586,11 +589,11 @@
         disabled={is_placing || !can_place}
       >
         {#if is_placing}
-          Placing...
+          {t('structure.ads_place_placing')}
         {:else if placement_mode_active}
-          Click a site to place (ESC to cancel)
+          {t('structure.ads_place_click_site')}
         {:else}
-          Enable placement mode
+          {t('structure.ads_place_enable_mode')}
         {/if}
       </button>
     </div>
@@ -606,7 +609,7 @@
     <!-- Post-placement actions -->
     {#if last_placed_adsorbate_indices.length > 0}
       <div class="section post-placement">
-        <label class="section-label">Post-placement</label>
+        <label class="section-label">{t('structure.ads_place_post_placement')}</label>
         <div class="ff-row">
           <select class="ff-select" bind:value={selected_ff}>
             {#each Object.entries(FF_LABELS) as [key, label]}
@@ -632,8 +635,10 @@
           {/if}
         </div>
         <div class="hint">
-          {last_placed_adsorbate_indices.length} adsorbate atom{last_placed_adsorbate_indices.length > 1 ? `s` : ``} placed
-          (indices {last_placed_adsorbate_indices.join(`, `)}) — only adsorbate moves
+          {t('structure.ads_place_placed_hint', {
+            n: last_placed_adsorbate_indices.length,
+            indices: last_placed_adsorbate_indices.join(`, `),
+          })}
         </div>
       </div>
     {/if}
