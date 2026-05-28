@@ -1,7 +1,10 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { TrajectoryType } from '$lib/trajectory'
   import type { PathwayTrajectoryMetadata } from '$lib/structure/pathway-types'
   import { pathway_frame_index, decompose_frame_index } from '$lib/structure/pathway-builder'
+
+  load_i18n_module(`structure`)
 
   let {
     trajectory,
@@ -40,7 +43,7 @@
   let frame_label = $derived.by(() => {
     if (!is_pathway || !active_pathway) return ``
     const parts: string[] = []
-    if (n_surfaces > 1) parts.push(`Surface ${surface_idx + 1}`)
+    if (n_surfaces > 1) parts.push(t(`structure.pathway_surface_n`, { n: surface_idx + 1 }))
     parts.push(active_pathway.name)
     if (active_pathway.step_names?.[step_idx]) {
       parts.push(active_pathway.step_names[step_idx])
@@ -66,7 +69,7 @@
       <!-- Surface slider (hidden when n=1) -->
       {#if n_surfaces > 1}
         <label class="control-group">
-          <span class="label">Surface</span>
+          <span class="label">{t(`structure.pathway_surface_label`)}</span>
           <input
             type="range"
             min="0"
@@ -81,7 +84,7 @@
       <!-- Pathway dropdown (hidden when m=1) -->
       {#if pathways_info.length > 1}
         <label class="control-group">
-          <span class="label">Pathway</span>
+          <span class="label">{t(`structure.pathway_label`)}</span>
           <select
             value={pathway_idx}
             onchange={(e) => update_frame(surface_idx, +e.currentTarget.value, step_idx)}
@@ -95,7 +98,7 @@
 
       <!-- Step slider (always visible) -->
       <label class="control-group step-control">
-        <span class="label">Step</span>
+        <span class="label">{t(`structure.pathway_step_label`)}</span>
         <input
           type="range"
           min="0"

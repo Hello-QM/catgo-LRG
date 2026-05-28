@@ -1,7 +1,10 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { job_script_store } from './job-script-store.svelte'
   import type { JobScript } from './workflow-types'
+
+  load_i18n_module(`workflow`)
 
   let {
     show = false,
@@ -129,7 +132,7 @@
     <div class="dialog-modal jsw-modal">
       <!-- Header -->
       <div class="modal-header">
-        <h2 class="modal-title">Job Script Workplace</h2>
+        <h2 class="modal-title">{t(`workflow.job_script_workplace`)}</h2>
         <button class="close-btn" onclick={() => onclose?.()}>x</button>
       </div>
 
@@ -137,11 +140,11 @@
       <div class="jsw-body">
         <!-- Left sidebar: script list -->
         <div class="jsw-sidebar">
-          <button class="jsw-new-btn" onclick={handle_new}>+ New Script</button>
+          <button class="jsw-new-btn" onclick={handle_new}>{t(`workflow.job_script_new`)}</button>
 
           <div class="jsw-list">
             {#if job_script_store.loading}
-              <div class="jsw-loading">Loading...</div>
+              <div class="jsw-loading">{t(`workflow.loading`)}</div>
             {:else}
               {#each job_script_store.grouped as group}
                 {#if group.scripts.length > 0 || group.category === ``}
@@ -171,7 +174,7 @@
             <div class="jsw-editor-fields">
               <div class="jsw-field-row">
                 <div class="jsw-field" style="flex:2">
-                  <label class="jsw-label">Name</label>
+                  <label class="jsw-label">{t(`workflow.name`)}</label>
                   <input type="text" class="jsw-input"
                     bind:value={edit_name}
                     oninput={mark_dirty}
@@ -182,7 +185,7 @@
 
               <div class="jsw-field-row">
                 <div class="jsw-field">
-                  <label class="jsw-label">Cluster</label>
+                  <label class="jsw-label">{t(`workflow.cluster`)}</label>
                   <select class="jsw-input jsw-select"
                     bind:value={edit_cluster_tag}
                     onchange={mark_dirty}
@@ -194,13 +197,13 @@
                   </select>
                 </div>
                 <div class="jsw-field">
-                  <label class="jsw-label">Calc Type</label>
+                  <label class="jsw-label">{t(`workflow.calc_type`)}</label>
                   <select class="jsw-input jsw-select"
                     bind:value={edit_calc_type}
                     onchange={mark_dirty}
                     disabled={selected_script.is_builtin}
                   >
-                    <option value="">General</option>
+                    <option value="">{t(`workflow.general`)}</option>
                     {#each Object.entries(job_script_store.categories) as [key, cat]}
                       <option value={key}>{cat.label}</option>
                     {/each}
@@ -210,7 +213,7 @@
             </div>
 
             <div class="jsw-template-area">
-              <label class="jsw-label">Template</label>
+              <label class="jsw-label">{t(`workflow.template`)}</label>
               <textarea class="jsw-textarea"
                 bind:value={edit_template}
                 oninput={mark_dirty}
@@ -220,7 +223,7 @@
             </div>
 
             <div class="jsw-vars-hint">
-              Variables: <code>{"{{job_name}}"}</code> <code>{"{{nodes}}"}</code> <code>{"{{ntasks}}"}</code>
+              {t(`workflow.variables`)} <code>{"{{job_name}}"}</code> <code>{"{{nodes}}"}</code> <code>{"{{ntasks}}"}</code>
               <code>{"{{cpus_per_task}}"}</code> <code>{"{{walltime}}"}</code> <code>{"{{partition}}"}</code>
               <code>{"{{work_dir}}"}</code> <code>{"{{python_env_activate}}"}</code> <code>{"{{vasp_run_command}}"}</code>
             </div>
@@ -228,21 +231,21 @@
             <div class="jsw-actions">
               {#if selected_script.is_builtin}
                 <button class="jsw-btn jsw-btn-primary" onclick={handle_duplicate}>
-                  Customize (create copy)
+                  {t(`workflow.job_script_customize_copy`)}
                 </button>
               {:else}
-                <button class="jsw-btn jsw-btn-danger" onclick={handle_delete}>Delete</button>
-                <button class="jsw-btn" onclick={handle_duplicate}>Duplicate</button>
+                <button class="jsw-btn jsw-btn-danger" onclick={handle_delete}>{t(`workflow.delete`)}</button>
+                <button class="jsw-btn" onclick={handle_duplicate}>{t(`workflow.duplicate`)}</button>
                 <div style="flex:1"></div>
                 <button class="jsw-btn jsw-btn-primary" onclick={handle_save} disabled={!is_dirty}>
-                  {is_dirty ? `Save` : `Saved`}
+                  {is_dirty ? t(`workflow.save`) : t(`workflow.saved`)}
                 </button>
               {/if}
             </div>
           {:else}
             <div class="jsw-empty">
               <div style="font-size:28px; opacity:0.3; margin-bottom:8px">📝</div>
-              <div>Select a script from the sidebar or create a new one.</div>
+              <div>{t(`workflow.job_script_empty`)}</div>
             </div>
           {/if}
         </div>

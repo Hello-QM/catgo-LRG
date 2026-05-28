@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module(`workflow`)
+
   interface FreqEntry {
     index: number
     frequency_cm: number
@@ -100,20 +104,20 @@
 </script>
 
 <div class="vib-section">
-  <div class="sp-section-title">Vibration Modes</div>
+  <div class="sp-section-title">{t(`workflow.vibration_modes`)}</div>
 
   <div class="vib-row">
     <select class="vib-select" bind:value={selected_index} onchange={() => { if (playing) play() }}>
       {#each all_modes as mode, i}
         <option value={i}>
-          {mode.index}: {mode.frequency_cm.toFixed(1)} cm⁻¹{mode.imaginary ? ' (imag)' : ''}
+          {mode.index}: {mode.frequency_cm.toFixed(1)} cm⁻¹{mode.imaginary ? ` (${t(`workflow.imag`)})` : ''}
         </option>
       {/each}
     </select>
   </div>
 
   <div class="vib-row">
-    <label class="vib-label">Amplitude</label>
+    <label class="vib-label">{t(`workflow.amplitude`)}</label>
     <input
       type="range"
       class="vib-slider"
@@ -127,7 +131,7 @@
 
   <div class="vib-row">
     <button class="vib-btn" class:vib-playing={playing} onclick={toggle_play}>
-      {playing ? '■ Stop' : '▶ Play'}
+      {playing ? t(`workflow.stop_vibration`) : t(`workflow.play_vibration`)}
     </button>
   </div>
 </div>

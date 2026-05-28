@@ -1,7 +1,10 @@
 <!-- src/lib/workflow/WorkflowDAGViewer.svelte -->
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { get_v2_dag, connect_v2_monitor, confirm_all_engine_tasks, type V2Task, type V2Link, type V2DAG } from '$lib/api/workflow-v2'
   import { get_v2_task_result, retry_v2_task } from '$lib/api/workflow-v2'
+
+  load_i18n_module(`workflow`)
 
   interface Props {
     workflow_id: string
@@ -244,9 +247,9 @@
 
   {#if has_pending_review}
     <div class="confirm-all-bar">
-      <span class="confirm-label">Tasks awaiting review</span>
+      <span class="confirm-label">{t(`workflow.tasks_awaiting_review`)}</span>
       <button class="confirm-all-btn" onclick={do_confirm_all} disabled={confirming_all}>
-        {confirming_all ? 'Confirming...' : 'Confirm All & Submit'}
+        {confirming_all ? t(`workflow.confirming`) : t(`workflow.confirm_all_submit`)}
       </button>
     </div>
   {/if}

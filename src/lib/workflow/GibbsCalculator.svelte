@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import * as api from '$lib/api/workflow'
   import type { GibbsResult, GibbsRequest } from '$lib/api/workflow'
+
+  load_i18n_module(`workflow`)
 
   let {
     workflow_id,
@@ -44,22 +47,22 @@
 <div class="gibbs-section">
   <button class="gibbs-toggle" onclick={() => expanded = !expanded}>
     <span class="gibbs-arrow">{expanded ? '▾' : '▸'}</span>
-    Gibbs Free Energy Correction
+    {t(`workflow.gibbs_free_energy_correction`)}
   </button>
 
   {#if expanded}
     <div class="gibbs-body">
       <!-- Mode selector -->
       <div class="gibbs-row">
-        <label class="gibbs-label">Mode</label>
+        <label class="gibbs-label">{t(`workflow.mode`)}</label>
         <div class="gibbs-radio-group">
           <label class="gibbs-radio">
             <input type="radio" bind:group={mode} value="adsorbed" />
-            Adsorbed
+            {t(`workflow.adsorbed`)}
           </label>
           <label class="gibbs-radio">
             <input type="radio" bind:group={mode} value="gas" />
-            Gas Phase
+            {t(`workflow.gas_phase`)}
           </label>
         </div>
       </div>
@@ -91,7 +94,7 @@
       {/if}
 
       <button class="gibbs-calc-btn" onclick={calculate} disabled={loading}>
-        {loading ? 'Calculating...' : 'Calculate'}
+        {loading ? t(`workflow.calculating`) : t(`workflow.calculate`)}
       </button>
 
       {#if error}
@@ -126,12 +129,12 @@
             </div>
             <div class="gibbs-result-divider"></div>
             <div class="gibbs-result-row dim">
-              <span>Mass</span>
+              <span>{t(`workflow.mass`)}</span>
               <span class="mono">{result.molecular_mass_amu?.toFixed(4)} amu</span>
             </div>
             <div class="gibbs-result-row dim">
-              <span>Linear</span>
-              <span class="mono">{result.is_linear ? 'Yes' : 'No'}</span>
+              <span>{t(`workflow.linear`)}</span>
+              <span class="mono">{result.is_linear ? t(`workflow.yes`) : t(`workflow.no`)}</span>
             </div>
             <div class="gibbs-result-row dim">
               <span>σ (sym. number)</span>

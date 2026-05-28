@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { lazy_load_plotly } from './plotly-utils'
+
+  load_i18n_module(`workflow`)
 
   interface Props {
     image_energies: Record<number, Array<[number, number]>>
@@ -37,7 +40,7 @@
         y: y_vals,
         type: 'scatter' as const,
         mode: 'lines+markers' as const,
-        name: `Iter ${iter}`,
+        name: t(`workflow.iter_n`, { n: iter }),
         line: {
           color: `hsl(${(color_idx * 360) / Math.max(iters.length, 1)}, 70%, 55%)`,
           width: iters.length > 20 ? 1 : 1.5,
@@ -49,7 +52,7 @@
 
     const layout = {
       xaxis: {
-        title: { text: 'Image', font: { size: 11, color: '#94a3b8' } },
+        title: { text: t(`workflow.image`), font: { size: 11, color: '#94a3b8' } },
         color: '#94a3b8',
         gridcolor: 'rgba(148,163,184,0.15)',
         zerolinecolor: 'rgba(148,163,184,0.2)',
@@ -104,7 +107,7 @@
 
 <div class="neb-profile-container">
   {#if !has_data}
-    <div class="empty-state">Waiting for NEB iteration data...</div>
+    <div class="empty-state">{t(`workflow.waiting_neb_iteration_data`)}</div>
   {:else}
     <div bind:this={plot_div} class="neb-profile-plot"></div>
   {/if}

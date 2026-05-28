@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { PymatgenStructure, Vec3 } from '$lib'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
   import {
@@ -8,6 +9,8 @@
   import { matrix_to_params, ensure_right_handed } from '$lib/structure/lattice-ops'
   import { deduplicate_periodic_images } from '$lib/structure/pbc'
   import { parse_slab_gen_params } from './graph-model'
+
+  load_i18n_module(`workflow`)
 
   /** Post-process WASM slab output — same steps as MillerSlabCutterPane */
   function postprocess_slab(raw: PymatgenStructure): PymatgenStructure {
@@ -187,7 +190,7 @@
   <!-- Termination selector (only when multiple terminations exist) -->
   {#if terminations.length > 1}
     <div class="termination-bar">
-      <span class="term-label">Termination</span>
+      <span class="term-label">{t(`workflow.termination`)}</span>
       <div class="term-options">
         {#each terminations as term, idx}
           <button
@@ -208,12 +211,12 @@
     {#if !upstream_structure}
       <div class="preview-msg">
         <span class="msg-icon">&#x1F517;</span>
-        <span>Connect a structure input</span>
+        <span>{t(`workflow.calc_connect_structure_input`)}</span>
       </div>
     {:else if is_loading}
       <div class="preview-msg">
         <div class="spinner"></div>
-        <span>Generating...</span>
+        <span>{t(`workflow.generating`)}</span>
       </div>
     {:else if error_msg}
       <div class="preview-msg error">
@@ -223,7 +226,7 @@
     {:else if preview_structure}
       <StructurePreview structure={preview_structure} />
       {#if on_expand}
-        <button class="viewport-expand-btn" onclick={on_expand} title="Open in full viewer">&#x26F6;</button>
+        <button class="viewport-expand-btn" onclick={on_expand} title={t(`workflow.calc_open_full_viewer`)}>&#x26F6;</button>
       {/if}
     {/if}
   </div>
@@ -231,9 +234,9 @@
   <!-- Info bar -->
   {#if preview_structure && !is_loading}
     <div class="preview-info">
-      <span>({parsed.miller.join('')}) &middot; {preview_structure.sites?.length ?? 0} atoms</span>
+      <span>({parsed.miller.join('')}) &middot; {t(`workflow.atom_count_plain`, { n: preview_structure.sites?.length ?? 0 })}</span>
       {#if is_locked}
-        <button class="unlock-btn" onclick={unlock} title="Unlock to re-enable auto slab generation">Edited &middot; Unlock</button>
+        <button class="unlock-btn" onclick={unlock} title={t(`workflow.unlock_auto_slab_generation`)}>{t(`workflow.edited_unlock`)}</button>
       {/if}
     </div>
   {/if}

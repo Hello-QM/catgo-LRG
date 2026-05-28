@@ -1,5 +1,6 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { PymatgenStructure, Site } from '$lib'
   import type { NodeDefinition } from './workflow-types'
   import { STATUS_COLORS } from './workflow-types'
@@ -13,6 +14,8 @@
   import { DEFAULTS } from '$lib/settings'
   import { Canvas } from '@threlte/core'
   import type { Vec3 } from '$lib/structure'
+
+  load_i18n_module(`workflow`)
 
   // ─── Site selection strategies ───
   // Extensible: add new strategies here, select via `site_strategy` param.
@@ -961,11 +964,11 @@
   <div class="sd-prompt-overlay" onclick={() => { sd_show_prompt = false; sd_pending_action = null }}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="sd-prompt" onclick={(e) => e.stopPropagation()}>
-      <div class="sd-prompt-title">Existing adsorbate ({custom_atoms.length} atoms)</div>
+      <div class="sd-prompt-title">{t(`workflow.ads_existing_adsorbate_atoms`, { n: custom_atoms.length })}</div>
       <div class="sd-prompt-buttons">
-        <button class="primary" onclick={() => sd_handle_prompt(true)}>Keep & Edit</button>
-        <button class="sd-btn" onclick={() => sd_handle_prompt(false)}>Clear & Start Fresh</button>
-        <button class="sd-btn" onclick={() => { sd_show_prompt = false; sd_pending_action = null }}>Cancel</button>
+        <button class="primary" onclick={() => sd_handle_prompt(true)}>{t(`workflow.ads_keep_and_edit`)}</button>
+        <button class="sd-btn" onclick={() => sd_handle_prompt(false)}>{t(`workflow.ads_clear_and_start_fresh`)}</button>
+        <button class="sd-btn" onclick={() => { sd_show_prompt = false; sd_pending_action = null }}>{t(`workflow.cancel`)}</button>
       </div>
     </div>
   </div>
@@ -986,7 +989,7 @@
         class="help-btn"
         class:active={show_help}
         onclick={() => show_help = !show_help}
-        title="Toggle help"
+        title={t(`workflow.ads_toggle_help`)}
       >?</button>
     </div>
     {#if show_help}
@@ -1004,7 +1007,7 @@
   {#if has_multi_structs && upstream_structs_parsed}
     <div class="section" style="padding: 4px 8px;">
       <div class="field-row" style="align-items: center; gap: 6px;">
-        <label class="field-label-sm" style="white-space: nowrap;">Structure</label>
+        <label class="field-label-sm" style="white-space: nowrap;">{t(`workflow.ads_structure`)}</label>
         <input type="range" min="0" max={upstream_structs_parsed.length - 1} step="1"
           value={struct_index}
           oninput={(e) => {
@@ -1025,12 +1028,12 @@
   {#if preview_structure}
     <div class="section preview-section">
       <div class="preview-header">
-        <span class="section-label">Preview</span>
+        <span class="section-label">{t(`workflow.ads_preview`)}</span>
         {#if placing}
           <div class="mini-spinner"></div>
         {/if}
         {#if onedit_3d && preview_structure}
-          <button class="expand-btn" onclick={() => onedit_3d?.()} title="Open in full 3D editor">&#x26F6;</button>
+          <button class="expand-btn" onclick={() => onedit_3d?.()} title={t(`workflow.ads_open_full_3d_editor`)}>&#x26F6;</button>
         {/if}
       </div>
       <div class="preview-viewport">
@@ -1061,15 +1064,15 @@
       {#if preview_info}
         <div class="preview-info">
           {#if preview_info.is_placed}
-            *{active_adsorbate?.display_formula ?? active_adsorbate?.formula ?? `?`} placed
+            *{active_adsorbate?.display_formula ?? active_adsorbate?.formula ?? `?`} {t(`workflow.ads_placed`)}
           {/if}
-          &middot; {preview_info.n_atoms} atoms
+          &middot; {t(`workflow.ads_atom_count`, { n: preview_info.n_atoms })}
           {#if !result_structure && sites.length > 0}
-            &middot; {sites.length} sites shown
+            &middot; {t(`workflow.ads_sites_shown`, { n: sites.length })}
             {#if site_strategy === `manual_position`}
-              &middot; click a site to lock
+              &middot; {t(`workflow.ads_click_site_to_lock`)}
             {:else if selected_site}
-              &middot; site #{selected_site.id} selected
+              &middot; {t(`workflow.ads_site_selected`, { n: selected_site.id })}
             {/if}
           {/if}
         </div>
@@ -1082,7 +1085,7 @@
 
   <!-- Display Name -->
   <div class="label-row">
-    <label class="field-label">Display Name</label>
+    <label class="field-label">{t(`workflow.ads_display_name`)}</label>
     <input type="text" class="field-input" placeholder={definition.label}
       value={node.params.label ?? ``}
       oninput={(e) => onparams_change?.({ ...node.params, label: e.currentTarget.value || undefined })} />
@@ -1090,34 +1093,34 @@
 
   <!-- Upstream Slab Info -->
   <div class="section">
-    <div class="section-label">Upstream Structure</div>
+    <div class="section-label">{t(`workflow.ads_upstream_structure`)}</div>
     {#if upstream_info}
       <div class="upstream-info">
         <span class="upstream-formula">{upstream_info.formula}</span>
-        <span class="upstream-atoms">{upstream_info.n_atoms} atoms</span>
+        <span class="upstream-atoms">{t(`workflow.ads_atom_count`, { n: upstream_info.n_atoms })}</span>
       </div>
     {:else if upstream_structure_json === undefined}
-      <div class="upstream-hint">Open in main window to see upstream structure</div>
+      <div class="upstream-hint">{t(`workflow.ads_open_in_main_window`)}</div>
     {:else}
-      <div class="upstream-missing">Connect a structure_input or slab_gen node upstream</div>
+      <div class="upstream-missing">{t(`workflow.ads_connect_upstream`)}</div>
     {/if}
   </div>
 
   <!-- Adsorbate Config -->
   <div class="section">
-    <div class="section-label">Adsorbate</div>
+    <div class="section-label">{t(`workflow.ads_adsorbate`)}</div>
 
     <!-- Source tabs -->
     <div class="source-tabs">
-      <button class="tab" class:active={source_type === `preset`} onclick={() => { source_type = `preset`; update_param(`_source_type`, `preset`) }}>Preset</button>
+      <button class="tab" class:active={source_type === `preset`} onclick={() => { source_type = `preset`; update_param(`_source_type`, `preset`) }}>{t(`workflow.ads_source_preset`)}</button>
       <button class="tab" class:active={source_type === `xyz`} onclick={() => { source_type = `xyz`; update_param(`_source_type`, `xyz`) }}>XYZ</button>
-      <button class="tab" class:active={source_type === `pubchem`} onclick={() => { source_type = `pubchem`; update_param(`_source_type`, `pubchem`) }}>PubChem</button>
-      <button class="tab" class:active={source_type === `self_define`} onclick={() => { source_type = `self_define`; sd_open = true; update_param(`_source_type`, `self_define`) }}>Self-define</button>
+      <button class="tab" class:active={source_type === `pubchem`} onclick={() => { source_type = `pubchem`; update_param(`_source_type`, `pubchem`) }}>{t(`workflow.ads_source_pubchem`)}</button>
+      <button class="tab" class:active={source_type === `self_define`} onclick={() => { source_type = `self_define`; sd_open = true; update_param(`_source_type`, `self_define`) }}>{t(`workflow.ads_source_self_define`)}</button>
     </div>
 
     {#if source_type === `preset`}
       <div class="field-row">
-        <label class="field-label-sm">Species</label>
+        <label class="field-label-sm">{t(`workflow.ads_species`)}</label>
         <select class="field-select" value={species_idx}
           onchange={(e) => {
             species_idx = Number((e.target as HTMLSelectElement).value)
@@ -1141,22 +1144,22 @@
         </select>
       </div>
     {:else if source_type === `xyz`}
-      <textarea class="xyz-input" rows="4" placeholder="C 0.0 0.0 0.0&#10;O 0.0 0.0 1.128"
+      <textarea class="xyz-input" rows="4" placeholder={t(`workflow.ads_xyz_placeholder`)}
         value={xyz_text}
         oninput={(e) => { xyz_text = (e.target as HTMLTextAreaElement).value; result_structure = null; update_param(`_xyz_text`, xyz_text) }}
       ></textarea>
       {#if xyz_parse_error}
         <div class="site-status error">{xyz_parse_error}</div>
       {:else if custom_atoms.length > 0}
-        <div class="site-status">{custom_atoms.length} atoms parsed</div>
+        <div class="site-status">{t(`workflow.ads_atoms_parsed`, { n: custom_atoms.length })}</div>
       {/if}
       <!-- Binding atom selection via atom badges below (same as manual pane) -->
     {:else if source_type === `pubchem`}
-      <input type="text" class="field-select" placeholder="e.g. ethanol, CH3OH..."
+      <input type="text" class="field-select" placeholder={t(`workflow.ads_pubchem_placeholder`)}
         value={pubchem_query}
         oninput={(e) => { pubchem_query = (e.target as HTMLInputElement).value; on_pubchem_input() }} />
       {#if pubchem_searching}
-        <div class="site-status"><div class="mini-spinner"></div> Searching...</div>
+        <div class="site-status"><div class="mini-spinner"></div> {t(`workflow.ads_searching`)}</div>
       {/if}
       {#if pubchem_error}
         <div class="site-status error">{pubchem_error}</div>
@@ -1174,23 +1177,23 @@
         </div>
       {/if}
       {#if custom_atoms.length > 0}
-        <div class="site-status">Loaded: {custom_atoms.length} atoms</div>
+        <div class="site-status">{t(`workflow.ads_loaded_atoms`, { n: custom_atoms.length })}</div>
       {/if}
     {:else if source_type === `self_define`}
       <!-- Self-define: two editor options -->
       <div class="sd-buttons" style="display: flex; flex-wrap: wrap; gap: 4pt; margin: 4pt 0">
         {#if onedit_3d}
           <button class="sd-btn" onclick={sd_open_3d_editor}>
-            {custom_atoms.length > 0 ? `Edit (${custom_atoms.length} atoms)` : `Empty Editor`}
+            {custom_atoms.length > 0 ? t(`workflow.ads_edit_atoms`, { n: custom_atoms.length }) : t(`workflow.ads_empty_editor`)}
           </button>
           {#if upstream_structure?.sites}
             <button class="primary" onclick={sd_open_with_surface}>
-              Edit with Surface
+              {t(`workflow.ads_edit_with_surface`)}
             </button>
           {/if}
         {/if}
         <button class="sd-btn" onclick={() => (sd_open = !sd_open)}>
-          {sd_open ? `Hide Text` : `Text`}
+          {sd_open ? t(`workflow.ads_hide_text`) : t(`workflow.ads_text`)}
         </button>
       </div>
 
@@ -1198,7 +1201,7 @@
       {#if sd_open}
         <div class="sd-editor">
           <!-- XYZ text editor (live-synced with preview) -->
-          <textarea class="xyz-input" rows="5" placeholder="C 0.0 0.0 0.0&#10;O 0.0 0.0 1.128"
+          <textarea class="xyz-input" rows="5" placeholder={t(`workflow.ads_xyz_placeholder`)}
             bind:value={sd_text}
             oninput={() => { update_param(`_xyz_text`, sd_text); result_structure = null }}
           ></textarea>
@@ -1206,15 +1209,15 @@
           {#if xyz_parse_error}
             <div class="site-status error">{xyz_parse_error}</div>
           {:else if custom_atoms.length > 0}
-            <div class="site-status">{custom_atoms.length} atom{custom_atoms.length > 1 ? `s` : ``}</div>
+            <div class="site-status">{t(`workflow.ads_atom_count`, { n: custom_atoms.length })}</div>
           {/if}
 
           <!-- Editor controls -->
           <div class="sd-controls">
-            <button class="sd-btn" onclick={sd_remove_last} disabled={custom_atoms.length === 0} title="Remove last atom">Undo</button>
-            <button class="sd-btn" onclick={sd_clear} title="Clear all">Clear</button>
+            <button class="sd-btn" onclick={sd_remove_last} disabled={custom_atoms.length === 0} title={t(`workflow.ads_remove_last_atom`)}>{t(`workflow.undo`)}</button>
+            <button class="sd-btn" onclick={sd_clear} title={t(`workflow.ads_clear_all`)}>{t(`workflow.clear`)}</button>
             <span style="flex:1"></span>
-            <button class="primary" onclick={sd_confirm} disabled={custom_atoms.length === 0}>Confirm</button>
+            <button class="primary" onclick={sd_confirm} disabled={custom_atoms.length === 0}>{t(`workflow.confirm`)}</button>
           </div>
         </div>
       {/if}
@@ -1242,7 +1245,7 @@
     <!-- Binding atoms (click to toggle, like interactive pane) -->
     {#if active_adsorbate && active_adsorbate.atoms.length > 1}
       <div class="binding-section">
-        <label class="field-label-sm">Binding atom{binding_atom_indices.length > 1 ? `s` : ``}</label>
+        <label class="field-label-sm">{binding_atom_indices.length > 1 ? t(`workflow.ads_binding_atoms`) : t(`workflow.ads_binding_atom`)}</label>
         <div class="atom-badges">
           {#each active_adsorbate.atoms as atom, idx}
             <button class="atom-badge" class:selected={binding_atom_indices.includes(idx)}
@@ -1265,31 +1268,31 @@
     {/if}
 
     <div class="field-row">
-      <label class="field-label-sm">Height (A)</label>
+      <label class="field-label-sm">{t(`workflow.ads_height_angstrom`)}</label>
       <input type="number" class="field-input-sm" step="0.1" min="0.5" max="5"
         value={height} oninput={(e) => { height = Number(e.currentTarget.value) || 2; update_param(`height`, height) }} />
     </div>
     <label class="checkbox-row">
       <input type="checkbox" checked={auto_rotate}
         onchange={(e) => { auto_rotate = (e.target as HTMLInputElement).checked; update_param(`_auto_rotate`, auto_rotate) }} />
-      <span class="field-label-sm">Auto-rotate to surface normal</span>
+      <span class="field-label-sm">{t(`workflow.ads_auto_rotate_to_surface_normal`)}</span>
     </label>
     {#if active_adsorbate}
-      <div class="site-status">Active: {active_adsorbate.formula} ({active_adsorbate.atoms.length} atoms)</div>
+      <div class="site-status">{t(`workflow.ads_active_adsorbate`, { formula: active_adsorbate.formula, n: active_adsorbate.atoms.length })}</div>
     {/if}
   </div>
 
   <!-- Adsorption Sites -->
   <div class="section">
     <div class="section-label">
-      Adsorption Sites
+      {t(`workflow.ads_adsorption_sites`)}
       {#if sites.length > 0}
         <span class="site-count">{sites.length}</span>
       {/if}
     </div>
 
     <div class="field-row">
-      <label class="field-label-sm">Strategy</label>
+      <label class="field-label-sm">{t(`workflow.ads_strategy`)}</label>
       <select class="field-select" value={site_strategy}
         onchange={(e) => {
           site_strategy = (e.target as HTMLSelectElement).value as SiteStrategy
@@ -1301,11 +1304,11 @@
             if (selected_site) lock_site_as_manual(selected_site)
           }
         }}>
-        <option value="nearest_center_top">Nearest center (Top)</option>
-        <option value="first_top">First Top</option>
-        <option value="first_bridge">First Bridge</option>
-        <option value="first_hollow">First Hollow</option>
-        <option value="manual_position">Manual Position (fixed)</option>
+        <option value="nearest_center_top">{t(`workflow.ads_strategy_nearest_center_top`)}</option>
+        <option value="first_top">{t(`workflow.ads_strategy_first_top`)}</option>
+        <option value="first_bridge">{t(`workflow.ads_strategy_first_bridge`)}</option>
+        <option value="first_hollow">{t(`workflow.ads_strategy_first_hollow`)}</option>
+        <option value="manual_position">{t(`workflow.ads_strategy_manual_position`)}</option>
       </select>
     </div>
 
@@ -1313,7 +1316,7 @@
       <div class="manual-pos-section">
         {#if manual_position_set}
           <div class="manual-pos-display">
-            <span class="manual-pos-label">Locked position</span>
+            <span class="manual-pos-label">{t(`workflow.ads_locked_position`)}</span>
             <div class="manual-pos-coords">
               <label class="coord-field">
                 <span>X</span>
@@ -1332,13 +1335,13 @@
               </label>
             </div>
             <div class="manual-pos-actions">
-              <button class="action-btn" onclick={() => { onedit_3d?.(upstream_structure ?? undefined, sites, handle_site_picked, handle_confirm) }}>Pick Site</button>
-              <button class="action-btn reset-btn" onclick={() => { manual_position_set = false; manual_position = [0,0,0]; manual_normal = [0,0,1] }}>Clear</button>
+              <button class="action-btn" onclick={() => { onedit_3d?.(upstream_structure ?? undefined, sites, handle_site_picked, handle_confirm) }}>{t(`workflow.ads_pick_site`)}</button>
+              <button class="action-btn reset-btn" onclick={() => { manual_position_set = false; manual_position = [0,0,0]; manual_normal = [0,0,1] }}>{t(`workflow.clear`)}</button>
             </div>
           </div>
         {:else}
           <div class="manual-pos-hint">
-            Click a site in the 3D preview above, pick from the list below, or enter coordinates:
+            {t(`workflow.ads_click_site_hint`)}
           </div>
           <div class="manual-pos-coords">
             <label class="coord-field">
@@ -1358,7 +1361,7 @@
             </label>
           </div>
           <button class="action-btn find-btn" onclick={() => { onedit_3d?.(upstream_structure ?? undefined, sites, handle_site_picked, handle_confirm) }}>
-            Pick Site
+            {t(`workflow.ads_pick_site`)}
           </button>
         {/if}
       </div>
@@ -1367,7 +1370,7 @@
     {#if sites_loading}
       <div class="site-status">
         <div class="mini-spinner"></div>
-        Finding sites...
+        {t(`workflow.ads_finding_sites`)}
       </div>
     {:else if sites_error}
       <div class="site-status error">{sites_error}</div>
@@ -1396,7 +1399,7 @@
             }
           }
         }}>
-        <option value="">{(site_strategy as SiteStrategy) === `manual_position` ? `— Pick a site to lock —` : `— Auto (${site_strategy.replace(/_/g, ` `)}) —`}</option>
+        <option value="">{(site_strategy as SiteStrategy) === `manual_position` ? t(`workflow.ads_pick_site_to_lock`) : t(`workflow.ads_auto_strategy`, { strategy: site_strategy.replace(/_/g, ` `) })}</option>
         {#each sites as s}
           <option value={s.id}>
             #{s.id} {s.site_type} — {s.env_signature}
@@ -1404,9 +1407,9 @@
         {/each}
       </select>
     {:else if sites_searched}
-      <div class="site-status">No sites found on this surface</div>
+      <div class="site-status">{t(`workflow.ads_no_sites_found`)}</div>
     {:else if !upstream_structure}
-      <div class="site-status dim">Waiting for upstream structure...</div>
+      <div class="site-status dim">{t(`workflow.ads_waiting_for_upstream_structure`)}</div>
     {/if}
 
     {#if upstream_structure && !sites_loading && site_strategy !== `manual_position`}
@@ -1415,7 +1418,7 @@
         find_counter++
         find_sites_impl(upstream_structure!, find_counter)
       }}>
-        {sites_searched ? `Re-find & Place` : `Find Sites & Place`}
+        {sites_searched ? t(`workflow.ads_refind_and_place`) : t(`workflow.ads_find_sites_and_place`)}
       </button>
     {/if}
   </div>
@@ -1432,15 +1435,15 @@
           do_place(upstream_structure, active_adsorbate, site, ++place_counter)
         }
       }}>
-        {result_structure ? `Re-place Adsorbate` : `Place Adsorbate`}
+        {result_structure ? t(`workflow.ads_replace_adsorbate`) : t(`workflow.ads_place_adsorbate`)}
       </button>
     {/if}
-    <button class="action-btn reset-btn" onclick={reset}>Reset</button>
+    <button class="action-btn reset-btn" onclick={reset}>{t(`workflow.reset`)}</button>
   </div>
 
   <!-- IO -->
   <div class="io-section">
-    <div class="section-label">Inputs / Outputs</div>
+    <div class="section-label">{t(`workflow.ads_inputs_outputs`)}</div>
     <div class="io-row">
       <div class="io-col">
         <span class="io-heading">IN</span>

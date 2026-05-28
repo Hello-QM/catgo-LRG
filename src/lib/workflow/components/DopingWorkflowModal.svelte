@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { PymatgenStructure, ElementSymbol } from '$lib'
   import { PeriodicTable } from '$lib/periodic-table'
   import { combinatorial_substitution } from '$lib/api/build'
   import type { TrajectoryType } from '$lib/trajectory'
+
+  load_i18n_module(`workflow`)
 
   let {
     show = $bindable(false),
@@ -219,7 +222,7 @@
           target_indices: resolve_targets(g),
           replacement_elements: g.replacement_elements,
         }))
-      if (valid_groups.length === 0) throw new Error('Select target atoms and replacement elements first')
+      if (valid_groups.length === 0) throw new Error(t(`workflow.doping_select_targets_first`))
 
       const result = await combinatorial_substitution({
         structure: structure as any,
@@ -230,7 +233,7 @@
       result_count = result.count
       variants = result.structures.map((s: any, i: number) => ({
         structure: s,
-        label: result.labels?.[i] || `Variant ${i + 1}`,
+        label: result.labels?.[i] || t(`workflow.doping_variant_n`, { n: i + 1 }),
       }))
       // Auto-select first variant
       if (variants.length > 0) active_variant_idx = 0
@@ -269,14 +272,14 @@
     <div class="dw-modal" onclick={(e) => e.stopPropagation()}>
       <!-- Header -->
       <div class="dw-header">
-        <h3 class="dw-title">Doping Editor</h3>
+        <h3 class="dw-title">{t(`workflow.doping_editor`)}</h3>
         <div class="dw-header-actions">
           <button class="dw-gen-btn" onclick={generate_structures} disabled={generating || combo_count === 0}>
-            {generating ? 'Generating...' : `Generate ${combo_count} Structure${combo_count !== 1 ? 's' : ''}`}
+            {generating ? t(`workflow.generating`) : t(`workflow.doping_generate_structures`, { n: combo_count })}
           </button>
           {#if variants.length > 0}
             <button class="dw-save-btn" onclick={save_all}>
-              Save All {variants.length} & Close
+              {t(`workflow.doping_save_all_close`, { n: variants.length })}
             </button>
           {/if}
           <button class="dw-close-btn" onclick={handle_close}>&times;</button>
@@ -289,7 +292,7 @@
         <div class="dw-left">
           <!-- Periodic table (sticky at top) -->
           <div class="dw-pt-section">
-            <div class="dw-section-label">Dopants for Group {active_group_idx + 1}</div>
+            <div class="dw-section-label">{t(`workflow.doping_dopants_for_group`, { n: active_group_idx + 1 })}</div>
             {#if groups[active_group_idx]}
               {@const ag = groups[active_group_idx]}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -323,11 +326,11 @@
               {@const is_active = gi === active_group_idx}
               <div class="dw-group" class:active={is_active} onclick={() => active_group_idx = gi}>
                 <div class="dw-group-header">
-                  <span class="dw-group-title">Group {gi + 1}</span>
+                  <span class="dw-group-title">{t(`workflow.doping_group_n`, { n: gi + 1 })}</span>
                   <span class="dw-group-summary">
                     {#if !is_active}
-                      {group.selection_mode === 'by_element' ? group.target_element : `${group.captured_indices.length} sites`}
-                      → {group.replacement_elements.length > 0 ? group.replacement_elements.join(', ') : 'none'}
+                      {group.selection_mode === 'by_element' ? group.target_element : t(`workflow.ads_sites_shown`, { n: group.captured_indices.length })}
+                      → {group.replacement_elements.length > 0 ? group.replacement_elements.join(', ') : t(`workflow.none`)}
                     {/if}
                   </span>
                   {#if groups.length > 1}
@@ -338,8 +341,8 @@
                 {#if is_active}
                   <div class="dw-group-body">
                     <div class="dw-group-mode">
-                      <label><input type="radio" checked={group.selection_mode === 'by_element'} onchange={() => { group.selection_mode = 'by_element'; groups = [...groups] }} /> All of Element</label>
-                      <label><input type="radio" checked={group.selection_mode === 'by_indices'} onchange={() => { group.selection_mode = 'by_indices'; groups = [...groups] }} /> Pick Specific Atoms</label>
+                      <label><input type="radio" checked={group.selection_mode === 'by_element'} onchange={() => { group.selection_mode = 'by_element'; groups = [...groups] }} /> {t(`workflow.doping_all_of_element`)}</label>
+                      <label><input type="radio" checked={group.selection_mode === 'by_indices'} onchange={() => { group.selection_mode = 'by_indices'; groups = [...groups] }} /> {t(`workflow.doping_pick_specific_atoms`)}</label>
                     </div>
 
                     {#if group.selection_mode === 'by_element'}
@@ -348,13 +351,13 @@
                           <option value={el}>{el} ({structure?.sites?.filter((s: any) => (s.species?.[0]?.element ?? s.label) === el).length ?? 0})</option>
                         {/each}
                       </select>
-                      <div class="dw-hint">{targets.length} {group.target_element} atom{targets.length !== 1 ? 's' : ''} will be replaced. Click an atom in the viewer to switch element.</div>
+                      <div class="dw-hint">{t(`workflow.doping_targets_hint`, { n: targets.length, element: group.target_element })}</div>
                     {:else}
                       {#if group.captured_indices.length > 0}
-                        <div class="dw-hint">{group.captured_indices.length} atom{group.captured_indices.length !== 1 ? 's' : ''} selected: sites {group.captured_indices.slice(0, 6).join(', ')}{group.captured_indices.length > 6 ? '...' : ''}</div>
-                        <button class="dw-small-btn danger" onclick={(e) => { e.stopPropagation(); group.captured_indices = []; selected_sites = []; groups = [...groups] }}>Clear Selection</button>
+                        <div class="dw-hint">{t(`workflow.doping_atoms_selected`, { n: group.captured_indices.length, sites: group.captured_indices.slice(0, 6).join(', ') })}{group.captured_indices.length > 6 ? '...' : ''}</div>
+                        <button class="dw-small-btn danger" onclick={(e) => { e.stopPropagation(); group.captured_indices = []; selected_sites = []; groups = [...groups] }}>{t(`workflow.clear_selection`)}</button>
                       {:else}
-                        <div class="dw-hint dw-hint-action">Click atoms in the 3D viewer to select them for doping</div>
+                        <div class="dw-hint dw-hint-action">{t(`workflow.doping_click_atoms_hint`)}</div>
                       {/if}
                     {/if}
 
@@ -365,23 +368,23 @@
                         {/each}
                       </div>
                     {:else}
-                      <div class="dw-hint dw-hint-action">Pick replacement elements from the periodic table above</div>
+                      <div class="dw-hint dw-hint-action">{t(`workflow.doping_pick_replacements_hint`)}</div>
                     {/if}
                   </div>
                 {/if}
               </div>
             {/each}
 
-            <button class="dw-add-group" onclick={add_group}>+ Add Group</button>
+            <button class="dw-add-group" onclick={add_group}>{t(`workflow.doping_add_group`)}</button>
 
             <!-- Config -->
             <div class="dw-config">
               <div class="dw-config-row">
-                <label>Max structures</label>
+                <label>{t(`workflow.doping_max_structures`)}</label>
                 <input type="number" class="dw-num-input" bind:value={max_structures} min={1} max={500} />
               </div>
               {#if combo_count > 0}
-                <div class="dw-combo-count">{combo_count} configuration{combo_count !== 1 ? 's' : ''}</div>
+                <div class="dw-combo-count">{t(`workflow.doping_configurations`, { n: combo_count })}</div>
               {/if}
               {#if gen_error}
                 <div class="dw-error">{gen_error}</div>
@@ -392,7 +395,7 @@
             {#if variants.length > 0}
               <div class="dw-variants-section">
                 <div class="dw-variants-header">
-                  <span class="dw-variants-title">Structures ({variants.length})</span>
+                  <span class="dw-variants-title">{t(`workflow.doping_structures_count`, { n: variants.length })}</span>
                 </div>
                 <div class="dw-variants-list">
                   <button
@@ -400,7 +403,7 @@
                     class:active={active_variant_idx === -1}
                     onclick={() => active_variant_idx = -1}
                   >
-                    Original (undoped)
+                    {t(`workflow.doping_original_undoped`)}
                   </button>
                   {#each variants as variant, i}
                     <button
@@ -431,7 +434,7 @@
               style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
             />
           {:else}
-            <div class="dw-loading">Loading 3D viewer...</div>
+            <div class="dw-loading">{t(`workflow.loading_3d_viewer`)}</div>
           {/if}
 
         </div>

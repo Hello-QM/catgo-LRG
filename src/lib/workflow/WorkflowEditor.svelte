@@ -2834,7 +2834,7 @@
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4m10-10h-4M6 12H2"/>
                     </svg>
-                    Open Doping Editor
+                    {t('workflow.doping_open_editor')}
                   </button>
                   <button class="doping-action-btn screen-sites-btn" onclick={() => {
                     nodes = nodes.map(n => n.id !== nd.id ? n : {
@@ -2846,27 +2846,27 @@
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M3 6h18M3 12h18M3 18h18"/>
                     </svg>
-                    Screen All Sites
+                    {t('workflow.doping_screen_all_sites')}
                   </button>
                 </div>
                 <!-- Summary of current config -->
                 <div class="doping-summary">
                   {#if nd.params.dopant && nd.params.mode !== 'combinatorial'}
                     <div class="doping-summary-row">
-                      <span class="doping-summary-label">Dopant</span>
+                      <span class="doping-summary-label">{t('workflow.doping_dopant')}</span>
                       <span class="doping-summary-value">{nd.params.dopant}</span>
                     </div>
                   {/if}
                   {#if nd.params.target_element}
                     <div class="doping-summary-row">
-                      <span class="doping-summary-label">Host</span>
+                      <span class="doping-summary-label">{t('workflow.doping_host')}</span>
                       <span class="doping-summary-value">{nd.params.target_element}</span>
                     </div>
                   {/if}
                   {#if nd.params.enumerate}
                     <div class="doping-summary-row">
-                      <span class="doping-summary-label">Mode</span>
-                      <span class="doping-summary-value">Enumerate (max {nd.params.max_configs ?? 50})</span>
+                      <span class="doping-summary-label">{t('workflow.mode')}</span>
+                      <span class="doping-summary-value">{t('workflow.doping_enumerate_max', { n: Number(nd.params.max_configs ?? 50) })}</span>
                     </div>
                   {/if}
                   {#if nd.params.mode === 'combinatorial' && nd.params.groups}
@@ -2874,8 +2874,8 @@
                     {#if grps.length > 0}
                       {#each grps as g, i}
                         <div class="doping-summary-row">
-                          <span class="doping-summary-label">Group {i+1}</span>
-                          <span class="doping-summary-value">{g.target || '?'} → {(g.replacements || []).join(', ') || 'none'}</span>
+                          <span class="doping-summary-label">{t('workflow.doping_group_n', { n: i + 1 })}</span>
+                          <span class="doping-summary-value">{g.target || '?'} → {(g.replacements || []).join(', ') || t('workflow.none')}</span>
                         </div>
                       {/each}
                     {/if}
@@ -2886,7 +2886,7 @@
                   {@const gen_structs = (() => { try { return JSON.parse(typeof nd.params.generated_structures_json === 'string' ? nd.params.generated_structures_json : '[]') as string[] } catch { return [] } })()}
                   {#if gen_structs.length > 1}
                     <div style="margin-top: 6px; font-size: 11px; color: var(--text-color-dim);">
-                      Preview: {gen_structs.length} doped variants
+                      {t('workflow.doping_preview_variants', { n: gen_structs.length })}
                     </div>
                     <CalcStructurePreview
                       upstream_structure_json={gen_structs[0]}
@@ -3068,7 +3068,7 @@
                   {nd.params.custom_incar_text ? '✏️ Edit INCAR / KPOINTS' : '📄 Preview INCAR / KPOINTS'}
                 </button>
                 {#if nd.params.custom_incar_text}
-                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">Custom INCAR saved</div>
+                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">{t('workflow.editor_custom_incar_saved')}</div>
                 {/if}
               {/if}
               {#if is_orca_node(nd.type, nd.params)}
@@ -3077,7 +3077,7 @@
                   {nd.params.custom_inp_text ? '✏️ Edit ORCA.inp' : '📄 Preview ORCA.inp'}
                 </button>
                 {#if nd.params.custom_inp_text}
-                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">Custom ORCA input saved</div>
+                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">{t('workflow.editor_custom_orca_saved')}</div>
                 {/if}
               {/if}
               {#if is_cp2k_node(nd.type, nd.params)}
@@ -3086,7 +3086,7 @@
                   {nd.params.custom_inp_text ? '✏️ Edit project.inp' : '📄 Preview project.inp'}
                 </button>
                 {#if nd.params.custom_inp_text}
-                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">Custom CP2K input saved</div>
+                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">{t('workflow.editor_custom_cp2k_saved')}</div>
                 {/if}
               {/if}
               {#if is_lammps_node(nd.type, nd.params)}
@@ -3095,7 +3095,7 @@
                   {nd.params.custom_input_text ? '✏️ Edit in.lammps' : '📄 Preview in.lammps'}
                 </button>
                 {#if nd.params.custom_input_text}
-                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">Custom LAMMPS input saved</div>
+                  <div class="structure-preview-badge" style="color: var(--accent-color); margin: 0 12px;">{t('workflow.editor_custom_lammps_saved')}</div>
                 {/if}
               {/if}
               <!-- ═══ Free Energy Diagram ═══ -->
@@ -3288,18 +3288,18 @@
         {@const fn = nodes.find(n => n.id === ed.from)}
         {@const tn = nodes.find(n => n.id === ed.to)}
         <div class="props">
-          <div class="prop-lbl">Edge</div>
+          <div class="prop-lbl">{t('workflow.editor_edge')}</div>
           <div class="edge-info">
-            <div>From: {fn ? NODE_DEFINITIONS[fn.type]?.icon + ` ` + NODE_DEFINITIONS[fn.type]?.label : `?`} ({ed.fromH})</div>
-            <div>To: {tn ? NODE_DEFINITIONS[tn.type]?.icon + ` ` + NODE_DEFINITIONS[tn.type]?.label : `?`} ({ed.toH})</div>
+            <div>{t('workflow.editor_edge_from')} {fn ? NODE_DEFINITIONS[fn.type]?.icon + ` ` + NODE_DEFINITIONS[fn.type]?.label : `?`} ({ed.fromH})</div>
+            <div>{t('workflow.editor_edge_to')} {tn ? NODE_DEFINITIONS[tn.type]?.icon + ` ` + NODE_DEFINITIONS[tn.type]?.label : `?`} ({ed.toH})</div>
           </div>
           <div style="margin-top:10px">
-            <label class="sec-label" style="font-size:9px">Label</label>
+            <label class="sec-label" style="font-size:9px">{t('workflow.editor_edge_label')}</label>
             <input class="param-input full" value={ed.label || ``}
               oninput={(e) => { edges = edges.map(edge => edge.id === ed.id ? { ...edge, label: e.currentTarget.value } : edge) }}
               onblur={() => push_history()} />
           </div>
-          <button class="tbtn danger full" style="margin-top:12px" onclick={() => { edges = edges.filter(e => e.id !== ed.id); sel_edge = null; push_history() }}>🗑 Delete Edge</button>
+          <button class="tbtn danger full" style="margin-top:12px" onclick={() => { edges = edges.filter(e => e.id !== ed.id); sel_edge = null; push_history() }}>{t('workflow.editor_delete_edge')}</button>
         </div>
       {:else}
         <div class="empty-sel">

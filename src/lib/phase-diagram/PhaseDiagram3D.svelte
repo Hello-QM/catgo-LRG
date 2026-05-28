@@ -7,6 +7,7 @@
   import { format_fractional, format_num } from '$lib/labels'
   import { ColorBar } from '$lib/plot'
   import { SvelteMap } from 'svelte/reactivity'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     get_ternary_3d_coordinates,
     get_triangle_centroid,
@@ -22,6 +23,8 @@
   import StructurePopup from './StructurePopup.svelte'
   import * as thermo from './thermodynamics'
   import type { HoverData3D, Point3D, TernaryPlotEntry } from './types'
+
+  load_i18n_module(`structure`)
 
   let {
     entries,
@@ -1014,7 +1017,7 @@
     event.preventDefault()
     drag_over = false
   }}
-  aria-label="Ternary phase diagram visualization"
+  aria-label={t(`structure.phase_ternary_visualization`)}
 >
   <h3 style="position: absolute; left: 1em; top: 1ex; margin: 0">
     {phase_stats?.chemical_system}
@@ -1036,7 +1039,7 @@
     {@const min_energy = hull_distances.length > 0 ? Math.min(...hull_distances) : 0}
     {@const max_energy = hull_distances.length > 0 ? Math.max(...hull_distances, 0.1) : 0.1}
     <ColorBar
-      title="Energy above hull (eV/atom)"
+      title={t(`structure.phase_energy_above_hull_ev_atom`)}
       range={[min_energy, max_energy]}
       {color_scale}
       wrapper_style="position: absolute; bottom: 2em; left: 1em; width: 200px;"
@@ -1048,7 +1051,7 @@
   <!-- Formation Energy Faces Color Bar (bottom-right corner) -->
   {#if plot_entries.length > 0}
     <ColorBar
-      title="Formation energy (eV/atom)"
+      title={t(`structure.phase_formation_energy_ev_atom`)}
       color_scale_fn={e_form_color_scale_fn}
       color_scale_domain={e_form_range}
       range={e_form_range}
@@ -1064,7 +1067,7 @@
       <button
         type="button"
         onclick={reset_all}
-        title="Reset view and settings"
+        title={t(`structure.phase_reset_view_settings`)}
         class="reset-camera-btn"
       >
         <Icon icon="Reset" />
@@ -1186,7 +1189,7 @@
     <div class="drag-overlay">
       <div class="drag-message">
         <Icon icon="Info" />
-        <span>Drop JSON file to load phase diagram data</span>
+        <span>{t(`structure.phase_drop_json_load_data`)}</span>
       </div>
     </div>
   {/if}

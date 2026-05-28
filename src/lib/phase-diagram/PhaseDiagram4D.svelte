@@ -6,6 +6,7 @@
   import { elem_symbol_to_name, get_electro_neg_formula } from '$lib/composition'
   import { format_fractional, format_num } from '$lib/labels'
   import { ColorBar } from '$lib/plot'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     barycentric_to_tetrahedral,
     compute_4d_coords,
@@ -20,6 +21,8 @@
   import type { Point4D } from './thermodynamics'
   import * as thermo from './thermodynamics'
   import type { HoverData3D, PlotEntry3D } from './types'
+
+  load_i18n_module(`structure`)
 
   let {
     entries,
@@ -985,7 +988,7 @@
     event.preventDefault()
     drag_over = false
   }}
-  aria-label="Phase diagram visualization"
+  aria-label={t(`structure.phase_visualization`)}
 >
   <h3 style="position: absolute; left: 1em; top: 1ex; margin: 0">
     {phase_stats?.chemical_system}
@@ -1008,7 +1011,7 @@
     {@const min_energy = hull_distances.length > 0 ? Math.min(...hull_distances) : 0}
     {@const max_energy = hull_distances.length > 0 ? Math.max(...hull_distances, 0.1) : 0.1}
     <ColorBar
-      title="Energy above hull (eV/atom)"
+      title={t(`structure.phase_energy_above_hull_ev_atom`)}
       range={[min_energy, max_energy]}
       {color_scale}
       wrapper_style="position: absolute; bottom: 2em; left: 1em; width: 200px;"
@@ -1023,7 +1026,7 @@
       <button
         type="button"
         onclick={reset_all}
-        title="Reset camera view (R key)"
+        title={t(`structure.phase_reset_camera_r_key`)}
         class="reset-camera-btn"
       >
         <Icon icon="Reset" />
@@ -1145,7 +1148,7 @@
     <div class="drag-overlay">
       <div class="drag-message">
         <Icon icon="Info" />
-        <span>Drop JSON file to load phase diagram data</span>
+        <span>{t(`structure.phase_drop_json_load_data`)}</span>
       </div>
     </div>
   {/if}

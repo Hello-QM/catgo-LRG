@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { PymatgenStructure } from '$lib'
   import type { V2Task } from '$lib/api/workflow-v2'
   import {
@@ -14,6 +15,8 @@
   import { NODE_DEFINITIONS } from './node-defs'
   import type { NodeDefinition, ParamDef } from './workflow-types'
   import { parse_xyz, parse_poscar } from '$lib/structure/parse'
+
+  load_i18n_module(`workflow`)
 
   // ── Eagerly load StructurePreview (avoids async rendering issues with Threlte Canvas) ──
   let StructurePreviewComponent = $state<typeof import('$lib/structure/StructurePreview.svelte').default | null>(null)
@@ -51,7 +54,7 @@
   let confirming = $state(false)
 
   // ── Derived helpers ──
-  let task_label = $derived(task?.name ?? task?.task_type ?? 'Task Structure')
+  let task_label = $derived(task?.name ?? task?.task_type ?? t(`workflow.task_structure`))
   let task_type = $derived(task?.task_type ?? '')
   let is_editable = $derived(task ? ['WAITING', 'READY', 'PENDING_REVIEW'].includes(task.status) : false)
   let node_definition = $derived<NodeDefinition | undefined>(NODE_DEFINITIONS[task_type])
@@ -395,15 +398,15 @@
   {#if !task_id}
     <div class="ete-empty">
       <span class="ete-empty-icon">&#x1F4CB;</span>
-      <span>Select a task to view details</span>
+      <span>{t(`workflow.select_task_details`)}</span>
     </div>
   {:else if loading && !task}
-    <div class="ete-loading">Loading task...</div>
+    <div class="ete-loading">{t(`workflow.loading_task`)}</div>
   {:else if error && !task}
     <div class="ete-error">
       <span class="ete-error-icon">&#x26A0;</span>
       <span>{error}</span>
-      <button class="ete-retry-btn" onclick={() => task_id && load_task(task_id)}>Retry</button>
+      <button class="ete-retry-btn" onclick={() => task_id && load_task(task_id)}>{t(`workflow.retry`)}</button>
     </div>
   {:else if task}
     <!-- Header -->
@@ -413,7 +416,7 @@
         <span class="ete-badge" style:background={get_status_color(task.status)}>{task.status}</span>
       </div>
       {#if onclose}
-        <button class="ete-close-btn" onclick={onclose} title="Close">&times;</button>
+        <button class="ete-close-btn" onclick={onclose} title={t(`workflow.close`)}>&times;</button>
       {/if}
     </div>
 
@@ -425,9 +428,9 @@
     <!-- PENDING_REVIEW banner -->
     {#if task.status === 'PENDING_REVIEW'}
       <div class="ete-review-banner">
-        <span>This task is awaiting your review before proceeding.</span>
+        <span>{t(`workflow.task_awaiting_review`)}</span>
         <button class="ete-confirm-btn" onclick={handle_confirm} disabled={confirming}>
-          {confirming ? 'Confirming...' : 'Confirm & Continue'}
+          {confirming ? t(`workflow.confirming`) : t(`workflow.confirm_continue`)}
         </button>
       </div>
     {/if}
@@ -435,7 +438,7 @@
     <!-- Error banner -->
     {#if task.error_message}
       <div class="ete-error-banner">
-        <strong>Error:</strong> {task.error_message}
+        <strong>{t(`workflow.error_label`)}</strong> {task.error_message}
       </div>
     {/if}
 
@@ -445,12 +448,12 @@
         class="ete-tab"
         class:ete-tab-active={active_tab === 'structure'}
         onclick={() => active_tab = 'structure'}
-      >Structure</button>
+      >{t(`workflow.structure`)}</button>
       <button
         class="ete-tab"
         class:ete-tab-active={active_tab === 'monitor'}
         onclick={() => active_tab = 'monitor'}
-      >Monitor</button>
+      >{t(`workflow.monitor`)}</button>
     </div>
 
     <!-- Tab content -->
@@ -463,11 +466,11 @@
               <StructurePreviewComponent structure={preview_structure} />
             {:else if preview_structure}
               <div class="ete-preview-empty">
-                <span>Loading preview...</span>
+                <span>{t(`workflow.loading_preview`)}</span>
               </div>
             {:else}
               <div class="ete-preview-empty">
-                <span>No structure available</span>
+                <span>{t(`workflow.no_structure_available`)}</span>
               </div>
             {/if}
           </div>
@@ -475,7 +478,7 @@
           {#if preview_structure}
             <div class="ete-structure-actions">
               <button class="ete-action-btn primary" onclick={open_full_editor}>
-                Open Full Editor
+                {t(`workflow.open_full_editor`)}
               </button>
               <button class="ete-action-btn" onclick={() => {
                 if (preview_structure) {
@@ -484,13 +487,13 @@
                   pending_open_structure.seq++
                 }
               }}>
-                New Tab
+                {t(`workflow.new_tab`)}
               </button>
             </div>
             <div class="ete-structure-info">
               <span>
-                {output_structure ? 'Output' : 'Input'} &middot;
-                {preview_structure.sites?.length ?? 0} atoms
+                {output_structure ? t(`workflow.output`) : t(`workflow.input`)} &middot;
+                {t(`workflow.atom_count_plain`, { n: preview_structure.sites?.length ?? 0 })}
                 {#if preview_structure.lattice}
                   &middot; {format_lattice(preview_structure)}
                 {/if}
@@ -501,7 +504,7 @@
           <!-- Task-specific embedded tool panes -->
           {#if task_type === 'slab_gen' && is_editable && input_structure}
             <div class="ete-tool-section">
-              <div class="ete-tool-header">Slab Cutter</div>
+              <div class="ete-tool-header">{t(`workflow.slab_cutter`)}</div>
               {#await import('$lib/structure/MillerSlabCutterPane.svelte') then mod}
                 <mod.default
                   structure={preview_structure ?? undefined}
@@ -516,7 +519,7 @@
 
           {#if task_type === 'adsorbate_place' && is_editable && preview_structure}
             <div class="ete-tool-section">
-              <div class="ete-tool-header">Adsorbate Placement</div>
+              <div class="ete-tool-header">{t(`workflow.adsorbate_placement`)}</div>
               {#await import('$lib/structure/AdsorbatePlacementPane.svelte') then mod}
                 <mod.default
                   structure={preview_structure ?? undefined}
@@ -534,7 +537,7 @@
               <div class="ete-params-error">{params_error}</div>
             {/if}
             {#if params_saving}
-              <div class="ete-params-saving">Saving...</div>
+              <div class="ete-params-saving">{t(`workflow.saving`)}</div>
             {/if}
 
             {#if node_definition?.param_schema?.length}
@@ -556,7 +559,7 @@
                         <button class="ete-toggle-btn" class:on={bool_val}
                           disabled={!is_editable}
                           onclick={() => { save_param(param.key, String(!bool_val)) }}>
-                          {bool_val ? 'ON' : 'OFF'}
+                          {bool_val ? t(`workflow.on`) : t(`workflow.off`)}
                         </button>
                       {:else if param.type === 'select' && param.options}
                         <select class="ete-param-select" disabled={!is_editable}
@@ -626,10 +629,10 @@
     <!-- Footer info -->
     <div class="ete-footer">
       {#if task.hpc_job_id}
-        <span class="ete-footer-item">Job: {task.hpc_job_id}</span>
+        <span class="ete-footer-item">{t(`workflow.job_label`, { id: task.hpc_job_id })}</span>
       {/if}
       {#if task.retry_count > 0}
-        <span class="ete-footer-item">Retries: {task.retry_count}</span>
+        <span class="ete-footer-item">{t(`workflow.retries_count`, { n: task.retry_count })}</span>
       {/if}
       {#if task.created_at}
         <span class="ete-footer-item">{new Date(task.created_at).toLocaleString()}</span>
@@ -641,7 +644,7 @@
       <div class="ete-file-overlay">
         <div class="ete-file-header">
           <span class="ete-file-path" title={file_editor_path}>{file_editor_path}</span>
-          <button class="ete-file-close" onclick={() => { show_file_editor = false }} title="Close (Esc)">
+          <button class="ete-file-close" onclick={() => { show_file_editor = false }} title={t(`workflow.close_esc`)}>
             &times;
           </button>
         </div>

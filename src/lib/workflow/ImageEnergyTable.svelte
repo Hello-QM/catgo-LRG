@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module(`workflow`)
+
   interface Props {
     image_energies: Record<number, Array<[number, number]>>
     selected_iteration?: number | null
@@ -46,9 +50,9 @@
 <div class="neb-table-container">
   <div class="neb-table-controls">
     {#if latest_iteration !== null}
-      <label class="neb-table-label">Iteration</label>
+      <label class="neb-table-label">{t(`workflow.iteration`)}</label>
       <select class="neb-table-select" bind:value={selected}>
-        <option value={null}>Latest ({latest_iteration})</option>
+        <option value={null}>{t(`workflow.latest_iteration`, { n: latest_iteration })}</option>
         {#each iterations as iter}
           <option value={iter}>{iter}</option>
         {/each}
@@ -64,7 +68,7 @@
             <th>Img</th>
             <th>E (Eh)</th>
             <th>ΔE (kcal/mol)</th>
-            {#if prev_images}<th>δE vs prev iter</th>{/if}
+            {#if prev_images}<th>{t(`workflow.delta_e_vs_prev_iter`)}</th>{/if}
           </tr>
         </thead>
         <tbody>
@@ -87,7 +91,7 @@
       </table>
     </div>
   {:else}
-    <div class="neb-table-empty">No data for selected iteration</div>
+    <div class="neb-table-empty">{t(`workflow.no_data_selected_iteration`)}</div>
   {/if}
 </div>
 

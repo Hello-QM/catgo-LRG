@@ -16,6 +16,7 @@
   } from '$lib/plot'
   import { ScatterPlot } from '$lib/plot'
   import { SvelteMap } from 'svelte/reactivity'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import * as helpers from './helpers'
   import type { BasePhaseDiagramProps } from './index'
   import { default_controls, default_pd_config, PD_STYLE } from './index'
@@ -24,6 +25,8 @@
   import StructurePopup from './StructurePopup.svelte'
   import * as thermo from './thermodynamics'
   import type { HoverData3D, PhaseEntry, PlotEntry3D } from './types'
+
+  load_i18n_module(`structure`)
 
   // Binary phase diagram rendered as energy vs composition (x in [0, 1])
   let {
@@ -483,7 +486,7 @@
       event.preventDefault()
       drag_over = false
     }}
-    aria-label="Binary phase diagram visualization"
+    aria-label={t(`structure.phase_binary_visualization`)}
     series={scatter_series}
     bind:display
     x_axis={{
@@ -561,7 +564,7 @@
         <button
           type="button"
           onclick={reset_all}
-          title="Reset view and settings"
+          title={t(`structure.phase_reset_view_settings`)}
           class="reset-camera-btn"
         >
           <Icon icon="Reset" />
@@ -621,7 +624,7 @@
       <div class="drag-overlay">
         <div class="drag-message">
           <Icon icon="Info" />
-          <span>Drop JSON file to load phase diagram data</span>
+          <span>{t(`structure.phase_drop_json_load_data`)}</span>
         </div>
       </div>
     {/if}

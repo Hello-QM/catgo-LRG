@@ -1570,6 +1570,20 @@ const structure: Record<string, string> = {
   phase_hull_distance_ev_atom: `Hull Distance (eV/atom)`,
   phase_max_above_hull: `Max above hull`,
   phase_avg_above_hull: `Avg above hull`,
+  phase_binary_visualization: `Binary phase diagram visualization`,
+  phase_ternary_visualization: `Ternary phase diagram visualization`,
+  phase_visualization: `Phase diagram visualization`,
+  phase_energy_above_hull_ev_atom: `Energy above hull (eV/atom)`,
+  phase_formation_energy_ev_atom: `Formation energy (eV/atom)`,
+  phase_reset_view_settings: `Reset view and settings`,
+  phase_reset_camera_r_key: `Reset camera view (R key)`,
+  phase_drop_json_load_data: `Drop JSON file to load phase diagram data`,
+
+  // Pathway controls
+  pathway_surface_label: `Surface`,
+  pathway_surface_n: `Surface {n}`,
+  pathway_label: `Pathway`,
+  pathway_step_label: `Step`,
 
   // Trajectory loader
   trajectory_load_title: `Load Trajectory`,

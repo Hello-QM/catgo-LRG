@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { EnrichedResult } from '$lib/api/project'
+
+  load_i18n_module(`workflow`)
 
   let {
     results = [],
@@ -28,23 +31,23 @@
   }
 
   const axis_options: AxisOption[] = [
-    { key: `formula`, label: `Formula`, numeric: false },
-    { key: `energy`, label: `Energy (eV)`, numeric: true },
-    { key: `energy_per_atom`, label: `E/atom (eV)`, numeric: true },
-    { key: `natoms`, label: `N atoms`, numeric: true },
-    { key: `volume`, label: `Volume (\u00c5\u00b3)`, numeric: true },
+    { key: `formula`, label: `workflow.results_col_formula`, numeric: false },
+    { key: `energy`, label: `workflow.results_col_energy`, numeric: true },
+    { key: `energy_per_atom`, label: `workflow.results_col_energy_atom`, numeric: true },
+    { key: `natoms`, label: `workflow.results_col_n_atoms`, numeric: true },
+    { key: `volume`, label: `workflow.results_col_volume`, numeric: true },
     { key: `a`, label: `a (\u00c5)`, numeric: true },
     { key: `b`, label: `b (\u00c5)`, numeric: true },
     { key: `c`, label: `c (\u00c5)`, numeric: true },
-    { key: `node_type`, label: `Node Type`, numeric: false },
-    { key: `workflow_name`, label: `Workflow`, numeric: false },
-    { key: `step_label`, label: `Step`, numeric: false },
-    { key: `frequencies`, label: `Vibrational Freq (cm\u207b\u00b9)`, numeric: true },
-    { key: `absorption_spectrum`, label: `UV-Vis Absorption`, numeric: true },
-    { key: `ir_histogram`, label: `IR Intensity Histogram`, numeric: true },
-    { key: `opt_convergence`, label: `Opt Convergence`, numeric: true },
-    { key: `neb_profile`, label: `NEB Energy Profile`, numeric: true },
-    { key: `irc_profile`, label: `IRC Energy Profile`, numeric: true },
+    { key: `node_type`, label: `workflow.results_col_node_type`, numeric: false },
+    { key: `workflow_name`, label: `workflow.results_col_workflow`, numeric: false },
+    { key: `step_label`, label: `workflow.results_col_step`, numeric: false },
+    { key: `frequencies`, label: `workflow.plot_axis_vibrational_freq`, numeric: true },
+    { key: `absorption_spectrum`, label: `workflow.plot_axis_uvvis_absorption`, numeric: true },
+    { key: `ir_histogram`, label: `workflow.plot_axis_ir_intensity_histogram`, numeric: true },
+    { key: `opt_convergence`, label: `workflow.plot_axis_opt_convergence`, numeric: true },
+    { key: `neb_profile`, label: `workflow.plot_axis_neb_energy_profile`, numeric: true },
+    { key: `irc_profile`, label: `workflow.plot_axis_irc_energy_profile`, numeric: true },
   ]
 
   const OPT_TYPES = new Set([`orca_opt`, `geo_opt`])
@@ -770,18 +773,18 @@
   <!-- Controls bar -->
   <div class="controls-bar">
     <div class="control-group">
-      <label>Type</label>
+      <label>{t(`workflow.type`)}</label>
       <select bind:value={plot_type}>
-        <option value="bar">Bar</option>
-        <option value="scatter">Scatter</option>
-        <option value="line">Line</option>
+        <option value="bar">{t(`workflow.bar`)}</option>
+        <option value="scatter">{t(`workflow.scatter`)}</option>
+        <option value="line">{t(`workflow.line`)}</option>
       </select>
     </div>
     <div class="control-group">
       <label>X</label>
       <select bind:value={x_axis}>
         {#each axis_options as opt}
-          <option value={opt.key}>{opt.label}</option>
+          <option value={opt.key}>{t(opt.label)}</option>
         {/each}
       </select>
     </div>
@@ -789,24 +792,24 @@
       <label>Y</label>
       <select bind:value={y_axis}>
         {#each axis_options.filter(o => o.numeric) as opt}
-          <option value={opt.key}>{opt.label}</option>
+          <option value={opt.key}>{t(opt.label)}</option>
         {/each}
       </select>
     </div>
     <div class="control-group">
-      <label>Color</label>
+      <label>{t(`workflow.color`)}</label>
       <select bind:value={color_by}>
         {#each color_options as opt}
-          <option value={opt.key}>{opt.label}</option>
+          <option value={opt.key}>{t(opt.label)}</option>
         {/each}
       </select>
     </div>
     <div class="control-group">
-      <label>Sort</label>
+      <label>{t(`workflow.sort`)}</label>
       <select bind:value={sort_mode}>
-        <option value="none">None</option>
-        <option value="x">By X</option>
-        <option value="y">By Y</option>
+        <option value="none">{t(`workflow.none`)}</option>
+        <option value="x">{t(`workflow.by_x`)}</option>
+        <option value="y">{t(`workflow.by_y`)}</option>
       </select>
     </div>
 
@@ -814,42 +817,42 @@
 
     <!-- Presets -->
     <div class="presets">
-      <button class="preset-btn" onclick={() => apply_preset(`energy_comparison`)}>Energy Compare</button>
-      <button class="preset-btn" onclick={() => apply_preset(`volume_vs_energy`)}>Vol vs E</button>
-      <button class="preset-btn" onclick={() => apply_preset(`lattice_constants`)}>Lattice</button>
+      <button class="preset-btn" onclick={() => apply_preset(`energy_comparison`)}>{t(`workflow.preset_energy_compare`)}</button>
+      <button class="preset-btn" onclick={() => apply_preset(`volume_vs_energy`)}>{t(`workflow.preset_vol_vs_e`)}</button>
+      <button class="preset-btn" onclick={() => apply_preset(`lattice_constants`)}>{t(`workflow.preset_lattice`)}</button>
       {#if has_frequency_data()}
-        <button class="preset-btn" onclick={() => apply_preset(`vibrational_frequencies`)}>Frequencies</button>
+        <button class="preset-btn" onclick={() => apply_preset(`vibrational_frequencies`)}>{t(`workflow.preset_frequencies`)}</button>
       {/if}
       {#if has_ir_intensity_data()}
-        <button class="preset-btn" onclick={() => apply_preset(`ir_histogram`)}>IR Intensities</button>
+        <button class="preset-btn" onclick={() => apply_preset(`ir_histogram`)}>{t(`workflow.preset_ir_intensities`)}</button>
       {/if}
       {#if has_uvvis_data()}
-        <button class="preset-btn" onclick={() => apply_preset(`absorption_spectrum`)}>UV-Vis</button>
+        <button class="preset-btn" onclick={() => apply_preset(`absorption_spectrum`)}>{t(`workflow.preset_uvvis`)}</button>
       {/if}
       {#if has_convergence_data()}
-        <button class="preset-btn" onclick={() => apply_preset(`opt_convergence`)}>Opt Convergence</button>
+        <button class="preset-btn" onclick={() => apply_preset(`opt_convergence`)}>{t(`workflow.preset_opt_convergence`)}</button>
       {/if}
       {#if has_neb_data()}
-        <button class="preset-btn" onclick={() => apply_preset(`neb_profile`)}>NEB Profile</button>
+        <button class="preset-btn" onclick={() => apply_preset(`neb_profile`)}>{t(`workflow.preset_neb_profile`)}</button>
       {/if}
       {#if has_irc_data()}
-        <button class="preset-btn" onclick={() => apply_preset(`irc_profile`)}>IRC Profile</button>
+        <button class="preset-btn" onclick={() => apply_preset(`irc_profile`)}>{t(`workflow.preset_irc_profile`)}</button>
       {/if}
     </div>
 
     <div class="control-sep"></div>
 
     <!-- Export -->
-    <button class="export-btn" onclick={export_png} title="Download PNG">PNG</button>
-    <button class="export-btn" onclick={export_svg} title="Download SVG">SVG</button>
+    <button class="export-btn" onclick={export_png} title={t(`workflow.download_png`)}>PNG</button>
+    <button class="export-btn" onclick={export_svg} title={t(`workflow.download_svg`)}>SVG</button>
   </div>
 
   <!-- Plot area -->
   <div class="plot-area">
     {#if results.length === 0}
-      <div class="empty-plot">No data to plot</div>
+      <div class="empty-plot">{t(`workflow.no_data_to_plot`)}</div>
     {:else if !Plotly}
-      <div class="loading-plot">Loading plot library...</div>
+      <div class="loading-plot">{t(`workflow.loading_plot_library`)}</div>
     {:else}
       <div class="plot-container" bind:this={plot_div}></div>
     {/if}

@@ -1,6 +1,9 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { StepForces } from '$lib/api/workflow'
   import * as api from '$lib/api/workflow'
+
+  load_i18n_module(`workflow`)
 
   let {
     workflow_id,
@@ -43,40 +46,40 @@
   async function load_forces() {
     const frames = parse_frames(frame_input)
     if (frames.length === 0) {
-      error = `Invalid frame input`
+      error = t(`workflow.invalid_frame_input`)
       return
     }
     loading = true
     error = null
-    status = `Fetching ${frames.length} frame${frames.length > 1 ? `s` : ``}...`
+    status = t(`workflow.fetching_frames`, { n: frames.length })
 
     try {
       const results: StepForces[] = []
       for (let i = 0; i < frames.length; i++) {
         const ionic_step = frames[i] === -1 ? 0 : frames[i]
         if (frames.length > 1) {
-          status = `Fetching ${i + 1}/${frames.length} (step ${frames[i]})...`
+          status = t(`workflow.fetching_frame_progress`, { current: i + 1, total: frames.length, step: frames[i] })
         }
         const data = await api.get_step_forces(workflow_id, node_id, ionic_step)
         if (!data.success) {
-          error = data.message || (data as any).error || `Failed at step ${frames[i]}`
+          error = data.message || (data as any).error || t(`workflow.failed_at_step`, { n: frames[i] })
           return
         }
         if (!data.forces?.length) {
-          error = `No force data for step ${frames[i]}`
+          error = t(`workflow.no_force_data_step`, { n: frames[i] })
           return
         }
         if (data.total_steps > 0) total_steps = data.total_steps
         results.push(data)
       }
 
-      status = `Loading 3D viewer...`
+      status = t(`workflow.loading_3d_viewer`)
       await new Promise(r => setTimeout(r, 50))
       await onload_forces?.(results)
       if (results.length === 1) {
-        status = `Step ${results[0].step} (${results[0].forces.length} atoms)`
+        status = t(`workflow.step_atoms`, { step: results[0].step, atoms: results[0].forces.length })
       } else {
-        status = `${results.length} frames loaded (trajectory mode)`
+        status = t(`workflow.frames_loaded_trajectory`, { n: results.length })
       }
     } catch (err) {
       error = String(err)
@@ -87,11 +90,11 @@
 </script>
 
 <div class="fv-controls">
-  <div class="sp-section-title">Force Visualization</div>
+  <div class="sp-section-title">{t(`workflow.force_visualization`)}</div>
 
   <div class="fv-frame-row">
     <label class="fv-label">
-      Step
+      {t(`workflow.step`)}
       <input
         type="text"
         class="fv-step-input"
@@ -108,7 +111,7 @@
 
   <div class="fv-action-row">
     <button class="fv-load-btn" onclick={load_forces} disabled={loading}>
-      {loading ? `Loading...` : `Load Forces`}
+      {loading ? t(`workflow.loading`) : t(`workflow.load_forces`)}
     </button>
     {#if status}
       <span class="fv-status">{status}</span>

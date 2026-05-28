@@ -1570,6 +1570,20 @@ const structure: Record<string, string> = {
   phase_hull_distance_ev_atom: `Hull 距离 (eV/atom)`,
   phase_max_above_hull: `最高 above hull`,
   phase_avg_above_hull: `平均 above hull`,
+  phase_binary_visualization: `二元相图可视化`,
+  phase_ternary_visualization: `三元相图可视化`,
+  phase_visualization: `相图可视化`,
+  phase_energy_above_hull_ev_atom: `高于 hull 的能量 (eV/atom)`,
+  phase_formation_energy_ev_atom: `形成能 (eV/atom)`,
+  phase_reset_view_settings: `重置视图和设置`,
+  phase_reset_camera_r_key: `重置相机视图（R 键）`,
+  phase_drop_json_load_data: `拖放 JSON 文件以加载相图数据`,
+
+  // 路径控制
+  pathway_surface_label: `表面`,
+  pathway_surface_n: `表面 {n}`,
+  pathway_label: `路径`,
+  pathway_step_label: `步骤`,
 
   // 轨迹加载入口
   trajectory_load_title: `加载轨迹`,

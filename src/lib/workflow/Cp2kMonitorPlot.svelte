@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t as tr, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { ConvergencePoint } from '$lib/api/workflow'
   import { lazy_load_plotly, make_target_writable, base_config, observe_resize } from './plotly-utils'
   import {
@@ -6,6 +7,8 @@
     CP2K_MD_POTENTIAL_SERIES, CP2K_MD_KINETIC_SERIES, CP2K_MD_CONSERVED_SERIES,
     build_traces, build_single_axis_layout,
   } from './monitor-series'
+
+  load_i18n_module(`workflow`)
 
   let {
     points = [],
@@ -79,20 +82,20 @@
     // Total / Potential / Kinetic / Conserved via the tab bar.
     // Otherwise (OPT, or MD before STEP NUMBER block) → simple Total.
     let series = CP2K_ENERGY_SERIES
-    let ytitle = `Energy (eV)`
+    let ytitle = tr(`workflow.energy_ev`)
     if (mode === `md` && has_md_thermo) {
       if (md_energy_view === `potential`) {
         series = CP2K_MD_POTENTIAL_SERIES
-        ytitle = `Potential Energy (eV)`
+        ytitle = tr(`workflow.cp2k_potential_energy_ev`)
       } else if (md_energy_view === `kinetic`) {
         series = CP2K_MD_KINETIC_SERIES
-        ytitle = `Kinetic Energy (eV)`
+        ytitle = tr(`workflow.cp2k_kinetic_energy_ev`)
       } else if (md_energy_view === `conserved`) {
         series = CP2K_MD_CONSERVED_SERIES
-        ytitle = `Conserved Quantity (eV)`
+        ytitle = tr(`workflow.cp2k_conserved_quantity_ev`)
       } else {
         series = CP2K_ENERGY_SERIES
-        ytitle = `Total Energy (eV)`
+        ytitle = tr(`workflow.cp2k_total_energy_ev`)
       }
     }
     Plotly.react(
@@ -108,7 +111,7 @@
     Plotly.react(
       force_div,
       build_traces(points, CP2K_FORCE_SERIES),
-      build_single_axis_layout({ ytitle: `Force (eV/Å)` }),
+      build_single_axis_layout({ ytitle: tr(`workflow.cp2k_force_ev_a`) }),
       base_config(),
     )
   })
@@ -118,7 +121,7 @@
     Plotly.react(
       temp_div,
       build_traces(points, CP2K_TEMPERATURE_SERIES),
-      build_single_axis_layout({ ytitle: `Temperature (K)` }),
+      build_single_axis_layout({ ytitle: tr(`workflow.cp2k_temperature_k`) }),
       base_config(),
     )
   })
@@ -143,7 +146,7 @@
 
 <div class="monitor-stack">
   {#if running}
-    <div class="live-badge">● LIVE</div>
+    <div class="live-badge">● {tr(`workflow.live`)}</div>
   {/if}
 
   <!-- Energy panel — always shown. In MD mode with thermo data, a tab
@@ -151,20 +154,20 @@
        just shows Total (OPT) or whatever is parsed (pre-STEP-NUMBER MD). -->
   <div class="panel">
     <div class="panel-header">
-      <div class="panel-title">{mode === `md` ? `Energies` : `Energy`}</div>
+      <div class="panel-title">{mode === `md` ? tr(`workflow.energies`) : tr(`workflow.energy`)}</div>
       {#if mode === `md` && has_md_thermo}
         <div class="tab-bar">
           {#each [
-            { id: `total`,     label: `Total` },
-            { id: `potential`, label: `Potential` },
-            { id: `kinetic`,   label: `Kinetic` },
-            { id: `conserved`, label: `Conserved` },
-          ] as t}
+            { id: `total`,     label: tr(`workflow.total`) },
+            { id: `potential`, label: tr(`workflow.potential`) },
+            { id: `kinetic`,   label: tr(`workflow.kinetic`) },
+            { id: `conserved`, label: tr(`workflow.conserved`) },
+          ] as tab}
             <button type="button"
                     class="tab"
-                    class:active={md_energy_view === t.id}
-                    onclick={() => md_energy_view = t.id as any}>
-              {t.label}
+                    class:active={md_energy_view === tab.id}
+                    onclick={() => md_energy_view = tab.id as any}>
+              {tab.label}
             </button>
           {/each}
         </div>
@@ -173,12 +176,12 @@
     <div bind:this={energy_div} class="panel-plot"></div>
     {#if empty}
       <div class="placeholder">
-        <div>{running ? `Waiting for first ${mode === `md` ? `MD` : `optimization`} step…` : `No data yet`}</div>
+        <div>{running ? tr(`workflow.cp2k_waiting_first_step`, { mode: mode === `md` ? `MD` : tr(`workflow.optimization`) }) : tr(`workflow.no_data_yet`)}</div>
         {#if message}
           <div class="placeholder-sub">{message}</div>
         {/if}
         {#if running}
-          <div class="placeholder-sub">Polls every 15 s. Re-parses <code>cp2k.out</code> from HPC.</div>
+          <div class="placeholder-sub">{@html tr(`workflow.cp2k_polling_hint`)}</div>
         {/if}
       </div>
     {/if}
@@ -192,14 +195,13 @@
        placeholder instead of disappearing. -->
   {#if mode === `opt`}
     <div class="panel">
-      <div class="panel-title">Forces</div>
+      <div class="panel-title">{tr(`workflow.forces`)}</div>
       <div bind:this={force_div} class="panel-plot"></div>
       {#if !has_forces}
         <div class="placeholder">
-          <div>{empty ? `Waiting for first step…` : `Waiting for gradient output`}</div>
+          <div>{empty ? tr(`workflow.waiting_first_step`) : tr(`workflow.cp2k_waiting_gradient_output`)}</div>
           <div class="placeholder-sub">
-            CP2K writes <code>Max. gradient</code> / <code>RMS gradient</code> in the per-step
-            <code>Informations at step</code> convergence block.
+            {@html tr(`workflow.cp2k_gradient_hint`)}
           </div>
         </div>
       {/if}
@@ -215,14 +217,13 @@
        on has_temperature in the $effect above. -->
   {#if mode === `md`}
     <div class="panel">
-      <div class="panel-title">Temperature</div>
+      <div class="panel-title">{tr(`workflow.temperature`)}</div>
       <div bind:this={temp_div} class="panel-plot"></div>
       {#if !has_temperature}
         <div class="placeholder">
-          <div>{empty ? `Waiting for first MD step…` : `Waiting for thermostat output`}</div>
+          <div>{empty ? tr(`workflow.waiting_first_md_step`) : tr(`workflow.cp2k_waiting_thermostat_output`)}</div>
           <div class="placeholder-sub">
-            CP2K writes <code>TEMPERATURE [K]</code> in the per-step <code>STEP NUMBER</code> block.
-            Appears after the first MD step's force evaluation completes.
+            {@html tr(`workflow.cp2k_temperature_hint`)}
           </div>
         </div>
       {/if}

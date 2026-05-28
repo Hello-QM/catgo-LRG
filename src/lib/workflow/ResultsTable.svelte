@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import type { EnrichedResult } from '$lib/api/project'
+
+  load_i18n_module(`workflow`)
 
   type SortDir = `asc` | `desc`
   type ColumnKey = keyof EnrichedResult
@@ -47,14 +50,14 @@
   let filter_workflow = $state(``)
 
   const columns: ColumnDef[] = [
-    { key: `formula`, label: `Formula`, width: `100px`, filterable: true },
-    { key: `energy`, label: `Energy (eV)`, width: `110px`, format: (v) => v != null ? Number(v).toFixed(4) : `\u2014` },
-    { key: `energy_per_atom`, label: `E/atom (eV)`, width: `110px`, format: (v) => v != null ? Number(v).toFixed(4) : `\u2014` },
-    { key: `natoms`, label: `N atoms`, width: `70px` },
-    { key: `volume`, label: `Volume (\u00C5\u00B3)`, width: `100px`, format: (v) => v != null ? Number(v).toFixed(2) : `\u2014` },
-    { key: `node_type`, label: `Node Type`, width: `110px`, filterable: true },
-    { key: `workflow_name`, label: `Workflow`, width: `130px`, filterable: true },
-    { key: `step_label`, label: `Step`, width: `110px` },
+    { key: `formula`, label: `workflow.results_col_formula`, width: `100px`, filterable: true },
+    { key: `energy`, label: `workflow.results_col_energy`, width: `110px`, format: (v) => v != null ? Number(v).toFixed(4) : `\u2014` },
+    { key: `energy_per_atom`, label: `workflow.results_col_energy_atom`, width: `110px`, format: (v) => v != null ? Number(v).toFixed(4) : `\u2014` },
+    { key: `natoms`, label: `workflow.results_col_n_atoms`, width: `70px` },
+    { key: `volume`, label: `workflow.results_col_volume`, width: `100px`, format: (v) => v != null ? Number(v).toFixed(2) : `\u2014` },
+    { key: `node_type`, label: `workflow.results_col_node_type`, width: `110px`, filterable: true },
+    { key: `workflow_name`, label: `workflow.results_col_workflow`, width: `130px`, filterable: true },
+    { key: `step_label`, label: `workflow.results_col_step`, width: `110px` },
   ]
 
   const filtered_results = $derived.by(() => {
@@ -126,7 +129,7 @@
 
   function export_csv() {
     const data = selected_keys.size > 0 ? selected_results() : sorted_results
-    const headers = columns.map(c => c.label)
+    const headers = columns.map(c => t(c.label))
     const rows = data.map(r => columns.map(c => {
       const val = r[c.key]
       return val != null ? String(val) : ``
@@ -157,17 +160,17 @@
   <div class="toolbar">
     <div class="toolbar-left">
       <span class="result-count">
-        {filtered_results.length} results
+        {t(`workflow.results_count`, { n: filtered_results.length })}
         {#if selected_keys.size > 0}
-          ({selected_keys.size} selected)
+          ({t(`workflow.results_selected`, { n: selected_keys.size })})
         {/if}
       </span>
-      <button class="tool-btn" onclick={select_all} title="Select all">Select All</button>
-      <button class="tool-btn" onclick={clear_selection} title="Clear selection" disabled={selected_keys.size === 0}>Clear</button>
+      <button class="tool-btn" onclick={select_all} title={t(`workflow.select_all`)}>{t(`workflow.select_all`)}</button>
+      <button class="tool-btn" onclick={clear_selection} title={t(`workflow.clear_selection`)} disabled={selected_keys.size === 0}>{t(`workflow.clear`)}</button>
     </div>
     <div class="toolbar-right">
-      <button class="tool-btn" onclick={export_csv} title="Export CSV">CSV</button>
-      <button class="tool-btn" onclick={export_json} title="Export JSON">JSON</button>
+      <button class="tool-btn" onclick={export_csv} title={t(`workflow.export_csv`)}>CSV</button>
+      <button class="tool-btn" onclick={export_json} title={t(`workflow.export_json`)}>JSON</button>
     </div>
   </div>
 
@@ -183,7 +186,7 @@
               {#if col.filterable}
                 <input
                   class="filter-input"
-                  placeholder="Filter..."
+                  placeholder={t(`workflow.filter_placeholder`)}
                   oninput={(e) => {
                     const value = (e.currentTarget as HTMLInputElement).value
                     if (col.key === `formula`) filter_formula = value
@@ -207,13 +210,13 @@
           </th>
           {#each columns as col}
             <th style="width: {col.width}" class="sortable" onclick={() => toggle_sort(col.key)}>
-              {col.label}
+              {t(col.label)}
               {#if sort_key === col.key}
                 <span class="sort-arrow">{sort_dir === `asc` ? `\u25B2` : `\u25BC`}</span>
               {/if}
             </th>
           {/each}
-          <th class="actions-col">Actions</th>
+          <th class="actions-col">{t(`workflow.actions`)}</th>
         </tr>
       </thead>
       <tbody>
@@ -234,11 +237,11 @@
                 {#if col.key === `node_type`}
                   <span class="node-badge">{row[col.key]}</span>
                 {:else if col.key === `natoms` && FREQ_TYPES.has(row.node_type)}
-                  <span class="meta-value" title="Vibrational modes">{row.frequencies?.length ?? 0} modes</span>
+                  <span class="meta-value" title={t(`workflow.vibrational_modes`)}>{t(`workflow.results_modes`, { n: row.frequencies?.length ?? 0 })}</span>
                 {:else if col.key === `natoms` && UVVIS_TYPES.has(row.node_type)}
-                  <span class="meta-value" title="Electronic transitions">{row.absorption_states?.length ?? 0} states</span>
+                  <span class="meta-value" title={t(`workflow.electronic_transitions`)}>{t(`workflow.results_states`, { n: row.absorption_states?.length ?? 0 })}</span>
                 {:else if col.key === `volume` && FREQ_TYPES.has(row.node_type)}
-                  <span class="meta-value" title="Imaginary frequencies">{row.num_imaginary ?? 0} imag</span>
+                  <span class="meta-value" title={t(`workflow.imaginary_frequencies`)}>{t(`workflow.results_imag`, { n: row.num_imaginary ?? 0 })}</span>
                 {:else if col.key === `volume` && UVVIS_TYPES.has(row.node_type)}
                   <span class="meta-value" title="Brightest transition">{row.brightest_wavelength_nm != null ? `\u03BB ${Number(row.brightest_wavelength_nm).toFixed(0)} nm` : `\u2014`}</span>
                 {:else if col.key === `energy_per_atom` && (FREQ_TYPES.has(row.node_type) || UVVIS_TYPES.has(row.node_type) || SP_TYPES.has(row.node_type))}
@@ -254,12 +257,12 @@
               <button class="action-btn toggle-detail" onclick={(e) => {
                 e.stopPropagation();
                 expanded_row_id = expanded_row_id === row.step_id ? null : row.step_id;
-              }} title={expanded_row_id === row.step_id ? 'Hide' : 'Show details'}>
+              }} title={expanded_row_id === row.step_id ? t(`workflow.hide`) : t(`workflow.show_details`)}>
                 {expanded_row_id === row.step_id ? '▼' : '▶'}
               </button>
               {#if on_view_step}
-                <button class="action-btn" onclick={() => on_view_step(row.workflow_id, row.step_id)} title="View step">
-                  Step
+                <button class="action-btn" onclick={() => on_view_step(row.workflow_id, row.step_id)} title={t(`workflow.view_step`)}>
+                  {t(`workflow.step`)}
                 </button>
               {/if}
             </td>
@@ -281,7 +284,7 @@
                       : '#3b82f6'}
                     <!-- Opt convergence energy plot -->
                     <div class="plot-container">
-                      <h4>{is_irc ? 'IRC Reaction Coordinate' : 'Optimization Progress'}</h4>
+                      <h4>{is_irc ? t(`workflow.irc_reaction_coordinate`) : t(`workflow.optimization_progress`)}</h4>
                       <svg width="400" height="120" class="convergence-chart">
                         {#each conv_pts as pt, i}
                           <line x1={x_for(i)} y1="100" x2={x_for(i)} y2={y_for(pt.energy || 0)} stroke={pt_color(i)} stroke-width="2" />
@@ -299,20 +302,20 @@
                           <circle cx={x_for(ts_idx)} cy={y_for(conv_pts[ts_idx].energy || 0)} r="4" fill="#ef4444" stroke="#dc2626" stroke-width="1" />
                           <!-- Legend -->
                           <circle cx="30" cy="13" r="4" fill="#8b5cf6" />
-                          <text x="38" y="17" font-size="12" fill="#64748b">Backward</text>
+                          <text x="38" y="17" font-size="12" fill="#64748b">{t(`workflow.irc_backward`)}</text>
                           <circle cx="105" cy="13" r="4" fill="#ef4444" />
                           <text x="113" y="17" font-size="12" fill="#64748b">TS</text>
                           <circle cx="135" cy="13" r="4" fill="#10b981" />
-                          <text x="143" y="17" font-size="12" fill="#64748b">Forward</text>
+                          <text x="143" y="17" font-size="12" fill="#64748b">{t(`workflow.irc_forward`)}</text>
                         {/if}
                         <line x1="20" y1="100" x2={x_for(conv_pts.length)} y2="100" stroke="#64748b" stroke-width="1" />
-                        <text x="10" y="115" font-size="13" fill="#94a3b8">Step</text>
+                        <text x="10" y="115" font-size="13" fill="#94a3b8">{t(`workflow.step`)}</text>
                       </svg>
                     </div>
                   {:else if FREQ_TYPES.has(row.node_type) && row.frequencies?.length}
                     <!-- Frequency table + spectrum -->
                     <div class="plot-container">
-                      <h4>Vibrational Frequencies ({row.frequencies.length} modes, {row.num_imaginary || 0} imaginary)</h4>
+                      <h4>{t(`workflow.vibrational_frequencies_title`, { modes: row.frequencies.length, imaginary: row.num_imaginary || 0 })}</h4>
                       <div class="freq-table-wrapper">
                         <div class="freq-list">
                           {#each row.frequencies as freq}
@@ -337,7 +340,7 @@
                   {:else if UVVIS_TYPES.has(row.node_type) && row.absorption_states?.length}
                     <!-- UV-Vis absorption spectrum -->
                     <div class="plot-container">
-                      <h4>Absorption Spectrum</h4>
+                      <h4>{t(`workflow.absorption_spectrum`)}</h4>
                       <svg width="500" height="100" class="spectrum-chart">
                         {#each row.absorption_states as state, i}
                           <line x1={10 + (state.wavelength_nm || 300 - 200) / 300 * 480} y1="80" x2={10 + (state.wavelength_nm || 300 - 200) / 300 * 480} y2={80 - (state.oscillator_strength || 0) * 40} stroke="#8b5cf6" stroke-width="1.5" opacity="0.8" />
@@ -348,7 +351,7 @@
                       </svg>
                     </div>
                   {:else}
-                    <span class="no-detail">No plot data available</span>
+                    <span class="no-detail">{t(`workflow.no_plot_data`)}</span>
                   {/if}
                 </div>
               </td>
@@ -362,9 +365,9 @@
   <!-- Pagination -->
   {#if total_pages > 1}
     <div class="pagination">
-      <button class="page-btn" disabled={page === 0} onclick={() => page--}>Prev</button>
-      <span class="page-info">Page {page + 1} of {total_pages}</span>
-      <button class="page-btn" disabled={page >= total_pages - 1} onclick={() => page++}>Next</button>
+      <button class="page-btn" disabled={page === 0} onclick={() => page--}>{t(`workflow.prev`)}</button>
+      <span class="page-info">{t(`workflow.page_of`, { current: page + 1, total: total_pages })}</span>
+      <button class="page-btn" disabled={page >= total_pages - 1} onclick={() => page++}>{t(`workflow.next`)}</button>
     </div>
   {/if}
 </div>
