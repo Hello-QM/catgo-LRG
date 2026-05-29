@@ -163,7 +163,7 @@ If you encounter any issues with CatGo, you can use the built-in bug reporting c
 
 ## 📄 License
 
-This extension is [MIT-Licensed](./license).
+This extension is licensed under the [GNU AGPL-3.0](./license), matching the [catgo-LRG repository](https://github.com/Hello-QM/catgo-LRG).
 
 ## 🔗 Related Projects
 
