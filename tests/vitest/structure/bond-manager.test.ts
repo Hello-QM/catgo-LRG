@@ -166,6 +166,31 @@ describe(`BondManager remove preserves jimage column`, () => {
 		expect(mgr.get_b(0)).toBe(3)
 		expect(mgr.get_jimage(0)).toEqual([2, 2, 2])
 	})
+
+	test(`apply_atom_delete keeps each survivor's own jimage after compaction`, () => {
+		const mgr = new BondManager()
+		// Distinct jimages so a clobber is detectable per-slot.
+		mgr.add_bond(0, 1, BOND_KIND.AUTO, [0, 0, 0]) // slot 0 — survives, no shift
+		mgr.add_bond(2, 3, BOND_KIND.AUTO, [1, 0, 0]) // slot 1 — DROPPED (atom 2 deleted)
+		mgr.add_bond(4, 5, BOND_KIND.AUTO, [0, 0, 0]) // slot 2 — survives, compacts to slot 1
+		mgr.add_bond(6, 7, BOND_KIND.AUTO, [0, 1, 0]) // slot 3 — survives, compacts to slot 2
+		// Delete atom 2: drops the (2,3) bond and forces slots 2,3 to compact
+		// down into slots 1,2 (and reindexes endpoints above index 2).
+		mgr.apply_atom_delete([2])
+		expect(mgr.count).toBe(3)
+		// Slot 0 unchanged.
+		expect(mgr.get_jimage(0)).toEqual([0, 0, 0])
+		// Survivor originally at slot 2 (atoms 4,5 -> 3,4) now in slot 1 — must
+		// keep ITS jimage [0,0,0], not inherit the dropped bond's stale [1,0,0].
+		expect(mgr.get_a(1)).toBe(3)
+		expect(mgr.get_b(1)).toBe(4)
+		expect(mgr.get_jimage(1)).toEqual([0, 0, 0])
+		// Survivor originally at slot 3 (atoms 6,7 -> 5,6) now in slot 2 — must
+		// keep its own jimage [0,1,0], not the prior slot-2 occupant's [0,0,0].
+		expect(mgr.get_a(2)).toBe(5)
+		expect(mgr.get_b(2)).toBe(6)
+		expect(mgr.get_jimage(2)).toEqual([0, 1, 0])
+	})
 })
 
 describe(`BondManager capacity grow preserves jimages`, () => {
