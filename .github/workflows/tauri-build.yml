@@ -12,6 +12,10 @@ on:
         default: false
         type: boolean
 
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+
 jobs:
   build:
     permissions:
