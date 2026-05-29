@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.2] - 2026-05-29
+
+### Added
+- **i18n**: Localized many additional UI surfaces (workflow, file browser, trajectory, phase diagram, plugins, gesture, MD analysis panels).
+
+### Fixed
+- **VS Code extension sidecar 404**: The `catgo-server` binary the extension downloads on first activate is now built on real per-platform runners and attached to each release (`catgo-server-linux-x64` / `-darwin-arm64` / `-win-x64.exe`). Previously these were never produced, so first activate failed with HTTP 404.
+- **Extension license**: Overview/readme now correctly states GNU AGPL-3.0 (was mislabeled MIT), matching the repository.
+
+### Changed
+- **Release CI**: The VS Code extension version is auto-synced from the root `package.json` at publish time, and publish steps now fail loudly on real errors instead of silently swallowing them.
+
 ## [1.1.1] - 2026-05-28
 
 ### Added
