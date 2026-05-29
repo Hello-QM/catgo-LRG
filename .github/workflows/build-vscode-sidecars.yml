@@ -1,0 +1,112 @@
+name: Build VSCode Sidecar Binaries
+
+# The VS Code / Open VSX extension ships WITHOUT the ~463 MB catgo-server
+# binary (Marketplace has a ~100 MB cap). On first activate, src/sidecar.ts
+# downloads the platform-appropriate binary from this release:
+#   https://github.com/Hello-QM/catgo-LRG/releases/download/v<version>/catgo-server-<platform>
+# This workflow builds those binaries on real per-platform runners (a single
+# Linux runner cannot cross-compile a PyInstaller bundle for macOS/Windows)
+# and attaches them to the matching release.
+#
+# Triggers:
+#   - push of a v* tag  → builds + attaches to that tag's release (normal release flow)
+#   - workflow_dispatch → builds + attaches to `tag` input (backfill an existing release,
+#                          e.g. v1.1.1 which shipped without these binaries)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach binaries to (e.g. v1.1.1). Defaults to the pushed tag.'
+        type: string
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            asset_name: catgo-server-linux-x64
+            dist_bin: catgo-server
+          - platform: macos-latest
+            asset_name: catgo-server-darwin-arm64
+            dist_bin: catgo-server
+          - platform: windows-latest
+            asset_name: catgo-server-win-x64.exe
+            dist_bin: catgo-server.exe
+
+    runs-on: ${{ matrix.platform }}
+    name: sidecar (${{ matrix.asset_name }})
+
+    # login shell so the conda env activated by setup-miniconda is on PATH
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --- Python backend toolchain (mirrors tauri-build.yml backend build) ---
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          channels: conda-forge
+          auto-activate-base: false
+          activate-environment: catgo
+
+      - name: Install Python dependencies
+        run: |
+          conda install -y -c conda-forge openbabel pip
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # openbabel comes from conda-forge, not pip
+          grep -iv '^openbabel' server/requirements.txt > reqs_no_ob.txt
+          pip install -r reqs_no_ob.txt
+          rm reqs_no_ob.txt
+
+      # catgo_server.spec bundles the Rust cube-processor binary; build it first
+      # or PyInstaller fails with "Unable to find ...cube-processor".
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build cube-processor
+        run: cargo build --release --manifest-path tools/cube-processor/Cargo.toml
+
+      - name: Build catgo-server (PyInstaller)
+        run: |
+          cd server
+          python -m PyInstaller catgo_server.spec --noconfirm
+
+      - name: Stage sidecar binary
+        run: |
+          cp "server/dist/${{ matrix.dist_bin }}" "${{ matrix.asset_name }}"
+          if [ "${{ runner.os }}" != "Windows" ]; then
+            chmod +x "${{ matrix.asset_name }}"
+          fi
+          ls -la "${{ matrix.asset_name }}"
+
+      - name: Attach sidecar to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag }}"
+          if [ -z "$tag" ]; then tag="${GITHUB_REF_NAME}"; fi
+          echo "Attaching ${{ matrix.asset_name }} to release $tag"
+          # The desktop build (tauri-build.yml) creates the release on tag push;
+          # retry briefly in case this job wins the race, then upload.
+          for i in 1 2 3 4 5; do
+            if gh release view "$tag" >/dev/null 2>&1; then break; fi
+            gh release create "$tag" --title "$tag" --notes "Release $tag" && break || sleep 15
+          done
+          gh release upload "$tag" "${{ matrix.asset_name }}" --clobber

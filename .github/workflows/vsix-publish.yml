@@ -126,7 +126,7 @@ jobs:
           path: extensions/vscode/catgo-*.vsix
           retention-days: 90
 
-      - name: Attach VSIX and sidecar binaries to GitHub Release
+      - name: Attach VSIX to GitHub Release
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,13 +137,8 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 \
             || gh release create "$tag" --title "$tag" --notes "Release $tag"
           gh release upload "$tag" "$vsix" --clobber
-          # Sidecar binaries (linux-x64, darwin-arm64, win-x64) live alongside
-          # the .vsix on the release so `extensions/vscode/src/sidecar.ts` can
-          # fetch the right one for the user's platform on first activate.
-          # The .vsix itself ships without bin/ to stay under the Marketplace
-          # ~100 MB size limit.
-          for f in extensions/vscode/bin/catgo-server-linux-x64 \
-                   extensions/vscode/bin/catgo-server-darwin-arm64 \
-                   extensions/vscode/bin/catgo-server-win-x64.exe; do
-            [ -f "$f" ] && gh release upload "$tag" "$f" --clobber || true
-          done
+          # The platform sidecar binaries (catgo-server-{linux-x64,darwin-arm64,
+          # win-x64.exe}) that src/sidecar.ts downloads on first activate are
+          # built and attached by the separate build-vscode-sidecars.yml
+          # workflow — they can't be produced on this single Linux runner, and
+          # the old `[ -f ] && upload` loop here silently uploaded nothing.
