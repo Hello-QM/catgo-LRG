@@ -156,6 +156,14 @@ export interface InteractionDeps {
   get_on_atoms_manipulated: () => ((event: AtomManipulationEvent) => void) | undefined
   get_on_atoms_deleted: () => ((event: { site_indices: number[] }) => void) | undefined
 
+  /**
+   * Reindex index-keyed edit state (manual bonds / deleted-bond keys / hidden
+   * sites) after an atom delete. Must be called with the OLD-index deleted list
+   * (the `sorted_indices` this path already computes), so the controller has no
+   * direct access to pencil/hidden_sites — it delegates to Structure.svelte.
+   */
+  reindex_edits_after_delete: (deleted: number[]) => void
+
   // ── 原子操作工具 ──
   get_original_atoms_only: (indices: number[]) => number[]
 
@@ -1050,6 +1058,8 @@ export function create_interaction_controller(deps: InteractionDeps) {
             for (const idx of sorted_indices) new_atom_overrides.delete(idx)
             deps.set_atom_opacity_overrides(new_atom_overrides)
           }
+          // Reindex index-keyed edit state with the OLD-index deleted list.
+          deps.reindex_edits_after_delete(sorted_indices)
           deps.set_structure(delete_atoms(structure, sorted_indices))
           deps.get_on_atoms_deleted()?.({ site_indices: sorted_indices })
           deps.set_selected_sites([])

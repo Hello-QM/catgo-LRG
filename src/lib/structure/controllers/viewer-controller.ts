@@ -159,3 +159,88 @@ export function validate_bond_edits(
     deleted_bond_keys: deleted_changed ? valid_deleted : null,
   }
 }
+
+/** Count of deleted indices strictly below `idx` (binary search on a sorted
+ *  ascending array). This is the amount a surviving atom at `idx` shifts down
+ *  when the deleted atoms are removed. */
+function count_deleted_below(sorted_deleted: readonly number[], idx: number): number {
+  let lo = 0
+  let hi = sorted_deleted.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (sorted_deleted[mid] < idx) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+function to_sorted_deleted(deleted_indices: readonly number[] | ReadonlySet<number>): number[] {
+  const arr = deleted_indices instanceof Set ? [...deleted_indices] : [...(deleted_indices as readonly number[])]
+  return arr.sort((a, b) => a - b)
+}
+
+/**
+ * Reindex manual bonds + deleted-bond keys after atom INDICES are deleted.
+ *
+ * Deleting atoms RENUMBERS survivors: a surviving atom at old index `i` moves
+ * to `i - (count of deleted indices below i)`. Bond-edit state keyed by atom
+ * index must follow that shift, NOT merely be pruned (which is all
+ * `validate_bond_edits` does). Without the shift, a survivor bond's renumbered
+ * pair can collide with a STALE deleted-bond key and get filtered out of the
+ * render — the "delete one atom, an unrelated bond vanishes" bug.
+ *
+ * Entries referencing a deleted atom are dropped. Pure: no WASM, no recompute.
+ */
+export function reindex_bond_edits(
+  manual_bonds: ManualBond[],
+  deleted_bond_keys: Set<string>,
+  deleted_indices: readonly number[] | ReadonlySet<number>,
+): { manual_bonds: ManualBond[]; deleted_bond_keys: Set<string> } {
+  const deleted = deleted_indices instanceof Set ? deleted_indices : new Set(deleted_indices)
+  const sorted = to_sorted_deleted(deleted)
+  const shift = (idx: number): number => count_deleted_below(sorted, idx)
+
+  const next_manual: ManualBond[] = []
+  for (const b of manual_bonds) {
+    if (deleted.has(b.site_idx_1) || deleted.has(b.site_idx_2)) continue
+    next_manual.push({ ...b, site_idx_1: b.site_idx_1 - shift(b.site_idx_1), site_idx_2: b.site_idx_2 - shift(b.site_idx_2) })
+  }
+
+  const next_keys = new Set<string>()
+  for (const key of deleted_bond_keys) {
+    // `lo-hi` (home cell) or `lo-hi-dx,dy,dz` (cross-cell jimage; dx may be negative).
+    const m = key.match(/^(\d+)-(\d+)(?:-(.*))?$/)
+    if (!m) { next_keys.add(key); continue } // unrecognized format — leave verbatim
+    const a = Number(m[1])
+    const b = Number(m[2])
+    const suffix = m[3]
+    if (deleted.has(a) || deleted.has(b)) continue
+    const na = a - shift(a)
+    const nb = b - shift(b)
+    const lo = Math.min(na, nb)
+    const hi = Math.max(na, nb)
+    next_keys.add(suffix === undefined ? `${lo}-${hi}` : `${lo}-${hi}-${suffix}`)
+  }
+
+  return { manual_bonds: next_manual, deleted_bond_keys: next_keys }
+}
+
+/**
+ * Reindex a Set of site indices (e.g. `hidden_sites`, selection) after atom
+ * deletion: shift survivors down by the count of deleted indices below them;
+ * drop any index that was itself deleted. Keeps per-site UI state attached to
+ * the same physical atom after renumbering.
+ */
+export function reindex_site_indices(
+  indices: ReadonlySet<number>,
+  deleted_indices: readonly number[] | ReadonlySet<number>,
+): Set<number> {
+  const deleted = deleted_indices instanceof Set ? deleted_indices : new Set(deleted_indices)
+  const sorted = to_sorted_deleted(deleted)
+  const next = new Set<number>()
+  for (const idx of indices) {
+    if (deleted.has(idx)) continue
+    next.add(idx - count_deleted_below(sorted, idx))
+  }
+  return next
+}

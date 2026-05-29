@@ -94,6 +94,13 @@ export interface ContextMenuDeps {
   is_image_atom: (idx: number) => boolean
   get_original_atoms_only: (indices: number[]) => number[]
 
+  /**
+   * Reindex index-keyed edit state (manual bonds / deleted-bond keys / hidden
+   * sites) after an atom delete. Called with the OLD-index deleted list so
+   * survivor edit state follows the renumber instead of going stale.
+   */
+  reindex_edits_after_delete: (deleted: number[]) => void
+
   // ── Phase X6 fast-path hook (null until StructureScene's $effect
   //    populates it; also null when USE_NEW_ATOM_SYSTEM is off). Optional
   //    so tests / legacy callers can skip wiring it. ──
@@ -235,6 +242,8 @@ export function create_context_menu_actions(deps: ContextMenuDeps) {
         const deleted_set = new Set(sorted_indices)
         const next_structure = delete_atoms(structure, sorted_indices)
         deps.get_atom_fast_ops?.()?.try_delete(sorted_indices, next_structure.sites)
+        // Reindex index-keyed edit state with the OLD-index deleted set.
+        deps.reindex_edits_after_delete([...deleted_set])
         deps.set_structure(next_structure)
         deps.get_on_atoms_deleted?.()?.({ site_indices: sorted_indices })
         deps.set_selected_sites(deps.get_selected_sites().filter((idx) => !deleted_set.has(idx)))

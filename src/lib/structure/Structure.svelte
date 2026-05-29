@@ -112,6 +112,8 @@
     build_constraints_section,
     build_charge_label_section,
     validate_bond_edits,
+    reindex_bond_edits,
+    reindex_site_indices,
   } from './controllers/viewer-controller'
   // tool-controller.svelte.ts exists but is not yet wired (template bind: compatibility)
   import StructureToolbar from './StructureToolbar.svelte'
@@ -439,6 +441,9 @@
           const deleted_set = new Set(sorted_indices)
           const next_sites: Site[] = structure.sites.filter((_, i) => !deleted_set.has(i))
           scene_atom_fast_ops?.try_delete(sorted_indices, next_sites)
+          // Reindex index-keyed edit state (manual bonds / deleted-bond keys /
+          // hidden sites) with the OLD-index deleted list before renumbering.
+          reindex_edits_on_delete(sorted_indices)
           structure = delete_atoms(structure, sorted_indices)
           selected_sites = []
         }
@@ -2391,6 +2396,7 @@
     set_context_menu_visible: (v) => { context_menu_visible = v },
     get_on_atoms_manipulated: () => on_atoms_manipulated,
     get_on_atoms_deleted: () => on_atoms_deleted,
+    reindex_edits_after_delete: (deleted) => reindex_edits_on_delete(deleted),
     get_original_atoms_only,
     set_cached_rotation_target: (v) => { cached_rotation_target = v },
     set_saved_selection: (v) => { saved_selection = v },
@@ -2421,6 +2427,20 @@
   })
 
   // (铅笔/键编辑 handler 函数已移到 pencil controller)
+
+  // Reindex index-keyed edit state after an atom delete. Deleting atoms
+  // RENUMBERS the survivors, so any state keyed by atom index (manual bonds,
+  // deleted-bond keys, hidden sites) must be shifted to follow that renumber —
+  // not merely pruned. Without this, a survivor's renumbered bond can collide
+  // with a STALE deleted-bond key and vanish from the render ("delete one atom,
+  // an unrelated bond disappears"). Must be called with the OLD-index deleted
+  // list (the same `sorted_indices` the delete paths already compute).
+  function reindex_edits_on_delete(deleted: number[]) {
+    const r = reindex_bond_edits(pencil.manual_bonds, pencil.deleted_bond_keys, deleted)
+    pencil.manual_bonds = r.manual_bonds
+    pencil.deleted_bond_keys = r.deleted_bond_keys
+    hidden_sites = reindex_site_indices(hidden_sites, deleted)
+  }
 
   // --- 右键菜单动作分发 (controllers/context-menu-actions.ts) ---
   // 右键菜单的所有动作（添加/删除/替换原子、选择、约束、颜色、电荷标签等）由独立模块管理
@@ -2456,6 +2476,7 @@
     push_selection_to_undo,
     is_image_atom,
     get_original_atoms_only,
+    reindex_edits_after_delete: (deleted) => reindex_edits_on_delete(deleted),
     get_on_atom_added: () => on_atom_added,
     get_on_atoms_deleted: () => on_atoms_deleted,
     get_on_atom_replaced: () => on_atom_replaced,
