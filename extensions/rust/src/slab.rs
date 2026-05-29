@@ -1062,6 +1062,56 @@ mod tests {
         );
     }
 
+    fn create_rocksalt_nio() -> Structure {
+        // Rocksalt NiO conventional cubic cell, a = 4.13792322 Å (4 Ni + 4 O)
+        let lattice = Lattice::cubic(4.13792322);
+        let frac_coords = vec![
+            Vector3::new(0.0, 0.0, 0.0), // Ni
+            Vector3::new(0.5, 0.5, 0.0), // Ni
+            Vector3::new(0.5, 0.0, 0.5), // Ni
+            Vector3::new(0.0, 0.5, 0.5), // Ni
+            Vector3::new(0.0, 0.0, 0.5), // O
+            Vector3::new(0.5, 0.0, 0.0), // O
+            Vector3::new(0.0, 0.5, 0.0), // O
+            Vector3::new(0.5, 0.5, 0.5), // O
+        ];
+        let ni = Species::from_string("Ni").unwrap();
+        let o = Species::from_string("O").unwrap();
+        let occ = vec![
+            SiteOccupancy::ordered(ni), SiteOccupancy::ordered(ni),
+            SiteOccupancy::ordered(ni), SiteOccupancy::ordered(ni),
+            SiteOccupancy::ordered(o), SiteOccupancy::ordered(o),
+            SiteOccupancy::ordered(o), SiteOccupancy::ordered(o),
+        ];
+        Structure::try_new_from_occupancies(lattice, occ, frac_coords).unwrap()
+    }
+
+    fn count_species(s: &Structure, sym: &str) -> usize {
+        s.site_occupancies
+            .iter()
+            .filter(|o| o.dominant_species().element.symbol() == sym)
+            .count()
+    }
+
+    /// Rocksalt (110) is a neutral, stoichiometric surface: every slab must keep
+    /// Ni:O = 1:1. Regression test for the species-blind primitive reduction that
+    /// accepted the c/2 cation→anion glide and deleted one whole species.
+    #[test]
+    fn nio_110_is_stoichiometric() {
+        let bulk = create_rocksalt_nio();
+        for n in [2usize, 3, 4] {
+            let slab = generate_slab_layers(&bulk, [1, 1, 0], n, 0, 15.0, [1, 1]).unwrap();
+            let ni = count_species(&slab, "Ni");
+            let o = count_species(&slab, "O");
+            eprintln!(
+                "NiO(110) layers={n}: Ni={ni} O={o} total={}",
+                slab.num_sites()
+            );
+            assert!(ni > 0 && o > 0, "layers={n}: a species was deleted (Ni={ni} O={o})");
+            assert_eq!(ni, o, "layers={n}: non-stoichiometric Ni={ni} O={o}");
+        }
+    }
+
     #[test]
     fn test_normalize_miller() {
         assert_eq!(normalize_miller([2, 4, 6]), [1, 2, 3]);
