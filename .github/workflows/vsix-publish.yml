@@ -58,6 +58,16 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
+      # Single source of truth for the version: the VS Code extension always
+      # inherits the root package.json version at publish time. Prevents
+      # shipping a stale .vsix when a release bump forgets to update
+      # extensions/vscode/package.json (this happened for v1.1.1).
+      - name: Sync extension version from root package.json
+        run: |
+          root_ver=$(node -p "require('./package.json').version")
+          npm --prefix extensions/vscode pkg set version="$root_ver"
+          echo "Extension version synced to $root_ver"
+
       - name: Build extension
         working-directory: extensions/vscode
         run: pnpm build
@@ -66,25 +76,48 @@ jobs:
         working-directory: extensions/vscode
         run: pnpm dlx @vscode/vsce package --no-dependencies
 
+      # Real publish failures (bad token, network, packaging) now fail the job
+      # loudly instead of being swallowed by continue-on-error. The ONLY
+      # tolerated error is "already published" — keeps re-tagging the same
+      # version idempotent without masking genuine breakage.
       - name: Publish to VS Code Marketplace
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
-        # Don't fail the whole job (and skip the release-attach below) when the
-        # version is already published — e.g. re-tagging the same version.
-        continue-on-error: true
         working-directory: extensions/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix
+        run: |
+          set +e
+          out=$(pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            if echo "$out" | grep -qiE "already (exists|published)"; then
+              echo "::warning::Version already on the VS Code Marketplace — treating as a no-op (idempotent re-tag)."
+            else
+              echo "::error::vsce publish failed (exit $code)."
+              exit "$code"
+            fi
+          fi
 
       - name: Publish to Open VSX (Cursor / VSCodium / Theia)
         if: ${{ (github.event_name == 'push' || inputs.dry_run == false) && env.OVSX_PAT != '' }}
-        continue-on-error: true
         working-directory: extensions/vscode
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
+          set +e
           vsix=$(ls catgo-*.vsix | head -1)
-          pnpm dlx ovsx publish "$vsix" --no-dependencies
+          out=$(pnpm dlx ovsx publish "$vsix" --no-dependencies 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            if echo "$out" | grep -qiE "already (exists|published)"; then
+              echo "::warning::Version already on Open VSX — treating as a no-op (idempotent re-tag)."
+            else
+              echo "::error::ovsx publish failed (exit $code)."
+              exit "$code"
+            fi
+          fi
 
       - name: Upload VSIX as workflow artifact
         uses: actions/upload-artifact@v4
