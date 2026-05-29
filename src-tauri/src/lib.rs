@@ -1,4 +1,3 @@
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
@@ -123,9 +122,53 @@ fn get_opened_files(state: tauri::State<'_, Mutex<OpenedFiles>>) -> Vec<String> 
     }
 }
 
+/// Buffer file paths from a process's argv into `OpenedFiles` and notify the
+/// frontend. Powers the Windows/Linux file-association "Open with CatGo" path:
+/// cold start reads `std::env::args()`; a warm start (instance already running)
+/// receives the second process's argv via tauri-plugin-single-instance. macOS/iOS
+/// deliver opened files through `RunEvent::Opened` instead, so this is compiled
+/// only off-Apple.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn buffer_file_args<R: tauri::Runtime, I: IntoIterator<Item = String>>(
+    app: &tauri::AppHandle<R>,
+    args: I,
+) {
+    let paths: Vec<String> = args
+        .into_iter()
+        .skip(1) // argv[0] is the executable
+        .filter(|a| !a.starts_with('-')) // ignore CLI flags
+        .filter(|a| std::path::Path::new(a).exists())
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    log::info!("[CatGo] File association opened (argv): {:?}", paths);
+    if let Ok(mut state) = app.state::<Mutex<OpenedFiles>>().lock() {
+        state.paths.extend(paths);
+    }
+    // Frontend listens for "file-opened" (warm start) and also eagerly drains
+    // get_opened_files() on mount (cold start); std::mem::take makes them idempotent.
+    let _ = app.emit("file-opened", ());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // tauri-plugin-single-instance MUST be the first plugin registered (Tauri v2).
+    // When CatGo is the default app for .cif/.poscar/… and one is already running,
+    // the OS launches a second process with the file path in argv; this plugin
+    // forwards that argv to the running instance, which loads the file and focuses.
+    // (Cold start is handled in .setup() below; macOS/iOS use RunEvent::Opened.)
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        buffer_file_args(app, argv);
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+    }));
+    let app = builder
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -199,6 +242,13 @@ pub fn run() {
                     .level(log::LevelFilter::Info)
                     .build(),
             )?;
+
+            // Cold-start file-association launch (Windows/Linux): the first process
+            // receives the opened file path in its own argv. Buffer it so the
+            // frontend's drain_opened_files() loads it on mount. (macOS/iOS deliver
+            // this via RunEvent::Opened.)
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            buffer_file_args(app.handle(), std::env::args());
 
             log::info!("[CatGo] Desktop app started");
 

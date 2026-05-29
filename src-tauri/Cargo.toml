@@ -41,3 +41,9 @@ objc2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"
+
+# Desktop-only (Windows/Linux): single-instance forwards the file-association
+# launch argv to the running instance. macOS/iOS use RunEvent::Opened instead,
+# so the crate is not pulled in on Apple targets.
+[target.'cfg(not(any(target_os = "macos", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"
