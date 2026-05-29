@@ -22,6 +22,7 @@
     unique_elements = [],
     generated_output = $bindable<Record<string, string>>({}),
     generation_error = $bindable<string | null>(null),
+    generation_notice = $bindable<{ text: string; severity: 'info' | 'warning' } | null>(null),
     active_file = $bindable(''),
     on_request_vacuum_box = undefined,
   }: {
@@ -30,6 +31,7 @@
     unique_elements?: string[]
     generated_output?: Record<string, string>
     generation_error?: string | null
+    generation_notice?: { text: string; severity: 'info' | 'warning' } | null
     active_file?: string
     on_request_vacuum_box?: () => void
   } = $props()
@@ -145,6 +147,7 @@
     if (!structure) { generation_error = 'No structure'; return }
     vasp_generating = true
     generation_error = null
+    generation_notice = null
     vasp_files = null
     try {
       let kpoints: number[][] | undefined = undefined
@@ -274,7 +277,10 @@
       if (files.incar_nelect) generated_output['INCAR_NELECT'] = files.incar_nelect
       active_file = vasp_constant_potential !== 'none' ? 'INCAR_NELECT' : 'INCAR'
     } catch (e) {
-      // Backend unavailable — generate client-side with $lib/io/vasp-input.
+      // Backend unavailable (web/static build, or desktop sidecar down/unreachable)
+      // OR backend returned an error — surface the real reason for diagnosis,
+      // then generate client-side with $lib/io/vasp-input as a fallback.
+      console.warn('[VASP] backend generation failed; falling back to client-side (offline) generation:', e)
       try {
         const poscar = structure_to_poscar(structure as unknown as StructureData)
         const { generate_incar_str, generate_kpoints_str, face_centered_from_symmetry, SUPPORTED_CALC_TYPES } =
@@ -317,13 +323,22 @@
           )
           generated_output = { 'INCAR': incar, 'POSCAR': poscar, 'KPOINTS': kpoints_str }
           active_file = 'INCAR'
-          generation_error = 'Generated client-side (offline). Advanced options (MD / constant-potential / element-specific POTCAR & MAGMOM tuning) require the Python backend.'
+          // Successful offline generation — this is not an error.
+          generation_notice = {
+            text: 'Generated client-side (offline). Advanced options (MD / constant-potential / element-specific POTCAR & MAGMOM tuning) require the Python backend.',
+            severity: 'info',
+          }
         } else {
           generated_output = { 'POSCAR': poscar }
           active_file = 'POSCAR'
-          generation_error = `Backend unavailable — '${vasp_calculation}' needs the Python backend; only POSCAR exported offline.`
+          // Partial result — the requested calc type can't be produced offline.
+          generation_notice = {
+            text: `Backend unavailable — '${vasp_calculation}' needs the Python backend; only POSCAR exported offline.`,
+            severity: 'warning',
+          }
         }
       } catch (offlineErr) {
+        console.error('[VASP] client-side fallback also failed:', offlineErr)
         generation_error = e instanceof Error ? e.message : 'Failed to generate VASP inputs'
       }
     } finally {

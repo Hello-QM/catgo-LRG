@@ -177,6 +177,10 @@
   let prefix = $state('calc')
   let generated_output = $state<Record<string, string>>({})
   let generation_error = $state<string | null>(null)
+  // Non-error feedback for the offline / partial fallback paths (web + desktop
+  // when the Python backend is unreachable). Kept separate from generation_error
+  // so a successful client-side generation isn't rendered as a red failure.
+  let generation_notice = $state<{ text: string; severity: 'info' | 'warning' } | null>(null)
   let active_file = $state('')
 
   // ====== Shared constraint state ======
@@ -392,6 +396,7 @@
     active_section
     generated_output = {}
     generation_error = null
+    generation_notice = null
     active_file = ''
   })
 
@@ -602,6 +607,7 @@
       {unique_elements}
       bind:generated_output
       bind:generation_error
+      bind:generation_notice
       bind:active_file
       {on_request_vacuum_box}
     />
@@ -721,6 +727,9 @@
   {#if generation_error}
     <p class="error">{generation_error}</p>
   {/if}
+  {#if generation_notice}
+    <p class="gen-notice {generation_notice.severity}">{generation_notice.text}</p>
+  {/if}
 {/snippet}
 
 {#if embedded}
@@ -801,6 +810,17 @@
   }
   .quick-export-btn:hover { background: light-dark(rgba(0,0,0,0.12), rgba(255,255,255,0.15)); }
   .quick-export-hint { font-size: 0.75em; opacity: 0.5; margin-top: 3px; }
+  .gen-notice { margin-top: 0.5em; padding: 6px 10px; border-radius: 4px; font-size: 0.85em; line-height: 1.4; }
+  .gen-notice.info {
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid var(--accent-color, #3b82f6);
+    color: var(--accent-color, #3b82f6);
+  }
+  .gen-notice.warning {
+    background: rgba(255, 152, 0, 0.12);
+    border: 1px solid var(--warning-color, #f59e0b);
+    color: var(--warning-color, #f59e0b);
+  }
   .supercell-export-notice {
     display: flex; align-items: center; gap: 6px; font-size: 0.78em;
     padding: 5px 8px; margin-bottom: 0.6em; border-radius: 4px;
