@@ -101,7 +101,20 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
+      # Cache the downloaded browser binaries. A cold `playwright install`
+      # historically stalled ~18min on the chromium download and tripped the
+      # 20min job backstop (job cancelled before tests ran). A cache hit skips
+      # the download; the per-step timeout fails fast on a stall instead of
+      # dragging the whole job to the backstop.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Playwright
+        timeout-minutes: 5
         run: npx playwright install chromium
 
       - name: Run e2e tests
