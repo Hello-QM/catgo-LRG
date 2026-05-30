@@ -133,13 +133,25 @@ fn buffer_file_args<R: tauri::Runtime, I: IntoIterator<Item = String>>(
     app: &tauri::AppHandle<R>,
     args: I,
 ) {
-    let paths: Vec<String> = args
-        .into_iter()
-        .skip(1) // argv[0] is the executable
-        .filter(|a| !a.starts_with('-')) // ignore CLI flags
-        .filter(|a| std::path::Path::new(a).exists())
+    // Skip argv[0] (the executable). Keep every remaining arg that resolves to
+    // a real FILE: `is_file()` is false for CLI flags, non-existent paths, and
+    // directories, so it robustly discards webview/runtime flags while still
+    // accepting filenames that legitimately start with '-'. Relative paths
+    // resolve against the process CWD (the OS passes absolute paths for file
+    // associations).
+    let raw: Vec<String> = args.into_iter().skip(1).collect();
+    let paths: Vec<String> = raw
+        .iter()
+        .filter(|a| std::path::Path::new(a.as_str()).is_file())
+        .cloned()
         .collect();
     if paths.is_empty() {
+        // Surface the case where launch args were present but none resolved to a
+        // file (e.g. a relative path against an unexpected CWD) so it can be
+        // diagnosed instead of failing silently.
+        if !raw.is_empty() {
+            log::debug!("[CatGo] file-association: no openable file in argv: {:?}", raw);
+        }
         return;
     }
     log::info!("[CatGo] File association opened (argv): {:?}", paths);
