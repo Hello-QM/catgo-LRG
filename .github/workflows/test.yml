@@ -16,6 +16,7 @@ env:
 jobs:
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -64,6 +65,9 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     continue-on-error: true
+    # Hard backstop: e2e is non-gating (continue-on-error) and has historically
+    # hung on the dev-server webServer, running to GitHub's 6h job cap. Bound it.
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
