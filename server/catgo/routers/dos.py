@@ -281,9 +281,14 @@ async def dos_from_directory(session_id: str, remote_path: str):
             raise HTTPException(status_code=503, detail=f"HPC session {session_id} not connected")
 
         async def _read_remote_text(path: str) -> str:
-            """Read a remote text file via SSH."""
+            """Read a remote text file via SSH.
+
+            PROCAR/OUTCAR can be tens of MB and stream back over a slow remote
+            link (e.g. through a ProxyJump), so allow well beyond the default
+            60s `conn.run` timeout — otherwise the read aborts with TimeoutError.
+            """
             result = await hpc.conn.run(
-                f"cat {shlex.quote(path)} 2>/dev/null", check=False
+                f"cat {shlex.quote(path)} 2>/dev/null", check=False, timeout=900
             )
             if result.exit_status != 0 or not result.stdout:
                 return ""

@@ -36,7 +36,7 @@ class SubprocessSSHRunner:
     def __init__(self, ssh_alias: str) -> None:
         self.ssh_alias = ssh_alias
 
-    async def run(self, cmd: str, check: bool = False) -> SubprocessCompletedProcess:
+    async def run(self, cmd: str, check: bool = False, timeout: float = 60) -> SubprocessCompletedProcess:
         # Wrap in login shell so module-managed tools (sbatch, squeue, etc.) are in PATH
         login_cmd = f"bash -l -c {shlex.quote(cmd)}"
         proc = await asyncio.create_subprocess_exec(
@@ -49,9 +49,19 @@ class SubprocessSSHRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=60
-        )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except (asyncio.TimeoutError, TimeoutError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            raise TimeoutError(
+                f"ssh '{self.ssh_alias}' command timed out after {timeout:g}s "
+                f"(transferring a large file? cmd: {cmd[:80]})"
+            )
         result = SubprocessCompletedProcess(
             exit_status=proc.returncode or 0,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
@@ -76,14 +86,14 @@ class LocalCommandRunner:
     (conn.run("cat ..."), conn.run("head -c ..."), etc.) work transparently.
     """
 
-    async def run(self, cmd: str, check: bool = False) -> SubprocessCompletedProcess:
+    async def run(self, cmd: str, check: bool = False, timeout: float = 60) -> SubprocessCompletedProcess:
         proc = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=60
+            proc.communicate(), timeout=timeout
         )
         result = SubprocessCompletedProcess(
             exit_status=proc.returncode or 0,
