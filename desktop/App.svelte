@@ -1676,6 +1676,22 @@
               {:else}
                 <div class="landing-page" class:secondary-pane={idx > 0} class:quad-layout={ts.layout === 'quad'} class:stacked-layout={ts.layout === 'splitV'}>
                   {#if idx === 0}
+                    <!-- Landing-only GitHub link — invites users to star the repo -->
+                    <a
+                      class="github-star"
+                      href="https://github.com/Hello-QM/catgo-LRG"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Star CatGo on GitHub"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                      </svg>
+                      <span class="github-star-text">Star on GitHub</span>
+                      <svg class="github-star-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M12 17.27l5.18 3.13-1.37-5.9 4.59-3.97-6.04-.52L12 4.5 9.64 10l-6.04.52 4.59 3.97-1.37 5.9z"/>
+                      </svg>
+                    </a>
                     <div class="samples-grid">
                       {#each sample_structures as sample}
                         <button
@@ -2594,6 +2610,7 @@
 
   /* Original horizontal layout (restored) */
   .landing-page {
+    position: relative;
     width: 100%;
     height: 100%;
     display: flex;
@@ -2603,6 +2620,43 @@
     padding: 16px;
     overflow-y: auto;
     background: var(--page-bg, linear-gradient(135deg, rgba(20, 25, 35, 0.98) 0%, rgba(10, 15, 25, 1) 100%));
+  }
+
+  /* Landing-only "Star on GitHub" link, pinned top-right of the welcome area */
+  .github-star {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+    color: var(--text-color-muted, #9ca3af);
+    background: var(--surface-bg, rgba(255, 255, 255, 0.05));
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+
+  .github-star:hover {
+    color: var(--text-color, #f3f4f6);
+    background: var(--surface-bg-hover, rgba(255, 255, 255, 0.1));
+    border-color: var(--accent-color, cornflowerblue);
+    transform: translateY(-1px);
+  }
+
+  .github-star svg {
+    flex-shrink: 0;
+  }
+
+  .github-star .github-star-icon {
+    color: #f1c40f;
   }
 
   .landing-page.secondary-pane {
