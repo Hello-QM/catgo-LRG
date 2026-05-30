@@ -63,41 +63,52 @@ def _configured_work_root(hpc) -> str:
     return root.strip() if isinstance(root, str) else ""
 
 
-async def _resolve_remote_dir_physical(conn, path: str) -> str:
-    safe = shlex.quote(path)
-    result = await conn.run(f"p={safe}; cd \"$p\" 2>/dev/null && pwd -P", check=False)
-    if result.exit_status != 0:
-        msg = (result.stderr or "").strip() or f"Cannot resolve directory: {path}"
-        raise HTTPException(status_code=400, detail=msg)
-    resolved = (result.stdout or "").strip()
-    if not resolved:
-        raise HTTPException(status_code=400, detail=f"Cannot resolve directory: {path}")
-    return resolved.rstrip("/")
-
-
-async def _resolve_remote_path_physical(conn, path: str) -> str:
-    safe = shlex.quote(path)
-    cmd = (
-        f"p={safe}; "
-        "if [ -e \"$p\" ]; then "
-        "  readlink -f -- \"$p\"; "
-        "else "
-        "  d=$(dirname -- \"$p\") && b=$(basename -- \"$p\") && "
-        "  cd \"$d\" 2>/dev/null && printf '%s/%s\\n' \"$(pwd -P)\" \"$b\"; "
-        "fi"
-    )
-    result = await conn.run(cmd, check=False)
-    if result.exit_status != 0:
-        msg = (result.stderr or "").strip() or f"Cannot resolve path: {path}"
-        raise HTTPException(status_code=400, detail=msg)
-    resolved = (result.stdout or "").strip()
-    if not resolved:
-        raise HTTPException(status_code=400, detail=f"Cannot resolve path: {path}")
-    return resolved.rstrip("/")
+# POSIX-sh boundary check. Resolves the work root and every candidate path on
+# the remote host in a SINGLE command (one channel open instead of N+1), so the
+# guard does not undo the read-many batching win. `canon()` expands a leading
+# tilde and canonicalises symlinks: `readlink -f` for existing paths, and
+# `readlink -m` for not-yet-created ones (e.g. `mkdir -p a/b/c` where the parent
+# chain is missing) so nested creation inside the root is not falsely rejected.
+_WORK_ROOT_CHECK_SCRIPT = r"""
+H=$HOME
+canon() {
+  case $1 in
+    '~') p=$H ;;
+    '~/'*) p=$H/${1#'~/'} ;;
+    *) p=$1 ;;
+  esac
+  if [ -e "$p" ]; then
+    readlink -f -- "$p" 2>/dev/null || (cd "$p" 2>/dev/null && pwd -P) || printf '%s' "$p"
+  else
+    readlink -m -- "$p" 2>/dev/null || printf '%s' "$p"
+  fi
+}
+root=$(canon "$WR_ROOT"); root=${root%/}
+if [ -z "$root" ]; then printf 'ERR\n'; exit 0; fi
+for raw in "$@"; do
+  pa=$(canon "$raw"); pa=${pa%/}
+  if [ "$pa" != "$root" ] && [ "${pa#"$root"/}" = "$pa" ]; then
+    printf 'DENY:%s\n' "$raw"; exit 0
+  fi
+done
+printf 'OK\n'
+"""
 
 
 async def _ensure_within_work_root(hpc, *paths: str) -> None:
-    """Enforce a session work-root boundary for remote file/job operations."""
+    """Enforce a session work-root boundary for remote file/job operations.
+
+    Resolves the configured ``work_root`` and every candidate path on the remote
+    host (following symlinks) and rejects any path that escapes the boundary.
+
+    Threat model: ``work_root`` is an accident-prevention guardrail for a
+    session's own operations, NOT a security sandbox against the authenticated
+    user -- they already hold a shell on the host and can bypass it with plain
+    ssh. The validation and the subsequent file op run as separate SSH commands,
+    so a same-user symlink swap between them is technically a TOCTOU window, but
+    closing it buys nothing the user could not already do directly. Enforcement
+    is therefore intentionally non-atomic.
+    """
     from catgo.utils.hpc_client import LocalFileConnection
 
     root = _configured_work_root(hpc)
@@ -108,17 +119,30 @@ async def _ensure_within_work_root(hpc, *paths: str) -> None:
     if not clean_paths:
         return
 
-    async def _check() -> None:
-        root_abs = await _resolve_remote_dir_physical(hpc.conn, root)
-        for path in clean_paths:
-            path_abs = await _resolve_remote_path_physical(hpc.conn, path)
-            if path_abs != root_abs and not path_abs.startswith(f"{root_abs}/"):
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Path is outside the configured work root ({root}): {path}",
-                )
+    safe_args = " ".join(shlex.quote(p) for p in clean_paths)
+    cmd = (
+        f"WR_ROOT={shlex.quote(root)}; "
+        f"set -- {safe_args}; "
+        f"{_WORK_ROOT_CHECK_SCRIPT}"
+    )
 
-    await hpc.run_on_owner(_check)
+    async def _check() -> str:
+        result = await hpc.conn.run(cmd, check=False)
+        return (result.stdout or "").strip()
+
+    out = await hpc.run_on_owner(_check)
+    last = out.splitlines()[-1] if out else ""
+    if last == "OK":
+        return
+    if last == "ERR" or not last:
+        raise HTTPException(status_code=400, detail=f"Cannot resolve work root: {root}")
+    if last.startswith("DENY:"):
+        bad = last[len("DENY:"):]
+        raise HTTPException(
+            status_code=403,
+            detail=f"Path is outside the configured work root ({root}): {bad}",
+        )
+    raise HTTPException(status_code=400, detail=f"Cannot validate path against work root: {root}")
 
 
 class FileReadManyRequest(BaseModel):
@@ -910,7 +934,11 @@ async def download_file(
         }
         if not skip_stat:
             file_size = await hpc.run_on_owner(lambda: hpc.get_remote_file_size(remote_path))
-            headers["Content-Length"] = str(file_size)
+            # Only advertise Content-Length when the stat actually succeeded.
+            # A failed stat returns 0 (SFTP fallback); sending "Content-Length: 0"
+            # while the body streams real bytes makes clients truncate the file.
+            if file_size > 0:
+                headers["Content-Length"] = str(file_size)
         return StreamingResponse(
             hpc.stream_on_owner(lambda: hpc.download_remote_file(remote_path)),
             media_type="application/octet-stream",

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listFiles, prefetchRemoteFiles, type RemoteFile } from '$lib/api/hpc'
+  import { listFiles, prefetchRemoteFiles, clearRemoteFileCache, type RemoteFile } from '$lib/api/hpc'
   import { Icon } from '$lib'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { untrack } from 'svelte'
@@ -466,6 +466,10 @@
   // Load root directory (does NOT fire on_navigate — caller is responsible)
   async function load_root(path: string) {
     if (!can_navigate_to(path)) path = boundary_fallback()
+    // Drop cached remote file contents on each (re)load so navigating to or
+    // refreshing a directory re-fetches files that may have changed on the
+    // server (e.g. job output). The prefetch below immediately refills it.
+    if (session_id && session_id !== `__local__`) clearRemoteFileCache(session_id)
     const seq = ++_load_root_seq
     root_loading = true
     current_root = path

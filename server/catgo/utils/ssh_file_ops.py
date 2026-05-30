@@ -167,13 +167,21 @@ class SSHFileOpsMixin:
                 yield chunk
             return
 
+        # For interactive downloads, an exec channel starts much faster on some
+        # HPC gateways than opening/using the SFTP subsystem. Only fall back to
+        # SFTP if exec fails BEFORE emitting any bytes -- once we've yielded a
+        # chunk to the client, restarting from offset 0 would duplicate data and
+        # corrupt the download.
+        emitted = False
         try:
-            # For interactive downloads, an exec channel starts much faster on
-            # some HPC gateways than opening/using the SFTP subsystem.
             async for chunk in self._download_exec(remote_path):
+                emitted = True
                 yield chunk
         except Exception as e:
-            logger.warning(f"Exec download failed, falling back to SFTP: {e}")
+            if emitted:
+                logger.error(f"Exec download failed mid-stream, cannot fall back: {e}")
+                raise
+            logger.warning(f"Exec download failed before any data, falling back to SFTP: {e}")
             sftp = await self.get_sftp()
             if sftp is None:
                 raise
@@ -234,10 +242,12 @@ class SSHFileOpsMixin:
                 if isinstance(chunk, str):
                     chunk = chunk.encode("utf-8")
                 yield chunk
+            # Wait for the real exit status. Reading it after close() can return
+            # None and silently swallow a tar failure (e.g. unreadable files).
+            status = await process.wait()
         finally:
             process.close()
-        status = process.exit_status
-        if status and status != 0:
+        if status is not None and status != 0:
             raise RuntimeError(f"Archive download failed (exit {status})")
 
     async def _download_sftp(self, remote_path: str):
