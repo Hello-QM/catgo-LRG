@@ -13,7 +13,9 @@
         // Client-direct path only: when set, the card settles the in-browser
         // tool-loop's pending permission promise instead of (and in addition
         // to skipping) the SDK backend round-trip. Undefined on the SDK path.
-        onResolve?: (approved: boolean) => void
+        // `session` is true for "Allow for session" so the caller can flip the
+        // session-scoped skip_permission flag (the SDK path handles that itself).
+        onResolve?: (approved: boolean, session?: boolean) => void
     }
 
     let { permissionId, toolName, input, suggestions, decisionReason, onResolve }: Props = $props()
@@ -44,7 +46,10 @@
             const approved = behavior !== `deny`
             if (onResolve) {
                 // Client-direct: resolve the in-browser tool-loop's promise.
-                onResolve(approved)
+                // Pass `session` so "Allow for session" sets the session-scoped
+                // skip_permission flag — otherwise it behaves like a one-time
+                // Allow and every later tool re-prompts.
+                onResolve(approved, behavior === `allow_session`)
             } else {
                 // SDK path: backend round-trip.
                 await resolve_permission(permissionId, behavior, suggestions)
