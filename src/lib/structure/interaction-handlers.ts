@@ -100,11 +100,14 @@ export function handle_keyboard_rotation(
 ): void {
   if (!camera || !orbit_controls) return
 
-  // Ignore if user is typing in an input field
+  // Ignore if user is typing in an input field. Monaco (EditContext) focuses a
+  // <div>, not a <textarea>, so also bail on embedded editors / contenteditable
+  // — otherwise plain s/w/arrow keys typed in the editor get swallowed.
   const target = event.target as HTMLElement
   if (
     target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
-    target.tagName === 'SELECT'
+    target.tagName === 'SELECT' ||
+    target?.closest?.('.monaco-editor, .native-edit-context, [contenteditable=""], [contenteditable="true"]')
   ) return
 
   // Don't handle if modifier keys are pressed (for browser shortcuts)

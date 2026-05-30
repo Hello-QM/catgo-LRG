@@ -46,11 +46,14 @@
 
   // Handle Delete/Backspace key for adsorption sites
   function handle_adsorption_site_delete(event: KeyboardEvent) {
-    // Ignore if user is typing in an input field
+    // Ignore if user is typing in an input field or an embedded editor.
+    // Monaco (EditContext) focuses a <div>, not a <textarea>, so a tagName-only
+    // check would let Delete/Backspace in the editor delete an adsorption site.
     const target = event.target as HTMLElement
     if (
       target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
-      target.tagName === 'SELECT'
+      target.tagName === 'SELECT' ||
+      target?.closest?.('.monaco-editor, .native-edit-context, [contenteditable=""], [contenteditable="true"]')
     ) return
 
     // Check for Delete or Backspace key

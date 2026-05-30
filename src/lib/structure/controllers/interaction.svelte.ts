@@ -840,6 +840,11 @@ export function create_interaction_controller(deps: InteractionDeps) {
   function onkeydown(event: KeyboardEvent) {
     if (!event.key) return
     const target = event.target as HTMLElement
+    // Don't hijack edit/clipboard keys when typing inside an embedded editor.
+    // Monaco (file/INCAR editor in Structure.svelte) uses the EditContext API,
+    // so its focused element is a <div>, not a <textarea>; a tagName-only check
+    // misses it and would swallow native Ctrl+Z/A/C/V/Delete in the editor.
+    if (target?.closest?.(`.monaco-editor, .native-edit-context, [contenteditable=""], [contenteditable="true"]`)) return
     const is_input_focused = target.tagName === `INPUT` || target.tagName === `TEXTAREA`
 
     // Ctrl/Cmd+Z 撤销
