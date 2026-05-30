@@ -1164,6 +1164,17 @@
   // $effect.pre runs prior to DOM mutations, so `camera`/`orbit_controls` are still
   // the OLD instances here and reflect the user's current orientation/zoom — even
   // if they never moved the camera (onchange/onend wouldn't have fired).
+  //
+  // These _view_* are declared HERE, ABOVE the $effect.pre that calls
+  // snapshot_view(). An $effect.pre's body can run during component init before
+  // the script reaches a later `let` (notably under HMR re-init), so keeping the
+  // declarations after the effect caused a temporal-dead-zone crash:
+  // "Cannot access '_view_dir' before initialization". snapshot_view() (a
+  // function declaration) hoists fine; only these `let`s needed moving up.
+  let _view_dir = new Vector3(0, -1, 0)
+  let _view_up = new Vector3(0, 0, 1)
+  let _view_target: Vector3 | null = null
+  let _view_vheight = 0  // visible world-height at the target plane (projection-independent)
   $effect.pre(() => {
     void camera_projection // dependency: re-run whenever the projection is about to change
     untrack(() => snapshot_view())
@@ -1729,10 +1740,8 @@
   // on every camera movement. Used to preserve the user's orientation across a
   // projection switch, which fully remounts the camera + TrackballControls and
   // would otherwise reset the view (see the camera_projection $effect below).
-  let _view_dir = new Vector3(0, -1, 0)
-  let _view_up = new Vector3(0, 0, 1)
-  let _view_target: Vector3 | null = null
-  let _view_vheight = 0  // visible world-height at the target plane (projection-independent)
+  // (The _view_* state is declared earlier, above the snapshot_view $effect.pre,
+  // to avoid a temporal-dead-zone crash on early effect runs / HMR re-init.)
   function snapshot_view() {
     if (!camera || !orbit_controls?.target) return
     const cam = camera as any
