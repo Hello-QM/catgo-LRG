@@ -2040,8 +2040,14 @@
   // ─── Keyboard ───
   $effect(() => {
     function handler(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement)?.tagName
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName
       if (tag === `INPUT` || tag === `TEXTAREA` || tag === `SELECT`) return
+      // Don't hijack Ctrl+C/V/A/Z when typing inside an embedded editor.
+      // Monaco (INCAR/KPOINTS, ORCA/CP2K/LAMMPS input editors) uses the
+      // EditContext API, so its focused element is a <div>, not a <textarea> —
+      // without this the canvas shortcuts swallow native paste/undo/select.
+      if (target?.closest(`.monaco-editor, .native-edit-context, [contenteditable=""], [contenteditable="true"]`)) return
       if ((e.metaKey || e.ctrlKey) && e.key === `z` && !e.shiftKey) { e.preventDefault(); undo() }
       if ((e.metaKey || e.ctrlKey) && e.key === `z` && e.shiftKey) { e.preventDefault(); redo() }
       if ((e.metaKey || e.ctrlKey) && e.key === `y`) { e.preventDefault(); redo() }
