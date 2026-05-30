@@ -3203,20 +3203,60 @@ pub fn reduce_slab_in_plane_primitive(structure: Structure, symprec: f64) -> Res
         if !unique_vecs.iter().any(|u| (v - u).norm() < 1e-4) { unique_vecs.push(*v); }
     }
 
+    // A candidate in-plane vector is only a real surface lattice translation if
+    // shifting every atom by it lands on an atom of the SAME species. Geometry
+    // alone is not enough: e.g. rocksalt (110) has a c/2 glide that maps the
+    // cation sublattice onto the anion sublattice. That operation preserves
+    // positions but swaps species; accepting it would halve the cell and the
+    // remap below would then delete one entire species (all-cation/all-anion
+    // slab with the wrong stoichiometry).
+    let det_ab = a.x * b.y - a.y * b.x;
+    let frac_tol = 2e-3_f64;
+    let is_lattice_translation = |t: &Vector3<f64>| -> bool {
+        if det_ab.abs() < 1e-12 { return false; }
+        for (i, fc) in structure.frac_coords.iter().enumerate() {
+            let sx = a.x * fc.x + b.x * fc.y + t.x;
+            let sy = a.y * fc.x + b.y * fc.y + t.y;
+            let mut fa = (sx * b.y - sy * b.x) / det_ab;
+            let mut fb = (-sx * a.y + sy * a.x) / det_ab;
+            fa -= fa.floor();
+            fb -= fb.floor();
+            let sp = structure.site_occupancies[i].dominant_species();
+            let z = fc.z;
+            let matched = structure.frac_coords.iter().enumerate().any(|(j, o)| {
+                if structure.site_occupancies[j].dominant_species() != sp { return false; }
+                if (o.z - z).abs() > 0.01 { return false; }
+                let oa = o.x - o.x.floor();
+                let ob = o.y - o.y.floor();
+                let da = (fa - oa).abs();
+                let db = (fb - ob).abs();
+                da.min(1.0 - da) < frac_tol && db.min(1.0 - db) < frac_tol
+            });
+            if !matched { return false; }
+        }
+        true
+    };
+
     // Find shortest pair with minimal area that forms a valid sub-lattice.
     // Verification: all layer atoms must be expressible as integer combinations
-    // of the candidate pair (solved via Cramer's rule on the Gram matrix).
+    // of the candidate pair (solved via Cramer's rule on the Gram matrix), AND
+    // each basis vector must be a species-preserving lattice translation.
+    let limit = unique_vecs.len().min(80);
+    let trans_ok: Vec<bool> = (0..limit).map(|i| is_lattice_translation(&unique_vecs[i])).collect();
+    drop(is_lattice_translation); // release immutable borrow of `structure`
     let mut best_a = a;
     let mut best_b = b;
     let mut best_area = orig_area;
     let mut found_smaller = false;
 
-    for i in 0..unique_vecs.len().min(80) {
+    for i in 0..limit {
         let va = unique_vecs[i];
         if va.dot(&surf_normal).abs() / va.norm() > 0.1 { continue; }
-        for j in (i + 1)..unique_vecs.len().min(80) {
+        if !trans_ok[i] { continue; }
+        for j in (i + 1)..limit {
             let vb = unique_vecs[j];
             if vb.dot(&surf_normal).abs() / vb.norm() > 0.1 { continue; }
+            if !trans_ok[j] { continue; }
             let area = va.cross(&vb).norm();
             if area < 1e-10 || area >= best_area - 1e-10 { continue; }
             let ratio = orig_area / area;
@@ -3263,7 +3303,9 @@ pub fn reduce_slab_in_plane_primitive(structure: Structure, symprec: f64) -> Res
         nf.y = nf.y.rem_euclid(1.0);
         if nf.x >= 1.0 - 1e-6 { nf.x = 0.0; }
         if nf.y >= 1.0 - 1e-6 { nf.y = 0.0; }
-        let is_dup = new_frac_coords.iter().any(|e| {
+        let cur_sp = occ.dominant_species();
+        let is_dup = new_frac_coords.iter().zip(new_occupancies.iter()).any(|(e, eo)| {
+            if eo.dominant_species() != cur_sp { return false; }
             let da = (nf.x - e.x).abs().min(1.0 - (nf.x - e.x).abs());
             let db = (nf.y - e.y).abs().min(1.0 - (nf.y - e.y).abs());
             let dc = (nf.z - e.z).abs();

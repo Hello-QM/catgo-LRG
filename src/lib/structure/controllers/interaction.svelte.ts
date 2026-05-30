@@ -81,6 +81,8 @@ export interface InteractionDeps {
    */
   push_atom_entry: (atom_inverse: AtomArrayInverse) => void
   undo: () => void
+  redo: () => void
+  get_redo_length: () => number
   push_selection_to_undo: () => void
   get_structure_history_length: () => number
   get_opacity_history: () => { atoms: Map<number, number>; bonds: Map<string, number> }[]
@@ -155,6 +157,14 @@ export interface InteractionDeps {
   // ── 回调 props ──
   get_on_atoms_manipulated: () => ((event: AtomManipulationEvent) => void) | undefined
   get_on_atoms_deleted: () => ((event: { site_indices: number[] }) => void) | undefined
+
+  /**
+   * Reindex index-keyed edit state (manual bonds / deleted-bond keys / hidden
+   * sites) after an atom delete. Must be called with the OLD-index deleted list
+   * (the `sorted_indices` this path already computes), so the controller has no
+   * direct access to pencil/hidden_sites — it delegates to Structure.svelte.
+   */
+  reindex_edits_after_delete: (deleted: number[]) => void
 
   // ── 原子操作工具 ──
   get_original_atoms_only: (indices: number[]) => number[]
@@ -857,6 +867,18 @@ export function create_interaction_controller(deps: InteractionDeps) {
       return
     }
 
+    // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y — redo (structure changes)
+    const is_redo_key = (event.ctrlKey || event.metaKey) &&
+      ((event.key.toLowerCase() === 'z' && event.shiftKey) || event.key.toLowerCase() === 'y')
+    if (is_redo_key) {
+      if (deps.get_redo_length() > 0) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        deps.redo()
+      }
+      return
+    }
+
     // Ctrl/Cmd+/ 切换 AI 聊天面板
     if ((event.ctrlKey || event.metaKey) && event.key === `/`) {
       event.preventDefault()
@@ -1050,6 +1072,8 @@ export function create_interaction_controller(deps: InteractionDeps) {
             for (const idx of sorted_indices) new_atom_overrides.delete(idx)
             deps.set_atom_opacity_overrides(new_atom_overrides)
           }
+          // Reindex index-keyed edit state with the OLD-index deleted list.
+          deps.reindex_edits_after_delete(sorted_indices)
           deps.set_structure(delete_atoms(structure, sorted_indices))
           deps.get_on_atoms_deleted()?.({ site_indices: sorted_indices })
           deps.set_selected_sites([])

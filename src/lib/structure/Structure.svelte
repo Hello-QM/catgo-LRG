@@ -112,6 +112,8 @@
     build_constraints_section,
     build_charge_label_section,
     validate_bond_edits,
+    reindex_bond_edits,
+    reindex_site_indices,
   } from './controllers/viewer-controller'
   // tool-controller.svelte.ts exists but is not yet wired (template bind: compatibility)
   import StructureToolbar from './StructureToolbar.svelte'
@@ -439,6 +441,9 @@
           const deleted_set = new Set(sorted_indices)
           const next_sites: Site[] = structure.sites.filter((_, i) => !deleted_set.has(i))
           scene_atom_fast_ops?.try_delete(sorted_indices, next_sites)
+          // Reindex index-keyed edit state (manual bonds / deleted-bond keys /
+          // hidden sites) with the OLD-index deleted list before renumbering.
+          reindex_edits_on_delete(sorted_indices)
           structure = delete_atoms(structure, sorted_indices)
           selected_sites = []
         }
@@ -2159,21 +2164,35 @@
   // Reverse sync: store → viewer. The CatBot client-direct tool loop (STATIC_ONLY,
   // no backend) mutates structures via set_current_structure() in structure-tools.ts;
   // unlike the SDK/MCP path there's no SSE bridge to push the result back into the
-  // viewer. Pull it here. Guard against the mirror effect above: only adopt a store
-  // value that is a DIFFERENT object than what we last wrote (so the viewer's own
-  // structure→store mirror can't ping-pong). New ref from a tool → adopt it.
+  // viewer. Pull it here.
+  //
+  // CRITICAL multi-tab/pane guard: `current_structure_state()` is ONE global
+  // singleton holding the session's last-loaded structure across ALL tabs and
+  // panes. Naively adopting its value bleeds structures between viewers — e.g.
+  // load NaCl in tab2, switch back to tab1, and tab1 (`is_active` flips true on
+  // activation) would adopt NaCl. So we only adopt a store change that lands
+  // WHILE this pane is the visible active viewer (`is_active` already requires
+  // `tab === active_tab` from App.svelte). On (re)activation we BASELINE the
+  // current store value instead of adopting it — only genuinely NEW writes
+  // (real CatBot edits aimed at this viewer) are pulled in afterwards.
   const _cur_store = current_structure_state()
+  let _seen_store_val: typeof structure | null = _cur_store.value as typeof structure
+  let _was_active = false
   $effect(() => {
     if (tab_id === undefined) return
-    // Only the active pane adopts store mutations. In a split view every pane
-    // shares this one global store; without this guard, loading/editing one
-    // pane (which writes the store) makes every sibling pane's effect re-run
-    // and overwrite itself with that structure — all panes collapse to the
-    // same structure. The active pane is the one CatBot/loads target.
-    if (!is_active) return
-    const v = _cur_store.value
+    const v = _cur_store.value as typeof structure // subscribe unconditionally
+    if (!is_active) { _was_active = false; return } // inactive/hidden: never adopt
+    if (!_was_active) {
+      // Just activated: baseline the current global value, do NOT adopt it
+      // (it may be another tab's structure). Adopt only later changes.
+      _was_active = true
+      _seen_store_val = v
+      return
+    }
+    if (v === _seen_store_val) return // nothing new since activation
+    _seen_store_val = v
     if (v && v !== structure && v !== _last_mirrored_to_store) {
-      structure = v as typeof structure
+      structure = v
     }
   })
 
@@ -2234,6 +2253,9 @@
     if (!structure) return
     const entry = sel_state.pop_entry()
     if (!entry) return
+    // Capture the state we're undoing FROM (the forward state) so redo() can
+    // restore it. Snapshot-based redo — see selection-state redo_history.
+    sel_state.push_redo(structure)
     if (entry.kind === 'structure') {
       structure = entry.structure
       pencil.pop_bond_undo()
@@ -2274,6 +2296,16 @@
     // double-add bonds. See Phase 5a commit for the original reasoning.
     pencil.bond_undo.undo()
     pencil.apply_bond_array_inverse(entry.array_inverse)
+  }
+
+  function redo() {
+    if (!structure) return
+    const snap = sel_state.pop_redo()
+    if (!snap) return
+    // Make the redo itself undoable: push the current state as a structure-kind
+    // undo entry, WITHOUT clearing the redo stack (so chained redo still works).
+    sel_state.push_structure_entry($state.snapshot(structure) as AnyStructure, false)
+    structure = snap as typeof structure
   }
 
   // Push current state to undo stack (used by slab cutter and other tools)
@@ -2333,6 +2365,8 @@
     push_to_undo,
     push_atom_entry: (inv) => { sel_state.push_atom_entry(inv); pencil.push_bond_undo() },
     undo,
+    redo,
+    get_redo_length: () => (sel_state.can_redo ? 1 : 0),
     push_selection_to_undo,
     get_structure_history_length: () => (sel_state.can_undo ? 1 : 0),
     get_opacity_history: () => sel_state.opacity_history,
@@ -2391,6 +2425,7 @@
     set_context_menu_visible: (v) => { context_menu_visible = v },
     get_on_atoms_manipulated: () => on_atoms_manipulated,
     get_on_atoms_deleted: () => on_atoms_deleted,
+    reindex_edits_after_delete: (deleted) => reindex_edits_on_delete(deleted),
     get_original_atoms_only,
     set_cached_rotation_target: (v) => { cached_rotation_target = v },
     set_saved_selection: (v) => { saved_selection = v },
@@ -2421,6 +2456,20 @@
   })
 
   // (铅笔/键编辑 handler 函数已移到 pencil controller)
+
+  // Reindex index-keyed edit state after an atom delete. Deleting atoms
+  // RENUMBERS the survivors, so any state keyed by atom index (manual bonds,
+  // deleted-bond keys, hidden sites) must be shifted to follow that renumber —
+  // not merely pruned. Without this, a survivor's renumbered bond can collide
+  // with a STALE deleted-bond key and vanish from the render ("delete one atom,
+  // an unrelated bond disappears"). Must be called with the OLD-index deleted
+  // list (the same `sorted_indices` the delete paths already compute).
+  function reindex_edits_on_delete(deleted: number[]) {
+    const r = reindex_bond_edits(pencil.manual_bonds, pencil.deleted_bond_keys, deleted)
+    pencil.manual_bonds = r.manual_bonds
+    pencil.deleted_bond_keys = r.deleted_bond_keys
+    hidden_sites = reindex_site_indices(hidden_sites, deleted)
+  }
 
   // --- 右键菜单动作分发 (controllers/context-menu-actions.ts) ---
   // 右键菜单的所有动作（添加/删除/替换原子、选择、约束、颜色、电荷标签等）由独立模块管理
@@ -2456,6 +2505,7 @@
     push_selection_to_undo,
     is_image_atom,
     get_original_atoms_only,
+    reindex_edits_after_delete: (deleted) => reindex_edits_on_delete(deleted),
     get_on_atom_added: () => on_atom_added,
     get_on_atoms_deleted: () => on_atoms_deleted,
     get_on_atom_replaced: () => on_atom_replaced,

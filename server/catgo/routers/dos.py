@@ -281,13 +281,33 @@ async def dos_from_directory(session_id: str, remote_path: str):
             raise HTTPException(status_code=503, detail=f"HPC session {session_id} not connected")
 
         async def _read_remote_text(path: str) -> str:
-            """Read a remote text file via SSH."""
-            result = await hpc.conn.run(
-                f"cat {shlex.quote(path)} 2>/dev/null", check=False
+            """Read a remote text file via SSH, gzip-compressed in transit.
+
+            PROCAR/OUTCAR are large text files and the remote link can be slow
+            (~0.2 MB/s through a ProxyJump to shaheen). gzip+base64 cuts the
+            transfer ~6x (text compresses well; a 20 MB PROCAR drops to ~2.3 MB
+            and ~15 s vs ~100 s). The large timeout still guards the slow path.
+            Falls back to plain `cat` if the compressed read isn't decodable.
+            """
+            import base64 as _b64
+            import gzip as _gzip
+            r = await hpc.conn.run(
+                f"gzip -c {shlex.quote(path)} 2>/dev/null | base64",
+                check=False, timeout=900,
             )
-            if result.exit_status != 0 or not result.stdout:
+            if r.exit_status == 0 and r.stdout.strip():
+                try:
+                    return _gzip.decompress(_b64.b64decode(r.stdout)).decode(
+                        "utf-8", errors="replace"
+                    )
+                except Exception:
+                    logger.warning("gzip read failed for %s; falling back to cat", path)
+            r = await hpc.conn.run(
+                f"cat {shlex.quote(path)} 2>/dev/null", check=False, timeout=900
+            )
+            if r.exit_status != 0 or not r.stdout:
                 return ""
-            return result.stdout
+            return r.stdout
 
         # List directory to find files
         resolved, files = await hpc.list_remote_dir(remote_path)
@@ -356,7 +376,14 @@ async def dos_from_directory(session_id: str, remote_path: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load from directory: {e}")
+        # Log the full traceback and surface the exception TYPE in the detail —
+        # some failures (e.g. asyncio.TimeoutError) have an empty str(), which
+        # produced the useless "Failed to load from directory: " message.
+        logger.exception("dos_from_directory failed for remote_path=%s", remote_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load from directory: {type(e).__name__}: {e}".rstrip(": "),
+        )
 
 
 ## ---------- Compute Endpoints (unified VaspData path) ---------- ##

@@ -12,6 +12,10 @@ on:
         default: false
         type: boolean
 
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+
 jobs:
   build:
     permissions:
@@ -32,10 +36,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             backend_target: x86_64-unknown-linux-gnu
             name: Linux
-            # Ship .deb only. AppImage (linuxdeploy) and .rpm (rpmbuild) both
-            # hang for 20+ min on GitHub runners; .deb builds in seconds and
-            # covers Debian/Ubuntu — the primary Linux desktop target.
-            bundles: deb
+            # Ship .deb + .rpm. AppImage (linuxdeploy) still excluded: it needs
+            # FUSE and hangs 20+ min on GitHub runners. Tauri v2's RPM bundler is
+            # pure-Rust (no rpmbuild), so .rpm builds fine and covers Fedora/RHEL.
+            bundles: deb rpm
 
     runs-on: ${{ matrix.platform }}
     name: Build (${{ matrix.name }})

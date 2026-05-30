@@ -259,6 +259,78 @@ register(
   },
 )
 
+// ── set_lattice (mutate) — give a molecule a periodic box ──
+register(
+  {
+    name: `set_lattice`,
+    description: `Add or replace an orthorhombic (box) lattice on the current structure. This is the correct way to give a non-periodic molecule a periodic cell — do NOT use make_supercell for that. Provide explicit box lengths a/b/c in Å, or omit them to auto-size a box around the molecule's extent plus vacuum padding on every side. Set cubic:true to force a cube. Atoms are re-centered in the new box.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        a: { type: `number`, description: `Box length along x in Å (optional; auto-sized from the structure if omitted).` },
+        b: { type: `number`, description: `Box length along y in Å (optional).` },
+        c: { type: `number`, description: `Box length along z in Å (optional).` },
+        padding: { type: `number`, description: `Vacuum padding added on each side when auto-sizing, in Å (default 8).` },
+        cubic: { type: `boolean`, description: `Force a cubic box using the largest of the three lengths (default false).` },
+      },
+    },
+  },
+  (input) => {
+    const next = clone_structure()
+    const sites = next.sites
+    if (!sites.length) throw new Error(`The current structure has no atoms.`)
+    const xyzs = sites.map((s) => (s.xyz ?? [0, 0, 0]).map(Number) as [number, number, number])
+    const min = [0, 1, 2].map((k) => Math.min(...xyzs.map((p) => p[k])))
+    const max = [0, 1, 2].map((k) => Math.max(...xyzs.map((p) => p[k])))
+    const extent = [0, 1, 2].map((k) => max[k] - min[k])
+
+    const pad = input.padding != null ? Number(input.padding) : 8
+    const given = [input.a, input.b, input.c].map((v) => (v != null ? Number(v) : null))
+    let box = [0, 1, 2].map((k) =>
+      given[k] != null && (given[k] as number) > 0 ? (given[k] as number) : extent[k] + 2 * pad,
+    )
+    if (input.cubic === true) {
+      const L = Math.max(...box)
+      box = [L, L, L]
+    }
+    if (!box.every((L) => L > 0 && Number.isFinite(L))) {
+      throw new Error(`Computed box lengths are invalid: ${box.join(`, `)}`)
+    }
+
+    const matrix: number[][] = [
+      [box[0], 0, 0],
+      [0, box[1], 0],
+      [0, 0, box[2]],
+    ]
+    const mat3 = matrix as [[number, number, number], [number, number, number], [number, number, number]]
+    for (let i = 0; i < sites.length; i++) {
+      const p = xyzs[i]
+      const centered: [number, number, number] = [
+        p[0] - min[0] + (box[0] - extent[0]) / 2,
+        p[1] - min[1] + (box[1] - extent[1]) / 2,
+        p[2] - min[2] + (box[2] - extent[2]) / 2,
+      ]
+      sites[i].xyz = centered
+      sites[i].abc = cartesian_to_fractional(centered, mat3)
+    }
+    const lattice = {
+      matrix,
+      a: box[0], b: box[1], c: box[2],
+      alpha: 90, beta: 90, gamma: 90,
+      volume: box[0] * box[1] * box[2],
+      pbc: [true, true, true],
+    }
+    next.lattice = lattice as MutStructure[`lattice`]
+    set_current_structure(next as never)
+    return {
+      lattice: { a: +box[0].toFixed(2), b: +box[1].toFixed(2), c: +box[2].toFixed(2) },
+      num_sites: sites.length,
+      cubic: input.cubic === true,
+    }
+  },
+)
+
 // ── substitute_element (mutate) ──
 register(
   {

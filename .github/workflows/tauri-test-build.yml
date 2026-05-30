@@ -14,6 +14,10 @@ on:
           - macos
           - macos-intel
 
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+
 jobs:
   build-windows:
     if: ${{ inputs.platform == 'all' || inputs.platform == 'windows' }}

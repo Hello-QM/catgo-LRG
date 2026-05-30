@@ -954,7 +954,9 @@ def stream_install(
                 ssh_alias = getattr(conn, "ssh_alias", None)
                 if ssh_alias:
                     proc = await asyncio.create_subprocess_exec(
-                        "ssh", ssh_alias, login_cmd,
+                        # BatchMode=yes: ControlMaster mode — master socket must
+                        # already exist; never fall back to interactive askpass.
+                        "ssh", "-o", "BatchMode=yes", ssh_alias, login_cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
                     )

@@ -26,6 +26,10 @@ on:
       - 'svelte.config.js'
   workflow_dispatch:
 
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+
 jobs:
   build-bundle:
     runs-on: ubuntu-latest

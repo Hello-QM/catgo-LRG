@@ -2,7 +2,7 @@
   "name": "catgo",
   "displayName": "CatGo",
   "description": "3D viewer for crystal structures and MD trajectories — POSCAR/CIF/XYZ/extXYZ/ASE .traj/HDF5/DCD/XTC/TRR. Cross-cell PBC bond rendering, moyo space-group + Wyckoff symmetry, charge-density cube isosurfaces, trajectory scrubbing with energy/force overlays, themes that follow VS Code.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "license": "AGPL-3.0-or-later",
   "publisher": "Guangsheng",
   "icon": "icon.png",

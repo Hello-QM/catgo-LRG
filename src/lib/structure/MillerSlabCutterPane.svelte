@@ -305,17 +305,14 @@
     }
   })
 
-  // Compute bounds for sliders when miller index changes (but not during commit)
+  // Structure extent along the surface normal — used to center the offset when
+  // the Miller index changes.
   let bounds = $derived.by<[number, number]>(() => {
     if (!calc_structure?.lattice || !is_valid || is_committing) return [0, 10]
     const lattice = calc_structure.lattice.matrix as Matrix3x3
     const normal = miller_to_normal(miller_index, lattice)
     return get_bounds_along_normal(calc_structure, normal)
   })
-
-  let min_offset = $derived(bounds[0] - 2)
-  let max_offset = $derived(bounds[1] + 2)
-  let offset_range = $derived(max_offset - min_offset)
 
   // Reset offset to center when miller index changes (but not during commit)
   $effect(() => {
@@ -633,13 +630,6 @@
     }, 150)
   }
 
-  function on_offset_input(e: Event) {
-    const raw_val = parseFloat((e.target as HTMLInputElement).value)
-    pending_offset = raw_val
-    schedule_raf_update()
-    schedule_precision_update()
-  }
-
   function on_thickness_input(e: Event) {
     const val = parseFloat((e.target as HTMLInputElement).value)
     pending_thickness = val
@@ -662,6 +652,43 @@
     on_push_undo?.()
     supercell_a = a
     supercell_b = b
+  }
+
+  // User-selectable +/- increment for the offset stepper.
+  let offset_step = $state(0.5)
+
+  // Plane offset +/- stepper. `dir` is ±1; step size is user-chosen.
+  function on_offset_step(dir: number) {
+    local_offset = +(local_offset + dir * offset_step).toFixed(2)
+    plane_offset = local_offset
+    start_fade_animation()
+  }
+
+  // Plane offset free numeric entry (exact value, no layer snapping).
+  function on_offset_number(e: Event) {
+    const v = parseFloat((e.target as HTMLInputElement).value)
+    if (!isNaN(v)) {
+      local_offset = v
+      plane_offset = v
+      start_fade_animation()
+    }
+  }
+
+  // User-selectable +/- increment for the thickness stepper.
+  let thickness_step = $state(1)
+
+  // Thickness +/- stepper (Angstrom mode). `dir` is ±1; step size is user-chosen.
+  function on_thickness_step(dir: number) {
+    const v = Math.max(0, +(local_thickness + dir * thickness_step).toFixed(2))
+    local_thickness = v
+    plane_thickness = v
+    thickness_mode = 'angstrom'
+    start_fade_animation()
+  }
+
+  // Vacuum +/- stepper. No upper cap.
+  function on_vacuum_step(delta: number) {
+    vacuum = Math.max(0, +(vacuum + delta).toFixed(2))
   }
 
   // Cleanup
@@ -784,23 +811,45 @@
           <h5>Position & Thickness</h5>
         </div>
 
-        <!-- Offset Slider -->
-        <div class="slider-group">
-          <div class="slider-label">
-            <span>Plane Offset</span>
-            <span class="value">{fmt(local_offset)} A</span>
+        <!-- Plane Offset — stepper + free numeric entry, user-chosen step -->
+        <div class="number-row">
+          <span>Plane Offset</span>
+          <div class="stepper">
+            <button class="layer-btn" onclick={() => on_offset_step(-1)}>-</button>
+            <div class="number-field">
+              <input
+                type="number"
+                step={offset_step}
+                value={local_offset}
+                oninput={on_offset_number}
+              />
+              <span class="unit">A</span>
+            </div>
+            <button class="layer-btn" onclick={() => on_offset_step(1)}>+</button>
           </div>
-          <input
-            type="range"
-            min={min_offset}
-            max={max_offset}
-            step={offset_range / 200}
-            value={local_offset}
-            oninput={on_offset_input}
-          />
-          <div class="slider-bounds">
-            <span>{fmt(min_offset)}</span>
-            <span>{fmt(max_offset)}</span>
+        </div>
+        <!-- Step-size selector for the offset +/- buttons: presets + custom -->
+        <div class="step-size">
+          <span class="step-size-label">Step</span>
+          {#each [0.1, 0.5, 1, 2] as s}
+            <button
+              class="step-size-btn"
+              class:active={offset_step === s}
+              onclick={() => offset_step = s}
+            >
+              {s}
+            </button>
+          {/each}
+          <div class="number-field step-custom">
+            <input
+              type="number"
+              min="0.01"
+              step="0.1"
+              value={offset_step}
+              oninput={(e) => { const v = parseFloat(e.currentTarget.value); if (!isNaN(v) && v > 0) offset_step = v }}
+              title="Custom step size"
+            />
+            <span class="unit">A</span>
           </div>
         </div>
 
@@ -828,20 +877,44 @@
           </div>
 
           {#if thickness_mode === 'angstrom'}
-            <!-- Thickness Slider (Angstroms) -->
-            <div class="slider-group">
-              <div class="slider-label">
-                <span></span>
-                <span class="value">{fmt(local_thickness)} A</span>
+            <!-- Thickness (Angstroms) — stepper + free numeric entry, no upper cap -->
+            <div class="stepper">
+              <button class="layer-btn" onclick={() => on_thickness_step(-1)} disabled={local_thickness <= 0}>-</button>
+              <div class="number-field">
+                <input
+                  type="number"
+                  min="0"
+                  step={thickness_step}
+                  value={local_thickness}
+                  oninput={on_thickness_input}
+                />
+                <span class="unit">A</span>
               </div>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(20, offset_range)}
-                step={0.1}
-                value={local_thickness}
-                oninput={on_thickness_input}
-              />
+              <button class="layer-btn" onclick={() => on_thickness_step(1)}>+</button>
+            </div>
+            <!-- Step-size selector for the +/- buttons: presets + custom entry -->
+            <div class="step-size">
+              <span class="step-size-label">Step</span>
+              {#each [0.1, 0.5, 1, 2] as s}
+                <button
+                  class="step-size-btn"
+                  class:active={thickness_step === s}
+                  onclick={() => thickness_step = s}
+                >
+                  {s}
+                </button>
+              {/each}
+              <div class="number-field step-custom">
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.1"
+                  value={thickness_step}
+                  oninput={(e) => { const v = parseFloat(e.currentTarget.value); if (!isNaN(v) && v > 0) thickness_step = v }}
+                  title="Custom step size"
+                />
+                <span class="unit">A</span>
+              </div>
             </div>
           {:else}
             <!-- Layer Count Control -->
@@ -923,20 +996,6 @@
           </div>
         </div>
 
-        <!-- Vacuum Layer -->
-        <div class="slider-group">
-          <div class="slider-label">
-            <span>Vacuum Layer</span>
-            <span class="value">{fmt(vacuum)} A</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={30}
-            step={1}
-            bind:value={vacuum}
-          />
-        </div>
       </section>
 
       <!-- Step C: Supercell -->
@@ -979,6 +1038,19 @@
           <span>Show bonds</span>
         </label>
       </section>
+
+      <!-- Vacuum Layer — stepper + free numeric entry, no upper cap -->
+      <div class="number-row vacuum-row">
+        <span>Vacuum Layer</span>
+        <div class="stepper">
+          <button class="layer-btn" onclick={() => on_vacuum_step(-1)} disabled={vacuum <= 0}>-</button>
+          <div class="number-field">
+            <input type="number" min="0" step="1" bind:value={vacuum} />
+            <span class="unit">A</span>
+          </div>
+          <button class="layer-btn" onclick={() => on_vacuum_step(1)}>+</button>
+        </div>
+      </div>
 
       <!-- Preview Statistics -->
       {#if preview}
@@ -1234,56 +1306,106 @@
     border-color: var(--accent-color, #007acc);
   }
 
-  .slider-group {
-    margin-bottom: 0.6em;
-  }
-
-  .slider-label {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 3px;
-    opacity: 0.8;
-  }
-
-  .slider-label .value {
-    font-weight: bold;
-    color: var(--accent-color, #007acc);
-    opacity: 1;
-  }
-
-  .slider-group input[type="range"] {
-    width: 100%;
-    height: 5px;
-    border-radius: 3px;
-    background: var(--border-color, rgba(255, 255, 255, 0.15));
-    appearance: none;
-    cursor: pointer;
-  }
-
-  .slider-group input[type="range"]::-webkit-slider-thumb {
-    appearance: none;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: var(--accent-color, #007acc);
-    cursor: grab;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-  }
-
-  .slider-group input[type="range"]::-webkit-slider-thumb:active {
-    cursor: grabbing;
-  }
-
-  .slider-bounds {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.8em;
-    opacity: 0.5;
-    margin-top: 2px;
-  }
-
   .thickness-control {
     margin-bottom: 0.6em;
+  }
+
+  .number-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 0.6em;
+  }
+
+  .vacuum-row {
+    padding: 0 4px;
+    margin: 0.2em 0 1em;
+  }
+
+  .step-size {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .step-size-label {
+    font-size: 0.8em;
+    opacity: 0.6;
+    margin-right: 2px;
+  }
+
+  .step-custom input[type="number"] {
+    width: 52px;
+    padding: 3px 6px;
+    font-size: 0.85em;
+    font-weight: normal;
+  }
+
+  .step-custom .unit {
+    font-size: 0.8em;
+  }
+
+  .step-size-btn {
+    flex: 1;
+    padding: 3px 6px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+    background: var(--btn-bg, rgba(255, 255, 255, 0.1));
+    color: inherit;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.15s;
+  }
+
+  .step-size-btn:hover {
+    background: var(--btn-bg-hover, rgba(255, 255, 255, 0.15));
+  }
+
+  .step-size-btn.active {
+    background: var(--accent-color, #007acc);
+    border-color: var(--accent-color, #007acc);
+    color: white;
+  }
+
+  .stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 6px;
+    background: var(--btn-bg, rgba(0, 0, 0, 0.2));
+    border-radius: 4px;
+  }
+
+  .number-field {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .number-field input[type="number"] {
+    width: 72px;
+    padding: 6px 8px;
+    text-align: right;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.15));
+    background: var(--btn-bg, rgba(0, 0, 0, 0.2));
+    color: inherit;
+    border-radius: 4px;
+    font-size: 1em;
+    font-weight: bold;
+  }
+
+  .number-field input[type="number"]:focus {
+    outline: none;
+    border-color: var(--accent-color, #007acc);
+  }
+
+  .number-field .unit {
+    opacity: 0.6;
+    font-size: 0.9em;
   }
 
   .thickness-header {

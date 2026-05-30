@@ -24,6 +24,17 @@ warnings.filterwarnings("ignore", message=".*weights_only.*torch\\.load.*")
 # Add server directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Make local extension packages importable by the routers. catgo_dos /
+# catgo_cohp live under extensions/<name>/ with their own pyproject and are NOT
+# pip-installed; the DOS/COHP routers bare-import them, so put the extension
+# dirs on sys.path at startup. (The CLI does this lazily via
+# catgo.cli._extpath.ensure_extension; the long-running server does it once.)
+_repo_root = Path(__file__).resolve().parent.parent
+for _ext_dir_name in ("dos-analysis", "cohp-analysis"):
+    _ext_dir = _repo_root / "extensions" / _ext_dir_name
+    if _ext_dir.is_dir() and str(_ext_dir) not in sys.path:
+        sys.path.insert(0, str(_ext_dir))
+
 
 def _worktree_offset() -> int:
     """Compute deterministic port offset from worktree directory name.

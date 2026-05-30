@@ -83,3 +83,9 @@ deploy/hpc/bundle/wheels/
 
 # Vendored PORMAKE runtime topology caches (regenerated from .cgd on first use)
 server/catgo/vendor/pormake/database/**/*.pickle
+
+# Local dev / debugging artifacts
+.playwright-mcp/
+.claude/logs/
+repro-*.jpeg
+repro-*.png

@@ -21,6 +21,8 @@ import {
   build_constraints_section,
   build_charge_label_section,
   validate_bond_edits,
+  reindex_bond_edits,
+  reindex_site_indices,
 } from '$lib/structure/controllers/viewer-controller'
 
 import type { AnyStructure } from '$lib/structure'
@@ -620,5 +622,68 @@ describe('validate_bond_edits', () => {
     expect(result.manual_bonds!).toHaveLength(0)
     expect(result.deleted_bond_keys).not.toBeNull()
     expect(result.deleted_bond_keys!.size).toBe(0)
+  })
+})
+
+describe('reindex_bond_edits (atom-delete renumbering)', () => {
+  // Deleting atoms renumbers survivors: each survivor index drops by the count
+  // of deleted indices below it. Bond-edit state keyed by atom index must be
+  // SHIFTED to follow survivors (not merely pruned), or a survivor bond's new
+  // index pair collides with a STALE deleted-bond key and gets filtered out of
+  // the render — the reported "delete one atom, an unrelated bond vanishes" bug.
+
+  test('shifts a surviving deleted-bond key down so it no longer collides with a renumbered survivor pair', () => {
+    // User had deleted the bond between old atoms 76 and 84 -> key "76-84".
+    // Now delete scattered atoms {3,5,7,10}. Old (76,84) -> new (72,80).
+    // The survivor bond old (80,88) -> new (76,84): it must NOT inherit the
+    // stale "76-84" deleted key.
+    const { deleted_bond_keys } = reindex_bond_edits([], new Set(['76-84']), [3, 5, 7, 10])
+    expect(deleted_bond_keys.has('72-80')).toBe(true)
+    expect(deleted_bond_keys.has('76-84')).toBe(false)
+  })
+
+  test('drops a deleted-bond key whose endpoint was itself deleted', () => {
+    const { deleted_bond_keys } = reindex_bond_edits([], new Set(['5-12']), [5])
+    expect(deleted_bond_keys.size).toBe(0)
+  })
+
+  test('shifts manual bond endpoints and drops manual bonds touching a deleted atom', () => {
+    const manual: ManualBond[] = [
+      { site_idx_1: 80, site_idx_2: 88, id: 'keep' },
+      { site_idx_1: 7, site_idx_2: 20, id: 'drop' },
+    ]
+    const { manual_bonds } = reindex_bond_edits(manual, new Set(), [3, 5, 7, 10])
+    expect(manual_bonds).toHaveLength(1)
+    expect(manual_bonds[0].id).toBe('keep')
+    expect(manual_bonds[0].site_idx_1).toBe(76) // 80 - 4 below
+    expect(manual_bonds[0].site_idx_2).toBe(84) // 88 - 4 below
+  })
+
+  test('preserves a jimage-tagged cross-cell deleted key suffix while shifting indices', () => {
+    const { deleted_bond_keys } = reindex_bond_edits([], new Set(['80-88-1,0,0']), [3, 5, 7, 10])
+    expect(deleted_bond_keys.has('76-84-1,0,0')).toBe(true)
+  })
+
+  test('no-op when nothing is deleted (returns shifted-by-zero copies)', () => {
+    const { deleted_bond_keys, manual_bonds } = reindex_bond_edits(
+      [{ site_idx_1: 2, site_idx_2: 9, id: 'b' }], new Set(['2-9']), [],
+    )
+    expect(deleted_bond_keys.has('2-9')).toBe(true)
+    expect(manual_bonds[0].site_idx_1).toBe(2)
+  })
+})
+
+describe('reindex_site_indices (atom-delete renumbering)', () => {
+  test('shifts surviving site indices down and drops deleted ones', () => {
+    const result = reindex_site_indices(new Set([1, 8, 88]), [3, 5, 7, 10])
+    expect(result.has(1)).toBe(true)   // below all deletions, unchanged
+    expect(result.has(5)).toBe(true)   // 8 - 3 below (3,5,7)
+    expect(result.has(84)).toBe(true)  // 88 - 4 below (3,5,7,10)
+    expect(result.size).toBe(3)
+  })
+
+  test('drops a hidden index that was itself deleted', () => {
+    const result = reindex_site_indices(new Set([5]), [5])
+    expect(result.size).toBe(0)
   })
 })

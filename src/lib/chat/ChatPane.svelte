@@ -1405,7 +1405,12 @@ import { is_client_direct, relay_fetch } from './provider-routing'
                     input={pb.input}
                     suggestions={pb.suggestions}
                     decisionReason={pb.decisionReason}
-                    onResolve={pb.resolve}
+                    onResolve={(approved, session) => {
+                      // "Allow for session": flip the session-scoped bypass so
+                      // subsequent mutating tools auto-approve (no re-prompt).
+                      if (session) slice.skip_permission.value = true
+                      pb.resolve(approved)
+                    }}
                   />
                 {/each}
                 <ThinkingSummary tools={slice.active_tool_blocks.entries}>

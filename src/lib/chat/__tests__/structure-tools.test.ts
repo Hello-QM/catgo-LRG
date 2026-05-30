@@ -463,3 +463,46 @@ describe(`pseudo-hydrogen passivation tools`, () => {
     spy.mockRestore()
   })
 })
+
+const WATER_NO_LATTICE = {
+  '@module': `pymatgen.core.structure`,
+  '@class': `Structure`,
+  sites: [
+    { species: [{ element: `O`, occu: 1 }], xyz: [0, 0, 0], label: `O` },
+    { species: [{ element: `H`, occu: 1 }], xyz: [0.76, 0.59, 0], label: `H` },
+    { species: [{ element: `H`, occu: 1 }], xyz: [-0.76, 0.59, 0], label: `H` },
+  ],
+}
+
+describe(`set_lattice tool`, () => {
+  beforeEach(() => set_current_structure(WATER_NO_LATTICE as never))
+
+  it(`is registered as a mutate tool`, () => {
+    expect(CLIENT_TOOLS.find((t) => t.name === `set_lattice`)).toBeTruthy()
+    expect(tool_kind(`set_lattice`)).toBe(`mutate`)
+  })
+
+  it(`auto-sizes an orthorhombic box around a no-lattice molecule`, async () => {
+    const out = JSON.parse(await execute_tool(`set_lattice`, { padding: 8 }))
+    // x extent 1.52 + 16, y extent 0.59 + 16, z extent 0 + 16
+    expect(out.lattice.a).toBeCloseTo(17.52, 1)
+    expect(out.lattice.b).toBeCloseTo(16.59, 1)
+    expect(out.lattice.c).toBeCloseTo(16, 1)
+    const s = get_current_structure() as never as { lattice: { matrix: number[][]; a: number }; sites: { abc: number[]; xyz: number[] }[] }
+    expect(s.lattice.matrix[0][0]).toBeCloseTo(17.52, 1)
+    // fractional coords recomputed and inside the box (0..1)
+    for (const site of s.sites) {
+      expect(site.abc).toHaveLength(3)
+      for (const f of site.abc) expect(f).toBeGreaterThanOrEqual(0)
+      for (const f of site.abc) expect(f).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it(`honors explicit a/b/c and cubic`, async () => {
+    const out = JSON.parse(await execute_tool(`set_lattice`, { a: 10, b: 12, c: 14, cubic: true }))
+    expect(out.lattice.a).toBe(14)
+    expect(out.lattice.b).toBe(14)
+    expect(out.lattice.c).toBe(14)
+    expect(out.cubic).toBe(true)
+  })
+})

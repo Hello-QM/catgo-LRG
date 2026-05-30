@@ -605,7 +605,9 @@ function cartesian_to_fractional_2d(xyz: Vec3, a: Vec3, b: Vec3): [number, numbe
  * 4. Verify all layer atoms are integer combinations of the new basis (Cramer's rule)
  * 5. Remap all atoms into the new cell
  */
-function reduce_in_plane_primitive<T extends { abc: Vec3; xyz: Vec3 }>(
+function reduce_in_plane_primitive<
+  T extends { abc: Vec3; xyz: Vec3; species?: Array<{ element?: string }> },
+>(
   sites: T[], a: Vec3, b: Vec3,
 ): { new_a: Vec3; new_b: Vec3; sites: T[] } | null {
   const cross_z = a[0] * b[1] - a[1] * b[0]
@@ -675,17 +677,57 @@ function reduce_in_plane_primitive<T extends { abc: Vec3; xyz: Vec3 }>(
     if (!unique.some(u => Math.hypot(v[0]-u[0], v[1]-u[1]) < 1e-4)) unique.push(v)
   }
 
+  // A candidate in-plane vector is only a real surface lattice translation if
+  // shifting every atom by it lands on an atom of the SAME species. Geometry
+  // alone is not enough: in e.g. rocksalt (110) a glide of c/2 maps the cation
+  // sublattice onto the anion sublattice, which is a position-preserving but
+  // species-swapping operation. Accepting it would halve the cell and then the
+  // remap dedup would delete one whole species (all-cation/all-anion slab).
+  const det_ab = a[0]*b[1] - a[1]*b[0]
+  const el_of = (s: T) => s.species?.[0]?.element ?? ''
+  const FRAC_TOL = 2e-3
+  const is_lattice_translation = (t: Vec3): boolean => {
+    if (Math.abs(det_ab) < 1e-12) return false
+    for (const s of sites) {
+      const sx = a[0]*s.abc[0] + b[0]*s.abc[1] + t[0]
+      const sy = a[1]*s.abc[0] + b[1]*s.abc[1] + t[1]
+      let fa = (sx*b[1] - sy*b[0]) / det_ab
+      let fb = (-sx*a[1] + sy*a[0]) / det_ab
+      fa -= Math.floor(fa); fb -= Math.floor(fb)
+      const el = el_of(s), z = s.abc[2]
+      const matched = sites.some((o) => {
+        if (el_of(o) !== el) return false
+        if (Math.abs(o.abc[2] - z) > 0.01) return false
+        const oa = o.abc[0] - Math.floor(o.abc[0])
+        const ob = o.abc[1] - Math.floor(o.abc[1])
+        const da = Math.abs(fa - oa), db = Math.abs(fb - ob)
+        return Math.min(da, 1 - da) < FRAC_TOL && Math.min(db, 1 - db) < FRAC_TOL
+      })
+      if (!matched) return false
+    }
+    return true
+  }
+  const trans_memo = new Map<string, boolean>()
+  const is_translation = (v: Vec3): boolean => {
+    const key = `${v[0].toFixed(4)},${v[1].toFixed(4)}`
+    let r = trans_memo.get(key)
+    if (r === undefined) { r = is_lattice_translation(v); trans_memo.set(key, r) }
+    return r
+  }
+
   // Find shortest pair with minimal area
   let best_a = a, best_b = b, best_area = orig_area, found = false
   const limit = Math.min(unique.length, 80)
   for (let i = 0; i < limit; i++) {
     const va = unique[i]
+    if (!is_translation(va)) continue
     for (let j = i + 1; j < limit; j++) {
       const vb = unique[j]
       const area = Math.abs(va[0]*vb[1] - va[1]*vb[0])
       if (area < 1e-10 || area >= best_area - 1e-10) continue
       const ratio = orig_area / area
       if (Math.abs(ratio - Math.round(ratio)) > 0.1) continue
+      if (!is_translation(vb)) continue
       // Verify all layer atoms are integer combos of (va, vb)
       const va2 = va[0]*va[0]+va[1]*va[1], vab = va[0]*vb[0]+va[1]*vb[1], vb2 = vb[0]*vb[0]+vb[1]*vb[1]
       const det = va2*vb2 - vab*vab
@@ -745,9 +787,10 @@ function reduce_in_plane_primitive<T extends { abc: Vec3; xyz: Vec3 }>(
     nfa = nfa - Math.floor(nfa); nfb = nfb - Math.floor(nfb)
     if (nfa >= 1 - 1e-6) nfa = 0; if (nfb >= 1 - 1e-6) nfb = 0
     const nfc = site.abc[2]
-    // Deduplicate
+    // Deduplicate (same position AND same species — never merge across species)
     const tol = 1e-3
     const dup = new_sites.some(e => {
+      if (el_of(e) !== el_of(site)) return false
       const da = Math.abs(nfa - e.abc[0]), db = Math.abs(nfb - e.abc[1]), dc = Math.abs(nfc - e.abc[2])
       return Math.min(da, 1-da) < tol && Math.min(db, 1-db) < tol && dc < tol
     })

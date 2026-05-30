@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
 
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -58,6 +62,16 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
+      # Single source of truth for the version: the VS Code extension always
+      # inherits the root package.json version at publish time. Prevents
+      # shipping a stale .vsix when a release bump forgets to update
+      # extensions/vscode/package.json (this happened for v1.1.1).
+      - name: Sync extension version from root package.json
+        run: |
+          root_ver=$(node -p "require('./package.json').version")
+          npm --prefix extensions/vscode pkg set version="$root_ver"
+          echo "Extension version synced to $root_ver"
+
       - name: Build extension
         working-directory: extensions/vscode
         run: pnpm build
@@ -66,25 +80,48 @@ jobs:
         working-directory: extensions/vscode
         run: pnpm dlx @vscode/vsce package --no-dependencies
 
+      # Real publish failures (bad token, network, packaging) now fail the job
+      # loudly instead of being swallowed by continue-on-error. The ONLY
+      # tolerated error is "already published" — keeps re-tagging the same
+      # version idempotent without masking genuine breakage.
       - name: Publish to VS Code Marketplace
         if: ${{ github.event_name == 'push' || inputs.dry_run == false }}
-        # Don't fail the whole job (and skip the release-attach below) when the
-        # version is already published — e.g. re-tagging the same version.
-        continue-on-error: true
         working-directory: extensions/vscode
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix
+        run: |
+          set +e
+          out=$(pnpm dlx @vscode/vsce publish --no-dependencies --packagePath catgo-*.vsix 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            if echo "$out" | grep -qiE "already (exists|published)"; then
+              echo "::warning::Version already on the VS Code Marketplace — treating as a no-op (idempotent re-tag)."
+            else
+              echo "::error::vsce publish failed (exit $code)."
+              exit "$code"
+            fi
+          fi
 
       - name: Publish to Open VSX (Cursor / VSCodium / Theia)
         if: ${{ (github.event_name == 'push' || inputs.dry_run == false) && env.OVSX_PAT != '' }}
-        continue-on-error: true
         working-directory: extensions/vscode
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
+          set +e
           vsix=$(ls catgo-*.vsix | head -1)
-          pnpm dlx ovsx publish "$vsix" --no-dependencies
+          out=$(pnpm dlx ovsx publish "$vsix" --no-dependencies 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ]; then
+            if echo "$out" | grep -qiE "already (exists|published)"; then
+              echo "::warning::Version already on Open VSX — treating as a no-op (idempotent re-tag)."
+            else
+              echo "::error::ovsx publish failed (exit $code)."
+              exit "$code"
+            fi
+          fi
 
       - name: Upload VSIX as workflow artifact
         uses: actions/upload-artifact@v4
@@ -93,7 +130,7 @@ jobs:
           path: extensions/vscode/catgo-*.vsix
           retention-days: 90
 
-      - name: Attach VSIX and sidecar binaries to GitHub Release
+      - name: Attach VSIX to GitHub Release
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -104,13 +141,8 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 \
             || gh release create "$tag" --title "$tag" --notes "Release $tag"
           gh release upload "$tag" "$vsix" --clobber
-          # Sidecar binaries (linux-x64, darwin-arm64, win-x64) live alongside
-          # the .vsix on the release so `extensions/vscode/src/sidecar.ts` can
-          # fetch the right one for the user's platform on first activate.
-          # The .vsix itself ships without bin/ to stay under the Marketplace
-          # ~100 MB size limit.
-          for f in extensions/vscode/bin/catgo-server-linux-x64 \
-                   extensions/vscode/bin/catgo-server-darwin-arm64 \
-                   extensions/vscode/bin/catgo-server-win-x64.exe; do
-            [ -f "$f" ] && gh release upload "$tag" "$f" --clobber || true
-          done
+          # The platform sidecar binaries (catgo-server-{linux-x64,darwin-arm64,
+          # win-x64.exe}) that src/sidecar.ts downloads on first activate are
+          # built and attached by the separate build-vscode-sidecars.yml
+          # workflow — they can't be produced on this single Linux runner, and
+          # the old `[ -f ] && upload` loop here silently uploaded nothing.

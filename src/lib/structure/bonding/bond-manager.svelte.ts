@@ -588,6 +588,7 @@ export class BondManager {
 		const old_count = this.#count;
 		const pairs = this.#pairs;
 		const kinds = this.#kinds;
+		const jimages = this.#jimages;
 		const colors_start = this.#colors_start;
 		const colors_end = this.#colors_end;
 		const opacity = this.#opacity_buffer;
@@ -629,6 +630,9 @@ export class BondManager {
 					if (opacity !== null) {
 						opacity[write] = opacity[read];
 					}
+					jimages[write * 3] = jimages[read * 3];
+					jimages[write * 3 + 1] = jimages[read * 3 + 1];
+					jimages[write * 3 + 2] = jimages[read * 3 + 2];
 				}
 				if (first_change === -1) first_change = write;
 				last_change = read;
