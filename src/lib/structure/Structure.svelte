@@ -2164,21 +2164,35 @@
   // Reverse sync: store → viewer. The CatBot client-direct tool loop (STATIC_ONLY,
   // no backend) mutates structures via set_current_structure() in structure-tools.ts;
   // unlike the SDK/MCP path there's no SSE bridge to push the result back into the
-  // viewer. Pull it here. Guard against the mirror effect above: only adopt a store
-  // value that is a DIFFERENT object than what we last wrote (so the viewer's own
-  // structure→store mirror can't ping-pong). New ref from a tool → adopt it.
+  // viewer. Pull it here.
+  //
+  // CRITICAL multi-tab/pane guard: `current_structure_state()` is ONE global
+  // singleton holding the session's last-loaded structure across ALL tabs and
+  // panes. Naively adopting its value bleeds structures between viewers — e.g.
+  // load NaCl in tab2, switch back to tab1, and tab1 (`is_active` flips true on
+  // activation) would adopt NaCl. So we only adopt a store change that lands
+  // WHILE this pane is the visible active viewer (`is_active` already requires
+  // `tab === active_tab` from App.svelte). On (re)activation we BASELINE the
+  // current store value instead of adopting it — only genuinely NEW writes
+  // (real CatBot edits aimed at this viewer) are pulled in afterwards.
   const _cur_store = current_structure_state()
+  let _seen_store_val: typeof structure | null = _cur_store.value as typeof structure
+  let _was_active = false
   $effect(() => {
     if (tab_id === undefined) return
-    // Only the active pane adopts store mutations. In a split view every pane
-    // shares this one global store; without this guard, loading/editing one
-    // pane (which writes the store) makes every sibling pane's effect re-run
-    // and overwrite itself with that structure — all panes collapse to the
-    // same structure. The active pane is the one CatBot/loads target.
-    if (!is_active) return
-    const v = _cur_store.value
+    const v = _cur_store.value as typeof structure // subscribe unconditionally
+    if (!is_active) { _was_active = false; return } // inactive/hidden: never adopt
+    if (!_was_active) {
+      // Just activated: baseline the current global value, do NOT adopt it
+      // (it may be another tab's structure). Adopt only later changes.
+      _was_active = true
+      _seen_store_val = v
+      return
+    }
+    if (v === _seen_store_val) return // nothing new since activation
+    _seen_store_val = v
     if (v && v !== structure && v !== _last_mirrored_to_store) {
-      structure = v as typeof structure
+      structure = v
     }
   })
 

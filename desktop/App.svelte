@@ -52,6 +52,9 @@
     is_chgcar_file, NON_STRUCTURE_EXTS, update_export_format, format_from_ext,
     serialize_structure_content,
   } from './pane-utils'
+  // Deep-clone structures on assignment into a pane so panes/tabs never alias
+  // the same object (module-level samples, library entries, reused DB imports).
+  import { clone_structure } from '$lib/structure/clone'
   // Extracted tab manager (factory — must be called in component context)
   import { create_tab_manager } from './lib/tab-manager.svelte'
   // Extracted close-all helpers (pure functions)
@@ -216,7 +219,7 @@
     if (!pane) return
     // If pane has no structure, load water so Structure mounts
     if (!pane.structure && !pane.trajectory && !pane.cube_file) {
-      ts.panes[idx].structure = water as unknown as AnyStructure
+      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
       ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
       ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
     }
@@ -368,7 +371,7 @@
         if (parsed?.sites?.length) {
           const target_ts = tab_states[target_tab_id]
           if (target_ts) {
-            target_ts.panes[target_pane_idx].structure = parsed
+            target_ts.panes[target_pane_idx].structure = clone_structure(parsed)
             target_ts.panes[target_pane_idx].initial_structure_ref = parsed
             target_ts.panes[target_pane_idx].initial_site_count = parsed.sites.length
             target_ts.panes[target_pane_idx].modified = false
@@ -454,7 +457,7 @@
       console.warn(`[App] Tab limit reached, cannot open structure in new tab`)
       return
     }
-    ts.panes[0].structure = struct
+    ts.panes[0].structure = clone_structure(struct)
     ts.panes[0].initial_structure_ref = struct
     ts.panes[0].initial_site_count = struct.sites?.length ?? 0
     ts.panes[0].modified = false
@@ -679,7 +682,7 @@
     const target = modal.import_target_pane
     // Mutate the pane in-place so Svelte 5's deep $state proxy tracks the change
     const pane = ts.panes[target]
-    pane.structure = imported as AnyStructure
+    pane.structure = clone_structure(imported as AnyStructure)
     pane.initial_site_count = imported.sites.length
     pane.initial_structure_ref = imported as AnyStructure
     pane.modified = false
@@ -893,7 +896,7 @@
   ) {
     const p = ts.panes[target]
     if (e.cube_file) {
-      p.structure = e.structure
+      p.structure = clone_structure(e.structure)
       p.initial_site_count = e.structure?.sites?.length ?? 0
       p.initial_structure_ref = e.structure ?? null
       p.cube_file = e.cube_file
@@ -911,7 +914,7 @@
     } else {
       p.is_trajectory_mode = false
       p.trajectory = null
-      p.structure = e.structure
+      p.structure = clone_structure(e.structure)
       p.initial_site_count = e.structure?.sites?.length ?? 0
       p.initial_structure_ref = e.structure ?? null
       p.cube_file = null
@@ -1058,7 +1061,7 @@
         // Re-bind to new tab
         const new_panes = new_ts.panes
         if (data.structure) {
-          new_panes[0].structure = data.structure
+          new_panes[0].structure = clone_structure(data.structure)
           new_panes[0].is_trajectory_mode = false
           new_panes[0].trajectory = null
           new_panes[0].initial_site_count = data.structure.sites?.length ?? 0
@@ -1070,7 +1073,7 @@
         return
       }
       if (data.structure) {
-        ts.panes[target].structure = data.structure
+        ts.panes[target].structure = clone_structure(data.structure)
         ts.panes[target].is_trajectory_mode = false
         ts.panes[target].trajectory = null
         ts.panes[target].initial_site_count = data.structure.sites?.length ?? 0
@@ -1082,7 +1085,7 @@
         if (traj.metadata?.source_format === `single_structure` && traj.frames?.length === 1) {
           const frame = traj.frames[0] as { structure?: AnyStructure }
           if (frame?.structure) {
-            ts.panes[target].structure = frame.structure
+            ts.panes[target].structure = clone_structure(frame.structure)
             ts.panes[target].is_trajectory_mode = false
             ts.panes[target].trajectory = null
             ts.panes[target].initial_site_count = frame.structure.sites?.length ?? 0
@@ -1246,7 +1249,7 @@
       if (!struct) return false
       const ts = tab_states[`default`]
       if (!ts || !ts.panes?.[0]) return false
-      ts.panes[0].structure = struct
+      ts.panes[0].structure = clone_structure(struct)
       update_tab_label(`default`)
       return true
     }
@@ -1371,7 +1374,7 @@
     if (struct?.sites?.length) {
       const ts = tab_states[`default`]
       if (ts?.panes?.[0]) {
-        ts.panes[0].structure = struct
+        ts.panes[0].structure = clone_structure(struct)
         update_tab_label(`default`)
       }
       return
@@ -1383,7 +1386,7 @@
         if (!cached?.sites?.length) return
         const ts = tab_states[`default`]
         if (ts?.panes?.[0]) {
-          ts.panes[0].structure = cached
+          ts.panes[0].structure = clone_structure(cached)
           update_tab_label(`default`)
         }
       })
@@ -1639,7 +1642,7 @@
               {:else if pane.structure}
                 <Structure
                   tab_id={tab.id}
-                  is_active={ts.active_pane === idx}
+                  is_active={ts.active_pane === idx && tab.id === tm.active_tab_id}
                   bind:structure={ts.panes[idx].structure}
                   bind:saveable_structure={ts.panes[idx].saveable_structure}
                   bind:selected_sites={ts.panes[idx].selected_sites}
@@ -1678,7 +1681,7 @@
                         <button
                           class="sample-card"
                           onclick={() => {
-                            ts.panes[idx].structure = sample.data
+                            ts.panes[idx].structure = clone_structure(sample.data)
                             ts.panes[idx].initial_site_count = sample.data.sites?.length ?? 0
                             ts.panes[idx].initial_structure_ref = sample.data
                             ts.panes[idx].modified = false
@@ -1805,7 +1808,7 @@
                          in-browser (no backend) and can fetch/build structures from empty state. -->
                     <button class="import-card chat-card" onclick={() => {
                       console.log(`[CatGo:UI] Welcome card clicked: AI Chat → loading structure + opening Chat panel`)
-                      ts.panes[idx].structure = water as unknown as AnyStructure
+                      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
                       ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
                       ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
                       ts.panes[idx].initial_panel = `chat`
@@ -1824,7 +1827,7 @@
                     {#if !STATIC_ONLY}
                     <button class="import-card hpc-card" onclick={() => {
                       console.log(`[CatGo:UI] Welcome card clicked: HPC → loading structure + opening HPC panel`)
-                      ts.panes[idx].structure = water as unknown as AnyStructure
+                      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
                       ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
                       ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
                       ts.panes[idx].initial_panel = `hpc`
@@ -1842,7 +1845,7 @@
 
                     <button class="import-card terminal-card" onclick={() => {
                       console.log(`[CatGo:UI] Welcome card clicked: Terminal → loading structure + opening Terminal panel`)
-                      ts.panes[idx].structure = water as unknown as AnyStructure
+                      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
                       ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
                       ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
                       ts.panes[idx].initial_panel = `terminal`
