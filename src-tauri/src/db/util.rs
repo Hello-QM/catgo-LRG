@@ -190,7 +190,23 @@ pub fn expand_tilde(dir: &str) -> PathBuf {
             return home.join(dir.strip_prefix("~/").unwrap_or(""));
         }
     }
-    PathBuf::from(dir)
+    let normalized = normalize_windows_drive_path(dir);
+    PathBuf::from(normalized)
+}
+
+fn normalize_windows_drive_path(path: &str) -> &str {
+    if cfg!(windows) {
+        let bytes = path.as_bytes();
+        if bytes.len() >= 4
+            && (bytes[0] == b'/' || bytes[0] == b'\\')
+            && bytes[2] == b':'
+            && (bytes[3] == b'/' || bytes[3] == b'\\')
+            && bytes[1].is_ascii_alphabetic()
+        {
+            return &path[1..];
+        }
+    }
+    path
 }
 
 /// Get a text_key_value for a system row.

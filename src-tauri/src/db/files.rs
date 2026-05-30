@@ -1,7 +1,7 @@
 //! Filesystem commands: browse, read, write, mkdir, delete, rename, copy, move.
 
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::util::expand_tilde;
 
@@ -58,6 +58,38 @@ pub struct FileOpResult {
     pub message: String,
 }
 
+fn path_to_ui_string(path: &Path) -> String {
+    strip_windows_verbatim_prefix(&path.to_string_lossy())
+}
+
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if cfg!(windows) {
+        if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = path.strip_prefix(r"\\?\") {
+            return rest.to_string();
+        }
+    }
+    path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_windows_verbatim_prefix;
+
+    #[test]
+    fn strips_windows_verbatim_drive_prefix_for_ui() {
+        let input = r"\\?\E:\Projects\example\data";
+        let expected = if cfg!(windows) {
+            r"E:\Projects\example\data"
+        } else {
+            input
+        };
+        assert_eq!(strip_windows_verbatim_prefix(input), expected);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tauri commands: DB browse directory
 // ---------------------------------------------------------------------------
@@ -108,7 +140,7 @@ pub fn db_browse_directory(dir: Option<String>) -> Result<BrowseResult, String> 
             items.push(BrowseItem {
                 name,
                 item_type: "dir".to_string(),
-                path: path.to_string_lossy().to_string(),
+                path: path_to_ui_string(&path),
             });
         } else if let Some(ext) = path.extension() {
             let ext_lower = ext.to_string_lossy().to_lowercase();
@@ -116,20 +148,16 @@ pub fn db_browse_directory(dir: Option<String>) -> Result<BrowseResult, String> 
                 items.push(BrowseItem {
                     name,
                     item_type: "file".to_string(),
-                    path: path.to_string_lossy().to_string(),
+                    path: path_to_ui_string(&path),
                 });
             }
         }
     }
 
-    let parent = target
-        .parent()
-        .unwrap_or(&target)
-        .to_string_lossy()
-        .to_string();
+    let parent = path_to_ui_string(target.parent().unwrap_or(&target));
 
     Ok(BrowseResult {
-        dir: target.to_string_lossy().to_string(),
+        dir: path_to_ui_string(&target),
         parent,
         items,
     })
@@ -147,7 +175,7 @@ pub fn db_browse_files(dir: Option<String>) -> Result<FileBrowseResult, String> 
 
     let parent = canonical
         .parent()
-        .map(|p| p.to_string_lossy().to_string())
+        .map(path_to_ui_string)
         .unwrap_or_default();
 
     let mut items = Vec::new();
@@ -169,7 +197,7 @@ pub fn db_browse_files(dir: Option<String>) -> Result<FileBrowseResult, String> 
             } else {
                 "file".to_string()
             },
-            path: entry.path().to_string_lossy().to_string(),
+            path: path_to_ui_string(&entry.path()),
         });
     }
     // Sort: directories first, then files, alphabetically
@@ -179,7 +207,7 @@ pub fn db_browse_files(dir: Option<String>) -> Result<FileBrowseResult, String> 
     });
 
     Ok(FileBrowseResult {
-        dir: canonical.to_string_lossy().to_string(),
+        dir: path_to_ui_string(&canonical),
         parent,
         items,
     })

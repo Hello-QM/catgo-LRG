@@ -55,9 +55,21 @@ export function get_file_icon(name: string): string {
 
 export function fs_get_breadcrumbs(dir: string): Array<{ label: string; path: string }> {
   if (!dir) return []
-  const sep = dir.includes(`\\`) ? `\\` : `/`
-  const parts = dir.split(sep).filter(Boolean)
+  const normalized_dir = dir.replace(/^\\\\\?\\([A-Za-z]:[\\/])/, `$1`)
+  const is_windows_drive = /^[A-Za-z]:[\\/]/.test(normalized_dir)
+  const sep = normalized_dir.includes(`\\`) ? `\\` : `/`
+  const parts = is_windows_drive
+    ? normalized_dir.split(/[\\/]+/).filter(Boolean)
+    : normalized_dir.split(sep).filter(Boolean)
   const crumbs: Array<{ label: string; path: string }> = []
+  if (is_windows_drive) {
+    let acc = ``
+    for (const p of parts) {
+      acc = acc ? `${acc}${sep}${p}` : p
+      crumbs.push({ label: p, path: acc + sep })
+    }
+    return crumbs
+  }
   // On Unix, start with /
   if (sep === `/`) {
     crumbs.push({ label: `/`, path: `/` })
