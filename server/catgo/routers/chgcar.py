@@ -16,9 +16,12 @@ from fastapi.responses import Response
 
 router = APIRouter(prefix="/chgcar", tags=["chgcar"])
 
-# Path to the Rust binary (same as cube.py)
+# Path to the Rust binary (same as cube.py). __file__ is
+# server/catgo/routers/chgcar.py, so four .parent hops reach the repo root
+# where tools/cube-processor lives (three only reached server/, which has no
+# tools/ → binary never found even when built).
 CUBE_PROCESSOR = (
-    Path(__file__).parent.parent.parent
+    Path(__file__).parent.parent.parent.parent
     / "tools"
     / "cube-processor"
     / "target"

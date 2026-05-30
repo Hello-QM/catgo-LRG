@@ -356,7 +356,14 @@ async def dos_from_directory(session_id: str, remote_path: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load from directory: {e}")
+        # Log the full traceback and surface the exception TYPE in the detail —
+        # some failures (e.g. asyncio.TimeoutError) have an empty str(), which
+        # produced the useless "Failed to load from directory: " message.
+        logger.exception("dos_from_directory failed for remote_path=%s", remote_path)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load from directory: {type(e).__name__}: {e}".rstrip(": "),
+        )
 
 
 ## ---------- Compute Endpoints (unified VaspData path) ---------- ##

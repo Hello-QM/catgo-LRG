@@ -18,7 +18,7 @@ router = APIRouter(prefix="/cube", tags=["cube"])
 
 # Path to the Rust binary (relative to server directory)
 CUBE_PROCESSOR = (
-    Path(__file__).parent.parent.parent / "tools" / "cube-processor" / "target" / "release" / "cube-processor"
+    Path(__file__).parent.parent.parent.parent / "tools" / "cube-processor" / "target" / "release" / "cube-processor"
 )
 
 # Cache directory for uploaded cube files and results
