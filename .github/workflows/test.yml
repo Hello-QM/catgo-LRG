@@ -64,6 +64,13 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # Run inside Playwright's official image, which ships the browsers
+    # preinstalled at /ms-playwright. The chromium download from
+    # cdn.playwright.dev systematically stalled ~18min on the runner and tripped
+    # the job backstop before the tests ran; the image removes that download
+    # entirely. Keep the tag in sync with @playwright/test in package.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.58.0-noble
     continue-on-error: true
     # Hard backstop: e2e is non-gating (continue-on-error) and has historically
     # hung on the dev-server webServer, running to GitHub's 6h job cap. Bound it.
@@ -101,22 +108,7 @@ jobs:
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
-      # Cache the downloaded browser binaries. A cold `playwright install`
-      # historically stalled ~18min on the chromium download and tripped the
-      # 20min job backstop (job cancelled before tests ran). A cache hit skips
-      # the download; the per-step timeout fails fast on a stall instead of
-      # dragging the whole job to the backstop.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
-
-      - name: Install Playwright
-        timeout-minutes: 5
-        run: npx playwright install chromium
-
+      # Browsers are preinstalled in the container image, so no download step.
       - name: Run e2e tests
         continue-on-error: true
         run: npx playwright test
