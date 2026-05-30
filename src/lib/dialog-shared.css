@@ -90,6 +90,12 @@
 .dialog-modal .tab-bar button.active,
 .dialog-modal .tab-bar .tab.active,
 .dialog-modal .tab-bar .tab-btn.active {
+  /* `background: none` is load-bearing: when a dialog is rendered inside a
+     .draggable-pane, pane-shared.css's `.draggable-pane .tab-bar button.active`
+     fills the active tab with the accent color. This underline-style rule only
+     set `color: accent`, so the result was accent text on an accent fill —
+     invisible. Reset the background so the dialog's underline style wins. */
+  background: none;
   color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
   border-bottom-color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
 }
