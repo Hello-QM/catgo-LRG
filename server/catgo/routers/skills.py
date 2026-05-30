@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 _SKILLS_DIR = os.path.join(
-    os.path.dirname(__file__), os.pardir, "catgo", "workflow", "skills",
+    os.path.dirname(__file__), os.pardir, "workflow", "skills",
 )
 
 

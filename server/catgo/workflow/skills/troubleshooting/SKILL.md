@@ -39,6 +39,7 @@ catgo_workflow_engine(action: "get_result", params: {
 | CatGo engine errors (REMOTE_ERROR, stuck tasks) | `troubleshooting/workflow_errors` |
 | HPC connection issues (SSH, SFTP) | `troubleshooting/workflow_errors` |
 | POTCAR not found, missing files | `troubleshooting/workflow_errors` |
+| Test/verify cluster config before submitting; POTCAR/pseudopotential/binary/module checks; job "completed" with no output | `troubleshooting/cluster_config_test` |
 
 ### Step 3: Gather diagnostics
 

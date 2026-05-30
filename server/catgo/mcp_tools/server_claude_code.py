@@ -1919,7 +1919,7 @@ async def _handle_workflow_engine(args: dict) -> list[TextContent]:
 
 _SKILLS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "catgo", "workflow", "skills",
+    "workflow", "skills",
 )
 
 
