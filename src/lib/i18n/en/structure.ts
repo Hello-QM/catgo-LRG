@@ -931,6 +931,7 @@ const structure: Record<string, string> = {
   server_hpc: `Server (HPC)`,
   plugin_hub: `Plugin Hub`,
   large_system_mode: `Large-system performance mode`,
+  large_system_mode_unavailable: `Large-system mode — WebGPU unavailable in this browser (enable Unsafe WebGPU / Vulkan flags)`,
   ai_assistant: `AI Assistant`,
   restore_terminal: `Restore terminal`,
   minimize_terminal: `Minimize terminal`,

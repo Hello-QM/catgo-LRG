@@ -64,6 +64,7 @@
     server_pane_open = $bindable(false),
     plugin_hub_open = $bindable(false),
     large_system_mode = $bindable(false),
+    webgpu_available = true,
     chat_pane_open = $bindable(false),
     show_terminal = $bindable(false),
     side_panel_minimized = $bindable(false),
@@ -119,6 +120,7 @@
     server_pane_open?: boolean
     plugin_hub_open?: boolean
     large_system_mode?: boolean
+    webgpu_available?: boolean
     chat_pane_open?: boolean
     show_terminal?: boolean
     side_panel_minimized?: boolean
@@ -359,14 +361,15 @@
     <span class="struct-toolbar-tooltip-wrap">
       <button
         type="button"
-        onclick={() => { large_system_mode = !large_system_mode }}
+        disabled={!webgpu_available}
+        onclick={() => { if (webgpu_available) large_system_mode = !large_system_mode }}
         class="build-tools-toggle"
         class:active={large_system_mode}
         aria-pressed={large_system_mode}
       >
         <Icon icon="Gauge" />
       </button>
-      <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.large_system_mode')}</span>
+      <span class="struct-toolbar-tooltip" role="tooltip">{webgpu_available ? t('structure.large_system_mode') : t('structure.large_system_mode_unavailable')}</span>
     </span>
 
     {#if !hide_extra_tools}
@@ -722,8 +725,12 @@
   section.control-buttons > :global(button:hover),
   section.control-buttons :global(.pane-toggle:hover),
   section.control-buttons .view-mode-button:hover,
-  section.control-buttons .build-tools-toggle:hover {
+  section.control-buttons .build-tools-toggle:hover:not(:disabled) {
     background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  section.control-buttons .build-tools-toggle:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
   }
   section.control-buttons .build-tools-toggle.active,
   section.control-buttons .view-mode-button.active,

@@ -931,6 +931,7 @@ const structure: Record<string, string> = {
   server_hpc: `服务器 (HPC)`,
   plugin_hub: `插件中心`,
   large_system_mode: `大体系性能模式`,
+  large_system_mode_unavailable: `大体系性能模式 —— 此浏览器不支持 WebGPU（需开启 Unsafe WebGPU / Vulkan 标志）`,
   ai_assistant: `AI 助手`,
   restore_terminal: `还原终端`,
   minimize_terminal: `最小化终端`,
