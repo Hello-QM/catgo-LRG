@@ -5,6 +5,28 @@ export function is_webgpu_supported(): boolean {
   return typeof navigator !== `undefined` && `gpu` in navigator && navigator.gpu != null
 }
 
+let _adapter_probe: Promise<boolean> | null = null
+
+/** Real availability check: `is_webgpu_supported()` only confirms the API
+ *  EXISTS (navigator.gpu); on many setups (e.g. AMD integrated + Linux without
+ *  the Vulkan/WebGPU flags) `requestAdapter()` still returns null — API present
+ *  but no device obtainable. This probes for an actual adapter once and caches
+ *  the result, used to disable the large-system toggle when WebGPU can't really
+ *  run instead of letting it fail at render time. */
+export function probe_webgpu_available(): Promise<boolean> {
+  if (_adapter_probe) return _adapter_probe
+  _adapter_probe = (async () => {
+    if (!is_webgpu_supported()) return false
+    try {
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: `high-performance` })
+      return adapter != null
+    } catch {
+      return false
+    }
+  })()
+  return _adapter_probe
+}
+
 let cached_device: GPUDevice | null = null
 
 /** Acquire a GPUDevice, or null if WebGPU is unavailable / acquisition fails.

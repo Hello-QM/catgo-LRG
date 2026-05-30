@@ -2001,6 +2001,21 @@
   // Task 9: experimental WebGPU large-system render path. Default OFF — when
   // off the overlay renders nothing and the WebGL viewer is unchanged.
   let large_system_mode = $state(false)
+  // Whether WebGPU can actually run here (a real adapter is obtainable, not just
+  // navigator.gpu existing). Optimistic until the async probe resolves; gates the
+  // toolbar toggle so it can't be enabled when the overlay would fail to render.
+  let webgpu_available = $state(true)
+  $effect(() => {
+    let cancelled = false
+    import('./gpu/webgpu-context').then(({ probe_webgpu_available }) =>
+      probe_webgpu_available().then((ok) => {
+        if (cancelled) return
+        webgpu_available = ok
+        if (!ok) large_system_mode = false // can't run — force OFF
+      }),
+    )
+    return () => { cancelled = true }
+  })
   // While the WebGPU overlay is active, the WebGL/Threlte path must do ZERO
   // per-frame work (not just zero painting): the overlay computes its own GPU
   // bonds/atoms, so any per-frame CPU recompute on the WebGL side is wasted and
@@ -2951,6 +2966,7 @@
       bind:server_pane_open
       bind:plugin_hub_open
       bind:large_system_mode
+      {webgpu_available}
       bind:chat_pane_open
       on_popout_chat={popout_chat}
       bind:show_terminal
@@ -3739,6 +3755,7 @@
           {structure}
           bind:bond_distance_rules
           bind:large_system_mode
+          {webgpu_available}
           {supercell_loading}
           closed_icon="Sliders"
         />

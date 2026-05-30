@@ -1516,6 +1516,18 @@
   }}
 />
 
+<!-- The wrapper's element-level onkeydown only fires when focus is INSIDE it.
+     When nothing is focused (focus on <body>), forward the trajectory shortcuts
+     so keys like Ctrl+A→first frame / A·D / Space work without first clicking
+     the viewer. If focus is on a specific element (an input, another pane), we
+     bail and let that element's own handler decide — so this never hijacks keys
+     from another focused pane. -->
+<svelte:window onkeydown={(event) => {
+  const ae = document.activeElement
+  if (ae && ae !== document.body) return
+  onkeydown(event)
+}} />
+
 <div
   class:dragover
   class:active={is_playing || structure_info_open || structure_controls_open ||
