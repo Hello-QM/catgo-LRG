@@ -2253,6 +2253,9 @@
     if (!structure) return
     const entry = sel_state.pop_entry()
     if (!entry) return
+    // Capture the state we're undoing FROM (the forward state) so redo() can
+    // restore it. Snapshot-based redo — see selection-state redo_history.
+    sel_state.push_redo(structure)
     if (entry.kind === 'structure') {
       structure = entry.structure
       pencil.pop_bond_undo()
@@ -2293,6 +2296,16 @@
     // double-add bonds. See Phase 5a commit for the original reasoning.
     pencil.bond_undo.undo()
     pencil.apply_bond_array_inverse(entry.array_inverse)
+  }
+
+  function redo() {
+    if (!structure) return
+    const snap = sel_state.pop_redo()
+    if (!snap) return
+    // Make the redo itself undoable: push the current state as a structure-kind
+    // undo entry, WITHOUT clearing the redo stack (so chained redo still works).
+    sel_state.push_structure_entry($state.snapshot(structure) as AnyStructure, false)
+    structure = snap as typeof structure
   }
 
   // Push current state to undo stack (used by slab cutter and other tools)
@@ -2352,6 +2365,8 @@
     push_to_undo,
     push_atom_entry: (inv) => { sel_state.push_atom_entry(inv); pencil.push_bond_undo() },
     undo,
+    redo,
+    get_redo_length: () => (sel_state.can_redo ? 1 : 0),
     push_selection_to_undo,
     get_structure_history_length: () => (sel_state.can_undo ? 1 : 0),
     get_opacity_history: () => sel_state.opacity_history,

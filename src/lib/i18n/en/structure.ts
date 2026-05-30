@@ -1064,7 +1064,7 @@ const structure: Record<string, string> = {
   tip_trajectory: `Trajectory`,
   tip_trajectory_desc: `A/D to prev/next frame, Space to play/pause`,
   tip_undo_redo: `Undo/Redo`,
-  tip_undo_redo_desc: `Ctrl+Z to undo structure changes`,
+  tip_undo_redo_desc: `Ctrl+Z to undo, Ctrl+Shift+Z (or Ctrl+Y) to redo structure changes`,
   tip_measure: `Measure`,
   tip_measure_desc: `Click atoms then pick distance/angle mode to measure`,
   tip_colors: `Colors`,

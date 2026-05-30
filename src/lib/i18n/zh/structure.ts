@@ -1064,7 +1064,7 @@ const structure: Record<string, string> = {
   tip_trajectory: `轨迹播放`,
   tip_trajectory_desc: `A/D 切换上一帧/下一帧，空格播放/暂停`,
   tip_undo_redo: `撤销/重做`,
-  tip_undo_redo_desc: `Ctrl+Z 撤销结构更改`,
+  tip_undo_redo_desc: `Ctrl+Z 撤销，Ctrl+Shift+Z（或 Ctrl+Y）重做结构更改`,
   tip_measure: `测量`,
   tip_measure_desc: `点击原子后选择距离/角度模式进行测量`,
   tip_colors: `颜色`,

@@ -91,6 +91,12 @@ export type UndoEntry =
 export function create_selection_state() {
   // Tagged undo history (see module-level doc)
   let undo_history: UndoEntry[] = $state([])
+  // Redo stack of forward structure snapshots. Captured by undo() (the state
+  // the user undid FROM) so redo() can restore it. Snapshot-based: covers all
+  // geometry edits (slab/supercell/lattice/substitute/atom add·move·delete);
+  // manual pencil bond edits are not part of redo. Any fresh edit
+  // (push_*_entry) invalidates the redo branch.
+  let redo_history: AnyStructure[] = $state([])
   let selection_history: number[][] = $state([])
 
   // Selection opacity slider value
@@ -114,17 +120,22 @@ export function create_selection_state() {
     return next.length > MAX_UNDO_HISTORY ? next.slice(-MAX_UNDO_HISTORY) : next
   }
 
-  function push_structure_entry(structure: AnyStructure): void {
+  // `clear_redo` is true for genuine edits (a new action invalidates any
+  // redo branch) and false when redo() itself re-pushes an undo entry.
+  function push_structure_entry(structure: AnyStructure, clear_redo = true): void {
     const snapshot = $state.snapshot(structure) as AnyStructure
     undo_history = trim([...undo_history, { kind: 'structure', structure: snapshot }])
+    if (clear_redo) redo_history = []
   }
 
   function push_bond_entry(array_inverse: BondArrayInverse): void {
     undo_history = trim([...undo_history, { kind: 'bond', array_inverse }])
+    redo_history = []
   }
 
   function push_atom_entry(atom_inverse: AtomArrayInverse): void {
     undo_history = trim([...undo_history, { kind: 'atom', atom_inverse }])
+    redo_history = []
   }
 
   /** Pop the most recent entry, or null if empty. Caller dispatches on `kind`. */
@@ -133,6 +144,22 @@ export function create_selection_state() {
     const entry = undo_history[undo_history.length - 1]
     undo_history = undo_history.slice(0, -1)
     return entry
+  }
+
+  /** Push a forward structure snapshot onto the redo stack (called by undo()). */
+  function push_redo(structure: AnyStructure): void {
+    const snapshot = $state.snapshot(structure) as AnyStructure
+    redo_history = redo_history.length >= MAX_UNDO_HISTORY
+      ? [...redo_history.slice(1), snapshot]
+      : [...redo_history, snapshot]
+  }
+
+  /** Pop the most recent redo snapshot, or null. */
+  function pop_redo(): AnyStructure | null {
+    if (redo_history.length === 0) return null
+    const s = redo_history[redo_history.length - 1]
+    redo_history = redo_history.slice(0, -1)
+    return s
   }
 
   function push_selection_to_undo(selected_sites: number[]) {
@@ -144,6 +171,7 @@ export function create_selection_state() {
     set undo_history(v: UndoEntry[]) { undo_history = v },
 
     get can_undo(): boolean { return undo_history.length > 0 },
+    get can_redo(): boolean { return redo_history.length > 0 },
 
     /** Oldest 'structure' snapshot, or null. Used as a baseline for diff ops (e.g. PubChem-atom detection). */
     get first_structure_snapshot(): AnyStructure | null {
@@ -173,6 +201,8 @@ export function create_selection_state() {
     push_bond_entry,
     push_atom_entry,
     pop_entry,
+    push_redo,
+    pop_redo,
     push_selection_to_undo,
     MAX_UNDO_HISTORY,
   }

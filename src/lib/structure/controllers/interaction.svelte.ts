@@ -81,6 +81,8 @@ export interface InteractionDeps {
    */
   push_atom_entry: (atom_inverse: AtomArrayInverse) => void
   undo: () => void
+  redo: () => void
+  get_redo_length: () => number
   push_selection_to_undo: () => void
   get_structure_history_length: () => number
   get_opacity_history: () => { atoms: Map<number, number>; bonds: Map<string, number> }[]
@@ -861,6 +863,18 @@ export function create_interaction_controller(deps: InteractionDeps) {
         const history = deps.get_selection_history()
         deps.set_selected_sites(history[history.length - 1])
         deps.set_selection_history(history.slice(0, -1))
+      }
+      return
+    }
+
+    // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y — redo (structure changes)
+    const is_redo_key = (event.ctrlKey || event.metaKey) &&
+      ((event.key.toLowerCase() === 'z' && event.shiftKey) || event.key.toLowerCase() === 'y')
+    if (is_redo_key) {
+      if (deps.get_redo_length() > 0) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        deps.redo()
       }
       return
     }
