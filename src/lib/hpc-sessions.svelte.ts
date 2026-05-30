@@ -11,6 +11,7 @@ export interface HPCSessionInfo {
   username: string
   scheduler: SchedulerType
   conda_activate?: string
+  work_root?: string
 }
 
 export const LOCAL_SESSION_ID = `__local__`
@@ -33,7 +34,7 @@ export async function refresh_hpc_sessions() {
       const key = `${c.username}@${c.host}`
       if (seen.has(key)) continue
       seen.add(key)
-      unique.push({ session_id: c.session_id, host: c.host, username: c.username, scheduler: c.scheduler })
+      unique.push({ session_id: c.session_id, host: c.host, username: c.username, scheduler: c.scheduler, work_root: c.work_root || undefined })
     }
     hpc_session_store.sessions = unique
   } catch {
@@ -51,6 +52,10 @@ export function add_session(info: HPCSessionInfo) {
   )
   if (!exists) {
     hpc_session_store.sessions.push(info)
+  } else {
+    exists.session_id = info.session_id
+    exists.scheduler = info.scheduler
+    exists.work_root = info.work_root
   }
 }
 

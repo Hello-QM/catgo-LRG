@@ -101,6 +101,8 @@
 
   // ========== HPC sessions ==========
   let hpc_sessions = $derived(hpc_session_store.sessions)
+  let active_hpc_session = $derived(hpc_sessions.find((s) => s.session_id === source))
+  let active_hpc_work_root = $derived(active_hpc_session?.work_root || ``)
 
   // Refresh HPC sessions on mount
   $effect(() => {
@@ -138,7 +140,10 @@
     }
     // localdb -> HPC: sync fs_current_dir to hpc file tree
     if (from === `localdb` && cur && cur !== `catgo` && cur !== `localdb`) {
-      if (fsb.fs_current_dir.startsWith(`/`)) {
+      if (active_hpc_work_root) {
+        hpc.hpc_current_path = active_hpc_work_root
+        hpc.hpc_file_tree_key++
+      } else if (fsb.fs_current_dir.startsWith(`/`)) {
         hpc.hpc_current_path = fsb.fs_current_dir
         hpc.hpc_file_tree_key++
       }
@@ -1407,6 +1412,7 @@
             <FileTree
               session_id={source}
               root_path={hpc.hpc_current_path}
+              root_boundary={active_hpc_work_root}
               on_load_structure={hpc.hpc_load_structure}
               on_open_editor={on_open_editor ? hpc.hpc_open_editor : undefined}
               on_preview_file={on_preview_file ? (file, type) => hpc.hpc_open_preview(file, type) : undefined}

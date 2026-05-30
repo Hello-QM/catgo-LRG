@@ -51,6 +51,7 @@
   let jump_use_key = $state(true)
   let ssh_alias = $state(``)
   let scheduler = $state<SchedulerType>(`slurm`)
+  let work_root = $state(``)
   // ─── SOCKS5 proxy settings ───
   let use_proxy = $state(false)
   let proxy_host = $state(`127.0.0.1`)
@@ -91,6 +92,7 @@
     key_file = p.key_file ?? ``
     scheduler = p.scheduler
     ssh_alias = p.ssh_alias ?? ``
+    work_root = p.work_root ?? ``
     if (p.jump_host) {
       use_jump = true
       jump_host = p.jump_host
@@ -127,6 +129,7 @@
       proxy_host: use_proxy ? proxy_host : undefined,
       proxy_port: use_proxy ? proxy_port : undefined,
       proxy_username: use_proxy && proxy_username ? proxy_username : undefined,
+      work_root: work_root.trim() || undefined,
     }
     try {
       await saveProfile(profile)
@@ -183,6 +186,7 @@
       proxy_port: use_proxy ? proxy_port : undefined,
       proxy_username: use_proxy && proxy_username ? proxy_username : undefined,
       proxy_password: use_proxy && proxy_password ? proxy_password : undefined,
+      work_root: work_root.trim() || undefined,
     }
 
     console.log(
@@ -193,7 +197,7 @@
     )
 
     ws_conn = connectHPC(config, {
-      onConnected: (session_id) => {
+      onConnected: (session_id, info) => {
         connected_session_id = session_id
         connected_host = host
         connected_username = username
@@ -201,7 +205,7 @@
         conn_error = ``
         password = ``
         console.log(`[CatGo:HPC] Connected to ${username}@${host} (session=${session_id})`)
-        add_session({ session_id, host, username, scheduler })
+        add_session({ session_id, host, username, scheduler, work_root: info?.work_root || work_root.trim() || undefined })
       },
       onOTPRequired: (prompt) => {
         conn_status = `otp_required`
@@ -241,6 +245,7 @@
         proxy_port: use_proxy ? proxy_port : undefined,
         proxy_username: use_proxy && proxy_username ? proxy_username : undefined,
         proxy_password: use_proxy && proxy_password ? proxy_password : undefined,
+        work_root: work_root.trim() || undefined,
       })
       connected_session_id = result.session_id
       connected_host = result.host
@@ -251,6 +256,7 @@
         host: result.host,
         username: result.username,
         scheduler,
+        work_root: result.work_root || work_root.trim() || undefined,
       })
     } catch (err: any) {
       conn_status = `error`
@@ -472,6 +478,11 @@
                   <option value="pbs">PBS/Torque</option>
                 </select>
               </label>
+              <label class="full-span">
+                {t('structure.work_root')} <span class="hint">{t('common.optional')}</span>
+                <input type="text" bind:value={work_root} placeholder={t('structure.work_root_placeholder')} />
+              </label>
+              <p class="form-hint full-span">{t('structure.work_root_hint')}</p>
             </div>
 
             <!-- Jump Host -->
@@ -894,6 +905,13 @@
   .hint {
     font-weight: 400;
     color: var(--text-color-dim, light-dark(#9ca3af, #94a3b8));
+  }
+
+  .form-hint {
+    margin: -6px 0 0;
+    color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    font-size: 11px;
+    line-height: 1.4;
   }
 
   .option-card {

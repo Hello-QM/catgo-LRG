@@ -54,6 +54,7 @@ class HPCConnectionConfig(BaseModel):
     proxy_port: int = 1080  # Default SOCKS5 port
     proxy_username: Optional[str] = None
     proxy_password: Optional[SecretStr] = None
+    work_root: Optional[str] = None  # Optional remote directory boundary for file/job operations
 
 
 class HPCProfile(BaseModel):
@@ -74,6 +75,7 @@ class HPCProfile(BaseModel):
     proxy_host: Optional[str] = None
     proxy_port: int = 1080
     proxy_username: Optional[str] = None
+    work_root: Optional[str] = None  # Optional remote directory boundary for this profile
 
 
 # ====== Jobs ======
@@ -205,6 +207,7 @@ class ConnectionStatusResponse(BaseModel):
     username: str = ""
     scheduler: SchedulerType = SchedulerType.SLURM
     uptime_seconds: float = 0
+    work_root: str = ""
 
 
 class ConnectionInfo(BaseModel):
@@ -215,6 +218,7 @@ class ConnectionInfo(BaseModel):
     username: str
     scheduler: SchedulerType
     uptime_seconds: float
+    work_root: str = ""
 
 
 class JobSummary(BaseModel):

@@ -5,7 +5,7 @@
  * Uses factory function pattern — $state must be created in component context.
  */
 
-import { readRemoteFile, uploadFile, downloadFile, mergeStructuresFromDir, hpc_mkdir, hpc_delete, hpc_rename, hpc_copy, hpc_move } from '$lib/api/hpc'
+import { readRemoteFile, uploadFile, downloadFile, getDownloadUrl, mergeStructuresFromDir, hpc_mkdir, hpc_delete, hpc_rename, hpc_copy, hpc_move } from '$lib/api/hpc'
 import { read_file } from '$lib/api/project'
 import { LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
 import type { RemoteFile } from '$lib/api/hpc'
@@ -207,13 +207,34 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
       }
       return
     }
+    const filename = file.is_dir ? `${file.name}.tar.gz` : file.name
     try {
-      const blob = await downloadFile(source, file.path)
+      hpc_files_error = ``
+      hpc_loading_file = { name: filename, size: file.is_dir ? undefined : file.size_bytes }
+      hpc_upload_progress = file.is_dir ? null : 0
+
+      const global_download = (globalThis as Record<string, unknown>).download
+      if (typeof document !== `undefined` && typeof global_download !== `function`) {
+        const link = document.createElement(`a`)
+        link.href = getDownloadUrl(source, file.path, { is_dir: file.is_dir, skip_stat: true })
+        link.download = filename
+        link.rel = `noopener`
+        link.style.display = `none`
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        return
+      }
+
+      const blob = await downloadFile(source, file.path, (p) => { hpc_upload_progress = p })
       // Use unified download (Tauri save dialog -> File System Access API -> <a> fallback)
       const { download } = await import(`$lib/io/fetch`)
-      download(blob, file.name, blob.type || `application/octet-stream`)
+      download(blob, filename, blob.type || `application/octet-stream`)
     } catch (err) {
       hpc_files_error = `Download failed: ${err}`
+    } finally {
+      hpc_loading_file = null
+      hpc_upload_progress = null
     }
   }
 

@@ -23,6 +23,8 @@
     fetchOverview,
     readRemoteFile,
     readRemoteBinaryFile,
+    downloadFile,
+    getDownloadUrl,
     mergeStructuresFromDir,
     checkInstallStatus,
     runInstall,
@@ -140,7 +142,8 @@
           jobs_error: ``,
           auto_refresh: false,
           refresh_interval: null,
-          current_path: `~`,
+          current_path: s.work_root || `~`,
+          work_root: s.work_root || ``,
           files_error: ``,
           upload_progress: null,
           overview: null,
@@ -176,6 +179,7 @@
   let jump_use_key = $state(true) // true = SSH key auth, false = password auth
   let ssh_alias = $state(``)
   let scheduler = $state<SchedulerType>(`slurm`)
+  let work_root = $state(``)
 
   // SOCKS5 proxy settings
   let use_proxy = $state(false)
@@ -293,6 +297,7 @@
     key_file = p.key_file ?? ``
     scheduler = p.scheduler
     ssh_alias = p.ssh_alias ?? ``
+    work_root = p.work_root ?? ``
     if (p.jump_host) {
       use_jump = true
       jump_host = p.jump_host
@@ -329,6 +334,7 @@
       proxy_host: use_proxy ? proxy_host : undefined,
       proxy_port: use_proxy ? proxy_port : undefined,
       proxy_username: use_proxy && proxy_username ? proxy_username : undefined,
+      work_root: work_root.trim() || undefined,
     }
     try {
       await saveProfile(profile)
@@ -367,6 +373,8 @@
     raw.host = host
     raw.username = username
     raw.scheduler = scheduler
+    raw.work_root = work_root.trim()
+    raw.current_path = raw.work_root || `~`
     raw.conn_status = `connecting`
     const sid = raw._id
 
@@ -389,19 +397,22 @@
       proxy_port: use_proxy ? proxy_port : undefined,
       proxy_username: use_proxy && proxy_username ? proxy_username : undefined,
       proxy_password: use_proxy && proxy_password ? proxy_password : undefined,
+      work_root: work_root.trim() || undefined,
     }
 
     // All callbacks look up the session through the reactive array via _id
     const ws = connectHPC(config, {
-      onConnected: (session_id) => {
+      onConnected: (session_id, info) => {
         const s = get_session(sid)
         if (!s) return
         s.session_id = session_id
         s.conn_status = `connected`
         s.conn_error = ``
+        s.work_root = info?.work_root || work_root.trim()
+        s.current_path = s.work_root || `~`
         password = ``
         // Sync to shared store so Workflow page can see this session
-        add_shared_session({ session_id, host, username, scheduler })
+        add_shared_session({ session_id, host, username, scheduler, work_root: s.work_root || undefined })
       },
       onOTPRequired: (prompt) => {
         const s = get_session(sid)
@@ -438,6 +449,8 @@
     raw.host = ssh_alias
     raw.username = ``
     raw.scheduler = scheduler
+    raw.work_root = work_root.trim()
+    raw.current_path = raw.work_root || `~`
     raw.conn_status = `connecting`
     const sid = raw._id
 
@@ -452,12 +465,15 @@
         auth_method: `ssh_config`,
         ssh_alias,
         scheduler,
+        work_root: work_root.trim() || undefined,
       })
       const s = get_session(sid)
       if (!s) return
       s.session_id = result.session_id
       s.host = result.host
       s.username = result.username
+      s.work_root = result.work_root || work_root.trim()
+      s.current_path = s.work_root || `~`
       s.conn_status = `connected`
       // Sync to shared store so Workflow page can see this session
       add_shared_session({
@@ -465,6 +481,7 @@
         host: result.host,
         username: result.username,
         scheduler,
+        work_root: s.work_root || undefined,
       })
     } catch (err: any) {
       const s = get_session(sid)
@@ -744,7 +761,7 @@
         cpus_per_task: job_cpus,
         time_limit: job_time,
         memory: job_memory || undefined,
-        work_dir: job_work_dir,
+        work_dir: active_session.work_root && job_work_dir.trim() === `~` ? active_session.work_root : job_work_dir,
       })
       submit_message = result.message
       if (result.success) {
@@ -822,6 +839,56 @@
     input.value = ``
   }
 
+  async function download_remote_file(file: RemoteFile) {
+    if (!active_session?.session_id) return
+    const session_id = active_session.session_id
+    const filename = file.is_dir ? `${file.name}.tar.gz` : file.name
+
+    if (session_id === LOCAL_SESSION_ID) {
+      try {
+        const { open } = await import(`@tauri-apps/plugin-shell`)
+        await open(file.path)
+      } catch {
+        navigator.clipboard.writeText(file.path).catch(() => {})
+      }
+      return
+    }
+
+    loading_file = { name: filename, size: file.is_dir ? undefined : file.size_bytes }
+    loading_error = null
+    active_session.upload_progress = file.is_dir ? null : 0
+
+    try {
+      const global_download = (globalThis as Record<string, unknown>).download
+      if (typeof document !== `undefined` && typeof global_download !== `function`) {
+        const link = document.createElement(`a`)
+        link.href = getDownloadUrl(session_id, file.path, { is_dir: file.is_dir, skip_stat: true })
+        link.download = filename
+        link.rel = `noopener`
+        link.style.display = `none`
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+        return
+      }
+
+      const blob = await downloadFile(session_id, file.path, (p) => {
+        if (active_session?.session_id === session_id) active_session.upload_progress = p
+      })
+      const { download } = await import(`$lib/io/fetch`)
+      download(blob, filename, blob.type || `application/octet-stream`)
+    } catch (e: any) {
+      loading_error = t('common.download_failed_reason', { reason: e?.message || String(e) })
+    } finally {
+      loading_file = null
+      if (active_session?.session_id === session_id) active_session.upload_progress = null
+    }
+  }
+
+  function copy_remote_path(file: RemoteFile) {
+    navigator.clipboard.writeText(file.path).catch(() => {})
+  }
+
   // ====== Structure file loading ======
 
   let loading_file = $state<{ name: string; size?: number } | null>(null)
@@ -887,13 +954,17 @@
   async function open_remote_editor(file: RemoteFile) {
     if (!active_session || !on_open_editor) return
     loading_file = { name: file.name, size: file.size_bytes }
+    loading_error = null
     try {
       const result = await readRemoteFile(active_session.session_id, file.path)
       if (result.success && result.content !== undefined) {
         on_open_editor(result.content, file.name, file.path, active_session.session_id)
+      } else {
+        loading_error = t('structure.failed_load_file', { name: file.name, error: result.message || t('structure.unknown_error') })
       }
     } catch (e: any) {
       console.error(`Failed to open file:`, e)
+      loading_error = t('structure.failed_load_file', { name: file.name, error: e?.message || String(e) })
     } finally {
       loading_file = null
     }
@@ -904,21 +975,27 @@
   async function open_remote_preview(file: RemoteFile, preview_type: string) {
     if (!active_session || !on_preview_file) return
     loading_file = { name: file.name, size: file.size_bytes }
+    loading_error = null
     try {
       const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel`
       if (is_binary) {
         const result = await readRemoteBinaryFile(active_session.session_id, file.path)
         if (result.success) {
           on_preview_file(preview_type, file.name, file.path, active_session.session_id, undefined, result.data, result.mime_type)
+        } else {
+          loading_error = t('structure.failed_load_file', { name: file.name, error: result.message || t('structure.unknown_error') })
         }
       } else {
         const result = await readRemoteFile(active_session.session_id, file.path)
         if (result.success && result.content !== undefined) {
           on_preview_file(preview_type, file.name, file.path, active_session.session_id, result.content)
+        } else {
+          loading_error = t('structure.failed_load_file', { name: file.name, error: result.message || t('structure.unknown_error') })
         }
       }
     } catch (e: any) {
       console.error(`Failed to preview file:`, e)
+      loading_error = t('structure.failed_load_file', { name: file.name, error: e?.message || String(e) })
     } finally {
       loading_file = null
     }
@@ -1097,6 +1174,11 @@
                 <span>{active_session.username}@{active_session.host}</span>
                 <span class="badge badge-green">{active_session.scheduler.toUpperCase()}</span>
               </div>
+              {#if active_session.work_root}
+                <div class="work-root-chip" title={active_session.work_root}>
+                  {t('structure.work_root')}: {active_session.work_root}
+                </div>
+              {/if}
               {#if active_session.overview}
                 <div class="overview-mini">
                   <span title={t('structure.running')}>{t('structure.running_count', { n: active_session.overview.job_summary.running })}</span>
@@ -1384,6 +1466,11 @@
                   <option value="pbs">PBS/Torque</option>
                 </select>
               </label>
+              <label class="full-span">
+                {t('structure.work_root')} <span class="optional-hint">{t('common.optional')}</span>
+                <input type="text" bind:value={work_root} placeholder={t('structure.work_root_placeholder')} />
+              </label>
+              <p class="form-hint full-span">{t('structure.work_root_hint')}</p>
             </div>
 
             <label class="checkbox-row">
@@ -1697,12 +1784,15 @@
             <FileTree
               session_id={active_session.session_id}
               root_path={active_session.current_path}
+              root_boundary={active_session.work_root}
               on_load_structure={(file) => load_remote_structure(file)}
               on_open_editor={(file) => open_remote_editor(file)}
               on_preview_file={(file, type) => open_remote_preview(file, type)}
               on_load_trajectory={(dir, pattern) => merge_dir_as_trajectory(dir, pattern)}
               on_analyze_report={on_analyze_report ? (file) => analyze_remote_report(file) : undefined}
               on_navigate={(path) => { if (active_session) active_session.current_path = path }}
+              on_download={(file) => download_remote_file(file)}
+              on_copy_path={(file) => copy_remote_path(file)}
               {merging_dir}
               {merge_status}
             />
@@ -2072,6 +2162,20 @@
     font-size: 0.8em;
     color: var(--text-color, #fff);
     margin-bottom: 8px;
+  }
+  .work-root-chip {
+    max-width: 100%;
+    margin: -2px 0 8px;
+    padding: 4px 6px;
+    border: 1px solid var(--border-color, light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12)));
+    border-radius: 5px;
+    color: var(--text-color-muted, #9ca3af);
+    background: var(--pre-bg, light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.04)));
+    font-family: monospace;
+    font-size: 0.7em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .overview-mini {
     display: flex;

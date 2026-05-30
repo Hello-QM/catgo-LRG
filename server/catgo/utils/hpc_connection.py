@@ -20,7 +20,7 @@ import logging
 import socket
 import time
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional, TypeVar
 
 import asyncssh
 
@@ -119,6 +119,55 @@ class HPCConnection(SSHFileOpsMixin):
 
         fut = asyncio.run_coroutine_threadsafe(_run_factory(coro_factory), owner)
         return await asyncio.wrap_future(fut)
+
+    async def stream_on_owner(self, stream_factory: Callable[[], AsyncIterator[bytes]]) -> AsyncIterator[bytes]:
+        """Yield an async byte stream from the connection owner loop.
+
+        Streaming responses keep iterating on FastAPI's loop, but AsyncSSH
+        streams must be opened and read on their owner loop. This bridges the
+        two loops with a small queue while preserving backpressure.
+        """
+        current = asyncio.get_running_loop()
+        owner = self._owner_loop
+        if owner is None or owner is current:
+            async for chunk in stream_factory():
+                yield chunk
+            return
+
+        if owner.is_closed():
+            raise RuntimeError(
+                f"HPCConnection {self.session_id}: owner loop is closed; "
+                f"connection must be re-established."
+            )
+
+        queue: asyncio.Queue[bytes | BaseException | object] = asyncio.Queue(maxsize=8)
+        sentinel = object()
+
+        async def put_on_caller(item: bytes | BaseException | object) -> None:
+            fut = asyncio.run_coroutine_threadsafe(queue.put(item), current)
+            await asyncio.wrap_future(fut)
+
+        async def pump() -> None:
+            try:
+                async for chunk in stream_factory():
+                    await put_on_caller(chunk)
+            except BaseException as exc:
+                await put_on_caller(exc)
+            finally:
+                await put_on_caller(sentinel)
+
+        pump_future = asyncio.run_coroutine_threadsafe(pump(), owner)
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            if not pump_future.done():
+                pump_future.cancel()
 
     @property
     def is_alive(self) -> bool:

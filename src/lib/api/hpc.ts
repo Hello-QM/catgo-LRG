@@ -36,6 +36,7 @@ export interface HPCConnectionConfig {
   proxy_port?: number // default: 1080
   proxy_username?: string
   proxy_password?: string
+  work_root?: string
 }
 
 export interface HPCProfile {
@@ -54,6 +55,7 @@ export interface HPCProfile {
   proxy_host?: string
   proxy_port?: number
   proxy_username?: string
+  work_root?: string
 }
 
 export interface HPCJob {
@@ -86,6 +88,7 @@ export interface ConnectionInfo {
   username: string
   scheduler: SchedulerType
   uptime_seconds: number
+  work_root?: string
 }
 
 export interface JobSummary {
@@ -229,7 +232,7 @@ export interface HPCWSConnection {
 }
 
 export interface HPCWSCallbacks {
-  onConnected: (session_id: string) => void
+  onConnected: (session_id: string, info?: { work_root?: string }) => void
   onOTPRequired: (prompt: string) => void
   onError: (message: string) => void
   onDisconnected: () => void
@@ -267,7 +270,7 @@ export function connectHPC(
       switch (data.type) {
         case `connected`:
           connected = true
-          callbacks.onConnected(data.session_id)
+          callbacks.onConnected(data.session_id, { work_root: data.work_root || `` })
           break
         case `auth_challenge`:
           callbacks.onOTPRequired(data.prompt || `Verification code:`)
@@ -316,7 +319,7 @@ export function connectHPC(
  */
 export async function connectSSHConfig(
   config: HPCConnectionConfig,
-): Promise<{ type: string; session_id: string; host: string; username: string; message: string }> {
+): Promise<{ type: string; session_id: string; host: string; username: string; message: string; work_root?: string }> {
   const response = await fetch(`${API_BASE}/hpc/connect/ssh-config`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
@@ -431,6 +434,7 @@ export async function listFiles(
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify({ session_id, path }),
+    signal: AbortSignal.timeout(30000),
   })
   return handleResponse(response)
 }
@@ -474,7 +478,8 @@ export async function downloadFile(
   remote_path: string,
   onProgress?: (percent: number) => void,
 ): Promise<Blob> {
-  const url = `${API_BASE}/hpc/download?session_id=${encodeURIComponent(session_id)}&remote_path=${encodeURIComponent(remote_path)}`
+  // The backend streams regular files as-is and directories as .tar.gz archives.
+  const url = getDownloadUrl(session_id, remote_path)
   const response = await fetch(url)
 
   if (!response.ok) {
@@ -502,6 +507,20 @@ export async function downloadFile(
   }
 
   return new Blob(chunks as BlobPart[])
+}
+
+export function getDownloadUrl(
+  session_id: string,
+  remote_path: string,
+  options: { is_dir?: boolean; skip_stat?: boolean } = {},
+): string {
+  const params = new URLSearchParams({
+    session_id,
+    remote_path,
+  })
+  if (options.is_dir !== undefined) params.set(`is_dir`, String(options.is_dir))
+  if (options.skip_stat !== undefined) params.set(`skip_stat`, String(options.skip_stat))
+  return `${API_BASE}/hpc/download?${params.toString()}`
 }
 
 // ====== REST: Profiles ======
@@ -538,7 +557,7 @@ export async function deleteProfile(name: string): Promise<void> {
 
 export async function checkConnectionStatus(
   session_id: string,
-): Promise<{ connected: boolean; host?: string; username?: string; uptime_seconds?: number }> {
+): Promise<{ connected: boolean; host?: string; username?: string; uptime_seconds?: number; work_root?: string }> {
   const response = await fetch(
     `${API_BASE}/hpc/status/${encodeURIComponent(session_id)}`,
   )
@@ -575,6 +594,12 @@ export async function readRemoteFile(
   file_path: string,
   max_bytes?: number,
 ): Promise<FileReadResponse> {
+  const cache_key = `${session_id}\0${file_path}\0${max_bytes ?? ``}`
+  const cached = remote_file_cache.get(cache_key)
+  if (cached && Date.now() - cached.time < REMOTE_FILE_CACHE_TTL_MS) {
+    return cached.value
+  }
+
   const body: Record<string, unknown> = { session_id, file_path }
   if (max_bytes !== undefined) body.max_bytes = max_bytes
   const response = await fetch(`${API_BASE}/hpc/files/read-content`, {
@@ -582,7 +607,75 @@ export async function readRemoteFile(
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify(body),
   })
-  return handleResponse(response)
+  const result = await handleResponse<FileReadResponse>(response)
+  if (result.success) {
+    remote_file_cache.set(cache_key, { time: Date.now(), value: result })
+  }
+  return result
+}
+
+const REMOTE_FILE_CACHE_TTL_MS = 30_000
+const remote_file_cache = new Map<string, { time: number; value: FileReadResponse }>()
+
+export async function prefetchRemoteFiles(
+  session_id: string,
+  file_paths: string[],
+  max_bytes: number = 65536,
+): Promise<void> {
+  const missing = file_paths.filter((file_path) => {
+    const cache_key = `${session_id}\0${file_path}\0${max_bytes}`
+    const cached = remote_file_cache.get(cache_key)
+    return !cached || Date.now() - cached.time >= REMOTE_FILE_CACHE_TTL_MS
+  })
+  if (!missing.length) return
+
+  const response = await fetch(`${API_BASE}/hpc/files/read-many`, {
+    method: `POST`,
+    headers: { 'Content-Type': `application/json` },
+    body: JSON.stringify({ session_id, file_paths: missing, max_bytes }),
+  })
+  const result = await handleResponse<{
+    success: boolean
+    files: Array<FileReadResponse & { file_path: string }>
+    message?: string
+  }>(response)
+  if (!result.success) return
+  const now = Date.now()
+  for (const file of result.files || []) {
+    if (!file.success) continue
+    remote_file_cache.set(`${session_id}\0${file.file_path}\0${max_bytes}`, {
+      time: now,
+      value: {
+        success: true,
+        content: file.content,
+        total_lines: file.total_lines,
+        message: file.message || ``,
+      },
+    })
+    // Default reads use max_bytes=undefined (2MB backend default). For small
+    // prefetched files, the 64KB cache is also valid for ordinary open/edit.
+    remote_file_cache.set(`${session_id}\0${file.file_path}\0`, {
+      time: now,
+      value: {
+        success: true,
+        content: file.content,
+        total_lines: file.total_lines,
+        message: file.message || ``,
+      },
+    })
+  }
+}
+
+export function clearRemoteFileCache(session_id?: string, file_path?: string): void {
+  if (!session_id) {
+    remote_file_cache.clear()
+    return
+  }
+  for (const key of remote_file_cache.keys()) {
+    if (key.startsWith(`${session_id}\0`) && (!file_path || key.startsWith(`${session_id}\0${file_path}\0`))) {
+      remote_file_cache.delete(key)
+    }
+  }
 }
 
 export async function readRemoteBinaryFile(
@@ -607,7 +700,9 @@ export async function writeRemoteFile(
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify({ session_id, file_path, content }),
   })
-  return handleResponse(response)
+  const result = await handleResponse<FileWriteResponse>(response)
+  if (result.success) clearRemoteFileCache(session_id, file_path)
+  return result
 }
 
 export async function mergeStructuresFromDir(

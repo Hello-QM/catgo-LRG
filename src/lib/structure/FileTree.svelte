@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listFiles, type RemoteFile } from '$lib/api/hpc'
+  import { listFiles, prefetchRemoteFiles, type RemoteFile } from '$lib/api/hpc'
   import { Icon } from '$lib'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { untrack } from 'svelte'
@@ -13,6 +13,7 @@
   let {
     session_id,
     root_path = `~`,
+    root_boundary = ``,
     on_load_structure,
     on_open_editor,
     on_preview_file,
@@ -32,6 +33,7 @@
   }: {
     session_id: string
     root_path?: string
+    root_boundary?: string
     on_load_structure?: (file: RemoteFile) => void
     on_open_editor?: (file: RemoteFile) => void
     on_preview_file?: (file: RemoteFile, preview_type: `image` | `pdf` | `markdown` | `csv` | `excel`) => void
@@ -364,16 +366,58 @@
     return { visible, hidden }
   }
   let current_root = $state(untrack(() => root_path))
+  let resolved_root_boundary = $state(``)
   let path_editing = $state(false)
   let path_input_value = $state(untrack(() => root_path))
   let path_input_el = $state<HTMLInputElement | null>(null)
 
-  async function load_dir(path: string): Promise<RemoteFile[]> {
+  function normalize_boundary_path(path: string): string {
+    const trimmed = path.trim().replace(/\\/g, `/`)
+    if (!trimmed || trimmed === `/`) return trimmed
+    return trimmed.replace(/\/+$/, ``)
+  }
+
+  function candidate_boundaries(): string[] {
+    return [root_boundary, resolved_root_boundary]
+      .map(normalize_boundary_path)
+      .filter((path, idx, arr) => path && arr.indexOf(path) === idx)
+  }
+
+  function is_inside_boundary(path: string): boolean {
+    const boundaries = candidate_boundaries()
+    if (!boundaries.length) return true
+    const normalized = normalize_boundary_path(path)
+    return boundaries.some((boundary) => normalized === boundary || normalized.startsWith(`${boundary}/`))
+  }
+
+  function is_at_boundary(path: string): boolean {
+    const boundaries = candidate_boundaries()
+    if (!boundaries.length) return false
+    const normalized = normalize_boundary_path(path)
+    return boundaries.some((boundary) => normalized === boundary)
+  }
+
+  function boundary_fallback(): string {
+    return resolved_root_boundary || root_boundary || current_root
+  }
+
+  function can_navigate_to(path: string): boolean {
+    return is_inside_boundary(path)
+  }
+
+  async function load_dir(path: string): Promise<{ files: RemoteFile[], current_path: string }> {
     try {
       const result = await listFiles(session_id, path)
+      if (!result.success) {
+        root_error = result.message || t('common.operation_failed')
+        return { files: [], current_path: path }
+      }
       if (result.files) {
         root_error = null
-        return result.files
+        if (root_boundary && normalize_boundary_path(path) === normalize_boundary_path(root_boundary) && result.current_path) {
+          resolved_root_boundary = result.current_path
+        }
+        return { files: result.files, current_path: result.current_path || path }
       }
     } catch (e: any) {
       const msg = e?.message || String(e)
@@ -381,11 +425,11 @@
       // Don't retry on session errors
       if (msg.includes(`not found`) || msg.includes(`expired`)) {
         root_error = t('sidebar.session_expired')
-        return []
+        return { files: [], current_path: path }
       }
       root_error = msg
     }
-    return []
+    return { files: [], current_path: path }
   }
 
   function files_to_nodes(files: RemoteFile[]): TreeNode[] {
@@ -402,21 +446,40 @@
     }))
   }
 
+  function prefetch_small_interactive_files(files: RemoteFile[]) {
+    if (!session_id || session_id === `__local__`) return
+    const paths = files
+      .filter((file) => !file.is_dir && file.size_bytes > 0 && file.size_bytes <= 64 * 1024)
+      .filter((file) => get_file_action(file.name) !== `none`)
+      .slice(0, 12)
+      .map((file) => file.path)
+    if (!paths.length) return
+    prefetchRemoteFiles(session_id, paths, 64 * 1024).catch((err) => {
+      console.debug(`Remote file prefetch failed:`, err)
+    })
+  }
+
   // Monotonic counter to discard stale load_root results when CWD changes
   // faster than the backend can respond (race condition).
   let _load_root_seq = 0
 
   // Load root directory (does NOT fire on_navigate — caller is responsible)
   async function load_root(path: string) {
+    if (!can_navigate_to(path)) path = boundary_fallback()
     const seq = ++_load_root_seq
     root_loading = true
     current_root = path
     _loaded_path = path
-    const files = await load_dir(path)
-    // Discard result if a newer load_root was triggered while we were waiting
-    if (seq !== _load_root_seq) return
-    root_nodes = files_to_nodes(files)
-    root_loading = false
+    try {
+      const { files, current_path } = await load_dir(path)
+      // Discard result if a newer load_root was triggered while we were waiting
+      if (seq !== _load_root_seq) return
+      current_root = current_path
+      root_nodes = files_to_nodes(files)
+      prefetch_small_interactive_files(files)
+    } finally {
+      if (seq === _load_root_seq) root_loading = false
+    }
   }
 
   // Toggle a directory node
@@ -428,36 +491,51 @@
     }
     if (node.children === null) {
       node.loading = true
-      const files = await load_dir(node.file.path)
-      node.children = files_to_nodes(files)
-      node.loading = false
+      try {
+        const { files } = await load_dir(node.file.path)
+        node.children = files_to_nodes(files)
+      } finally {
+        node.loading = false
+      }
     }
     node.expanded = true
   }
 
   // Navigate up (user-initiated)
   function go_up() {
-    if (current_root === `~` || current_root === `/`) return
+    if (current_root === `~` || current_root === `/` || is_at_boundary(current_root)) return
     const parts = current_root.split(`/`)
     parts.pop()
-    const parent = parts.join(`/`) || `/`
+    let parent = parts.join(`/`) || `/`
+    if (!can_navigate_to(parent)) parent = boundary_fallback()
     load_root(parent)
     on_navigate?.(parent)
   }
+
+  let can_go_up = $derived(!(current_root === `~` || current_root === `/` || is_at_boundary(current_root)))
 
   // Navigate to path (user-initiated, e.g., from editable path bar)
   function navigate_user(path: string) {
     const trimmed = path.trim()
     if (!trimmed || trimmed === current_root) return
+    if (!can_navigate_to(trimmed)) {
+      root_error = t('structure.work_root_blocked')
+      return
+    }
     load_root(trimmed)
     on_navigate?.(trimmed)
   }
 
   // Load when root_path prop changes (external navigation or initial load)
   let _loaded_path = $state<string | null>(null)
+  let _loaded_session = $state<string | null>(null)
+  let _loaded_boundary = $state<string | null>(null)
   $effect(() => {
-    if (session_id && root_path !== _loaded_path) {
+    if (session_id && (session_id !== _loaded_session || root_path !== _loaded_path || root_boundary !== _loaded_boundary)) {
+      _loaded_session = session_id
       _loaded_path = root_path
+      _loaded_boundary = root_boundary
+      resolved_root_boundary = ``
       load_root(root_path)
     }
   })
@@ -519,7 +597,7 @@
 
   <!-- Path bar -->
   <div class="tree-path-bar">
-    <button class="tree-nav-btn" onclick={go_up} title={t('sidebar.go_up')}>&#x2191;</button>
+    <button class="tree-nav-btn" onclick={go_up} disabled={!can_go_up} title={root_boundary && !can_go_up ? t('structure.work_root_boundary') : t('sidebar.go_up')}>&#x2191;</button>
     {#if path_editing}
       <input
         class="tree-path-input"
@@ -560,7 +638,9 @@
           <button
             class="breadcrumb-segment"
             class:is-last={idx === breadcrumb_segments.length - 1}
-            onclick={(e) => { e.stopPropagation(); if (seg.path !== current_root) { load_root(seg.path); on_navigate?.(seg.path) } }}
+            class:blocked={!can_navigate_to(seg.path)}
+            disabled={!can_navigate_to(seg.path)}
+            onclick={(e) => { e.stopPropagation(); if (seg.path !== current_root && can_navigate_to(seg.path)) { load_root(seg.path); on_navigate?.(seg.path) } }}
           >
             {#if seg.is_home}
               <Icon icon="Home" style="width: 12px; height: 12px; vertical-align: middle;" />
@@ -596,6 +676,11 @@
       <button class="tree-nav-btn" onclick={start_new_folder_inline} title={t('sidebar.new_folder')}>&#x2795;</button>
     {/if}
   </div>
+  {#if root_boundary}
+    <div class="tree-boundary-note" title={resolved_root_boundary || root_boundary}>
+      {t('structure.work_root_boundary')}: {resolved_root_boundary || root_boundary}
+    </div>
+  {/if}
 
   {#if root_error}
     <div class="tree-error">{root_error}</div>
@@ -661,7 +746,7 @@
         <button class="ft-ctx-item" onclick={() => { do_paste(); close_ctx_menu() }}>{t('common.paste')}</button>
       {/if}
       {#if on_download}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_download?.(ctx_menu.node.file); close_ctx_menu() }}>{t('common.download')}</button>
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_download?.(ctx_menu.node.file); close_ctx_menu() }}>{ctx_menu.node.file.is_dir ? t('common.download_archive') : t('common.download')}</button>
       {/if}
       {#if on_copy_path}
         <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_copy_path?.(ctx_menu.node.file); close_ctx_menu() }}>{t('sidebar.copy_path')}</button>
@@ -763,6 +848,11 @@
       {#if on_copy_path}
         <button class="tree-action-btn copy" onclick={(e) => { e.stopPropagation(); on_copy_path?.(node.file) }} title={t('sidebar.copy_path')}>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" /></svg>
+        </button>
+      {/if}
+      {#if on_download}
+        <button class="tree-action-btn download" onclick={(e) => { e.stopPropagation(); on_download?.(node.file) }} title={t('common.download_archive')}>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         </button>
       {/if}
     {:else}
@@ -904,6 +994,16 @@
     color: #6C9CFC;
     background: rgba(108, 156, 252, 0.1);
   }
+  .breadcrumb-segment:disabled,
+  .breadcrumb-segment.blocked {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  .breadcrumb-segment:disabled:hover,
+  .breadcrumb-segment.blocked:hover {
+    color: var(--text-color-muted);
+    background: none;
+  }
   .breadcrumb-segment.is-last {
     color: var(--text-color);
     font-weight: 500;
@@ -945,6 +1045,26 @@
   .tree-nav-btn:hover {
     background: var(--btn-bg, light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.1)));
     color: var(--text-color);
+  }
+  .tree-nav-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .tree-nav-btn:disabled:hover {
+    background: none;
+    color: var(--text-color-muted);
+  }
+  .tree-boundary-note {
+    padding: 3px 8px;
+    border-bottom: 1px solid light-dark(rgba(0,0,0,0.04), rgba(255,255,255,0.06));
+    color: var(--text-color-muted);
+    background: light-dark(rgba(59, 130, 246, 0.06), rgba(59, 130, 246, 0.12));
+    font-family: monospace;
+    font-size: 0.68em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .tree-nodes {
     flex: 1;

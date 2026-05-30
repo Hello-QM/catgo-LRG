@@ -41,6 +41,7 @@ const common: Record<string, string> = {
   select_all:         `Select All`,
   deselect_all:       `Deselect All`,
   download:           `Download`,
+  download_archive:   `Download as Archive`,
   upload:             `Upload`,
   move:               `Move`,
   back:               `Back`,

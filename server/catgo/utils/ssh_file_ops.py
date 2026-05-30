@@ -7,7 +7,10 @@ No import of HPCConnection is needed.
 
 import asyncio
 import logging
+import posixpath
 import shlex
+import tarfile
+import tempfile
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -18,6 +21,16 @@ logger = logging.getLogger(__name__)
 
 class SSHFileOpsMixin:
     """File operation methods for HPCConnection (remote SSH)."""
+
+    async def _expand_remote_tilde(self, path: str) -> str:
+        """Expand a leading tilde before passing paths to quoted shell commands."""
+        if path == "~" or path.startswith("~/"):
+            result = await self.conn.run("printf %s \"$HOME\"", check=False)
+            home = (result.stdout or "").strip()
+            if not home:
+                raise RuntimeError("Could not determine remote home directory")
+            return path.replace("~", home, 1)
+        return path
 
     async def list_remote_dir(self, path: str) -> tuple[str, list[FileInfo]]:
         """List files in a remote directory. Returns (resolved_path, files)."""
@@ -154,21 +167,78 @@ class SSHFileOpsMixin:
                 yield chunk
             return
 
-        sftp = await self.get_sftp()
-        if sftp is None:
-            async for chunk in self._download_exec(remote_path):
-                yield chunk
-            return
-
         try:
-            async for chunk in self._download_sftp(remote_path):
+            # For interactive downloads, an exec channel starts much faster on
+            # some HPC gateways than opening/using the SFTP subsystem.
+            async for chunk in self._download_exec(remote_path):
                 yield chunk
         except Exception as e:
-            logger.warning(f"SFTP download failed, falling back to exec: {e}")
-            self._sftp_failed = True
-            self.sftp = None
-            async for chunk in self._download_exec(remote_path):
+            logger.warning(f"Exec download failed, falling back to SFTP: {e}")
+            sftp = await self.get_sftp()
+            if sftp is None:
+                raise
+            async for chunk in self._download_sftp(remote_path):
                 yield chunk
+
+    async def is_remote_dir(self, remote_path: str) -> bool:
+        """Return whether a remote path is a directory."""
+        expanded = await self._expand_remote_tilde(remote_path)
+        result = await self.conn.run(
+            f"test -d {shlex.quote(expanded)}", check=False
+        )
+        return result.exit_status == 0
+
+    async def download_remote_archive(self, remote_path: str):
+        """Stream a selected remote directory as a gzip-compressed tar archive."""
+        expanded = await self._expand_remote_tilde(remote_path)
+        path = expanded.rstrip("/")
+        parent = posixpath.dirname(path) or "."
+        name = posixpath.basename(path)
+        if not name:
+            raise RuntimeError("Cannot archive the filesystem root")
+        command = (
+            f"tar -czf - -C {shlex.quote(parent)} -- {shlex.quote(name)}"
+        )
+        if self.is_subprocess_mode:
+            async for chunk in self._download_archive_subprocess(command):
+                yield chunk
+            return
+        async for chunk in self._download_archive_exec(command):
+            yield chunk
+
+    async def _download_archive_subprocess(self, command: str):
+        """Stream an archive through an SSH config subprocess connection."""
+        proc = await asyncio.create_subprocess_exec(
+            "ssh", "-o", "BatchMode=yes", self.ssh_alias, command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        while True:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            yield chunk
+        await proc.wait()
+        if proc.returncode != 0:
+            stderr = await proc.stderr.read()
+            raise RuntimeError(f"Archive download failed: {stderr.decode()}")
+
+    async def _download_archive_exec(self, command: str):
+        """Stream an archive through an AsyncSSH exec channel."""
+        process = await self.conn.create_process(command, encoding=None)
+        try:
+            while True:
+                chunk = await process.stdout.read(65536)
+                if not chunk:
+                    break
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8")
+                yield chunk
+        finally:
+            process.close()
+        status = process.exit_status
+        if status and status != 0:
+            raise RuntimeError(f"Archive download failed (exit {status})")
 
     async def _download_sftp(self, remote_path: str):
         sftp = await self.get_sftp()
@@ -294,9 +364,13 @@ class SSHFileOpsMixin:
         if self.is_subprocess_mode:
             return await self._get_file_size_exec(remote_path)
 
+        try:
+            return await self._get_file_size_exec(remote_path)
+        except Exception as e:
+            logger.warning(f"Exec stat failed, falling back to SFTP: {e}")
         sftp = await self.get_sftp()
         if sftp is None:
-            return await self._get_file_size_exec(remote_path)
+            return 0
 
         try:
             attrs = await sftp.stat(remote_path)
@@ -349,6 +423,33 @@ class LocalFileOpsMixin:
                 if not chunk:
                     break
                 yield chunk
+
+    async def is_remote_dir(self, remote_path: str) -> bool:
+        """Return whether a local path is a directory."""
+        return self._resolve_local_path(remote_path).is_dir()
+
+    async def download_remote_archive(self, remote_path: str) -> AsyncIterator[bytes]:
+        """Stream a selected local directory as a gzip-compressed tar archive."""
+        src = self._resolve_local_path(remote_path)
+        if not src.is_dir():
+            raise RuntimeError(f"Not a directory: {src}")
+
+        def create_archive():
+            archive = tempfile.SpooledTemporaryFile(max_size=16 * 1024 * 1024)
+            with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+                tar.add(src, arcname=src.name)
+            archive.seek(0)
+            return archive
+
+        archive = await asyncio.to_thread(create_archive)
+        try:
+            while True:
+                chunk = archive.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            archive.close()
 
     async def download_to_local(self, remote_path: str, local_path: str) -> None:
         """Copy a local file."""

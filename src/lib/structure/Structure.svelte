@@ -3654,6 +3654,8 @@
               editor_session_id = sid
               show_editor = true
               show_preview = false
+              side_panel_minimized = false
+              server_pane_open = false
             }}
             on_preview_file={(mode, filename, file_path, sid, content, binary_data, mime_type) => {
               preview_mode = mode as typeof preview_mode
@@ -3665,6 +3667,8 @@
               preview_mime_type = mime_type ?? ``
               show_preview = true
               show_editor = false
+              side_panel_minimized = false
+              server_pane_open = false
             }}
             on_analyze_report={(content, filename) => {
               // Open SlowGrowthPane and send REPORT content

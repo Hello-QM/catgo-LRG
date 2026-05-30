@@ -40,6 +40,7 @@ const common: Record<string, string> = {
   select_all:         `全选`,
   deselect_all:       `取消全选`,
   download:           `下载`,
+  download_archive:   `打包并下载`,
   upload:             `上传`,
   move:               `移动`,
   back:               `返回`,

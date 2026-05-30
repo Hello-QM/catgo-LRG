@@ -57,6 +57,90 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/hpc", tags=["hpc"])
 
 
+def _configured_work_root(hpc) -> str:
+    """Return the configured work-root boundary for a session, if any."""
+    root = getattr(getattr(hpc, "config", None), "work_root", None)
+    return root.strip() if isinstance(root, str) else ""
+
+
+async def _resolve_remote_dir_physical(conn, path: str) -> str:
+    safe = shlex.quote(path)
+    result = await conn.run(f"p={safe}; cd \"$p\" 2>/dev/null && pwd -P", check=False)
+    if result.exit_status != 0:
+        msg = (result.stderr or "").strip() or f"Cannot resolve directory: {path}"
+        raise HTTPException(status_code=400, detail=msg)
+    resolved = (result.stdout or "").strip()
+    if not resolved:
+        raise HTTPException(status_code=400, detail=f"Cannot resolve directory: {path}")
+    return resolved.rstrip("/")
+
+
+async def _resolve_remote_path_physical(conn, path: str) -> str:
+    safe = shlex.quote(path)
+    cmd = (
+        f"p={safe}; "
+        "if [ -e \"$p\" ]; then "
+        "  readlink -f -- \"$p\"; "
+        "else "
+        "  d=$(dirname -- \"$p\") && b=$(basename -- \"$p\") && "
+        "  cd \"$d\" 2>/dev/null && printf '%s/%s\\n' \"$(pwd -P)\" \"$b\"; "
+        "fi"
+    )
+    result = await conn.run(cmd, check=False)
+    if result.exit_status != 0:
+        msg = (result.stderr or "").strip() or f"Cannot resolve path: {path}"
+        raise HTTPException(status_code=400, detail=msg)
+    resolved = (result.stdout or "").strip()
+    if not resolved:
+        raise HTTPException(status_code=400, detail=f"Cannot resolve path: {path}")
+    return resolved.rstrip("/")
+
+
+async def _ensure_within_work_root(hpc, *paths: str) -> None:
+    """Enforce a session work-root boundary for remote file/job operations."""
+    from catgo.utils.hpc_client import LocalFileConnection
+
+    root = _configured_work_root(hpc)
+    if not root or isinstance(hpc, LocalFileConnection):
+        return
+
+    clean_paths = [p.strip() for p in paths if isinstance(p, str) and p.strip()]
+    if not clean_paths:
+        return
+
+    async def _check() -> None:
+        root_abs = await _resolve_remote_dir_physical(hpc.conn, root)
+        for path in clean_paths:
+            path_abs = await _resolve_remote_path_physical(hpc.conn, path)
+            if path_abs != root_abs and not path_abs.startswith(f"{root_abs}/"):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Path is outside the configured work root ({root}): {path}",
+                )
+
+    await hpc.run_on_owner(_check)
+
+
+class FileReadManyRequest(BaseModel):
+    session_id: str
+    file_paths: list[str]
+    max_bytes: int = 65536
+
+
+class FileReadManyItem(BaseModel):
+    file_path: str
+    success: bool
+    content: str = ""
+    total_lines: int = 0
+    message: str = ""
+
+
+class FileReadManyResponse(BaseModel):
+    success: bool
+    files: list[FileReadManyItem] = []
+    message: str = ""
+
+
 # ====== WebSocket: Interactive SSH Connection ======
 
 
@@ -115,6 +199,7 @@ async def ws_connect(ws: WebSocket) -> None:
                         await ws.send_json({
                             "type": "connected",
                             "session_id": session_id,
+                            "work_root": config.work_root or "",
                             "message": f"Connected to {config.host}",
                         })
                     except asyncio.TimeoutError:
@@ -167,6 +252,7 @@ async def connect_ssh_config(config: HPCConnectionConfig) -> dict:
             "message": f"Connected to {hpc.host} via SSH config",
             "host": hpc.host,
             "username": hpc.username,
+            "work_root": config.work_root or "",
         }
     except Exception as exc:
         logger.error(f"SSH config connection failed: {exc}")
@@ -188,6 +274,7 @@ def connection_status(session_id: str) -> ConnectionStatusResponse:
             username=hpc.username,
             scheduler=hpc.scheduler_type,
             uptime_seconds=time.time() - hpc.connected_at,
+            work_root=_configured_work_root(hpc),
         )
     return ConnectionStatusResponse(connected=False, session_id=session_id)
 
@@ -241,11 +328,15 @@ async def submit_job(request: JobSubmitRequest) -> JobSubmitResponse:
     """Submit a job to the HPC scheduler."""
     hpc = _get_hpc(request.session_id)
     try:
+        work_dir = request.work_dir
+        if _configured_work_root(hpc) and work_dir.strip() in ("", "~"):
+            work_dir = _configured_work_root(hpc)
+        await _ensure_within_work_root(hpc, work_dir)
         success, message, job_id = await hpc.scheduler.submit_job(
             hpc.conn,
             script_content=request.script_content,
             job_name=request.job_name,
-            work_dir=request.work_dir,
+            work_dir=work_dir,
             partition=request.partition,
             nodes=request.nodes,
             ntasks=request.ntasks,
@@ -271,6 +362,15 @@ async def list_jobs(
 
         # Batch detect calc types for jobs that have work_dir
         work_dirs = [j.work_dir for j in jobs if j.work_dir]
+        if _configured_work_root(hpc):
+            allowed_dirs: list[str] = []
+            for work_dir in set(work_dirs):
+                try:
+                    await _ensure_within_work_root(hpc, work_dir)
+                    allowed_dirs.append(work_dir)
+                except HTTPException:
+                    continue
+            work_dirs = allowed_dirs
         if work_dirs:
             from catgo.utils.job_parser import batch_detect_calc_types
             type_map = await batch_detect_calc_types(hpc.conn, list(set(work_dirs)))
@@ -321,6 +421,7 @@ async def get_job_detail_endpoint(job_id: str, session_id: str = Query(...)) -> 
     # Detect calc type if work_dir is available
     if detail.work_dir:
         try:
+            await _ensure_within_work_root(hpc, detail.work_dir)
             software, calc_type = await detect_calc_type(hpc.conn, detail.work_dir)
             detail.calc_software = software
             detail.calc_type = calc_type
@@ -342,6 +443,7 @@ async def get_convergence(job_id: str, session_id: str = Query(...)) -> Converge
     if not detail or not detail.work_dir:
         return ConvergenceData(success=False, message="Job or work_dir not found")
     try:
+        await _ensure_within_work_root(hpc, detail.work_dir)
         software, _ = await detect_calc_type(hpc.conn, detail.work_dir)
         if software == CalcSoftware.VASP:
             return await parse_vasp_convergence(hpc.conn, detail.work_dir)
@@ -359,6 +461,7 @@ async def get_job_structure(job_id: str, session_id: str = Query(...)) -> dict:
     if not detail or not detail.work_dir:
         raise HTTPException(status_code=404, detail="Job or work_dir not found")
     try:
+        await _ensure_within_work_root(hpc, detail.work_dir)
         software, _ = await detect_calc_type(hpc.conn, detail.work_dir)
         content = await get_structure_content(hpc.conn, detail.work_dir, software)
         if not content:
@@ -388,6 +491,7 @@ async def get_job_log(
     if not path:
         return JobLogResponse(success=False, message=f"No {file} path found for job {job_id}")
     try:
+        await _ensure_within_work_root(hpc, path)
         content, total = await tail_remote_file(hpc.conn, path, lines)
         return JobLogResponse(success=True, content=content, file_path=path, total_lines=total)
     except Exception as exc:
@@ -400,16 +504,98 @@ async def read_file_content(request: FileReadRequest) -> FileReadResponse:
     from catgo.utils.hpc_client import LocalFileConnection
     hpc = _get_hpc(request.session_id)
     try:
+        await _ensure_within_work_root(hpc, request.file_path)
         # max_bytes: explicit request value, or None (use default limit)
         max_bytes = request.max_bytes
         if isinstance(hpc, LocalFileConnection):
             kwargs = {"max_bytes": max_bytes} if max_bytes is not None and max_bytes > 0 else {}
             content, total = await hpc.read_file_content(request.file_path, **kwargs)
         else:
-            content, total = await read_remote_file(hpc.conn, request.file_path, max_bytes=max_bytes or 0)
+            content, total = await hpc.run_on_owner(
+                lambda: read_remote_file(hpc.conn, request.file_path, max_bytes=max_bytes or 0)
+            )
         return FileReadResponse(success=True, content=content, total_lines=total)
     except Exception as e:
         return FileReadResponse(success=False, message=str(e))
+
+
+@router.post("/files/read-many", response_model=FileReadManyResponse)
+async def read_many_file_content(request: FileReadManyRequest) -> FileReadManyResponse:
+    """Read several small remote text files in one SSH command for UI prefetch."""
+    from catgo.utils.hpc_client import LocalFileConnection
+    hpc = _get_hpc(request.session_id)
+    paths = [p for p in request.file_paths if p][:16]
+    if not paths:
+        return FileReadManyResponse(success=True, files=[])
+
+    max_bytes = max(1, min(request.max_bytes, 256 * 1024))
+    try:
+        await _ensure_within_work_root(hpc, *paths)
+        if isinstance(hpc, LocalFileConnection):
+            items: list[FileReadManyItem] = []
+            for path in paths:
+                try:
+                    content, total = await hpc.read_file_content(path, max_bytes=max_bytes)
+                    items.append(FileReadManyItem(
+                        file_path=path,
+                        success=True,
+                        content=content,
+                        total_lines=total,
+                    ))
+                except Exception as exc:
+                    items.append(FileReadManyItem(file_path=path, success=False, message=str(exc)))
+            return FileReadManyResponse(success=True, files=items)
+
+        marker = f"__CATGO_READ_MANY_{uuid.uuid4().hex}__"
+
+        async def _read_many_remote() -> str:
+            parts: list[str] = []
+            for idx, path in enumerate(paths):
+                safe = shlex.quote(path)
+                parts.append(
+                    "printf '\\n{m}_BEGIN_{i}\\n'; "
+                    "if [ -f {p} ]; then "
+                    "wc -l < {p}; "
+                    "printf '\\n{m}_CONTENT_{i}\\n'; "
+                    "head -c {n} {p}; "
+                    "printf '\\n{m}_END_{i}\\n'; "
+                    "else "
+                    "printf '0\\n{m}_CONTENT_{i}\\n\\n{m}_END_{i}\\n'; "
+                    "fi".format(m=marker, i=idx, p=safe, n=max_bytes)
+                )
+            result = await hpc.conn.run(" ; ".join(parts), check=False)
+            if result.exit_status not in (0, None):
+                raise RuntimeError(result.stderr or f"read-many failed ({result.exit_status})")
+            return result.stdout or ""
+
+        raw = await hpc.run_on_owner(_read_many_remote)
+        items = []
+        for idx, path in enumerate(paths):
+            begin = f"{marker}_BEGIN_{idx}\n"
+            content_marker = f"\n{marker}_CONTENT_{idx}\n"
+            end = f"\n{marker}_END_{idx}"
+            _, found_begin, rest = raw.partition(begin)
+            if not found_begin:
+                items.append(FileReadManyItem(file_path=path, success=False, message="Missing response block"))
+                continue
+            header, found_content, after_content = rest.partition(content_marker)
+            content, found_end, _ = after_content.partition(end)
+            if not found_content or not found_end:
+                items.append(FileReadManyItem(file_path=path, success=False, message="Incomplete response block"))
+                continue
+            try:
+                total_lines = int(header.strip().splitlines()[-1])
+            except Exception:
+                total_lines = 0
+            items.append(FileReadManyItem(
+                file_path=path,
+                success=True,
+                content=content,
+                total_lines=total_lines,
+            ))
+        return FileReadManyResponse(success=True, files=items)
+    except Exception as exc:
+        return FileReadManyResponse(success=False, message=str(exc))
 
 
 @router.post("/files/read-binary", response_model=BinaryFileReadResponse)
@@ -417,8 +603,9 @@ async def read_binary_file_content(request: FileReadRequest) -> BinaryFileReadRe
     """Read a binary file from the remote system (no size limit)."""
     hpc = _get_hpc(request.session_id)
     try:
+        await _ensure_within_work_root(hpc, request.file_path)
         chunks: list[bytes] = []
-        async for chunk in hpc.download_remote_file(request.file_path):
+        async for chunk in hpc.stream_on_owner(lambda: hpc.download_remote_file(request.file_path)):
             chunks.append(chunk)
         raw = b"".join(chunks)
         mime_type, _ = mimetypes.guess_type(request.file_path)
@@ -438,12 +625,13 @@ async def write_file_content(request: FileWriteRequest) -> FileWriteResponse:
     from catgo.utils.hpc_client import LocalFileConnection
     hpc = _get_hpc(request.session_id)
     try:
+        await _ensure_within_work_root(hpc, request.file_path)
         if isinstance(hpc, LocalFileConnection):
             p = hpc._resolve_local_path(request.file_path)
             p.write_text(request.content, encoding="utf-8")
             ok = True
         else:
-            ok = await write_remote_file(hpc.conn, request.file_path, request.content)
+            ok = await hpc.run_on_owner(lambda: write_remote_file(hpc.conn, request.file_path, request.content))
         return FileWriteResponse(
             success=ok, message="File saved" if ok else "Write failed"
         )
@@ -460,6 +648,7 @@ async def get_job_trajectory(
     detail = await hpc.scheduler.get_job_detail(hpc.conn, job_id)
     if not detail or not detail.work_dir:
         raise HTTPException(status_code=404, detail="Job or work_dir not found")
+    await _ensure_within_work_root(hpc, detail.work_dir)
     content = await get_xdatcar_content(hpc.conn, detail.work_dir)
     if not content:
         raise HTTPException(status_code=404, detail="XDATCAR not found in work directory")
@@ -475,6 +664,7 @@ async def get_job_files(
     detail = await hpc.scheduler.get_job_detail(hpc.conn, job_id)
     if not detail or not detail.work_dir:
         return JobFilesResponse(success=False, message="No work_dir found for job")
+    await _ensure_within_work_root(hpc, detail.work_dir)
     software, _ = await detect_calc_type(hpc.conn, detail.work_dir)
     files = await list_job_files(hpc.conn, detail.work_dir, software)
     return JobFilesResponse(success=True, files=files, work_dir=detail.work_dir)
@@ -489,6 +679,7 @@ async def resubmit_job_endpoint(
     detail = await hpc.scheduler.get_job_detail(hpc.conn, job_id)
     if not detail or not detail.work_dir:
         raise HTTPException(status_code=404, detail="Job or work_dir not found")
+    await _ensure_within_work_root(hpc, detail.work_dir)
     script = await find_job_script(hpc.conn, detail.work_dir)
     if not script:
         raise HTTPException(
@@ -496,8 +687,8 @@ async def resubmit_job_endpoint(
         )
     safe_dir = shlex.quote(detail.work_dir)
     safe_script = shlex.quote(script)
-    result = await hpc.conn.run(
-        f"cd {safe_dir} && sbatch {safe_script}", check=False
+    result = await hpc.run_on_owner(
+        lambda: hpc.conn.run(f"cd {safe_dir} && sbatch {safe_script}", check=False)
     )
     if result.exit_status != 0:
         return JobResubmitResponse(
@@ -595,8 +786,21 @@ async def list_files(request: FileListRequest) -> FileListResponse:
     """List files in a remote directory."""
     hpc = _get_hpc(request.session_id)
     try:
-        resolved, files = await hpc.list_remote_dir(request.path)
+        target_path = request.path
+        if _configured_work_root(hpc) and target_path.strip() in ("", "~"):
+            target_path = _configured_work_root(hpc)
+        await _ensure_within_work_root(hpc, target_path)
+        resolved, files = await asyncio.wait_for(
+            hpc.run_on_owner(lambda: hpc.list_remote_dir(target_path)),
+            timeout=30.0,
+        )
         return FileListResponse(success=True, files=files, current_path=resolved)
+    except asyncio.TimeoutError:
+        logger.error(f"File listing timed out: {request.path}")
+        return FileListResponse(
+            success=False,
+            message=f"Listing timed out for {request.path}",
+        )
     except Exception as exc:
         logger.error(f"File listing failed: {exc}")
         return FileListResponse(success=False, message=str(exc))
@@ -615,7 +819,8 @@ async def upload_file(
         target = remote_path
         if file.filename and not target.endswith(file.filename or ""):
             target = f"{target}/{file.filename}"
-        final_path = await hpc.upload_remote_file(content, target)
+        await _ensure_within_work_root(hpc, target)
+        final_path = await hpc.run_on_owner(lambda: hpc.upload_remote_file(content, target))
         return FileUploadResponse(
             success=True,
             message=f"Uploaded {file.filename}",
@@ -638,6 +843,7 @@ async def resolve_file(
     """
     hpc = _get_hpc(session_id)
     path = remote_path.strip()
+    await _ensure_within_work_root(hpc, path)
     target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
 
     # Use stat to determine if path is a file or directory
@@ -678,20 +884,40 @@ async def resolve_file(
 async def download_file(
     session_id: str = Query(...),
     remote_path: str = Query(...),
+    is_dir: bool | None = Query(None),
+    skip_stat: bool = Query(False),
 ) -> StreamingResponse:
-    """Download a file from the remote host."""
+    """Download a file, or archive a directory before downloading it."""
     hpc = _get_hpc(session_id)
     try:
-        file_size = await hpc.get_remote_file_size(remote_path)
+        await _ensure_within_work_root(hpc, remote_path)
+        if is_dir is None:
+            is_dir = await hpc.run_on_owner(lambda: hpc.is_remote_dir(remote_path))
+        if is_dir:
+            stem = re.split(r"[/\\]+", remote_path.rstrip("/\\"))[-1] or "archive"
+            filename = f"{stem}.tar.gz"
+            return StreamingResponse(
+                hpc.stream_on_owner(lambda: hpc.download_remote_archive(remote_path)),
+                media_type="application/gzip",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{filename}"',
+                },
+            )
+
         filename = remote_path.rsplit("/", 1)[-1]
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+        if not skip_stat:
+            file_size = await hpc.run_on_owner(lambda: hpc.get_remote_file_size(remote_path))
+            headers["Content-Length"] = str(file_size)
         return StreamingResponse(
-            hpc.download_remote_file(remote_path),
+            hpc.stream_on_owner(lambda: hpc.download_remote_file(remote_path)),
             media_type="application/octet-stream",
-            headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Length": str(file_size),
-            },
+            headers=headers,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -730,6 +956,7 @@ async def merge_structures(request: MergeRequest):
     """Merge CONTCAR/POSCAR files from subdirectories into a trajectory."""
     hpc = _get_hpc(request.session_id)
     try:
+        await _ensure_within_work_root(hpc, request.dir_path)
         ok, content, paths = await merge_structures_from_dir(
             hpc.conn, request.dir_path, request.pattern
         )
@@ -1219,11 +1446,12 @@ async def api_files_mkdir(req: FileMkdirRequest):
     if not hpc:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
+        await _ensure_within_work_root(hpc, req.path)
         if isinstance(hpc, LocalFileConnection):
             await hpc.mkdir_local(req.path)
         else:
             safe_path = shlex.quote(req.path)
-            result = await hpc.conn.run(f"mkdir -p {safe_path}")
+            result = await hpc.run_on_owner(lambda: hpc.conn.run(f"mkdir -p {safe_path}"))
             if result.exit_status != 0:
                 return FileOpResponse(success=False, message=result.stderr.strip())
         return FileOpResponse(success=True, message=f"Created {req.path}")
@@ -1240,11 +1468,12 @@ async def api_files_delete(req: FileDeleteRequest):
     if not hpc:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
+        await _ensure_within_work_root(hpc, req.path)
         if isinstance(hpc, LocalFileConnection):
             await hpc.delete_local(req.path)
         else:
             safe_path = shlex.quote(req.path)
-            result = await hpc.conn.run(f"rm -rf {safe_path}")
+            result = await hpc.run_on_owner(lambda: hpc.conn.run(f"rm -rf {safe_path}"))
             if result.exit_status != 0:
                 return FileOpResponse(success=False, message=result.stderr.strip())
         return FileOpResponse(success=True, message=f"Deleted {req.path}")
@@ -1260,12 +1489,13 @@ async def api_files_rename(req: FileRenameRequest):
     if not hpc:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
+        await _ensure_within_work_root(hpc, req.old_path, req.new_path)
         if isinstance(hpc, LocalFileConnection):
             await hpc.rename_local(req.old_path, req.new_path)
         else:
             safe_old = shlex.quote(req.old_path)
             safe_new = shlex.quote(req.new_path)
-            result = await hpc.conn.run(f"mv {safe_old} {safe_new}")
+            result = await hpc.run_on_owner(lambda: hpc.conn.run(f"mv {safe_old} {safe_new}"))
             if result.exit_status != 0:
                 return FileOpResponse(success=False, message=result.stderr.strip())
         return FileOpResponse(success=True, message=f"Renamed to {req.new_path}")
@@ -1281,12 +1511,13 @@ async def api_files_copy(req: FileCopyRequest):
     if not hpc:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
+        await _ensure_within_work_root(hpc, req.source, req.destination)
         if isinstance(hpc, LocalFileConnection):
             await hpc.copy_local(req.source, req.destination)
         else:
             safe_src = shlex.quote(req.source)
             safe_dst = shlex.quote(req.destination)
-            result = await hpc.conn.run(f"cp -r {safe_src} {safe_dst}")
+            result = await hpc.run_on_owner(lambda: hpc.conn.run(f"cp -r {safe_src} {safe_dst}"))
             if result.exit_status != 0:
                 return FileOpResponse(success=False, message=result.stderr.strip())
         return FileOpResponse(success=True, message=f"Copied to {req.destination}")
@@ -1302,12 +1533,13 @@ async def api_files_move(req: FileMoveRequest):
     if not hpc:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
+        await _ensure_within_work_root(hpc, req.source, req.destination)
         if isinstance(hpc, LocalFileConnection):
             await hpc.rename_local(req.source, req.destination)
         else:
             safe_src = shlex.quote(req.source)
             safe_dst = shlex.quote(req.destination)
-            result = await hpc.conn.run(f"mv {safe_src} {safe_dst}")
+            result = await hpc.run_on_owner(lambda: hpc.conn.run(f"mv {safe_src} {safe_dst}"))
             if result.exit_status != 0:
                 return FileOpResponse(success=False, message=result.stderr.strip())
         return FileOpResponse(success=True, message=f"Moved to {req.destination}")

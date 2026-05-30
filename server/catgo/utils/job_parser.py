@@ -1088,25 +1088,33 @@ async def read_remote_file(
     Returns (content, total_lines).
     """
     safe_path = shlex.quote(file_path)
+    delimiter = "__CATGO_FILE_CONTENT__"
 
-    # Get total line count
-    total_lines = 0
-    wc_result = await conn.run(f"wc -l < {safe_path} 2>/dev/null", check=False)
-    if wc_result.exit_status == 0 and (wc_result.stdout or "").strip():
-        try:
-            total_lines = int(wc_result.stdout.strip())
-        except ValueError:
-            pass
-
-    # Read content (max_bytes=0 means unlimited)
+    # Read line count and content in one SSH command. Opening a command channel
+    # on some HPC gateways takes seconds, so avoiding a separate `wc -l` call
+    # makes small editable/structure files feel much snappier.
     if max_bytes > 0:
-        cmd = f"head -c {max_bytes} {safe_path} 2>/dev/null"
+        read_cmd = f"head -c {max_bytes} {safe_path}"
     else:
-        cmd = f"cat {safe_path} 2>/dev/null"
+        read_cmd = f"cat {safe_path}"
+    cmd = (
+        f"{{ wc -l < {safe_path}; printf '\\n{delimiter}\\n'; "
+        f"{read_cmd}; }} 2>/dev/null"
+    )
     result = await conn.run(cmd, check=False)
-    content = ""
-    if result.exit_status == 0:
-        content = result.stdout or ""
+    if result.exit_status != 0:
+        return "", 0
+
+    raw = result.stdout or ""
+    header, sep, content = raw.partition(f"\n{delimiter}\n")
+    total_lines = 0
+    if sep:
+        try:
+            total_lines = int(header.strip())
+        except ValueError:
+            total_lines = 0
+    else:
+        content = raw
 
     return content, total_lines
 

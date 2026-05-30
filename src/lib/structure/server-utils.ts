@@ -37,6 +37,7 @@ export interface HPCSession {
   refresh_interval: ReturnType<typeof setInterval> | null
   // Files
   current_path: string
+  work_root: string
   files_error: string
   upload_progress: number | null
   // Overview
@@ -65,6 +66,7 @@ export function create_session(): HPCSession {
     auto_refresh: false,
     refresh_interval: null,
     current_path: `~`,
+    work_root: ``,
     files_error: ``,
     upload_progress: null,
     overview: null,
@@ -91,6 +93,7 @@ export function create_local_session(): HPCSession {
     auto_refresh: false,
     refresh_interval: null,
     current_path: `~`,
+    work_root: ``,
     files_error: ``,
     upload_progress: null,
     overview: null,

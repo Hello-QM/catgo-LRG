@@ -631,6 +631,7 @@ class HPCConnectionPool:
                 username=hpc.username,
                 scheduler=hpc.scheduler_type,
                 uptime_seconds=now - hpc.connected_at,
+                work_root=(hpc.config.work_root or "") if hpc.config else "",
             )
             for hpc in self.connections.values()
         ]
