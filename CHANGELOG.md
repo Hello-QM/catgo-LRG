@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.3] - 2026-05-30
+
+### Added
+- **Redo**: `Ctrl+Shift+Z` / `Ctrl+Y` to redo structure changes (undo was already `Ctrl+Z`).
+- **CatBot `set_lattice`**: the web (STATIC_ONLY) assistant can give a molecule a periodic box client-side.
+- **Landing page**: a "Star on GitHub" link on the welcome screen.
+
+### Fixed
+- **Cross-tab / cross-pane bleed**: loading a structure in one tab or pane no longer overwrites another.
+- **Atom delete**: deleting an atom no longer drops unrelated surviving bonds.
+- **(110) slab stoichiometry**: species-aware in-plane primitive reduction (TS + Rust); slab-cutter controls are no longer hard-capped.
+- **Desktop file association**: "Open with CatGo" now loads the file on Windows & Linux, and drag-drop can read dropped files.
+- **DOS / COHP analysis**: extension packages are importable again (was "Failed to fetch"), and large remote reads (PROCAR / COHPCAR / CHGCAR) are gzip-compressed in transit (~6× faster on slow links); the Charge `cube-processor` path was corrected.
+- **CatBot**: "Allow for session" now persists in the client-direct path.
+- **UI**: the active dialog tab no longer renders invisible (accent text on an accent fill); Structure-Info usage tips were corrected to match the real key/mouse bindings.
+- **Large-system mode**: the toggle is disabled with an explanatory tooltip when WebGPU isn't actually available (no GPU adapter).
+- **Trajectory**: keyboard shortcuts (A/D, Space, Ctrl+A/D, Home/End) work without first clicking into the viewer.
+- **VASP**: a successful offline (client-side) input generation shows as info, not a red error.
+- Fixed a startup crash ("Cannot access '_view_dir' before initialization").
+
+### Changed
+- **HPC**: ControlMaster-mode SSH commands use `BatchMode=yes` so a missing master fails cleanly instead of hanging on `ssh-askpass`.
+- **CI**: bounded the e2e/unit job time so a hung dev-server can't run to the 6h cap; hardened cargo network flakes.
+
 ## [1.1.2] - 2026-05-29
 
 ### Added
