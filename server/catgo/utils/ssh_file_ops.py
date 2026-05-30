@@ -180,16 +180,28 @@ class SSHFileOpsMixin:
                 yield chunk
 
     async def _download_subprocess(self, remote_path: str):
+        # gzip on the remote side and inflate the stream locally. Large text
+        # volumetric files (CHGCAR/AECCAR/LOCPOT) compress heavily, cutting the
+        # slow-link transfer several-fold; already-compressed files (.h5) still
+        # transfer correctly, just without a size win. Requires `gzip` on the
+        # remote (universal on HPC); a missing gzip surfaces via returncode != 0.
+        import zlib
         proc = await asyncio.create_subprocess_exec(
-            "ssh", "-o", "BatchMode=yes", self.ssh_alias, f"cat {shlex.quote(remote_path)}",
+            "ssh", "-o", "BatchMode=yes", self.ssh_alias, f"gzip -c {shlex.quote(remote_path)}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        decomp = zlib.decompressobj(16 + zlib.MAX_WBITS)  # 16 => expect gzip header
         while True:
             chunk = await proc.stdout.read(65536)
             if not chunk:
                 break
-            yield chunk
+            out = decomp.decompress(chunk)
+            if out:
+                yield out
+        tail = decomp.flush()
+        if tail:
+            yield tail
         await proc.wait()
         if proc.returncode != 0:
             stderr = await proc.stderr.read()
