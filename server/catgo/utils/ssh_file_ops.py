@@ -120,7 +120,7 @@ class SSHFileOpsMixin:
             home = result.stdout.strip()
             remote_path = remote_path.replace("~", home, 1)
         proc = await asyncio.create_subprocess_exec(
-            "ssh", self.ssh_alias, f"cat > {shlex.quote(remote_path)}",
+            "ssh", "-o", "BatchMode=yes", self.ssh_alias, f"cat > {shlex.quote(remote_path)}",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -181,7 +181,7 @@ class SSHFileOpsMixin:
 
     async def _download_subprocess(self, remote_path: str):
         proc = await asyncio.create_subprocess_exec(
-            "ssh", self.ssh_alias, f"cat {shlex.quote(remote_path)}",
+            "ssh", "-o", "BatchMode=yes", self.ssh_alias, f"cat {shlex.quote(remote_path)}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -224,7 +224,7 @@ class SSHFileOpsMixin:
         """Download a remote file to a local path. Works for both SSH and subprocess modes."""
         if self.is_subprocess_mode:
             proc = await asyncio.create_subprocess_exec(
-                "ssh", self.ssh_alias, f"cat {shlex.quote(remote_path)}",
+                "ssh", "-o", "BatchMode=yes", self.ssh_alias, f"cat {shlex.quote(remote_path)}",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

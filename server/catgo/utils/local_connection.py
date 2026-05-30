@@ -40,7 +40,12 @@ class SubprocessSSHRunner:
         # Wrap in login shell so module-managed tools (sbatch, squeue, etc.) are in PATH
         login_cmd = f"bash -l -c {shlex.quote(cmd)}"
         proc = await asyncio.create_subprocess_exec(
-            "ssh", self.ssh_alias, login_cmd,
+            # BatchMode=yes: ControlMaster mode assumes a master socket already
+            # exists, so no prompt is ever needed. Without it, a missing master
+            # makes ssh fall back to interactive auth → no TTY → it execs
+            # /usr/bin/ssh-askpass and dies with "Connection closed ... port 65535"
+            # instead of a clean "Permission denied / master not active" error.
+            "ssh", "-o", "BatchMode=yes", self.ssh_alias, login_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
