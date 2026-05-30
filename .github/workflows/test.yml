@@ -96,6 +96,11 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
+      # The Playwright image is minimal and lacks a C toolchain. Native deps
+      # (node-pty) need node-gyp -> make/g++/python3 to build during install.
+      - name: Install build toolchain for native modules
+        run: apt-get update && apt-get install -y --no-install-recommends build-essential python3
+
       - name: Install dependencies
         run: pnpm install
 
