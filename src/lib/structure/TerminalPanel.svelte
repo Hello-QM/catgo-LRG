@@ -219,17 +219,25 @@
         }))
         if (disposed) { term.dispose(); return }
 
-        // Try WebGL renderer for GPU acceleration, fall back silently.
-        // Skip in Tauri — WebKitGTK + NVIDIA proprietary drivers have poor
-        // WebGL performance that makes the terminal unusable.  The canvas
-        // renderer is plenty fast for terminal text.
-        if (!(`__TAURI_INTERNALS__` in window)) {
+        // Renderer: default to the DOM renderer (no addon).
+        //
+        // The WebGL addon's glyph texture atlas corrupts on some browser/GPU
+        // combos — glyphs render as black tofu boxes (random letters, not a
+        // font-coverage issue). It was already skipped in Tauri (WebKitGTK +
+        // NVIDIA perf), and the same corruption hit the browser/desktop:serve
+        // path, so it is now opt-in only. The DOM renderer has no atlas and
+        // never corrupts; it is plenty fast for terminal text. Set
+        // localStorage["catgo_terminal_webgl"] = "1" to re-enable GPU accel.
+        const want_webgl = (() => {
+          try { return globalThis.localStorage?.getItem(`catgo_terminal_webgl`) === `1` } catch { return false }
+        })()
+        if (want_webgl && !(`__TAURI_INTERNALS__` in window)) {
           try {
             const webgl = new webglMod.WebglAddon()
             webgl.onContextLoss(() => webgl.dispose())
             term.loadAddon(webgl)
           } catch {
-            // WebGL not available, canvas renderer is fine
+            // WebGL not available, DOM renderer is fine
           }
         }
 
