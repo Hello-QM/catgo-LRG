@@ -41,6 +41,9 @@ import {
   set_hetero_matches,
   set_lateral_matches,
 } from './hetero-stash.svelte'
+import { run_workflow as api_run_workflow, get_run_status } from '$lib/api/workflow'
+import { load_run_config } from '$lib/workflow/run-config-store'
+import { iter_workflow_slices } from '$lib/workflow/workflow-state.svelte'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
 interface MutSite {
@@ -997,6 +1000,87 @@ register(
     return n_added === undefined
       ? { num_sites: sites.length }
       : { num_sites: sites.length, n_hydrogens_added: n_added }
+  },
+)
+
+/**
+ * Resolve the active workflow id for the workflow tools. CLIENT_TOOLS executors
+ * are stateless (no tab_id threaded through execute_tool), so read the per-tab
+ * workflow slices directly; the WorkflowEditor sync effect writes the open
+ * workflow into slice.active_workflow.id. An explicit workflow_id arg wins.
+ */
+function resolve_workflow_id(arg?: unknown): string {
+  const explicit = typeof arg === `string` ? arg.trim() : ``
+  if (explicit) return explicit
+  for (const [, slice] of iter_workflow_slices()) {
+    const id = slice.active_workflow.id
+    if (id) return id
+  }
+  return ``
+}
+
+// ── run_workflow (mutate — submits real HPC jobs / burns compute) ──
+register(
+  {
+    name: `run_workflow`,
+    description: `Run (submit) a workflow using its last-used run configuration. This submits REAL HPC jobs / consumes compute, so it requires user confirmation. The workflow must have been run at least once via the Run dialog so its cluster + job config is saved — otherwise this returns a message telling the user to open the Run dialog once. Defaults to the currently-open workflow if workflow_id is omitted.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        workflow_id: { type: `string`, description: `Workflow id to run (default: the currently-open workflow).` },
+      },
+    },
+  },
+  async (input) => {
+    const workflow_id = resolve_workflow_id(input.workflow_id)
+    if (!workflow_id) {
+      throw new Error(`No active workflow. Open a workflow in the editor, or pass workflow_id.`)
+    }
+    const config = load_run_config(workflow_id)
+    if (!config) {
+      return {
+        status: `no_config`,
+        workflow_id,
+        message: `No saved run configuration for this workflow. Open the Run dialog once (set cluster / execution mode / job params and click Run) so the config is saved, then I can re-run it.`,
+      }
+    }
+    const result = await api_run_workflow(workflow_id, config)
+    return { status: result.status, workflow_id: result.workflow_id ?? workflow_id }
+  },
+)
+
+// ── get_workflow_run_status (read — monitor job progress) ──
+register(
+  {
+    name: `get_workflow_run_status`,
+    description: `Get the current run status of a workflow: overall status, per-step states, and any step errors. Use this to monitor or report job progress. Defaults to the currently-open workflow if workflow_id is omitted.`,
+    kind: `read`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        workflow_id: { type: `string`, description: `Workflow id to check (default: the currently-open workflow).` },
+      },
+    },
+  },
+  async (input) => {
+    const workflow_id = resolve_workflow_id(input.workflow_id)
+    if (!workflow_id) {
+      throw new Error(`No active workflow. Open a workflow in the editor, or pass workflow_id.`)
+    }
+    const status = await get_run_status(workflow_id)
+    const steps = (status.steps ?? []).map((s) => ({
+      id: s.id,
+      label: s.label,
+      status: s.status,
+      ...(s.error_message ? { error: s.error_message } : {}),
+    }))
+    return {
+      workflow_id: status.workflow_id ?? workflow_id,
+      status: status.status,
+      progress: status.progress,
+      steps,
+    }
   },
 )
 

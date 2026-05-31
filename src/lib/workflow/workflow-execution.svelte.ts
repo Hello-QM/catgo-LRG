@@ -22,6 +22,7 @@ import {
   parse_slab_gen_params,
 } from './graph-model'
 import { hpc_session_store, refresh_hpc_sessions } from '$lib/hpc-sessions.svelte'
+import { save_run_config } from './run-config-store'
 import type { PymatgenStructure } from '$lib'
 
 export interface WorkflowExecution {
@@ -473,6 +474,11 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
         }
       }
     }
+
+    // Persist the fully-assembled run config (incl. per-step overrides) keyed
+    // by workflow id, so the in-app AI (CatBot's run_workflow tool) can re-run
+    // this workflow later without re-opening the Run dialog.
+    save_run_config(workflow_id, config)
 
     try {
       if (workflow_status === `paused`) {
