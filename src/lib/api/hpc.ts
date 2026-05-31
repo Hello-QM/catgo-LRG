@@ -349,6 +349,46 @@ export async function submitJob(
   return handleResponse(response)
 }
 
+export interface PreflightCheck {
+  name: string
+  ok: boolean
+  severity: 'error' | 'warn'
+  detail: string
+}
+
+export interface VaspPreflightResponse {
+  success: boolean
+  checks: PreflightCheck[]
+  message: string
+}
+
+export async function preflightVasp(
+  session_id: string,
+  config: {
+    potcar_root: string
+    potcar_functional: string
+    vasp_command?: string
+    elements?: string[]
+    module_loads?: string
+    python_env?: string
+  },
+): Promise<VaspPreflightResponse> {
+  const response = await fetch(`${API_BASE}/hpc/preflight/vasp`, {
+    method: `POST`,
+    headers: { 'Content-Type': `application/json` },
+    body: JSON.stringify({
+      session_id,
+      potcar_root: config.potcar_root,
+      potcar_functional: config.potcar_functional,
+      vasp_command: config.vasp_command || ``,
+      elements: config.elements || [],
+      module_loads: config.module_loads || ``,
+      python_env: config.python_env || ``,
+    }),
+  })
+  return handleResponse(response)
+}
+
 export async function fetchJobs(
   session_id: string,
   start_time: string = ``,

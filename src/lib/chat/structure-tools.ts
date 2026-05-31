@@ -28,6 +28,9 @@ import type {
 } from '$lib/api/heterostructure'
 import { passivateSlab } from '$lib/api/pseudo-hydrogen'
 import type { PseudoHydrogenParams } from '$lib/api/pseudo-hydrogen'
+import { preflightVasp } from '$lib/api/hpc'
+import { hpc_session_store } from '$lib/hpc-sessions.svelte'
+import { API_BASE } from '$lib/api/config'
 import {
   get_bulk_stash,
   get_film_stash,
@@ -103,6 +106,90 @@ function plain_formula(structure: AnyStructure): string {
     .map(([el, n]) => (n === 1 ? el : `${el}${n}`))
     .join(``)
 }
+
+/** Element symbols of the currently loaded structure (POSCAR-style set). */
+function current_elements(): string[] {
+  const s = get_current_structure() as { sites?: { species?: { element?: string }[] }[] } | null
+  if (!s?.sites) return []
+  const set = new Set<string>()
+  for (const site of s.sites) {
+    const el = site.species?.[0]?.element
+    if (el) set.add(el)
+  }
+  return [...set]
+}
+
+// ── validate_hpc_config (read) ──
+// Lets the in-app AI (any API-key provider, not just Claude Code) validate a
+// VASP cluster config against the LIVE cluster over SSH, reusing the same
+// /hpc/preflight/vasp probe the "Test configuration" button uses.
+register(
+  {
+    name: `validate_hpc_config`,
+    description: `Validate the VASP/HPC cluster configuration against the LIVE connected cluster before submitting a workflow. Over SSH it checks that the POTCAR root and functional directories exist, that the pseudopotential for each element of the current structure is present, and that the VASP binary resolves under the given module loads + conda/Python environment (the real submit-script environment, not a bare login shell). Use this whenever the user asks to test/verify/debug their cluster setup or before running a VASP workflow — never guess whether a cluster is configured correctly. Read potcar_root, potcar_functional, vasp_command, module_loads and python_env from the user's run configuration or their submit script; the session and element list are filled automatically.`,
+    kind: `read`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        potcar_root: { type: `string`, description: `Remote directory holding the POTCAR pseudopotential tree, e.g. /scratch/user/VASP/pot64` },
+        potcar_functional: { type: `string`, description: `Functional subdirectory, e.g. potpaw_PBE (default), potpaw_PBE.54, potpaw_LDA` },
+        vasp_command: { type: `string`, description: `VASP run command from the submit script, e.g. "srun --hint=nomultithread vasp_std"` },
+        module_loads: { type: `string`, description: `module load lines from the submit script, newline-separated` },
+        python_env: { type: `string`, description: `conda/env activation lines from the submit script` },
+        elements: { type: `array`, items: { type: `string` }, description: `Element symbols to check; defaults to the current structure's elements` },
+        session_id: { type: `string`, description: `HPC session id; defaults to the active connected cluster` },
+      },
+      required: [`potcar_root`],
+    },
+  },
+  async (input) => {
+    const sessions = hpc_session_store.sessions || []
+    const session_id = (input.session_id as string) || sessions[0]?.session_id
+    if (!session_id) {
+      throw new Error(`No connected HPC cluster. Connect a cluster in the HPC panel first, then retry.`)
+    }
+    const elements = Array.isArray(input.elements) && input.elements.length
+      ? (input.elements as string[])
+      : current_elements()
+    return await preflightVasp(session_id, {
+      potcar_root: String(input.potcar_root ?? ``),
+      potcar_functional: input.potcar_functional ? String(input.potcar_functional) : `potpaw_PBE`,
+      vasp_command: input.vasp_command ? String(input.vasp_command) : undefined,
+      module_loads: input.module_loads ? String(input.module_loads) : undefined,
+      python_env: input.python_env ? String(input.python_env) : undefined,
+      elements,
+    })
+  },
+)
+
+// ── get_skill (read): progressive skill loading for the in-app AI ──
+// CatBot's live loop only passes CLIENT_TOOLS, so without this tool the
+// in-app AI (DeepSeek/Qwen/etc.) cannot reach the /api/skills guides at all.
+// Call with no arg to LIST, then with skill_path to READ — progressive
+// disclosure, not the whole skill corpus in the prompt.
+register(
+  {
+    name: `get_skill`,
+    description: `Load a CatGo skill guide — a domain playbook / best-practice checklist for VASP/CP2K/ORCA/QE calculations, structure building, analysis, or troubleshooting. Call with NO argument to LIST available skills, then call again with a skill_path (e.g. "vasp/relax", "troubleshooting/cluster_config_test", "analysis/oer") to READ that skill and follow its guidance. Consult the relevant skill BEFORE building a workflow or diagnosing a cluster/job problem, instead of guessing.`,
+    kind: `read`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        skill_path: { type: `string`, description: `Skill path to read, e.g. "vasp/relax". Omit to list all available skills.` },
+      },
+    },
+  },
+  async (input) => {
+    const path = String((input.skill_path as string) ?? ``).trim().replace(/^\/+|\/+$/g, ``)
+    const url = path ? `${API_BASE}/skills/${path}` : `${API_BASE}/skills/`
+    const res = await fetch(url)
+    if (!res.ok) {
+      throw new Error(`Skill fetch failed (HTTP ${res.status}). Call get_skill with no argument to list available skills.`)
+    }
+    const data = await res.json()
+    return path ? (data.content ?? data) : (data.skills ?? data)
+  },
+)
 
 // ── get_structure_info (read) ──
 register(

@@ -36,5 +36,11 @@ export function relay_fetch(url: string, init?: RequestInit): Promise<Response> 
 /** True when the tool-calling loop should run in-browser (no backend proxy). */
 export function is_client_direct(config: ChatConfig): boolean {
   if (SDK_PROVIDERS.has(config.provider)) return false // SDK agents always backend
-  return STATIC_ONLY || config.client_direct === true
+  // Non-SDK providers (DeepSeek/Qwen/Kimi/Gemini/Anthropic/custom/ollama) keep
+  // their API key client-side, so default to the in-browser tool-calling loop
+  // (not only under static deploys) — otherwise CatBot falls back to a
+  // text-only backend proxy and can never call CLIENT_TOOLS (validate_hpc_config,
+  // get_skill, structure tools). Explicit client_direct:false opts back into
+  // the text-only path.
+  return STATIC_ONLY || config.client_direct !== false
 }

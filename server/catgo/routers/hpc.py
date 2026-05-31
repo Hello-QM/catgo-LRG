@@ -1884,3 +1884,60 @@ def hpc_health() -> dict[str, str | int]:
         "service": "hpc",
         "active_connections": len(pool.connections),
     }
+
+
+# ====== VASP cluster config preflight ======
+
+
+class VaspPreflightRequest(BaseModel):
+    session_id: str
+    potcar_root: str
+    potcar_functional: str = "potpaw_PBE"
+    vasp_command: str = ""
+    elements: list[str] = []
+    # Environment prelude the real job uses, so the binary check resolves the
+    # executable the same way the submitted script will (module load / conda /
+    # exports), instead of probing a bare login shell.
+    module_loads: str = ""
+    python_env: str = ""
+
+
+class PreflightCheck(BaseModel):
+    name: str
+    ok: bool
+    severity: str = "error"  # "error" gates success; "warn" is advisory
+    detail: str = ""
+
+
+class VaspPreflightResponse(BaseModel):
+    success: bool
+    checks: list[PreflightCheck] = []
+    message: str = ""
+
+
+@router.post("/preflight/vasp", response_model=VaspPreflightResponse)
+async def preflight_vasp(request: VaspPreflightRequest) -> VaspPreflightResponse:
+    """Validate VASP cluster settings against the live remote host.
+
+    Checks that the POTCAR root/functional directories exist, that the tree
+    actually contains element POTCARs (and each requested element when given),
+    and that the VASP binary resolves. Lets users catch a broken config before
+    submitting a job that would otherwise crash silently on the cluster.
+    """
+    from catgo.utils.vasp_preflight import run_vasp_preflight
+
+    hpc = _get_hpc(request.session_id)
+    success, checks, message = await run_vasp_preflight(
+        hpc,
+        potcar_root=request.potcar_root,
+        potcar_functional=request.potcar_functional,
+        vasp_command=request.vasp_command,
+        elements=request.elements,
+        module_loads=request.module_loads,
+        python_env=request.python_env,
+    )
+    return VaspPreflightResponse(
+        success=success,
+        checks=[PreflightCheck(**c) for c in checks],
+        message=message,
+    )

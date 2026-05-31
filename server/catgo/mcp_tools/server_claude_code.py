@@ -626,6 +626,33 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_validate_config",
+        description=(
+            "Validate the user's VASP/HPC cluster configuration against the LIVE "
+            "cluster over SSH before submitting a workflow. Checks the POTCAR root "
+            "and functional directories exist, the pseudopotential for each element "
+            "is present, and the VASP binary resolves under the given module loads + "
+            "conda env. Read potcar_root, potcar_functional, vasp_command, "
+            "module_loads and python_env from the user's run config or submit "
+            "script. Use whenever the user asks to test/verify/debug their cluster "
+            "setup or before running VASP — never guess whether a cluster is "
+            "configured correctly. See skill 'troubleshooting/cluster_config_test'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "potcar_root": {"type": "string", "description": "POTCAR tree root, e.g. /scratch/user/VASP/pot64"},
+                "potcar_functional": {"type": "string", "description": "Functional subdir (default potpaw_PBE)"},
+                "vasp_command": {"type": "string", "description": "Run command, e.g. 'srun --hint=nomultithread vasp_std'"},
+                "module_loads": {"type": "string", "description": "module load lines from the submit script"},
+                "python_env": {"type": "string", "description": "conda/env activation lines from the submit script"},
+                "elements": {"type": "array", "items": {"type": "string"}, "description": "Element symbols to check"},
+                "session_id": {"type": "string", "description": "HPC session id; defaults to the active connected cluster"},
+            },
+            "required": ["potcar_root"],
+        },
+    ),
+    Tool(
         name="catgo_heterostructure",
         description=(
             "Build heterostructures / interfaces / van der Waals stacks "
@@ -1919,8 +1946,47 @@ async def _handle_workflow_engine(args: dict) -> list[TextContent]:
 
 _SKILLS_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "catgo", "workflow", "skills",
+    "workflow", "skills",
 )
+
+
+async def _handle_validate_config(client, args: dict) -> list[TextContent]:
+    """Validate a VASP cluster config against the live host via /hpc/preflight/vasp."""
+    T = TextContent
+    session_id = args.get("session_id", "")
+    if not session_id:
+        try:
+            r = await client.get(f"{API_BASE}/hpc/connections")
+            conns = r.json()
+            conns = conns if isinstance(conns, list) else conns.get("connections", [])
+            remote = [c for c in conns if c.get("session_id") and c.get("session_id") != "__local__"]
+            if remote:
+                session_id = remote[0]["session_id"]
+        except Exception:
+            pass
+    if not session_id:
+        return [T(type="text", text="No connected HPC cluster. Connect a cluster in CatGo first, then retry.")]
+
+    payload = {
+        "session_id": session_id,
+        "potcar_root": args.get("potcar_root", ""),
+        "potcar_functional": args.get("potcar_functional") or "potpaw_PBE",
+        "vasp_command": args.get("vasp_command", ""),
+        "module_loads": args.get("module_loads", ""),
+        "python_env": args.get("python_env", ""),
+        "elements": args.get("elements", []),
+    }
+    resp = await client.post(f"{API_BASE}/hpc/preflight/vasp", json=payload)
+    d = resp.json()
+    lines = []
+    for c in d.get("checks", []):
+        mark = "PASS" if c.get("ok") else ("WARN" if c.get("severity") == "warn" else "FAIL")
+        lines.append(f"{mark}  {c.get('name','')} — {c.get('detail','')}")
+    if d.get("message"):
+        lines.append(d["message"])
+    verdict = ("Configuration looks good." if d.get("success")
+               else "Configuration has problems — fix the FAIL items above before submitting.")
+    return [T(type="text", text=verdict + "\n" + "\n".join(lines))]
 
 
 async def _handle_skills(args: dict) -> list[TextContent]:
@@ -2935,6 +3001,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
                 return await _handle_diagnose(arguments)
             elif name == "catgo_skills":
                 return await _handle_skills(arguments)
+            elif name == "catgo_validate_config":
+                return await _handle_validate_config(client, arguments)
             elif name == "catgo_quickbuild":
                 return await _handle_quickbuild(client, arguments)
             elif name == "catgo_heterostructure":

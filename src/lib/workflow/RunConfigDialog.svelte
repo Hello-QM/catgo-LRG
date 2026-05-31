@@ -3,6 +3,7 @@
   import { t } from '$lib/i18n/index.svelte'
   import type { WorkflowRunConfig, JobScriptParams, ClusterConfig } from './workflow-types'
   import { API_BASE } from '$lib/api/config'
+  import { preflightVasp, type VaspPreflightResponse } from '$lib/api/hpc'
 
   let {
     show = false,
@@ -358,6 +359,53 @@
   let active_cluster = $derived(cluster_configs[active_cluster_id])
   let active_session = $derived(sessions.find(s => s.id === active_cluster_id))
 
+  // ─── VASP config preflight (test cluster settings against the live host) ───
+  let preflight_running = $state(false)
+  let preflight_result = $state<VaspPreflightResponse | null>(null)
+
+  // Best-effort element list from the workflow's structures, so the preflight
+  // can check the exact POTCARs this run needs (falls back to a generic
+  // "tree has POTCARs" check when no elements can be derived).
+  function collect_workflow_elements(): string[] {
+    const out = new Set<string>()
+    for (const n of workflow_nodes || []) {
+      const s = n?.data?.structure ?? n?.structure ?? n?.data?.params?.structure
+      const sites = s?.sites ?? s?.atoms ?? []
+      for (const site of sites) {
+        const el = site?.species?.[0]?.element ?? site?.element ?? site?.symbol
+        if (typeof el === 'string' && el) out.add(el)
+      }
+      for (const el of (s?.elements ?? s?.symbols ?? [])) {
+        if (typeof el === 'string' && el) out.add(el)
+      }
+    }
+    return [...out]
+  }
+
+  async function run_preflight() {
+    if (!active_cluster || !active_session) return
+    preflight_running = true
+    preflight_result = null
+    try {
+      preflight_result = await preflightVasp(active_session.id, {
+        potcar_root: active_cluster.potcar_root,
+        potcar_functional: active_cluster.potcar_functional,
+        vasp_command: active_cluster.vasp_command,
+        elements: collect_workflow_elements(),
+        module_loads: active_cluster.module_loads,
+        python_env: active_cluster.python_env,
+      })
+    } catch (e: any) {
+      preflight_result = {
+        success: false,
+        checks: [],
+        message: e?.message || String(e),
+      }
+    } finally {
+      preflight_running = false
+    }
+  }
+
   // ─── Handlers ───
   function apply_preset(template: string) {
     if (active_cluster_id && cluster_configs[active_cluster_id]) {
@@ -686,6 +734,32 @@
                     <code>{"{{cpus_per_task}}"}</code> <code>{"{{walltime}}"}</code> <code>{"{{partition}}"}</code>
                     <code>{"{{memory}}"}</code> <code>{"{{account}}"}</code> <code>{"{{work_dir}}"}</code> <code>{"{{python_env_activate}}"}</code> <code>{"{{vasp_run_command}}"}</code>
                   </div>
+
+                  {#if calc_mode === 'vasp'}
+                    <div class="preflight-block">
+                      <button class="preflight-btn" onclick={run_preflight} disabled={preflight_running}>
+                        {preflight_running ? t('workflow.rc_preflight_running') : t('workflow.rc_preflight_test')}
+                      </button>
+                      <span class="help-text preflight-hint">{t('workflow.rc_preflight_hint')}</span>
+                    </div>
+                    {#if preflight_result}
+                      <div class="preflight-results" class:ok={preflight_result.success}>
+                        <div class="preflight-summary">
+                          {preflight_result.success ? t('workflow.rc_preflight_pass') : t('workflow.rc_preflight_fail')}
+                        </div>
+                        {#each preflight_result.checks as c}
+                          <div class="preflight-check {c.ok ? 'pass' : (c.severity === 'warn' ? 'warn' : 'fail')}">
+                            <span class="preflight-icon">{c.ok ? '✓' : (c.severity === 'warn' ? '!' : '✗')}</span>
+                            <span class="preflight-name">{c.name}</span>
+                            {#if c.detail}<span class="preflight-detail">{c.detail}</span>{/if}
+                          </div>
+                        {/each}
+                        {#if preflight_result.message}
+                          <div class="preflight-check fail"><span class="preflight-detail">{preflight_result.message}</span></div>
+                        {/if}
+                      </div>
+                    {/if}
+                  {/if}
                 </div>
               {/if}
             </section>
@@ -1322,4 +1396,51 @@
     margin-top: 6px;
     line-height: 1.4;
   }
+  .preflight-block {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }
+  .preflight-btn {
+    padding: 5px 12px;
+    border: 1px solid var(--accent-color, #60a5fa);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent-color, #60a5fa);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .preflight-btn:hover:not(:disabled) {
+    background: var(--accent-color, #60a5fa);
+    color: #fff;
+  }
+  .preflight-btn:disabled { opacity: 0.6; cursor: progress; }
+  .preflight-hint { flex: 1; min-width: 160px; margin: 0; }
+  .preflight-results {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+    border-left: 3px solid var(--danger-color, #f87171);
+    border-radius: 6px;
+    background: var(--pre-bg, rgba(0,0,0,0.04));
+  }
+  .preflight-results.ok { border-left-color: var(--success-color, #34d399); }
+  .preflight-summary { font-weight: 600; font-size: 12px; margin-bottom: 6px; }
+  .preflight-check {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    font-family: monospace;
+  }
+  .preflight-icon { width: 12px; flex-shrink: 0; font-weight: 700; }
+  .preflight-check.pass .preflight-icon { color: var(--success-color, #34d399); }
+  .preflight-check.warn .preflight-icon { color: var(--warning-color, #fbbf24); }
+  .preflight-check.fail .preflight-icon { color: var(--danger-color, #f87171); }
+  .preflight-name { font-weight: 600; }
+  .preflight-detail { color: var(--text-color-muted, #9ca3af); word-break: break-all; }
 </style>
