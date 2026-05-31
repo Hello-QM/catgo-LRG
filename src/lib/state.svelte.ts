@@ -87,16 +87,33 @@ export const pane_font_size_state = $state<{ size: number }>({
 // Terminal font preferences
 const TERMINAL_FONT_KEY = `catgo-terminal-font`
 export const DEFAULT_TERMINAL_FONT_SIZE = 13
-export const DEFAULT_TERMINAL_FONT_FAMILY = `'JetBrains Mono', monospace`
+// Per-glyph fallback chain so the terminal renders Nerd Font icons (powerline /
+// statusline), emoji, and CJK that the primary monospace fonts lack. Without
+// it those glyphs show as tofu boxes (the primary fonts contain none of them,
+// and a bare `monospace` fallback doesn't cover Nerd/emoji). Native terminals
+// (kitty, gnome-terminal) don't have this problem because fontconfig supplies
+// the fallback automatically.
+export const TERMINAL_GLYPH_FALLBACK =
+  `'Symbols Nerd Font Mono', 'Symbols Nerd Font', 'Noto Color Emoji', 'Apple Color Emoji', 'Noto Sans CJK SC', 'Microsoft YaHei', monospace`
+
+/** Append the glyph fallback chain to a primary font if it isn't already present. */
+export function with_glyph_fallback(family: string): string {
+  if (!family || family.includes(`Noto Sans CJK`)) return family
+  // Drop a trailing bare `monospace` so the fallback chain owns the tail.
+  const primary = family.replace(/,\s*monospace\s*$/i, ``).trim()
+  return primary ? `${primary}, ${TERMINAL_GLYPH_FALLBACK}` : TERMINAL_GLYPH_FALLBACK
+}
+
+export const DEFAULT_TERMINAL_FONT_FAMILY = `'JetBrains Mono', ${TERMINAL_GLYPH_FALLBACK}`
 
 export const TERMINAL_FONT_FAMILIES: { label: string; value: string }[] = [
-  { label: `JetBrains Mono`, value: `'JetBrains Mono', monospace` },
-  { label: `Fira Code`, value: `'Fira Code', monospace` },
-  { label: `Source Code Pro`, value: `'Source Code Pro', monospace` },
-  { label: `Cascadia Code`, value: `'Cascadia Code', monospace` },
-  { label: `Menlo`, value: `Menlo, monospace` },
-  { label: `Consolas`, value: `Consolas, monospace` },
-  { label: `monospace`, value: `monospace` },
+  { label: `JetBrains Mono`, value: `'JetBrains Mono', ${TERMINAL_GLYPH_FALLBACK}` },
+  { label: `Fira Code`, value: `'Fira Code', ${TERMINAL_GLYPH_FALLBACK}` },
+  { label: `Source Code Pro`, value: `'Source Code Pro', ${TERMINAL_GLYPH_FALLBACK}` },
+  { label: `Cascadia Code`, value: `'Cascadia Code', ${TERMINAL_GLYPH_FALLBACK}` },
+  { label: `Menlo`, value: `Menlo, ${TERMINAL_GLYPH_FALLBACK}` },
+  { label: `Consolas`, value: `Consolas, ${TERMINAL_GLYPH_FALLBACK}` },
+  { label: `monospace`, value: TERMINAL_GLYPH_FALLBACK },
 ]
 
 let initial_terminal_font_size = DEFAULT_TERMINAL_FONT_SIZE
@@ -110,7 +127,9 @@ try {
         initial_terminal_font_size = parsed.font_size
       }
       if (typeof parsed.font_family === `string`) {
-        initial_terminal_font_family = parsed.font_family
+        // Upgrade older saved values (e.g. "'JetBrains Mono', monospace") that
+        // predate the glyph fallback chain, so existing users get Nerd/emoji/CJK.
+        initial_terminal_font_family = with_glyph_fallback(parsed.font_family)
       }
     }
   }
