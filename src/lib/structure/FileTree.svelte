@@ -737,6 +737,9 @@
       {#if ctx_menu.node.file.is_dir && on_mkdir}
         <button class="ft-ctx-item" onclick={() => { new_folder_parent = ctx_menu?.node.file.path ?? current_root; new_folder_name = t('sidebar.new_folder'); close_ctx_menu() }}>{t('sidebar.new_folder')}</button>
       {/if}
+      {#if on_open_editor && !ctx_menu.node.file.is_dir}
+        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_open_editor?.(ctx_menu.node.file); close_ctx_menu() }}>{t('app.open_in_editor')}</button>
+      {/if}
       {#if on_rename}
         <button class="ft-ctx-item" onclick={() => { renaming_node = ctx_menu?.node ?? null; rename_value = ctx_menu?.node.file.name ?? ``; close_ctx_menu() }}>{t('common.rename')}</button>
       {/if}
