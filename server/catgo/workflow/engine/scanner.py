@@ -384,6 +384,14 @@ class WorkflowEngine:
                             "cp2k_data_dir", "cp2k_command"):
                     if cc.get(key):
                         hpc.setdefault("job_defaults", {})[key] = cc[key]
+                # POTCAR root/functional are read at hpc ROOT level by the VASP
+                # submitter (submitter._submit_one / batch_submitter), not from
+                # job_defaults. Without this, a configured POTCAR dir lands only
+                # in job_defaults, the submitter reads "" from root, and POTCAR
+                # generation is silently skipped.
+                for key in ("potcar_root", "potcar_functional"):
+                    if cc.get(key):
+                        hpc[key] = cc[key]
 
             # Direct hpc-level keys (backward compat for legacy configs)
             for key in ("run_commands",):

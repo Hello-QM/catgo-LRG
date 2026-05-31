@@ -7,6 +7,7 @@ same type are READY (fan-out from a map task).
 from __future__ import annotations
 import json
 import logging
+import shlex
 from collections import defaultdict
 from typing import Any
 
@@ -442,27 +443,57 @@ _POTCAR_VARIANTS = {
 async def _generate_potcar(
     hpc, work_dir: str, potcar_root: str, potcar_functional: str,
 ) -> None:
-    """Concatenate POTCAR files on remote from POSCAR element order."""
+    """Concatenate POTCAR files on remote from POSCAR element order.
+
+    Raises RuntimeError on any failure (unreadable POSCAR, a missing source
+    POTCAR, a failed concat, or an empty result). The caller (_submit_one /
+    submit_batch_tasks) turns the exception into a REMOTE_ERROR task so the
+    failure is surfaced in the UI instead of silently submitting a VASP job
+    with no POTCAR that later crashes on the cluster with no visible error.
+    """
+    wd = shlex.quote(work_dir)
     # Read POSCAR to get element order
-    result = await hpc.run_on_owner(lambda: hpc.conn.run(f"cat {work_dir}/POSCAR", check=False))
+    result = await hpc.run_on_owner(lambda: hpc.conn.run(f"cat {wd}/POSCAR", check=False))
     if result.exit_status != 0 or not result.stdout.strip():
-        logger.warning("Cannot read POSCAR for POTCAR generation")
-        return
+        raise RuntimeError(f"Cannot read POSCAR for POTCAR generation in {work_dir}")
 
     lines = result.stdout.strip().split("\n")
     if len(lines) < 6:
-        return
+        raise RuntimeError("POSCAR has fewer than 6 lines; cannot determine element order for POTCAR")
     # Element symbols are on line 6 (0-indexed: line 5)
     elements = lines[5].split()
+    if not elements:
+        raise RuntimeError("POSCAR line 6 lists no element symbols; cannot build POTCAR")
 
     parts = []
     for el in elements:
         variant = _POTCAR_VARIANTS.get(el, el)
         parts.append(f"{potcar_root}/{potcar_functional}/{variant}/POTCAR")
 
-    cat_cmd = f"cat {' '.join(parts)} > {work_dir}/POTCAR"
+    # Verify every source POTCAR exists first, so the error names the culprit
+    # element/path instead of leaving a partial or empty POTCAR behind.
+    check_cmd = " ; ".join(f"test -f {shlex.quote(p)} || echo MISSING {p}" for p in parts)
+    chk = await hpc.run_on_owner(lambda: hpc.conn.run(check_cmd, check=False))
+    missing = [ln[len("MISSING "):] for ln in (chk.stdout or "").splitlines() if ln.startswith("MISSING ")]
+    if missing:
+        raise RuntimeError(
+            "POTCAR source files not found (check POTCAR root/functional and "
+            f"element→pseudopotential mapping): {', '.join(missing)}"
+        )
+
+    cat_cmd = f"cat {' '.join(shlex.quote(p) for p in parts)} > {wd}/POTCAR"
     result = await hpc.run_on_owner(lambda: hpc.conn.run(cat_cmd, check=False))
     if result.exit_status != 0:
-        logger.error("POTCAR generation failed: %s", result.stderr if hasattr(result, 'stderr') else "")
-    else:
-        logger.info("POTCAR generated from %d elements: %s", len(elements), elements)
+        stderr = (getattr(result, "stderr", "") or "").strip()
+        raise RuntimeError(f"POTCAR concatenation failed: {stderr or 'unknown error'}")
+
+    # Sanity: a real POTCAR is never empty.
+    size = await hpc.run_on_owner(lambda: hpc.conn.run(f"wc -c < {wd}/POTCAR", check=False))
+    try:
+        nbytes = int((size.stdout or "0").strip())
+    except ValueError:
+        nbytes = 0
+    if nbytes <= 0:
+        raise RuntimeError("Generated POTCAR is empty after concatenation")
+
+    logger.info("POTCAR generated from %d elements: %s", len(elements), elements)
