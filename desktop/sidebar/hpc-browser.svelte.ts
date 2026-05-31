@@ -197,12 +197,28 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
   async function hpc_download(file: RemoteFile) {
     const source = callbacks.get_source()
     if (source === LOCAL_SESSION_ID) {
-      // Local file: open with system default app
-      try {
-        const { open } = await import(`@tauri-apps/plugin-shell`)
-        await open(file.path)
-      } catch {
-        // Fallback: copy path to clipboard
+      const { check_tauri } = await import(`$lib/io/tauri`)
+      if (check_tauri()) {
+        // Desktop app: open the local file with the system default app.
+        try {
+          const { open } = await import(`@tauri-apps/plugin-shell`)
+          await open(file.path)
+        } catch {
+          navigator.clipboard.writeText(file.path).catch(() => {})
+        }
+      } else if (!file.is_dir) {
+        // Web/dev mode: Tauri shell is unavailable (the button was a silent
+        // no-op), so stream the file via /__files/raw and trigger a browser
+        // download.
+        const link = document.createElement(`a`)
+        link.href = `/__files/raw?path=${encodeURIComponent(file.path)}`
+        link.download = file.name
+        link.rel = `noopener`
+        link.style.display = `none`
+        document.body.appendChild(link)
+        link.click()
+        link.remove()
+      } else {
         navigator.clipboard.writeText(file.path).catch(() => {})
       }
       return
