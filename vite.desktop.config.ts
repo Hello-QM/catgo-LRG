@@ -314,6 +314,34 @@ export default defineConfig({
             return
           }
 
+          // [2026-05] Serve raw file bytes (images, pdf, binaries) so the
+          // browser/web build can load local files natively via <img src> /
+          // <embed> instead of Tauri-only fs reads. Parallel + browser-cached,
+          // so markdown images load instantly like a native preview.
+          if (url.pathname === `/__files/raw`) {
+            const p = resolve_path(url.searchParams.get(`path`) || ``)
+            if (!existsSync(p) || statSync(p).isDirectory()) {
+              res.statusCode = 404
+              res.end(`not found`)
+              return
+            }
+            try {
+              const ext = (p.split(`.`).pop() || ``).toLowerCase()
+              const mime: Record<string, string> = {
+                png: `image/png`, jpg: `image/jpeg`, jpeg: `image/jpeg`, gif: `image/gif`,
+                webp: `image/webp`, bmp: `image/bmp`, svg: `image/svg+xml`, ico: `image/x-icon`,
+                tif: `image/tiff`, tiff: `image/tiff`, pdf: `application/pdf`,
+              }
+              res.setHeader(`Content-Type`, mime[ext] || `application/octet-stream`)
+              res.setHeader(`Cache-Control`, `no-cache`)
+              res.end(readFileSync(p))
+            } catch {
+              res.statusCode = 400
+              res.end(`cannot read file`)
+            }
+            return
+          }
+
           // [2026-03] Write text content to a file
           if (url.pathname === `/__files/write` && req.method === `POST`) {
             let body = ``

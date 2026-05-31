@@ -1,5 +1,6 @@
 <script lang="ts">
   import { markdown_to_html } from '$lib/chat/markdown'
+  import { check_tauri } from '$lib/io/tauri'
   import { download as unified_download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
@@ -67,46 +68,83 @@
     if (mode !== `markdown`) { rendered_markdown = ``; return }
     const html = markdown_to_html(content)
     rendered_markdown = html
+    if (!file_path) return
 
-    // Resolve remote images when viewing HPC markdown files
-    if (session_id && file_path) {
-      resolve_remote_images(html, session_id, file_path).then((resolved) => {
-        if (resolved !== html) rendered_markdown = resolved
-      })
-    }
+    // Resolve markdown <img> relative paths. Remote (HPC) reads over SSH;
+    // local reads via the Tauri fs plugin. Both run in PARALLEL (was serial,
+    // one slow roundtrip per image) and only apply if this render is still
+    // current, so images appear together instead of slowly or not at all.
+    const base = html
+    const resolver = session_id
+      ? resolve_remote_images(base, session_id, file_path)
+      : resolve_local_images(base, file_path)
+    resolver.then((resolved) => {
+      if (resolved !== base && rendered_markdown === base) rendered_markdown = resolved
+    })
   })
 
-  /** Scan rendered HTML for <img> with relative src, fetch from HPC, replace with data URI. */
-  async function resolve_remote_images(html: string, sid: string, md_path: string): Promise<string> {
-    const { readRemoteBinaryFile } = await import(`$lib/api/hpc`)
+  /** Scan rendered HTML for <img> with relative src, resolve each (in parallel,
+   *  de-duplicated) via `load`, and swap in the result. */
+  async function resolve_images(
+    html: string,
+    md_path: string,
+    load: (abs_path: string, src: string) => Promise<string | null>,
+  ): Promise<string> {
     const dir = md_path.substring(0, md_path.lastIndexOf(`/`))
-    // Match both src="..." and src=&quot;...&quot; (HTML-escaped from esc())
     const img_regex = /<img\s[^>]*?src="([^"]+)"/g
-    const matches = [...html.matchAll(img_regex)]
-    if (matches.length === 0) return html
+    const srcs = [...new Set([...html.matchAll(img_regex)].map((m) => m[1]))].filter(
+      (src) => !src.startsWith(`data:`) && !src.startsWith(`http://`) && !src.startsWith(`https://`),
+    )
+    if (srcs.length === 0) return html
+
+    const resolved = await Promise.all(
+      srcs.map(async (src) => {
+        const abs_path = src.startsWith(`/`) ? src : `${dir}/${src}`
+        try {
+          return [src, await load(abs_path, src)] as const
+        } catch (err) {
+          console.warn(`[FilePreview] image load failed: ${abs_path}`, err)
+          return [src, null] as const
+        }
+      }),
+    )
 
     let result = html
-    for (const match of matches) {
-      const src = match[1]
-      if (src.startsWith(`data:`) || src.startsWith(`http://`) || src.startsWith(`https://`)) continue
-      const abs_path = src.startsWith(`/`) ? src : `${dir}/${src}`
-      try {
-        const resp = await readRemoteBinaryFile(sid, abs_path)
-        if (resp.success && resp.data) {
-          // Guess MIME from extension if not provided
-          const mime = resp.mime_type || guess_image_mime(src)
-          result = result.replace(
-            `src="${src}"`,
-            `src="data:${mime};base64,${resp.data}"`,
-          )
-        } else {
-          console.warn(`[FilePreview] Failed to load remote image: ${abs_path}`, resp.message)
-        }
-      } catch (err) {
-        console.warn(`[FilePreview] Error fetching remote image: ${abs_path}`, err)
-      }
+    for (const [src, uri] of resolved) {
+      if (uri) result = result.replaceAll(`src="${src}"`, `src="${uri}"`)
     }
     return result
+  }
+
+  /** HPC markdown: fetch each image over SSH and inline as a data URI. */
+  async function resolve_remote_images(html: string, sid: string, md_path: string): Promise<string> {
+    const { readRemoteBinaryFile } = await import(`$lib/api/hpc`)
+    return resolve_images(html, md_path, async (abs_path, src) => {
+      const resp = await readRemoteBinaryFile(sid, abs_path)
+      if (resp.success && resp.data) return `data:${resp.mime_type || guess_image_mime(src)};base64,${resp.data}`
+      console.warn(`[FilePreview] Failed to load remote image: ${abs_path}`, resp.message)
+      return null
+    })
+  }
+
+  /** Local markdown: read each image via the Tauri fs plugin and inline it.
+   *  In a plain browser (no Tauri) local files can't be read, so leave the
+   *  markdown as-is rather than throwing. */
+  async function resolve_local_images(html: string, md_path: string): Promise<string> {
+    if (check_tauri()) {
+      // Desktop app: read each image via the Tauri fs plugin and inline it.
+      const { readFile } = await import(`@tauri-apps/plugin-fs`)
+      return resolve_images(html, md_path, async (abs_path, src) => {
+        const bytes = await readFile(abs_path)
+        let bin = ``
+        const chunk = 8192
+        for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk))
+        return `data:${guess_image_mime(src)};base64,${btoa(bin)}`
+      })
+    }
+    // Web/dev: point each relative image at the raw-file route so the browser
+    // loads it natively — parallel and cached, no base64 bloat (like VSCode).
+    return resolve_images(html, md_path, async (abs_path) => `/__files/raw?path=${encodeURIComponent(abs_path)}`)
   }
 
   function guess_image_mime(path: string): string {

@@ -8,6 +8,7 @@
 import { browse_files, read_file, export_structure } from '$lib/api/project'
 import type { FileBrowseItem } from '$lib/api/project'
 import { is_structure_file, is_db_file } from '../sidebar-utils'
+import { check_tauri } from '$lib/io/tauri'
 
 export interface FsBrowserCallbacks {
   on_load_file: (content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) => void
@@ -85,21 +86,35 @@ export function create_fs_browser_state(callbacks: FsBrowserCallbacks) {
     }
 
     const lower_name = item.name.toLowerCase()
+    const is_tauri = check_tauri()
+
+    // Read raw bytes of a local file in BOTH modes: the Tauri fs plugin in the
+    // desktop app, or the Vite dev /__files/raw route in browser/web mode.
+    // Without the web branch, the plugin-fs import throws "Cannot read
+    // properties of undefined (reading 'invoke')" and previews fail in web mode.
+    async function read_local_bytes(path: string): Promise<Uint8Array> {
+      if (is_tauri) {
+        const { readFile } = await import(`@tauri-apps/plugin-fs`)
+        return await readFile(path)
+      }
+      const resp = await fetch(`/__files/raw?path=${encodeURIComponent(path)}`)
+      if (!resp.ok) throw new Error(`Cannot read file (HTTP ${resp.status})`)
+      return new Uint8Array(await resp.arrayBuffer())
+    }
+    function bytes_to_base64(bytes: Uint8Array): string {
+      let bin = ``
+      const chunk_size = 8192
+      for (let i = 0; i < bytes.length; i += chunk_size) bin += String.fromCharCode(...bytes.subarray(i, i + chunk_size))
+      return btoa(bin)
+    }
 
     // In-app preview for images
     if (callbacks.on_preview_file && /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|tiff?)$/i.test(lower_name)) {
       try {
-        const { readFile } = await import(`@tauri-apps/plugin-fs`)
-        const bytes = await readFile(item.path)
+        const bytes = await read_local_bytes(item.path)
         const ext = lower_name.split(`.`).pop() || ``
         const mime = ext === `svg` ? `image/svg+xml` : ext === `gif` ? `image/gif` : ext === `webp` ? `image/webp` : ext === `bmp` ? `image/bmp` : ext.startsWith(`tif`) ? `image/tiff` : `image/${ext === `jpg` ? `jpeg` : ext}`
-        let bin = ``
-        const chunk_size = 8192
-        for (let i = 0; i < bytes.length; i += chunk_size) {
-          bin += String.fromCharCode(...bytes.subarray(i, i + chunk_size))
-        }
-        const base64 = btoa(bin)
-        callbacks.on_preview_file(`image`, item.name, item.path, ``, undefined, base64, mime)
+        callbacks.on_preview_file(`image`, item.name, item.path, ``, undefined, bytes_to_base64(bytes), mime)
       } catch (e) {
         fs_error = e instanceof Error ? e.message : `Cannot read image`
       }
@@ -109,26 +124,24 @@ export function create_fs_browser_state(callbacks: FsBrowserCallbacks) {
     // In-app preview for PDFs
     if (callbacks.on_preview_file && /\.pdf$/i.test(lower_name)) {
       try {
-        const { readFile } = await import(`@tauri-apps/plugin-fs`)
-        const bytes = await readFile(item.path)
-        let bin = ``
-        const chunk_size = 8192
-        for (let i = 0; i < bytes.length; i += chunk_size) {
-          bin += String.fromCharCode(...bytes.subarray(i, i + chunk_size))
-        }
-        const base64 = btoa(bin)
-        callbacks.on_preview_file(`pdf`, item.name, item.path, ``, undefined, base64, `application/pdf`)
+        const bytes = await read_local_bytes(item.path)
+        callbacks.on_preview_file(`pdf`, item.name, item.path, ``, undefined, bytes_to_base64(bytes), `application/pdf`)
       } catch (e) {
         fs_error = e instanceof Error ? e.message : `Cannot read PDF`
       }
       return
     }
 
-    // Non-previewable binary files: open with system default app
+    // Non-previewable binary files: open with the system default app (desktop),
+    // or open the raw file in a new browser tab in web mode.
     if (/\.(xlsx?|xlsm|xlsb|ods|mp[34]|wav|ogg|avi|mov|mkv|zip|gz|tar|rar|7z|exe|dll|so|dylib|woff2?|ttf|eot|doc|docx|ppt|pptx)$/i.test(lower_name)) {
       try {
-        const { open } = await import(`@tauri-apps/plugin-shell`)
-        await open(item.path)
+        if (is_tauri) {
+          const { open } = await import(`@tauri-apps/plugin-shell`)
+          await open(item.path)
+        } else {
+          window.open(`/__files/raw?path=${encodeURIComponent(item.path)}`, `_blank`)
+        }
       } catch (e) {
         fs_error = e instanceof Error ? e.message : `Cannot open file`
       }
