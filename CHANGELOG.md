@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.4] - 2026-05-30
+
+### Added
+- **Cluster config validation**: a "Test configuration" button in the Run dialog (and a CatBot tool, `validate_hpc_config` / `catgo_validate_config`) that probes the live HPC cluster over SSH — POTCAR root/functional directories, per-element pseudopotentials, and VASP binary resolution under the real module-load + conda environment — so a broken cluster config is caught before submitting instead of crashing silently on the cluster.
+- **In-app AI gains tools**: non-SDK providers (DeepSeek/Qwen/Kimi/Gemini/…) now run the in-browser tool-calling loop, so CatBot can validate clusters, load skill guides on demand (`get_skill`), and **run and monitor workflows** (`run_workflow`, `get_workflow_run_status`) using a per-workflow run config persisted at submit time.
+- **File tree "Open in editor"**: right-click context-menu action to open a file in the Monaco editor.
+
+### Fixed
+- **Skill system restored**: corrected `_SKILLS_DIR` (it pointed at a non-existent doubled `catgo/` path), so `GET /api/skills` and the `catgo_skills` MCP tool serve all skill guides again — the in-app AI was silently getting no skill guidance.
+- **POTCAR generation**: the configured POTCAR directory was written to `hpc.job_defaults` but read from the hpc root, so POTCAR generation was silently skipped and VASP ran without one; the directory is now read correctly, and generation failures are surfaced as errored tasks (naming the missing element) instead of crashing silently on the cluster.
+- **Local files in browser/web mode**: clicking the download button or previewing an image/PDF/binary in the local file browser no longer throws `Cannot read properties of undefined (reading 'invoke')` outside the desktop app — these now stream through a dev file route; markdown images load in parallel (was one slow request per image).
+- **Terminal rendering**: default to the DOM renderer (WebGL opt-in) plus a Nerd Font / emoji / CJK glyph fallback chain, so terminal output no longer renders as tofu boxes in browser mode.
+
 ## [1.1.3] - 2026-05-30
 
 ### Added
