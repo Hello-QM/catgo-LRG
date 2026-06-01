@@ -629,6 +629,31 @@ export async function fetchOverview(session_id: string): Promise<HPCOverview> {
   return handleResponse(response)
 }
 
+export interface MaterializeTrajectoryResponse {
+  ok: boolean
+  local_path: string
+  total_frames: number
+  n_atoms: number
+  file_size: number
+}
+
+/**
+ * Pull a large remote trajectory to a backend-local cache file (gzip-compressed
+ * on the wire) and index it. Returns the local path the frame-streaming
+ * endpoints can then read. Lets a huge remote XYZ open without slurping it into
+ * the webview.
+ */
+export async function materializeRemoteTrajectory(
+  session_id: string,
+  remote_path: string,
+): Promise<MaterializeTrajectoryResponse> {
+  const url = `${API_BASE}/hpc/materialize_trajectory` +
+    `?session_id=${encodeURIComponent(session_id)}` +
+    `&remote_path=${encodeURIComponent(remote_path)}`
+  const response = await fetch(url)
+  return handleResponse<MaterializeTrajectoryResponse>(response)
+}
+
 export async function readRemoteFile(
   session_id: string,
   file_path: string,

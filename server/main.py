@@ -90,6 +90,7 @@ from catgo.routers import (
     workflow_router,
     build_router,
     trajectory_edit_router,
+    trajectory_stream_router,
     pty_router,
     chat_router,
     structure_ops_router,
@@ -406,6 +407,7 @@ app.include_router(mofdb_router, prefix="/api")
 app.include_router(dos_router, prefix="/api")
 app.include_router(cohp_router, prefix="/api")
 app.include_router(bands_router, prefix="/api")
+app.include_router(trajectory_stream_router, prefix="/api")
 app.include_router(workflow_router, prefix="/api")
 app.include_router(pseudo_hydrogen_router, prefix="/api")
 app.include_router(build_router, prefix="/api")

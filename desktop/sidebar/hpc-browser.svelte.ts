@@ -15,6 +15,8 @@ export interface HpcBrowserCallbacks {
   on_load_file: (content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) => void
   on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
   on_load_trajectory?: (content: string, filename: string, meta?: { session_id: string; dir_path: string }) => void
+  /** Stream a large trajectory from a backend-local path (after remote materialize). */
+  on_load_trajectory_stream?: (path: string, filename: string) => void | Promise<void>
   on_preview_file?: (mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) => void
 }
 
@@ -90,6 +92,18 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
     const source = callbacks.get_source()
     hpc_loading_file = { name: file.name, size: file.size_bytes }
     try {
+      // Large remote trajectory → materialize to a backend-local cache file
+      // (gzip on the wire) and stream frames, instead of pulling the whole
+      // file into the webview (which freezes it).
+      if (callbacks.on_load_trajectory_stream) {
+        const { materialize_remote_if_large } = await import('$lib/trajectory/remote-frame-loader')
+        const local = await materialize_remote_if_large(source, file.path, file.name, file.size_bytes)
+        if (local) {
+          const nm = file.path.split(/[/\\]/).pop() || file.name
+          await callbacks.on_load_trajectory_stream(local, nm)
+          return
+        }
+      }
       const content = await read_file_content(file)
       if (!content) return
       const filename = file.path.split(/[/\\]/).pop() || file.name

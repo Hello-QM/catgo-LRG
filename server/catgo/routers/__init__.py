@@ -50,6 +50,7 @@ _ROUTERS: dict[str, str] = {
     "pseudo_hydrogen_router": "pseudo_hydrogen",
     "build_router": "build",
     "trajectory_edit_router": "trajectory_edit",
+    "trajectory_stream_router": "trajectory_stream",
     "pty_router": "pty",
     "orca_router": "orca",
     "chat_router": "chat",

@@ -3678,6 +3678,17 @@
               // Dispatch event to SlowGrowthPane with the text content
               window.dispatchEvent(new CustomEvent(`catgo-sg-upload-text`, { detail: { content } }))
             }}
+            on_load_trajectory_stream={async (local_path, filename) => {
+              // Large remote trajectory already materialized to a backend-local
+              // file — build a streamed trajectory and open it in the viewer.
+              try {
+                const { load_remote_trajectory } = await import('$lib/trajectory/remote-frame-loader')
+                const trajectory = await load_remote_trajectory(local_path, filename)
+                if (trajectory && on_file_load) on_file_load({ trajectory, filename } as any)
+              } catch (e) {
+                console.error(`streamed remote trajectory open failed:`, e)
+              }
+            }}
             on_load_trajectory={async (content, filename, remote_origin) => {
               // Route through on_file_load so App.svelte can open in Trajectory viewer
               try {

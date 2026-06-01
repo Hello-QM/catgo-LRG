@@ -20,6 +20,10 @@ export interface DragDropDeps {
   get_active_tab_id: () => string
   process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number) => Promise<void>
   import_many: (tab_id: string, items: ImportItem[], pane_idx: number) => Promise<void>
+  /** If `path` is a large on-disk trajectory, stream it and return true. */
+  stream_trajectory: (path: string, filename: string) => Promise<boolean>
+  /** If `file` is a large trajectory (web mode, no path), upload+stream it; return true. */
+  stream_trajectory_file: (file: File) => Promise<boolean>
   get_drag_target_pane: () => number | null
   set_drag_target_pane: (v: number | null) => void
   set_is_loading: (v: boolean) => void
@@ -115,6 +119,12 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
   if (fs_path) {
     deps.set_is_loading(true)
     try {
+      // Large on-disk trajectory → stream frame-by-frame, never read it whole.
+      const fs_name = fs_path.split(/[/\\]/).pop() || `file`
+      if (await deps.stream_trajectory(fs_path, fs_name)) {
+        ts.active_pane = pane_idx
+        return
+      }
       const { read_file } = await import(`$lib/api/project`)
       const result = await read_file(fs_path)
       await deps.process_file_content(deps.get_active_tab_id(), result.content, result.name, pane_idx)
@@ -153,9 +163,17 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       for (const f of flat_files) collected.push({ file: f, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })
     }
     if (collected.length === 0) return
+    // Large trajectories (no fs path in web mode) → upload+stream, don't parse
+    // the whole file into the webview (which freezes it).
+    const to_import: Array<{ file: File; path: string | null }> = []
+    for (const c of collected) {
+      if (await deps.stream_trajectory_file(c.file)) continue
+      to_import.push(c)
+    }
+    if (to_import.length === 0) { ts.active_pane = pane_idx; return }
     await deps.import_many(
       deps.get_active_tab_id(),
-      collected.map(c => ({ file: c.file, filename: c.file.name, path: c.path })),
+      to_import.map(c => ({ file: c.file, filename: c.file.name, path: c.path })),
       pane_idx,
     )
     ts.active_pane = pane_idx

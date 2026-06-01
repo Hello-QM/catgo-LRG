@@ -7,7 +7,7 @@
   import type { AnyStructure } from '$lib'
   import { parse_cube_header, cube_atoms_to_molecule } from '$lib/cube'
   import { API_BASE, STATIC_ONLY } from '$lib/api/config'
-  import { check_tauri, init_tauri, open_files as tauri_open_files, open_folder as tauri_open_folder, read_dropped_paths as tauri_read_dropped_paths } from '$lib/io/tauri'
+  import { check_tauri, init_tauri, read_dropped_paths as tauri_read_dropped_paths, pick_structure_paths as tauri_pick_structure_paths, pick_folder_paths as tauri_pick_folder_paths } from '$lib/io/tauri'
   import { decompress_file } from '$lib/io/decompress'
   import { is_trajectory_file, parse_trajectory_data } from '$lib/trajectory/parse'
   import type { TrajectoryType } from '$lib/trajectory'
@@ -175,6 +175,8 @@
     get_active_tab_id: () => tm.active_tab_id,
     process_file_content,
     import_many,
+    stream_trajectory: (path, filename) => stream_path_if_large(path, filename),
+    stream_trajectory_file: (file) => stream_file_if_large(file),
     get_drag_target_pane: () => drag_target_pane,
     set_drag_target_pane: (v) => { drag_target_pane = v },
     set_is_loading: (v) => { is_loading = v },
@@ -193,6 +195,72 @@
   function handle_sidebar_preview(mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) { _handle_sidebar_preview(sidebar_deps, mode, filename, file_path, session_id, content, binary_data, mime_type) }
   function handle_sidebar_open_editor(content: string, filename: string, file_path: string, session_id: string) { _handle_sidebar_open_editor(sidebar_deps, content, filename, file_path, session_id) }
   function handle_sidebar_load_trajectory(content: string, filename: string, _meta?: { session_id: string; dir_path: string }) { _handle_sidebar_load_trajectory(sidebar_deps, content, filename, _meta) }
+  // Backend-streamed trajectory: never reads the full file into the webview.
+  // Builds a minimal indexed TrajectoryType (frames 0..9 + frame_loader) from
+  // the backend index and drops it straight into a pane — no parse-all, no
+  // base64. See src/lib/trajectory/remote-frame-loader.ts.
+  async function handle_load_trajectory_stream(path: string, filename: string) {
+    let tab_id = tm.active_tab_id
+    let ts = tab_states[tab_id]
+    if (!ts) return
+    let target = find_import_target_pane(ts, ts.active_pane)
+    if (target === -1) {
+      open_tab(`structure`)
+      tab_id = tm.active_tab_id
+      ts = tab_states[tab_id]
+      if (!ts) return
+      target = 0
+    }
+    try {
+      const { load_remote_trajectory } = await import(`$lib/trajectory/remote-frame-loader`)
+      const trajectory = await load_remote_trajectory(path, filename)
+      apply_entry_to_pane(tab_id, ts, target, {
+        id: `stream-${filename}-${Date.now()}`,
+        filename,
+        source_path: path,
+        format: `xyz`,
+        structure: undefined,
+        trajectory,
+        is_trajectory: true,
+        cube_file: null,
+        raw_traj_b64: ``,
+        raw_traj_format: `xyz`,
+      }, null, path)
+    } catch (e) {
+      console.error(`Streamed trajectory load failed for ${filename}:`, e)
+    }
+  }
+  // Probe a local path; if it's a large multi-frame trajectory, load it via the
+  // backend streamer and return true (caller then skips the in-memory read that
+  // would otherwise freeze the webview). Shared by every path-based entry point.
+  async function stream_path_if_large(path: string, filename: string): Promise<boolean> {
+    try {
+      const { probe_streamable_trajectory } = await import(`$lib/trajectory/remote-frame-loader`)
+      const probe = await probe_streamable_trajectory(path, filename)
+      if (probe?.stream) {
+        await handle_load_trajectory_stream(path, filename)
+        return true
+      }
+    } catch (e) {
+      console.error(`stream probe failed for ${filename}:`, e)
+    }
+    return false
+  }
+  // Web-mode counterpart: a large browser File has no path, so upload it once
+  // to the backend cache, then stream. Returns true if streamed.
+  async function stream_file_if_large(file: File): Promise<boolean> {
+    try {
+      const { materialize_file_if_large } = await import(`$lib/trajectory/remote-frame-loader`)
+      const local = await materialize_file_if_large(file)
+      if (local) {
+        await handle_load_trajectory_stream(local, file.name)
+        return true
+      }
+    } catch (e) {
+      console.error(`file stream failed for ${file.name}:`, e)
+    }
+    return false
+  }
   function handle_terminal_open_file(file_path: string, filename: string, session_id: string) { return _handle_terminal_open_file(sidebar_deps, file_path, filename, session_id) }
   function handle_unload(tab_id: string, pane_idx: number) { _handle_unload(pane_deps, tab_id, pane_idx) }
   function close_panel(tab_id: string, pane_idx: number) { _close_panel(pane_deps, tab_id, pane_idx) }
@@ -602,9 +670,21 @@
     ts.active_pane = pane_idx
     if (is_tauri) {
       try {
-        const results = await tauri_open_files()
-        if (results && results.length > 0) {
-          await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+        // Pick paths first; divert large trajectories to the backend streamer
+        // before any 100s-of-MB read hits the webview.
+        const paths = await tauri_pick_structure_paths()
+        const read_paths: string[] = []
+        for (const pth of paths) {
+          const nm = pth.split(/[/\\]/).pop() || `unknown`
+          if (await stream_path_if_large(pth, nm)) continue
+          read_paths.push(pth)
+        }
+        if (read_paths.length > 0) {
+          const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
+          const results = await tauri_read_dropped_paths(read_paths, accept)
+          if (results.length > 0) {
+            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+          }
         }
       } catch (err) {
         console.error(err)
@@ -624,9 +704,20 @@
     const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
     if (is_tauri) {
       try {
-        const results = await tauri_open_folder(accept)
-        if (results && results.length > 0) {
-          await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+        // Path-first so a folder containing a huge trajectory streams instead
+        // of reading the whole file into the webview.
+        const paths = await tauri_pick_folder_paths(accept)
+        const read_paths: string[] = []
+        for (const pth of paths) {
+          const nm = pth.split(/[/\\]/).pop() || `unknown`
+          if (await stream_path_if_large(pth, nm)) continue
+          read_paths.push(pth)
+        }
+        if (read_paths.length > 0) {
+          const results = await tauri_read_dropped_paths(read_paths, accept)
+          if (results.length > 0) {
+            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+          }
         }
       } catch (err) {
         console.error(err)
@@ -643,11 +734,18 @@
     const files = Array.from(input.files ?? [])
     if (files.length === 0) return
     try {
-      await import_many(
-        file_input_target_tab,
-        files.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
-        file_input_target_pane,
-      )
+      const to_import: File[] = []
+      for (const f of files) {
+        if (await stream_file_if_large(f)) continue
+        to_import.push(f)
+      }
+      if (to_import.length > 0) {
+        await import_many(
+          file_input_target_tab,
+          to_import.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
+          file_input_target_pane,
+        )
+      }
     } catch (err) {
       console.error(err)
     } finally {
@@ -662,11 +760,18 @@
     const files = all.filter(f => is_structure_file(f.name) || is_trajectory_file(f.name) || is_chgcar_file(f.name))
     if (files.length === 0) { input.value = ``; return }
     try {
-      await import_many(
-        file_input_target_tab,
-        files.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
-        file_input_target_pane,
-      )
+      const to_import: File[] = []
+      for (const f of files) {
+        if (await stream_file_if_large(f)) continue
+        to_import.push(f)
+      }
+      if (to_import.length > 0) {
+        await import_many(
+          file_input_target_tab,
+          to_import.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
+          file_input_target_pane,
+        )
+      }
     } catch (err) {
       console.error(err)
     } finally {
@@ -1166,12 +1271,23 @@
 
             if (other_paths.length === 0) return
 
+            // Large on-disk trajectories: stream frame-by-frame from the
+            // backend instead of reading the whole 100s-of-MB file into the
+            // webview (which freezes it).
+            const read_paths: string[] = []
+            for (const pth of other_paths) {
+              const nm = pth.split(/[/\\]/).pop() || `trajectory.xyz`
+              if (await stream_path_if_large(pth, nm)) continue
+              read_paths.push(pth)
+            }
+            if (read_paths.length === 0) return
+
             const ts = get_active_ts()
             if (!ts) return
             is_loading = true
             try {
               const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
-              const files = await tauri_read_dropped_paths(other_paths, accept)
+              const files = await tauri_read_dropped_paths(read_paths, accept)
               const target_pane = ts.panes.findIndex(p => !pane_has_content(p))
               const pane_idx = target_pane >= 0 ? target_pane : ts.active_pane
               if (files.length > 0) {
@@ -1474,6 +1590,7 @@
     on_open_editor={handle_sidebar_open_editor}
     on_preview_file={handle_sidebar_preview}
     on_load_trajectory={handle_sidebar_load_trajectory}
+    on_load_trajectory_stream={handle_load_trajectory_stream}
     on_open_workflow={handle_sidebar_open_workflow}
     on_save_structure={get_current_structure}
     on_save_workflow={() => {

@@ -228,6 +228,47 @@ export async function open_folder(
 }
 
 /**
+ * Open the multi-file dialog and return the picked paths WITHOUT reading them.
+ * Lets callers probe each path (e.g. divert a huge trajectory to the backend
+ * streamer) before deciding to read its content into memory.
+ */
+export async function pick_structure_paths(): Promise<string[]> {
+  if (!check_tauri()) return []
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const picked = await open({ multiple: true, filters: STRUCTURE_DIALOG_FILTERS })
+    if (!picked) return []
+    return Array.isArray(picked) ? picked : [picked]
+  } catch (error) {
+    console.error('Tauri pick-paths error:', error)
+    return []
+  }
+}
+
+/**
+ * Open the directory dialog and return every accepted file path inside WITHOUT
+ * reading them — the path-only sibling of {@link open_folder}.
+ */
+export async function pick_folder_paths(
+  accept: (filename: string) => boolean,
+  max_depth = 3,
+  max_files = 500,
+): Promise<string[]> {
+  if (!check_tauri()) return []
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const dir = await open({ directory: true, multiple: false })
+    if (!dir || Array.isArray(dir)) return []
+    const collected: string[] = []
+    await walk_dir(dir, accept, collected, 0, max_depth, max_files)
+    return collected
+  } catch (error) {
+    console.error('Tauri folder pick-paths error:', error)
+    return []
+  }
+}
+
+/**
  * Expand a list of dropped paths (files and/or directories) into readable
  * files, filtering by `accept`. Directories are walked like open_folder.
  */

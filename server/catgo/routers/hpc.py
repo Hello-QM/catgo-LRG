@@ -950,6 +950,69 @@ async def download_file(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.get("/materialize_trajectory")
+async def materialize_trajectory(
+    session_id: str = Query(...),
+    remote_path: str = Query(...),
+) -> dict:
+    """Pull a large remote trajectory to a local cache file, then index it.
+
+    A 100s-of-MB remote XYZ can't be slurped into the webview (it freezes) and
+    per-frame SFTP is too chatty over WAN. Instead we transfer the file ONCE,
+    gzip-compressed on the wire (``download_remote_file`` already inflates text
+    via ``gzip -c`` remotely), write the inflated bytes to a backend-local cache
+    file, and index it. The frontend then streams frames from that local file
+    through the existing ``/trajectory/{frames,metadata}`` endpoints — the
+    webview only ever holds the current frames. Cached by (session, path, size)
+    so re-opening is instant.
+    """
+    import hashlib
+    from pathlib import Path
+
+    hpc = _get_hpc(session_id)
+    await _ensure_within_work_root(hpc, remote_path)
+    size = await hpc.run_on_owner(lambda: hpc.get_remote_file_size(remote_path))
+
+    key = hashlib.sha1(f"{session_id}\0{remote_path}\0{size}".encode()).hexdigest()[:16]
+    ext = os.path.splitext(remote_path)[1] or ".xyz"
+    cache_dir = Path.home() / ".catgoat" / "cache" / "traj"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    local = cache_dir / f"{key}{ext}"
+
+    if not (local.is_file() and local.stat().st_size > 0):
+        tmp = local.with_name(local.name + ".part")
+        written = 0
+        try:
+            with tmp.open("wb") as fh:
+                async for chunk in hpc.stream_on_owner(
+                    lambda: hpc.download_remote_file(remote_path)
+                ):
+                    fh.write(chunk)
+                    written += len(chunk)
+            tmp.replace(local)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=f"materialize failed: {exc}") from exc
+        logger.info(
+            "Materialized remote trajectory %s -> %s (%d bytes)", remote_path, local, written
+        )
+
+    from .trajectory_stream import _get_index
+
+    try:
+        _, idx = _get_index(str(local))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"index failed: {exc}") from exc
+
+    return {
+        "ok": True,
+        "local_path": str(local),
+        "total_frames": idx.total_frames,
+        "n_atoms": idx.n_atoms,
+        "file_size": idx.file_size,
+    }
+
+
 # ====== Connections Listing + Overview ======
 
 

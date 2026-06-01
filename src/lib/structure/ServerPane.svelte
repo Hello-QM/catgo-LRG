@@ -72,6 +72,7 @@
     on_open_editor,
     on_preview_file,
     on_load_trajectory,
+    on_load_trajectory_stream,
     on_analyze_report,
     external_navigate_path = $bindable<string | undefined>(undefined),
   }: {
@@ -84,6 +85,7 @@
     on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
     on_preview_file?: (mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) => void
     on_load_trajectory?: (content: string, filename: string, remote_origin?: { session_id: string; dir_path: string }) => void
+    on_load_trajectory_stream?: (local_path: string, filename: string) => void | Promise<void>
     on_analyze_report?: (content: string, filename: string) => void
     external_navigate_path?: string | undefined
   } = $props()
@@ -918,6 +920,18 @@
     loading_file = { name: file.name, size: file.size_bytes }
     loading_error = null
     try {
+      // Large remote trajectory → materialize to a backend-local cache file
+      // (gzip on the wire) and stream frames, instead of pulling the whole file
+      // into the webview (which freezes it).
+      if (on_load_trajectory_stream) {
+        const { materialize_remote_if_large } = await import('$lib/trajectory/remote-frame-loader')
+        const local = await materialize_remote_if_large(active_session.session_id, file.path, file.name, file.size_bytes)
+        if (local) {
+          await on_load_trajectory_stream(local, file.name)
+          loading_file = null
+          return
+        }
+      }
       // Detect trajectory files early — default 2MB limit truncates large XDATCAR etc.
       const { is_trajectory_file } = await import('$lib/trajectory/parse')
       const likely_traj = on_load_trajectory && is_trajectory_file(file.name)

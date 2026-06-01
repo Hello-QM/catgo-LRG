@@ -14,6 +14,8 @@ export interface FsBrowserCallbacks {
   on_load_file: (content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) => void
   on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
   on_load_trajectory?: (content: string, filename: string, meta?: { session_id: string; dir_path: string }) => void
+  /** Stream a large on-disk trajectory frame-by-frame via the backend (no full read). */
+  on_load_trajectory_stream?: (path: string, filename: string) => void | Promise<void>
   on_save_structure?: () => Record<string, unknown> | null
   on_preview_file?: (mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) => void
   on_before_db_switch?: () => Promise<boolean>
@@ -146,6 +148,17 @@ export function create_fs_browser_state(callbacks: FsBrowserCallbacks) {
         fs_error = e instanceof Error ? e.message : `Cannot open file`
       }
       return
+    }
+
+    // Large on-disk trajectory: stream frame-by-frame from the backend instead
+    // of slurping 100s of MB into the webview (which freezes it).
+    if (callbacks.on_load_trajectory_stream) {
+      const { probe_streamable_trajectory } = await import('$lib/trajectory/remote-frame-loader')
+      const probe = await probe_streamable_trajectory(item.path, item.name)
+      if (probe?.stream) {
+        await callbacks.on_load_trajectory_stream(item.path, item.name)
+        return
+      }
     }
 
     // Text-based files: read content

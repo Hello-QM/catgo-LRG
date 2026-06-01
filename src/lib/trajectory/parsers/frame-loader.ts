@@ -11,7 +11,6 @@ import type {
 } from '../index'
 import {
   convert_atomic_numbers,
-  count_xyz_frames,
   create_trajectory_frame,
   MAX_METADATA_SIZE,
   MAX_SAFE_STRING_LENGTH,
@@ -21,9 +20,72 @@ import {
 export class TrajFrameReader implements FrameLoader {
   private format: `xyz` | `ase`
   private global_numbers?: number[] // For ASE trajectories
+  // Cached per-frame character offsets into the XYZ source string.
+  // Length = n_frames + 1; frame i spans [offsets[i], offsets[i + 1]).
+  // Built once via a single newline-walking pass (NO whole-file split),
+  // then reused for counting / indexing / random frame access so large
+  // trajectories never re-split the 100s-of-MB string on the main thread.
+  private xyz_offsets?: number[]
+  private xyz_offsets_src?: string
 
   constructor(filename: string) {
     this.format = filename.toLowerCase().endsWith(`.traj`) ? `ase` : `xyz`
+  }
+
+  /**
+   * Build (and cache) frame start offsets for an XYZ string in a single pass.
+   *
+   * Walks line boundaries with `indexOf('\n')` instead of
+   * `data.split(/\r?\n/)`, so it never allocates a multi-million-element line
+   * array or copies the whole file via `.trim()`. Only the per-frame count
+   * line is sliced+parsed; the comment + atom lines are skipped by offset.
+   */
+  private ensure_xyz_offsets(data: string): number[] {
+    if (this.xyz_offsets && this.xyz_offsets_src === data) return this.xyz_offsets
+
+    const n = data.length
+    const offsets: number[] = []
+    let pos = 0
+
+    while (pos < n) {
+      let nl = data.indexOf(`\n`, pos)
+      if (nl === -1) nl = n
+      const header = data.slice(pos, nl).trim()
+      if (!header) { // blank line between frames
+        pos = nl + 1
+        continue
+      }
+
+      const num_atoms = parseInt(header, 10)
+      if (isNaN(num_atoms) || num_atoms <= 0) { // not a frame header — skip line
+        pos = nl + 1
+        continue
+      }
+
+      const frame_start = pos
+      // Advance over: count line + comment line + num_atoms atom lines.
+      const lines_to_skip = 2 + num_atoms
+      let p = pos
+      let complete = true
+      for (let k = 0; k < lines_to_skip; k++) {
+        let e = data.indexOf(`\n`, p)
+        if (e === -1) { // EOF
+          if (k < lines_to_skip - 1) complete = false // truncated final frame
+          p = n
+          break
+        }
+        p = e + 1
+      }
+      if (!complete) break
+
+      offsets.push(frame_start)
+      pos = p
+    }
+
+    offsets.push(n) // end sentinel
+    this.xyz_offsets = offsets
+    this.xyz_offsets_src = data
+    return offsets
   }
 
   // async needed to satisfy FrameLoader interface
@@ -33,7 +95,7 @@ export class TrajFrameReader implements FrameLoader {
   ): Promise<number> {
     if (this.format === `xyz`) {
       if (data instanceof ArrayBuffer) throw new Error(`XYZ loader requires text data`)
-      return count_xyz_frames(data)
+      return this.ensure_xyz_offsets(data).length - 1
     } else {
       if (!(data instanceof ArrayBuffer)) {
         throw new Error(`ASE loader requires binary data`)
@@ -52,56 +114,19 @@ export class TrajFrameReader implements FrameLoader {
     const frame_index: FrameIndex[] = []
 
     if (this.format === `xyz`) {
-      const data_str = data as string
-      const lines = data_str.trim().split(/\r?\n/)
-      const encoder = new TextEncoder() // Reuse single encoder instance
+      // Offsets are character indices into the source string (built once,
+      // cached). `byte_offset`/`estimated_size` here carry char offset/length
+      // — used only for slicing the same string and for display.
+      const offsets = this.ensure_xyz_offsets(data as string)
 
-      // Detect the actual newline sequence used in the file
-      const newline_sequence = data_str.includes(`\r\n`) ? `\r\n` : `\n`
-      const newline_byte_len = encoder.encode(newline_sequence).length
-
-      let [current_frame, line_idx, byte_offset] = [0, 0, 0]
-
-      while (line_idx < lines.length && current_frame < total_frames) {
-        if (!lines[line_idx]?.trim()) {
-          byte_offset += encoder.encode(lines[line_idx]).length +
-            newline_byte_len
-          line_idx++
-          continue
-        }
-
-        const num_atoms = parseInt(lines[line_idx].trim(), 10)
-        if (
-          isNaN(num_atoms) || num_atoms <= 0 || line_idx + num_atoms + 1 >= lines.length
-        ) {
-          byte_offset += encoder.encode(lines[line_idx]).length +
-            newline_byte_len
-          line_idx++
-          continue
-        }
-
+      for (let current_frame = 0; current_frame < total_frames; current_frame++) {
         if (current_frame % sample_rate === 0) {
           frame_index.push({
             frame_number: current_frame,
-            byte_offset,
-            estimated_size: 0,
+            byte_offset: offsets[current_frame],
+            estimated_size: offsets[current_frame + 1] - offsets[current_frame],
           })
         }
-
-        // Calculate frame size and advance using actual byte lengths
-        const frame_start = line_idx
-        line_idx += 2 + num_atoms
-        let frame_size = 0
-        for (let i = frame_start; i < line_idx; i++) {
-          frame_size += encoder.encode(lines[i]).length + newline_byte_len
-        }
-
-        if (current_frame % sample_rate === 0) {
-          frame_index[frame_index.length - 1].estimated_size = frame_size
-        }
-
-        byte_offset += frame_size
-        current_frame++
 
         if (on_progress && current_frame % 1000 === 0) {
           on_progress({
@@ -157,25 +182,23 @@ export class TrajFrameReader implements FrameLoader {
     const total_frames = await this.get_total_frames(data)
 
     if (this.format === `xyz`) {
-      const lines = (data as string).trim().split(/\r?\n/)
-      let [current_frame, line_idx] = [0, 0]
+      const data_str = data as string
+      const offsets = this.ensure_xyz_offsets(data_str)
 
-      while (line_idx < lines.length && current_frame < total_frames) {
-        if (!lines[line_idx]?.trim()) {
-          line_idx++
-          continue
-        }
-
-        const num_atoms = parseInt(lines[line_idx].trim(), 10)
-        if (
-          isNaN(num_atoms) || num_atoms <= 0 || line_idx + num_atoms + 1 >= lines.length
-        ) {
-          line_idx++
-          continue
-        }
-
+      for (let current_frame = 0; current_frame < total_frames; current_frame++) {
         if (current_frame % sample_rate === 0) {
-          const comment = lines[line_idx + 1] || ``
+          // Comment is the 2nd line of the frame; slice just that line
+          // instead of materialising the whole atom block.
+          const start = offsets[current_frame]
+          const first_nl = data_str.indexOf(`\n`, start)
+          const second_nl = first_nl === -1
+            ? -1
+            : data_str.indexOf(`\n`, first_nl + 1)
+          const comment = first_nl === -1
+            ? ``
+            : data_str.slice(first_nl + 1, second_nl === -1 ? undefined : second_nl)
+              .trim()
+
           const frame_metadata = this.parse_xyz_metadata(comment, current_frame)
 
           if (properties) {
@@ -189,9 +212,6 @@ export class TrajFrameReader implements FrameLoader {
 
           metadata_list.push(frame_metadata)
         }
-
-        line_idx += 2 + num_atoms
-        current_frame++
 
         if (on_progress && current_frame % 5000 === 0) {
           on_progress({
@@ -257,35 +277,27 @@ export class TrajFrameReader implements FrameLoader {
     data: string,
     frame_number: number,
   ): TrajectoryFrame | null {
-    const lines = data.trim().split(/\r?\n/)
-    let [current_frame, line_idx] = [0, 0]
+    // O(1) random access: slice only this frame's bytes via the cached
+    // offset index, then split the small chunk (not the whole file).
+    const offsets = this.ensure_xyz_offsets(data)
+    if (frame_number < 0 || frame_number + 1 >= offsets.length) return null
 
-    // Skip to target frame
-    while (line_idx < lines.length && current_frame < frame_number) {
-      if (!lines[line_idx]?.trim()) {
-        line_idx++
-        continue
-      }
-      const num_atoms = parseInt(lines[line_idx].trim(), 10)
-      if (isNaN(num_atoms) || num_atoms <= 0) {
-        line_idx++
-        continue
-      }
-      line_idx += 2 + num_atoms
-      current_frame++
-    }
+    const chunk = data.slice(offsets[frame_number], offsets[frame_number + 1])
+    const lines = chunk.split(/\r?\n/)
 
-    // Parse target frame
-    if (line_idx >= lines.length) return null
-    const num_atoms = parseInt(lines[line_idx].trim(), 10)
-    if (isNaN(num_atoms) || line_idx + num_atoms + 1 >= lines.length) return null
+    // First non-empty line is the atom count (offset points at it, but stay
+    // defensive about stray leading blanks).
+    let head = 0
+    while (head < lines.length && !lines[head]?.trim()) head++
+    const num_atoms = parseInt(lines[head]?.trim(), 10)
+    if (isNaN(num_atoms) || head + num_atoms + 1 >= lines.length) return null
 
-    const comment = lines[line_idx + 1] || ``
+    const comment = lines[head + 1] || ``
     const positions: number[][] = []
     const elements: ElementSymbol[] = []
 
     for (let i = 0; i < num_atoms; i++) {
-      const parts = lines[line_idx + 2 + i]?.trim().split(/\s+/)
+      const parts = lines[head + 2 + i]?.trim().split(/\s+/)
       if (parts?.length >= 4) {
         elements.push(parts[0] as ElementSymbol)
         positions.push([parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3])])

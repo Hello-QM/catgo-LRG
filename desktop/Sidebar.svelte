@@ -60,6 +60,7 @@
     on_load_file,
     on_open_editor,
     on_load_trajectory,
+    on_load_trajectory_stream,
     on_open_workflow, // [2025-02] open workflow editor from sidebar
     on_save_structure,
     on_save_workflow, // [2025-02] returns workflow_id if active pane is workflow editor
@@ -77,6 +78,7 @@
     on_load_file: (content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) => void
     on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
     on_load_trajectory?: (content: string, filename: string, meta?: { session_id: string; dir_path: string }) => void
+    on_load_trajectory_stream?: (path: string, filename: string) => void | Promise<void>
     on_open_workflow?: (workflow_id: string) => void
     on_save_structure?: () => Record<string, unknown> | null
     on_save_workflow?: () => string | null
@@ -230,6 +232,10 @@
     on_load_file,
     on_open_editor,
     on_load_trajectory,
+    // Wrap in a closure so the (reactive) prop is read at call time, not
+    // captured as its initial value when create_fs_browser_state runs.
+    on_load_trajectory_stream: (path: string, filename: string) =>
+      on_load_trajectory_stream?.(path, filename),
     on_save_structure,
     on_preview_file,
     on_before_db_switch,
@@ -784,6 +790,9 @@
     on_load_file,
     on_open_editor,
     on_load_trajectory,
+    // Closure so the reactive prop is read at call time, not captured at init.
+    on_load_trajectory_stream: (path: string, filename: string) =>
+      on_load_trajectory_stream?.(path, filename),
     on_preview_file,
   })
   // Sync bindable props with internal path state
