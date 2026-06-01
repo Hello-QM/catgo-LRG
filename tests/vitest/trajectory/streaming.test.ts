@@ -335,17 +335,18 @@ describe(`Trajectory Streaming`, () => {
 
       const loader = new TrajFrameReader(`test.xyz`)
 
-      // Should skip corrupted frame and continue
+      // The byte-offset index skips the corrupted frame entirely, so the count
+      // drops to 9 and every remaining index resolves to a valid frame.
       const total_frames = await loader.get_total_frames(data)
       expect(total_frames).toBe(9) // One less due to corruption
 
       const frame_4 = await loader.load_frame(data, 4)
-      const frame_5 = await loader.load_frame(data, 5) // Try to load the corrupted frame
-      const frame_6 = await loader.load_frame(data, 6) // Skip the corrupted frame
+      const frame_8 = await loader.load_frame(data, 8) // last valid frame
+      const frame_oob = await loader.load_frame(data, 9) // out of bounds → null
 
       expect(frame_4).toBeTruthy()
-      expect(frame_5).toBeNull() // Corrupted frame should return null
-      expect(frame_6).toBeTruthy()
+      expect(frame_8).toBeTruthy()
+      expect(frame_oob).toBeNull()
     })
 
     it(`should handle empty or invalid trajectory data`, async () => {

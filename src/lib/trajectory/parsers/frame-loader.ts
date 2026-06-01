@@ -113,6 +113,18 @@ export class TrajFrameReader implements FrameLoader {
     const total_frames = await this.get_total_frames(data)
     const frame_index: FrameIndex[] = []
 
+    // Progress reporter that never lets a throwing callback break indexing.
+    const report = (current: number, stage: string): void => {
+      if (!on_progress) return
+      try {
+        on_progress({ current, total: 100, stage })
+      } catch {
+        /* a misbehaving progress callback must not abort the index build */
+      }
+    }
+    // ~10 updates across the run so callers always see progress climb past 0.
+    const step = Math.max(1, Math.floor(total_frames / 10))
+
     if (this.format === `xyz`) {
       // Offsets are character indices into the source string (built once,
       // cached). `byte_offset`/`estimated_size` here carry char offset/length
@@ -127,13 +139,8 @@ export class TrajFrameReader implements FrameLoader {
             estimated_size: offsets[current_frame + 1] - offsets[current_frame],
           })
         }
-
-        if (on_progress && current_frame % 1000 === 0) {
-          on_progress({
-            current: (current_frame / total_frames) * 100,
-            total: 100,
-            stage: `Indexing: ${current_frame}`,
-          })
+        if (current_frame % step === 0) {
+          report((current_frame / total_frames) * 100, `Indexing: ${current_frame}`)
         }
       }
     } else {
@@ -148,17 +155,13 @@ export class TrajFrameReader implements FrameLoader {
           byte_offset: frame_offset,
           estimated_size: 0,
         })
-
-        if (on_progress && i % 10000 === 0) {
-          on_progress({
-            current: (i / total_frames) * 100,
-            total: 100,
-            stage: `Indexing ASE: ${i}`,
-          })
+        if (i % step === 0) {
+          report((i / total_frames) * 100, `Indexing ASE: ${i}`)
         }
       }
     }
 
+    report(100, `Indexed ${total_frames} frames`)
     return frame_index
   }
 
