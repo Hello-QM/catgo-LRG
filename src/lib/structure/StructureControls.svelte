@@ -5,7 +5,8 @@
   import type { ColorSchemeName } from '$lib/colors'
   import { axis_colors, element_color_schemes } from '$lib/colors'
   import { to_degrees, to_radians } from '$lib/math'
-  import { DEFAULTS, SETTINGS_CONFIG } from '$lib/settings'
+  import { DEFAULTS, SETTINGS_CONFIG, BackendUrlSettings, ConnectWizard } from '$lib/settings'
+  import { check_tauri } from '$lib/io/tauri'
   import {
     DEFAULT_PANE_FONT_SIZE,
     pane_font_size_state,
@@ -209,6 +210,14 @@
   }}
   {...rest}
 >
+  {#if !check_tauri()}
+    <!-- Backend connection (web mode only — desktop Tauri uses the bundled sidecar) -->
+    <div class="backend-connect-section">
+      <BackendUrlSettings />
+      <ConnectWizard />
+    </div>
+  {/if}
+
   <SettingsSection
     title={t('structure.visibility')}
     current_values={{
@@ -1536,6 +1545,16 @@
 </DraggablePane>
 
 <style>
+  /* Backend connection block (web mode) — sits above the display settings */
+  .backend-connect-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8pt;
+    padding-bottom: 8pt;
+    margin-bottom: 4pt;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  }
+
   /* Visibility checkboxes in 2-column grid */
   .visibility-grid {
     display: grid;
