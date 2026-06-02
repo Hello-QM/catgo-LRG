@@ -90,10 +90,15 @@ fn configure_webkitgtk(window: &tauri::WebviewWindow) {
 }
 
 mod db;
+// Local-PTY terminal is desktop-only; mobile gets its terminal from the future
+// russh layer instead, so portable-pty (and this module) is not compiled there.
+#[cfg(desktop)]
 mod pty;
 mod workflow_engine;
 
-// Global state to track the Python backend process
+// Global state to track the Python backend process.
+// Sidecars (Python/Node) are spawned only on desktop, so this is desktop-only.
+#[cfg(desktop)]
 struct BackendState {
     child: Option<tauri_plugin_shell::process::CommandChild>,
     /// True when we spawned the sidecar ourselves; false if backend was already running.
@@ -103,6 +108,7 @@ struct BackendState {
 // Global state to track the Node agent-bridge sidecar (catgo-agent).
 // Separate from BackendState because the two binaries have independent
 // lifecycles and the agent sidecar may be missing on older builds.
+#[cfg(desktop)]
 struct AgentState {
     child: Option<tauri_plugin_shell::process::CommandChild>,
     spawned_by_us: bool,
@@ -126,9 +132,10 @@ fn get_opened_files(state: tauri::State<'_, Mutex<OpenedFiles>>) -> Vec<String> 
 /// frontend. Powers the Windows/Linux file-association "Open with CatGo" path:
 /// cold start reads `std::env::args()`; a warm start (instance already running)
 /// receives the second process's argv via tauri-plugin-single-instance. macOS/iOS
-/// deliver opened files through `RunEvent::Opened` instead, so this is compiled
-/// only off-Apple.
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+/// deliver opened files through `RunEvent::Opened` instead. Gated to desktop
+/// both because single-instance (its warm-start caller) is desktop-only and
+/// because mobile has no argv file-association path.
+#[cfg(desktop)]
 fn buffer_file_args<R: tauri::Runtime, I: IntoIterator<Item = String>>(
     app: &tauri::AppHandle<R>,
     args: I,
@@ -171,7 +178,8 @@ pub fn run() {
     // the OS launches a second process with the file path in argv; this plugin
     // forwards that argv to the running instance, which loads the file and focuses.
     // (Cold start is handled in .setup() below; macOS/iOS use RunEvent::Opened.)
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    // Desktop-only: single-instance does not build on mobile (Android/iOS).
+    #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         buffer_file_args(app, argv);
         if let Some(w) = app.get_webview_window("main") {
@@ -180,18 +188,29 @@ pub fn run() {
             let _ = w.set_focus();
         }
     }));
-    let app = builder
+    let builder = builder
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
+        .manage(Mutex::new(OpenedFiles { paths: Vec::new() }))
+        .manage(db::DbState::default())
+        .manage(workflow_engine::WorkflowEngineState::default());
+
+    // Desktop-only managed state: the Python/Node sidecars (BackendState,
+    // AgentState) and the local-PTY terminal (PtyState) only exist on desktop.
+    #[cfg(desktop)]
+    let builder = builder
         .manage(Mutex::new(BackendState { child: None, spawned_by_us: false }))
         .manage(Mutex::new(AgentState { child: None, spawned_by_us: false }))
-        .manage(Mutex::new(OpenedFiles { paths: Vec::new() }))
-        .manage(pty::PtyState::default())
-        .manage(db::DbState::default())
-        .manage(workflow_engine::WorkflowEngineState::default())
-        .invoke_handler(tauri::generate_handler![
+        .manage(pty::PtyState::default());
+
+    // The local-PTY commands (pty_*) are desktop-only because portable-pty isn't
+    // compiled on mobile. `generate_handler!` can't `cfg` individual entries, so
+    // register a desktop-only handler that includes the pty_* commands and a
+    // mobile handler that omits them; everything else is shared verbatim.
+    #[cfg(desktop)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
@@ -246,7 +265,66 @@ pub fn run() {
             workflow_engine::db_run_workflow,
             workflow_engine::db_pause_workflow,
             workflow_engine::db_resume_workflow,
-        ])
+        ]);
+
+    // Mobile handler: identical to the desktop handler above minus the local-PTY
+    // commands (pty_*), which are not compiled on mobile. Keep this list in sync
+    // with the desktop one for every non-pty command.
+    #[cfg(not(desktop))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+            get_opened_files,
+            // DB management (mod.rs)
+            db::db_get_current,
+            db::db_new,
+            db::db_open,
+            db::db_save_as,
+            // Filesystem (files.rs)
+            db::files::db_browse_directory,
+            db::files::db_browse_files,
+            db::files::db_read_file,
+            db::files::db_write_file,
+            db::files::db_fs_mkdir,
+            db::files::db_fs_delete,
+            db::files::db_fs_rename,
+            db::files::db_fs_copy,
+            db::files::db_fs_move,
+            // Projects & workflows (workflow.rs)
+            db::workflow::db_list_projects,
+            db::workflow::db_create_project,
+            db::workflow::db_update_project,
+            db::workflow::db_delete_project,
+            db::workflow::db_get_project,
+            db::workflow::db_get_enriched_results,
+            db::workflow::db_assign_workflow_to_project,
+            db::workflow::db_list_workflow_folders,
+            db::workflow::db_create_workflow_folder,
+            db::workflow::db_get_workflow_folder,
+            db::workflow::db_update_workflow_folder,
+            db::workflow::db_delete_workflow_folder,
+            db::workflow::db_assign_workflow_to_folder,
+            db::workflow::db_unassign_workflow_from_folder,
+            db::workflow::db_list_workflows,
+            db::workflow::db_create_workflow,
+            db::workflow::db_get_workflow_detail,
+            db::workflow::db_update_workflow,
+            db::workflow::db_delete_workflow,
+            db::workflow::db_list_steps,
+            db::workflow::db_get_run_status,
+            // Results & structures (results.rs)
+            db::results::db_query_results,
+            db::results::db_update_result_label,
+            db::results::db_delete_result,
+            db::results::db_move_or_copy_result,
+            db::results::db_get_result_structure,
+            db::results::db_save_structure,
+            db::results::db_export_structure,
+            db::results::db_serialize_structure,
+            workflow_engine::db_run_workflow,
+            workflow_engine::db_pause_workflow,
+            workflow_engine::db_resume_workflow,
+        ]);
+
+    let app = builder
         .setup(|app| {
             // Enable logging in desktop builds
             app.handle().plugin(
@@ -258,8 +336,9 @@ pub fn run() {
             // Cold-start file-association launch (Windows/Linux): the first process
             // receives the opened file path in its own argv. Buffer it so the
             // frontend's drain_opened_files() loads it on mount. (macOS/iOS deliver
-            // this via RunEvent::Opened.)
-            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            // this via RunEvent::Opened.) Desktop-only: buffer_file_args isn't
+            // compiled on mobile.
+            #[cfg(desktop)]
             buffer_file_args(app.handle(), std::env::args());
 
             log::info!("[CatGo] Desktop app started");
@@ -276,6 +355,12 @@ pub fn run() {
                 configure_webkitgtk(&webview_window);
             }
 
+            // Sidecar machinery (Python backend + Node agent bridge) is
+            // desktop-only: tauri-plugin-shell sidecars and the BackendState/
+            // AgentState managed state don't exist on mobile. Mobile reaches a
+            // remote backend over the network instead.
+            #[cfg(desktop)]
+            {
             // Before spawning sidecar, check if backend is already running
             let port = std::env::var("SERVER_PORT").unwrap_or_else(|_| "8000".to_string());
             let backend_already_running = {
@@ -455,6 +540,7 @@ pub fn run() {
                 let init = format!("window.__CATGO_AGENT_PORT__ = {};", agent_port);
                 let _ = win.eval(&init);
             }
+            } // end #[cfg(desktop)] sidecar block
 
             Ok(())
         })
@@ -466,6 +552,10 @@ pub fn run() {
                     return;
                 }
 
+                // Sidecar + local-PTY cleanup is desktop-only (those managed
+                // states only exist on desktop).
+                #[cfg(desktop)]
+                {
                 // Only kill the backend if we spawned it ourselves.
                 // If it was already running externally (daemon mode), leave it alone.
                 if let Ok(mut state) = window.state::<Mutex<BackendState>>().lock() {
@@ -486,13 +576,18 @@ pub fn run() {
                         }
                     }
                 }
+                }
+
                 // Cancel all running workflows
                 let engine_state = window.state::<workflow_engine::WorkflowEngineState>();
                 engine_state.cancel_all();
 
-                // Kill all PTY sessions
-                let pty_state = window.state::<pty::PtyState>();
-                pty_state.kill_all();
+                // Kill all PTY sessions (desktop-only — portable-pty isn't on mobile)
+                #[cfg(desktop)]
+                {
+                    let pty_state = window.state::<pty::PtyState>();
+                    pty_state.kill_all();
+                }
 
                 // Exit via Tauri so the CLI detects shutdown and
                 // terminates the beforeDevCommand process group (Vite + Python).
