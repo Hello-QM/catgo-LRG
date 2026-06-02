@@ -532,6 +532,7 @@ if _frontend_dir.is_dir():
     from starlette.responses import Response
 
     _index_html = _frontend_dir / "index.html"
+    _frontend_base = _frontend_dir.resolve()
     _assets_dir = _frontend_dir / "assets"
     if _assets_dir.is_dir():
         app.mount(
@@ -547,9 +548,17 @@ if _frontend_dir.is_dir():
         # (or a genuine 404), never the index.html shell.
         if full_path.startswith("api"):
             return Response(status_code=404)
-        candidate = _frontend_dir / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(str(candidate))
+        # Path-traversal guard: reject absolute / `..` paths and confirm the
+        # resolved candidate stays inside the frontend dir before serving — a
+        # request like `../../etc/passwd` must never escape build-desktop/.
+        if full_path and not full_path.startswith("/") and ".." not in full_path.split("/"):
+            try:
+                candidate = (_frontend_base / full_path).resolve()
+                candidate.relative_to(_frontend_base)
+            except (ValueError, OSError):
+                candidate = None
+            if candidate is not None and candidate.is_file():
+                return FileResponse(str(candidate))
         return FileResponse(str(_index_html))
 
     print(f"[Server] Serving prebuilt SPA from {_frontend_dir}")
