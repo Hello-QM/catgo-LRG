@@ -32,15 +32,33 @@ export interface HpcConnectConfig {
   passphrase?: string
 }
 
+/** A single keyboard-interactive / OTP prompt surfaced by the server. */
+export interface OtpPrompt {
+  /** Prompt text to render (e.g. "One-time password: "). */
+  prompt: string
+  /** Whether the typed answer should be echoed. `false` => mask as a secret
+   * (OTP / password). */
+  echo: boolean
+}
+
 /** Result of a connect attempt. */
 export interface HpcConnectResult {
   connected: boolean
   /** Opaque session id used by subsequent `exec`/`submitOtp` calls. */
   sessionId: string
-  /** True when the server requires a keyboard-interactive / OTP round-trip. */
+  /** True when the server requires a keyboard-interactive / OTP round-trip;
+   * drive {@link HpcTransport.submitOtp} with `pendingId` + answers to
+   * `prompts`. */
   needsOtp: boolean
   /** Human-readable status / error message (empty on success). */
   message: string
+  /** In-flight handshake id to pass to `submitOtp` (set only when `needsOtp`).
+   * Empty otherwise. */
+  pendingId: string
+  /** Prompts the user must answer this round (set only when `needsOtp`). */
+  prompts: OtpPrompt[]
+  /** Server-supplied instructions for this round (may be empty). */
+  instructions: string
 }
 
 /** Result of a remote command. */

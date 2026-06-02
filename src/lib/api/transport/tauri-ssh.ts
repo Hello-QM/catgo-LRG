@@ -6,9 +6,9 @@
  * commands are the only path to the cluster.
  *
  * Commands (registered in src-tauri/src/lib.rs on BOTH desktop and mobile):
- *   * `ssh_connect`    -> { connected, session_id, needs_otp, message }
+ *   * `ssh_connect`    -> { connected, session_id, needs_otp, pending_id, prompts, instructions, message }
  *   * `ssh_exec`       -> { stdout, stderr, code }
- *   * `ssh_submit_otp` -> (TODO stub: returns an explicit error for now)
+ *   * `ssh_submit_otp` -> same shape as ssh_connect (multi-round 2FA: respond, may return more prompts)
  */
 
 import type {
@@ -16,6 +16,7 @@ import type {
   HpcConnectResult,
   HpcExecResult,
   HpcTransport,
+  OtpPrompt,
 } from './index'
 
 /** Lazily import the Tauri core so this module is importable in a browser
@@ -25,12 +26,17 @@ async function invokeTauri<T>(cmd: string, args: Record<string, unknown>): Promi
   return invoke<T>(cmd, args)
 }
 
-/** Shape returned by the Rust `ssh_connect` / `ssh_submit_otp` commands. */
+/** Shape returned by the Rust `ssh_connect` / `ssh_submit_otp` commands. The
+ * OTP fields are `#[serde(skip_serializing_if = ...)]` on the Rust side, so they
+ * are absent (not `null`) on the non-OTP paths — hence optional here. */
 interface RustConnectResult {
   connected: boolean
   session_id: string
   needs_otp: boolean
   message: string
+  pending_id?: string
+  prompts?: OtpPrompt[]
+  instructions?: string
 }
 
 /** Shape returned by the Rust `ssh_exec` command. */
@@ -62,6 +68,9 @@ function fromRustConnectResult(r: RustConnectResult): HpcConnectResult {
     sessionId: r.session_id,
     needsOtp: r.needs_otp,
     message: r.message,
+    pendingId: r.pending_id ?? ``,
+    prompts: r.prompts ?? [],
+    instructions: r.instructions ?? ``,
   }
 }
 
@@ -76,8 +85,10 @@ class TauriSshTransport implements HpcTransport {
   }
 
   async submitOtp(pendingId: string, responses: string[]): Promise<HpcConnectResult> {
-    // NOTE: the Rust side is a clearly-marked TODO stub and will reject with an
-    // explicit "not yet implemented" error until the OTP wiring lands.
+    // The Rust `ssh_submit_otp(submission: OtpSubmission, ...)` command takes a
+    // single `submission` arg (serde-renamed `pending_id`). A `Success` reply
+    // yields a live `sessionId`; an `InfoRequest` reply yields `needsOtp: true`
+    // plus a fresh `pendingId`/`prompts` for the next multi-round 2FA step.
     const r = await invokeTauri<RustConnectResult>(`ssh_submit_otp`, {
       submission: { pending_id: pendingId, responses },
     })

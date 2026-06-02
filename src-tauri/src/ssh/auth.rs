@@ -6,9 +6,10 @@
 //!
 //! KEYBOARD-INTERACTIVE / OTP (2FA) needs a frontend round-trip — the server
 //! emits one or more `InfoRequest` prompt rounds and the user has to type the
-//! codes — so it CANNOT complete inside a single `ssh_connect` call. We detect
-//! it and return `needs_otp = true`; the actual prompt/response loop is a
-//! clearly-marked TODO in [`super::otp`].
+//! codes — so it CANNOT complete inside a single `ssh_connect` call. We start
+//! the handshake here, stash the in-flight handle in [`SshState`]'s pending map,
+//! and return `needs_otp = true` + `pending_id` + `prompts`; the response
+//! rounds are driven by [`super::otp::ssh_submit_otp`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,11 +17,35 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use russh::client::{self, AuthResult};
+use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse, Prompt};
 use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg};
 
 use super::handler::MobileHandler;
-use super::state::{SshSession, SshState};
+use super::state::{PendingAuth, SshSession, SshState};
+
+/// One keyboard-interactive / OTP prompt surfaced to the frontend.
+///
+/// Mirrors russh's [`russh::client::Prompt`] but is `Serialize` so it can cross
+/// the Tauri boundary. `echo == false` => the answer is secret (OTP / password)
+/// and the UI MUST mask it; `echo == true` => plain, visible input.
+#[derive(Debug, Clone, Serialize)]
+pub struct OtpPrompt {
+    /// Prompt text to show the user (e.g. "One-time password: ").
+    pub prompt: String,
+    /// Whether the typed answer should be echoed (`false` => mask as a secret).
+    pub echo: bool,
+}
+
+impl From<&Prompt> for OtpPrompt {
+    fn from(p: &Prompt) -> Self {
+        Self { prompt: p.prompt.clone(), echo: p.echo }
+    }
+}
+
+/// Map a russh `Vec<Prompt>` to the serializable wire form.
+pub fn map_prompts(prompts: &[Prompt]) -> Vec<OtpPrompt> {
+    prompts.iter().map(OtpPrompt::from).collect()
+}
 
 /// Authentication method selector sent from the frontend.
 #[derive(Debug, Clone, Deserialize)]
@@ -63,10 +88,23 @@ pub struct ConnectResult {
     /// Opaque session id (UUID v4) when `connected` is true; empty otherwise.
     pub session_id: String,
     /// `true` when the server requires keyboard-interactive / OTP and the
-    /// frontend must drive `ssh_submit_otp` (NOT yet implemented — see otp.rs).
+    /// frontend must drive `ssh_submit_otp` with `pending_id` + `prompts`.
     pub needs_otp: bool,
     /// Human-readable error / status message (empty on success).
     pub message: String,
+    /// In-flight handshake id to pass back to `ssh_submit_otp` (only set when
+    /// `needs_otp` is true). Skipped from the wire when empty so the
+    /// password/public-key paths serialize unchanged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pending_id: String,
+    /// The prompts the user must answer this round (only set with `needs_otp`).
+    /// `echo == false` => mask the answer. Skipped when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<OtpPrompt>,
+    /// Server-supplied instructions for this round (may be empty). Skipped when
+    /// empty so non-OTP paths stay clean.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub instructions: String,
 }
 
 /// Open + authenticate an SSH session.
@@ -172,24 +210,54 @@ pub async fn ssh_connect(
             }
         }
         AuthConfig::KeyboardInteractive => {
-            // Keyboard-interactive / OTP requires a frontend round-trip: the
-            // server sends prompt rounds (password, then OTP, ...) that the user
-            // must answer interactively. That handshake cannot finish inside this
-            // single command, so we surface `needs_otp` and leave the pending
-            // handle wiring to `ssh_submit_otp`.
-            //
-            // TODO(OTP-wiring): to support this we must KEEP the partially-
-            // authed `handle` alive between `ssh_connect` and `ssh_submit_otp`
-            // (the start/respond loop is `&mut self` on the SAME handle). That
-            // means stashing the in-flight handle in a separate "pending" map in
-            // SshState and resuming the loop in `ssh_submit_otp`. Doing that
-            // correctly (prompt surfacing, multi-round loops, echo masking,
-            // timeout/cancel) is deliberately deferred rather than guessed.
-            return Ok(ConnectResult {
-                needs_otp: true,
-                message: "Keyboard-interactive/OTP not yet wired (see ssh_submit_otp TODO)".into(),
-                ..Default::default()
-            });
+            // Start the keyboard-interactive handshake. The server may answer
+            // immediately (Success, e.g. no actual prompts), reject (Failure),
+            // or — the common 2FA case — return an `InfoRequest` round of
+            // prompts (password, then OTP, ...). Because the start/respond loop
+            // is `&mut self` on the SAME handle and can span MULTIPLE rounds,
+            // each `InfoRequest` is handed back to the frontend and the mid-auth
+            // handle is parked in the `pending` map for `ssh_submit_otp` to
+            // resume. `None` submethods => let the server choose.
+            match handle
+                .authenticate_keyboard_interactive_start(&username, None)
+                .await
+            {
+                // Authed in one shot — fall through to "register live session".
+                Ok(KeyboardInteractiveAuthResponse::Success) => {}
+                Ok(KeyboardInteractiveAuthResponse::InfoRequest {
+                    instructions,
+                    prompts,
+                    ..
+                }) => {
+                    let wire_prompts = map_prompts(&prompts);
+                    let pending = PendingAuth::new(handle, host.clone(), username.clone());
+                    let pending_id = state.insert_pending(pending).await;
+                    log::info!(
+                        "[CatGo SSH] keyboard-interactive challenge for {username}@{host}:{port} \
+                         — pending {pending_id} ({} prompt(s))",
+                        wire_prompts.len()
+                    );
+                    return Ok(ConnectResult {
+                        needs_otp: true,
+                        pending_id,
+                        prompts: wire_prompts,
+                        instructions,
+                        ..Default::default()
+                    });
+                }
+                Ok(KeyboardInteractiveAuthResponse::Failure { .. }) => {
+                    return Ok(ConnectResult {
+                        message: "Keyboard-interactive auth rejected".into(),
+                        ..Default::default()
+                    });
+                }
+                Err(e) => {
+                    return Ok(ConnectResult {
+                        message: format!("Keyboard-interactive auth error: {e}"),
+                        ..Default::default()
+                    });
+                }
+            }
         }
     }
 
@@ -203,7 +271,6 @@ pub async fn ssh_connect(
     Ok(ConnectResult {
         connected: true,
         session_id,
-        message: String::new(),
-        needs_otp: false,
+        ..Default::default()
     })
 }

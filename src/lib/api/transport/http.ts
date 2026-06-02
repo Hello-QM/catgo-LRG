@@ -45,9 +45,13 @@ class HttpTransport implements HpcTransport {
       connected: Boolean(res.session_id),
       sessionId: res.session_id ?? ``,
       // The HTTP/WS connect path signals OTP via a separate `auth_challenge`
-      // WS message handled in hpc.ts; this thin REST shim does not see it.
+      // WS message handled in hpc.ts; this thin REST shim does not see it, so
+      // the OTP fields below stay empty (the russh path owns real OTP wiring).
       needsOtp: res.type === `auth_challenge`,
       message: res.message ?? ``,
+      pendingId: ``,
+      prompts: [],
+      instructions: ``,
     }
   }
 

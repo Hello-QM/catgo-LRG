@@ -1,73 +1,116 @@
-//! Keyboard-interactive / OTP (2FA) submission — STUB (clearly-marked TODO).
+//! Keyboard-interactive / OTP (2FA) submission.
 //!
-//! The real flow (confirmed by the spike) is a start/respond loop driven on the
-//! SAME `Handle` that `ssh_connect` opened:
+//! Resumes the keyboard-interactive handshake that `ssh_connect` began. The
+//! mid-auth `Handle` was parked in `SshState::pending` (see `state.rs`); here we
+//! MOVE it back out, drive one `authenticate_keyboard_interactive_respond`
+//! round, and react to the server's reply:
 //!
-//! ```ignore
-//! let mut resp = handle
-//!     .authenticate_keyboard_interactive_start(user, None /* submethods */)
-//!     .await?;
-//! loop {
-//!     match resp {
-//!         KeyboardInteractiveAuthResponse::Success => break, // authed
-//!         KeyboardInteractiveAuthResponse::Failure { .. } => /* fail */,
-//!         KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } => {
-//!             // prompts: Vec<Prompt { prompt: String, echo: bool }>
-//!             // echo == false => secret (OTP/password) -> mask in the UI.
-//!             // responses.len() MUST equal prompts.len().
-//!             let answers: Vec<String> = /* one per prompt, from the frontend */;
-//!             resp = handle
-//!                 .authenticate_keyboard_interactive_respond(answers)
-//!                 .await?;
-//!         }
-//!     }
-//! }
-//! ```
+//!   * `Success`     => build + register the live `SshSession`, return
+//!                      `connected: true` + the new `session_id`.
+//!   * `InfoRequest` => the server wants ANOTHER round (multi-round 2FA, e.g.
+//!                      password THEN OTP). Re-stash the SAME handle under a NEW
+//!                      `pending_id` and return `needs_otp: true` + the new
+//!                      prompts so the frontend submits again.
+//!   * `Failure`     => surface "OTP rejected" (never throws across the
+//!                      boundary on an auth failure).
+//!   * `Err`         => surface "OTP error: ..." likewise.
 //!
-//! Why this is deferred and NOT blind-guessed:
-//!   * The handshake spans MULTIPLE Tauri command calls (one `InfoRequest`
-//!     round per `ssh_submit_otp` invocation), so the partially-authed `Handle`
-//!     must survive between calls. That needs a dedicated "pending sessions"
-//!     map in `SshState` (separate from the authed `sessions` map), created in
-//!     `ssh_connect` when `needs_otp` is detected.
-//!   * The frontend contract (how prompts are surfaced, how many rounds, how
-//!     cancel/timeout behave) isn't pinned down yet. Guessing the wiring would
-//!     bake in an API we'd have to break later.
-//!
-//! This stub compiles and returns an explicit "not yet implemented" error so
-//! the command is registerable today without committing to a half-built path.
+//! Because the handle is `&mut self` for `respond`, it is owned exclusively here
+//! for the duration of the call; it is only ever shared once it becomes a live
+//! `SshSession` (behind that session's own `Mutex`).
+
+use std::sync::Arc;
 
 use serde::Deserialize;
 
-use super::state::SshState;
+use russh::client::KeyboardInteractiveAuthResponse;
 
-/// One OTP/keyboard-interactive submission round from the frontend: the answers
-/// for the prompts most recently surfaced by the server.
+use super::auth::{map_prompts, ConnectResult};
+use super::state::{PendingAuth, SshSession, SshState};
+
+/// One OTP / keyboard-interactive submission round from the frontend: the
+/// answers for the prompts most recently surfaced by the server.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OtpSubmission {
-    /// The pending (pre-auth) session id minted by `ssh_connect` when it
-    /// returned `needs_otp = true`.
+    /// The pending (pre-auth) handshake id minted by `ssh_connect` (or by the
+    /// previous `ssh_submit_otp` round, for multi-round 2FA).
     pub pending_id: String,
-    /// One answer per prompt in the current `InfoRequest`, in order.
+    /// One answer per prompt in the current `InfoRequest`, in order. Its length
+    /// must equal the prompt count of that round (russh enforces this).
     pub responses: Vec<String>,
 }
 
-/// Submit OTP / keyboard-interactive responses for a pending session.
+/// Submit OTP / keyboard-interactive responses for a pending handshake.
 ///
-/// TODO(OTP-wiring): implement the start/respond loop documented above against
-/// a pending-handle map in `SshState`. Until then this returns an explicit
-/// error rather than silently failing or guessing the wiring.
+/// Never throws across the Tauri boundary on an auth failure — returns a
+/// `ConnectResult` describing the outcome instead (mirrors `ssh_connect`).
 #[tauri::command]
 pub async fn ssh_submit_otp(
     submission: OtpSubmission,
-    _state: tauri::State<'_, SshState>,
-) -> Result<super::auth::ConnectResult, String> {
-    // Touch the fields so the (intentional) stub still type-checks the payload
-    // shape the frontend will send.
-    let _ = (&submission.pending_id, &submission.responses);
-    Err(
-        "ssh_submit_otp is not yet implemented: keyboard-interactive/OTP wiring \
-         (pending-handle map + start/respond loop) is a TODO. See src-tauri/src/ssh/otp.rs."
-            .to_string(),
-    )
+    state: tauri::State<'_, SshState>,
+) -> Result<ConnectResult, String> {
+    let OtpSubmission { pending_id, responses } = submission;
+
+    // MOVE the mid-auth handle out of the pending map. A missing id means the
+    // handshake expired, was already consumed, or never existed.
+    let PendingAuth { mut handle, host, username } = match state.take_pending(&pending_id).await {
+        Some(p) => p,
+        None => {
+            return Ok(ConnectResult {
+                message: "no pending OTP session (expired or already used)".into(),
+                ..Default::default()
+            });
+        }
+    };
+
+    // Drive exactly ONE round. The server decides whether more rounds follow.
+    match handle
+        .authenticate_keyboard_interactive_respond(responses)
+        .await
+    {
+        Ok(KeyboardInteractiveAuthResponse::Success) => {
+            let session = Arc::new(SshSession::new(handle, host.clone(), username.clone()));
+            let session_id = state.insert(session).await;
+            log::info!(
+                "[CatGo SSH] keyboard-interactive auth complete — session {session_id} \
+                 ({username}@{host})"
+            );
+            Ok(ConnectResult {
+                connected: true,
+                session_id,
+                ..Default::default()
+            })
+        }
+        // Another round (multi-round 2FA): re-park the SAME handle under a NEW
+        // pending_id and ask the frontend for the next set of answers.
+        Ok(KeyboardInteractiveAuthResponse::InfoRequest {
+            instructions,
+            prompts,
+            ..
+        }) => {
+            let wire_prompts = map_prompts(&prompts);
+            let pending = PendingAuth::new(handle, host, username);
+            let next_id = state.insert_pending(pending).await;
+            log::info!(
+                "[CatGo SSH] keyboard-interactive needs another round — pending {next_id} \
+                 ({} prompt(s))",
+                wire_prompts.len()
+            );
+            Ok(ConnectResult {
+                needs_otp: true,
+                pending_id: next_id,
+                prompts: wire_prompts,
+                instructions,
+                ..Default::default()
+            })
+        }
+        Ok(KeyboardInteractiveAuthResponse::Failure { .. }) => Ok(ConnectResult {
+            message: "OTP rejected".into(),
+            ..Default::default()
+        }),
+        Err(e) => Ok(ConnectResult {
+            message: format!("OTP error: {e}"),
+            ..Default::default()
+        }),
+    }
 }
