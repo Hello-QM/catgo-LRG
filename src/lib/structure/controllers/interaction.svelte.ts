@@ -202,6 +202,55 @@ export function create_interaction_controller(deps: InteractionDeps) {
     return is_mac ? event.metaKey : event.ctrlKey
   }
 
+  // ── Touch interaction mode ──
+  // Touch devices have no modifier keys, so box-select / move / rotate (normally
+  // gated by Cmd-Ctrl / Shift+Alt / Shift) can't be triggered. A toolbar toggle
+  // sets `touch_mode`; while set, a plain drag performs that action. Desktop is
+  // unchanged because the default is 'none' (every check below is `modifier ||
+  // touch_mode === 'x'`, a no-op when 'none').
+  let touch_mode = $state<'none' | 'box' | 'move' | 'rotate'>('none')
+  const want_box = (event: MouseEvent): boolean =>
+    is_box_select_modifier(event) || touch_mode === 'box'
+  const want_rotate = (event: MouseEvent): boolean =>
+    (event.shiftKey && !event.altKey) || touch_mode === 'rotate'
+  const want_move = (event: MouseEvent): boolean =>
+    (event.shiftKey && event.altKey) || touch_mode === 'move'
+
+  // ── Long-press → context menu (touch replacement for right-click) ──
+  const LONG_PRESS_MS = 500
+  const LONG_PRESS_MOVE_TOLERANCE_PX = 10
+  let long_press_timer: ReturnType<typeof setTimeout> | null = null
+  let long_press_origin: { x: number; y: number } | null = null
+
+  function cancel_long_press(): void {
+    if (long_press_timer) {
+      clearTimeout(long_press_timer)
+      long_press_timer = null
+    }
+    long_press_origin = null
+  }
+
+  function maybe_start_long_press(event: PointerEvent): void {
+    // Only plain touches (no active drag mode) open the menu via long-press.
+    if (event.pointerType !== 'touch' || touch_mode !== 'none') return
+    cancel_long_press()
+    const cx = event.clientX
+    const cy = event.clientY
+    const target = event.target
+    long_press_origin = { x: cx, y: cy }
+    long_press_timer = setTimeout(() => {
+      long_press_timer = null
+      long_press_origin = null
+      oncontextmenu({
+        clientX: cx,
+        clientY: cy,
+        target,
+        preventDefault() {},
+        stopPropagation() {},
+      } as unknown as MouseEvent)
+    }, LONG_PRESS_MS)
+  }
+
   /** Find the main 3D viewer canvas, skipping preview canvases in sub-panes. */
   function get_main_canvas(w: HTMLElement): HTMLCanvasElement | null {
     for (const c of w.querySelectorAll('canvas')) {
@@ -1107,6 +1156,10 @@ export function create_interaction_controller(deps: InteractionDeps) {
   }
 
   function handlePointerUpCapture(event: PointerEvent) {
+    // A quick tap (up before the long-press fires) cancels the pending menu;
+    // a fired long-press already cleared it.
+    cancel_long_press()
+
     // 裁剪区域完成
     if (crop_drawing && crop_draw_start && crop_draw_end) {
       event.stopPropagation()
@@ -1124,11 +1177,17 @@ export function create_interaction_controller(deps: InteractionDeps) {
       return
     }
 
-    if (is_rotating_atoms) finish_rotation()
+    // Commit box-select + finish atom drag/rotation on pointerup. On touch this
+    // is the only "up" that fires (mouseup is mouse-only); `onmouseup` is
+    // idempotent (guarded by is_box_selecting / is_dragging_atom / is_rotating_atoms).
+    onmouseup()
   }
 
   function handleShiftClickCapture(event: PointerEvent) {
     const wrapper = deps.get_wrapper()
+
+    // Touch long-press opens the context menu (cancelled on move/up below).
+    maybe_start_long_press(event)
 
     // 裁剪模式
     if (crop_mode_active && event.button === 0 && wrapper) {
@@ -1147,7 +1206,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
     if (target_el?.closest(`.terminal-panel`) || target_el?.closest(`.xterm`) || target_el?.closest(`.monaco-editor`) || target_el?.closest(`.file-preview-panel`)) {
       return
     }
-    if (is_box_select_modifier(event) && !event.shiftKey && event.button === 0 && wrapper) {
+    if (want_box(event) && !event.shiftKey && event.button === 0 && wrapper) {
       event.stopPropagation()
       event.preventDefault()
       const canvas_el = get_main_canvas(wrapper)
@@ -1158,9 +1217,19 @@ export function create_interaction_controller(deps: InteractionDeps) {
       return
     }
 
+    // Touch move-mode: preempt the camera on pointerdown so the subsequent
+    // pointermove drags the selected atoms instead of orbiting.
+    if (touch_mode === 'move' && event.button === 0 && deps.get_selected_sites().length >= 1) {
+      event.stopPropagation()
+      event.preventDefault()
+      const oc = deps.get_orbit_controls()
+      if (oc) oc.enabled = false
+      return
+    }
+
     // Shift+click 开始原子旋转 (capture phase，在 TrackballControls 前拦截)
     // 左键 = pitch/yaw, 右键 = roll
-    if (event.shiftKey && !event.altKey && deps.get_selected_sites().length >= 1 && (event.button === 0 || event.button === 2) && deps.get_structure()) {
+    if (want_rotate(event) && deps.get_selected_sites().length >= 1 && (event.button === 0 || event.button === 2) && deps.get_structure()) {
       const started = start_atom_rotation(event, true)
       if (started) {
         if (event.button === 2) {
@@ -1304,6 +1373,13 @@ export function create_interaction_controller(deps: InteractionDeps) {
   }
 
   function onpointermove(event: PointerEvent) {
+    // Cancel a pending long-press once the finger moves past tolerance.
+    if (long_press_origin) {
+      const dx = event.clientX - long_press_origin.x
+      const dy = event.clientY - long_press_origin.y
+      if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOLERANCE_PX) cancel_long_press()
+    }
+
     // 裁剪预览更新
     if (crop_drawing && crop_draw_start && deps.get_wrapper()) {
       const rect = deps.get_wrapper()!.getBoundingClientRect()
@@ -1314,8 +1390,18 @@ export function create_interaction_controller(deps: InteractionDeps) {
       return
     }
 
-    // 自动开始拖拽: Shift+Alt 按住时有选中原子即开始
-    if (!is_dragging_atom && event.shiftKey && event.altKey && deps.get_selected_sites().length >= 1 && deps.get_structure() && deps.get_camera()) {
+    // 框选更新 (touch: onmousemove 不会在触摸拖拽时触发，这里用 pointer 镜像)
+    if (is_box_selecting && box_select_start && deps.get_wrapper()) {
+      event.preventDefault()
+      const wrapper = deps.get_wrapper()!
+      const canvas_el = get_main_canvas(wrapper)
+      const rect = canvas_el?.getBoundingClientRect() ?? wrapper.getBoundingClientRect()
+      box_select_end = { x: event.clientX - rect.left, y: event.clientY - rect.top }
+      return
+    }
+
+    // 自动开始拖拽: Shift+Alt 按住 (或触屏 move 模式) 时有选中原子即开始
+    if (!is_dragging_atom && want_move(event) && deps.get_selected_sites().length >= 1 && deps.get_structure() && deps.get_camera()) {
       const original_indices = deps.get_original_atoms_only(deps.get_selected_sites())
       if (original_indices.length > 0) {
         const structure = deps.get_structure()!
@@ -1358,7 +1444,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
 
     // 拖拽中
     if (is_dragging_atom && dragged_atom_indices.length > 0 && deps.get_structure() && drag_start_mouse_position && drag_plane_reference && drag_camera_quaternion) {
-      if (!event.shiftKey || !event.altKey) {
+      if (!want_move(event)) {
         finish_drag()
         return
       }
@@ -1404,7 +1490,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
 
     // 原子旋转中 — 固定屏幕坐标系，单轴锁定
     if (is_rotating_atoms && atom_rotation_center && deps.get_structure()) {
-      if (!event.shiftKey || event.altKey) {
+      if (!want_rotate(event)) {
         finish_rotation()
         return
       }
@@ -1559,6 +1645,9 @@ export function create_interaction_controller(deps: InteractionDeps) {
     get is_dragging_atom() { return is_dragging_atom },
     get is_rotating_atoms() { return is_rotating_atoms },
     get is_box_selecting() { return is_box_selecting },
+    /** Touch interaction mode: plain-drag performs box-select / move / rotate. */
+    get touch_mode() { return touch_mode },
+    set touch_mode(v: 'none' | 'box' | 'move' | 'rotate') { touch_mode = v },
     get box_select_start() { return box_select_start },
     get box_select_end() { return box_select_end },
     get last_box_select_commit_ms() { return last_box_select_commit_ms },

@@ -17,6 +17,7 @@
   import type { Measurement } from './index'
   import type { MolecularFragment } from './controllers/fragments'
   import type { PencilModeController } from './controllers/pencil-mode.svelte'
+  import { type create_interaction_controller } from './controllers/interaction.svelte'
   import { structure_to_poscar_str } from './export'
   import { writeRemoteFile } from '$lib/api/hpc'
   import { click_outside, tooltip } from 'svelte-multiselect'
@@ -43,6 +44,7 @@
 
     // ── 铅笔控制器 (只读传入, 内部 getter/setter 可写) ──
     pencil,
+    interaction,
 
     // ── 双向绑定状态 ($bindable) ──
     // 全屏
@@ -103,6 +105,7 @@
 
     // 铅笔控制器
     pencil: PencilModeController
+    interaction: ReturnType<typeof create_interaction_controller>
 
     // 双向绑定
     fullscreen?: boolean
@@ -226,6 +229,42 @@
         <span class="struct-toolbar-tooltip" role="tooltip">{show_gesture_settings ? t('structure.close_voice_settings') : t('structure.open_voice_settings')}</span>
       </span>
     {/if}
+    {/if}
+
+    <!-- === Touch interaction modes (no modifier keys on touch devices) === -->
+    {#if typeof window !== `undefined` && window.matchMedia?.(`(pointer: coarse)`).matches}
+      <div class="touch-mode-container">
+        <span class="struct-toolbar-tooltip-wrap">
+          <button
+            type="button"
+            class="touch-mode-toggle"
+            class:active={interaction.touch_mode === `box`}
+            aria-pressed={interaction.touch_mode === `box`}
+            onclick={() => interaction.touch_mode = interaction.touch_mode === `box` ? `none` : `box`}
+          >{t('structure.touch_box_select')}</button>
+          <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.touch_box_select_hint')}</span>
+        </span>
+        <span class="struct-toolbar-tooltip-wrap">
+          <button
+            type="button"
+            class="touch-mode-toggle"
+            class:active={interaction.touch_mode === `move`}
+            aria-pressed={interaction.touch_mode === `move`}
+            onclick={() => interaction.touch_mode = interaction.touch_mode === `move` ? `none` : `move`}
+          >{t('structure.touch_move_atoms')}</button>
+          <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.touch_move_atoms_hint')}</span>
+        </span>
+        <span class="struct-toolbar-tooltip-wrap">
+          <button
+            type="button"
+            class="touch-mode-toggle"
+            class:active={interaction.touch_mode === `rotate`}
+            aria-pressed={interaction.touch_mode === `rotate`}
+            onclick={() => interaction.touch_mode = interaction.touch_mode === `rotate` ? `none` : `rotate`}
+          >{t('structure.touch_rotate_atoms')}</button>
+          <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.touch_rotate_atoms_hint')}</span>
+        </span>
+      </div>
     {/if}
 
     <!-- === Structure Editing (Pencil Mode) === -->
@@ -909,6 +948,28 @@
   .pencil-toggle.active {
     color: var(--accent-color, #007acc);
     background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
+  }
+  .touch-mode-container {
+    display: flex;
+    position: relative;
+    gap: 4pt;
+  }
+  .touch-mode-toggle {
+    background-color: transparent;
+    padding: 4pt 7pt;
+    font-size: clamp(0.8em, 1.6cqmin, 1.1em);
+    border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-radius: 4pt;
+    white-space: nowrap;
+    transition: background-color 0.2s, color 0.2s;
+  }
+  .touch-mode-toggle:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .touch-mode-toggle.active {
+    color: var(--accent-color, #007acc);
+    border-color: var(--accent-color, #007acc);
+    background-color: color-mix(in srgb, var(--accent-color, #007acc) 18%, transparent);
   }
 
   /* === 手势控制切换 === */

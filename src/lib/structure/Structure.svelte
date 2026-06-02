@@ -2951,6 +2951,7 @@
       {reset_text}
       {wrapper}
       {pencil}
+      {interaction}
       bind:fullscreen
       bind:gesture_active
       bind:gesture_config
