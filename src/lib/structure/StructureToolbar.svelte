@@ -146,6 +146,24 @@
     // 子组件 snippet
     children?: Snippet
   } = $props()
+
+  // Touch-capability detection for the touch-mode buttons. `any-pointer: coarse`
+  // is true when ANY available pointer is coarse (finger/stylus) — so it also
+  // catches hybrid devices (touch laptops, a tablet with a mouse attached) that
+  // `pointer: coarse` (primary pointer only) would miss. Kept reactive so it
+  // updates if an input device is plugged/unplugged.
+  let has_touch = $state(false)
+  $effect(() => {
+    if (typeof window === `undefined`) return
+    const coarse = window.matchMedia?.(`(any-pointer: coarse)`)
+    const update = () => {
+      has_touch = (coarse?.matches ?? false) ||
+        (typeof navigator !== `undefined` && navigator.maxTouchPoints > 0)
+    }
+    update()
+    coarse?.addEventListener?.(`change`, update)
+    return () => coarse?.removeEventListener?.(`change`, update)
+  })
 </script>
 
 <section class:visible={visible_buttons} class="control-buttons">
@@ -232,7 +250,7 @@
     {/if}
 
     <!-- === Touch interaction modes (no modifier keys on touch devices) === -->
-    {#if typeof window !== `undefined` && window.matchMedia?.(`(pointer: coarse)`).matches}
+    {#if has_touch}
       <div class="touch-mode-container">
         <span class="struct-toolbar-tooltip-wrap">
           <button
