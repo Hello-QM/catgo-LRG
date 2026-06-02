@@ -7,6 +7,8 @@ export * from './defaults'
 
 // Runtime backend-URL control (Model C) + its store/persistence helpers.
 export { default as BackendUrlSettings } from './BackendUrlSettings.svelte'
+// "Connect & Check" wizard — probe/connect a backend then render diagnostics.
+export { default as ConnectWizard } from './ConnectWizard.svelte'
 export {
   apply_backend_url,
   backend_url_store,
