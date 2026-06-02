@@ -60,6 +60,11 @@ def _worktree_offset() -> int:
 
 SERVER_PORT = int(os.environ.get("SERVER_PORT", 0)) or (8000 + _worktree_offset())
 
+# Thin mode: skip heavy domain routers (cube/chgcar/water/moire/.../kmc) and
+# their transitive pymatgen/ase imports.  Gated entirely by env; when unset the
+# server loads every router exactly as before.
+CATGO_THIN = os.environ.get("CATGO_THIN") == "1"
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -70,41 +75,48 @@ from starlette.middleware.gzip import GZipMiddleware
 # (optimize, structure_ops, view_capture, optimade/pubchem/mp search, etc.)
 # are ready the moment uvicorn binds.
 # ============================================================================
+# THIN-BASE routers — always imported (light deps, core UI/search/workflow).
 from catgo.routers import (
     optimize_router,
     optimize_ws_router,
     optimade_router,
     pubchem_router,
     mp_router,
-    cube_router,
-    chgcar_router,
-    water_layer_router,
-    moire_router,
-    nanotube_router,
-    reticular_router,
     mofdb_router,
-    dos_router,
-    cohp_router,
-    bands_router,
-    pseudo_hydrogen_router,
-    workflow_router,
-    build_router,
-    trajectory_edit_router,
-    trajectory_stream_router,
-    pty_router,
-    chat_router,
     structure_ops_router,
     view_capture_router,
-    paper_router,
-    plugins_router,
-    tool_bridge_router,
-    freq_analysis_router,
+    trajectory_stream_router,
+    trajectory_edit_router,
+    pty_router,
+    chat_router,
+    workflow_router,
     system_router,
     hub_router,
     file_sandbox_router,
-    kmc_router,
     skills_router,
+    tool_bridge_router,
+    plugins_router,
 )
+
+# THIN-SKIP routers — heavy domain builders/analysis (pymatgen/ase/etc).
+# Skipped entirely (import AND include) when CATGO_THIN=1.
+if not CATGO_THIN:
+    from catgo.routers import (
+        cube_router,
+        chgcar_router,
+        water_layer_router,
+        moire_router,
+        nanotube_router,
+        reticular_router,
+        dos_router,
+        cohp_router,
+        bands_router,
+        pseudo_hydrogen_router,
+        build_router,
+        paper_router,
+        freq_analysis_router,
+        kmc_router,
+    )
 
 # ============================================================================
 # Deferred routers — imported AFTER lifespan yields, so they don't block the
@@ -117,7 +129,7 @@ from catgo.routers import (
 # first couple of seconds of a typical session.  The real heavy hitters
 # (heterostructure, vasp, md_clustering) are the primary targets.
 # ============================================================================
-_DEFERRED_ROUTER_ATTRS: list[str] = [
+_DEFERRED_ROUTER_ATTRS: list[str] = ["hpc_router"] if CATGO_THIN else [
     "heterostructure_router",  # ~1340 ms (pymatgen.analysis.interfaces)
     "vasp_router",              # ~1310 ms (pymatgen.io.vasp.inputs)
     "md_clustering_router",     # ~600 ms (sklearn.cluster, scipy.signal)
@@ -341,14 +353,32 @@ app = FastAPI(
 # CORS configuration - allow frontend to connect
 # Covers: Tauri app, localhost dev servers on any port, worktree ports,
 # and VSCode webview panels (origin is `vscode-webview://<opaque-id>`).
+# Base origins: Tauri app on all platforms.
+_cors_allow_origins = [
+    "tauri://localhost",  # Tauri app (macOS/Linux)
+    "https://tauri.localhost",  # Tauri app (Windows)
+    "http://tauri.localhost",
+]
+# Extra origins from CATGO_ALLOWED_ORIGINS (comma-separated; empties dropped).
+# Unset -> no change from previous behaviour.
+for _origin in os.environ.get("CATGO_ALLOWED_ORIGINS", "").split(","):
+    _origin = _origin.strip()
+    if _origin:
+        _cors_allow_origins.append(_origin)
+
+# Base regex: localhost/127.0.0.1 on any port + VSCode webview.
+# Extended to also match Tailscale MagicDNS hosts
+# (https://<machine>.<tailnet>.ts.net) so a remote-served SPA can reach the API.
+_cors_allow_origin_regex = (
+    r"(https?://(localhost|127\.0\.0\.1)(:\d+)?"
+    r"|vscode-webview://[A-Za-z0-9\-]+"
+    r"|https://[A-Za-z0-9\-]+\.[A-Za-z0-9\-]+\.ts\.net)"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"(https?://(localhost|127\.0\.0\.1)(:\d+)?|vscode-webview://[A-Za-z0-9\-]+)",
-    allow_origins=[
-        "tauri://localhost",  # Tauri app (macOS/Linux)
-        "https://tauri.localhost",  # Tauri app (Windows)
-        "http://tauri.localhost",
-    ],
+    allow_origin_regex=_cors_allow_origin_regex,
+    allow_origins=_cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -392,39 +422,43 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Heavy routers (VASP input, heterostructure, md_clustering, HPC, QE, ORCA,
 # CP2K, LAMMPS, quacc, atomate2, forcefield) are registered later
 # inside `_deferred_startup()` so they don't block /health from going green.
+# THIN-BASE includes — always registered.
 app.include_router(optimize_router, prefix="/api")
 app.include_router(optimize_ws_router, prefix="/api")
 app.include_router(optimade_router, prefix="/api")
 app.include_router(pubchem_router, prefix="/api")
 app.include_router(mp_router, prefix="/api")
-app.include_router(cube_router, prefix="/api")
-app.include_router(chgcar_router, prefix="/api")
-app.include_router(water_layer_router, prefix="/api")
-app.include_router(moire_router, prefix="/api")
-app.include_router(nanotube_router, prefix="/api")
-app.include_router(reticular_router, prefix="/api")
 app.include_router(mofdb_router, prefix="/api")
-app.include_router(dos_router, prefix="/api")
-app.include_router(cohp_router, prefix="/api")
-app.include_router(bands_router, prefix="/api")
 app.include_router(trajectory_stream_router, prefix="/api")
 app.include_router(workflow_router, prefix="/api")
-app.include_router(pseudo_hydrogen_router, prefix="/api")
-app.include_router(build_router, prefix="/api")
 app.include_router(trajectory_edit_router, prefix="/api")
 app.include_router(pty_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(structure_ops_router, prefix="/api")
 app.include_router(view_capture_router, prefix="/api")
-app.include_router(paper_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(tool_bridge_router, prefix="/api")
-app.include_router(freq_analysis_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(hub_router, prefix="/api")
 app.include_router(file_sandbox_router, prefix="/api")
-app.include_router(kmc_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
+
+# THIN-SKIP includes — registered only outside thin mode (heavy deps).
+if not CATGO_THIN:
+    app.include_router(cube_router, prefix="/api")
+    app.include_router(chgcar_router, prefix="/api")
+    app.include_router(water_layer_router, prefix="/api")
+    app.include_router(moire_router, prefix="/api")
+    app.include_router(nanotube_router, prefix="/api")
+    app.include_router(reticular_router, prefix="/api")
+    app.include_router(dos_router, prefix="/api")
+    app.include_router(cohp_router, prefix="/api")
+    app.include_router(bands_router, prefix="/api")
+    app.include_router(pseudo_hydrogen_router, prefix="/api")
+    app.include_router(build_router, prefix="/api")
+    app.include_router(paper_router, prefix="/api")
+    app.include_router(freq_analysis_router, prefix="/api")
+    app.include_router(kmc_router, prefix="/api")
 
 from catgo.routers.tools import router as tools_router
 app.include_router(tools_router, prefix="/api")
@@ -439,9 +473,9 @@ except Exception as e:
 
 
 
-@app.get("/")
+@app.get("/api/info")
 async def root():
-    """Root endpoint with API information."""
+    """API information endpoint (moved off '/' so the SPA can own the root)."""
     return {
         "name": "CatGo Computation Server",
         "version": "0.1.0",
@@ -479,6 +513,46 @@ async def root():
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "port": SERVER_PORT, "pid": os.getpid()}
+
+
+# ---------------------------------------------------------------------------
+# Prebuilt SPA serving (remote / hosted mode).
+#
+# Only enabled when the frontend build directory exists, so the desktop/dev
+# flow (separate Vite dev server, no build-desktop/) is completely untouched.
+# The catch-all route is registered LAST in this module — after every
+# include_router(), /health and /api/info — so it never shadows the API.
+# ---------------------------------------------------------------------------
+_frontend_dir = Path(
+    os.environ.get("CATGO_FRONTEND_DIR") or (_repo_root / "build-desktop")
+)
+if _frontend_dir.is_dir():
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from starlette.responses import Response
+
+    _index_html = _frontend_dir / "index.html"
+    _assets_dir = _frontend_dir / "assets"
+    if _assets_dir.is_dir():
+        app.mount(
+            "/assets",
+            StaticFiles(directory=str(_assets_dir)),
+            name="assets",
+        )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> Response:
+        """Serve the prebuilt SPA; never shadow /api/* routes."""
+        # API paths must 404 here so they resolve to real routers above
+        # (or a genuine 404), never the index.html shell.
+        if full_path.startswith("api"):
+            return Response(status_code=404)
+        candidate = _frontend_dir / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(_index_html))
+
+    print(f"[Server] Serving prebuilt SPA from {_frontend_dir}")
 
 
 # ---------------------------------------------------------------------------

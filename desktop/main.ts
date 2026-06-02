@@ -1,6 +1,13 @@
 import '../src/lib/app.css'
 import App from './App.svelte'
 import { mount } from 'svelte'
+import { init_backend_url } from '../src/lib/api/backend-url.svelte'
+
+// Model C: a hosted frontend can target a user-chosen backend. Apply the saved
+// backend URL (localStorage 'catgo-backend-url') to ALL API consumers BEFORE the
+// app mounts and any HPC/MP/chat/compute module makes its first call. No-op when
+// nothing is saved, so the default (http://localhost:8000) is preserved.
+init_backend_url()
 
 const target = document.getElementById(`app`)!
 
