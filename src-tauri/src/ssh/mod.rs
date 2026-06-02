@@ -22,6 +22,7 @@ pub mod auth;
 pub mod exec;
 pub mod handler;
 pub mod otp;
+pub mod pty;
 pub mod state;
 
 // Re-exported for ergonomic `ssh::ssh_connect` use elsewhere. NOTE: `lib.rs`'s

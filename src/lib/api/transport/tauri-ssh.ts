@@ -103,6 +103,53 @@ class TauriSshTransport implements HpcTransport {
     })
     return { stdout: r.stdout, stderr: r.stderr, code: r.code }
   }
+
+  async ptyOpen(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    onData: (bytes: Uint8Array) => void,
+  ): Promise<string> {
+    // The Rust `ssh_pty_open` takes `on_output: tauri::ipc::Channel<Vec<u8>>`.
+    // A `Channel<Vec<u8>>` is serialized over IPC as a JSON array of integers,
+    // so each message arrives JS-side as `number[]` — normalize to `Uint8Array`
+    // before handing it to xterm.
+    const { Channel, invoke } = await import(`@tauri-apps/api/core`)
+    const ch = new Channel<number[] | Uint8Array | ArrayBuffer>()
+    ch.onmessage = (msg) => {
+      if (msg instanceof Uint8Array) onData(msg)
+      else if (msg instanceof ArrayBuffer) onData(new Uint8Array(msg))
+      else onData(Uint8Array.from(msg))
+    }
+    return invoke<string>(`ssh_pty_open`, {
+      sessionId,
+      cols,
+      rows,
+      onOutput: ch,
+    })
+  }
+
+  async ptyWrite(sessionId: string, channelId: string, data: Uint8Array): Promise<void> {
+    // Rust `data: Vec<u8>` deserializes from a JSON number array.
+    await invokeTauri<void>(`ssh_pty_write`, {
+      sessionId,
+      channelId,
+      data: Array.from(data),
+    })
+  }
+
+  async ptyResize(
+    sessionId: string,
+    channelId: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    await invokeTauri<void>(`ssh_pty_resize`, { sessionId, channelId, cols, rows })
+  }
+
+  async ptyClose(sessionId: string, channelId: string): Promise<void> {
+    await invokeTauri<void>(`ssh_pty_close`, { sessionId, channelId })
+  }
 }
 
 export const tauriSshTransport: HpcTransport = new TauriSshTransport()

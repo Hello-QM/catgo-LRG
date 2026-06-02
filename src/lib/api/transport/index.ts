@@ -89,6 +89,29 @@ export interface HpcTransport {
   /** Run a command on an established session. Never rejects on a *remote*
    * failure — surfaces `{ code: -1, stderr }` instead. */
   exec(sessionId: string, cmd: string, timeoutMs?: number): Promise<HpcExecResult>
+
+  /**
+   * Open an interactive PTY + shell on an established session and stream its
+   * output bytes to `onData` (UTF-8-agnostic — pass straight to xterm.js).
+   *
+   * Resolves to an opaque `channelId` for {@link ptyWrite}/{@link ptyResize}/
+   * {@link ptyClose}. Mobile (tauri-ssh) only; the HTTP shim throws.
+   */
+  ptyOpen(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    onData: (bytes: Uint8Array) => void,
+  ): Promise<string>
+
+  /** Write stdin bytes to an open PTY channel. */
+  ptyWrite(sessionId: string, channelId: string, data: Uint8Array): Promise<void>
+
+  /** Inform the remote of a terminal resize. */
+  ptyResize(sessionId: string, channelId: string, cols: number, rows: number): Promise<void>
+
+  /** Tear down an open PTY channel (idempotent). */
+  ptyClose(sessionId: string, channelId: string): Promise<void>
 }
 
 /**

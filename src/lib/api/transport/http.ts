@@ -82,6 +82,35 @@ class HttpTransport implements HpcTransport {
       return { stdout: ``, stderr: String(err), code: -1 }
     }
   }
+
+  // Interactive PTY is a mobile (russh) capability only. On desktop the existing
+  // terminal is driven by the local-PTY / Python path, not this transport, so
+  // these throw rather than pretend to stream.
+  async ptyOpen(
+    _sessionId: string,
+    _cols: number,
+    _rows: number,
+    _onData: (bytes: Uint8Array) => void,
+  ): Promise<string> {
+    throw new Error(`http transport: interactive PTY is not supported (mobile russh only)`)
+  }
+
+  async ptyWrite(_sessionId: string, _channelId: string, _data: Uint8Array): Promise<void> {
+    throw new Error(`http transport: interactive PTY is not supported (mobile russh only)`)
+  }
+
+  async ptyResize(
+    _sessionId: string,
+    _channelId: string,
+    _cols: number,
+    _rows: number,
+  ): Promise<void> {
+    throw new Error(`http transport: interactive PTY is not supported (mobile russh only)`)
+  }
+
+  async ptyClose(_sessionId: string, _channelId: string): Promise<void> {
+    // No-op: nothing to tear down on the HTTP path.
+  }
 }
 
 export const httpTransport: HpcTransport = new HttpTransport()

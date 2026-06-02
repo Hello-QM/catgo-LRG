@@ -275,6 +275,10 @@ pub fn run() {
             ssh::auth::ssh_connect,
             ssh::exec::ssh_exec,
             ssh::otp::ssh_submit_otp,
+            ssh::pty::ssh_pty_open,
+            ssh::pty::ssh_pty_write,
+            ssh::pty::ssh_pty_resize,
+            ssh::pty::ssh_pty_close,
         ]);
 
     // Mobile handler: identical to the desktop handler above minus the local-PTY
@@ -336,6 +340,10 @@ pub fn run() {
             ssh::auth::ssh_connect,
             ssh::exec::ssh_exec,
             ssh::otp::ssh_submit_otp,
+            ssh::pty::ssh_pty_open,
+            ssh::pty::ssh_pty_write,
+            ssh::pty::ssh_pty_resize,
+            ssh::pty::ssh_pty_close,
         ]);
 
     let app = builder

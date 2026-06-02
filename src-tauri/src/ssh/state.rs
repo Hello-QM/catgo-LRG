@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
+use tokio::task::AbortHandle;
 
 use super::handler::MobileHandler;
 
@@ -26,6 +27,28 @@ use super::handler::MobileHandler;
 ///
 /// Aliased so the (verbose) generic `Handle<MobileHandler>` is written once.
 pub type SshHandle = russh::client::Handle<MobileHandler>;
+
+/// The concrete write-half type for an interactive PTY channel.
+///
+/// `russh::ChannelWriteHalf<S>` where `S = russh::client::Msg`. All of its I/O
+/// methods (`data` / `window_change` / `eof` / `close`) take `&self`, so it can
+/// be shared behind an `Arc` and driven from the `ssh_pty_write/resize/close`
+/// commands WITHOUT a mutex — the `&mut self` half (`wait()`) lives entirely in
+/// the spawned reader task (see `pty.rs`).
+pub type PtyWriteHalf = russh::ChannelWriteHalf<russh::client::Msg>;
+
+/// A live interactive PTY channel attached to a session.
+///
+/// Holds the write half (for `ssh_pty_write` / `ssh_pty_resize` / `ssh_pty_close`)
+/// plus the `AbortHandle` of the spawned reader task so `ssh_pty_close` can stop
+/// the byte pump WITHOUT leaking the task (it does not end on its own until the
+/// remote closes the channel).
+pub struct PtyHandle {
+    /// The russh channel write half (shared; `&self` methods, no lock needed).
+    pub write: Arc<PtyWriteHalf>,
+    /// Abort handle for the reader task forwarding bytes into the Tauri channel.
+    pub reader: AbortHandle,
+}
 
 /// A partially-authenticated (in-flight) keyboard-interactive / OTP handshake.
 ///
@@ -71,6 +94,12 @@ pub struct SshSession {
     /// Liveness flag. Set to `false` when a disconnect/error is observed so the
     /// command layer can prune dead sessions without racing the handle.
     pub alive: std::sync::atomic::AtomicBool,
+    /// Interactive PTY channels owned by this session, keyed by an opaque
+    /// `channel_id` (a v4 UUID minted by `ssh_pty_open`). Behind an async
+    /// `Mutex` so the `ssh_pty_*` commands can insert/lookup/remove from async
+    /// contexts. Distinct from `handle`: a PTY's write half is independent of
+    /// the auth handle's lock, so opening/using a PTY never blocks `ssh_exec`.
+    pub ptys: Mutex<HashMap<String, PtyHandle>>,
 }
 
 impl SshSession {
@@ -82,7 +111,28 @@ impl SshSession {
             username,
             connected_at: chrono::Utc::now().timestamp_millis(),
             alive: std::sync::atomic::AtomicBool::new(true),
+            ptys: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Register a freshly-opened PTY channel and return its opaque id.
+    pub async fn insert_pty(&self, pty: PtyHandle) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.ptys.lock().await.insert(id.clone(), pty);
+        id
+    }
+
+    /// Look up a PTY's write half by channel id, cloning the `Arc` so the outer
+    /// map lock is released before any network I/O.
+    pub async fn get_pty_write(&self, channel_id: &str) -> Option<Arc<PtyWriteHalf>> {
+        self.ptys.lock().await.get(channel_id).map(|p| p.write.clone())
+    }
+
+    /// Remove (and return) a PTY channel by id, if present. The caller is
+    /// responsible for aborting the returned reader task and tearing down the
+    /// channel.
+    pub async fn remove_pty(&self, channel_id: &str) -> Option<PtyHandle> {
+        self.ptys.lock().await.remove(channel_id)
     }
 
     /// Whether the session is still believed to be alive.
