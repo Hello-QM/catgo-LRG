@@ -94,6 +94,9 @@ mod db;
 // russh layer instead, so portable-pty (and this module) is not compiled there.
 #[cfg(desktop)]
 mod pty;
+// SSH foundation for the future mobile HPC transport. NOT cfg-gated: russh
+// compiles on every target, so this builds (and is validated) on desktop too.
+mod ssh;
 mod workflow_engine;
 
 // Global state to track the Python backend process.
@@ -195,7 +198,10 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .manage(Mutex::new(OpenedFiles { paths: Vec::new() }))
         .manage(db::DbState::default())
-        .manage(workflow_engine::WorkflowEngineState::default());
+        .manage(workflow_engine::WorkflowEngineState::default())
+        // SSH session registry — shared by ssh_connect/ssh_exec/ssh_submit_otp
+        // on both desktop and mobile (the SSH module is not cfg-gated).
+        .manage(ssh::SshState::default());
 
     // Desktop-only managed state: the Python/Node sidecars (BackendState,
     // AgentState) and the local-PTY terminal (PtyState) only exist on desktop.
@@ -265,6 +271,10 @@ pub fn run() {
             workflow_engine::db_run_workflow,
             workflow_engine::db_pause_workflow,
             workflow_engine::db_resume_workflow,
+            // SSH transport (mobile HPC; compiled & registered on desktop too)
+            ssh::auth::ssh_connect,
+            ssh::exec::ssh_exec,
+            ssh::otp::ssh_submit_otp,
         ]);
 
     // Mobile handler: identical to the desktop handler above minus the local-PTY
@@ -322,6 +332,10 @@ pub fn run() {
             workflow_engine::db_run_workflow,
             workflow_engine::db_pause_workflow,
             workflow_engine::db_resume_workflow,
+            // SSH transport (mobile HPC) — same commands as the desktop handler.
+            ssh::auth::ssh_connect,
+            ssh::exec::ssh_exec,
+            ssh::otp::ssh_submit_otp,
         ]);
 
     let app = builder

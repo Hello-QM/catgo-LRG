@@ -35,6 +35,27 @@ catgo-graph = { path = "../crates/catgo-graph" }
 tokio = { version = "1", features = ["rt", "sync", "time", "net", "io-util", "macros", "rt-multi-thread"] }
 tokio-util = "0.7"
 
+# ── SSH foundation (mobile HPC transport) ────────────────────────────────────
+# russh is the future mobile SSH transport but is NOT cfg-gated: it compiles on
+# every target (including desktop) so the ssh module can be validated on desktop.
+#
+# Version pin rationale (from the russh API spike):
+#   * `cargo add russh` silently resolves to 0.54.5 under this crate's
+#     `rust-version = "1.77.2"` pin (russh 0.61.1 needs rustc 1.85). We pin
+#     `=0.54.5` explicitly to keep the build reproducible under 1.77.2 and to
+#     stay within the existing MSRV instead of bumping it.
+#   * russh 0.54.6 is BROKEN (yanked transitive dep `libcrux-ml-kem 0.0.3`) —
+#     the `=` pin guarantees we never float onto it.
+#   * `russh-keys` standalone is OBSOLETE (latest 0.49.2 is incompatible with
+#     russh 0.54+). Keys live at `russh::keys::*` (always compiled, no feature
+#     gate), so we add only `russh` — never `russh-keys`.
+#   * The Handler trait uses native `async fn` (RPITIT) — no `async-trait`.
+russh = "=0.54.5"
+# Independent crate (still separate from russh); used by the future SFTP layer.
+russh-sftp = "2.3.0"
+# gzip/deflate helper for the future compressed file-transfer path.
+flate2 = "1"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 
