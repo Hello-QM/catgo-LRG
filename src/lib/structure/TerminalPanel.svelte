@@ -175,6 +175,23 @@
         term.loadAddon(fit)
         term.loadAddon(new linksMod.WebLinksAddon())
 
+        // Ensure the configured webfont is loaded BEFORE xterm measures the cell
+        // size in term.open(). If it measures against a fallback first, it bakes
+        // in a wrong advance width and renders glyphs wide-spaced until the next
+        // resize. Best-effort: the Font Loading API may be absent in some webviews.
+        try {
+          const fam = terminal_font_state.font_family
+          const px = terminal_font_state.font_size
+          await Promise.all([
+            (document as Document).fonts?.load(`${px}px ${fam}`),
+            (document as Document).fonts?.load(`bold ${px}px ${fam}`),
+          ])
+        } catch {
+          // Font Loading API unavailable — DOM renderer still works, just may
+          // need a resize to settle metrics on first paint.
+        }
+        if (disposed) { term.dispose(); return }
+
         term.open(container_el!)
 
         // File path link provider — must be registered AFTER term.open() so xterm's

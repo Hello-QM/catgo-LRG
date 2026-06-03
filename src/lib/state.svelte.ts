@@ -93,14 +93,32 @@ export const DEFAULT_TERMINAL_FONT_SIZE = 13
 // and a bare `monospace` fallback doesn't cover Nerd/emoji). Native terminals
 // (kitty, gnome-terminal) don't have this problem because fontconfig supplies
 // the fallback automatically.
+//
+// ORDER MATTERS: a real monospace Latin net ('DejaVu Sans Mono' / 'Liberation
+// Mono' / generic `monospace`) sits BEFORE the emoji/CJK fonts. If the primary
+// font is missing (e.g. proprietary Menlo/Consolas on Linux, or a bundled
+// @font-face that failed to load), per-glyph matching must catch Latin on a
+// real monospace — NOT fall through to a proportional CJK font like Noto Sans
+// CJK SC, which would size every cell to the wrong advance and render the
+// terminal as wide-spaced "garbled" text. CJK fonts stay last so they only
+// ever serve CJK codepoints, which the Latin/symbol fonts don't cover.
 export const TERMINAL_GLYPH_FALLBACK =
-  `'Symbols Nerd Font Mono', 'Symbols Nerd Font', 'Noto Color Emoji', 'Apple Color Emoji', 'Noto Sans CJK SC', 'Microsoft YaHei', monospace`
+  `'Symbols Nerd Font Mono', 'Symbols Nerd Font', 'DejaVu Sans Mono', 'Liberation Mono', monospace, 'Noto Color Emoji', 'Apple Color Emoji', 'Noto Sans CJK SC', 'Microsoft YaHei'`
 
-/** Append the glyph fallback chain to a primary font if it isn't already present. */
+/**
+ * Re-attach the current glyph fallback chain to a primary font. Idempotent and
+ * self-migrating: a saved value embedding an OLD chain ordering is normalized
+ * back to its primary and re-suffixed with the current chain, so existing users
+ * pick up ordering fixes (e.g. the CJK-before-monospace bug) on next load.
+ */
 export function with_glyph_fallback(family: string): string {
-  if (!family || family.includes(`Noto Sans CJK`)) return family
-  // Drop a trailing bare `monospace` so the fallback chain owns the tail.
-  const primary = family.replace(/,\s*monospace\s*$/i, ``).trim()
+  if (!family) return DEFAULT_TERMINAL_FONT_FAMILY
+  // The bare fallback chain itself (the "monospace" picker option) — already current.
+  if (family.trim().startsWith(`'Symbols Nerd Font`)) return TERMINAL_GLYPH_FALLBACK
+  // Strip any previously-appended fallback chain (it always begins at the Nerd
+  // Font token) plus a trailing bare `monospace`, leaving just the primary.
+  let primary = family.replace(/,\s*'Symbols Nerd Font[\s\S]*$/i, ``).trim()
+  primary = primary.replace(/,\s*monospace\s*$/i, ``).trim()
   return primary ? `${primary}, ${TERMINAL_GLYPH_FALLBACK}` : TERMINAL_GLYPH_FALLBACK
 }
 

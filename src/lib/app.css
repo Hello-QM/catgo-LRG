@@ -1,3 +1,50 @@
+/* Bundled monospace fonts for the terminal/editor font picker. Without these,
+   a machine lacking the chosen system font falls through the font stack to a
+   proportional CJK font (e.g. Noto Sans CJK SC) for Latin glyphs, which breaks
+   xterm's cell metrics and renders the terminal with wide-spaced "garbled"
+   characters. Menlo (Apple) and Consolas (Microsoft) are proprietary and
+   cannot be bundled; the fallback chain degrades those to a real monospace. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('./fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url('./fonts/JetBrainsMono-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Code';
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('./fonts/FiraCode-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Fira Code';
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url('./fonts/FiraCode-Bold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('./fonts/SourceCodePro-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Source Code Pro';
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url('./fonts/SourceCodePro-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Cascadia Code';
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('./fonts/CascadiaCode-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Cascadia Code';
+  font-style: normal; font-weight: 700; font-display: swap;
+  src: url('./fonts/CascadiaCode-Bold.woff2') format('woff2');
+}
+
 :root {
   --theme-transition-duration: 0.3s;
   --text-color: #eee;
