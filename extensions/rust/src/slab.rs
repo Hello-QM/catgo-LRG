@@ -1029,6 +1029,53 @@ mod tests {
         Structure::try_new_from_occupancies(lattice, occ, frac_coords).unwrap()
     }
 
+    /// mp-1068212: cubic Fe2O3 (a=3.788512). Fe at corner+body-center, O at
+    /// three face-edge centers. Repro fixture for the "(100)/(001) slab loses
+    /// all oxygen" bug.
+    fn fe2o3_cubic_mp1068212() -> Structure {
+        let lattice = Lattice::cubic(3.788512);
+        let frac_coords = vec![
+            Vector3::new(0.0, 0.0, 0.0), // Fe
+            Vector3::new(0.5, 0.5, 0.5), // Fe
+            Vector3::new(0.5, 0.0, 0.5), // O
+            Vector3::new(0.0, 0.5, 0.5), // O
+            Vector3::new(0.5, 0.5, 0.0), // O
+        ];
+        let fe = Species::from_string("Fe").unwrap();
+        let o = Species::from_string("O").unwrap();
+        let occ = vec![
+            SiteOccupancy::ordered(fe),
+            SiteOccupancy::ordered(fe),
+            SiteOccupancy::ordered(o),
+            SiteOccupancy::ordered(o),
+            SiteOccupancy::ordered(o),
+        ];
+        Structure::try_new_from_occupancies(lattice, occ, frac_coords).unwrap()
+    }
+
+    /// Regression: cutting cubic Fe2O3 (mp-1068212) along (100)/(010)/(001)
+    /// must keep BOTH species. A buggy in-plane primitive reduction used to map
+    /// the cation sublattice onto the anion sublattice and delete all oxygen,
+    /// yielding a pure-Fe slab (worst on (100)/(010); (001) was spared). Slabs
+    /// are legitimately non-stoichiometric at the surface, so we only assert
+    /// both species survive, not an exact 2:3 ratio.
+    #[test]
+    fn repro_fe2o3_cubic_slab_keeps_oxygen() {
+        let structure = fe2o3_cubic_mp1068212();
+        let fe = Species::from_string("Fe").unwrap();
+        let o = Species::from_string("O").unwrap();
+        for mi in [[1, 0, 0], [0, 1, 0], [0, 0, 1]] {
+            let config = SlabConfig { miller_index: mi, ..Default::default() };
+            let slab = generate_slab(&structure, &config).unwrap();
+            let n_fe = slab.site_occupancies.iter().filter(|x| *x.dominant_species() == fe).count();
+            let n_o = slab.site_occupancies.iter().filter(|x| *x.dominant_species() == o).count();
+            assert!(
+                n_fe > 0 && n_o > 0,
+                "Miller {mi:?}: slab lost a species — Fe={n_fe} O={n_o} (bulk is Fe2O3)"
+            );
+        }
+    }
+
     /// Count distinct atomic layers (by cartesian z) in a generated slab.
     fn count_z_layers(s: &Structure) -> usize {
         let mut zs: Vec<f64> = s.cart_coords().iter().map(|v| v.z).collect();

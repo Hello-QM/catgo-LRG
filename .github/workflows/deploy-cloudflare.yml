@@ -7,6 +7,14 @@ on:
       - "docs/**"
       - "src/**"
       - "desktop/**"
+      # Rust WASM SOURCES — CI rebuilds these crates into the web bundle, so a
+      # fix here must trigger a redeploy. Previously only the gitignored built
+      # `extensions/rust-wasm/**` pkg (which never changes in git) was watched,
+      # so Rust source fixes (e.g. slab stoichiometry #158) silently shipped a
+      # STALE wasm to the live web. See also build:wasm in package.json.
+      - "extensions/rust/**"
+      - "extensions/chgdiff-wasm/**"
+      - "extensions/catrender-wasm/**"
       - "extensions/rust-wasm/**"
       - "static/**"
       - "package.json"
