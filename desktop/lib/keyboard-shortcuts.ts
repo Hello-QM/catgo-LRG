@@ -53,12 +53,8 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
       return
     }
 
-    // Ctrl+B — toggle sidebar
-    if (ctrl && event.key === `b`) {
-      event.preventDefault()
-      deps.toggle_sidebar()
-      return
-    }
+    // Ctrl+B intentionally NOT bound: it collides with Claude Code's prefix
+    // key. Toggle the sidebar with the in-app toolbar button instead.
 
     // Ctrl+T — new structure tab
     if (ctrl && event.key === `t`) {
