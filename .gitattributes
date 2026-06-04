@@ -1,0 +1,11 @@
+# Force LF for files that BREAK (not just look noisy) when checked out as CRLF
+# on Windows with core.autocrlf=true.
+
+# Patch files: pnpm-lock.yaml pins each patch's content hash under
+# patchedDependencies. A CRLF rewrite changes the bytes -> hash mismatch ->
+# `pnpm install` aborts. Pin to LF so the hash stays valid on every platform.
+patches/*.patch text eol=lf
+
+# Shell scripts are invoked via bash (e.g. `bash scripts/build-backend.sh`);
+# a CRLF shebang line yields `bad interpreter: /usr/bin/env bash^M`.
+*.sh text eol=lf
