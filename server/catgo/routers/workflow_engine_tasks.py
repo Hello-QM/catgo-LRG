@@ -12,6 +12,7 @@ Endpoints:
   GET  /api/engine/tasks/{id}/file-content — read a file from work_dir
   PUT  /api/engine/tasks/{id}/file-content — write a file in work_dir
   GET  /api/engine/tasks/{id}/frequencies  — parse vibrational frequencies
+  GET  /api/engine/tasks/{id}/forces       — per-ionic-step force vectors
 """
 
 from __future__ import annotations
@@ -460,6 +461,33 @@ async def get_task_frequencies(task_id: str):
         return data
     except Exception as exc:
         return {"success": False, "message": str(exc)}
+
+
+@router.get("/{task_id}/forces")
+async def get_task_forces(task_id: str, ionic_step: int = Query(0, description="Ionic step (0 = last)")):
+    """Per-atom force vectors for one ionic step from the task's VASP output.
+
+    V2-native mirror of V1 ``GET /api/workflow/{wf}/forces/{step}``. Resolves the
+    task (and its HPC connection) via ``WorkflowDB.get_task`` / ``_get_task_hpc``
+    instead of the legacy ``workflow_steps`` table, then delegates the actual
+    OUTCAR/vaspout.h5 parsing to the SAME V1 helpers
+    (``parse_vasp_forces_h5`` then ``parse_vasp_forces``) — this is additive
+    convergence work, not a re-implementation.
+
+    ``_get_task_hpc`` raises a clean 404 when the task is unknown or has no
+    ``work_dir``, and a 404 when no HPC connection is available.
+    """
+    task, hpc = _get_task_hpc(task_id)
+    work_dir = task["work_dir"]
+
+    from catgo.utils.job_parser import parse_vasp_forces, parse_vasp_forces_h5
+
+    # Try H5 first (VASP 6.4+ vaspout.h5), fall back to OUTCAR AWK — same order
+    # the V1 handler uses.
+    h5_result = await parse_vasp_forces_h5(hpc.conn, work_dir, ionic_step)
+    if h5_result and h5_result.get("success"):
+        return h5_result
+    return await parse_vasp_forces(hpc.conn, work_dir, ionic_step)
 
 
 def _freqs_from_v2_result(result: dict) -> tuple[list[float], list[float]]:
