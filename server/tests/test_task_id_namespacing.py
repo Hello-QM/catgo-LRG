@@ -20,3 +20,51 @@ def test_node_id_from_task_id_passthrough_for_bare_or_random_ids():
     # legacy bare ids and DSL random ids (no ':') pass through unchanged
     assert node_id_from_task_id("slab_opt") == "slab_opt"
     assert node_id_from_task_id("a1b2c3d4e5f6a7b8") == "a1b2c3d4e5f6a7b8"
+
+
+import os
+import sqlite3
+import tempfile
+from catgo.workflow.db import WorkflowDB
+
+
+def _make_db():
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    return WorkflowDB(path), path
+
+
+def test_create_task_stores_node_id():
+    db, path = _make_db()
+    try:
+        # tasks.workflow_id has an FK to workflows(id) (foreign_keys=ON), so the
+        # parent workflow row must exist before the task can be inserted.
+        db.create_workflow("wfA", workflow_id="wfA")
+        tid = db.create_task("wfA", "geo_opt", task_id="wfA:slab_opt", node_id="slab_opt")
+        assert tid == "wfA:slab_opt"
+        t = db.get_task("wfA:slab_opt")
+        assert t["node_id"] == "slab_opt"
+        assert t["workflow_id"] == "wfA"
+    finally:
+        os.unlink(path)
+
+
+def test_migration_backfills_node_id_from_id():
+    # Simulate a pre-migration DB: tasks row created without node_id, then reopened.
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        raw = sqlite3.connect(path)
+        raw.executescript(
+            "CREATE TABLE tasks (id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, "
+            "task_type TEXT NOT NULL, status TEXT DEFAULT 'WAITING', created_at TEXT);"
+        )
+        raw.execute("INSERT INTO tasks (id, workflow_id, task_type) VALUES ('slab_opt','wfOld','geo_opt')")
+        raw.commit()
+        raw.close()
+
+        db = WorkflowDB(path)  # triggers _migrate_db + schema
+        t = db.get_task("slab_opt")
+        assert t["node_id"] == "slab_opt"  # back-filled
+    finally:
+        os.unlink(path)
