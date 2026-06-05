@@ -166,7 +166,8 @@
 
   // Derived TaskRef for adapter calls.
   // In step mode, if we have an engine_task (e.g. for PENDING_REVIEW confirm),
-  // use task mode with node_id as task_id (graph converter preserves node IDs).
+  // use task mode with the engine task's namespaced id (#227: task ids are
+  // {workflow_id}:{node_id}, so never pass the bare node_id as a task_id).
   const task_ref = $derived<TaskRef>(
     mode === 'task' && task_id
       ? { mode: 'task', task_id }

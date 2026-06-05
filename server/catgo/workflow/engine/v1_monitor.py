@@ -143,5 +143,9 @@ def translate_broadcast_message(
             "status": msg.get("status", ""),
         }
 
-    # ping, error, etc — pass through
+    # Pass-through (ping, error, and step_status/step_log broadcast directly by
+    # local execution engines). Those carry a namespaced step_id that the V1
+    # frontend keys by graph node id, so de-namespace it here too.
+    if "step_id" in msg:
+        return {**msg, "step_id": node_id_from_task_id(msg.get("step_id", ""), workflow_id)}
     return msg
