@@ -14,6 +14,7 @@ import json
 from typing import Any
 
 from catgo.workflow.db import WorkflowDB
+from catgo.workflow.task_ids import make_task_id
 
 
 # Map frontend node types to handle names (input/output ports)
@@ -110,7 +111,8 @@ def convert_graph_json(
             logger.error(f"[convert_graph_json] Creating task {i+1}/{len(nodes)}: node_id={node_id}, type={node_type}, wf_id={wf_id}")
             db.create_task(
                 wf_id, node_type,
-                task_id=node_id,
+                task_id=make_task_id(wf_id, node_id),
+                node_id=node_id,
                 name=params.get("label") or params.get("system_name"),
                 params=params,
                 software=software,
@@ -137,6 +139,11 @@ def convert_graph_json(
         source_key = _get_handle_name(src_node_type, src_handle, "output")
         target_key = _get_handle_name(tgt_node_type, tgt_handle, "input")
 
-        db.create_link(wf_id, src_node_id, tgt_node_id, source_key, target_key)
+        db.create_link(
+            wf_id,
+            make_task_id(wf_id, src_node_id),
+            make_task_id(wf_id, tgt_node_id),
+            source_key, target_key,
+        )
 
     return wf_id

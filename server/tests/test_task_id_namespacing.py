@@ -68,3 +68,54 @@ def test_migration_backfills_node_id_from_id():
         assert t["node_id"] == "slab_opt"  # back-filled
     finally:
         os.unlink(path)
+
+
+import json
+from catgo.workflow.graph_converter import convert_graph_json
+
+
+def _overlap_graph():
+    return json.dumps({
+        "nodes": [
+            {"id": "si", "type": "structure_input", "params": {}},
+            {"id": "slab_opt", "type": "geo_opt", "params": {"software": "vasp"}},
+        ],
+        "edges": [{"from": "si", "to": "slab_opt", "fromH": "out-0", "toH": "in-0"}],
+    })
+
+
+def test_two_workflows_overlapping_node_ids_dont_clobber():
+    """Running/converting workflow A must not delete workflow B's tasks when both
+    use identical node ids (the ORR-template collision in #227)."""
+    db, path = _make_db()
+    try:
+        db.create_workflow("RPBE-D3", workflow_id="wfB")
+        convert_graph_json(db, "RPBE-D3", _overlap_graph(), workflow_id="wfB")
+        db.update_task("wfB:slab_opt", status="COMPLETED")
+        db.store_result("wfB:slab_opt", "wfB", energy=-123.4)
+
+        db.create_workflow("RPBE", workflow_id="wfA")
+        db.delete_workflow_tasks_and_links("wfA")  # no-op; A has none yet
+        convert_graph_json(db, "RPBE", _overlap_graph(), workflow_id="wfA")
+
+        b_nodes = {t["node_id"] for t in db.get_all_tasks("wfB")}
+        assert b_nodes == {"si", "slab_opt"}, "workflow B tasks were clobbered (#227)"
+        assert db.get_result("wfB:slab_opt")["energy"] == -123.4
+        a_ids = {t["id"] for t in db.get_all_tasks("wfA")}
+        assert a_ids == {"wfA:si", "wfA:slab_opt"}
+    finally:
+        os.unlink(path)
+
+
+def test_convert_namespaces_links():
+    db, path = _make_db()
+    try:
+        db.create_workflow("RPBE", workflow_id="wfA")
+        convert_graph_json(db, "RPBE", _overlap_graph(), workflow_id="wfA")
+        links = db._get_all_links("wfA")
+        assert any(
+            l["source_task_id"] == "wfA:si" and l["target_task_id"] == "wfA:slab_opt"
+            for l in links
+        )
+    finally:
+        os.unlink(path)

@@ -36,7 +36,7 @@ def test_convert_preserves_ids():
     try:
         wf_id = convert_graph_json(db, "test", _sample_graph())
         tasks = db.get_all_tasks(wf_id)
-        assert {t["id"] for t in tasks} == {"n1", "n2"}
+        assert {t["node_id"] for t in tasks} == {"n1", "n2"}
     finally:
         os.unlink(path)
 
