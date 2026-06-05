@@ -161,7 +161,7 @@ CatGo 是一个集成式桌面应用，把交互式 3D 结构查看器、自然�
 - **Python** ≥ 3.10（推荐 Conda）
 - **Git**
 - [**Rust**](https://rustup.rs/)
-- [**wasm-pack**](%5Bwasm-pack%5D(https://wasm-bindgen.github.io/wasm-pack/installer/)) (要求**Rust** ≥ 1.30.0)
+- [**wasm-pack**](https://wasm-bindgen.github.io/wasm-pack/installer/) (要求**Rust** ≥ 1.30.0)
 
 ### 安装与运行
 
