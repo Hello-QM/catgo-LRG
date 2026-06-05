@@ -171,7 +171,7 @@
     mode === 'task' && task_id
       ? { mode: 'task', task_id }
       : engine_task
-        ? { mode: 'task', task_id: node_id }
+        ? { mode: 'task', task_id: engine_task.id }   // was: node_id
         : { mode: 'step', workflow_id, node_id }
   )
 
@@ -793,7 +793,7 @@
       // - engine_task already loaded: keep it in sync (e.g. after confirmation)
       if (effective_status === 'pending_review' || status === 'pending_review' || engine_task) {
         try {
-          const data = await get_v2_task(node_id)
+          const data = await get_v2_task(engine_task?.id ?? `${workflow_id}:${node_id}`)
           if (gen === fetch_gen) engine_task = data.task
         } catch {
           // Engine task not found — may be a V1-only workflow

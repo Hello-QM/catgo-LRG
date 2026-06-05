@@ -22,6 +22,7 @@ export interface V2WorkflowSummary {
 export interface V2Task {
   id: string
   workflow_id: string
+  node_id?: string   // graph node id; `id` is namespaced {workflow_id}:{node_id}
   task_type: string
   name: string | null
   status: string
