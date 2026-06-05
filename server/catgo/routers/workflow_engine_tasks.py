@@ -85,6 +85,11 @@ def get_task(task_id: str):
         task = db.get_task(task_id)
     except KeyError:
         raise HTTPException(404, f"Task {task_id} not found")
+    # Expose node_id so the frontend can map a namespaced task id back to its
+    # graph node. Fresh rows already carry it via SELECT *; legacy/pre-migration
+    # rows (NULL node_id) fall back to the task id. (#227)
+    if task.get("node_id") is None:
+        task["node_id"] = task["id"]
     parents = db.get_task_parents(task_id)
     children = db.get_task_children(task_id)
     return {"task": task, "parents": parents, "children": children}
