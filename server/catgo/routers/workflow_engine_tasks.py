@@ -25,6 +25,8 @@ from pydantic import BaseModel
 from catgo.workflow.states import TaskState
 from catgo.workflow import service
 from catgo.workflow.engine.advancer import PREVIEW_DIR_PREFIX
+# Reuse the V1 request schema rather than redefining it (additive convergence).
+from catgo.routers.workflow import GibbsRequest
 
 logger = logging.getLogger(__name__)
 
@@ -458,3 +460,89 @@ async def get_task_frequencies(task_id: str):
         return data
     except Exception as exc:
         return {"success": False, "message": str(exc)}
+
+
+def _freqs_from_v2_result(result: dict) -> tuple[list[float], list[float]]:
+    """Extract real/imag frequency lists (cm⁻¹) from a V2 task_results row.
+
+    The V2 engine stores frequencies in the dedicated ``real_freqs_json`` /
+    ``imag_freqs_json`` columns (lists of floats, or lists of dicts carrying a
+    ``frequency_cm`` key). For robustness we also fall back to a nested
+    ``outputs_json`` blob using the same legacy key names the V1 path reads
+    (``real_freqs`` / ``imag_freqs``).
+    """
+    def _coerce(raw) -> list[float]:
+        if raw is None:
+            return []
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, list):
+            return []
+        return [f["frequency_cm"] if isinstance(f, dict) else f for f in data]
+
+    real_cm = _coerce(result.get("real_freqs_json"))
+    imag_cm = _coerce(result.get("imag_freqs_json"))
+
+    # Fallback: legacy-shaped frequencies nested in outputs_json.
+    if not real_cm and not imag_cm:
+        outputs_raw = result.get("outputs_json")
+        if outputs_raw:
+            outputs = json.loads(outputs_raw) if isinstance(outputs_raw, str) else outputs_raw
+            if isinstance(outputs, dict):
+                real_cm = _coerce(outputs.get("real_freqs"))
+                imag_cm = _coerce(outputs.get("imag_freqs"))
+
+    return real_cm, imag_cm
+
+
+@router.post("/{task_id}/gibbs")
+def calculate_task_gibbs(task_id: str, req: GibbsRequest):
+    """Calculate Gibbs free-energy correction from a V2 task's stored frequencies.
+
+    V2-native mirror of V1 ``POST /api/workflow/{wf}/gibbs/{step}``. Reads the
+    task's frequency data from the ``task_results`` table (via
+    ``WorkflowDB.get_result``) — the V1 path is broken for V2 because
+    ``task_results`` has no ``result_json`` mirror. The Gibbs/thermo physics is
+    delegated to the same shared helpers the V1 handler calls
+    (``catgo.utils.gibbs_calculator.calc_adsorbed`` / ``calc_gas``).
+    """
+    db = _get_db()
+    try:
+        db.get_task(task_id)
+    except KeyError:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    result = db.get_result(task_id)
+    if not result:
+        raise HTTPException(404, f"No result for task {task_id}")
+
+    real_cm, imag_cm = _freqs_from_v2_result(result)
+    if not real_cm:
+        return {"success": False, "message": "No frequency data available"}
+
+    from catgo.utils.gibbs_calculator import calc_adsorbed, calc_gas
+
+    if req.mode == "adsorbed":
+        return calc_adsorbed(real_cm, imag_cm, req.temperature, req.freq_cutoff)
+    elif req.mode == "gas":
+        positions = _coerce_json_list(result.get("positions_json"))
+        masses = _coerce_json_list(result.get("masses_json"))
+        atom_types = _coerce_json_list(result.get("atom_types_json"))
+
+        if not positions or not masses:
+            return {"success": False, "message": "Position/mass data required for gas mode"}
+
+        return calc_gas(
+            real_cm, imag_cm, positions, masses, atom_types,
+            T=req.temperature, P=req.pressure,
+            n_unpaired=req.n_unpaired,
+        )
+    else:
+        return {"success": False, "message": f"Unknown mode: {req.mode}"}
+
+
+def _coerce_json_list(raw):
+    """Decode a JSON-encoded list column, returning [] for missing/blank."""
+    if raw is None:
+        return []
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    return data if isinstance(data, list) else []
