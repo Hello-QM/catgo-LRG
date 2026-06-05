@@ -161,7 +161,7 @@ The rest of this README covers running CatGo **from source** for development.
 - **Python** ≥ 3.10 (Conda recommended)
 - **Git**
 - [**Rust**](https://rustup.rs/)
-- [**wasm-pack**]([wasm-pack](https://wasm-bindgen.github.io/wasm-pack/installer/)) (requires **Rust** ≥ 1.30.0)
+- [**wasm-pack**](https://wasm-bindgen.github.io/wasm-pack/installer/) (requires **Rust** ≥ 1.30.0)
 
 ### Install & Run
 
