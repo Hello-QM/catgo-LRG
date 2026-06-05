@@ -416,11 +416,33 @@ def unassign_project(workflow_id: str):
     return {"status": "unassigned", "workflow_id": workflow_id}
 
 
+def build_v2_initial_state(db: WorkflowDB, workflow_id: str) -> dict:
+    """Build the V2 monitor ``initial_state`` seed frame (#224 Phase 3 prep).
+
+    Carries the SAME ``{tasks, links}`` payload the V2 DAG REST endpoint returns
+    (``GET /api/engine/workflows/{id}/dag`` → ``WorkflowDB.get_dag``), tagged with
+    ``type: "initial_state"`` so the monitor WS can seed live status from the WS
+    itself instead of a separate REST call. Reuses ``db.get_dag`` verbatim — no
+    DAG/shape logic is duplicated here.
+    """
+    return {"type": "initial_state", **db.get_dag(workflow_id)}
+
+
 @router.websocket("/{workflow_id}/monitor")
 async def monitor(websocket: WebSocket, workflow_id: str):
     db = _get_db()
     _ensure_exists(db, workflow_id)
     await websocket.accept()
+
+    # Seed the client with the current DAG BEFORE streaming live updates, so the
+    # editor (V1-style) can hydrate from the WS itself. Additive: old consumers
+    # (e.g. the V2 DAG viewer that seeds via the /dag REST call) ignore an
+    # unknown "initial_state" type. Existing task_status/workflow_status
+    # streaming below is unchanged.
+    try:
+        await websocket.send_json(build_v2_initial_state(db, workflow_id))
+    except Exception:
+        pass
 
     q = add_listener(workflow_id)
 

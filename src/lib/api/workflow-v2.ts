@@ -313,6 +313,12 @@ export interface V2MonitorCallbacks {
   on_task_status?: (task_id: string, status: string) => void
   on_workflow_status?: (status: string) => void
   on_error?: (error: string) => void
+  /** Fired once on (re)connect with the current DAG snapshot, before any
+   *  streamed task_status updates. Additive (#224 Phase 3 prep): lets the
+   *  editor seed live status from the WS itself instead of a separate
+   *  get_v2_dag REST call. Carries the same {tasks, links} shape as the
+   *  /dag endpoint. Optional — existing consumers can ignore it. */
+  on_initial_state?: (dag: V2DAG) => void
 }
 
 export function connect_v2_monitor(workflow_id: string, callbacks: V2MonitorCallbacks): { close: () => void } {
@@ -356,7 +362,9 @@ export function connect_v2_monitor(workflow_id: string, callbacks: V2MonitorCall
       try {
         const msg = JSON.parse(ev.data)
         if (msg.type === 'pong' || msg.type === 'heartbeat') return
-        if (msg.type === 'task_status') {
+        if (msg.type === 'initial_state') {
+          callbacks.on_initial_state?.({ tasks: msg.tasks ?? [], links: msg.links ?? [] })
+        } else if (msg.type === 'task_status') {
           callbacks.on_task_status?.(msg.task_id, msg.status)
         } else if (msg.type === 'workflow_status') {
           callbacks.on_workflow_status?.(msg.status)
