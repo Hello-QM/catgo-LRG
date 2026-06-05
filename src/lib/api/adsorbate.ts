@@ -295,6 +295,11 @@ export function place_adsorbate_local(
   const inv_lat = lat ? mat3_inverse(lat) : null
 
   const slab_count = slab.sites.length
+  // If the slab carries selective_dynamics (frozen layers), mark the adsorbate
+  // atoms as fully free so the fixity stays consistent downstream — issue #222.
+  const slab_has_sd = slab.sites.some((s: any) => s.properties?.selective_dynamics)
+  const ads_props = (): Record<string, unknown> =>
+    slab_has_sd ? { selective_dynamics: [true, true, true] } : {}
   const merged_sites = [
     ...slab.sites,
     ...adsorbate_atoms.map((atom, i) => {
@@ -305,7 +310,7 @@ export function place_adsorbate_local(
         abc,
         xyz,
         label: atom.symbol,
-        properties: {} as Record<string, unknown>,
+        properties: ads_props(),
       }
     }),
   ]

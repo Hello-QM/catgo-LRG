@@ -9,6 +9,7 @@
   import { matrix_to_params, ensure_right_handed } from '$lib/structure/lattice-ops'
   import { deduplicate_periodic_images } from '$lib/structure/pbc'
   import { parse_slab_gen_params } from './graph-model'
+  import { apply_freeze_to_structure } from './freeze'
 
   load_i18n_module(`workflow`)
 
@@ -162,9 +163,15 @@
         if (gen_counter !== my_gen) return
         if (is_ok(result)) {
           const slab = postprocess_slab(result.ok)
-          preview_structure = slab
+          // Persist selective_dynamics onto the generated slab so the fixity
+          // flows downstream (Adsorbate / geo_opt) — issue #222. The supercell
+          // is already folded into the geometry, so freezing after generation
+          // covers the tiled cell. Falls back to the raw slab if no freeze.
+          const slab_json = JSON.stringify(slab)
+          const frozen_json = apply_freeze_to_structure(slab_json, node_params) ?? slab_json
+          preview_structure = JSON.parse(frozen_json)
           error_msg = null
-          onstructure_generated?.(JSON.stringify(slab))
+          onstructure_generated?.(frozen_json)
         } else {
           preview_structure = null
           error_msg = result.error

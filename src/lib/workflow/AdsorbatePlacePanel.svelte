@@ -806,6 +806,11 @@
 
     // Build merged structure
     const lat = slab.lattice?.matrix
+    // If the slab carries selective_dynamics (frozen layers), mark the adsorbate
+    // atoms as fully free so the fixity stays consistent downstream — issue #222.
+    const slab_has_sd = slab.sites.some((s: any) => s.properties?.selective_dynamics)
+    const ads_props = (): Record<string, unknown> =>
+      slab_has_sd ? { selective_dynamics: [true, true, true] } : {}
     const new_sites = [
       ...slab.sites,
       ...manual_adsorbate_cart.map((atom: CustomAtom, i: number) => {
@@ -815,7 +820,7 @@
           species: [{ element: atom.symbol, occu: 1 }],
           abc, xyz,
           label: atom.symbol,
-          properties: {} as Record<string, unknown>,
+          properties: ads_props(),
         }
       }),
     ]
