@@ -14,6 +14,7 @@ Endpoints:
   GET  /api/engine/tasks/{id}/frequencies  — parse vibrational frequencies
   GET  /api/engine/tasks/{id}/forces       — per-ionic-step force vectors
   GET  /api/engine/tasks/{id}/mlp-progress — MLP optimizer live progress
+  GET  /api/engine/tasks/{id}/orca-progress — ORCA stdout-tail calc stage
 """
 
 from __future__ import annotations
@@ -604,6 +605,94 @@ async def get_task_mlp_progress(task_id: str):
             f"(target fmax not in params — convergence flag suppressed)"
         )
     return {"points": points, "converged": converged_value, "message": message}
+
+
+def _starting_stage() -> dict:
+    """Clean default stage when there is nothing to parse yet."""
+    return {"stage": "starting", "message": "Starting calculation..."}
+
+
+@router.get("/{task_id}/orca-progress")
+async def get_task_orca_progress(task_id: str):
+    """Coarse-grained ORCA calculation *stage* parsed from the output tail.
+
+    V2-native mirror of V1 ``GET /api/workflow/{wf}/orca_progress/{step}``
+    (``catgo.routers.workflow.api_get_orca_progress``). Resolves the task via
+    ``WorkflowDB.get_task`` (V2 store) for its ``work_dir`` / ``task_type`` /
+    ``params_json`` instead of the legacy ``workflow_steps`` table, tails the
+    task's ``ORCA.out`` and derives a stage from it. The stage parsing is
+    delegated to the SAME engine parsers the poller already uses
+    (``catgo.workflow.engine.orca_progress.get_orca_stage`` /
+    ``get_orca_irc_stage``) — this is additive convergence work, not a
+    re-implementation of the physics/parsing.
+
+    Unlike the V1 endpoint (which returns convergence *points* via
+    ``parse_orca_progress``), this returns the lightweight stdout-tail *stage*
+    dict — the coarse progress label the poller surfaces. The IRC parser is
+    dispatched for ``orca_irc`` (resolving unified nodes like ``geo_opt`` +
+    ``software=orca`` first); every other ORCA node uses the opt/freq parser.
+
+    Contract: unknown task -> clean 404; no work_dir, no ORCA.out yet, or no
+    live HPC connection -> a clean ``starting`` stage (never a 500). The
+    response always echoes ``task_id`` + the resolved ``task_type`` so the
+    frontend can map it back to its graph node.
+    """
+    db = _get_db()
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    work_dir = task.get("work_dir")
+    if not work_dir:
+        return {"task_id": task_id, "task_type": task.get("task_type", ""), **_starting_stage()}
+
+    # Resolve unified calc types (e.g. geo_opt + software=orca → orca_opt, or
+    # ts_search + software=orca → orca_neb_ts) so the right parser is dispatched
+    # — same resolution the convergence endpoint + V1 handler use.
+    task_type = task.get("task_type", "")
+    from workflow.node_sets import UNIFIED_CALC_NODES, _resolve_software
+    if task_type in UNIFIED_CALC_NODES:
+        params = json.loads(task.get("params_json", "{}") or "{}")
+        task_type, _ = _resolve_software(task_type, params)
+
+    base = {"task_id": task_id, "task_type": task_type}
+
+    # Tail the ORCA.out — local preview reads straight from disk; HPC tails over
+    # SSH. Any failure (no file / dead session) degrades to a clean starting
+    # stage rather than a 500, matching the V1 "no work directory" behaviour.
+    tail_text = ""
+    orca_out = f"{work_dir}/ORCA.out"
+    if _is_local_preview(work_dir):
+        local_path = Path(work_dir) / "ORCA.out"
+        if local_path.is_file():
+            tail_text = local_path.read_text(encoding="utf-8", errors="replace")
+    else:
+        try:
+            _task, hpc = _get_task_hpc(task_id)
+        except HTTPException:
+            # No live HPC connection (expired session) → clean starting stage.
+            return {**base, **_starting_stage()}
+        try:
+            result = await hpc.run(
+                f"test -f {orca_out} && tail -c 20000 {orca_out} || echo ''",
+                check=False,
+            )
+            tail_text = result.stdout or ""
+        except Exception as exc:
+            logger.warning("Task %s orca-progress tail failed: %s", task_id, exc)
+            return {**base, **_starting_stage()}
+
+    if not tail_text.strip():
+        return {**base, **_starting_stage()}
+
+    from catgo.workflow.engine.orca_progress import get_orca_stage, get_orca_irc_stage
+    if task_type == "orca_irc":
+        stage = get_orca_irc_stage(tail_text)
+    else:
+        stage = get_orca_stage(tail_text)
+
+    return {**base, **stage}
 
 
 def _freqs_from_v2_result(result: dict) -> tuple[list[float], list[float]]:
