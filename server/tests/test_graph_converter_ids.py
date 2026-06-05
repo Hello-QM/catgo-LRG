@@ -27,8 +27,8 @@ def test_node_ids_preserved():
         }
         wf_id = convert_graph_json(db, "test", json.dumps(graph))
         tasks = db.get_all_tasks(wf_id)
-        task_ids = {t["id"] for t in tasks}
-        assert task_ids == {"node_abc", "node_xyz"}
+        node_ids = {t["node_id"] for t in tasks}
+        assert node_ids == {"node_abc", "node_xyz"}
     finally:
         os.unlink(path)
 
@@ -62,8 +62,8 @@ def test_links_use_original_ids():
         dag = db.get_dag(wf_id)
         links = dag["links"]
         assert len(links) == 1
-        assert links[0]["source_task_id"] == "src_node"
-        assert links[0]["target_task_id"] == "tgt_node"
+        assert links[0]["source_task_id"] == f"{wf_id}:src_node"
+        assert links[0]["target_task_id"] == f"{wf_id}:tgt_node"
     finally:
         os.unlink(path)
 
