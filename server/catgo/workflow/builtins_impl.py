@@ -257,6 +257,14 @@ def run_adsorbate_place(
     if structure is None and params.get("structure_json"):
         structure = params["structure_json"]
 
+    # Accept POSCAR/CONTCAR text too — an upstream geo_opt passes its relaxed
+    # CONTCAR (POSCAR format), not pymatgen-JSON. Convert text -> JSON so the
+    # ferrox and fallback paths (which json.loads the structure) work and the
+    # slab's selective_dynamics is preserved.
+    if isinstance(structure, str) and structure.lstrip()[:1] not in "{[":
+        from pymatgen.core import Structure as _PmgS
+        structure = _PmgS.from_str(structure, fmt="poscar").to(fmt="json")
+
     try:
         import ferrox
     except ImportError:

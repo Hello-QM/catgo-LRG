@@ -129,6 +129,31 @@ a 45-atom 1/9 ML p(3×3) through it. ASE `surface()`/`fcc111` gives exact, c-per
 
 ---
 
+## Update — later 2026-06-04 (found while running the ORR jobs on Expanse)
+
+### C5 🟢 `run_adsorbate_place` couldn't read a CONTCAR (only JSON)
+`run_adsorbate_place` did `json.loads(struct_str)` (builtins_impl.py:336) but an upstream
+`geo_opt` passes its **relaxed CONTCAR (POSCAR text)**, not pymatgen-JSON → `JSONDecodeError`,
+so all three adsorbate nodes failed the moment `slab_opt` produced a real CONTCAR.
+**Fix:** accept POSCAR/CONTCAR text too (parse via pymatgen → JSON; preserves the slab's
+`selective_dynamics`). Verified: OOH/O/OH place on the relaxed slab, 18 frozen / adsorbate free.
+
+### A3 🔴 Concurrent workflows delete each other's V2 tasks → **issue #227**
+Running two workflows at once: re-running/converting one wiped the OTHER's tasks (a workflow with
+a COMPLETED `slab_opt` dropped to 0 tasks, losing the collected CONTCAR result). Cannot run two
+workflows concurrently safely. (Workaround: run serially.)
+
+### A4 🔴 run-config nested `cluster_configs[sid].default_job_params` not propagated → **issue #228**
+`partition`/`ntasks`/`walltime`/`memory` (and `default_session_id`) from the run config's nested
+cluster `default_job_params` never reach `hpc.job_defaults`, so jobs default to `partition="workq"`
+→ `sbatch: Partition workq not found`. Had to hand-patch `config_json.hpc.job_defaults` in
+`~/.catgo/catgo.db` on every run. Fix in `_run_config_to_engine_config`.
+
+> Operational note: SCF divergence on the Gamma-only Pt metal slab was traced to the **dipole
+> correction (LDIPOL)** — removing it + ALGO=Fast/NPAR=2 converged cleanly (E0 ≈ −398 eV). Not a
+> CatGo code bug; a setting. Also hit a transient Expanse-side "Invalid account/partition" block
+> for ALL valid accounts after many rapid sbatch retries (cluster rate-limit/accounting).
+
 ## Fix-priority suggestion (open items)
 1. **D2b** `pnpm build:wasm` → kill the FE/backend slab mismatch (cheap, high impact).
 2. **D2c/D2d/C4-fallback** make `selective_dynamics` flow through the FE pipeline (slab emit +
