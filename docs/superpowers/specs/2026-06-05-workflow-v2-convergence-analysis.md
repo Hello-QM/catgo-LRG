@@ -190,18 +190,40 @@ open in the DAG viewer. That routing split is the actual user-facing confusion.
    monitor, per-node input-file/structure editing). This is required anyway to
    drop V1.
 
-**What is optional (UX choice, not architecture):** collapsing the two views into
-a single component. "Edit mode" vs "monitor mode" of the *same* V2 workflow is a
-perfectly healthy design (cf. IDE editor vs debugger; n8n/Airflow edit vs runs).
-Once the editor is V2-native it **subsumes** the DAG viewer's capabilities, so
-`WorkflowDAGViewer`/`EngineTaskEditor` become redundant and can be deleted — but
-forcing a single-component merge for its own sake adds rewrite risk for marginal
-benefit. **Unify the entry point + data + engine; keeping edit/monitor as two
-modes of one workflow is fine.**
+**Why UI 2 is NOT redundant scaffolding (important correction).** The two views
+have fundamentally different rendering models:
 
-**Direction when folding:** the editor is the surface to KEEP and make V2-native
-(it owns all authoring — see node model below); the DAG viewer is the candidate to
-fold in or delete. Do not lose the editor.
+- **UI 1 (WorkflowEditor) is catalog-bound** — it renders/edits nodes from
+  `NODE_DEFINITIONS`; it needs a `param_schema` per type to draw the node and its
+  param form. It can only meaningfully show node types it knows (built-in +
+  plugin/dynamic).
+- **UI 2 (WorkflowDAGViewer + EngineTaskEditor) is data-driven** — it renders
+  whatever `get_v2_dag` returns (raw tasks/links) and edits via the generic
+  `get/put file-content` + params/structure. It can therefore **visualize and
+  inspect ANY computation the engine actually ran** — headless/MCP/CLI-created
+  workflows, batch fan-outs, map children, and task types the editor's palette
+  does not have.
+
+**This was the original reason UI 2 was built: so that *any* computation can be
+seen, not just the curated GUI catalog.** A catalog-bound editor cannot do that.
+So making the editor V2-native does **NOT** automatically subsume UI 2 — folding
+naively would lose the "see any computation" capability.
+
+**DECISION (chosen): Option A — keep UI 2 as the generic engine-state viewer.**
+Convergence unifies **engine + data model + API + entry point**, and keeps two
+complementary, both-V2-native views:
+- WorkflowEditor — catalog-bound **authoring** (palette, param schemas, plugin +
+  dynamic-engine nodes; see node model below).
+- WorkflowDAGViewer/EngineTaskEditor — data-driven **generic observer/inspector**
+  of any engine task graph.
+Do **NOT** delete UI 2. The only UI-level change required is removing the
+**source-based routing split** (any V2 workflow openable from either view) and
+pointing both views at the unified V2 data.
+
+(Option B — make the editor itself data-driven by rendering unknown task types
+with a *generic node* + generic file/structure editor, so it could subsume UI 2 —
+is a larger future enhancement, and is the same capability that would enable an
+in-UI custom-node builder. Not chosen for the convergence; recorded as an option.)
 
 ## Node extensibility model (must be preserved on the editor)
 
