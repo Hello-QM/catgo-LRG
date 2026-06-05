@@ -39,6 +39,7 @@ from catgo.models.workflow import (
 from catgo.models.workflow_run import (
     CALC_TYPE_CATEGORIES,
     JOB_SCRIPT_PRESETS,
+    JobScriptParams,
     NODE_CATEGORIES,
     RECOMMENDED_POTCAR,
     StepInfo,
@@ -1008,12 +1009,20 @@ def _run_config_to_engine_config(config: WorkflowRunConfig) -> dict:
 
     # Preserve global default_job_params (nodes, ntasks, walltime, partition, account, memory).
     # These come directly from the RunConfigDialog state variables and represent the user's
-    # actual choices — they must OVERWRITE cluster defaults, not defer to them.
+    # actual choices — they must OVERWRITE cluster defaults *when the user actually changed
+    # them*. WorkflowRunConfig.default_job_params is a non-optional JobScriptParams with a
+    # default_factory, so it ALWAYS serializes its hardcoded defaults (partition='workq',
+    # ntasks=96) even when the dialog never touched it. Blindly applying them clobbered the
+    # cluster's default_job_params (issue #228). Only overwrite when the value differs from
+    # the JobScriptParams default, or when the cluster supplied nothing for that key.
+    _jsp_defaults = JobScriptParams().model_dump()
     djp = d.get("default_job_params", {})
     if djp:
         jd = result["hpc"].setdefault("job_defaults", {})
         for k, v in djp.items():
-            if v is not None:
+            if v is None:
+                continue
+            if v != _jsp_defaults.get(k) or k not in jd:
                 jd[k] = v
 
     # Preserve orca_binary for run command resolution
