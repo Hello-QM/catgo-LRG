@@ -225,6 +225,31 @@ with a *generic node* + generic file/structure editor, so it could subsume UI 2 
 is a larger future enhancement, and is the same capability that would enable an
 in-UI custom-node builder. Not chosen for the convergence; recorded as an option.)
 
+### Two create paths = two authoring experiences (keep both; converge the data only)
+
+There are two workflow-creation paths today, and they correspond to the two views:
+
+| MCP tool | impl | writes | view | character |
+|----------|------|--------|------|-----------|
+| `catgo_workflow` (the agent default) | `mcp_tools/workflow_tools.py` (httpx → `/api/workflow/*`) | V1 `graph_json` in `catgo_results.db` | UI 1 editor | **rich / high-control** — full catalog, param schemas, plugin + dynamic-engine nodes |
+| `catgo_workflow_engine` | `workflow/mcp_tools.py` (`_get_db` → `~/.catgo/catgo.db`) | V2 tasks directly | UI 2 DAG viewer | **flexible / minimal** — generic add_task/connect, can express arbitrary tasks the catalog lacks |
+
+**Decision: keep BOTH authoring experiences — do not collapse to one create path.**
+UI 1 is the high-control editor (more 可操作空间); UI 2 is the flexible "anything"
+builder/observer. They are complementary product surfaces, not duplication.
+
+What convergence removes is the **dual DATA store** (the V1 `catgo_results.db`
+graph_json), NOT the dual UX: after convergence **both create paths write the same
+V2 store** (the rich editor + `catgo_workflow` become V2-native; the engine path
+already is), and a workflow created either way is openable in either view. So the
+end state is **one V2 data model + engine, two authoring experiences (rich UI 1 /
+flexible UI 2), one observer (UI 2's data-driven view)**.
+
+**Agent behavior:** when the user asks the AI to "build a workflow," it should
+**ask which path** — rich editor (`catgo_workflow`, UI 1, full control) vs flexible
+engine (`catgo_workflow_engine`, UI 2, arbitrary tasks) — rather than silently
+defaulting to the V1 editor path. (Today `catgo_workflow` silently goes V1→UI 1.)
+
 ## Node extensibility model (must be preserved on the editor)
 
 The OLD editor's node catalog is three layers (`src/lib/workflow/node-definitions.ts`,
