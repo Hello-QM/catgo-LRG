@@ -4,6 +4,7 @@ Endpoints:
   GET  /api/engine/tasks/{id}           — get task details
   PUT  /api/engine/tasks/{id}/params    — update params (only WAITING/READY)
   GET  /api/engine/tasks/{id}/result    — get result data
+  GET  /api/engine/tasks/{id}/step-results — completed-step convergence/energy summary
   POST /api/engine/tasks/{id}/retry     — reset task + downstream
   POST /api/engine/tasks/{id}/cancel    — cancel task
   GET  /api/engine/tasks/{id}/provenance — get provenance lineage
@@ -142,6 +143,58 @@ async def get_result(task_id: str):
         pass
 
     raise HTTPException(404, f"No result for task {task_id}")
+
+
+@router.get("/{task_id}/step-results")
+def get_step_results(task_id: str):
+    """Completed-step results (convergence points, energy, etc.) for a V2 task.
+
+    V2-native mirror of V1 ``GET /api/workflow/{wf}/step-results/{step}``
+    (``catgo.routers.workflow.api_get_step_results``). Resolves the task via
+    ``WorkflowDB.get_task`` and reads its stored result via
+    ``WorkflowDB.get_result`` (the ``task_results`` table) instead of the legacy
+    ``workflow_steps`` table.
+
+    The result-merge (tasks.result_json + task_results.outputs_json + the typed
+    result columns) is delegated to the SAME V1-compat shim
+    (``catgo.workflow.v1_compat._task_to_step``) the V1 endpoint already reads
+    through — this is additive convergence work, not a re-implementation of the
+    merge. The scalar fields are then pulled out of the merged summary exactly as
+    V1 does, so the response shape is byte-for-byte compatible with the V1
+    endpoint the frontend already consumes.
+
+    Contract (matches V1): unknown task -> clean 404; task not completed -> 400;
+    on success the documented ``{node_type, convergence_points, energy_eh,
+    energy_ev, converged, n_steps, full_summary}`` payload.
+    """
+    db = _get_db()
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    # Build the V1-shaped step dict (merges result_json + task_results columns +
+    # flattened outputs_json) via the shared compat shim, then read it exactly as
+    # the V1 step-results handler does.
+    from catgo.workflow.v1_compat import _task_to_step
+    step = _task_to_step(db, task)
+
+    status = (step.get("status") or "").lower()
+    if status != "completed":
+        raise HTTPException(400, f"Step not completed (status: {status})")
+
+    result_json_str = step.get("result_json", "{}") or "{}"
+    result_json = json.loads(result_json_str) if isinstance(result_json_str, str) else result_json_str
+
+    return {
+        "node_type": step.get("node_type"),
+        "convergence_points": result_json.get("convergence_points", []),
+        "energy_eh": result_json.get("energy_eh"),
+        "energy_ev": result_json.get("energy_ev"),
+        "converged": result_json.get("converged"),
+        "n_steps": result_json.get("n_steps"),
+        "full_summary": result_json,  # Full merged summary for detailed analysis
+    }
 
 
 @router.post("/{task_id}/retry")
