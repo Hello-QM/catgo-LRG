@@ -1034,7 +1034,7 @@ class WorkflowEngine:
             for t in tasks:
                 v1_status = _V2_TO_V1_STATUS.get(t["status"], "pending")
                 try:
-                    update_v1_step(workflow_id, t["id"], {
+                    update_v1_step(workflow_id, t.get("node_id") or t["id"], {
                         "status": v1_status,
                         "hpc_job_id": t.get("hpc_job_id"),
                         "hpc_session_id": t.get("hpc_session_id"),

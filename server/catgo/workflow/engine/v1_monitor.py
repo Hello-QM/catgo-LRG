@@ -16,6 +16,7 @@ from typing import Any
 import re
 
 from catgo.workflow.state_map import v2_to_v1_status
+from catgo.workflow.task_ids import node_id_from_task_id
 
 
 def get_orca_stage(tail_text: str) -> dict:
@@ -96,7 +97,7 @@ def build_initial_state(
     steps = []
     for t in tasks:
         steps.append({
-            "id": t["id"],
+            "id": t.get("node_id") or t["id"],
             "node_type": t.get("task_type", ""),
             "status": v2_to_v1_status(t["status"]),
             "hpc_job_id": t.get("hpc_job_id"),
@@ -109,14 +110,21 @@ def build_initial_state(
     }
 
 
-def translate_broadcast_message(msg: dict[str, Any]) -> dict[str, Any]:
-    """Translate a V2 broadcast message to V1 wire format."""
+def translate_broadcast_message(
+    msg: dict[str, Any], workflow_id: str | None = None
+) -> dict[str, Any]:
+    """Translate a V2 broadcast message to V1 wire format.
+
+    V2 broadcasts carry the namespaced task id (`{workflow_id}:{node_id}`); the
+    V1 frontend keys steps by graph node id, so de-namespace via the passed
+    workflow_id before emitting `step_id`.
+    """
     msg_type = msg.get("type", "")
 
     if msg_type == "task_status":
         return {
             "type": "step_status",
-            "step_id": msg.get("task_id", ""),
+            "step_id": node_id_from_task_id(msg.get("task_id", ""), workflow_id),
             "status": v2_to_v1_status(msg.get("status", "")),
             "job_id": msg.get("job_id"),
         }
@@ -124,7 +132,7 @@ def translate_broadcast_message(msg: dict[str, Any]) -> dict[str, Any]:
     if msg_type == "step_message":
         return {
             "type": "step_status",
-            "step_id": msg.get("task_id", ""),
+            "step_id": node_id_from_task_id(msg.get("task_id", ""), workflow_id),
             "status": "running",
             "message": msg.get("message", ""),
         }
