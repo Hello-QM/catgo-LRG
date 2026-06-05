@@ -598,7 +598,7 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
   async function fetch_task_results(workflow_id: string, task_id: string): Promise<any> {
     try {
       const response = await fetch(
-        `${API_BASE}/engine/tasks/${task_id}/result`,
+        `${API_BASE}/engine/tasks/${encodeURIComponent(`${workflow_id}:${task_id}`)}/result`,
         { signal: AbortSignal.timeout(10000) } // 10s timeout
       )
 

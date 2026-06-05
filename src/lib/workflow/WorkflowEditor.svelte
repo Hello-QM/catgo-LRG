@@ -942,7 +942,9 @@
       // V2 engine never writes to workflow_steps so Try 1 returns nothing for V2 tasks.
       if (!structure_json) {
         try {
-          const resp = await fetch(`${API_BASE}/engine/tasks/${encodeURIComponent(node_id)}/result`)
+          const resp = await fetch(
+            `${API_BASE}/engine/tasks/${encodeURIComponent(`${workflow_id}:${node_id}`)}/result`
+          )
           if (resp.ok) {
             const row: any = await resp.json()
             const raw = row?.structure_json
