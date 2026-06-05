@@ -713,32 +713,36 @@ fn finalize_slab(
         slab_1x1_occ, slab_1x1_frac,
     )?;
 
-    // Reduce to primitive surface unit cell (e.g., FCC (111) 4 atoms/layer → 1).
-    // Only accept the reduction if the new lattice vectors preserve the original
-    // directions (both reduced_a ∥ surf_a and reduced_b ∥ surf_b within ~15°).
-    // Reductions that rotate the lattice (e.g. rutile 001 → 45° primitive cell)
-    // are rejected to keep the slab orientation consistent with the cutting plane.
+    // Reduce to primitive surface unit cell (e.g., FCC (111) 6 atoms/layer → 1).
+    // Only accept the reduction if it is a pure in-plane sublattice change that
+    // preserves the surface frame (in-plane vectors stay in the z≈0 plane and the
+    // perpendicular stacking vector c is unchanged). See the inline note below.
     {
-        let orig_a = Vector3::new(surf_a[0], surf_a[1], 0.0);
-        let orig_b = Vector3::new(surf_b[0], surf_b[1], 0.0);
-        let cos_15: f64 = (15.0_f64.to_radians()).cos();
+        let orig_c = new_c;
         match crate::structure::reduce_slab_in_plane_primitive(slab_1x1.clone(), 0.01) {
             Ok(reduced) => {
                 let rm = reduced.lattice.matrix();
                 let red_a = Vector3::new(rm[(0, 0)], rm[(0, 1)], rm[(0, 2)]);
                 let red_b = Vector3::new(rm[(1, 0)], rm[(1, 1)], rm[(1, 2)]);
-                let la = orig_a.norm();
-                let lb = orig_b.norm();
-                let lra = red_a.norm();
-                let lrb = red_b.norm();
-                let a_parallel = la > 1e-10 && lra > 1e-10
-                    && orig_a.dot(&red_a).abs() / (la * lra) > cos_15;
-                let b_parallel = lb > 1e-10 && lrb > 1e-10
-                    && orig_b.dot(&red_b).abs() / (lb * lrb) > cos_15;
-                if a_parallel && b_parallel {
+                let red_c = Vector3::new(rm[(2, 0)], rm[(2, 1)], rm[(2, 2)]);
+                // Accept the primitive reduction iff it is a pure IN-PLANE
+                // sublattice change that preserves the surface orientation: both
+                // reduced surface vectors stay in the surface plane (z ≈ 0) and the
+                // stacking vector c is unchanged (still perpendicular). Species- and
+                // area-preservation are already enforced inside the reduction helper
+                // (is_lattice_translation + integer area-ratio), so the only thing
+                // left to guard here is the surface frame itself. This accepts the
+                // FCC(111) primitive (whose surface basis rotates 60°/120° in-plane
+                // but keeps c ⟂ surface) — the earlier slot-paired "parallel to the
+                // original surf vector" test wrongly rejected it — while still
+                // rejecting any reduction that tilts a vector out of the plane or
+                // alters the perpendicular c.
+                let in_plane = red_a.z.abs() < 1e-6 && red_b.z.abs() < 1e-6;
+                let c_unchanged = (red_c - orig_c).norm() < 1e-6;
+                if in_plane && c_unchanged {
                     slab_1x1 = reduced;
                 }
-                // else: reduction rotates the lattice — skip it
+                // else: reduction rotates/tilts the surface frame — skip it
             }
             Err(_) => {} // reduction failed — keep original
         }
@@ -1157,6 +1161,41 @@ mod tests {
             assert!(ni > 0 && o > 0, "layers={n}: a species was deleted (Ni={ni} O={o})");
             assert_eq!(ni, o, "layers={n}: non-stoichiometric Ni={ni} O={o}");
         }
+    }
+
+    /// FCC(111) cut from the conventional cubic cell must reduce to a clean
+    /// primitive p(n×n) mesh: uniform atoms per layer (9 for n=3), correct total
+    /// (45 for p(3×3)×5), and a surface-perpendicular c vector. Regression for
+    /// the slot-paired acceptance guard rejecting the (correct) swapped-slot
+    /// primitive reduction, leaving the 4-atom/layer conventional mesh.
+    #[test]
+    fn fcc111_primitive_p3x3_is_clean() {
+        let bulk = create_fcc_cu();
+        let slab = generate_slab_layers(&bulk, [1, 1, 1], 5, 0, 15.0, [3, 3]).unwrap();
+        assert_eq!(slab.num_sites(), 45, "p(3x3)x5 FCC(111) must be 45 atoms");
+        // uniform 9 atoms per z-layer
+        let mut zs: Vec<f64> = slab.cart_coords().iter().map(|v| v.z).collect();
+        zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut groups: Vec<usize> = vec![];
+        let mut i = 0;
+        while i < zs.len() {
+            let z0 = zs[i];
+            let mut n = 0;
+            while i < zs.len() && (zs[i] - z0).abs() < 0.5 {
+                n += 1;
+                i += 1;
+            }
+            groups.push(n);
+        }
+        assert!(groups.iter().all(|&n| n == 9), "every layer must have 9 atoms, got {:?}", groups);
+        // c perpendicular to the surface plane
+        let c = slab.lattice.matrix();
+        assert!(
+            c[(2, 0)].abs() < 1e-6 && c[(2, 1)].abs() < 1e-6,
+            "c must be perpendicular to surface, got ({}, {})",
+            c[(2, 0)],
+            c[(2, 1)]
+        );
     }
 
     #[test]
