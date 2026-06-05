@@ -228,6 +228,43 @@ fn generate_slab(
     Ok(json_str.extract()?)
 }
 
+/// Generate a slab by explicit atomic-layer count.
+///
+/// Calls the SAME `slab::generate_slab_layers` that the WASM/frontend
+/// `wasm_generate_slab_layers` uses, so a slab cut in the editor and one cut by
+/// the backend workflow engine are identical (same Rust source). Previously only
+/// the thickness-based `generate_slab` was bound to Python, which produced a
+/// different cell than the editor.
+#[pyfunction]
+#[pyo3(signature = (structure, h, k, l, num_layers = 4, termination_index = 0, vacuum = 15.0, supercell_a = 1, supercell_b = 1))]
+fn generate_slab_layers(
+    py: Python<'_>,
+    structure: StructureJson,
+    h: i32,
+    k: i32,
+    l: i32,
+    num_layers: usize,
+    termination_index: usize,
+    vacuum: f64,
+    supercell_a: i32,
+    supercell_b: i32,
+) -> PyResult<String> {
+    let struc = parse_struct(&structure)?;
+    let slab = crate::slab::generate_slab_layers(
+        &struc,
+        [h, k, l],
+        num_layers,
+        termination_index,
+        vacuum,
+        [supercell_a, supercell_b],
+    )
+    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let dict = super::helpers::structure_to_pydict(py, &slab)?;
+    let json_mod = py.import("json")?;
+    let json_str = json_mod.call_method1("dumps", (&dict,))?;
+    Ok(json_str.extract()?)
+}
+
 /// Register the surfaces submodule.
 pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let submod = PyModule::new(parent.py(), "surfaces")?;
@@ -240,6 +277,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     submod.add_function(wrap_pyfunction!(compute_wulff, &submod)?)?;
     submod.add_function(wrap_pyfunction!(miller_to_normal, &submod)?)?;
     submod.add_function(wrap_pyfunction!(generate_slab, &submod)?)?;
+    submod.add_function(wrap_pyfunction!(generate_slab_layers, &submod)?)?;
     parent.add_submodule(&submod)?;
     Ok(())
 }

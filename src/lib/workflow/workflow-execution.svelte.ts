@@ -581,7 +581,12 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
       cur.forEach(id => all[id] = `running`)
       node_statuses = { ...all }
       sim_timer = setTimeout(() => {
-        cur.forEach(id => all[id] = Math.random() > 0.1 ? `completed` : `failed`)
+        // Honest dependency-order preview: mark each node done and advance. This is
+        // a visual walkthrough of execution ORDER only — it does NOT run anything,
+        // so it must never fabricate failures. (Previously used Math.random() to
+        // randomly fail ~10% of nodes, which misled users into thinking a valid
+        // workflow was broken.) Real pass/fail comes from Run (V2 engine).
+        cur.forEach(id => all[id] = `completed`)
         node_statuses = { ...all }
         step++
         sim_timer = setTimeout(run_step, 600)

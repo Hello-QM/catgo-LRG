@@ -620,7 +620,12 @@
   /** Apply freeze params to a structure JSON, setting selective_dynamics on sites */
   function apply_freeze_to_structure(struct_json: string | null, params: Record<string, unknown>): string | null {
     if (!struct_json) return null
-    const mode = params.freeze_mode as string
+    // Tolerate every spelling: explicit freeze_mode, or a bare frozen_layers /
+    // freeze_layers / freeze_n_layers (the geo_opt/slab convention) which implies
+    // bottom-layer freezing. Mirrors the backend's _freeze_n_bottom_layers.
+    const n_bottom = Number(params.frozen_layers ?? params.freeze_layers ?? params.freeze_n_layers ?? 0)
+    let mode = params.freeze_mode as string
+    if ((!mode || mode === `none`) && n_bottom > 0) mode = `layers`
     if (!mode || mode === `none`) return struct_json
 
     try {
@@ -653,8 +658,8 @@
             if (!isNaN(v)) frozen.add(v)
           }
         }
-      } else if (mode === `layers`) {
-        const n_layers = Number(params.freeze_layers ?? 0)
+      } else if (mode === `layers` || mode === `bottom`) {
+        const n_layers = n_bottom > 0 ? n_bottom : Number(params.freeze_layers ?? 0)
         if (n_layers > 0) {
           const zs = ([...new Set(struct.sites.map((s: any) => Math.round((s.xyz?.[2] ?? 0) * 100) / 100))] as number[]).sort((a, b) => a - b)
           const threshold = n_layers < zs.length ? (zs[n_layers - 1] + zs[n_layers]) / 2 : zs[zs.length - 1] + 0.1
@@ -1893,10 +1898,22 @@
       // Ensure every loaded edge has a unique id — `to_workflow_json` does not
       // persist `id`, so round-tripped graphs would otherwise yield duplicate
       // `undefined` keys and crash the keyed {#each} (each_key_duplicate).
-      edges = (graph.edges || []).map((e: WfEdge, i: number) => ({
-        ...e,
-        id: e.id ?? `e${i}-${e.from ?? `?`}-${e.to ?? `?`}`,
-      }))
+      edges = (graph.edges || []).map((e: Record<string, any>, i: number) => {
+        // Normalize across graph dialects so any producer renders here, matching
+        // the Tauri/db-wasm loader: legacy `source/target` + react-flow
+        // `sourceHandle/targetHandle`, and `to_workflow_json`'s `fromHandle/toHandle`,
+        // all map onto the editor's native `from/to/fromH/toH`.
+        const from = e.from ?? e.source ?? ``
+        const to = e.to ?? e.target ?? ``
+        return {
+          id: e.id ?? `e${i}-${from || `?`}-${to || `?`}`,
+          from,
+          to,
+          fromH: e.fromH ?? e.fromHandle ?? e.sourceHandle ?? `out-0`,
+          toH: e.toH ?? e.toHandle ?? e.targetHandle ?? `in-0`,
+          ...(e.label ? { label: e.label } : {}),
+        }
+      })
       fill_empty_structure_inputs()
       push_history()
       change_det.set_external_change_detected(false)
@@ -1941,10 +1958,22 @@
       // Ensure every loaded edge has a unique id — `to_workflow_json` does not
       // persist `id`, so round-tripped graphs would otherwise yield duplicate
       // `undefined` keys and crash the keyed {#each} (each_key_duplicate).
-      edges = (graph.edges || []).map((e: WfEdge, i: number) => ({
-        ...e,
-        id: e.id ?? `e${i}-${e.from ?? `?`}-${e.to ?? `?`}`,
-      }))
+      edges = (graph.edges || []).map((e: Record<string, any>, i: number) => {
+        // Normalize across graph dialects so any producer renders here, matching
+        // the Tauri/db-wasm loader: legacy `source/target` + react-flow
+        // `sourceHandle/targetHandle`, and `to_workflow_json`'s `fromHandle/toHandle`,
+        // all map onto the editor's native `from/to/fromH/toH`.
+        const from = e.from ?? e.source ?? ``
+        const to = e.to ?? e.target ?? ``
+        return {
+          id: e.id ?? `e${i}-${from || `?`}-${to || `?`}`,
+          from,
+          to,
+          fromH: e.fromH ?? e.fromHandle ?? e.sourceHandle ?? `out-0`,
+          toH: e.toH ?? e.toHandle ?? e.targetHandle ?? `in-0`,
+          ...(e.label ? { label: e.label } : {}),
+        }
+      })
       is_loaded = true
       fill_empty_structure_inputs()
       // Auto-layout if any nodes were missing coordinates
@@ -3046,7 +3075,7 @@
                 {#if _has_input}
                   {@const _upstream_structures = resolve_input_structures(nd.id)}
                   {@const _raw_struct = resolve_input_structure(nd.id)}
-                  {@const _preview_struct = nd.type === `freq` ? apply_freeze_to_structure(_raw_struct, nd.params) : _raw_struct}
+                  {@const _preview_struct = (nd.type === `freq` || nd.type === `geo_opt` || nd.type === `slab_gen`) ? apply_freeze_to_structure(_raw_struct, nd.params) : _raw_struct}
                   <CalcStructurePreview
                     upstream_structure_json={_preview_struct}
                     upstream_structures_json={_upstream_structures && _upstream_structures.length > 1 ? _upstream_structures : null}

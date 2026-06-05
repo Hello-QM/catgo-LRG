@@ -278,6 +278,18 @@ async def lifespan(app: FastAPI):
     yield immediately.  The heavy plugin/tool/router init runs in parallel
     with the first few user requests.
     """
+    # ─── Restore last active workflow DB (before any create/list/get) ───
+    # A fresh backend otherwise defaults to the packaged DB while the frontend
+    # later re-opens the user's project DB, orphaning API-created workflows in
+    # the wrong file. Restoring the persisted path keeps a single source of truth.
+    try:
+        from catgo.utils.ase_db import restore_active_db_path
+        restored = restore_active_db_path()
+        if restored:
+            logger.info("Active workflow DB restored to: %s", restored)
+    except Exception as exc:  # non-fatal
+        logger.warning("Active DB restore skipped: %s", exc)
+
     # ─── Workflow Engine (sync — needed for workflow endpoints) ───
     _engine_started = False
     _stop_engine_fn = None
