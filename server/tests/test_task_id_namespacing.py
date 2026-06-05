@@ -130,3 +130,19 @@ def test_resolve_work_dir_uses_node_id():
     wd = resolve_work_dir(task, "wfA", config)
     assert wd.endswith("/wfA/slab_opt"), wd
     assert ":" not in wd.rsplit("/", 1)[-1]  # no namespaced segment in the last path component
+
+
+from catgo.workflow.v1_compat import get_step_status_v1, list_steps_v1
+
+
+def test_v1_compat_steps_keyed_by_node_id():
+    db, path = _make_db()
+    try:
+        db.create_workflow("RPBE", workflow_id="wfA")
+        convert_graph_json(db, "RPBE", _overlap_graph(), workflow_id="wfA")
+        steps = list_steps_v1(db, "wfA")
+        assert {s["id"] for s in steps} == {"si", "slab_opt"}  # node ids, not namespaced
+        one = get_step_status_v1(db, "wfA", "slab_opt")        # look up by node id
+        assert one["id"] == "slab_opt"
+    finally:
+        os.unlink(path)
