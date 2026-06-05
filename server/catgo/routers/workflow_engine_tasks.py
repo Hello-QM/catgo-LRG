@@ -15,6 +15,7 @@ Endpoints:
   GET  /api/engine/tasks/{id}/forces       — per-ionic-step force vectors
   GET  /api/engine/tasks/{id}/mlp-progress — MLP optimizer live progress
   GET  /api/engine/tasks/{id}/orca-progress — ORCA stdout-tail calc stage
+  GET  /api/engine/tasks/{id}/irc-trajectory — ORCA IRC full trajectory (XYZ)
 """
 
 from __future__ import annotations
@@ -693,6 +694,97 @@ async def get_task_orca_progress(task_id: str):
         stage = get_orca_stage(tail_text)
 
     return {**base, **stage}
+
+
+@router.get("/{task_id}/irc-trajectory")
+async def get_task_irc_trajectory(task_id: str):
+    """Serve the ORCA IRC full trajectory (``ORCA_IRC_Full_trj.xyz``) for a V2 task.
+
+    V2-native mirror of V1 ``GET /api/workflow/{wf}/irc_trajectory/{step}``
+    (``catgo.routers.workflow.api_get_irc_trajectory``). Resolves the task via
+    ``WorkflowDB.get_task`` (V2 store) for its ``work_dir`` / ``task_type`` /
+    ``params_json`` instead of the legacy ``workflow_steps`` table, then reads
+    the IRC trajectory file ORCA writes (input basename ``ORCA`` →
+    ``ORCA_IRC_Full_trj.xyz``) and returns it as raw XYZ text for the trajectory
+    viewer. The HPC read reuses the SAME V1 file helper
+    (``catgo.utils.job_parser.read_remote_file``) — this is additive convergence
+    work, not a re-implementation of the I/O.
+
+    Unified ``irc`` nodes (``software=orca``) are resolved to ``orca_irc`` first,
+    matching the V1 node-type guard: this endpoint only serves ORCA IRC nodes.
+
+    Contract: unknown task / no ``work_dir`` -> clean 404; non-IRC node -> 400;
+    trajectory file absent (not produced yet) or no live HPC connection -> clean
+    404. The response echoes ``task_id`` + the resolved ``task_type`` so the
+    frontend can map it back to its graph node, alongside the documented V1
+    ``{content, filename}`` payload.
+    """
+    db = _get_db()
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    work_dir = task.get("work_dir")
+    if not work_dir:
+        raise HTTPException(404, f"Task {task_id} has no work_dir")
+
+    # Resolve unified calc types (irc + software=orca → orca_irc) so the node-type
+    # guard matches the V1 handler — same resolution the convergence/orca-progress
+    # endpoints use.
+    task_type = task.get("task_type", "")
+    from workflow.node_sets import UNIFIED_CALC_NODES, _resolve_software
+    if task_type in UNIFIED_CALC_NODES:
+        params = json.loads(task.get("params_json", "{}") or "{}")
+        task_type, _ = _resolve_software(task_type, params)
+
+    if task_type != "orca_irc":
+        raise HTTPException(400, "This endpoint only supports orca_irc nodes")
+
+    # ORCA appends the input basename to all IRC output files. The input is
+    # always written as ORCA.inp, so basename = ORCA → ORCA_IRC_Full_trj.xyz.
+    filename = "ORCA_IRC_Full_trj.xyz"
+    base = {"task_id": task_id, "task_type": task_type}
+
+    # Local-preview work dirs read straight from disk; HPC work dirs read over
+    # SSH via the shared V1 helper.
+    if _is_local_preview(work_dir):
+        local_path = Path(work_dir) / filename
+        if not local_path.is_file():
+            raise HTTPException(404, f"{filename} not found")
+        content = local_path.read_text(encoding="utf-8", errors="replace")
+        if not content:
+            raise HTTPException(404, f"{filename} not found")
+        return {**base, "content": content, "filename": filename}
+
+    # HPC path — a missing/expired session degrades to a clean 404 (file is
+    # unreachable), matching the V1 "file not found on HPC" behaviour.
+    try:
+        _task, hpc = _get_task_hpc(task_id)
+    except HTTPException:
+        raise HTTPException(404, f"{filename} not reachable (no HPC session)")
+
+    trajectory_path = f"{work_dir}/{filename}"
+    try:
+        from catgo.utils.hpc_client import LocalFileConnection
+        if isinstance(hpc, LocalFileConnection):
+            content, _ = await hpc.read_file_content(trajectory_path)
+        else:
+            from catgo.utils.job_parser import read_remote_file
+            # IRC trajectories are typically 10–200 KB for 40-step paths.
+            content, _ = await read_remote_file(
+                hpc.conn, trajectory_path, max_bytes=10 * 1024 * 1024
+            )
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Timeout reading trajectory file from HPC")
+    except Exception as exc:
+        logger.warning("Task %s irc-trajectory read failed: %s", task_id, exc)
+        raise HTTPException(404, f"{filename} not found")
+
+    if not content:
+        raise HTTPException(404, f"{filename} not found")
+
+    return {**base, "content": content, "filename": filename}
 
 
 def _freqs_from_v2_result(result: dict) -> tuple[list[float], list[float]]:
