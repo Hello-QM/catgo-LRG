@@ -2398,7 +2398,7 @@ async def ws_workflow_monitor(websocket: WebSocket, workflow_id: str):
         while True:
             try:
                 msg = await asyncio.wait_for(queue.get(), timeout=30.0)
-                v1_msg = translate_broadcast_message(msg)
+                v1_msg = translate_broadcast_message(msg, workflow_id)
                 await websocket.send_json(v1_msg)
                 if v1_msg.get("type") == "workflow_status" and v1_msg.get("status") in ("completed", "failed"):
                     await websocket.close(code=1000, reason="Workflow finished")
