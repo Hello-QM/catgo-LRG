@@ -20,7 +20,9 @@ import {
   is_hpc_node,
   node_needs_hpc,
   parse_slab_gen_params,
+  resolve_input_structure,
 } from './graph-model'
+import { dry_run_workflow } from '$lib/api/workflow-v2'
 import { hpc_session_store, refresh_hpc_sessions } from '$lib/hpc-sessions.svelte'
 import { save_run_config } from './run-config-store'
 import type { PymatgenStructure } from '$lib'
@@ -34,6 +36,7 @@ export interface WorkflowExecution {
   readonly show_pause_dialog: boolean
   readonly pause_jobs: PauseJob[]
   readonly node_statuses: Record<string, string>
+  readonly node_errors: Record<string, string>
   readonly step_messages: Record<string, string>
   readonly task_results: Record<string, any>
   readonly has_running_jobs: boolean
@@ -105,6 +108,7 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
   let show_pause_dialog = $state(false)
   let pause_jobs = $state<PauseJob[]>([])
   let node_statuses = $state<Record<string, string>>({})
+  let node_errors = $state<Record<string, string>>({})
   let step_messages = $state<Record<string, string>>({})
   let task_results = $state<Record<string, any>>({})
   let monitor_handle: { close: () => void } | null = null
@@ -548,13 +552,19 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
     nodes: WfNode[],
     edges: WfEdge[],
   ) {
+    // Toggle: calling while a dry-run is in flight clears the result.
     if (sim_running) {
       if (sim_timer) clearTimeout(sim_timer)
       sim_running = false
       node_statuses = {}
+      node_errors = {}
       return
     }
     sim_running = true
+    node_errors = {}
+
+    // ── Dependency-order layering (Kahn) — drives the brief visual cadence
+    //    and the topo order; the FINAL state comes from the real dry-run. ──
     const adj: Record<string, string[]> = {}
     const in_deg: Record<string, number> = {}
     nodes.forEach(n => { adj[n.id] = []; in_deg[n.id] = 0 })
@@ -571,28 +581,93 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
       })
       queue = next
     }
+
+    // All nodes start pending.
     const all: Record<string, string> = {}
     nodes.forEach(n => all[n.id] = `pending`)
     node_statuses = { ...all }
+
+    // ── Build the structures map: a node's own cached structure_json wins
+    //    (input / structure nodes), otherwise resolve the nearest upstream
+    //    structure. Only include non-null entries. ──
+    const structures: Record<string, string> = {}
+    for (const n of nodes) {
+      const own = n.params?.structure_json
+      if (typeof own === `string` && own) {
+        structures[n.id] = own
+        continue
+      }
+      const upstream = resolve_input_structure(n.id, nodes, edges)
+      if (upstream) structures[n.id] = upstream
+    }
+
+    // Kick off the real dry-run; meanwhile run a brief topo-layer "running"
+    // cadence purely for visual feedback.
+    const dry_run_promise = dry_run_workflow(nodes, edges, structures)
+
     let step = 0
     function run_step() {
-      if (step >= layers.length) { sim_running = false; return }
+      // Stop the cadence if the toggle cleared the run.
+      if (!sim_running) return
+      if (step >= layers.length) return
       const cur = layers[step]
-      cur.forEach(id => all[id] = `running`)
+      cur.forEach(id => { if (all[id] === `pending`) all[id] = `running` })
       node_statuses = { ...all }
-      sim_timer = setTimeout(() => {
-        // Honest dependency-order preview: mark each node done and advance. This is
-        // a visual walkthrough of execution ORDER only — it does NOT run anything,
-        // so it must never fabricate failures. (Previously used Math.random() to
-        // randomly fail ~10% of nodes, which misled users into thinking a valid
-        // workflow was broken.) Real pass/fail comes from Run (V2 engine).
-        cur.forEach(id => all[id] = `completed`)
-        node_statuses = { ...all }
-        step++
-        sim_timer = setTimeout(run_step, 600)
-      }, 1200)
+      step++
+      sim_timer = setTimeout(run_step, 400)
     }
-    sim_timer = setTimeout(run_step, 300)
+    sim_timer = setTimeout(run_step, 200)
+
+    dry_run_promise.then(resp => {
+      if (!sim_running) return // toggled off while awaiting
+      if (sim_timer) { clearTimeout(sim_timer); sim_timer = null }
+
+      const next_statuses: Record<string, string> = {}
+      const next_errors: Record<string, string> = {}
+      nodes.forEach(n => { next_statuses[n.id] = `pending` })
+
+      for (const [id, r] of Object.entries(resp.results || {})) {
+        if (r.ok === true) {
+          next_statuses[id] = `completed`
+        } else if (r.ok === false) {
+          next_statuses[id] = `failed`
+          if (r.error) next_errors[id] = r.error
+        } else {
+          // ok === null → couldn't run (e.g. upstream structure unavailable).
+          // This is NOT a failure — render as neutral "skipped".
+          next_statuses[id] = `skipped`
+          if (r.skipped) next_errors[id] = r.skipped
+        }
+      }
+
+      // Graph-level errors (cycle / disconnected). Mark involved nodes failed
+      // when their id appears in the message; always set execution_error so the
+      // banner surfaces them and they're never silently dropped.
+      const graph_errors = resp.graph_errors || []
+      if (graph_errors.length > 0) {
+        for (const ge of graph_errors) {
+          for (const n of nodes) {
+            if (ge.includes(n.id)) {
+              next_statuses[n.id] = `failed`
+              next_errors[n.id] = next_errors[n.id] ? `${next_errors[n.id]}; ${ge}` : ge
+            }
+          }
+        }
+        execution_error = graph_errors.join(`; `)
+      }
+
+      node_statuses = next_statuses
+      node_errors = next_errors
+      sim_running = false
+    }).catch(err => {
+      if (sim_timer) { clearTimeout(sim_timer); sim_timer = null }
+      execution_error = err instanceof Error ? err.message : String(err)
+      // Reset visual state; don't leave nodes stuck "running".
+      const reset: Record<string, string> = {}
+      nodes.forEach(n => { reset[n.id] = `pending` })
+      node_statuses = reset
+      sim_running = false
+    })
   }
 
   async function fetch_task_results(workflow_id: string, task_id: string): Promise<any> {
@@ -731,6 +806,7 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
     get show_pause_dialog() { return show_pause_dialog },
     get pause_jobs() { return pause_jobs },
     get node_statuses() { return node_statuses },
+    get node_errors() { return node_errors },
     get step_messages() { return step_messages },
     get task_results() { return task_results },
     get has_running_jobs() { return has_running_jobs },

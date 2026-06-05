@@ -240,6 +240,7 @@
   const show_pause_dialog = $derived(exec.show_pause_dialog)
   const pause_jobs = $derived(exec.pause_jobs)
   const node_statuses = $derived(exec.node_statuses)
+  const node_errors = $derived(exec.node_errors)
   const step_messages = $derived(exec.step_messages)
   const task_results = $derived(exec.task_results)
   const has_running_jobs = $derived(exec.has_running_jobs)
@@ -2388,7 +2389,7 @@
       {/if}
       <span class="toolbar-tooltip-wrap">
         <button class="tbtn" onclick={simulate_run}>{t('workflow.we_simulate') || '🧪'}</button>
-        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_simulate_title') || "Simulate (test without HPC)"}</span>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_simulate_title') || "Dry-run (validate + generate inputs, no HPC)"}</span>
       </span>
       {#if ontoggle_terminal}
         <span class="toolbar-tooltip-wrap">
@@ -2584,6 +2585,7 @@
             {@const is_orphan = orphan_set.has(node.id)}
             {@const status = node_statuses[node.id]}
             {@const scolor = status ? STATUS_COLORS[status] || null : null}
+            {@const node_err = node_errors[node.id]}
             {@const inputs = cfg.inputs || []}
             {@const outputs = cfg.outputs || []}
             {@const custom_label = (node.params?.label as string) || ``}
@@ -2598,6 +2600,7 @@
                 else if (is_cp2k_node(node.type, node.params)) open_input_editor(node.id, 'cp2k')
                 else if (is_lammps_node(node.type, node.params)) open_input_editor(node.id, 'lammps')
               }} style="cursor:grab">
+              {#if node_err}<title>{status === `skipped` ? `${t('workflow.we_skipped') || 'Skipped'}: ${node_err}` : node_err}</title>{/if}
               {#if status === `running`}
                 <rect x={-4} y={-4} width={NW + 8} height={nh + 8} rx={14} fill="none" stroke={scolor} stroke-width={2} opacity={0.5}>
                   <animate attributeName="opacity" values="0.3;0.8;0.3" dur="1.2s" repeatCount="indefinite" />

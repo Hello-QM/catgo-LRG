@@ -246,6 +246,55 @@ export async function convert_graph_to_v2(name: string, graph_json: string, conf
   )
 }
 
+// --- Dry-run (local validate + per-node input generation, no HPC) ---
+
+/** Per-node dry-run outcome.
+ *  - ok===true  : passed (validated + inputs generated)
+ *  - ok===false : real failure — `error` carries the message
+ *  - ok===null  : couldn't run (e.g. upstream structure unavailable) — `skipped`
+ *                 carries the reason. NOT a failure. */
+export interface DryRunNodeResult {
+  ok: boolean | null
+  error?: string
+  skipped?: string
+}
+
+export interface DryRunResponse {
+  valid: boolean
+  results: Record<string, DryRunNodeResult>
+  graph_errors: string[]
+}
+
+export interface DryRunNode {
+  id: string
+  type: string
+  params: Record<string, unknown>
+}
+
+export interface DryRunEdge {
+  from: string
+  to: string
+  fromH?: string
+  toH?: string
+}
+
+/** Run a local dry-run: validate the graph and generate each calc node's
+ *  inputs without touching HPC. `structures` maps node id → input structure
+ *  (pymatgen-json or POSCAR string). */
+export async function dry_run_workflow(
+  nodes: DryRunNode[],
+  edges: DryRunEdge[],
+  structures: Record<string, string>,
+): Promise<DryRunResponse> {
+  return handle<DryRunResponse>(
+    await fetch(`${API_BASE}/engine/workflows/dry-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodes, edges, structures }),
+    })
+  )
+}
+
 // --- WebSocket Monitor ---
 
 export interface V2MonitorCallbacks {

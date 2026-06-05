@@ -12,6 +12,7 @@ export const STATUS_COLORS: Record<string, string> = {
   not_converged: `#f59e0b`,
   pending_review: `#f59e0b`,
   failed: `#ef4444`,
+  skipped: `#64748b`, // neutral slate — dry-run couldn't run this node (NOT a failure)
 }
 
 /** A single conditional visibility rule: show when params[key] is in values */
