@@ -8,6 +8,8 @@ import asyncio
 from typing import Any
 import contextvars
 
+from catgo.workflow.task_ids import make_task_id
+
 # Track the active project context (e.g., when called from ProjectDashboard)
 _active_project_id: contextvars.ContextVar[str | None] = contextvars.ContextVar('active_project_id', default=None)
 
@@ -33,7 +35,10 @@ def get_tool_definition() -> dict:
             "IMPORTANT: Before using action='submit', you MUST ask the user which HPC "
             "cluster to use (e.g., Expanse, Shaheen, local) and confirm job parameters "
             "(partition, account, walltime, ntasks). Never submit without user confirmation. "
-            "HPC job parameters can be set per-task via add_task params."
+            "HPC job parameters can be set per-task via add_task params. "
+            "Task ids are namespaced as '{workflow_id}:{node_id}'. For per-task actions "
+            "(get_result, modify_params, retry) pass either an explicit 'task_id', or "
+            "'workflow_id' + 'node_id' (the graph node id) which will be namespaced for you."
         ),
         "inputSchema": {
             "type": "object",
@@ -48,12 +53,33 @@ def get_tool_definition() -> dict:
                 },
                 "params": {
                     "type": "object",
-                    "description": "Action-specific parameters",
+                    "description": (
+                        "Action-specific parameters. For per-task actions "
+                        "(get_result, modify_params, retry), provide either 'task_id' "
+                        "(already namespaced as '{workflow_id}:{node_id}') or "
+                        "'workflow_id' + 'node_id' (the graph node id)."
+                    ),
                 },
             },
             "required": ["action"],
         },
     }
+
+
+def _resolve_task_id(params: dict[str, Any]) -> str:
+    """Resolve a (namespaced) task id from MCP params.
+
+    Task ids are namespaced ``{workflow_id}:{node_id}`` (issue #227). Result/status
+    tools may be called either with an explicit ``task_id`` (back-compat) or with
+    ``workflow_id`` + ``node_id`` (the graph node id), which are namespaced here.
+    """
+    if params.get("task_id"):
+        return params["task_id"]
+    wf = params.get("workflow_id")
+    node = params.get("node_id")
+    if wf and node:
+        return make_task_id(wf, node)
+    raise ValueError("provide task_id, or workflow_id + node_id")
 
 
 def _get_db():
@@ -108,14 +134,14 @@ def _dispatch_sync(action: str, params: dict[str, Any]) -> dict[str, Any]:
         return db.get_dag(params["workflow_id"])
 
     elif action == "get_result":
-        result = db.get_result(params["task_id"])
+        result = db.get_result(_resolve_task_id(params))
         return result or {"error": "No result found"}
 
     elif action == "modify_params":
-        return service.modify_task_params(db, params["task_id"], params.get("updates", {}))
+        return service.modify_task_params(db, _resolve_task_id(params), params.get("updates", {}))
 
     elif action == "retry":
-        reset_ids = service.retry_task(db, params["task_id"])
+        reset_ids = service.retry_task(db, _resolve_task_id(params))
         return {"reset_tasks": reset_ids}
 
     elif action == "pause":
