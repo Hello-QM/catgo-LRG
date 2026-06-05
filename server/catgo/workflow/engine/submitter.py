@@ -243,7 +243,10 @@ async def _submit_one(
 
     # 5.5 Check if preview files exist (from PENDING_REVIEW local generation)
     from pathlib import Path
-    preview_dir = Path(PREVIEW_DIR_PREFIX) / task_id
+    # Keyed on the bare graph node_id (not the namespaced task id) to match the
+    # path the advancer wrote the preview to in _generate_local_preview.
+    node_id = task.get("node_id") or task_id
+    preview_dir = Path(PREVIEW_DIR_PREFIX) / node_id
     if preview_dir.exists() and any(preview_dir.iterdir()):
         # Upload existing (possibly user-edited) files instead of regenerating
         db.update_task(task_id, status=TaskState.UPLOADING.value)

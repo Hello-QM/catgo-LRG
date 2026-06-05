@@ -119,3 +119,14 @@ def test_convert_namespaces_links():
         )
     finally:
         os.unlink(path)
+
+
+from catgo.workflow.engine.hpc_utils import resolve_work_dir
+
+
+def test_resolve_work_dir_uses_node_id():
+    config = {"hpc": {"base_work_dir": "/scratch/me/catgo"}}
+    task = {"id": "wfA:slab_opt", "node_id": "slab_opt", "workflow_id": "wfA"}
+    wd = resolve_work_dir(task, "wfA", config)
+    assert wd.endswith("/wfA/slab_opt"), wd
+    assert ":" not in wd.rsplit("/", 1)[-1]  # no namespaced segment in the last path component
