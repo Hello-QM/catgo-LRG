@@ -57,7 +57,6 @@ from catgo.utils.workflow_db import (
     list_templates,
     create_from_template,
     list_steps,
-    list_edges,
     list_projects,
     create_project,
     get_project,
