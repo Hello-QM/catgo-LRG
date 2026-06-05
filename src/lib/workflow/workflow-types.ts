@@ -3,8 +3,17 @@ export type WorkflowStatus = `draft` | `running` | `completed` | `not_converged`
 export type StepStatus = `pending` | `queued` | `submitting` | `running` | `completed` | `not_converged` | `failed` | `skipped`
 export type EdgeType = `sequential` | `parallel` | `conditional`
 
-/** Status colors matching the reference design */
+/**
+ * Status colors for both the V1 coarse vocabulary (lowercase) and the full
+ * V2 TaskState set (UPPERCASE enum values). Both must render — V2-native
+ * views (WorkflowDAGViewer, EngineTaskEditor) look up by the raw UPPERCASE
+ * state, while the V1 editor renders the lowercase coarse string produced by
+ * `normalize_status` (task-adapter.ts), which remains the SINGLE V2→coarse
+ * collapse point. This map is purely additive coverage — it does NOT collapse
+ * anything itself. (#224 Phase 3 prep)
+ */
 export const STATUS_COLORS: Record<string, string> = {
+  // ── V1 coarse vocabulary (lowercase) ──
   pending: `#475569`,
   queued: `#a78bfa`,
   running: `#3b82f6`,
@@ -13,6 +22,24 @@ export const STATUS_COLORS: Record<string, string> = {
   pending_review: `#f59e0b`,
   failed: `#ef4444`,
   skipped: `#64748b`, // neutral slate — dry-run couldn't run this node (NOT a failure)
+
+  // ── Full V2 TaskState set (UPPERCASE enum values) ──
+  // Palette mirrors WorkflowDAGViewer's local map so the two stay consistent.
+  WAITING: `#475569`,           // parents not yet completed — neutral slate
+  READY: `#3b82f6`,             // all parents done, can be picked up — blue
+  GENERATING: `#a78bfa`,        // creating input files — violet (prep)
+  UPLOADING: `#a78bfa`,         // transferring files to HPC — violet (prep)
+  SUBMITTED: `#8b5cf6`,         // sbatch done, got job_id — purple
+  QUEUED: `#a78bfa`,            // SLURM PENDING — violet
+  RUNNING: `#eab308`,           // SLURM RUNNING — amber (live)
+  COMPLETED_REMOTE: `#84cc16`,  // HPC done, results on remote — lime
+  COLLECTING: `#84cc16`,        // reading output files — lime
+  COMPLETED: `#22c55e`,         // results in DB — green
+  FAILED: `#ef4444`,            // permanent failure — red
+  REMOTE_ERROR: `#f97316`,      // transient/retryable error — orange
+  PENDING_REVIEW: `#f59e0b`,    // local done, awaiting user confirm — amber
+  PAUSED: `#64748b`,            // user paused — muted slate
+  CANCELLED: `#6b7280`,         // user cancelled — gray
 }
 
 /** A single conditional visibility rule: show when params[key] is in values */
