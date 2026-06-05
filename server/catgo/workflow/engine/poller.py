@@ -12,7 +12,7 @@ from catgo.workflow.db import WorkflowDB
 from catgo.workflow.states import TaskState
 from catgo.workflow.engine.hpc_utils import get_hpc_connection
 from catgo.workflow.engine.broadcast import broadcast_stage_message
-from catgo.workflow.engine.v1_monitor import get_orca_stage, get_orca_irc_stage
+from catgo.workflow.engine.orca_progress import get_orca_stage, get_orca_irc_stage
 from catgo.workflow.engine.result_handler import on_task_completed
 
 logger = logging.getLogger(__name__)
