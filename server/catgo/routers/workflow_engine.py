@@ -90,6 +90,29 @@ def get_dag(workflow_id: str):
     return db.get_dag(workflow_id)
 
 
+@router.get("/{workflow_id}/results-enriched")
+async def get_results_enriched(workflow_id: str):
+    """V2-native dashboard aggregation (#224 Phase 2).
+
+    Mirrors the V1 ``GET /api/workflow/{workflow_id}/results-enriched`` response
+    shape (``{"results": [...], "count": N}``), but reads exclusively from the
+    V2 ``WorkflowDB`` (tasks + task_results + provenance) instead of the legacy
+    ase_db / ``workflow_steps`` tables. Additive — the V1 endpoint is untouched.
+    """
+    db = _get_db()
+    _ensure_exists(db, workflow_id)
+    from catgo.services.workflow_results import build_enriched_results_for_workflow
+    try:
+        results = await asyncio.to_thread(
+            build_enriched_results_for_workflow, db, workflow_id
+        )
+    except KeyError:
+        raise HTTPException(404, f"Workflow {workflow_id} not found")
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"results": results, "count": len(results)}
+
+
 def _ensure_exists(db: WorkflowDB, workflow_id: str):
     try:
         db.get_workflow(workflow_id)

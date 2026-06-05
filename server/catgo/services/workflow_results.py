@@ -435,3 +435,154 @@ def build_part_c_results(task_rows: list[dict]) -> list[dict]:
 
     logger.debug(f"build_part_c_results: built {len(results)} enriched results from {len(task_rows)} rows")
     return results
+
+
+# ─── V2-native enriched results (#224 Phase 2) ───────────────────────────────
+
+
+def build_enriched_results_for_workflow(db, workflow_id: str) -> list[dict]:
+    """Build dashboard-enriched results for a workflow from the V2 store ONLY.
+
+    Mirrors the response shape of the V1 ``GET /api/workflow/{id}/results-enriched``
+    endpoint (see catgo/routers/workflow.py), but reads exclusively from the V2
+    ``WorkflowDB`` instead of the legacy ase_db / ``workflow_steps`` tables:
+
+      * iterate the workflow's tasks via ``db.get_all_tasks``
+      * join each task's stored result via ``db.get_result``
+      * attach provenance via ``db.get_provenance`` (best-effort, additive)
+
+    Unlike :func:`fetch_v2_task_results_by_workflow` (which filters to
+    ``software = 'orca'`` for the V1 Part-C merge), this V2-native path surfaces
+    *every* task with a stored result regardless of engine (vasp / cp2k / orca /
+    mlp / …). ORCA tasks are formatted via :func:`build_part_c_results` so the
+    engine-specific fields (frequencies, convergence_points, NEB/IRC, UV-Vis)
+    stay identical to the V1 merge; all other engines get the generic enriched
+    base row.
+
+    Each returned dict carries the same keys the FE dashboard expects:
+    ``id, formula, energy, energy_per_atom, natoms, volume, a, b, c, alpha,
+    beta, gamma, workflow_id, workflow_name, step_id, step_label, node_type``.
+    """
+    try:
+        wf = db.get_workflow(workflow_id)
+        wf_name = wf.get("name") or workflow_id
+    except KeyError:
+        raise
+    except Exception:
+        wf_name = workflow_id
+
+    tasks = db.get_all_tasks(workflow_id)
+
+    # Rows destined for the ORCA-aware formatter, shaped like the SQL join in
+    # fetch_v2_task_results_by_workflow so build_part_c_results works unchanged.
+    orca_rows: list[dict] = []
+    generic_results: list[dict] = []
+
+    for task in tasks:
+        task_id = task.get("id")
+        try:
+            result = db.get_result(task_id)
+        except Exception:
+            result = None
+        if not result:
+            continue  # task has no stored result yet — nothing to enrich
+
+        try:
+            outputs = json.loads(result.get("outputs_json") or "{}")
+        except Exception:
+            outputs = {}
+        if outputs.get("error"):
+            continue
+
+        try:
+            params = json.loads(task.get("params_json") or "{}")
+        except Exception:
+            params = {}
+
+        software = (task.get("software") or params.get("software") or "").lower()
+
+        common_row = {
+            "task_id": task_id,
+            "workflow_id": result.get("workflow_id") or workflow_id,
+            "energy": result.get("energy"),
+            "outputs_json": result.get("outputs_json") or "{}",
+            "task_type": task.get("task_type"),
+            "task_name": task.get("name"),
+            "params_json": task.get("params_json") or "{}",
+            "system_name": task.get("system_name"),
+            "wf_name": wf_name,
+        }
+
+        if software == "orca" or outputs.get("type", "").startswith("orca"):
+            orca_rows.append(common_row)
+            continue
+
+        # Generic (non-ORCA) enriched base row — same key set as build_part_c.
+        task_type = task.get("task_type")
+        step_label = task.get("name") or params.get("label") or task_type
+        formula = (
+            task.get("system_name")
+            or params.get("system_name")
+            or params.get("formula")
+            or outputs.get("formula")
+        )
+        energy = result.get("energy")
+        if energy is None:
+            energy = outputs.get("energy_ev") or outputs.get("energy")
+        natoms = outputs.get("natoms")
+        energy_per_atom = None
+        if energy is not None and isinstance(natoms, (int, float)) and natoms:
+            energy_per_atom = energy / natoms
+
+        base_result = {
+            "id": None,
+            "formula": formula,
+            "energy": energy,
+            "energy_per_atom": energy_per_atom,
+            "natoms": natoms,
+            "volume": outputs.get("volume"),
+            "a": outputs.get("a"), "b": outputs.get("b"), "c": outputs.get("c"),
+            "alpha": outputs.get("alpha"), "beta": outputs.get("beta"),
+            "gamma": outputs.get("gamma"),
+            "workflow_id": result.get("workflow_id") or workflow_id,
+            "workflow_name": wf_name,
+            "step_id": task_id,
+            "step_label": step_label,
+            "node_type": task_type,
+            "energy_eh": outputs.get("energy_eh"),
+        }
+
+        convergence_points = outputs.get("convergence_points", [])
+        if convergence_points:
+            base_result["convergence_points"] = convergence_points
+            if base_result["energy"] is None:
+                final_energy = convergence_points[-1].get("energy")
+                if final_energy is not None:
+                    base_result["energy"] = final_energy
+
+        # Provenance (best-effort, additive — never blocks the row).
+        try:
+            prov = db.get_provenance(task_id)
+            if prov:
+                base_result["provenance"] = prov
+        except Exception:
+            pass
+
+        generic_results.append(base_result)
+
+    enriched = build_part_c_results(orca_rows) if orca_rows else []
+
+    # Attach provenance to ORCA rows too (best-effort) so the shape is uniform.
+    for row in enriched:
+        sid = row.get("step_id")
+        if not sid:
+            continue
+        try:
+            prov = db.get_provenance(sid)
+            if prov:
+                row["provenance"] = prov
+        except Exception:
+            pass
+
+    enriched.extend(generic_results)
+    return enriched
