@@ -218,6 +218,18 @@ export async function get_engine_task_convergence(task_id: string): Promise<Task
   return handle(await fetch(`${API_BASE}/engine/tasks/${task_id}/convergence`))
 }
 
+export interface TaskMlpProgressResponse {
+  points: ConvergencePoint[]
+  // null when the per-task fmax target is unresolvable — the frontend
+  // status-sync must NOT treat the node as converged in that case.
+  converged: boolean | null
+  message: string
+}
+
+export async function get_engine_task_mlp_progress(task_id: string): Promise<TaskMlpProgressResponse> {
+  return handle(await fetch(`${API_BASE}/engine/tasks/${task_id}/mlp-progress`))
+}
+
 export async function get_engine_task_file_content(task_id: string, path: string): Promise<TaskFileContentResponse> {
   return handle(await fetch(`${API_BASE}/engine/tasks/${task_id}/file-content?path=${encodeURIComponent(path)}`))
 }

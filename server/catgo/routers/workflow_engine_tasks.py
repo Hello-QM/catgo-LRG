@@ -13,6 +13,7 @@ Endpoints:
   PUT  /api/engine/tasks/{id}/file-content — write a file in work_dir
   GET  /api/engine/tasks/{id}/frequencies  — parse vibrational frequencies
   GET  /api/engine/tasks/{id}/forces       — per-ionic-step force vectors
+  GET  /api/engine/tasks/{id}/mlp-progress — MLP optimizer live progress
 """
 
 from __future__ import annotations
@@ -488,6 +489,121 @@ async def get_task_forces(task_id: str, ionic_step: int = Query(0, description="
     if h5_result and h5_result.get("success"):
         return h5_result
     return await parse_vasp_forces(hpc.conn, work_dir, ionic_step)
+
+
+@router.get("/{task_id}/mlp-progress")
+async def get_task_mlp_progress(task_id: str):
+    """Per-iteration live progress from an MLP optimizer log for a V2 task.
+
+    V2-native mirror of V1 ``GET /api/workflow/{wf}/mlp-progress/{step}``
+    (``catgo.routers.workflow.api_get_mlp_progress``). Resolves the task via
+    ``WorkflowDB.get_task`` (V2 store) for its ``work_dir`` / ``task_type`` /
+    ``params_json`` instead of the legacy ``workflow_steps`` table, then reuses
+    the SAME V1 parser (``catgo.utils.job_parser.parse_ase_opt_log``) and emits
+    the identical ``{points, converged, message}`` shape the frontend's
+    ``NormalizedConvergence`` adapter renders — this is additive convergence
+    work, not a re-implementation.
+
+    This is what the frontend task-adapter's ``mode:'task'`` branch (currently a
+    placeholder message) calls to make live MLP progress real.
+
+    Local-only, same as V1: an HPC-remote MLP task returns a deferred message
+    rather than SSH-tailing the log. Unknown task -> clean 404; no work_dir or
+    no log yet -> clean empty result (never a 500).
+    """
+    db = _get_db()
+    try:
+        task = db.get_task(task_id)
+    except KeyError:
+        raise HTTPException(404, f"Task {task_id} not found")
+
+    work_dir = task.get("work_dir")
+    if not work_dir:
+        return {"points": [], "converged": False, "message": "No work directory yet"}
+
+    # Only local work dirs are readable here. HPC work dirs would need SSH
+    # tailing — deferred until the MLP+HPC path is tested (mirrors V1).
+    if task.get("hpc_session_id"):
+        return {
+            "points": [], "converged": False,
+            "message": "MLP progress over HPC is not yet wired",
+        }
+
+    import os
+    # Pick opt.log for relax/vibrations, neb.log for NEB / ts_search. Match the
+    # V1 contract: only the log files ASE actually writes, no os.listdir
+    # fallback (OS-dependent ordering could shadow the current log with a stale
+    # one from an aborted run).
+    task_type = (task.get("task_type") or "").lower()
+    candidates = []
+    if "neb" in task_type or task_type == "ts_search":
+        candidates.append(os.path.join(work_dir, "neb.log"))
+    candidates.append(os.path.join(work_dir, "opt.log"))
+
+    log_path = next((p for p in candidates if os.path.isfile(p)), None)
+    if not log_path:
+        return {"points": [], "converged": False, "message": "Log file not created yet"}
+
+    # Resolve the per-task fmax target from params_json (the V2 analog of V1's
+    # config_json). We DON'T silently default to 0.05 — a wrong target could
+    # flip a still-running node to converged=True and prematurely complete it.
+    # When unresolvable, return converged=None so the frontend status-sync
+    # short-circuits and keeps the node "running" (mirrors V1 exactly).
+    fmax_target: float | None = None
+    try:
+        params = json.loads(task.get("params_json") or "{}")
+        if isinstance(params, dict) and "fmax" in params:
+            fmax_target = float(params["fmax"])
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "Could not parse fmax from task %s params_json: %s — "
+            "convergence flag will be reported as null.",
+            task_id, exc,
+        )
+    if fmax_target is None:
+        # No known target -> parse points but skip the converged check. The
+        # parser uses a sentinel fmax that's never reached so converged stays
+        # False; we override to null below.
+        fmax_target = -1.0
+
+    from catgo.utils.job_parser import parse_ase_opt_log
+    # Parser is synchronous & reads a local file — offload so the event loop
+    # doesn't block on large log tails.
+    try:
+        conv_data = await asyncio.to_thread(parse_ase_opt_log, log_path, fmax_target)
+    except Exception:
+        logger.exception("Error parsing MLP progress for task %s", task_id)
+        raise HTTPException(500, f"Error reading MLP progress for task {task_id}")
+
+    if not conv_data.success:
+        return {"points": [], "converged": False, "message": conv_data.message}
+
+    # If fmax_target was unresolvable, null out converged so the frontend
+    # status-sync branch in NodeStatusPanel can't use it.
+    unresolved_fmax = fmax_target < 0
+
+    prev_energy = None
+    points = []
+    for pt in conv_data.points:
+        dE = (pt.energy - prev_energy) if prev_energy is not None else 0.0
+        points.append({
+            "step": pt.step,
+            "energy": pt.energy,
+            "dE": dE,
+            "energy_sigma0": pt.energy_sigma0,
+            "max_force": pt.max_force,
+            "rms_force": pt.rms_force,
+        })
+        prev_energy = pt.energy
+
+    converged_value = None if unresolved_fmax else conv_data.converged
+    message = conv_data.message
+    if unresolved_fmax and points:
+        message = (
+            f"step {points[-1]['step']} · fmax={points[-1]['max_force']:.3f} eV/Å "
+            f"(target fmax not in params — convergence flag suppressed)"
+        )
+    return {"points": points, "converged": converged_value, "message": message}
 
 
 def _freqs_from_v2_result(result: dict) -> tuple[list[float], list[float]]:
