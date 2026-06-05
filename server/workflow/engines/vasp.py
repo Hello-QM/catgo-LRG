@@ -71,7 +71,13 @@ def _structure_to_pymatgen_dict(struct: Any) -> dict[str, Any]:
     """Convert a pymatgen Structure or Molecule to the PymatgenStructure model format."""
     sites = []
     for site in struct:
-        sp = site.specie
+        try:
+            sp = site.specie
+        except AttributeError:
+            # Disordered / partial-occupancy site: pymatgen's `.specie` property
+            # raises (it falls through to __getattr__). Fall back to the
+            # dominant species so VASP input generation still resolves an element.
+            sp = max(site.species.items(), key=lambda kv: kv[1])[0]
         elem = str(sp.element) if hasattr(sp, "element") else str(sp)
         oxi = getattr(sp, "oxi_state", None) or getattr(sp, "oxidation_state", None)
         species_dict = {"element": elem, "occu": 1.0}
