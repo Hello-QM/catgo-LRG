@@ -423,7 +423,8 @@ def api_retry_step(workflow_id: str, step_id: str):
         reset_ids = reset_step_and_descendants(workflow_id, step_id)
     else:
         from catgo.workflow.service import retry_task
-        reset_ids = retry_task(engine_db, step_id)
+        from catgo.workflow.task_ids import make_task_id
+        reset_ids = retry_task(engine_db, make_task_id(workflow_id, step_id))
 
     if not reset_ids:
         raise HTTPException(status_code=404, detail=f"Step {step_id} not found")
@@ -772,13 +773,13 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
             graph_dict = json.loads(graph) if isinstance(graph, str) else graph
             new_node_ids = {n["id"] for n in graph_dict.get("nodes", [])}
             old_tasks = engine_db.get_all_tasks(workflow_id)
-            old_task_ids = {t["id"] for t in old_tasks}
+            old_node_ids = {t.get("node_id") or t["id"] for t in old_tasks}
 
-            if new_node_ids != old_task_ids:
+            if new_node_ids != old_node_ids:
                 # Graph changed (e.g. different template loaded) — full recreate
                 logger.info(
                     "Workflow %s: graph changed (%d old tasks, %d new nodes) — recreating",
-                    workflow_id, len(old_task_ids), len(new_node_ids),
+                    workflow_id, len(old_node_ids), len(new_node_ids),
                 )
                 # Remove old tasks/links before recreating to avoid UNIQUE constraint errors
                 engine_db.delete_workflow_tasks_and_links(workflow_id)
@@ -801,12 +802,12 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
                 engine_wf_id = workflow_id
                 # Resync per-task type + params from current graph_json so
                 # editor edits propagate.
-                old_by_id = {t["id"]: t for t in old_tasks}
+                old_by_node = {(t.get("node_id") or t["id"]): t for t in old_tasks}
                 for n in graph_dict.get("nodes", []):
                     nid = n.get("id")
-                    if nid not in old_by_id:
+                    if nid not in old_by_node:
                         continue
-                    old_t = old_by_id[nid]
+                    old_t = old_by_node[nid]
                     new_type = n.get("type", "") or old_t.get("task_type")
                     new_params = n.get("params") or {}
                     updates: dict = {}
@@ -826,7 +827,7 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
                     if merged != old_params:
                         updates["params_json"] = json.dumps(merged)
                     if updates:
-                        engine_db.update_task(nid, **updates)
+                        engine_db.update_task(old_t["id"], **updates)
                         logger.info(
                             "Workflow %s: resynced task %s from graph (type=%s)",
                             workflow_id, nid[:12], new_type,
@@ -927,6 +928,7 @@ async def api_reconcile_from_hpc(workflow_id: str):
             "tasks": [
                 {
                     "id": t["id"],
+                    "node_id": t.get("node_id") or t["id"],
                     "task_type": t["task_type"],
                     "status": t["status"],
                     "hpc_job_id": t.get("hpc_job_id"),
