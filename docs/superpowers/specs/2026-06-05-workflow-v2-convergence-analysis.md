@@ -165,6 +165,77 @@ Live-status path today: `workflow-execution.svelte.ts` → `connect_workflow_mon
 
 ---
 
+## UI surfaces — what "converge" does and does NOT mean
+
+There are two visualization surfaces today, and it is important to separate the
+two axes of "two interfaces":
+
+- **Axis 1 — data/engine duality (V1 vs V2).** This is the real debt; the phases
+  above remove it. End state: one engine, one data model (V2 tasks), one API,
+  one DB.
+- **Axis 2 — UI surface count.** Two views exist: **WorkflowEditor** (authoring
+  canvas — drag nodes, connect edges, set params; design-time) and
+  **WorkflowDAGViewer + EngineTaskEditor** (execution monitoring + per-task
+  inspect/edit of input files & structure; run-time "the engine's eyes").
+
+**Why two views exist today:** the editor is V1 and cannot show V2 execution
+truth, so a separate V2-native viewer was built. The split is also **source-based
+routing** — GUI-created workflows open in the editor, MCP/CLI/engine-created ones
+open in the DAG viewer. That routing split is the actual user-facing confusion.
+
+**What convergence must do (necessary):**
+1. Remove the **source-based routing split** — any V2 workflow opens in the same
+   place regardless of origin (one entry point).
+2. Make **WorkflowEditor V2-native** (read tasks/links, live status from the V2
+   monitor, per-node input-file/structure editing). This is required anyway to
+   drop V1.
+
+**What is optional (UX choice, not architecture):** collapsing the two views into
+a single component. "Edit mode" vs "monitor mode" of the *same* V2 workflow is a
+perfectly healthy design (cf. IDE editor vs debugger; n8n/Airflow edit vs runs).
+Once the editor is V2-native it **subsumes** the DAG viewer's capabilities, so
+`WorkflowDAGViewer`/`EngineTaskEditor` become redundant and can be deleted — but
+forcing a single-component merge for its own sake adds rewrite risk for marginal
+benefit. **Unify the entry point + data + engine; keeping edit/monitor as two
+modes of one workflow is fine.**
+
+**Direction when folding:** the editor is the surface to KEEP and make V2-native
+(it owns all authoring — see node model below); the DAG viewer is the candidate to
+fold in or delete. Do not lose the editor.
+
+## Node extensibility model (must be preserved on the editor)
+
+The OLD editor's node catalog is three layers (`src/lib/workflow/node-definitions.ts`,
+`node-defs/`):
+
+1. **Built-in nodes** — code-defined in `node-defs/` (`calculation.ts`,
+   `common.ts`, `analysis/`, `logic/`, `specialized/`, `utility/`): geo_opt,
+   slab_gen, adsorbate, freq, etc. Fixed set; not editable in the UI (no in-UI
+   "create node type" builder).
+2. **Dynamic engine specs** — `load_dynamic_engines()` fetches declarative
+   `EngineSpec`s from `GET /api/workflow/engine-defs` and ADDS software options +
+   params onto *existing* calc nodes (e.g. register a new DFT engine as a
+   `software` option with `show_if`-gated params). Extends existing nodes, not new
+   types.
+3. **Plugin/tool nodes** — `load_plugin_nodes()` fetches full `NodeDefinition`s
+   from `GET /api/plugins/workflow-nodes` and `GET /api/tools/workflow-nodes` and
+   **registers them as new node types** in the palette (if the `type` isn't
+   already present). This is how "custom nodes" are added: author a plugin/tool
+   (backend, declarative JSON), not hand-draw a node in the GUI.
+
+So **"can the old UI define custom nodes?"** — not by drawing them in the canvas,
+but yes via the backend plugin/tool + dynamic-engine extension paths.
+
+**Convergence implication:** all authoring (palette, `param_schema`/`show_if`,
+drag-to-add, plugin + dynamic-engine loading) lives ONLY in `WorkflowEditor`.
+`WorkflowDAGViewer`/`EngineTaskEditor` have no node-authoring. Therefore the
+unified surface must be the **editor made V2-native** — preserving the three-layer
+node model — and these endpoints (`/workflow/engine-defs`, `/plugins/workflow-nodes`,
+`/tools/workflow-nodes`) must remain (or get V2-namespaced equivalents) so custom
+nodes keep working. Folding must not drop them.
+
+---
+
 ## Recommendation
 
 - **Start safe:** Phase 0 as a small PR (verified dead code); Phase 1 + 2 as
