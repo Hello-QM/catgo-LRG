@@ -22,6 +22,11 @@ exists for fixed routines + teaching — don't use this skill for those.
   line. Read `INDEX.md` first; drill into a branch only when you work it. Keep
   `STATUS.md` / `LESSONS.md` curated, never append-only logs.
 - **README + INDEX pair** at every level (description + pointer).
+- **Log every intervention.** Any time you cancel / rebuild / retry a calc, change its
+  inputs, or hit a gotcha, record what changed and **why** in that calc's `LESSONS.md`
+  (and the project `LESSONS.md` if it generalizes). `STATUS.md` only holds the CURRENT
+  job — it does not remember a prior cancelled/failed attempt, so the history lives in
+  LESSONS. (`catgo campaign submit` updates STATUS.md automatically; LESSONS is on you.)
 - **Human-readable names, never hashes** (uniqueness from the path hierarchy; a
   clash gets a `-2` suffix). The remote work_dir mirrors the local tree.
 - **Progressive plan (drill down for detail).** The top `plan.md` says only WHAT —
