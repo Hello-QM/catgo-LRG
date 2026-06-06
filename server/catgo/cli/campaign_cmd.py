@@ -20,6 +20,7 @@ _ACTIONS = {
     "aggregate": "aggregate",
     "report": "make_report",
     "ingest": "ingest_lit",
+    "archive": "archive",
 }
 
 _USAGE = "usage: catgo campaign {" + "|".join(_ACTIONS) + "} [args]"

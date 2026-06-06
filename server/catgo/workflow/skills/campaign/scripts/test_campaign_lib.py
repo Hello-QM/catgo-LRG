@@ -362,3 +362,58 @@ def test_poll_falls_back_to_done_when_sacct_unavailable(tmp_path, monkeypatch):
     cl.poll_campaign(str(root), "lab", now="t1")
     # ended but sacct unavailable -> fall back to DONE (no crash)
     assert cl.parse_status((calc / "STATUS.md").read_text()).state == "DONE"
+
+
+# ---- archive: explicit move + propose candidates (never guess) ----
+
+def test_archive_calc_moves_and_leaves_tombstone(tmp_path):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    calc = root / "calc" / "01-stability-formation-energy" / "Au1-Cu_SAA"
+    calc.mkdir(parents=True)
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="Au1-Cu_SAA", state="FAILED", jobid="9")))
+    (calc / "INCAR").write_text("ENCUT=520\n")
+    dest = cl.archive_calc(str(root), "calc/01-stability-formation-energy/Au1-Cu_SAA",
+                           reason="job crashed", now="t9")
+    assert dest == root / "archive" / "01-stability-formation-energy" / "Au1-Cu_SAA"
+    assert (dest / "INCAR").is_file()
+    tomb = calc / "ARCHIVED.md"
+    assert tomb.is_file()
+    t = tomb.read_text()
+    assert "moved_to:" in t and "job crashed" in t
+    assert not (calc / "INCAR").exists()      # files moved out of original
+
+
+def test_archive_calc_refuses_non_calc_or_missing(tmp_path):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    with pytest.raises(cl.CampaignError):
+        cl.archive_calc(str(root), "refs/foo")                 # not under calc/
+    with pytest.raises(cl.CampaignError):
+        cl.archive_calc(str(root), "calc/01-stability-formation-energy/nope")  # missing
+
+
+def test_archive_calc_disambiguates_readable(tmp_path):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    stage = "calc/01-stability-formation-energy"
+    (root / "archive" / "01-stability-formation-energy" / "c").mkdir(parents=True)
+    calc = root / stage / "c"
+    calc.mkdir(parents=True)
+    (calc / "INCAR").write_text("x\n")
+    dest = cl.archive_calc(str(root), f"{stage}/c")
+    assert dest.name == "c-2"      # readable suffix, never a hash
+
+
+def test_archive_candidates_lists_failed_not_funnel_rejects(tmp_path):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    stage = root / "calc" / "01-stability-formation-energy"
+    (stage / "bad").mkdir(parents=True)
+    (stage / "bad" / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="bad", state="FAILED", jobid="1", exit_code="1:0")))
+    (stage / "reject").mkdir(parents=True)        # DONE but high E_form = funnel reject = DATA
+    (stage / "reject" / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="reject", state="DONE", jobid="2")))
+    (stage / "reject" / "result.md").write_text(cl.render_result("reject", {"E_form": 0.5}))
+    cands = cl.archive_candidates(str(root))
+    names = [c["calc"] for c in cands]
+    assert any("bad" in n for n in names)
+    assert not any("reject" in n for n in names)   # funnel rejects kept

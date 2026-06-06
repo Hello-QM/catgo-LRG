@@ -101,6 +101,15 @@ python poll.py        --project <dir> --ssh <alias>
 Run them as-is (gates enforced), or read `scripts/campaign_lib.py` and adapt for
 the unforeseen (mixed software / odd clusters / novel calc types).
 
+## Archiving (explicit / propose — never auto-decide)
+
+Keep the live tree clean by moving superseded/abandoned calcs into `archive/`, but
+NEVER guess what is stale: `python archive.py --project <dir> --list` proposes only
+`STATUS=FAILED` calcs (it does not move anything). **Funnel rejects (a DONE calc with a
+high E_form) are kept** — the ranking/volcano/funnel need them as data. Move one only on
+explicit user instruction: `python archive.py --project <dir> --calc calc/<stage>/<name>
+--reason "..."` (leaves a tombstone `ARCHIVED.md` at the original location).
+
 ## catgo CLI during a campaign
 
 Use the existing `catgo` CLI for the actual chemistry — see

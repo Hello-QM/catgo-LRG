@@ -42,3 +42,27 @@ def test_aggregate_main_writes_analysis(tmp_path, capsys):
     assert rc == 0
     assert (root / "analysis" / "funnel.md").is_file()
     assert (root / "analysis" / "volcano.png").is_file()
+
+
+def test_archive_main_list(tmp_path, capsys):
+    import archive
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    stage = root / "calc" / "01-stability-formation-energy"
+    (stage / "bad").mkdir(parents=True)
+    (stage / "bad" / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="bad", state="FAILED", jobid="1")))
+    rc = archive.main(["--project", str(root), "--list"])
+    assert rc == 0
+    assert "bad" in capsys.readouterr().out
+
+
+def test_archive_main_move(tmp_path):
+    import archive
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "INCAR").write_text("x\n")
+    rc = archive.main(["--project", str(root), "--calc",
+                       "calc/01-stability-formation-energy/c", "--reason", "dup"])
+    assert rc == 0
+    assert (root / "archive" / "01-stability-formation-energy" / "c" / "INCAR").is_file()

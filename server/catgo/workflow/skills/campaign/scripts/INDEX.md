@@ -11,6 +11,16 @@
   reference job script from the cluster.
 - `submit_calc.py --project <dir> --calc <rel> --ssh <alias>` — submit ONE calc;
   **refuses** if cluster.md is unconfirmed or reference_job.sb is missing.
-- `poll.py --project <dir> --ssh <alias>` — squeue active calcs, update STATUS.md.
-- `test_campaign_lib.py` / `test_entrypoints.py` — dev verification (not a CI gate):
-  `cd <this dir> && python -m pytest -v`.
+- `poll.py --project <dir> --ssh <alias>` — squeue→sacct, update STATUS.md (DONE/FAILED).
+- `aggregate.py --project <dir> [--plot]` — roll per-calc result.md into analysis/
+  (ranking / volcano / funnel). Logic in `campaign_analysis.py`.
+- `make_report.py --project <dir> --occasion <name> [--date YYYY-MM-DD]` — draft a
+  group-meeting/seminar report under report/. Logic in `campaign_report.py`.
+- `ingest_lit.py --project <dir> (--pdf <p.pdf> | --repo <url> [--purpose ..])` —
+  literature ingest (MinerU PDF→md / repo pointer). Logic in `campaign_lit.py`.
+- `archive.py --project <dir> (--list | --calc <rel> [--reason ..])` — propose
+  archivable calcs (FAILED only; funnel rejects kept) or explicitly move one into
+  archive/ with a tombstone. Never auto-decides.
+- `test_campaign_lib.py` / `test_entrypoints.py` / `test_campaign_analysis.py` /
+  `test_campaign_report.py` / `test_campaign_lit.py` / `test_skill_structure.py` —
+  dev verification (not a CI gate): `cd <this dir> && python -m pytest -v`.

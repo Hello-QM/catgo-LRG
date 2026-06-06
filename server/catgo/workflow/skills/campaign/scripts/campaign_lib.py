@@ -477,6 +477,59 @@ def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:
     return updated
 
 
+# ================================= archive =================================
+# Explicit move + propose-only. We NEVER auto-decide what is stale: funnel
+# rejects (DONE with a high E_form) are real data the analysis needs, so they are
+# never proposed. Only the user (or a clear FAILED signal they confirm) archives.
+
+def archive_calc(project, calc_rel: str, reason: str = "",
+                 now: str | None = None) -> Path:
+    """Move a calc folder into ``archive/`` (readable mirror) + leave a tombstone.
+
+    Refuses anything outside ``calc/``. On a name clash in archive/, uses a
+    readable ``-2`` suffix (never a hash).
+    """
+    proj = Path(project).expanduser()
+    calc_rel = calc_rel.strip("/")
+    if not calc_rel.startswith("calc/"):
+        raise CampaignError(f"can only archive calc/ folders, got: {calc_rel}")
+    src = proj / calc_rel
+    if not src.is_dir():
+        raise CampaignError(f"calc folder not found: {src}")
+
+    dest = proj / "archive" / calc_rel[len("calc/"):]
+    base = dest
+    i = 2
+    while dest.exists():
+        dest = base.parent / f"{base.name}-{i}"
+        i += 1
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src.rename(dest)                      # move the whole folder
+
+    ts = now or _utc_now()
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "ARCHIVED.md").write_text(
+        tldr_header(f"ARCHIVED: {src.name}", f"moved to {dest} on {ts}")
+        + f"\nmoved_to: {dest}\nwhen: {ts}\nreason: {reason}\n")
+    return dest
+
+
+def archive_candidates(project) -> list[dict]:
+    """Propose calcs that look archivable (STATUS=FAILED). Never moves anything.
+
+    Funnel rejects (DONE with a high E_form) are NOT proposed — they are data the
+    ranking/volcano/funnel need.
+    """
+    proj = Path(project).expanduser()
+    out: list[dict] = []
+    for sf in sorted(proj.glob("calc/**/STATUS.md")):
+        st = parse_status(sf.read_text())
+        if st.state == "FAILED":
+            out.append({"calc": sf.parent.relative_to(proj).as_posix(),
+                        "reason": f"STATUS=FAILED (exit {st.exit_code or '?'})"})
+    return out
+
+
 # ================================ result.md ================================
 
 def render_result(name: str, values: dict, tldr: str = "") -> str:
