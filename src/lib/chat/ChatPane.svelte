@@ -147,6 +147,17 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     return normalize_provider_base_url(chat_config.base_url || PROVIDER_BASE_URLS[chat_config.provider] || ``)
   }
 
+  function handle_text_input_keydown(event: KeyboardEvent) {
+    const target = event.currentTarget as HTMLInputElement
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === `a`) {
+      event.preventDefault()
+      event.stopPropagation()
+      target.select()
+      return
+    }
+    event.stopPropagation()
+  }
+
   async function fetch_provider_models() {
     fetch_models_status = `loading`
     fetch_models_message = ``
@@ -1208,6 +1219,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
             type="password"
             value={chat_config.api_key}
             placeholder={t('chat.api_key_placeholder')}
+            onkeydown={handle_text_input_keydown}
             oninput={(e) => update_config({ api_key: (e.target as HTMLInputElement).value.trim() })}
           />
         </div>
@@ -1221,6 +1233,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
             type="text"
             value={chat_config.base_url}
             placeholder={t('chat.base_url_placeholder')}
+            onkeydown={handle_text_input_keydown}
             oninput={(e) => update_config({ base_url: (e.target as HTMLInputElement).value.trim() })}
           />
         </div>
