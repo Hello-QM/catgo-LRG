@@ -103,6 +103,15 @@ cluster.md holds the slab config; submit gas via the ssh helpers with that templ
 
 Keep your working context lean (just `plan.md` + the active `STATUS.md`). Each wake:
 
+**RULE — delegate each poll to a subagent.** Do NOT run the poll/verify inline in the
+driving thread. Dispatch ONE subagent (opus) to run steps 1-3 (poll, ssh-read OUTCAR,
+verify by force, write result.md/STATUS/LESSONS) and return a **compact summary only**
+(one line per calc; no raw OUTCAR/OSZICAR/ssh dumps). Over a long run the verbose output
+would otherwise fill the main context toward the 1M limit. **Gates stay in the main
+agent**: the input-file gate (before submitting freq/next jobs) and stage checkpoints are
+NOT delegated — the subagent reports, the main agent shows the user and acts. The subagent
+must not submit/cancel jobs or touch the :8000 backend.
+
 1. Read `plan.md` + active `STATUS.md`.
 2. `python poll.py --project <dir> --ssh <alias>` — updates each STATUS.md: while
    queued via `squeue`; once a job leaves the queue, `sacct` decides the terminal
