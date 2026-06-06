@@ -30,6 +30,7 @@
   import PauseDialog from './PauseDialog.svelte'
   import * as api from '$lib/api/workflow'
   import type { StepForces } from '$lib/api/workflow'
+  import { put_engine_task_file_content } from '$lib/api/workflow-v2'
   import { API_BASE } from '$lib/api/config'
   import { hpc_session_store, refresh_hpc_sessions } from '$lib/hpc-sessions.svelte'
   import ConnectDialog from '$lib/ConnectDialog.svelte'
@@ -1445,6 +1446,19 @@
     } finally {
       file_browser_loading = false
     }
+  }
+
+  /** Save the edited work_dir file back via the V2 engine endpoint. Task id is the
+   *  namespaced {workflow_id}:{node_id}; the endpoint handles both local-preview and
+   *  HPC-remote work_dirs. Throws on failure so MonacoEditorPanel surfaces the error. */
+  async function save_file_browser_content(new_content: string) {
+    if (!workflow_id || !file_browser_node_id || !file_browser_filename) return
+    await put_engine_task_file_content(
+      `${workflow_id}:${file_browser_node_id}`,
+      file_browser_filename,
+      new_content,
+    )
+    file_browser_content = new_content
   }
 
   /** Load a structure file (CONTCAR/POSCAR/etc.) from step output into the 3D viewer. */
@@ -3451,6 +3465,7 @@
   file_path={file_browser_file_path}
   session_id={file_browser_session_id}
   onopen_file={open_file_in_editor}
+  onsave={save_file_browser_content}
   onback_to_list={() => { file_browser_view = 'list' }}
   onclose={() => { show_file_browser = false; file_browser_node_id = null }}
 />
