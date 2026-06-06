@@ -1453,11 +1453,23 @@
    *  HPC-remote work_dirs. Throws on failure so MonacoEditorPanel surfaces the error. */
   async function save_file_browser_content(new_content: string) {
     if (!workflow_id || !file_browser_node_id || !file_browser_filename) return
-    await put_engine_task_file_content(
-      `${workflow_id}:${file_browser_node_id}`,
-      file_browser_filename,
-      new_content,
-    )
+    // Newer workflows use namespaced task ids ({workflow_id}:{node_id}); pre-#227
+    // workflows store the bare node_id as the task id. Try namespaced first, fall
+    // back to bare only when the task isn't found (so real write errors surface).
+    try {
+      await put_engine_task_file_content(
+        `${workflow_id}:${file_browser_node_id}`,
+        file_browser_filename,
+        new_content,
+      )
+    } catch (e) {
+      if (!/not found/i.test(e instanceof Error ? e.message : String(e))) throw e
+      await put_engine_task_file_content(
+        file_browser_node_id,
+        file_browser_filename,
+        new_content,
+      )
+    }
     file_browser_content = new_content
   }
 
