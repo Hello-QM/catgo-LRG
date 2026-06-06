@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { needs_relay, relay_url, RELAY_URL } from '../provider-routing'
+import { needs_relay, normalize_provider_base_url, relay_url, RELAY_URL } from '../provider-routing'
 
 describe(`needs_relay`, () => {
   it(`flags Materials Project OPTIMADE host`, () => {
@@ -9,11 +9,22 @@ describe(`needs_relay`, () => {
     expect(needs_relay(`https://alexandria.icams.rub.de/pbe/v1/structures`)).toBe(false)
     expect(needs_relay(`https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound`)).toBe(false)
   })
+  it(`routes NVIDIA's OpenAI-compatible API through the relay`, () => {
+    expect(needs_relay(`https://integrate.api.nvidia.com/v1/models`)).toBe(true)
+  })
 })
 
 describe(`relay_url`, () => {
   it(`wraps a target URL as a relay query param`, () => {
     const wrapped = relay_url(`https://optimade.materialsproject.org/v1/structures?x=1`)
     expect(wrapped).toBe(`${RELAY_URL}/?url=${encodeURIComponent(`https://optimade.materialsproject.org/v1/structures?x=1`)}`)
+  })
+})
+
+describe(`normalize_provider_base_url`, () => {
+  it(`accepts provider base URLs and trims complete endpoint URLs`, () => {
+    expect(normalize_provider_base_url(`https://integrate.api.nvidia.com/v1/`)).toBe(`https://integrate.api.nvidia.com/v1`)
+    expect(normalize_provider_base_url(`https://integrate.api.nvidia.com/v1/chat/completions`)).toBe(`https://integrate.api.nvidia.com/v1`)
+    expect(normalize_provider_base_url(`https://integrate.api.nvidia.com/v1/models`)).toBe(`https://integrate.api.nvidia.com/v1`)
   })
 })

@@ -15,6 +15,9 @@ export const RELAY_URL: string =
 const RELAY_HOSTS = new Set<string>([
   `optimade.materialsproject.org`,
   `api.materialsproject.org`,
+  // NVIDIA's OpenAI-compatible endpoint does not allow browser CORS for direct
+  // CatBot model/test/chat requests, so desktop/web client-direct mode must relay.
+  `integrate.api.nvidia.com`,
 ])
 
 export function needs_relay(url: string): boolean {
@@ -27,6 +30,14 @@ export function needs_relay(url: string): boolean {
 
 export function relay_url(url: string): string {
   return `${RELAY_URL}/?url=${encodeURIComponent(url)}`
+}
+
+export function normalize_provider_base_url(base_url: string): string {
+  const base = base_url.replace(/\/$/, ``)
+  for (const suffix of [`/chat/completions`, `/messages`, `/models`]) {
+    if (base.toLowerCase().endsWith(suffix)) return base.slice(0, -suffix.length).replace(/\/$/, ``)
+  }
+  return base
 }
 
 /** A fetch wrapper that transparently routes CORS-blocked hosts via the relay. */
