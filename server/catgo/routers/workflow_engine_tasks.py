@@ -451,9 +451,59 @@ class FileWriteBody(BaseModel):
     content: str
 
 
+def _sync_input_file_to_params(db, task_id: str, task: dict, rel_path: str, content: str) -> None:
+    """Sync an edited input file back into the task's params (DB).
+
+    After a user edits an input file in the work_dir, the file diverges from the
+    params the engine regenerates inputs from. Parse the edit by filename and write
+    it back to params so (a) the DB stays consistent with the file and (b) the edit
+    survives a later regenerate-from-params. Best-effort: parse failures are logged,
+    never raised (the file write already succeeded).
+    """
+    import os
+    name = os.path.basename(rel_path).upper()
+    try:
+        params = json.loads(task.get("params_json") or "{}")
+        if not isinstance(params, dict):
+            params = {}
+    except Exception:
+        params = {}
+    changed = False
+    try:
+        if name in ("POSCAR", "CONTCAR"):
+            from pymatgen.core import Structure
+            params["structure_json"] = Structure.from_str(content, fmt="poscar").as_dict()
+            changed = True
+        elif name == "INCAR":
+            from pymatgen.io.vasp.inputs import Incar
+            for k, v in Incar.from_str(content).items():
+                params[str(k).upper()] = v
+            changed = True
+        elif name == "KPOINTS":
+            from pymatgen.io.vasp.inputs import Kpoints
+            kp = Kpoints.from_str(content)
+            if kp.kpts and len(kp.kpts[0]) == 3:
+                params["kpoints"] = " ".join(str(int(x)) for x in kp.kpts[0])
+                changed = True
+        # POTCAR + unknown files are not synced (POTCAR is regenerated from potcar_root).
+    except Exception as exc:
+        logger.warning("Task %s: could not sync edited %s into params: %s", task_id, name, exc)
+        return
+    if changed:
+        try:
+            db.update_task(task_id, params_json=json.dumps(params, default=str))
+            logger.info("Task %s: synced edited %s back into params", task_id, name)
+        except Exception as exc:
+            logger.warning("Task %s: failed to persist synced params for %s: %s", task_id, name, exc)
+
+
 @router.put("/{task_id}/file-content")
 async def put_task_file_content(task_id: str, body: FileWriteBody):
-    """Write a file to the task's work_dir (local preview or HPC)."""
+    """Write a file to the task's work_dir (local preview or HPC).
+
+    On success the edited input file is synced back into the task params (DB) so the
+    DB matches the file and the edit survives regeneration.
+    """
     if ".." in body.path or body.path.startswith("/"):
         raise HTTPException(400, "Path must be relative and cannot contain '..'")
 
@@ -472,6 +522,7 @@ async def put_task_file_content(task_id: str, body: FileWriteBody):
         local_path = Path(work_dir) / body.path
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_text(body.content, encoding="utf-8")
+        _sync_input_file_to_params(db, task_id, task, body.path, body.content)
         return {"path": body.path, "success": True}
 
     # HPC path — use SSH connection
@@ -489,6 +540,7 @@ async def put_task_file_content(task_id: str, body: FileWriteBody):
             ok = await write_remote_file(hpc.conn, full_path, body.content)
         if not ok:
             raise HTTPException(500, "Write returned failure")
+        _sync_input_file_to_params(db, task_id, task, body.path, body.content)
         return {"path": body.path, "success": True}
     except HTTPException:
         raise

@@ -965,7 +965,11 @@ def _run_config_to_engine_config(config: WorkflowRunConfig) -> dict:
         },
         "execution_mode": config.execution_mode,
         "default_session_id": config.default_session_id,
-        "auto_submit": True,
+        # Respect the user's review preference. Default False => HPC tasks pause at
+        # PENDING_REVIEW so the user reviews/edits inputs before submission
+        # (user-in-the-loop). Previously hard-coded True, which silently bypassed
+        # the review gate for every V1 "Run".
+        "auto_submit": config.auto_submit,
     }
 
     # Preserve the job script template selected in RunConfigDialog

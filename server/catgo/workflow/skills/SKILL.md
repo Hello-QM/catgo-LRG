@@ -108,6 +108,8 @@ catgo_workflow_engine(action="add_task", params={
 
 **Never submit a workflow without explicit user confirmation of the HPC target, a known (user-confirmed) pseudopotential/POTCAR path, AND a known (user-confirmed) way to load/invoke the compute binary.**
 
+**Default to a review gate — user-in-the-loop.** Do NOT auto-submit a freshly built workflow. Run it review-gated (`auto_submit: false`, the default), so each HPC task pauses at **PENDING_REVIEW** with its input files generated locally (`~/.catgo/preview/<node>/`). Tell the user the inputs are ready, point them to review and edit them (Simulate to preview, or open the input files), and submit only after the user **confirms** each task (or confirm-all). Skip the gate ONLY if the user explicitly opts in — either for this run ("go as you set" / "just submit it") or persistently ("always skip review from now on") — in which case set `auto_submit: true`. Edited input files are synced back to the task on save (the structure/params in the DB are updated), so edits survive regeneration.
+
 ### 6. Connect tasks with output references
 
 Never hardcode intermediate values. Always chain:
