@@ -24,6 +24,8 @@ exists for fixed routines + teaching — don't use this skill for those.
 - **README + INDEX pair** at every level (description + pointer). **When you add a
   stage or calc folder, update the parent `INDEX.md`** to list it (one line + role) —
   INDEX is the navigation spine, keep it current; an empty/stale INDEX breaks drill-down.
+  Likewise **fill the scaffold's stub files** (top `README.md` = what/goal/current stage,
+  `plan.md`, `cluster.md`) — never leave the `<...>` placeholders the scaffolder writes.
 - **Log every intervention.** Any time you cancel / rebuild / retry a calc, change its
   inputs, or hit a gotcha, record what changed and **why** in that calc's `LESSONS.md`
   (and the project `LESSONS.md` if it generalizes). `STATUS.md` only holds the CURRENT
