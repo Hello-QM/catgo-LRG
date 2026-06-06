@@ -67,6 +67,26 @@ Before writing or finalizing `plan.md`, ASK the user how to create it — do not
 Default to asking. Skip the question only if the user already opted in
 ("just use the template" / "go as you set" / YOLO).
 
+**Derive the full pipeline from the TARGET OBSERVABLE — before building ANY input.**
+Work backward from what the user wants to measure to every calc it requires, and write
+that into `plan.md` BEFORE scaffolding structures/inputs (the build order is: plan first,
+inputs second). Common traps:
+- **Overpotential / free-energy diagram / ΔG / Gibbs / adsorption *free* energy** ⇒ needs
+  **free energies, not raw DFT energies** ⇒ the plan MUST include **freq (ZPE + TΔS)**
+  calcs for adsorbates (IBRION=5, adsorbate atoms free) AND **gas-phase thermo**
+  (`catgo freq --mode gas`) for molecular references. geo_opt energies alone are wrong.
+- **Reaction barriers / TS** ⇒ NEB/dimer + a freq to confirm one imaginary mode.
+- **Band gap / DOS / COHP** ⇒ a dense-k static after relax.
+Confirm the full stage list with the user before building. Do NOT jump from "scope" to
+rendering inputs — discuss the plan (and its observables) first.
+
+## Gas-phase references (convention)
+Small-molecule gas references (H2, H2O, O2, CO, …): use **Γ-point only** (KPOINTS 1×1×1) +
+the **gamma VASP build (`vasp_gam`)** on a **`shared`** node (~32 cores) — never burn an
+exclusive 128-core `compute` node on a few-atom molecule. Slabs use `vasp_std` + a k-mesh
+on `compute`. Keep a separate gas job template (e.g. `scripts/reference_gas.sb`) since
+cluster.md holds the slab config; submit gas via the ssh helpers with that template.
+
 ## The loop (human-triggered, ~10 min, configurable)
 
 Keep your working context lean (just `plan.md` + the active `STATUS.md`). Each wake:
