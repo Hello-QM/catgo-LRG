@@ -59,10 +59,15 @@ Keep your working context lean (just `plan.md` + the active `STATUS.md`). Each w
 
 1. Read `plan.md` + active `STATUS.md`.
 2. `python poll.py --project <dir> --ssh <alias>` (updates STATUS via squeue).
-3. For finished calcs: collect results into `result.md`; note gotchas in `LESSONS.md`.
-4. Render inputs for newly-ready calcs -> input-file gate -> `submit_calc.py`.
-5. At a stage/decision point -> write a summary -> checkpoint.
-6. On an unhandleable problem -> write it to STATUS/LESSONS and stop.
+3. For finished calcs: analyze outputs with the catgo CLI (`catgo freq` for
+   Gibbs/ΔG, `catgo dos`/`band`/`cohp` as needed — see references/catgo-cli.md)
+   and write the numbers into the calc's `result.md`; note gotchas in `LESSONS.md`.
+4. Render inputs for newly-ready calcs (build with `catgo slab`/`supercell` etc.)
+   -> input-file gate -> `submit_calc.py`.
+5. At a stage/decision point -> `python aggregate.py --project <dir> --plot`
+   (ranking / volcano / funnel into analysis/) -> write a summary -> checkpoint.
+6. For a group meeting: `python make_report.py --project <dir> --occasion groupmeeting`.
+7. On an unhandleable problem -> write it to STATUS/LESSONS and stop.
 
 ## Scripts (in `scripts/`, see scripts/INDEX.md)
 
@@ -75,6 +80,15 @@ python poll.py        --project <dir> --ssh <alias>
 
 Run them as-is (gates enforced), or read `scripts/campaign_lib.py` and adapt for
 the unforeseen (mixed software / odd clusters / novel calc types).
+
+## catgo CLI during a campaign
+
+Use the existing `catgo` CLI for the actual chemistry — see
+`references/catgo-cli.md`. Build structures (`catgo slab`/`supercell`/`reticular`/
+`convert`/`inspect`) and analyze results (`catgo dos`/`band`/`cohp`/`freq`). These
+run offline (no viewer needed). Aggregate per-calc `result.md` files with
+`scripts/aggregate.py`; draft reports with `scripts/make_report.py`; ingest
+literature with `scripts/ingest_lit.py`.
 
 ## Literature -> plan -> skill
 

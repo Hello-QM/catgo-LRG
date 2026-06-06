@@ -22,3 +22,21 @@ def test_saa_her_template_has_funnel():
     assert "**TL;DR:**" in text
     assert "decision point" in text.lower()
     assert "dG_H" in text or "ΔG" in text
+
+
+def test_catgo_cli_reference_exists_and_lists_ops():
+    ref = _SKILL / "references" / "catgo-cli.md"
+    assert ref.is_file()
+    text = ref.read_text()
+    assert text.lstrip().startswith("# ")
+    assert "**TL;DR:**" in text
+    for op in ("catgo slab", "catgo convert", "catgo dos", "catgo freq",
+               "catgo band", "catgo cohp"):
+        assert op in text, f"{op} not documented"
+
+
+def test_skill_md_links_cli_reference_and_aggregate():
+    text = (_SKILL / "SKILL.md").read_text()
+    assert "references/catgo-cli.md" in text
+    assert "aggregate.py" in text        # P2 aggregation wired into the loop
+    assert "make_report.py" in text
