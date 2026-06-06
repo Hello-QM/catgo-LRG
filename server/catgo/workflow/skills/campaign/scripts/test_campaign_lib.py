@@ -417,3 +417,17 @@ def test_archive_candidates_lists_failed_not_funnel_rejects(tmp_path):
     names = [c["calc"] for c in cands]
     assert any("bad" in n for n in names)
     assert not any("reject" in n for n in names)   # funnel rejects kept
+
+
+def test_squeue_invalid_jobid_returns_empty(monkeypatch):
+    # finished job -> `squeue -j <id>` exits nonzero "Invalid job id" -> treat as not queued
+    monkeypatch.setattr(cl, "_run",
+                        lambda argv: (1, "", "slurm_load_jobs error: Invalid job id specified"))
+    assert cl.squeue("lab", "999") == ""
+
+
+def test_squeue_real_ssh_failure_still_raises(monkeypatch):
+    monkeypatch.setattr(cl, "_run", lambda argv: (255, "", "Connection refused"))
+    import pytest as _pt
+    with _pt.raises(cl.CampaignError):
+        cl.squeue("lab", "1")

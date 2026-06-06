@@ -303,7 +303,16 @@ def sbatch(alias: str, remote_dir: str, script: str) -> str:
 
 
 def squeue(alias: str, jobid: str) -> str:
-    return ssh_run(alias, f"squeue -j {shlex.quote(jobid)} -h -o %T")
+    # A job that has LEFT the queue makes `squeue -j <id>` exit nonzero with
+    # "Invalid job id specified" (not empty output) on some SLURM builds. Treat
+    # that as "not queued" ("") so poll_campaign falls through to the sacct
+    # terminal verdict instead of crashing. Real ssh failures still raise.
+    try:
+        return ssh_run(alias, f"squeue -j {shlex.quote(jobid)} -h -o %T")
+    except CampaignError as exc:
+        if "invalid job id" in str(exc).lower():
+            return ""
+        raise
 
 
 def sacct(alias: str, jobid: str) -> str:
