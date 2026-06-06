@@ -486,8 +486,12 @@ TOOLS = [
             "cluster: if you are not certain where POTCAR/pseudopotential files live "
             "(potcar_root etc.), STOP and ASK THE USER -- do NOT guess (a wrong path "
             "fails every job, and it is per-user/per-cluster, not inferable from another "
-            "workflow). On Expanse POTCAR can be generated via 'echo -e 103 | vaspkit'; "
-            "verify with catgo_test_cluster before submit."
+            "workflow). On Expanse POTCAR can be generated via 'echo -e 103 | vaspkit'. "
+            "SAME for the compute binary: confirm how the executable is loaded/invoked on "
+            "the cluster (vasp_command + 'module load'/'conda activate'/full path); if not "
+            "certain, ASK THE USER -- a wrong command/module dies with 'command not found' "
+            "(e.g. execve(): vasp_std: No such file or directory). "
+            "Verify with catgo_test_cluster before submit."
         ),
         inputSchema={
             "type": "object",

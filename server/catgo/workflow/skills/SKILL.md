@@ -89,6 +89,7 @@ Before calling `catgo_workflow_engine(action="submit", ...)`, you **MUST** ask t
 1. **Which HPC cluster** to use (e.g., Expanse, Shaheen, local). Do not assume — the user may have multiple connections active.
 2. **Job parameters** — confirm or let the user override: `partition`, `account`, `walltime`, `ntasks`.
 3. **Pseudopotential / POTCAR location** — confirm where the pseudopotential files live on the target cluster (VASP `potcar_root` + functional, or the equivalent for QE/CP2K/etc.). **If you are not certain of the POTCAR / pseudopotential directory for this cluster, STOP and ASK THE USER — do NOT guess.** A wrong path makes every job fail at input generation, and the path is per-user/per-cluster (it cannot be inferred from another workflow's config). On Expanse the POTCAR can be generated with `echo -e 103 | vaspkit`. Verify the resolved paths with `catgo_test_cluster` before submitting.
+4. **Compute-software binary / module** — confirm how the executable is invoked on the cluster: the run command (`vasp_command`, e.g. `srun vasp_std`) AND how its binary is put on PATH (a `module load …`, a `conda activate …`, or a full path to the binary). **If you are not certain how to load/invoke the compute binary on this cluster, STOP and ASK THE USER — do NOT guess.** A wrong command/module makes the job die with `command not found` (e.g. `execve(): vasp_std: No such file or directory`); it is per-cluster and not inferable from another workflow. Verify with `catgo_test_cluster` before submitting.
 
 These parameters are set per-task via `add_task` params:
 ```
@@ -105,7 +106,7 @@ catgo_workflow_engine(action="add_task", params={
 })
 ```
 
-**Never submit a workflow without explicit user confirmation of the HPC target AND a known (user-confirmed) pseudopotential/POTCAR path.**
+**Never submit a workflow without explicit user confirmation of the HPC target, a known (user-confirmed) pseudopotential/POTCAR path, AND a known (user-confirmed) way to load/invoke the compute binary.**
 
 ### 6. Connect tasks with output references
 
