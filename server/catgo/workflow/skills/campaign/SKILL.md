@@ -53,6 +53,20 @@ per-run ("go as you set" / "yolo") or persistently ("always skip review"). With
 YOLO off and the user away, hold at the gate: keep polling running jobs but
 submit nothing new and cross no stage.
 
+## Plan creation — ask the user first
+
+Before writing or finalizing `plan.md`, ASK the user how to create it — do not assume:
+
+- **Brainstorm together** — read `literature/INDEX.md` first, then ask clarifying
+  questions ONE at a time (goal, candidate set, descriptor, funnel thresholds,
+  reference systems), propose 2-3 stage / decision-point approaches with a
+  recommendation, and write `plan.md` only after the user approves.
+- **Template / direct** — instantiate a template (e.g. `saa_her`) or generate
+  `plan.md` from the user's stated intent, then let them review and edit it.
+
+Default to asking. Skip the question only if the user already opted in
+("just use the template" / "go as you set" / YOLO).
+
 ## The loop (human-triggered, ~10 min, configurable)
 
 Keep your working context lean (just `plan.md` + the active `STATUS.md`). Each wake:

@@ -40,3 +40,12 @@ def test_skill_md_links_cli_reference_and_aggregate():
     assert "references/catgo-cli.md" in text
     assert "aggregate.py" in text        # P2 aggregation wired into the loop
     assert "make_report.py" in text
+
+
+def test_skill_md_offers_brainstorm_choice():
+    text = (_SKILL / "SKILL.md").read_text()
+    low = text.lower()
+    assert "brainstorm" in low
+    # the agent must ASK the user how to create the plan, not assume
+    assert "ask the user" in low or "ask first" in low
+    assert "plan.md" in text
