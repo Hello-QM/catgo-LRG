@@ -6,6 +6,7 @@ DB-only engine made hard to see.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import campaign_lib as cl
@@ -23,8 +24,12 @@ def collect_results(project) -> list[dict]:
 
 
 def _numeric(results, key):
-    return [(r["name"], r["values"][key]) for r in results
-            if isinstance(r["values"].get(key), (int, float))]
+    # Drop non-finite values (NaN/inf): a failed job's collect step may write
+    # `dG_H: nan`, and NaN compares false against everything, which would
+    # silently scramble the sorted ranking/volcano/funnel order. Exclude them.
+    return [(r["name"], v) for r in results
+            if isinstance((v := r["values"].get(key)), (int, float))
+            and not isinstance(v, bool) and math.isfinite(v)]
 
 
 def rank_formation_energy(results, key: str = "E_form") -> tuple[str, str]:
@@ -56,7 +61,7 @@ def funnel_md(results, eform_key: str = "E_form", eform_threshold: float = 0.0,
     md.append(f"- stage 1 (stability): {len(stage1)} candidates")
     md.append(f"- survivors (E_form < {eform_threshold}): {len(survivors)} -> "
               + ", ".join(n for n, _ in survivors))
-    md.append(f"- stage 2 (activity) top {top} by |dG_H|: "
+    md.append(f"- stage 2 (activity) top {min(top, len(activity))} by |dG_H|: "
               + ", ".join(f"{n}({v})" for n, v in activity[:top]))
     return "\n".join(md) + "\n"
 

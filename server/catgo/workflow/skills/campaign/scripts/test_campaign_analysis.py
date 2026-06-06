@@ -72,3 +72,19 @@ def test_volcano_plot_writes_png(tmp_path):
     assert dest.is_file()
     assert dest.suffix == ".png"
     assert dest.stat().st_size > 0
+
+
+def test_nan_results_excluded_from_aggregates(tmp_path):
+    # a failed job writing `dG_H: nan` must not silently scramble ordering
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    d = root / "calc" / "01-stability-formation-energy"
+    for name, vals in (("good", {"E_form": -0.3, "dG_H": 0.05}),
+                       ("failed", {"E_form": float("nan"), "dG_H": float("nan")})):
+        (d / name).mkdir(parents=True)
+        (d / name / "result.md").write_text(cl.render_result(name, vals))
+    results = ca.collect_results(str(root))
+    md, csv = ca.rank_formation_energy(results)
+    assert "good" in md and "failed" not in md          # nan row dropped
+    assert "1 candidates" in md
+    funnel = ca.funnel_md(results)
+    assert "1 candidates" in funnel                       # only the finite one counts
