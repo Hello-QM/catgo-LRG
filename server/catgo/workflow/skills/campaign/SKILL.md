@@ -58,10 +58,16 @@ submit nothing new and cross no stage.
 Keep your working context lean (just `plan.md` + the active `STATUS.md`). Each wake:
 
 1. Read `plan.md` + active `STATUS.md`.
-2. `python poll.py --project <dir> --ssh <alias>` (updates STATUS via squeue).
-3. For finished calcs: analyze outputs with the catgo CLI (`catgo freq` for
-   Gibbs/ΔG, `catgo dos`/`band`/`cohp` as needed — see references/catgo-cli.md)
-   and write the numbers into the calc's `result.md`; note gotchas in `LESSONS.md`.
+2. `python poll.py --project <dir> --ssh <alias>` — updates each STATUS.md: while
+   queued via `squeue`; once a job leaves the queue, `sacct` decides the terminal
+   state (`COMPLETED` -> DONE, `FAILED`/`TIMEOUT`/`OUT_OF_MEMORY`/`CANCELLED`/... ->
+   FAILED, with the `exit_code` recorded).
+3. For finished calcs: **a scheduler `DONE` is not "the science succeeded"** — the
+   batch script can exit 0 while the calc never converged. ALWAYS open the
+   `remote_dir` outputs to confirm (e.g. `catgo freq` for Gibbs/ΔG, `catgo dos`/
+   `band`/`cohp` — see references/catgo-cli.md), write the numbers into the calc's
+   `result.md`, and on a real failure (DONE-but-not-converged, or FAILED) record
+   the cause + fix in `LESSONS.md`.
 4. Render inputs for newly-ready calcs (build with `catgo slab`/`supercell` etc.)
    -> input-file gate -> `submit_calc.py`.
 5. At a stage/decision point -> `python aggregate.py --project <dir> --plot`

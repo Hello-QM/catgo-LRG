@@ -275,3 +275,90 @@ def test_result_parse_keeps_non_numeric_as_string_and_skips_header():
     assert v["energy"] == -1.0
     assert v["note"] == "converged in 42 steps"   # non-numeric stays string
     assert "result" not in v                        # title line not captured
+
+
+# ---- sacct terminal verdict: DONE vs FAILED (P2.x) ----
+
+def test_parse_sacct_first_job_line():
+    assert cl.parse_sacct("COMPLETED|0:0\nCOMPLETED|0:0\n") == ("COMPLETED", "0:0")
+    assert cl.parse_sacct("FAILED|1:0\nFAILED|1:0\n") == ("FAILED", "1:0")
+    # 'CANCELLED by 42' -> drop the trailing 'by <uid>'
+    assert cl.parse_sacct("CANCELLED by 42|0:15\n")[0] == "CANCELLED"
+    assert cl.parse_sacct("") == ("", "")
+
+
+def test_map_sacct():
+    assert cl.map_sacct("COMPLETED") == "DONE"
+    for s in ("FAILED", "TIMEOUT", "OUT_OF_MEMORY", "CANCELLED", "NODE_FAIL"):
+        assert cl.map_sacct(s) == "FAILED"
+    assert cl.map_sacct("RUNNING") == "RUNNING"
+    assert cl.map_sacct("PENDING") == "PENDING"
+    assert cl.map_sacct("WEIRD") == ""        # unknown -> caller falls back
+
+
+def test_status_exit_code_roundtrips():
+    s = cl.Status(title="c", state="FAILED", jobid="55", exit_code="1:0")
+    s2 = cl.parse_status(cl.render_status(s))
+    assert s2.exit_code == "1:0" and s2.state == "FAILED"
+
+
+def test_poll_marks_failed_via_sacct(tmp_path, monkeypatch):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="c", state="RUNNING", cluster="expanse", jobid="55",
+        remote_dir="/remote/base/p/calc/01/c")))
+
+    def fake_run(argv):
+        j = " ".join(argv)
+        if "squeue" in j:
+            return 0, "", ""                 # left the queue
+        if "sacct" in j:
+            return 0, "FAILED|1:0\n", ""      # terminal verdict: failed
+        return 0, "", ""
+    monkeypatch.setattr(cl, "_run", fake_run)
+
+    updated = cl.poll_campaign(str(root), "lab", now="t1")
+    assert any("RUNNING->FAILED" in u for u in updated)
+    s = cl.parse_status((calc / "STATUS.md").read_text())
+    assert s.state == "FAILED" and s.exit_code == "1:0"
+
+
+def test_poll_sacct_completed_is_done(tmp_path, monkeypatch):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="c", state="RUNNING", jobid="55")))
+
+    def fake_run(argv):
+        j = " ".join(argv)
+        if "squeue" in j:
+            return 0, "", ""
+        if "sacct" in j:
+            return 0, "COMPLETED|0:0\n", ""
+        return 0, "", ""
+    monkeypatch.setattr(cl, "_run", fake_run)
+    cl.poll_campaign(str(root), "lab", now="t1")
+    assert cl.parse_status((calc / "STATUS.md").read_text()).state == "DONE"
+
+
+def test_poll_falls_back_to_done_when_sacct_unavailable(tmp_path, monkeypatch):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="c", state="RUNNING", jobid="55")))
+
+    def fake_run(argv):
+        j = " ".join(argv)
+        if "squeue" in j:
+            return 0, "", ""
+        if "sacct" in j:
+            return 127, "", "sacct: command not found"   # -> CampaignError
+        return 0, "", ""
+    monkeypatch.setattr(cl, "_run", fake_run)
+    cl.poll_campaign(str(root), "lab", now="t1")
+    # ended but sacct unavailable -> fall back to DONE (no crash)
+    assert cl.parse_status((calc / "STATUS.md").read_text()).state == "DONE"

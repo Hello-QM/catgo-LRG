@@ -60,7 +60,7 @@ def remote_mirror_path(remote_base: str, project_name: str, rel_path: str) -> st
 
 _STATUS_FIELDS = [
     "state", "cluster", "job_type", "remote_dir",
-    "jobid", "submitted_at", "updated_at",
+    "jobid", "exit_code", "submitted_at", "updated_at",
 ]
 
 
@@ -71,6 +71,7 @@ class Status:
     job_type: str = ""
     remote_dir: str = ""
     jobid: str = ""
+    exit_code: str = ""        # sacct ExitCode once terminal (e.g. "0:0" / "1:0")
     submitted_at: str = ""
     updated_at: str = ""
     title: str = ""
@@ -213,12 +214,53 @@ def parse_squeue(output: str) -> str:
 
 
 def map_state(squeue_state: str, had_jobid: bool) -> str:
-    # NOTE: a job that left the queue is reported DONE — squeue cannot tell
-    # success from failure (that needs sacct, a P2 follow-up). Real failure is
-    # caught at the agent-driven collect step (outputs -> result.md / LESSONS.md).
+    # squeue only knows queued states. When a job has LEFT the queue, poll_campaign
+    # asks sacct for the terminal verdict (DONE vs FAILED) — see map_sacct. This
+    # empty->DONE branch is the fallback used only when sacct is unavailable.
     if not squeue_state:
         return "DONE" if had_jobid else "PENDING"
     return _SQUEUE_MAP.get(squeue_state, squeue_state)
+
+
+# sacct gives the SCHEDULER's terminal verdict. NOTE: COMPLETED only means the
+# batch script exited 0 — it does NOT mean the calculation converged. The real
+# scientific error is found only by reading the work_dir outputs at the
+# agent-driven collect step (-> result.md / LESSONS.md).
+_SACCT_DONE = {"COMPLETED"}
+_SACCT_RUNNING = {"RUNNING", "COMPLETING"}
+_SACCT_PENDING = {"PENDING", "CONFIGURING", "REQUEUED", "RESIZING"}
+_SACCT_FAILED = {"FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL",
+                 "BOOT_FAIL", "DEADLINE", "PREEMPTED", "REVOKED"}
+
+
+def parse_sacct(output: str) -> tuple[str, str]:
+    """First job line of ``sacct -n -P -o State,ExitCode`` -> (State, ExitCode).
+
+    State may carry a suffix (e.g. ``CANCELLED by 42``) — keep only the keyword.
+    """
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split("|")
+        state = parts[0].split()[0] if parts[0].strip() else ""
+        exitcode = parts[1].strip() if len(parts) > 1 else ""
+        return state, exitcode
+    return "", ""
+
+
+def map_sacct(state: str) -> str:
+    """sacct State -> our state, or "" if unknown (caller falls back)."""
+    s = state.upper()
+    if s in _SACCT_DONE:
+        return "DONE"
+    if s in _SACCT_RUNNING:
+        return "RUNNING"
+    if s in _SACCT_PENDING:
+        return "PENDING"
+    if s in _SACCT_FAILED:
+        return "FAILED"
+    return ""
 
 
 # ============================== ssh wrappers ===============================
@@ -262,6 +304,11 @@ def sbatch(alias: str, remote_dir: str, script: str) -> str:
 
 def squeue(alias: str, jobid: str) -> str:
     return ssh_run(alias, f"squeue -j {shlex.quote(jobid)} -h -o %T")
+
+
+def sacct(alias: str, jobid: str) -> str:
+    """Terminal accounting record for a job that has left the queue."""
+    return ssh_run(alias, f"sacct -j {shlex.quote(jobid)} -n -P -o State,ExitCode")
 
 
 def _utc_now() -> str:
@@ -410,10 +457,21 @@ def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:
         st = parse_status(sf.read_text())
         if st.state not in ("PENDING", "RUNNING") or not st.jobid:
             continue
-        new_state = map_state(parse_squeue(squeue(alias, st.jobid)), had_jobid=True)
+        sq_state = parse_squeue(squeue(alias, st.jobid))
+        extra: dict[str, str] = {}
+        if sq_state:                          # still in the queue
+            new_state = map_state(sq_state, had_jobid=True)
+        else:                                 # left queue -> sacct terminal verdict
+            try:
+                sacct_state, exitcode = parse_sacct(sacct(alias, st.jobid))
+            except (CampaignError, OSError):
+                sacct_state, exitcode = "", ""
+            new_state = map_sacct(sacct_state) or "DONE"   # fallback if sacct absent
+            if exitcode:
+                extra["exit_code"] = exitcode
         if new_state != st.state:
             sf.write_text(update_status(
-                sf.read_text(), state=new_state, updated_at=now or _utc_now()
+                sf.read_text(), state=new_state, updated_at=now or _utc_now(), **extra
             ))
             updated.append(f"{sf.parent.name}: {st.state}->{new_state}")
     return updated
