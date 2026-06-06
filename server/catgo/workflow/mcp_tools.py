@@ -29,9 +29,16 @@ def get_tool_definition() -> dict:
     return {
         "name": "catgo_workflow_engine",
         "description": (
-            "Create and manage computational chemistry workflows. "
-            "Actions: create, add_task, connect, submit, status, list, "
-            "modify_params, retry, pause, resume, reset, get_result, get_dag. "
+            "Create and manage computational chemistry workflows. Build: create -> "
+            "add_task (one per node) -> submit. "
+            "Actions: create, add_task, submit, status, list, modify_params, retry, "
+            "pause, resume, reset, get_result, get_dag. "
+            "WIRE TASKS by data flow (there is no separate connect action): pass an "
+            "upstream task's output as an input param of the downstream add_task, using "
+            "an output reference {'_ref': '<upstream_task_id>', '_key': '<output_key>'}. "
+            "e.g. add_task geo_opt with params {'structure': {'_ref': '<slab_task_id>', "
+            "'_key': 'structure'}} creates the slab.structure -> geo_opt.structure edge. "
+            "add_task returns the new task_id. "
             "IMPORTANT: Before using action='submit', you MUST ask the user which HPC "
             "cluster to use (e.g., Expanse, Shaheen, local) and confirm job parameters "
             "(partition, account, walltime, ntasks). Never submit without user confirmation. "
@@ -46,7 +53,7 @@ def get_tool_definition() -> dict:
                 "action": {
                     "type": "string",
                     "enum": [
-                        "create", "add_task", "connect", "submit",
+                        "create", "add_task", "submit",
                         "status", "list", "modify_params", "retry",
                         "pause", "resume", "reset", "get_result", "get_dag",
                     ],
@@ -54,10 +61,11 @@ def get_tool_definition() -> dict:
                 "params": {
                     "type": "object",
                     "description": (
-                        "Action-specific parameters. For per-task actions "
-                        "(get_result, modify_params, retry), provide either 'task_id' "
-                        "(already namespaced as '{workflow_id}:{node_id}') or "
-                        "'workflow_id' + 'node_id' (the graph node id)."
+                        "Action-specific parameters. add_task: workflow_id, task_type, and "
+                        "input params (use {'_ref':'<task_id>','_key':'<key>'} values to wire "
+                        "from upstream tasks). For per-task actions (get_result, "
+                        "modify_params, retry), provide either 'task_id' (already namespaced "
+                        "as '{workflow_id}:{node_id}') or 'workflow_id' + 'node_id'."
                     ),
                 },
             },
