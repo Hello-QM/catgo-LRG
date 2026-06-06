@@ -491,7 +491,7 @@ TOOLS = [
             "the cluster (vasp_command + 'module load'/'conda activate'/full path); if not "
             "certain, ASK THE USER -- a wrong command/module dies with 'command not found' "
             "(e.g. execve(): vasp_std: No such file or directory). "
-            "Verify with catgo_test_cluster before submit."
+            "Verify with catgo_validate_config before submit."
         ),
         inputSchema={
             "type": "object",
