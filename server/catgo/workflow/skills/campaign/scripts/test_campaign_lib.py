@@ -199,7 +199,8 @@ def _mock_run(monkeypatch):
 
 
 def test_submit_happy_writes_status_and_ships_inputs(tmp_path, _mock_run):
-    root = cl.scaffold_project(tmp_path / "p", "SAA HER", template="saa_her")
+    # remote mirrors the LOCAL dir basename (true mirror) — dir name == remote name
+    root = cl.scaffold_project(tmp_path / "SAA-HER", "SAA HER", template="saa_her")
     (root / "cluster.md").write_text(_good_cluster_md())
     (root / "scripts" / "reference_job.sb").write_text(
         "#!/bin/bash\n#SBATCH --time=1:00:00\nsource setvars.sh\nsrun vasp_std\n"

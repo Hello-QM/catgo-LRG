@@ -12,12 +12,10 @@ handles auth) — matches "just use ssh sbatch". No catgo-package coupling.
 from __future__ import annotations
 
 import datetime
-import os
 import posixpath
 import re
 import shlex
 import subprocess
-import tempfile
 from dataclasses import dataclass, fields
 from pathlib import Path
 
@@ -215,6 +213,9 @@ def parse_squeue(output: str) -> str:
 
 
 def map_state(squeue_state: str, had_jobid: bool) -> str:
+    # NOTE: a job that left the queue is reported DONE — squeue cannot tell
+    # success from failure (that needs sacct, a P2 follow-up). Real failure is
+    # caught at the agent-driven collect step (outputs -> result.md / LESSONS.md).
     if not squeue_state:
         return "DONE" if had_jobid else "PENDING"
     return _SQUEUE_MAP.get(squeue_state, squeue_state)
@@ -350,17 +351,6 @@ def fetch_reference(project, alias: str, remote_path: str) -> Path:
     return dest
 
 
-def _project_name(proj: Path) -> str:
-    """Recorded human-readable project name (README.md '# title'); the remote
-    tree mirrors it. Falls back to the directory basename when unrecorded."""
-    readme = proj / "README.md"
-    if readme.is_file():
-        for raw in readme.read_text().splitlines():
-            if raw.startswith("# "):
-                return raw[2:].strip()
-    return proj.name
-
-
 def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
                 now: str | None = None) -> dict:
     """Gate-enforcing submit: refuses an unconfirmed cluster.md or a missing
@@ -389,7 +379,9 @@ def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
 
     use_alias = alias or cfg.ssh_host
     job_name = calc_rel.rsplit("/", 1)[-1]
-    remote_dir = remote_mirror_path(cfg.remote_base, _project_name(proj), calc_rel)
+    # Remote mirrors the LOCAL tree: use the project folder basename, so the
+    # remote dir is identical to the local one (a true mirror, not the --name).
+    remote_dir = remote_mirror_path(cfg.remote_base, proj.name, calc_rel)
     job_sb = adapt_job_script(
         ref.read_text(), job_name=job_name, work_dir=remote_dir,
         account=cfg.account, partition=cfg.partition, walltime=cfg.walltime,
