@@ -218,3 +218,210 @@ def map_state(squeue_state: str, had_jobid: bool) -> str:
     if not squeue_state:
         return "DONE" if had_jobid else "PENDING"
     return _SQUEUE_MAP.get(squeue_state, squeue_state)
+
+
+# ============================== ssh wrappers ===============================
+# Plain stdlib subprocess on an ssh alias. ControlMaster / ~/.ssh/config handle
+# auth. All ssh/scp go through _run so tests can monkeypatch one seam.
+
+def _run(argv: list[str]) -> tuple[int, str, str]:
+    cp = subprocess.run(argv, capture_output=True, text=True, timeout=120, check=False)
+    return cp.returncode, cp.stdout or "", cp.stderr or ""
+
+
+def ssh_run(alias: str, remote_cmd: str) -> str:
+    login = f"bash -l -c {shlex.quote(remote_cmd)}"
+    rc, out, err = _run(["ssh", "-o", "BatchMode=yes", alias, login])
+    if rc != 0:
+        raise CampaignError(f"ssh {alias}: {err.strip() or f'rc={rc}'}")
+    return out
+
+
+def scp_to(alias: str, local_path: str, remote_path: str) -> None:
+    rc, _, err = _run(["scp", "-o", "BatchMode=yes", local_path,
+                       f"{alias}:{remote_path}"])
+    if rc != 0:
+        raise CampaignError(f"scp -> {alias}:{remote_path}: {err.strip() or rc}")
+
+
+def scp_from(alias: str, remote_path: str, local_path: str) -> None:
+    rc, _, err = _run(["scp", "-o", "BatchMode=yes",
+                       f"{alias}:{remote_path}", local_path])
+    if rc != 0:
+        raise CampaignError(f"scp <- {alias}:{remote_path}: {err.strip() or rc}")
+
+
+def sbatch(alias: str, remote_dir: str, script: str) -> str:
+    out = ssh_run(alias, f"cd {shlex.quote(remote_dir)} && sbatch {shlex.quote(script)}")
+    ids = re.findall(r"(\d+)", out)
+    if not ids:
+        raise CampaignError(f"could not parse jobid from sbatch: {out.strip()!r}")
+    return ids[-1]
+
+
+def squeue(alias: str, jobid: str) -> str:
+    return ssh_run(alias, f"squeue -j {shlex.quote(jobid)} -h -o %T")
+
+
+def _utc_now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ============================== orchestration ==============================
+
+_SKIP_UPLOAD = {"STATUS.md", "LESSONS.md", "plan.md", "result.md",
+                "README.md", "INDEX.md"}
+
+_SUBDIR_DESC = {
+    "literature": "papers (MinerU md) + repos + extracted-skills — grounds the plan",
+    "refs": "shared reference calcs (H2, clean slab) — computed once",
+    "scripts": "all scripts (incl. reference_job.sb) + usage",
+    "calc": "the calculations, named by funnel stage / candidate",
+    "analysis": "cross-calc aggregation (ranking, volcano, funnel)",
+    "report": "group-meeting / seminar reports",
+    "archive": "outdated / abandoned calculations",
+}
+
+
+def _plan_blank(name: str) -> str:
+    return (tldr_header(f"{name} — plan", "campaign playbook: stages, decision points")
+            + "\n## Stages\n1. <stage> — <what / decision point>\n\n"
+            "## Decision points\n- <criterion to cross to the next stage>\n")
+
+
+def _plan_saa_her(name: str) -> str:
+    return tldr_header(f"{name} — plan", "SAA HER screening funnel") + """
+## Stages
+
+1. **Stability — formation energy** (`calc/01-stability-formation-energy/`)
+   Per candidate SAA slab: geo_opt -> energy -> E_form.
+   **decision point:** keep candidates with E_form below the user-set threshold.
+
+2. **Activity — dG_H\\*** (`calc/02-activity-dGH/`)
+   Per survivor: clean slab + *H slab -> geo_opt -> freq -> gibbs -> dG_H*.
+   **decision point:** rank by |dG_H*|; report the top candidates.
+
+3. **Analysis** (`analysis/`)
+   E_form ranking + dG_H* volcano + funnel summary (P2 aggregation).
+
+## References
+- `refs/` H2 + clean host slab — computed once, reused by all candidates.
+"""
+
+
+def scaffold_project(base, name: str, template: str = "blank") -> Path:
+    root = Path(base).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "README.md").write_text(
+        tldr_header(name, f"Campaign project: {name}. Goal: <fill in>.")
+        + "\n## Goal\n<what this answers>\n\n## Current stage\n<stage>\n"
+    )
+    index = [tldr_header(f"{name} — index", "navigation: role of each subfolder"), ""]
+    index.append("- `plan.md` — campaign playbook (stages / funnel / decision points)")
+    index.append("- `cluster.md` — CONFIRMED compute env (never guessed)")
+    index += [f"- `{d}/` — {_SUBDIR_DESC[d]}" for d in SUBDIRS]
+    (root / "INDEX.md").write_text("\n".join(index) + "\n")
+    (root / "cluster.md").write_text(
+        render_cluster(ClusterConfig())
+        + "\n<!-- Fill via the setup gate; NEVER guess. "
+        "Run catgo_validate_config before the first submit. -->\n"
+    )
+    for d in SUBDIRS:
+        (root / d).mkdir(exist_ok=True)
+        (root / d / "INDEX.md").write_text(tldr_header(f"{d}/", _SUBDIR_DESC[d]))
+
+    if template == "saa_her":
+        (root / "plan.md").write_text(_plan_saa_her(name))
+        for stage in ("01-stability-formation-energy", "02-activity-dGH"):
+            sdir = root / "calc" / stage
+            sdir.mkdir(parents=True, exist_ok=True)
+            (sdir / "INDEX.md").write_text(
+                tldr_header(f"{stage}/", "one folder per candidate")
+            )
+    else:
+        (root / "plan.md").write_text(_plan_blank(name))
+    return root
+
+
+def fetch_reference(project, alias: str, remote_path: str) -> Path:
+    dest = Path(project).expanduser() / "scripts" / "reference_job.sb"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    scp_from(alias, remote_path, str(dest))
+    return dest
+
+
+def _project_name(proj: Path) -> str:
+    """Recorded human-readable project name (README.md '# title'); the remote
+    tree mirrors it. Falls back to the directory basename when unrecorded."""
+    readme = proj / "README.md"
+    if readme.is_file():
+        for raw in readme.read_text().splitlines():
+            if raw.startswith("# "):
+                return raw[2:].strip()
+    return proj.name
+
+
+def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
+                now: str | None = None) -> dict:
+    """Gate-enforcing submit: refuses an unconfirmed cluster.md or a missing
+    reference script (so cluster paths are never guessed), then adapts the
+    reference script, scp's the calc inputs, sbatch's, and writes STATUS.md."""
+    proj = Path(project).expanduser()
+    calc_rel = calc_rel.strip("/")
+    local = proj / calc_rel
+    if not local.is_dir():
+        raise CampaignError(f"calc folder not found: {local}")
+
+    cfg = (parse_cluster((proj / "cluster.md").read_text())
+           if (proj / "cluster.md").is_file() else ClusterConfig())
+    miss = missing_fields(cfg)
+    if miss:
+        raise CampaignError(
+            f"cluster.md not confirmed — missing: {', '.join(miss)}. "
+            "Run the setup gate; never guess cluster paths."
+        )
+    ref = proj / "scripts" / "reference_job.sb"
+    if not ref.is_file():
+        raise CampaignError(
+            "no scripts/reference_job.sb — provide one "
+            "(local file, or pull a remote path with fetch_ref.py)."
+        )
+
+    use_alias = alias or cfg.ssh_host
+    job_name = calc_rel.rsplit("/", 1)[-1]
+    remote_dir = remote_mirror_path(cfg.remote_base, _project_name(proj), calc_rel)
+    job_sb = adapt_job_script(
+        ref.read_text(), job_name=job_name, work_dir=remote_dir,
+        account=cfg.account, partition=cfg.partition, walltime=cfg.walltime,
+        ntasks=cfg.ntasks, run_command=cfg.run_command,
+    )
+    (local / "job.sb").write_text(job_sb)
+
+    ssh_run(use_alias, f"mkdir -p {shlex.quote(remote_dir)}")
+    for f in sorted(local.iterdir()):
+        if f.is_file() and f.name not in _SKIP_UPLOAD:
+            scp_to(use_alias, str(f), f"{remote_dir}/{f.name}")
+    jobid = sbatch(use_alias, remote_dir, "job.sb")
+
+    ts = now or _utc_now()
+    (local / "STATUS.md").write_text(render_status(Status(
+        title=job_name, state="RUNNING", cluster=cfg.cluster, job_type=job_type,
+        remote_dir=remote_dir, jobid=jobid, submitted_at=ts, updated_at=ts,
+    )))
+    return {"jobid": jobid, "remote_dir": remote_dir, "job_name": job_name}
+
+
+def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:
+    proj = Path(project).expanduser()
+    updated: list[str] = []
+    for sf in sorted(proj.glob("calc/**/STATUS.md")):
+        st = parse_status(sf.read_text())
+        if st.state not in ("PENDING", "RUNNING") or not st.jobid:
+            continue
+        new_state = map_state(parse_squeue(squeue(alias, st.jobid)), had_jobid=True)
+        if new_state != st.state:
+            sf.write_text(update_status(
+                sf.read_text(), state=new_state, updated_at=now or _utc_now()
+            ))
+            updated.append(f"{sf.parent.name}: {st.state}->{new_state}")
+    return updated
