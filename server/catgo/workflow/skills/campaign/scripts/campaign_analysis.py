@@ -73,3 +73,26 @@ def write_aggregates(project, eform_threshold: float = 0.0, top: int = 3) -> dic
     (adir / "funnel.md").write_text(
         funnel_md(results, eform_threshold=eform_threshold, top=top))
     return {"n_results": len(results)}
+
+
+def volcano_plot(project, key: str = "dG_H", out: str = "analysis/volcano.png") -> Path:
+    """Scatter |dG_H| per candidate -> analysis/volcano.png (Agg, headless)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    proj = Path(project).expanduser()
+    pts = _numeric(collect_results(project), key)
+    fig, ax = plt.subplots(figsize=(max(4, len(pts) * 0.8), 4))
+    xs = list(range(len(pts)))
+    ax.scatter(xs, [abs(v) for _, v in pts])
+    ax.set_xticks(xs)
+    ax.set_xticklabels([n for n, _ in pts], rotation=45, ha="right")
+    ax.set_ylabel(f"|{key}| (eV)")
+    ax.set_title("HER activity volcano (closer to 0 = better)")
+    fig.tight_layout()
+    dest = proj / out
+    dest.parent.mkdir(exist_ok=True)
+    fig.savefig(dest, dpi=120)
+    plt.close(fig)
+    return dest

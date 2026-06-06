@@ -30,3 +30,15 @@ def test_poll_main_runs_with_no_active(tmp_path):
     root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
     rc = poll.main(["--project", str(root), "--ssh", "lab"])
     assert rc == 0                        # nothing active -> no ssh calls -> ok
+
+
+def test_aggregate_main_writes_analysis(tmp_path, capsys):
+    import aggregate
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    d = root / "calc" / "01-stability-formation-energy" / "c"
+    d.mkdir(parents=True)
+    (d / "result.md").write_text(cl.render_result("c", {"E_form": -0.5, "dG_H": 0.1}))
+    rc = aggregate.main(["--project", str(root), "--plot"])
+    assert rc == 0
+    assert (root / "analysis" / "funnel.md").is_file()
+    assert (root / "analysis" / "volcano.png").is_file()

@@ -64,3 +64,11 @@ def test_write_aggregates_creates_files(tmp_path):
     for f in ("formation_energy_ranking.md", "formation_energy_ranking.csv",
               "volcano.csv", "funnel.md"):
         assert (adir / f).is_file(), f"missing {f}"
+
+
+def test_volcano_plot_writes_png(tmp_path):
+    root = _project_with_results(tmp_path)
+    dest = ca.volcano_plot(str(root))
+    assert dest.is_file()
+    assert dest.suffix == ".png"
+    assert dest.stat().st_size > 0
