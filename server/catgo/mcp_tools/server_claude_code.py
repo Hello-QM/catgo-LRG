@@ -482,7 +482,12 @@ TOOLS = [
             "add_task params. "
             "IMPORTANT: before action='submit' you MUST ask the user which HPC cluster "
             "(Expanse, Shaheen, local) and confirm job parameters; never submit without "
-            "confirmation."
+            "confirmation. ALSO confirm the pseudopotential/POTCAR directory for that "
+            "cluster: if you are not certain where POTCAR/pseudopotential files live "
+            "(potcar_root etc.), STOP and ASK THE USER -- do NOT guess (a wrong path "
+            "fails every job, and it is per-user/per-cluster, not inferable from another "
+            "workflow). On Expanse POTCAR can be generated via 'echo -e 103 | vaspkit'; "
+            "verify with catgo_test_cluster before submit."
         ),
         inputSchema={
             "type": "object",
