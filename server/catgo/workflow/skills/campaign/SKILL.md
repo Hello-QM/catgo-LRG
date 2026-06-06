@@ -21,7 +21,9 @@ exists for fixed routines + teaching — don't use this skill for those.
 - **Progressive markdown.** Every md opens with `# title` + a `> **TL;DR:**`
   line. Read `INDEX.md` first; drill into a branch only when you work it. Keep
   `STATUS.md` / `LESSONS.md` curated, never append-only logs.
-- **README + INDEX pair** at every level (description + pointer).
+- **README + INDEX pair** at every level (description + pointer). **When you add a
+  stage or calc folder, update the parent `INDEX.md`** to list it (one line + role) —
+  INDEX is the navigation spine, keep it current; an empty/stale INDEX breaks drill-down.
 - **Log every intervention.** Any time you cancel / rebuild / retry a calc, change its
   inputs, or hit a gotcha, record what changed and **why** in that calc's `LESSONS.md`
   (and the project `LESSONS.md` if it generalizes). `STATUS.md` only holds the CURRENT
