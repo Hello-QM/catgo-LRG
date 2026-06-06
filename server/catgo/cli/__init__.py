@@ -41,6 +41,15 @@ def _build_legacy_parser():
     p_stop = sub.add_parser("stop", help="Stop a running daemon")
     p_stop.set_defaults(func=cmd_stop)
 
+    from catgo.cli.campaign_cmd import cmd_campaign
+    p_campaign = sub.add_parser(
+        "campaign",
+        help="md-orchestration campaign (file-first, agent-driven)")
+    p_campaign.add_argument(
+        "rest", nargs=argparse.REMAINDER,
+        help="<action> [args]: new|fetch-ref|submit|poll|aggregate|report|ingest")
+    p_campaign.set_defaults(func=cmd_campaign)
+
     return parser, sub
 
 
