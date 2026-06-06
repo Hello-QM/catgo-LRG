@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as project_api from '$lib/api/project'
   import type { ProjectSummary } from '$lib/api/project'
+  import * as campaign_api from '$lib/api/campaign'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   let {
@@ -24,6 +25,10 @@
   let show_create_dialog = $state(false)
   let new_name = $state(``)
   let new_description = $state(``)
+  let new_mode = $state<'visual' | 'md'>(`visual`)
+  let new_base = $state(``)
+  let new_template = $state(`blank`)
+  let created_path = $state(``)
 
   async function load_projects() {
     is_loading = true
@@ -53,16 +58,34 @@
     }
   }
 
+  function reset_create_form() {
+    new_name = ``
+    new_description = ``
+    new_base = ``
+    new_template = `blank`
+    new_mode = `visual`
+    created_path = ``
+    show_create_dialog = false
+  }
+
   async function create_project() {
     const name = new_name.trim()
     if (!name) return
     error = ``
     try {
+      if (new_mode === `md`) {
+        const base = new_base.trim()
+        if (!base) {
+          error = t('app.campaign_location_required')
+          return
+        }
+        const res = await campaign_api.create_campaign(name, base, new_template)
+        created_path = res.path
+        return
+      }
       const created = await project_api.create_project(name, new_description.trim())
       projects = [created, ...projects]
-      new_name = ``
-      new_description = ``
-      show_create_dialog = false
+      reset_create_form()
       ondbchange?.()
     } catch (err) {
       error = String(err)
@@ -127,31 +150,78 @@
   <!-- Create dialog (inline, conditionally shown) -->
   {#if show_create_dialog}
     <div class="create-form">
-      <input
-        class="form-input"
-        bind:value={new_name}
-        placeholder={t('app.project_name_placeholder')}
-      />
-      <input
-        class="form-input"
-        bind:value={new_description}
-        placeholder={t('app.description_optional_placeholder')}
-      />
-      <div class="form-actions">
-        <button class="primary-btn" onclick={create_project} disabled={!new_name.trim()}>
-          {t('common.create')}
-        </button>
-        <button
-          class="secondary-btn"
-          onclick={() => {
-            show_create_dialog = false
-            new_name = ``
-            new_description = ``
-          }}
-        >
-          {t('common.cancel')}
-        </button>
-      </div>
+      {#if created_path}
+        <!-- md campaign created: show next-steps -->
+        <div class="created-panel">
+          <div class="created-title">{t('app.campaign_created', { path: created_path })}</div>
+          <div class="created-hint">{t('app.campaign_created_hint')}</div>
+        </div>
+        <div class="form-actions">
+          <button class="primary-btn" onclick={reset_create_form}>{t('app.campaign_done')}</button>
+        </div>
+      {:else}
+        <!-- mode toggle -->
+        <div class="mode-row" role="group" aria-label={t('app.campaign_mode_label')}>
+          <button
+            type="button"
+            class="mode-btn"
+            class:active={new_mode === `visual`}
+            onclick={() => (new_mode = `visual`)}
+          >
+            <span class="mode-title">{t('app.campaign_mode_visual')}</span>
+            <span class="mode-hint">{t('app.campaign_mode_visual_hint')}</span>
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            class:active={new_mode === `md`}
+            onclick={() => (new_mode = `md`)}
+          >
+            <span class="mode-title">{t('app.campaign_mode_md')}</span>
+            <span class="mode-hint">{t('app.campaign_mode_md_hint')}</span>
+          </button>
+        </div>
+
+        <input
+          class="form-input"
+          bind:value={new_name}
+          placeholder={t('app.project_name_placeholder')}
+        />
+
+        {#if new_mode === `visual`}
+          <input
+            class="form-input"
+            bind:value={new_description}
+            placeholder={t('app.description_optional_placeholder')}
+          />
+        {:else}
+          <input
+            class="form-input"
+            bind:value={new_base}
+            placeholder={t('app.campaign_location_placeholder')}
+          />
+          <label class="template-row">
+            <span class="template-label">{t('app.campaign_template_label')}</span>
+            <select class="form-input" bind:value={new_template}>
+              <option value="blank">{t('app.campaign_template_blank')}</option>
+              <option value="saa_her">{t('app.campaign_template_saa_her')}</option>
+            </select>
+          </label>
+        {/if}
+
+        <div class="form-actions">
+          <button
+            class="primary-btn"
+            onclick={create_project}
+            disabled={!new_name.trim() || (new_mode === `md` && !new_base.trim())}
+          >
+            {t('common.create')}
+          </button>
+          <button class="secondary-btn" onclick={reset_create_form}>
+            {t('common.cancel')}
+          </button>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -325,6 +395,77 @@
     border-radius: 8px;
     padding: 16px;
     margin-bottom: 16px;
+  }
+
+  .mode-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .mode-btn {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 10px 12px;
+    background: var(--surface-bg-hover);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-color-muted, #94a3b8);
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+
+  .mode-btn:hover {
+    color: var(--text-color, #eee);
+  }
+
+  .mode-btn.active {
+    border-color: var(--accent-color, #3b82f6);
+    background: rgba(59, 130, 246, 0.12);
+    color: var(--text-color, #eee);
+  }
+
+  .mode-title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .mode-hint {
+    font-size: 10px;
+    line-height: 1.3;
+  }
+
+  .template-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .template-label {
+    font-size: 12px;
+    color: var(--text-color-muted, #94a3b8);
+    white-space: nowrap;
+  }
+
+  .created-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .created-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-color, #eee);
+    word-break: break-all;
+  }
+
+  .created-hint {
+    font-size: 11px;
+    color: var(--text-color-muted, #94a3b8);
   }
 
   .form-input {
