@@ -321,9 +321,18 @@ export interface V2MonitorCallbacks {
   on_initial_state?: (dag: V2DAG) => void
 }
 
+/** Build the V2 monitor WebSocket URL. The engine router is mounted at
+ *  /api/engine/workflows (workflow_engine.py prefix), so the monitor lives at
+ *  /api/engine/workflows/{id}/monitor — NOT a /v2 alias (none exists in the
+ *  backend; the old /v2/workflows path silently failed and the DAG viewer only
+ *  worked via its REST seed). */
+export function v2_monitor_ws_url(api_base: string, workflow_id: string): string {
+  const ws_base = api_base.replace(/^http/, 'ws')
+  return `${ws_base}/engine/workflows/${encodeURIComponent(workflow_id)}/monitor`
+}
+
 export function connect_v2_monitor(workflow_id: string, callbacks: V2MonitorCallbacks): { close: () => void } {
-  const WS_BASE = API_BASE.replace(/^http/, 'ws')
-  const url = `${WS_BASE}/v2/workflows/${workflow_id}/monitor`
+  const url = v2_monitor_ws_url(API_BASE, workflow_id)
 
   let ws: WebSocket | null = null
   let closed = false
