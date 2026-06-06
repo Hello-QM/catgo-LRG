@@ -226,6 +226,27 @@ def generate_vasp_input_files(
                 val = str(val)
             request_data[request_key] = val
 
+    # Pass through any OTHER INCAR tags so users can set arbitrary INCAR options
+    # (e.g. LH5, MAGMOM, ICHARG, AMIX, LDAU*) that aren't in param_mapping above.
+    # VASP INCAR tags are UPPERCASE; CatGo control keys (software, kpoints,
+    # freeze_mode, system_type, ...) are lowercase, so route uppercase-and-unmapped
+    # keys plus an explicit `custom_incar` dict into request.custom_incar.
+    extra_incar: dict[str, Any] = dict(params.get("custom_incar") or {})
+    for k, v in params.items():
+        if v is None or k in param_mapping or k == "KPOINTS":
+            continue
+        if isinstance(k, str) and len(k) >= 2 and k.isupper():
+            if isinstance(v, str):
+                try:
+                    v = float(v) if ("." in v or "e" in v.lower()) else int(v)
+                except ValueError:
+                    pass
+            extra_incar.setdefault(k, v)
+    if extra_incar:
+        request_data.setdefault("custom_incar", {})
+        for k, v in extra_incar.items():
+            request_data["custom_incar"].setdefault(k, v)
+
     # Handle optimizer
     ibrion = params.get("IBRION")
     if ibrion == 3:
