@@ -254,3 +254,24 @@ def test_fetch_reference_writes_script(tmp_path, monkeypatch):
     dest = cl.fetch_reference(str(root), "lab", "/expanse/test/vasp_test.sb")
     assert dest.is_file()
     assert "srun vasp_std" in dest.read_text()
+
+
+# ---- result.md (P2) ----
+
+def test_result_render_then_parse_coerces_numbers():
+    text = cl.render_result("Pt1-Cu_SAA", {"energy": -123.456, "E_form": -0.42,
+                                           "dG_H": 0.08})
+    assert text.lstrip().startswith("# result: Pt1-Cu_SAA")
+    assert "**TL;DR:**" in text
+    v = cl.parse_result(text)
+    assert v["E_form"] == -0.42 and v["dG_H"] == 0.08
+    assert isinstance(v["energy"], float)
+
+
+def test_result_parse_keeps_non_numeric_as_string_and_skips_header():
+    text = ("# result: x\n> **TL;DR:** whatever\n\n"
+            "energy: -1.0\nnote: converged in 42 steps\n")
+    v = cl.parse_result(text)
+    assert v["energy"] == -1.0
+    assert v["note"] == "converged in 42 steps"   # non-numeric stays string
+    assert "result" not in v                        # title line not captured

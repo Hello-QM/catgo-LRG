@@ -417,3 +417,30 @@ def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:
             ))
             updated.append(f"{sf.parent.name}: {st.state}->{new_state}")
     return updated
+
+
+# ================================ result.md ================================
+
+def render_result(name: str, values: dict, tldr: str = "") -> str:
+    summary = tldr or ", ".join(f"{k}={v}" for k, v in values.items()) or "no values"
+    lines = [tldr_header(f"result: {name}", summary), ""]
+    lines += [f"{k}: {v}" for k, v in values.items()]
+    return "\n".join(lines) + "\n"
+
+
+def parse_result(text: str) -> dict:
+    """Parse a result.md's ``key: value`` lines; coerce numbers to float."""
+    out: dict = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if ":" not in line or line.startswith("#") or line.startswith(">"):
+            continue
+        key, _, val = line.partition(":")
+        key, val = key.strip(), val.strip()
+        if not key:
+            continue
+        try:
+            out[key] = float(val)
+        except ValueError:
+            out[key] = val
+    return out
