@@ -130,6 +130,29 @@ must not submit/cancel jobs or touch the :8000 backend.
 6. For a group meeting: `python make_report.py --project <dir> --occasion groupmeeting`.
 7. On an unhandleable problem -> write it to STATUS/LESSONS and stop.
 
+## Resuming a campaign (fresh agent / after context compaction)
+
+State lives ON DISK, not in the agent's context — so a campaign survives compaction, a
+new session, or a different agent. This is the whole point of file-first. To resume with
+**zero conversation history**:
+
+1. Invoke this skill; identify the project dir.
+2. Read, in order: `README.md` (what + current stage) → `plan.md` and each
+   `calc/<stage>/plan.md` (pipeline + what's next) → `cluster.md` (confirmed env) →
+   **every `calc/**/STATUS.md`** (per-job state / jobid / remote_dir / exit_code) →
+   `result.md` files (already-collected energies) → `LESSONS.md` (gotchas + intervention
+   history). That fully reconstructs done / running / next.
+3. Continue the loop (delegate each poll to a subagent, per the loop rule above).
+
+Because everything is written to files **as it happens** (results, STATUS, LESSONS, plan),
+nothing important is lost when context is dropped. Keep that discipline: never hold
+campaign state only in your head/context — flush it to the right file immediately.
+
+**Surviving a fully-ended session (unattended):** ScheduleWakeup dies with the session.
+For a campaign that must keep advancing without you, register a **cron routine** that wakes
+a fresh agent on a schedule to poll the project (it resumes from disk per the steps above).
+Otherwise the user just says "resume <project>" in a new session.
+
 ## Scripts (in `scripts/`, see scripts/INDEX.md)
 
 ```
