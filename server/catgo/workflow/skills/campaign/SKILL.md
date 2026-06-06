@@ -24,10 +24,13 @@ exists for fixed routines + teaching — don't use this skill for those.
 - **README + INDEX pair** at every level (description + pointer).
 - **Human-readable names, never hashes** (uniqueness from the path hierarchy; a
   clash gets a `-2` suffix). The remote work_dir mirrors the local tree.
-- **Two-level plan.** Project `plan.md` = the campaign (stages / funnel /
-  decision points). Each calc folder has its own `plan.md` = that calc's recipe
-  (method, params + literature citation, convergence, restart strategy, result
-  to extract, dependencies).
+- **Progressive plan (drill down for detail).** The top `plan.md` says only WHAT —
+  goal + the stage list, each line LINKING to that stage's plan — not the how. Each
+  stage folder (`calc/<stage>/plan.md`) gives mid-level detail + links to its calcs.
+  Each calc folder (`calc/<stage>/<calc>/plan.md`) holds the FULL recipe (method,
+  params + rationale, convergence, freq/restart strategy, result to extract,
+  dependencies). Keep the top short; push specifics down. (For a flat campaign with no
+  stages, two levels — top + per-calc — suffice.)
 
 ## Setup gate — confirm the environment (NEVER guess)
 
