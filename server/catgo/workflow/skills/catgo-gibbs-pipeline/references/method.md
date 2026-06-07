@@ -34,6 +34,7 @@ Use **`catgo freq-inputs`** (wraps `scripts/build_freq_inputs.py`). Key choices 
 Small molecules (H2, H2O, O2, CO, …): Γ-point only + the gamma build `vasp_gam` on a
 `shared` node (~32 cores) — never an exclusive 128-core node for a few-atom molecule.
 Slabs: `vasp_std` + a k-mesh on `compute`.
+- **Match ISPIN between geo_opt and freq.** Closed-shell molecules (H2, H2O): ISPIN=1 for BOTH — ISPIN=2 can break H2 into two spin-polarized H atoms (dissociation / corrupt finite-diff Hessian → imaginary stretch). Open-shell (O2, NO, radicals): ISPIN=2. `catgo freq-inputs --gas --ispin <n>` to set it.
 
 ## CHE references (avoid O2)
 Computational Hydrogen Electrode: G(H⁺ + e⁻) = ½ G_H2 at U = 0, pH 0. Each (H⁺ + e⁻)
