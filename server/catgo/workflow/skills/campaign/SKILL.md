@@ -87,6 +87,12 @@ inputs second). Common traps:
   **free energies, not raw DFT energies** ⇒ the plan MUST include **freq (ZPE + TΔS)**
   calcs for adsorbates (IBRION=5, adsorbate atoms free) AND **gas-phase thermo**
   (`catgo freq --mode gas`) for molecular references. geo_opt energies alone are wrong.
+  **The standard Gibbs pipeline is per species: `geo_opt → freq → gibbs`.** Wire freq as
+  the AUTO-NEXT-STEP after each species' geo_opt in `plan.md` (a dependency, not a manual
+  afterthought) — every adsorbate AND every molecular reference that enters a ΔG needs its
+  own freq. Each species pipelines independently (freq fires when THAT geo_opt converges,
+  not after all of them). This pattern is reusable across HER/ORR/OER/CO2RR/NRR and any
+  adsorption-Gibbs study — instantiate it from a campaign template rather than rebuilding.
 - **Reaction barriers / TS** ⇒ NEB/dimer + a freq to confirm one imaginary mode.
 - **Band gap / DOS / COHP** ⇒ a dense-k static after relax.
 Confirm the full stage list with the user before building. Do NOT jump from "scope" to
@@ -123,8 +129,13 @@ must not submit/cancel jobs or touch the :8000 backend.
    `band`/`cohp` — see references/catgo-cli.md), write the numbers into the calc's
    `result.md`, and on a real failure (DONE-but-not-converged, or FAILED) record
    the cause + fix in `LESSONS.md`.
-4. Render inputs for newly-ready calcs (build with `catgo slab`/`supercell` etc.)
-   -> input-file gate -> `submit_calc.py`.
+4. **Auto-advance each newly-converged calc to its NEXT plan step — per species, as a
+   PIPELINE, do NOT barrier.** The moment a calc converges, advance IT (don't wait for its
+   siblings): e.g. in a Gibbs/ΔG study a converged geo_opt immediately triggers that
+   species' **freq** (built from its CONTCAR). Render the next-step inputs (or build with
+   `catgo slab`/`supercell` etc.) -> input-file gate -> `submit_calc.py`. Never leave a
+   converged species idle waiting for the user to remember the next step — the plan defines
+   it, the loop fires it.
 5. At a stage/decision point -> `python aggregate.py --project <dir> --plot`
    (ranking / volcano / funnel into analysis/) -> write a summary -> checkpoint.
 6. For a group meeting: `python make_report.py --project <dir> --occasion groupmeeting`.
