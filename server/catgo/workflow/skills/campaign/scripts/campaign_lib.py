@@ -383,6 +383,27 @@ def scaffold_project(base, name: str, template: str = "blank") -> Path:
         + "\n<!-- Fill via the setup gate; NEVER guess. "
         "Run catgo_validate_config before the first submit. -->\n"
     )
+    # Thin agent bootstrap: an agent launched in this folder reads it and knows to
+    # drive/resume the campaign. Defers the project description to README (no overlap).
+    (root / "CLAUDE.md").write_text(
+        "# Agent bootstrap — CatGo md-orchestration campaign\n\n"
+        "> **TL;DR:** Agent launched here — drive/resume this campaign via the "
+        "`catgo-campaign` skill; state is in these files, not in chat.\n\n"
+        "This folder is a **CatGo md-orchestration campaign**: file-first, state lives in\n"
+        "these files (not in chat). Drive it with the **`catgo-campaign`** skill via\n"
+        "`catgo campaign <action> ...` (use your catgo env's binary if not on PATH). This is\n"
+        "NOT the DB workflow engine.\n\n"
+        "**What this project is:** see `README.md` (not duplicated here).\n\n"
+        "**Resume (no chat history needed):** read `README.md` → `plan.md` (+ each\n"
+        "`calc/<stage>/plan.md`) → `cluster.md` → every `calc/**/STATUS.md` → `result.md`\n"
+        "→ `LESSONS.md` = done / running / next. Then continue the loop, delegating each\n"
+        "poll to a subagent.\n\n"
+        "**Rules:** never guess cluster/POTCAR/binary (keep in `cluster.md`); input-file\n"
+        "gate before submit (review-gated unless the user says YOLO); `submit` refuses an\n"
+        "already-RUNNING calc (`--force` to override); log every cancel/rebuild/gotcha to\n"
+        "the calc's `LESSONS.md`; keep `INDEX.md`/`README.md` current. Full conventions: the\n"
+        "`catgo-campaign` skill.\n"
+    )
     for d in SUBDIRS:
         (root / d).mkdir(exist_ok=True)
         (root / d / "INDEX.md").write_text(tldr_header(f"{d}/", _SUBDIR_DESC[d]))

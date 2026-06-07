@@ -477,3 +477,13 @@ def test_submit_proceeds_when_status_done(tmp_path, _mock_run):
         title="c", state="DONE", jobid="42")))   # DONE -> resubmit allowed (no guard)
     res = cl.submit_calc(str(root), "calc/01-stability-formation-energy/c", "lab", now="t0")
     assert res["jobid"] == "55"
+
+
+def test_scaffold_writes_agent_claude_md(tmp_path):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="blank")
+    c = root / "CLAUDE.md"
+    assert c.is_file()
+    t = c.read_text()
+    assert "catgo-campaign" in t              # points at the skill
+    assert "Resume" in t and "STATUS.md" in t # resume recipe
+    assert "see `README.md`" in t             # defers description to README (no overlap)
