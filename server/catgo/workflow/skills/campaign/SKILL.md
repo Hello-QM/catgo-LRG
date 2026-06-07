@@ -16,30 +16,12 @@ The user chose md-orchestration over the visual workflow engine (exploratory /
 iterative / mixed-software / cross-cluster work). The visual DB engine still
 exists for fixed routines + teaching — don't use this skill for those.
 
-## Conventions (always)
+## Conventions
 
-- **Progressive markdown.** Every md opens with `# title` + a `> **TL;DR:**`
-  line. Read `INDEX.md` first; drill into a branch only when you work it. Keep
-  `STATUS.md` / `LESSONS.md` curated, never append-only logs.
-- **README + INDEX pair** at every level (description + pointer). **When you add a
-  stage or calc folder, update the parent `INDEX.md`** to list it (one line + role) —
-  INDEX is the navigation spine, keep it current; an empty/stale INDEX breaks drill-down.
-  Likewise **fill the scaffold's stub files** (top `README.md` = what/goal/current stage,
-  `plan.md`, `cluster.md`) — never leave the `<...>` placeholders the scaffolder writes.
-- **Log every intervention.** Any time you cancel / rebuild / retry a calc, change its
-  inputs, or hit a gotcha, record what changed and **why** in that calc's `LESSONS.md`
-  (and the project `LESSONS.md` if it generalizes). `STATUS.md` only holds the CURRENT
-  job — it does not remember a prior cancelled/failed attempt, so the history lives in
-  LESSONS. (`catgo campaign submit` updates STATUS.md automatically; LESSONS is on you.)
-- **Human-readable names, never hashes** (uniqueness from the path hierarchy; a
-  clash gets a `-2` suffix). The remote work_dir mirrors the local tree.
-- **Progressive plan (drill down for detail).** The top `plan.md` says only WHAT —
-  goal + the stage list, each line LINKING to that stage's plan — not the how. Each
-  stage folder (`calc/<stage>/plan.md`) gives mid-level detail + links to its calcs.
-  Each calc folder (`calc/<stage>/<calc>/plan.md`) holds the FULL recipe (method,
-  params + rationale, convergence, freq/restart strategy, result to extract,
-  dependencies). Keep the top short; push specifics down. (For a flat campaign with no
-  stages, two levels — top + per-calc — suffice.)
+Authoring conventions (progressive md, README+INDEX pairs + keeping them current, logging
+interventions to LESSONS, human-readable/never-hash names, the top→stage→calc progressive
+plan, filling scaffold stubs) live in the **`catgo-campaign-conventions`** skill — follow
+it whenever you create/edit campaign markdown.
 
 ## Setup gate — confirm the environment (NEVER guess)
 
@@ -92,64 +74,12 @@ inputs second). Common traps:
 Confirm the full stage list with the user before building. Do NOT jump from "scope" to
 rendering inputs — discuss the plan (and its observables) first.
 
-## The loop (human-triggered, ~10 min, configurable)
+## The loop + resuming
 
-Keep your working context lean (just `plan.md` + the active `STATUS.md`). Each wake:
-
-**RULE — delegate each poll to a subagent.** Do NOT run the poll/verify inline in the
-driving thread. Dispatch ONE subagent (opus) to run steps 1-3 (poll, ssh-read OUTCAR,
-verify by force, write result.md/STATUS/LESSONS) and return a **compact summary only**
-(one line per calc; no raw OUTCAR/OSZICAR/ssh dumps). Over a long run the verbose output
-would otherwise fill the main context toward the 1M limit. **Gates stay in the main
-agent**: the input-file gate (before submitting freq/next jobs) and stage checkpoints are
-NOT delegated — the subagent reports, the main agent shows the user and acts. The subagent
-must not submit/cancel jobs or touch the :8000 backend.
-
-1. Read `plan.md` + active `STATUS.md`.
-2. `python poll.py --project <dir> --ssh <alias>` — updates each STATUS.md: while
-   queued via `squeue`; once a job leaves the queue, `sacct` decides the terminal
-   state (`COMPLETED` -> DONE, `FAILED`/`TIMEOUT`/`OUT_OF_MEMORY`/`CANCELLED`/... ->
-   FAILED, with the `exit_code` recorded).
-3. For finished calcs: **a scheduler `DONE` is not "the science succeeded"** — the
-   batch script can exit 0 while the calc never converged. ALWAYS open the
-   `remote_dir` outputs to confirm (e.g. `catgo freq` for Gibbs/ΔG, `catgo dos`/
-   `band`/`cohp` — see references/catgo-cli.md), write the numbers into the calc's
-   `result.md`, and on a real failure (DONE-but-not-converged, or FAILED) record
-   the cause + fix in `LESSONS.md`.
-4. **Auto-advance each newly-converged calc to its NEXT plan step — per species, as a
-   PIPELINE, do NOT barrier.** The moment a calc converges, advance IT (don't wait for its
-   siblings): e.g. in a Gibbs/ΔG study a converged geo_opt immediately triggers that
-   species' **freq** (built from its CONTCAR). Render the next-step inputs (or build with
-   `catgo slab`/`supercell` etc.) -> input-file gate -> `submit_calc.py`. Never leave a
-   converged species idle waiting for the user to remember the next step — the plan defines
-   it, the loop fires it.
-5. At a stage/decision point -> `python aggregate.py --project <dir> --plot`
-   (ranking / volcano / funnel into analysis/) -> write a summary -> checkpoint.
-6. For a group meeting: `python make_report.py --project <dir> --occasion groupmeeting`.
-7. On an unhandleable problem -> write it to STATUS/LESSONS and stop.
-
-## Resuming a campaign (fresh agent / after context compaction)
-
-State lives ON DISK, not in the agent's context — so a campaign survives compaction, a
-new session, or a different agent. This is the whole point of file-first. To resume with
-**zero conversation history**:
-
-1. Invoke this skill; identify the project dir.
-2. Read, in order: `README.md` (what + current stage) → `plan.md` and each
-   `calc/<stage>/plan.md` (pipeline + what's next) → `cluster.md` (confirmed env) →
-   **every `calc/**/STATUS.md`** (per-job state / jobid / remote_dir / exit_code) →
-   `result.md` files (already-collected energies) → `LESSONS.md` (gotchas + intervention
-   history). That fully reconstructs done / running / next.
-3. Continue the loop (delegate each poll to a subagent, per the loop rule above).
-
-Because everything is written to files **as it happens** (results, STATUS, LESSONS, plan),
-nothing important is lost when context is dropped. Keep that discipline: never hold
-campaign state only in your head/context — flush it to the right file immediately.
-
-**Surviving a fully-ended session (unattended):** ScheduleWakeup dies with the session.
-For a campaign that must keep advancing without you, register a **cron routine** that wakes
-a fresh agent on a schedule to poll the project (it resumes from disk per the steps above).
-Otherwise the user just says "resume <project>" in a new session.
+Driving the ~10-min poll loop (delegate each poll to a subagent → compact summary; verify
+convergence by **force**; auto-advance each converged species per-species, pipeline not
+barrier; stage checkpoints) AND resuming a campaign from disk after compaction / a new
+session live in the **`catgo-campaign-loop`** skill. Gates stay with the main agent.
 
 ## Scripts (in `scripts/`, see scripts/INDEX.md)
 
