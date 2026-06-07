@@ -42,6 +42,18 @@ class ServerLink:
 
     @classmethod
     def discover(cls) -> "ServerLink | None":
+        # Honor CATGO_API (the var `catgo setup` writes): when set, target ONLY
+        # that endpoint and do NOT fall back to the local-port scan. This lets a
+        # user point catgo at a specific server (remote tunnel / custom port) and
+        # lets tests force a deterministic "no server" by pointing it at a dead
+        # port — otherwise discovery depends on whatever happens to run on :8000.
+        import os
+        api = os.environ.get("CATGO_API")
+        if api:
+            base = api.rstrip("/")
+            if base.endswith("/api"):
+                base = base[: -len("/api")]
+            return cls(base_url=base) if _ping(f"{base}/health") else None
         for port in (8000, 33413):
             url = f"http://localhost:{port}"
             if _ping(f"{url}/health"):
