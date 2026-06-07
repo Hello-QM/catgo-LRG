@@ -50,7 +50,13 @@ Do NOT compute O2 (triplet / over-binding error) — the whole point of CHE.
 - ΔG3: *O + (H⁺+e⁻) → *OH
 - ΔG4: *OH + (H⁺+e⁻) → * + H2O
 With G_state = E + ZPE − TΔS for each adsorbed state, referenced to clean slab + the CHE
-potentials. **Limiting potential** U_L = max(ΔG_i)/e; **overpotential** η = 1.23 − U_L.
+potentials. Here the ORR ΔG_i are the **reduction** step free energies — NEGATIVE when
+downhill. **Limiting potential** U_L = **−**max_i(ΔG_i)/e (the negative sign is essential —
+ORR steps are negative, unlike the OER convention below); **overpotential** η = 1.23 − U_L
+= 1.23 + max_i(ΔG_i)/e. **Sanity check (assert it in code):** an ideal catalyst has every
+ΔG_i = −1.23 eV → U_L = 1.23 V → η = 0; a formula that returns η = 2.46 there has the sign
+wrong (this exact bug doubled a Pt(111) η from 0.96 → 1.50). Limiting step = the one with
+the **largest (least-negative)** ΔG_i.
 
 ## OER
 Reverse of ORR (water oxidation): same four intermediates, η = max(ΔG_i)/e − 1.23.
