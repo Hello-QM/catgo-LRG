@@ -12,10 +12,10 @@ CatGo md-orchestration campaign (`~/catgo-campaigns/Pt111-ORR`).
 All freq are **Γ-only, no NCORE, shared/32, vasp_gam** (cheap + robust; surface frozen):
 ```
 # *OH adsorbate: free the O,H, fix the metal (Γ is the default)
-python ../scripts/build_freq_inputs.py --structure <OH>/CONTCAR --out 04-freq/Pt111_OH_freq \
+catgo freq-inputs --structure <OH>/CONTCAR --out 04-freq/Pt111_OH_freq \
     --free-elements O,H --ismear 1 --sigma 0.2
 # H2O gas reference: all atoms free
-python ../scripts/build_freq_inputs.py --structure <H2O>/CONTCAR --out 04-freq/H2O_freq \
+catgo freq-inputs --structure <H2O>/CONTCAR --out 04-freq/H2O_freq \
     --gas --ismear 0 --sigma 0.05
 ```
 Submit all freq via the gas job template (`scripts/reference_gas.sb`: shared/32/vasp_gam).

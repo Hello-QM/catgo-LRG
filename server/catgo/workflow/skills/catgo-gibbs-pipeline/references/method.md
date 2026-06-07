@@ -16,7 +16,7 @@ For each species (adsorbate intermediate AND molecular reference):
 Freq fires as THAT species' geo_opt converges — pipeline per species, don't wait for siblings.
 
 ## freq setup
-Use `scripts/build_freq_inputs.py`. Key choices (cheap + robust):
+Use **`catgo freq-inputs`** (wraps `scripts/build_freq_inputs.py`). Key choices (cheap + robust):
 - **K = Γ only (1×1×1)** for ALL freq — freq needs only forces, and for an adsorbate the
   surface is frozen, so a dense k-mesh is wasted. Γ ⇒ run on the gamma build `vasp_gam`.
 - **No NCORE / NPAR** — IBRION=5 finite differences are most robust with no band

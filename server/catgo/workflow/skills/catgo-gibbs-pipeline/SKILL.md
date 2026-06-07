@@ -22,16 +22,19 @@ geo_opt energies are NOT enough: add ZPE + TΔS from frequencies.
 - **Gas refs cheap:** Γ-only + `vasp_gam` on `shared`; slabs `vasp_std` + k-mesh on `compute`.
 
 ## Bundled resources
-- `scripts/build_freq_inputs.py` — build a VASP freq input from a relaxed CONTCAR/POSCAR
-  (adsorbate: fix surface, free adsorbate atoms; gas: all free). Run it instead of
-  re-deriving the freq setup each time.
+- **`catgo freq-inputs`** — build a VASP freq input from a relaxed CONTCAR/POSCAR
+  (adsorbate: fix surface, free adsorbate atoms; gas: all free). Runs from ANY directory:
+  `catgo freq-inputs --structure <CONTCAR> --out <dir> [--gas | --free-elements O,H]`.
+  Wraps `scripts/build_freq_inputs.py` (call the script directly only if `catgo` isn't on
+  PATH; resolve it as `<this skill base>/scripts/build_freq_inputs.py`, never a hardcoded
+  `~/.claude/...` path).
 - `references/method.md` — full thermo + freq setup + CHE/ORR/OER/HER pathway formulas +
   the η definition. Read for the exact equations.
 - `examples/orr-pt111.md` — a worked ORR-on-Pt(111) instance (build freq, assemble η).
 
 ## Flow
 1. geo_opt each species (force-converged) → E.
-2. `build_freq_inputs.py` from each CONTCAR → submit freq → `catgo freq --mode adsorbed|gas`
+2. `catgo freq-inputs` from each CONTCAR → submit freq → `catgo freq --mode adsorbed|gas`
    → ZPE + TΔS → G.
 3. Assemble ΔG_i along the pathway → U_L = max ΔG_i/e → **η = |1.23 − U_L|**; free-energy
    diagram + ΔG table. (Building blocks: the `vasp-freq`, `gibbs`, `her`, `oer`,

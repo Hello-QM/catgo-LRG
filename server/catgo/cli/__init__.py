@@ -50,6 +50,15 @@ def _build_legacy_parser():
         help="<action> [args]: new|fetch-ref|submit|poll|aggregate|report|ingest")
     p_campaign.set_defaults(func=cmd_campaign)
 
+    from catgo.cli.freq_inputs_cmd import cmd_freq_inputs
+    p_freq = sub.add_parser(
+        "freq-inputs",
+        help="build VASP freq inputs from a relaxed CONTCAR/POSCAR (catgo-gibbs-pipeline)")
+    p_freq.add_argument(
+        "rest", nargs=argparse.REMAINDER,
+        help="--structure <CONTCAR> --out <dir> [--gas | --free-elements O,H] [--kpoints ...]")
+    p_freq.set_defaults(func=cmd_freq_inputs)
+
     return parser, sub
 
 
@@ -180,6 +189,15 @@ def main(argv: list[str] | None = None) -> None:
         from catgo.cli.shell import InteractiveShell
         InteractiveShell(no_autostart=no_auto).run()
         return
+    # Passthrough subcommands: their tail is forwarded verbatim to a launcher and may
+    # LEAD with an option (e.g. `catgo freq-inputs --structure ...`), which argparse
+    # REMAINDER mishandles. Dispatch them directly, before the top-level parser.
+    if effective[0] == "campaign":
+        from catgo.cli.campaign_cmd import run_campaign
+        raise SystemExit(run_campaign(effective[1:]))
+    if effective[0] == "freq-inputs":
+        from catgo.cli.freq_inputs_cmd import run_freq_inputs
+        raise SystemExit(run_freq_inputs(effective[1:]))
     args = parser.parse_args(
         (["--no-autostart"] if no_auto else []) + effective)
     if not getattr(args, "command", None):
