@@ -21,9 +21,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--calc", required=True, help="calc rel path under the project")
     ap.add_argument("--ssh", default="", help="ssh alias (default: cluster.md ssh_host)")
     ap.add_argument("--job_type", default="", help="label, e.g. 'vasp geo_opt'")
+    ap.add_argument("--force", action="store_true",
+                    help="resubmit even if STATUS is RUNNING/PENDING (e.g. after a rebuild)")
     args = ap.parse_args(argv)
     try:
-        res = cl.submit_calc(args.project, args.calc, args.ssh, job_type=args.job_type)
+        res = cl.submit_calc(args.project, args.calc, args.ssh,
+                             job_type=args.job_type, force=args.force)
     except cl.CampaignError as exc:
         print(str(exc), file=sys.stderr)
         return 1

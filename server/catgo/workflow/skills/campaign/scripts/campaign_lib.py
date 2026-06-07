@@ -408,15 +408,28 @@ def fetch_reference(project, alias: str, remote_path: str) -> Path:
 
 
 def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
-                now: str | None = None) -> dict:
+                now: str | None = None, force: bool = False) -> dict:
     """Gate-enforcing submit: refuses an unconfirmed cluster.md or a missing
     reference script (so cluster paths are never guessed), then adapts the
-    reference script, scp's the calc inputs, sbatch's, and writes STATUS.md."""
+    reference script, scp's the calc inputs, sbatch's, and writes STATUS.md.
+
+    Idempotent re-entry guard: refuses if this calc already has a STATUS.md with
+    state RUNNING/PENDING (a resumed agent must not double-submit a live job).
+    Pass force=True to resubmit anyway (e.g. after a rebuild)."""
     proj = Path(project).expanduser()
     calc_rel = calc_rel.strip("/")
     local = proj / calc_rel
     if not local.is_dir():
         raise CampaignError(f"calc folder not found: {local}")
+
+    status_file = local / "STATUS.md"
+    if status_file.is_file() and not force:
+        prev = parse_status(status_file.read_text())
+        if prev.state in ("RUNNING", "PENDING"):
+            raise CampaignError(
+                f"{calc_rel} already {prev.state} (job {prev.jobid}). Refusing to "
+                "double-submit; poll first, or pass force=True (--force) to resubmit."
+            )
 
     cfg = (parse_cluster((proj / "cluster.md").read_text())
            if (proj / "cluster.md").is_file() else ClusterConfig())

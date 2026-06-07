@@ -431,3 +431,49 @@ def test_squeue_real_ssh_failure_still_raises(monkeypatch):
     import pytest as _pt
     with _pt.raises(cl.CampaignError):
         cl.squeue("lab", "1")
+
+
+# ---- submit double-submit guard (idempotent re-entry) ----
+
+def test_submit_refuses_when_already_running(tmp_path):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    (root / "cluster.md").write_text(_good_cluster_md())
+    (root / "scripts" / "reference_job.sb").write_text(
+        "#!/bin/bash\n#SBATCH --time=1:00:00\nsrun vasp_std\n")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "INCAR").write_text("ENCUT=520\n")
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="c", state="RUNNING", jobid="42")))
+    with pytest.raises(cl.CampaignError) as ei:
+        cl.submit_calc(str(root), "calc/01-stability-formation-energy/c", "lab")
+    assert "already RUNNING" in str(ei.value) and "42" in str(ei.value)
+
+
+def test_submit_force_overrides_running_guard(tmp_path, _mock_run):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    (root / "cluster.md").write_text(_good_cluster_md())
+    (root / "scripts" / "reference_job.sb").write_text(
+        "#!/bin/bash\n#SBATCH --time=1:00:00\nsrun vasp_std\n")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "INCAR").write_text("ENCUT=520\n")
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="c", state="RUNNING", jobid="42")))
+    res = cl.submit_calc(str(root), "calc/01-stability-formation-energy/c", "lab",
+                         now="t0", force=True)
+    assert res["jobid"] == "55"   # resubmitted (fake sbatch returns 55)
+
+
+def test_submit_proceeds_when_status_done(tmp_path, _mock_run):
+    root = cl.scaffold_project(tmp_path / "p", "p", template="saa_her")
+    (root / "cluster.md").write_text(_good_cluster_md())
+    (root / "scripts" / "reference_job.sb").write_text(
+        "#!/bin/bash\n#SBATCH --time=1:00:00\nsrun vasp_std\n")
+    calc = root / "calc" / "01-stability-formation-energy" / "c"
+    calc.mkdir(parents=True)
+    (calc / "INCAR").write_text("ENCUT=520\n")
+    (calc / "STATUS.md").write_text(cl.render_status(cl.Status(
+        title="c", state="DONE", jobid="42")))   # DONE -> resubmit allowed (no guard)
+    res = cl.submit_calc(str(root), "calc/01-stability-formation-energy/c", "lab", now="t0")
+    assert res["jobid"] == "55"
