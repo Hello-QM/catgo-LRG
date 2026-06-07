@@ -4,6 +4,10 @@ CatGo is an **AI-driven workbench for computational materials science**: a 3D
 structure/trajectory editor + workflow engine, shipped as a Tauri desktop app
 (and a Tauri **mobile** build) with a Python backend.
 
+> **Agents:** working conventions (skills, campaign md-orchestration, poll-loop subagents,
+> HPC config gate, Gibbs pipeline) live in **`AGENTS.md`** — read it. Run `catgo setup` to
+> install the Claude Code skills.
+
 ## Stack & layout
 
 - **Frontend:** SvelteKit 2 / **Svelte 5 (runes)** + Vite 7 — `src/`
