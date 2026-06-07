@@ -84,26 +84,13 @@ Work backward from what the user wants to measure to every calc it requires, and
 that into `plan.md` BEFORE scaffolding structures/inputs (the build order is: plan first,
 inputs second). Common traps:
 - **Overpotential / free-energy diagram / ΔG / Gibbs / adsorption *free* energy** ⇒ needs
-  **free energies, not raw DFT energies** ⇒ the plan MUST include **freq (ZPE + TΔS)**
-  calcs for adsorbates (IBRION=5, adsorbate atoms free) AND **gas-phase thermo**
-  (`catgo freq --mode gas`) for molecular references. geo_opt energies alone are wrong.
-  **The standard Gibbs pipeline is per species: `geo_opt → freq → gibbs`.** Wire freq as
-  the AUTO-NEXT-STEP after each species' geo_opt in `plan.md` (a dependency, not a manual
-  afterthought) — every adsorbate AND every molecular reference that enters a ΔG needs its
-  own freq. Each species pipelines independently (freq fires when THAT geo_opt converges,
-  not after all of them). This pattern is reusable across HER/ORR/OER/CO2RR/NRR and any
-  adsorption-Gibbs study — instantiate it from a campaign template rather than rebuilding.
+  free energies, not raw DFT energies ⇒ **follow the `catgo-gibbs-pipeline` skill** (the
+  per-species `geo_opt → freq → gibbs` pipeline, freq setup, gas-ref convention, CHE, η).
+  Wire freq as the auto-next-step after each species' geo_opt in `plan.md`.
 - **Reaction barriers / TS** ⇒ NEB/dimer + a freq to confirm one imaginary mode.
 - **Band gap / DOS / COHP** ⇒ a dense-k static after relax.
 Confirm the full stage list with the user before building. Do NOT jump from "scope" to
 rendering inputs — discuss the plan (and its observables) first.
-
-## Gas-phase references (convention)
-Small-molecule gas references (H2, H2O, O2, CO, …): use **Γ-point only** (KPOINTS 1×1×1) +
-the **gamma VASP build (`vasp_gam`)** on a **`shared`** node (~32 cores) — never burn an
-exclusive 128-core `compute` node on a few-atom molecule. Slabs use `vasp_std` + a k-mesh
-on `compute`. Keep a separate gas job template (e.g. `scripts/reference_gas.sb`) since
-cluster.md holds the slab config; submit gas via the ssh helpers with that template.
 
 ## The loop (human-triggered, ~10 min, configurable)
 
