@@ -44,6 +44,9 @@ transfer shifts a state by +eU. Derive O/OH chemical potentials from H2O + H2:
 - μ_OH = G_H2O − ½ G_H2
 Do NOT compute O2 (triplet / over-binding error) — the whole point of CHE.
 
+## Adsorbate solvation (don't skip for ORR/OER)
+Vacuum *OH (and *OOH) are UNDER-bound — in water they H-bond to the solvent, stabilizing them by **~0.5 eV** (Nørskov 2004). Omitting it leaves ΔG(*OH) ~0.5 eV too high → step *O→*OH too flat → η ~0.5 V too large. This is NOT a wrong adsorption site (bare-DFT binding energies already match literature). Add it via explicit co-adsorbed H2O, an implicit solvent (VASPsol), or the standard ~−0.5 eV *OH / ~−0.5 eV *OOH correction. Sanity: a bare-DFT Pt(111) ORR η of ~0.9-1.0 V drops to the experimental ~0.45 V once *OH solvation is included.
+
 ## ORR (4e, associative) pathway, U = 0, pH 0
 - ΔG1: O2 + * + (H⁺+e⁻) → *OOH     (anchored via 4×1.23 = 4.92 eV total to 2 H2O)
 - ΔG2: *OOH + (H⁺+e⁻) → *O + H2O
