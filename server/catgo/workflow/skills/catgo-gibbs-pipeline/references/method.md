@@ -45,7 +45,17 @@ transfer shifts a state by +eU. Derive O/OH chemical potentials from H2O + H2:
 Do NOT compute O2 (triplet / over-binding error) — the whole point of CHE.
 
 ## Adsorbate solvation (don't skip for ORR/OER)
-Vacuum *OH (and *OOH) are UNDER-bound — in water they H-bond to the solvent, stabilizing them by **~0.5 eV** (Nørskov 2004). Omitting it leaves ΔG(*OH) ~0.5 eV too high → step *O→*OH too flat → η ~0.5 V too large. This is NOT a wrong adsorption site (bare-DFT binding energies already match literature). Add it via explicit co-adsorbed H2O, an implicit solvent (VASPsol), or the standard ~−0.5 eV *OH / ~−0.5 eV *OOH correction. Sanity: a bare-DFT Pt(111) ORR η of ~0.9-1.0 V drops to the experimental ~0.45 V once *OH solvation is included.
+Vacuum *OH (and *OOH) are UNDER-bound — water H-bonding stabilizes them, so a vacuum free
+energy makes ΔG(*OH) too high → step *O→*OH too flat → η too large. This is NOT a wrong
+adsorption site: bare-DFT binding ENERGIES (ΔE) already match literature; the gap is in the
+free-energy CORRECTION. **Caveat on the number:** Nørskov 2004 folds solvation + ZPE +
+entropy into ONE empirical step correction fit to their detailed results — it does NOT print
+an isolated solvation value, so don't cite "~0.5 eV solvation (Nørskov 2004)". The commonly
+used ~0.3–0.5 eV *OH/*OOH solvation comes from later explicit-water studies. **Quantify it
+by COMPUTING, not by plugging a hand-waved number:** explicit co-adsorbed H2O, or an implicit
+solvent (VASPsol). (Empirically, bare-DFT Pt(111) ORR η ~0.9–1.0 V vs experimental ~0.45 V
+is consistent with a ~0.5 eV *OH stabilization, but treat that as a result to verify, not an
+input.)
 
 ## ORR (4e, associative) pathway, U = 0, pH 0
 - ΔG1: O2 + * + (H⁺+e⁻) → *OOH     (anchored via 4×1.23 = 4.92 eV total to 2 H2O)
