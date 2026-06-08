@@ -110,6 +110,11 @@
   let lp_timer: ReturnType<typeof setTimeout> | null = null
   let lp_fired = false
 
+  // Clear a dangling long-press timer if the workspace tears down mid-press.
+  $effect(() => () => {
+    if (lp_timer) clearTimeout(lp_timer)
+  })
+
   // Tap = switch. Focus synchronously (trusted gesture so the soft keyboard
   // stays up), then refit after the DOM shows the now-active tab.
   async function select_tab(id: string): Promise<void> {
@@ -118,7 +123,16 @@
     await tick()
     term_refs[id]?.refit?.()
   }
+  // Close a tab + tidy the state tied to it: the unmounting MobileTerminal
+  // closes its own PTY, but bind:this leaves a stale `undefined` ref behind, so
+  // drop the key; also dismiss the action sheet if it targeted this tab.
+  function remove_tab(id: string): void {
+    close_tab(id)
+    delete term_refs[id]
+    if (sheet_tab === id) sheet_tab = null
+  }
   function tab_pointerdown(id: string): void {
+    if (lp_timer) clearTimeout(lp_timer) // drop any previous press (multi-touch)
     lp_fired = false
     lp_timer = setTimeout(() => {
       lp_fired = true
@@ -137,8 +151,7 @@
     select_tab(id)
   }
   function sheet_close(): void {
-    if (sheet_tab) close_tab(sheet_tab)
-    sheet_tab = null
+    if (sheet_tab) remove_tab(sheet_tab)
   }
   const has_content = $derived(structure != null || trajectory != null)
 
@@ -445,7 +458,7 @@
                       type="button"
                       class="mw-tabchip-x"
                       aria-label={t(`mobile.term_close`)}
-                      onclick={() => close_tab(tab.id)}
+                      onclick={() => remove_tab(tab.id)}
                     ><Icon icon="Close" /></button>
                   {/if}
                 </div>

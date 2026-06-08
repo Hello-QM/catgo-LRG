@@ -74,6 +74,11 @@
   $effect(() => {
     if (!container_el) return
 
+    // Snapshot the session this PTY belongs to, so the cleanup closes the right
+    // channel even if the prop has already flipped to a new/null session by
+    // teardown time (e.g. on disconnect, which nulls session_id then unmounts).
+    const sid = session_id
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let terminal: any = null
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -311,7 +316,7 @@
       observer?.disconnect()
       touch_ac?.abort()
       const ch = opened_channel ?? channel_id
-      if (ch) transport.ptyClose(session_id, ch).catch(() => {})
+      if (ch) transport.ptyClose(sid, ch).catch(() => {})
       channel_id = null
       term_ref = null
       fit_ref = null

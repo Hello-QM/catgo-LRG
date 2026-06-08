@@ -77,6 +77,9 @@ export function close_tab(id: string): void {
   const idx = term_tabs.tabs.findIndex((t) => t.id === id)
   if (idx === -1) return
   term_tabs.tabs.splice(idx, 1)
+  // The ✕ affordance only shows with >1 tab, so don't leave edit mode "on"
+  // (and re-appearing) once we're back down to a single terminal.
+  if (term_tabs.tabs.length <= 1) term_tabs.edit_mode = false
   if (term_tabs.tabs.length === 0) {
     add_tab() // last-tab respawn — always ≥ 1 terminal
     return

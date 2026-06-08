@@ -10,6 +10,7 @@ import {
   set_tab_cwd,
   switch_tab,
   term_tabs,
+  toggle_edit_mode,
 } from '../terminal-tabs.svelte'
 
 // Module-level state persists between tests — reset it each time.
@@ -101,5 +102,69 @@ describe(`terminal-tabs registry`, () => {
     expect(active_cwd()).toBe(`/home/u/beta`) // b is active
     switch_tab(a)
     expect(active_cwd()).toBe(`/home/u/alpha`)
+  })
+})
+
+describe(`terminal-tabs registry — edge cases`, () => {
+  it(`path_basename returns a no-slash relative path unchanged`, () => {
+    expect(path_basename(`proj`)).toBe(`proj`)
+  })
+
+  it(`close_tab is a no-op for an unknown id`, () => {
+    reset_for_session(`s1`)
+    add_tab()
+    const before = term_tabs.tabs.length
+    const active = term_tabs.active_id
+    close_tab(`nope`)
+    expect(term_tabs.tabs.length).toBe(before)
+    expect(term_tabs.active_id).toBe(active)
+  })
+
+  it(`closing a NON-active tab leaves the active selection unchanged`, () => {
+    reset_for_session(`s1`)
+    const a = term_tabs.tabs[0].id
+    add_tab() // b, now active
+    const b = term_tabs.active_id as string
+    close_tab(a) // close the inactive one
+    expect(term_tabs.active_id).toBe(b)
+    expect(term_tabs.tabs.some((t) => t.id === a)).toBe(false)
+  })
+
+  it(`switch_tab ignores an id that was closed`, () => {
+    reset_for_session(`s1`)
+    const a = term_tabs.tabs[0].id
+    add_tab()
+    const b = term_tabs.active_id as string
+    close_tab(a)
+    switch_tab(a) // a no longer exists
+    expect(term_tabs.active_id).toBe(b)
+  })
+
+  it(`active_cwd is empty when there is no active tab`, () => {
+    clear_tabs()
+    expect(active_cwd()).toBe(``)
+  })
+
+  it(`set_tab_cwd is a no-op for an unknown id`, () => {
+    reset_for_session(`s1`)
+    expect(() => set_tab_cwd(`nope`, `/x`)).not.toThrow()
+    expect(active_cwd()).toBe(``)
+  })
+
+  it(`edit_mode toggles, and drops back off once only one tab remains`, () => {
+    reset_for_session(`s1`)
+    add_tab() // 2 tabs
+    toggle_edit_mode()
+    expect(term_tabs.edit_mode).toBe(true)
+    close_tab(term_tabs.active_id as string) // back to 1 tab
+    expect(term_tabs.edit_mode).toBe(false)
+  })
+
+  it(`reset_for_session clears a lingering edit_mode`, () => {
+    reset_for_session(`s1`)
+    add_tab()
+    toggle_edit_mode()
+    reset_for_session(`s2`) // different session → fresh state
+    expect(term_tabs.edit_mode).toBe(false)
   })
 })
