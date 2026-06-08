@@ -1,5 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
-import { parse_openai_stream, stream_client_llm, to_openai_message, type LlmEvent } from '../client-llm'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  type LlmEvent,
+  parse_openai_stream,
+  stream_client_llm,
+  to_openai_message,
+} from '../client-llm'
 import type { ChatConfig, ChatMessage, ClientTool } from '../types'
 
 function sse(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
@@ -17,10 +22,12 @@ function sse(lines: string[]): ReadableStreamDefaultReader<Uint8Array> {
 describe(`parse_openai_stream`, () => {
   it(`assembles text deltas`, async () => {
     const events: LlmEvent[] = []
-    for await (const e of parse_openai_stream(sse([
-      JSON.stringify({ choices: [{ delta: { content: `Hel` } }] }),
-      JSON.stringify({ choices: [{ delta: { content: `lo` } }] }),
-    ]))) events.push(e)
+    for await (
+      const e of parse_openai_stream(sse([
+        JSON.stringify({ choices: [{ delta: { content: `Hell` } }] }),
+        JSON.stringify({ choices: [{ delta: { content: `o` } }] }),
+      ]))
+    ) events.push(e)
     const text = events
       .filter((e): e is Extract<LlmEvent, { type: `text` }> => e.type === `text`)
       .map((e) => e.text)
@@ -30,34 +37,84 @@ describe(`parse_openai_stream`, () => {
 
   it(`assembles tool_calls split across chunks`, async () => {
     const events: LlmEvent[] = []
-    for await (const e of parse_openai_stream(sse([
-      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `c1`, function: { name: `make_supercell`, arguments: `{"nx":2,` } }] } }] }),
-      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: `"ny":1,"nz":1}` } }] } }] }),
-      JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
-    ]))) events.push(e)
-    const tc = events.find((e): e is Extract<LlmEvent, { type: `tool_calls` }> => e.type === `tool_calls`)
-    expect(tc?.calls[0]).toEqual({ id: `c1`, name: `make_supercell`, arguments: { nx: 2, ny: 1, nz: 1 } })
+    for await (
+      const e of parse_openai_stream(sse([
+        JSON.stringify({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: `c1`,
+                function: { name: `make_supercell`, arguments: `{"nx":2,` },
+              }],
+            },
+          }],
+        }),
+        JSON.stringify({
+          choices: [{
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: `"ny":1,"nz":1}` } }],
+            },
+          }],
+        }),
+        JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
+      ]))
+    ) events.push(e)
+    const tc = events.find((e): e is Extract<LlmEvent, { type: `tool_calls` }> =>
+      e.type === `tool_calls`
+    )
+    expect(tc?.calls[0]).toEqual({
+      id: `c1`,
+      name: `make_supercell`,
+      arguments: { nx: 2, ny: 1, nz: 1 },
+    })
   })
 
   it(`captures reasoning_content (DeepSeek thinking) on the tool_calls event`, async () => {
     const events: LlmEvent[] = []
-    for await (const e of parse_openai_stream(sse([
-      JSON.stringify({ choices: [{ delta: { reasoning_content: `Let me ` } }] }),
-      JSON.stringify({ choices: [{ delta: { reasoning_content: `think.` } }] }),
-      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `c1`, function: { name: `fetch_optimade`, arguments: `{"q":"x"}` } }] } }] }),
-      JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
-    ]))) events.push(e)
-    const tc = events.find((e): e is Extract<LlmEvent, { type: `tool_calls` }> => e.type === `tool_calls`)
+    for await (
+      const e of parse_openai_stream(sse([
+        JSON.stringify({ choices: [{ delta: { reasoning_content: `Let me ` } }] }),
+        JSON.stringify({ choices: [{ delta: { reasoning_content: `think.` } }] }),
+        JSON.stringify({
+          choices: [{
+            delta: {
+              tool_calls: [{
+                index: 0,
+                id: `c1`,
+                function: { name: `fetch_optimade`, arguments: `{"q":"x"}` },
+              }],
+            },
+          }],
+        }),
+        JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
+      ]))
+    ) events.push(e)
+    const tc = events.find((e): e is Extract<LlmEvent, { type: `tool_calls` }> =>
+      e.type === `tool_calls`
+    )
     expect(tc?.reasoning_content).toBe(`Let me think.`)
   })
 
   it(`yields an error event (not a throw) on malformed tool-call args`, async () => {
     const events: LlmEvent[] = []
     await expect((async () => {
-      for await (const e of parse_openai_stream(sse([
-        JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `c1`, function: { name: `x`, arguments: `{"nx":` } }] } }] }),
-        JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
-      ]))) events.push(e)
+      for await (
+        const e of parse_openai_stream(sse([
+          JSON.stringify({
+            choices: [{
+              delta: {
+                tool_calls: [{
+                  index: 0,
+                  id: `c1`,
+                  function: { name: `x`, arguments: `{"nx":` },
+                }],
+              },
+            }],
+          }),
+          JSON.stringify({ choices: [{ finish_reason: `tool_calls` }] }),
+        ]))
+      ) events.push(e)
     })()).resolves.not.toThrow()
     expect(events.some((e) => e.type === `error`)).toBe(true)
     expect(events.some((e) => e.type === `done`)).toBe(true)
@@ -79,7 +136,11 @@ describe(`to_openai_message`, () => {
     const out = to_openai_message(m) as {
       role: string
       content: null
-      tool_calls: { id: string; type: string; function: { name: string; arguments: string } }[]
+      tool_calls: {
+        id: string
+        type: string
+        function: { name: string; arguments: string }
+      }[]
     }
     expect(out.role).toBe(`assistant`)
     expect(out.content).toBeNull()
@@ -92,7 +153,13 @@ describe(`to_openai_message`, () => {
   it(`echoes reasoning_content on the assistant tool_calls message (DeepSeek thinking)`, () => {
     const m: ChatMessage = {
       role: `assistant`,
-      content: [{ type: `tool_use`, id: `a`, name: `f`, input: { x: 1 }, reasoning_content: `think` }],
+      content: [{
+        type: `tool_use`,
+        id: `a`,
+        name: `f`,
+        input: { x: 1 },
+        reasoning_content: `think`,
+      }],
       timestamp: 0,
     }
     const out = to_openai_message(m) as {
@@ -111,7 +178,11 @@ describe(`to_openai_message`, () => {
       content: [{ type: `tool_result`, tool_use_id: `a`, content: `{"ok":1}` }],
       timestamp: 0,
     }
-    expect(to_openai_message(m)).toEqual({ role: `tool`, tool_call_id: `a`, content: `{"ok":1}` })
+    expect(to_openai_message(m)).toEqual({
+      role: `tool`,
+      tool_call_id: `a`,
+      content: `{"ok":1}`,
+    })
   })
 
   it(`joins text blocks into a single content string`, () => {
@@ -125,7 +196,7 @@ describe(`to_openai_message`, () => {
 })
 
 describe(`stream_client_llm request body`, () => {
-  it(`always includes the tools array in the request`, async () => {
+  it(`includes the tools array when the tool list is non-empty`, async () => {
     let captured_body: Record<string, unknown> = {}
     const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (_url, init) => {
       captured_body = JSON.parse((init as RequestInit).body as string)
@@ -151,17 +222,154 @@ describe(`stream_client_llm request body`, () => {
       mode: `universal`,
     }
     const tools: ClientTool[] = [
-      { name: `make_supercell`, description: `d`, kind: `mutate`, input_schema: { type: `object`, properties: {} } },
+      {
+        name: `make_supercell`,
+        description: `d`,
+        kind: `mutate`,
+        input_schema: { type: `object`, properties: {} },
+      },
     ]
     const events: LlmEvent[] = []
     for await (
-      const e of stream_client_llm([{ role: `user`, content: `hi`, timestamp: 0 }], config, `sys`, tools, undefined)
+      const e of stream_client_llm(
+        [{ role: `user`, content: `hi`, timestamp: 0 }],
+        config,
+        `sys`,
+        tools,
+        undefined,
+      )
     ) events.push(e)
-    const captured_tools = captured_body.tools as { type: string; function: { name: string } }[]
+    const captured_tools = captured_body.tools as {
+      type: string
+      function: { name: string }
+    }[]
     expect(Array.isArray(captured_tools)).toBe(true)
     expect(captured_tools.length).toBeGreaterThan(0)
     expect(captured_tools[0].type).toBe(`function`)
     expect(captured_tools[0].function.name).toBe(`make_supercell`)
+    spy.mockRestore()
+  })
+
+  it(`OMITS the tools field entirely when the tool list is empty (Anthropic 400s on [])`, async () => {
+    let captured_body: Record<string, unknown> = {}
+    const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (_url, init) => {
+      captured_body = JSON.parse((init as RequestInit).body as string)
+      const enc = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode(`data: [DONE]\n\n`))
+          c.close()
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    const config = {
+      provider: `deepseek`,
+      model: `deepseek-chat`,
+      temperature: 0.2,
+      max_tokens: 1024,
+      api_key: `sk-x`,
+      base_url: `https://api.deepseek.com`,
+      api_format: `openai`,
+      fetched_models: {},
+      mode: `universal`,
+    } as never
+    const events: LlmEvent[] = []
+    for await (
+      const e of stream_client_llm(
+        [{ role: `user`, content: `hi`, timestamp: 0 }] as never,
+        config,
+        `sys`,
+        [] as never,
+        undefined,
+      )
+    ) events.push(e)
+    expect(`tools` in captured_body).toBe(false)
+    spy.mockRestore()
+  })
+
+  it(`sends anthropic-version for the anthropic provider`, async () => {
+    let captured_headers: Record<string, string> = {}
+    const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (_url, init) => {
+      captured_headers = (init as RequestInit).headers as Record<string, string>
+      const enc = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode(`data: [DONE]\n\n`))
+          c.close()
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    const config = {
+      provider: `anthropic`,
+      model: `claude-3-5-sonnet`,
+      temperature: 0.2,
+      max_tokens: 1024,
+      api_key: `sk-ant-x`,
+      base_url: ``,
+      api_format: `openai`,
+      fetched_models: {},
+      mode: `universal`,
+    } as never
+    const events: LlmEvent[] = []
+    for await (
+      const e of stream_client_llm(
+        [{ role: `user`, content: `hi`, timestamp: 0 }] as never,
+        config,
+        `sys`,
+        [] as never,
+        undefined,
+      )
+    ) events.push(e)
+    expect(captured_headers[`anthropic-version`]).toBe(`2023-06-01`)
+    expect(`anthropic-dangerous-direct-browser-access` in captured_headers).toBe(false)
+    spy.mockRestore()
+  })
+
+  it(`single-read: parses a buffered non-streaming completion via parse_openai_stream`, async () => {
+    // Simulate the Tauri HTTP plugin buffering the whole body (no streaming):
+    // a single non-streaming OpenAI chat completion delivered in ONE chunk.
+    const completion = JSON.stringify({
+      choices: [{ message: { role: `assistant`, content: `Hello from buffered reply` } }],
+    })
+    const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async () => {
+      const enc = new TextEncoder()
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode(completion))
+          c.close()
+        },
+      })
+      return new Response(stream, { status: 200 })
+    })
+    const config = {
+      provider: `deepseek`,
+      model: `deepseek-chat`,
+      temperature: 0.2,
+      max_tokens: 1024,
+      api_key: `sk-x`,
+      base_url: `https://api.deepseek.com`,
+      api_format: `openai`,
+      fetched_models: {},
+      mode: `universal`,
+    } as never
+    const events: LlmEvent[] = []
+    for await (
+      const e of stream_client_llm(
+        [{ role: `user`, content: `hi`, timestamp: 0 }] as never,
+        config,
+        `sys`,
+        [] as never,
+        undefined,
+      )
+    ) events.push(e)
+    const text = events
+      .filter((e): e is Extract<LlmEvent, { type: `text` }> => e.type === `text`)
+      .map((e) => e.text)
+      .join(``)
+    expect(text).toBe(`Hello from buffered reply`)
+    expect(events.some((e) => e.type === `done`)).toBe(true)
     spy.mockRestore()
   })
 
@@ -170,12 +378,35 @@ describe(`stream_client_llm request body`, () => {
     const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async (url) => {
       called_url = String(url)
       const enc = new TextEncoder()
-      const stream = new ReadableStream({ start(c) { c.enqueue(enc.encode(`data: [DONE]\n\n`)); c.close() } })
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(enc.encode(`data: [DONE]\n\n`))
+          c.close()
+        },
+      })
       return new Response(stream, { status: 200 })
     })
-    const config = { provider: `deepseek`, model: `deepseek-chat`, temperature: 0.2, max_tokens: 1024, api_key: `sk-x`, base_url: ``, api_format: `openai`, fetched_models: {}, mode: `universal` } as never
+    const config = {
+      provider: `deepseek`,
+      model: `deepseek-chat`,
+      temperature: 0.2,
+      max_tokens: 1024,
+      api_key: `sk-x`,
+      base_url: ``,
+      api_format: `openai`,
+      fetched_models: {},
+      mode: `universal`,
+    } as never
     const events = []
-    for await (const e of stream_client_llm([{ role: `user`, content: `hi`, timestamp: 0 }] as never, config, `sys`, [] as never, undefined)) events.push(e)
+    for await (
+      const e of stream_client_llm(
+        [{ role: `user`, content: `hi`, timestamp: 0 }] as never,
+        config,
+        `sys`,
+        [] as never,
+        undefined,
+      )
+    ) events.push(e)
     expect(called_url).toBe(`https://api.deepseek.com/chat/completions`)
     spy.mockRestore()
   })
@@ -184,9 +415,27 @@ describe(`stream_client_llm request body`, () => {
     const spy = vi.spyOn(globalThis, `fetch`).mockImplementation(async () => {
       throw new Error(`fetch should not be called`)
     })
-    const config = { provider: `custom`, model: `m`, temperature: 0.2, max_tokens: 1024, api_key: `sk-x`, base_url: ``, api_format: `openai`, fetched_models: {}, mode: `universal` } as never
+    const config = {
+      provider: `custom`,
+      model: `m`,
+      temperature: 0.2,
+      max_tokens: 1024,
+      api_key: `sk-x`,
+      base_url: ``,
+      api_format: `openai`,
+      fetched_models: {},
+      mode: `universal`,
+    } as never
     const events: LlmEvent[] = []
-    for await (const e of stream_client_llm([{ role: `user`, content: `hi`, timestamp: 0 }] as never, config, `sys`, [] as never, undefined)) events.push(e)
+    for await (
+      const e of stream_client_llm(
+        [{ role: `user`, content: `hi`, timestamp: 0 }] as never,
+        config,
+        `sys`,
+        [] as never,
+        undefined,
+      )
+    ) events.push(e)
     expect(spy).not.toHaveBeenCalled()
     expect(events.some((e) => e.type === `error`)).toBe(true)
     spy.mockRestore()

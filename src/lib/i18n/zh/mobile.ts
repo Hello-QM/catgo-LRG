@@ -123,6 +123,27 @@ const mobile: Record<string, string> = {
   term_new:               `新建终端`,
   term_close:             `关闭终端`,
   term_edit:              `编辑终端`,
+
+  // ── AI 对话 (MobileChat / MobileChatSetup) ───────────────────────────
+  action_ai:              `AI 助手`,
+  action_ai_short:        `AI`,
+  ai_title:               `AI`,
+  ai_provider:            `提供方`,
+  ai_setup:               `AI 设置`,
+  ai_api_key:             `API 密钥`,
+  ai_api_key_placeholder: `粘贴你的 API 密钥`,
+  ai_base_url:            `基础 URL`,
+  ai_base_url_placeholder: `https://host/v1`,
+  ai_model:               `模型（可选）`,
+  ai_save:                `保存`,
+  ai_saving:              `保存中…`,
+  ai_send:                `发送`,
+  ai_stop:                `停止`,
+  ai_thinking:            `思考中…`,
+  ai_empty:               `关于你的结构或研究，尽管问我。`,
+  ai_no_key:              `添加 API 密钥即可开始对话。`,
+  ai_invalid_key:         `API 密钥无效。请在 AI 设置中检查密钥。`,
+  ai_message_placeholder: `输入消息…`,
 }
 
 export default mobile

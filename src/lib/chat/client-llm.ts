@@ -1,5 +1,14 @@
-import type { ChatConfig, ChatMessage, ClientTool, ToolCall, ToolUseBlock, ToolResultBlock, LLMProvider } from './types'
-import { needs_relay, normalize_provider_base_url, relay_url } from './provider-routing'
+import type {
+  ChatConfig,
+  ChatMessage,
+  ClientTool,
+  LLMProvider,
+  ToolCall,
+  ToolResultBlock,
+  ToolUseBlock,
+} from './types'
+import { llm_fetch, normalize_provider_base_url } from './provider-routing'
+import { redact } from './message-utils'
 
 /** Default OpenAI-compatible base URLs for known API providers, mirrored from
  *  the backend (server/catgo/routers/chat.py). Used in client-direct mode where
@@ -19,7 +28,11 @@ export type LlmEvent =
   | { type: `done` }
   | { type: `error`; message: string }
 
-interface AccTool { id: string; name: string; args: string }
+interface AccTool {
+  id: string
+  name: string
+  args: string
+}
 
 /** Minimal shape of an OpenAI tool_call delta within an SSE chunk. */
 interface ToolCallDelta {
@@ -83,7 +96,10 @@ export async function* parse_openai_stream(
       }))
       yield { type: `tool_calls`, calls, reasoning_content: reasoning || undefined }
     } catch (err) {
-      yield { type: `error`, message: err instanceof Error ? `Bad tool args: ${err.message}` : `Bad tool args` }
+      yield {
+        type: `error`,
+        message: err instanceof Error ? `Bad tool args: ${err.message}` : `Bad tool args`,
+      }
     }
   }
   yield { type: `done` }
@@ -97,17 +113,29 @@ export async function* stream_client_llm(
   tools: ClientTool[],
   signal?: AbortSignal,
 ): AsyncGenerator<LlmEvent> {
-  const base = normalize_provider_base_url(config.base_url || PROVIDER_BASE_URLS[config.provider] || ``)
+  const base = normalize_provider_base_url(
+    config.base_url || PROVIDER_BASE_URLS[config.provider] || ``,
+  )
   if (!base) {
-    yield { type: `error`, message: `No base URL configured for provider "${config.provider}". Set a base URL in CatBot settings.` }
+    yield {
+      type: `error`,
+      message:
+        `No base URL configured for provider "${config.provider}". Set a base URL in CatBot settings.`,
+    }
     return
   }
+  // Key-bearing path: ALWAYS hit the DIRECT provider endpoint. We must not
+  // rewrite to the relay (relay_url) here — the request carries the user's API
+  // key and the relay is a third party (security §8 C). llm_fetch uses the
+  // native Tauri HTTP plugin on mobile (no CORS, no relay fallback) and a plain
+  // fetch on desktop.
   const endpoint = `${base}/chat/completions`
-  const url = needs_relay(endpoint) ? relay_url(endpoint) : endpoint
-  // INVARIANT: tools must be sent on EVERY turn. The chat-completions API is
-  // stateless — omitting `tools` on a follow-up turn makes providers (e.g. DeepSeek)
-  // stop emitting structured tool_calls and leak raw tool-call markup into content.
-  // (Verified against the live DeepSeek API, 2026-05-26.)
+  // INVARIANT: tools must be sent on EVERY turn when non-empty. The
+  // chat-completions API is stateless — omitting `tools` on a follow-up turn
+  // makes providers (e.g. DeepSeek) stop emitting structured tool_calls and leak
+  // raw tool-call markup into content. (Verified against the live DeepSeek API,
+  // 2026-05-26.) BUT: an empty `"tools": []` 400s on Anthropic, so OMIT the
+  // field entirely when the tool list is empty (text-only mobile chat path).
   const openai_tools = tools.map((t) => ({
     type: `function`,
     function: { name: t.name, description: t.description, parameters: t.input_schema },
@@ -117,14 +145,23 @@ export async function* stream_client_llm(
     stream: true,
     temperature: config.temperature,
     max_tokens: config.max_tokens,
-    tools: openai_tools,
+    ...(openai_tools.length > 0 ? { tools: openai_tools } : {}),
     messages: [{ role: `system`, content: system }, ...messages.map(to_openai_message)],
   }
+  const headers: Record<string, string> = { 'Content-Type': `application/json` }
+  // Omit the auth header when there's no key (e.g. a keyless local ollama) so we
+  // don't send an empty `Bearer ` that some OpenAI-compat servers reject (§8 H).
+  if (config.api_key) headers[`Authorization`] = `Bearer ${config.api_key}`
+  // Anthropic's OpenAI-compat /v1 endpoint requires the API-version header.
+  // anthropic-dangerous-direct-browser-access is intentionally NOT sent — the
+  // native-fetch path has no browser CORS, and adding it would only matter on a
+  // relayed/browser path that is forbidden for key-bearing requests (§8 C/M).
+  if (config.provider === `anthropic`) headers[`anthropic-version`] = `2023-06-01`
   let resp: Response
   try {
-    resp = await fetch(url, {
+    resp = await llm_fetch(endpoint, {
       method: `POST`,
-      headers: { 'Content-Type': `application/json`, Authorization: `Bearer ${config.api_key}` },
+      headers,
       body: JSON.stringify(body),
       signal,
     })
@@ -133,10 +170,139 @@ export async function* stream_client_llm(
     return
   }
   if (!resp.ok || !resp.body) {
-    yield { type: `error`, message: `Provider error ${resp.status}: ${await resp.text().catch(() => ``)}` }
+    yield {
+      type: `error`,
+      message: `Provider error ${resp.status}: ${redact(await resp.text().catch(() => ``))}`,
+    }
     return
   }
-  yield* parse_openai_stream(resp.body.getReader())
+
+  // Single-read detection (mobile: the Tauri HTTP plugin may buffer the whole
+  // body instead of streaming). Do ONE read. A streaming SSE body's first chunk
+  // is `data:`-framed; a buffered non-streaming completion arrives as a single
+  // JSON object (no `data:` prefix). When the read is `done` (empty/whole body)
+  // OR the first chunk is NOT SSE-framed, treat it as a buffered completion:
+  // JSON-parse it and replay it through parse_openai_stream as one synthetic
+  // SSE chunk (reuse the parser — do NOT fork parsing). Otherwise stream, with
+  // the consumed first chunk pushed back in front of the live reader.
+  const reader = resp.body.getReader()
+  const first = await reader.read()
+  if (first.done || !looks_like_sse(first.value)) {
+    // Buffered (non-streaming): drain whatever remains so a chunked-but-
+    // non-streaming body is reassembled in full before JSON-parsing.
+    const buf = await drain_reader(first.value, first.done ? null : reader)
+    yield* parse_openai_stream(buffered_completion_reader(buf))
+    return
+  }
+  yield* parse_openai_stream(prepend_reader(first.value, reader))
+}
+
+/** Concatenate the first chunk with any remaining reader output into one buffer. */
+async function drain_reader(
+  first: Uint8Array | undefined,
+  reader: ReadableStreamDefaultReader<Uint8Array> | null,
+): Promise<Uint8Array> {
+  const parts: Uint8Array[] = first ? [first] : []
+  if (reader) {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) parts.push(value)
+    }
+  }
+  const total = parts.reduce((n, p) => n + p.length, 0)
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const p of parts) {
+    out.set(p, off)
+    off += p.length
+  }
+  return out
+}
+
+/** Heuristic: does the first chunk look like an SSE stream (`data:`-framed)?
+ *  A buffered non-streaming completion is a bare JSON object instead. */
+function looks_like_sse(value: Uint8Array | undefined): boolean {
+  if (!value || value.length === 0) return false
+  // A streaming SSE body opens with a `data:` event — or a `:` keep-alive/comment
+  // line before the first event (some providers do this). Either means "stream",
+  // not a buffered JSON completion.
+  const first_line = new TextDecoder().decode(value).trimStart().split(`\n`)[0]
+  return first_line.startsWith(`data:`) || first_line.startsWith(`:`)
+}
+
+/** Wrap an already-buffered non-streaming completion body as a one-shot SSE
+ *  reader so it flows through parse_openai_stream unchanged. Converts the
+ *  message.content (+ tool_calls) of a non-streaming response into a single
+ *  `data:` delta chunk followed by `[DONE]`. */
+function buffered_completion_reader(
+  value: Uint8Array,
+): ReadableStreamDefaultReader<Uint8Array> {
+  const enc = new TextEncoder()
+  let sse = `data: [DONE]\n\n`
+  try {
+    const text = value.length ? new TextDecoder().decode(value) : ``
+    const json = JSON.parse(text)
+    const message = json?.choices?.[0]?.message ?? {}
+    // Reshape message → a streaming-style delta the parser already understands.
+    const delta: Record<string, unknown> = {}
+    if (message.content) delta.content = message.content
+    if (message.reasoning_content) delta.reasoning_content = message.reasoning_content
+    if (Array.isArray(message.tool_calls)) {
+      delta.tool_calls = message.tool_calls.map((
+        tc: Record<string, unknown>,
+        i: number,
+      ) => ({
+        index: i,
+        id: tc.id,
+        function: tc.function,
+      }))
+    }
+    const chunk = JSON.stringify({ choices: [{ delta }] })
+    sse = `data: ${chunk}\n\ndata: [DONE]\n\n`
+  } catch {
+    // Non-JSON / empty buffer: emit just [DONE] so the parser yields a clean
+    // `done` event (an empty assistant reply rather than a thrown parse error).
+  }
+  return single_chunk_reader(enc.encode(sse))
+}
+
+/** A reader that yields one pre-encoded chunk then ends. */
+function single_chunk_reader(
+  bytes: Uint8Array,
+): ReadableStreamDefaultReader<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(bytes)
+      c.close()
+    },
+  }).getReader()
+}
+
+/** Re-prepend an already-consumed first chunk in front of the live reader so
+ *  the streaming SSE parser sees the whole body. */
+function prepend_reader(
+  first: Uint8Array | undefined,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): ReadableStreamDefaultReader<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async pull(c) {
+      if (first) {
+        c.enqueue(first)
+        first = undefined
+        return
+      }
+      const { done, value } = await reader.read()
+      if (done) {
+        c.close()
+        return
+      }
+      if (value) c.enqueue(value)
+    },
+    cancel(reason) {
+      void reader.cancel(reason)
+    },
+  }).getReader()
 }
 
 /** Convert in-app ChatMessage to OpenAI wire format.
@@ -157,7 +323,9 @@ export function to_openai_message(m: ChatMessage): Record<string, unknown> {
   if (typeof m.content === `string`) return { role: m.role, content: m.content }
 
   // tool_result → role:'tool' (highest priority; a single result block per msg).
-  const result_block = m.content.find((b): b is ToolResultBlock => b.type === `tool_result`)
+  const result_block = m.content.find((b): b is ToolResultBlock =>
+    b.type === `tool_result`
+  )
   if (result_block) {
     const content = typeof result_block.content === `string`
       ? result_block.content
@@ -170,7 +338,8 @@ export function to_openai_message(m: ChatMessage): Record<string, unknown> {
   if (use_blocks.length > 0) {
     // DeepSeek thinking models reject the follow-up request unless the assistant
     // message that emitted the tool_calls carries back its reasoning_content.
-    const reasoning_content = use_blocks.find((b) => b.reasoning_content)?.reasoning_content
+    const reasoning_content = use_blocks.find((b) => b.reasoning_content)
+      ?.reasoning_content
     return {
       role: `assistant`,
       content: null,

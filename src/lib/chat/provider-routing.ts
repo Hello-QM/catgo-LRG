@@ -6,7 +6,8 @@ import { SDK_PROVIDERS } from './types'
 /** Edge CORS relay base URL. Override at build time via VITE_CORS_RELAY_URL;
  *  falls back to the deployed catgo-cors-relay Worker. */
 export const RELAY_URL: string =
-  (typeof import.meta.env.VITE_CORS_RELAY_URL === `string` && import.meta.env.VITE_CORS_RELAY_URL) ||
+  (typeof import.meta.env.VITE_CORS_RELAY_URL === `string` &&
+    import.meta.env.VITE_CORS_RELAY_URL) ||
   `https://catgo-cors-relay.guangshengliu2021.workers.dev`
 
 /** Hosts known to block browser CORS — fetches to these must go through the relay.
@@ -41,7 +42,9 @@ export function relay_url(url: string): string {
 export function normalize_provider_base_url(base_url: string): string {
   const base = base_url.replace(/\/$/, ``)
   for (const suffix of [`/chat/completions`, `/messages`, `/models`]) {
-    if (base.toLowerCase().endsWith(suffix)) return base.slice(0, -suffix.length).replace(/\/$/, ``)
+    if (base.toLowerCase().endsWith(suffix)) {
+      return base.slice(0, -suffix.length).replace(/\/$/, ``)
+    }
   }
   return base
 }
@@ -56,18 +59,42 @@ export function requires_backend_chat(config: ChatConfig): boolean {
   }
 }
 
+/** True when `init` carries an API-key / bearer header that must NEVER transit a
+ *  third-party relay (security §8 C). Case-insensitive across Headers/object/array. */
+function has_auth_header(init?: RequestInit): boolean {
+  if (!init?.headers) return false
+  const h = init.headers
+  const names: string[] = h instanceof Headers
+    ? [...h.keys()]
+    : Array.isArray(h)
+    ? h.map(([k]) => k)
+    : Object.keys(h)
+  return names.some((n) => {
+    const lower = n.toLowerCase()
+    return lower === `authorization` || lower === `x-api-key`
+  })
+}
+
 /** A fetch wrapper that transparently routes CORS-blocked hosts via the relay. */
 export async function relay_fetch(url: string, init?: RequestInit): Promise<Response> {
+  // SECURITY (§8 C): the relay is a third party. NEVER hand it a request that
+  // carries the user's API key. Key-bearing chat requests must use llm_fetch
+  // (native, no relay) — this guard is defense-in-depth against an accidental
+  // key-bearing relay_fetch caller.
+  if (has_auth_header(init) && needs_relay(url)) {
+    throw new Error(
+      `Refusing to relay a request carrying an Authorization/x-api-key header`,
+    )
+  }
   // On mobile (Tauri) there is no browser CORS — the native HTTP plugin fetches
   // from Rust, so CORS-blocked sources (Materials Project, the OPTIMADE provider
   // list, any provider that omits Access-Control-Allow-Origin) work DIRECTLY
   // with no relay and no backend. This is why the database showed only PubChem.
   if (isMobile()) {
     try {
-      const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http')
+      const { fetch: tauriFetch } = await import(`@tauri-apps/plugin-http`)
       return await tauriFetch(url, init)
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn(`[CatGo] tauri http fetch failed, falling back:`, url, e)
       // Plugin unavailable (e.g. plain browser) — fall back to the relay path.
     }
@@ -75,10 +102,25 @@ export async function relay_fetch(url: string, init?: RequestInit): Promise<Resp
   return fetch(needs_relay(url) ? relay_url(url) : url, init)
 }
 
+/** Key-bearing LLM fetch. On mobile it goes through the Tauri HTTP plugin
+ *  (native Rust fetch, no browser CORS) and THROWS on failure — there is NO
+ *  relay fallback because the request carries the user's API key and the relay
+ *  is a third party (security §8 C). On desktop it is a plain `fetch`. */
+export async function llm_fetch(url: string, init?: RequestInit): Promise<Response> {
+  if (isMobile()) {
+    // No try/relay fallback: surface the error instead of leaking the key.
+    const { fetch: tauriFetch } = await import(`@tauri-apps/plugin-http`)
+    return tauriFetch(url, init)
+  }
+  return fetch(url, init)
+}
+
 /** True when the tool-calling loop should run in-browser (no backend proxy). */
 export function is_client_direct(config: ChatConfig): boolean {
   if (SDK_PROVIDERS.has(config.provider)) return false // SDK agents always backend
-  if (!STATIC_ONLY && config.provider === `custom` && config.client_direct !== true) return false
+  if (!STATIC_ONLY && config.provider === `custom` && config.client_direct !== true) {
+    return false
+  }
   if (!STATIC_ONLY && requires_backend_chat(config)) return false
   // Built-in non-SDK providers (DeepSeek/Qwen/Kimi/Gemini/Anthropic/ollama) keep
   // their API key client-side, so default to the in-browser tool-calling loop

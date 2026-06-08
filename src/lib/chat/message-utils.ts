@@ -9,6 +9,16 @@ import type { WorkflowEvent } from '$lib/workflow/workflow-state.svelte'
 
 // ── Static data ──
 
+/** Mask bearer tokens / `sk-...` secrets / x-api-key values in a string so it is
+ *  safe to display or log (§8 M). Route any error text that might reflect request
+ *  headers (some providers echo them in 401 bodies) through this first. */
+export function redact(s: string): string {
+  return s
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._\-+/=]+/gi, `$1 ***`)
+    .replace(/\bsk-[A-Za-z0-9._\-]+/g, `sk-***`)
+    .replace(/\b(x-api-key)\s*[:=]\s*[A-Za-z0-9._\-+/=]+/gi, `$1: ***`)
+}
+
 /** Static fallback model lists (used only when backend is unreachable) */
 export const FALLBACK_MODELS: Partial<Record<LLMProvider, { id: string; label: string }[]>> = {
   'sdk-claude': [

@@ -1,17 +1,21 @@
 import { untrack } from 'svelte'
 import { SvelteMap } from 'svelte/reactivity'
 import type { ChatConfig, ChatMessage, ContentBlock, SessionSummary } from './types'
-import { get_display_text, SDK_PROVIDERS, agent_from_provider } from './types'
-import { stream_chat, build_sdk_system_prompt } from './llm-client'
+import { agent_from_provider, get_display_text, SDK_PROVIDERS } from './types'
+import { build_sdk_system_prompt, stream_chat } from './llm-client'
 import { stream_sdk_agent } from './sdk-stream'
 import { is_client_direct } from './provider-routing'
 import { stream_client_llm } from './client-llm'
 import { run_tool_loop } from './tool-loop'
 import { CLIENT_TOOLS, execute_tool, tool_kind } from './structure-tools'
 import { retrieve } from './rag'
-import { get_workflow_slice, clear_workflow_events } from '$lib/workflow/workflow-state.svelte'
+import {
+  clear_workflow_events,
+  get_workflow_slice,
+} from '$lib/workflow/workflow-state.svelte'
 import { build_paper_context, build_paper_context_from_doi } from './context'
 import { API_BASE } from '$lib/api/config'
+import { isMobile } from '$lib/api/transport'
 
 const STORAGE_KEY_CONFIG = `catgo-chat-config`
 const STORAGE_KEY_USERNAME = `catgo-chat-username`
@@ -46,7 +50,9 @@ const DEFAULT_CONFIG: ChatConfig = {
 
 function load_from_storage<T>(key: string, fallback: T): T {
   try {
-    if (typeof window === `undefined` || typeof localStorage === `undefined`) return fallback
+    if (typeof window === `undefined` || typeof localStorage === `undefined`) {
+      return fallback
+    }
     const stored = localStorage.getItem(key)
     if (!stored) return fallback
     return JSON.parse(stored) as T
@@ -91,12 +97,32 @@ function init_username(): string {
 export const chat_username = $state<{ value: string }>({ value: init_username() })
 
 function persist_config(): void {
+  // SECURITY (§5/§8 H): never write the API key to localStorage on mobile. The
+  // key lives only in the native encrypted store + an in-memory $state; redact
+  // it here so any update_config caller can't accidentally serialize it cleartext.
+  if (isMobile()) {
+    save_to_storage(STORAGE_KEY_CONFIG, { ...chat_config, api_key: `` })
+    return
+  }
   save_to_storage(STORAGE_KEY_CONFIG, chat_config)
 }
 
 export function update_config(updates: Partial<ChatConfig>): void {
   Object.assign(chat_config, updates)
   persist_config()
+}
+
+/** Set the LLM API key in memory ONLY — never persisted (§5/§8 H).
+ *
+ * Direct assignment, deliberately NOT via update_config: update_config →
+ * persist_config writes chat_config to localStorage on every call, so routing
+ * the key through it would risk serializing it cleartext. (persist_config does
+ * redact api_key on mobile as belt-and-suspenders, but the key must never
+ * depend on that.) The key lives in a local $state in MobileChat/MobileChatSetup
+ * and is pushed here right before each send so stream_client_llm can read it
+ * off chat_config.api_key. */
+export function set_session_api_key(key: string): void {
+  chat_config.api_key = key
 }
 
 // ─── Chat position (right / bottom / popout) — global UI preference ───
@@ -175,7 +201,9 @@ export interface ChatSlice {
   // A message the user composed while a response was still streaming. It is
   // sent automatically the moment the in-flight round finishes (drained in
   // send_message's finally), so the input box never has to be locked.
-  pending_send: { value: { content: string; attachments?: import('./types').Attachment[] } | null }
+  pending_send: {
+    value: { content: string; attachments?: import('./types').Attachment[] } | null
+  }
   // Session-scoped tool-approval bypass (NOT persisted — a fresh session
   // always re-gates). Read at send time, threaded into the Claude adapter.
   skip_permission: { value: boolean }
@@ -195,15 +223,23 @@ function make_chat_slice(): ChatSlice {
   const loading = $state({ value: false })
   const error = $state({ value: `` })
   const active_tool_blocks = $state({ entries: {} as Record<string, ToolEntry> })
-  const active_permission_blocks = $state({ entries: {} as Record<string, PermissionEntry> })
+  const active_permission_blocks = $state({
+    entries: {} as Record<string, PermissionEntry>,
+  })
   const structure_context = $state({ value: `` })
   const workflow_context = $state({ value: `` })
   const paper_context = $state({ value: `` })
   const paper_session: PaperSession = $state({
-    session_id: ``, title: ``, authors: [], doi: ``, page_count: 0,
+    session_id: ``,
+    title: ``,
+    authors: [],
+    doi: ``,
+    page_count: 0,
   })
   const pending_send = $state({
-    value: null as { content: string; attachments?: import('./types').Attachment[] } | null,
+    value: null as
+      | { content: string; attachments?: import('./types').Attachment[] }
+      | null,
   })
   const skip_permission = $state({ value: false })
   return {
@@ -274,7 +310,9 @@ export function remove_chat_slice(tab_id: string): void {
     // tokens on work no UI will display. The SvelteKit route forwards
     // request.signal to the SDK adapter's AbortController (wired in
     // src/routes/api/agent/stream/+server.ts + adapters/claude.ts:121).
-    try { slice.abort_controller.abort() } catch { /* noop */ }
+    try {
+      slice.abort_controller.abort()
+    } catch { /* noop */ }
   }
   chat_slices.delete(tab_id)
 }
@@ -282,7 +320,10 @@ export function remove_chat_slice(tab_id: string): void {
 // ─── Paper import (writes into the slice identified by tab_id) ───
 
 /** Upload a PDF paper and set its text as context for the AI */
-export async function import_paper(file: File, tab_id: string = `default`): Promise<string> {
+export async function import_paper(
+  file: File,
+  tab_id: string = `default`,
+): Promise<string> {
   const slice = get_chat_slice(tab_id)
   const form_data = new FormData()
   form_data.append(`file`, file)
@@ -309,17 +350,24 @@ export async function import_paper(file: File, tab_id: string = `default`): Prom
 
   // Post an assistant message so the user knows import succeeded
   const title = slice.paper_session.title || file.name
-  slice.messages.list = [...slice.messages.list, {
-    role: `assistant`,
-    content: `**Paper imported:** ${title}\n\nI've read the paper. You can now ask me to:\n- Summarize the computational methodology\n- Create a workflow based on this paper\n- Explain specific calculations mentioned`,
-    timestamp: Date.now(),
-  } satisfies ChatMessage]
+  slice.messages.list = [
+    ...slice.messages.list,
+    {
+      role: `assistant`,
+      content:
+        `**Paper imported:** ${title}\n\nI've read the paper. You can now ask me to:\n- Summarize the computational methodology\n- Create a workflow based on this paper\n- Explain specific calculations mentioned`,
+      timestamp: Date.now(),
+    } satisfies ChatMessage,
+  ]
 
   return data.session_id
 }
 
 /** Resolve a DOI and set metadata as context */
-export async function import_doi(doi: string, tab_id: string = `default`): Promise<string> {
+export async function import_doi(
+  doi: string,
+  tab_id: string = `default`,
+): Promise<string> {
   const slice = get_chat_slice(tab_id)
   const resp = await fetch(`${API_BASE}/paper/resolve-doi`, {
     method: `POST`,
@@ -419,7 +467,11 @@ export function listen_chat_context(
 }
 
 /** Update the last assistant message's display content during streaming */
-function update_last_message(slice: ChatSlice, text: string, blocks?: ContentBlock[]): void {
+function update_last_message(
+  slice: ChatSlice,
+  text: string,
+  blocks?: ContentBlock[],
+): void {
   const updated = [...slice.messages.list]
   const last = updated[updated.length - 1]
   if (blocks) {
@@ -479,7 +531,11 @@ export async function send_message(
         slice.workflow_context.value,
         slice.paper_context.value,
       ].filter(Boolean).join(`\n\n`) || undefined
-      const system = build_sdk_system_prompt(chat_config.provider, combined_context, !!sid)
+      const system = build_sdk_system_prompt(
+        chat_config.provider,
+        combined_context,
+        !!sid,
+      )
 
       const gen = stream_sdk_agent({
         agent,
@@ -527,9 +583,9 @@ export async function send_message(
               te.status = (event.isError as boolean) ? `error` : `complete`
               if (event.toolName) te.toolName = event.toolName as string
             }
-            const resolved_tool_name = (event.toolName as string)
-              || te?.toolName
-              || ``
+            const resolved_tool_name = (event.toolName as string) ||
+              te?.toolName ||
+              ``
             // If a workflow-related MCP tool completed, trigger editor reload
             // so nodes created server-side via MCP appear on the canvas.
             //
@@ -538,11 +594,16 @@ export async function send_message(
             // Writing the same id again would re-fire App.svelte's navigate
             // effect, producing a doubled reload cascade on large workflows.
             const result_str = (event.result as string) ?? ``
-            if (resolved_tool_name.includes(`workflow`) || result_str.includes(`Created workflow`) || result_str.includes(`graph_json`)) {
+            if (
+              resolved_tool_name.includes(`workflow`) ||
+              result_str.includes(`Created workflow`) || result_str.includes(`graph_json`)
+            ) {
               // Route to the sending tab's workflow slice so a CatBot-created
               // workflow opens in the tab the user typed in.
               const wf_slice = get_workflow_slice(tab_id)
-              const id_match = result_str.match(/(?:id:\s*|workflow_id["\s:]+|"id"\s*:\s*")([a-f0-9-]{8,})/)
+              const id_match = result_str.match(
+                /(?:id:\s*|workflow_id["\s:]+|"id"\s*:\s*")([a-f0-9-]{8,})/,
+              )
               if (id_match && wf_slice.active_workflow.id !== id_match[1]) {
                 wf_slice.pending_navigate_workflow.id = id_match[1]
               }
@@ -561,7 +622,9 @@ export async function send_message(
             break
           case `permission_resolved`: {
             const pb = slice.active_permission_blocks.entries[event.id as string]
-            if (pb) pb.status = (event.behavior as string) === `deny` ? `denied` : `allowed`
+            if (pb) {
+              pb.status = (event.behavior as string) === `deny` ? `denied` : `allowed`
+            }
             break
           }
           case `status`:
@@ -592,7 +655,11 @@ export async function send_message(
         slice.workflow_context.value,
         slice.paper_context.value,
       ].filter(Boolean).join(`\n\n`) || undefined
-      const system = build_sdk_system_prompt(chat_config.provider, combined_context, false)
+      const system = build_sdk_system_prompt(
+        chat_config.provider,
+        combined_context,
+        false,
+      )
 
       // Local rolling conversation. Start from the prior turns (drop the empty
       // assistant placeholder we just pushed), append the user's new message,
@@ -609,41 +676,60 @@ export async function send_message(
       // subsequent turns (not `{}`, which silently drops them).
       const tool_inputs = new SvelteMap<string, Record<string, unknown>>()
       await run_tool_loop({
-        transport: () => stream_client_llm(
-          history,
-          chat_config,
-          system,
-          CLIENT_TOOLS,
-          slice.abort_controller?.signal,
-        ),
-        execute: execute_tool,
-        kind_of: tool_kind,
-        request_permission: (call) => new Promise<boolean>((resolve) => {
-          // Session-scoped bypass: approve immediately, no card.
-          if (slice.skip_permission.value) { resolve(true); return }
-          // If the user already aborted (Stop / tab close), don't park a
-          // promise no card will ever settle — resolve false immediately so
-          // the loop emits a skipped tool_end and unwinds to the finally.
-          const signal = slice.abort_controller?.signal
-          if (signal?.aborted) { resolve(false); return }
-          // Resolve false once when the stream is aborted while a card is
-          // pending. Without this the awaited promise never settles → the
-          // loop never finishes → finally never clears loading (wedge).
-          const on_abort = () => resolve(false)
-          signal?.addEventListener(`abort`, on_abort, { once: true })
-          slice.active_permission_blocks.entries[call.id] = {
-            toolName: call.name,
-            input: call.arguments,
-            status: `pending`,
-            // PermissionCard's approve/deny handler calls this to settle the
-            // promise the loop is awaiting (see PermissionCard.svelte). It
-            // also detaches the abort listener so abort can't double-settle.
-            resolve: (ok: boolean) => {
-              signal?.removeEventListener(`abort`, on_abort)
-              resolve(ok)
-            },
-          }
-        }),
+        transport: () =>
+          stream_client_llm(
+            history,
+            chat_config,
+            system,
+            // Text-only on mobile (§4): run the loop with an EMPTY tool list so the
+            // model never attempts a tool call. Combined with Phase A's
+            // omit-tools-when-empty body fix this makes mobile chat pure text.
+            // Desktop keeps the full CLIENT_TOOLS agentic loop.
+            isMobile() ? [] : CLIENT_TOOLS,
+            slice.abort_controller?.signal,
+          ),
+        // Mobile is text-only and offers no tools, but a model can still
+        // hallucinate a tool_call. There is no PermissionCard on mobile, so a
+        // `mutate` call would park request_permission forever and wedge the chat
+        // (loading never clears). Route any such call to an immediate error with
+        // read-kind (skips the permission gate) so the loop unwinds cleanly.
+        execute: isMobile()
+          ? () => Promise.resolve(`{"error":"tools are not available in mobile chat"}`)
+          : execute_tool,
+        kind_of: isMobile() ? () => `read` as const : tool_kind,
+        request_permission: (call) =>
+          new Promise<boolean>((resolve) => {
+            // Session-scoped bypass: approve immediately, no card.
+            if (slice.skip_permission.value) {
+              resolve(true)
+              return
+            }
+            // If the user already aborted (Stop / tab close), don't park a
+            // promise no card will ever settle — resolve false immediately so
+            // the loop emits a skipped tool_end and unwinds to the finally.
+            const signal = slice.abort_controller?.signal
+            if (signal?.aborted) {
+              resolve(false)
+              return
+            }
+            // Resolve false once when the stream is aborted while a card is
+            // pending. Without this the awaited promise never settles → the
+            // loop never finishes → finally never clears loading (wedge).
+            const on_abort = () => resolve(false)
+            signal?.addEventListener(`abort`, on_abort, { once: true })
+            slice.active_permission_blocks.entries[call.id] = {
+              toolName: call.name,
+              input: call.arguments,
+              status: `pending`,
+              // PermissionCard's approve/deny handler calls this to settle the
+              // promise the loop is awaiting (see PermissionCard.svelte). It
+              // also detaches the abort listener so abort can't double-settle.
+              resolve: (ok: boolean) => {
+                signal?.removeEventListener(`abort`, on_abort)
+                resolve(ok)
+              },
+            }
+          }),
         on_event: (e) => {
           switch (e.type) {
             case `text`:
@@ -671,7 +757,13 @@ export async function send_message(
               // assistant tool_calls message to be followed by its result).
               history.push({
                 role: `assistant`,
-                content: [{ type: `tool_use`, id: e.id, name: e.name, input: tool_inputs.get(e.id) ?? {}, reasoning_content: e.reasoning_content }],
+                content: [{
+                  type: `tool_use`,
+                  id: e.id,
+                  name: e.name,
+                  input: tool_inputs.get(e.id) ?? {},
+                  reasoning_content: e.reasoning_content,
+                }],
                 timestamp: Date.now(),
               })
               history.push({
@@ -719,8 +811,7 @@ export async function send_message(
       // User cancelled — keep partial content
     } else {
       const msg = err instanceof Error ? err.message : `Unknown error`
-      const is_network_or_server =
-        err instanceof TypeError ||
+      const is_network_or_server = err instanceof TypeError ||
         msg.includes(`Failed to fetch`) ||
         msg.includes(`NetworkError`) ||
         msg.includes(`Server error`)
@@ -760,7 +851,9 @@ export async function send_message(
     const queued = slice.pending_send.value
     if (queued) {
       slice.pending_send.value = null
-      queueMicrotask(() => { void send_message(queued.content, queued.attachments, tab_id) })
+      queueMicrotask(() => {
+        void send_message(queued.content, queued.attachments, tab_id)
+      })
     }
   }
 }
@@ -851,7 +944,10 @@ export function load_session_messages(session_id: string): ChatMessage[] {
   return Array.isArray(map[session_id]) ? map[session_id] : []
 }
 
-export function persist_session_messages(session_id: string, messages: ChatMessage[]): void {
+export function persist_session_messages(
+  session_id: string,
+  messages: ChatMessage[],
+): void {
   if (!session_id || messages.length === 0) return
   const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
   map[session_id] = messages.slice(-MAX_PERSISTED_MESSAGES)
@@ -874,7 +970,12 @@ function forget_session_messages(session_id: string): void {
  * is available. Each call either inserts a new summary or bumps the
  * `last_active` + `message_count` of the existing one, then re-persists.
  */
-export function record_session(agent: string, session_id: string, topic: string, model?: string): void {
+export function record_session(
+  agent: string,
+  session_id: string,
+  topic: string,
+  model?: string,
+): void {
   agent_sessions[agent] = session_id
 
   const now = Date.now()

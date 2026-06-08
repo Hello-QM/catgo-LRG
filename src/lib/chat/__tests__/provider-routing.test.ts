@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { is_client_direct, needs_relay, normalize_provider_base_url, relay_url, RELAY_URL, requires_backend_chat } from '../provider-routing'
+import { is_client_direct, needs_relay, normalize_provider_base_url, relay_fetch, relay_url, RELAY_URL, requires_backend_chat } from '../provider-routing'
 import type { ChatConfig } from '../types'
 
 describe(`needs_relay`, () => {
@@ -66,5 +66,28 @@ describe(`provider chat routing`, () => {
     } satisfies ChatConfig
     expect(requires_backend_chat(config)).toBe(false)
     expect(is_client_direct(config)).toBe(true)
+  })
+})
+
+describe(`relay_fetch auth-header guard (§8 C)`, () => {
+  it(`refuses to relay a request carrying an Authorization header to a relay host`, async () => {
+    await expect(
+      relay_fetch(`https://optimade.materialsproject.org/v1/structures`, {
+        headers: { Authorization: `Bearer secret` },
+      }),
+    ).rejects.toThrow(/Refusing to relay/)
+  })
+
+  it(`refuses an x-api-key header (object + Headers forms) to a relay host`, async () => {
+    await expect(
+      relay_fetch(`https://api.materialsproject.org/x`, {
+        headers: { 'x-api-key': `secret` },
+      }),
+    ).rejects.toThrow(/Refusing to relay/)
+    await expect(
+      relay_fetch(`https://api.materialsproject.org/x`, {
+        headers: new Headers({ Authorization: `Bearer secret` }),
+      }),
+    ).rejects.toThrow(/Refusing to relay/)
   })
 })

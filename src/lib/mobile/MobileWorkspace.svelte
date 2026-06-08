@@ -27,6 +27,7 @@
   import MobileConnect from './MobileConnect.svelte'
   import MobileTerminal from './MobileTerminal.svelte'
   import MobileFiles from './MobileFiles.svelte'
+  import MobileChat from './MobileChat.svelte'
   import KeySetup from './KeySetup.svelte'
   import { loadConnections } from './connections'
   import { tick } from 'svelte'
@@ -73,6 +74,9 @@
   let remote_origin = $state<{ path: string; filename: string } | null>(null)
   let local_filename = $state(`structure.vasp`)
   let files_open = $state(false)
+  // AI chat overlay — available whenever the workspace is shown (works without a
+  // cluster connection: the key-direct LLM path needs no backend).
+  let ai_open = $state(false)
   let db_visible = $state(false)
   let save_msg = $state(``)
 
@@ -400,6 +404,10 @@
       </div>
       <div class="mw-actions">
         <LocaleSwitch compact />
+        <button type="button" class="mw-act ai" onclick={() => (ai_open = true)} title={t(`mobile.action_ai`)} aria-label={t(`mobile.action_ai`)}>
+          <Icon icon="Chat" />
+          <span class="mw-act-label">{t(`mobile.action_ai_short`)}</span>
+        </button>
         {#if has_structure && editor_api}
           <button type="button" class="mw-act" onclick={() => editor_api?.undo()} disabled={!editor_api.can_undo()} title={t(`common.undo`)} aria-label={t(`common.undo`)}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -579,6 +587,10 @@
         <MobileFiles {session_id} follow_path={term_cwd} on_open_structure={open_remote_structure} />
       </div>
     </div>
+  {/if}
+
+  {#if ai_open}
+    <MobileChat on_close={() => (ai_open = false)} />
   {/if}
 
   {#if ks_visible && session_id}
@@ -793,6 +805,9 @@
   .mw-tabs button.active {
     color: var(--accent-color, #3b82f6);
     border-color: var(--accent-color, #3b82f6);
+  }
+  .mw-act.ai {
+    color: var(--accent-color, #3b82f6);
   }
   .mw-act.save {
     color: #4ade80;

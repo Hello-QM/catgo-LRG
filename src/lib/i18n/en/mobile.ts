@@ -123,6 +123,27 @@ const mobile: Record<string, string> = {
   term_new:               `New terminal`,
   term_close:             `Close terminal`,
   term_edit:              `Edit terminals`,
+
+  // ── AI chat (MobileChat / MobileChatSetup) ───────────────────────────
+  action_ai:              `AI assistant`,
+  action_ai_short:        `AI`,
+  ai_title:               `AI`,
+  ai_provider:            `Provider`,
+  ai_setup:               `AI setup`,
+  ai_api_key:             `API key`,
+  ai_api_key_placeholder: `Paste your API key`,
+  ai_base_url:            `Base URL`,
+  ai_base_url_placeholder: `https://host/v1`,
+  ai_model:               `Model (optional)`,
+  ai_save:                `Save`,
+  ai_saving:              `Saving…`,
+  ai_send:                `Send`,
+  ai_stop:                `Stop`,
+  ai_thinking:            `Thinking…`,
+  ai_empty:               `Ask me anything about your structure or research.`,
+  ai_no_key:              `Add an API key to start chatting.`,
+  ai_invalid_key:         `API key is invalid. Check your key in AI setup.`,
+  ai_message_placeholder: `Type a message…`,
 }
 
 export default mobile
