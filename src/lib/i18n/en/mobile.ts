@@ -116,6 +116,13 @@ const mobile: Record<string, string> = {
   saving:                 `Saving…`,
   saved:                  `Saved`,
   save_failed:            `Save failed`,
+
+  // ── Terminal tabs ("Terminals" panel, MobileWorkspace) ───────────────
+  term_panel:             `Terminals`,
+  term_label:             `Terminal {n}`,
+  term_new:               `New terminal`,
+  term_close:             `Close terminal`,
+  term_edit:              `Edit terminals`,
 }
 
 export default mobile

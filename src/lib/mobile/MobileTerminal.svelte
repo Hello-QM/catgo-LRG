@@ -38,6 +38,9 @@
   // Refs the keybar handler needs (set once the PTY is open).
   let channel_id: string | null = null
   let term_ref: { focus: () => void } | null = null
+  // Lifted to component scope so refit() (called by the parent on tab-show) can
+  // reach the fit addon, which is otherwise local to the $effect.
+  let fit_ref: { fit: () => void } | null = null
   const encoder = new TextEncoder()
 
   /** Forward a raw byte string (from the key bar) to the PTY as stdin. */
@@ -45,6 +48,26 @@
     if (!channel_id) return
     transport.ptyWrite(session_id, channel_id, encoder.encode(seq)).catch(() => {})
     // Keep focus on the hidden textarea so the soft keyboard stays up.
+    term_ref?.focus()
+  }
+
+  /** Re-fit the grid to the container. The parent calls this when a kept-warm
+   *  tab becomes visible again: visibility:hidden does NOT fire ResizeObserver,
+   *  so the fit has to be triggered explicitly on show. */
+  export function refit(): void {
+    requestAnimationFrame(() => {
+      try {
+        fit_ref?.fit()
+      } catch {
+        /* term may be disposing */
+      }
+    })
+  }
+
+  /** Focus the hidden xterm textarea (raises the soft keyboard). The parent
+   *  calls this from a tab tap handler — a trusted gesture, which WKWebView
+   *  requires for programmatic focus. */
+  export function focus(): void {
     term_ref?.focus()
   }
 
@@ -109,6 +132,7 @@
 
         terminal = term
         fit_addon = fit
+        fit_ref = fit
         term_ref = term
 
         const cols = term.cols > 0 ? term.cols : 80
@@ -290,6 +314,7 @@
       if (ch) transport.ptyClose(session_id, ch).catch(() => {})
       channel_id = null
       term_ref = null
+      fit_ref = null
       terminal?.dispose()
     }
   })

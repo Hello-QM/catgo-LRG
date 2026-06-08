@@ -29,6 +29,20 @@
   import MobileFiles from './MobileFiles.svelte'
   import KeySetup from './KeySetup.svelte'
   import { loadConnections } from './connections'
+  import { tick } from 'svelte'
+  import {
+    active_cwd,
+    add_tab,
+    clear_tabs,
+    close_tab,
+    MAX_TABS,
+    path_basename,
+    reset_for_session,
+    set_tab_cwd,
+    switch_tab,
+    term_tabs,
+    toggle_edit_mode,
+  } from './terminal-tabs.svelte'
   import { check_tauri } from '$lib/io/tauri'
   import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import Icon from '$lib/Icon.svelte'
@@ -83,8 +97,49 @@
   // IME). We deliberately do NOT bind the root height to visualViewport — doing
   // so double-counts the keyboard and leaves a black gap above it.
 
-  let term_cwd = $state(``)
+  // The Files tab follows the ACTIVE terminal's cwd (each tab tracks its own).
+  const term_cwd = $derived(active_cwd())
   const has_structure = $derived(structure != null)
+
+  // Per-tab component refs so a tab switch can refit()/focus() the now-visible
+  // terminal. Keyed by tab id (set via bind:this in the {#each}).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let term_refs = $state<Record<string, any>>({})
+  // Long-press → close action sheet; holds the target tab id while open.
+  let sheet_tab = $state<string | null>(null)
+  let lp_timer: ReturnType<typeof setTimeout> | null = null
+  let lp_fired = false
+
+  // Tap = switch. Focus synchronously (trusted gesture so the soft keyboard
+  // stays up), then refit after the DOM shows the now-active tab.
+  async function select_tab(id: string): Promise<void> {
+    switch_tab(id)
+    term_refs[id]?.focus?.()
+    await tick()
+    term_refs[id]?.refit?.()
+  }
+  function tab_pointerdown(id: string): void {
+    lp_fired = false
+    lp_timer = setTimeout(() => {
+      lp_fired = true
+      sheet_tab = id
+    }, 500)
+  }
+  function tab_pointerup(): void {
+    if (lp_timer) clearTimeout(lp_timer)
+    lp_timer = null
+  }
+  function tab_click(id: string): void {
+    if (lp_fired) {
+      lp_fired = false // long-press already opened the sheet; swallow the click
+      return
+    }
+    select_tab(id)
+  }
+  function sheet_close(): void {
+    if (sheet_tab) close_tab(sheet_tab)
+    sheet_tab = null
+  }
   const has_content = $derived(structure != null || trajectory != null)
 
   // Auto-dismiss the save/notice banner so it never sticks permanently; a ✕ also
@@ -200,6 +255,7 @@
   // connections + OTP-only reconnect still apply). The structure stays loaded.
   function disconnect(): void {
     session_id = null
+    clear_tabs()
     ks_visible = false
     files_open = false
     if (!has_content) mode = is_web ? `choose` : `terminal`
@@ -207,6 +263,7 @@
 
   function on_connected(id: string): void {
     session_id = id
+    reset_for_session(id) // seed a single terminal tab for this session
     if (mode === `choose`) mode = `terminal`
 
     // Offer SSH-key passwordless setup once per endpoint (skip if already keyed
@@ -360,7 +417,74 @@
 
       <div class="mw-pane mw-term" class:hidden={!show_terminal}>
         {#if session_id}
-          <MobileTerminal {session_id} on_cwd={(p) => (term_cwd = p)} />
+          <div class="mw-termwrap">
+            <!-- Terminals panel: horizontal strip on phone, vertical sidebar on
+                 iPad (CSS breakpoint). Tap = switch; long-press or edit-mode ✕ =
+                 close; + = new (capped at MAX_TABS). -->
+            <div class="mw-tabbar" role="tablist" aria-label={t(`mobile.term_panel`)}>
+              {#each term_tabs.tabs as tab (tab.id)}
+                <div class="mw-tabchip" class:active={tab.id === term_tabs.active_id}>
+                  <button
+                    type="button"
+                    class="mw-tabchip-btn"
+                    role="tab"
+                    aria-selected={tab.id === term_tabs.active_id}
+                    onclick={() => tab_click(tab.id)}
+                    onpointerdown={() => tab_pointerdown(tab.id)}
+                    onpointerup={tab_pointerup}
+                    onpointercancel={tab_pointerup}
+                    oncontextmenu={(e) => e.preventDefault()}
+                  >
+                    <Icon icon="Terminal" />
+                    <span class="mw-tabchip-label"
+                      >{path_basename(tab.cwd) || t(`mobile.term_label`, { n: tab.seq })}</span
+                    >
+                  </button>
+                  {#if term_tabs.edit_mode && term_tabs.tabs.length > 1}
+                    <button
+                      type="button"
+                      class="mw-tabchip-x"
+                      aria-label={t(`mobile.term_close`)}
+                      onclick={() => close_tab(tab.id)}
+                    ><Icon icon="Close" /></button>
+                  {/if}
+                </div>
+              {/each}
+              {#if term_tabs.tabs.length < MAX_TABS}
+                <button
+                  type="button"
+                  class="mw-tab-add"
+                  title={t(`mobile.term_new`)}
+                  aria-label={t(`mobile.term_new`)}
+                  onclick={() => add_tab()}
+                ><Icon icon="Plus" /></button>
+              {/if}
+              {#if term_tabs.tabs.length > 1}
+                <button
+                  type="button"
+                  class="mw-tab-edit"
+                  class:active={term_tabs.edit_mode}
+                  title={t(`mobile.term_edit`)}
+                  aria-label={t(`mobile.term_edit`)}
+                  onclick={toggle_edit_mode}
+                ><Icon icon="Pencil" /></button>
+              {/if}
+            </div>
+
+            <!-- All terminals stay mounted; inactive ones are kept warm
+                 (visibility:hidden, full size) so their PTY + grid survive. -->
+            <div class="mw-termstack">
+              {#each term_tabs.tabs as tab (tab.id)}
+                <div class="mw-termtab" class:inactive={tab.id !== term_tabs.active_id}>
+                  <MobileTerminal
+                    bind:this={term_refs[tab.id]}
+                    {session_id}
+                    on_cwd={(p) => set_tab_cwd(tab.id, p)}
+                  />
+                </div>
+              {/each}
+            </div>
+          </div>
         {:else}
           <div class="mw-connect">
             <MobileConnect {on_connected} />
@@ -390,6 +514,26 @@
       username={ks_user}
       on_done={() => (ks_visible = false)}
     />
+  {/if}
+
+  {#if sheet_tab}
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="mw-sheet-backdrop" role="presentation" onclick={() => (sheet_tab = null)}>
+      <div
+        class="mw-sheet"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <button type="button" class="mw-sheet-btn danger" onclick={sheet_close}>
+          {t(`mobile.term_close`)}
+        </button>
+        <button type="button" class="mw-sheet-btn" onclick={() => (sheet_tab = null)}>
+          {t(`common.cancel`)}
+        </button>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -610,6 +754,16 @@
     inset: 0;
     z-index: -1;
   }
+  /* Same keep-warm rationale for the terminal stack: xterm's grid measures
+     wrong if the pane ever hits display:none, so park it laid-out + invisible. */
+  .mw-pane.mw-term.hidden {
+    display: flex;
+    visibility: hidden;
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+  }
   /* The editor's root (.structure-main) defaults to height:500px via
      --struct-height; override it so it fills the pane (no black gap / clipping
      in any layout). */
@@ -655,6 +809,167 @@
   }
   .mw-connect {
     display: flex;
+  }
+
+  /* ── Terminals panel (tabs) ─────────────────────────────────────────── */
+  .mw-termwrap {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column; /* phone: strip on top, stack below */
+    width: 100%;
+  }
+  .mw-tabbar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 4px 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: rgba(0, 0, 0, 0.25);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .mw-tabbar::-webkit-scrollbar {
+    display: none;
+  }
+  .mw-tabchip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .mw-tabchip-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    max-width: 140px;
+    padding: 0 12px;
+    font-size: 13px;
+    color: var(--text-color-muted, #94a3b8);
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .mw-tabchip.active .mw-tabchip-btn {
+    color: var(--accent-color, #3b82f6);
+    border-color: var(--accent-color, #3b82f6);
+    background: rgba(59, 130, 246, 0.1);
+  }
+  .mw-tabchip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mw-tabchip-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-left: -6px;
+    font-size: 11px;
+    color: #ff6b6b;
+    background: var(--surface-bg, #1a1a2e);
+    border: 1px solid rgba(255, 107, 107, 0.5);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .mw-tab-add,
+  .mw-tab-edit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    font-size: 15px;
+    color: var(--text-color-muted, #94a3b8);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .mw-tab-edit.active {
+    color: var(--accent-color, #3b82f6);
+    border-color: var(--accent-color, #3b82f6);
+  }
+  /* Stack: all terminals laid out full-size; only the active one is visible. */
+  .mw-termstack {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+  .mw-termtab {
+    position: absolute;
+    inset: 0;
+    display: flex;
+  }
+  /* Keep-warm: inactive tabs stay full-size but invisible (NEVER display:none —
+     that would zero xterm's measured grid). */
+  .mw-termtab.inactive {
+    visibility: hidden;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  /* iPad / wide: vertical sidebar instead of a top strip. */
+  @media (min-width: 768px) {
+    .mw-termwrap {
+      flex-direction: row;
+    }
+    .mw-tabbar {
+      flex-direction: column;
+      align-items: stretch;
+      overflow-x: hidden;
+      overflow-y: auto;
+      width: 160px;
+      flex-shrink: 0;
+      border-bottom: none;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .mw-tabchip {
+      width: 100%;
+    }
+    .mw-tabchip-btn {
+      flex: 1;
+      max-width: none;
+    }
+  }
+
+  /* Long-press close action sheet */
+  .mw-sheet-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: flex-end;
+    background: rgba(0, 0, 0, 0.45);
+  }
+  .mw-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 12px;
+  }
+  .mw-sheet-btn {
+    min-height: 48px;
+    font-size: 15px;
+    color: var(--text-color, #e0e0e0);
+    background: var(--surface-bg, #1a1a2e);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    cursor: pointer;
+  }
+  .mw-sheet-btn.danger {
+    color: #ff6b6b;
+    border-color: rgba(255, 107, 107, 0.5);
   }
 
   /* Remote files overlay */

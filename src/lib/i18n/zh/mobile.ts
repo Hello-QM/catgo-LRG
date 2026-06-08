@@ -116,6 +116,13 @@ const mobile: Record<string, string> = {
   saving:                 `保存中…`,
   saved:                  `已保存`,
   save_failed:            `保存失败`,
+
+  // ── 终端标签（MobileWorkspace「终端」面板）───────────────────────────
+  term_panel:             `终端`,
+  term_label:             `终端 {n}`,
+  term_new:               `新建终端`,
+  term_close:             `关闭终端`,
+  term_edit:              `编辑终端`,
 }
 
 export default mobile
