@@ -146,7 +146,7 @@
       // Filter to matching file types if any filter specified
       if (file_types.length > 0) {
         step_files = all_files.filter((f) =>
-          file_types.some((ext) => f.name.toLowerCase().endsWith(ext)),
+          file_types.some((ext) => f.name.toLowerCase().endsWith(ext.toLowerCase())),
         )
         // If no matches found, show all files so user can still choose
         if (step_files.length === 0) step_files = all_files
@@ -174,7 +174,9 @@
   function validate_file(file: File): boolean {
     if (file_types.length === 0) return true
     const name = file.name.toLowerCase()
-    return file_types.some((ext) => name.endsWith(ext))
+    // Compare case-insensitively so extensionless names like "XDATCAR"
+    // (matched by an "XDATCAR" entry) validate regardless of casing.
+    return file_types.some((ext) => name.endsWith(ext.toLowerCase()))
   }
 
   // ─── Tab 1: Local Upload ───

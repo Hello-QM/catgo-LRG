@@ -42,6 +42,7 @@
   let profile_axis = $state<`x` | `y` | `z`>(`z`)
   let profile_n_bins = $state(100)
   let profile_density_type = $state<`number` | `mass`>(`number`)
+  let profile_selection = $state<`all` | `water` | `water_oxygen`>(`all`)
   let profile_atom_indices_text = $state(``)
   let profile_frame_start = $state(``)
   let profile_frame_end = $state(``)
@@ -70,6 +71,7 @@
 
       const indices = parse_atom_indices(profile_atom_indices_text)
       if (indices) body.atom_indices = indices
+      else if (profile_selection !== `all`) body.selection = profile_selection
 
       const fs = parseInt(profile_frame_start, 10)
       const fe = parseInt(profile_frame_end, 10)
@@ -121,6 +123,7 @@
   let planar_ny = $state(50)
   let planar_z_min = $state(``)
   let planar_z_max = $state(``)
+  let planar_selection = $state<`all` | `water` | `water_oxygen`>(`all`)
   let planar_atom_indices_text = $state(``)
   let planar_frame_start = $state(``)
   let planar_frame_end = $state(``)
@@ -154,6 +157,7 @@
 
       const indices = parse_atom_indices(planar_atom_indices_text)
       if (indices) body.atom_indices = indices
+      else if (planar_selection !== `all`) body.selection = planar_selection
 
       const fs = parseInt(planar_frame_start, 10)
       const fe = parseInt(planar_frame_end, 10)
@@ -228,6 +232,14 @@
         </select>
       </label>
       <label>
+        {t('structure.md_selection')}
+        <select bind:value={profile_selection} disabled={profile_atom_indices_text.trim() !== ``}>
+          <option value="all">{t('structure.md_selection_all')}</option>
+          <option value="water">{t('structure.md_selection_water')}</option>
+          <option value="water_oxygen">{t('structure.md_selection_water_oxygen')}</option>
+        </select>
+      </label>
+      <label>
         {t('structure.md_atom_indices')}
         <input
           type="text"
@@ -298,6 +310,14 @@
       <label>
         {t('structure.md_axis_range_max_angstrom', { axis: planar_plane === `xy` ? `Z` : planar_plane === `xz` ? `Y` : `X` })}
         <input type="text" placeholder="(optional)" bind:value={planar_z_max} />
+      </label>
+      <label>
+        {t('structure.md_selection')}
+        <select bind:value={planar_selection} disabled={planar_atom_indices_text.trim() !== ``}>
+          <option value="all">{t('structure.md_selection_all')}</option>
+          <option value="water">{t('structure.md_selection_water')}</option>
+          <option value="water_oxygen">{t('structure.md_selection_water_oxygen')}</option>
+        </select>
       </label>
       <label>
         {t('structure.md_atom_indices')}

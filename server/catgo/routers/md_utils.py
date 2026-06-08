@@ -13,6 +13,7 @@ import tempfile
 from typing import Optional
 
 import mdtraj as md
+import numpy as np
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ TOPOLOGY_REQUIRED_FORMATS = {
 # Formats that mdtraj cannot handle natively but ASE can read
 ASE_CONVERTIBLE_FORMATS = {
     "xyz", "xyz.gz", "extxyz", "traj",
+    "xdatcar",  # VASP MD trajectory — ASE reads it, mdtraj does not
 }
 
 ALL_SUPPORTED_FORMATS = (
@@ -66,8 +68,15 @@ def _convert_xyz_to_pdb(xyz_path: str, fmt: str) -> str:
         )
 
     try:
-        # Read all frames from the XYZ file
-        ase_format = "extxyz" if fmt in ("extxyz", "traj") else None
+        # ASE guesses the reader from the file extension, but the temp file's
+        # suffix (e.g. ".xdatcar") isn't a name ASE recognizes, so pass an
+        # explicit format for anything not a plain ".xyz".
+        if fmt == "xdatcar":
+            ase_format = "vasp-xdatcar"
+        elif fmt in ("extxyz", "traj"):
+            ase_format = "extxyz"
+        else:
+            ase_format = None
         frames = read(xyz_path, index=":", format=ase_format)
         if not isinstance(frames, list):
             frames = [frames]
@@ -128,6 +137,67 @@ def _guess_bonds_from_distances(traj: md.Trajectory, tolerance: float = 0.3) -> 
                 traj.topology.add_bond(atom_i, atom_j)
 
     logger.info("Guessed %d bonds from covalent radii", traj.topology.n_bonds)
+
+
+def select_water_atoms(traj: md.Trajectory, oxygen_only: bool = False) -> np.ndarray:
+    """Return atom indices belonging to water molecules.
+
+    Resolution order:
+      1. mdtraj's ``topology.select("water")`` — works when the file carried
+         water residue names (HOH/WAT/SOL/...), e.g. a PDB/GRO trajectory.
+      2. Geometric fallback — for trajectories with no residue info (XDATCAR,
+         bare XYZ): an oxygen with exactly two hydrogens within 1.3 A in the
+         first frame is treated as a water molecule. This is the same O-H
+         cutoff used by the bond detector.
+
+    Args:
+        traj: The loaded trajectory.
+        oxygen_only: If True, return only the water oxygens; otherwise return
+            each water O plus its two H.
+
+    Returns:
+        Sorted array of 0-based atom indices (possibly empty). The result only
+        ever contains O and H atoms — metals/other elements can never leak in,
+        even if a residue-name match over-selects.
+    """
+    symbols = [a.element.symbol for a in traj.topology.atoms]
+
+    # 1. Residue-name path (PDB/GRO with water residues like HOH/WAT/SOL).
+    try:
+        sel = list(traj.topology.select("water"))
+    except Exception:
+        sel = []
+    # Keep only O/H from the matched residues — a "water" residue can carry
+    # ions or be mislabeled, and we must never return a metal as "water".
+    candidates = [int(i) for i in sel if symbols[int(i)] in ("O", "H")]
+
+    # 2. Geometric fallback (no usable residue info — XDATCAR / bare XYZ).
+    #    Assign each H to its NEAREST O (within 1.3 A); an O that owns exactly
+    #    two H is a water molecule. Nearest-O assignment is essential for dense
+    #    water: a neighbouring molecule's H often sits within 1.3 A of an O, so
+    #    a naive "count all H within 1.3 A == 2" test wrongly rejects those
+    #    waters and roughly halves the computed density.
+    if not candidates:
+        o_idx = [i for i, s in enumerate(symbols) if s == "O"]
+        h_idx = [i for i, s in enumerate(symbols) if s == "H"]
+        if not o_idx or not h_idx:
+            return np.array([], dtype=int)
+        pos = traj.xyz[0] * 10.0  # nm -> Angstroms (first frame)
+        o_pos = pos[o_idx]
+        cutoff_sq = 1.3 * 1.3
+        owned_h: dict[int, list[int]] = {oi: [] for oi in o_idx}
+        for hi in h_idx:
+            d_sq = np.sum((o_pos - pos[hi]) ** 2, axis=1)
+            j = int(np.argmin(d_sq))
+            if d_sq[j] < cutoff_sq:  # this H belongs to its nearest O
+                owned_h[o_idx[j]].append(hi)
+        for oi, hs in owned_h.items():
+            if len(hs) == 2:  # exactly two H -> water (not OH-, not H3O+)
+                candidates.extend([oi, *hs])
+
+    if oxygen_only:
+        candidates = [i for i in candidates if symbols[i] == "O"]
+    return np.array(sorted(set(candidates)), dtype=int)
 
 
 def resolve_periodic(traj: md.Trajectory, periodic: bool) -> bool:

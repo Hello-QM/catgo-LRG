@@ -15,7 +15,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .md_utils import load_trajectory
+from .md_utils import load_trajectory, select_water_atoms
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,16 @@ class DensityProfileRequest(BaseModel):
     atom_indices: Optional[list[int]] = Field(
         default=None,
         description="Atom indices to include (0-based). If None, all atoms are used.",
+    )
+    selection: Optional[str] = Field(
+        default=None,
+        description=(
+            "Semantic atom selection, applied when atom_indices is not given: "
+            "'water' (O + 2 H of each water molecule) or 'water_oxygen' (water "
+            "O only). Water is found by residue name, falling back to geometry "
+            "(O with exactly two H within 1.3 A) for files without residues "
+            "such as XDATCAR. If None/'all', all atoms are used."
+        ),
     )
     frame_range: Optional[list[int]] = Field(
         default=None,
@@ -116,6 +126,16 @@ class PlanarDensityRequest(BaseModel):
     atom_indices: Optional[list[int]] = Field(
         default=None,
         description="Atom indices to include (0-based). If None, all atoms are used.",
+    )
+    selection: Optional[str] = Field(
+        default=None,
+        description=(
+            "Semantic atom selection, applied when atom_indices is not given: "
+            "'water' (O + 2 H of each water molecule) or 'water_oxygen' (water "
+            "O only). Water is found by residue name, falling back to geometry "
+            "(O with exactly two H within 1.3 A) for files without residues "
+            "such as XDATCAR. If None/'all', all atoms are used."
+        ),
     )
     z_range: Optional[list[float]] = Field(
         default=None,
@@ -238,6 +258,49 @@ def _select_frames(
     return traj[start : end + 1]
 
 
+def _resolve_atom_indices(
+    traj: md.Trajectory,
+    atom_indices: Optional[list[int]],
+    selection: Optional[str],
+) -> np.ndarray:
+    """Resolve the atoms to analyze from an explicit list or a semantic
+    ``selection`` ('water' / 'water_oxygen' / 'all'). Explicit indices win.
+    """
+    if atom_indices is not None:
+        idx = np.array(atom_indices, dtype=int)
+        if len(idx) == 0:
+            raise HTTPException(status_code=400, detail="atom_indices is empty.")
+        if np.any(idx < 0) or np.any(idx >= traj.n_atoms):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"atom_indices contains out-of-range values. "
+                    f"Valid range: 0 to {traj.n_atoms - 1}."
+                ),
+            )
+        return idx
+
+    sel = (selection or "all").lower().strip()
+    if sel in ("", "all", "none"):
+        return np.arange(traj.n_atoms)
+    if sel in ("water", "water_oxygen"):
+        idx = select_water_atoms(traj, oxygen_only=(sel == "water_oxygen"))
+        if len(idx) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No water molecules found in this trajectory (looked for "
+                    "water residues, then for O with two nearby H). Use explicit "
+                    "atom_indices instead."
+                ),
+            )
+        return idx
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unknown selection '{selection}'. Use 'all', 'water', or 'water_oxygen'.",
+    )
+
+
 def _get_cell_dimensions_angstrom(traj: md.Trajectory) -> Optional[np.ndarray]:
     """Get average unit cell dimensions in Angstroms from the trajectory.
 
@@ -290,25 +353,10 @@ def density_profile(request: DensityProfileRequest) -> DensityProfileResponse:
         if n_frames == 0:
             raise HTTPException(status_code=400, detail="No frames in the selected range.")
 
-        # Determine atom indices
-        if request.atom_indices is not None:
-            atom_indices = np.array(request.atom_indices, dtype=int)
-            # Validate indices
-            if len(atom_indices) == 0:
-                raise HTTPException(
-                    status_code=400, detail="atom_indices is empty."
-                )
-            if np.any(atom_indices < 0) or np.any(atom_indices >= traj.n_atoms):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"atom_indices contains out-of-range values. "
-                        f"Valid range: 0 to {traj.n_atoms - 1}."
-                    ),
-                )
-        else:
-            atom_indices = np.arange(traj.n_atoms)
-
+        # Determine atom indices (explicit list, or a semantic selection)
+        atom_indices = _resolve_atom_indices(
+            traj, request.atom_indices, request.selection
+        )
         n_atoms_selected = len(atom_indices)
 
         # Get positions in Angstroms: mdtraj stores in nm
@@ -465,24 +513,10 @@ def planar_density(request: PlanarDensityRequest) -> PlanarDensityResponse:
         if n_frames == 0:
             raise HTTPException(status_code=400, detail="No frames in the selected range.")
 
-        # Determine atom selection
-        if request.atom_indices is not None:
-            atom_indices = np.array(request.atom_indices, dtype=int)
-            if len(atom_indices) == 0:
-                raise HTTPException(
-                    status_code=400, detail="atom_indices is empty."
-                )
-            if np.any(atom_indices < 0) or np.any(atom_indices >= traj.n_atoms):
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"atom_indices contains out-of-range values. "
-                        f"Valid range: 0 to {traj.n_atoms - 1}."
-                    ),
-                )
-        else:
-            atom_indices = np.arange(traj.n_atoms)
-
+        # Determine atom selection (explicit list, or a semantic selection)
+        atom_indices = _resolve_atom_indices(
+            traj, request.atom_indices, request.selection
+        )
         n_atoms_selected = len(atom_indices)
 
         # Get positions in Angstroms
