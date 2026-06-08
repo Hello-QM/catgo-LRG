@@ -126,26 +126,9 @@ def _ensure_db():
             metadata TEXT DEFAULT '{}'
         );
 
-        CREATE TABLE IF NOT EXISTS branches (
-            id TEXT PRIMARY KEY,
-            workflow_id TEXT NOT NULL,
-            map_node_id TEXT NOT NULL,
-            branch_index INTEGER NOT NULL,
-            label TEXT,
-            status TEXT DEFAULT 'pending',
-            structure_json TEXT,
-            result_json TEXT,
-            error_message TEXT,
-            work_dir TEXT,
-            started_at DATETIME,
-            completed_at DATETIME,
-            FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-        );
-
         CREATE INDEX IF NOT EXISTS idx_steps_workflow ON workflow_steps(workflow_id);
         CREATE INDEX IF NOT EXISTS idx_steps_status ON workflow_steps(status);
         CREATE INDEX IF NOT EXISTS idx_edges_workflow ON workflow_edges(workflow_id);
-        CREATE INDEX IF NOT EXISTS idx_branches_workflow ON branches(workflow_id, map_node_id);
     """)
     conn.commit()
 
@@ -550,69 +533,6 @@ def list_steps(wf_id: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
-def list_edges(wf_id: str) -> list[dict]:
-    """List all edges for a workflow."""
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT * FROM workflow_edges WHERE workflow_id = ?", (wf_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_step_dependencies(wf_id: str, step_id: str) -> list[str]:
-    """Get IDs of all steps that feed into the given step."""
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT source_step_id FROM workflow_edges WHERE workflow_id = ? AND target_step_id = ?",
-            (wf_id, step_id),
-        ).fetchall()
-        return [r["source_step_id"] for r in rows]
-
-
-def get_ready_steps(wf_id: str) -> list[dict]:
-    """Get steps that are ready to execute (all dependencies completed)."""
-    with get_db() as conn:
-        # Steps that are pending and whose dependencies are all completed
-        rows = conn.execute("""
-            SELECT s.* FROM workflow_steps s
-            WHERE s.workflow_id = ? AND s.status = 'pending'
-            AND NOT EXISTS (
-                SELECT 1 FROM workflow_edges e
-                JOIN workflow_steps dep ON dep.id = e.source_step_id AND dep.workflow_id = e.workflow_id
-                WHERE e.workflow_id = ? AND e.target_step_id = s.id
-                AND dep.status != 'completed'
-            )
-        """, (wf_id, wf_id)).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_incomplete_running_workflows() -> list[dict]:
-    """Get workflows that are in 'running' state (for recovery after restart).
-
-    When CatGo shuts down while workflows are running, jobs continue on HPC.
-    On startup, this function finds workflows that need status recovery.
-    """
-    with get_db() as conn:
-        wf_rows = conn.execute(
-            "SELECT id, name, run_config_json FROM workflows WHERE status = 'running'",
-        ).fetchall()
-        results = []
-        for wf in wf_rows:
-            steps = conn.execute(
-                """SELECT id, node_type, status, hpc_job_id, hpc_session_id, work_dir, config_json
-                   FROM workflow_steps
-                   WHERE workflow_id = ? AND status IN ('running', 'queued')""",
-                (wf["id"],),
-            ).fetchall()
-            results.append({
-                "workflow_id": wf["id"],
-                "name": wf["name"],
-                "run_config_json": wf["run_config_json"],
-                "pending_steps": [dict(s) for s in steps],
-            })
-        return results
-
-
 def update_workflow_run_config(wf_id: str, config_json: str):
     """Store the run configuration for a workflow."""
     with _write_lock:
@@ -622,139 +542,6 @@ def update_workflow_run_config(wf_id: str, config_json: str):
                 (config_json, _now(), wf_id),
             )
             conn.commit()
-
-
-# --- Branch management (map/aggregate fan-out) ---
-
-
-def create_branch(
-    workflow_id: str,
-    map_node_id: str,
-    branch_index: int,
-    label: str,
-    structure_json: str,
-    work_dir: str,
-) -> str:
-    """Create a branch record for a map node's parallel fan-out.
-
-    Each branch represents one parallel execution path through the
-    sub-workflow between a map node and its paired aggregate node.
-
-    Args:
-        workflow_id: Parent workflow ID.
-        map_node_id: The map node that spawned this branch.
-        branch_index: Zero-based index within the fan-out batch.
-        label: Human-readable label (e.g. "Cu-Ti substitution").
-        structure_json: JSON-serialized input structure for this branch.
-        work_dir: Unique work directory path for this branch.
-
-    Returns:
-        The branch ID string ("{workflow_id}:{map_node_id}:{branch_index}").
-    """
-    branch_id = f"{workflow_id}:{map_node_id}:{branch_index}"
-    with _write_lock:
-        with get_db() as conn:
-            conn.execute(
-                """INSERT OR REPLACE INTO branches
-                   (id, workflow_id, map_node_id, branch_index, label,
-                    status, structure_json, work_dir)
-                   VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)""",
-                (branch_id, workflow_id, map_node_id, branch_index,
-                 label, structure_json, work_dir),
-            )
-            conn.commit()
-    return branch_id
-
-
-def update_branch_status(
-    branch_id: str,
-    status: str,
-    result_json: Optional[str] = None,
-    error_message: Optional[str] = None,
-) -> None:
-    """Atomically update a branch's status in SQLite.
-
-    Designed to be crash-safe: each call is a single atomic DB write,
-    so the branch state is always consistent even if the server crashes
-    mid-execution.
-
-    Args:
-        branch_id: Unique branch identifier.
-        status: New status (pending/running/completed/failed).
-        result_json: JSON-serialized result dict (for completed branches).
-        error_message: Error description (for failed branches).
-    """
-    with _write_lock:
-        with get_db() as conn:
-            sets = ["status = ?"]
-            vals: list = [status]
-
-            if status == "running":
-                sets.append("started_at = ?")
-                vals.append(_now())
-            elif status in ("completed", "failed"):
-                sets.append("completed_at = ?")
-                vals.append(_now())
-
-            if result_json is not None:
-                sets.append("result_json = ?")
-                vals.append(result_json)
-
-            if error_message is not None:
-                sets.append("error_message = ?")
-                vals.append(error_message)
-
-            vals.append(branch_id)
-            conn.execute(
-                f"UPDATE branches SET {', '.join(sets)} WHERE id = ?",
-                vals,
-            )
-            conn.commit()
-
-
-def get_branches(workflow_id: str, map_node_id: str) -> list[dict]:
-    """Get all branches for a specific map node in a workflow.
-
-    Used by the aggregate node to collect results, and by the WebSocket
-    monitor to send branch status updates to the frontend.
-
-    Args:
-        workflow_id: Parent workflow ID.
-        map_node_id: The map node whose branches to retrieve.
-
-    Returns:
-        List of branch dicts ordered by branch_index.
-    """
-    with get_db() as conn:
-        rows = conn.execute(
-            """SELECT * FROM branches
-               WHERE workflow_id = ? AND map_node_id = ?
-               ORDER BY branch_index""",
-            (workflow_id, map_node_id),
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_branch(branch_id: str) -> dict:
-    """Get a single branch record by ID.
-
-    Args:
-        branch_id: Unique branch identifier.
-
-    Returns:
-        Branch dict.
-
-    Raises:
-        KeyError: If the branch does not exist.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM branches WHERE id = ?",
-            (branch_id,),
-        ).fetchone()
-        if not row:
-            raise KeyError(f"Branch {branch_id} not found")
-        return dict(row)
 
 
 # --- Project management ---

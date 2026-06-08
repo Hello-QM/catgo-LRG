@@ -148,10 +148,14 @@ def test_shell_freq_analyze_via_menu(tmp_path):
     assert "imaginary=0" in text
 
 
-def test_shell_no_autostart_blocks_push():
+def test_shell_no_autostart_blocks_push(monkeypatch):
     # Without a real server and with no_autostart=True, choosing `push`
     # in the menu must NOT spawn a daemon; the shell surfaces a clean
     # OpError-format line and returns to the menu.
+    # Point discovery at a dead endpoint so the test is deterministic even on a
+    # workstation with `catgo serve` running on :8000 (CATGO_API short-circuits
+    # ServerLink.discover to that one endpoint).
+    monkeypatch.setenv("CATGO_API", "http://127.0.0.1:59999")
     out = []
     script = iter(["push", "", "q"])   # op name, panel (empty), quit
     sh = InteractiveShell(session=Session(),

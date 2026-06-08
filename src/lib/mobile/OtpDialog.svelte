@@ -73,7 +73,7 @@
           <input
             class="otp-input"
             type={p.echo ? `text` : `password`}
-            inputmode={p.echo ? `text` : `numeric`}
+            inputmode="text"
             autocomplete="one-time-code"
             autocapitalize="off"
             autocorrect="off"

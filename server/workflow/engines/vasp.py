@@ -52,11 +52,32 @@ def _get_layer_z_threshold(struct: Any, n_frozen_layers: int) -> float:
     return (z_coords[n_frozen_layers - 1] + z_coords[n_frozen_layers]) / 2
 
 
+def _freeze_n_bottom_layers(params: dict) -> int:
+    """Number of bottom slab layers to freeze, tolerant of every param spelling
+    used across the frontend / skills / MCP (`frozen_layers`, `freeze_layers`,
+    `freeze_n_layers`). Returns 0 if none set. Single source of truth so a slab
+    is frozen regardless of which producer authored the node."""
+    for key in ("frozen_layers", "freeze_layers", "freeze_n_layers"):
+        v = params.get(key)
+        if v:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
 def _structure_to_pymatgen_dict(struct: Any) -> dict[str, Any]:
     """Convert a pymatgen Structure or Molecule to the PymatgenStructure model format."""
     sites = []
     for site in struct:
-        sp = site.specie
+        try:
+            sp = site.specie
+        except AttributeError:
+            # Disordered / partial-occupancy site: pymatgen's `.specie` property
+            # raises (it falls through to __getattr__). Fall back to the
+            # dominant species so VASP input generation still resolves an element.
+            sp = max(site.species.items(), key=lambda kv: kv[1])[0]
         elem = str(sp.element) if hasattr(sp, "element") else str(sp)
         oxi = getattr(sp, "oxi_state", None) or getattr(sp, "oxidation_state", None)
         species_dict = {"element": elem, "occu": 1.0}
@@ -205,6 +226,27 @@ def generate_vasp_input_files(
                 val = str(val)
             request_data[request_key] = val
 
+    # Pass through any OTHER INCAR tags so users can set arbitrary INCAR options
+    # (e.g. LH5, MAGMOM, ICHARG, AMIX, LDAU*) that aren't in param_mapping above.
+    # VASP INCAR tags are UPPERCASE; CatGo control keys (software, kpoints,
+    # freeze_mode, system_type, ...) are lowercase, so route uppercase-and-unmapped
+    # keys plus an explicit `custom_incar` dict into request.custom_incar.
+    extra_incar: dict[str, Any] = dict(params.get("custom_incar") or {})
+    for k, v in params.items():
+        if v is None or k in param_mapping or k == "KPOINTS":
+            continue
+        if isinstance(k, str) and len(k) >= 2 and k.isupper():
+            if isinstance(v, str):
+                try:
+                    v = float(v) if ("." in v or "e" in v.lower()) else int(v)
+                except ValueError:
+                    pass
+            extra_incar.setdefault(k, v)
+    if extra_incar:
+        request_data.setdefault("custom_incar", {})
+        for k, v in extra_incar.items():
+            request_data["custom_incar"].setdefault(k, v)
+
     # Handle optimizer
     ibrion = params.get("IBRION")
     if ibrion == 3:
@@ -223,19 +265,26 @@ def generate_vasp_input_files(
             except ValueError:
                 pass
 
-    # Handle slab-specific params
-    if node_type == "slab_relax":
+    # Handle slab-specific params (unified geo_opt/vasp_relax + legacy slab_relax)
+    if node_type in ("slab_relax", "vasp_relax", "geo_opt"):
         request_data.setdefault("isif", 2)
         if params.get("LDIPOL"):
             request_data.setdefault("custom_incar", {})
             request_data["custom_incar"]["LDIPOL"] = True
             request_data["custom_incar"]["IDIPOL"] = 3
-        # Freeze bottom layers
-        frozen_layers = params.get("frozen_layers", 0)
-        if frozen_layers and frozen_layers > 0:
-            request_data["fixed_z_below"] = _get_layer_z_threshold(
-                struct, int(frozen_layers)
-            )
+        # Freeze bottom N layers (selective dynamics). Previously only wired for
+        # slab_relax, so the unified geo_opt/vasp_relax path silently ignored
+        # frozen_layers and the slab was never actually constrained.
+        n_frozen_layers = _freeze_n_bottom_layers(params)
+        if n_frozen_layers > 0 and struct:
+            z_threshold = _get_layer_z_threshold(struct, n_frozen_layers)
+            request_data["fixed_z_below"] = z_threshold
+            sd = [[False, False, False] if site.coords[2] < z_threshold else [True, True, True]
+                  for site in struct]
+            struct.add_site_property("selective_dynamics", sd)
+            n_frozen = sum(1 for row in sd if row == [False, False, False])
+            logger.info("[FREEZE] %s: fixed %d/%d atoms below z=%.3f",
+                        node_type, n_frozen, len(struct), z_threshold)
 
     # Handle frozen atoms for frequency calculations
     if node_type in ("freq", "frequency"):
@@ -273,9 +322,9 @@ def generate_vasp_input_files(
                     except ValueError:
                         pass
 
-        elif freeze_mode == "layers" and struct:
-            # Support both "frozen_layers" (frontend) and "freeze_layers" (legacy)
-            n_layers = int(params.get("frozen_layers", 0) or params.get("freeze_layers", 0))
+        elif freeze_mode in ("layers", "bottom") and struct:
+            # "bottom" is the workflow_builder/MCP spelling; "layers" the skills'.
+            n_layers = _freeze_n_bottom_layers(params)
             if n_layers > 0:
                 z_threshold = _get_layer_z_threshold(struct, n_layers)
                 request_data["fixed_z_below"] = z_threshold
@@ -284,7 +333,7 @@ def generate_vasp_input_files(
                         frozen_set.add(idx)
 
         # Apply invert: freeze everything EXCEPT the selected atoms
-        if freeze_mode != "none" and freeze_mode != "layers" and params.get("freeze_invert"):
+        if freeze_mode not in ("none", "layers", "bottom") and params.get("freeze_invert"):
             frozen_set = set(range(n_atoms)) - frozen_set
 
         if frozen_set:

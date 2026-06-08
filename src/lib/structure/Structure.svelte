@@ -68,6 +68,7 @@
     JobDetailPane,
     PluginHubPane,
   } from './index'
+  import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
@@ -1397,6 +1398,7 @@
   let slow_growth_pane_open = $state(false)  // Slow-growth post-processing
   let io_pane_open = $state(false)  // IO (import/export) pane
   let server_pane_open = $state(false)  // Server (HPC) pane
+  let hpc_upload_open = $state(false)  // "Upload structure to HPC" dialog
   let plugin_hub_open = $state(false)  // Plugin Hub pane
   // Open Plugin Hub when external counter prop is incremented
   $effect(() => {
@@ -2947,6 +2949,7 @@
       {hidden_toolbar_items}
       {remote_origin}
       {structure}
+      on_upload_to_hpc={() => { hpc_upload_open = true }}
       {molecular_fragments}
       {reset_text}
       {wrapper}
@@ -4421,6 +4424,9 @@
       sel_state.color_picker_targets = []
     }}
   />
+
+  <!-- Upload current structure to HPC (independent guided dialog) -->
+  <HpcUploadDialog bind:show={hpc_upload_open} structure={saveable_structure ?? structure} />
 
   <!-- OPTIMADE search modal -->
   <OptimadeSearchModal

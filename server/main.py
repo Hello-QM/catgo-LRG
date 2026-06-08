@@ -9,6 +9,20 @@ import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+# PyInstaller windowed build (console=False) leaves sys.stdout/sys.stderr as None
+# on Windows when the .exe is launched directly (e.g. double-clicked). That makes
+# the port-handshake print() and uvicorn's ColourizedFormatter crash —
+# ColourizedFormatter.__init__ calls sys.stdout.isatty(), raising
+# "AttributeError: 'NoneType' object has no attribute 'isatty'". Restore writable
+# streams so logging and uvicorn start cleanly. (When launched by the desktop app
+# the streams are real pipes, so this guard is a no-op.)
+if sys.stdout is None or sys.stderr is None:
+    _devnull = open(os.devnull, "w")  # noqa: SIM115
+    if sys.stdout is None:
+        sys.stdout = _devnull
+    if sys.stderr is None:
+        sys.stderr = _devnull
+
 # Configure root logger so workflow engine logs are visible
 logging.basicConfig(
     level=logging.INFO,
@@ -219,6 +233,25 @@ def _sync_seed_workflow_templates() -> None:
         logger.warning("Workflow template seeding failed: %s", exc)
 
 
+def _move_spa_fallback_last(app: "FastAPI") -> None:
+    """Move the SPA catch-all route (`/{full_path:path}`) to the end of the
+    route table so routers included after import time are matched first.
+
+    In SPA mode the catch-all is registered at module load and 404s any
+    unmatched `/api/*` path. Routers included later — the workflow engine in
+    `lifespan()` and the hpc/heterostructure/etc. routers in
+    `_deferred_startup()` — are appended *after* it, so Starlette matches the
+    catch-all first and those deferred `/api/*` routes 404. Re-appending the
+    catch-all keeps it last. No-op (and safe) when no catch-all is registered
+    (dev mode without a prebuilt frontend). Idempotent.
+    """
+    routes = app.router.routes
+    for i, route in enumerate(routes):
+        if getattr(route, "path", None) == "/{full_path:path}":
+            routes.append(routes.pop(i))
+            return
+
+
 async def _deferred_startup(app: "FastAPI") -> None:
     """Heavy work that used to block `/health` from going green.
 
@@ -245,6 +278,9 @@ async def _deferred_startup(app: "FastAPI") -> None:
                 logger.warning("Deferred router %s include failed: %s", attr, exc)
         logger.info("Deferred routers included (%d of %d)",
                     len(pairs), len(_DEFERRED_ROUTER_ATTRS))
+        # Deferred routers were appended after the module-load SPA catch-all;
+        # re-float the catch-all to the end so they aren't shadowed (→ 404).
+        _move_spa_fallback_last(app)
     except Exception as exc:
         logger.warning("Deferred router batch failed: %s", exc)
 
@@ -278,6 +314,18 @@ async def lifespan(app: FastAPI):
     yield immediately.  The heavy plugin/tool/router init runs in parallel
     with the first few user requests.
     """
+    # ─── Restore last active workflow DB (before any create/list/get) ───
+    # A fresh backend otherwise defaults to the packaged DB while the frontend
+    # later re-opens the user's project DB, orphaning API-created workflows in
+    # the wrong file. Restoring the persisted path keeps a single source of truth.
+    try:
+        from catgo.utils.ase_db import restore_active_db_path
+        restored = restore_active_db_path()
+        if restored:
+            logger.info("Active workflow DB restored to: %s", restored)
+    except Exception as exc:  # non-fatal
+        logger.warning("Active DB restore skipped: %s", exc)
+
     # ─── Workflow Engine (sync — needed for workflow endpoints) ───
     _engine_started = False
     _stop_engine_fn = None
@@ -296,6 +344,8 @@ async def lifespan(app: FastAPI):
 
         app.include_router(wf_engine_router)
         app.include_router(tasks_engine_router)
+        # Keep the SPA catch-all last so these engine routes aren't shadowed.
+        _move_spa_fallback_last(app)
 
         await start_engine(catgo_db, catgo_config)
         _engine_started = True

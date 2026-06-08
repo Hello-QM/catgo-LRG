@@ -31,13 +31,13 @@ CatGo is a desktop application that combines an interactive 3D structure viewer,
 
 ## 🔗 Links
 
-| | |
-|---|---|
-| **Web app** — try instantly, no install | <https://app.catgo-ucsd.org> |
-| **Tutorial / Docs** | <https://docs.catgo-ucsd.org> |
-| **Downloads** — prebuilt editions | <https://github.com/Hello-QM/catgo-LRG/releases> |
-| **Source** | <https://github.com/Hello-QM/catgo-LRG> |
-| **Forum** — questions & discussion | <https://groups.google.com/g/catgo_official> |
+|                                         |                                                  |
+| --------------------------------------- | ------------------------------------------------ |
+| **Web app** — try instantly, no install | <https://app.catgo-ucsd.org>                     |
+| **Tutorial / Docs**                     | <https://docs.catgo-ucsd.org>                    |
+| **Downloads** — prebuilt editions       | <https://github.com/Hello-QM/catgo-LRG/releases> |
+| **Source**                              | <https://github.com/Hello-QM/catgo-LRG>          |
+| **Forum** — questions & discussion      | <https://groups.google.com/g/catgo_official>     |
 
 ### Community
 
@@ -49,17 +49,17 @@ Scan to join the CatGo QQ group:
 
 ## ✨ Features
 
-| Area | Capability |
-|---|---|
-| **3D Viewer** | Crystals · molecules · surfaces · trajectories · PBC image atoms · bond rendering across cell boundaries · selectable polyhedra · per-element / per-site colour overrides · light, dark, white, black themes |
-| **CatBot** | Natural-language structure operations and workflow authoring via Claude, Codex, Gemini, or OpenAI |
-| **Workflow** | DAG editor for chained calculations (opt → SP → DOS / NEB / MD / slow-growth …) with one-click stock-recipe Quick-Build (HER, OER, ORR, NRR, CO₂RR, NEB, slow-growth, DOS) |
-| **HPC** | SSH terminal, file browser, job submit and monitor, OTP + jump-host + SOCKS5 |
-| **DFT inputs** | Native: VASP, Quantum ESPRESSO, LAMMPS, CP2K, ORCA. CatBot-drafted only (skill text, no workflow node executor): GPAW, ABINIT, SIESTA, DFTB+, Gaussian |
-| **ML potentials** | MACE (incl. mace_mp foundation), CHGNet, M3GNet (via matgl) |
-| **Other fast calculators** | EMT (effective-medium theory), xTB / GFN-xTB (semi-empirical tight-binding via tblite + xtb-CLI) |
-| **Analysis** | DOS / PDOS, band structure, COHP / ICOHP, d-band centre, charge-density cube isosurface, volcano plots, Gibbs free-energy corrections, Bader-charge label overlay (reads pre-computed values from site properties) |
-| **Catalysis** | OER / HER / ORR / CO₂RR / NRR pathways, ICONST templates for slow-growth, C–N coupling reaction network |
+| Area                       | Capability                                                                                                                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **3D Viewer**              | Crystals · molecules · surfaces · trajectories · PBC image atoms · bond rendering across cell boundaries · selectable polyhedra · per-element / per-site colour overrides · light, dark, white, black themes       |
+| **CatBot**                 | Natural-language structure operations and workflow authoring via Claude, Codex, Gemini, or OpenAI                                                                                                                  |
+| **Workflow**               | DAG editor for chained calculations (opt → SP → DOS / NEB / MD / slow-growth …) with one-click stock-recipe Quick-Build (HER, OER, ORR, NRR, CO₂RR, NEB, slow-growth, DOS)                                         |
+| **HPC**                    | SSH terminal, file browser, job submit and monitor, OTP + jump-host + SOCKS5                                                                                                                                       |
+| **DFT inputs**             | Native: VASP, Quantum ESPRESSO, LAMMPS, CP2K, ORCA. CatBot-drafted only (skill text, no workflow node executor): GPAW, ABINIT, SIESTA, DFTB+, Gaussian                                                             |
+| **ML potentials**          | MACE (incl. mace_mp foundation), CHGNet, M3GNet (via matgl)                                                                                                                                                        |
+| **Other fast calculators** | EMT (effective-medium theory), xTB / GFN-xTB (semi-empirical tight-binding via tblite + xtb-CLI)                                                                                                                   |
+| **Analysis**               | DOS / PDOS, band structure, COHP / ICOHP, d-band centre, charge-density cube isosurface, volcano plots, Gibbs free-energy corrections, Bader-charge label overlay (reads pre-computed values from site properties) |
+| **Catalysis**              | OER / HER / ORR / CO₂RR / NRR pathways, ICONST templates for slow-growth, C–N coupling reaction network                                                                                                            |
 
 ---
 
@@ -160,6 +160,8 @@ The rest of this README covers running CatGo **from source** for development.
 - **Node.js** ≥ 20 with **pnpm**
 - **Python** ≥ 3.10 (Conda recommended)
 - **Git**
+- [**Rust**](https://rustup.rs/)
+- [**wasm-pack**](https://wasm-bindgen.github.io/wasm-pack/installer/) (requires **Rust** ≥ 1.30.0)
 
 ### Install & Run
 
@@ -182,6 +184,7 @@ Then pick one of three ways to run:
 **Option A — Browser dev (fastest iteration)**
 
 ```bash
+pnpm build:wasm               # Compile Rust to WebAssembly
 pnpm desktop:serve            # vite on :3100, FastAPI on :8000
 ```
 
@@ -308,10 +311,10 @@ through the backend MCP endpoint.
 
 Pick any available provider in CatBot settings:
 
-| Provider group | Options | Notes |
-|---|---|---|
-| **Local** | Ollama | Runs against `http://127.0.0.1:11434`; no API key required. |
-| **SDK agents** | Claude Code, Gemini CLI, Codex CLI | Install the matching CLI. Claude can also use `ANTHROPIC_API_KEY`; Gemini can use CLI OAuth or `GEMINI_API_KEY`; Codex uses the Codex SDK/CLI auth flow. |
+| Provider group    | Options                                 | Notes                                                                                                                                                                                                     |
+| ----------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Local**         | Ollama                                  | Runs against `http://127.0.0.1:11434`; no API key required.                                                                                                                                               |
+| **SDK agents**    | Claude Code, Gemini CLI, Codex CLI      | Install the matching CLI. Claude can also use `ANTHROPIC_API_KEY`; Gemini can use CLI OAuth or `GEMINI_API_KEY`; Codex uses the Codex SDK/CLI auth flow.                                                  |
 | **API providers** | DeepSeek, Qwen, Kimi, Zhipu GLM, Gemini | Use an API key from settings or server env (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`, `MOONSHOT_API_KEY`, `ZHIPUAI_API_KEY`, `GEMINI_API_KEY`). These go through CatGo's OpenAI-compatible streaming path. |
 
 For API providers, the Base URL field is editable, so the same path can be
@@ -347,14 +350,14 @@ catgo-LRG/
 
 ## 🛠️ Development
 
-| Command | Description |
-|---|---|
-| `pnpm desktop:serve` | Frontend on port 3100 plus Python backend on port 8000 (recommended) |
-| `pnpm desktop:dev` | Frontend only |
-| `pnpm tauri:dev` | Full Tauri desktop app |
-| `pnpm check` | Svelte / TypeScript check |
-| `pnpm test` | Vitest unit tests |
-| `cd server && pytest` | Python backend tests |
+| Command               | Description                                                          |
+| --------------------- | -------------------------------------------------------------------- |
+| `pnpm desktop:serve`  | Frontend on port 3100 plus Python backend on port 8000 (recommended) |
+| `pnpm desktop:dev`    | Frontend only                                                        |
+| `pnpm tauri:dev`      | Full Tauri desktop app                                               |
+| `pnpm check`          | Svelte / TypeScript check                                            |
+| `pnpm test`           | Vitest unit tests                                                    |
+| `cd server && pytest` | Python backend tests                                                 |
 
 ---
 

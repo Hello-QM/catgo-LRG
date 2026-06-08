@@ -22,6 +22,7 @@ export interface V2WorkflowSummary {
 export interface V2Task {
   id: string
   workflow_id: string
+  node_id?: string   // graph node id; `id` is namespaced {workflow_id}:{node_id}
   task_type: string
   name: string | null
   status: string
@@ -217,6 +218,18 @@ export async function get_engine_task_convergence(task_id: string): Promise<Task
   return handle(await fetch(`${API_BASE}/engine/tasks/${task_id}/convergence`))
 }
 
+export interface TaskMlpProgressResponse {
+  points: ConvergencePoint[]
+  // null when the per-task fmax target is unresolvable — the frontend
+  // status-sync must NOT treat the node as converged in that case.
+  converged: boolean | null
+  message: string
+}
+
+export async function get_engine_task_mlp_progress(task_id: string): Promise<TaskMlpProgressResponse> {
+  return handle(await fetch(`${API_BASE}/engine/tasks/${task_id}/mlp-progress`))
+}
+
 export async function get_engine_task_file_content(task_id: string, path: string): Promise<TaskFileContentResponse> {
   return handle(await fetch(`${API_BASE}/engine/tasks/${task_id}/file-content?path=${encodeURIComponent(path)}`))
 }
@@ -245,17 +258,81 @@ export async function convert_graph_to_v2(name: string, graph_json: string, conf
   )
 }
 
+// --- Dry-run (local validate + per-node input generation, no HPC) ---
+
+/** Per-node dry-run outcome.
+ *  - ok===true  : passed (validated + inputs generated)
+ *  - ok===false : real failure — `error` carries the message
+ *  - ok===null  : couldn't run (e.g. upstream structure unavailable) — `skipped`
+ *                 carries the reason. NOT a failure. */
+export interface DryRunNodeResult {
+  ok: boolean | null
+  error?: string
+  skipped?: string
+}
+
+export interface DryRunResponse {
+  valid: boolean
+  results: Record<string, DryRunNodeResult>
+  graph_errors: string[]
+}
+
+export interface DryRunNode {
+  id: string
+  type: string
+  params: Record<string, unknown>
+}
+
+export interface DryRunEdge {
+  from: string
+  to: string
+  fromH?: string
+  toH?: string
+}
+
+/** Run a local dry-run: validate the graph and generate each calc node's
+ *  inputs without touching HPC. `structures` maps node id → input structure
+ *  (pymatgen-json or POSCAR string). */
+export async function dry_run_workflow(
+  nodes: DryRunNode[],
+  edges: DryRunEdge[],
+  structures: Record<string, string>,
+): Promise<DryRunResponse> {
+  return handle<DryRunResponse>(
+    await fetch(`${API_BASE}/engine/workflows/dry-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nodes, edges, structures }),
+    })
+  )
+}
+
 // --- WebSocket Monitor ---
 
 export interface V2MonitorCallbacks {
   on_task_status?: (task_id: string, status: string) => void
   on_workflow_status?: (status: string) => void
   on_error?: (error: string) => void
+  /** Fired once on (re)connect with the current DAG snapshot, before any
+   *  streamed task_status updates. Additive (#224 Phase 3 prep): lets the
+   *  editor seed live status from the WS itself instead of a separate
+   *  get_v2_dag REST call. Carries the same {tasks, links} shape as the
+   *  /dag endpoint. Optional — existing consumers can ignore it. */
+  on_initial_state?: (dag: V2DAG) => void
+}
+
+/** Build the V2 monitor WebSocket URL. The engine router is mounted at
+ *  /api/engine/workflows (workflow_engine.py prefix), so the monitor lives at
+ *  /api/engine/workflows/{id}/monitor — NOT a /v2 alias (none exists in the
+ *  backend; the old /v2/workflows path silently failed and the DAG viewer only
+ *  worked via its REST seed). */
+export function v2_monitor_ws_url(api_base: string, workflow_id: string): string {
+  const ws_base = api_base.replace(/^http/, 'ws')
+  return `${ws_base}/engine/workflows/${encodeURIComponent(workflow_id)}/monitor`
 }
 
 export function connect_v2_monitor(workflow_id: string, callbacks: V2MonitorCallbacks): { close: () => void } {
-  const WS_BASE = API_BASE.replace(/^http/, 'ws')
-  const url = `${WS_BASE}/v2/workflows/${workflow_id}/monitor`
+  const url = v2_monitor_ws_url(API_BASE, workflow_id)
 
   let ws: WebSocket | null = null
   let closed = false
@@ -294,7 +371,9 @@ export function connect_v2_monitor(workflow_id: string, callbacks: V2MonitorCall
       try {
         const msg = JSON.parse(ev.data)
         if (msg.type === 'pong' || msg.type === 'heartbeat') return
-        if (msg.type === 'task_status') {
+        if (msg.type === 'initial_state') {
+          callbacks.on_initial_state?.({ tasks: msg.tasks ?? [], links: msg.links ?? [] })
+        } else if (msg.type === 'task_status') {
           callbacks.on_task_status?.(msg.task_id, msg.status)
         } else if (msg.type === 'workflow_status') {
           callbacks.on_workflow_status?.(msg.status)

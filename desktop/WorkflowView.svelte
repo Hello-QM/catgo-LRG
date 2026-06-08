@@ -167,7 +167,16 @@
       task_count: ewf.task_count,
       created_at: ewf.created_at ?? ``,
     }))
-    return [...gui, ...engine].sort((a, b) => {
+    // A uuid present in BOTH DBs (V1 graph_json skin + V2 tasks) is the SAME
+    // workflow — dedup by id so it appears once. GUI is listed first so it wins
+    // (it carries graph_json + step counts and loads in the editor). Without this
+    // the keyed {#each ... (wf.id)} below throws each_key_duplicate and crashes the
+    // "All Workflows" view.
+    const by_id = new Map<string, UnifiedWorkflow>()
+    for (const w of [...gui, ...engine]) {
+      if (!by_id.has(w.id)) by_id.set(w.id, w)
+    }
+    return [...by_id.values()].sort((a, b) => {
       if (!a.created_at && !b.created_at) return 0
       if (!a.created_at) return 1
       if (!b.created_at) return -1

@@ -9,6 +9,7 @@
 // in-memory content) and addresses frames by the file path instead.
 
 import type { ElementSymbol } from '$lib'
+import type { Matrix3x3 } from '$lib/math'
 import { API_BASE } from '$lib/api/config'
 import { create_trajectory_frame } from './parsers/common'
 import type {
@@ -25,6 +26,9 @@ interface BackendFrame {
   positions: number[][]
   comment?: string
   properties?: Record<string, number>
+  // Present for periodic formats (XDATCAR): the 3x3 cell for this frame.
+  // Absent for cell-less formats (CP2K *-pos*.xyz).
+  lattice?: number[][] | null
 }
 
 /** Cap plot sampling so the metadata fetch stays small for 10k+ frames. */
@@ -36,11 +40,17 @@ const BATCH = 16
 const CACHE_CAP = 400
 
 function backend_frame_to_trajectory_frame(bf: BackendFrame): TrajectoryFrame {
+  // Periodic formats (XDATCAR) carry a per-frame cell; pass it through so the
+  // viewer draws the box and bonds are PBC-aware. Cell-less formats (CP2K
+  // *-pos*.xyz) send no lattice and stay non-periodic.
+  const lattice = (bf.lattice && bf.lattice.length === 3)
+    ? bf.lattice as unknown as Matrix3x3
+    : undefined
   return create_trajectory_frame(
     bf.positions,
     bf.elements as ElementSymbol[],
-    undefined, // lattice — CP2K pos files carry no cell
-    undefined, // pbc
+    lattice,
+    lattice ? [true, true, true] : undefined,
     bf.frame_number,
     { comment: bf.comment ?? ``, ...(bf.properties ?? {}) },
   )
@@ -51,8 +61,19 @@ function frames_url(path: string, start: number, count: number): string {
     `&start=${start}&count=${count}`
 }
 
-/** Extensions the backend trajectory streamer can index. */
-const STREAMABLE_RE = /\.(xyz|extxyz|lammpstrj|traj)$/i
+/** Files the backend trajectory streamer can index. XDATCAR is matched by
+ *  name (VASP trajectories usually have no extension). */
+const STREAMABLE_RE = /\.(xyz|extxyz|lammpstrj|traj)$|xdatcar/i
+
+/** XDATCAR parses ~100× its byte size into JS site objects (fractional text →
+ *  nested objects), so it must stream at a much lower size than text XYZ — a
+ *  2-3 MB XDATCAR already balloons to hundreds of MB and OOMs the webview when
+ *  a second one is opened. Stream XDATCAR above 1 MB; keep the 20 MB default
+ *  for the lighter text formats. */
+const XDATCAR_STREAM_MIN_BYTES = 1 * 1024 * 1024
+function stream_min_bytes_for(filename: string): number {
+  return /xdatcar/i.test(filename) ? XDATCAR_STREAM_MIN_BYTES : 20 * 1024 * 1024
+}
 
 export interface StreamProbe {
   stream: boolean
@@ -72,9 +93,10 @@ export interface StreamProbe {
 export async function probe_streamable_trajectory(
   path: string,
   filename: string,
-  min_bytes = 20 * 1024 * 1024,
+  min_bytes?: number,
 ): Promise<StreamProbe | null> {
   if (!STREAMABLE_RE.test(filename)) return null
+  const limit = min_bytes ?? stream_min_bytes_for(filename)
   try {
     const resp = await fetch(
       `${API_BASE}/trajectory/index?path=${encodeURIComponent(path)}`,
@@ -83,7 +105,7 @@ export async function probe_streamable_trajectory(
     const idx = await resp.json()
     const total_frames = idx?.total_frames ?? 0
     const file_size = idx?.file_size ?? 0
-    return { stream: total_frames >= 2 && file_size > min_bytes, total_frames, file_size }
+    return { stream: total_frames >= 2 && file_size > limit, total_frames, file_size }
   } catch {
     return null
   }
@@ -101,9 +123,10 @@ export async function materialize_remote_if_large(
   remote_path: string,
   filename: string,
   size_bytes: number,
-  min_bytes = 20 * 1024 * 1024,
+  min_bytes?: number,
 ): Promise<string | null> {
-  if (!STREAMABLE_RE.test(filename) || (size_bytes ?? 0) <= min_bytes) return null
+  const limit = min_bytes ?? stream_min_bytes_for(filename)
+  if (!STREAMABLE_RE.test(filename) || (size_bytes ?? 0) <= limit) return null
   try {
     const { materializeRemoteTrajectory } = await import('$lib/api/hpc')
     const mat = await materializeRemoteTrajectory(session_id, remote_path)
@@ -122,9 +145,10 @@ export async function materialize_remote_if_large(
  */
 export async function materialize_file_if_large(
   file: File,
-  min_bytes = 20 * 1024 * 1024,
+  min_bytes?: number,
 ): Promise<string | null> {
-  if (!STREAMABLE_RE.test(file.name) || file.size <= min_bytes) return null
+  const limit = min_bytes ?? stream_min_bytes_for(file.name)
+  if (!STREAMABLE_RE.test(file.name) || file.size <= limit) return null
   try {
     const fd = new FormData()
     fd.append('file', file, file.name)

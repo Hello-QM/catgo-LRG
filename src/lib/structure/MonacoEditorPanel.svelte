@@ -180,7 +180,17 @@
     save_error = ``
 
     try {
-      if (session_id && file_path) {
+      if (onsave) {
+        // When a parent provides onsave, it is the authoritative writer (e.g.
+        // workflow file editors persist via the V2 engine endpoint, which handles
+        // both local and HPC-remote work_dirs). Awaited so a failure surfaces as
+        // an error state instead of a false "saved". Takes priority over the
+        // remote/local branches below — no current caller passes onsave AND
+        // relies on writeRemoteFile/write_file.
+        await onsave(value)
+        save_status = `saved`
+        is_dirty = false
+      } else if (session_id && file_path) {
         // Save to remote server
         const result = await writeRemoteFile(session_id, file_path, value)
         if (result.success) {

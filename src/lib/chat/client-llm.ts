@@ -1,5 +1,5 @@
 import type { ChatConfig, ChatMessage, ClientTool, ToolCall, ToolUseBlock, ToolResultBlock, LLMProvider } from './types'
-import { needs_relay, relay_url } from './provider-routing'
+import { needs_relay, normalize_provider_base_url, relay_url } from './provider-routing'
 
 /** Default OpenAI-compatible base URLs for known API providers, mirrored from
  *  the backend (server/catgo/routers/chat.py). Used in client-direct mode where
@@ -97,7 +97,7 @@ export async function* stream_client_llm(
   tools: ClientTool[],
   signal?: AbortSignal,
 ): AsyncGenerator<LlmEvent> {
-  const base = (config.base_url || PROVIDER_BASE_URLS[config.provider] || ``).replace(/\/$/, ``)
+  const base = normalize_provider_base_url(config.base_url || PROVIDER_BASE_URLS[config.provider] || ``)
   if (!base) {
     yield { type: `error`, message: `No base URL configured for provider "${config.provider}". Set a base URL in CatBot settings.` }
     return

@@ -3,7 +3,7 @@
   import { Icon } from '$lib'
   import type { AnyStructure } from '$lib'
   import { t } from '$lib/i18n/index.svelte'
-  import { API_BASE } from '$lib/api/config'
+  import { API_BASE, STATIC_ONLY } from '$lib/api/config'
   import {
     get_chat_slice,
     chat_config,
@@ -33,7 +33,7 @@
   import { SDK_PROVIDERS, default_mode_for } from './types'
   import { fetch_providers } from './llm-client'
   import { PROVIDER_BASE_URLS } from './client-llm'
-import { is_client_direct, relay_fetch } from './provider-routing'
+import { is_client_direct, normalize_provider_base_url, relay_fetch } from './provider-routing'
   import { TTSEngine } from '$lib/gesture/tts-engine'
   import {
     FALLBACK_MODELS, CLI_INSTALL_INFO, PROVIDER_META, AGENT_LABELS, VOICE_LANGUAGES,
@@ -98,7 +98,7 @@ import { is_client_direct, relay_fetch } from './provider-routing'
 
     // Client-direct (STATIC_ONLY / no backend): ping the provider's /models
     // endpoint from the browser to validate base_url + API key.
-    if (is_client_direct(chat_config)) {
+    if (STATIC_ONLY && is_client_direct(chat_config)) {
       try {
         const base = resolved_base_url()
         if (!base) throw new Error(`no base_url`)
@@ -144,7 +144,18 @@ import { is_client_direct, relay_fetch } from './provider-routing'
 
   /** Resolve the OpenAI-compatible base URL for the current provider (client-direct). */
   function resolved_base_url(): string {
-    return (chat_config.base_url || PROVIDER_BASE_URLS[chat_config.provider] || ``).replace(/\/$/, ``)
+    return normalize_provider_base_url(chat_config.base_url || PROVIDER_BASE_URLS[chat_config.provider] || ``)
+  }
+
+  function handle_text_input_keydown(event: KeyboardEvent) {
+    const target = event.currentTarget as HTMLInputElement
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === `a`) {
+      event.preventDefault()
+      event.stopPropagation()
+      target.select()
+      return
+    }
+    event.stopPropagation()
   }
 
   async function fetch_provider_models() {
@@ -153,7 +164,7 @@ import { is_client_direct, relay_fetch } from './provider-routing'
 
     // Client-direct (STATIC_ONLY / no backend): query the provider's /models
     // endpoint straight from the browser instead of the absent backend.
-    if (is_client_direct(chat_config)) {
+    if (STATIC_ONLY && is_client_direct(chat_config)) {
       try {
         const base = resolved_base_url()
         if (!base) throw new Error(`no base_url`)
@@ -1208,6 +1219,7 @@ import { is_client_direct, relay_fetch } from './provider-routing'
             type="password"
             value={chat_config.api_key}
             placeholder={t('chat.api_key_placeholder')}
+            onkeydown={handle_text_input_keydown}
             oninput={(e) => update_config({ api_key: (e.target as HTMLInputElement).value.trim() })}
           />
         </div>
@@ -1221,6 +1233,7 @@ import { is_client_direct, relay_fetch } from './provider-routing'
             type="text"
             value={chat_config.base_url}
             placeholder={t('chat.base_url_placeholder')}
+            onkeydown={handle_text_input_keydown}
             oninput={(e) => update_config({ base_url: (e.target as HTMLInputElement).value.trim() })}
           />
         </div>

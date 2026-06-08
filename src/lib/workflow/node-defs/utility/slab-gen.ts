@@ -9,7 +9,7 @@ export const slab_gen: NodeDefinition = {
   description: `Cut surface slab from bulk`,
   inputs: [`structure`],
   outputs: [`structure`],
-  default_params: { miller: `1,0,0`, layers: 4, vacuum: 15.0, supercell_a: 1, supercell_b: 1, center_slab: true, primitive: true, enumerate_terminations: false },
+  default_params: { miller: `1,0,0`, layers: 4, vacuum: 15.0, supercell_a: 1, supercell_b: 1, frozen_layers: 0, center_slab: true, primitive: true, enumerate_terminations: false },
   help_text: `**Slab Generator** — Cut a surface from the optimized bulk.
 
 Creates a surface slab by selecting Miller indices, number of layers, and vacuum thickness.`,
@@ -37,6 +37,11 @@ Creates a surface slab by selecting Miller indices, number of layers, and vacuum
       key: `supercell_b`, label: `Supercell b`, type: `number`, default: 1, group: `Slab`,
       min: 1, max: 8, step: 1,
       help: `Repeat along the b lattice direction.`,
+    },
+    {
+      key: `frozen_layers`, label: `Frozen Bottom Layers`, type: `number`, default: 0, group: `Slab`,
+      min: 0, max: 8, step: 1,
+      help: `Freeze the bottom N layers (Selective Dynamics). Written onto the structure so the fixed atoms are visible in the viewer and inherited by downstream geo_opt/freq. 0 = all atoms free.`,
     },
     {
       key: `center_slab`, label: `Center in Cell`, type: `boolean`, default: true, group: `Slab`,

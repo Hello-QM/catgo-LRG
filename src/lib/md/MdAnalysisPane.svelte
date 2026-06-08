@@ -129,7 +129,11 @@
     error_msg = ``;
     try {
       local_traj_b64 = await file_to_b64(file);
-      local_traj_format = file.name.split(`.`).pop()?.toLowerCase() || ``;
+      // VASP XDATCAR has no extension, so match it by name; otherwise use the
+      // file extension as the format hint sent to the backend.
+      local_traj_format = /xdatcar/i.test(file.name)
+        ? `xdatcar`
+        : file.name.split(`.`).pop()?.toLowerCase() || ``;
     } catch (e: any) {
       error_msg = e.message || t("structure.failed_read_file");
     } finally {
@@ -277,6 +281,7 @@
     `.dcd`,
     `.lammpstrj`,
     `.nc`,
+    `XDATCAR`,
   ]}
   title={t("structure.load_trajectory")}
   description={t("structure.select_trajectory_md")}

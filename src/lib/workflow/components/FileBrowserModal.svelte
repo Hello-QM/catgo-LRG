@@ -18,6 +18,7 @@
     onopen_file,
     onback_to_list,
     onclose,
+    onsave,
   }: {
     show: boolean
     view: `list` | `editor`
@@ -31,6 +32,8 @@
     onopen_file: (filename: string) => void
     onback_to_list: () => void
     onclose: () => void
+    /** When provided, the file is editable and Ctrl+S / Save writes it back. Omit for read-only. */
+    onsave?: (content: string) => void | Promise<void>
   } = $props()
 </script>
 
@@ -77,8 +80,10 @@
           <MonacoEditorPanel
             {content}
             {filename}
-            {file_path}
-            {session_id}
+            file_path={onsave ? `` : file_path}
+            session_id={onsave ? `` : session_id}
+            readonly={!onsave}
+            {onsave}
             onclose={onback_to_list}
           />
         {/if}

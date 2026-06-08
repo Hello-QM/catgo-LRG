@@ -17,6 +17,7 @@
   import NodeConfigPanel from './NodeConfigPanel.svelte'
   import NodeStatusPanel from './NodeStatusPanel.svelte'
   import SlabGenPreview from './SlabGenPreview.svelte'
+  import { apply_freeze_to_structure } from './freeze'
   import CalcStructurePreview from './CalcStructurePreview.svelte'
   import BatchPanel from './BatchPanel.svelte'
   import GestureProvider from '$lib/gesture/GestureProvider.svelte'
@@ -29,6 +30,7 @@
   import PauseDialog from './PauseDialog.svelte'
   import * as api from '$lib/api/workflow'
   import type { StepForces } from '$lib/api/workflow'
+  import { put_engine_task_file_content } from '$lib/api/workflow-v2'
   import { API_BASE } from '$lib/api/config'
   import { hpc_session_store, refresh_hpc_sessions } from '$lib/hpc-sessions.svelte'
   import ConnectDialog from '$lib/ConnectDialog.svelte'
@@ -240,6 +242,7 @@
   const show_pause_dialog = $derived(exec.show_pause_dialog)
   const pause_jobs = $derived(exec.pause_jobs)
   const node_statuses = $derived(exec.node_statuses)
+  const node_errors = $derived(exec.node_errors)
   const step_messages = $derived(exec.step_messages)
   const task_results = $derived(exec.task_results)
   const has_running_jobs = $derived(exec.has_running_jobs)
@@ -617,73 +620,6 @@
     schedule_save()
   }
 
-  /** Apply freeze params to a structure JSON, setting selective_dynamics on sites */
-  function apply_freeze_to_structure(struct_json: string | null, params: Record<string, unknown>): string | null {
-    if (!struct_json) return null
-    const mode = params.freeze_mode as string
-    if (!mode || mode === `none`) return struct_json
-
-    try {
-      const struct = JSON.parse(struct_json)
-      if (!struct.sites?.length) return struct_json
-      const n = struct.sites.length
-      const frozen = new Set<number>()
-
-      if (mode === `z_range`) {
-        const z_lo = Number(params.freeze_z_below ?? 0)
-        for (let i = 0; i < n; i++) {
-          const z = struct.sites[i].xyz?.[2] ?? 0
-          if (z < z_lo) frozen.add(i)
-        }
-      } else if (mode === `element`) {
-        const elems = new Set(String(params.freeze_elements ?? ``).split(`,`).map(s => s.trim()).filter(Boolean))
-        for (let i = 0; i < n; i++) {
-          const el = struct.sites[i].species?.[0]?.element ?? struct.sites[i].label ?? ``
-          if (elems.has(el)) frozen.add(i)
-        }
-      } else if (mode === `indices` || mode === `manual`) {
-        for (const part of String(params.freeze_indices ?? ``).split(`,`)) {
-          const t = part.trim()
-          if (!t) continue
-          if (t.includes(`-`)) {
-            const [a, b] = t.split(`-`).map(Number)
-            for (let i = a; i <= b; i++) frozen.add(i)
-          } else {
-            const v = parseInt(t)
-            if (!isNaN(v)) frozen.add(v)
-          }
-        }
-      } else if (mode === `layers`) {
-        const n_layers = Number(params.freeze_layers ?? 0)
-        if (n_layers > 0) {
-          const zs = ([...new Set(struct.sites.map((s: any) => Math.round((s.xyz?.[2] ?? 0) * 100) / 100))] as number[]).sort((a, b) => a - b)
-          const threshold = n_layers < zs.length ? (zs[n_layers - 1] + zs[n_layers]) / 2 : zs[zs.length - 1] + 0.1
-          for (let i = 0; i < n; i++) {
-            if ((struct.sites[i].xyz?.[2] ?? 0) < threshold) frozen.add(i)
-          }
-        }
-      }
-
-      // Apply invert
-      let final_frozen = frozen
-      if (params.freeze_invert && mode !== `none`) {
-        final_frozen = new Set(Array.from({ length: n }, (_, i) => i).filter(i => !frozen.has(i)))
-      }
-
-      // Set selective_dynamics on sites
-      for (let i = 0; i < n; i++) {
-        const free = !final_frozen.has(i)
-        struct.sites[i].properties = {
-          ...(struct.sites[i].properties ?? {}),
-          selective_dynamics: [free, free, free],
-        }
-      }
-      return JSON.stringify(struct)
-    } catch {
-      return struct_json
-    }
-  }
-
   // Non-reactive cache for trajectory objects (avoids Svelte reactivity + serialization overhead)
   const trajectory_cache = new Map<string, TrajectoryType>()
 
@@ -937,7 +873,9 @@
       // V2 engine never writes to workflow_steps so Try 1 returns nothing for V2 tasks.
       if (!structure_json) {
         try {
-          const resp = await fetch(`${API_BASE}/engine/tasks/${encodeURIComponent(node_id)}/result`)
+          const resp = await fetch(
+            `${API_BASE}/engine/tasks/${encodeURIComponent(`${workflow_id}:${node_id}`)}/result`
+          )
           if (resp.ok) {
             const row: any = await resp.json()
             const raw = row?.structure_json
@@ -1510,6 +1448,31 @@
     }
   }
 
+  /** Save the edited work_dir file back via the V2 engine endpoint. Task id is the
+   *  namespaced {workflow_id}:{node_id}; the endpoint handles both local-preview and
+   *  HPC-remote work_dirs. Throws on failure so MonacoEditorPanel surfaces the error. */
+  async function save_file_browser_content(new_content: string) {
+    if (!workflow_id || !file_browser_node_id || !file_browser_filename) return
+    // Newer workflows use namespaced task ids ({workflow_id}:{node_id}); pre-#227
+    // workflows store the bare node_id as the task id. Try namespaced first, fall
+    // back to bare only when the task isn't found (so real write errors surface).
+    try {
+      await put_engine_task_file_content(
+        `${workflow_id}:${file_browser_node_id}`,
+        file_browser_filename,
+        new_content,
+      )
+    } catch (e) {
+      if (!/not found/i.test(e instanceof Error ? e.message : String(e))) throw e
+      await put_engine_task_file_content(
+        file_browser_node_id,
+        file_browser_filename,
+        new_content,
+      )
+    }
+    file_browser_content = new_content
+  }
+
   /** Load a structure file (CONTCAR/POSCAR/etc.) from step output into the 3D viewer. */
   async function handle_load_structure(node_id: string, filename: string) {
     try {
@@ -1893,10 +1856,22 @@
       // Ensure every loaded edge has a unique id — `to_workflow_json` does not
       // persist `id`, so round-tripped graphs would otherwise yield duplicate
       // `undefined` keys and crash the keyed {#each} (each_key_duplicate).
-      edges = (graph.edges || []).map((e: WfEdge, i: number) => ({
-        ...e,
-        id: e.id ?? `e${i}-${e.from ?? `?`}-${e.to ?? `?`}`,
-      }))
+      edges = (graph.edges || []).map((e: Record<string, any>, i: number) => {
+        // Normalize across graph dialects so any producer renders here, matching
+        // the Tauri/db-wasm loader: legacy `source/target` + react-flow
+        // `sourceHandle/targetHandle`, and `to_workflow_json`'s `fromHandle/toHandle`,
+        // all map onto the editor's native `from/to/fromH/toH`.
+        const from = e.from ?? e.source ?? ``
+        const to = e.to ?? e.target ?? ``
+        return {
+          id: e.id ?? `e${i}-${from || `?`}-${to || `?`}`,
+          from,
+          to,
+          fromH: e.fromH ?? e.fromHandle ?? e.sourceHandle ?? `out-0`,
+          toH: e.toH ?? e.toHandle ?? e.targetHandle ?? `in-0`,
+          ...(e.label ? { label: e.label } : {}),
+        }
+      })
       fill_empty_structure_inputs()
       push_history()
       change_det.set_external_change_detected(false)
@@ -1941,10 +1916,22 @@
       // Ensure every loaded edge has a unique id — `to_workflow_json` does not
       // persist `id`, so round-tripped graphs would otherwise yield duplicate
       // `undefined` keys and crash the keyed {#each} (each_key_duplicate).
-      edges = (graph.edges || []).map((e: WfEdge, i: number) => ({
-        ...e,
-        id: e.id ?? `e${i}-${e.from ?? `?`}-${e.to ?? `?`}`,
-      }))
+      edges = (graph.edges || []).map((e: Record<string, any>, i: number) => {
+        // Normalize across graph dialects so any producer renders here, matching
+        // the Tauri/db-wasm loader: legacy `source/target` + react-flow
+        // `sourceHandle/targetHandle`, and `to_workflow_json`'s `fromHandle/toHandle`,
+        // all map onto the editor's native `from/to/fromH/toH`.
+        const from = e.from ?? e.source ?? ``
+        const to = e.to ?? e.target ?? ``
+        return {
+          id: e.id ?? `e${i}-${from || `?`}-${to || `?`}`,
+          from,
+          to,
+          fromH: e.fromH ?? e.fromHandle ?? e.sourceHandle ?? `out-0`,
+          toH: e.toH ?? e.toHandle ?? e.targetHandle ?? `in-0`,
+          ...(e.label ? { label: e.label } : {}),
+        }
+      })
       is_loaded = true
       fill_empty_structure_inputs()
       // Auto-layout if any nodes were missing coordinates
@@ -2357,7 +2344,7 @@
       {/if}
       <span class="toolbar-tooltip-wrap">
         <button class="tbtn" onclick={simulate_run}>{t('workflow.we_simulate') || '🧪'}</button>
-        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_simulate_title') || "Simulate (test without HPC)"}</span>
+        <span class="toolbar-tooltip" role="tooltip">{t('workflow.we_simulate_title') || "Dry-run (validate + generate inputs, no HPC)"}</span>
       </span>
       {#if ontoggle_terminal}
         <span class="toolbar-tooltip-wrap">
@@ -2553,6 +2540,7 @@
             {@const is_orphan = orphan_set.has(node.id)}
             {@const status = node_statuses[node.id]}
             {@const scolor = status ? STATUS_COLORS[status] || null : null}
+            {@const node_err = node_errors[node.id]}
             {@const inputs = cfg.inputs || []}
             {@const outputs = cfg.outputs || []}
             {@const custom_label = (node.params?.label as string) || ``}
@@ -2567,6 +2555,7 @@
                 else if (is_cp2k_node(node.type, node.params)) open_input_editor(node.id, 'cp2k')
                 else if (is_lammps_node(node.type, node.params)) open_input_editor(node.id, 'lammps')
               }} style="cursor:grab">
+              {#if node_err}<title>{status === `skipped` ? `${t('workflow.we_skipped') || 'Skipped'}: ${node_err}` : node_err}</title>{/if}
               {#if status === `running`}
                 <rect x={-4} y={-4} width={NW + 8} height={nh + 8} rx={14} fill="none" stroke={scolor} stroke-width={2} opacity={0.5}>
                   <animate attributeName="opacity" values="0.3;0.8;0.3" dur="1.2s" repeatCount="indefinite" />
@@ -3046,7 +3035,7 @@
                 {#if _has_input}
                   {@const _upstream_structures = resolve_input_structures(nd.id)}
                   {@const _raw_struct = resolve_input_structure(nd.id)}
-                  {@const _preview_struct = nd.type === `freq` ? apply_freeze_to_structure(_raw_struct, nd.params) : _raw_struct}
+                  {@const _preview_struct = (nd.type === `freq` || nd.type === `geo_opt`) ? apply_freeze_to_structure(_raw_struct, nd.params) : _raw_struct}
                   <CalcStructurePreview
                     upstream_structure_json={_preview_struct}
                     upstream_structures_json={_upstream_structures && _upstream_structures.length > 1 ? _upstream_structures : null}
@@ -3488,6 +3477,7 @@
   file_path={file_browser_file_path}
   session_id={file_browser_session_id}
   onopen_file={open_file_in_editor}
+  onsave={save_file_browser_content}
   onback_to_list={() => { file_browser_view = 'list' }}
   onclose={() => { show_file_browser = false; file_browser_node_id = null }}
 />

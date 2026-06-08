@@ -195,8 +195,10 @@ def _generate_local_preview(db: WorkflowDB, task: dict, workflow_id: str) -> Non
         # Legacy fallback
         params["_resolved_product_structure"] = inputs["product_structure"]
 
-    # Create local preview directory
-    preview_dir = Path.home() / ".catgo" / "preview" / task_id
+    # Create local preview directory keyed on the bare graph node_id (not the
+    # namespaced task id) so the path stays stable and matches submitter.py.
+    node_id = task.get("node_id") or task_id
+    preview_dir = Path.home() / ".catgo" / "preview" / node_id
     preview_dir.mkdir(parents=True, exist_ok=True)
 
     # Resolve engine type

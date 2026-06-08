@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Merged into the generated iOS Info.plist by Tauri (bundle.iOS.infoPlist).
+	     Survives the build's Info.plist regeneration, unlike post-init PlistBuddy edits. -->
+
+	<!-- Export compliance: CatGo uses only standard, exempt encryption (HTTPS/TLS,
+	     SSH via russh). Declaring this skips the App Store Connect encryption
+	     questionnaire ("Missing Compliance"). -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<!-- Document-based app: the editor opens local structure files in place.
+	     Required when CFBundleDocumentTypes is declared (ITMS-90737). -->
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+</dict>
+</plist>

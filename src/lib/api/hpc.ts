@@ -520,7 +520,16 @@ export async function uploadFile(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(JSON.parse(xhr.responseText))
       } else {
-        reject(new Error(`Upload failed: ${xhr.statusText}`))
+        // Surface the backend's detailed error (e.g. the work-root message)
+        // instead of the bare HTTP status text, which hides the real cause.
+        let detail = xhr.statusText
+        try {
+          const body = JSON.parse(xhr.responseText)
+          detail = body?.detail || body?.message || detail
+        } catch {
+          if (xhr.responseText) detail = xhr.responseText.slice(0, 300)
+        }
+        reject(new Error(`Upload failed (${xhr.status}): ${detail}`))
       }
     }
 

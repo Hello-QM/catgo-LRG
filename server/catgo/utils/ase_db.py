@@ -19,10 +19,28 @@ DB_PATH = DB_DIR / "catgo_results.db"
 # [2025-02] Mutable active DB path — changed by new/open/save-as operations
 _active_db_path: Optional[str] = None
 
+# Persisted record of the last active DB path. Lives at a fixed, CWD-independent
+# location so a freshly-started backend restores the DB the user last opened
+# instead of silently reverting to the packaged default — which would orphan any
+# workflow created via the API before the frontend re-opens its project DB.
+_ACTIVE_DB_STATE = DB_DIR / ".active_db_path"
+
 
 def get_active_db_path() -> str:
     """Return the current active ASE DB path."""
     return _active_db_path or str(DB_PATH)
+
+
+def _persist_active_db_path(path: Optional[str]) -> None:
+    """Record (or clear) the active DB path so it survives a backend restart."""
+    try:
+        DB_DIR.mkdir(parents=True, exist_ok=True)
+        if path:
+            _ACTIVE_DB_STATE.write_text(path)
+        elif _ACTIVE_DB_STATE.exists():
+            _ACTIVE_DB_STATE.unlink()
+    except OSError as exc:  # best-effort; persistence failure must not break ops
+        logger.warning("Could not persist active DB path: %s", exc)
 
 
 def set_active_db_path(path: Optional[str]):
@@ -32,13 +50,38 @@ def set_active_db_path(path: Optional[str]):
     workflows, etc.) coexist in the SAME SQLite file.  No separate *_workflows.db
     is created.  Previous versions used a separate file — see git history for
     rollback if needed.
+
+    The path is resolved to an absolute path so create/list/get agree regardless
+    of the process working directory, and the choice is persisted so the next
+    backend start restores it (see restore_active_db_path).
     """
     global _active_db_path
-    _active_db_path = path
+    abs_path = str(Path(path).resolve()) if path else None
+    _active_db_path = abs_path
     logger.info("Switched active ASE DB to: %s", get_active_db_path())
+    _persist_active_db_path(abs_path)
     # Point workflow_db at the same file so all data lives in one .db
     from catgo.utils.workflow_db import set_active_wf_db_path
-    set_active_wf_db_path(path)
+    set_active_wf_db_path(abs_path)
+
+
+def restore_active_db_path() -> Optional[str]:
+    """Restore the last active DB path persisted by set_active_db_path().
+
+    Call once at backend startup. If the persisted file is missing/stale the
+    packaged default is kept. Returns the restored path, or None."""
+    try:
+        if _ACTIVE_DB_STATE.exists():
+            stored = _ACTIVE_DB_STATE.read_text().strip()
+            if stored and Path(stored).exists():
+                set_active_db_path(stored)
+                logger.info("Restored active DB from persisted state: %s", stored)
+                return stored
+            if stored:
+                logger.warning("Persisted active DB no longer exists: %s", stored)
+    except OSError as exc:
+        logger.warning("Could not restore active DB path: %s", exc)
+    return None
 
 
 def _ensure_dir():

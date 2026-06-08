@@ -97,10 +97,16 @@ export async function get_mlp_progress(ref: TaskRef): Promise<NormalizedConverge
     const data = await v1.get_mlp_progress(ref.workflow_id, ref.node_id)
     return { points: data.points, converged: data.converged, message: data.message }
   }
+  // V2 task-mode: hit the V2-native endpoint, which parses the SAME ASE
+  // optimizer log via the V1 parser. `converged` may come back null when the
+  // task's fmax target is unresolvable — pass it through unchanged so the
+  // status-sync branch in NodeStatusPanel keeps the node "running" rather than
+  // treating it as converged (the V1 step-mode path above does the same).
+  const data = await v2.get_engine_task_mlp_progress(ref.task_id)
   return {
-    points: [],
-    converged: false,
-    message: `Live progress is only available from the workflow editor view. Open the step via its workflow to see iteration-by-iteration convergence.`,
+    points: data.points,
+    converged: data.converged as NormalizedConvergence['converged'],
+    message: data.message,
   }
 }
 

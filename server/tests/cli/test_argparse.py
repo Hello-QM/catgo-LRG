@@ -51,12 +51,21 @@ def _cu_poscar(tmp_path):
     return src
 
 
-def _run_catgo(*cli_args):
+def _run_catgo(*cli_args, env=None):
+    import os
     import subprocess, sys
+    run_env = {**os.environ, **(env or {})}
     return subprocess.run(
         [sys.executable, "-m", "catgo", *cli_args],
-        cwd=str(SERVER_DIR), capture_output=True, text=True,
+        cwd=str(SERVER_DIR), capture_output=True, text=True, env=run_env,
     )
+
+
+# A guaranteed-unreachable server endpoint: forces ServerLink.discover() to
+# return None regardless of whether a dev CatGO server is running on :8000.
+# (Without this, the --no-autostart "no server" tests are environment-dependent:
+# they pass in CI but fail on a workstation with `catgo serve` up.)
+_NO_SERVER_ENV = {"CATGO_API": "http://127.0.0.1:59999"}
 
 
 def test_convert_without_out_clean_error(tmp_path):
@@ -132,7 +141,8 @@ def test_no_autostart_global_flag_listed():
 
 def test_push_without_server_with_no_autostart_clean_exit(tmp_path):
     # No CatGO server running in CI; --no-autostart must NOT spawn one.
-    r = _run_catgo("--no-autostart", "push", "--panel", "default")
+    r = _run_catgo("--no-autostart", "push", "--panel", "default",
+                   env=_NO_SERVER_ENV)
     assert r.returncode == 2
     assert "--no-autostart" in r.stderr
     assert "unreachable" in r.stderr.lower() or "server" in r.stderr.lower()
@@ -156,7 +166,8 @@ def test_viewer_subcommands_in_help():
 
 def test_no_autostart_after_subcommand_also_works(tmp_path):
     # Users will type the flag in either position; both must work.
-    r = _run_catgo("push", "--no-autostart", "--panel", "default")
+    r = _run_catgo("push", "--no-autostart", "--panel", "default",
+                   env=_NO_SERVER_ENV)
     assert r.returncode == 2, r.stderr
     assert "unrecognized" not in r.stderr  # not an argparse rejection
     assert "--no-autostart" in r.stderr or "server" in r.stderr.lower()

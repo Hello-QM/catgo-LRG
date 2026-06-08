@@ -467,11 +467,31 @@ TOOLS = [
     Tool(
         name="catgo_workflow_engine",
         description=(
-            "State-machine workflow engine for HPC execution. "
-            "Actions: create, add_task, submit, status, list, modify_params, retry, "
-            "pause, resume, reset, get_result, get_dag. "
-            "Pass workflow_id, task_id, task_type inside params. "
-            "Ask user which HPC cluster before submit."
+            "State-machine workflow engine (V2) for HPC execution. Build: create -> "
+            "add_task (one per calculation node) -> submit. "
+            "WIRE TASKS by data flow, NOT a connect action: pass an upstream task's "
+            "output as an input param of the downstream add_task, using an output "
+            "reference {\"_ref\": \"<upstream_task_id>\", \"_key\": \"<output_key>\"}. "
+            "e.g. add_task geo_opt with params {\"structure\": {\"_ref\": \"<slab_task_id>\", "
+            "\"_key\": \"structure\"}} links slab.structure -> geo_opt.structure (creates "
+            "the edge). add_task returns the new task_id to reference next. "
+            "Task ids are namespaced '{workflow_id}:{node_id}'. For per-task actions "
+            "(get_result, modify_params, retry, status) pass either an explicit 'task_id' "
+            "or 'workflow_id' + 'node_id' -- do NOT hand-build the namespaced id. "
+            "HPC job params (partition, account, walltime, ntasks) are set per-task via "
+            "add_task params. "
+            "IMPORTANT: before action='submit' you MUST ask the user which HPC cluster "
+            "(Expanse, Shaheen, local) and confirm job parameters; never submit without "
+            "confirmation. ALSO confirm the pseudopotential/POTCAR directory for that "
+            "cluster: if you are not certain where POTCAR/pseudopotential files live "
+            "(potcar_root etc.), STOP and ASK THE USER -- do NOT guess (a wrong path "
+            "fails every job, and it is per-user/per-cluster, not inferable from another "
+            "workflow). On Expanse POTCAR can be generated via 'echo -e 103 | vaspkit'. "
+            "SAME for the compute binary: confirm how the executable is loaded/invoked on "
+            "the cluster (vasp_command + 'module load'/'conda activate'/full path); if not "
+            "certain, ASK THE USER -- a wrong command/module dies with 'command not found' "
+            "(e.g. execve(): vasp_std: No such file or directory). "
+            "Verify with catgo_validate_config before submit."
         ),
         inputSchema={
             "type": "object",
@@ -487,7 +507,12 @@ TOOLS = [
                 },
                 "params": {
                     "type": "object",
-                    "description": "Action-specific parameters",
+                    "description": (
+                        "Action-specific parameters. add_task: workflow_id, task_type, "
+                        "and input params (use {\"_ref\":\"<task_id>\",\"_key\":\"<key>\"} "
+                        "values to wire from upstream tasks). Per-task actions: task_id OR "
+                        "workflow_id + node_id."
+                    ),
                 },
             },
             "required": ["action"],

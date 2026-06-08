@@ -15,6 +15,15 @@ export const RELAY_URL: string =
 const RELAY_HOSTS = new Set<string>([
   `optimade.materialsproject.org`,
   `api.materialsproject.org`,
+  // NVIDIA's OpenAI-compatible endpoint does not allow browser CORS for direct
+  // CatBot model/test/chat requests, so desktop/web client-direct mode must relay.
+  `integrate.api.nvidia.com`,
+])
+
+const BACKEND_CHAT_HOSTS = new Set<string>([
+  // The public relay does not allow this host. In local/desktop builds, route
+  // NVIDIA chat through CatGo's backend OpenAI-compatible proxy instead.
+  `integrate.api.nvidia.com`,
 ])
 
 export function needs_relay(url: string): boolean {
@@ -27,6 +36,24 @@ export function needs_relay(url: string): boolean {
 
 export function relay_url(url: string): string {
   return `${RELAY_URL}/?url=${encodeURIComponent(url)}`
+}
+
+export function normalize_provider_base_url(base_url: string): string {
+  const base = base_url.replace(/\/$/, ``)
+  for (const suffix of [`/chat/completions`, `/messages`, `/models`]) {
+    if (base.toLowerCase().endsWith(suffix)) return base.slice(0, -suffix.length).replace(/\/$/, ``)
+  }
+  return base
+}
+
+export function requires_backend_chat(config: ChatConfig): boolean {
+  const base = normalize_provider_base_url(config.base_url || ``)
+  if (!base) return false
+  try {
+    return BACKEND_CHAT_HOSTS.has(new URL(base).host)
+  } catch {
+    return false
+  }
 }
 
 /** A fetch wrapper that transparently routes CORS-blocked hosts via the relay. */
@@ -51,11 +78,15 @@ export async function relay_fetch(url: string, init?: RequestInit): Promise<Resp
 /** True when the tool-calling loop should run in-browser (no backend proxy). */
 export function is_client_direct(config: ChatConfig): boolean {
   if (SDK_PROVIDERS.has(config.provider)) return false // SDK agents always backend
-  // Non-SDK providers (DeepSeek/Qwen/Kimi/Gemini/Anthropic/custom/ollama) keep
+  if (!STATIC_ONLY && config.provider === `custom` && config.client_direct !== true) return false
+  if (!STATIC_ONLY && requires_backend_chat(config)) return false
+  // Built-in non-SDK providers (DeepSeek/Qwen/Kimi/Gemini/Anthropic/ollama) keep
   // their API key client-side, so default to the in-browser tool-calling loop
   // (not only under static deploys) — otherwise CatBot falls back to a
   // text-only backend proxy and can never call CLIENT_TOOLS (validate_hpc_config,
   // get_skill, structure tools). Explicit client_direct:false opts back into
-  // the text-only path.
+  // the text-only path. Custom providers default to backend in local/desktop
+  // builds because third-party OpenAI-compatible gateways often do not allow
+  // browser CORS even when their /models and backend test calls succeed.
   return STATIC_ONLY || config.client_direct !== false
 }

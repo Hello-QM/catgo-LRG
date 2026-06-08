@@ -116,11 +116,17 @@ class WorkflowDB:
             ("map_key", "TEXT"),
             ("task_group", "TEXT"),
             ("condition_json", "TEXT"),
+            ("node_id", "TEXT"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {type_}")
             except Exception:
                 pass  # column already exists
+        # Back-fill node_id for pre-namespacing rows (id was the bare node id).
+        try:
+            conn.execute("UPDATE tasks SET node_id = id WHERE node_id IS NULL")
+        except Exception:
+            pass
         # Add link_type to task_links
         try:
             conn.execute("ALTER TABLE task_links ADD COLUMN link_type TEXT DEFAULT 'data'")
@@ -238,17 +244,20 @@ class WorkflowDB:
     def create_task(
         self, workflow_id: str, task_type: str, *,
         task_id: str | None = None,
+        node_id: str | None = None,
         name: str | None = None, params: dict | None = None,
         software: str | None = None, system_name: str | None = None,
     ) -> str:
         task_id = task_id or _generate_id()
+        if node_id is None:
+            node_id = task_id
         with self._lock:
             conn = self._get_conn()
             conn.execute(
                 """INSERT OR REPLACE INTO tasks
-                   (id, workflow_id, task_type, name, status, params_json, software, system_name, created_at)
-                   VALUES (?, ?, ?, ?, 'WAITING', ?, ?, ?, ?)""",
-                (task_id, workflow_id, task_type, name, json.dumps(params or {}),
+                   (id, workflow_id, node_id, task_type, name, status, params_json, software, system_name, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'WAITING', ?, ?, ?, ?)""",
+                (task_id, workflow_id, node_id, task_type, name, json.dumps(params or {}),
                  software, system_name, _now()),
             )
             conn.commit()
@@ -516,6 +525,7 @@ CREATE TABLE IF NOT EXISTS workflows (
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     workflow_id TEXT NOT NULL,
+    node_id TEXT,
     task_type TEXT NOT NULL,
     name TEXT,
     status TEXT DEFAULT 'WAITING',

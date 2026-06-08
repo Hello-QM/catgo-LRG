@@ -73,7 +73,7 @@
   let expanded_help_keys = $state(new Set<string>())
 
   // Groups that should start expanded (the rest collapse by default)
-  const ALWAYS_OPEN_GROUPS = new Set([`Software`, `General`, `Model`, `Optimizer`, `Doping`, `Thermodynamics`, `Diagram`, `Freeze Atoms`])
+  const ALWAYS_OPEN_GROUPS = new Set([`Software`, `General`, `Model`, `Optimizer`, `Doping`, `Thermodynamics`, `Diagram`, `Freeze Atoms`, `Slab`])
 
   // Track user-explicit group toggles — survives param changes and re-renders.
   // Reset when switching to a different node.

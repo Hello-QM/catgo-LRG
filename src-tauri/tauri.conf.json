@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CatGo",
-  "version": "1.1.8",
+  "version": "1.1.13",
   "identifier": "com.catgo.app",
   "build": {
     "frontendDist": "../build-desktop",
@@ -50,6 +50,10 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
+    "iOS": {
+      "minimumSystemVersion": "17.0",
+      "infoPlist": "Info.ios.plist"
+    },
     "resources": {
       "icons/document.icns": "./"
     },
@@ -58,31 +62,36 @@
         "ext": ["cif"],
         "name": "CIF Structure",
         "description": "Crystallographic Information File",
-        "role": "Viewer"
+        "role": "Viewer",
+        "rank": "Owner"
       },
       {
         "ext": ["poscar", "vasp", "contcar"],
         "name": "VASP Structure",
         "description": "VASP POSCAR/CONTCAR file",
-        "role": "Viewer"
+        "role": "Viewer",
+        "rank": "Owner"
       },
       {
         "ext": ["xyz", "extxyz"],
         "name": "XYZ Structure",
         "description": "XYZ molecular structure file",
-        "role": "Viewer"
+        "role": "Viewer",
+        "rank": "Owner"
       },
       {
         "ext": ["traj"],
         "name": "ASE Trajectory",
         "description": "ASE trajectory file",
-        "role": "Viewer"
+        "role": "Viewer",
+        "rank": "Owner"
       },
       {
         "ext": ["json"],
         "name": "JSON Structure",
         "description": "JSON structure data",
-        "role": "Viewer"
+        "role": "Viewer",
+        "rank": "Owner"
       }
     ]
   }

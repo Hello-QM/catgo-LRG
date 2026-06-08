@@ -274,6 +274,12 @@ class WorkflowRunConfig(BaseModel):
         default=True,
         description="Use custodian to automatically fix VASP errors and restart",
     )
+    auto_submit: bool = Field(
+        default=False,
+        description="If False (default), HPC tasks pause at PENDING_REVIEW so the user "
+        "can review/edit the generated input files before submission (user-in-the-loop). "
+        "Set True to submit directly without a review gate.",
+    )
     custodian_max_errors: int = Field(
         default=5,
         ge=1,

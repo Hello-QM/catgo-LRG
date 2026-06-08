@@ -130,9 +130,19 @@ def run_slab_gen(
     thickness: float = 10.0,
     **params,
 ) -> dict:
-    """Generate slab from bulk structure using ferrox (Rust)."""
+    """Generate slab from bulk structure using ferrox (Rust).
+
+    Supercell expansion and bottom-layer freezing are applied to BOTH the ferrox
+    and pymatgen paths (previously the ferrox path returned early, silently
+    dropping supercell/layers/freeze). Freezing is written as a
+    ``selective_dynamics`` site property so the constraint is stored ON the
+    structure \u2014 visible in the 3D viewer and inherited by downstream nodes \u2014
+    rather than only materializing in the VASP POSCAR at run time.
+    """
     if structure is None:
         raise ValueError("slab_gen requires a structure input")
+
+    from pymatgen.core import Structure as PmgStructure
 
     struct_str = structure if isinstance(structure, str) else json.dumps(structure)
     # Accept both tuple/list (1,1,1) and string "1,1,1" for miller indices
@@ -140,45 +150,74 @@ def run_slab_gen(
         miller = tuple(int(x) for x in miller.replace(" ", "").split(","))
     h, k, l = (int(m) for m in miller)
 
+    # Convert requested layer count -> physical thickness so `layers` is honored
+    # (the ferrox API is thickness-based).
+    eff_thickness = thickness
+    try:
+        _bulk = PmgStructure.from_dict(
+            json.loads(struct_str) if isinstance(struct_str, str) else struct_str
+        )
+        _nlc = max(1, len(set(round(s.frac_coords[2], 4) for s in _bulk)))
+        _d = _bulk.lattice.c / _nlc
+        if layers:
+            eff_thickness = max(float(thickness), int(layers) * _d)
+    except Exception:
+        pass
+
+    slab = None
     try:
         import ferrox
         slab_json = ferrox.surfaces.generate_slab(
-            struct_str, h, k, l, thickness=thickness, vacuum=vacuum,
+            struct_str, h, k, l, thickness=eff_thickness, vacuum=vacuum,
         )
-        return {"structure": slab_json}
-    except ImportError:
-        pass
+        slab = PmgStructure.from_dict(
+            json.loads(slab_json) if isinstance(slab_json, str) else slab_json
+        )
+    except Exception:
+        slab = None
 
-    # Fallback: pymatgen SlabGenerator when ferrox (Rust) is not available
-    from pymatgen.core import Structure as PmgStructure
-    from pymatgen.core.surface import SlabGenerator
+    if slab is None:
+        # Fallback: pymatgen SlabGenerator when ferrox is unavailable / failed
+        from pymatgen.core.surface import SlabGenerator
+        struct_dict = json.loads(struct_str) if isinstance(struct_str, str) else struct_str
+        bulk = PmgStructure.from_dict(struct_dict)
+        c_param = bulk.lattice.c
+        n_layers_in_cell = max(1, len(set(round(s.frac_coords[2], 4) for s in bulk)))
+        min_slab_size = int(layers) * (c_param / n_layers_in_cell)
+        gen = SlabGenerator(bulk, (h, k, l), min_slab_size=min_slab_size,
+                            min_vacuum_size=vacuum, center_slab=True)
+        slabs = gen.get_slabs()
+        if not slabs:
+            raise RuntimeError(f"SlabGenerator returned no slabs for miller=({h},{k},{l})")
+        slab = slabs[0]
 
-    struct_dict = json.loads(struct_str) if isinstance(struct_str, str) else struct_str
-    bulk = PmgStructure.from_dict(struct_dict)
-
-    # Convert layer count to slab thickness
-    c_param = bulk.lattice.c
-    n_layers_in_cell = max(1, len(set(round(s.frac_coords[2], 4) for s in bulk)))
-    layer_spacing = c_param / n_layers_in_cell
-    min_slab_size = layers * layer_spacing
-
-    gen = SlabGenerator(bulk, (h, k, l), min_slab_size=min_slab_size,
-                        min_vacuum_size=vacuum, center_slab=True)
-    slabs = gen.get_slabs()
-    if not slabs:
-        raise RuntimeError(f"SlabGenerator returned no slabs for miller=({h},{k},{l})")
-
-    # Apply supercell if specified
-    slab = slabs[0]
-    sa = int(params.get("supercell_a", 1))
-    sb = int(params.get("supercell_b", 1))
+    # --- Supercell (applies to BOTH paths) ---
+    sa = int(params.get("supercell_a", 1) or 1)
+    sb = int(params.get("supercell_b", 1) or 1)
     if sa == 1 and sb == 1 and params.get("supercell"):
-        sc_str = str(params["supercell"]).replace("\u00d7", "x")
-        sc_parts = sc_str.lower().split("x")
+        sc_parts = str(params["supercell"]).replace("\u00d7", "x").lower().split("x")
         if len(sc_parts) >= 2:
             sa, sb = int(sc_parts[0]), int(sc_parts[1])
     if sa > 1 or sb > 1:
         slab.make_supercell([[sa, 0, 0], [0, sb, 0], [0, 0, 1]])
+
+    # --- Freeze bottom N layers as selective dynamics (stored on the structure) ---
+    n_frozen = 0
+    for _key in ("frozen_layers", "freeze_layers", "freeze_n_layers"):
+        _v = params.get(_key)
+        if _v:
+            try:
+                n_frozen = int(_v)
+                break
+            except (TypeError, ValueError):
+                pass
+    if n_frozen > 0 and len(slab) > 0:
+        z_levels = sorted(set(round(s.coords[2], 2) for s in slab))
+        if 0 < n_frozen < len(z_levels):
+            z_thr = (z_levels[n_frozen - 1] + z_levels[n_frozen]) / 2
+            sd = [[False, False, False] if s.coords[2] < z_thr else [True, True, True]
+                  for s in slab]
+            slab.add_site_property("selective_dynamics", sd)
 
     return {"structure": json.dumps(slab.as_dict())}
 
@@ -217,6 +256,14 @@ def run_adsorbate_place(
     # Accept structure_json key from frontend (same pattern as run_structure_input)
     if structure is None and params.get("structure_json"):
         structure = params["structure_json"]
+
+    # Accept POSCAR/CONTCAR text too — an upstream geo_opt passes its relaxed
+    # CONTCAR (POSCAR format), not pymatgen-JSON. Convert text -> JSON so the
+    # ferrox and fallback paths (which json.loads the structure) work and the
+    # slab's selective_dynamics is preserved.
+    if isinstance(structure, str) and structure.lstrip()[:1] not in "{[":
+        from pymatgen.core import Structure as _PmgS
+        structure = _PmgS.from_str(structure, fmt="poscar").to(fmt="json")
 
     try:
         import ferrox
@@ -392,16 +439,27 @@ def run_adsorbate_place(
     merged_symbols = result["symbols"]
     inv_lat = np.linalg.inv(lattice_matrix)
 
+    # Preserve the slab's selective_dynamics so a frozen slab stays frozen after
+    # adsorption: slab atoms (first n_slab, same order) keep their flags; the
+    # newly placed adsorbate atoms are fully free (T T T). Without this the freeze
+    # silently vanished the moment a structure passed through the adsorbate node.
+    n_slab = len(slab_dict["sites"])
+    slab_has_sd = any("selective_dynamics" in (s.get("properties") or {})
+                      for s in slab_dict["sites"])
     out_sites = []
     for i, (pos, sym) in enumerate(zip(merged_positions, merged_symbols)):
         xyz = pos.tolist() if hasattr(pos, 'tolist') else list(pos)
         abc = (np.array(xyz) @ inv_lat).tolist()
+        if i < n_slab:
+            props = dict(slab_dict["sites"][i].get("properties") or {})
+        else:
+            props = {"selective_dynamics": [True, True, True]} if slab_has_sd else {}
         out_sites.append({
             "species": [{"element": sym, "occu": 1}],
             "abc": abc,
             "xyz": xyz,
             "label": sym,
-            "properties": {},
+            "properties": props,
         })
 
     out_dict = {

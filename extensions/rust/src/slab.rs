@@ -713,32 +713,36 @@ fn finalize_slab(
         slab_1x1_occ, slab_1x1_frac,
     )?;
 
-    // Reduce to primitive surface unit cell (e.g., FCC (111) 4 atoms/layer → 1).
-    // Only accept the reduction if the new lattice vectors preserve the original
-    // directions (both reduced_a ∥ surf_a and reduced_b ∥ surf_b within ~15°).
-    // Reductions that rotate the lattice (e.g. rutile 001 → 45° primitive cell)
-    // are rejected to keep the slab orientation consistent with the cutting plane.
+    // Reduce to primitive surface unit cell (e.g., FCC (111) 6 atoms/layer → 1).
+    // Only accept the reduction if it is a pure in-plane sublattice change that
+    // preserves the surface frame (in-plane vectors stay in the z≈0 plane and the
+    // perpendicular stacking vector c is unchanged). See the inline note below.
     {
-        let orig_a = Vector3::new(surf_a[0], surf_a[1], 0.0);
-        let orig_b = Vector3::new(surf_b[0], surf_b[1], 0.0);
-        let cos_15: f64 = (15.0_f64.to_radians()).cos();
+        let orig_c = new_c;
         match crate::structure::reduce_slab_in_plane_primitive(slab_1x1.clone(), 0.01) {
             Ok(reduced) => {
                 let rm = reduced.lattice.matrix();
                 let red_a = Vector3::new(rm[(0, 0)], rm[(0, 1)], rm[(0, 2)]);
                 let red_b = Vector3::new(rm[(1, 0)], rm[(1, 1)], rm[(1, 2)]);
-                let la = orig_a.norm();
-                let lb = orig_b.norm();
-                let lra = red_a.norm();
-                let lrb = red_b.norm();
-                let a_parallel = la > 1e-10 && lra > 1e-10
-                    && orig_a.dot(&red_a).abs() / (la * lra) > cos_15;
-                let b_parallel = lb > 1e-10 && lrb > 1e-10
-                    && orig_b.dot(&red_b).abs() / (lb * lrb) > cos_15;
-                if a_parallel && b_parallel {
+                let red_c = Vector3::new(rm[(2, 0)], rm[(2, 1)], rm[(2, 2)]);
+                // Accept the primitive reduction iff it is a pure IN-PLANE
+                // sublattice change that preserves the surface orientation: both
+                // reduced surface vectors stay in the surface plane (z ≈ 0) and the
+                // stacking vector c is unchanged (still perpendicular). Species- and
+                // area-preservation are already enforced inside the reduction helper
+                // (is_lattice_translation + integer area-ratio), so the only thing
+                // left to guard here is the surface frame itself. This accepts the
+                // FCC(111) primitive (whose surface basis rotates 60°/120° in-plane
+                // but keeps c ⟂ surface) — the earlier slot-paired "parallel to the
+                // original surf vector" test wrongly rejected it — while still
+                // rejecting any reduction that tilts a vector out of the plane or
+                // alters the perpendicular c.
+                let in_plane = red_a.z.abs() < 1e-6 && red_b.z.abs() < 1e-6;
+                let c_unchanged = (red_c - orig_c).norm() < 1e-6;
+                if in_plane && c_unchanged {
                     slab_1x1 = reduced;
                 }
-                // else: reduction rotates the lattice — skip it
+                // else: reduction rotates/tilts the surface frame — skip it
             }
             Err(_) => {} // reduction failed — keep original
         }
@@ -911,69 +915,159 @@ pub fn generate_slab_layers(
     }
 
     let d_spacing = compute_d_spacing(miller_index, &structure.lattice);
-    // Build supercell thick enough: num_layers layers + margin
+    if !(d_spacing.is_finite() && d_spacing > EPS) {
+        return Err(FerroxError::InvalidStructure {
+            index: 0,
+            reason: "Degenerate d-spacing for Miller index".to_string(),
+        });
+    }
+    // Build supercell thick enough: num_layers periods + margin on each side.
     let required = (num_layers as f64 + 4.0) * d_spacing;
     let rc = build_rotated_supercell(structure, miller_index, required)?;
 
-    // Detect layers by Z in the rotated frame
-    let all_layers = detect_layers_in_rotated(&rc.sites);
-    if all_layers.is_empty() {
+    if rc.sites.is_empty() {
         return Err(FerroxError::InvalidStructure {
             index: 0,
-            reason: "No atomic layers detected in rotated supercell".to_string(),
+            reason: "No atoms in rotated supercell".to_string(),
         });
     }
 
-    // Find layers per d-spacing period (from the center to avoid edge effects)
-    let center_z = all_layers[all_layers.len() / 2].0;
-    let layers_per_period = all_layers
+    // ---------------------------------------------------------------------
+    // D-spacing repeat-unit selection (ASE `surface()` convention).
+    //
+    // The previous implementation grouped atoms into individual atomic
+    // z-planes and selected `num_layers` CONSECUTIVE planes. For rutile
+    // oxides a stoichiometric repeat unit spans several unequally-spaced,
+    // individually-non-stoichiometric planes ({M+O},{O},{O}), so slicing N
+    // consecutive planes cut mid-repeat-unit and dropped O.
+    //
+    // Instead we quantise by the surface d-spacing: each atom gets a PERIOD
+    // INDEX p = floor((z - z0)/d + tol), and we select `num_layers` COMPLETE
+    // repeat units p ∈ [start, start+num_layers). For metals/rocksalt one
+    // atomic plane spans one d-spacing, so this reduces to the old behaviour
+    // (num_layers periods == num_layers planes). For FCC(111) each (111)
+    // plane is one d-spacing apart → num_layers planes. For rutile it is
+    // num_layers full {M,2O} units → stoichiometric, matching ASE.
+    // ---------------------------------------------------------------------
+
+    // Reference z near the center of the rotated stack.
+    let mut zs: Vec<f64> = rc.sites.iter().map(|(xyz, _)| xyz[2]).collect();
+    zs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let center_z = zs[zs.len() / 2];
+
+    // Enumerate the distinct sub-period offsets (atomic z-plane positions
+    // modulo one d-spacing). `termination_index` selects which of these
+    // distinct in-period sub-planes the period origin sits on, i.e. which
+    // termination is exposed. Offsets are taken relative to `center_z` so the
+    // arithmetic is numerically stable regardless of absolute z.
+    let frac_tol = LAYER_TOLERANCE / d_spacing; // plane tolerance as a fraction of a period
+    let mut sub_offsets: Vec<f64> = Vec::new();
+    for &z in &zs {
+        // fractional position within the period, in [0, 1)
+        let mut f = ((z - center_z) / d_spacing).rem_euclid(1.0);
+        if f >= 1.0 - frac_tol {
+            f = 0.0; // fold the near-1.0 plane onto 0.0
+        }
+        if !sub_offsets.iter().any(|&o| (o - f).abs() <= frac_tol) {
+            sub_offsets.push(f);
+        }
+    }
+    sub_offsets.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    if sub_offsets.is_empty() {
+        sub_offsets.push(0.0);
+    }
+    let n_sub = sub_offsets.len();
+
+    // Shift the period origin so the cut lands on the chosen sub-plane. A small
+    // negative epsilon keeps the chosen plane inside (not on the boundary of)
+    // the period it opens.
+    let term_offset = sub_offsets[termination_index % n_sub];
+    let z0 = center_z + (term_offset - frac_tol) * d_spacing;
+
+    // Assign every atom a period index relative to z0.
+    let period_of = |z: f64| -> i64 { ((z - z0) / d_spacing + frac_tol).floor() as i64 };
+
+    // Center the selection window on the supercell middle so every selected
+    // repeat unit lies in the fully-populated interior. The supercell is built
+    // symmetrically about z, so its XY coverage is ragged only near the top and
+    // bottom; an off-center (grow-upward-only) window pushed the top period into
+    // that ragged zone and under-populated its planes after the XY wrap+dedup,
+    // breaking stoichiometry. Centering keeps both surfaces of the slab away
+    // from the supercell edges.
+    let center_p = period_of(center_z);
+    let start_p = center_p - (num_layers as i64) / 2;
+    let end_p = start_p + num_layers as i64; // exclusive
+
+    let mut selected_sites: Vec<(Vector3<f64>, usize)> = rc
+        .sites
         .iter()
-        .filter(|(z, _)| *z >= center_z && *z < center_z + d_spacing - LAYER_TOLERANCE)
-        .count();
-    let layers_per_period = if layers_per_period == 0 { 1 } else { layers_per_period };
-
-    // The termination index selects which layer type is at the top surface.
-    // We pick a window of num_layers consecutive layers from the middle of the stack,
-    // shifted by termination_index to select different surface compositions.
-    let term_idx = termination_index % layers_per_period;
-    let total_layers = all_layers.len();
-
-    // Start from center, shift by termination index
-    let center_layer_idx = total_layers / 2;
-    // Top layer = center + term_idx, bottom layer = top - (num_layers - 1)
-    let top_idx = center_layer_idx + term_idx;
-    if top_idx >= total_layers {
-        return Err(FerroxError::InvalidStructure {
-            index: 0,
-            reason: "Termination index out of range".to_string(),
-        });
-    }
-    let bottom_idx = top_idx.saturating_sub(num_layers - 1);
-    if top_idx - bottom_idx + 1 < num_layers {
-        return Err(FerroxError::InvalidStructure {
-            index: 0,
-            reason: format!(
-                "Not enough layers: need {}, have {} (total detected: {})",
-                num_layers,
-                top_idx - bottom_idx + 1,
-                total_layers
-            ),
-        });
-    }
-
-    // Collect atoms from selected layers
-    let selected_layers = &all_layers[bottom_idx..=top_idx];
-    let selected_sites: Vec<(Vector3<f64>, usize)> = selected_layers
-        .iter()
-        .flat_map(|(_, atom_indices)| {
-            atom_indices.iter().map(|&ri| rc.sites[ri])
+        .filter(|(xyz, _)| {
+            let p = period_of(xyz[2]);
+            p >= start_p && p < end_p
         })
+        .cloned()
         .collect();
+
+    // In-plane registry nudge so no atom sits EXACTLY on the surface-cell
+    // boundary when finalize_slab wraps XY into [0,1).
+    //
+    // finalize_slab folds each atom's in-plane fractional coords to [0,1) and
+    // then de-duplicates by Cartesian proximity. An atom that lands at a cell
+    // CORNER/EDGE (frac-XY component == 0.0 or 1.0) is degenerate: its periodic
+    // images sit on BOTH opposing edges (0.0 and 1.0), a full surface vector
+    // apart, so the dedup — which only merges atoms within DUPLICATE_TOL — keeps
+    // them as DISTINCT atoms and double-counts that plane. Whether a plane hits
+    // the boundary depends only on the supercell-origin phase relative to
+    // (surf_a, surf_b): for glided facets (e.g. rutile (110)/(001), rocksalt
+    // (110)) consecutive periods are laterally shifted, so some selected planes
+    // land exactly on the cell boundary and some don't → asymmetric
+    // double-counting that silently breaks stoichiometry (observed: a {M+O}
+    // plane keeping 2× M but 1× O on RuO2(110)/(001) and NiO(110)).
+    //
+    // A single uniform in-plane translation of the whole selected set is a pure
+    // PBC no-op (x,y are periodic), but it moves every atom off the exact
+    // boundary into the cell interior, making the subsequent wrap+dedup
+    // unambiguous for ALL planes at once. The shift is an irrational-ish
+    // fraction of each surface vector so it never re-lands a different plane's
+    // atoms onto the boundary. Metals/rocksalt/FCC(111) are unaffected in count
+    // (their planes were already interior or are now cleanly deduped); rutile
+    // now keeps full {M,2O} repeat units, matching ASE.
+    {
+        let nudge = 0.001_f64.mul_add(rc.surf_b[0], 0.0017 * rc.surf_a[0]);
+        let nudge_y = 0.001_f64.mul_add(rc.surf_b[1], 0.0017 * rc.surf_a[1]);
+        let shift = Vector3::new(nudge, nudge_y, 0.0);
+        for (xyz, _) in selected_sites.iter_mut() {
+            *xyz += shift;
+        }
+    }
+
+    #[cfg(test)]
+    if std::env::var("SLAB_DEBUG").is_ok() {
+        use std::collections::BTreeMap;
+        let mut per: BTreeMap<i64, BTreeMap<String, usize>> = BTreeMap::new();
+        for (xyz, si) in &rc.sites {
+            let p = period_of(xyz[2]);
+            if p < start_p - 1 || p > end_p { continue; }
+            let sym = structure.site_occupancies[*si].dominant_species().element.symbol().to_string();
+            *per.entry(p).or_default().entry(sym).or_default() += 1;
+        }
+        eprintln!("DEBUG hkl={:?} d={:.4} center_z={:.4} z0={:.4} term_off={:.4} subs={:?} start_p={} end_p={}", miller_index, d_spacing, center_z, z0, term_offset, sub_offsets, start_p, end_p);
+        for (p, m) in &per { eprintln!("  period {}: {:?}", p, m); }
+        // distinct z-planes (rounded) in the selected set, with element composition
+        let mut planes: BTreeMap<i64, BTreeMap<String, usize>> = BTreeMap::new();
+        for (xyz, si) in &selected_sites {
+            let key = (xyz[2] * 100.0).round() as i64;
+            let sym = structure.site_occupancies[*si].dominant_species().element.symbol().to_string();
+            *planes.entry(key).or_default().entry(sym).or_default() += 1;
+        }
+        eprintln!("  SELECTED distinct z-planes ({}):", planes.len());
+        for (zk, m) in &planes { eprintln!("    z={:.2}: {:?}", *zk as f64 / 100.0, m); }
+    }
 
     if selected_sites.is_empty() {
         return Err(FerroxError::InvalidStructure {
             index: 0,
-            reason: "No atoms in selected layers".to_string(),
+            reason: "No atoms in selected repeat units".to_string(),
         });
     }
 
@@ -1004,29 +1098,35 @@ mod tests {
         Structure::try_new_from_occupancies(lattice, site_occupancies, frac_coords).unwrap()
     }
 
-    fn create_rutile_ruo2() -> Structure {
-        // Rutile RuO2: tetragonal P4_2/mnm, a=b=4.4919, c=3.1066, u≈0.3053
-        let lattice = Lattice::tetragonal(4.4919, 3.1066);
+    /// Generic rutile oxide MO2 (tetragonal P4_2/mnm), internal param u≈0.3053.
+    /// M at (0,0,0),(.5,.5,.5); O at (u,u,0),(1-u,1-u,0),(.5+u,.5-u,.5),(.5-u,.5+u,.5).
+    fn create_rutile(metal: &str, a: f64, c: f64) -> Structure {
+        let lattice = Lattice::tetragonal(a, c);
         let u = 0.3053;
         let frac_coords = vec![
-            Vector3::new(0.0, 0.0, 0.0),         // Ru
-            Vector3::new(0.5, 0.5, 0.5),         // Ru
+            Vector3::new(0.0, 0.0, 0.0),         // M
+            Vector3::new(0.5, 0.5, 0.5),         // M
             Vector3::new(u, u, 0.0),             // O
             Vector3::new(1.0 - u, 1.0 - u, 0.0), // O
             Vector3::new(0.5 + u, 0.5 - u, 0.5), // O
             Vector3::new(0.5 - u, 0.5 + u, 0.5), // O
         ];
-        let ru = Species::from_string("Ru").unwrap();
+        let m = Species::from_string(metal).unwrap();
         let o = Species::from_string("O").unwrap();
         let occ = vec![
-            SiteOccupancy::ordered(ru),
-            SiteOccupancy::ordered(ru),
+            SiteOccupancy::ordered(m),
+            SiteOccupancy::ordered(m),
             SiteOccupancy::ordered(o),
             SiteOccupancy::ordered(o),
             SiteOccupancy::ordered(o),
             SiteOccupancy::ordered(o),
         ];
         Structure::try_new_from_occupancies(lattice, occ, frac_coords).unwrap()
+    }
+
+    fn create_rutile_ruo2() -> Structure {
+        // Rutile RuO2: tetragonal P4_2/mnm, a=b=4.4919, c=3.1066, u≈0.3053
+        create_rutile("Ru", 4.4919, 3.1066)
     }
 
     /// mp-1068212: cubic Fe2O3 (a=3.788512). Fe at corner+body-center, O at
@@ -1154,6 +1254,113 @@ mod tests {
                 "NiO(110) layers={n}: Ni={ni} O={o} total={}",
                 slab.num_sites()
             );
+            assert!(ni > 0 && o > 0, "layers={n}: a species was deleted (Ni={ni} O={o})");
+            assert_eq!(ni, o, "layers={n}: non-stoichiometric Ni={ni} O={o}");
+        }
+    }
+
+    /// FCC(111) cut from the conventional cubic cell must reduce to a clean
+    /// primitive p(n×n) mesh: uniform atoms per layer (9 for n=3), correct total
+    /// (45 for p(3×3)×5), and a surface-perpendicular c vector. Regression for
+    /// the slot-paired acceptance guard rejecting the (correct) swapped-slot
+    /// primitive reduction, leaving the 4-atom/layer conventional mesh.
+    #[test]
+    fn fcc111_primitive_p3x3_is_clean() {
+        let bulk = create_fcc_cu();
+        let slab = generate_slab_layers(&bulk, [1, 1, 1], 5, 0, 15.0, [3, 3]).unwrap();
+        assert_eq!(slab.num_sites(), 45, "p(3x3)x5 FCC(111) must be 45 atoms");
+        // uniform 9 atoms per z-layer
+        let mut zs: Vec<f64> = slab.cart_coords().iter().map(|v| v.z).collect();
+        zs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut groups: Vec<usize> = vec![];
+        let mut i = 0;
+        while i < zs.len() {
+            let z0 = zs[i];
+            let mut n = 0;
+            while i < zs.len() && (zs[i] - z0).abs() < 0.5 {
+                n += 1;
+                i += 1;
+            }
+            groups.push(n);
+        }
+        assert!(groups.iter().all(|&n| n == 9), "every layer must have 9 atoms, got {:?}", groups);
+        // c perpendicular to the surface plane
+        let c = slab.lattice.matrix();
+        assert!(
+            c[(2, 0)].abs() < 1e-6 && c[(2, 1)].abs() < 1e-6,
+            "c must be perpendicular to surface, got ({}, {})",
+            c[(2, 0)],
+            c[(2, 1)]
+        );
+    }
+
+    /// Rutile RuO2(110) must stay stoichiometric (O/Ru == 2) for any layer
+    /// count. ASE `surface()` stacks whole oriented unit cells → exact O:M=2.
+    /// Cutting by atomic z-plane sliced mid-repeat-unit and dropped O.
+    #[test]
+    fn rutile_110_stoichiometric() {
+        let bulk = create_rutile_ruo2();
+        for n in [2usize, 3, 4] {
+            let slab = generate_slab_layers(&bulk, [1, 1, 0], n, 0, 15.0, [1, 1]).unwrap();
+            let ru = count_species(&slab, "Ru");
+            let o = count_species(&slab, "O");
+            if std::env::var("SLAB_DEBUG").is_ok() {
+                use std::collections::BTreeMap;
+                let mut planes: BTreeMap<i64, BTreeMap<String, usize>> = BTreeMap::new();
+                for (xyz, occ) in slab.cart_coords().iter().zip(slab.site_occupancies.iter()) {
+                    let key = (xyz.z * 100.0).round() as i64;
+                    let sym = occ.dominant_species().element.symbol().to_string();
+                    *planes.entry(key).or_default().entry(sym).or_default() += 1;
+                }
+                eprintln!("FINAL RuO2(110) n={n}: planes={}", planes.len());
+                for (zk, m) in &planes { eprintln!("    z={:.2}: {:?}", *zk as f64 / 100.0, m); }
+            }
+            eprintln!("RuO2(110) layers={n}: Ru={ru} O={o} total={}", slab.num_sites());
+            assert!(ru > 0 && o > 0, "layers={n}: a species was deleted (Ru={ru} O={o})");
+            assert_eq!(o, 2 * ru, "layers={n}: non-stoichiometric O={o} Ru={ru} (want O=2*Ru)");
+        }
+    }
+
+    /// Rutile RuO2(100) — same stoichiometry guarantee. The (100) repeat unit
+    /// spans 6 unequally spaced atomic planes; consecutive-plane cuts drop O.
+    #[test]
+    fn rutile_100_stoichiometric() {
+        let bulk = create_rutile_ruo2();
+        for n in [2usize, 3, 4] {
+            let slab = generate_slab_layers(&bulk, [1, 0, 0], n, 0, 15.0, [1, 1]).unwrap();
+            let ru = count_species(&slab, "Ru");
+            let o = count_species(&slab, "O");
+            eprintln!("RuO2(100) layers={n}: Ru={ru} O={o} total={}", slab.num_sites());
+            assert!(ru > 0 && o > 0, "layers={n}: a species was deleted (Ru={ru} O={o})");
+            assert_eq!(o, 2 * ru, "layers={n}: non-stoichiometric O={o} Ru={ru} (want O=2*Ru)");
+        }
+    }
+
+    /// Rutile RuO2(001) was already stoichiometric (each (001) d-spacing holds a
+    /// full {M+2O} unit) — must not regress under the new period-based cut.
+    #[test]
+    fn rutile_001_still_stoichiometric() {
+        let bulk = create_rutile_ruo2();
+        for n in [2usize, 3, 4] {
+            let slab = generate_slab_layers(&bulk, [0, 0, 1], n, 0, 15.0, [1, 1]).unwrap();
+            let ru = count_species(&slab, "Ru");
+            let o = count_species(&slab, "O");
+            eprintln!("RuO2(001) layers={n}: Ru={ru} O={o} total={}", slab.num_sites());
+            assert!(ru > 0 && o > 0, "layers={n}: a species was deleted (Ru={ru} O={o})");
+            assert_eq!(o, 2 * ru, "layers={n}: non-stoichiometric O={o} Ru={ru} (want O=2*Ru)");
+        }
+    }
+
+    /// Rocksalt NiO(100) is 1:1 on every plane — must stay Ni==O (metals/rocksalt
+    /// are immune: one atomic plane per d-spacing period).
+    #[test]
+    fn rocksalt_100_stays_1to1() {
+        let bulk = create_rocksalt_nio();
+        for n in [2usize, 3, 4] {
+            let slab = generate_slab_layers(&bulk, [1, 0, 0], n, 0, 15.0, [1, 1]).unwrap();
+            let ni = count_species(&slab, "Ni");
+            let o = count_species(&slab, "O");
+            eprintln!("NiO(100) layers={n}: Ni={ni} O={o} total={}", slab.num_sites());
             assert!(ni > 0 && o > 0, "layers={n}: a species was deleted (Ni={ni} O={o})");
             assert_eq!(ni, o, "layers={n}: non-stoichiometric Ni={ni} O={o}");
         }

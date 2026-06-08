@@ -170,6 +170,73 @@ class MainActivity : TauriActivity() {
 }
 ```
 
+## 2c. Regenerate the launcher icon (REQUIRED — re-apply after every `init`)
+
+`tauri android init` writes the **default Tauri icon** (the cyan/yellow "8")
+into `src-tauri/gen/android/app/src/main/res/mipmap-*/`. Those mipmaps are
+machine-local (under the gitignored `src-tauri/gen/`), so the desktop icon work
+in `src-tauri/icons/` does NOT propagate to them — the APK ships the default
+icon unless you regenerate after each `init`.
+
+`scripts/generate-icons.js` only covers the desktop/Windows/macOS sizes; it does
+**not** touch Android. Run the Tauri icon command to (re)generate the Android
+mipmaps from the CatGo cat logo so the launcher icon matches desktop:
+
+```bash
+# from the repo root — regenerates src-tauri/icons/* AND the Android mipmaps
+pnpm tauri icon desktop/logo.png
+```
+
+Verify `mipmap-xxxhdpi/ic_launcher.png` now shows the navy cat "C" mark, not the
+default "8".
+
+## 2d. Release signing for Play Store (REQUIRED — re-apply after every `init`)
+
+`tauri android init` writes a stock `app/build.gradle.kts` with **no signing
+config**, so a release build is `*-release-unsigned.{apk,aab}` — Play rejects it.
+The upload keystore itself lives OUTSIDE the repo (machine-local); only the wiring
+below has to be re-applied after each `init` (`gen/` is gitignored).
+
+**Upload keystore (one-time, keep it forever — back it up offline):**
+
+```bash
+keytool -genkeypair -v -keystore ~/.catgo-keys/catgo-upload.jks -storetype PKCS12 \
+  -alias catgo-upload -keyalg RSA -keysize 2048 -validity 10000 \
+  -dname "CN=CatGo, O=CatGo, OU=CatGo, C=US"
+```
+
+Losing this file/password means you can no longer push updates with the same
+upload key (Play App Signing lets you *reset* the upload key via support, but the
+app signing key Google holds is permanent). Never commit it.
+
+**(1) `app/keystore.properties`** (gitignored under `gen/`) — points at the key:
+
+```properties
+storeFile=/home/<you>/.catgo-keys/catgo-upload.jks
+storePassword=<store password>
+keyAlias=catgo-upload
+keyPassword=<key password>
+```
+
+**(2) `app/build.gradle.kts`** — load it and wire a release `signingConfig`. Add a
+`keystoreProperties` loader next to the existing `tauriProperties` one, a
+`signingConfigs { create("release") { … } }` block inside `android {}` that reads
+those four keys, and `signingConfig = signingConfigs.getByName("release")` in
+`buildTypes.getByName("release")`. Guard each on `storeFile` being present so a
+keyless checkout/CI still builds (unsigned) instead of failing.
+
+**Build the signed AAB for Play (internal testing → production):**
+
+```bash
+pnpm tauri android build --aab true   # → app/build/outputs/bundle/universalRelease/app-universal-release.aab
+```
+
+Verify it is signed with your upload key (not the debug key):
+
+```bash
+jarsigner -verify -certs app-universal-release.aab   # Owner should be CN=CatGo, not CN=Android Debug
+```
+
 ## 3. Run on an emulator / device (dev)
 
 ```bash

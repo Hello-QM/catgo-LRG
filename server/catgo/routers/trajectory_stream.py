@@ -51,7 +51,7 @@ class _TrajIndex:
     frame count is stored in ``_total`` (ASE handles random access itself).
     """
 
-    __slots__ = ("fmt", "offsets", "file_size", "n_atoms", "_total")
+    __slots__ = ("fmt", "offsets", "file_size", "n_atoms", "_total", "elements", "lattices")
 
     def __init__(
         self,
@@ -60,12 +60,19 @@ class _TrajIndex:
         file_size: int,
         n_atoms: int,
         total: int | None = None,
+        elements: list[str] | None = None,
+        lattices: list[list[list[float]]] | None = None,
     ) -> None:
         self.fmt = fmt
         self.offsets = offsets
         self.file_size = file_size
         self.n_atoms = n_atoms
         self._total = total if total is not None else len(offsets)
+        # XDATCAR-only: element list (constant — VASP can't vary composition)
+        # and per-frame 3x3 lattice (constant cell repeats the same matrix;
+        # NPT carries the cell that was in effect for each frame).
+        self.elements = elements or []
+        self.lattices = lattices or []
 
     @property
     def total_frames(self) -> int:
@@ -84,12 +91,16 @@ _CACHE_LOCK = threading.Lock()
 
 
 def _detect_format(p: Path) -> str:
-    """Map a file extension to a reader format."""
+    """Map a file extension / name to a reader format."""
     suffix = p.suffix.lower()
     if suffix == ".lammpstrj":
         return "lammpstrj"
     if suffix == ".traj":
         return "traj"
+    # VASP XDATCAR usually has no extension; match by name (XDATCAR,
+    # XDATCAR.bz2 already decompressed, my_run.XDATCAR, ...).
+    if "xdatcar" in p.name.lower():
+        return "xdatcar"
     return "xyz"  # .xyz / .extxyz / default
 
 # Property patterns for the plot panel. Word boundaries + a MANDATORY `=`/`:`
@@ -196,6 +207,97 @@ def _build_traj_index(p: Path) -> _TrajIndex:
     return _TrajIndex("traj", [], p.stat().st_size, n_atoms, total=total)
 
 
+def _parse_xdatcar_header(lines: list[str], start: int) -> tuple[list[list[float]], list[str], int] | None:
+    """Parse a header block at ``lines[start]`` (title line). Returns
+    ``(lattice 3x3, expanded element list, next_line_index)`` or ``None`` if
+    the block is not a valid header. Mirrors the frontend parser layout:
+    start=title, +1=scale, +2..4=lattice, +5=element names, +6=counts.
+    """
+    if start + 6 >= len(lines):
+        return None
+    try:
+        scale = float(lines[start + 1].split()[0])
+    except (ValueError, IndexError):
+        return None
+    lattice: list[list[float]] = []
+    for r in range(2, 5):
+        parts = lines[start + r].split()
+        if len(parts) < 3:
+            return None
+        try:
+            lattice.append([float(parts[0]) * scale, float(parts[1]) * scale, float(parts[2]) * scale])
+        except ValueError:
+            return None
+    names = lines[start + 5].split()
+    try:
+        counts = [int(x) for x in lines[start + 6].split()]
+    except ValueError:
+        return None
+    if not names or len(counts) != len(names) or any(c <= 0 for c in counts):
+        return None
+    elements: list[str] = []
+    for name, c in zip(names, counts):
+        elements.extend([name] * c)
+    return lattice, elements, start + 7
+
+
+def _build_xdatcar_index(p: Path) -> _TrajIndex:
+    """Index an XDATCAR: byte offset of each ``configuration=`` line plus the
+    lattice in effect for that frame (constant cell, or per-frame for NPT).
+
+    The element list and per-frame lattice are stored so a single frame can be
+    read and converted from fractional to Cartesian coordinates without
+    re-reading the whole file.
+    """
+    text = p.read_text(errors="replace")
+    lines = text.split("\n")
+
+    top = _parse_xdatcar_header(lines, 0)
+    if top is None:
+        raise HTTPException(status_code=400, detail="XDATCAR: bad header")
+    cur_lattice, elements, _ = top
+
+    # Byte offset of each line (so we can return the configuration line's
+    # offset). Building the prefix once is O(lines); seek uses these offsets.
+    line_byte_offsets: list[int] = [0] * len(lines)
+    acc = 0
+    enc = text.encode("utf-8", "replace")
+    # Recompute per-line byte offsets from the encoded text to stay exact for
+    # multibyte content (rare in XDATCAR, but correct).
+    b = 0
+    for i, ln in enumerate(lines):
+        line_byte_offsets[i] = b
+        b += len(ln.encode("utf-8", "replace")) + 1  # +1 for the '\n'
+    del enc, acc
+
+    offsets: list[int] = []
+    lattices: list[list[list[float]]] = []
+    i = top[2]
+    while i < len(lines):
+        line = lines[i]
+        if line.strip() == "":
+            i += 1
+            continue
+        if "configuration=" not in line:
+            rep = _parse_xdatcar_header(lines, i)
+            if rep is not None:  # NPT: cell changed for the next frame
+                cur_lattice, elements, nxt = rep
+                i = nxt
+                continue
+            i += 1
+            continue
+        offsets.append(line_byte_offsets[i])
+        lattices.append(cur_lattice)
+        # skip the configuration line + its n_atoms coordinate lines
+        i += 1 + len(elements)
+
+    file_size = p.stat().st_size
+    return _TrajIndex(
+        "xdatcar", offsets, file_size, len(elements),
+        elements=elements, lattices=lattices,
+    )
+
+
 def _get_index(path: str) -> tuple[Path, _TrajIndex]:
     """Return the cached index for ``path``, building it on first access."""
     p = _resolve_path(path)
@@ -210,6 +312,8 @@ def _get_index(path: str) -> tuple[Path, _TrajIndex]:
             idx = _build_lammps_index(p)
         elif fmt == "traj":
             idx = _build_traj_index(p)
+        elif fmt == "xdatcar":
+            idx = _build_xdatcar_index(p)
         else:
             idx = _build_xyz_index(p)
         with _CACHE_LOCK:
@@ -224,6 +328,8 @@ def _read_frame(p: Path, idx: _TrajIndex, n: int) -> dict[str, Any]:
         return _read_lammps_frame(p, idx, n)
     if idx.fmt == "traj":
         return _read_traj_frame(p, idx, n)
+    if idx.fmt == "xdatcar":
+        return _read_xdatcar_frame(p, idx, n)
     return _read_xyz_frame(p, idx, n)
 
 
@@ -313,6 +419,56 @@ def _read_xyz_frame(p: Path, idx: _TrajIndex, n: int) -> dict[str, Any]:
         "positions": positions,
         "comment": comment,
         "properties": _parse_comment(comment),
+    }
+
+
+def _read_xdatcar_frame(p: Path, idx: _TrajIndex, n: int) -> dict[str, Any]:
+    """Read XDATCAR frame ``n``: seek to its configuration line, read the
+    fractional coords, convert to Cartesian with that frame's lattice, and
+    return Cartesian positions + the lattice (so the viewer gets the cell).
+    """
+    n_atoms = idx.n_atoms
+    lattice = idx.lattices[n] if n < len(idx.lattices) else (idx.lattices[0] if idx.lattices else None)
+    elements = idx.elements
+
+    start = idx.offsets[n]
+    # The frame body is the configuration line + n_atoms coord lines; bound the
+    # read generously (no coord line exceeds a few dozen bytes).
+    end = idx.offsets[n + 1] if n + 1 < len(idx.offsets) else idx.file_size
+    with p.open("rb") as fh:
+        fh.seek(start)
+        raw = fh.read(end - start)
+    lines = raw.decode("utf-8", "replace").splitlines()
+
+    # lines[0] is the configuration line; coords start at lines[1].
+    # Lattice rows = a,b,c (VASP convention) ⇒ cart = fracᵀ·M summed per row:
+    #   cart_k = fa*a_k + fb*b_k + fc*c_k.
+    a, b, c = (lattice or [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    positions: list[list[float]] = []
+    for k in range(n_atoms):
+        li = 1 + k
+        if li >= len(lines):
+            break
+        parts = lines[li].split()
+        if len(parts) < 3:
+            continue
+        try:
+            fa, fb, fc = float(parts[0]), float(parts[1]), float(parts[2])
+        except ValueError:
+            continue
+        positions.append([
+            fa * a[0] + fb * b[0] + fc * c[0],
+            fa * a[1] + fb * b[1] + fc * c[1],
+            fa * a[2] + fb * b[2] + fc * c[2],
+        ])
+
+    return {
+        "frame_number": n,
+        "elements": list(elements),
+        "positions": positions,
+        "lattice": lattice,
+        "comment": "",
+        "properties": {},
     }
 
 
@@ -432,7 +588,14 @@ async def trajectory_upload(file: UploadFile = File(...)) -> dict:
     """
     cache_dir = Path.home() / ".catgoat" / "cache" / "traj"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    ext = os.path.splitext(file.filename or "upload.xyz")[1] or ".xyz"
+    orig_name = file.filename or "upload.xyz"
+    # The cached filename drives _detect_format. VASP XDATCAR has no extension,
+    # so preserve an "xdatcar" marker in the suffix; otherwise keep the real
+    # extension (defaulting to .xyz).
+    if "xdatcar" in orig_name.lower():
+        ext = ".xdatcar"
+    else:
+        ext = os.path.splitext(orig_name)[1] or ".xyz"
 
     tmp = cache_dir / f".upload-{os.getpid()}-{id(file)}{ext}.part"
     sha = hashlib.sha1()

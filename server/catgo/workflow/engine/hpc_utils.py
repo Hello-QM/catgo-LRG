@@ -80,7 +80,11 @@ def resolve_work_dir(task: dict, workflow_id: str, config: dict) -> str:
     _logger.info(f"[resolve_work_dir] config.hpc.base_work_dir={config.get('hpc', {}).get('base_work_dir')}")
     _logger.info(f"[resolve_work_dir] Using base_dir={base_dir}")
     _logger.info(f"[resolve_work_dir] template={template}")
-    work_dir = template.format(base_dir=base_dir, workflow_id=workflow_id, task_id=task["id"])
+    work_dir = template.format(
+        base_dir=base_dir,
+        workflow_id=workflow_id,
+        task_id=task.get("node_id") or task["id"],
+    )
     _logger.info(f"[resolve_work_dir] Final work_dir={work_dir}")
     return work_dir
 

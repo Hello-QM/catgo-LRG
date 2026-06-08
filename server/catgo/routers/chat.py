@@ -388,8 +388,16 @@ def _resolve_api_key(provider_id: str, api_key: Optional[str]) -> Optional[str]:
     return api_key or (os.environ.get(env_key) if env_key else None)
 
 
+def _normalize_provider_base_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    for suffix in ("/chat/completions", "/messages", "/models"):
+        if base.lower().endswith(suffix):
+            return base[: -len(suffix)].rstrip("/")
+    return base
+
+
 def _resolve_base_url(provider_id: str, base_url: Optional[str]) -> str:
-    return (base_url or _API_BASE_URLS.get(provider_id, "")).rstrip("/")
+    return _normalize_provider_base_url(base_url or _API_BASE_URLS.get(provider_id, ""))
 
 
 def _resolve_api_format(provider_id: str, api_format: Optional[str], base_url: str) -> str:

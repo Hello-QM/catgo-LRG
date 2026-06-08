@@ -89,3 +89,4 @@ server/catgo/vendor/pormake/database/**/*.pickle
 .claude/logs/
 repro-*.jpeg
 repro-*.png
+server/catgo/data/

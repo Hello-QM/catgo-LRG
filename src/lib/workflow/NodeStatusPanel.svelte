@@ -166,12 +166,13 @@
 
   // Derived TaskRef for adapter calls.
   // In step mode, if we have an engine_task (e.g. for PENDING_REVIEW confirm),
-  // use task mode with node_id as task_id (graph converter preserves node IDs).
+  // use task mode with the engine task's namespaced id (#227: task ids are
+  // {workflow_id}:{node_id}, so never pass the bare node_id as a task_id).
   const task_ref = $derived<TaskRef>(
     mode === 'task' && task_id
       ? { mode: 'task', task_id }
       : engine_task
-        ? { mode: 'task', task_id: node_id }
+        ? { mode: 'task', task_id: engine_task.id }   // was: node_id
         : { mode: 'step', workflow_id, node_id }
   )
 
@@ -793,7 +794,7 @@
       // - engine_task already loaded: keep it in sync (e.g. after confirmation)
       if (effective_status === 'pending_review' || status === 'pending_review' || engine_task) {
         try {
-          const data = await get_v2_task(node_id)
+          const data = await get_v2_task(engine_task?.id ?? `${workflow_id}:${node_id}`)
           if (gen === fetch_gen) engine_task = data.task
         } catch {
           // Engine task not found — may be a V1-only workflow
