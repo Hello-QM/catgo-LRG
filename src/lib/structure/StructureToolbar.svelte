@@ -87,6 +87,7 @@
     delete_measurement = (_id: string) => {},
     delete_selected_atoms = () => {},
     on_popout_chat = undefined as (() => void) | undefined,
+    on_upload_to_hpc = undefined as (() => void) | undefined,
 
     // ── 子组件 snippet (面板组件从 Structure.svelte 传入) ──
     children,
@@ -144,6 +145,7 @@
     delete_measurement?: (id: string) => void
     delete_selected_atoms?: () => void
     on_popout_chat?: () => void
+    on_upload_to_hpc?: () => void
 
     // 子组件 snippet
     children?: Snippet
@@ -456,7 +458,6 @@
       </span>
 
       <!-- === Analysis Tools === -->
-      {#if !hidden_toolbar_items.includes('analysis')}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -468,7 +469,6 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.analysis_tools')}</span>
       </span>
-      {/if}
 
       {#if !hidden_toolbar_items.includes('workflow') && !STATIC_ONLY}
       <!-- === Workflow === -->
@@ -510,6 +510,17 @@
           <Icon icon="Server" />
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.server_hpc')}</span>
+      </span>
+      <!-- === Upload current structure to HPC === -->
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => on_upload_to_hpc?.()}
+          class="build-tools-toggle"
+        >
+          <Icon icon="Cloud" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.upload_to_hpc')}</span>
       </span>
       {/if}
 

@@ -68,6 +68,7 @@
     JobDetailPane,
     PluginHubPane,
   } from './index'
+  import HpcUploadDialog from './HpcUploadDialog.svelte'
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
@@ -735,7 +736,6 @@
     lattice_props: lattice_props_in = $bindable(undefined),
     controls_open = $bindable(false),
     info_pane_open = $bindable(false),
-    editor_api = $bindable(undefined),
     enable_measure_mode = $bindable(true),
     background_color = $bindable(undefined),
     background_opacity = $bindable(0.1),
@@ -864,13 +864,6 @@
       enable_info_pane?: boolean
       enable_measure_mode?: boolean
       info_pane_open?: boolean
-      /** Imperative editor handle for parents (e.g. mobile undo/redo buttons). */
-      editor_api?: {
-        undo: () => void
-        redo: () => void
-        can_undo: () => boolean
-        can_redo: () => boolean
-      }
       fullscreen_toggle?: Snippet<[]> | boolean
       hidden_toolbar_items?: string[]
       bottom_left?: Snippet<[{ structure?: AnyStructure }]>
@@ -1405,6 +1398,7 @@
   let slow_growth_pane_open = $state(false)  // Slow-growth post-processing
   let io_pane_open = $state(false)  // IO (import/export) pane
   let server_pane_open = $state(false)  // Server (HPC) pane
+  let hpc_upload_open = $state(false)  // "Upload structure to HPC" dialog
   let plugin_hub_open = $state(false)  // Plugin Hub pane
   // Open Plugin Hub when external counter prop is incremented
   $effect(() => {
@@ -2343,18 +2337,6 @@
     sel_state.selection_history = [...sel_state.selection_history, [...selected_sites]]
   }
 
-  // Imperative handle for parents (mobile undo/redo buttons). Desktop drives
-  // undo/redo via keyboard; mobile has no keyboard, so expose it explicitly.
-  // can_undo/can_redo are getters so callers re-read live state reactively.
-  $effect(() => {
-    editor_api = {
-      undo,
-      redo,
-      can_undo: () => sel_state.can_undo,
-      can_redo: () => sel_state.can_redo,
-    }
-  })
-
   // Vacuum box modal helpers
   function open_vacuum_box_for_tool(tool: typeof pending_tool_after_wrap) {
     pending_tool_after_wrap = tool
@@ -2967,6 +2949,7 @@
       {hidden_toolbar_items}
       {remote_origin}
       {structure}
+      on_upload_to_hpc={() => { hpc_upload_open = true }}
       {molecular_fragments}
       {reset_text}
       {wrapper}
@@ -4441,6 +4424,9 @@
       sel_state.color_picker_targets = []
     }}
   />
+
+  <!-- Upload current structure to HPC (independent guided dialog) -->
+  <HpcUploadDialog bind:show={hpc_upload_open} structure={saveable_structure ?? structure} />
 
   <!-- OPTIMADE search modal -->
   <OptimadeSearchModal
