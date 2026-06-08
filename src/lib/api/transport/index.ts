@@ -16,7 +16,7 @@
  */
 
 /** Authentication method for an SSH/HPC connection. */
-export type HpcAuthMethod = 'password' | 'publickey' | 'keyboard-interactive'
+export type HpcAuthMethod = `password` | `publickey` | `keyboard-interactive`
 
 /** Parameters for opening an HPC connection. */
 export interface HpcHostConfig {
@@ -112,7 +112,7 @@ export interface SftpReadResult {
  */
 export interface HpcTransport {
   /** Human-readable transport id (`'http'` | `'tauri-ssh'`) for diagnostics. */
-  readonly kind: 'http' | 'tauri-ssh'
+  readonly kind: `http` | `tauri-ssh`
 
   /** Open + authenticate an HPC connection. */
   connect(config: HpcConnectConfig): Promise<HpcConnectResult>
@@ -220,8 +220,14 @@ export interface HpcTransport {
  * `platform()` once that plugin is added (a later step).
  */
 export function isMobile(): boolean {
-  if (typeof navigator === 'undefined') return false
-  return /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+  if (typeof navigator === `undefined`) return false
+  const ua = navigator.userAgent
+  if (/android|iphone|ipod/i.test(ua)) return true
+  // iPadOS 13+ defaults its WKWebView to "desktop-class browsing", so the UA
+  // reports `Macintosh` with no `iPad` token. A real Mac has maxTouchPoints 0;
+  // an iPad reports 5 — that touch signal is what disambiguates the two.
+  if (/ipad/i.test(ua)) return true
+  return /macintosh/i.test(ua) && navigator.maxTouchPoints > 1
 }
 
 import { httpTransport } from './http'

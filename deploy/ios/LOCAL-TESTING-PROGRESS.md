@@ -89,6 +89,16 @@ the phone loads the UI from `http://<LAN-IP>:3100` and HMR pushes edits live.
 - If signing shows *"Failed to register bundle identifier"* on another machine/Apple ID,
   change the bundle id to something unique (e.g. `com.<yourname>.catgo`) and mirror
   it in `src-tauri/tauri.conf.json`. (Not needed here — `com.catgo.app` was accepted.)
+- **iPad needed two fixes beyond the iPhone build (2026-06-07).** The PR built for iPhone
+  but the iPad showed a letterboxed iPhone window rendering the *desktop* UI. Two causes,
+  both now fixed (see the knobs table): (1) the generated Xcode project's device family
+  wasn't pinned, so the iPad build wasn't universal → letterbox; pinned
+  `TARGETED_DEVICE_FAMILY: "1,2"` in `project.yml`. (2) **iPadOS WKWebView masquerades as a
+  Mac** — its `navigator.userAgent` says `Macintosh`, not `iPad` (desktop-class browsing,
+  default since iPadOS 13), so `isMobile()` fell through to the desktop UI + localhost
+  transport. Fixed by also matching a `Macintosh` UA with `navigator.maxTouchPoints > 1`.
+  Canvas sizing needed **no** change — Threlte's `<Canvas>` `ResizeObserver` + the
+  `flex:1 / 100%` `.mw-struct` pane already fill the larger iPad viewport.
 
 ## Mobile/iOS code changes — map & adjustable knobs
 
@@ -107,6 +117,8 @@ comments at the change site.
 | Action bar overflow | `MobileWorkspace.svelte` | Compact locale switch + scrollable/shrinkable `.mw-actions` so the buttons (up to 6 when connected) never clip. | — |
 | Terminal | `MobileTerminal.svelte` | Hides the OSC7 cwd-setup echo via a render-gate (private OSC 99 sentinel); registers the cwd hook for **zsh** (`precmd_functions`, not bash `PROMPT_COMMAND`); adds left/right padding. | — |
 | Local file picker | `MobileWorkspace.svelte` (`accept="*/*"`) | iOS greys out unknown extensions (`.xyz`, `.cif`, …); `*/*` lets you pick any file and the handler parses by content. | Production fix: declare the formats as UTTypes in `src-tauri/gen/apple/.../Info.plist`. |
+| **iPad: full-screen** | `src-tauri/gen/apple/project.yml` (`TARGETED_DEVICE_FAMILY: "1,2"`) | `project.yml` previously left device family to xcodegen's default → non-deterministic across build machines, so a build could ship iPhone-only (family `1`) and show the **letterboxed** window on iPad. Now pinned universal. | Pin in `project.yml` (tracked), **not** in Xcode — the `.xcodeproj` is gitignored/regenerated, so an Xcode-GUI toggle is wiped on the next build. Optionally add `UIRequiresFullScreen: true` to the Info.plist props to opt out of iPad Split View (protects the resize-fragile 3D viewer). |
+| **iPad: mobile UI** | `src/lib/api/transport/index.ts` (`isMobile()`) | iPadOS 13+ defaults its WKWebView to *desktop-class browsing*, so `navigator.userAgent` reports `Macintosh` with **no `iPad` token** → the old regex returned false → iPad loaded the **desktop UI + HTTP/localhost transport** instead of the mobile UI + SSH transport. Fixed by also treating `Macintosh` UA **with `maxTouchPoints > 1`** as mobile (a real Mac reports 0). | The `maxTouchPoints > 1` threshold is the iPad tell. Don't drop it. A genuine desktop Mac is unaffected (touch points = 0). |
 
 App icon: regenerated locally via `pnpm tauri icon src-tauri/icons/icon.png`, but
 `gen/apple` is machine-local — the durable fix is a 1024×1024 master so `tauri icon` /
