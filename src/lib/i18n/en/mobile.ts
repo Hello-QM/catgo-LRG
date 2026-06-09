@@ -69,6 +69,7 @@ const mobile: Record<string, string> = {
   connecting:             `Connecting…`,
   connect_action:         `Connect`,
   connection_failed:      `Connection failed.`,
+  saved_pw_rejected:      `Saved password was rejected — it may have changed. Enter it again to reconnect.`,
   auth_cancelled:         `Authentication cancelled.`,
 
   // ── Save-password prompt (MobileConnect) ─────────────────────────────

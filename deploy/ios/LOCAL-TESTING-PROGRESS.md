@@ -253,12 +253,39 @@ Found while a colleague + we tested SSH connections and the terminal on iPhone/i
   ("selects the whole thing"). Added `-webkit-user-select:none` +
   `-webkit-touch-callout:none` to `.mw-struct`.
 
-### Known benign noise
+### Review follow-ups (post code-review)
 
-- Xcode: ~390 *"Object file … built for newer 'iOS' version (17.0) than being
-  linked (14.0)"* warnings — the Rust `libapp.a` targets iOS 17 but `project.yml`
-  links iOS 14. Cosmetic; align `IPHONEOS_DEPLOYMENT_TARGET` / `project.yml`
-  `deploymentTarget` to silence.
+- **Per-tab stream cancel.** `MobileChat`'s unmount-cancel `$effect` read the
+  reactive `active_id`, so switching tabs cancelled the LEFT tab's stream. Now
+  reads it via `untrack` → cancels only on real unmount.
+- **Silent password-save failure.** `save_password_yes` swallowed a `keyStore`
+  error. Now surfaces it in the save dialog with a Retry (`save_pw_failed` /
+  `save_pw_retry`).
+- **Stale saved password.** If a saved password is rejected on reconnect (changed
+  server-side), clear it in-memory AND from the store (overwrite empty — no
+  delete command; empty reads back as "none") and prompt to re-enter
+  (`saved_pw_rejected`). Mainly matters for the keyboard-interactive auto-answer
+  path, which the user couldn't otherwise interrupt.
+
+### Fixed: Xcode deployment-target warnings
+
+- The ~390 *"object file built for newer iOS (17.0) than being linked (14.0)"*
+  warnings: added `export IPHONEOS_DEPLOYMENT_TARGET="${...:-14.0}"` to the
+  `gen/apple/project.yml` "Build Rust Code" preBuildScript (next to the PATH
+  export) so cargo builds the Rust lib for iOS 14 to match the project's link
+  target. **Machine-local (gen/apple is gitignored) — re-apply after
+  `tauri ios init`, then `xcodegen generate` + rebuild.**
+
+### Not changed — by design / platform
+
+- **No SSE streaming on iOS** — the Tauri HTTP plugin buffers the whole body;
+  fixing needs native plugin work. The single-read fallback + idle-timeout make
+  it correct, just one-shot. Out of scope.
+- **Conservative password-prompt capture** — only offers to save when the prompt
+  is recognized as a password (excludes passcode/OTP/duo) so we never persist a
+  one-time code. Intentional; broadening it is unsafe.
+- **One abort-listener per send** in `stream_client_llm` — bounded and GC'd with
+  the per-send AbortController; not a real leak.
 
 ---
 *Session notes — a resume guide for building and testing CatGo on iOS.*

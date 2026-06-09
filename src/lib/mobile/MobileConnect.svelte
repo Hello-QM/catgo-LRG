@@ -87,6 +87,8 @@
   // Post-success "save password?" prompt, parked until the user decides so we
   // stay mounted (calling on_connected swaps us out).
   let save_prompt_visible = $state(false)
+  // Shown inside the save-password dialog when the encrypted store write fails,
+  // so a failed save isn't silently swallowed (the dialog offers Retry).
   let save_error = $state(``)
   let pending_session = ``
   let pending_pw = ``
@@ -254,6 +256,18 @@
     otp_visible = false
     otp_busy = false
     error_msg = r.message || t(`mobile.connection_failed`)
+    // If THIS attempt used a saved password and it was rejected, it's probably
+    // stale (changed on the server). Clear it — in-memory AND from the encrypted
+    // store (overwrite empty; there's no delete command, and an empty value
+    // reads back as "no saved password") — so the next attempt prompts fresh
+    // instead of silently re-submitting the wrong one (esp. the keyboard-
+    // interactive auto-answer path, which the user can't otherwise interrupt).
+    if (used_saved_pw) {
+      auto_password = ``
+      used_saved_pw = false
+      transport.keyStore(endpoint_pw_key(), ``).catch(() => {/* best-effort */})
+      error_msg = t(`mobile.saved_pw_rejected`)
+    }
   }
 
   async function connect(): Promise<void> {

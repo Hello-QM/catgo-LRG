@@ -69,6 +69,7 @@ const mobile: Record<string, string> = {
   connecting:             `连接中…`,
   connect_action:         `连接`,
   connection_failed:      `连接失败。`,
+  saved_pw_rejected:      `已保存的密码被拒绝 — 可能已更改。请重新输入以连接。`,
   auth_cancelled:         `认证已取消。`,
 
   // ── 保存密码提示 (MobileConnect) ─────────────────────────────────────
