@@ -87,6 +87,7 @@
   // Post-success "save password?" prompt, parked until the user decides so we
   // stay mounted (calling on_connected swaps us out).
   let save_prompt_visible = $state(false)
+  let save_error = $state(``)
   let pending_session = ``
   let pending_pw = ``
 
@@ -242,6 +243,7 @@
         pending_session = r.sessionId
         pending_pw = captured_password
         captured_password = ``
+        save_error = ``
         save_prompt_visible = true
         return
       }
@@ -363,6 +365,7 @@
 
   function finish_connect(): void {
     save_prompt_visible = false
+    save_error = ``
     const id = pending_session
     pending_session = ``
     pending_pw = ``
@@ -371,10 +374,15 @@
 
   /** Save the password (encrypted) for OTP-only reconnect, then continue. */
   async function save_password_yes(): Promise<void> {
+    save_error = ``
     try {
       await transport.keyStore(endpoint_pw_key(), pending_pw)
     } catch {
-      /* store unavailable — proceed without saving */
+      // The user explicitly chose to save — don't pretend it worked (that would
+      // silently re-create the "empty password on reconnect → rejected" bug).
+      // Surface it and keep the dialog so they can retry or continue without it.
+      save_error = t(`mobile.save_pw_failed`)
+      return
     }
     finish_connect()
   }
@@ -609,9 +617,14 @@
       <div class="sp-body">
         {t(`mobile.save_pw_body`, { user: `${username}@${host}` })}
       </div>
+      {#if save_error}
+        <div class="sp-error" role="alert">{save_error}</div>
+      {/if}
       <div class="sp-actions">
         <button type="button" class="sp-no" onclick={finish_connect}>{t(`mobile.save_pw_not_now`)}</button>
-        <button type="button" class="sp-yes" onclick={save_password_yes}>{t(`mobile.save_pw_save`)}</button>
+        <button type="button" class="sp-yes" onclick={save_password_yes}>
+          {save_error ? t(`mobile.save_pw_retry`) : t(`mobile.save_pw_save`)}
+        </button>
       </div>
     </div>
   </div>
@@ -647,6 +660,12 @@
     line-height: 1.5;
     color: var(--text-color-muted, #cbd5e1);
     margin-bottom: 18px;
+  }
+  .sp-error {
+    font-size: 0.85em;
+    line-height: 1.4;
+    color: #ff6b6b;
+    margin-bottom: 14px;
   }
   .sp-actions {
     display: flex;

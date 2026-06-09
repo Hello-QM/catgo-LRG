@@ -19,6 +19,7 @@
   renderer only when a fenced code block is detected.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte'
   import Icon from '$lib/Icon.svelte'
   import { get_display_text } from '$lib/chat/types'
   import {
@@ -130,7 +131,12 @@
   })
 
   // Abort the active chat's in-flight stream when the overlay unmounts (§6).
-  $effect(() => () => cancel_generation(active_id))
+  // Read active_id via `untrack` so the effect takes NO reactive dependency on
+  // it — otherwise switching tabs would re-run the effect and its teardown would
+  // cancel the stream of the tab you just LEFT (breaking per-tab background
+  // streaming). With untrack, the teardown runs only on real unmount and cancels
+  // whatever tab is active at that moment.
+  $effect(() => () => cancel_generation(untrack(() => active_id)))
 
   const has_key = $derived(local_key.trim().length > 0)
   const show_setup = $derived(setup_open || (key_checked && !has_key))

@@ -76,6 +76,8 @@ const mobile: Record<string, string> = {
   save_pw_body:           `Next time you connect to {user} you'll only need the one-time passcode (OTP). The password is encrypted on this device.`,
   save_pw_not_now:        `Not now`,
   save_pw_save:           `Save password`,
+  save_pw_retry:          `Retry`,
+  save_pw_failed:         `Couldn't save the password — it wasn't stored. Retry, or continue and enter it next time.`,
 
   // ── OTP dialog (OtpDialog) ───────────────────────────────────────────
   otp_title:              `Verification required`,
