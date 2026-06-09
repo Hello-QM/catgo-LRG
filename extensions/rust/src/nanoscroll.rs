@@ -27,6 +27,7 @@ use nalgebra::Vector3;
 
 use crate::element::Element;
 use crate::error::{FerroxError, Result};
+use crate::lattice::Lattice;
 use crate::species::Species;
 use crate::structure::Structure;
 
@@ -35,6 +36,9 @@ pub const DEFAULT_INTERLAYER_GAP: f64 = 3.3;
 
 /// Default local-strain threshold above which a curvature warning is emitted.
 pub const DEFAULT_STRAIN_WARN_THRESHOLD: f64 = 0.15;
+
+/// Vacuum padding added around the generated non-periodic scroll cell (Å).
+const DEFAULT_CELL_PADDING: f64 = 10.0;
 
 /// In-plane roll direction (which lattice vector becomes the rolling axis).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,6 +279,23 @@ pub fn min_interwinding_gap(pitch: f64, monolayer_thickness: f64) -> f64 {
     pitch - monolayer_thickness
 }
 
+fn bounding_box(points: &[Vector3<f64>]) -> Option<(Vector3<f64>, Vector3<f64>)> {
+    if points.is_empty() {
+        return None;
+    }
+    let mut min = Vector3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Vector3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in points {
+        min.x = min.x.min(p.x);
+        min.y = min.y.min(p.y);
+        min.z = min.z.min(p.z);
+        max.x = max.x.max(p.x);
+        max.y = max.y.max(p.y);
+        max.z = max.z.max(p.z);
+    }
+    Some((min, max))
+}
+
 /// Build a nanoscroll from a monolayer structure.
 ///
 /// Returns the rolled structure (non-periodic molecule, pbc = false) together
@@ -379,8 +400,6 @@ pub fn build_nanoscroll(
         warning: warning.clone(),
     };
 
-    // Build a non-periodic molecule structure (matches the reference, which
-    // writes xyz with no cell). The molecule constructor keeps frac == cart.
     let species: Vec<Species> = elements.into_iter().map(Species::neutral).collect();
 
     let mut properties: HashMap<String, serde_json::Value> = HashMap::new();
@@ -410,7 +429,31 @@ pub fn build_nanoscroll(
         properties.insert("warning".into(), serde_json::json!(w));
     }
 
-    let structure = Structure::try_new_molecule(species, rolled, 0.0, properties)?;
+    let (min, max) = bounding_box(&rolled).ok_or_else(|| FerroxError::InvalidStructure {
+        index: 0,
+        reason: "nanoscroll produced no atoms".to_string(),
+    })?;
+    let span = max - min;
+    let cell = Vector3::new(
+        (span.x + 2.0 * DEFAULT_CELL_PADDING).max(1.0),
+        (span.y + 2.0 * DEFAULT_CELL_PADDING).max(1.0),
+        (span.z + 2.0 * DEFAULT_CELL_PADDING).max(1.0),
+    );
+    let shifted_cart: Vec<Vector3<f64>> = rolled
+        .iter()
+        .map(|p| *p - min + (cell - span) * 0.5)
+        .collect();
+    let mut lattice = Lattice::orthorhombic(cell.x, cell.y, cell.z);
+    lattice.pbc = [false, false, false];
+    let frac_coords = lattice.get_fractional_coords(&shifted_cart);
+    let structure = Structure::try_new_full(
+        lattice,
+        species.into_iter().map(crate::species::SiteOccupancy::ordered).collect(),
+        frac_coords,
+        [false, false, false],
+        0.0,
+        properties,
+    )?;
 
     Ok((structure, info))
 }
@@ -479,6 +522,27 @@ mod tests {
         for c in scroll.cart_coords() {
             let r = (c.x * c.x + c.y * c.y).sqrt();
             assert!(r > info.inner_radius - info.monolayer_thickness - 1e-6);
+        }
+    }
+
+    #[test]
+    fn scroll_cell_encloses_all_atoms() {
+        let mono = graphene_like();
+        let params = NanoscrollParams {
+            turns: 4,
+            inner_radius: 18.0,
+            length: 9.0,
+            ..Default::default()
+        };
+        let (scroll, _info) = build_nanoscroll(&mono, &params).unwrap();
+        let lengths = scroll.lattice.lengths();
+        assert_eq!(scroll.pbc, [false, false, false]);
+        assert!(lengths.x > 2.0 * params.inner_radius);
+        assert!(lengths.y > 2.0 * params.inner_radius);
+        for c in scroll.cart_coords() {
+            assert!(c.x >= -1e-8 && c.x <= lengths.x + 1e-8);
+            assert!(c.y >= -1e-8 && c.y <= lengths.y + 1e-8);
+            assert!(c.z >= -1e-8 && c.z <= lengths.z + 1e-8);
         }
     }
 

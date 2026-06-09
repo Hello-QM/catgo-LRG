@@ -1059,6 +1059,24 @@
   // This prevents the target from changing when structure changes (e.g., after slab cut)
   let current_camera_target = $state<Vec3>([0, 0, 0])
 
+  function get_atom_bounds_center(structure: AnyStructure | undefined): Vec3 | null {
+    if (!structure?.sites?.length) return null
+    let min_x = Infinity, max_x = -Infinity
+    let min_y = Infinity, max_y = -Infinity
+    let min_z = Infinity, max_z = -Infinity
+    for (const site of structure.sites) {
+      const [x, y, z] = site.xyz
+      if (x < min_x) min_x = x; if (x > max_x) max_x = x
+      if (y < min_y) min_y = y; if (y > max_y) max_y = y
+      if (z < min_z) min_z = z; if (z > max_z) max_z = z
+    }
+    return [(min_x + max_x) / 2, (min_y + max_y) / 2, (min_z + max_z) / 2]
+  }
+
+  function get_camera_fit_target(): Vec3 {
+    return get_atom_bounds_center(structure) ?? rotation_target ?? [0, 0, 0]
+  }
+
   // Apply target to orbit controls imperatively (outside reactive tracking).
   // Uses untrack to avoid Svelte proxy reads on Three.js internals causing
   // cascading reactive updates that freeze the app.
@@ -1098,10 +1116,10 @@
     const controls_ready = !!orbit_controls?.target
 
     if (!initial_target_set) {
-      current_camera_target = rotation_target
+      current_camera_target = get_camera_fit_target()
       last_center_trigger = center_camera_trigger
       if (controls_ready) {
-        apply_orbit_target(rotation_target)
+        apply_orbit_target(current_camera_target)
         initial_target_set = true
       }
       return
@@ -1109,8 +1127,8 @@
 
     if (center_camera_trigger === last_center_trigger) return
     last_center_trigger = center_camera_trigger
-    current_camera_target = rotation_target
-    apply_orbit_target(rotation_target)
+    current_camera_target = get_camera_fit_target()
+    apply_orbit_target(current_camera_target)
   })
 
   // Reset camera to default +Z viewing direction when lattice_align_trigger changes.
@@ -1246,12 +1264,13 @@
     if (!initial_target_set || !rotation_target) return
     // Only read orbit_controls presence, not its deep properties
     if (!orbit_controls) return
-    const [rx, ry, rz] = rotation_target
+    const target = get_camera_fit_target()
+    const [rx, ry, rz] = target
     const [cx, cy, cz] = current_camera_target
     const dist_sq = (rx - cx) ** 2 + (ry - cy) ** 2 + (rz - cz) ** 2
     if (dist_sq > 4) {
-      current_camera_target = rotation_target
-      apply_orbit_target(rotation_target)
+      current_camera_target = target
+      apply_orbit_target(target)
     }
   })
 
@@ -1727,7 +1746,7 @@
   let computed_zoom = $state<number>(untrack(() => initial_zoom))
   $effect(() => {
     if (!(width > 0) || !(height > 0)) return
-    const structure_max_dim = Math.max(1, untrack(() => structure_size))
+    const structure_max_dim = Math.max(1, structure_size)
     const viewer_min_dim = Math.min(width, height)
     const scale_factor = viewer_min_dim / (structure_max_dim * 30) // 30px per unit — fills more of the viewport
     let new_zoom = initial_zoom * scale_factor
@@ -1784,7 +1803,7 @@
       }
       const distance = Math.max(1, view_size) * (60 / fov)
       // Camera on -Y axis looking into +Y, so Z is up and Y goes into screen
-      const center = rotation_target || [0, 0, 0]
+      const center = get_camera_fit_target()
       camera_position = [
         center[0],
         center[1] - distance,

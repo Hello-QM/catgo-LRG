@@ -1036,6 +1036,7 @@
     push_to_undo: () => push_to_undo(),
     inc_center_camera: () => { center_camera_trigger++ },
     inc_reset_camera_up: () => { reset_camera_up_trigger++ },
+    reset_camera_position: () => { scene_props.camera_position = [0, 0, 0] },
     align_view_to_lattice: () => align_view_to_lattice(),
     initial_bulk,
   })
@@ -3143,7 +3144,7 @@
               bind:structure={structure as PymatgenStructure}
               pane_open={true}
               on_push_undo={push_to_undo}
-              on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
+              on_structure_change={(new_struct) => build.handle_structure_replace_and_fit(new_struct)}
             />
           {:else if build.active_build_tab === 'heterostructure'}
             <HeterostructurePane

@@ -41,6 +41,7 @@ export interface BuildToolsDeps {
   // ── Camera triggers ──
   inc_center_camera: () => void
   inc_reset_camera_up: () => void
+  reset_camera_position: () => void
   align_view_to_lattice: () => void
 
   // ── Optional: bulk structure for passivation when opening a slab directly ──
@@ -62,6 +63,7 @@ export interface BuildToolsDeps {
  *   push_to_undo: () => push_to_undo(),
  *   inc_center_camera: () => { center_camera_trigger++ },
  *   inc_reset_camera_up: () => { reset_camera_up_trigger++ },
+ *   reset_camera_position: () => { scene_props.camera_position = [0, 0, 0] },
  *   align_view_to_lattice: () => align_view_to_lattice(),
  * })
  * ```
@@ -185,6 +187,16 @@ export function create_build_tools_controller(deps: BuildToolsDeps) {
   }
 
   /**
+   * Handle structure replacement and refit the camera to the new geometry.
+   * Useful for tools that can greatly change the bounding box, such as nanoscrolls.
+   */
+  function handle_structure_replace_and_fit(new_struct: AnyStructure) {
+    handle_structure_replace(new_struct)
+    deps.reset_camera_position()
+    deps.inc_center_camera()
+  }
+
+  /**
    * Handle structure change from slab cutter (also resets camera).
    */
   function handle_slab_structure_change(new_struct: AnyStructure) {
@@ -291,6 +303,7 @@ export function create_build_tools_controller(deps: BuildToolsDeps) {
     // ── Functions ──
     open_build_tab,
     handle_structure_replace,
+    handle_structure_replace_and_fit,
     handle_slab_structure_change,
     handle_structure_modify,
     handle_slab_camera_transition,
