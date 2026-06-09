@@ -72,7 +72,6 @@
     on_open_editor,
     on_preview_file,
     on_load_trajectory,
-    on_load_trajectory_stream,
     on_analyze_report,
     external_navigate_path = $bindable<string | undefined>(undefined),
   }: {
@@ -85,7 +84,6 @@
     on_open_editor?: (content: string, filename: string, file_path: string, session_id: string) => void
     on_preview_file?: (mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) => void
     on_load_trajectory?: (content: string, filename: string, remote_origin?: { session_id: string; dir_path: string }) => void
-    on_load_trajectory_stream?: (local_path: string, filename: string) => void | Promise<void>
     on_analyze_report?: (content: string, filename: string) => void
     external_navigate_path?: string | undefined
   } = $props()
@@ -162,11 +160,6 @@
         if (!ls.ws_conn) sessions.splice(i, 1)
       }
     }
-    // Splicing can leave active_session_idx past the end → active_session
-    // ($derived) becomes null while the Files/Jobs tab is still mounted, and
-    // Svelte re-reads the child prop getters (e.g. session_id) before tearing
-    // the block down. Clamp here so active_session never lingers null.
-    if (active_session_idx >= sessions.length) active_session_idx = sessions.length - 1
   })
 
   let active_tab = $state<ServerTab>(`files`)
@@ -852,29 +845,10 @@
     const filename = file.is_dir ? `${file.name}.tar.gz` : file.name
 
     if (session_id === LOCAL_SESSION_ID) {
-      const { check_tauri } = await import(`$lib/io/tauri`)
-      if (check_tauri()) {
-        // Desktop app: open the local file with the system default app.
-        try {
-          const { open } = await import(`@tauri-apps/plugin-shell`)
-          await open(file.path)
-        } catch {
-          navigator.clipboard.writeText(file.path).catch(() => {})
-        }
-      } else if (!file.is_dir) {
-        // Web/dev mode: stream the local file via /__files/raw and trigger a
-        // browser download (Tauri shell open is unavailable, so the button was
-        // a silent no-op before).
-        const link = document.createElement(`a`)
-        link.href = `/__files/raw?path=${encodeURIComponent(file.path)}`
-        link.download = file.name
-        link.rel = `noopener`
-        link.style.display = `none`
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
-      } else {
-        // Local directory in web mode: no raw stream for dirs — copy the path.
+      try {
+        const { open } = await import(`@tauri-apps/plugin-shell`)
+        await open(file.path)
+      } catch {
         navigator.clipboard.writeText(file.path).catch(() => {})
       }
       return
@@ -925,18 +899,6 @@
     loading_file = { name: file.name, size: file.size_bytes }
     loading_error = null
     try {
-      // Large remote trajectory → materialize to a backend-local cache file
-      // (gzip on the wire) and stream frames, instead of pulling the whole file
-      // into the webview (which freezes it).
-      if (on_load_trajectory_stream) {
-        const { materialize_remote_if_large } = await import('$lib/trajectory/remote-frame-loader')
-        const local = await materialize_remote_if_large(active_session.session_id, file.path, file.name, file.size_bytes)
-        if (local) {
-          await on_load_trajectory_stream(local, file.name)
-          loading_file = null
-          return
-        }
-      }
       // Detect trajectory files early — default 2MB limit truncates large XDATCAR etc.
       const { is_trajectory_file } = await import('$lib/trajectory/parse')
       const likely_traj = on_load_trajectory && is_trajectory_file(file.name)
@@ -1181,11 +1143,11 @@
     <div class="pane-content">
       <!-- ====== CONNECTION TAB ====== -->
       {#if active_tab === `connection`}
-        {#if active_session && active_session?.conn_status === `otp_required`}
+        {#if active_session && active_session.conn_status === `otp_required`}
           <!-- OTP Input -->
           <section class="action-section">
             <h5>{t('structure.two_factor_auth')}</h5>
-            <p class="description">{active_session?.otp_prompt}</p>
+            <p class="description">{active_session.otp_prompt}</p>
             <div class="form-row">
               <input
                 type="text"
@@ -1195,43 +1157,43 @@
                 class="otp-input"
                 onkeydown={(e) => e.key === `Enter` && submit_otp()}
               />
-              <button class="apply-btn" onclick={submit_otp} disabled={!active_session?.otp_code}>
+              <button class="apply-btn" onclick={submit_otp} disabled={!active_session.otp_code}>
                 {t('common.submit')}
               </button>
             </div>
           </section>
-        {:else if active_session && active_session?.conn_status === `connected`}
+        {:else if active_session && active_session.conn_status === `connected`}
           <!-- Connected Status -->
           <section class="action-section">
-            {#if active_session?._id === LOCAL_SESSION_ID}
+            {#if active_session._id === LOCAL_SESSION_ID}
               <h5>{t('structure.local_filesystem')}</h5>
               <p class="description">{t('structure.browse_local_server_files')}</p>
             {:else}
               <h5>{t('common.connected')}</h5>
               <div class="conn-info">
-                <span>{active_session?.username}@{active_session?.host}</span>
-                <span class="badge badge-green">{active_session?.scheduler.toUpperCase()}</span>
+                <span>{active_session.username}@{active_session.host}</span>
+                <span class="badge badge-green">{active_session.scheduler.toUpperCase()}</span>
               </div>
-              {#if active_session?.work_root}
-                <div class="work-root-chip" title={active_session?.work_root}>
-                  {t('structure.work_root')}: {active_session?.work_root}
+              {#if active_session.work_root}
+                <div class="work-root-chip" title={active_session.work_root}>
+                  {t('structure.work_root')}: {active_session.work_root}
                 </div>
               {/if}
-              {#if active_session?.overview}
+              {#if active_session.overview}
                 <div class="overview-mini">
-                  <span title={t('structure.running')}>{t('structure.running_count', { n: active_session?.overview.job_summary.running })}</span>
-                  <span title={t('structure.pending')}>{t('structure.pending_count', { n: active_session?.overview.job_summary.pending })}</span>
-                  <span title={t('structure.all')}>{t('structure.total_count', { n: active_session?.overview.job_summary.total })}</span>
+                  <span title={t('structure.running')}>{t('structure.running_count', { n: active_session.overview.job_summary.running })}</span>
+                  <span title={t('structure.pending')}>{t('structure.pending_count', { n: active_session.overview.job_summary.pending })}</span>
+                  <span title={t('structure.all')}>{t('structure.total_count', { n: active_session.overview.job_summary.total })}</span>
                 </div>
-                {#if active_session?.overview.disk_usage}
-                  <div class="overview-disk">{t('structure.disk_usage', { usage: active_session?.overview.disk_usage })}</div>
+                {#if active_session.overview.disk_usage}
+                  <div class="overview-disk">{t('structure.disk_usage', { usage: active_session.overview.disk_usage })}</div>
                 {/if}
               {/if}
               <div class="conn-actions">
                 {#if on_open_terminal}
                   <button
                     class="action-btn"
-                    onclick={() => on_open_terminal?.(active_session?.session_id, active_session?.host, active_session?.username)}
+                    onclick={() => on_open_terminal?.(active_session.session_id, active_session.host, active_session.username)}
                     title={t('structure.open_remote_terminal')}
                   >
                     {t('structure.terminal_button')}
@@ -1413,17 +1375,17 @@
               </div>
             {/if}
           </section>
-        {:else if active_session && active_session?.conn_status === `connecting`}
+        {:else if active_session && active_session.conn_status === `connecting`}
           <!-- Connecting -->
           <section class="action-section">
             <h5>{t('structure.connecting')}</h5>
-            <p class="description">{t('structure.establishing_ssh_connection', { host: active_session?.host })}</p>
+            <p class="description">{t('structure.establishing_ssh_connection', { host: active_session.host })}</p>
           </section>
-        {:else if active_session && active_session?.conn_status === `error`}
+        {:else if active_session && active_session.conn_status === `error`}
           <!-- Error -->
           <section class="action-section">
             <h5>{t('structure.connection_error')}</h5>
-            <div class="error-msg">{active_session?.conn_error}</div>
+            <div class="error-msg">{active_session.conn_error}</div>
             <button class="secondary-btn full-width" onclick={() => do_disconnect(active_session_idx)} style="margin-top: 6px">
               Dismiss
             </button>
@@ -1603,16 +1565,16 @@
       <!-- ====== JOBS TAB ====== -->
       {:else if active_tab === `jobs` && active_session}
         <!-- Overview Card -->
-        {#if active_session?.overview}
+        {#if active_session.overview}
           <div class="overview-card">
             <div class="overview-row">
-              <span class="badge badge-green">{active_session?.overview.job_summary.running} R</span>
-              <span class="badge badge-yellow">{active_session?.overview.job_summary.pending} Q</span>
-              <span class="badge badge-blue">{active_session?.overview.job_summary.completed} C</span>
-              <span class="badge badge-red">{active_session?.overview.job_summary.failed} F</span>
+              <span class="badge badge-green">{active_session.overview.job_summary.running} R</span>
+              <span class="badge badge-yellow">{active_session.overview.job_summary.pending} Q</span>
+              <span class="badge badge-blue">{active_session.overview.job_summary.completed} C</span>
+              <span class="badge badge-red">{active_session.overview.job_summary.failed} F</span>
             </div>
-            {#if active_session?.overview.system_info}
-              <div class="overview-host">{active_session?.overview.system_info}</div>
+            {#if active_session.overview.system_info}
+              <div class="overview-host">{active_session.overview.system_info}</div>
             {/if}
           </div>
         {/if}
@@ -1682,13 +1644,13 @@
             <div class="header-actions">
               <button
                 class="icon-btn"
-                class:active={active_session?.auto_refresh}
+                class:active={active_session.auto_refresh}
                 onclick={toggle_auto_refresh}
-                title={active_session?.auto_refresh ? t('structure.stop_auto_refresh') : t('structure.auto_refresh_seconds', { seconds: 15 })}
+                title={active_session.auto_refresh ? t('structure.stop_auto_refresh') : t('structure.auto_refresh_seconds', { seconds: 15 })}
               >
-                {active_session?.auto_refresh ? `⏸` : `⟳`}
+                {active_session.auto_refresh ? `⏸` : `⟳`}
               </button>
-              <button class="icon-btn" onclick={() => refresh_jobs()} disabled={active_session?.jobs_loading} title={t('common.refresh')}>
+              <button class="icon-btn" onclick={() => refresh_jobs()} disabled={active_session.jobs_loading} title={t('common.refresh')}>
                 ↻
               </button>
             </div>
@@ -1735,13 +1697,13 @@
             <label>{t('structure.path_depth')} <input type="number" min={0} max={20} bind:value={workdir_skip_segments} class="depth-input" /></label>
           </div>
 
-          {#if active_session?.jobs_error}
-            <div class="error-msg">{active_session?.jobs_error}</div>
+          {#if active_session.jobs_error}
+            <div class="error-msg">{active_session.jobs_error}</div>
           {/if}
 
-          {#if active_session?.jobs_loading && !active_session?.jobs_fetched}
+          {#if active_session.jobs_loading && !active_session.jobs_fetched}
             <p class="description">{t('structure.loading_jobs')}</p>
-          {:else if active_session?.jobs.length === 0}
+          {:else if active_session.jobs.length === 0}
             <p class="description">{t('structure.no_jobs_found')}</p>
           {:else if filtered_jobs().length === 0}
             <p class="description">{t('structure.no_jobs_match_filters')}</p>
@@ -1750,10 +1712,10 @@
               {#each filtered_jobs() as job}
                 <div
                   class="job-card clickable"
-                  onclick={() => on_select_job?.(active_session?.session_id, job.job_id)}
+                  onclick={() => on_select_job?.(active_session.session_id, job.job_id)}
                   role="button"
                   tabindex="0"
-                  onkeydown={(e) => e.key === `Enter` && on_select_job?.(active_session?.session_id, job.job_id)}
+                  onkeydown={(e) => e.key === `Enter` && on_select_job?.(active_session.session_id, job.job_id)}
                 >
                   <div class="job-header">
                     <span class="job-id">{job.job_id}</span>
@@ -1799,14 +1761,14 @@
             </label>
           </div>
 
-          {#if active_session?.upload_progress != null}
+          {#if active_session.upload_progress !== null}
             <div class="progress-bar">
-              <div class="progress-fill" style="width: {active_session?.upload_progress}%"></div>
-              <span class="progress-text">{t('structure.uploading_percent', { percent: active_session?.upload_progress })}</span>
+              <div class="progress-fill" style="width: {active_session.upload_progress}%"></div>
+              <span class="progress-text">{t('structure.uploading_percent', { percent: active_session.upload_progress })}</span>
             </div>
           {/if}
-          {#if active_session?.files_error}
-            <div class="error-msg">{active_session?.files_error}</div>
+          {#if active_session.files_error}
+            <div class="error-msg">{active_session.files_error}</div>
           {/if}
 
           {#if loading_file}
@@ -1820,9 +1782,9 @@
           {/if}
           {#key file_tree_key}
             <FileTree
-              session_id={active_session?.session_id ?? ``}
-              root_path={active_session?.current_path ?? `~`}
-              root_boundary={active_session?.work_root ?? ``}
+              session_id={active_session.session_id}
+              root_path={active_session.current_path}
+              root_boundary={active_session.work_root}
               on_load_structure={(file) => load_remote_structure(file)}
               on_open_editor={(file) => open_remote_editor(file)}
               on_preview_file={(file, type) => open_remote_preview(file, type)}

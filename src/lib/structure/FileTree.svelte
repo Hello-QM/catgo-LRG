@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { listFiles, prefetchRemoteFiles, clearRemoteFileCache, type RemoteFile } from '$lib/api/hpc'
+  import { listFiles, prefetchRemoteFiles, type RemoteFile } from '$lib/api/hpc'
   import { Icon } from '$lib'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { untrack } from 'svelte'
@@ -466,10 +466,6 @@
   // Load root directory (does NOT fire on_navigate — caller is responsible)
   async function load_root(path: string) {
     if (!can_navigate_to(path)) path = boundary_fallback()
-    // Drop cached remote file contents on each (re)load so navigating to or
-    // refreshing a directory re-fetches files that may have changed on the
-    // server (e.g. job output). The prefetch below immediately refills it.
-    if (session_id && session_id !== `__local__`) clearRemoteFileCache(session_id)
     const seq = ++_load_root_seq
     root_loading = true
     current_root = path
@@ -736,9 +732,6 @@
     <div class="ft-ctx-menu" style="left: {ctx_menu.x}px; top: {ctx_menu.y}px" onclick={(e) => e.stopPropagation()}>
       {#if ctx_menu.node.file.is_dir && on_mkdir}
         <button class="ft-ctx-item" onclick={() => { new_folder_parent = ctx_menu?.node.file.path ?? current_root; new_folder_name = t('sidebar.new_folder'); close_ctx_menu() }}>{t('sidebar.new_folder')}</button>
-      {/if}
-      {#if on_open_editor && !ctx_menu.node.file.is_dir}
-        <button class="ft-ctx-item" onclick={() => { if (ctx_menu) on_open_editor?.(ctx_menu.node.file); close_ctx_menu() }}>{t('app.open_in_editor')}</button>
       {/if}
       {#if on_rename}
         <button class="ft-ctx-item" onclick={() => { renaming_node = ctx_menu?.node ?? null; rename_value = ctx_menu?.node.file.name ?? ``; close_ctx_menu() }}>{t('common.rename')}</button>
