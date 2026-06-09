@@ -37,17 +37,30 @@ warnings.filterwarnings("ignore", message=".*weights_only.*torch\\.load.*")
 
 # Add server directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
+_repo_root = Path(__file__).resolve().parent.parent
 
 # Make local extension packages importable by the routers. catgo_dos /
-# catgo_cohp live under extensions/<name>/ with their own pyproject and are NOT
-# pip-installed; the DOS/COHP routers bare-import them, so put the extension
-# dirs on sys.path at startup. (The CLI does this lazily via
-# catgo.cli._extpath.ensure_extension; the long-running server does it once.)
-_repo_root = Path(__file__).resolve().parent.parent
+# catgo_cohp live under extensions/<name>/ and are not regular dependencies.
+# In a PyInstaller build they are extracted under sys._MEIPASS; in source runs
+# they live at the repository root.
+def _extension_roots() -> list[Path]:
+    roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(Path(meipass))
+        roots.append(Path(sys.executable).resolve().parent)
+    roots.append(_repo_root)
+    roots.append(Path.cwd())
+    return roots
+
+
 for _ext_dir_name in ("dos-analysis", "cohp-analysis"):
-    _ext_dir = _repo_root / "extensions" / _ext_dir_name
-    if _ext_dir.is_dir() and str(_ext_dir) not in sys.path:
-        sys.path.insert(0, str(_ext_dir))
+    for _root in _extension_roots():
+        _ext_dir = _root / "extensions" / _ext_dir_name
+        if _ext_dir.is_dir() and str(_ext_dir) not in sys.path:
+            sys.path.insert(0, str(_ext_dir))
+            break
 
 
 def _worktree_offset() -> int:

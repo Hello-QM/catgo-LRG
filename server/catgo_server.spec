@@ -23,6 +23,13 @@ block_cipher = None
 
 # Get the server directory
 server_dir = Path(SPECPATH)
+project_dir = server_dir.parent
+dos_ext_dir = project_dir / 'extensions' / 'dos-analysis'
+cohp_ext_dir = project_dir / 'extensions' / 'cohp-analysis'
+
+for _ext_dir in (dos_ext_dir, cohp_ext_dir):
+    if _ext_dir.is_dir() and str(_ext_dir) not in sys.path:
+        sys.path.insert(0, str(_ext_dir))
 
 # cube-processor binary name is platform-specific (Windows appends .exe).
 # The source path must match the actual cargo artifact or PyInstaller fails
@@ -33,6 +40,8 @@ _cube_bin = 'cube-processor.exe' if sys.platform == 'win32' else 'cube-processor
 # Auto-collect all submodules (lazy imports invisible to PyInstaller)
 catgo_submodules = collect_submodules('catgo')
 workflow_submodules = collect_submodules('workflow')
+dos_submodules = collect_submodules('catgo_dos')
+cohp_submodules = collect_submodules('catgo_cohp')
 
 # Collect data files from packages that bundle .json/.json.gz/.yaml etc.
 pymatgen_datas = collect_data_files('pymatgen')
@@ -69,8 +78,15 @@ a = Analysis(
         # (from Path(__file__).parent.parent.parent / "tools" / ...).
         (f'../tools/cube-processor/target/release/{_cube_bin}',
          'tools/cube-processor/target/release'),
+        # Local DOS/COHP analysis extension packages. They are source-tree
+        # packages rather than normal dependencies, so bundle their package dirs
+        # and let server/main.py add <MEIPASS>/extensions/* to sys.path.
+        ('../extensions/dos-analysis/catgo_dos',
+         'extensions/dos-analysis/catgo_dos'),
+        ('../extensions/cohp-analysis/catgo_cohp',
+         'extensions/cohp-analysis/catgo_cohp'),
     ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas,
-    hiddenimports=catgo_submodules + workflow_submodules + [
+    hiddenimports=catgo_submodules + workflow_submodules + dos_submodules + cohp_submodules + [
         # ---------------------------------------------------------------
         # FastAPI / ASGI stack
         # ---------------------------------------------------------------
