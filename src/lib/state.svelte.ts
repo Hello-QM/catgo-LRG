@@ -63,7 +63,7 @@ export const theme_state = $state<
 
 // Pane font-size preference
 const PANE_FONT_SIZE_KEY = `catgo-pane-font-size`
-export const DEFAULT_PANE_FONT_SIZE = 1.00 // em
+export const DEFAULT_PANE_FONT_SIZE = 0.85 // em
 
 let initial_pane_font_size = DEFAULT_PANE_FONT_SIZE
 try {

@@ -15,7 +15,6 @@
   } from '$lib/api/hpc'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { hpc_session_store, refresh_hpc_sessions, add_session, remove_session } from '$lib/hpc-sessions.svelte'
-  import { loadHpcPassword, storeHpcPassword } from '$lib/hpc-credential-store'
 
   load_i18n_module('common')
   load_i18n_module('structure')
@@ -42,8 +41,6 @@
   let port = $state(22)
   let username = $state(``)
   let password = $state(``)
-  let remember_password = $state(true)
-  let credential_hint = $state(``)
   let auth_method = $state<AuthMethod>(`password`)
   let key_file = $state(``)
   let use_jump = $state(false)
@@ -85,80 +82,6 @@
     } catch { /* server not running */ }
   }
 
-  function password_auth_selected(): boolean {
-    return auth_method === `password` || auth_method === `password_otp`
-  }
-
-  function default_profile_name(): string {
-    if (auth_method === `ssh_config`) return ssh_alias.trim()
-    const suffix = port === 22 ? `` : `:${port}`
-    return `${username.trim()}@${host.trim()}${suffix}`
-  }
-
-  function matching_profile_name(): string {
-    const h = auth_method === `ssh_config` ? ssh_alias.trim() : host.trim()
-    const u = username.trim()
-    return profiles.find((p) =>
-      p.auth_method === auth_method &&
-      p.host === h &&
-      p.port === port &&
-      p.username === u &&
-      (p.ssh_alias ?? ``) === (auth_method === `ssh_config` ? ssh_alias.trim() : ``)
-    )?.name ?? ``
-  }
-
-  function build_profile(name: string): HPCProfile {
-    return {
-      name,
-      host: auth_method === `ssh_config` ? ssh_alias.trim() : host.trim(),
-      port,
-      username: username.trim(),
-      auth_method,
-      key_file: key_file || undefined,
-      scheduler,
-      ssh_alias: auth_method === `ssh_config` ? ssh_alias.trim() : undefined,
-      jump_host: use_jump ? jump_host.trim() : undefined,
-      jump_port: use_jump ? jump_port : undefined,
-      jump_username: use_jump ? jump_username.trim() : undefined,
-      proxy_host: use_proxy ? proxy_host.trim() : undefined,
-      proxy_port: use_proxy ? proxy_port : undefined,
-      proxy_username: use_proxy && proxy_username ? proxy_username.trim() : undefined,
-      work_root: work_root.trim() || undefined,
-    }
-  }
-
-  async function load_saved_password_for_current(show_missing = false): Promise<boolean> {
-    credential_hint = ``
-    if (!password_auth_selected() || !host.trim() || !username.trim()) return false
-    if (password) return true
-    const saved = await loadHpcPassword(host, port, username)
-    if (saved) {
-      password = saved
-      credential_hint = t('structure.saved_password_loaded')
-      return true
-    }
-    if (show_missing) credential_hint = t('structure.saved_password_missing')
-    return false
-  }
-
-  async function persist_successful_connection(password_to_store: string) {
-    const name = profile_name.trim() || selected_profile || matching_profile_name() || default_profile_name()
-    if (name) {
-      profile_name = name
-      try {
-        await saveProfile(build_profile(name))
-        await load_saved_profiles()
-        selected_profile = name
-      } catch (err) {
-        console.error(`Failed to auto-save profile:`, err)
-      }
-    }
-    if (remember_password && password_auth_selected() && password_to_store) {
-      const ok = await storeHpcPassword(host, port, username, password_to_store)
-      credential_hint = ok ? t('structure.password_saved_local') : t('structure.password_save_unavailable')
-    }
-  }
-
   function apply_profile(name: string) {
     const p = profiles.find((pr) => pr.name === name)
     if (!p) return
@@ -187,14 +110,27 @@
       use_proxy = false
     }
     profile_name = p.name
-    password = ``
-    credential_hint = ``
-    void load_saved_password_for_current(false)
   }
 
   async function save_current_profile() {
     if (!profile_name.trim()) return
-    const profile = build_profile(profile_name.trim())
+    const profile: HPCProfile = {
+      name: profile_name.trim(),
+      host,
+      port,
+      username,
+      auth_method,
+      key_file: key_file || undefined,
+      scheduler,
+      ssh_alias: auth_method === `ssh_config` ? ssh_alias : undefined,
+      jump_host: use_jump ? jump_host : undefined,
+      jump_port: use_jump ? jump_port : undefined,
+      jump_username: use_jump ? jump_username : undefined,
+      proxy_host: use_proxy ? proxy_host : undefined,
+      proxy_port: use_proxy ? proxy_port : undefined,
+      proxy_username: use_proxy && proxy_username ? proxy_username : undefined,
+      work_root: work_root.trim() || undefined,
+    }
     try {
       await saveProfile(profile)
       await load_saved_profiles()
@@ -216,7 +152,7 @@
   }
 
   // ─── Connect ───
-  async function do_connect() {
+  function do_connect() {
     if (auth_method === `ssh_config`) {
       do_connect_ssh_config()
       return
@@ -229,11 +165,7 @@
 
     if (!host || !username) return
     const needs_pw = auth_method === `password` || auth_method === `password_otp`
-    if (needs_pw && !password) {
-      const loaded = await load_saved_password_for_current(true)
-      if (!loaded) return
-    }
-    const password_to_store = needs_pw ? password : ``
+    if (needs_pw && !password) return
 
     conn_status = `connecting`
     conn_error = ``
@@ -272,7 +204,6 @@
         conn_status = `connected`
         conn_error = ``
         password = ``
-        void persist_successful_connection(password_to_store)
         console.log(`[CatGo:HPC] Connected to ${username}@${host} (session=${session_id})`)
         add_session({ session_id, host, username, scheduler, work_root: info?.work_root || work_root.trim() || undefined })
       },
@@ -364,7 +295,7 @@
   const can_connect = $derived(
     auth_method === `ssh_config`
       ? !!ssh_alias
-      : (!!host && !!username)
+      : (!!host && !!username && (auth_method === `key` || auth_method === `key_otp` || !!password))
   )
 
   // ─── Backdrop handlers ───
@@ -534,13 +465,6 @@
                     {t('structure.password')}
                     <input type="password" bind:value={password} placeholder="••••••" />
                   </label>
-                  <label class="checkbox-row full-span">
-                    <input type="checkbox" bind:checked={remember_password} />
-                    {t('structure.remember_password_local')}
-                  </label>
-                  {#if credential_hint}
-                    <p class="form-hint full-span">{credential_hint}</p>
-                  {/if}
                 {/if}
                 <label class="full-span">
                   {t('structure.key_file')} <span class="hint">{t('common.optional')}</span>
