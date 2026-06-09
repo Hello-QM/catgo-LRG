@@ -139,4 +139,73 @@ App icon: regenerated locally via `pnpm tauri icon src-tauri/icons/icon.png`, bu
   smoke build by default; signed IPA when `APPLE_*` secrets are set)
 
 ---
+
+## 2026-06-08 session — iPad (M5) device run + AI-chat testing
+
+Branch `ios-app`. Ran on a physical **iPad Pro 13" (M5, iPadOS 26)**. Several
+issues surfaced building + running on a fresh device/OS; fixes below.
+
+### Launch command (CORRECTED — `--host` flag is required)
+
+```bash
+TAURI_DEV_HOST=<MAC_LAN_IP> pnpm tauri ios dev "<device>" --host <MAC_LAN_IP>
+```
+
+`TAURI_DEV_HOST` (env) drives Vite's bind + backend CORS, but Tauri CLI **2.9.6
+does not rewrite the app's baked devUrl from the env var alone** — you MUST pass
+`--host <ip>` too, or the app loads `http://localhost:3100` (unreachable from the
+device → "did you grant local network permissions?"). With `--host`, Tauri logs
+`Replacing devUrl host with <ip>` and injects the ATS / local-network plist keys.
+
+### Build/run fixes (all required to get a device build to launch)
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `tauri ios dev` hangs, then `Could not connect to http://localhost:3100 after 180s` | Vite bound to ONLY `TAURI_DEV_HOST`; Tauri's readiness poll hits `localhost` (the configured devUrl), which isn't served. | `vite.desktop.config.ts`: bind mobile to `0.0.0.0` (`host: tauri_dev_host ? '0.0.0.0' : '127.0.0.1'`) so localhost + LAN both work. |
+| Xcode build: `PhaseScriptExecution failed … pnpm: command not found` | Xcode GUI builds inherit launchd's minimal PATH (no Homebrew/cargo). | `gen/apple/project.yml` → `preBuildScripts` "Build Rust Code": prepend `export PATH="/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"`. Re-run `xcodegen generate`. |
+| Xcode: `Signing requires a development team` | `project.yml` carried no team, so each `xcodegen` regen dropped the Xcode-GUI selection. | `gen/apple/project.yml` target `settings.base`: `DEVELOPMENT_TEAM: 6G73SADM5R` + `CODE_SIGN_STYLE: Automatic` (re-apply after `tauri ios init`). Team = the one local `Apple Development: ijennheart@gmail.com` identity. |
+| App launches but: `Failed to request http://localhost:3100 … local network permissions?` | See "Launch command" — `--host` not passed. | Pass `--host <ip>`; grant the iOS **Local Network** prompt (or Settings → Privacy & Security → Local Network → CatGo). |
+
+`gen/apple` is gitignored/regenerated — re-apply the PATH + signing edits to
+`project.yml` after any `tauri ios init`, then `xcodegen generate`.
+
+### AI-chat (mobile, client-direct) findings
+
+| Finding | Status / fix |
+|---------|--------------|
+| **Default model `gemini-2.0-flash` 429s with `limit: 0`** | Google **retired 2.0-flash 2026-03-03**; free-tier quota is 0. Bumped `DEFAULT_MODELS.gemini` → `gemini-2.5-flash` in `MobileChatSetup.svelte`. (Free tier is per-**project** & per-**model**; new keys/projects don't help — only a live model does.) |
+| **Gemini `AQ.`-prefix keys** | New Google key format (replaces `AIza`). Works on CatGo's **native** Gemini path; known to break on **OpenAI-compat** endpoints ("Multiple authentication credentials"). |
+| **No SSE streaming on iOS** | EXPECTED — the Tauri HTTP plugin buffers the whole body; `stream_client_llm`'s single-read detection falls back to one-shot render. Confirmed on device; not a bug. |
+| **Chat freezes after loading a structure → no reply, no new sends** | The structure goes into the system prompt; that request **hung** (no client-side timeout) → awaited stream never settled → `loading` stuck `true` → every later message silently queued (`chat-state` line ~495). **Fixed:** added an idle-timeout watchdog (60s, re-arms per chunk, folded into the Stop signal) + clean retryable error in `stream_client_llm`. Test: `client-llm.test.ts` "idle-timeout …". |
+| **System prompt advertised tools the mobile path doesn't have** | Mobile chat is tool-free (`isMobile() ? [] : CLIENT_TOOLS`), but `build_sdk_system_prompt` told the model to "call catgo_* tools directly" — so it promised actions (e.g. "I'll check the active structure") and burned turns / stalled. **Fixed:** added a `text_only` branch to `build_sdk_system_prompt` (no tool talk; answer from the inline structure context); `chat-state` passes `isMobile()`. The same `text_only` prompt also instructs **Unicode** formulas (TiO₂, α-Fe₂O₃) instead of LaTeX `$...$` — `MobileChat.svelte`'s renderer is lightweight by design (no KaTeX, to avoid its ~250 KB load), so LaTeX rendered raw (`$TiO_2$`). |
+| **Typed mobile chat didn't get the structure context** | `structure_context.value` is only fed by desktop `ChatPane` and the `Structure.svelte` *voice* path — neither runs for `MobileChat` (tab `mobile`). So typed chat only had context by coincidence (right after a fetch); after an app restart (structure restored, no load event) it reported "no structure loaded". **Fixed:** `MobileChat` now takes a `structure` prop (passed from `MobileWorkspace`) and rebuilds `structure_context` via `build_structure_context({structure})` on every send — always current across restarts and mid-chat swaps. |
+| Open: structure context may be sent **un-trimmed** | A large structure could bloat the prompt enough to stall every time. Timeout makes it fail gracefully; trimming/summarizing the context is the real cure (TODO). |
+| Transient errors (429 rate-limit, 503 overload, 5xx/529) | **Fixed:** `stream_client_llm` now auto-retries the connect/status phase with exponential backoff (3 attempts; honors `Retry-After` up to 8s; abortable via Stop/idle-timeout; never retries once a 200 body streams). `gemini-2.5-flash` free tier is 10 RPM; busy-model 503s and brief 429s now self-heal before surfacing. Tests: `client-llm.test.ts` "auto-retries transient 503s", "does NOT retry a non-transient 4xx". |
+
+### Multi-chat tabs + minimize (feature)
+
+Mirrors the terminal tab bar for the AI chat. New `src/lib/mobile/chat-tabs.svelte.ts`
+(module-scope reactive registry, like `terminal-tabs.svelte.ts`) — each tab's `id`
+IS its chat-state slice id, so history/loading/abort/queue come free per tab.
+`MobileChat.svelte` drives off `chat_tabs.active_id`, renders a header tab strip
+(tap=switch, long-press=close sheet, **+**=new, cap `MAX_CHAT_TABS=5`) and a
+**Collapse**(minimize) button — minimize/close just dismiss the overlay; chats persist
+at module scope and restore on reopen. Tabs label by first message. New i18n keys:
+`ai_new_chat`, `ai_minimize`, `ai_close_chat` (en + zh).
+
+### Other mobile fix
+
+- **Terminal tab long-press selected the "Delete" label text** (WKWebView native
+  text-selection on press-and-hold). `MobileWorkspace.svelte`: added
+  `-webkit-user-select: none` + `-webkit-touch-callout: none` to `.mw-tabchip-btn`
+  and `.mw-sheet-btn`.
+
+### SSH "connect to this Mac" (works)
+
+Enable **System Settings → General → Sharing → Remote Login**, then in CatGo's
+Connect dialog: host = Mac LAN IP, user = Mac username, port 22, Mac login
+password. (iPad must be on the same LAN — it already is, since it loads the UI
+from that IP.)
+
+---
 *Session notes — a resume guide for building and testing CatGo on iOS.*

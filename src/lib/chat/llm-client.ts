@@ -1,13 +1,52 @@
 import { API_BASE } from '$lib/api/config'
-import type { ChatConfig, ChatMessage, DocChunk, ProviderInfoResponse, LLMProvider } from './types'
+import type {
+  ChatConfig,
+  ChatMessage,
+  DocChunk,
+  LLMProvider,
+  ProviderInfoResponse,
+} from './types'
 
-const SYSTEM_PROMPT = `You are CatBot, an AI helper for CatGO — an interactive visualization toolkit for materials science. You help users with crystal structure visualization, MD trajectories, band structures, phase diagrams, and more.
+const SYSTEM_PROMPT =
+  `You are CatBot, an AI helper for CatGO — an interactive visualization toolkit for materials science. You help users with crystal structure visualization, MD trajectories, band structures, phase diagrams, and more.
 
 Answer questions based on the documentation and structure context provided. Be concise and helpful. When the user asks about their current structure, reference the structure context below. If the documentation doesn't cover the topic, say so honestly.`
 
-/** System message for SDK agents with agent-specific guidance. Exported for chat-state SDK path. */
-export function build_sdk_system_prompt(provider: LLMProvider, structure_context?: string, has_session: boolean = false): string {
-  let msg = `You are CatBot — a materials science assistant in CatGO. Respond in the user's language. Use catgo_* MCP tools to manipulate structures and run analysis. Call tools directly — never ask for confirmation.
+/** System message for SDK agents with agent-specific guidance. Exported for chat-state SDK path.
+ *  `text_only` = the caller runs with NO tools (mobile/client-direct). The default
+ *  prompt advertises tools (catgo_, WebSearch, Bash, ...) and says "call tools
+ *  directly"; with no tools wired up the model promises actions it can't perform
+ *  and burns turns hallucinating tool calls (then stalls). The text-only branch
+ *  drops all tool talk and points the model at the inline structure context. */
+export function build_sdk_system_prompt(
+  provider: LLMProvider,
+  structure_context?: string,
+  has_session: boolean = false,
+  text_only: boolean = false,
+): string {
+  if (text_only) {
+    let msg = `You are CatBot, a materials science assistant in CatGO ` +
+      `(crystal structures, MD trajectories, band structures, phase diagrams, ` +
+      `catalysis). This is a TEXT-ONLY chat: you have NO tools — you cannot run ` +
+      `actions, fetch data, browse files, or modify structures. Answer directly ` +
+      `from your knowledge and from the structure context provided below; when ` +
+      `asked about the current structure, read it from that context. If you lack ` +
+      `the information, say so plainly and suggest what the user can do in the ` +
+      `CatGO UI. Be concise (2-3 sentences). Match the user's language. Write ` +
+      `chemical formulas and math with UNICODE characters (e.g. TiO₂, H₂O, ` +
+      `α-Fe₂O₃, x², E=mc²) — the mobile chat does NOT render LaTeX or HTML, so ` +
+      `never use $...$, \\(...\\), <sub>, or <sup>.`
+    if (has_session) {
+      msg += `\n\nThis is a resumed conversation — skip greetings, answer directly.`
+    }
+    if (structure_context) {
+      msg += `\n\n${structure_context}`
+    }
+    return msg
+  }
+
+  let msg =
+    `You are CatBot — a materials science assistant in CatGO. Respond in the user's language. Use catgo_* MCP tools to manipulate structures and run analysis. Call tools directly — never ask for confirmation.
 
 Tool routing: To load/import structures, use catgo_fetch (crystals from OPTIMADE databases) or catgo_fetch (molecules from PubChem) — do NOT build structures manually. For molecules without a lattice, use set_lattice to add a periodic box (NOT make_supercell). For one-off viewer operations (supercell, doping, atom editing), use catgo_structure. To add water: catgo_structure add_molecule query:"water" count:N. For bulk fill to liquid density, use fill:true. When building WORKFLOWS (OER, HER, CO2RR, relaxation pipelines), use catgo_workflow with slab_gen/adsorbate_place nodes — do NOT cut slabs or place adsorbates via catgo_structure, because workflow nodes handle layer counting and reproducibility correctly. For transition state searches: create workflow with ts_search node (software:"sella", calculator:"orca" or "xtb"). To test/verify/debug an HPC cluster setup before submitting (POTCAR paths, pseudopotentials, module loads, VASP binary resolution), call the cluster-validation tool (validate_hpc_config, or catgo_validate_config on the SDK path) — read potcar_root/potcar_functional and the module-load and conda/activate lines from the user's submit script or run config, then pass them in. Never guess whether a cluster is configured correctly; validate it against the live host.
 
@@ -24,14 +63,21 @@ Formatting: When describing workflow DAG structures or pipelines, ALWAYS use a f
 Rules: Act first, explain after. Use standard defaults (slab: 10 Å thickness, 15 Å vacuum; fmax=0.05). After executing, briefly state what you did and offer to adjust. When running multi-step workflows, proceed through all steps autonomously — only pause if something fails or requires genuine user input.`
 
   if (has_session) {
-    msg += `\n\nCONTINUATION RULE: This is a resumed conversation. Skip all greetings and structural introductions. Respond directly and concisely to the latest user message.`
+    msg +=
+      `\n\nCONTINUATION RULE: This is a resumed conversation. Skip all greetings and structural introductions. Respond directly and concisely to the latest user message.`
   }
 
   // Agent-specific behavioral hints
   if (provider === `sdk-codex`) {
-    msg += `\n\nCodex runtime rule: never output execution-status boilerplate or tool call logs. Reply directly to the user intent with concise, helpful text. CRITICAL: always match the user's language — if they write Chinese, reply in Chinese; if English, reply in English.`
+    msg +=
+      `\n\nCodex runtime rule: never output execution-status boilerplate or tool call logs. Reply directly to the user intent with concise, helpful text. CRITICAL: always match the user's language — if they write Chinese, reply in Chinese; if English, reply in English.`
   } else if (provider === `sdk-gemini`) {
-    msg += `\n\nGemini runtime rule: do NOT browse local files or use shell tools. All structure data is available through catgo_* MCP tools — call them instead. CRITICAL: always match the user's language — if they write Chinese, reply entirely in Chinese; if English, reply in English. Keep responses concise (2-3 sentences max). ${has_session ? `` : `When greeting, briefly describe the loaded structure in one sentence.`} Use LaTeX for math and chemical formulas ($H_2O$, $E = mc^2$, $\\alpha$-Fe₂O₃) with $...$ for inline and $$...$$ for display math. Never use HTML tags (<sub>, <sup>).`
+    msg +=
+      `\n\nGemini runtime rule: do NOT browse local files or use shell tools. All structure data is available through catgo_* MCP tools — call them instead. CRITICAL: always match the user's language — if they write Chinese, reply entirely in Chinese; if English, reply in English. Keep responses concise (2-3 sentences max). ${
+        has_session
+          ? ``
+          : `When greeting, briefly describe the loaded structure in one sentence.`
+      } Use LaTeX for math and chemical formulas ($H_2O$, $E = mc^2$, $\\alpha$-Fe₂O₃) with $...$ for inline and $$...$$ for display math. Never use HTML tags (<sub>, <sup>).`
   }
 
   if (structure_context) {
@@ -48,7 +94,10 @@ function estimate_tokens(text: string): number {
 /** Max system prompt budget (leave room for messages + response) */
 const MAX_SYSTEM_TOKENS = 3000
 
-function build_system_message(rag_context: DocChunk[], structure_context?: string): string {
+function build_system_message(
+  rag_context: DocChunk[],
+  structure_context?: string,
+): string {
   const parts = [SYSTEM_PROMPT]
 
   if (structure_context) {
@@ -62,14 +111,18 @@ function build_system_message(rag_context: DocChunk[], structure_context?: strin
     const rag_parts: string[] = []
     let rag_tokens = 0
     for (const chunk of rag_context) {
-      const text = `[${chunk.source}${chunk.heading ? ` — ${chunk.heading}` : ``}]\n${chunk.content}`
+      const text = `[${chunk.source}${
+        chunk.heading ? ` — ${chunk.heading}` : ``
+      }]\n${chunk.content}`
       const chunk_tokens = estimate_tokens(text)
       if (rag_tokens + chunk_tokens > remaining && rag_parts.length > 0) break
       rag_parts.push(text)
       rag_tokens += chunk_tokens
     }
     if (rag_parts.length > 0) {
-      parts.push(`\n\nRelevant documentation:\n\n${rag_parts.join(`\n\n---\n\n`)}`)
+      parts.push(
+        `\n\nRelevant documentation:\n\n${rag_parts.join(`\n\n---\n\n`)}`,
+      )
     }
   }
 
@@ -116,7 +169,9 @@ You have an imported scientific paper available in your context. When the user a
 5. **Note gaps**: If the paper uses methods not supported in CatGO (e.g., specific DFT codes other than VASP, or specialized methods), mention this and suggest alternatives.`
 
 /** Parse SSE lines from a ReadableStream */
-async function* parse_sse(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string> {
+async function* parse_sse(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): AsyncGenerator<string> {
   const decoder = new TextDecoder()
   let buffer = ``
 
@@ -170,8 +225,12 @@ async function* stream_universal(
       temperature: config.temperature,
       max_tokens: config.max_tokens,
       system,
-      base_url: (config.provider === `custom` || config.provider === `ollama`) ? config.base_url || undefined : undefined,
-      api_format: (config.provider === `custom` || config.provider === `anthropic`) ? config.api_format : undefined,
+      base_url: (config.provider === `custom` || config.provider === `ollama`)
+        ? config.base_url || undefined
+        : undefined,
+      api_format: (config.provider === `custom` || config.provider === `anthropic`)
+        ? config.api_format
+        : undefined,
       api_key: config.api_key || undefined,
     }),
     signal,
@@ -190,7 +249,9 @@ export async function fetch_providers(): Promise<ProviderInfoResponse[]> {
   try {
     const response = await fetch(`${API_BASE}/chat/providers`)
     if (!response.ok) {
-      console.warn(`[CatBot] Failed to fetch providers: HTTP ${response.status}`)
+      console.warn(
+        `[CatBot] Failed to fetch providers: HTTP ${response.status}`,
+      )
       return []
     }
     const data = await response.json()

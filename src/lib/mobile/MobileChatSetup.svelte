@@ -36,7 +36,9 @@
     'sdk-codex': ``,
     'sdk-gemini': ``,
     anthropic: `claude-3-5-sonnet-latest`,
-    gemini: `gemini-2.0-flash`,
+    // gemini-2.0-flash was retired 2026-03-03 (free-tier quota → 0, every call
+    // 429s); 2.5-flash is the current free-tier default.
+    gemini: `gemini-2.5-flash`,
     deepseek: `deepseek-chat`,
     qwen: `qwen-plus`,
     kimi: `moonshot-v1-8k`,

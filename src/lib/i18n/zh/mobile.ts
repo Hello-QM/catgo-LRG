@@ -138,11 +138,16 @@ const mobile: Record<string, string> = {
   ai_save:                `保存`,
   ai_saving:              `保存中…`,
   ai_send:                `发送`,
+  ai_new_chat:            `新对话`,
+  ai_minimize:            `最小化`,
+  ai_close_chat:          `关闭对话`,
   ai_stop:                `停止`,
   ai_thinking:            `思考中…`,
   ai_empty:               `关于你的结构或研究，尽管问我。`,
   ai_no_key:              `添加 API 密钥即可开始对话。`,
   ai_invalid_key:         `API 密钥无效。请在 AI 设置中检查密钥。`,
+  ai_rate_limited:        `已达到速率限制 — 免费层每分钟只能发送少量消息。请等待几秒后重试，或在设置中选择额度更高的模型。`,
+  ai_model_busy:          `模型当前繁忙（需求高峰）— 通常是暂时的。请稍候重试，或在设置中尝试其他模型。`,
   ai_message_placeholder: `输入消息…`,
 }
 

@@ -72,7 +72,9 @@ export async function* parse_openai_stream(
       const choice = data.choices?.[0]
       const delta = choice?.delta
       if (delta?.content) yield { type: `text`, text: delta.content as string }
-      if (delta?.reasoning_content) reasoning += delta.reasoning_content as string
+      if (delta?.reasoning_content) {
+        reasoning += delta.reasoning_content as string
+      }
       if (delta?.tool_calls) {
         saw_tool_calls = true
         for (const tc of delta.tool_calls as ToolCallDelta[]) {
@@ -94,7 +96,11 @@ export async function* parse_openai_stream(
         name: t.name,
         arguments: t.args ? JSON.parse(t.args) : {},
       }))
-      yield { type: `tool_calls`, calls, reasoning_content: reasoning || undefined }
+      yield {
+        type: `tool_calls`,
+        calls,
+        reasoning_content: reasoning || undefined,
+      }
     } catch (err) {
       yield {
         type: `error`,
@@ -103,6 +109,75 @@ export async function* parse_openai_stream(
     }
   }
   yield { type: `done` }
+}
+
+/** No bytes for this long ⇒ treat the connection as dead and abort. Reset on
+ *  every chunk, so a stream that keeps flowing is never cut off. In buffered
+ *  (non-streaming) mode — the iOS path, where the whole body arrives at once
+ *  only after generation finishes — this acts as a response timeout, sized to
+ *  comfortably exceed a text-only reply. */
+const IDLE_TIMEOUT_MS = 60_000
+
+/** Wrap a reader so each resolved `read()` fires `on_chunk` — used to re-arm the
+ *  idle-timeout watchdog on every byte of activity. All other members
+ *  (releaseLock / cancel / closed) are forwarded untouched. */
+function with_idle_reset(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  on_chunk: () => void,
+): ReadableStreamDefaultReader<Uint8Array> {
+  return new Proxy(reader, {
+    get(target, prop, recv) {
+      if (prop === `read`) {
+        return async () => {
+          const r = await target.read()
+          on_chunk()
+          return r
+        }
+      }
+      const v = Reflect.get(target, prop, recv)
+      return typeof v === `function` ? v.bind(target) : v
+    },
+  })
+}
+
+/** Transient HTTP statuses worth retrying — overload / rate-limit / gateway. */
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504, 529])
+/** Total attempts (initial + retries) for the connect/status phase only. Once a
+ *  200 body starts streaming we never retry — partial text may already be out. */
+const MAX_ATTEMPTS = 3
+const BASE_BACKOFF_MS = 500
+const MAX_BACKOFF_MS = 4000
+/** Honor a server `Retry-After` only up to this — beyond it, fail fast rather
+ *  than silently stalling the chat (free-tier 429s can ask for ~50s). */
+const RETRY_AFTER_CAP_MS = 8000
+
+/** Exponential backoff (no jitter — single client, keeps it deterministic). */
+function backoff_ms(attempt: number): number {
+  return Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_BACKOFF_MS)
+}
+
+/** Parse a `Retry-After` header (delta-seconds or HTTP-date) to ms, else null. */
+function retry_after_ms(header: string | null): number | null {
+  if (!header) return null
+  const secs = Number(header)
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000)
+  const at = Date.parse(header)
+  return Number.isNaN(at) ? null : Math.max(0, at - Date.now())
+}
+
+/** A sleep that rejects (AbortError) if the signal aborts — so user Stop or the
+ *  idle timeout interrupts a backoff wait instead of dragging it out. */
+function abortable_sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      return reject(new DOMException(`Aborted`, `AbortError`))
+    }
+    const t = setTimeout(resolve, ms)
+    signal.addEventListener(`abort`, () => {
+      clearTimeout(t)
+      reject(new DOMException(`Aborted`, `AbortError`))
+    }, { once: true })
+  })
 }
 
 /** Send one chat turn to an OpenAI-compatible provider, streaming events. */
@@ -138,7 +213,11 @@ export async function* stream_client_llm(
   // field entirely when the tool list is empty (text-only mobile chat path).
   const openai_tools = tools.map((t) => ({
     type: `function`,
-    function: { name: t.name, description: t.description, parameters: t.input_schema },
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.input_schema,
+    },
   }))
   const body = {
     model: config.model,
@@ -146,9 +225,14 @@ export async function* stream_client_llm(
     temperature: config.temperature,
     max_tokens: config.max_tokens,
     ...(openai_tools.length > 0 ? { tools: openai_tools } : {}),
-    messages: [{ role: `system`, content: system }, ...messages.map(to_openai_message)],
+    messages: [
+      { role: `system`, content: system },
+      ...messages.map(to_openai_message),
+    ],
   }
-  const headers: Record<string, string> = { 'Content-Type': `application/json` }
+  const headers: Record<string, string> = {
+    'Content-Type': `application/json`,
+  }
   // Omit the auth header when there's no key (e.g. a keyless local ollama) so we
   // don't send an empty `Bearer ` that some OpenAI-compat servers reject (§8 H).
   if (config.api_key) headers[`Authorization`] = `Bearer ${config.api_key}`
@@ -156,23 +240,120 @@ export async function* stream_client_llm(
   // anthropic-dangerous-direct-browser-access is intentionally NOT sent — the
   // native-fetch path has no browser CORS, and adding it would only matter on a
   // relayed/browser path that is forbidden for key-bearing requests (§8 C/M).
-  if (config.provider === `anthropic`) headers[`anthropic-version`] = `2023-06-01`
-  let resp: Response
-  try {
-    resp = await llm_fetch(endpoint, {
-      method: `POST`,
-      headers,
-      body: JSON.stringify(body),
-      signal,
-    })
-  } catch (err) {
-    yield { type: `error`, message: err instanceof Error ? err.message : `Network error` }
-    return
+  if (config.provider === `anthropic`) {
+    headers[`anthropic-version`] = `2023-06-01`
   }
-  if (!resp.ok || !resp.body) {
+  // Idle-timeout watchdog: if no response or bytes arrive for IDLE_TIMEOUT_MS,
+  // abort so a stalled connection (dropped Wi-Fi, dead socket) fails cleanly
+  // with a retryable error instead of hanging the chat forever — the awaited
+  // stream would otherwise never settle, leaving `loading` stuck `true` and
+  // silently queueing every later message. Fold the caller's Stop/unmount
+  // signal into the same controller; re-arm on every chunk (see with_idle_reset)
+  // so a live stream is never cut off.
+  const ac = new AbortController()
+  let timed_out = false
+  let idle_timer: ReturnType<typeof setTimeout> | null = null
+  const arm_idle = () => {
+    if (idle_timer) clearTimeout(idle_timer)
+    idle_timer = setTimeout(() => {
+      timed_out = true
+      ac.abort()
+    }, IDLE_TIMEOUT_MS)
+  }
+  const clear_idle = () => {
+    if (idle_timer) clearTimeout(idle_timer)
+    idle_timer = null
+  }
+  if (signal) {
+    if (signal.aborted) ac.abort()
+    else signal.addEventListener(`abort`, () => ac.abort(), { once: true })
+  }
+  const timeout_msg = `The model stopped responding (timed out after ` +
+    `${IDLE_TIMEOUT_MS / 1000}s). Check your connection and try again.`
+
+  // Connect/status phase with auto-retry: transient overload / rate-limit /
+  // gateway errors (429/503/529/5xx) and bare network failures retry a few
+  // times with exponential backoff before surfacing — so a flaky connection or
+  // a busy free-tier model self-heals instead of bothering the user. Each
+  // attempt is bounded by the idle watchdog; an idle-timeout or user Stop aborts
+  // `ac` and is NEVER retried. Retrying is safe: the request is idempotent and
+  // no body has been consumed/streamed yet.
+  const body_json = JSON.stringify(body)
+  let resp: Response | undefined
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    arm_idle()
+    let r: Response
+    try {
+      r = await llm_fetch(endpoint, {
+        method: `POST`,
+        headers,
+        body: body_json,
+        signal: ac.signal,
+      })
+    } catch (err) {
+      clear_idle()
+      if (timed_out) {
+        yield { type: `error`, message: timeout_msg }
+        return
+      }
+      if (ac.signal.aborted) {
+        yield {
+          type: `error`,
+          message: err instanceof Error ? err.message : `Aborted`,
+        }
+        return
+      }
+      // Network-level failure (DNS, reset, TLS): retry with backoff if attempts
+      // remain, otherwise surface.
+      if (attempt < MAX_ATTEMPTS) {
+        try {
+          await abortable_sleep(backoff_ms(attempt), ac.signal)
+        } catch {
+          yield { type: `error`, message: timed_out ? timeout_msg : `Aborted` }
+          return
+        }
+        continue
+      }
+      yield {
+        type: `error`,
+        message: err instanceof Error ? err.message : `Network error`,
+      }
+      return
+    }
+
+    if (r.ok && r.body) {
+      resp = r
+      break
+    }
+
+    // Non-OK: drain the body for the error message, then decide retry vs surface.
+    clear_idle()
+    const status = r.status
+    const detail = await r.text().catch(() => ``)
+    const ra = retry_after_ms(r.headers.get(`retry-after`))
+    const retryable = RETRYABLE_STATUS.has(status) &&
+      attempt < MAX_ATTEMPTS &&
+      (ra == null || ra <= RETRY_AFTER_CAP_MS)
+    if (retryable) {
+      try {
+        await abortable_sleep(ra ?? backoff_ms(attempt), ac.signal)
+      } catch {
+        yield { type: `error`, message: timed_out ? timeout_msg : `Aborted` }
+        return
+      }
+      continue
+    }
     yield {
       type: `error`,
-      message: `Provider error ${resp.status}: ${redact(await resp.text().catch(() => ``))}`,
+      message: `Provider error ${status}: ${redact(detail)}`,
+    }
+    return
+  }
+  if (!resp || !resp.body) {
+    clear_idle()
+    yield {
+      type: `error`,
+      message: `Provider unavailable after ${MAX_ATTEMPTS} attempts.`,
     }
     return
   }
@@ -185,16 +366,32 @@ export async function* stream_client_llm(
   // JSON-parse it and replay it through parse_openai_stream as one synthetic
   // SSE chunk (reuse the parser — do NOT fork parsing). Otherwise stream, with
   // the consumed first chunk pushed back in front of the live reader.
-  const reader = resp.body.getReader()
-  const first = await reader.read()
-  if (first.done || !looks_like_sse(first.value)) {
-    // Buffered (non-streaming): drain whatever remains so a chunked-but-
-    // non-streaming body is reassembled in full before JSON-parsing.
-    const buf = await drain_reader(first.value, first.done ? null : reader)
-    yield* parse_openai_stream(buffered_completion_reader(buf))
-    return
+  // The reader is wrapped so every read() re-arms the idle watchdog.
+  const reader = with_idle_reset(resp.body.getReader(), arm_idle)
+  try {
+    const first = await reader.read()
+    if (first.done || !looks_like_sse(first.value)) {
+      // Buffered (non-streaming): drain whatever remains so a chunked-but-
+      // non-streaming body is reassembled in full before JSON-parsing.
+      const buf = await drain_reader(first.value, first.done ? null : reader)
+      clear_idle()
+      yield* parse_openai_stream(buffered_completion_reader(buf))
+      return
+    }
+    yield* parse_openai_stream(prepend_reader(first.value, reader))
+  } catch (err) {
+    // A mid-stream idle-timeout (or user Stop) aborts the read, surfacing here.
+    yield {
+      type: `error`,
+      message: timed_out
+        ? timeout_msg
+        : (err instanceof Error ? err.message : `Stream error`),
+    }
+  } finally {
+    // Always cancel the watchdog — including when the consumer stops iterating
+    // early (run_tool_loop break / generator .return()), so no timer dangles.
+    clear_idle()
   }
-  yield* parse_openai_stream(prepend_reader(first.value, reader))
 }
 
 /** Concatenate the first chunk with any remaining reader output into one buffer. */
@@ -247,7 +444,9 @@ function buffered_completion_reader(
     // Reshape message → a streaming-style delta the parser already understands.
     const delta: Record<string, unknown> = {}
     if (message.content) delta.content = message.content
-    if (message.reasoning_content) delta.reasoning_content = message.reasoning_content
+    if (message.reasoning_content) {
+      delta.reasoning_content = message.reasoning_content
+    }
     if (Array.isArray(message.tool_calls)) {
       delta.tool_calls = message.tool_calls.map((
         tc: Record<string, unknown>,
@@ -320,7 +519,9 @@ function prepend_reader(
  *  (tool_result → tool_use → text) is sufficient and keeps the
  *  assistant-tool_calls / tool-result pairing OpenAI requires. */
 export function to_openai_message(m: ChatMessage): Record<string, unknown> {
-  if (typeof m.content === `string`) return { role: m.role, content: m.content }
+  if (typeof m.content === `string`) {
+    return { role: m.role, content: m.content }
+  }
 
   // tool_result → role:'tool' (highest priority; a single result block per msg).
   const result_block = m.content.find((b): b is ToolResultBlock =>

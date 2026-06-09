@@ -57,13 +57,19 @@ export function build_structure_context(ctx: StructureContext): string {
 
   // Check if periodic
   const is_periodic = `lattice` in structure
-  lines.push(`- Type: ${is_periodic ? `crystal (periodic)` : `molecule (non-periodic)`}`)
+  lines.push(
+    `- Type: ${is_periodic ? `crystal (periodic)` : `molecule (non-periodic)`}`,
+  )
 
   // Lattice parameters
   if (is_periodic) {
     const lat = structure.lattice
     if (lat.a != null && lat.b != null && lat.c != null) {
-      lines.push(`- Lattice parameters: a=${fmt(lat.a)} b=${fmt(lat.b)} c=${fmt(lat.c)} alpha=${fmt(lat.alpha ?? 90)} beta=${fmt(lat.beta ?? 90)} gamma=${fmt(lat.gamma ?? 90)}`)
+      lines.push(
+        `- Lattice parameters: a=${fmt(lat.a)} b=${fmt(lat.b)} c=${fmt(lat.c)} alpha=${
+          fmt(lat.alpha ?? 90)
+        } beta=${fmt(lat.beta ?? 90)} gamma=${fmt(lat.gamma ?? 90)}`,
+      )
     }
     if (lat.volume != null) {
       lines.push(`- Volume: ${fmt(lat.volume)} A^3`)
@@ -84,7 +90,9 @@ export function build_structure_context(ctx: StructureContext): string {
   // Symmetry
   if (symmetry_data) {
     lines.push(`\n## Symmetry`)
-    lines.push(`- Space group: ${symmetry_data.number} (${symmetry_data.hm_symbol})`)
+    lines.push(
+      `- Space group: ${symmetry_data.number} (${symmetry_data.hm_symbol})`,
+    )
     if (symmetry_data.pearson_symbol) {
       lines.push(`- Pearson symbol: ${symmetry_data.pearson_symbol}`)
     }
@@ -136,14 +144,27 @@ export function build_structure_context(ctx: StructureContext): string {
         .map((s) => s.properties?.forces as number[] | undefined)
         .filter(Boolean)
       if (forces.length > 0) {
-        const magnitudes = forces.map((f) => Math.sqrt(f![0] ** 2 + f![1] ** 2 + f![2] ** 2))
+        const magnitudes = forces.map((f) =>
+          Math.sqrt(f![0] ** 2 + f![1] ** 2 + f![2] ** 2)
+        )
         const max_f = Math.max(...magnitudes)
         lines.push(`- Max force magnitude: ${fmt(max_f, 4)} eV/A`)
       }
     }
   }
 
-  return lines.join(`\n`)
+  const out = lines.join(`\n`)
+  // Safety cap. This is a SUMMARY (no per-atom dump — selected sites are already
+  // capped at `max_show`), so it's normally a few hundred chars regardless of
+  // atom count. The cap only guards a pathological structure (e.g. thousands of
+  // distinct species/Wyckoff entries) from bloating the prompt. ~4000 chars
+  // (~1k tokens) is far above any real summary, so it never trims normal input.
+  const MAX_CONTEXT_CHARS = 4000
+  if (out.length > MAX_CONTEXT_CHARS) {
+    return out.slice(0, MAX_CONTEXT_CHARS) +
+      `\n\n… (structure summary truncated)`
+  }
+  return out
 }
 
 /** Build workflow context string from shared workflow state */
@@ -166,16 +187,20 @@ export function build_workflow_context(wf: ActiveWorkflow): string {
         .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
         .join(`, `)
       const params_str = key_params ? ` (${key_params})` : ``
-      lines.push(`- ${node.label} (id: ${node.id}, type: ${node.type})${status_str}${params_str}`)
+      lines.push(
+        `- ${node.label} (id: ${node.id}, type: ${node.type})${status_str}${params_str}`,
+      )
     }
   }
 
   if (wf.edges.length > 0) {
     lines.push(`\n### Edges (${wf.edges.length})`)
     for (const edge of wf.edges) {
-      const from_node = wf.nodes.find(n => n.id === edge.from)
-      const to_node = wf.nodes.find(n => n.id === edge.to)
-      lines.push(`- ${from_node?.label ?? edge.from} → ${to_node?.label ?? edge.to}`)
+      const from_node = wf.nodes.find((n) => n.id === edge.from)
+      const to_node = wf.nodes.find((n) => n.id === edge.to)
+      lines.push(
+        `- ${from_node?.label ?? edge.from} → ${to_node?.label ?? edge.to}`,
+      )
     }
   }
 
@@ -185,7 +210,7 @@ export function build_workflow_context(wf: ActiveWorkflow): string {
   if (failed.length > 0) {
     lines.push(`\n### Failed Steps`)
     for (const [step_id] of failed) {
-      const node = wf.nodes.find(n => n.id === step_id)
+      const node = wf.nodes.find((n) => n.id === step_id)
       lines.push(`- ${node?.label ?? step_id} (id: ${step_id})`)
     }
   }
@@ -273,6 +298,8 @@ export function build_paper_context_from_doi(data: {
     lines.push(data.abstract)
   }
   lines.push(``)
-  lines.push(`Note: Only metadata available from DOI. For full paper text, upload the PDF.`)
+  lines.push(
+    `Note: Only metadata available from DOI. For full paper text, upload the PDF.`,
+  )
   return lines.join(`\n`)
 }

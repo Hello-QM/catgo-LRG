@@ -590,7 +590,7 @@
   {/if}
 
   {#if ai_open}
-    <MobileChat on_close={() => (ai_open = false)} />
+    <MobileChat {structure} on_close={() => (ai_open = false)} />
   {/if}
 
   {#if ks_visible && session_id}
@@ -980,6 +980,11 @@
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 8px;
     cursor: pointer;
+    /* iOS: the long-press that opens the close sheet otherwise triggers
+       WKWebView's native text selection / callout on the tab label. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .mw-tabchip.active .mw-tabchip-btn {
     color: var(--accent-color, #3b82f6);
@@ -1092,6 +1097,11 @@
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 10px;
     cursor: pointer;
+    /* iOS: don't let a finger still held from the long-press select the
+       "Delete"/"Cancel" label text when the sheet opens under it. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .mw-sheet-btn.danger {
     color: #ff6b6b;

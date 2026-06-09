@@ -57,14 +57,19 @@ function load_from_storage<T>(key: string, fallback: T): T {
     if (!stored) return fallback
     return JSON.parse(stored) as T
   } catch (err) {
-    console.warn(`[CatGo] Failed to load ${key} from localStorage, using default:`, err)
+    console.warn(
+      `[CatGo] Failed to load ${key} from localStorage, using default:`,
+      err,
+    )
     return fallback
   }
 }
 
 function save_to_storage(key: string, value: unknown): void {
   try {
-    if (typeof window === `undefined` || typeof localStorage === `undefined`) return
+    if (typeof window === `undefined` || typeof localStorage === `undefined`) {
+      return
+    }
     localStorage.setItem(key, JSON.stringify(value))
   } catch (err) {
     console.warn(`[CatGo] Failed to save ${key} to localStorage:`, err)
@@ -94,7 +99,9 @@ function init_username(): string {
   return name
 }
 
-export const chat_username = $state<{ value: string }>({ value: init_username() })
+export const chat_username = $state<{ value: string }>({
+  value: init_username(),
+})
 
 function persist_config(): void {
   // SECURITY (§5/§8 H): never write the API key to localStorage on mobile. The
@@ -202,7 +209,9 @@ export interface ChatSlice {
   // sent automatically the moment the in-flight round finishes (drained in
   // send_message's finally), so the input box never has to be locked.
   pending_send: {
-    value: { content: string; attachments?: import('./types').Attachment[] } | null
+    value:
+      | { content: string; attachments?: import('./types').Attachment[] }
+      | null
   }
   // Session-scoped tool-approval bypass (NOT persisted — a fresh session
   // always re-gates). Read at send time, threaded into the Claude adapter.
@@ -222,7 +231,9 @@ function make_chat_slice(): ChatSlice {
   const messages = $state({ list: [] as ChatMessage[] })
   const loading = $state({ value: false })
   const error = $state({ value: `` })
-  const active_tool_blocks = $state({ entries: {} as Record<string, ToolEntry> })
+  const active_tool_blocks = $state({
+    entries: {} as Record<string, ToolEntry>,
+  })
   const active_permission_blocks = $state({
     entries: {} as Record<string, PermissionEntry>,
   })
@@ -430,7 +441,9 @@ export function broadcast_chat_context(tab_id: string = `default`): void {
     })
     bc.close()
   } catch (err) {
-    if (import.meta.env.DEV) console.warn(`[CatBot] BroadcastChannel sync failed:`, err)
+    if (import.meta.env.DEV) {
+      console.warn(`[CatBot] BroadcastChannel sync failed:`, err)
+    }
   }
 }
 
@@ -456,10 +469,14 @@ export function listen_chat_context(
     // Drop messages from a different source tab than the one this popout
     // is mirroring — otherwise every tab's broadcast in the main window
     // overwrites this popout's context in last-writer-wins order.
-    if (expected_source_tab_id && e.data?.source_tab_id !== expected_source_tab_id) return
+    if (
+      expected_source_tab_id && e.data?.source_tab_id !== expected_source_tab_id
+    ) return
     if (expected_source_id && e.data?.source_id !== expected_source_id) return
     const slice = get_chat_slice(tab_id)
-    if (e.data.structure != null) slice.structure_context.value = e.data.structure
+    if (e.data.structure != null) {
+      slice.structure_context.value = e.data.structure
+    }
     if (e.data.workflow != null) slice.workflow_context.value = e.data.workflow
     if (e.data.paper != null) slice.paper_context.value = e.data.paper
   }
@@ -596,7 +613,8 @@ export async function send_message(
             const result_str = (event.result as string) ?? ``
             if (
               resolved_tool_name.includes(`workflow`) ||
-              result_str.includes(`Created workflow`) || result_str.includes(`graph_json`)
+              result_str.includes(`Created workflow`) ||
+              result_str.includes(`graph_json`)
             ) {
               // Route to the sending tab's workflow slice so a CatBot-created
               // workflow opens in the tab the user typed in.
@@ -659,6 +677,10 @@ export async function send_message(
         chat_config.provider,
         combined_context,
         false,
+        // Mobile/client-direct runs tool-free (isMobile() ? [] : CLIENT_TOOLS
+        // below) — use the tool-free prompt so the model answers from the inline
+        // structure context instead of promising tool actions it can't perform.
+        isMobile(),
       )
 
       // Local rolling conversation. Start from the prior turns (drop the empty
@@ -694,7 +716,10 @@ export async function send_message(
         // (loading never clears). Route any such call to an immediate error with
         // read-kind (skips the permission gate) so the loop unwinds cleanly.
         execute: isMobile()
-          ? () => Promise.resolve(`{"error":"tools are not available in mobile chat"}`)
+          ? () =>
+            Promise.resolve(
+              `{"error":"tools are not available in mobile chat"}`,
+            )
           : execute_tool,
         kind_of: isMobile() ? () => `read` as const : tool_kind,
         request_permission: (call) =>
@@ -768,7 +793,11 @@ export async function send_message(
               })
               history.push({
                 role: `user`,
-                content: [{ type: `tool_result`, tool_use_id: e.id, content: e.result }],
+                content: [{
+                  type: `tool_result`,
+                  tool_use_id: e.id,
+                  content: e.result,
+                }],
                 timestamp: Date.now(),
               })
               break
@@ -843,7 +872,9 @@ export async function send_message(
     try {
       const persist_agent = agent_from_provider(chat_config.provider)
       const persist_sid = persist_agent ? agent_sessions[persist_agent] : undefined
-      if (persist_sid) persist_session_messages(persist_sid, slice.messages.list)
+      if (persist_sid) {
+        persist_session_messages(persist_sid, slice.messages.list)
+      }
     } catch { /* persistence is best-effort, never block the UI */ }
     // Drain a message the user composed mid-stream. queueMicrotask so this
     // send_message promise settles (and the UI repaints the finished round)
@@ -940,7 +971,10 @@ type SessionMessageMap = Record<string, ChatMessage[]>
 
 export function load_session_messages(session_id: string): ChatMessage[] {
   if (!session_id) return []
-  const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
+  const map = load_from_storage<SessionMessageMap>(
+    STORAGE_KEY_SESSION_MESSAGES,
+    {},
+  )
   return Array.isArray(map[session_id]) ? map[session_id] : []
 }
 
@@ -949,14 +983,20 @@ export function persist_session_messages(
   messages: ChatMessage[],
 ): void {
   if (!session_id || messages.length === 0) return
-  const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
+  const map = load_from_storage<SessionMessageMap>(
+    STORAGE_KEY_SESSION_MESSAGES,
+    {},
+  )
   map[session_id] = messages.slice(-MAX_PERSISTED_MESSAGES)
   save_to_storage(STORAGE_KEY_SESSION_MESSAGES, map)
 }
 
 function forget_session_messages(session_id: string): void {
   if (!session_id) return
-  const map = load_from_storage<SessionMessageMap>(STORAGE_KEY_SESSION_MESSAGES, {})
+  const map = load_from_storage<SessionMessageMap>(
+    STORAGE_KEY_SESSION_MESSAGES,
+    {},
+  )
   if (session_id in map) {
     delete map[session_id]
     save_to_storage(STORAGE_KEY_SESSION_MESSAGES, map)

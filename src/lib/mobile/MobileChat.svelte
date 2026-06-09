@@ -30,17 +30,69 @@
   } from '$lib/chat/chat-state.svelte'
   import { loadApiKey, redact } from './ai-keys'
   import MobileChatSetup from './MobileChatSetup.svelte'
+  import { build_structure_context } from '$lib/chat/context'
+  import type { AnyStructure } from '$lib'
+  import {
+    add_chat_tab,
+    chat_tab_label,
+    chat_tabs,
+    close_chat_tab,
+    ensure_chat_seed,
+    MAX_CHAT_TABS,
+    set_chat_title,
+    switch_chat_tab,
+  } from './chat-tabs.svelte'
   import { t } from '$lib/i18n/index.svelte'
 
   interface Props {
     /** Dismiss the overlay back to the workspace. */
     on_close: () => void
+    /** The structure currently open in the workspace, so CatBot can answer
+     *  about it. The typed mobile chat has no other context source — the
+     *  desktop ChatPane / voice paths don't run here. */
+    structure?: AnyStructure
   }
 
-  let { on_close }: Props = $props()
+  let { on_close, structure }: Props = $props()
 
-  const TAB = `mobile`
-  const slice = $derived(get_chat_slice(TAB))
+  // Seed the first tab once, then drive the visible chat off the active tab id
+  // (which IS the chat-state slice id). Multiple chats, each its own slice.
+  ensure_chat_seed()
+  const active_id = $derived(chat_tabs.active_id ?? `mobile`)
+  const slice = $derived(get_chat_slice(active_id))
+
+  // Long-press a tab → close action sheet (mirrors the terminal tab bar).
+  let sheet_tab = $state<string | null>(null)
+  let lp_timer: ReturnType<typeof setTimeout> | null = null
+  let lp_fired = false
+  $effect(() => () => {
+    if (lp_timer) clearTimeout(lp_timer)
+  })
+  function tab_pointerdown(id: string): void {
+    if (lp_timer) clearTimeout(lp_timer)
+    lp_fired = false
+    lp_timer = setTimeout(() => {
+      lp_fired = true
+      sheet_tab = id
+    }, 500)
+  }
+  function tab_pointerup(): void {
+    if (lp_timer) clearTimeout(lp_timer)
+    lp_timer = null
+  }
+  function tab_click(id: string): void {
+    if (lp_fired) {
+      lp_fired = false // long-press already opened the sheet; swallow the click
+      return
+    }
+    switch_chat_tab(id)
+  }
+  function sheet_close(): void {
+    if (sheet_tab) {
+      close_chat_tab(sheet_tab)
+      sheet_tab = null
+    }
+  }
 
   // The current provider, read reactively off the persisted (non-secret) config.
   const provider = $derived(chat_config.provider)
@@ -77,8 +129,8 @@
       })
   })
 
-  // Abort any in-flight stream when the overlay unmounts (§6).
-  $effect(() => () => cancel_generation(TAB))
+  // Abort the active chat's in-flight stream when the overlay unmounts (§6).
+  $effect(() => () => cancel_generation(active_id))
 
   const has_key = $derived(local_key.trim().length > 0)
   const show_setup = $derived(setup_open || (key_checked && !has_key))
@@ -89,6 +141,16 @@
   const error_text = $derived(slice.error.value ? redact(slice.error.value) : ``)
   const is_key_error = $derived(
     /401|invalid[_\s-]?api[_\s-]?key|unauthor/i.test(slice.error.value),
+  )
+  // Rate-limit / quota (429 / RESOURCE_EXHAUSTED) — common on free tiers. Show a
+  // plain-language explanation instead of the raw provider JSON.
+  const is_rate_limit = $derived(
+    /429|resource_exhausted|quota|rate.?limit/i.test(slice.error.value),
+  )
+  // Transient server overload (503 / UNAVAILABLE / "high demand") — the auto-retry
+  // already tried; tell the user it's temporary and to resend.
+  const is_overloaded = $derived(
+    /503|unavailable|overloaded|high demand|try again later/i.test(slice.error.value),
   )
 
   function on_setup_done(): void {
@@ -109,11 +171,19 @@
   async function send(): Promise<void> {
     const text = input.trim()
     if (!text) return
+    // Label this tab by its first message (no-op once a title is set).
+    set_chat_title(active_id, text)
+    // Refresh the structure context from whatever's open RIGHT NOW, every send.
+    // This is the typed mobile chat's only context source, and it must be
+    // current across app restarts (structure restored, no load event fires) and
+    // mid-conversation structure swaps. Empty string when nothing is open, which
+    // correctly tells CatBot there's no structure.
+    slice.structure_context.value = build_structure_context({ structure })
     // Push the in-memory key right before sending so stream_client_llm reads it
     // off chat_config.api_key (§5). Never persisted.
     set_session_api_key(local_key)
     input = ``
-    await send_message(text, undefined, TAB)
+    await send_message(text, undefined, active_id)
   }
 
   function on_input_keydown(e: KeyboardEvent): void {
@@ -162,21 +232,50 @@
 
 <div class="ai-overlay">
   <header class="ai-head">
-    <button
-      type="button"
-      class="ai-head-btn"
-      aria-label={t(`mobile.back`)}
-      title={t(`mobile.back`)}
-      onclick={on_close}
-    ><Icon icon="Close" /></button>
-    <span class="ai-head-title">{t(`mobile.ai_title`)} · {provider}</span>
-    <button
-      type="button"
-      class="ai-head-btn"
-      aria-label={t(`mobile.ai_setup`)}
-      title={t(`mobile.ai_setup`)}
-      onclick={() => (setup_open = true)}
-    ><Icon icon="Settings" /></button>
+    <!-- Chat tab strip: tap = switch, long-press = close sheet, + = new (capped
+         at MAX_CHAT_TABS). Mirrors the terminal tab bar. -->
+    <div class="ai-tabbar" role="tablist" aria-label={t(`mobile.ai_title`)}>
+      {#each chat_tabs.tabs as tab (tab.id)}
+        <div class="ai-tabchip" class:active={tab.id === active_id}>
+          <button
+            type="button"
+            class="ai-tabchip-btn"
+            role="tab"
+            aria-selected={tab.id === active_id}
+            onclick={() => tab_click(tab.id)}
+            onpointerdown={() => tab_pointerdown(tab.id)}
+            onpointerup={tab_pointerup}
+            onpointercancel={tab_pointerup}
+            oncontextmenu={(e) => e.preventDefault()}
+          ><span class="ai-tabchip-label">{chat_tab_label(tab)}</span></button>
+        </div>
+      {/each}
+      {#if chat_tabs.tabs.length < MAX_CHAT_TABS}
+        <button
+          type="button"
+          class="ai-tab-add"
+          aria-label={t(`mobile.ai_new_chat`)}
+          title={t(`mobile.ai_new_chat`)}
+          onclick={() => add_chat_tab()}
+        ><Icon icon="Plus" /></button>
+      {/if}
+    </div>
+    <div class="ai-head-ctrls">
+      <button
+        type="button"
+        class="ai-head-btn"
+        aria-label={t(`mobile.ai_setup`)}
+        title={t(`mobile.ai_setup`)}
+        onclick={() => (setup_open = true)}
+      ><Icon icon="Settings" /></button>
+      <button
+        type="button"
+        class="ai-head-btn"
+        aria-label={t(`mobile.ai_minimize`)}
+        title={t(`mobile.ai_minimize`)}
+        onclick={on_close}
+      ><Icon icon="Collapse" /></button>
+    </div>
   </header>
 
   {#if show_setup}
@@ -213,8 +312,18 @@
 
       {#if error_text}
         <div class="ai-error" role="alert">
-          <span>{is_key_error ? t(`mobile.ai_invalid_key`) : error_text}</span>
-          {#if is_key_error}
+          <span>
+            {#if is_key_error}
+              {t(`mobile.ai_invalid_key`)}
+            {:else if is_rate_limit}
+              {t(`mobile.ai_rate_limited`)}
+            {:else if is_overloaded}
+              {t(`mobile.ai_model_busy`)}
+            {:else}
+              {error_text}
+            {/if}
+          </span>
+          {#if is_key_error || is_rate_limit || is_overloaded}
             <button type="button" class="ai-error-fix" onclick={() => (setup_open = true)}>
               {t(`mobile.ai_setup`)}
             </button>
@@ -236,7 +345,7 @@
           type="button"
           class="ai-send stop"
           aria-label={t(`mobile.ai_stop`)}
-          onclick={() => cancel_generation(TAB)}
+          onclick={() => cancel_generation(active_id)}
         ><Icon icon="Close" /></button>
       {:else}
         <button
@@ -247,6 +356,27 @@
           onclick={send}
         ><Icon icon="ArrowUp" /></button>
       {/if}
+    </div>
+  {/if}
+
+  {#if sheet_tab}
+    <!-- Long-press close sheet for a chat tab (mirrors the terminal one). -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="ai-sheet-backdrop" role="presentation" onclick={() => (sheet_tab = null)}>
+      <div
+        class="ai-sheet"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <button type="button" class="ai-sheet-btn danger" onclick={sheet_close}>
+          {t(`mobile.ai_close_chat`)}
+        </button>
+        <button type="button" class="ai-sheet-btn" onclick={() => (sheet_tab = null)}>
+          {t(`common.cancel`)}
+        </button>
+      </div>
     </div>
   {/if}
 </div>
@@ -271,17 +401,6 @@
     background: rgba(0, 0, 0, 0.3);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
-  .ai-head-title {
-    flex: 1;
-    min-width: 0;
-    font-weight: 600;
-    font-size: 0.95em;
-    text-align: center;
-    color: var(--text-color, #e0e0e0);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
   .ai-head-btn {
     display: inline-flex;
     align-items: center;
@@ -295,6 +414,107 @@
     border: 1px solid transparent;
     border-radius: 8px;
     cursor: pointer;
+  }
+  .ai-head-ctrls {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .ai-tabbar {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ai-tabbar::-webkit-scrollbar {
+    display: none;
+  }
+  .ai-tabchip {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .ai-tabchip-btn {
+    display: inline-flex;
+    align-items: center;
+    max-width: 120px;
+    min-height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+    color: var(--text-color-muted, #94a3b8);
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    cursor: pointer;
+    /* iOS: long-press (to close) must not text-select the tab label. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .ai-tabchip.active .ai-tabchip-btn {
+    color: var(--accent-color, #3b82f6);
+    border-color: var(--accent-color, #3b82f6);
+    background: rgba(59, 130, 246, 0.1);
+  }
+  .ai-tabchip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ai-tab-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    font-size: 14px;
+    color: var(--text-color-muted, #94a3b8);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  /* Long-press close action sheet (mirrors MobileWorkspace's terminal sheet). */
+  .ai-sheet-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+  }
+  .ai-sheet {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    padding: 12px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    background: var(--page-bg, #0e1117);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .ai-sheet-btn {
+    min-height: 48px;
+    font-size: 15px;
+    color: var(--text-color, #e0e0e0);
+    background: var(--surface-bg, #1a1a2e);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .ai-sheet-btn.danger {
+    color: #ff6b6b;
+    border-color: rgba(255, 107, 107, 0.5);
   }
   .ai-setup-host {
     flex: 1;

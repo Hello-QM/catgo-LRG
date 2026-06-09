@@ -795,7 +795,12 @@ export default defineConfig({
   },
 
   server: {
-    host: tauri_dev_host || `127.0.0.1`,
+    // Mobile: bind ALL interfaces (0.0.0.0), not just the LAN IP. The device
+    // reaches Vite over the LAN, but Tauri's own dev-server readiness poll hits
+    // `devUrl` (http://localhost:3100). Binding to only `tauri_dev_host` leaves
+    // localhost unserved → Tauri "Could not connect ... after 180s". 0.0.0.0
+    // serves both. HMR still derives from tauri_dev_host (see hmr below).
+    host: tauri_dev_host ? `0.0.0.0` : `127.0.0.1`,
     port: desktop_port,
     strictPort: true,
     fs: { strict: false },
