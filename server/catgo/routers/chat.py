@@ -278,6 +278,9 @@ _API_MODELS = {
 }
 
 
+_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+
+
 def _ollama_running(host: str = "127.0.0.1", port: int = 11434, timeout: float = 0.3) -> bool:
     """Cheap TCP probe — connect()=success means a listener is bound."""
     try:
@@ -287,8 +290,27 @@ def _ollama_running(host: str = "127.0.0.1", port: int = 11434, timeout: float =
         return False
 
 
+async def _fetch_ollama_tags(base_url: Optional[str] = None) -> tuple[list[dict], float]:
+    """Return locally installed Ollama models from the native /api/tags API."""
+    base = _normalize_provider_base_url(base_url or _OLLAMA_BASE_URL)
+    t0 = time.perf_counter()
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        r = await client.get(f"{base}/api/tags")
+    if r.status_code != 200:
+        raise RuntimeError(f"Ollama responded HTTP {r.status_code}.")
+    data = r.json()
+    models: list[dict] = []
+    for item in data.get("models", []):
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("name") or item.get("model")
+        if model_id:
+            models.append({"id": model_id, "label": model_id})
+    return models, (time.perf_counter() - t0) * 1000
+
+
 @router.get("/providers")
-def list_providers() -> dict:
+async def list_providers() -> dict:
     """Return the provider catalogue with live availability flags."""
     providers: list[dict] = []
 
@@ -313,13 +335,23 @@ def list_providers() -> dict:
             "base_url": _API_BASE_URLS.get(pid),
         })
 
+    ollama_models: list[dict] = []
+    ollama_available = False
+    try:
+        ollama_models, _ = await _fetch_ollama_tags(_OLLAMA_BASE_URL)
+        ollama_available = True
+    except Exception:
+        # Fall back to a fast TCP probe so the UI still shows a useful signal
+        # while Ollama is starting up or if /api/tags is temporarily busy.
+        ollama_available = _ollama_running()
+
     providers.append({
         "id": "ollama",
         "name": "Ollama (Local)",
         "type": "local",
-        "available": _ollama_running(),
-        "models": [],
-        "base_url": "http://127.0.0.1:11434",
+        "available": ollama_available,
+        "models": ollama_models,
+        "base_url": _OLLAMA_BASE_URL,
     })
 
     return {"providers": providers}
@@ -397,6 +429,8 @@ def _normalize_provider_base_url(base_url: str) -> str:
 
 
 def _resolve_base_url(provider_id: str, base_url: Optional[str]) -> str:
+    if provider_id == "ollama":
+        return _normalize_provider_base_url(base_url or _OLLAMA_BASE_URL)
     return _normalize_provider_base_url(base_url or _API_BASE_URLS.get(provider_id, ""))
 
 
@@ -500,6 +534,12 @@ def _parse_models_payload(data: dict) -> list[dict]:
 
 
 async def _fetch_provider_models(provider_id: str, api_key: Optional[str], base_url: Optional[str], api_format: Optional[str] = None) -> tuple[list[dict], float, str]:
+    if provider_id == "ollama":
+        models, latency = await _fetch_ollama_tags(base_url)
+        if not models:
+            raise RuntimeError("Ollama is running, but no local models were found. Run `ollama pull <model>` first.")
+        return models, latency, "ollama"
+
     key = _resolve_api_key(provider_id, api_key)
     env_key = _provider_env_key(provider_id)
     if not key:
@@ -558,18 +598,11 @@ async def test_provider(req: ProviderTestRequest) -> dict:
 
     # Ollama — TCP probe, then confirm the HTTP API actually answers.
     if pid == "ollama":
-        base = (req.base_url or "http://127.0.0.1:11434").rstrip("/")
-        if not _ollama_running():
-            return {"success": False, "error": "Ollama is not running on 127.0.0.1:11434."}
-        t0 = time.perf_counter()
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                r = await client.get(f"{base}/api/tags")
+            models, latency = await _fetch_ollama_tags(req.base_url)
         except Exception as exc:
             return {"success": False, "error": f"Cannot reach Ollama: {exc}"}
-        if r.status_code == 200:
-            return {"success": True, "latency_ms": (time.perf_counter() - t0) * 1000}
-        return {"success": False, "error": f"Ollama responded HTTP {r.status_code}."}
+        return {"success": True, "latency_ms": latency, "models": models}
 
     # API providers — model discovery proves reachability and key validity.
     if pid in _API_PROVIDERS:
@@ -598,23 +631,74 @@ def chat_stream_universal(req: UniversalStreamRequest):
 async def _stream_universal(req: UniversalStreamRequest):
     key = _resolve_api_key(req.provider_id, req.api_key)
     env_key = _provider_env_key(req.provider_id)
-    if not key:
+    if req.provider_id != "ollama" and not key:
         hint = f" or set ${env_key}" if env_key else ""
         yield f"data: {json.dumps({'error': f'No API key. Enter one in chat settings{hint}.'})}\n\n"
         yield "data: [DONE]\n\n"
         return
     base = _resolve_base_url(req.provider_id, req.base_url)
+    if req.provider_id == "ollama" and not base:
+        base = _OLLAMA_BASE_URL
     if not base:
         yield f"data: {json.dumps({'error': f'No base URL configured for {req.provider_id}.'})}\n\n"
         yield "data: [DONE]\n\n"
         return
+    if req.provider_id == "ollama":
+        async for chunk in _stream_ollama(req, base):
+            yield chunk
+        return
     fmt = _resolve_api_format(req.provider_id, req.api_format, base)
     if fmt == "anthropic":
-        async for chunk in _stream_anthropic_universal(req, key, base):
+        async for chunk in _stream_anthropic_universal(req, key or "", base):
             yield chunk
     else:
-        async for chunk in _stream_openai_universal(req, key, base, fmt):
+        async for chunk in _stream_openai_universal(req, key or "", base, fmt):
             yield chunk
+
+
+async def _stream_ollama(req: UniversalStreamRequest, base_url: str):
+    """Stream from Ollama's native chat endpoint; no API key is required."""
+    messages = []
+    if req.system:
+        messages.append({"role": "system", "content": req.system})
+    messages.extend([m.model_dump() for m in req.messages])
+    body = {
+        "model": req.model,
+        "messages": messages,
+        "stream": True,
+        "options": {
+            "temperature": req.temperature,
+            "num_predict": req.max_tokens,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream(
+                "POST",
+                f"{base_url.rstrip('/')}/api/chat",
+                json=body,
+            ) as response:
+                if response.status_code != 200:
+                    error_body = await response.aread()
+                    message = error_body[:200].decode(errors="ignore")
+                    yield f"data: {json.dumps({'error': f'Ollama error {response.status_code}: {message}'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    text = data.get("message", {}).get("content", "")
+                    if text:
+                        yield f"data: {json.dumps({'text': text})}\n\n"
+                    if data.get("done"):
+                        break
+    except Exception as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 async def _stream_openai_universal(req: UniversalStreamRequest, api_key: str, base_url: str, api_format: str):

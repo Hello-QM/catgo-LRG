@@ -86,6 +86,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
       fetch_providers().then((p) => {
         providers = p
         providers_loaded = true
+        const models = get_models(chat_config.provider, p, chat_config.fetched_models ?? {})
+        if (chat_config.provider === `ollama` && !chat_config.model && models.length > 0) {
+          update_config({ model: models[0].id, base_url: p.find((provider) => provider.id === `ollama`)?.base_url ?? chat_config.base_url })
+        }
       })
     }
   })
@@ -193,7 +197,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         body: JSON.stringify({
           provider_id: chat_config.provider,
           api_key: chat_config.api_key || undefined,
-          base_url: chat_config.provider === `custom` ? chat_config.base_url || undefined : undefined,
+          base_url: (chat_config.provider === `custom` || chat_config.provider === `ollama`) ? chat_config.base_url || undefined : undefined,
           api_format: (chat_config.provider === `custom` || chat_config.provider === `anthropic`) ? chat_config.api_format : undefined,
         }),
       })
@@ -1180,7 +1184,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
               oninput={(e) => update_config({ model: (e.target as HTMLInputElement).value.trim() })}
             />
           {/if}
-          {#if !SDK_PROVIDERS.has(chat_config.provider) && chat_config.provider !== `ollama`}
+          {#if !SDK_PROVIDERS.has(chat_config.provider)}
             <button
               type="button"
               class="test-btn compact"
