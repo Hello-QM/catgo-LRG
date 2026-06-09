@@ -14,7 +14,6 @@ describe(`needs_relay`, () => {
     expect(needs_relay(`https://integrate.api.nvidia.com/v1/models`)).toBe(true)
   })
 })
-
 describe(`relay_url`, () => {
   it(`wraps a target URL as a relay query param`, () => {
     const wrapped = relay_url(`https://optimade.materialsproject.org/v1/structures?x=1`)
@@ -68,6 +67,7 @@ describe(`provider chat routing`, () => {
     expect(is_client_direct(config)).toBe(true)
   })
 })
+
 
 describe(`relay_fetch auth-header guard (§8 C)`, () => {
   it(`refuses to relay a request carrying an Authorization header to a relay host`, async () => {
