@@ -28,7 +28,7 @@ router = APIRouter(prefix="/bands", tags=["bands"])
 
 @dataclass
 class BandSession:
-    bs: Any  # BandStructureSymmLine
+    bs: Any  # BandStructureSymmLine or BandStructure
     vr: Any  # Vasprun (kept for projections)
     timestamp: float
 
@@ -81,7 +81,7 @@ def _structure_to_pymatgen_dict(structure) -> dict:
 
 
 def _extract_band_gap(bs) -> Optional[BandGapInfo]:
-    """Extract band gap info from BandStructureSymmLine."""
+    """Extract band gap info from a pymatgen BandStructure object."""
     bg = bs.get_band_gap()
     if bg["energy"] <= 0 or bg["energy"] > 20:
         return None
@@ -92,10 +92,37 @@ def _extract_band_gap(bs) -> Optional[BandGapInfo]:
     )
 
 
+def _kpoint_count(bs) -> int:
+    """Return the number of k-points for SymmLine and regular band structures."""
+    kpoints = getattr(bs, "kpoints", None)
+    if kpoints is not None:
+        return len(kpoints)
+
+    for bands in getattr(bs, "bands", {}).values():
+        if hasattr(bands, "shape") and len(bands.shape) >= 2:
+            return int(bands.shape[1])
+        if bands:
+            return len(bands[0])
+    return 0
+
+
+def _band_distance(bs) -> List[float]:
+    """Return plot x-axis positions, falling back to k-point indices."""
+    distance = getattr(bs, "distance", None)
+    if distance is not None:
+        return [float(d) for d in distance]
+    return [float(idx) for idx in range(_kpoint_count(bs))]
+
+
 def _extract_branches(bs) -> List[BandBranch]:
-    """Extract branch info from BandStructureSymmLine."""
+    """Extract branch info, with a fallback for runs without line-mode KPOINTS."""
     branches = []
-    for b in bs.branches:
+    bs_branches = getattr(bs, "branches", None)
+    if not bs_branches:
+        nkpts = _kpoint_count(bs)
+        return [BandBranch(start_index=0, end_index=nkpts - 1, name="")] if nkpts else []
+
+    for b in bs_branches:
         name = b["name"]
         start = b["start_index"]
         end = b["end_index"]
@@ -104,16 +131,23 @@ def _extract_branches(bs) -> List[BandBranch]:
 
 
 def _extract_tick_info(bs) -> tuple:
-    """Extract tick labels and positions for high-symmetry points."""
-    from pymatgen.electronic_structure.bandstructure import BandStructureSymmLine
-
+    """Extract high-symmetry ticks, or simple endpoint ticks without KPOINTS."""
     labels = []
     positions = []
+    bs_branches = getattr(bs, "branches", None)
+
+    if not bs_branches:
+        distance = _band_distance(bs)
+        if not distance:
+            return labels, positions
+        if len(distance) == 1:
+            return ["1"], [distance[0]]
+        return ["1", str(len(distance))], [distance[0], distance[-1]]
 
     # bs.distance is the cumulative distance array
-    distance = bs.distance
+    distance = _band_distance(bs)
 
-    for b in bs.branches:
+    for b in bs_branches:
         start_idx = b["start_index"]
         end_idx = b["end_index"]
         name_parts = b["name"].split("-")
@@ -184,7 +218,7 @@ async def upload_band_vasprun(
 
     try:
         vr = Vasprun(vasprun_path, parse_projected_eigen=True, parse_potcar_file=False, exception_on_bad_xml=False)
-        bs = vr.get_band_structure(kpoints_filename=kpoints_path, line_mode=True)
+        bs = vr.get_band_structure(kpoints_filename=kpoints_path, line_mode=kpoints_path is not None)
     except Exception as e:
         Path(vasprun_path).unlink(missing_ok=True)
         if kpoints_path:
@@ -199,7 +233,7 @@ async def upload_band_vasprun(
 
 
 def _create_band_session(vr, bs) -> BandUploadResponse:
-    """Create a band session from parsed Vasprun + BandStructureSymmLine."""
+    """Create a band session from parsed Vasprun + BandStructure."""
     import numpy as np
     from pymatgen.electronic_structure.core import Spin
     from collections import Counter
@@ -216,7 +250,7 @@ def _create_band_session(vr, bs) -> BandUploadResponse:
 
     nspin = 2 if bs.is_spin_polarized else 1
     nbands = bs.nb_bands
-    nkpts = sum(b["end_index"] - b["start_index"] + 1 for b in bs.branches)
+    nkpts = _kpoint_count(bs)
 
     band_gap = _extract_band_gap(bs)
     branches = _extract_branches(bs)
@@ -284,7 +318,7 @@ async def band_from_directory(session_id: str, remote_path: str):
                     await sftp.get(file_names["KPOINTS"], tmp_kpoints)
 
             vr = Vasprun(tmp_vasprun, parse_projected_eigen=True, parse_potcar_file=False, exception_on_bad_xml=False)
-            bs = vr.get_band_structure(kpoints_filename=tmp_kpoints, line_mode=True)
+            bs = vr.get_band_structure(kpoints_filename=tmp_kpoints, line_mode=tmp_kpoints is not None)
         finally:
             Path(tmp_vasprun).unlink(missing_ok=True)
             if tmp_kpoints:
@@ -306,7 +340,7 @@ def get_band_data(request: BandDataRequest) -> BandDataResponse:
     session = _get_session(request.session_id)
     bs = session.bs
 
-    distance = bs.distance
+    distance = _band_distance(bs)
 
     band_series = []
 
@@ -327,7 +361,7 @@ def get_band_data(request: BandDataRequest) -> BandDataResponse:
     tick_labels, tick_positions = _extract_tick_info(bs)
 
     return BandDataResponse(
-        distance=[float(d) for d in distance],
+        distance=distance,
         branches=branches,
         band_series=band_series,
         efermi=float(bs.efermi),
@@ -350,7 +384,7 @@ def get_band_projections(request: BandProjectionRequest) -> BandProjectionRespon
     if not bs.projections:
         raise HTTPException(status_code=400, detail="No projection data available. Upload with parse_projected_eigen=True.")
 
-    distance = bs.distance
+    distance = _band_distance(bs)
 
     # Build base band data
     band_series = []
@@ -425,7 +459,7 @@ def get_band_projections(request: BandProjectionRequest) -> BandProjectionRespon
     tick_labels, tick_positions = _extract_tick_info(bs)
 
     return BandProjectionResponse(
-        distance=[float(d) for d in distance],
+        distance=distance,
         branches=branches,
         band_series=band_series,
         efermi=float(bs.efermi),

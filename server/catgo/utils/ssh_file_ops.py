@@ -22,11 +22,44 @@ logger = logging.getLogger(__name__)
 class SSHFileOpsMixin:
     """File operation methods for HPCConnection (remote SSH)."""
 
+    async def _run_clean_file_cmd(self, cmd: str, timeout: float = 20):
+        """Run file-management commands without login-shell startup noise."""
+        clean_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
+        runner = getattr(self.conn, "run_raw", None)
+        if callable(runner):
+            return await runner(clean_cmd, check=False, timeout=timeout)
+        return await asyncio.wait_for(
+            self.conn.run(clean_cmd, check=False),
+            timeout=timeout,
+        )
+
+    async def _run_marked_file_cmd(self, cmd: str, timeout: float = 20) -> str:
+        """Return only stdout emitted between CatGO markers."""
+        begin = "__CATGO_FILE_BEGIN__"
+        end = "__CATGO_FILE_END__"
+        marked = (
+            f"printf '%s\\n' {shlex.quote(begin)}; "
+            f"{cmd}; "
+            f"status=$?; "
+            f"printf '\\n%s:%s\\n' {shlex.quote(end)} \"$status\"; "
+            f"exit $status"
+        )
+        result = await self._run_clean_file_cmd(marked, timeout=timeout)
+        stdout = result.stdout or ""
+        start = stdout.find(begin)
+        if start < 0:
+            return stdout.strip()
+        start += len(begin)
+        tail = stdout[start:]
+        end_pos = tail.rfind(end)
+        if end_pos >= 0:
+            tail = tail[:end_pos]
+        return tail.strip("\r\n")
+
     async def _expand_remote_tilde(self, path: str) -> str:
         """Expand a leading tilde before passing paths to quoted shell commands."""
         if path == "~" or path.startswith("~/"):
-            result = await self.conn.run("printf %s \"$HOME\"", check=False)
-            home = (result.stdout or "").strip()
+            home = (await self._run_marked_file_cmd("printf %s \"$HOME\"", timeout=10)).strip()
             if not home:
                 raise RuntimeError("Could not determine remote home directory")
             return path.replace("~", home, 1)
@@ -74,19 +107,24 @@ class SSHFileOpsMixin:
 
     async def _list_dir_subprocess(self, path: str) -> tuple[str, list[FileInfo]]:
         if path == "~" or path.startswith("~/"):
-            result = await self.conn.run("echo $HOME", check=False)
-            home = result.stdout.strip()
+            home = (await self._run_marked_file_cmd("printf %s \"$HOME\"", timeout=10)).strip()
             path = path.replace("~", home, 1)
-        result = await self.conn.run(f"readlink -f {shlex.quote(path)}", check=False)
-        resolved = result.stdout.strip() or path
-        # stat -c format: type|size|mtime|name
+        resolved = (
+            await self._run_marked_file_cmd(
+                f"readlink -f -- {shlex.quote(path)} 2>/dev/null || printf %s {shlex.quote(path)}",
+                timeout=10,
+            )
+        ).strip() or path
+        # find format: type|size|mtime|name. Use maxdepth instead of shell globs
+        # so huge directories and dotfiles do not expand inside the shell.
         cmd = (
             f"cd {shlex.quote(resolved)} && "
-            f"stat -c '%F|%s|%Y|%n' * .* 2>/dev/null || true"
+            "find . -mindepth 1 -maxdepth 1 "
+            "-printf '%y|%s|%T@|%f\\n' 2>/dev/null | head -n 5000"
         )
-        result = await self.conn.run(cmd, check=False)
+        output = await self._run_marked_file_cmd(cmd, timeout=20)
         files: list[FileInfo] = []
-        for line in (result.stdout or "").strip().split("\n"):
+        for line in output.strip().split("\n"):
             if not line.strip():
                 continue
             parts = line.split("|", 3)
@@ -98,9 +136,9 @@ class SSHFileOpsMixin:
             files.append(FileInfo(
                 name=name,
                 path=f"{resolved}/{name}",
-                is_dir="directory" in ftype.lower(),
+                is_dir=ftype == "d",
                 size_bytes=int(size_str) if size_str.isdigit() else 0,
-                modified_time=mtime_str,
+                modified_time=str(int(float(mtime_str))) if mtime_str else "",
             ))
         files.sort(key=lambda f: (not f.is_dir, f.name.lower()))
         return resolved, files
@@ -131,8 +169,7 @@ class SSHFileOpsMixin:
 
     async def _upload_subprocess(self, content: bytes, remote_path: str) -> str:
         if remote_path == "~" or remote_path.startswith("~/"):
-            result = await self.conn.run("echo $HOME", check=False)
-            home = result.stdout.strip()
+            home = (await self._run_marked_file_cmd("printf %s \"$HOME\"", timeout=10)).strip()
             remote_path = remote_path.replace("~", home, 1)
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "BatchMode=yes", self.ssh_alias, f"cat > {shlex.quote(remote_path)}",
@@ -148,8 +185,7 @@ class SSHFileOpsMixin:
     async def _upload_exec(self, content: bytes, remote_path: str) -> str:
         """Upload file via SSH exec channel (fallback when SFTP unavailable)."""
         if remote_path == "~" or remote_path.startswith("~/"):
-            result = await self.conn.run("echo $HOME", check=False)
-            home = result.stdout.strip()
+            home = (await self._run_marked_file_cmd("printf %s \"$HOME\"", timeout=10)).strip()
             remote_path = remote_path.replace("~", home, 1)
         result = await self.conn.run(
             f"cat > {shlex.quote(remote_path)}",
