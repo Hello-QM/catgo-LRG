@@ -80,6 +80,40 @@
   let db_visible = $state(false)
   let save_msg = $state(``)
 
+  // Auto-expand the terminal while typing: in a split layout the soft keyboard
+  // leaves almost no room for the terminal, so when it opens we switch to the
+  // full-terminal view and restore the split when it closes. Gated on no overlay
+  // (the chat/files own their own keyboard) so we only react to the terminal.
+  let kb_open = $state(false)
+  let mode_before_kb: Mode | null = null
+  $effect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const update = () => {
+      // >120px of inset = a real soft keyboard, not the URL bar / safe area.
+      const open = window.innerHeight - vv.height - vv.offsetTop > 120
+      if (open !== kb_open) kb_open = open
+    }
+    update()
+    vv.addEventListener(`resize`, update)
+    vv.addEventListener(`scroll`, update)
+    return () => {
+      vv.removeEventListener(`resize`, update)
+      vv.removeEventListener(`scroll`, update)
+    }
+  })
+  $effect(() => {
+    const split = mode === `split-h` || mode === `split-v`
+    if (kb_open && split && !ai_open && !files_open && !db_visible) {
+      mode_before_kb = mode
+      mode = `terminal`
+    } else if (!kb_open && mode_before_kb) {
+      // Restore the split only if the user didn't manually pick another view.
+      if (mode === `terminal`) mode = mode_before_kb
+      mode_before_kb = null
+    }
+  })
+
   // Hide the editor toolbar items that don't apply on mobile: server/HPC +
   // terminal are owned by MobileWorkspace (russh); workflow, plugin_hub and chat
   // are Python-backend-only (chat streams via /api/agent/stream) so they can't
@@ -403,6 +437,7 @@
         {/if}
       </div>
       <div class="mw-actions">
+        <div class="mw-actions-scroll">
         <LocaleSwitch compact />
         <button type="button" class="mw-act ai" onclick={() => (ai_open = true)} title={t(`mobile.action_ai`)} aria-label={t(`mobile.action_ai`)}>
           <Icon icon="Chat" />
@@ -438,6 +473,7 @@
           <Icon icon="Database" />
           <span class="mw-act-label">{t(`mobile.action_import_database_short`)}</span>
         </button>
+        </div>
         {#if can_save}
           <button type="button" class="mw-act save" onclick={save} title={t(`mobile.action_save_structure`)}>
             <Icon icon="Download" />
@@ -765,10 +801,21 @@
     gap: 2px;
     flex-shrink: 1;
     min-width: 0;
+    align-items: center;
+  }
+  /* Inner scroller holds the SECONDARY actions (locale, AI, undo/redo, files,
+     open, database). Save + Disconnect sit OUTSIDE it as direct .mw-actions
+     children (flex-shrink:0), so on a narrow iPhone they stay pinned/visible on
+     the right instead of scrolling off the edge. */
+  .mw-actions-scroll {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 1;
+    min-width: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .mw-actions::-webkit-scrollbar {
+  .mw-actions-scroll::-webkit-scrollbar {
     display: none;
   }
   .mw-tabs button,
@@ -897,6 +944,13 @@
     --struct-height: 100%;
     --struct-width: 100%;
     overflow: hidden;
+    /* iOS: a touch-drag to rotate the 3D viewer otherwise triggers WKWebView's
+       native text selection (it grabs the toolbar labels and "selects the whole
+       thing"). Suppress selection + the callout on the whole structure pane —
+       there's no user-selectable text here, only the canvas + tool buttons. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .mw-struct :global(.structure-main) {
     height: 100%;

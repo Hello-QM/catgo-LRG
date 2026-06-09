@@ -207,5 +207,58 @@ Connect dialog: host = Mac LAN IP, user = Mac username, port 22, Mac login
 password. (iPad must be on the same LAN — it already is, since it loads the UI
 from that IP.)
 
+## 2026-06-09 — connection + terminal/keyboard polish (device-tested)
+
+Found while a colleague + we tested SSH connections and the terminal on iPhone/iPad.
+
+### SSH connection password (`MobileConnect.svelte`, `OtpDialog.svelte`)
+
+- **Saved password never applied → "Password authentication rejected".** The
+  `password = pw` copy lived INSIDE `if (!auto_password)`, but tapping a saved
+  connection (`pick_saved`) pre-loads `auto_password`, so the block was skipped
+  and an empty password was sent. Fixed: apply the saved password whenever it's
+  the password method (any load path); mark `used_saved_pw` when sending the
+  unchanged saved password so we don't re-offer to save it.
+- **No masked feedback on tap.** `pick_saved` now fills the (masked) password
+  field from the store for the password method, so the user sees `••••` and can
+  just tap Connect.
+- **2FA clusters.** Reconnect now pre-fills the password prompt(s) from the saved
+  password even in a MIXED password+OTP round (new `prefill` prop on
+  `OtpDialog`); submits silently only when the whole round is password prompts.
+  Generalized from the old "exactly one prompt" rule.
+- **Key-trim consistency.** `persist_non_secrets` trims host/username so the saved
+  descriptor matches the (trimmed) password key.
+
+### iPhone top-bar overflow (`MobileWorkspace.svelte`)
+
+- Save (and Disconnect) were scrolling off the right edge. Wrapped the secondary
+  actions in a `.mw-actions-scroll` flexbox scroller; Save/Disconnect stay OUTSIDE
+  it (`flex-shrink:0`) so they're always pinned/visible on a narrow screen.
+
+### Terminal soft-keyboard (`MobileTerminal.svelte`, `MobileWorkspace.svelte`)
+
+- **Key bar hidden under the keyboard.** It floats `position:fixed` just above
+  the keyboard (height tracked via `visualViewport`; no transformed ancestors so
+  fixed tracks the viewport). CSS transition + debounced re-fit keep it smooth.
+- **Split mode auto-expand.** When the keyboard opens in split layout, the
+  workspace switches to full-terminal (keep-warm `visibility:hidden`, NOT
+  display:none) and restores the split on close — so the terminal is usable.
+- **Collapse toggle.** A toggle on the bar hides it to a corner pill (terminal
+  visible) and back; `preventDefault` + refocus keep the keyboard up. Styled to
+  fill the strip (`align-self:stretch`, strip bg) so there's no dark box.
+
+### Visualizer (`MobileWorkspace.svelte`)
+
+- Touch-drag to rotate the 3D viewer triggered WKWebView text selection
+  ("selects the whole thing"). Added `-webkit-user-select:none` +
+  `-webkit-touch-callout:none` to `.mw-struct`.
+
+### Known benign noise
+
+- Xcode: ~390 *"Object file … built for newer 'iOS' version (17.0) than being
+  linked (14.0)"* warnings — the Rust `libapp.a` targets iOS 17 but `project.yml`
+  links iOS 14. Cosmetic; align `IPHONEOS_DEPLOYMENT_TARGET` / `project.yml`
+  `deploymentTarget` to silence.
+
 ---
 *Session notes — a resume guide for building and testing CatGo on iOS.*

@@ -25,17 +25,31 @@
     on_submit?: (responses: string[]) => void
     /** Emitted when the user cancels this OTP round. */
     on_cancel?: () => void
+    /** Optional initial answers (index-aligned with `prompts`) — used to
+     *  pre-fill the account-password field from a saved password so the user
+     *  only types the remaining (2FA / OTP) prompts. */
+    prefill?: string[]
   }
 
-  let { prompts, instructions = ``, busy = false, on_submit, on_cancel }: Props =
-    $props()
+  let {
+    prompts,
+    instructions = ``,
+    busy = false,
+    on_submit,
+    on_cancel,
+    prefill = [],
+  }: Props = $props()
 
   // One answer slot per prompt. Re-derived whenever the prompts array identity
   // changes (i.e. a new multi-round step), so stale answers never leak forward.
+  // Seed from `prefill` (e.g. a saved password) where provided.
+  // Not a writable $derived: `responses[i]` is two-way bound to the inputs
+  // (user-edited), so it must be reset-from-props $state, not a pure derived.
+  // eslint-disable-next-line svelte/prefer-writable-derived
   let responses = $state<string[]>([])
   $effect(() => {
     // Track prompts length/identity; reset the answer buffer for a new round.
-    responses = prompts.map(() => ``)
+    responses = prompts.map((_, i) => prefill[i] ?? ``)
   })
 
   function submit(): void {

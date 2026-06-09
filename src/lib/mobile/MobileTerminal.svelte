@@ -19,6 +19,7 @@
 -->
 <script lang="ts">
   import { transport } from '$lib/api/transport'
+  import Icon from '$lib/Icon.svelte'
   import MobileTerminalKeyBar from '$lib/structure/MobileTerminalKeyBar.svelte'
 
   interface Props {
@@ -63,6 +64,46 @@
       }
     })
   }
+
+  // iOS: the soft keyboard OVERLAYS the WKWebView (the layout viewport doesn't
+  // shrink), so the bottom key bar (Esc/Tab/Ctrl/arrows) would hide behind it.
+  // Track the keyboard height via visualViewport and pad the terminal up by that
+  // much, so the key bar sits right above the keyboard and the grid re-fits to
+  // the smaller area. Self-correcting cross-platform: where the webview already
+  // resizes for the keyboard (Android native insets), innerHeight shrinks too,
+  // so the computed inset is ~0 (no double-pad); on desktop there's no soft
+  // keyboard so it stays 0.
+  let kb_inset = $state(0)
+  // Measured height of the key bar, so we can reserve exactly that much space
+  // above the keyboard when the bar floats (see template / styles).
+  let keybar_h = $state(48)
+  // User toggle: collapse the floating bar to a small pill so the terminal is
+  // visible (e.g. in split mode where the pane is short). Re-tap to expand.
+  let keybar_open = $state(true)
+  $effect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    let last = -1
+    let refit_timer: ReturnType<typeof setTimeout> | null = null
+    const update = () => {
+      const next = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+      if (next === last) return
+      last = next
+      kb_inset = next // padding glides via the CSS transition (see styles)
+      // Re-fit the grid ONCE after the keyboard settles — running it on every
+      // animation frame is what makes the bar look jumpy.
+      if (refit_timer) clearTimeout(refit_timer)
+      refit_timer = setTimeout(() => refit(), 140)
+    }
+    update()
+    vv.addEventListener(`resize`, update)
+    vv.addEventListener(`scroll`, update)
+    return () => {
+      if (refit_timer) clearTimeout(refit_timer)
+      vv.removeEventListener(`resize`, update)
+      vv.removeEventListener(`scroll`, update)
+    }
+  })
 
   /** Focus the hidden xterm textarea (raises the soft keyboard). The parent
    *  calls this from a tab tap handler — a trusted gesture, which WKWebView
@@ -325,7 +366,10 @@
   })
 </script>
 
-<div class="mobile-terminal">
+<div
+  class="mobile-terminal"
+  style="padding-bottom: {kb_inset > 0 ? kb_inset + keybar_h : 0}px"
+>
   <div class="mt-body" bind:this={container_el}>
     {#if status === `init`}
       <div class="mt-status">Opening shell…</div>
@@ -333,7 +377,34 @@
       <div class="mt-error">{error_msg}</div>
     {/if}
   </div>
-  <MobileTerminalKeyBar on_key={send_keys} />
+  <!-- When the keyboard is up, the bar floats fixed just above it (so it's
+       reachable even in split mode where the pane is too short to hold it in
+       flow). When the keyboard is down it sits in normal flow at the bottom.
+       The toggle collapses it to a small pill so the terminal stays visible. -->
+  <div
+    class="mt-keybar"
+    class:floating={kb_inset > 0}
+    class:closed={!keybar_open}
+    style:bottom="{kb_inset}px"
+    bind:clientHeight={keybar_h}
+  >
+    {#if keybar_open}
+      <MobileTerminalKeyBar on_key={send_keys} />
+    {/if}
+    <button
+      type="button"
+      class="mt-keybar-toggle"
+      onpointerdown={(e) => e.preventDefault()}
+      onclick={() => {
+        keybar_open = !keybar_open
+        // Keep the soft keyboard up: tapping a button blurs the hidden xterm
+        // textarea (which dismisses the keyboard), so refocus it like the keys do.
+        term_ref?.focus()
+      }}
+      aria-label={keybar_open ? `Hide terminal keys` : `Show terminal keys`}
+      title={keybar_open ? `Hide keys` : `Show keys`}
+    ><Icon icon={keybar_open ? `Collapse` : `Expand`} /></button>
+  </div>
 </div>
 
 <style>
@@ -343,6 +414,12 @@
     width: 100%;
     height: 100%;
     min-height: 0;
+    /* border-box so the dynamic padding-bottom (soft-keyboard inset) shrinks the
+       content within height:100% rather than overflowing it. */
+    box-sizing: border-box;
+    /* Glide the key bar with the keyboard instead of stepping through the few
+       discrete heights visualViewport reports during the open/close animation. */
+    transition: padding-bottom 0.18s ease-out;
     background: var(--page-bg, #0e1117);
   }
   .mt-body {
@@ -360,6 +437,60 @@
   .mt-body :global(.xterm-screen) {
     height: 100%;
     width: 100%;
+  }
+  .mt-keybar {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    /* Match the key strip so there's no black gap behind the toggle. */
+    background: var(--keybar-bg, #1e1e1e);
+  }
+  .mt-keybar :global(.keybar) {
+    flex: 1;
+    min-width: 0;
+  }
+  /* Keyboard up: float the key bar fixed just above it (left/right:0, bottom set
+     inline to the keyboard inset) so it's reachable regardless of how short the
+     terminal pane is in split mode. No transformed ancestors, so fixed tracks
+     the viewport. The transition glides it with the keyboard. */
+  .mt-keybar.floating {
+    position: fixed;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    transition: bottom 0.18s ease-out;
+  }
+  /* Collapsed while floating: shrink to just the toggle pill, pinned to the
+     right, so the terminal underneath stays visible. */
+  .mt-keybar.floating.closed {
+    left: auto;
+    background: var(--keybar-bg, #1e1e1e);
+    border-top: 1px solid var(--keybar-border, #333);
+    border-left: 1px solid var(--keybar-border, #333);
+    border-top-left-radius: 10px;
+  }
+  .mt-keybar-toggle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 52px;
+    align-self: stretch; /* fill the full strip height — no margin gaps */
+    font-size: 14px;
+    /* Same surface as the strip so it can't contrast as a "box"; the blue icon
+       and a thin left divider are what mark it as the toggle control. */
+    color: #0a84ff;
+    background: var(--keybar-bg, #1e1e1e);
+    border: none;
+    border-left: 1px solid var(--keybar-border, #333);
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mt-keybar-toggle:active {
+    background: var(--key-bg, #2d2d2d);
   }
   .mt-status {
     padding: 12px;
