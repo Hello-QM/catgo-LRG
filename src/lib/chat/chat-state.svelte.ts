@@ -677,9 +677,9 @@ export async function send_message(
         chat_config.provider,
         combined_context,
         false,
-        // Mobile/client-direct runs tool-free (isMobile() ? [] : CLIENT_TOOLS
-        // below) — use the tool-free prompt so the model answers from the inline
-        // structure context instead of promising tool actions it can't perform.
+        false,
+        // Mobile renders chat with a plain-text markdown renderer (no KaTeX/
+        // HTML) — keep the Unicode-formula instruction in the tooled prompt.
         isMobile(),
       )
 
@@ -703,25 +703,14 @@ export async function send_message(
             history,
             chat_config,
             system,
-            // Text-only on mobile (§4): run the loop with an EMPTY tool list so the
-            // model never attempts a tool call. Combined with Phase A's
-            // omit-tools-when-empty body fix this makes mobile chat pure text.
-            // Desktop keeps the full CLIENT_TOOLS agentic loop.
-            isMobile() ? [] : CLIENT_TOOLS,
+            // Desktop AND mobile run the full CLIENT_TOOLS agentic loop; the
+            // mobile permission card in MobileChat.svelte renders
+            // active_permission_blocks, so mutating calls no longer wedge.
+            CLIENT_TOOLS,
             slice.abort_controller?.signal,
           ),
-        // Mobile is text-only and offers no tools, but a model can still
-        // hallucinate a tool_call. There is no PermissionCard on mobile, so a
-        // `mutate` call would park request_permission forever and wedge the chat
-        // (loading never clears). Route any such call to an immediate error with
-        // read-kind (skips the permission gate) so the loop unwinds cleanly.
-        execute: isMobile()
-          ? () =>
-            Promise.resolve(
-              `{"error":"tools are not available in mobile chat"}`,
-            )
-          : execute_tool,
-        kind_of: isMobile() ? () => `read` as const : tool_kind,
+        execute: execute_tool,
+        kind_of: tool_kind,
         request_permission: (call) =>
           new Promise<boolean>((resolve) => {
             // Session-scoped bypass: approve immediately, no card.
