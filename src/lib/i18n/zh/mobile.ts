@@ -152,6 +152,11 @@ const mobile: Record<string, string> = {
   ai_rate_limited:        `已达到速率限制 — 免费层每分钟只能发送少量消息。请等待几秒后重试，或在设置中选择额度更高的模型。`,
   ai_model_busy:          `模型当前繁忙（需求高峰）— 通常是暂时的。请稍候重试，或在设置中尝试其他模型。`,
   ai_message_placeholder: `输入消息…`,
+  ai_tool_permission:    `CatBot 请求执行工具`,
+  ai_allow:              `允许`,
+  ai_deny:               `拒绝`,
+  ai_dont_ask_again:     `本会话内不再询问`,
+  ai_tool_failed:        `失败`,
 }
 
 export default mobile

@@ -152,6 +152,11 @@ const mobile: Record<string, string> = {
   ai_rate_limited:        `Rate limit reached — the free tier allows only a few messages per minute. Wait a few seconds and resend, or pick a higher-limit model in settings.`,
   ai_model_busy:          `The model is busy right now (high demand) — usually temporary. Wait a moment and resend, or try a different model in settings.`,
   ai_message_placeholder: `Type a message…`,
+  ai_tool_permission:    `CatBot wants to run a tool`,
+  ai_allow:              `Allow`,
+  ai_deny:               `Deny`,
+  ai_dont_ask_again:     `Don't ask again this session`,
+  ai_tool_failed:        `failed`,
 }
 
 export default mobile
