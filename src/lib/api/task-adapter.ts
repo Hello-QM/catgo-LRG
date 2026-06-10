@@ -11,6 +11,19 @@ export type TaskRef =
   | { mode: 'step'; workflow_id: string; node_id: string }
   | { mode: 'task'; task_id: string }
 
+/**
+ * Validate a task id before sending it to the engine API.
+ * Accepts legacy bare ids (`n1780126181-5mj`) and #227 namespaced ids
+ * (`{workflow_id}:{node_id}`, e.g. `885d5082-…-f75c9cf3b56b:n1781062668958-89a2`
+ * — see server/catgo/workflow/task_ids.py). At most one ':' separator.
+ */
+export function is_valid_task_id(id: unknown): id is string {
+  return (
+    typeof id === 'string' &&
+    /^[a-zA-Z0-9_-]{8,64}(:[a-zA-Z0-9_-]{1,64})?$/.test(id)
+  )
+}
+
 // --- Normalized types ---
 
 export interface NormalizedFileEntry {

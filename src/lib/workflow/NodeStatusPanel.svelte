@@ -31,7 +31,7 @@
   import { pending_open_structure } from './workflow-state.svelte'
   import type { TaskRef } from '$lib/api/task-adapter'
   import * as adapter from '$lib/api/task-adapter'
-  import { normalize_status } from '$lib/api/task-adapter'
+  import { normalize_status, is_valid_task_id } from '$lib/api/task-adapter'
   import { get_v2_task, get_v2_task_result, type V2Task } from '$lib/api/workflow-v2'
   import ResultsPlot from './ResultsPlot.svelte'
   // Static imports for the View Structure click handler — using a dynamic
@@ -200,12 +200,6 @@
 
   // ========== PHASE DETECTION ==========
   // Determine which workflow phase we're in based on status + mode
-
-  // ========== INPUT VALIDATION ==========
-  function is_valid_task_id(id: unknown): id is string {
-    // UUID or alphanumeric with dashes/underscores, 8-64 chars
-    return typeof id === 'string' && /^[a-zA-Z0-9_-]{8,64}$/.test(id)
-  }
 
   /**
    * Review phase: User reviewing parameters before HPC submission
