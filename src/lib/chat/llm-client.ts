@@ -17,12 +17,15 @@ Answer questions based on the documentation and structure context provided. Be c
  *  prompt advertises tools (catgo_, WebSearch, Bash, ...) and says "call tools
  *  directly"; with no tools wired up the model promises actions it can't perform
  *  and burns turns hallucinating tool calls (then stalls). The text-only branch
- *  drops all tool talk and points the model at the inline structure context. */
+ *  drops all tool talk and points the model at the inline structure context.
+ *  `unicode_math` = when true and not in text_only mode, appends a note that the
+ *  host UI renders plain text (not LaTeX/HTML), so use Unicode for formulas instead. */
 export function build_sdk_system_prompt(
   provider: LLMProvider,
   structure_context?: string,
   has_session: boolean = false,
   text_only: boolean = false,
+  unicode_math: boolean = false,
 ): string {
   if (text_only) {
     let msg = `You are CatBot, a materials science assistant in CatGO ` +
@@ -78,6 +81,12 @@ Rules: Act first, explain after. Use standard defaults (slab: 10 Å thickness, 1
           ? ``
           : `When greeting, briefly describe the loaded structure in one sentence.`
       } Use LaTeX for math and chemical formulas ($H_2O$, $E = mc^2$, $\\alpha$-Fe₂O₃) with $...$ for inline and $$...$$ for display math. Never use HTML tags (<sub>, <sup>).`
+  }
+
+  if (unicode_math) {
+    msg += `\n\nRendering: this chat does NOT render LaTeX or HTML. Write ` +
+      `chemical formulas and math with UNICODE characters (e.g. TiO₂, H₂O, ` +
+      `α-Fe₂O₃, x², E=mc²) — never use $...$, \\(...\\), <sub>, or <sup>.`
   }
 
   if (structure_context) {
