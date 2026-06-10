@@ -199,11 +199,11 @@ export async function* stream_client_llm(
     }
     return
   }
-  // Key-bearing path: ALWAYS hit the DIRECT provider endpoint. We must not
-  // rewrite to the relay (relay_url) here — the request carries the user's API
-  // key and the relay is a third party (security §8 C). llm_fetch uses the
-  // native Tauri HTTP plugin on mobile (no CORS, no relay fallback) and a plain
-  // fetch on desktop.
+  // Key-bearing path: hit the provider endpoint via llm_fetch — native Tauri
+  // HTTP on mobile (no CORS, no relay fallback), plain fetch in the browser.
+  // llm_fetch itself rewrites the few CORS-blocked hosts the CatGo-owned relay
+  // is allowed to carry credentials for (NVIDIA) to the relay; everything else
+  // goes DIRECT so keys never transit the relay (security §8 C).
   const endpoint = `${base}/chat/completions`
   // INVARIANT: tools must be sent on EVERY turn when non-empty. The
   // chat-completions API is stateless — omitting `tools` on a follow-up turn
