@@ -681,7 +681,17 @@ export async function send_message(
         // Mobile renders chat with a plain-text markdown renderer (no KaTeX/
         // HTML) — keep the Unicode-formula instruction in the tooled prompt.
         isMobile(),
-      )
+      ) +
+        // The shared prompt names catgo_* MCP tools, which exist only on the
+        // SDK/backend path. Client-direct runs CLIENT_TOOLS — without this
+        // note, weaker models answer in prose ("I would build a supercell…")
+        // instead of calling the equivalent listed tool.
+        `\n\nIMPORTANT: in this chat the ONLY callable tools are the ones in ` +
+        `the tools list of this request (e.g. make_supercell, generate_slab, ` +
+        `place_adsorbate, substitute_element, fetch_optimade, ` +
+        `get_structure_info). catgo_* tools are NOT available here. When the ` +
+        `user asks for a structure operation that maps to a listed tool, CALL ` +
+        `the tool — never just describe the steps or claim you did it.`
 
       // Local rolling conversation. Start from the prior turns (drop the empty
       // assistant placeholder we just pushed), append the user's new message,

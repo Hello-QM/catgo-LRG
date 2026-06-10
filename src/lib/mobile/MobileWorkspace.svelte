@@ -522,7 +522,14 @@
             allow_file_drop={false}
             persist_settings={false}
             hidden_toolbar_items={HIDDEN_TOOLBAR}
+            tab_id="mobile"
+            is_active={true}
           />
+          <!-- tab_id enables the global current-structure store adoption in
+               Structure.svelte, so CatBot's client-direct tool edits
+               (make_supercell, generate_slab, …) appear in this viewer.
+               The MCP bridge that tab_id would normally also start is
+               skipped on mobile inside Structure.svelte (no backend). -->
         {:else}
           <div class="mw-empty">
             <p>{t(`mobile.no_structure_loaded`)}</p>
