@@ -190,6 +190,17 @@ const common: Record<string, string> = {
   select_workflow_step_file: `请选择工作流、步骤和文件`,
   failed_fetch_file_reason: `获取文件失败：{reason}`,
   failed_load_workflow_file: `从工作流加载文件失败`,
+  all: `全部`,
+  applying: `应用中...`,
+  current: `当前`,
+  hide: `隐藏`,
+  new: `新`,
+  of: `/`,
+  page: `第`,
+  prev: `上一页`,
+  preview: `预览`,
+  show: `显示`,
+  total: `共`,
 }
 
 export default common

@@ -546,14 +546,14 @@
               {#each groups as group}
                 {@const group_params = schema.filter(p => (p.group ?? '') === group && (params[p.key] !== undefined || is_editable))}
                 {#if group && group_params.length > 0}
-                  <div class="ete-param-group">{group}</div>
+                  <div class="ete-param-group">{t(group)}</div>
                 {/if}
                 {#each group_params as param}
                   {@const show_cond = param.show_if}
                   {@const show_conds = !show_cond ? [] : Array.isArray(show_cond) ? show_cond : [show_cond]}
                   {#if !show_cond || show_conds.every(c => (c.values ?? []).includes(String(params[c.key] ?? '')))}
-                    <div class="ete-param-row" title={param.help ?? ''}>
-                      <label class="ete-param-label">{param.label}</label>
+                    <div class="ete-param-row" title={param.help ? t(param.help) : ''}>
+                      <label class="ete-param-label">{t(param.label)}</label>
                       {#if param.type === 'boolean'}
                         {@const bool_val = params[param.key] !== undefined ? !!params[param.key] : !!param.default}
                         <button class="ete-toggle-btn" class:on={bool_val}
@@ -566,7 +566,7 @@
                           value={String(params[param.key] ?? param.default ?? '')}
                           onchange={(e) => save_param(param.key, (e.target as HTMLSelectElement).value)}>
                           {#each param.options as opt}
-                            <option value={String(opt.value)}>{opt.label}</option>
+                            <option value={String(opt.value)}>{t(opt.label)}</option>
                           {/each}
                         </select>
                       {:else if param.type === 'number'}

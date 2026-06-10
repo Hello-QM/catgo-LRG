@@ -73,7 +73,12 @@
   let expanded_help_keys = $state(new Set<string>())
 
   // Groups that should start expanded (the rest collapse by default)
-  const ALWAYS_OPEN_GROUPS = new Set([`Software`, `General`, `Model`, `Optimizer`, `Doping`, `Thermodynamics`, `Diagram`, `Freeze Atoms`, `Slab`])
+  // Group names may be raw i18n keys (workflow.node_group_*) — see node-definitions.ts
+  const ALWAYS_OPEN_GROUPS = new Set([
+    `Software`, `General`, `Model`, `Optimizer`, `Doping`, `Thermodynamics`,
+    `Diagram`, `Freeze Atoms`, `Slab`,
+    `workflow.node_group_software`, `workflow.node_group_model`,
+  ])
 
   // Track user-explicit group toggles — survives param changes and re-renders.
   // Reset when switching to a different node.
@@ -519,7 +524,7 @@
           <span class="group-chevron" class:collapsed={is_collapsed}>
             &#9662;
           </span>
-          <span class="group-name">{group.name}</span>
+          <span class="group-name">{t(group.name)}</span>
           {#if is_collapsed && is_modified}
             <span class="group-modified-dot" title={t('workflow.config_modified_from_defaults')}></span>
           {/if}
@@ -533,11 +538,11 @@
             {#each group.params as param}
               <div class="field">
                 <div class="field-label-row">
-                  <label class="field-label" for="param-{param.key}">{param.label}</label>
+                  <label class="field-label" for="param-{param.key}">{t(param.label)}</label>
                   {#if param.help}
                     <button class="field-help-btn" class:active={expanded_help_keys.has(param.key)}
                       onclick={() => { const s = new Set(expanded_help_keys); if (s.has(param.key)) s.delete(param.key); else s.add(param.key); expanded_help_keys = s }}
-                      title={param.help}>?</button>
+                      title={t(param.help)}>?</button>
                   {/if}
                 </div>
 
@@ -594,7 +599,7 @@
                     }}
                   >
                     {#each options as opt}
-                      <option value={String(opt.value)}>{opt.label}</option>
+                      <option value={String(opt.value)}>{t(opt.label)}</option>
                     {/each}
                   </select>
 
@@ -737,7 +742,7 @@
                 {/if}
 
                 {#if expanded_help_keys.has(param.key) && param.help}
-                  <div class="field-help">{param.help}</div>
+                  <div class="field-help">{t(param.help)}</div>
                 {/if}
               </div>
             {/each}

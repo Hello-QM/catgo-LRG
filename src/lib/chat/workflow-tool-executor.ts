@@ -16,6 +16,7 @@
 
 import { get_workflow_slice, active_project_context } from '$lib/workflow/workflow-state.svelte'
 import { NODE_DEFINITIONS } from '$lib/workflow/node-definitions'
+import { t } from '$lib/i18n/index.svelte'
 import { WORKFLOW_TOOL_NAMES, TASK_TYPE_TO_SKILL, REACTION_TYPE_TO_SKILL } from './workflow-tools'
 import * as workflow_api from '$lib/api/workflow'
 import * as project_api from '$lib/api/project'
@@ -234,15 +235,16 @@ function handle_suggest_params(tab_id: string, node_type: string, node_id?: stri
   if (def.param_schema && def.param_schema.length > 0) {
     lines.push(`### Parameters`)
     for (const p of def.param_schema) {
-      const group = p.group ? `[${p.group}] ` : ``
+      // label/group/help may be raw i18n keys (workflow.*) — translate for the LLM
+      const group = p.group ? `[${t(p.group)}] ` : ``
       const range = p.min !== undefined || p.max !== undefined
         ? ` (range: ${p.min ?? ``}–${p.max ?? ``})`
         : ``
       const options = p.options
-        ? ` Options: ${p.options.map(o => `${o.label}`).join(`, `)}`
+        ? ` Options: ${p.options.map(o => `${t(o.label)}`).join(`, `)}`
         : ``
-      lines.push(`- **${p.key}** ${group}— ${p.label}. Default: ${JSON.stringify(p.default)}${range}${options}`)
-      if (p.help) lines.push(`  ${p.help}`)
+      lines.push(`- **${p.key}** ${group}— ${t(p.label)}. Default: ${JSON.stringify(p.default)}${range}${options}`)
+      if (p.help) lines.push(`  ${t(p.help)}`)
     }
   } else {
     lines.push(`Default params: ${JSON.stringify(def.default_params, null, 2)}`)

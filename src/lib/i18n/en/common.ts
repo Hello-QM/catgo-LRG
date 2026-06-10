@@ -191,6 +191,17 @@ const common: Record<string, string> = {
   select_workflow_step_file: `Select a workflow, step, and file`,
   failed_fetch_file_reason: `Failed to fetch file: {reason}`,
   failed_load_workflow_file: `Failed to load file from workflow`,
+  all: `All`,
+  applying: `Applying...`,
+  current: `Current`,
+  hide: `Hide`,
+  new: `New`,
+  of: `of`,
+  page: `Page`,
+  prev: `Prev`,
+  preview: `Preview`,
+  show: `Show`,
+  total: `total`,
 }
 
 export default common

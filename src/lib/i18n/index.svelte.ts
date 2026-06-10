@@ -146,6 +146,26 @@ export async function load_i18n_module(name: TranslationModule): Promise<void> {
 }
 
 /**
+ * Synchronously seed a translation module from statically-imported maps.
+ *
+ * For modules whose consumers evaluate `t()` at module-load time (e.g.
+ * `workflow/node-definitions.ts` builds param-def consts during import),
+ * the async `load_i18n_module()` resolves too late and raw keys get frozen
+ * into the consts. Statically import both locale maps and call this before
+ * any `t()` runs. No-op if the module is already cached.
+ */
+export function seed_i18n_module(
+  name: TranslationModule,
+  maps: Record<Locale, Record<string, string>>,
+): void {
+  if (_cache.has(name)) return
+  const map = maps[_locale]
+  if (!map) return
+  _cache.set(name, map)
+  _rev++
+}
+
+/**
  * Switch the locale.
  *
  * - Saves the preference to localStorage.

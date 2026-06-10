@@ -525,7 +525,7 @@
   }
 
   async function handle_execute(config: WorkflowRunConfig) {
-    await exec.handle_execute(config, workflow_id, nodes, resolve_input_structure, do_save, (updated: typeof nodes) => { nodes = updated })
+    await exec.handle_execute(config, workflow_id, nodes, edges, resolve_input_structure, do_save, (updated: typeof nodes) => { nodes = updated })
   }
 
   async function handle_pause_confirm(cancel_step_ids: string[]) {
