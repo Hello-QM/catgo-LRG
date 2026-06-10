@@ -4,7 +4,7 @@
   "homepage": "https://github.com/Hello-QM/catgo-LRG",
   "repository": "https://github.com/Hello-QM/catgo-LRG",
   "license": "AGPL-3.0-or-later",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "type": "module",
   "packageManager": "pnpm@10.28.2",
   "bugs": "https://github.com/Hello-QM/catgo-LRG/issues",

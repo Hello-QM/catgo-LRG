@@ -624,7 +624,7 @@ dependencies = [
 
 [[package]]
 name = "catgo"
-version = "1.1.5"
+version = "1.1.15"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
