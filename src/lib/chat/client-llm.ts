@@ -210,7 +210,8 @@ export async function* stream_client_llm(
   // makes providers (e.g. DeepSeek) stop emitting structured tool_calls and leak
   // raw tool-call markup into content. (Verified against the live DeepSeek API,
   // 2026-05-26.) BUT: an empty `"tools": []` 400s on Anthropic, so OMIT the
-  // field entirely when the tool list is empty (text-only mobile chat path).
+  // field entirely when the tool list is empty (defensive — all current
+  // callers pass the full CLIENT_TOOLS list).
   const openai_tools = tools.map((t) => ({
     type: `function`,
     function: {
