@@ -269,10 +269,11 @@
   .ccw-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 9999;
     display: flex; align-items: center; justify-content: center;
+    padding: 16px; overflow: auto;
   }
   .ccw-modal {
-    width: min(640px, 94vw);
-    max-height: 90vh;
+    width: min(640px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     background: var(--surface-bg, #1e2330);
     border: 1px solid var(--border-color, rgba(255,255,255,0.1));
     border-radius: 10px;
@@ -285,11 +286,12 @@
   /* Header */
   .ccw-header {
     display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; min-width: 0;
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
     flex-shrink: 0;
   }
-  .ccw-title { margin: 0; font-size: 14px; font-weight: 700; }
+  .ccw-title { margin: 0; font-size: 14px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .ccw-close-btn {
     width: 28px; height: 28px; border-radius: 5px; border: none;
     background: transparent; color: var(--text-color-muted, #94a3b8);

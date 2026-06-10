@@ -174,28 +174,39 @@ Direct
     align-items: center;
     justify-content: center;
     z-index: 100000010;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
   .modal-content {
     background: var(--surface-bg, #1e1e1e);
     border: 1px solid var(--border-color, #444);
     border-radius: 8px;
-    width: 90vw;
-    max-width: 700px;
-    max-height: 85vh;
+    width: min(700px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-width: 0;
+    box-sizing: border-box;
   }
   .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-color, #444);
+    min-width: 0;
   }
   .modal-header h2 {
     margin: 0;
     font-size: 1.1rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .close-btn {
     width: 28px;
@@ -206,6 +217,7 @@ Direct
     font-size: 20px;
     cursor: pointer;
     border-radius: 4px;
+    flex-shrink: 0;
   }
   .close-btn:hover {
     background: var(--surface-bg-hover, #333);
@@ -217,6 +229,8 @@ Direct
     display: flex;
     flex-direction: column;
     gap: 16px;
+    min-height: 0;
+    min-width: 0;
   }
   .format-section {
     display: flex;
@@ -254,6 +268,7 @@ Direct
     align-items: center;
     gap: 8px;
     margin-top: 4px;
+    min-width: 0;
   }
   .filename-input label {
     font-size: 0.85rem;
@@ -269,6 +284,7 @@ Direct
     color: inherit;
     font-size: 0.85rem;
     max-width: 200px;
+    min-width: 0;
   }
   .content-section {
     display: flex;
@@ -276,6 +292,7 @@ Direct
     gap: 8px;
     flex: 1;
     min-height: 0;
+    min-width: 0;
   }
   .content-section > label {
     font-size: 0.9rem;
@@ -293,6 +310,8 @@ Direct
     font-size: 0.85rem;
     line-height: 1.4;
     resize: vertical;
+    min-width: 0;
+    box-sizing: border-box;
   }
   .content-section textarea::placeholder {
     color: var(--text-color-muted, #666);
@@ -321,6 +340,7 @@ Direct
     gap: 12px;
     padding-top: 8px;
     border-top: 1px solid var(--border-color, #444);
+    flex-wrap: wrap;
   }
   .cancel-btn {
     padding: 8px 16px;
@@ -352,5 +372,26 @@ Direct
   .import-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  @media (max-width: 520px) {
+    .modal-overlay {
+      padding: 8px;
+    }
+
+    .modal-content {
+      width: calc(100vw - 16px);
+      max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 16px);
+    }
+
+    .filename-input {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .filename-input input {
+      max-width: none;
+    }
   }
 </style>

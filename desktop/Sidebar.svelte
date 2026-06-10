@@ -207,6 +207,30 @@
   let drag_data = $state<{ type: 'project' | 'result' | 'workflow'; id: string | number } | null>(null)
   let drop_target_id = $state<string | null>(null)
 
+  function clamp_context_position(x: number, y: number, width = 220, height = 280) {
+    if (typeof window === `undefined`) return { x, y }
+    const margin = 8
+    const max_x = Math.max(margin, window.innerWidth - width - margin)
+    const max_y = Math.max(margin, window.innerHeight - height - margin)
+    return {
+      x: Math.min(Math.max(x, margin), max_x),
+      y: Math.min(Math.max(y, margin), max_y),
+    }
+  }
+
+  function open_catgo_context_menu(e: MouseEvent, file: LocalFile) {
+    if (!on_open_editor) return
+    e.preventDefault()
+    e.stopPropagation()
+    catgo_ctx = { ...clamp_context_position(e.clientX, e.clientY, 180, 96), file }
+  }
+
+  function open_fs_context_menu(e: MouseEvent, item: FileBrowseItem) {
+    e.preventDefault()
+    e.stopPropagation()
+    fsb.fs_ctx = { ...clamp_context_position(e.clientX, e.clientY, 220, 260), item }
+  }
+
   // [2025-02] Database management state
   let current_db = $state<DbInfo | null>(null)
   const is_tauri = typeof window !== `undefined` && (`__TAURI__` in window || `__TAURI_INTERNALS__` in window)
@@ -559,13 +583,15 @@
 
   function handle_project_contextmenu(e: MouseEvent, project_id: string) {
     const target = make_project_target(project_id)
-    ctx_menu = open_context_menu(e, target)
+    const menu = open_context_menu(e, target)
+    ctx_menu = { ...menu, ...clamp_context_position(menu.x, menu.y, 240, 320) }
     ctx_target_snapshot = target
   }
 
   function handle_result_contextmenu(e: MouseEvent, result: DbResult, parent_id: string) {
     const target = make_result_target(result, parent_id)
-    ctx_menu = open_context_menu(e, target)
+    const menu = open_context_menu(e, target)
+    ctx_menu = { ...menu, ...clamp_context_position(menu.x, menu.y, 240, 360) }
     ctx_target_snapshot = target
   }
 
@@ -854,7 +880,7 @@
     ondragend={() => { drag_data = null; drop_target_id = null }}
     onclick={() => toggle_workflow(wf.id)}
     ondblclick={() => on_open_workflow?.(wf.id)}
-    oncontextmenu={(e) => { const target = make_workflow_target(wf); ctx_menu = open_context_menu(e, target); ctx_target_snapshot = target }}
+    oncontextmenu={(e) => { const target = make_workflow_target(wf); const menu = open_context_menu(e, target); ctx_menu = { ...menu, ...clamp_context_position(menu.x, menu.y, 240, 320) }; ctx_target_snapshot = target }}
   >
     <svg class="chevron small" class:open={db_expanded_workflows.has(wf.id)} width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
       <path d="M9 18l6-6-6-6" />
@@ -1036,7 +1062,7 @@
         {#if sections_open.structures}
           <div class="section-files" transition:slide={{ duration: 150 }}>
             {#each structure_list as file}
-              <button class="file-item" onclick={() => handle_local_click(file)} oncontextmenu={(e) => { if (!on_open_editor) return; e.preventDefault(); e.stopPropagation(); catgo_ctx = { x: e.clientX, y: e.clientY, file } }} title={file.name}>
+              <button class="file-item" onclick={() => handle_local_click(file)} oncontextmenu={(e) => open_catgo_context_menu(e, file)} title={file.name}>
                 <svg class="file-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d={get_file_icon(file.name)} />
                 </svg>
@@ -1057,7 +1083,7 @@
         {#if sections_open.molecules}
           <div class="section-files" transition:slide={{ duration: 150 }}>
             {#each molecule_list as file}
-              <button class="file-item" onclick={() => handle_local_click(file)} oncontextmenu={(e) => { if (!on_open_editor) return; e.preventDefault(); e.stopPropagation(); catgo_ctx = { x: e.clientX, y: e.clientY, file } }} title={file.name}>
+              <button class="file-item" onclick={() => handle_local_click(file)} oncontextmenu={(e) => open_catgo_context_menu(e, file)} title={file.name}>
                 <svg class="file-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d={get_file_icon(file.name)} />
                 </svg>
@@ -1078,7 +1104,7 @@
         {#if sections_open.trajectories}
           <div class="section-files" transition:slide={{ duration: 150 }}>
             {#each trajectory_list as file}
-              <button class="file-item" onclick={() => handle_local_click(file)} oncontextmenu={(e) => { if (!on_open_editor) return; e.preventDefault(); e.stopPropagation(); catgo_ctx = { x: e.clientX, y: e.clientY, file } }} title={file.name}>
+              <button class="file-item" onclick={() => handle_local_click(file)} oncontextmenu={(e) => open_catgo_context_menu(e, file)} title={file.name}>
                 <svg class="file-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d={get_file_icon(file.name)} />
                 </svg>
@@ -1237,7 +1263,7 @@
                   <button
                     class="fs-file-item {fs_file_icon_class(item)}"
                     onclick={() => fsb.fs_handle_click(item)}
-                    oncontextmenu={(e) => { e.preventDefault(); e.stopPropagation(); fsb.fs_ctx = { x: e.clientX, y: e.clientY, item } }}
+                    oncontextmenu={(e) => open_fs_context_menu(e, item)}
                     title={item.path}
                     draggable={item.type === `file`}
                     ondragstart={(e) => {
@@ -2547,18 +2573,21 @@
   .ctx-menu {
     position: fixed;
     z-index: 9999;
-    min-width: 140px;
+    min-width: min(140px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
     background: var(--page-bg, #1e293b);
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
     border-radius: 6px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
     padding: 4px;
-    overflow: hidden;
+    overflow: auto;
   }
 
   .ctx-item {
     display: block;
     width: 100%;
+    max-width: 100%;
     padding: 5px 10px;
     font-size: 11px;
     background: transparent;
@@ -2568,6 +2597,9 @@
     text-align: left;
     border-radius: 3px;
     transition: background 0.1s;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .ctx-item:hover {
@@ -2648,16 +2680,23 @@
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
     border-radius: 8px;
     padding: 4px 0;
-    min-width: 120px;
+    min-width: min(120px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     z-index: 100000061;
+    overflow: auto;
   }
   .fs-ctx-item {
     display: block;
     width: 100%;
+    max-width: 100%;
     padding: 4px 12px;
     font-size: 12px;
     color: var(--text-color, #e5e7eb);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     background: none;
     border: none;
     cursor: pointer;
@@ -2742,13 +2781,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
+    overflow: auto;
   }
   .diagnostics-overlay-content {
     background: var(--bg-secondary, #1e1e2e);
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     border-radius: 10px;
-    width: min(600px, 90vw);
-    max-height: 80vh;
+    width: min(600px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     overflow-y: auto;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
   }

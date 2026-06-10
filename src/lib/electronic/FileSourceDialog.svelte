@@ -580,9 +580,10 @@
   /* .backdrop - layout handled by dialog-shared.css via .dialog-backdrop */
 
   .modal {
-    max-width: 520px;
-    width: 95%;
-    max-height: 85vh;
+    width: min(520px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    min-width: 0;
   }
 
   .modal-header {
@@ -608,6 +609,7 @@
     font-size: 12px;
     color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
     line-height: 1.5;
+    overflow-wrap: anywhere;
   }
 
   /* ─── Tab bar ─── */
@@ -627,6 +629,7 @@
   /* ─── Modal body ─── */
   .modal-body {
     padding: 16px 20px 20px;
+    min-width: 0;
   }
 
   /* ─── Drop zone (Tab 1) ─── */

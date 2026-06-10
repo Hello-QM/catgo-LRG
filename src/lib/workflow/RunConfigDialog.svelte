@@ -875,30 +875,37 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
+    overflow: auto;
     backdrop-filter: blur(4px);
+    box-sizing: border-box;
   }
 
   .modal {
     background: var(--dialog-bg, light-dark(#fff, #1c1d21));
     border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
     border-radius: 12px;
-    max-width: 600px;
-    width: 95%;
-    max-height: 85vh;
+    width: min(600px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
     display: flex;
     flex-direction: column;
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
     font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace;
     font-size: 13px;
     color: var(--text-color, light-dark(#374151, #eee));
+    min-width: 0;
+    box-sizing: border-box;
   }
 
   .modal-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
     padding: 16px 20px 12px;
     flex-shrink: 0;
+    min-width: 0;
   }
 
   .modal-title {
@@ -907,6 +914,10 @@
     font-weight: 600;
     color: var(--text-color, light-dark(#1f2937, #eee));
     letter-spacing: 0.3px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .close-btn {
@@ -919,6 +930,7 @@
     border-radius: 4px;
     font-family: inherit;
     line-height: 1;
+    flex-shrink: 0;
   }
   .close-btn:hover {
     color: var(--text-color, light-dark(#374151, #eee));
@@ -932,6 +944,9 @@
     padding: 0 20px;
     border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #3a3a3a));
     flex-shrink: 0;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   /* ─── Calc mode toggle ─── */
@@ -957,6 +972,8 @@
     text-transform: uppercase;
     letter-spacing: 0.8px;
     transition: all 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .tab:hover {
     color: var(--text-color, light-dark(#374151, #eee));
@@ -970,6 +987,8 @@
     padding: 16px 20px;
     overflow-y: auto;
     flex: 1;
+    min-height: 0;
+    min-width: 0;
   }
 
   .section {
@@ -1220,6 +1239,7 @@
     padding: 14px 20px;
     border-top: 1px solid var(--dialog-border, light-dark(#d1d5db, #3a3a3a));
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   .btn {

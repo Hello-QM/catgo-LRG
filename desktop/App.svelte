@@ -2294,8 +2294,10 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(80vw, 900px);
-    height: min(80vh, 700px);
+    width: min(900px, calc(100vw - 32px));
+    height: min(700px, calc(100vh - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
     z-index: 100;
     border-radius: 8px;
     overflow: hidden;
@@ -2309,6 +2311,8 @@
     inset: 0;
     z-index: 99;
     background: rgba(0, 0, 0, 0.4);
+    padding: 16px;
+    overflow: auto;
   }
 
   :global(*) {
@@ -2626,9 +2630,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
     background: rgba(0, 0, 0, 0.5);
     z-index: 100000050;
     animation: fade-in 0.15s ease-out;
+    overflow: auto;
   }
 
   .modal-dialog {
@@ -2636,9 +2642,11 @@
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     border-radius: 12px;
     padding: 24px;
-    min-width: 320px;
-    max-width: 420px;
+    min-width: min(320px, calc(100vw - 32px));
+    max-width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+    overflow: auto;
   }
 
   .modal-dialog h3 {
@@ -2657,6 +2665,7 @@
   .modal-actions {
     display: flex;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
   }
 

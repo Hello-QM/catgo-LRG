@@ -386,13 +386,16 @@
     top: 100%;
     right: 0;
     margin-top: 4px;
-    min-width: 160px;
+    min-width: min(160px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 48px);
     background: var(--dialog-bg, var(--surface-bg, #1c1c2e));
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     border-radius: 8px;
     padding: 4px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     z-index: 100000030;
+    overflow: auto;
   }
 
   .layout-menu-item {
@@ -408,6 +411,13 @@
     font-size: 12px;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
+    min-width: 0;
+  }
+
+  .layout-menu-item span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .layout-menu-item:hover {

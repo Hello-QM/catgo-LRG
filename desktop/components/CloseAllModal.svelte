@@ -65,9 +65,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
     background: rgba(0, 0, 0, 0.5);
     z-index: 100000050;
     animation: fade-in 0.15s ease-out;
+    overflow: auto;
   }
 
   .modal-dialog {
@@ -75,13 +77,15 @@
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     border-radius: 12px;
     padding: 24px;
-    min-width: 320px;
-    max-width: 420px;
+    min-width: min(320px, calc(100vw - 32px));
+    max-width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+    overflow: auto;
   }
 
   .close-all-dialog {
-    max-width: 480px;
+    max-width: min(480px, calc(100vw - 32px));
   }
 
   .modal-dialog h3 {
@@ -100,6 +104,7 @@
   .modal-actions {
     display: flex;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
@@ -160,6 +165,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
     padding: 6px 8px;
     border-radius: 4px;
     cursor: pointer;
@@ -178,10 +184,16 @@
   .close-all-formula {
     font-weight: 600;
     color: var(--text-color, #e0e0e0);
-    min-width: 80px;
+    min-width: 0;
+    max-width: 110px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .close-all-target {
+    min-width: 0;
+    flex: 1;
     color: var(--text-color-muted, #9ca3af);
     font-size: 11px;
     overflow: hidden;

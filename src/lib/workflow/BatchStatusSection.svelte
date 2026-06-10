@@ -353,9 +353,10 @@
   .bs-file-item { font-size: 10px; font-family: monospace; padding: 2px 8px; border: 1px solid var(--dialog-border, rgba(0,0,0,0.1)); border-radius: 3px; background: var(--input-bg, #f5f5f5); color: var(--text-color, #333); cursor: pointer; }
   .bs-file-item:hover { background: var(--dialog-border, rgba(0,0,0,0.06)); color: var(--accent-color, #3b82f6); }
 
-  .bs-file-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 9999; display: flex; align-items: center; justify-content: center; }
-  .bs-file-modal { background: var(--pane-bg, #1a1a2e); border: 1px solid var(--dialog-border, #404040); border-radius: 8px; width: 80vw; max-width: 700px; max-height: 80vh; display: flex; flex-direction: column; overflow: hidden; }
-  .bs-file-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--dialog-border, #404040); font-size: 12px; font-weight: 600; color: var(--text-color, #eee); }
+  .bs-file-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 16px; overflow: auto; }
+  .bs-file-modal { background: var(--pane-bg, #1a1a2e); border: 1px solid var(--dialog-border, #404040); border-radius: 8px; width: min(700px, calc(100vw - 32px)); max-height: calc(100vh - 32px); display: flex; flex-direction: column; overflow: hidden; }
+  .bs-file-modal-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; padding: 8px 12px; border-bottom: 1px solid var(--dialog-border, #404040); font-size: 12px; font-weight: 600; color: var(--text-color, #eee); }
+  .bs-file-modal-header span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .bs-file-modal-header button { background: none; border: none; color: var(--text-color-dim, #999); cursor: pointer; font-size: 14px; padding: 2px 6px; }
   .bs-file-modal-header button:hover { color: var(--text-color, #eee); }
   .bs-file-modal-content { padding: 12px; overflow: auto; font-size: 11px; font-family: monospace; color: var(--text-color, #ccc); white-space: pre-wrap; word-break: break-all; margin: 0; flex: 1; }

@@ -3576,7 +3576,9 @@
     box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
     font-size: 10px;
     line-height: 1.25;
-    white-space: nowrap;
+    max-width: min(260px, calc(100vw - 32px));
+    white-space: normal;
+    overflow-wrap: anywhere;
     pointer-events: none;
     opacity: 0;
     visibility: hidden;
@@ -3646,6 +3648,9 @@
     position: absolute; top: 44px; left: 50%; transform: translateX(-50%);
     background: color-mix(in srgb, var(--error-color) 85%, var(--surface-bg)); color: light-dark(#dc2626, #fca5a5); padding: 6px 16px; border-radius: 6px;
     font-size: 11px; z-index: 20; pointer-events: none;
+    max-width: calc(100% - 24px);
+    text-align: center;
+    overflow-wrap: anywhere;
     animation: wf-fade-in 0.2s ease;
   }
   .load-error-bar {
@@ -3660,7 +3665,9 @@
     position: absolute; top: 44px; left: 50%; transform: translateX(-50%);
     background: color-mix(in srgb, var(--error-color) 85%, var(--surface-bg)); color: light-dark(#dc2626, #fca5a5); padding: 6px 16px; border-radius: 6px;
     font-size: 11px; z-index: 20; display: flex; align-items: center; gap: 10px;
-    max-width: 80%; animation: wf-fade-in 0.2s ease;
+    max-width: calc(100% - 24px); animation: wf-fade-in 0.2s ease;
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .error-dismiss {
     background: none; border: none; color: light-dark(#dc2626, #fca5a5); cursor: pointer;
@@ -3673,6 +3680,9 @@
     padding: 6px 16px; border-radius: 6px; font-size: 11px; z-index: 20;
     display: flex; align-items: center; gap: 8px; animation: wf-fade-in 0.2s ease;
     border: 1px solid color-mix(in srgb, #2563eb 30%, transparent);
+    max-width: calc(100% - 24px);
+    min-width: 0;
+    flex-wrap: wrap;
   }
   .external-change-bar button {
     background: color-mix(in srgb, #2563eb 20%, transparent); border: 1px solid color-mix(in srgb, #2563eb 40%, transparent);
@@ -3685,7 +3695,9 @@
     padding: 6px 16px; border-radius: 6px; font-size: 11px; z-index: 20;
     display: flex; align-items: center; gap: 8px; animation: wf-fade-in 0.2s ease;
     border: 1px solid color-mix(in srgb, #f59e0b 30%, transparent);
-    max-width: 90%;
+    max-width: calc(100% - 24px);
+    min-width: 0;
+    flex-wrap: wrap;
   }
   .hpc-banner strong { color: light-dark(#78350f, #fde68a); }
   .hpc-banner-connect {
@@ -3704,8 +3716,13 @@
   .tmpl-overlay {
     position: absolute; left: 10px; top: 50px; z-index: 30;
     background: var(--surface-bg); border: 1px solid var(--border-color); border-radius: 8px;
-    padding: 12px; width: 300px; backdrop-filter: blur(8px);
-    max-height: calc(100vh - 120px); overflow-y: auto;
+    padding: 12px;
+    width: min(300px, calc(100% - 20px));
+    max-width: calc(100vw - 32px);
+    backdrop-filter: blur(8px);
+    max-height: calc(100vh - 120px);
+    overflow: auto;
+    box-sizing: border-box;
   }
   .tmpl-title { font-size: 10px; font-weight: 700; color: var(--text-color-muted); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 8px; }
   .tmpl-group-header { font-size: 9px; font-weight: 700; color: var(--text-color-muted); text-transform: uppercase; letter-spacing: 1px; margin: 10px 0 4px; padding-top: 6px; border-top: 1px solid var(--border-color); }
@@ -3716,9 +3733,9 @@
     cursor: pointer; color: inherit; font-family: inherit; transition: all 0.12s;
   }
   .tmpl-card:hover { background: var(--surface-bg-hover); border-color: var(--text-color-muted); }
-  .tmpl-name { font-size: 12px; font-weight: 600; color: var(--text-color-muted); }
-  .tmpl-desc { font-size: 10px; color: var(--text-color-muted); margin-top: 2px; }
-  .tmpl-meta { font-size: 9px; color: var(--text-color-muted); margin-top: 2px; }
+  .tmpl-name { font-size: 12px; font-weight: 600; color: var(--text-color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tmpl-desc { font-size: 10px; color: var(--text-color-muted); margin-top: 2px; overflow-wrap: anywhere; }
+  .tmpl-meta { font-size: 9px; color: var(--text-color-muted); margin-top: 2px; overflow-wrap: anywhere; }
   .tmpl-quick-strip {
     display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px;
   }
@@ -3747,6 +3764,8 @@
   .help {
     position: absolute; bottom: 10px; right: 290px; font-size: 9px;
     color: var(--border-color); z-index: 5; text-align: right; line-height: 1.6;
+    max-width: min(260px, calc(100% - 320px));
+    overflow-wrap: anywhere;
   }
   .rpanel {
     width: 280px; background: var(--surface-bg); border-left: 1px solid var(--border-color);
@@ -3788,6 +3807,26 @@
      the rpanel's .pcontent handles scrolling, not the individual panels */
   .pcontent :global(.config-panel.dialog-modal),
   .pcontent :global(.config-panel) { max-height: none !important; height: auto !important; overflow: visible !important; }
+
+  @media (max-width: 820px) {
+    .tmpl-overlay {
+      left: 8px;
+      right: 8px;
+      width: auto;
+      max-width: none;
+    }
+
+    .minimap,
+    .help {
+      display: none;
+    }
+
+    .execution-error,
+    .external-change-bar,
+    .hpc-banner {
+      align-items: flex-start;
+    }
+  }
   .props { display: flex; flex-direction: column; }
   .prop-lbl { font-size: 13px; font-weight: 600; color: var(--text-color); }
   .sec-label {

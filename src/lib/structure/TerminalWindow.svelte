@@ -544,15 +544,17 @@
     top: 100%;
     right: 0;
     z-index: 100;
-    min-width: 260px;
-    max-width: 400px;
+    min-width: min(260px, calc(100vw - 16px));
     width: max-content;
+    max-width: min(400px, calc(100vw - 16px));
+    max-height: calc(100vh - 72px);
     background: var(--surface-bg);
     border: 1px solid var(--border-color);
     border-radius: 6px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
     padding: 4px 0;
     margin-top: 2px;
+    overflow: auto;
   }
   .tw-dropdown-header {
     padding: 6px 10px 3px;
@@ -586,6 +588,9 @@
     text-align: left;
     transition: background 0.1s;
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .tw-dropdown-item:hover {
     background: var(--surface-bg-hover);

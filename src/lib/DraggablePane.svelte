@@ -33,21 +33,6 @@
         const initial_top = node.offsetTop
         let dragging = false
 
-        // Walk up to find a reasonably-sized container for clamping bounds.
-        // node.offsetParent can be a tiny <SECTION> (30px) which makes dragging impossible.
-        // Use the closest ancestor with substantial height, or fall back to viewport.
-        function find_clamp_bounds(): { w: number; h: number } {
-          let el = node.parentElement
-          while (el) {
-            if (el.clientHeight >= 200 && el.clientWidth >= 200) {
-              return { w: el.clientWidth, h: el.clientHeight }
-            }
-            el = el.parentElement
-          }
-          return { w: window.innerWidth, h: window.innerHeight }
-        }
-        const bounds = find_clamp_bounds()
-
         function on_mousemove(e: MouseEvent) {
           const dx = e.clientX - start_x
           const dy = e.clientY - start_y
@@ -58,9 +43,10 @@
             node.style.userSelect = `none`
             document.body.style.cursor = `grabbing`
           }
-          const min_visible = 60
-          const new_left = Math.max(-node.offsetWidth + min_visible, Math.min(initial_left + dx, bounds.w - min_visible))
-          const new_top = Math.max(0, Math.min(initial_top + dy, bounds.h - min_visible))
+          const margin = 16
+          const min_visible = Math.min(80, Math.max(40, node.offsetWidth / 4))
+          const new_left = Math.max(margin - node.offsetWidth + min_visible, Math.min(initial_left + dx, window.innerWidth - min_visible))
+          const new_top = Math.max(margin, Math.min(initial_top + dy, window.innerHeight - min_visible))
           node.style.left = `${new_left}px`
           node.style.top = `${new_top}px`
           node.style.right = `auto`
@@ -139,6 +125,12 @@
   let initial_position = $state({ left: `50px`, top: `50px`, maxHeight: `` })
   let show_control_buttons = $state(false)
 
+  function viewport_max_width() {
+    if (typeof window === `undefined`) return max_width
+    if (!max_width || max_width === `none`) return `calc(100vw - 32px)`
+    return `min(${max_width}, calc(100vw - 32px))`
+  }
+
   function toggle_pane() {
     show = !show
     if (!show) {
@@ -184,135 +176,86 @@
     on_drag_start()
   }
 
-  // Position calculation — returns { left, top, maxHeight } relative to positioned ancestor.
-  // Clamps vertically so the pane never extends below the ancestor container.
-  // Combines caller's max_height constraint with available-space clamping via CSS min().
+  // Position calculation — returns viewport-relative coordinates. Panes are
+  // portaled to <body>, so fixed positioning is the safest way to avoid
+  // clipping/overflow from toolbar wrappers, transformed parents, or split panes.
   function calculate_position() {
-    const margin = 20
+    const margin = 16
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const safe_w = Math.max(220, vw - margin * 2)
+    const safe_h = Math.max(160, vh - margin * 2)
 
     if (!toggle_pane_btn) {
       console.debug(`[DraggablePane] no toggle_pane_btn, using fallback position`)
-      return { left: `50px`, top: `50px`, maxHeight: max_height || `` }
+      return {
+        left: `${Math.max(margin, Math.round((vw - Math.min(450, safe_w)) / 2))}px`,
+        top: `${Math.max(margin, Math.round((vh - Math.min(400, safe_h)) / 2))}px`,
+        maxHeight: max_height ? `min(${max_height}, ${safe_h}px)` : `${safe_h}px`,
+      }
     }
 
     const toggle_rect = toggle_pane_btn.getBoundingClientRect()
     if (toggle_rect.width === 0 && toggle_rect.height === 0) {
       console.debug(`[DraggablePane] toggle button is hidden (0x0), deferring`)
-      return { left: `50px`, top: `50px`, maxHeight: max_height || `` }
+      return {
+        left: `${Math.max(margin, Math.round((vw - Math.min(450, safe_w)) / 2))}px`,
+        top: `${Math.max(margin, Math.round((vh - Math.min(400, safe_h)) / 2))}px`,
+        maxHeight: max_height ? `min(${max_height}, ${safe_h}px)` : `${safe_h}px`,
+      }
     }
 
     const pane_rect = pane_div?.getBoundingClientRect()
     // `||` would only catch width === 0; getBoundingClientRect can return a
     // tiny non-zero width during the same tick that show=true (race with
     // content layout). Treat anything below 100px as an unreliable
-    // measurement and use the conservative fallback instead, so calc_left
+    // measurement and use the conservative fallback instead, so the left
     // doesn't pick a right-anchored position the actual (wider) pane will
     // overflow when it finishes laying out.
-    const pane_width = (pane_rect && pane_rect.width >= 100) ? pane_rect.width : 450
-    const pane_height = (pane_rect && pane_rect.height >= 50) ? pane_rect.height : 400
-    const positioned_ancestor = toggle_pane_btn.offsetParent as HTMLElement
-    const ancestor_rect = positioned_ancestor?.getBoundingClientRect()
+    const pane_width = Math.min((pane_rect && pane_rect.width >= 100) ? pane_rect.width : 450, safe_w)
+    const pane_height = Math.min((pane_rect && pane_rect.height >= 50) ? pane_rect.height : 400, safe_h)
 
     // Containment bounds: normally the viewport, but when the toggle lives
-    // inside a modal dialog the pane must stay within IT — the fixed-position
-    // fallback below otherwise reasons in viewport coords and happily parks
-    // the pane outside the dialog, over unrelated UI (e.g. the structure
-    // controls escaping StructureEditModal onto the workflow side panels).
+    // inside a modal dialog the pane must stay within IT — fixed positioning
+    // otherwise reasons in viewport coords and happily parks the pane outside
+    // the dialog, over unrelated UI (e.g. the structure controls escaping
+    // StructureEditModal onto the workflow side panels).
     const modal_el = toggle_pane_btn.closest(
       `dialog, [role="dialog"], .struct-edit3d-modal`,
     ) as HTMLElement | null
     const modal_rect = modal_el?.getBoundingClientRect()
     const bounds = (modal_rect && modal_rect.width > pane_width + margin && modal_rect.height > 200)
       ? { left: modal_rect.left, top: modal_rect.top, right: modal_rect.right, bottom: modal_rect.bottom }
-      : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+      : { left: 0, top: 0, right: vw, bottom: vh }
 
-    // Decide pane left position. Reasons in VIEWPORT coords because the
-    // positioned ancestor (toggle_pane_btn.offsetParent) is only a
-    // coordinate origin, not a fits-here constraint. When offsetParent
-    // resolves to a small wrapper (e.g., a button-sized flex item near
-    // the viewport's right edge — exactly what the trajectory info
-    // toggle hits) using ancestor.width as the constraint makes both
-    // right_open and left_open fail in the old algorithm; it then clamps
-    // to ancestor-left = 0, and the pane lands AT the ancestor's left
-    // edge — sitting near the viewport's right side, with the pane
-    // overflowing past it. Viewport bounds are what users actually see.
-    //
-    // container_w is kept in the signature for callers but unused; if a
-    // smaller logical containment is ever needed, gate behind a prop.
-    function calc_left(btn_right: number, btn_left: number, origin_left: number, _container_w: number): number {
-      const right_open_vp = btn_right + (offset.x ?? 5)
-      const left_open_vp = btn_left - pane_width - (offset.x ?? 5)
-      // Prefer right of the button if the pane fits within the containment
-      // bounds (viewport, or the enclosing modal); otherwise flip left.
-      const target_vp = right_open_vp + pane_width <= bounds.right - margin
-        ? right_open_vp
-        : left_open_vp
-      // Clamp: pane's right edge ≤ bounds.right − margin,
-      // pane's left edge ≥ bounds.left + margin.
-      const clamped_vp = Math.max(bounds.left + margin, Math.min(target_vp, bounds.right - pane_width - margin))
-      // Convert back to ancestor-relative for the inline `left:` style.
-      // May be negative when the ancestor sits near the viewport's right
-      // edge — that's correct; the pane extends leftward past the ancestor.
-      return clamped_vp - origin_left
-    }
+    const right_open = toggle_rect.right + (offset.x ?? 5)
+    const left_open = toggle_rect.left - pane_width - (offset.x ?? 5)
+    // Prefer right of the button if the pane fits within the containment
+    // bounds (viewport, or the enclosing modal); otherwise flip left.
+    let left_val = right_open + pane_width <= bounds.right - margin ? right_open : left_open
+    left_val = Math.max(bounds.left + margin, Math.min(left_val, bounds.right - pane_width - margin))
 
-    // Also fall back to viewport when the ancestor is too small to contain the pane.
-    // Trajectory/split-pane layouts can resolve `offsetParent` to a small toolbar SECTION
-    // whose height is much less than the pane needs, which collapses available_h to 0.
-    if (!ancestor_rect || ancestor_rect.height === 0 || ancestor_rect.height < pane_height + margin * 2) {
-      const vw = bounds.right
-      const vh = bounds.bottom
-      let top_px = toggle_rect.bottom + (offset.y ?? 5)
-      // When the pane is too tall to fit at its natural anchored position, prefer
-      // shrinking its `maxHeight` (the pane scrolls internally) over yanking it up
-      // to the viewport edge, which would land it on top of OS title bars or
-      // Tauri drag regions and prevent the user from grabbing the pane's drag
-      // handle. Only pull `top_px` up when there isn't enough room below for a
-      // minimally usable pane (200px), and never above a safe minimum (50px).
-      const TOP_MIN = 50 // safety from OS chrome / Tauri drag regions
-      const MIN_PANE_HEIGHT = 200
-      if (top_px + MIN_PANE_HEIGHT > vh - margin) {
-        top_px = Math.max(TOP_MIN, vh - MIN_PANE_HEIGHT - margin)
-      }
-      const left_px = calc_left(toggle_rect.right, toggle_rect.left, 0, vw)
-      // Clamp max-height so the pane never extends below the viewport
-      const available_h = `${vh - top_px - margin}px`
-      const effective_max_h = max_height ? `min(${max_height}, ${available_h})` : available_h
-      const result = { left: `${left_px}px`, top: `${top_px}px`, maxHeight: effective_max_h }
-      // Switch to fixed positioning so coords are viewport-relative AND we escape
-      // any `overflow: hidden` on the small ancestor that would otherwise clip the pane.
-      // Raise z-index above modal overlays (e.g. .struct-preview-overlay is 9999):
-      // the pane's default z (10) paints UNDER the dialog, leaving it visible but
-      // unclickable — "the pane is below the structure window".
-      if (pane_div) {
-        pane_div.style.position = `fixed`
-        pane_div.style.zIndex = `10000`
-      }
-      console.debug(`[DraggablePane] viewport fallback:`, { toggle_rect: { bottom: toggle_rect.bottom, right: toggle_rect.right }, vh, pane_height, result })
-      return result
+    let top_val = toggle_rect.bottom + (offset.y ?? 5)
+    if (top_val + pane_height > bounds.bottom - margin) {
+      const above = toggle_rect.top - pane_height - (offset.y ?? 5)
+      top_val = above >= bounds.top + margin
+        ? above
+        : Math.max(bounds.top + margin, Math.round((bounds.top + bounds.bottom - pane_height) / 2))
     }
-    // Restore default positioning (CSS rule sets position: absolute) when the ancestor is adequate.
-    if (pane_div && pane_div.style.position === `fixed`) {
-      pane_div.style.position = ``
-      pane_div.style.zIndex = ``
-    }
+    top_val = Math.max(bounds.top + margin, Math.min(top_val, bounds.bottom - pane_height - margin))
 
-    const ancestor_h = ancestor_rect.height
-    let top_val = toggle_rect.bottom - ancestor_rect.top + (offset.y ?? 5)
-    if (top_val + pane_height > ancestor_h - margin) {
-      top_val = Math.max(margin, ancestor_h - pane_height - margin)
-    }
-    const left_val = calc_left(toggle_rect.right, toggle_rect.left, ancestor_rect.left, ancestor_rect.width)
-    // Clamp max-height so the pane never extends below the ancestor container
-    const available_h = `${ancestor_h - top_val - margin}px`
+    const available_h = `${Math.max(120, bounds.bottom - top_val - margin)}px`
     const effective_max_h = max_height ? `min(${max_height}, ${available_h})` : available_h
     const result = { left: `${left_val}px`, top: `${top_val}px`, maxHeight: effective_max_h }
-    console.debug(`[DraggablePane] positioned:`, {
-      toggle: { bottom: toggle_rect.bottom, right: toggle_rect.right },
-      ancestor: { top: ancestor_rect.top, height: ancestor_h, tag: positioned_ancestor?.tagName },
-      pane: { width: pane_width, height: pane_height },
-      result,
-    })
+    // Fixed positioning escapes overflow clipping; the z-index raise keeps the
+    // pane above modal overlays (e.g. .struct-preview-overlay is z 9999 —
+    // the pane's default z of 10 would paint under the dialog, leaving it
+    // visible but unclickable).
+    if (pane_div) {
+      pane_div.style.position = `fixed`
+      pane_div.style.zIndex = `10000`
+    }
+    console.debug(`[DraggablePane] positioned:`, { toggle: { bottom: toggle_rect.bottom, right: toggle_rect.right }, pane: { width: pane_width, height: pane_height }, bounds, result })
     return result
   }
 
@@ -332,18 +275,23 @@
   // Debounced resize handler for better performance
   let resize_timeout: ReturnType<typeof setTimeout> | undefined = $state(undefined)
 
-  function handle_resize() { // Only reposition if pane is visible and hasn't been manually dragged
-    if (!show || has_been_dragged || currently_dragging) return
+  function handle_resize() {
+    if (!show || currently_dragging) return
 
     if (resize_timeout) clearTimeout(resize_timeout)
     const current_timeout = setTimeout(() => {
       if (resize_timeout !== current_timeout) return
-      if (show && toggle_pane_btn && !has_been_dragged && pane_div) {
-        const pos = calculate_position()
-        initial_position = pos
-        pane_div.style.left = pos.left
-        pane_div.style.top = pos.top
-        if (pos.maxHeight) pane_div.style.maxHeight = pos.maxHeight
+      if (show && pane_div) {
+        if (toggle_pane_btn && !has_been_dragged) {
+          const pos = calculate_position()
+          initial_position = pos
+          pane_div.style.left = pos.left
+          pane_div.style.top = pos.top
+          if (pos.maxHeight) pane_div.style.maxHeight = pos.maxHeight
+        } else {
+          // Even manually moved panes must remain reachable after viewport changes.
+          clamp_to_viewport()
+        }
       }
     }, 50) // Debounce resize events
     resize_timeout = current_timeout
@@ -362,31 +310,41 @@
         pane_div.style.width = ``
         pane_div.style.height = ``
         pane_div.style.maxHeight = pos.maxHeight || ``
-        pane_div.style.maxWidth = ``
+        pane_div.style.maxWidth = viewport_max_width()
       }
     }
   })
 
-  // Clamp pane max-height so it never extends below its containing boundary.
-  // Uses the closest overflow-clipping ancestor (modal, .structure, etc.) or viewport.
+  // Clamp pane geometry so it remains inside the visible viewport.
   // Re-runs on show, resize, and content changes via ResizeObserver.
-  function clamp_max_height() {
+  function clamp_to_viewport() {
     if (!pane_div || !show) return
     const rect = pane_div.getBoundingClientRect()
-    // Walk up to find the nearest overflow-clipping ancestor
-    let bottom = window.innerHeight
-    let el: HTMLElement | null = pane_div.offsetParent as HTMLElement | null
-    while (el) {
-      const style = getComputedStyle(el)
-      if (style.overflowY === `hidden` || style.overflowY === `clip`) {
-        bottom = el.getBoundingClientRect().bottom
-        break
+    const margin = 16
+    const max_left = Math.max(margin, window.innerWidth - rect.width - margin)
+    const max_top = Math.max(margin, window.innerHeight - Math.min(rect.height, window.innerHeight - margin * 2) - margin)
+    const next_left = Math.max(margin, Math.min(rect.left, max_left))
+    const next_top = Math.max(margin, Math.min(rect.top, max_top))
+    const available = window.innerHeight - next_top - margin
+    const clamped = available > 100
+      ? (max_height ? `min(${max_height}, ${available}px)` : `${available}px`)
+      : initial_position.maxHeight
+
+    const is_outside_viewport = rect.left < margin || rect.top < margin ||
+      rect.right > window.innerWidth - margin || rect.bottom > window.innerHeight - margin
+    if ((is_outside_viewport || !has_been_dragged) && (
+      Math.abs(next_left - rect.left) > 1 ||
+      Math.abs(next_top - rect.top) > 1 ||
+      initial_position.maxHeight !== clamped
+    )) {
+      initial_position = {
+        left: `${next_left}px`,
+        top: `${next_top}px`,
+        maxHeight: clamped,
       }
-      el = el.offsetParent as HTMLElement | null
     }
-    const available = bottom - rect.top - 20
+
     if (available > 100) {
-      const clamped = max_height ? `min(${max_height}, ${available}px)` : `${available}px`
       if (initial_position.maxHeight !== clamped) {
         initial_position = { ...initial_position, maxHeight: clamped }
       }
@@ -396,8 +354,8 @@
   $effect(() => {
     if (!show || !pane_div) return
     // Clamp on show and whenever the pane or its container resizes
-    requestAnimationFrame(clamp_max_height)
-    const ro = new ResizeObserver(() => clamp_max_height())
+    requestAnimationFrame(clamp_to_viewport)
+    const ro = new ResizeObserver(() => clamp_to_viewport())
     ro.observe(pane_div)
     // Also observe the offsetParent (container) for modal resize
     if (pane_div.offsetParent instanceof HTMLElement) {
@@ -586,7 +544,7 @@
     role="dialog"
     aria-label="Draggable pane"
     aria-modal="false"
-    style:max-width={max_width}
+    style:max-width={viewport_max_width()}
     style:max-height={initial_position.maxHeight || null}
     style:top={initial_position.top}
     style:left={initial_position.left}
@@ -702,7 +660,7 @@
     background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
   }
   div.draggable-pane {
-    position: absolute; /* Use absolute so pane scrolls with page content */
+    position: fixed;
     background: var(--pane-bg, var(--page-bg, light-dark(white, black)));
     border: var(--pane-border, 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)));
     border-radius: var(--pane-border-radius, 10px);
@@ -719,7 +677,7 @@
     width: 28em;
     min-width: 200px;
     min-height: 120px;
-    max-width: var(--pane-max-width, 80cqw);
+    max-width: min(var(--pane-max-width, 80cqw), calc(100vw - 32px));
     resize: both;
     overflow-x: var(--pane-overflow-x, hidden);
     overflow-y: var(--pane-overflow-y, auto);

@@ -256,8 +256,10 @@
 
 <style>
   .jsw-modal {
-    width: min(900px, 95vw);
-    height: min(650px, 85vh);
+    width: min(900px, calc(100vw - 32px));
+    height: min(650px, calc(100vh - 32px));
+    min-width: 0;
+    min-height: 0;
   }
 
   .jsw-body {
@@ -265,6 +267,7 @@
     grid-template-columns: 200px 1fr;
     flex: 1;
     min-height: 0;
+    min-width: 0;
     overflow: hidden;
   }
 
@@ -274,6 +277,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-width: 0;
   }
 
   .jsw-new-btn {
@@ -360,6 +364,8 @@
     padding: 12px 16px;
     gap: 8px;
     overflow-y: auto;
+    min-width: 0;
+    min-height: 0;
   }
 
   .jsw-editor-fields {
@@ -371,6 +377,7 @@
   .jsw-field-row {
     display: flex;
     gap: 10px;
+    min-width: 0;
   }
 
   .jsw-field {
@@ -378,6 +385,7 @@
     display: flex;
     flex-direction: column;
     gap: 3px;
+    min-width: 0;
   }
 
   .jsw-label {
@@ -423,6 +431,7 @@
     flex-direction: column;
     gap: 3px;
     min-height: 0;
+    min-width: 0;
   }
 
   .jsw-textarea {
@@ -439,6 +448,7 @@
     resize: none;
     outline: none;
     box-sizing: border-box;
+    min-width: 0;
   }
   .jsw-textarea:focus {
     border-color: var(--accent-color, light-dark(#4f46e5, #3b82f6));
@@ -468,6 +478,7 @@
     gap: 8px;
     align-items: center;
     padding-top: 4px;
+    flex-wrap: wrap;
   }
 
   .jsw-btn {
@@ -517,5 +528,22 @@
     height: 100%;
     color: var(--text-color-muted);
     font-size: 12px;
+  }
+
+  @media (max-width: 700px) {
+    .jsw-body {
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(120px, 34%) 1fr;
+    }
+
+    .jsw-sidebar {
+      border-right: none;
+      border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+    }
+
+    .jsw-field-row {
+      flex-direction: column;
+      gap: 8px;
+    }
   }
 </style>

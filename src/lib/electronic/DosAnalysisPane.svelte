@@ -972,25 +972,39 @@
     position: fixed; inset: 0; z-index: 1000;
     background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px);
     display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
   .procar-modal {
     background: light-dark(#fff, #1e1e2e); border-radius: 10px;
-    width: min(420px, 90vw); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    box-sizing: border-box;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
     border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
   }
   .procar-header {
     display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
     padding: 10px 14px; border-bottom: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+    min-width: 0;
+    flex-shrink: 0;
   }
-  .procar-header h3 { margin: 0; font-size: 0.95em; color: var(--text-color, #fff); }
-  .close-btn { background: none; border: none; color: var(--text-color-muted, rgba(255, 255, 255, 0.5)); font-size: 1.3em; cursor: pointer; padding: 0 4px; }
+  .procar-header h3 { margin: 0; font-size: 0.95em; color: var(--text-color, #fff); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .close-btn { background: none; border: none; color: var(--text-color-muted, rgba(255, 255, 255, 0.5)); font-size: 1.3em; cursor: pointer; padding: 0 4px; flex-shrink: 0; }
   .close-btn:hover { color: var(--text-color, #fff); }
-  .procar-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+  .procar-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-height: 0; min-width: 0; }
   .file-slot {
     padding: 8px 10px; border-radius: 6px;
     background: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.04));
     border: 1px dashed light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15));
     display: flex; flex-direction: column; gap: 4px;
+    min-width: 0;
   }
   .file-slot.done {
     border-style: solid;
@@ -998,7 +1012,7 @@
     background: light-dark(rgba(34, 197, 94, 0.05), rgba(34, 197, 94, 0.06));
   }
   .slot-label { font-size: 0.8em; font-weight: 600; color: var(--text-color-muted, rgba(255, 255, 255, 0.6)); }
-  .slot-file { font-size: 0.85em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 6px; }
+  .slot-file { font-size: 0.85em; color: var(--text-color, #fff); display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .slot-browse {
     font-size: 0.82em; color: var(--accent-color, #007acc); cursor: pointer;
     text-decoration: underline; text-underline-offset: 2px;
@@ -1010,6 +1024,8 @@
   .procar-footer {
     display: flex; justify-content: flex-end; gap: 8px;
     padding: 10px 14px; border-top: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
+    flex-wrap: wrap;
+    flex-shrink: 0;
   }
   .btn-cancel {
     padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 0.85em;

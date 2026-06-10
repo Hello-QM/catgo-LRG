@@ -454,14 +454,17 @@
 
 <style>
   .result-panel {
-    width: 900px;
-    max-width: 95vw;
+    width: min(900px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    min-width: 0;
   }
 
   /* Summary section */
   .summary-section {
     padding: 12px 20px;
     border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+    min-width: 0;
+    flex-shrink: 0;
   }
 
   .summary-line {
@@ -470,6 +473,8 @@
     gap: 8px;
     font-size: 14px;
     margin-bottom: 10px;
+    min-width: 0;
+    flex-wrap: wrap;
   }
 
   .summary-total {
@@ -488,6 +493,10 @@
   .summary-expr {
     color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
     font-size: 12px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .controls-row {
@@ -554,6 +563,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
   }
 
   .filter-label {
@@ -567,12 +577,18 @@
 
   .filter-input {
     flex: 1;
+    min-width: 0;
     font-size: 12px;
+  }
+
+  .modal-body {
+    overflow: auto;
   }
 
   /* Data table */
   .result-table {
     width: 100%;
+    min-width: max-content;
     border-collapse: collapse;
     font-size: 12px;
   }
@@ -738,6 +754,7 @@
     gap: 16px;
     font-size: 11px;
     color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+    flex-wrap: wrap;
   }
 
   /* Footer */
@@ -747,6 +764,8 @@
     padding: 12px 20px;
     border-top: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
     justify-content: flex-end;
+    flex-wrap: wrap;
+    flex-shrink: 0;
   }
 
   .btn-action {

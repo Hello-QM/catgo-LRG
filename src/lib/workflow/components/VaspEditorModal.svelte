@@ -85,25 +85,26 @@
   .vasp-modal-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9999;
     display: flex; align-items: center; justify-content: center;
+    padding: 16px; overflow: auto;
   }
   .vasp-modal {
-    width: min(900px, 90vw); height: min(700px, 85vh);
+    width: min(900px, calc(100vw - 32px)); height: min(700px, calc(100vh - 32px));
     background: var(--surface-bg); border: 1px solid var(--border-color); border-radius: 10px;
     display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
   }
   .vasp-modal-header {
-    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px; min-width: 0;
     border-bottom: 1px solid light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.08)); flex-shrink: 0;
   }
-  .vasp-modal-title { font-size: 14px; font-weight: 700; color: var(--text-color, #eee); margin: 0; white-space: nowrap; }
-  .vasp-tabs { display: flex; gap: 0; flex: 1; }
+  .vasp-modal-title { font-size: 14px; font-weight: 700; color: var(--text-color, #eee); margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .vasp-tabs { display: flex; gap: 0; flex: 1; min-width: 0; overflow-x: auto; }
   .vasp-tab {
     padding: 6px 16px; background: none; border: none; border-bottom: 2px solid transparent;
     color: var(--text-color-muted); font-size: 12px; font-weight: 600; cursor: pointer;
   }
   .vasp-tab:hover { color: var(--text-color-muted, #94a3b8); }
   .vasp-tab.active { color: light-dark(#7c3aed, #a78bfa); border-bottom-color: light-dark(#7c3aed, #a78bfa); }
-  .vasp-modal-actions { display: flex; gap: 6px; }
+  .vasp-modal-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .vasp-save-btn {
     padding: 5px 14px; background: var(--accent-color, #3b82f6); border: none; border-radius: 5px;
     color: white; font-size: 12px; font-weight: 600; cursor: pointer;

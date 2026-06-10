@@ -306,12 +306,13 @@
 
 <style>
   .gesture-settings {
-    position: absolute;
-    top: 40px;
-    right: 8px;
+    position: fixed;
+    top: max(40px, env(safe-area-inset-top, 0px) + 12px);
+    right: max(8px, env(safe-area-inset-right, 0px) + 12px);
     z-index: 100000;
     width: 300px;
-    max-height: calc(100% - 56px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 56px);
     overflow-y: auto;
     border: 1px solid rgba(0, 255, 247, 0.2);
     border-radius: 8px;

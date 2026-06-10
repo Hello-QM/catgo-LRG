@@ -898,6 +898,8 @@
     position: absolute;
     top: 115%;
     right: 0;
+    max-width: calc(100vw - 24px);
+    overflow-x: auto;
     background: var(--surface-bg);
     border-radius: 4px;
     box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.1);
@@ -1102,8 +1104,10 @@
     border-radius: var(--border-radius, 6px);
     padding: 4px;
     width: max-content;
-    max-width: calc(100cqw - 20px);
+    max-width: min(420px, calc(100vw - 24px));
+    max-height: calc(100vh - 96px);
     overflow-x: auto;
+    overflow-y: auto;
     box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.1);
     font-size: 0.9rem;
   }
@@ -1145,7 +1149,7 @@
 
   /* === 片段选择器 === */
   .fragment-selector {
-    max-width: 400px;
+    max-width: min(400px, calc(100vw - 36px));
   }
   .fragment-categories {
     display: flex;
@@ -1183,5 +1187,19 @@
     background: var(--accent-color, #007acc);
     color: white;
     border-color: var(--accent-color, #007acc);
+  }
+
+  @media (max-width: 560px) {
+    .pencil-mode-selector,
+    .view-mode-dropdown {
+      position: fixed;
+      left: 50%;
+      right: auto;
+      top: 72px;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: calc(100vw - 24px);
+      z-index: 100000020;
+    }
   }
 </style>

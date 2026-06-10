@@ -117,14 +117,16 @@
 
 <style>
   .pause-dialog {
-    width: 480px;
-    max-width: 90vw;
+    width: min(480px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    min-width: 0;
   }
 
   .pd-body {
     padding: 16px 20px;
     overflow-y: auto;
-    max-height: 60vh;
+    max-height: none;
+    min-height: 0;
   }
 
   .pd-empty {
@@ -145,6 +147,8 @@
     gap: 6px;
     margin-bottom: 10px;
     font-size: 11px;
+    flex-wrap: wrap;
+    min-width: 0;
   }
 
   .pd-link {
@@ -168,6 +172,7 @@
   .pd-count {
     margin-left: auto;
     color: var(--text-color-dim, light-dark(#9ca3af, #6b7280));
+    min-width: 0;
   }
 
   .pd-list {
@@ -185,6 +190,7 @@
     cursor: pointer;
     border: 1px solid var(--dialog-border, light-dark(#e5e7eb, #333));
     transition: background 0.15s;
+    min-width: 0;
   }
 
   .pd-job:hover {
@@ -214,12 +220,17 @@
     font-size: 13px;
     font-weight: 500;
     color: var(--text-color, light-dark(#1f2937, #eee));
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .pd-job-meta {
     display: flex;
     gap: 8px;
     font-size: 11px;
+    min-width: 0;
+    flex-wrap: wrap;
   }
 
   .pd-status {
@@ -243,6 +254,7 @@
     gap: 8px;
     padding: 12px 20px;
     border-top: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+    flex-wrap: wrap;
   }
 
   .pd-btn {

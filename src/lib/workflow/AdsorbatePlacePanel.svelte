@@ -1641,19 +1641,28 @@
     position: fixed; inset: 0; z-index: 9999;
     background: rgba(0,0,0,0.35);
     display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
   .sd-prompt {
     background: var(--dialog-bg, light-dark(#fff, #1e2028));
     border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-    border-radius: 8px; padding: 16px 20px; min-width: 280px;
+    border-radius: 8px; padding: 16px 20px;
+    width: min(360px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    overflow: auto;
+    min-width: 0;
+    box-sizing: border-box;
     box-shadow: 0 8px 24px rgba(0,0,0,0.25);
   }
   .sd-prompt-title {
     font-size: 13px; font-weight: 600; margin-bottom: 12px;
     color: var(--text-color, light-dark(#1f2937, #eee));
+    overflow-wrap: anywhere;
   }
   .sd-prompt-buttons {
-    display: flex; gap: 8px; justify-content: flex-end;
+    display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap;
   }
   .pubchem-results {
     max-height: 120px; overflow-y: auto; display: flex; flex-direction: column;

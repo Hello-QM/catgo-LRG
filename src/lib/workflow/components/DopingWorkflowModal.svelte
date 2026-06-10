@@ -447,9 +447,13 @@
   .dw-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 9999;
     display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
   .dw-modal {
-    width: 96vw; height: 94vh;
+    width: min(96vw, calc(100vw - 32px));
+    height: min(94vh, calc(100vh - 32px));
     background: var(--dialog-bg, var(--surface-bg, #fff));
     border: 1px solid var(--dialog-border, rgba(0,0,0,0.12));
     border-radius: 10px;
@@ -457,17 +461,23 @@
     overflow: hidden;
     box-shadow: 0 20px 60px rgba(0,0,0,0.2);
     color: var(--text-color, #1a1a1a);
+    min-width: 0;
+    min-height: 0;
+    box-sizing: border-box;
   }
   .dw-header {
     display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--dialog-border, rgba(0,0,0,0.08));
     flex-shrink: 0;
+    min-width: 0;
   }
   .dw-title {
     margin: 0; font-size: 15px; font-weight: 600; color: #e2e8f0;
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .dw-header-actions { display: flex; gap: 8px; align-items: center; }
+  .dw-header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
   .dw-gen-btn {
     padding: 6px 16px; border-radius: 6px; font-size: 12px; font-weight: 600;
     background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3);
@@ -491,12 +501,13 @@
 
   /* Side-by-side body */
   .dw-body {
-    flex: 1; display: flex; min-height: 0;
+    flex: 1; display: flex; min-height: 0; min-width: 0;
   }
 
   /* Left panel */
   .dw-left {
-    width: 420px; flex-shrink: 0;
+    width: min(420px, 38vw); flex-shrink: 0;
+    min-width: 280px;
     display: flex; flex-direction: column;
     border-right: 1px solid var(--dialog-border, rgba(0,0,0,0.08));
     overflow-y: auto; overflow-x: hidden;
@@ -617,7 +628,7 @@
 
   /* Right panel */
   .dw-right {
-    flex: 1; position: relative; min-width: 0;
+    flex: 1; position: relative; min-width: 0; min-height: 0;
     --struct-height: 100%;
     --struct-width: 100%;
   }
@@ -706,5 +717,49 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     flex: 1;
+  }
+
+  @media (max-width: 900px) {
+    .dw-modal {
+      width: calc(100vw - 32px);
+      height: calc(100vh - 32px);
+    }
+
+    .dw-body {
+      flex-direction: column;
+    }
+
+    .dw-left {
+      width: 100%;
+      min-width: 0;
+      max-height: 42%;
+      border-right: none;
+      border-bottom: 1px solid var(--dialog-border, rgba(0,0,0,0.08));
+    }
+
+    .dw-right {
+      min-height: 260px;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .dw-overlay {
+      padding: 8px;
+    }
+
+    .dw-modal {
+      width: calc(100vw - 16px);
+      height: calc(100vh - 16px);
+    }
+
+    .dw-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .dw-header-actions {
+      width: 100%;
+      justify-content: flex-start;
+    }
   }
 </style>

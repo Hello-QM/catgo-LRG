@@ -1037,30 +1037,41 @@
     align-items: center;
     justify-content: center;
     z-index: 100000010;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
   .modal-content {
     background: var(--surface-bg, #1e1e1e);
     border: 1px solid var(--border-color, #444);
     border-radius: 8px;
-    width: 90vw;
-    max-width: 900px;
-    max-height: 85vh;
+    width: min(900px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-width: 0;
+    box-sizing: border-box;
   }
   .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-color, #444);
     position: relative;
     z-index: 10;
+    min-width: 0;
   }
   .modal-header h2 {
     margin: 0;
     font-size: 1.1rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .close-btn {
     width: 28px;
@@ -1071,6 +1082,7 @@
     font-size: 20px;
     cursor: pointer;
     border-radius: 4px;
+    flex-shrink: 0;
   }
   .close-btn:hover {
     background: var(--surface-bg-hover, #333);
@@ -1079,6 +1091,8 @@
     padding: 16px;
     overflow-y: auto;
     flex: 1;
+    min-height: 0;
+    min-width: 0;
   }
   .mode-tabs {
     display: flex;
@@ -1089,6 +1103,9 @@
     border-radius: 999px;
     border: 1px solid var(--border-color, #444);
     width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
   .mode-tab {
     padding: 6px 16px;
@@ -1099,6 +1116,8 @@
     font-size: 0.85rem;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .mode-tab:hover:not(.active) {
     color: inherit;
@@ -1143,6 +1162,7 @@
   .provider-section select {
     flex: 1;
     max-width: 300px;
+    min-width: 0;
     padding: 6px 10px;
     border: 1px solid var(--border-color, #444);
     border-radius: 4px;
@@ -1184,9 +1204,11 @@
     display: flex;
     gap: 8px;
     width: 100%;
+    min-width: 0;
   }
   .api-key-input-row input {
     flex: 1;
+    min-width: 0;
     padding: 6px 10px;
     border: 1px solid var(--border-color, #444);
     border-radius: 4px;
@@ -1248,11 +1270,13 @@
     gap: 12px;
     margin-bottom: 16px;
     flex-wrap: wrap;
+    min-width: 0;
   }
   .search-field {
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
   }
   .search-field label {
     font-size: 0.9rem;
@@ -1265,6 +1289,7 @@
     background: var(--surface-bg, #1e1e1e);
     color: inherit;
     width: 150px;
+    min-width: 0;
   }
   .search-btn {
     display: flex;
@@ -1290,6 +1315,7 @@
   }
   .results-section {
     min-height: 300px;
+    min-width: 0;
   }
   .results-section h3 {
     margin: 0 0 10px;

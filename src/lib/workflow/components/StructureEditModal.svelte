@@ -176,18 +176,27 @@
   .struct-preview-overlay {
     position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 9999;
     display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
   .struct-preview-header {
     display: flex; align-items: center; padding: 12px 16px; gap: 12px;
     border-bottom: 1px solid light-dark(rgba(0,0,0,0.08), rgba(255,255,255,0.08));
+    min-width: 0;
+    flex-shrink: 0;
   }
   .struct-preview-title {
     margin: 0; font-size: 15px; font-weight: 600; color: var(--text-color, #eee);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0;
   }
   .edit3d-tabs {
     display: flex; gap: 2px; background: light-dark(rgba(0,0,0,0.06), rgba(255,255,255,0.06));
     border-radius: 6px; padding: 2px; flex-shrink: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
   .edit3d-tab {
     padding: 4px 12px; border: none; border-radius: 4px; font-size: 12px; font-weight: 500;
@@ -202,16 +211,20 @@
     color: var(--text-color, #eee);
   }
   .struct-preview-close {
-    background: none; border: none; color: var(--text-color-muted, #94a3b8); font-size: 20px; cursor: pointer; padding: 4px 8px;
+    background: none; border: none; color: var(--text-color-muted, #94a3b8); font-size: 20px; cursor: pointer; padding: 4px 8px; flex-shrink: 0;
   }
   .struct-preview-close:hover { color: var(--text-color, #fff); }
   .struct-edit3d-modal {
-    width: min(1100px, 92vw); height: min(800px, 90vh);
+    width: min(1100px, calc(100vw - 32px));
+    height: min(800px, calc(100vh - 32px));
     background: var(--surface-bg); border: 1px solid light-dark(rgba(0,0,0,0.15), rgba(255,255,255,0.15)); border-radius: 10px;
     display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    min-width: 0;
+    min-height: 0;
+    box-sizing: border-box;
   }
   .struct-edit3d-actions {
-    display: flex; align-items: center; gap: 6px; margin-left: auto;
+    display: flex; align-items: center; gap: 6px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end;
   }
   .struct-edit3d-save {
     padding: 5px 14px; border-radius: 5px; font-size: 12px; font-weight: 600; cursor: pointer;
@@ -226,6 +239,7 @@
     color: #f59e0b; background: #f59e0b12;
     border-bottom: 1px solid #f59e0b30;
     text-align: center;
+    flex-shrink: 0;
   }
   .struct-edit3d-body {
     flex: 1; position: relative; min-height: 0; overflow: hidden;
@@ -240,6 +254,8 @@
     display: flex; align-items: center; gap: 8px; padding: 6px 16px;
     background: light-dark(rgba(59,130,246,0.06), rgba(59,130,246,0.1));
     border-bottom: 1px solid light-dark(rgba(59,130,246,0.15), rgba(59,130,246,0.2));
+    flex-wrap: wrap;
+    flex-shrink: 0;
   }
   .freeze-toolbar-stat {
     font-size: 11px; color: var(--text-color, #eee); margin-right: auto;
@@ -255,4 +271,26 @@
     background: light-dark(rgba(59,130,246,0.2), rgba(59,130,246,0.3));
   }
   .freeze-tb-btn:disabled { opacity: 0.4; cursor: default; }
+
+  @media (max-width: 720px) {
+    .struct-preview-overlay {
+      padding: 8px;
+    }
+
+    .struct-edit3d-modal {
+      width: calc(100vw - 16px);
+      height: calc(100vh - 16px);
+    }
+
+    .struct-preview-header {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .struct-edit3d-actions {
+      width: 100%;
+      justify-content: flex-start;
+      margin-left: 0;
+    }
+  }
 </style>

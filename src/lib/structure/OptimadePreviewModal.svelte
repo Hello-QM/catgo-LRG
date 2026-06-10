@@ -243,31 +243,42 @@
     align-items: center;
     justify-content: center;
     z-index: 100000010;
+    padding: 16px;
+    overflow: auto;
+    box-sizing: border-box;
   }
 
   .modal-content {
     background: var(--surface-bg, #1e1e1e);
     border: 1px solid var(--border-color, #444);
     border-radius: 8px;
-    width: 90vw;
-    max-width: 1000px;
-    max-height: 85vh;
+    width: min(1000px, calc(100vw - 32px));
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    min-width: 0;
+    box-sizing: border-box;
   }
 
   .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8px;
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-color, #444);
+    min-width: 0;
   }
 
   .modal-header h2 {
     margin: 0;
     font-size: 1.1rem;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .close-btn {
@@ -279,6 +290,7 @@
     font-size: 20px;
     cursor: pointer;
     border-radius: 4px;
+    flex-shrink: 0;
   }
 
   .close-btn:hover {
@@ -293,6 +305,8 @@
     display: flex;
     align-items: stretch;
     justify-content: stretch;
+    min-height: 0;
+    min-width: 0;
   }
 
   .preview-container {
@@ -302,6 +316,7 @@
     width: 100%;
     height: 100%;
     max-height: 500px;
+    min-width: 0;
   }
 
   .structure-preview-column {
@@ -309,6 +324,7 @@
     flex-direction: column;
     height: 100%;
     min-height: 300px;
+    min-width: 0;
     border: 1px solid var(--border-color, #444);
     border-radius: 4px;
     overflow: hidden;
@@ -320,6 +336,7 @@
     gap: 12px;
     overflow-y: auto;
     padding-right: 8px;
+    min-width: 0;
   }
 
   .info-section {
@@ -430,6 +447,7 @@
     padding: 12px 16px;
     border-top: 1px solid var(--border-color, #444);
     background: var(--surface-bg-hover, #333);
+    flex-wrap: wrap;
   }
 
   .cancel-btn,
@@ -465,6 +483,10 @@
   }
 
   @media (max-width: 800px) {
+    .modal-overlay {
+      padding: 8px;
+    }
+
     .preview-container {
       grid-template-columns: 1fr;
       gap: 16px;
@@ -476,7 +498,9 @@
     }
 
     .modal-content {
-      max-width: 95vw;
+      width: calc(100vw - 16px);
+      max-width: calc(100vw - 16px);
+      max-height: calc(100vh - 16px);
     }
   }
 </style>

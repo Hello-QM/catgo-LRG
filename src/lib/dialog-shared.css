@@ -9,7 +9,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 16px;
+  overflow: auto;
   backdrop-filter: blur(4px);
+  box-sizing: border-box;
 }
 
 .dialog-modal {
@@ -20,10 +23,12 @@
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
   font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 13px;
-  max-height: 90vh;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 /* Modal header/title */
@@ -31,8 +36,11 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  min-width: 0;
   padding: 16px 20px;
   border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
+  flex-shrink: 0;
 }
 
 .dialog-modal .modal-title {
@@ -40,6 +48,10 @@
   font-weight: 600;
   color: var(--text-color, light-dark(#1f2937, #eee));
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Close button */
@@ -53,6 +65,7 @@
   border-radius: 4px;
   transition: all 0.15s;
   line-height: 1;
+  flex-shrink: 0;
 }
 
 .dialog-modal .close-btn:hover {
@@ -66,6 +79,10 @@
   border-bottom: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
   padding: 0 16px;
   gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
 }
 
 .dialog-modal .tab-bar button,
@@ -79,6 +96,8 @@
   font-size: 12px;
   padding: 8px 12px;
   transition: all 0.15s;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .dialog-modal .tab-bar button:hover,
@@ -117,6 +136,7 @@
   padding: 8px 10px;
   transition: border-color 0.15s, box-shadow 0.15s;
   width: 100%;
+  min-width: 0;
   box-sizing: border-box;
   font-family: inherit;
 }
@@ -246,6 +266,18 @@
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+}
+
+.dialog-modal .modal-footer,
+.dialog-modal .dialog-footer,
+.dialog-modal .footer,
+.dialog-modal .actions,
+.dialog-modal .button-row,
+.dialog-modal .btn-row {
+  flex-wrap: wrap;
+  min-width: 0;
+  flex-shrink: 0;
 }
 
 /* List items / rows */

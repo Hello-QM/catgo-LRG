@@ -118,15 +118,17 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
     z-index: 1000;
+    overflow: auto;
   }
 
   .fp-dialog {
     background: var(--page-bg, #1a1f2e);
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
     border-radius: 8px;
-    width: 480px;
-    max-height: 70vh;
+    width: min(480px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     display: flex;
     flex-direction: column;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -215,6 +217,7 @@
     align-items: center;
     gap: 8px;
     width: 100%;
+    min-width: 0;
     padding: 5px 14px;
     font-size: 12px;
     background: transparent;
@@ -222,6 +225,13 @@
     color: var(--text-color, #e2e8f0);
     cursor: pointer;
     text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fp-item svg {
+    flex-shrink: 0;
   }
 
   .fp-item:hover { background: rgba(128, 128, 128, 0.1); }
@@ -245,6 +255,7 @@
 
   .fp-filename-input {
     flex: 1;
+    min-width: 0;
     padding: 4px 8px;
     font-size: 12px;
     background: var(--btn-bg, rgba(128, 128, 128, 0.1));
@@ -261,6 +272,7 @@
   .fp-actions {
     display: flex;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 10px 14px;
     border-top: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));

@@ -106,15 +106,18 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
     z-index: 1000;
+    overflow: auto;
   }
 
   .dialog {
     background: var(--bg-color, #fff);
     border-radius: 8px;
-    max-width: 450px;
-    width: 90%;
+    width: min(450px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+    overflow: auto;
   }
 
   header {

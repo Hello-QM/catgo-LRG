@@ -150,9 +150,11 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    padding: 16px;
     background: rgba(0, 0, 0, 0.5);
     z-index: 100000050;
     animation: fade-in 0.15s ease-out;
+    overflow: auto;
   }
 
   .modal-dialog {
@@ -160,9 +162,11 @@
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
     border-radius: 12px;
     padding: 24px;
-    min-width: 320px;
-    max-width: 420px;
+    min-width: min(320px, calc(100vw - 32px));
+    max-width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+    overflow: auto;
   }
 
   .modal-dialog h3 {
@@ -181,6 +185,7 @@
   .modal-actions {
     display: flex;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
@@ -232,6 +237,7 @@
     align-items: center;
     gap: 6px;
     width: 100%;
+    min-width: 0;
     padding: 6px 8px;
     font-size: 12px;
     background: transparent;
@@ -240,6 +246,9 @@
     cursor: pointer;
     text-align: left;
     transition: background 0.1s;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .save-tree-item:hover {
@@ -272,6 +281,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    min-width: 0;
     font-size: 12px;
     color: var(--text-color-muted, #6b7280);
   }
@@ -295,6 +305,8 @@
     border-radius: 4px;
     word-break: break-all;
     font-family: monospace;
+    max-height: 120px;
+    overflow: auto;
   }
 
   .export-fs-browser {
@@ -304,11 +316,13 @@
   .export-fs-pathbar {
     display: flex;
     gap: 4px;
+    min-width: 0;
     margin-bottom: 4px;
   }
 
   .export-fs-path-input {
     flex: 1;
+    min-width: 0;
     padding: 4px 8px;
     font-size: 12px;
     font-family: monospace;
@@ -358,6 +372,7 @@
     align-items: center;
     gap: 6px;
     width: 100%;
+    min-width: 0;
     padding: 5px 8px;
     font-size: 12px;
     background: transparent;
@@ -365,6 +380,9 @@
     color: var(--text-color, #e2e8f0);
     cursor: pointer;
     text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .export-fs-item:hover {
@@ -385,6 +403,7 @@
   }
 
   .export-input, .export-select {
+    min-width: 0;
     padding: 6px 8px;
     font-size: 13px;
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));

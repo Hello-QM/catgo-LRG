@@ -75,10 +75,21 @@
   function open_ctx_menu(e: MouseEvent, node: TreeNode) {
     e.preventDefault()
     e.stopPropagation()
-    ctx_menu = { x: e.clientX, y: e.clientY, node }
+    ctx_menu = { ...clamp_menu_position(e.clientX, e.clientY, 240, 320), node }
   }
 
   function close_ctx_menu() { ctx_menu = null }
+
+  function clamp_menu_position(x: number, y: number, width = 220, height = 280) {
+    if (typeof window === `undefined`) return { x, y }
+    const margin = 8
+    const max_x = Math.max(margin, window.innerWidth - width - margin)
+    const max_y = Math.max(margin, window.innerHeight - height - margin)
+    return {
+      x: Math.min(Math.max(x, margin), max_x),
+      y: Math.min(Math.max(y, margin), max_y),
+    }
+  }
 
   async function do_new_folder(parent_path: string) {
     if (!on_mkdir || !new_folder_name.trim()) return
@@ -1401,6 +1412,7 @@
   /* Context menu */
   .ft-ctx-overlay {
     position: fixed; inset: 0; z-index: 100000060;
+    overflow: auto;
   }
   .ft-ctx-menu {
     position: fixed;
@@ -1408,13 +1420,17 @@
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
     border-radius: 8px;
     padding: 4px 0;
-    min-width: 140px;
+    min-width: min(140px, calc(100vw - 16px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     z-index: 100000061;
+    overflow: auto;
   }
   .ft-ctx-item {
     display: block;
     width: 100%;
+    max-width: 100%;
     padding: 5px 12px;
     font-size: 12px;
     color: var(--text-color, #e5e7eb);
@@ -1422,6 +1438,9 @@
     border: none;
     cursor: pointer;
     text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .ft-ctx-item:hover {
     background: rgba(99, 102, 241, 0.15);
@@ -1448,9 +1467,12 @@
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
     border-radius: 10px;
     padding: 16px 20px;
-    min-width: 280px;
+    min-width: min(280px, calc(100vw - 32px));
+    max-width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
     z-index: 100000062;
+    overflow: auto;
   }
   .ft-delete-dialog p {
     margin: 0 0 8px;
@@ -1466,6 +1488,7 @@
   .ft-delete-actions {
     display: flex;
     justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
     margin-top: 12px;
   }
