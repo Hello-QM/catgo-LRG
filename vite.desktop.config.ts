@@ -156,6 +156,9 @@ export default defineConfig({
               return
             }
             res.setHeader(`Content-Type`, `application/octet-stream`)
+            // Conflict-guard handshake: the client remembers this mtime and
+            // must present it on /__db/write (see below).
+            res.setHeader(`X-DB-Mtime`, String(statSync(p).mtimeMs))
             res.end(readFileSync(p))
             return
           }
@@ -168,9 +171,26 @@ export default defineConfig({
             req.on(`data`, (c: Buffer) => chunks.push(c))
             req.on(`end`, () => {
               try {
+                // [2026-06] Stale-snapshot guard: the browser's sql.js copy is a
+                // whole-file image. If the on-disk file changed since the client
+                // loaded/last wrote it (the Python backend writes this same file:
+                // workflows, results), blindly writing the image would ROLL BACK
+                // those rows — the "geo_opt node disappears after run" bug.
+                // The client sends the mtime it knows; mismatch → reject.
+                const base = url.searchParams.get(`base_mtime`)
+                if (base !== null && existsSync(p)) {
+                  const current = statSync(p).mtimeMs
+                  if (Math.abs(current - Number(base)) > 0.5) {
+                    console.warn(`[db-fs] Rejected stale write to ${p} (disk mtime ${current} ≠ client ${base})`)
+                    res.statusCode = 409
+                    res.setHeader(`Content-Type`, `application/json`)
+                    res.end(JSON.stringify({ ok: false, conflict: true, mtime: current }))
+                    return
+                  }
+                }
                 writeFileSync(p, Buffer.concat(chunks))
                 res.setHeader(`Content-Type`, `application/json`)
-                res.end(JSON.stringify({ ok: true }))
+                res.end(JSON.stringify({ ok: true, mtime: statSync(p).mtimeMs }))
               } catch (e) {
                 console.error(`[db-fs] Failed to write ${p}:`, e)
                 res.statusCode = 500

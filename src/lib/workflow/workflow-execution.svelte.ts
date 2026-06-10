@@ -21,6 +21,7 @@ import {
   node_needs_hpc,
   parse_slab_gen_params,
   resolve_input_structure,
+  to_workflow_json,
 } from './graph-model'
 import { dry_run_workflow } from '$lib/api/workflow-v2'
 import { hpc_session_store, refresh_hpc_sessions } from '$lib/hpc-sessions.svelte'
@@ -66,6 +67,7 @@ export interface WorkflowExecution {
     config: WorkflowRunConfig,
     workflow_id: string,
     nodes: WfNode[],
+    edges: WfEdge[],
     resolve_input_structure: (node_id: string) => string | null,
     do_save: () => Promise<void>,
     set_nodes?: (updated: WfNode[]) => void,
@@ -408,6 +410,7 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
     config: WorkflowRunConfig,
     workflow_id: string,
     nodes: WfNode[],
+    edges: WfEdge[],
     resolve_input_structure: (node_id: string) => string | null,
     do_save: () => Promise<void>,
     set_nodes?: (updated: WfNode[]) => void,
@@ -491,7 +494,10 @@ export function create_workflow_execution(tab_id: string = `default`): WorkflowE
         console.log('[DEBUG] After resume_workflow')
       } else {
         console.log('[DEBUG] Before run_workflow')
-        await api.run_workflow(workflow_id, config)
+        // Pass the editor's live graph so the backend runs exactly what the
+        // canvas shows — never a stale snapshot (see run_workflow [2026-06]).
+        const graph = JSON.stringify(to_workflow_json(effective_nodes, edges))
+        await api.run_workflow(workflow_id, config, graph)
         console.log('[DEBUG] After run_workflow')
       }
       workflow_status = `running`

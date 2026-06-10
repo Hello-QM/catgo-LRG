@@ -156,18 +156,23 @@ function needs_python_hpc(graph_json: string | object): boolean {
   } catch { return false } // Malformed graph JSON — default to not needing HPC
 }
 
-export async function run_workflow(id: string, config: WorkflowRunConfig): Promise<{ status: string; workflow_id: string }> {
+export async function run_workflow(
+  id: string,
+  config: WorkflowRunConfig,
+  graph_json?: string,
+): Promise<{ status: string; workflow_id: string }> {
   // All workflows execute via Python backend (handles local + HPC nodes)
   //
   // [2026-04] Ensure the backend has the latest graph_json before running.
-  // In desktop:serve mode, the frontend saves to WASM SQLite (db-wasm.ts).
-  // The backend needs the latest graph_json to create V2 tasks with correct
-  // params (including imported structures in structure_input nodes).
+  //
+  // [2026-06] Do NOT flush the WASM snapshot here. The browser's sql.js copy
+  // is a whole-file image loaded at page start; flushing it over the on-disk
+  // DB rolled back every row the backend persisted since then (new workflows,
+  // graph updates with new nodes) — the "geo_opt node disappears after run" /
+  // "Workflow not found" bug. The backend file is authoritative; callers with
+  // editor state pass the live graph via `graph_json` and we sync just that.
   const db = await getLocal()
   if (db) {
-    // Bug 2 fix: flush WASM DB to disk before syncing to backend
-    if (`flush_now` in db) await (db as { flush_now: () => Promise<void> }).flush_now()
-
     const dbInfo = await db.db_get_current()
     // Bug 1 fix: db/open failure must block execution
     const openResp = await fetch(`${API_BASE}/workflow/db/open?path=${encodeURIComponent(dbInfo.path)}`, {
@@ -177,9 +182,19 @@ export async function run_workflow(id: string, config: WorkflowRunConfig): Promi
       const detail = await openResp.text().catch(() => openResp.statusText)
       throw new Error(`Failed to open database on backend: ${detail}`)
     }
-
-    const wf = await get_workflow(id)
-    const graph = typeof wf.graph_json === `string` ? wf.graph_json : JSON.stringify(wf.graph_json)
+  }
+  if (db || graph_json != null) {
+    // Prefer the editor's live graph (authoritative); fall back to the stored
+    // workflow for callers without editor state (e.g. the in-app AI).
+    let wf: { id: string; name: string; description?: string; graph_json: unknown; project_id?: string | null }
+    let graph: string
+    if (graph_json != null) {
+      wf = await get_workflow(id).catch(() => ({ id, name: `Workflow`, description: ``, graph_json, project_id: null }))
+      graph = graph_json
+    } else {
+      wf = await get_workflow(id)
+      graph = typeof wf.graph_json === `string` ? wf.graph_json : JSON.stringify(wf.graph_json)
+    }
     // Bug 1 fix: sync failure must block execution
     const sync_resp = await fetch(`${API_BASE}/workflow/`, {
       method: `POST`,

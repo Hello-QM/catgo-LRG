@@ -17,6 +17,11 @@ import { API_BASE } from './config'
 let db: Database | null = null
 let db_path = `server/data/catgo_results.db`
 let flush_timer: ReturnType<typeof setTimeout> | null = null
+// On-disk mtime of the snapshot we loaded / last successfully wrote.
+// /__db/write rejects (409) when the disk file moved on from this — i.e. the
+// Python backend wrote the same file — so a stale whole-file image can never
+// roll back backend rows (the "node disappears after run" bug).
+let disk_mtime: number | null = null
 
 async function get_db(): Promise<Database> {
   if (db) return db
@@ -27,6 +32,8 @@ async function get_db(): Promise<Database> {
     const resp = await fetch(`/__db/read?path=${encodeURIComponent(db_path)}`)
     if (resp.ok) {
       const buf = await resp.arrayBuffer()
+      const mt = resp.headers.get(`X-DB-Mtime`)
+      disk_mtime = mt != null ? Number(mt) : null
       db = new SQL.Database(new Uint8Array(buf))
     } else {
       db = new SQL.Database()
@@ -202,10 +209,21 @@ function schedule_flush(): void {
 export async function flush_now(): Promise<void> {
   if (!db) return
   const data = db.export()
-  await fetch(`/__db/write?path=${encodeURIComponent(db_path)}`, {
+  const base = disk_mtime != null ? `&base_mtime=${disk_mtime}` : ``
+  const resp = await fetch(`/__db/write?path=${encodeURIComponent(db_path)}${base}`, {
     method: `POST`,
     body: new Blob([data as unknown as BlobPart]),
   })
+  if (resp.status === 409) {
+    // Backend wrote the file since our snapshot — dropping this whole-file
+    // write is the safe choice (it would roll back the backend's rows).
+    console.warn(`[db-wasm] Flush rejected: on-disk DB changed (backend wrote it). Snapshot is stale; skipping write.`)
+    return
+  }
+  if (resp.ok) {
+    const body = await resp.json().catch(() => null)
+    if (body?.mtime != null) disk_mtime = body.mtime
+  }
 }
 
 if (typeof window !== `undefined`) {
@@ -213,9 +231,12 @@ if (typeof window !== `undefined`) {
     if (flush_timer) { clearTimeout(flush_timer); flush_timer = null }
     if (db) {
       const data = db.export()
-      // Use sendBeacon for reliable delivery during unload
+      // Use sendBeacon for reliable delivery during unload. The middleware's
+      // base_mtime guard (vite.desktop.config.ts) rejects the write when the
+      // backend has since modified the file — fire-and-forget is then safe.
       const blob = new Blob([data as unknown as BlobPart], { type: `application/octet-stream` })
-      navigator.sendBeacon(`/__db/write?path=${encodeURIComponent(db_path)}`, blob)
+      const base = disk_mtime != null ? `&base_mtime=${disk_mtime}` : ``
+      navigator.sendBeacon(`/__db/write?path=${encodeURIComponent(db_path)}${base}`, blob)
     }
   })
 }
