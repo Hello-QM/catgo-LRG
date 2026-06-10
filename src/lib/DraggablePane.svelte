@@ -176,6 +176,24 @@
     on_drag_start()
   }
 
+  // Containment bounds: normally the viewport, but when the toggle lives
+  // inside a modal dialog the pane must stay within IT — fixed positioning
+  // otherwise reasons in viewport coords and happily parks the pane outside
+  // the dialog, over unrelated UI (e.g. the structure controls escaping
+  // StructureEditModal onto the workflow side panels). `min_width` guards
+  // against modals too small to host the pane at all (fall back to viewport).
+  function containment_bounds(min_width: number): { left: number; top: number; right: number; bottom: number } {
+    const anchor = toggle_pane_btn ?? pane_div
+    const modal_el = anchor?.closest(
+      `dialog, [role="dialog"], .struct-edit3d-modal`,
+    ) as HTMLElement | null
+    const rect = modal_el?.getBoundingClientRect()
+    if (rect && rect.width > min_width && rect.height > 200) {
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+    }
+    return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+  }
+
   // Position calculation — returns viewport-relative coordinates. Panes are
   // portaled to <body>, so fixed positioning is the safest way to avoid
   // clipping/overflow from toolbar wrappers, transformed parents, or split panes.
@@ -215,18 +233,7 @@
     const pane_width = Math.min((pane_rect && pane_rect.width >= 100) ? pane_rect.width : 450, safe_w)
     const pane_height = Math.min((pane_rect && pane_rect.height >= 50) ? pane_rect.height : 400, safe_h)
 
-    // Containment bounds: normally the viewport, but when the toggle lives
-    // inside a modal dialog the pane must stay within IT — fixed positioning
-    // otherwise reasons in viewport coords and happily parks the pane outside
-    // the dialog, over unrelated UI (e.g. the structure controls escaping
-    // StructureEditModal onto the workflow side panels).
-    const modal_el = toggle_pane_btn.closest(
-      `dialog, [role="dialog"], .struct-edit3d-modal`,
-    ) as HTMLElement | null
-    const modal_rect = modal_el?.getBoundingClientRect()
-    const bounds = (modal_rect && modal_rect.width > pane_width + margin && modal_rect.height > 200)
-      ? { left: modal_rect.left, top: modal_rect.top, right: modal_rect.right, bottom: modal_rect.bottom }
-      : { left: 0, top: 0, right: vw, bottom: vh }
+    const bounds = containment_bounds(pane_width + margin)
 
     const right_open = toggle_rect.right + (offset.x ?? 5)
     const left_open = toggle_rect.left - pane_width - (offset.x ?? 5)
@@ -315,23 +322,25 @@
     }
   })
 
-  // Clamp pane geometry so it remains inside the visible viewport.
+  // Clamp pane geometry so it remains inside the visible bounds (viewport,
+  // or the enclosing modal — see containment_bounds).
   // Re-runs on show, resize, and content changes via ResizeObserver.
   function clamp_to_viewport() {
     if (!pane_div || !show) return
     const rect = pane_div.getBoundingClientRect()
     const margin = 16
-    const max_left = Math.max(margin, window.innerWidth - rect.width - margin)
-    const max_top = Math.max(margin, window.innerHeight - Math.min(rect.height, window.innerHeight - margin * 2) - margin)
-    const next_left = Math.max(margin, Math.min(rect.left, max_left))
-    const next_top = Math.max(margin, Math.min(rect.top, max_top))
-    const available = window.innerHeight - next_top - margin
+    const b = containment_bounds(rect.width + margin)
+    const max_left = Math.max(b.left + margin, b.right - rect.width - margin)
+    const max_top = Math.max(b.top + margin, b.bottom - Math.min(rect.height, b.bottom - b.top - margin * 2) - margin)
+    const next_left = Math.max(b.left + margin, Math.min(rect.left, max_left))
+    const next_top = Math.max(b.top + margin, Math.min(rect.top, max_top))
+    const available = b.bottom - next_top - margin
     const clamped = available > 100
       ? (max_height ? `min(${max_height}, ${available}px)` : `${available}px`)
       : initial_position.maxHeight
 
-    const is_outside_viewport = rect.left < margin || rect.top < margin ||
-      rect.right > window.innerWidth - margin || rect.bottom > window.innerHeight - margin
+    const is_outside_viewport = rect.left < b.left + margin || rect.top < b.top + margin ||
+      rect.right > b.right - margin || rect.bottom > b.bottom - margin
     if ((is_outside_viewport || !has_been_dragged) && (
       Math.abs(next_left - rect.left) > 1 ||
       Math.abs(next_top - rect.top) > 1 ||

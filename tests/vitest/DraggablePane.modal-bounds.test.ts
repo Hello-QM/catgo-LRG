@@ -35,28 +35,28 @@ describe(`DraggablePane modal containment`, () => {
       props: { children: () => `Pane Content`, show: true, show_pane: true },
     })
 
-    const modal_rect = {
-      left: 110, top: 50, right: 1512, bottom: 1050,
-      width: 1402, height: 1000, x: 110, y: 50,
+    const make_rect = (left: number, top: number, right: number, bottom: number) => ({
+      left, top, right, bottom,
+      width: right - left, height: bottom - top, x: left, y: top,
       toJSON: () => ({}),
-    } as DOMRect
-    // Toggle near the modal's right edge; pane measures 450x400.
-    const toggle_rect = {
-      left: 1450, top: 140, right: 1482, bottom: 172,
-      width: 32, height: 32, x: 1450, y: 140,
-      toJSON: () => ({}),
-    } as DOMRect
-    const pane_rect = {
-      left: 0, top: 0, right: 450, bottom: 400,
-      width: 450, height: 400, x: 0, y: 0,
-      toJSON: () => ({}),
-    } as DOMRect
+    }) as DOMRect
 
-    vi.spyOn(modal, `getBoundingClientRect`).mockReturnValue(modal_rect)
+    const modal_rect = make_rect(110, 50, 1512, 1050)
+    // Toggle near the modal's right edge; pane measures 450x400.
+    const toggle_rect = make_rect(1450, 140, 1482, 172)
+    const pane_rect = make_rect(0, 0, 450, 400)
+
+    // Prototype-level mock: per-element spies break if the component
+    // re-creates the toggle/pane elements between clicks.
+    void modal
+    vi.spyOn(Element.prototype, `getBoundingClientRect`).mockImplementation(function(this: Element) {
+      if (this.classList?.contains(`struct-edit3d-modal`)) return modal_rect
+      if (this.classList?.contains(`pane-toggle`)) return toggle_rect
+      if (this.classList?.contains(`draggable-pane`)) return pane_rect
+      return make_rect(0, 0, 0, 0)
+    })
     const toggle = document.querySelector(`.pane-toggle`) as HTMLElement
     const pane = document.querySelector(`.draggable-pane`) as HTMLElement
-    vi.spyOn(toggle, `getBoundingClientRect`).mockReturnValue(toggle_rect)
-    vi.spyOn(pane, `getBoundingClientRect`).mockReturnValue(pane_rect)
 
     // Two clicks: first computes position (positioning side-effect), second opens.
     await click(toggle)

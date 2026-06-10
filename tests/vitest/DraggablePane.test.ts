@@ -158,7 +158,9 @@ describe(`DraggablePane`, () => {
       props: { ...default_props, show: true, max_width: `600px` },
     })
     const pane = doc_query(`.draggable-pane`)
-    expect(pane.style.maxWidth).toBe(`600px`)
+    // PR #298: max_width is clamped to the viewport so wide panes can't
+    // overflow small windows.
+    expect(pane.style.maxWidth).toBe(`min(600px, calc(100vw - 32px))`)
   })
 
   test(`ARIA defaults`, () => {
