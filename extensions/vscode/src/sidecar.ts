@@ -31,6 +31,29 @@ export function get_binary_name(): string {
   return 'catgo-server-linux-x64'
 }
 
+/**
+ * Sidecar binaries are only built for win-x64, darwin-arm64, and linux-x64
+ * (see .github/workflows/build-vscode-sidecars.yml). On anything else —
+ * notably Intel Macs, which cannot run the arm64 binary (Rosetta only
+ * translates the other direction) — fail with a clear message instead of
+ * downloading 463 MB that will never start.
+ */
+export function unsupported_platform_reason(): string | null {
+  const { platform, arch } = process
+  if (platform === 'darwin' && arch !== 'arm64') {
+    return 'CatGo\'s bundled server is only built for Apple Silicon (arm64) Macs. ' +
+      'Intel Macs are not supported by the VS Code extension — use the CatGo ' +
+      'desktop app or run the Python server from source instead.'
+  }
+  if (platform === 'win32' && arch !== 'x64') {
+    return `CatGo's bundled server is only built for x64 Windows (this machine is ${arch}).`
+  }
+  if (platform === 'linux' && arch !== 'x64') {
+    return `CatGo's bundled server is only built for x64 Linux (this machine is ${arch}).`
+  }
+  return null
+}
+
 function bundled_binary_path(context: vscode.ExtensionContext): string {
   return path.join(context.extensionPath, 'bin', get_binary_name())
 }
@@ -127,6 +150,12 @@ export async function ensure_sidecar_binary(
 
   const downloaded = downloaded_binary_path(context)
   if (await file_exists(downloaded)) return downloaded
+
+  const unsupported = unsupported_platform_reason()
+  if (unsupported) {
+    vscode.window.showErrorMessage(unsupported)
+    throw new Error(unsupported)
+  }
 
   const url = release_url(pkg_json.version)
   return await vscode.window.withProgress(
