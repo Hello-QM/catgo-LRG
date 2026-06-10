@@ -108,7 +108,10 @@ export function create_tool_controller(deps: ToolDeps) {
   let dos_plot_ref: DosPlot | undefined = $state()
   let show_dos_panel = $derived(dos_state.dos_result !== null)
   let dband_center_for_plot = $derived(
-    dos_state.show_dband_line && dos_state.dband_result ? dos_state.dband_result.center_rel : null
+    dos_state.show_dband_line && typeof dos_state.dband_result?.center_rel === 'number' &&
+      Number.isFinite(dos_state.dband_result.center_rel)
+      ? dos_state.dband_result.center_rel
+      : null
   )
 
   let band_state: BandViewState = $state({

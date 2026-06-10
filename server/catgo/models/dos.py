@@ -85,17 +85,17 @@ class DBandRequest(BaseModel):
 class DBandResponse(BaseModel):
     """D-band analysis results."""
 
-    center_abs: float = Field(description="D-band center absolute (eV)")
-    center_rel: float = Field(description="D-band center relative to Ef (eV)")
-    width: float = Field(description="D-band width / RMS (eV)")
-    variance: float = Field(description="D-band variance (eV^2)")
-    n_d: float = Field(description="Occupied d-electron count")
-    total_d_weight: float = Field(description="Total d-weight")
-    filling_fraction: float = Field(description="D-band filling fraction (0-1)")
-    skewness: float = Field(description="3rd standardised moment")
-    kurtosis: float = Field(description="4th standardised moment")
-    lower_edge: float = Field(description="Lower band edge (eV rel Ef)")
-    upper_edge: float = Field(description="Upper band edge (eV rel Ef)")
+    center_abs: Optional[float] = Field(description="D-band center absolute (eV)")
+    center_rel: Optional[float] = Field(description="D-band center relative to Ef (eV)")
+    width: Optional[float] = Field(description="D-band width / RMS (eV)")
+    variance: Optional[float] = Field(description="D-band variance (eV^2)")
+    n_d: Optional[float] = Field(description="Occupied d-electron count")
+    total_d_weight: Optional[float] = Field(description="Total d-weight")
+    filling_fraction: Optional[float] = Field(description="D-band filling fraction (0-1)")
+    skewness: Optional[float] = Field(description="3rd standardised moment")
+    kurtosis: Optional[float] = Field(description="4th standardised moment")
+    lower_edge: Optional[float] = Field(description="Lower band edge (eV rel Ef)")
+    upper_edge: Optional[float] = Field(description="Upper band edge (eV rel Ef)")
 
 
 class AtomSelectionRequest(BaseModel):

@@ -35,7 +35,10 @@
   let dos_plot: DosPlot | undefined = $state()
 
   let dband_center_val = $derived(
-    show_dband_line && dband_result ? dband_result.center_rel : null
+    show_dband_line && typeof dband_result?.center_rel === `number` &&
+      Number.isFinite(dband_result.center_rel)
+      ? dband_result.center_rel
+      : null
   )
 
   function download_blob(content: string, filename: string, mime: string) {

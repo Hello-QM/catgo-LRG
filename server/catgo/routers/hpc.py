@@ -819,11 +819,12 @@ async def list_files(request: FileListRequest) -> FileListResponse:
             timeout=30.0,
         )
         return FileListResponse(success=True, files=files, current_path=resolved)
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as exc:
         logger.error(f"File listing timed out: {request.path}")
+        message = str(exc) or f"Listing timed out for {request.path}"
         return FileListResponse(
             success=False,
-            message=f"Listing timed out for {request.path}",
+            message=message,
         )
     except Exception as exc:
         logger.error(f"File listing failed: {exc}")

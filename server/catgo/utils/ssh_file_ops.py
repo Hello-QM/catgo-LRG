@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 class SSHFileOpsMixin:
     """File operation methods for HPCConnection (remote SSH)."""
 
+    _LIST_BEGIN = "__CATGO_LIST_BEGIN__"
+    _LIST_END = "__CATGO_LIST_END__"
+    _LIST_ERROR = "__CATGO_LIST_ERROR__"
+
     async def _run_clean_file_cmd(self, cmd: str, timeout: float = 20):
         """Run file-management commands without login-shell startup noise."""
         clean_cmd = f"bash --noprofile --norc -c {shlex.quote(cmd)}"
@@ -69,18 +73,30 @@ class SSHFileOpsMixin:
         """List files in a remote directory. Returns (resolved_path, files)."""
         if self.is_subprocess_mode:
             return await self._list_dir_subprocess(path)
+
+        # Prefer exec for listing. Many HPC login nodes accept SSH commands but
+        # have a slow or unavailable SFTP subsystem; trying SFTP first can spend
+        # most of the API timeout before the cheaper command fallback runs.
+        try:
+            return await self._list_dir_subprocess(path)
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning("Exec list_dir timed out")
+            raise
+        except Exception as e:
+            if str(e).startswith("Cannot list directory:"):
+                raise
+            logger.warning(f"Exec list_dir failed, falling back to SFTP: {e}")
+
         sftp = await self.get_sftp()
         if sftp is None:
-            return await self._list_dir_subprocess(path)
+            raise RuntimeError(f"Could not list directory: {path}")
         try:
-            # Bound the op: realpath/readdir can hang on a DTN-offloaded node
-            # even after the handshake succeeds. Timeout => fall back to exec.
-            return await asyncio.wait_for(self._list_dir_sftp(path), timeout=15)
+            return await asyncio.wait_for(self._list_dir_sftp(path), timeout=10)
         except Exception as e:
-            logger.warning(f"SFTP list_dir failed, falling back to exec: {e}")
+            logger.warning(f"SFTP list_dir failed: {e}")
             self._sftp_failed = True
             self.sftp = None
-            return await self._list_dir_subprocess(path)
+            raise
 
     async def _list_dir_sftp(self, path: str) -> tuple[str, list[FileInfo]]:
         sftp = await self.get_sftp()
@@ -106,37 +122,68 @@ class SSHFileOpsMixin:
         return resolved, files
 
     async def _list_dir_subprocess(self, path: str) -> tuple[str, list[FileInfo]]:
-        if path == "~" or path.startswith("~/"):
-            home = (await self._run_marked_file_cmd("printf %s \"$HOME\"", timeout=10)).strip()
-            path = path.replace("~", home, 1)
-        resolved = (
-            await self._run_marked_file_cmd(
-                f"readlink -f -- {shlex.quote(path)} 2>/dev/null || printf %s {shlex.quote(path)}",
-                timeout=10,
-            )
-        ).strip() or path
-        # find format: type|size|mtime|name. Use maxdepth instead of shell globs
-        # so huge directories and dotfiles do not expand inside the shell.
-        cmd = (
-            f"cd {shlex.quote(resolved)} && "
-            "find . -mindepth 1 -maxdepth 1 "
-            "-printf '%y|%s|%T@|%f\\n' 2>/dev/null | head -n 5000"
+        error_marker = shlex.quote(self._LIST_ERROR + "%s\\n")
+        begin_marker = shlex.quote(self._LIST_BEGIN + "%s\\n")
+        end_marker = shlex.quote(self._LIST_END + "\\n")
+        script = f"""
+p={shlex.quote(path)}
+case "$p" in
+  '~') p=$HOME ;;
+  '~/'*) p=$HOME/${{p#'~/'}} ;;
+esac
+if ! cd -- "$p" 2>/dev/null; then
+  printf {error_marker} "$p"
+  exit 2
+fi
+resolved=$(pwd -P 2>/dev/null || printf '%s' "$p")
+printf {begin_marker} "$resolved"
+if command -v find >/dev/null 2>&1; then
+  find . -mindepth 1 -maxdepth 1 -printf '%y|%s|%T@|%f\\n' 2>/dev/null | head -n 5000
+else
+  for f in ./* ./.[!.]* ./..?*; do
+    [ -e "$f" ] || continue
+    name=${{f#./}}
+    if [ -d "$f" ]; then kind=d; else kind=f; fi
+    size=$(wc -c < "$f" 2>/dev/null || printf 0)
+    mtime=$(date -r "$f" +%s 2>/dev/null || printf 0)
+    printf '%s|%s|%s|%s\\n' "$kind" "$size" "$mtime" "$name"
+  done
+fi
+printf {end_marker}
+"""
+        result = await self._run_clean_file_cmd(script, timeout=20)
+        stdout = result.stdout or ""
+        error_line = next(
+            (line for line in stdout.splitlines() if line.startswith(self._LIST_ERROR)),
+            "",
         )
-        output = await self._run_marked_file_cmd(cmd, timeout=20)
+        if result.exit_status != 0 or error_line:
+            target = error_line[len(self._LIST_ERROR):] if error_line else path
+            detail = (result.stderr or "").strip()
+            raise RuntimeError(f"Cannot list directory: {target}{': ' + detail if detail else ''}")
+
+        begin = stdout.find(self._LIST_BEGIN)
+        end = stdout.find(self._LIST_END, begin)
+        if begin < 0 or end < 0:
+            raise RuntimeError("Could not parse remote directory listing")
+
+        payload = stdout[begin + len(self._LIST_BEGIN):end].strip("\r\n")
+        lines = payload.splitlines()
+        resolved = lines[0].strip() if lines else path
         files: list[FileInfo] = []
-        for line in output.strip().split("\n"):
+        for line in lines[1:]:
             if not line.strip():
                 continue
             parts = line.split("|", 3)
             if len(parts) < 4:
                 continue
-            ftype, size_str, mtime_str, name = parts
+            kind, size_str, mtime_str, name = parts
             if name in (".", ".."):
                 continue
             files.append(FileInfo(
                 name=name,
                 path=f"{resolved}/{name}",
-                is_dir=ftype == "d",
+                is_dir=kind == "d" or "directory" in kind.lower(),
                 size_bytes=int(size_str) if size_str.isdigit() else 0,
                 modified_time=str(int(float(mtime_str))) if mtime_str else "",
             ))

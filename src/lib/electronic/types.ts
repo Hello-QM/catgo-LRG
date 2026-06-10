@@ -36,17 +36,17 @@ export interface PDOSResult {
 }
 
 export interface DBandResult {
-  center_abs: number
-  center_rel: number
-  width: number
-  variance: number
-  n_d: number
-  total_d_weight: number
-  filling_fraction: number
-  skewness: number
-  kurtosis: number
-  lower_edge: number
-  upper_edge: number
+  center_abs: number | null
+  center_rel: number | null
+  width: number | null
+  variance: number | null
+  n_d: number | null
+  total_d_weight: number | null
+  filling_fraction: number | null
+  skewness: number | null
+  kurtosis: number | null
+  lower_edge: number | null
+  upper_edge: number | null
 }
 
 export interface DOSPlotConfig {

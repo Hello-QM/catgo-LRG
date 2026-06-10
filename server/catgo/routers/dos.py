@@ -497,27 +497,61 @@ def compute_dband(request: DBandRequest) -> DBandResponse:
     )
 
 
+def _select_by_element(elements, requested: list[str]) -> list[int]:
+    wanted = {str(e).strip() for e in requested if str(e).strip()}
+    return [idx for idx, element in enumerate(elements) if str(element).strip() in wanted]
+
+
+def _select_by_index(index_spec: str, nions: int) -> list[int]:
+    atoms: set[int] = set()
+    for raw_part in index_spec.split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+
+        if "-" in part:
+            bounds = [p.strip() for p in part.split("-", 1)]
+            if len(bounds) != 2 or not bounds[0].isdigit() or not bounds[1].isdigit():
+                raise HTTPException(status_code=400, detail=f"Invalid atom index range: {part}")
+            start = int(bounds[0])
+            end = int(bounds[1])
+            lo, hi = sorted((start, end))
+            for one_based in range(lo, hi + 1):
+                idx = one_based - 1
+                if 0 <= idx < nions:
+                    atoms.add(idx)
+            continue
+
+        if not part.isdigit():
+            raise HTTPException(status_code=400, detail=f"Invalid atom index: {part}")
+
+        idx = int(part) - 1
+        if 0 <= idx < nions:
+            atoms.add(idx)
+
+    return sorted(atoms)
+
+
 @router.post("/select-atoms")
 def select_atoms(request: AtomSelectionRequest) -> dict:
     """Select atom indices by element symbol or index range (1-based)."""
     session = _get_session(request.session_id)
-    from catgo_dos.selection import combine_selections, select_by_element, select_by_index
 
     data = session.data
     selections = []
 
     if request.elements:
-        indices = select_by_element(data.elements, request.elements)
+        indices = _select_by_element(data.elements, request.elements)
         selections.append(indices)
 
     if request.index_spec:
-        indices = select_by_index(request.index_spec, data.nions, one_based=True)
+        indices = _select_by_index(request.index_spec, data.nions)
         selections.append(indices)
 
     if not selections:
         raise HTTPException(status_code=400, detail="Provide elements or index_spec")
 
-    result = combine_selections(*selections, mode="union")
+    result = sorted({idx for indices in selections for idx in indices})
     return {"atoms": result}
 
 

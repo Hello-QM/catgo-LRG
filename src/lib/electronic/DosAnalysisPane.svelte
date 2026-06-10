@@ -132,6 +132,86 @@
     return new_orbital === `custom` ? new_orbital_custom : new_orbital
   }
 
+  function parse_index_spec(spec: string, nions: number): number[] {
+    const atoms = new Set<number>()
+    for (const raw_part of spec.split(`,`)) {
+      const part = raw_part.trim()
+      if (!part) continue
+
+      const range = part.match(/^(\d+)\s*-\s*(\d+)$/)
+      if (range) {
+        const start = Number.parseInt(range[1], 10)
+        const end = Number.parseInt(range[2], 10)
+        const lo = Math.min(start, end)
+        const hi = Math.max(start, end)
+        for (let one_based = lo; one_based <= hi; one_based += 1) {
+          const idx = one_based - 1
+          if (idx >= 0 && idx < nions) atoms.add(idx)
+        }
+        continue
+      }
+
+      if (/^\d+$/.test(part)) {
+        const idx = Number.parseInt(part, 10) - 1
+        if (idx >= 0 && idx < nions) atoms.add(idx)
+      }
+    }
+    return [...atoms].sort((a, b) => a - b)
+  }
+
+  function select_atoms_locally(opts: { elements?: string[]; index_spec?: string }): number[] {
+    if (!session) return []
+
+    const selections: number[] = []
+    if (opts.elements?.length) {
+      const wanted = new Set(opts.elements.map((el) => el.trim()).filter(Boolean))
+      session.elements.forEach((el, idx) => {
+        if (wanted.has(String(el).trim())) selections.push(idx)
+      })
+    }
+
+    if (opts.index_spec?.trim()) {
+      selections.push(...parse_index_spec(opts.index_spec, session.nions))
+    }
+
+    return [...new Set(selections)].sort((a, b) => a - b)
+  }
+
+  async function resolve_atoms(opts: { elements?: string[]; index_spec?: string }): Promise<number[]> {
+    if (!session) return []
+    try {
+      const atoms = await select_atoms(session.session_id, opts)
+      if (atoms.length > 0) return atoms
+    } catch (e) {
+      console.warn(`DOS atom selection endpoint failed; falling back to local selection`, e)
+    }
+    return select_atoms_locally(opts)
+  }
+
+  function format_num(value: number | null | undefined, digits: number, suffix = ``): string {
+    return typeof value === `number` && Number.isFinite(value)
+      ? `${value.toFixed(digits)}${suffix}`
+      : `—`
+  }
+
+  function format_percent(value: number | null | undefined, digits: number): string {
+    return typeof value === `number` && Number.isFinite(value)
+      ? `${(value * 100).toFixed(digits)}%`
+      : `—`
+  }
+
+  function format_range(
+    lower: number | null | undefined,
+    upper: number | null | undefined,
+    digits: number,
+    suffix = ``,
+  ): string {
+    return typeof lower === `number` && Number.isFinite(lower) &&
+      typeof upper === `number` && Number.isFinite(upper)
+      ? `${lower.toFixed(digits)} ~ ${upper.toFixed(digits)}${suffix}`
+      : `—`
+  }
+
   function is_procar(f: File): boolean {
     return f.name.toUpperCase().startsWith(`PROCAR`)
   }
@@ -259,35 +339,42 @@
     poscar_file = null
   }
 
+  async function build_current_group(): Promise<DOSGroup | null> {
+    if (!session) return null
+    let atoms: number[]
+    if (selection_mode === `element`) {
+      if (!new_element) return null
+      atoms = await resolve_atoms({ elements: [new_element] })
+    } else {
+      if (!new_index_spec.trim()) return null
+      atoms = await resolve_atoms({ index_spec: new_index_spec.trim() })
+    }
+
+    if (atoms.length === 0) {
+      error_msg = t('structure.dos_no_atoms_selection')
+      return null
+    }
+
+    const orb = get_orbital_value()
+    const sel_label = selection_mode === `element` ? new_element : `[${new_index_spec}]`
+    const label = new_label || `${sel_label}-${orb}`
+
+    return {
+      atoms,
+      channels: orb,
+      label,
+      normalize: new_normalize,
+    }
+  }
+
   async function add_group() {
-    if (!session) return
     error_msg = ``
 
     try {
-      let atoms: number[]
-      if (selection_mode === `element`) {
-        if (!new_element) return
-        atoms = await select_atoms(session.session_id, { elements: [new_element] })
-      } else {
-        if (!new_index_spec.trim()) return
-        atoms = await select_atoms(session.session_id, { index_spec: new_index_spec.trim() })
-      }
+      const group = await build_current_group()
+      if (!group) return
 
-      if (atoms.length === 0) {
-        error_msg = t('structure.dos_no_atoms_selection')
-        return
-      }
-
-      const orb = get_orbital_value()
-      const sel_label = selection_mode === `element` ? new_element : `[${new_index_spec}]`
-      const label = new_label || `${sel_label}-${orb}`
-
-      groups = [...groups, {
-        atoms,
-        channels: orb,
-        label,
-        normalize: new_normalize,
-      }]
+      groups = [...groups, group]
       new_label = ``
       error_msg = ``
     } catch (e: any) {
@@ -300,12 +387,21 @@
   }
 
   async function run_compute() {
-    if (!session || groups.length === 0) return
+    if (!session) return
     computing = true
     error_msg = ``
     try {
+      let compute_groups = groups
+      if (compute_groups.length === 0) {
+        const group = await build_current_group()
+        if (!group) return
+        compute_groups = [group]
+        groups = [group]
+        new_label = ``
+      }
+
       const params = { sigma, emin, emax, ngrid }
-      const pdos = await compute_pdos(session.session_id, groups, params)
+      const pdos = await compute_pdos(session.session_id, compute_groups, params)
 
       if (include_total) {
         const total = await compute_total_dos(session.session_id, params)
@@ -328,10 +424,10 @@
       let atoms: number[]
       if (dband_sel_mode === `element`) {
         if (!dband_element) return
-        atoms = await select_atoms(session.session_id, { elements: [dband_element] })
+        atoms = await resolve_atoms({ elements: [dband_element] })
       } else {
         if (!dband_index_spec.trim()) return
-        atoms = await select_atoms(session.session_id, { index_spec: dband_index_spec.trim() })
+        atoms = await resolve_atoms({ index_spec: dband_index_spec.trim() })
       }
 
       if (atoms.length === 0) {
@@ -679,7 +775,7 @@
     <button
       class="btn-compute"
       onclick={run_compute}
-      disabled={computing || groups.length === 0}
+      disabled={computing || (groups.length === 0 && (selection_mode === `element` ? !new_element : !new_index_spec.trim()))}
     >
       {#if computing}
         <Spinner /> {t('structure.computing')}
@@ -740,18 +836,18 @@
       {#if dos_state.dband_result}
         <table class="dband-table">
           <tbody>
-            <tr><td>{t('structure.dos_center_abs')}</td><td>{dos_state.dband_result.center_abs.toFixed(4)} eV</td></tr>
-            <tr><td>{t('structure.dos_center_rel_ef')}</td><td>{dos_state.dband_result.center_rel.toFixed(4)} eV</td></tr>
-            <tr><td>{t('structure.dos_width_rms')}</td><td>{dos_state.dband_result.width.toFixed(4)} eV</td></tr>
-            <tr><td>{t('structure.dos_variance')}</td><td>{dos_state.dband_result.variance.toFixed(4)} eV&sup2;</td></tr>
-            <tr><td>n<sub>d</sub></td><td>{dos_state.dband_result.n_d.toFixed(3)}</td></tr>
-            <tr><td>{t('structure.dos_total_d_weight')}</td><td>{dos_state.dband_result.total_d_weight.toFixed(3)}</td></tr>
-            <tr><td>{t('structure.dos_filling')}</td><td>{(dos_state.dband_result.filling_fraction * 100).toFixed(1)}%</td></tr>
-            <tr><td>{t('structure.dos_skewness')}</td><td>{dos_state.dband_result.skewness.toFixed(4)}</td></tr>
-            <tr><td>{t('structure.dos_kurtosis')}</td><td>{dos_state.dband_result.kurtosis.toFixed(4)}</td></tr>
+            <tr><td>{t('structure.dos_center_abs')}</td><td>{format_num(dos_state.dband_result.center_abs, 4, ` eV`)}</td></tr>
+            <tr><td>{t('structure.dos_center_rel_ef')}</td><td>{format_num(dos_state.dband_result.center_rel, 4, ` eV`)}</td></tr>
+            <tr><td>{t('structure.dos_width_rms')}</td><td>{format_num(dos_state.dband_result.width, 4, ` eV`)}</td></tr>
+            <tr><td>{t('structure.dos_variance')}</td><td>{format_num(dos_state.dband_result.variance, 4, ` eV²`)}</td></tr>
+            <tr><td>n<sub>d</sub></td><td>{format_num(dos_state.dband_result.n_d, 3)}</td></tr>
+            <tr><td>{t('structure.dos_total_d_weight')}</td><td>{format_num(dos_state.dband_result.total_d_weight, 3)}</td></tr>
+            <tr><td>{t('structure.dos_filling')}</td><td>{format_percent(dos_state.dband_result.filling_fraction, 1)}</td></tr>
+            <tr><td>{t('structure.dos_skewness')}</td><td>{format_num(dos_state.dband_result.skewness, 4)}</td></tr>
+            <tr><td>{t('structure.dos_kurtosis')}</td><td>{format_num(dos_state.dband_result.kurtosis, 4)}</td></tr>
             <tr>
               <td>{t('structure.dos_band_edges')}</td>
-              <td>{dos_state.dband_result.lower_edge.toFixed(2)} ~ {dos_state.dband_result.upper_edge.toFixed(2)} eV</td>
+              <td>{format_range(dos_state.dband_result.lower_edge, dos_state.dband_result.upper_edge, 2, ` eV`)}</td>
             </tr>
           </tbody>
         </table>
