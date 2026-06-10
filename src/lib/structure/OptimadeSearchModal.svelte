@@ -276,15 +276,24 @@
 
       mp_summaries = new_map
 
-      // Re-sort current results by MP formation energy (lowest first) now that
-      // we have authoritative numbers; structures without a value go to the end.
+      // Re-sort current results by stability now that we have authoritative
+      // numbers: energy_above_hull ascending (0 = on the hull), formation
+      // energy per atom as the tiebreak; structures without data go last.
       if (search_results?.structures?.length) {
+        const rank = (id: string): [number, number] => {
+          const s = new_map.get(id)
+          const hull = typeof s?.energy_above_hull === `number`
+            ? s.energy_above_hull
+            : Number.POSITIVE_INFINITY
+          const form = typeof s?.formation_energy_per_atom === `number`
+            ? s.formation_energy_per_atom
+            : Number.POSITIVE_INFINITY
+          return [hull, form]
+        }
         const sorted = [...search_results.structures].sort((a, b) => {
-          const ea = new_map.get(a.id)?.formation_energy_per_atom
-          const eb = new_map.get(b.id)?.formation_energy_per_atom
-          const va = typeof ea === `number` ? ea : Number.POSITIVE_INFINITY
-          const vb = typeof eb === `number` ? eb : Number.POSITIVE_INFINITY
-          return va - vb
+          const [ha, fa] = rank(a.id)
+          const [hb, fb] = rank(b.id)
+          return ha !== hb ? ha - hb : fa - fb
         })
         search_results = { ...search_results, structures: sorted }
       }

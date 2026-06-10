@@ -389,6 +389,7 @@ const PROVIDER_EXTRA_FIELDS: Record<string, string[]> = {
     `_mp_spacegroup_number`,
     `_mp_chemical_system`,
     `_mp_chemsys`,
+    `_mp_stability`,
   ],
   alexandria: [
     `_alexandria_formation_energy_per_atom`,
@@ -457,17 +458,27 @@ function default_sort_for_provider(provider: string): string | undefined {
   return field ? field : undefined
 }
 
-/** Local fallback: re-sort already-fetched structures by formation energy ascending. */
-function sort_by_formation_energy(structures: OptimadeStructure[]): OptimadeStructure[] {
-  const get_e = (s: OptimadeStructure): number => {
-    const attrs = s.attributes as Record<string, unknown>
-    for (const [k, v] of Object.entries(attrs)) {
-      if (typeof v !== `number`) continue
-      if (/^_\w+_(formation|enthalpy_formation|delta_e)/.test(k)) return v
-    }
-    return Number.POSITIVE_INFINITY
+/** Local fallback sort: most stable first — energy_above_hull ascending
+ *  (0 = on the hull), formation energy per atom as the tiebreak, entries
+ *  without any thermo data last. Reads both flat `_provider_*` fields and
+ *  MP's nested `_mp_stability` via extract_provider_details. Providers'
+ *  server-side `sort` support is spotty (MP OPTIMADE 400s on it), so the
+ *  client always re-sorts. */
+export function sort_structures_by_stability(
+  structures: OptimadeStructure[],
+): OptimadeStructure[] {
+  const rank = (s: OptimadeStructure): [number, number] => {
+    const d = extract_provider_details(s.attributes as Record<string, unknown>)
+    return [
+      typeof d.energy_above_hull === `number` ? d.energy_above_hull : Number.POSITIVE_INFINITY,
+      typeof d.formation_energy === `number` ? d.formation_energy : Number.POSITIVE_INFINITY,
+    ]
   }
-  return [...structures].sort((a, b) => get_e(a) - get_e(b))
+  return [...structures].sort((a, b) => {
+    const [ha, fa] = rank(a)
+    const [hb, fb] = rank(b)
+    return ha !== hb ? ha - hb : fa - fb
+  })
 }
 
 export interface OptimadeSearchResult {
@@ -590,7 +601,7 @@ export async function search_optimade_structures(
         sort,
       }
       const result = await post_to_extension_optimade_search(provider, extension_options)
-      result.structures = sort_by_formation_energy(result.structures)
+      result.structures = sort_structures_by_stability(result.structures)
       return result
     }
 
@@ -624,7 +635,7 @@ export async function search_optimade_structures(
       }
       if (!response.ok) throw new Error(`OPTIMADE API error (${response.status})`)
       const data = await response.json() as { data?: OptimadeStructure[]; meta?: { data_returned?: number; data_available?: number } }
-      const structures = sort_by_formation_energy(data.data || [])
+      const structures = sort_structures_by_stability(data.data || [])
       return {
         structures,
         total_count: data.meta?.data_returned ?? data.meta?.data_available,
@@ -663,7 +674,7 @@ export async function search_optimade_structures(
         })
         if (retry.ok) {
           const retry_data = await retry.json() as { data?: OptimadeStructure[]; meta?: { data_returned?: number; data_available?: number } }
-          const retry_structs = sort_by_formation_energy(retry_data.data || [])
+          const retry_structs = sort_structures_by_stability(retry_data.data || [])
           return {
             structures: retry_structs,
             total_count: retry_data.meta?.data_returned ?? retry_data.meta?.data_available,
@@ -676,7 +687,7 @@ export async function search_optimade_structures(
 
     const data = await response.json() as { data?: OptimadeStructure[]; meta?: { data_returned?: number; data_available?: number } }
 
-    const structures = sort_by_formation_energy(data.data || [])
+    const structures = sort_structures_by_stability(data.data || [])
     const total_count = data.meta?.data_returned ?? data.meta?.data_available
 
     return {
@@ -737,9 +748,37 @@ export function extract_provider_details(
     // Skip standard OPTIMADE fields
     if (!attr_key.startsWith(`_`)) continue
 
+    // MP moved thermo data into a nested `_mp_stability` dict keyed by thermo
+    // type ({'gga_gga+u': {energy_above_hull, formation_energy_per_atom}, ...});
+    // the flat _mp_energy_above_hull / _mp_formation_energy_per_atom fields now
+    // return null. Prefer gga_gga+u (MP's default mixed thermo — matches the
+    // REST summary numbers), falling back to the first entry.
+    if (attr_key === `_mp_stability` && typeof attr_val === `object`) {
+      const thermos = attr_val as Record<string, Record<string, unknown>>
+      const entry = thermos[`gga_gga+u`] ?? Object.values(thermos)[0]
+      if (entry && typeof entry === `object`) {
+        if (typeof entry.energy_above_hull === `number` && details.energy_above_hull === undefined) {
+          details.energy_above_hull = entry.energy_above_hull
+        }
+        if (typeof entry.formation_energy_per_atom === `number` && details.formation_energy === undefined) {
+          details.formation_energy = entry.formation_energy_per_atom
+        }
+      }
+      continue
+    }
+
     let matched = false
     for (const { key, regex } of DETAIL_PATTERNS) {
       if (regex.test(attr_key) && details[key] === undefined) {
+        // Numeric detail fields must only accept numbers — e.g. a provider's
+        // `_*_stability` OBJECT must not land in energy_above_hull.
+        const numeric_keys: (keyof ProviderDetails)[] = [
+          `band_gap`,
+          `energy_above_hull`,
+          `formation_energy`,
+          `spacegroup_number`,
+        ]
+        if (numeric_keys.includes(key) && typeof attr_val !== `number`) continue
         ;(details as unknown as Record<string, unknown>)[key] = attr_val
         matched = true
         break
