@@ -5,7 +5,14 @@
 // sends no Access-Control-Allow-Origin, so direct browser fetches are blocked.
 
 import { API_BASE as _DEFAULT_API, STATIC_ONLY } from './config'
+import { isMobile } from '$lib/api/transport'
 import { relay_fetch } from '$lib/chat/provider-routing'
+
+// Mobile has no Python backend regardless of STATIC_ONLY (local dev builds run
+// with STATIC_ONLY=false), so it must take the direct-API branch — same rule
+// optimade.ts applies to every gate. relay_fetch then uses the native Tauri
+// HTTP plugin (no browser CORS, key goes straight to MP).
+const direct_api = (): boolean => STATIC_ONLY || isMobile()
 
 // API base URL - same as other API modules
 let API_BASE = _DEFAULT_API
@@ -162,7 +169,7 @@ export async function search_mp_structures(
   let url: string
   let data: { data?: MPSummaryData[] }
 
-  if (vscode_api || STATIC_ONLY) {
+  if (vscode_api || direct_api()) {
     // Direct Materials Project API call (relay-routed in the web build)
     const params = new URLSearchParams({
       _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal`,
@@ -223,7 +230,7 @@ export async function get_mp_structure_summary(material_id: string): Promise<MPS
     let url: string
     let data: { data?: MPSummaryData }
 
-    if (vscode_api || STATIC_ONLY) {
+    if (vscode_api || direct_api()) {
       // Direct API call (relay-routed in the web build)
       const params = new URLSearchParams({
         _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal`,
@@ -268,7 +275,7 @@ export async function validate_mp_api_key(key: string): Promise<boolean> {
       url = `https://api.materialsproject.org/materials/summary/?_limit=1`
       await fetch_json_smart(url, key)
       return true // If we got here without error, key is valid
-    } else if (STATIC_ONLY) {
+    } else if (direct_api()) {
       // Web build: validate via the new MP API summary endpoint through the relay
       // (the www.materialsproject.org api_check host is not relay-allowlisted).
       // fetch_json_smart throws on a non-2xx (e.g. 401 invalid key) → caught below.
