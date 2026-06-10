@@ -80,7 +80,11 @@ Rules: Act first, explain after. Use standard defaults (slab: 10 Å thickness, 1
         has_session
           ? ``
           : `When greeting, briefly describe the loaded structure in one sentence.`
-      } Use LaTeX for math and chemical formulas ($H_2O$, $E = mc^2$, $\\alpha$-Fe₂O₃) with $...$ for inline and $$...$$ for display math. Never use HTML tags (<sub>, <sup>).`
+      } ${
+        !unicode_math
+          ? `Use LaTeX for math and chemical formulas ($H_2O$, $E = mc^2$, $\\alpha$-Fe₂O₃) with $...$ for inline and $$...$$ for display math. `
+          : ``
+      }Never use HTML tags (<sub>, <sup>).`
   }
 
   if (unicode_math) {
