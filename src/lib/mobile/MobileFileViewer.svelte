@@ -163,7 +163,7 @@
             reset_zoom()
             status = `image`
           } else {
-            const blob = new Blob([bytes], { type: `application/pdf` })
+            const blob = new Blob([new Uint8Array(bytes)], { type: `application/pdf` })
             local_blob = URL.createObjectURL(blob)
             blob_url = local_blob
             status = `pdf`

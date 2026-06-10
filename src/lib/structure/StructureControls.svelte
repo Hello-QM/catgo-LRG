@@ -50,6 +50,7 @@
     structure = undefined,
     bond_distance_rules = $bindable<import('./index').BondDistanceRule[]>([]),
     large_system_mode = $bindable(false),
+    webgpu_available = true,
     supercell_loading = false,
     pane_props = {},
     toggle_props = {},
@@ -73,6 +74,7 @@
     structure?: AnyStructure
     bond_distance_rules?: import('./index').BondDistanceRule[]
     large_system_mode?: boolean
+    webgpu_available?: boolean
     supercell_loading?: boolean
     pane_props?: ComponentProps<typeof DraggablePane>[`pane_props`]
     toggle_props?: ComponentProps<typeof DraggablePane>[`toggle_props`]

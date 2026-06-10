@@ -196,7 +196,6 @@
         if (result.success) {
           save_status = `saved`
           is_dirty = false
-          onsave?.(value)
         } else {
           save_status = `error`
           save_error = result.message || `Save failed`
@@ -207,10 +206,8 @@
         await write_file(local_file_path, value)
         save_status = `saved`
         is_dirty = false
-        onsave?.(value)
       } else {
-        // No file target — just notify parent
-        onsave?.(value)
+        // No file target — just notify parent (onsave is falsy in all else branches)
         save_status = `saved`
         is_dirty = false
       }

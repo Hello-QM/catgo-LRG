@@ -1426,7 +1426,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
                       // "Allow for session": flip the session-scoped bypass so
                       // subsequent mutating tools auto-approve (no re-prompt).
                       if (session) slice.skip_permission.value = true
-                      pb.resolve(approved)
+                      pb.resolve?.(approved)
                     }}
                   />
                 {/each}

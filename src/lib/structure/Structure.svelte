@@ -851,6 +851,13 @@
     initial_bulk = null as PymatgenStructure | null,
     tab_id,
     is_active = true,
+    // Bindable handle exposing undo/redo to parent (used by mobile toolbar)
+    editor_api = $bindable<{
+      undo: () => void
+      redo: () => void
+      can_undo: () => boolean
+      can_redo: () => boolean
+    } | undefined>(undefined),
     ...rest
   }:
     & {
@@ -1003,6 +1010,13 @@
       // clobbered by a load/edit that targeted a sibling pane. Defaults true
       // so single-pane and preview usages behave as before.
       is_active?: boolean
+      // Bindable handle exposing undo/redo API to parent (used by mobile toolbar buttons)
+      editor_api?: {
+        undo: () => void
+        redo: () => void
+        can_undo: () => boolean
+        can_redo: () => boolean
+      }
     }
     & Omit<ComponentProps<typeof StructureControls>, `children` | `onclose`>
     & Omit<HTMLAttributes<HTMLDivElement>, `children`> = $props()
@@ -2340,6 +2354,16 @@
     // undo entry, WITHOUT clearing the redo stack (so chained redo still works).
     sel_state.push_structure_entry($state.snapshot(structure) as AnyStructure, false)
     structure = snap as typeof structure
+  }
+
+  // Populate the bindable editor_api handle so parents (e.g. mobile toolbar) can
+  // drive undo/redo without keyboard access. Assigned once; the functions themselves
+  // read reactive state (sel_state.can_undo/can_redo) at call time.
+  editor_api = {
+    undo,
+    redo,
+    can_undo: () => sel_state.can_undo,
+    can_redo: () => sel_state.can_redo,
   }
 
   // Push current state to undo stack (used by slab cutter and other tools)

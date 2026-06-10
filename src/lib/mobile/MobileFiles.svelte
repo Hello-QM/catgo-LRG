@@ -92,7 +92,8 @@
     if (initial.startsWith(`/`)) {
       followed = initial
       await list_dir(initial)
-      if (status !== `error`) return
+      // status may be mutated by the awaited call; cast to defeat TS narrowing
+      if ((status as string) !== `error`) return
     }
     let start = `.`
     try {
@@ -104,7 +105,7 @@
     }
     await list_dir(start)
     // If `.` somehow failed, last-resort to root so the browser is never stuck.
-    if (status === `error` && start !== `/`) await list_dir(`/`)
+    if ((status as string) === `error` && start !== `/`) await list_dir(`/`)
   }
 
   $effect(() => {

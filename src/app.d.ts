@@ -1,5 +1,14 @@
 /// <reference types="@sveltejs/kit" />
 
+// Extend Svelte's HTML element types to include non-standard but real iOS/Safari
+// attributes that are missing from the TypeScript lib (autocorrect on textarea).
+declare module 'svelte/elements' {
+  interface HTMLTextareaAttributes {
+    // Safari/iOS non-standard attribute — suppresses inline autocorrect on textarea
+    autocorrect?: 'on' | 'off' | '' | undefined | null
+  }
+}
+
 declare module 'mp-*.json' {
   const content: import('$lib/structure').PymatgenStructure
   export default content
