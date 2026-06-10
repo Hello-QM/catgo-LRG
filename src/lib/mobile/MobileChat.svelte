@@ -4,8 +4,10 @@
   Mirrors the .mw-files-overlay pattern. Reuses the existing chat lifecycle
   (get_chat_slice / send_message / cancel_generation) under tab id 'mobile', so
   history, the loading indicator, abort, and the pending-send queue all come for
-  free (§4). Text-only: chat-state runs the client-direct loop with an EMPTY
-  tool list on mobile.
+  free (§4). Tool calling: chat-state runs the full CLIENT_TOOLS client-direct
+  loop on mobile; this overlay renders the tool status rows and the
+  permission card (active_tool_blocks / active_permission_blocks) so mutating
+  calls are gated rather than wedging the chat.
 
   Key handling (§5/§8): the API key is loaded from the native encrypted store
   into a LOCAL $state and pushed into chat_config in-memory via

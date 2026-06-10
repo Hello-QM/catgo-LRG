@@ -13,7 +13,8 @@ const SYSTEM_PROMPT =
 Answer questions based on the documentation and structure context provided. Be concise and helpful. When the user asks about their current structure, reference the structure context below. If the documentation doesn't cover the topic, say so honestly.`
 
 /** System message for SDK agents with agent-specific guidance. Exported for chat-state SDK path.
- *  `text_only` = the caller runs with NO tools (mobile/client-direct). The default
+ *  `text_only` = the caller runs with NO tools (no current caller sets this; kept
+ *  for the tool-free prompt variant). The default
  *  prompt advertises tools (catgo_, WebSearch, Bash, ...) and says "call tools
  *  directly"; with no tools wired up the model promises actions it can't perform
  *  and burns turns hallucinating tool calls (then stalls). The text-only branch
