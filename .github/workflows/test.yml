@@ -114,6 +114,8 @@ jobs:
         run: pnpm run build:doc-chunks
 
       # Browsers are preinstalled in the container image, so no download step.
+      # No step-level continue-on-error: the job-level one already keeps e2e
+      # non-gating, and the step must show a real X when tests fail (#310 —
+      # the double continue-on-error painted a failing suite green).
       - name: Run e2e tests
-        continue-on-error: true
         run: npx playwright test
