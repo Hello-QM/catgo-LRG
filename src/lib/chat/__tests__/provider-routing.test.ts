@@ -1,6 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { is_client_direct, needs_relay, normalize_provider_base_url, relay_fetch, relay_url, RELAY_URL, requires_backend_chat } from '../provider-routing'
 import type { ChatConfig } from '../types'
+
+// Controllable isMobile + native-fetch mocks for the mobile relay_fetch path.
+const mobile_flag = vi.hoisted(() => ({ value: false }))
+const tauri_fetch_mock = vi.hoisted(() => vi.fn())
+vi.mock('$lib/api/transport', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('$lib/api/transport')>()
+  return { ...orig, isMobile: () => mobile_flag.value }
+})
+vi.mock('@tauri-apps/plugin-http', () => ({ fetch: tauri_fetch_mock }))
 
 describe(`needs_relay`, () => {
   it(`flags Materials Project OPTIMADE host`, () => {
@@ -89,5 +98,35 @@ describe(`relay_fetch auth-header guard (§8 C)`, () => {
         headers: new Headers({ Authorization: `Bearer secret` }),
       }),
     ).rejects.toThrow(/Refusing to relay/)
+  })
+
+  describe(`mobile native path`, () => {
+    afterEach(() => {
+      mobile_flag.value = false
+      tauri_fetch_mock.mockReset()
+    })
+
+    it(`allows a key-bearing Materials Project request on mobile via native fetch (regression: guard used to fire before the native path and broke MP on mobile)`, async () => {
+      mobile_flag.value = true
+      tauri_fetch_mock.mockResolvedValue(new Response(`{}`, { status: 200 }))
+      const url = `https://api.materialsproject.org/materials/summary/?_limit=1`
+      const resp = await relay_fetch(url, { headers: { 'X-API-KEY': `secret` } })
+      expect(resp.status).toBe(200)
+      // Native fetch got the ORIGINAL url — never the relay.
+      expect(tauri_fetch_mock).toHaveBeenCalledWith(
+        url,
+        expect.objectContaining({ headers: { 'X-API-KEY': `secret` } }),
+      )
+    })
+
+    it(`still refuses to relay a key when the native plugin is unavailable on mobile`, async () => {
+      mobile_flag.value = true
+      tauri_fetch_mock.mockRejectedValue(new Error(`plugin missing`))
+      await expect(
+        relay_fetch(`https://api.materialsproject.org/x`, {
+          headers: { 'X-API-KEY': `secret` },
+        }),
+      ).rejects.toThrow(/Refusing to relay/)
+    })
   })
 })

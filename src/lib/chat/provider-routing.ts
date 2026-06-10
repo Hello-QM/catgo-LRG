@@ -77,6 +77,24 @@ function has_auth_header(init?: RequestInit): boolean {
 
 /** A fetch wrapper that transparently routes CORS-blocked hosts via the relay. */
 export async function relay_fetch(url: string, init?: RequestInit): Promise<Response> {
+  // On mobile (Tauri) there is no browser CORS — the native HTTP plugin fetches
+  // from Rust, so CORS-blocked sources (Materials Project, the OPTIMADE provider
+  // list, any provider that omits Access-Control-Allow-Origin) work DIRECTLY
+  // with no relay and no backend. This is why the database showed only PubChem.
+  // Key-bearing requests (e.g. Materials Project X-API-KEY) are safe on this
+  // path: the native fetch goes straight to the target host, never the relay —
+  // which is why this branch must run BEFORE the §8 C guard below (the guard
+  // used to come first and broke MP API access on mobile entirely).
+  if (isMobile()) {
+    try {
+      const { fetch: tauriFetch } = await import(`@tauri-apps/plugin-http`)
+      return await tauriFetch(url, init)
+    } catch (e) {
+      console.warn(`[CatGo] tauri http fetch failed, falling back:`, url, e)
+      // Plugin unavailable (e.g. plain browser) — fall back to the relay path,
+      // which is still protected by the auth-header guard below.
+    }
+  }
   // SECURITY (§8 C): the relay is a third party. NEVER hand it a request that
   // carries the user's API key. Key-bearing chat requests must use llm_fetch
   // (native, no relay) — this guard is defense-in-depth against an accidental
@@ -85,19 +103,6 @@ export async function relay_fetch(url: string, init?: RequestInit): Promise<Resp
     throw new Error(
       `Refusing to relay a request carrying an Authorization/x-api-key header`,
     )
-  }
-  // On mobile (Tauri) there is no browser CORS — the native HTTP plugin fetches
-  // from Rust, so CORS-blocked sources (Materials Project, the OPTIMADE provider
-  // list, any provider that omits Access-Control-Allow-Origin) work DIRECTLY
-  // with no relay and no backend. This is why the database showed only PubChem.
-  if (isMobile()) {
-    try {
-      const { fetch: tauriFetch } = await import(`@tauri-apps/plugin-http`)
-      return await tauriFetch(url, init)
-    } catch (e) {
-      console.warn(`[CatGo] tauri http fetch failed, falling back:`, url, e)
-      // Plugin unavailable (e.g. plain browser) — fall back to the relay path.
-    }
   }
   return fetch(needs_relay(url) ? relay_url(url) : url, init)
 }
