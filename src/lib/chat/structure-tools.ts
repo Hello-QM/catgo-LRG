@@ -189,9 +189,10 @@ register(
     try {
       res = await fetch(url)
     } catch {
-      // Mobile / static builds have no Python backend at API_BASE.
+      // fetch() rejects only on network-level failure: mobile/static builds
+      // have no Python backend at API_BASE, and desktop may not have it running.
       throw new Error(
-        `Skill guides require the CatGo backend, which is not available in this build (mobile/static). Proceed with your own domain knowledge instead of retrying.`,
+        `Skill guides require the CatGo backend, which is unreachable (mobile/static build, or backend not running). Proceed with your own domain knowledge instead of retrying.`,
       )
     }
     if (!res.ok) {
