@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 
 from catgo.utils.ssh_file_ops import SSHFileOpsMixin
@@ -67,3 +68,35 @@ async def test_remote_listing_surfaces_cd_failure() -> None:
 
     with pytest.raises(RuntimeError, match="Cannot list directory: /missing"):
         await ops.list_remote_dir("/missing")
+
+
+class _TimeoutThenSftpOps(SSHFileOpsMixin):
+    def __init__(self) -> None:
+        self.sftp = object()
+        self._sftp_failed = False
+        self.sftp_called = False
+
+    @property
+    def is_subprocess_mode(self) -> bool:
+        return False
+
+    async def get_sftp(self):
+        return self.sftp
+
+    async def _list_dir_subprocess(self, path: str):
+        raise asyncio.TimeoutError()
+
+    async def _list_dir_sftp(self, path: str):
+        self.sftp_called = True
+        return "/resolved", []
+
+
+@pytest.mark.asyncio
+async def test_exec_timeout_falls_back_to_sftp() -> None:
+    ops = _TimeoutThenSftpOps()
+
+    resolved, files = await ops.list_remote_dir("/data")
+
+    assert ops.sftp_called is True
+    assert resolved == "/resolved"
+    assert files == []

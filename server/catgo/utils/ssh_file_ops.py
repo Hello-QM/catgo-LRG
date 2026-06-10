@@ -77,19 +77,21 @@ class SSHFileOpsMixin:
         # Prefer exec for listing. Many HPC login nodes accept SSH commands but
         # have a slow or unavailable SFTP subsystem; trying SFTP first can spend
         # most of the API timeout before the cheaper command fallback runs.
+        exec_error: Exception
         try:
             return await self._list_dir_subprocess(path)
-        except (asyncio.TimeoutError, TimeoutError):
-            logger.warning("Exec list_dir timed out")
-            raise
+        except (asyncio.TimeoutError, TimeoutError) as e:
+            logger.warning("Exec list_dir timed out, falling back to SFTP")
+            exec_error = e
         except Exception as e:
             if str(e).startswith("Cannot list directory:"):
                 raise
             logger.warning(f"Exec list_dir failed, falling back to SFTP: {e}")
+            exec_error = e
 
         sftp = await self.get_sftp()
         if sftp is None:
-            raise RuntimeError(f"Could not list directory: {path}")
+            raise RuntimeError(f"Could not list directory: {path}") from exec_error
         try:
             return await asyncio.wait_for(self._list_dir_sftp(path), timeout=10)
         except Exception as e:
