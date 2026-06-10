@@ -213,6 +213,19 @@
     const positioned_ancestor = toggle_pane_btn.offsetParent as HTMLElement
     const ancestor_rect = positioned_ancestor?.getBoundingClientRect()
 
+    // Containment bounds: normally the viewport, but when the toggle lives
+    // inside a modal dialog the pane must stay within IT — the fixed-position
+    // fallback below otherwise reasons in viewport coords and happily parks
+    // the pane outside the dialog, over unrelated UI (e.g. the structure
+    // controls escaping StructureEditModal onto the workflow side panels).
+    const modal_el = toggle_pane_btn.closest(
+      `dialog, [role="dialog"], .struct-edit3d-modal`,
+    ) as HTMLElement | null
+    const modal_rect = modal_el?.getBoundingClientRect()
+    const bounds = (modal_rect && modal_rect.width > pane_width + margin && modal_rect.height > 200)
+      ? { left: modal_rect.left, top: modal_rect.top, right: modal_rect.right, bottom: modal_rect.bottom }
+      : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+
     // Decide pane left position. Reasons in VIEWPORT coords because the
     // positioned ancestor (toggle_pane_btn.offsetParent) is only a
     // coordinate origin, not a fits-here constraint. When offsetParent
@@ -227,17 +240,16 @@
     // container_w is kept in the signature for callers but unused; if a
     // smaller logical containment is ever needed, gate behind a prop.
     function calc_left(btn_right: number, btn_left: number, origin_left: number, _container_w: number): number {
-      const vw = window.innerWidth
       const right_open_vp = btn_right + (offset.x ?? 5)
       const left_open_vp = btn_left - pane_width - (offset.x ?? 5)
-      // Prefer right of the button if the pane fits in the viewport;
-      // otherwise flip to the left of the button.
-      const target_vp = right_open_vp + pane_width <= vw - margin
+      // Prefer right of the button if the pane fits within the containment
+      // bounds (viewport, or the enclosing modal); otherwise flip left.
+      const target_vp = right_open_vp + pane_width <= bounds.right - margin
         ? right_open_vp
         : left_open_vp
-      // Clamp to viewport: pane's right edge ≤ vw − margin,
-      // pane's left edge ≥ margin.
-      const clamped_vp = Math.max(margin, Math.min(target_vp, vw - pane_width - margin))
+      // Clamp: pane's right edge ≤ bounds.right − margin,
+      // pane's left edge ≥ bounds.left + margin.
+      const clamped_vp = Math.max(bounds.left + margin, Math.min(target_vp, bounds.right - pane_width - margin))
       // Convert back to ancestor-relative for the inline `left:` style.
       // May be negative when the ancestor sits near the viewport's right
       // edge — that's correct; the pane extends leftward past the ancestor.
@@ -248,8 +260,8 @@
     // Trajectory/split-pane layouts can resolve `offsetParent` to a small toolbar SECTION
     // whose height is much less than the pane needs, which collapses available_h to 0.
     if (!ancestor_rect || ancestor_rect.height === 0 || ancestor_rect.height < pane_height + margin * 2) {
-      const vw = window.innerWidth
-      const vh = window.innerHeight
+      const vw = bounds.right
+      const vh = bounds.bottom
       let top_px = toggle_rect.bottom + (offset.y ?? 5)
       // When the pane is too tall to fit at its natural anchored position, prefer
       // shrinking its `maxHeight` (the pane scrolls internally) over yanking it up
@@ -269,12 +281,21 @@
       const result = { left: `${left_px}px`, top: `${top_px}px`, maxHeight: effective_max_h }
       // Switch to fixed positioning so coords are viewport-relative AND we escape
       // any `overflow: hidden` on the small ancestor that would otherwise clip the pane.
-      if (pane_div) pane_div.style.position = `fixed`
+      // Raise z-index above modal overlays (e.g. .struct-preview-overlay is 9999):
+      // the pane's default z (10) paints UNDER the dialog, leaving it visible but
+      // unclickable — "the pane is below the structure window".
+      if (pane_div) {
+        pane_div.style.position = `fixed`
+        pane_div.style.zIndex = `10000`
+      }
       console.debug(`[DraggablePane] viewport fallback:`, { toggle_rect: { bottom: toggle_rect.bottom, right: toggle_rect.right }, vh, pane_height, result })
       return result
     }
     // Restore default positioning (CSS rule sets position: absolute) when the ancestor is adequate.
-    if (pane_div && pane_div.style.position === `fixed`) pane_div.style.position = ``
+    if (pane_div && pane_div.style.position === `fixed`) {
+      pane_div.style.position = ``
+      pane_div.style.zIndex = ``
+    }
 
     const ancestor_h = ancestor_rect.height
     let top_val = toggle_rect.bottom - ancestor_rect.top + (offset.y ?? 5)
