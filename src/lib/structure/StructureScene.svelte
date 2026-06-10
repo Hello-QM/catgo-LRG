@@ -1746,10 +1746,46 @@
   let computed_zoom = $state<number>(untrack(() => initial_zoom))
   $effect(() => {
     if (!(width > 0) || !(height > 0)) return
+    // Once the user zooms (TrackballControls writes camera.zoom directly, so it
+    // drifts from the last computed_zoom we applied), stop auto-recomputing:
+    // re-running on a pane resize (layout switch, sidebar toggle) would clobber
+    // their zoom level and visibly rescale the view. Read untracked — camera
+    // mutations must not re-trigger this effect.
+    const user_zoomed = untrack(() => {
+      const cam = camera as any
+      return cam?.isOrthographicCamera && Math.abs(cam.zoom - computed_zoom) > 1e-3
+    })
+    if (user_zoomed) return
     const structure_max_dim = Math.max(1, structure_size)
     const viewer_min_dim = Math.min(width, height)
-    const scale_factor = viewer_min_dim / (structure_max_dim * 30) // 30px per unit — fills more of the viewport
-    let new_zoom = initial_zoom * scale_factor
+    // Size the view from the atom bounding box when it is tighter than the cell
+    // average — molecules have no lattice and would otherwise fall back to the
+    // 10 A placeholder and render tiny.
+    let fit_size = structure_max_dim
+    if (structure?.sites?.length) {
+      let min_x = Infinity, max_x = -Infinity
+      let min_y = Infinity, max_y = -Infinity
+      let min_z = Infinity, max_z = -Infinity
+      for (const s of structure.sites) {
+        const [x, y, z] = s.xyz
+        if (x < min_x) min_x = x; if (x > max_x) max_x = x
+        if (y < min_y) min_y = y; if (y > max_y) max_y = y
+        if (z < min_z) min_z = z; if (z > max_z) max_z = z
+      }
+      // +2 A: atom centers ignore the rendered sphere radii (~1 A per side),
+      // which dominate the visual extent of small molecules.
+      const extent = Math.max(max_x - min_x, max_y - min_y, max_z - min_z, 1) + 2
+      fit_size = Math.min(structure_max_dim, extent * 1.2)
+    }
+    // Fit the whole structure into the viewport's short axis with a 25% margin
+    // (the margin absorbs the longest cell axis exceeding the average, atom
+    // radii, and boundary image atoms).
+    // initial_zoom acts as a relative knob: at its default the structure just
+    // fits; larger values zoom in proportionally. (The previous fixed 30 px/Å
+    // density cropped any structure wider than viewer_min_dim/30 Å — e.g.
+    // LiFePO4's 10.3 Å axis in a half-width side-by-side pane.)
+    const fit_zoom = viewer_min_dim / (Math.max(1, fit_size) * 1.25)
+    let new_zoom = fit_zoom * (initial_zoom / DEFAULTS.structure.initial_zoom)
     if (min_zoom && min_zoom > 0) new_zoom = Math.max(min_zoom, new_zoom)
     if (max_zoom && max_zoom > 0) new_zoom = Math.min(max_zoom, new_zoom)
     computed_zoom = new_zoom
