@@ -59,20 +59,39 @@ export function requires_backend_chat(config: ChatConfig): boolean {
   }
 }
 
-/** True when `init` carries an API-key / bearer header that must NEVER transit a
- *  third-party relay (security §8 C). Case-insensitive across Headers/object/array. */
-function has_auth_header(init?: RequestInit): boolean {
-  if (!init?.headers) return false
+/** Lowercased header names from a RequestInit, across Headers/object/array forms. */
+function header_names(init?: RequestInit): string[] {
+  if (!init?.headers) return []
   const h = init.headers
   const names: string[] = h instanceof Headers
     ? [...h.keys()]
     : Array.isArray(h)
     ? h.map(([k]) => k)
     : Object.keys(h)
-  return names.some((n) => {
-    const lower = n.toLowerCase()
-    return lower === `authorization` || lower === `x-api-key`
-  })
+  return names.map((n) => n.toLowerCase())
+}
+
+/** Hosts the relay may forward an X-API-KEY header to. The relay is CatGo's
+ *  OWN Cloudflare Worker (workers/cors-relay — target-host allowlisted, fixed
+ *  forward-header list), not an arbitrary third party. The Materials Project
+ *  key must transit it in the STATIC_ONLY web build because
+ *  api.materialsproject.org blocks browser CORS (#147). High-value LLM keys
+ *  (Authorization) must still NEVER be relayed — those use llm_fetch. */
+const RELAY_KEY_ALLOWED_HOSTS = new Set<string>([`api.materialsproject.org`])
+
+/** True when relaying `url` with `init`'s headers would hand the relay a
+ *  credential that must not transit it (security §8 C): any Authorization
+ *  header, or an X-API-KEY for a host outside RELAY_KEY_ALLOWED_HOSTS. */
+function refuses_relay(url: string, init?: RequestInit): boolean {
+  if (!needs_relay(url)) return false
+  const names = header_names(init)
+  if (names.includes(`authorization`)) return true
+  if (!names.includes(`x-api-key`)) return false
+  try {
+    return !RELAY_KEY_ALLOWED_HOSTS.has(new URL(url).host)
+  } catch {
+    return true
+  }
 }
 
 /** A fetch wrapper that transparently routes CORS-blocked hosts via the relay. */
@@ -95,11 +114,11 @@ export async function relay_fetch(url: string, init?: RequestInit): Promise<Resp
       // which is still protected by the auth-header guard below.
     }
   }
-  // SECURITY (§8 C): the relay is a third party. NEVER hand it a request that
-  // carries the user's API key. Key-bearing chat requests must use llm_fetch
-  // (native, no relay) — this guard is defense-in-depth against an accidental
-  // key-bearing relay_fetch caller.
-  if (has_auth_header(init) && needs_relay(url)) {
+  // SECURITY (§8 C): never hand the relay a credential it must not carry —
+  // any Authorization header (LLM keys use llm_fetch: native, no relay), or
+  // an X-API-KEY outside the explicit RELAY_KEY_ALLOWED_HOSTS allowlist.
+  // This guard is defense-in-depth against an accidental key-bearing caller.
+  if (refuses_relay(url, init)) {
     throw new Error(
       `Refusing to relay a request carrying an Authorization/x-api-key header`,
     )

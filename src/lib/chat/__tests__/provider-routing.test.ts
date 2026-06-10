@@ -87,17 +87,33 @@ describe(`relay_fetch auth-header guard (§8 C)`, () => {
     ).rejects.toThrow(/Refusing to relay/)
   })
 
-  it(`refuses an x-api-key header (object + Headers forms) to a relay host`, async () => {
+  it(`refuses an x-api-key header to a non-allowlisted relay host`, async () => {
     await expect(
-      relay_fetch(`https://api.materialsproject.org/x`, {
+      relay_fetch(`https://integrate.api.nvidia.com/v1/models`, {
         headers: { 'x-api-key': `secret` },
       }),
     ).rejects.toThrow(/Refusing to relay/)
+  })
+
+  it(`refuses an Authorization header (Headers form) even to the MP allowlisted host`, async () => {
     await expect(
       relay_fetch(`https://api.materialsproject.org/x`, {
         headers: new Headers({ Authorization: `Bearer secret` }),
       }),
     ).rejects.toThrow(/Refusing to relay/)
+  })
+
+  it(`relays an x-api-key request to api.materialsproject.org (web MP key, #147 — relay is CatGo's own Worker)`, async () => {
+    const fetch_mock = vi.fn().mockResolvedValue(new Response(`{}`, { status: 200 }))
+    vi.stubGlobal(`fetch`, fetch_mock)
+    try {
+      const url = `https://api.materialsproject.org/materials/summary/?_limit=1`
+      const resp = await relay_fetch(url, { headers: { 'X-API-KEY': `secret` } })
+      expect(resp.status).toBe(200)
+      expect(fetch_mock).toHaveBeenCalledWith(relay_url(url), expect.anything())
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   describe(`mobile native path`, () => {
@@ -119,11 +135,11 @@ describe(`relay_fetch auth-header guard (§8 C)`, () => {
       )
     })
 
-    it(`still refuses to relay a key when the native plugin is unavailable on mobile`, async () => {
+    it(`still refuses a non-allowlisted key when the native plugin is unavailable on mobile`, async () => {
       mobile_flag.value = true
       tauri_fetch_mock.mockRejectedValue(new Error(`plugin missing`))
       await expect(
-        relay_fetch(`https://api.materialsproject.org/x`, {
+        relay_fetch(`https://integrate.api.nvidia.com/v1/models`, {
           headers: { 'X-API-KEY': `secret` },
         }),
       ).rejects.toThrow(/Refusing to relay/)
