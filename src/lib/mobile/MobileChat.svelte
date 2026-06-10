@@ -20,6 +20,7 @@
 -->
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import Icon from '$lib/Icon.svelte'
   import { get_display_text } from '$lib/chat/types'
   import {
@@ -29,6 +30,7 @@
     send_message,
     set_session_api_key,
   } from '$lib/chat/chat-state.svelte'
+  import type { PermissionEntry } from '$lib/chat/chat-state.svelte'
   import { loadApiKey, redact } from './ai-keys'
   import MobileChatSetup from './MobileChatSetup.svelte'
   import { build_structure_context } from '$lib/chat/context'
@@ -107,6 +109,23 @@
   let setup_open = $state(false)
 
   let input = $state(``)
+
+  // Tool rows the user has tapped open (entries are replaced wholesale at the
+  // start of each client-direct run, so no per-send cleanup is needed).
+  const expanded_tools = new SvelteSet<string>()
+  function toggle_tool(id: string): void {
+    if (expanded_tools.has(id)) expanded_tools.delete(id)
+    else expanded_tools.add(id)
+  }
+
+  // "Don't ask again this session" checkbox state for the permission card.
+  let skip_session = $state(false)
+
+  function decide_permission(entry: PermissionEntry, ok: boolean): void {
+    entry.status = ok ? `approved` : `denied`
+    if (ok && skip_session) slice.skip_permission.value = true
+    entry.resolve?.(ok)
+  }
 
   // Load the stored key for the current provider whenever it changes. Async-race
   // guard (§5): capture the provider; only apply if it's still selected on
@@ -308,6 +327,45 @@
           {/if}
         {/each}
       {/if}
+
+      <!-- Tool calls of the current run: compact status rows, tap to expand -->
+      {#each Object.entries(slice.active_tool_blocks.entries) as [id, tb] (id)}
+        <div class="ai-tool" class:error={tb.status === `error`}>
+          <button type="button" class="ai-tool-row" onclick={() => toggle_tool(id)}>
+            {#if tb.status === `running`}
+              <span class="ai-dots" aria-hidden="true"></span>
+            {:else if tb.status === `error`}
+              <span class="ai-tool-mark err">✗</span>
+            {:else}
+              <span class="ai-tool-mark ok">✓</span>
+            {/if}
+            <span class="ai-tool-name">{tb.toolName}</span>
+            {#if tb.status === `error`}<span class="ai-tool-sub">{t(`mobile.ai_tool_failed`)}</span>{/if}
+          </button>
+          {#if expanded_tools.has(id)}
+            <pre class="ai-tool-out">{tb.output || JSON.stringify(tb.input, null, 1)}</pre>
+          {/if}
+        </div>
+      {/each}
+
+      <!-- Pending mutating-tool permission cards (client-direct loop) -->
+      {#each Object.entries(slice.active_permission_blocks.entries) as [id, pb] (id)}
+        {#if pb.status === `pending` && pb.resolve}
+          <div class="ai-perm" role="alertdialog" aria-label={t(`mobile.ai_tool_permission`)}>
+            <div class="ai-perm-title">{t(`mobile.ai_tool_permission`)}</div>
+            <div class="ai-perm-tool">{pb.toolName}</div>
+            <pre class="ai-perm-input">{JSON.stringify(pb.input, null, 1)}</pre>
+            <label class="ai-perm-skip">
+              <input type="checkbox" bind:checked={skip_session} />
+              {t(`mobile.ai_dont_ask_again`)}
+            </label>
+            <div class="ai-perm-actions">
+              <button type="button" class="ai-perm-deny" onclick={() => decide_permission(pb, false)}>{t(`mobile.ai_deny`)}</button>
+              <button type="button" class="ai-perm-allow" onclick={() => decide_permission(pb, true)}>{t(`mobile.ai_allow`)}</button>
+            </div>
+          </div>
+        {/if}
+      {/each}
 
       {#if slice.loading.value}
         <div class="ai-thinking" aria-live="polite">
@@ -681,5 +739,66 @@
   }
   .ai-send.stop {
     background: #ff6b6b;
+  }
+  .ai-tool {
+    margin: 2px 0;
+    border-radius: 8px;
+    background: var(--surface-2, rgba(148, 163, 184, 0.08));
+    overflow: hidden;
+  }
+  .ai-tool-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-color-muted, #94a3b8);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ai-tool-mark.ok { color: var(--success-color, #4ade80); }
+  .ai-tool-mark.err { color: #ff6b6b; }
+  .ai-tool-name { font-family: monospace; }
+  .ai-tool-sub { margin-left: auto; font-size: 12px; opacity: 0.8; }
+  .ai-tool-out,
+  .ai-perm-input {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    font-family: monospace;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--text-color-muted, #94a3b8);
+    background: rgba(0, 0, 0, 0.15);
+  }
+  .ai-tool-out { max-height: 40vh; overflow-y: auto; }
+  .ai-perm {
+    margin: 6px 0;
+    padding: 10px;
+    border: 1px solid rgba(250, 204, 21, 0.6);
+    border-radius: 10px;
+    display: grid;
+    gap: 8px;
+  }
+  .ai-perm-title { font-weight: 600; font-size: 14px; color: var(--text-color, #e0e0e0); }
+  .ai-perm-tool { font-family: monospace; font-size: 13px; color: var(--text-color-muted, #94a3b8); }
+  .ai-perm-skip { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-color-muted, #94a3b8); }
+  .ai-perm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .ai-perm-actions button {
+    min-height: 40px;
+    padding: 0 16px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .ai-perm-allow { background: var(--accent-color, #3b82f6); color: white; }
+  .ai-perm-deny {
+    background: transparent;
+    border-color: rgba(255, 255, 255, 0.12) !important;
+    color: var(--text-color-muted, #94a3b8);
   }
 </style>
