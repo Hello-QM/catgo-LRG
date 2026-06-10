@@ -19,7 +19,7 @@
   renderer only when a fenced code block is detected.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import Icon from '$lib/Icon.svelte'
   import { get_display_text } from '$lib/chat/types'
@@ -121,6 +121,19 @@
   // "Don't ask again this session" checkbox state for the permission card.
   let skip_session = $state(false)
 
+  // The checkbox is per-card UI state; the effective bypass lives per-slice in
+  // slice.skip_permission. Reset the checkbox when switching chat tabs.
+  $effect(() => {
+    void active_id
+    skip_session = false
+  })
+
+  // Cap the permission-card input preview (structure params can be huge).
+  function truncate_input(input: Record<string, unknown>): string {
+    const text = JSON.stringify(input, null, 1)
+    return text.length > 400 ? `${text.slice(0, 400)}…` : text
+  }
+
   function decide_permission(entry: PermissionEntry, ok: boolean): void {
     entry.status = ok ? `approved` : `denied`
     if (ok && skip_session) slice.skip_permission.value = true
@@ -147,6 +160,27 @@
       .catch(() => {
         if (p === chat_config.provider) key_checked = true
       })
+  })
+
+  // Scroll container bound in the template — used for auto-scroll below.
+  let body_el = $state<HTMLElement | null>(null)
+
+  // Auto-scroll to bottom on new content (messages, tool rows, permission
+  // cards) — a pending permission card below the fold would otherwise look
+  // like a hang while the tool loop blocks awaiting the decision.
+  $effect(() => {
+    // Touch the reactive sources so the effect re-runs on any of them.
+    void slice.messages.list.length
+    void get_display_text(
+      slice.messages.list[slice.messages.list.length - 1]?.content ?? ``,
+    ).length
+    void Object.values(slice.active_tool_blocks.entries)
+      .map((tb) => tb.status)
+      .join()
+    void Object.keys(slice.active_permission_blocks.entries).length
+    const el = body_el
+    if (!el) return
+    tick().then(() => el.scrollTo({ top: el.scrollHeight }))
   })
 
   // Abort the active chat's in-flight stream when the overlay unmounts (§6).
@@ -308,7 +342,7 @@
       <MobileChatSetup on_done={on_setup_done} />
     </div>
   {:else}
-    <div class="ai-body">
+    <div class="ai-body" bind:this={body_el}>
       {#if slice.messages.list.length === 0}
         <div class="ai-empty">
           <Icon icon="Chat" />
@@ -354,7 +388,7 @@
           <div class="ai-perm" role="alertdialog" aria-label={t(`mobile.ai_tool_permission`)}>
             <div class="ai-perm-title">{t(`mobile.ai_tool_permission`)}</div>
             <div class="ai-perm-tool">{pb.toolName}</div>
-            <pre class="ai-perm-input">{JSON.stringify(pb.input, null, 1)}</pre>
+            <pre class="ai-perm-input">{truncate_input(pb.input)}</pre>
             <label class="ai-perm-skip">
               <input type="checkbox" bind:checked={skip_session} />
               {t(`mobile.ai_dont_ask_again`)}
@@ -775,6 +809,12 @@
     background: rgba(0, 0, 0, 0.15);
   }
   .ai-tool-out { max-height: 40vh; overflow-y: auto; }
+  .ai-perm-input {
+    max-height: 120px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
   .ai-perm {
     margin: 6px 0;
     padding: 10px;
