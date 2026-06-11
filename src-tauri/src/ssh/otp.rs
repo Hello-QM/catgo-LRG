@@ -133,6 +133,19 @@ pub async fn ssh_submit_otp(
             message: "OTP rejected".into(),
             ..Default::default()
         }),
+        // The connection died while the handshake sat waiting for the code —
+        // the server's LoginGraceTime / Duo timeout expired, or (common on
+        // iOS) switching to an authenticator app suspended CatGo long enough
+        // for the socket to drop. The raw russh wording ("Unable to receive
+        // more messages from the channel") reads like a bug; tell the user
+        // what actually happened and what to do.
+        Err(russh::Error::RecvError | russh::Error::SendError | russh::Error::Disconnect) => {
+            Ok(ConnectResult {
+                message: "OTP session expired: the SSH server closed the connection while                           waiting for the code (switching to another app to read it can                           suspend CatGo long enough to time out). Please connect again."
+                    .into(),
+                ..Default::default()
+            })
+        }
         Err(e) => Ok(ConnectResult {
             message: format!("OTP error: {e}"),
             ..Default::default()
