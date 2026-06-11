@@ -79,19 +79,29 @@
   ]
 </script>
 
+<!-- pointerdown preventDefault on EVERY key: a plain button tap steals focus
+     from xterm's hidden textarea, which dismisses the soft keyboard. Normal
+     keys got refocused by the parent's send_keys, but Ctrl emits nothing — so
+     tapping Ctrl collapsed the keyboard and the Ctrl+<letter> flow broke. -->
 <div class="keybar" role="toolbar" aria-label="Terminal keys">
   <button
     type="button"
     class="key ctrl"
     class:armed={ctrl_armed}
     aria-pressed={ctrl_armed}
+    onpointerdown={(e) => e.preventDefault()}
     onclick={toggle_ctrl}
   >
     Ctrl
   </button>
 
   {#each keys as k (k.label)}
-    <button type="button" class="key" onclick={() => press(k.seq)}>
+    <button
+      type="button"
+      class="key"
+      onpointerdown={(e) => e.preventDefault()}
+      onclick={() => press(k.seq)}
+    >
       {k.label}
     </button>
   {/each}

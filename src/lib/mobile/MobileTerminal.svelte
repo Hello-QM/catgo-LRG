@@ -257,9 +257,11 @@
         term.onData((data: string) => {
           if (disposed || !channel_id) return
           let out = data
-          if (kb_ctrl_armed && data.length === 1) {
+          if (kb_ctrl_armed) {
+            // Disarm on ANY input: a predictive-keyboard burst (length > 1)
+            // must not leave Ctrl stuck armed for a later keystroke.
             kb_ctrl_armed = false
-            const ctl = to_control(data)
+            const ctl = data.length === 1 ? to_control(data) : null
             if (ctl !== null) out = ctl
           }
           transport
