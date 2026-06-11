@@ -2,12 +2,18 @@ import '../src/lib/app.css'
 import App from './App.svelte'
 import { mount } from 'svelte'
 import { init_backend_url } from '../src/lib/api/backend-url.svelte'
+import { install_external_link_handler } from '../src/lib/io/external-links'
 
 // Model C: a hosted frontend can target a user-chosen backend. Apply the saved
 // backend URL (localStorage 'catgo-backend-url') to ALL API consumers BEFORE the
 // app mounts and any HPC/MP/chat/compute module makes its first call. No-op when
 // nothing is saved, so the default (http://localhost:8000) is preserved.
 init_backend_url()
+
+// In the Tauri shells (desktop + mobile), plain external <a> links are blocked
+// by the WebView; route them through shell.open so they reach the system
+// browser. No-op in regular browser builds.
+install_external_link_handler()
 
 const target = document.getElementById(`app`)!
 
