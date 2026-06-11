@@ -2,7 +2,13 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for CatGo",
-  "windows": ["main", "workflow-editor", "terminal", "terminal-*", "doping-pt-*"],
+  "windows": [
+    "main",
+    "workflow-editor",
+    "terminal",
+    "terminal-*",
+    "doping-pt-*"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",
@@ -38,23 +44,44 @@
     {
       "identifier": "shell:allow-execute",
       "allow": [
-        { "name": "catgo-server", "sidecar": true, "args": true },
-        { "name": "catgo-agent", "sidecar": true, "args": true }
+        {
+          "name": "catgo-server",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "catgo-agent",
+          "sidecar": true,
+          "args": true
+        }
       ]
     },
     {
       "identifier": "shell:allow-spawn",
       "allow": [
-        { "name": "catgo-server", "sidecar": true, "args": true },
-        { "name": "catgo-agent", "sidecar": true, "args": true }
+        {
+          "name": "catgo-server",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "catgo-agent",
+          "sidecar": true,
+          "args": true
+        }
       ]
     },
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://**" },
-        { "url": "http://**" }
+        {
+          "url": "https://**"
+        },
+        {
+          "url": "http://**"
+        }
       ]
-    }
+    },
+    "clipboard-manager:allow-write-text"
   ]
 }
