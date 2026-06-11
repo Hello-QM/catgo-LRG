@@ -1,0 +1,12 @@
+[package]
+name = "tauri-plugin-bg-grace"
+version = "0.1.0"
+description = "Keep CatGo alive ~30s after backgrounding on iOS (beginBackgroundTask) so SSH sessions and pending OTP handshakes survive a quick app switch"
+edition = "2021"
+links = "tauri-plugin-bg-grace"
+
+[dependencies]
+tauri = { version = "2" }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

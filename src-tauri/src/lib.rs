@@ -204,6 +204,12 @@ pub fn run() {
         // on both desktop and mobile (the SSH module is not cfg-gated).
         .manage(ssh::SshState::default());
 
+    // iOS only: ~30 s background grace (beginBackgroundTask) so SSH sockets and
+    // pending OTP handshakes survive a quick switch to an authenticator app
+    // (reading a 2FA code) instead of dying when iOS freezes the process.
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_bg_grace::init());
+
     // Desktop-only managed state: the Python/Node sidecars (BackendState,
     // AgentState) and the local-PTY terminal (PtyState) only exist on desktop.
     #[cfg(desktop)]
