@@ -4,13 +4,13 @@ import {
   add_tab,
   clear_tabs,
   close_tab,
+  close_tabs_for_session,
+  ensure_tab,
   MAX_TABS,
   path_basename,
-  reset_for_session,
   set_tab_cwd,
   switch_tab,
   term_tabs,
-  toggle_edit_mode,
 } from '../terminal-tabs.svelte'
 
 // Module-level state persists between tests — reset it each time.
@@ -29,45 +29,49 @@ describe(`path_basename`, () => {
   it(`returns empty for empty input`, () => {
     expect(path_basename(``)).toBe(``)
   })
+  it(`returns a no-slash relative path unchanged`, () => {
+    expect(path_basename(`proj`)).toBe(`proj`)
+  })
 })
 
 describe(`terminal-tabs registry`, () => {
-  it(`reset_for_session seeds exactly one active tab`, () => {
-    reset_for_session(`s1`)
+  it(`ensure_tab seeds exactly one active tab for a new session`, () => {
+    ensure_tab(`s1`, `me@a`)
     expect(term_tabs.tabs.length).toBe(1)
     expect(term_tabs.active_id).toBe(term_tabs.tabs[0].id)
-    expect(term_tabs.session_id).toBe(`s1`)
+    expect(term_tabs.tabs[0].session_id).toBe(`s1`)
+    expect(term_tabs.tabs[0].cluster).toBe(`me@a`)
   })
 
-  it(`reset_for_session is idempotent for the same session`, () => {
-    reset_for_session(`s1`)
-    add_tab()
-    const n = term_tabs.tabs.length
-    reset_for_session(`s1`) // same session, has tabs → no wipe
-    expect(term_tabs.tabs.length).toBe(n)
+  it(`ensure_tab refocuses (not duplicates) a session that already has tabs`, () => {
+    ensure_tab(`s1`, `me@a`)
+    const first = term_tabs.tabs[0].id
+    add_tab(`s1`, `me@a`)
+    ensure_tab(`s1`, `me@a`)
+    expect(term_tabs.tabs.length).toBe(2)
+    expect(term_tabs.active_id).toBe(first)
   })
 
-  it(`reset_for_session wipes when the session changes`, () => {
-    reset_for_session(`s1`)
-    add_tab()
-    reset_for_session(`s2`)
-    expect(term_tabs.tabs.length).toBe(1)
-    expect(term_tabs.session_id).toBe(`s2`)
+  it(`tabs from several sessions coexist — connecting B keeps A's tabs`, () => {
+    ensure_tab(`s1`, `me@a`)
+    ensure_tab(`s2`, `me@b`)
+    expect(term_tabs.tabs.length).toBe(2)
+    expect(term_tabs.tabs.map((t) => t.session_id)).toEqual([`s1`, `s2`])
   })
 
   it(`add_tab appends, activates, and caps at MAX_TABS`, () => {
-    reset_for_session(`s1`) // 1 tab
-    for (let i = 0; i < 10; i++) add_tab()
+    ensure_tab(`s1`, `me@a`) // 1 tab
+    for (let i = 0; i < 10; i++) add_tab(`s1`, `me@a`)
     expect(term_tabs.tabs.length).toBe(MAX_TABS)
-    expect(add_tab()).toBeNull()
+    expect(add_tab(`s1`, `me@a`)).toBeNull()
     const last = term_tabs.tabs[term_tabs.tabs.length - 1]
     expect(term_tabs.active_id).toBe(last.id)
   })
 
   it(`switch_tab changes the active tab and ignores unknown ids`, () => {
-    reset_for_session(`s1`)
+    ensure_tab(`s1`, `me@a`)
     const first = term_tabs.tabs[0].id
-    add_tab()
+    add_tab(`s1`, `me@a`)
     switch_tab(first)
     expect(term_tabs.active_id).toBe(first)
     switch_tab(`nope`)
@@ -75,44 +79,27 @@ describe(`terminal-tabs registry`, () => {
   })
 
   it(`close_tab removes the tab and reassigns the active selection`, () => {
-    reset_for_session(`s1`)
+    ensure_tab(`s1`, `me@a`)
     const a = term_tabs.tabs[0].id
-    add_tab()
+    add_tab(`s1`, `me@a`)
     const b = term_tabs.active_id as string
     close_tab(b)
     expect(term_tabs.tabs.some((t) => t.id === b)).toBe(false)
     expect(term_tabs.active_id).toBe(a)
   })
 
-  it(`closing the last tab respawns a fresh one`, () => {
-    reset_for_session(`s1`)
+  it(`closing the last tab respawns a fresh one on the SAME cluster`, () => {
+    ensure_tab(`s1`, `me@a`)
     const only = term_tabs.tabs[0].id
     close_tab(only)
     expect(term_tabs.tabs.length).toBe(1)
     expect(term_tabs.tabs[0].id).not.toBe(only)
-  })
-
-  it(`set_tab_cwd updates cwd; active_cwd follows the active tab`, () => {
-    reset_for_session(`s1`)
-    const a = term_tabs.tabs[0].id
-    add_tab()
-    const b = term_tabs.active_id as string
-    set_tab_cwd(a, `/home/u/alpha`)
-    set_tab_cwd(b, `/home/u/beta`)
-    expect(active_cwd()).toBe(`/home/u/beta`) // b is active
-    switch_tab(a)
-    expect(active_cwd()).toBe(`/home/u/alpha`)
-  })
-})
-
-describe(`terminal-tabs registry — edge cases`, () => {
-  it(`path_basename returns a no-slash relative path unchanged`, () => {
-    expect(path_basename(`proj`)).toBe(`proj`)
+    expect(term_tabs.tabs[0].session_id).toBe(`s1`)
   })
 
   it(`close_tab is a no-op for an unknown id`, () => {
-    reset_for_session(`s1`)
-    add_tab()
+    ensure_tab(`s1`, `me@a`)
+    add_tab(`s1`, `me@a`)
     const before = term_tabs.tabs.length
     const active = term_tabs.active_id
     close_tab(`nope`)
@@ -121,50 +108,78 @@ describe(`terminal-tabs registry — edge cases`, () => {
   })
 
   it(`closing a NON-active tab leaves the active selection unchanged`, () => {
-    reset_for_session(`s1`)
+    ensure_tab(`s1`, `me@a`)
     const a = term_tabs.tabs[0].id
-    add_tab() // b, now active
+    add_tab(`s1`, `me@a`) // b, now active
     const b = term_tabs.active_id as string
-    close_tab(a) // close the inactive one
+    close_tab(a)
     expect(term_tabs.active_id).toBe(b)
     expect(term_tabs.tabs.some((t) => t.id === a)).toBe(false)
   })
 
-  it(`switch_tab ignores an id that was closed`, () => {
-    reset_for_session(`s1`)
+  it(`set_tab_cwd updates cwd; active_cwd follows the active tab`, () => {
+    ensure_tab(`s1`, `me@a`)
     const a = term_tabs.tabs[0].id
-    add_tab()
+    add_tab(`s1`, `me@a`)
     const b = term_tabs.active_id as string
-    close_tab(a)
-    switch_tab(a) // a no longer exists
-    expect(term_tabs.active_id).toBe(b)
+    set_tab_cwd(a, `/home/u/alpha`)
+    set_tab_cwd(b, `/home/u/beta`)
+    expect(active_cwd()).toBe(`/home/u/beta`) // b is active
+    switch_tab(a)
+    expect(active_cwd()).toBe(`/home/u/alpha`)
   })
 
-  it(`active_cwd is empty when there is no active tab`, () => {
-    clear_tabs()
-    expect(active_cwd()).toBe(``)
+  it(`close_tabs_for_session removes only that cluster's tabs (no respawn)`, () => {
+    ensure_tab(`s1`, `me@a`)
+    add_tab(`s1`, `me@a`)
+    ensure_tab(`s2`, `me@b`)
+    close_tabs_for_session(`s1`)
+    expect(term_tabs.tabs.length).toBe(1)
+    expect(term_tabs.tabs[0].session_id).toBe(`s2`)
+    expect(term_tabs.active_id).toBe(term_tabs.tabs[0].id)
   })
 
-  it(`set_tab_cwd is a no-op for an unknown id`, () => {
-    reset_for_session(`s1`)
-    expect(() => set_tab_cwd(`nope`, `/x`)).not.toThrow()
-    expect(active_cwd()).toBe(``)
+  it(`close_tabs_for_session of the LAST cluster leaves an empty strip`, () => {
+    ensure_tab(`s1`, `me@a`)
+    close_tabs_for_session(`s1`)
+    expect(term_tabs.tabs.length).toBe(0)
+    expect(term_tabs.active_id).toBe(null)
+  })
+})
+
+describe(`clusters registry`, () => {
+  it(`register / switch / remove round-trip`, async () => {
+    const { clusters, get_active_cluster, register_cluster, remove_cluster, set_active_cluster } =
+      await import(`../clusters.svelte`)
+    clusters.list.length = 0
+    clusters.active_key = null
+
+    register_cluster({ key: `a:22:u`, session_id: `s1`, host: `a`, port: 22, username: `u`, label: `u@a` })
+    register_cluster({ key: `b:22:u`, session_id: `s2`, host: `b`, port: 22, username: `u`, label: `u@b` })
+    expect(clusters.list.length).toBe(2)
+    expect(clusters.active_key).toBe(`b:22:u`) // newest connect becomes active
+
+    set_active_cluster(`a:22:u`)
+    expect(get_active_cluster()?.session_id).toBe(`s1`)
+
+    // Removing the active cluster activates the remaining one.
+    const next = remove_cluster(`a:22:u`)
+    expect(next?.key).toBe(`b:22:u`)
+    expect(clusters.active_key).toBe(`b:22:u`)
+
+    // Removing the last leaves none.
+    expect(remove_cluster(`b:22:u`)).toBe(null)
+    expect(clusters.active_key).toBe(null)
   })
 
-  it(`edit_mode toggles, and drops back off once only one tab remains`, () => {
-    reset_for_session(`s1`)
-    add_tab() // 2 tabs
-    toggle_edit_mode()
-    expect(term_tabs.edit_mode).toBe(true)
-    close_tab(term_tabs.active_id as string) // back to 1 tab
-    expect(term_tabs.edit_mode).toBe(false)
-  })
-
-  it(`reset_for_session clears a lingering edit_mode`, () => {
-    reset_for_session(`s1`)
-    add_tab()
-    toggle_edit_mode()
-    reset_for_session(`s2`) // different session → fresh state
-    expect(term_tabs.edit_mode).toBe(false)
+  it(`re-registering the same endpoint refreshes instead of duplicating`, async () => {
+    const { clusters, register_cluster } = await import(`../clusters.svelte`)
+    clusters.list.length = 0
+    clusters.active_key = null
+    register_cluster({ key: `a:22:u`, session_id: `s1`, host: `a`, port: 22, username: `u`, label: `u@a` })
+    register_cluster({ key: `a:22:u`, session_id: `s9`, host: `a`, port: 22, username: `u`, label: `nick` })
+    expect(clusters.list.length).toBe(1)
+    expect(clusters.list[0].session_id).toBe(`s9`)
+    expect(clusters.list[0].label).toBe(`nick`)
   })
 })

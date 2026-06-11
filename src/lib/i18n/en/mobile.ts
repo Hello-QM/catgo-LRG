@@ -124,6 +124,11 @@ const mobile: Record<string, string> = {
   term_panel:             `Terminals`,
   term_label:             `Terminal {n}`,
   term_new:               `New terminal`,
+  term_add_where:         `New terminal on…`,
+  term_add_new_cluster:   `Connect a new cluster…`,
+  connected_label:        `Connected clusters`,
+  connected_current:      `current`,
+  connected_eject:        `Disconnect this cluster`,
   term_close:             `Close terminal`,
   term_edit:              `Edit terminals`,
 

@@ -8,10 +8,11 @@
  * component (the `$effect` closure), NOT here — storing DOM-tied objects in
  * module state would leak and block GC after a tab closes.
  *
- * Single-host (v1): the list belongs to the currently-connected session. Call
- * `reset_for_session(id)` on (re)connect to seed a fresh single tab, and
- * `clear_tabs()` on disconnect. Multi-host (a `Map<endpointKey, TermTab[]>`) is
- * a future extension — see docs/developer/mobile-terminal-tabs-design.md.
+ * Multi-host: each tab carries the `session_id` (and a cluster label) it is
+ * bound to, so tabs for several clusters coexist in one strip. `ensure_tab()`
+ * seeds a first tab per session on connect; `close_tabs_for_session()` removes
+ * a cluster's tabs on eject. (Supersedes the single-host v1 noted in
+ * docs/developer/mobile-terminal-tabs-design.md §6.1.)
  */
 
 export type TermTab = {
@@ -21,6 +22,11 @@ export type TermTab = {
   cwd: string
   /** 1-based creation ordinal, used for the `Terminal N` fallback label. */
   seq: number
+  /** The live SSH session this tab's PTY runs on. */
+  session_id: string
+  /** Short cluster label (saved-connection nickname or `user@host`) shown on
+   * the chip when tabs from several clusters coexist. */
+  cluster: string
 }
 
 /** Hard cap on simultaneous terminals (N live PTYs + xterm instances on a
@@ -32,8 +38,6 @@ export const term_tabs = $state({
   active_id: null as string | null,
   /** Edit mode reveals a ✕ on each tab for closing several quickly. */
   edit_mode: false,
-  /** The session these tabs belong to (single-host v1). */
-  session_id: null as string | null,
 })
 
 // Monotonic across the whole app life so ids never collide, even after a
@@ -56,11 +60,11 @@ export function path_basename(path: string): string {
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
 
-/** Add a terminal and make it active. No-op (returns null) past MAX_TABS. */
-export function add_tab(): string | null {
+/** Add a terminal on `session_id` and make it active. No-op past MAX_TABS. */
+export function add_tab(session_id: string, cluster: string): string | null {
   if (term_tabs.tabs.length >= MAX_TABS) return null
   seq_counter += 1
-  const tab: TermTab = { id: next_id(), cwd: ``, seq: seq_counter }
+  const tab: TermTab = { id: next_id(), cwd: ``, seq: seq_counter, session_id, cluster }
   term_tabs.tabs.push(tab)
   term_tabs.active_id = tab.id
   return tab.id
@@ -76,12 +80,14 @@ export function switch_tab(id: string): void {
 export function close_tab(id: string): void {
   const idx = term_tabs.tabs.findIndex((t) => t.id === id)
   if (idx === -1) return
+  const closed = term_tabs.tabs[idx]
   term_tabs.tabs.splice(idx, 1)
   // The ✕ affordance only shows with >1 tab, so don't leave edit mode "on"
   // (and re-appearing) once we're back down to a single terminal.
   if (term_tabs.tabs.length <= 1) term_tabs.edit_mode = false
   if (term_tabs.tabs.length === 0) {
-    add_tab() // last-tab respawn — always ≥ 1 terminal
+    // last-tab respawn on the same cluster — always ≥ 1 terminal
+    add_tab(closed.session_id, closed.cluster)
     return
   }
   if (term_tabs.active_id === id) {
@@ -106,23 +112,33 @@ export function active_cwd(): string {
   return tab?.cwd ?? ``
 }
 
-/** Seed a fresh single-tab registry for a (new) session. Idempotent for the
- *  same session id that already has tabs, so re-renders don't wipe state. */
-export function reset_for_session(session_id: string): void {
-  if (term_tabs.session_id === session_id && term_tabs.tabs.length > 0) return
-  term_tabs.tabs = []
-  term_tabs.active_id = null
-  term_tabs.edit_mode = false
-  term_tabs.session_id = session_id
-  seq_counter = 0
-  add_tab()
+/** Make sure `session_id` has at least one tab; activate its first tab.
+ *  Idempotent — reconnecting/switching to a cluster that already has tabs
+ *  just focuses them instead of wiping anything. */
+export function ensure_tab(session_id: string, cluster: string): void {
+  const existing = term_tabs.tabs.find((t) => t.session_id === session_id)
+  if (existing) {
+    term_tabs.active_id = existing.id
+    return
+  }
+  add_tab(session_id, cluster)
 }
 
-/** Wipe everything (on disconnect). */
+/** Close all tabs bound to one session (cluster eject). Unlike close_tab,
+ *  closing the last tab overall does NOT respawn — an empty strip is correct
+ *  when no cluster is connected. */
+export function close_tabs_for_session(session_id: string): void {
+  term_tabs.tabs = term_tabs.tabs.filter((t) => t.session_id !== session_id)
+  if (term_tabs.tabs.length <= 1) term_tabs.edit_mode = false
+  if (!term_tabs.tabs.some((t) => t.id === term_tabs.active_id)) {
+    term_tabs.active_id = term_tabs.tabs[0]?.id ?? null
+  }
+}
+
+/** Wipe everything (full reset, e.g. all clusters gone). */
 export function clear_tabs(): void {
   term_tabs.tabs = []
   term_tabs.active_id = null
   term_tabs.edit_mode = false
-  term_tabs.session_id = null
   seq_counter = 0
 }

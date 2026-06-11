@@ -34,16 +34,25 @@
   import {
     active_cwd,
     add_tab,
-    clear_tabs,
     close_tab,
+    close_tabs_for_session,
+    ensure_tab,
     MAX_TABS,
     path_basename,
-    reset_for_session,
     set_tab_cwd,
     switch_tab,
     term_tabs,
     toggle_edit_mode,
   } from './terminal-tabs.svelte'
+  import {
+    clusters,
+    get_active_cluster,
+    register_cluster,
+    remove_cluster,
+    set_active_cluster,
+  } from './clusters.svelte'
+  import type { ConnectedMeta } from './MobileConnect.svelte'
+  import { endpointKey } from './sessions'
   import { check_tauri } from '$lib/io/tauri'
   import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import Icon from '$lib/Icon.svelte'
@@ -167,6 +176,13 @@
   // stays up), then refit after the DOM shows the now-active tab.
   async function select_tab(id: string): Promise<void> {
     switch_tab(id)
+    // Activating a tab also activates its cluster: Files/Jobs/chat follow.
+    const tab = term_tabs.tabs.find((t) => t.id === id)
+    if (tab && tab.session_id !== session_id) {
+      session_id = tab.session_id
+      const c = clusters.list.find((x) => x.session_id === tab.session_id)
+      if (c) set_active_cluster(c.key)
+    }
     term_refs[id]?.focus?.()
     await tick()
     term_refs[id]?.refit?.()
@@ -202,6 +218,9 @@
     if (sheet_tab) remove_tab(sheet_tab)
   }
   const has_content = $derived(structure != null || trajectory != null)
+  const multi_cluster_tabs = $derived(
+    new Set(term_tabs.tabs.map((t) => t.session_id)).size > 1,
+  )
 
   // Auto-dismiss the save/notice banner so it never sticks permanently; a ✕ also
   // clears it immediately.
@@ -330,19 +349,61 @@
     }
   }
 
-  // Drop the session → the terminal pane shows the connect form again (saved
-  // connections + OTP-only reconnect still apply). The structure stays loaded.
-  function disconnect(): void {
+  // Eject ONE cluster from the workspace (its russh session stays alive on the
+  // Rust side for silent ControlMaster-style reuse — see sessions.ts). Other
+  // connected clusters keep their tabs; the next one becomes active. With no
+  // clusters left the terminal pane shows the connect form again.
+  function eject_cluster(key: string): void {
+    const c = clusters.list.find((x) => x.key === key)
+    if (c) close_tabs_for_session(c.session_id)
+    const next = remove_cluster(key)
+    if (next) {
+      session_id = next.session_id
+      ensure_tab(next.session_id, next.label)
+      return
+    }
     session_id = null
-    clear_tabs()
     ks_visible = false
     files_open = false
     if (!has_content) mode = is_web ? `choose` : `terminal`
   }
 
-  function on_connected(id: string): void {
+  function disconnect(): void {
+    const active = get_active_cluster()
+    if (active) eject_cluster(active.key)
+    else session_id = null
+  }
+
+  // "+" on the tab strip: with one cluster it's ambiguous what the user wants
+  // (another shell here, or a different cluster?) — ask. Selecting a connected
+  // cluster opens a tab on it without re-auth; "new cluster" shows the connect
+  // form WITHOUT dropping any live session.
+  let add_sheet_visible = $state(false)
+  function add_tab_on(cluster_session: string, cluster_label: string): void {
+    add_sheet_visible = false
+    add_tab(cluster_session, cluster_label)
+    const c = clusters.list.find((x) => x.session_id === cluster_session)
+    if (c) {
+      set_active_cluster(c.key)
+      session_id = c.session_id
+    }
+  }
+  function add_new_cluster(): void {
+    add_sheet_visible = false
+    session_id = null // shows MobileConnect; live clusters stay registered
+  }
+
+  function on_connected(id: string, meta: ConnectedMeta): void {
     session_id = id
-    reset_for_session(id) // seed a single terminal tab for this session
+    register_cluster({
+      key: endpointKey(meta.host, meta.port, meta.username),
+      session_id: id,
+      host: meta.host,
+      port: meta.port,
+      username: meta.username,
+      label: meta.label,
+    })
+    ensure_tab(id, meta.label) // seed (or refocus) this cluster's terminal tab
     if (mode === `choose`) mode = `terminal`
 
     // Offer SSH-key passwordless setup once per endpoint (skip if already keyed
@@ -563,7 +624,8 @@
                   >
                     <Icon icon="Terminal" />
                     <span class="mw-tabchip-label"
-                      >{path_basename(tab.cwd) || t(`mobile.term_label`, { n: tab.seq })}</span
+                      >{multi_cluster_tabs ? `${tab.cluster} · ` : ``}{path_basename(tab.cwd) ||
+                        t(`mobile.term_label`, { n: tab.seq })}</span
                     >
                   </button>
                   {#if term_tabs.edit_mode && term_tabs.tabs.length > 1}
@@ -582,7 +644,7 @@
                   class="mw-tab-add"
                   title={t(`mobile.term_new`)}
                   aria-label={t(`mobile.term_new`)}
-                  onclick={() => add_tab()}
+                  onclick={() => (add_sheet_visible = true)}
                 ><Icon icon="Plus" /></button>
               {/if}
               {#if term_tabs.tabs.length > 1}
@@ -604,16 +666,47 @@
                 <div class="mw-termtab" class:inactive={tab.id !== term_tabs.active_id}>
                   <MobileTerminal
                     bind:this={term_refs[tab.id]}
-                    {session_id}
+                    session_id={tab.session_id}
                     on_cwd={(p) => set_tab_cwd(tab.id, p)}
                   />
                 </div>
               {/each}
             </div>
+
+            {#if add_sheet_visible}
+              <!-- "+" chooser: a shell on a connected cluster, or a new cluster. -->
+              <div
+                class="mw-addsheet-backdrop"
+                role="presentation"
+                onclick={() => (add_sheet_visible = false)}
+              >
+                <div
+                  class="mw-addsheet"
+                  role="dialog"
+                  aria-label={t(`mobile.term_new`)}
+                  onclick={(e) => e.stopPropagation()}
+                >
+                  <div class="mw-addsheet-title">{t(`mobile.term_add_where`)}</div>
+                  {#each clusters.list as c (c.key)}
+                    <button type="button" class="mw-addsheet-opt" onclick={() => add_tab_on(c.session_id, c.label)}>
+                      <Icon icon="Terminal" />
+                      <span>{c.label}</span>
+                      {#if c.key === clusters.active_key}
+                        <span class="mw-addsheet-cur">{t(`mobile.connected_current`)}</span>
+                      {/if}
+                    </button>
+                  {/each}
+                  <button type="button" class="mw-addsheet-opt new" onclick={add_new_cluster}>
+                    <Icon icon="Plus" />
+                    <span>{t(`mobile.term_add_new_cluster`)}</span>
+                  </button>
+                </div>
+              </div>
+            {/if}
           </div>
         {:else}
           <div class="mw-connect">
-            <MobileConnect {on_connected} />
+            <MobileConnect {on_connected} on_eject={eject_cluster} />
           </div>
         {/if}
       </div>
@@ -1021,6 +1114,51 @@
   }
   .mw-tabbar::-webkit-scrollbar {
     display: none;
+  }
+  .mw-addsheet-backdrop {
+    position: absolute;
+    inset: 0;
+    background: #0006;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 30;
+  }
+  .mw-addsheet {
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface-bg, var(--page-bg, #fff));
+    border-radius: 12px 12px 0 0;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mw-addsheet-title {
+    font-size: 13px;
+    opacity: 0.7;
+    padding: 4px 6px 8px;
+  }
+  .mw-addsheet-opt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    background: none;
+    border: 1px solid var(--border-color, #4443);
+    border-radius: 8px;
+    padding: 12px;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+  }
+  .mw-addsheet-opt.new {
+    border-style: dashed;
+  }
+  .mw-addsheet-cur {
+    margin-left: auto;
+    font-size: 11px;
+    opacity: 0.65;
   }
   .mw-tabchip {
     position: relative;

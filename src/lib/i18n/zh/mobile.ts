@@ -124,6 +124,11 @@ const mobile: Record<string, string> = {
   term_panel:             `终端`,
   term_label:             `终端 {n}`,
   term_new:               `新建终端`,
+  term_add_where:         `在哪个集群新建终端…`,
+  term_add_new_cluster:   `连接新集群…`,
+  connected_label:        `已连接集群`,
+  connected_current:      `当前`,
+  connected_eject:        `断开此集群`,
   term_close:             `关闭终端`,
   term_edit:              `编辑终端`,
 

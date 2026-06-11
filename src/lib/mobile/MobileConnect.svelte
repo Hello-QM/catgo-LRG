@@ -26,14 +26,36 @@
     type SavedConnection,
   } from './connections'
   import { endpointKey, reuseSession, rememberSession } from './sessions'
+  import { clusters } from './clusters.svelte'
   import { t } from '$lib/i18n/index.svelte'
+
+  export interface ConnectedMeta {
+    host: string
+    port: number
+    username: string
+    /** Saved nickname if set, else `user@host`. */
+    label: string
+  }
 
   interface Props {
     /** Emitted with the live session id once authentication completes. */
-    on_connected?: (session_id: string) => void
+    on_connected?: (session_id: string, meta: ConnectedMeta) => void
+    /** Disconnect one live cluster (endpoint key) — owned by the workspace. */
+    on_eject?: (key: string) => void
   }
 
-  let { on_connected }: Props = $props()
+  let { on_connected, on_eject }: Props = $props()
+
+  function connected_meta(): ConnectedMeta {
+    const h = host.trim()
+    const u = username.trim()
+    return {
+      host: h,
+      port,
+      username: u,
+      label: label.trim() || (port === 22 ? `${u}@${h}` : `${u}@${h}:${port}`),
+    }
+  }
 
   // ─── Saved (non-secret) connections ───
   let saved = $state<SavedConnection[]>([])
@@ -249,7 +271,7 @@
         save_prompt_visible = true
         return
       }
-      on_connected?.(r.sessionId)
+      on_connected?.(r.sessionId, connected_meta())
       return
     }
     // Not connected and no OTP round => authentication failed / refused.
@@ -283,7 +305,7 @@
       if (reused) {
         persist_non_secrets()
         connecting = false
-        on_connected?.(reused)
+        on_connected?.(reused, connected_meta())
         return
       }
     } catch {
@@ -383,7 +405,7 @@
     const id = pending_session
     pending_session = ``
     pending_pw = ``
-    on_connected?.(id)
+    on_connected?.(id, connected_meta())
   }
 
   /** Save the password (encrypted) for OTP-only reconnect, then continue. */
@@ -411,6 +433,45 @@
 <div class="connect-wrap">
   <div class="connect-card">
     <div class="connect-title">{t(`mobile.connect_title`)}</div>
+
+    {#if clusters.list.length > 0}
+      <!-- Clusters the user is logged into RIGHT NOW. Tap = make it the active
+           one (instant — the session is already authenticated); ⏏ = disconnect
+           just that cluster. Connecting a new cluster below does NOT drop these. -->
+      <div class="live-list">
+        <div class="saved-head">
+          <span class="saved-label">{t(`mobile.connected_label`)}</span>
+        </div>
+        {#each clusters.list as c (c.key)}
+          <div class="live-row" class:active={c.key === clusters.active_key}>
+            <button
+              type="button"
+              class="live-pick"
+              onclick={() =>
+                on_connected?.(c.session_id, {
+                  host: c.host,
+                  port: c.port,
+                  username: c.username,
+                  label: c.label,
+                })}
+            >
+              <span class="live-dot" aria-hidden="true"></span>
+              <span class="live-name">{c.label}</span>
+              {#if c.key === clusters.active_key}
+                <span class="live-current">{t(`mobile.connected_current`)}</span>
+              {/if}
+            </button>
+            <button
+              type="button"
+              class="live-eject"
+              title={t(`mobile.connected_eject`)}
+              aria-label={t(`mobile.connected_eject`)}
+              onclick={() => on_eject?.(c.key)}
+            >⏏</button>
+          </div>
+        {/each}
+      </div>
+    {/if}
 
     {#if saved.length > 0}
       <div class="saved-list">
@@ -730,6 +791,61 @@
     font-weight: 600;
     color: var(--text-color, #e0e0e0);
     margin-bottom: 16px;
+  }
+  .live-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .live-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border-color, #4443);
+    border-radius: 8px;
+    padding: 2px 6px 2px 2px;
+  }
+  .live-row.active {
+    border-color: var(--accent-color, #1976d2);
+  }
+  .live-pick {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    background: none;
+    border: none;
+    padding: 8px;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+  }
+  .live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #2e7d32;
+    flex-shrink: 0;
+  }
+  .live-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .live-current {
+    font-size: 11px;
+    opacity: 0.65;
+    flex-shrink: 0;
+  }
+  .live-eject {
+    background: none;
+    border: none;
+    font-size: 16px;
+    padding: 6px 8px;
+    color: inherit;
+    opacity: 0.8;
   }
   .saved-list {
     display: flex;
