@@ -175,7 +175,14 @@ jobs:
           # terminal/files (russh over Tauri invoke, not HTTP). Backend-only UI
           # (chat/workflow/plugin_hub) is already hidden on mobile.
           VITE_STATIC_ONLY: '1'
-        run: pnpm tauri ios build --export-method app-store-connect --config '{"identifier":"org.catgo.app"}'
+        # bundleVersion (CFBundleVersion) must be STRICTLY INCREASING per upload
+        # for App Store Connect — a fixed value (previously the marketing
+        # version) makes every re-upload of the same app version fail with
+        # ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE. github.run_number is
+        # monotonic per workflow, so every run is uploadable.
+        run: >
+          pnpm tauri ios build --export-method app-store-connect
+          --config '{"identifier":"org.catgo.app","bundle":{"iOS":{"bundleVersion":"${{ github.run_number }}"}}}'
 
       # ---- Upload the signed IPA to App Store Connect (TestFlight) ----
       # Needs an App Store Connect API key (App Store Connect → Users and Access →
