@@ -479,6 +479,44 @@ def test_submit_proceeds_when_status_done(tmp_path, _mock_run):
     assert res["jobid"] == "55"
 
 
+# ---- scientific-config sanity gate (P1: safety-critical, pre-submission) ----
+
+def test_sanity_gate_blocks_encut_below_enmax(tmp_path):
+    calc = tmp_path / "c"
+    calc.mkdir()
+    (calc / "INCAR").write_text("ENCUT = 200\nISMEAR = 1\n")
+    (calc / "POSCAR").write_text("c\n1\n1 0 0\n0 1 0\n0 0 1\nPt O\n9 1\n")
+    try:
+        cl.sanity_check_inputs(calc, force=False)
+        assert False, "expected a blocking CampaignError"
+    except cl.CampaignError as exc:
+        assert "ENCUT" in str(exc) and "force" in str(exc).lower()
+
+
+def test_sanity_gate_force_overrides_block(tmp_path):
+    calc = tmp_path / "c"
+    calc.mkdir()
+    (calc / "INCAR").write_text("ENCUT = 200\n")
+    (calc / "POSCAR").write_text("c\n1\n1 0 0\n0 1 0\n0 0 1\nPt O\n9 1\n")
+    lines = cl.sanity_check_inputs(calc, force=True)  # must NOT raise
+    assert any("ENCUT" in l for l in lines)
+
+
+def test_sanity_gate_warnings_do_not_block(tmp_path):
+    calc = tmp_path / "c"
+    calc.mkdir()
+    (calc / "INCAR").write_text("ENCUT = 450\nISMEAR = 1\nSIGMA = 0.1\n")  # 450<520 = warn
+    (calc / "POSCAR").write_text("c\n1\n1 0 0\n0 1 0\n0 0 1\nPt O\n9 1\n")
+    lines = cl.sanity_check_inputs(calc, force=False)  # warn-only, no raise
+    assert any("ENCUT" in l for l in lines)
+
+
+def test_sanity_gate_no_incar_returns_empty(tmp_path):
+    calc = tmp_path / "c"
+    calc.mkdir()
+    assert cl.sanity_check_inputs(calc, force=False) == []
+
+
 def test_scaffold_writes_agent_claude_md(tmp_path):
     root = cl.scaffold_project(tmp_path / "p", "p", template="blank")
     c = root / "CLAUDE.md"

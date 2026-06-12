@@ -428,6 +428,30 @@ def fetch_reference(project, alias: str, remote_path: str) -> Path:
     return dest
 
 
+def sanity_check_inputs(calc_dir, *, force: bool = False) -> list[str]:
+    """Pre-submission scientific-config gate. Validates the calc's VASP inputs
+    (ENCUT vs ENMAX, k-mesh density, ISMEAR/SIGMA, magnetic & closed-shell ISPIN)
+    and returns the warning lines to surface. Raises CampaignError on an
+    error-severity check unless force=True (the human-in-the-loop override:
+    CatGo surfaces the issue + the fix, the user decides). No-ops (returns []) if
+    vasp_sanity is unavailable or the folder has no INCAR to validate."""
+    try:
+        import vasp_sanity as _vs
+    except ImportError:
+        return []
+    is_gas = _vs.detect_is_gas(calc_dir)
+    checks = _vs.validate_calc_dir(calc_dir, is_gas=is_gas)
+    ok, lines = _vs.summarize(checks)
+    if not ok and not force:
+        bad = "; ".join(f"{c.name}: {c.detail}" for c in checks
+                        if c.severity == "error" and not c.ok)
+        raise CampaignError(
+            f"scientific-config check failed -> {bad}. "
+            "Fix the inputs, or pass --force to submit anyway after review."
+        )
+    return lines
+
+
 def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
                 now: str | None = None, force: bool = False) -> dict:
     """Gate-enforcing submit: refuses an unconfirmed cluster.md or a missing
@@ -467,6 +491,10 @@ def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
             "(local file, or pull a remote path with fetch_ref.py)."
         )
 
+    # Scientific-config gate: validate VASP inputs before shipping (blocks on a
+    # hard physics error unless force; warnings are returned to be surfaced).
+    warnings = sanity_check_inputs(local, force=force)
+
     use_alias = alias or cfg.ssh_host
     job_name = calc_rel.rsplit("/", 1)[-1]
     # Remote mirrors the LOCAL tree: use the project folder basename, so the
@@ -490,7 +518,8 @@ def submit_calc(project, calc_rel: str, alias: str, job_type: str = "",
         title=job_name, state="RUNNING", cluster=cfg.cluster, job_type=job_type,
         remote_dir=remote_dir, jobid=jobid, submitted_at=ts, updated_at=ts,
     )))
-    return {"jobid": jobid, "remote_dir": remote_dir, "job_name": job_name}
+    return {"jobid": jobid, "remote_dir": remote_dir, "job_name": job_name,
+            "warnings": warnings}
 
 
 def poll_campaign(project, alias: str, now: str | None = None) -> list[str]:

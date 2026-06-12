@@ -30,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     except cl.CampaignError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    for line in res.get("warnings", []):
+        print("[sanity] " + line.strip(), file=sys.stderr)
     print(f"submitted {res['job_name']} job={res['jobid']} dir={res['remote_dir']}")
     return 0
 
