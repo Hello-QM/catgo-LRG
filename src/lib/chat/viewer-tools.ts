@@ -11,6 +11,19 @@ import { get_viewer_action_handler } from './viewer-tool-executor'
 
 type ViewerToolRun = (input: Record<string, unknown>) => unknown
 
+/** Coerce a model-supplied "boolean" to a real boolean. The schema says boolean,
+ *  but weaker models (e.g. Ollama qwen2.5) often send the STRING `"false"` —
+ *  which is truthy, so `!!"false"` would WRONGLY show what the user asked to
+ *  hide. Treat `false`/`"false"`/`0`/`"no"` as false; everything else by its
+ *  natural truthiness. */
+function as_bool(v: unknown): boolean {
+  if (typeof v === `string`) {
+    const s = v.trim().toLowerCase()
+    return !(s === `false` || s === `0` || s === `no` || s === ``)
+  }
+  return !!v
+}
+
 // Graceful degradation: no viewer mounted/active (headless, SSR, or chat open
 // with no structure pane). Return structured JSON, never throw — the model can
 // report it and retry once a viewer is focused. View tools are idempotent, so a
@@ -38,7 +51,7 @@ function toggle(scene_key: string, subject: string): ViewerToolRun {
   return (input) => {
     const h = get_viewer_action_handler()
     if (!h) return NO_VIEWER
-    const visible = !!input.visible
+    const visible = as_bool(input.visible)
     h.set_scene_prop(scene_key, visible)
     return {
       ok: true,
@@ -84,12 +97,13 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
     run: (input) => {
       const h = get_viewer_action_handler()
       if (!h) return NO_VIEWER
-      const value = input.visible ? `always` : `never`
+      const visible = as_bool(input.visible)
+      const value = visible ? `always` : `never`
       h.set_scene_prop(`show_bonds`, value)
       return {
         ok: true,
         show_bonds: value,
-        message: `Bonds are now ${input.visible ? `shown` : `hidden`}.`,
+        message: `Bonds are now ${visible ? `shown` : `hidden`}.`,
       }
     },
   },
