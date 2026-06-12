@@ -62,7 +62,7 @@ def test_cluster_gate_blocks_empty_and_lists_missing():
 
 def test_cluster_full_is_submittable_roundtrip():
     c = cl.ClusterConfig(
-        cluster="expanse", ssh_host="expanse", account="sdp126",
+        cluster="expanse", ssh_host="expanse", account="abc123",
         partition="shared", walltime="12:00:00", ntasks="64",
         run_command="srun vasp_std", load_method="source setvars.sh",
         potcar_root="/pot", python_env="conda activate pmg",
@@ -85,13 +85,13 @@ _REF = (
 
 def test_adapt_overrides_directives_keeps_preamble_once():
     out = cl.adapt_job_script(
-        _REF, job_name="Pt1-Cu_SAA", work_dir="/w", account="sdp126",
+        _REF, job_name="Pt1-Cu_SAA", work_dir="/w", account="abc123",
         partition="shared", walltime="12:00:00", ntasks="64",
         run_command="srun vasp_std",
     )
     assert "#SBATCH --job-name=Pt1-Cu_SAA" in out
     assert "#SBATCH --time=12:00:00" in out
-    assert "#SBATCH --account=sdp126" in out
+    assert "#SBATCH --account=abc123" in out
     assert "old" not in out and "01:00:00" not in out
     assert "source /home/wli7/intel/oneapi/setvars.sh" in out
     assert "conda activate pmg" in out
@@ -127,7 +127,7 @@ import pytest
 
 def _good_cluster_md():
     return cl.render_cluster(cl.ClusterConfig(
-        cluster="expanse", ssh_host="lab", account="sdp126", partition="shared",
+        cluster="expanse", ssh_host="lab", account="abc123", partition="shared",
         walltime="12:00:00", ntasks="64", run_command="srun vasp_std",
         load_method="source setvars.sh", potcar_root="/pot",
         python_env="conda activate pmg", remote_base="/remote/base",

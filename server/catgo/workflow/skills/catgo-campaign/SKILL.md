@@ -10,13 +10,14 @@ toward one research goal. This skill drives it via the portable `catgo campaign`
 which dispatches to CatGo's campaign reference scripts.
 
 ## Launcher (works from any directory)
-Run via the editable-installed catgo in the catgo conda env — it reflects the LIVE repo
-source (`/home/james0001/project/catgo-LRG/server/catgo/...`), so edits to the campaign
-scripts/SKILL take effect immediately, no reinstall:
+Run via the `catgo` CLI:
 
-    /home/james0001/miniforge3/envs/catgo/bin/catgo campaign <action> ...
+    catgo campaign <action> ...
 
-(If the catgo env is active and `catgo` is on PATH, plain `catgo campaign ...` also works.)
+With an editable install (`pip install -e <repo>/server`) the CLI reflects the LIVE repo
+source, so edits to the campaign scripts/SKILL take effect immediately, no reinstall.
+If `catgo` is not on PATH (env not activated), use the entry point inside its python
+env directly: `<env-prefix>/bin/catgo campaign ...`.
 In the steps below, `catgo campaign` means that launcher.
 
 ## Before anything: confirm the environment (NEVER guess)
