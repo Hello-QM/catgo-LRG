@@ -41,6 +41,7 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "shell:allow-open",
+    "opener:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [
@@ -79,6 +80,12 @@
         },
         {
           "url": "http://**"
+        },
+        {
+          "url": "https://*:*/**"
+        },
+        {
+          "url": "http://*:*/**"
         }
       ]
     },

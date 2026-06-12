@@ -118,7 +118,7 @@
   import ExportSaveDialog from './components/ExportSaveDialog.svelte'
   import CloseAllModal from './components/CloseAllModal.svelte'
 
-  init_i18n().then(() => load_i18n_module('app'))
+  init_i18n().then(() => load_i18n_module(`app`))
 
   // ========== Tab Management (extracted to ./lib/tab-manager.svelte.ts) ==========
   const tm = create_tab_manager()
@@ -144,7 +144,7 @@
   let loading_text = $state(``)
   let drag_target_pane = $state<number | null>(null)
   let is_panel_resizing = $state(false)
-  let resize_axis = $state<'col' | 'row'>('col')
+  let resize_axis = $state<`col` | `row`>(`col`)
 
   // Dep objects wired to local $state
   const sidebar_deps: SidebarHandlerDeps = {
@@ -282,7 +282,7 @@
   function handle_dragover(event: DragEvent) { _handle_dragover(drag_deps, event) }
   function handle_dragleave(event: DragEvent) { _handle_dragleave(drag_deps, event) }
   function handle_drop(event: DragEvent) { return _handle_drop(drag_deps, event) }
-  function on_divider_mousedown(e: MouseEvent, axis: 'col' | 'row', tab_id: string) { _on_divider_mousedown(resize_deps, e, axis, tab_id) }
+  function on_divider_mousedown(e: MouseEvent, axis: `col` | `row`, tab_id: string) { _on_divider_mousedown(resize_deps, e, axis, tab_id) }
   function on_center_mousedown(e: MouseEvent, tab_id: string) { _on_center_mousedown(resize_deps, e, tab_id) }
 
   // ========== Plugin Hub (via Structure.svelte counter prop) ==========
@@ -319,7 +319,7 @@
       close_all_structure_tabs(tm.tabs, tab_states, close_tab)
       modal.close_all_visible = false
     } catch (e) {
-      modal.close_all_error = e instanceof Error ? e.message : t('app.save_failed')
+      modal.close_all_error = e instanceof Error ? e.message : t(`app.save_failed`)
     } finally {
       modal.close_all_saving = false
     }
@@ -480,7 +480,7 @@
     }
     const pane_idx = ts.panes.findIndex(p => !pane_has_content(p))
     const target = pane_idx >= 0 ? pane_idx : ts.active_pane
-    ts.panes[target] = { ...create_empty_pane(), mode: 'workflow', workflow_id, workflow_compact: compact }
+    ts.panes[target] = { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact }
     ts.panes = [...ts.panes]
     ts.active_pane = target
     tm.active_tab_id = ts_tab_id
@@ -590,7 +590,7 @@
       const cc = ts.panes.filter(p => pane_has_content(p)).length
       const current_count = layout_panel_count(ts.layout)
       if (cc > current_count) {
-        ts.layout = cc <= 2 ? 'splitH' : 'quad'
+        ts.layout = cc <= 2 ? `splitH` : `quad`
       }
     }
   })
@@ -807,7 +807,7 @@
     modal.paste_content_visible = false
     // Force canvas resize after DOM update
     tick().then(() => {
-      window.dispatchEvent(new Event('resize'))
+      window.dispatchEvent(new Event(`resize`))
     })
   }
 
@@ -839,14 +839,14 @@
       attrs.n_sites ??
       (Array.isArray(attrs.cartesian_site_positions) ? attrs.cartesian_site_positions.length : 0)
 
-    modal.db_preview_title = t('app.preview_structure_import')
+    modal.db_preview_title = t(`app.preview_structure_import`)
     modal.db_preview_formula = formula
     modal.db_preview_lattice = compute_lattice_params(attrs.lattice_vectors)
     modal.db_preview_details = [
-      { label: t('app.field_id'), value: String(optimade_struct?.id ?? ``), mono: true },
-      { label: t('app.field_formula'), value: formula },
-      { label: t('app.field_sites'), value: String(sites) },
-      { label: t('app.field_database'), value: provider },
+      { label: t(`app.field_id`), value: String(optimade_struct?.id ?? ``), mono: true },
+      { label: t(`app.field_formula`), value: formula },
+      { label: t(`app.field_sites`), value: String(sites) },
+      { label: t(`app.field_database`), value: provider },
     ]
     modal.db_preview_visible = true
   }
@@ -868,15 +868,15 @@
       : (heavy ?? 0)
 
     const rows: Array<{ label: string; value: string; mono?: boolean }> = []
-    if (cid) rows.push({ label: t('app.field_cid'), value: String(cid), mono: true })
-    if (name) rows.push({ label: t('app.field_name'), value: name })
-    if (formula) rows.push({ label: t('app.field_formula'), value: formula })
-    if (n_atoms) rows.push({ label: t('app.field_atoms'), value: String(n_atoms) })
+    if (cid) rows.push({ label: t(`app.field_cid`), value: String(cid), mono: true })
+    if (name) rows.push({ label: t(`app.field_name`), value: name })
+    if (formula) rows.push({ label: t(`app.field_formula`), value: formula })
+    if (n_atoms) rows.push({ label: t(`app.field_atoms`), value: String(n_atoms) })
     if (typeof weight === `number`)
-      rows.push({ label: t('app.field_weight'), value: `${weight.toFixed(2)} g/mol` })
-    rows.push({ label: t('app.field_database'), value: `PubChem` })
+      rows.push({ label: t(`app.field_weight`), value: `${weight.toFixed(2)} g/mol` })
+    rows.push({ label: t(`app.field_database`), value: `PubChem` })
 
-    modal.db_preview_title = t('app.preview_compound_import')
+    modal.db_preview_title = t(`app.preview_compound_import`)
     modal.db_preview_formula = formula
     modal.db_preview_lattice = null
     modal.db_preview_details = rows
@@ -902,9 +902,9 @@
   // Result of parsing one file. 'skip' = ignore silently; 'editor' = not a
   // structure, open raw text in the editor; 'entry' = a library entry payload.
   type IngestOutcome =
-    | { kind: 'entry'; entry: Omit<LibraryEntry, 'id'> }
-    | { kind: 'skip' }
-    | { kind: 'editor'; text: string }
+    | { kind: `entry`; entry: Omit<LibraryEntry, `id`> }
+    | { kind: `skip` }
+    | { kind: `editor`; text: string }
 
   /**
    * Parse a single file into a LibraryEntry payload WITHOUT touching any pane.
@@ -926,7 +926,7 @@
       try {
         let cube_text: string
         try {
-          const { chgcar_to_cube } = await import('$lib/electronic/chgdiff-wasm')
+          const { chgcar_to_cube } = await import(`$lib/electronic/chgdiff-wasm`)
           cube_text = await chgcar_to_cube(text)
         } catch (wasm_err) {
           console.warn(`[CHGCAR] wasm path failed, falling back to backend:`, wasm_err)
@@ -952,10 +952,10 @@
           console.error(`Failed to parse converted cube atoms:`, err)
         }
         const cube_file = new File([new Blob([cube_text], { type: `chemical/x-cube` })], cube_filename)
-        return { kind: 'entry', entry: { filename, source_path: null, format: `cube`, structure, trajectory: undefined, is_trajectory: false, cube_file } }
+        return { kind: `entry`, entry: { filename, source_path: null, format: `cube`, structure, trajectory: undefined, is_trajectory: false, cube_file } }
       } catch (err) {
         console.error(`Failed to convert CHGCAR to cube:`, err)
-        return { kind: 'skip' }
+        return { kind: `skip` }
       }
     }
 
@@ -968,34 +968,34 @@
         console.error(`Failed to parse cube file atoms:`, err)
       }
       const cube_file = new File([new Blob([text], { type: `chemical/x-cube` })], filename)
-      return { kind: 'entry', entry: { filename, source_path: null, format: `cube`, structure, trajectory: undefined, is_trajectory: false, cube_file } }
+      return { kind: `entry`, entry: { filename, source_path: null, format: `cube`, structure, trajectory: undefined, is_trajectory: false, cube_file } }
     }
 
     // Skip non-structure files (images, PDFs, spreadsheets, media, archives, binaries)
     if (NON_STRUCTURE_EXTS.test(filename)) {
       console.warn(`[ingest_one] Skipping non-structure file: ${filename}`)
-      return { kind: 'skip' }
+      return { kind: `skip` }
     }
 
     if (is_trajectory_file(filename, text)) {
       const trajectory = await parse_trajectory_data(content, filename)
       return {
-        kind: 'entry',
+        kind: `entry`,
         entry: {
           filename, source_path: null, format: ext, structure: undefined, trajectory,
           is_trajectory: true, cube_file: null,
           raw_traj_b64: content_to_base64(content),
-          raw_traj_format: filename.split('.').pop()?.toLowerCase() || '',
+          raw_traj_format: filename.split(`.`).pop()?.toLowerCase() || ``,
         },
       }
     }
 
     const parsed = parse_structure_file(text, filename)
     if (parsed?.sites?.length) {
-      return { kind: 'entry', entry: { filename, source_path: null, format: ext, structure: parsed, trajectory: undefined, is_trajectory: false, cube_file: null } }
+      return { kind: `entry`, entry: { filename, source_path: null, format: ext, structure: parsed, trajectory: undefined, is_trajectory: false, cube_file: null } }
     }
     // Can't parse as structure — fall back to the text editor
-    return { kind: 'editor', text }
+    return { kind: `editor`, text }
   }
 
   /** Write a library entry's parsed content into a pane (in-place — Svelte 5 deep proxy). */
@@ -1022,8 +1022,8 @@
       p.initial_site_count = 0
       p.initial_structure_ref = null
       p.cube_file = null
-      p.raw_traj_b64 = e.raw_traj_b64 ?? ''
-      p.raw_traj_format = e.raw_traj_format ?? ''
+      p.raw_traj_b64 = e.raw_traj_b64 ?? ``
+      p.raw_traj_format = e.raw_traj_format ?? ``
     } else {
       p.is_trajectory_mode = false
       p.trajectory = null
@@ -1054,8 +1054,8 @@
       return process_file_content(tm.active_tab_id, content, filename, 0, remote_origin, local_file_path)
     }
     const outcome = await ingest_one(content, filename)
-    if (outcome.kind === 'skip') return
-    if (outcome.kind === 'editor') {
+    if (outcome.kind === `skip`) return
+    if (outcome.kind === `editor`) {
       const session = remote_origin?.session_id || ``
       const fp = remote_origin?.file_path || local_file_path || ``
       handle_sidebar_open_editor(outcome.text, filename, fp, session)
@@ -1096,7 +1096,7 @@
           }
           if (content == null) { failures++; continue }
           const outcome = await ingest_one(content, filename)
-          if (outcome.kind !== 'entry') { failures++; continue }
+          if (outcome.kind !== `entry`) { failures++; continue }
           ts.library.push({ id: crypto.randomUUID(), ...outcome.entry, source_path: it.path ?? outcome.entry.source_path ?? null })
         } catch (err) {
           failures++
@@ -1120,7 +1120,7 @@
     if (!entry) return
     apply_entry_to_pane(tab_id, ts, ts.active_pane, entry)
     ts.active_library_id = id
-    tick().then(() => window.dispatchEvent(new Event('resize')))
+    tick().then(() => window.dispatchEvent(new Event(`resize`)))
   }
 
   /** Remove one entry; if it was active, fall back to the first remaining (or clear the pane). */
@@ -1400,20 +1400,20 @@
           const el = Array.isArray(s.species) ? s.species[0]?.element : s.species
           if (el) elems[el] = (elems[el] || 0) + 1
         }
-        const formula = Object.entries(elems).map(([el, k]) => k > 1 ? `${el}${k}` : el).join('') || '?'
+        const formula = Object.entries(elems).map(([el, k]) => k > 1 ? `${el}${k}` : el).join(``) || `?`
         // Pass `struct` into the onclick closure so opening External shows
         // EXACTLY the structure the toast referred to — bypassing the
         // catch-up fetch (which can race against sample-card / heartbeat
         // overwrites of the panel cache).
         const captured = struct
         show_toast({
-          message: t('app.external_structure_pushed', {
+          message: t(`app.external_structure_pushed`, {
             formula,
             count: String(n),
             s: n === 1 ? `` : `s`,
           }),
           variant: `info`,
-          action: { label: t('app.open_external_viewer'), onclick: () => open_external_tab(captured) },
+          action: { label: t(`app.open_external_viewer`), onclick: () => open_external_tab(captured) },
           duration: 12000,
         })
       } catch (err) {
@@ -1445,13 +1445,13 @@
         // No External tab → toast prompts the user to open one.
         const n_frames = traj?.frames?.length ?? `?`
         show_toast({
-          message: t('app.external_trajectory_pushed', {
-            name: filename || t('app.unnamed'),
+          message: t(`app.external_trajectory_pushed`, {
+            name: filename || t(`app.unnamed`),
             count: String(n_frames),
           }),
           variant: `info`,
           action: {
-            label: t('app.open_external_viewer'),
+            label: t(`app.open_external_viewer`),
             onclick: () => {
               tm.create_remote_tab()
               // After tab is created, inject (next macrotask)
@@ -1553,7 +1553,7 @@
   <button
     class="sidebar-toggle"
     onclick={() => sidebar.collapsed = !sidebar.collapsed}
-    title={sidebar.collapsed ? t('app.show_sidebar') : t('app.hide_sidebar')}
+    title={sidebar.collapsed ? t(`app.show_sidebar`) : t(`app.hide_sidebar`)}
     style="display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; background: transparent; border: 1px solid var(--border-color, rgba(128,128,128,0.2)); border-radius: 4px; color: var(--text-color-muted, #6b7280); cursor: pointer; flex-shrink: 0; transition: color 0.15s, background 0.15s;"
   >
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1669,7 +1669,7 @@
                     <button
                       class="panel-popout-btn"
                       onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, idx) }}
-                      title={t('app.open_in_new_window')}
+                      title={t(`app.open_in_new_window`)}
                     >
                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                         <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
@@ -1681,7 +1681,7 @@
                   <button
                     class="panel-close-btn"
                     onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, idx) }}
-                    title={t('app.close_panel')}
+                    title={t(`app.close_panel`)}
                   >
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                       <path d="M18 6L6 18M6 6l12 12" />
@@ -1696,19 +1696,19 @@
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
                   </svg>
-                  {#if ts.panes[idx].mode === 'workflow'}
-                    <span>{t('app.workflow_will_be_closed')}</span>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t('common.cancel')}</button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t('common.close')}</button>
+                  {#if ts.panes[idx].mode === `workflow`}
+                    <span>{t(`app.workflow_will_be_closed`)}</span>
+                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t(`common.cancel`)}</button>
+                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t(`common.close`)}</button>
                   {:else}
-                    <span>{t('common.save_before_closing')}</span>
+                    <span>{t(`common.save_before_closing`)}</span>
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
                     <select class="banner-select target-select" bind:value={exp.close_save_target} onclick={(e) => e.stopPropagation()}>
-                      <option value="local">{t('app.local')}</option>
+                      <option value="local">{t(`app.local`)}</option>
                       {#if ts.panes[idx].remote_origin?.session_id}
-                        <option value="hpc">{t('app.hpc')}</option>
+                        <option value="hpc">{t(`app.hpc`)}</option>
                       {/if}
-                      <option value="project">{t('app.catgo_db')}</option>
+                      <option value="project">{t(`app.catgo_db`)}</option>
                     </select>
                     {#if exp.close_save_target === `project` && exp.close_save_projects.length > 0}
                       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -1728,17 +1728,17 @@
                       <span class="banner-path" title={ts.panes[idx].remote_origin?.file_path}>{ts.panes[idx].remote_origin?.file_path?.split(/[/\\]/).pop()}</span>
                     {/if}
                     <button class="banner-btn save" disabled={exp.close_saving} onclick={(e) => { e.stopPropagation(); save_and_close_panel(tab.id, idx) }}>
-                      {exp.close_saving ? t('common.saving') : t('common.save_and_close')}
+                      {exp.close_saving ? t(`common.saving`) : t(`common.save_and_close`)}
                     </button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t('common.close')}</button>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t('common.cancel')}</button>
+                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t(`common.close`)}</button>
+                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t(`common.cancel`)}</button>
                   {/if}
                 </div>
               {/if}
 
               <!-- Panel content -->
               <div class="panel-content">
-              {#if pane.mode === 'workflow'}
+              {#if pane.mode === `workflow`}
                 <WorkflowView
                   initial_workflow_id={pane.workflow_id}
                   compact={pane.workflow_compact ?? false}
@@ -1755,7 +1755,7 @@
                   on_file_load={create_on_file_load(tab.id, idx)}
                   fullscreen_toggle={false}
                   allow_file_drop={false}
-                  structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format, tab_id: tab.id }}
+                  structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format, tab_id: tab.id, is_active: ts.active_pane === idx && tab.id === tm.active_tab_id }}
                   style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
                 >
                   {#snippet trajectory_controls({ trajectory: traj, current_step_idx: step, on_step_change })}
@@ -1801,7 +1801,7 @@
                   style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
                 />
               {:else}
-                <div class="landing-page" class:secondary-pane={idx > 0} class:quad-layout={ts.layout === 'quad'} class:stacked-layout={ts.layout === 'splitV'}>
+                <div class="landing-page" class:secondary-pane={idx > 0} class:quad-layout={ts.layout === `quad`} class:stacked-layout={ts.layout === `splitV`}>
                   {#if idx === 0}
                     <!-- Landing-only GitHub link — invites users to star the repo -->
                     <a
@@ -1843,7 +1843,7 @@
                               allow_file_drop={false}
                               align_on_load="none"
                               persist_settings={false}
-                              scene_props={{ atom_radius: 1.6, camera_projection: 'orthographic', initial_zoom: 100 } as any}
+                              scene_props={{ atom_radius: 1.6, camera_projection: `orthographic`, initial_zoom: 100 } as any}
                               style="--struct-height: 100%; --struct-width: 100%; pointer-events: none;"
                             />
                           </div>
@@ -1862,8 +1862,8 @@
                         <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('common.open_file')}</span>
-                        <span class="import-desc">{t('app.multi_select_or_drop')}</span>
+                        <span class="import-title">{t(`common.open_file`)}</span>
+                        <span class="import-desc">{t(`app.multi_select_or_drop`)}</span>
                       </div>
                     </button>
 
@@ -1873,8 +1873,8 @@
                         <path d="M2 10h20"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('common.open_folder')}</span>
-                        <span class="import-desc">{t('app.load_all_structures')}</span>
+                        <span class="import-title">{t(`common.open_folder`)}</span>
+                        <span class="import-desc">{t(`app.load_all_structures`)}</span>
                       </div>
                     </button>
 
@@ -1883,8 +1883,8 @@
                         <path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4s8-1.79 8-4s-3.58-4-8-4M4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9M4 14v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('app.search_database')}</span>
-                        <span class="import-desc">{STATIC_ONLY ? t('app.pubchem_molecules') : t('app.optimade_pubchem')}</span>
+                        <span class="import-title">{t(`app.search_database`)}</span>
+                        <span class="import-desc">{STATIC_ONLY ? t(`app.pubchem_molecules`) : t(`app.optimade_pubchem`)}</span>
                       </div>
                     </button>
 
@@ -1895,13 +1895,13 @@
                         <path d="M9 12h6M9 16h6"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('common.paste')}</span>
+                        <span class="import-title">{t(`common.paste`)}</span>
                         <span class="import-desc">POSCAR/CONTCAR</span>
                       </div>
                     </button>
 
                     {#if !STATIC_ONLY}
-                    <button class="import-card workflow-card" onclick={() => { ts.panes[idx].mode = 'workflow'; ts.panes = [...ts.panes]; update_tab_label(tab.id) }}>
+                    <button class="import-card workflow-card" onclick={() => { ts.panes[idx].mode = `workflow`; ts.panes = [...ts.panes]; update_tab_label(tab.id) }}>
                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                         <rect x="2" y="3" width="6" height="5" rx="1" />
                         <rect x="16" y="3" width="6" height="5" rx="1" />
@@ -1910,8 +1910,8 @@
                         <path d="M12 13v3" />
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('common.workflow')}</span>
-                        <span class="import-desc">{t('app.pipeline_editor')}</span>
+                        <span class="import-title">{t(`common.workflow`)}</span>
+                        <span class="import-desc">{t(`app.pipeline_editor`)}</span>
                       </div>
                     </button>
                     {/if}
@@ -1942,8 +1942,8 @@
                         <path d="M12 10.5v2.5l-4.5 3M12 13l4.5 3"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('app.build')}</span>
-                        <span class="import-desc">{t('app.build_desc')}</span>
+                        <span class="import-title">{t(`app.build`)}</span>
+                        <span class="import-desc">{t(`app.build_desc`)}</span>
                       </div>
                     </button>
 
@@ -1962,8 +1962,8 @@
                         <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('app.ai_chat')}</span>
-                        <span class="import-desc">{t('app.ask_questions')}</span>
+                        <span class="import-title">{t(`app.ai_chat`)}</span>
+                        <span class="import-desc">{t(`app.ask_questions`)}</span>
                       </div>
                     </button>
 
@@ -1981,8 +1981,8 @@
                         <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('app.hpc')}</span>
-                        <span class="import-desc">{t('app.remote_connect')}</span>
+                        <span class="import-title">{t(`app.hpc`)}</span>
+                        <span class="import-desc">{t(`app.remote_connect`)}</span>
                       </div>
                     </button>
 
@@ -1999,8 +1999,8 @@
                         <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
                       </svg>
                       <div class="import-text">
-                        <span class="import-title">{t('app.terminal')}</span>
-                        <span class="import-desc">{t('app.local_shell')}</span>
+                        <span class="import-title">{t(`app.terminal`)}</span>
+                        <span class="import-desc">{t(`app.local_shell`)}</span>
                       </div>
                     </button>
                     {/if}
@@ -2014,8 +2014,8 @@
                           <path d="M2 12l10 5 10-5"/>
                         </svg>
                         <div class="import-text">
-                          <span class="import-title">{t('app.plugins')}</span>
-                          <span class="import-desc">{t('app.extend_catgo')}</span>
+                          <span class="import-title">{t(`app.plugins`)}</span>
+                          <span class="import-desc">{t(`app.extend_catgo`)}</span>
                         </div>
                       </button>
 
@@ -2032,8 +2032,8 @@
                           <path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>
                         </svg>
                         <div class="import-text">
-                          <span class="import-title">{t('app.external')}</span>
-                          <span class="import-desc">{t('app.receive_from_lab')}</span>
+                          <span class="import-title">{t(`app.external`)}</span>
+                          <span class="import-desc">{t(`app.receive_from_lab`)}</span>
                         </div>
                       </button>
                     {/if}
@@ -2046,41 +2046,41 @@
           {/each}
 
           <!-- Resize handles -->
-          {#if ts.layout === 'splitH'}
+          {#if ts.layout === `splitH`}
             <div
               class="grid-divider grid-divider-col"
-              class:active={is_panel_resizing && resize_axis === 'col'}
+              class:active={is_panel_resizing && resize_axis === `col`}
               style="grid-column: 2; grid-row: 1;"
-              onmousedown={(e) => on_divider_mousedown(e, 'col', tab.id)}
+              onmousedown={(e) => on_divider_mousedown(e, `col`, tab.id)}
               ondblclick={() => { ts.col_split = 50 }}
               role="separator"
               aria-orientation="vertical"
             ></div>
-          {:else if ts.layout === 'splitV'}
+          {:else if ts.layout === `splitV`}
             <div
               class="grid-divider grid-divider-row"
-              class:active={is_panel_resizing && resize_axis === 'row'}
+              class:active={is_panel_resizing && resize_axis === `row`}
               style="grid-column: 1; grid-row: 2;"
-              onmousedown={(e) => on_divider_mousedown(e, 'row', tab.id)}
+              onmousedown={(e) => on_divider_mousedown(e, `row`, tab.id)}
               ondblclick={() => { ts.row_split = 50 }}
               role="separator"
               aria-orientation="horizontal"
             ></div>
-          {:else if ts.layout === 'quad'}
+          {:else if ts.layout === `quad`}
             <div
               class="grid-divider grid-divider-col"
-              class:active={is_panel_resizing && resize_axis === 'col'}
+              class:active={is_panel_resizing && resize_axis === `col`}
               style="grid-column: 2; grid-row: 1 / span 3;"
-              onmousedown={(e) => on_divider_mousedown(e, 'col', tab.id)}
+              onmousedown={(e) => on_divider_mousedown(e, `col`, tab.id)}
               ondblclick={() => { ts.col_split = 50 }}
               role="separator"
               aria-orientation="vertical"
             ></div>
             <div
               class="grid-divider grid-divider-row"
-              class:active={is_panel_resizing && resize_axis === 'row'}
+              class:active={is_panel_resizing && resize_axis === `row`}
               style="grid-column: 1 / span 3; grid-row: 2;"
-              onmousedown={(e) => on_divider_mousedown(e, 'row', tab.id)}
+              onmousedown={(e) => on_divider_mousedown(e, `row`, tab.id)}
               ondblclick={() => { ts.row_split = 50 }}
               role="separator"
               aria-orientation="horizontal"
@@ -2227,11 +2227,11 @@
     <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-        <h3>{t('app.confirm_close_tab', { label: confirm_tab.label })}</h3>
-        <p>{t('app.structures_will_be_removed', { count: structure_count })}</p>
+        <h3>{t(`app.confirm_close_tab`, { label: confirm_tab.label })}</h3>
+        <p>{t(`app.structures_will_be_removed`, { count: structure_count })}</p>
         <div class="modal-actions">
-          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>{t('common.cancel')}</button>
-          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t('app.close_tab')}</button>
+          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>{t(`common.cancel`)}</button>
+          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t(`app.close_tab`)}</button>
         </div>
       </div>
     </div>
@@ -2247,11 +2247,11 @@
   <div class="modal-overlay" onclick={() => tm.pending_layout_change = null}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
-      <h3>{t('app.change_layout')}</h3>
-      <p>{t('app.structures_will_be_removed', { count: tm.pending_layout_change.lost_count })}</p>
+      <h3>{t(`app.change_layout`)}</h3>
+      <p>{t(`app.structures_will_be_removed`, { count: tm.pending_layout_change.lost_count })}</p>
       <div class="modal-actions">
-        <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>{t('common.cancel')}</button>
-        <button class="modal-btn danger" onclick={confirm_layout_change}>{t('app.continue')}</button>
+        <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>{t(`common.cancel`)}</button>
+        <button class="modal-btn danger" onclick={confirm_layout_change}>{t(`app.continue`)}</button>
       </div>
     </div>
   </div>

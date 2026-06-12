@@ -1,20 +1,23 @@
 import type { AnyStructure } from '$lib'
 import type { ClientTool, ToolKind } from './types'
-import { get_current_structure, set_current_structure } from '$lib/structure/current-structure.svelte'
+import {
+  get_current_structure,
+  set_current_structure,
+} from '$lib/structure/current-structure.svelte'
 import { relay_fetch } from './provider-routing'
-import { search_optimade_structures, fetch_optimade_structure } from '$lib/api/optimade'
+import { fetch_optimade_structure, search_optimade_structures } from '$lib/api/optimade'
 import { optimade_to_pymatgen } from '$lib/structure/parse'
 import {
   create_supercell,
-  get_spacegroup as ferrox_spacegroup,
   get_distance as ferrox_distance,
+  get_spacegroup as ferrox_spacegroup,
   wasm_compute_xrd as ferrox_xrd,
 } from '$lib/structure/ferrox-wasm'
 import { generate_slab as ferrox_generate_slab } from '$lib/structure/miller-slab'
 import { cartesian_to_fractional } from '$lib/structure/lattice-ops'
 import { buildNanotube } from '$lib/api/nanotube'
 import { buildNanoscroll } from '$lib/api/nanoscroll'
-import { searchMoireAngles, buildMoireBilayer } from '$lib/api/moire'
+import { buildMoireBilayer, searchMoireAngles } from '$lib/api/moire'
 import {
   buildHeterostructureManual,
   buildLateralInterface,
@@ -36,14 +39,17 @@ import {
   get_film_stash,
   get_hetero_matches,
   get_lateral_matches,
+  get_lateral_search_params,
   set_bulk_stash,
   set_film_stash,
   set_hetero_matches,
   set_lateral_matches,
+  set_lateral_search_params,
 } from './hetero-stash.svelte'
-import { run_workflow as api_run_workflow, get_run_status } from '$lib/api/workflow'
+import { get_run_status, run_workflow as api_run_workflow } from '$lib/api/workflow'
 import { load_run_config } from '$lib/workflow/run-config-store'
 import { iter_workflow_slices } from '$lib/workflow/workflow-state.svelte'
+import { VIEWER_TOOLS } from './viewer-tools'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
 interface MutSite {
@@ -98,7 +104,8 @@ function require_structure(): AnyStructure {
 /** Plain-text (no markup) reduced-count formula derived directly from sites.
  *  Synchronous + node-safe (no WASM), suitable for compact tool results. */
 function plain_formula(structure: AnyStructure): string {
-  const sites = (structure as { sites?: { species?: { element?: string }[] }[] }).sites ?? []
+  const sites = (structure as { sites?: { species?: { element?: string }[] }[] }).sites ??
+    []
   const counts = new Map<string, number>()
   for (const site of sites) {
     const el = site.species?.[0]?.element
@@ -112,7 +119,9 @@ function plain_formula(structure: AnyStructure): string {
 
 /** Element symbols of the currently loaded structure (POSCAR-style set). */
 function current_elements(): string[] {
-  const s = get_current_structure() as { sites?: { species?: { element?: string }[] }[] } | null
+  const s = get_current_structure() as
+    | { sites?: { species?: { element?: string }[] }[] }
+    | null
   if (!s?.sites) return []
   const set = new Set<string>()
   for (const site of s.sites) {
@@ -129,18 +138,45 @@ function current_elements(): string[] {
 register(
   {
     name: `validate_hpc_config`,
-    description: `Validate the VASP/HPC cluster configuration against the LIVE connected cluster before submitting a workflow. Over SSH it checks that the POTCAR root and functional directories exist, that the pseudopotential for each element of the current structure is present, and that the VASP binary resolves under the given module loads + conda/Python environment (the real submit-script environment, not a bare login shell). Use this whenever the user asks to test/verify/debug their cluster setup or before running a VASP workflow — never guess whether a cluster is configured correctly. Read potcar_root, potcar_functional, vasp_command, module_loads and python_env from the user's run configuration or their submit script; the session and element list are filled automatically.`,
+    description:
+      `Validate the VASP/HPC cluster configuration against the LIVE connected cluster before submitting a workflow. Over SSH it checks that the POTCAR root and functional directories exist, that the pseudopotential for each element of the current structure is present, and that the VASP binary resolves under the given module loads + conda/Python environment (the real submit-script environment, not a bare login shell). Use this whenever the user asks to test/verify/debug their cluster setup or before running a VASP workflow — never guess whether a cluster is configured correctly. Read potcar_root, potcar_functional, vasp_command, module_loads and python_env from the user's run configuration or their submit script; the session and element list are filled automatically.`,
     kind: `read`,
     input_schema: {
       type: `object`,
       properties: {
-        potcar_root: { type: `string`, description: `Remote directory holding the POTCAR pseudopotential tree, e.g. /scratch/user/VASP/pot64` },
-        potcar_functional: { type: `string`, description: `Functional subdirectory, e.g. potpaw_PBE (default), potpaw_PBE.54, potpaw_LDA` },
-        vasp_command: { type: `string`, description: `VASP run command from the submit script, e.g. "srun --hint=nomultithread vasp_std"` },
-        module_loads: { type: `string`, description: `module load lines from the submit script, newline-separated` },
-        python_env: { type: `string`, description: `conda/env activation lines from the submit script` },
-        elements: { type: `array`, items: { type: `string` }, description: `Element symbols to check; defaults to the current structure's elements` },
-        session_id: { type: `string`, description: `HPC session id; defaults to the active connected cluster` },
+        potcar_root: {
+          type: `string`,
+          description:
+            `Remote directory holding the POTCAR pseudopotential tree, e.g. /scratch/user/VASP/pot64`,
+        },
+        potcar_functional: {
+          type: `string`,
+          description:
+            `Functional subdirectory, e.g. potpaw_PBE (default), potpaw_PBE.54, potpaw_LDA`,
+        },
+        vasp_command: {
+          type: `string`,
+          description:
+            `VASP run command from the submit script, e.g. "srun --hint=nomultithread vasp_std"`,
+        },
+        module_loads: {
+          type: `string`,
+          description: `module load lines from the submit script, newline-separated`,
+        },
+        python_env: {
+          type: `string`,
+          description: `conda/env activation lines from the submit script`,
+        },
+        elements: {
+          type: `array`,
+          items: { type: `string` },
+          description:
+            `Element symbols to check; defaults to the current structure's elements`,
+        },
+        session_id: {
+          type: `string`,
+          description: `HPC session id; defaults to the active connected cluster`,
+        },
       },
       required: [`potcar_root`],
     },
@@ -149,14 +185,18 @@ register(
     const sessions = hpc_session_store.sessions || []
     const session_id = (input.session_id as string) || sessions[0]?.session_id
     if (!session_id) {
-      throw new Error(`No connected HPC cluster. Connect a cluster in the HPC panel first, then retry.`)
+      throw new Error(
+        `No connected HPC cluster. Connect a cluster in the HPC panel first, then retry.`,
+      )
     }
     const elements = Array.isArray(input.elements) && input.elements.length
       ? (input.elements as string[])
       : current_elements()
     return await preflightVasp(session_id, {
       potcar_root: String(input.potcar_root ?? ``),
-      potcar_functional: input.potcar_functional ? String(input.potcar_functional) : `potpaw_PBE`,
+      potcar_functional: input.potcar_functional
+        ? String(input.potcar_functional)
+        : `potpaw_PBE`,
       vasp_command: input.vasp_command ? String(input.vasp_command) : undefined,
       module_loads: input.module_loads ? String(input.module_loads) : undefined,
       python_env: input.python_env ? String(input.python_env) : undefined,
@@ -173,17 +213,25 @@ register(
 register(
   {
     name: `get_skill`,
-    description: `Load a CatGo skill guide — a domain playbook / best-practice checklist for VASP/CP2K/ORCA/QE calculations, structure building, analysis, or troubleshooting. Call with NO argument to LIST available skills, then call again with a skill_path (e.g. "vasp/relax", "troubleshooting/cluster_config_test", "analysis/oer") to READ that skill and follow its guidance. Consult the relevant skill BEFORE building a workflow or diagnosing a cluster/job problem, instead of guessing.`,
+    description:
+      `Load a CatGo skill guide — a domain playbook / best-practice checklist for VASP/CP2K/ORCA/QE calculations, structure building, analysis, or troubleshooting. Call with NO argument to LIST available skills, then call again with a skill_path (e.g. "vasp/relax", "troubleshooting/cluster_config_test", "analysis/oer") to READ that skill and follow its guidance. Consult the relevant skill BEFORE building a workflow or diagnosing a cluster/job problem, instead of guessing.`,
     kind: `read`,
     input_schema: {
       type: `object`,
       properties: {
-        skill_path: { type: `string`, description: `Skill path to read, e.g. "vasp/relax". Omit to list all available skills.` },
+        skill_path: {
+          type: `string`,
+          description:
+            `Skill path to read, e.g. "vasp/relax". Omit to list all available skills.`,
+        },
       },
     },
   },
   async (input) => {
-    const path = String((input.skill_path as string) ?? ``).trim().replace(/^\/+|\/+$/g, ``)
+    const path = String((input.skill_path as string) ?? ``).trim().replace(
+      /^\/+|\/+$/g,
+      ``,
+    )
     const url = path ? `${API_BASE}/skills/${path}` : `${API_BASE}/skills/`
     let res: Response
     try {
@@ -196,7 +244,9 @@ register(
       )
     }
     if (!res.ok) {
-      throw new Error(`Skill fetch failed (HTTP ${res.status}). Call get_skill with no argument to list available skills.`)
+      throw new Error(
+        `Skill fetch failed (HTTP ${res.status}). Call get_skill with no argument to list available skills.`,
+      )
     }
     const data = await res.json()
     return path ? (data.content ?? data) : (data.skills ?? data)
@@ -207,7 +257,8 @@ register(
 register(
   {
     name: `get_structure_info`,
-    description: `Get composition, formula, site count, and lattice of the currently loaded structure.`,
+    description:
+      `Get composition, formula, site count, and lattice of the currently loaded structure.`,
     kind: `read`,
     input_schema: { type: `object`, properties: {} },
   },
@@ -216,7 +267,9 @@ register(
       sites: { species: { element: string }[] }[]
       lattice?: { matrix: number[][] }
     }
-    const elements = [...new Set(s.sites.map((site) => site.species[0]?.element).filter(Boolean))]
+    const elements = [
+      ...new Set(s.sites.map((site) => site.species[0]?.element).filter(Boolean)),
+    ]
     return { num_sites: s.sites.length, elements, lattice: s.lattice?.matrix ?? null }
   },
 )
@@ -231,13 +284,21 @@ const OPTIMADE_BASES: Record<string, string> = {
 register(
   {
     name: `fetch_optimade`,
-    description: `SEARCH an OPTIMADE crystal-structure database by chemical formula; returns a list of {id, formula}. This does NOT load anything into the viewer — call load_optimade_structure with a chosen id to actually load it. Providers: mp (Materials Project), alexandria, odbx.`,
+    description:
+      `SEARCH an OPTIMADE crystal-structure database by chemical formula; returns a list of {id, formula}. This does NOT load anything into the viewer — call load_optimade_structure with a chosen id to actually load it. Providers: mp (Materials Project), alexandria, odbx.`,
     kind: `read`,
     input_schema: {
       type: `object`,
       properties: {
-        provider: { type: `string`, enum: [`mp`, `alexandria`, `odbx`], description: `Database provider id.` },
-        formula: { type: `string`, description: `Reduced chemical formula, e.g. "NaCl".` },
+        provider: {
+          type: `string`,
+          enum: [`mp`, `alexandria`, `odbx`],
+          description: `Database provider id.`,
+        },
+        formula: {
+          type: `string`,
+          description: `Reduced chemical formula, e.g. "NaCl".`,
+        },
         limit: { type: `integer`, description: `Max results (default 5).` },
       },
       required: [`provider`, `formula`],
@@ -253,7 +314,8 @@ register(
     // i.e. "ClNa", so a literal "NaCl" match returns nothing). relay routing,
     // provider base_url resolution, and sorting are reused.
     const providers = [{
-      id: provider, type: `links`,
+      id: provider,
+      type: `links`,
       attributes: { name: provider, description: ``, base_url: base },
     }]
     const res = await search_optimade_structures(provider, providers as never, {
@@ -263,7 +325,8 @@ register(
     return {
       results: res.structures.map((s) => ({
         id: s.id,
-        formula: (s.attributes as { chemical_formula_reduced?: string } | undefined)?.chemical_formula_reduced,
+        formula: (s.attributes as { chemical_formula_reduced?: string } | undefined)
+          ?.chemical_formula_reduced,
       })),
     }
   },
@@ -273,12 +336,17 @@ register(
 register(
   {
     name: `load_optimade_structure`,
-    description: `Load a specific OPTIMADE structure (by its id, e.g. "mp-22851") into the viewer so it becomes the current structure. Use the id from fetch_optimade results. This replaces the currently loaded structure.`,
+    description:
+      `Load a specific OPTIMADE structure (by its id, e.g. "mp-22851") into the viewer so it becomes the current structure. Use the id from fetch_optimade results. This replaces the currently loaded structure.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
-        provider: { type: `string`, enum: [`mp`, `alexandria`, `odbx`], description: `Database provider id.` },
+        provider: {
+          type: `string`,
+          enum: [`mp`, `alexandria`, `odbx`],
+          description: `Database provider id.`,
+        },
         id: { type: `string`, description: `OPTIMADE structure id, e.g. "mp-22851".` },
       },
       required: [`provider`, `id`],
@@ -289,10 +357,15 @@ register(
     const base = OPTIMADE_BASES[provider]
     if (!base) throw new Error(`Unknown OPTIMADE provider: ${provider}`)
     const providers = [{
-      id: provider, type: `links`,
+      id: provider,
+      type: `links`,
       attributes: { name: provider, description: ``, base_url: base },
     }]
-    const struct = await fetch_optimade_structure(String(input.id), provider, providers as never)
+    const struct = await fetch_optimade_structure(
+      String(input.id),
+      provider,
+      providers as never,
+    )
     if (!struct) throw new Error(`Structure "${input.id}" not found on ${provider}.`)
     const pymatgen = optimade_to_pymatgen(struct)
     if (!pymatgen) throw new Error(`Could not parse structure "${input.id}".`)
@@ -300,7 +373,8 @@ register(
     const sites = (pymatgen as { sites?: unknown[] }).sites ?? []
     return {
       loaded: String(input.id),
-      formula: (struct.attributes as { chemical_formula_reduced?: string } | undefined)?.chemical_formula_reduced,
+      formula: (struct.attributes as { chemical_formula_reduced?: string } | undefined)
+        ?.chemical_formula_reduced,
       num_sites: sites.length,
     }
   },
@@ -310,23 +384,44 @@ register(
 register(
   {
     name: `fetch_pubchem`,
-    description: `Look up a molecule by name in PubChem and return its CID and canonical SMILES.`,
+    description:
+      `Look up a molecule by name in PubChem and return its CID and canonical SMILES.`,
     kind: `read`,
     input_schema: {
       type: `object`,
-      properties: { name: { type: `string`, description: `Molecule name, e.g. "water".` } },
+      properties: {
+        name: { type: `string`, description: `Molecule name, e.g. "water".` },
+      },
       required: [`name`],
     },
   },
   async (input) => {
     const name = encodeURIComponent(String(input.name))
-    const url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${name}/property/CanonicalSMILES/JSON`
+    // PubChem renamed its SMILES properties (2025): `CanonicalSMILES` →
+    // `ConnectivitySMILES` / `SMILES`. The legacy property name is still accepted
+    // by the request URL (HTTP 200), but the RESPONSE now keys the value under
+    // the new name — so the old read of `p.CanonicalSMILES` silently returned
+    // undefined. Keep the still-accepted legacy request property, but read every
+    // known spelling from the response and fail loudly if none is present.
+    const url =
+      `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${name}/property/CanonicalSMILES/JSON`
     const resp = await relay_fetch(url)
     if (!resp.ok) throw new Error(`PubChem error ${resp.status}`)
-    const data = (await resp.json()) as { PropertyTable?: { Properties?: { CID: number; CanonicalSMILES: string }[] } }
+    const data = (await resp.json()) as {
+      PropertyTable?: {
+        Properties?: {
+          CID: number
+          SMILES?: string
+          ConnectivitySMILES?: string
+          CanonicalSMILES?: string
+        }[]
+      }
+    }
     const p = data.PropertyTable?.Properties?.[0]
     if (!p) throw new Error(`No PubChem match for "${input.name}"`)
-    return { cid: p.CID, smiles: p.CanonicalSMILES }
+    const smiles = p.SMILES ?? p.ConnectivitySMILES ?? p.CanonicalSMILES
+    if (!smiles) throw new Error(`PubChem returned no SMILES for "${input.name}"`)
+    return { cid: p.CID, smiles }
   },
 )
 
@@ -350,7 +445,9 @@ register(
     const nx = Math.trunc(Number(input.nx))
     const ny = Math.trunc(Number(input.ny))
     const nz = Math.trunc(Number(input.nz))
-    if (!(nx >= 1 && ny >= 1 && nz >= 1)) throw new Error(`nx, ny, nz must be integers ≥ 1.`)
+    if (!(nx >= 1 && ny >= 1 && nz >= 1)) {
+      throw new Error(`nx, ny, nz must be integers ≥ 1.`)
+    }
     const res = await create_supercell(require_structure() as never, nx, ny, nz)
     if (`error` in res) throw new Error(res.error)
     set_current_structure(res.ok as never)
@@ -362,16 +459,29 @@ register(
 register(
   {
     name: `set_lattice`,
-    description: `Add or replace an orthorhombic (box) lattice on the current structure. This is the correct way to give a non-periodic molecule a periodic cell — do NOT use make_supercell for that. Provide explicit box lengths a/b/c in Å, or omit them to auto-size a box around the molecule's extent plus vacuum padding on every side. Set cubic:true to force a cube. Atoms are re-centered in the new box.`,
+    description:
+      `Add or replace an orthorhombic (box) lattice on the current structure. This is the correct way to give a non-periodic molecule a periodic cell — do NOT use make_supercell for that. Provide explicit box lengths a/b/c in Å, or omit them to auto-size a box around the molecule's extent plus vacuum padding on every side. Set cubic:true to force a cube. Atoms are re-centered in the new box.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
-        a: { type: `number`, description: `Box length along x in Å (optional; auto-sized from the structure if omitted).` },
+        a: {
+          type: `number`,
+          description:
+            `Box length along x in Å (optional; auto-sized from the structure if omitted).`,
+        },
         b: { type: `number`, description: `Box length along y in Å (optional).` },
         c: { type: `number`, description: `Box length along z in Å (optional).` },
-        padding: { type: `number`, description: `Vacuum padding added on each side when auto-sizing, in Å (default 8).` },
-        cubic: { type: `boolean`, description: `Force a cubic box using the largest of the three lengths (default false).` },
+        padding: {
+          type: `number`,
+          description:
+            `Vacuum padding added on each side when auto-sizing, in Å (default 8).`,
+        },
+        cubic: {
+          type: `boolean`,
+          description:
+            `Force a cubic box using the largest of the three lengths (default false).`,
+        },
       },
     },
   },
@@ -379,7 +489,9 @@ register(
     const next = clone_structure()
     const sites = next.sites
     if (!sites.length) throw new Error(`The current structure has no atoms.`)
-    const xyzs = sites.map((s) => (s.xyz ?? [0, 0, 0]).map(Number) as [number, number, number])
+    const xyzs = sites.map((s) =>
+      (s.xyz ?? [0, 0, 0]).map(Number) as [number, number, number]
+    )
     const min = [0, 1, 2].map((k) => Math.min(...xyzs.map((p) => p[k])))
     const max = [0, 1, 2].map((k) => Math.max(...xyzs.map((p) => p[k])))
     const extent = [0, 1, 2].map((k) => max[k] - min[k])
@@ -387,7 +499,9 @@ register(
     const pad = input.padding != null ? Number(input.padding) : 8
     const given = [input.a, input.b, input.c].map((v) => (v != null ? Number(v) : null))
     let box = [0, 1, 2].map((k) =>
-      given[k] != null && (given[k] as number) > 0 ? (given[k] as number) : extent[k] + 2 * pad,
+      given[k] != null && (given[k] as number) > 0
+        ? (given[k] as number)
+        : extent[k] + 2 * pad
     )
     if (input.cubic === true) {
       const L = Math.max(...box)
@@ -402,7 +516,11 @@ register(
       [0, box[1], 0],
       [0, 0, box[2]],
     ]
-    const mat3 = matrix as [[number, number, number], [number, number, number], [number, number, number]]
+    const mat3 = matrix as [
+      [number, number, number],
+      [number, number, number],
+      [number, number, number],
+    ]
     for (let i = 0; i < sites.length; i++) {
       const p = xyzs[i]
       const centered: [number, number, number] = [
@@ -415,8 +533,12 @@ register(
     }
     const lattice = {
       matrix,
-      a: box[0], b: box[1], c: box[2],
-      alpha: 90, beta: 90, gamma: 90,
+      a: box[0],
+      b: box[1],
+      c: box[2],
+      alpha: 90,
+      beta: 90,
+      gamma: 90,
       volume: box[0] * box[1] * box[2],
       pbc: [true, true, true],
     }
@@ -467,7 +589,8 @@ register(
 register(
   {
     name: `generate_slab`,
-    description: `Cut a surface slab from the current bulk structure along a Miller plane (h,k,l) with given thickness and vacuum (Angstroms).`,
+    description:
+      `Cut a surface slab from the current bulk structure along a Miller plane (h,k,l) with given thickness and vacuum (Angstroms).`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
@@ -475,8 +598,14 @@ register(
         h: { type: `integer`, description: `Miller index h.` },
         k: { type: `integer`, description: `Miller index k.` },
         l: { type: `integer`, description: `Miller index l.` },
-        thickness: { type: `number`, description: `Slab thickness in Angstroms (default 10).` },
-        vacuum: { type: `number`, description: `Vacuum layer thickness in Angstroms (default 15).` },
+        thickness: {
+          type: `number`,
+          description: `Slab thickness in Angstroms (default 10).`,
+        },
+        vacuum: {
+          type: `number`,
+          description: `Vacuum layer thickness in Angstroms (default 15).`,
+        },
       },
       required: [`h`, `k`, `l`],
     },
@@ -485,6 +614,15 @@ register(
     const h = Math.trunc(Number(input.h))
     const k = Math.trunc(Number(input.k))
     const l = Math.trunc(Number(input.l))
+    // h,k,l are schema-required (presence checked in execute_tool), but a model
+    // can still pass non-numeric junk — guard NaN with a directive message so it
+    // retries with real indices instead of cutting a slab on a NaN plane.
+    if (![h, k, l].every(Number.isFinite)) {
+      return {
+        error: `generate_slab needs integer Miller indices h, k, l — e.g. ` +
+          `h=1, k=0, l=0 for the (100) surface, or 1,1,1 for (111).`,
+      }
+    }
     const thickness = input.thickness === undefined ? 10 : Number(input.thickness)
     const vacuum = input.vacuum === undefined ? 15 : Number(input.vacuum)
     const slab = ferrox_generate_slab(require_structure() as never, {
@@ -494,7 +632,11 @@ register(
       vacuum,
     })
     set_current_structure(slab as never)
-    return { num_sites: (slab as unknown as MutStructure).sites.length }
+    const num_sites = (slab as unknown as MutStructure).sites.length
+    return {
+      num_sites,
+      message: `Cut a (${h}${k}${l}) slab — the structure now has ${num_sites} sites.`,
+    }
   },
 )
 
@@ -502,7 +644,8 @@ register(
 register(
   {
     name: `place_adsorbate`,
-    description: `Add a single adsorbate atom at a Cartesian position [x, y, z] in the current structure.`,
+    description:
+      `Add a single adsorbate atom at a Cartesian position [x, y, z] in the current structure.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
@@ -523,7 +666,11 @@ register(
     const element = String(input.element)
     const position = (input.position as number[]).map(Number)
     const next = clone_structure()
-    const site: MutSite = { species: [{ element, occu: 1 }], xyz: [...position], label: element }
+    const site: MutSite = {
+      species: [{ element, occu: 1 }],
+      xyz: [...position],
+      label: element,
+    }
     // `abc` must be FRACTIONAL coordinates — downstream consumers (e.g.
     // lattice-ops) prefer `abc` over `xyz` when present. With a lattice,
     // convert the Cartesian position to fractional; without one (molecule),
@@ -531,7 +678,11 @@ register(
     if (next.lattice?.matrix) {
       site.abc = cartesian_to_fractional(
         position as [number, number, number],
-        next.lattice.matrix as [[number, number, number], [number, number, number], [number, number, number]],
+        next.lattice.matrix as [
+          [number, number, number],
+          [number, number, number],
+          [number, number, number],
+        ],
       )
     }
     next.sites.push(site)
@@ -544,12 +695,16 @@ register(
 register(
   {
     name: `get_spacegroup`,
-    description: `Determine the international spacegroup number of the current structure (symmetry analysis).`,
+    description:
+      `Determine the international spacegroup number of the current structure (symmetry analysis).`,
     kind: `read`,
     input_schema: {
       type: `object`,
       properties: {
-        symprec: { type: `number`, description: `Symmetry precision in Angstroms (default 1e-4).` },
+        symprec: {
+          type: `number`,
+          description: `Symmetry precision in Angstroms (default 1e-4).`,
+        },
       },
     },
   },
@@ -565,7 +720,8 @@ register(
 register(
   {
     name: `get_distance`,
-    description: `Compute the minimum-image distance (Angstroms) between two atoms by site index.`,
+    description:
+      `Compute the minimum-image distance (Angstroms) between two atoms by site index.`,
     kind: `read`,
     input_schema: {
       type: `object`,
@@ -589,7 +745,8 @@ register(
 register(
   {
     name: `compute_xrd`,
-    description: `Compute the simulated powder X-ray diffraction (XRD) pattern of the current structure.`,
+    description:
+      `Compute the simulated powder X-ray diffraction (XRD) pattern of the current structure.`,
     kind: `read`,
     input_schema: { type: `object`, properties: {} },
   },
@@ -604,15 +761,23 @@ register(
 register(
   {
     name: `build_nanotube`,
-    description: `Roll the currently-loaded 2D sheet into an (n, m) nanotube and load the resulting tube as the current structure. The current structure must be a periodic 2D material (it provides the layer that is rolled up).`,
+    description:
+      `Roll the currently-loaded 2D sheet into an (n, m) nanotube and load the resulting tube as the current structure. The current structure must be a periodic 2D material (it provides the layer that is rolled up).`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
         n: { type: `integer`, description: `Chiral index n.` },
         m: { type: `integer`, description: `Chiral index m.` },
-        NL: { type: `integer`, minimum: 1, description: `Number of unit cells along the tube axis (default 1).` },
-        vacuum: { type: `number`, description: `Vacuum padding around the tube in Angstroms (default 15).` },
+        NL: {
+          type: `integer`,
+          minimum: 1,
+          description: `Number of unit cells along the tube axis (default 1).`,
+        },
+        vacuum: {
+          type: `number`,
+          description: `Vacuum padding around the tube in Angstroms (default 15).`,
+        },
       },
       required: [`n`, `m`],
     },
@@ -638,14 +803,21 @@ register(
 register(
   {
     name: `build_nanoscroll`,
-    description: `Roll the currently-loaded 2D monolayer into an Archimedean-spiral nanoscroll and load the result as the current structure. The current structure must be a single 2D layer (not a 3D bulk).`,
+    description:
+      `Roll the currently-loaded 2D monolayer into an Archimedean-spiral nanoscroll and load the result as the current structure. The current structure must be a single 2D layer (not a 3D bulk).`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
         turns: { type: `number`, description: `Number of windings/turns (default 6).` },
-        inner_radius: { type: `number`, description: `Inner winding radius in Angstroms (default 25).` },
-        length: { type: `number`, description: `Scroll height along z in Angstroms (default 12).` },
+        inner_radius: {
+          type: `number`,
+          description: `Inner winding radius in Angstroms (default 25).`,
+        },
+        length: {
+          type: `number`,
+          description: `Scroll height along z in Angstroms (default 12).`,
+        },
       },
     },
   },
@@ -664,13 +836,21 @@ register(
 register(
   {
     name: `build_moire`,
-    description: `Build a twisted bilayer (moiré superlattice) of the currently-loaded 2D sheet at the requested twist angle (in degrees) and load it as the current structure. The current structure is used as both layers. Searches commensurate twist angles near the target and uses the closest match.`,
+    description:
+      `Build a twisted bilayer (moiré superlattice) of the currently-loaded 2D sheet at the requested twist angle (in degrees) and load it as the current structure. The current structure is used as both layers. Searches commensurate twist angles near the target and uses the closest match.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
-        twist_angle: { type: `number`, description: `Target twist angle between the two layers, in degrees.` },
-        max_index: { type: `integer`, minimum: 1, description: `Max search index for commensurate cells (default 10).` },
+        twist_angle: {
+          type: `number`,
+          description: `Target twist angle between the two layers, in degrees.`,
+        },
+        max_index: {
+          type: `integer`,
+          minimum: 1,
+          description: `Max search index for commensurate cells (default 10).`,
+        },
       },
       required: [`twist_angle`],
     },
@@ -699,7 +879,8 @@ register(
 register(
   {
     name: `set_film`,
-    description: `Mark the currently-loaded structure as the FILM for a heterostructure; then load/fetch the substrate and call heterostructure_search. Slab thickness uses the builder's default — for explicit thickness control, cut a slab with generate_slab first, then call set_film.`,
+    description:
+      `Mark the currently-loaded structure as the FILM for a heterostructure; then load/fetch the substrate and call heterostructure_search. Slab thickness uses the builder's default — for explicit thickness control, cut a slab with generate_slab first, then call set_film.`,
     kind: `read`,
     input_schema: { type: `object`, properties: {} },
   },
@@ -715,7 +896,8 @@ register(
 register(
   {
     name: `heterostructure_search`,
-    description: `Search for lattice-matched heterostructure interfaces between the FILM (set earlier via set_film) and the SUBSTRATE (the currently-loaded structure). Returns a list of candidate matches sorted by strain — use the match's index with build_heterostructure. Requires set_film to have been called first.`,
+    description:
+      `Search for lattice-matched heterostructure interfaces between the FILM (set earlier via set_film) and the SUBSTRATE (the currently-loaded structure). Returns a list of candidate matches sorted by strain — use the match's index with build_heterostructure. Requires set_film to have been called first.`,
     kind: `read`,
     input_schema: {
       type: `object`,
@@ -734,24 +916,44 @@ register(
           maxItems: 3,
           description: `Film Miller plane [h,k,l] (default [0,0,1]).`,
         },
-        max_area: { type: `number`, description: `Max interface supercell area in Å² (default 400).` },
-        max_strain_pct: { type: `number`, description: `Max allowed strain, in percent (default 5).` },
-        max_results: { type: `integer`, minimum: 1, description: `Max candidate matches to return (default 10).` },
+        max_area: {
+          type: `number`,
+          description: `Max interface supercell area in Å² (default 400).`,
+        },
+        max_strain_pct: {
+          type: `number`,
+          description: `Max allowed strain, in percent (default 5).`,
+        },
+        max_results: {
+          type: `integer`,
+          minimum: 1,
+          description: `Max candidate matches to return (default 10).`,
+        },
       },
     },
   },
   async (input) => {
     const film = get_film_stash()
-    if (!film) throw new Error(`No film set. Call set_film first to mark the current structure as the film.`)
+    if (!film) {
+      throw new Error(
+        `No film set. Call set_film first to mark the current structure as the film.`,
+      )
+    }
     const substrate = require_structure()
 
-    const substrate_miller = (input.substrate_miller as number[] | undefined)?.map((n) => Math.trunc(Number(n))) as
+    const substrate_miller = (input.substrate_miller as number[] | undefined)?.map((n) =>
+      Math.trunc(Number(n))
+    ) as
       | [number, number, number]
       | undefined
-    const film_miller = (input.film_miller as number[] | undefined)?.map((n) => Math.trunc(Number(n))) as
+    const film_miller = (input.film_miller as number[] | undefined)?.map((n) =>
+      Math.trunc(Number(n))
+    ) as
       | [number, number, number]
       | undefined
-    const max_strain_pct = input.max_strain_pct === undefined ? 5 : Number(input.max_strain_pct)
+    const max_strain_pct = input.max_strain_pct === undefined
+      ? 5
+      : Number(input.max_strain_pct)
     // Map the user-facing percent strain onto the underlying tolerance fields.
     // ratio_tol is a fractional (0–1) area-ratio tolerance ≈ strain/100; length
     // and angle tolerances scale with the same allowance.
@@ -765,10 +967,16 @@ register(
       max_area_ratio_tol: ratio_tol,
       max_length_tol: ratio_tol,
       max_angle_tol: max_strain_pct,
-      max_results: input.max_results === undefined ? 10 : Math.trunc(Number(input.max_results)),
+      max_results: input.max_results === undefined
+        ? 10
+        : Math.trunc(Number(input.max_results)),
     }
 
-    const result = await searchHeterostructureMatches(substrate as never, film as never, params)
+    const result = await searchHeterostructureMatches(
+      substrate as never,
+      film as never,
+      params,
+    )
     set_hetero_matches(result.matches)
     return {
       n_matches: result.matches.length,
@@ -789,16 +997,32 @@ register(
 register(
   {
     name: `build_heterostructure`,
-    description: `Build the heterostructure for a chosen candidate match (from heterostructure_search) and load it into the viewer. The film (set via set_film) is placed on the substrate (the current structure); use swap=true to invert which is on top. Slab thickness uses the builder's default — for explicit thickness, cut slabs with generate_slab before set_film. Requires heterostructure_search to have been run first. NOTE: twist_angle is not yet supported on the client-side (WASM) path and is ignored there; twist≠0 requires the Python backend, default 0 works offline.`,
+    description:
+      `Build the heterostructure for a chosen candidate match (from heterostructure_search) and load it into the viewer. The film (set via set_film) is placed on the substrate (the current structure); use swap=true to invert which is on top. Slab thickness uses the builder's default — for explicit thickness, cut slabs with generate_slab before set_film. Requires heterostructure_search to have been run first. NOTE: twist_angle is not yet supported on the client-side (WASM) path and is ignored there; twist≠0 requires the Python backend, default 0 works offline.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
-        match_index: { type: `integer`, minimum: 0, description: `Index of the match from heterostructure_search (default 0 = lowest strain).` },
-        gap: { type: `number`, description: `Interface gap between film and substrate in Å (default 2.0).` },
+        match_index: {
+          type: `integer`,
+          minimum: 0,
+          description:
+            `Index of the match from heterostructure_search (default 0 = lowest strain).`,
+        },
+        gap: {
+          type: `number`,
+          description: `Interface gap between film and substrate in Å (default 2.0).`,
+        },
         vacuum: { type: `number`, description: `Vacuum padding in Å (default 20.0).` },
-        twist_angle: { type: `number`, description: `Twist between layers in degrees (default 0; backend-only, ignored client-side).` },
-        swap: { type: `boolean`, description: `Swap which structure is substrate vs film (default false).` },
+        twist_angle: {
+          type: `number`,
+          description:
+            `Twist between layers in degrees (default 0; backend-only, ignored client-side).`,
+        },
+        swap: {
+          type: `boolean`,
+          description: `Swap which structure is substrate vs film (default false).`,
+        },
         xy_shift: {
           type: `array`,
           items: { type: `number` },
@@ -812,12 +1036,20 @@ register(
   async (input) => {
     const matches = get_hetero_matches()
     if (matches.length === 0) {
-      throw new Error(`No heterostructure matches available. Run heterostructure_search first.`)
+      throw new Error(
+        `No heterostructure matches available. Run heterostructure_search first.`,
+      )
     }
-    const match_index = input.match_index === undefined ? 0 : Math.trunc(Number(input.match_index))
+    const match_index = input.match_index === undefined
+      ? 0
+      : Math.trunc(Number(input.match_index))
     const m = matches[match_index]
     if (!m) {
-      throw new Error(`match_index ${match_index} is out of range (0–${matches.length - 1}). Run heterostructure_search again or pick a valid index.`)
+      throw new Error(
+        `match_index ${match_index} is out of range (0–${
+          matches.length - 1
+        }). Run heterostructure_search again or pick a valid index.`,
+      )
     }
 
     const swap = input.swap === true
@@ -831,7 +1063,10 @@ register(
     const gap = input.gap === undefined ? 2.0 : Number(input.gap)
     const vacuum = input.vacuum === undefined ? 20.0 : Number(input.vacuum)
     const twist_angle = input.twist_angle === undefined ? 0 : Number(input.twist_angle)
-    const xy_shift = (input.xy_shift as number[] | undefined)?.map(Number) as [number, number] | undefined
+    const xy_shift = (input.xy_shift as number[] | undefined)?.map(Number) as [
+      number,
+      number,
+    ] | undefined
 
     const result = await buildHeterostructureManual(
       substrate as never,
@@ -844,7 +1079,11 @@ register(
       xy_shift ?? [0, 0],
     )
     set_current_structure(result.structure as never)
-    return { num_sites: result.n_atoms, strain: result.strain, match_area: result.match_area }
+    return {
+      num_sites: result.n_atoms,
+      strain: result.strain,
+      match_area: result.match_area,
+    }
   },
 )
 
@@ -852,7 +1091,8 @@ register(
 register(
   {
     name: `lateral_heterostructure_search`,
-    description: `Search for LATERAL (in-plane) heterojunction edge-matches between the FILM (set earlier via set_film) and the SUBSTRATE (the currently-loaded structure). This is an IN-PLANE junction where the two slabs are stitched side-by-side along a shared edge — distinct from build_heterostructure, which stacks them vertically (one on top of the other). Returns candidate matches sorted by strain; use the match's index with build_lateral_heterostructure. Requires set_film to have been called first.`,
+    description:
+      `Search for LATERAL (in-plane) heterojunction edge-matches between the FILM (set earlier via set_film) and the SUBSTRATE (the currently-loaded structure). This is an IN-PLANE junction where the two slabs are stitched side-by-side along a shared edge — distinct from build_heterostructure, which stacks them vertically (one on top of the other). Returns candidate matches sorted by strain; use the match's index with build_lateral_heterostructure. Requires set_film to have been called first.`,
     kind: `read`,
     input_schema: {
       type: `object`,
@@ -860,30 +1100,55 @@ register(
         interface_axis: {
           type: `integer`,
           enum: [0, 1],
-          description: `In-plane lattice axis along which the two slabs share their edge: 0=a, 1=b (default 0).`,
+          description:
+            `In-plane lattice axis along which the two slabs share their edge: 0=a, 1=b (default 0).`,
         },
-        max_strain_pct: { type: `number`, description: `Max allowed edge-length mismatch strain, in percent (default 5).` },
-        max_length: { type: `number`, description: `Max interface edge length to consider, in Å (default 100).` },
-        max_results: { type: `integer`, minimum: 1, description: `Max candidate matches to return (default 10).` },
+        max_strain_pct: {
+          type: `number`,
+          description: `Max allowed edge-length mismatch strain, in percent (default 5).`,
+        },
+        max_length: {
+          type: `number`,
+          description: `Max interface edge length to consider, in Å (default 100).`,
+        },
+        max_results: {
+          type: `integer`,
+          minimum: 1,
+          description: `Max candidate matches to return (default 10).`,
+        },
       },
     },
   },
   async (input) => {
     const film = get_film_stash()
-    if (!film) throw new Error(`No film set. Call set_film first to mark the current structure as the film.`)
+    if (!film) {
+      throw new Error(
+        `No film set. Call set_film first to mark the current structure as the film.`,
+      )
+    }
     const substrate = require_structure()
 
-    const max_strain_pct = input.max_strain_pct === undefined ? 5 : Number(input.max_strain_pct)
+    const max_strain_pct = input.max_strain_pct === undefined
+      ? 5
+      : Number(input.max_strain_pct)
     const params: LateralSearchParams = {
-      interface_axis: input.interface_axis === undefined ? 0 : Math.trunc(Number(input.interface_axis)),
+      interface_axis: input.interface_axis === undefined
+        ? 0
+        : Math.trunc(Number(input.interface_axis)),
       // The lateral API's `max_strain` is already expressed in percent.
       max_strain: max_strain_pct,
       max_length: input.max_length === undefined ? 100 : Number(input.max_length),
-      max_results: input.max_results === undefined ? 10 : Math.trunc(Number(input.max_results)),
+      max_results: input.max_results === undefined
+        ? 10
+        : Math.trunc(Number(input.max_results)),
     }
 
     const result = await searchLateralMatches(substrate as never, film as never, params)
     set_lateral_matches(result.matches)
+    // Stash the search params so build_lateral_heterostructure rebuilds with the
+    // SAME interface_axis / max_length / max_strain — otherwise its internal
+    // re-search diverges from this candidate list and match_index is wrong.
+    set_lateral_search_params(params)
     return {
       n_matches: result.matches.length,
       matches: result.matches.map((m, i) => ({
@@ -902,15 +1167,34 @@ register(
 register(
   {
     name: `build_lateral_heterostructure`,
-    description: `Build a LATERAL (in-plane) heterojunction for a chosen candidate match (from lateral_heterostructure_search) and load it into the viewer. The SUBSTRATE (current structure) and FILM (set via set_film) are stitched side-by-side along a shared in-plane edge — distinct from build_heterostructure, which stacks them vertically. Requires lateral_heterostructure_search to have been run first.`,
+    description:
+      `Build a LATERAL (in-plane) heterojunction for a chosen candidate match (from lateral_heterostructure_search) and load it into the viewer. The SUBSTRATE (current structure) and FILM (set via set_film) are stitched side-by-side along a shared in-plane edge — distinct from build_heterostructure, which stacks them vertically. Requires lateral_heterostructure_search to have been run first.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
-        match_index: { type: `integer`, minimum: 0, description: `Index of the match from lateral_heterostructure_search (default 0 = lowest strain).` },
-        width_A: { type: `integer`, minimum: 1, description: `Number of substrate (A) repeat units along the interface (default 1).` },
-        width_B: { type: `integer`, minimum: 1, description: `Number of film (B) repeat units along the interface (default 1).` },
-        buffer: { type: `number`, description: `Buffer gap between the two slabs at the junction, in Å (default 0).` },
+        match_index: {
+          type: `integer`,
+          minimum: 0,
+          description:
+            `Index of the match from lateral_heterostructure_search (default 0 = lowest strain).`,
+        },
+        width_A: {
+          type: `integer`,
+          minimum: 1,
+          description:
+            `Number of substrate (A) repeat units along the interface (default 1).`,
+        },
+        width_B: {
+          type: `integer`,
+          minimum: 1,
+          description: `Number of film (B) repeat units along the interface (default 1).`,
+        },
+        buffer: {
+          type: `number`,
+          description:
+            `Buffer gap between the two slabs at the junction, in Å (default 0).`,
+        },
         vacuum: { type: `number`, description: `Vacuum padding in Å (default 20.0).` },
       },
     },
@@ -918,12 +1202,20 @@ register(
   async (input) => {
     const matches = get_lateral_matches()
     if (matches.length === 0) {
-      throw new Error(`No lateral heterostructure matches available. Run lateral_heterostructure_search first.`)
+      throw new Error(
+        `No lateral heterostructure matches available. Run lateral_heterostructure_search first.`,
+      )
     }
-    const match_index = input.match_index === undefined ? 0 : Math.trunc(Number(input.match_index))
+    const match_index = input.match_index === undefined
+      ? 0
+      : Math.trunc(Number(input.match_index))
     const m = matches[match_index]
     if (!m) {
-      throw new Error(`match_index ${match_index} is out of range (0–${matches.length - 1}). Run lateral_heterostructure_search again or pick a valid index.`)
+      throw new Error(
+        `match_index ${match_index} is out of range (0–${
+          matches.length - 1
+        }). Run lateral_heterostructure_search again or pick a valid index.`,
+      )
     }
 
     const substrate = require_structure()
@@ -937,7 +1229,17 @@ register(
       vacuum: input.vacuum === undefined ? 20.0 : Number(input.vacuum),
     }
 
-    const result = await buildLateralInterface(substrate as never, film as never, m, params)
+    // Thread the stashed search params so the build's internal re-search matches
+    // the searched candidate list (it selects by match_id). Falls back to {} only
+    // for a stale pre-fix session where the search predates this stash.
+    const search_params = get_lateral_search_params() ?? {}
+    const result = await buildLateralInterface(
+      substrate as never,
+      film as never,
+      m,
+      params,
+      search_params,
+    )
     set_current_structure(result.structure as never)
     return {
       num_sites: result.n_atoms,
@@ -953,7 +1255,8 @@ register(
 register(
   {
     name: `set_bulk_reference`,
-    description: `Mark the currently-loaded structure as the BULK reference for surface passivation (used to compute correct coordination numbers). Then load/cut the slab and call passivate_surface. Typical flow: load bulk → set_bulk_reference → generate_slab → passivate_surface.`,
+    description:
+      `Mark the currently-loaded structure as the BULK reference for surface passivation (used to compute correct coordination numbers). Then load/cut the slab and call passivate_surface. Typical flow: load bulk → set_bulk_reference → generate_slab → passivate_surface.`,
     kind: `read`,
     input_schema: { type: `object`, properties: {} },
   },
@@ -969,7 +1272,8 @@ register(
 register(
   {
     name: `passivate_surface`,
-    description: `Passivate dangling bonds on the current slab with pseudo-hydrogen. Requires a bulk reference (set_bulk_reference) or an explicit bulk_coordination map.`,
+    description:
+      `Passivate dangling bonds on the current slab with pseudo-hydrogen. Requires a bulk reference (set_bulk_reference) or an explicit bulk_coordination map.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
@@ -977,7 +1281,8 @@ register(
         bulk_coordination: {
           type: `object`,
           additionalProperties: { type: `number` },
-          description: `Optional map of element → expected (bulk) coordination number, e.g. {"Si": 4}. Overrides the bulk-derived coordination; lets you passivate without a stashed bulk reference.`,
+          description:
+            `Optional map of element → expected (bulk) coordination number, e.g. {"Si": 4}. Overrides the bulk-derived coordination; lets you passivate without a stashed bulk reference.`,
         },
       },
     },
@@ -985,7 +1290,9 @@ register(
   async (input) => {
     const slab = require_structure()
     const bulk = get_bulk_stash()
-    const bulk_coordination = input.bulk_coordination as Record<string, number> | undefined
+    const bulk_coordination = input.bulk_coordination as
+      | Record<string, number>
+      | undefined
 
     if (!bulk && !bulk_coordination) {
       throw new Error(
@@ -1032,26 +1339,33 @@ function resolve_workflow_id(arg?: unknown): string {
 register(
   {
     name: `run_workflow`,
-    description: `Run (submit) a workflow using its last-used run configuration. This submits REAL HPC jobs / consumes compute, so it requires user confirmation. The workflow must have been run at least once via the Run dialog so its cluster + job config is saved — otherwise this returns a message telling the user to open the Run dialog once. Defaults to the currently-open workflow if workflow_id is omitted.`,
+    description:
+      `Run (submit) a workflow using its last-used run configuration. This submits REAL HPC jobs / consumes compute, so it requires user confirmation. The workflow must have been run at least once via the Run dialog so its cluster + job config is saved — otherwise this returns a message telling the user to open the Run dialog once. Defaults to the currently-open workflow if workflow_id is omitted.`,
     kind: `mutate`,
     input_schema: {
       type: `object`,
       properties: {
-        workflow_id: { type: `string`, description: `Workflow id to run (default: the currently-open workflow).` },
+        workflow_id: {
+          type: `string`,
+          description: `Workflow id to run (default: the currently-open workflow).`,
+        },
       },
     },
   },
   async (input) => {
     const workflow_id = resolve_workflow_id(input.workflow_id)
     if (!workflow_id) {
-      throw new Error(`No active workflow. Open a workflow in the editor, or pass workflow_id.`)
+      throw new Error(
+        `No active workflow. Open a workflow in the editor, or pass workflow_id.`,
+      )
     }
     const config = load_run_config(workflow_id)
     if (!config) {
       return {
         status: `no_config`,
         workflow_id,
-        message: `No saved run configuration for this workflow. Open the Run dialog once (set cluster / execution mode / job params and click Run) so the config is saved, then I can re-run it.`,
+        message:
+          `No saved run configuration for this workflow. Open the Run dialog once (set cluster / execution mode / job params and click Run) so the config is saved, then I can re-run it.`,
       }
     }
     const result = await api_run_workflow(workflow_id, config)
@@ -1063,19 +1377,25 @@ register(
 register(
   {
     name: `get_workflow_run_status`,
-    description: `Get the current run status of a workflow: overall status, per-step states, and any step errors. Use this to monitor or report job progress. Defaults to the currently-open workflow if workflow_id is omitted.`,
+    description:
+      `Get the current run status of a workflow: overall status, per-step states, and any step errors. Use this to monitor or report job progress. Defaults to the currently-open workflow if workflow_id is omitted.`,
     kind: `read`,
     input_schema: {
       type: `object`,
       properties: {
-        workflow_id: { type: `string`, description: `Workflow id to check (default: the currently-open workflow).` },
+        workflow_id: {
+          type: `string`,
+          description: `Workflow id to check (default: the currently-open workflow).`,
+        },
       },
     },
   },
   async (input) => {
     const workflow_id = resolve_workflow_id(input.workflow_id)
     if (!workflow_id) {
-      throw new Error(`No active workflow. Open a workflow in the editor, or pass workflow_id.`)
+      throw new Error(
+        `No active workflow. Open a workflow in the editor, or pass workflow_id.`,
+      )
     }
     const status = await get_run_status(workflow_id)
     const steps = (status.steps ?? []).map((s) => ({
@@ -1098,12 +1418,35 @@ export function tool_kind(name: string): ToolKind | undefined {
 }
 
 /** Execute a tool by name; always resolves to a JSON string (errors included). */
+/** Required params (per the tool's schema) that are absent/blank in `input`.
+ *  Weak local models sometimes call a tool with invented or missing args (e.g.
+ *  generate_slab with `thickness`/`layers` but no Miller indices h,k,l). Catching
+ *  that up front returns a clear, actionable error the model can retry against —
+ *  instead of the tool silently computing on `undefined`/NaN and changing nothing. */
+function missing_required(def: ClientTool, input: Record<string, unknown>): string[] {
+  const required = (def.input_schema as { required?: unknown }).required
+  if (!Array.isArray(required)) return []
+  return required.filter((key): key is string =>
+    typeof key === `string` &&
+    (input[key] === undefined || input[key] === null || input[key] === ``)
+  )
+}
+
 export async function execute_tool(
   name: string,
   input: Record<string, unknown>,
 ): Promise<string> {
   const entry = REGISTRY.get(name)
   if (!entry) return JSON.stringify({ error: `Unknown tool: ${name}` })
+  const missing = missing_required(entry.def, input)
+  if (missing.length > 0) {
+    const plural = missing.length > 1
+    return JSON.stringify({
+      error: `Missing required parameter${plural ? `s` : ``} for ${name}: ${
+        missing.join(`, `)
+      }. Provide ${plural ? `them` : `it`} and call ${name} again.`,
+    })
+  }
   try {
     const result = await entry.run(input)
     return JSON.stringify(result ?? { ok: true })
@@ -1112,5 +1455,12 @@ export async function execute_tool(
   }
 }
 
+// Register the viewer-control tools (visibility / camera / selection /
+// appearance) into CLIENT_TOOLS + REGISTRY. They live in a separate module to
+// keep this file focused; registered HERE (at the bottom, after `register` and
+// the CLIENT_TOOLS const exist) rather than via a side-effect `import` in
+// viewer-tools, which would hit a const temporal-dead-zone during circular init.
+for (const { def, run } of VIEWER_TOOLS) register(def, run)
+
 // Re-export so later tasks can register mutating tools that write structures back.
-export { set_current_structure, register }
+export { register, set_current_structure }

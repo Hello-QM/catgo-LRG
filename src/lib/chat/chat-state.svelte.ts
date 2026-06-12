@@ -1,7 +1,12 @@
 import { untrack } from 'svelte'
 import { SvelteMap } from 'svelte/reactivity'
 import type { ChatConfig, ChatMessage, ContentBlock, SessionSummary } from './types'
-import { agent_from_provider, get_display_text, SDK_PROVIDERS } from './types'
+import {
+  agent_from_provider,
+  get_display_text,
+  get_tool_uses,
+  SDK_PROVIDERS,
+} from './types'
 import { build_sdk_system_prompt, stream_chat } from './llm-client'
 import { stream_sdk_agent } from './sdk-stream'
 import { is_client_direct } from './provider-routing'
@@ -673,25 +678,24 @@ export async function send_message(
         slice.workflow_context.value,
         slice.paper_context.value,
       ].filter(Boolean).join(`\n\n`) || undefined
-      const system = build_sdk_system_prompt(
-        chat_config.provider,
-        combined_context,
-        false,
-        false,
-        // Mobile renders chat with a plain-text markdown renderer (no KaTeX/
-        // HTML) — keep the Unicode-formula instruction in the tooled prompt.
-        isMobile(),
-      ) +
-        // The shared prompt names catgo_* MCP tools, which exist only on the
-        // SDK/backend path. Client-direct runs CLIENT_TOOLS — without this
-        // note, weaker models answer in prose ("I would build a supercell…")
-        // instead of calling the equivalent listed tool.
-        `\n\nIMPORTANT: in this chat the ONLY callable tools are the ones in ` +
-        `the tools list of this request (e.g. make_supercell, generate_slab, ` +
-        `place_adsorbate, substitute_element, fetch_optimade, ` +
-        `get_structure_info). catgo_* tools are NOT available here. When the ` +
-        `user asks for a structure operation that maps to a listed tool, CALL ` +
-        `the tool — never just describe the steps or claim you did it.`
+      // LEAN, tool-ALIGNED system prompt for the client-direct loop. We do NOT
+      // reuse build_sdk_system_prompt here: that prompt was written for the
+      // Claude-Code SDK/MCP path and describes catgo_*/WebSearch/Bash/plugin
+      // tools that DO NOT EXIST client-direct. Pairing that big, misaligned
+      // prompt with the real CLIENT_TOOLS (different names) + a short opening
+      // message made weaker models (DeepSeek) return an EMPTY completion on the
+      // first turn — the model couldn't reconcile "call catgo_*" with "actually
+      // those don't exist, call these". This concise prompt names the REAL tool
+      // categories and tells the model to call them immediately. (Unicode-math
+      // note kept for mobile's KaTeX-free renderer.)
+      const system = [
+        `You are CatBot, a materials-science assistant inside CatGo's interactive 3D structure viewer.`,
+        `You act by CALLING the tools provided in this request: viewer controls (e.g. toggle_bonds, toggle_unit_cell, reset_camera, select_by_element, set_atom_radius), structure edits (make_supercell, substitute_element, generate_slab, place_adsorbate, set_lattice, build_nanotube), data fetch (fetch_optimade, fetch_pubchem, load_optimade_structure), analysis (get_structure_info, get_spacegroup, compute_xrd), and workflows (get_skill, run_workflow).`,
+        `When the user's request maps to a tool, CALL it immediately — never just describe what you would do, never ask for confirmation, and never claim you did something without calling the tool. After a tool runs, confirm the result in ONE short sentence.`,
+        `The JSON you receive back after a tool call is its RESULT — proof the action already happened. If it has a "message" field, just relay that message to the user (verbatim or lightly reworded). Do NOT re-emit the JSON as code, do NOT wrap it in a json block, and do NOT say things like "none of the functions match".`,
+        `Only the tools in this request are available — there are no catgo_*, web-search, shell, or file tools. Respond in the user's language. Write chemical formulas and math in Unicode (TiO₂, α-Fe₂O₃, E=mc²), never LaTeX.`,
+        combined_context ? `\n${combined_context}` : ``,
+      ].filter(Boolean).join(`\n\n`)
 
       // Local rolling conversation. Start from the prior turns (drop the empty
       // assistant placeholder we just pushed), append the user's new message,
@@ -864,6 +868,18 @@ export async function send_message(
     finalize_stream_indicators(slice)
     slice.loading.value = false
     slice.abort_controller = null
+    // Drop a trailing assistant turn that produced NO text and NO tool calls (a
+    // content-free completion). Leaving it renders an invisible empty bubble and,
+    // worse, an empty assistant message poisons the NEXT request's history (some
+    // providers mishandle it, which is what made the first message silently fail
+    // and only "work" after a second send). Any error still shows via slice.error.
+    const tail = slice.messages.list[slice.messages.list.length - 1]
+    if (
+      tail?.role === `assistant` && !get_display_text(tail.content) &&
+      get_tool_uses(tail.content).length === 0
+    ) {
+      slice.messages.list = slice.messages.list.slice(0, -1)
+    }
     // Persist the finished round so the Sessions tab can restore it later
     // (no backend history endpoint exists). The session_id is assigned during
     // the stream (record_session / event.sessionId); by the finally it lives

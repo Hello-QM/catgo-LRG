@@ -37,7 +37,9 @@ const pending_requests = new Map<string, PendingRequest>()
 /**
  * Set VSCode API for extension context
  */
-export function set_vscode_pubchem_api(api: { postMessage: (msg: unknown) => void }): void {
+export function set_vscode_pubchem_api(
+  api: { postMessage: (msg: unknown) => void },
+): void {
   vscode_api = api
   if (typeof window !== `undefined`) {
     window.addEventListener(`message`, (event: MessageEvent) => {
@@ -196,8 +198,8 @@ export interface PubChemSearchResponse {
 }
 
 // Simple in-memory cache
-let cached_search_results: Record<string, PubChemSearchResponse | null> = {}
-let search_cache_time: Record<string, number> = {}
+const cached_search_results: Record<string, PubChemSearchResponse | null> = {}
+const search_cache_time: Record<string, number> = {}
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
 /**
@@ -216,7 +218,9 @@ function parse_elements_from_formula(formula: string): string[] {
 export async function autocomplete_pubchem(term: string, limit = 8): Promise<string[]> {
   if (term.length < 2) return []
   try {
-    const url = `${API_BASE}/pubchem/autocomplete?term=${encodeURIComponent(term)}&limit=${limit}`
+    const url = `${API_BASE}/pubchem/autocomplete?term=${
+      encodeURIComponent(term)
+    }&limit=${limit}`
     const response = await fetch(url, { headers: { 'Accept': `application/json` } })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const data = await response.json() as { suggestions?: string[] }
@@ -267,7 +271,7 @@ export async function search_pubchem_compounds(
   }
 
   // Check cache (include search_type and offset in key)
-  const cache_key = `${search_type}:${term}:${elements?.join(',') ?? ''}:${offset}`
+  const cache_key = `${search_type}:${term}:${elements?.join(`,`) ?? ``}:${offset}`
   const now = Date.now()
   if (
     cached_search_results[cache_key] &&
@@ -285,11 +289,16 @@ export async function search_pubchem_compounds(
       // Static mode: query PubChem REST API directly (CORS supported)
       let url: string
       if (search_type === `cid`) {
-        url = `${PUBCHEM_API}/compound/cid/${term}/property/MolecularFormula,MolecularWeight,IUPACName/JSON`
+        url =
+          `${PUBCHEM_API}/compound/cid/${term}/property/MolecularFormula,MolecularWeight,IUPACName/JSON`
       } else if (search_type === `formula`) {
-        url = `${PUBCHEM_API}/compound/fastformula/${encodeURIComponent(term)}/property/MolecularFormula,MolecularWeight,IUPACName/JSON?MaxRecords=${limit}`
+        url = `${PUBCHEM_API}/compound/fastformula/${
+          encodeURIComponent(term)
+        }/property/MolecularFormula,MolecularWeight,IUPACName/JSON?MaxRecords=${limit}`
       } else {
-        url = `${PUBCHEM_API}/compound/name/${encodeURIComponent(term)}/property/MolecularFormula,MolecularWeight,IUPACName/JSON?MaxRecords=${limit}`
+        url = `${PUBCHEM_API}/compound/name/${
+          encodeURIComponent(term)
+        }/property/MolecularFormula,MolecularWeight,IUPACName/JSON?MaxRecords=${limit}`
       }
       const response = await fetch(url)
       if (!response.ok) {
@@ -302,9 +311,20 @@ export async function search_pubchem_compounds(
         }
         throw new Error(`PubChem search failed: ${response.status}`)
       }
-      const data = await response.json() as { PropertyTable?: { Properties?: Array<{ CID: number; MolecularFormula?: string; MolecularWeight?: number; IUPACName?: string }> } }
+      const data = await response.json() as {
+        PropertyTable?: {
+          Properties?: Array<
+            {
+              CID: number
+              MolecularFormula?: string
+              MolecularWeight?: number
+              IUPACName?: string
+            }
+          >
+        }
+      }
       const props = data.PropertyTable?.Properties || []
-      compounds = props.map(p => ({
+      compounds = props.map((p) => ({
         cid: p.CID,
         formula: p.MolecularFormula || ``,
         weight: p.MolecularWeight,
@@ -325,7 +345,13 @@ export async function search_pubchem_compounds(
       if (!response.ok) {
         throw new Error(`PubChem search failed: ${response.status}`)
       }
-      const data = await response.json() as { compounds?: Array<{ cid: number; formula: string; weight?: number; name?: string }>; total_count?: number; has_more?: boolean }
+      const data = await response.json() as {
+        compounds?: Array<
+          { cid: number; formula: string; weight?: number; name?: string }
+        >
+        total_count?: number
+        has_more?: boolean
+      }
       compounds = data.compounds || []
       total_count = data.total_count
       has_more = data.has_more ?? false
@@ -394,14 +420,28 @@ function post_to_extension_pubchem_search(
 /**
  * Fetch full structure data for a compound by CID
  */
-export async function fetch_pubchem_compound(cid: number): Promise<PubChemCompound | null> {
+export async function fetch_pubchem_compound(
+  cid: number,
+): Promise<PubChemCompound | null> {
   try {
     let url: string
-    let data: { PC_Compounds?: Array<{ id: { id: { cid: number } }; atoms?: { aid?: number[]; element?: number[] }; bonds?: { aid1?: number[]; aid2?: number[]; order?: number[] }; coords?: Array<{ conformers?: Array<{ x?: number[]; y?: number[]; z?: number[] }> }> }> }
+    let data: {
+      PC_Compounds?: Array<
+        {
+          id: { id: { cid: number } }
+          atoms?: { aid?: number[]; element?: number[] }
+          bonds?: { aid1?: number[]; aid2?: number[]; order?: number[] }
+          coords?: Array<
+            { conformers?: Array<{ x?: number[]; y?: number[]; z?: number[] }> }
+          >
+        }
+      >
+    }
 
     if (vscode_api || IS_STATIC) {
       // Direct PubChem API call (VSCode or static mode)
-      url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/JSON?record_type=3d`
+      url =
+        `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/JSON?record_type=3d`
       data = await fetch_json_smart(url) as typeof data
     } else {
       // Backend proxy
@@ -425,12 +465,12 @@ export async function fetch_pubchem_compound(cid: number): Promise<PubChemCompou
         bonds: backend_data.bonds,
         coords: backend_data.coords?.length
           ? [{
-              conformers: backend_data.coords.map(c => ({
-                x: c.x,
-                y: c.y,
-                z: c.z,
-              })),
-            }]
+            conformers: backend_data.coords.map((c) => ({
+              x: c.x,
+              y: c.y,
+              z: c.z,
+            })),
+          }]
           : undefined,
       }
       return compound
@@ -500,6 +540,10 @@ export interface PubChemProperties {
   MolecularWeight?: number
   Title?: string
   IUPACName?: string
+  // PubChem renamed the SMILES property (2025): `SMILES` / `ConnectivitySMILES`
+  // are the current names; `CanonicalSMILES` is the deprecated legacy key.
+  SMILES?: string
+  ConnectivitySMILES?: string
   CanonicalSMILES?: string
   InChI?: string
   InChIKey?: string
@@ -513,11 +557,14 @@ export interface PubChemProperties {
 /**
  * Fetch extended properties for a compound by CID via backend.
  */
-export async function fetch_pubchem_properties(cid: number): Promise<PubChemProperties | null> {
+export async function fetch_pubchem_properties(
+  cid: number,
+): Promise<PubChemProperties | null> {
   try {
     let url: string
     if (IS_STATIC) {
-      const props = `MolecularFormula,MolecularWeight,IUPACName,CanonicalSMILES,InChI,InChIKey,XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,RotatableBondCount`
+      const props =
+        `MolecularFormula,MolecularWeight,IUPACName,SMILES,InChI,InChIKey,XLogP,TPSA,HBondDonorCount,HBondAcceptorCount,RotatableBondCount`
       url = `${PUBCHEM_API}/compound/cid/${cid}/property/${props}/JSON`
     } else {
       url = `${API_BASE}/pubchem/compound/${cid}/properties`
@@ -528,7 +575,9 @@ export async function fetch_pubchem_properties(cid: number): Promise<PubChemProp
       throw new Error(`Failed to fetch properties: ${response.status}`)
     }
     if (IS_STATIC) {
-      const data = await response.json() as { PropertyTable?: { Properties?: PubChemProperties[] } }
+      const data = await response.json() as {
+        PropertyTable?: { Properties?: PubChemProperties[] }
+      }
       return data.PropertyTable?.Properties?.[0] ?? null
     }
     return await response.json()

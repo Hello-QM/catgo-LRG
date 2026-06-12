@@ -277,23 +277,6 @@
     file_input?.click()
   }
 
-  async function open_github(): Promise<void> {
-    // On Android/iOS the Tauri WebView ignores <a target="_blank">, so route
-    // external URLs through the shell plugin (desktop + mobile app); fall back
-    // to window.open in the browser/web build.
-    const url = `https://github.com/Hello-QM/catgo-LRG`
-    try {
-      const { check_tauri } = await import(`$lib/io/tauri`)
-      if (check_tauri()) {
-        const { open } = await import(`@tauri-apps/plugin-shell`)
-        await open(url)
-        return
-      }
-    } catch {
-      // fall through to web behaviour
-    }
-    window.open(url, `_blank`, `noopener`)
-  }
   async function on_local_file(e: Event): Promise<void> {
     const input = e.target as HTMLInputElement
     const f = input.files?.[0]
@@ -471,10 +454,11 @@
           <span class="mw-choice-desc">{t(`mobile.choice_connect_desc`)}</span>
         </button>
       {/if}
-      <button
-        type="button"
+      <a
         class="mw-github"
-        onclick={open_github}
+        href="https://github.com/Hello-QM/catgo-LRG"
+        target="_blank"
+        rel="noopener noreferrer"
         title="Star CatGo on GitHub"
       >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -484,7 +468,7 @@
         <svg class="mw-github-star" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M12 17.27l5.18 3.13-1.37-5.9 4.59-3.97-6.04-.52L12 4.5 9.64 10l-6.04.52 4.59 3.97-1.37 5.9z"/>
         </svg>
-      </button>
+      </a>
     </div>
   {:else}
     <!-- Top bar: layout switch + actions -->

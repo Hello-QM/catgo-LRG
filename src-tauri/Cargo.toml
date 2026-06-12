@@ -25,6 +25,11 @@ tauri-plugin-fs = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-shell = "2"
+# Opens external URLs in the system browser on every platform incl. iOS/Android.
+# shell.open is desktop-only (shells out to `open`/`xdg-open`) and silently
+# no-ops on mobile, so external links never opened on the phone. Used by the
+# global external-link handler (src/lib/io/external-links.ts).
+tauri-plugin-opener = "2"
 tauri-plugin-http = "2"
 url = "2"
 base64 = "0.22"

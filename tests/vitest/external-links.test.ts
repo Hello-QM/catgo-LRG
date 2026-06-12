@@ -4,7 +4,7 @@ const open_mock = vi.fn(() => Promise.resolve())
 let tauri_present = true
 
 vi.mock(`$lib/io/tauri`, () => ({ check_tauri: () => tauri_present }))
-vi.mock(`@tauri-apps/plugin-shell`, () => ({ open: open_mock }))
+vi.mock(`@tauri-apps/plugin-opener`, () => ({ openUrl: open_mock }))
 
 import { install_external_link_handler } from '$lib/io/external-links'
 
@@ -26,11 +26,13 @@ describe(`install_external_link_handler`, () => {
     document.body.replaceChildren()
   })
 
-  it(`routes cross-origin http(s) anchors through shell.open`, async () => {
+  it(`routes cross-origin http(s) anchors through openUrl`, async () => {
     install_external_link_handler()
     const event = click_anchor(`https://github.com/Hello-QM/catgo-LRG`)
     expect(event.defaultPrevented).toBe(true)
-    await vi.waitFor(() => expect(open_mock).toHaveBeenCalledWith(`https://github.com/Hello-QM/catgo-LRG`))
+    await vi.waitFor(() =>
+      expect(open_mock).toHaveBeenCalledWith(`https://github.com/Hello-QM/catgo-LRG`)
+    )
   })
 
   it(`leaves same-origin links alone`, () => {

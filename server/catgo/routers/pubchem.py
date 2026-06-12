@@ -415,10 +415,13 @@ async def get_compound_properties(cid: int):
     Args:
         cid: PubChem compound ID
     """
+    # PubChem renamed the SMILES property (2025): request the modern `SMILES`
+    # name (the legacy `CanonicalSMILES` request still 200s but the response now
+    # keys the value as `ConnectivitySMILES`, silently dropping it).
     props_url = (
         f"{PUBCHEM_BASE_URL}/compound/cid/{cid}/property/"
         "MolecularFormula,MolecularWeight,Title,IUPACName,"
-        "CanonicalSMILES,InChI,InChIKey,XLogP,TPSA,"
+        "SMILES,InChI,InChIKey,XLogP,TPSA,"
         "HBondDonorCount,HBondAcceptorCount,RotatableBondCount/JSON"
     )
 

@@ -18,18 +18,26 @@ install_external_link_handler()
 const target = document.getElementById(`app`)!
 
 function render_status(html: string, color = `#888`) {
-  target.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;font-family:system-ui;color:${color};padding:2rem;text-align:center;white-space:pre-wrap;font-size:14px">${html}</div>`
+  target.innerHTML =
+    `<div style="display:flex;align-items:center;justify-content:center;height:100%;font-family:system-ui;color:${color};padding:2rem;text-align:center;white-space:pre-wrap;font-size:14px">${html}</div>`
 }
 
 function is_ignorable_runtime_error(err: unknown) {
   const message = err instanceof Error ? err.message : String(err)
-  return message === `ResizeObserver loop completed with undelivered notifications.`
-    || message === `ResizeObserver loop limit exceeded`
+  return message === `ResizeObserver loop completed with undelivered notifications.` ||
+    message === `ResizeObserver loop limit exceeded` ||
     // On mobile there is no Python/Node sidecar, so any code path that tries to
     // spawn one fails with the shell plugin's "Scoped shell IO error: No such
     // file or directory". That feature is simply unavailable on mobile — log it,
     // but never tear down the whole app with a fatal error screen.
-    || message.includes(`Scoped shell IO error`)
+    message.includes(`Scoped shell IO error`) ||
+    // tauri-plugin-http (native fetch) frees a request/body resource once it is
+    // fully read; aborting or cancelling it afterwards (idle watchdog,
+    // cancel_generation, the plugin's own abort listener, or a stale closure
+    // left by an HMR module swap) calls fetch_cancel on the freed id and rejects
+    // with "The resource id N is invalid". It is entirely benign — the request
+    // already completed — so log it instead of whiting out the whole WebView.
+    /resource id \d+ is invalid/i.test(message)
 }
 
 function render_error(label: string, err: unknown) {
@@ -41,14 +49,25 @@ function render_error(label: string, err: unknown) {
   const detail = err instanceof Error
     ? `${err.name}: ${err.message}\n\n${err.stack ?? ``}`
     : String(err)
-  render_status(`${label}\n\n${detail.replace(/[&<>]/g, c => ({ '&': `&amp;`, '<': `&lt;`, '>': `&gt;` }[c]!))}`, `#e44`)
+  render_status(
+    `${label}\n\n${
+      detail.replace(/[&<>]/g, (c) => ({ '&': `&amp;`, '<': `&lt;`, '>': `&gt;` }[c]!))
+    }`,
+    `#e44`,
+  )
   console.error(`[CatGo] ${label}`, err)
 }
 
 render_status(`Loading CatGo…`)
 
-window.addEventListener(`error`, (e) => render_error(`Runtime error:`, e.error ?? e.message))
-window.addEventListener(`unhandledrejection`, (e) => render_error(`Unhandled rejection:`, e.reason))
+window.addEventListener(
+  `error`,
+  (e) => render_error(`Runtime error:`, e.error ?? e.message),
+)
+window.addEventListener(
+  `unhandledrejection`,
+  (e) => render_error(`Unhandled rejection:`, e.reason),
+)
 
 let app: unknown
 try {

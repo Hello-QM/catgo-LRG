@@ -53,7 +53,14 @@ export async function* parse_openai_stream(
   // It must be echoed back on the assistant tool-call message (see to_openai_message).
   let reasoning = ``
 
-  while (true) {
+  // `[DONE]` is the SSE terminator — nothing follows it. Break the OUTER read
+  // loop on it, not just the inner line loop: a native (Tauri HTTP) buffered
+  // body frees its resource once fully delivered, so an extra reader.read()
+  // past `[DONE]` throws "resource id N is invalid" → a spurious "Stream error"
+  // bubble after an otherwise-complete reply. Stopping at `[DONE]` avoids the
+  // read-after-free entirely (and is correct on every platform).
+  let stream_done = false
+  while (!stream_done) {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
@@ -62,7 +69,10 @@ export async function* parse_openai_stream(
     for (const line of lines) {
       if (!line.startsWith(`data: `)) continue
       const payload = line.slice(6).trim()
-      if (payload === `[DONE]`) break
+      if (payload === `[DONE]`) {
+        stream_done = true
+        break
+      }
       let data
       try {
         data = JSON.parse(payload)
@@ -253,6 +263,15 @@ export async function* stream_client_llm(
   // so a live stream is never cut off.
   const ac = new AbortController()
   let timed_out = false
+  // Once a request's network phase has settled (body fully read, errored, or
+  // surfaced), a LATER external abort must NOT touch it. The native HTTP plugin
+  // frees the request/body resource on completion, so aborting it then fires
+  // `fetch_cancel` on a freed resource id → an UNHANDLED "resource id N is
+  // invalid" rejection that crashes the WebView. A multi-turn tool loop leaves
+  // one stale {once} listener per finished request; when cancel_generation later
+  // aborts the shared slice signal (Stop / tab switch / unmount) they would all
+  // fire. This flag makes the external-abort handler a no-op past completion.
+  let network_done = false
   let idle_timer: ReturnType<typeof setTimeout> | null = null
   const arm_idle = () => {
     if (idle_timer) clearTimeout(idle_timer)
@@ -265,9 +284,12 @@ export async function* stream_client_llm(
     if (idle_timer) clearTimeout(idle_timer)
     idle_timer = null
   }
+  const on_external_abort = () => {
+    if (!network_done) ac.abort()
+  }
   if (signal) {
     if (signal.aborted) ac.abort()
-    else signal.addEventListener(`abort`, () => ac.abort(), { once: true })
+    else signal.addEventListener(`abort`, on_external_abort, { once: true })
   }
   const timeout_msg = `The model stopped responding (timed out after ` +
     `${IDLE_TIMEOUT_MS / 1000}s). Check your connection and try again.`
@@ -315,6 +337,7 @@ export async function* stream_client_llm(
         }
         continue
       }
+      network_done = true
       yield {
         type: `error`,
         message: err instanceof Error ? err.message : `Network error`,
@@ -339,19 +362,22 @@ export async function* stream_client_llm(
       try {
         await abortable_sleep(ra ?? backoff_ms(attempt), ac.signal)
       } catch {
+        network_done = true
         yield { type: `error`, message: timed_out ? timeout_msg : `Aborted` }
         return
       }
       continue
     }
+    network_done = true
     yield {
       type: `error`,
-      message: `Provider error ${status}: ${redact(detail)}`,
+      message: summarize_provider_error(status, detail),
     }
     return
   }
   if (!resp || !resp.body) {
     clear_idle()
+    network_done = true
     yield {
       type: `error`,
       message: `Provider unavailable after ${MAX_ATTEMPTS} attempts.`,
@@ -392,6 +418,9 @@ export async function* stream_client_llm(
     // Always cancel the watchdog — including when the consumer stops iterating
     // early (run_tool_loop break / generator .return()), so no timer dangles.
     clear_idle()
+    // Network phase for this request is over: detach it from a later external
+    // abort so cancel_generation can't fire `fetch_cancel` on its freed resource.
+    network_done = true
   }
 }
 
@@ -427,6 +456,26 @@ function looks_like_sse(value: Uint8Array | undefined): boolean {
   // not a buffered JSON completion.
   const first_line = new TextDecoder().decode(value).trimStart().split(`\n`)[0]
   return first_line.startsWith(`data:`) || first_line.startsWith(`:`)
+}
+
+/** Turn a provider's raw error body into a ONE-LINE human message — never a JSON
+ *  dump. Extracts {error:{message}} (or [{error:{message}}], the Gemini/OpenAI
+ *  shape), keeps the status + key tokens (429/quota/401…) so the chat UI's
+ *  rate-limit / key-error classifiers still match, redacts, and caps length. */
+function summarize_provider_error(status: number, detail: string): string {
+  let msg = detail
+  try {
+    const parsed: unknown = JSON.parse(detail)
+    const obj = Array.isArray(parsed) ? parsed[0] : parsed
+    const m = (obj as { error?: { message?: string } } | null)?.error?.message
+    if (typeof m === `string` && m.trim()) msg = m
+  } catch { /* not JSON — fall through with the raw text */ }
+  msg = redact(msg.split(`\n`)[0].trim())
+  // Prefer the first sentence when the line is long and verbose.
+  const sentence = msg.match(/^.*?[.!?](\s|$)/)?.[0]?.trim()
+  if (sentence && sentence.length >= 15) msg = sentence
+  if (msg.length > 240) msg = `${msg.slice(0, 240)}…`
+  return `Provider error ${status}: ${msg}`
 }
 
 /** Wrap an already-buffered non-streaming completion body as a one-shot SSE
@@ -500,7 +549,10 @@ function prepend_reader(
       if (value) c.enqueue(value)
     },
     cancel(reason) {
-      void reader.cancel(reason)
+      // Swallow rejection: cancelling an already-finished native HTTP body
+      // reader rejects with "resource id N is invalid" (freed resource). That
+      // is benign here, but unguarded it becomes an unhandled rejection.
+      void reader.cancel(reason).catch(() => {})
     },
   }).getReader()
 }

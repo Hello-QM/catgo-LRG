@@ -21,7 +21,7 @@
   renderer only when a fenced code block is detected.
 -->
 <script lang="ts">
-  import { tick, untrack } from 'svelte'
+  import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import Icon from '$lib/Icon.svelte'
   import { get_display_text } from '$lib/chat/types'
@@ -136,6 +136,20 @@
     return text.length > 400 ? `${text.slice(0, 400)}…` : text
   }
 
+  // Short local time (e.g. 4:07 PM) for a message bubble. Bad/zero timestamps
+  // (older messages stored before timestamps existed) render nothing.
+  function format_time(ts: number): string {
+    if (!ts) return ``
+    try {
+      return new Date(ts).toLocaleTimeString([], {
+        hour: `numeric`,
+        minute: `2-digit`,
+      })
+    } catch {
+      return ``
+    }
+  }
+
   function decide_permission(entry: PermissionEntry, ok: boolean): void {
     entry.status = ok ? `approved` : `denied`
     if (ok && skip_session) slice.skip_permission.value = true
@@ -185,16 +199,27 @@
     tick().then(() => el.scrollTo({ top: el.scrollHeight }))
   })
 
-  // Abort the active chat's in-flight stream when the overlay unmounts (§6).
-  // Read active_id via `untrack` so the effect takes NO reactive dependency on
-  // it — otherwise switching tabs would re-run the effect and its teardown would
-  // cancel the stream of the tab you just LEFT (breaking per-tab background
-  // streaming). With untrack, the teardown runs only on real unmount and cancels
-  // whatever tab is active at that moment.
-  $effect(() => () => cancel_generation(untrack(() => active_id)))
+  // Deliberately NO cancel on unmount OR minimize. The ✕ is "minimize" (hide),
+  // not "stop": streams live in the module-level slice (chat-state) and are
+  // per-tab background-capable, so they must SURVIVE both a minimize and the
+  // transient destroy+recreate that MobileWorkspace's `{#if ai_open}` wrapper
+  // does on a parent re-render — the user sees the finished result on reopen.
+  // Cancelling from either path aborted a healthy in-flight generation
+  // mid-stream ("Request canceled" — traced via WHO=close_chat / effect
+  // teardown). The only deliberate cancels are the Stop button (below) and
+  // closing the whole tab (remove_chat_slice).
 
   const has_key = $derived(local_key.trim().length > 0)
-  const show_setup = $derived(setup_open || (key_checked && !has_key))
+  // Ollama is keyless — it authenticates by reachability, not an API key. It's
+  // "configured" once a base URL is set. Without treating it as such, the
+  // !configured clause below would pin the setup card open forever (no key can
+  // ever exist for Ollama), so Save never reveals the chat and every relaunch
+  // re-prompts setup even though the provider/base_url ARE persisted.
+  const key_optional = $derived(provider === `ollama`)
+  const configured = $derived(
+    has_key || (key_optional && chat_config.base_url.trim().length > 0),
+  )
+  const show_setup = $derived(setup_open || (key_checked && !configured))
 
   // 401 / invalid-key detection on the slice error so we can offer a shortcut
   // back to setup without echoing the raw provider body (which might reflect the
@@ -279,15 +304,49 @@
       .join(``)
   }
 
-  /** Paragraphs (blank-line separated) → <p>, single newlines → <br>. */
+  /** Block markdown → safe HTML: bullet (* - •) and numbered (1. 1)) list runs
+   *  become real <ul>/<ol>; everything else is paragraphs (blank-line separated,
+   *  single newlines → <br>). Inline bold/code handled per line. Lightweight by
+   *  design — no full markdown lib. */
   function render_markdown(text: string): string {
-    return text
-      .split(/\n{2,}/)
-      .map((para) => {
-        const inner = render_inline(escape_html(para)).replace(/\n/g, `<br>`)
-        return `<p>${inner}</p>`
-      })
-      .join(``)
+    const bullet_re = /^\s*[*\-•]\s+(.*)$/
+    const number_re = /^\s*\d+[.)]\s+(.*)$/
+    const lines = text.split(`\n`)
+    const html: string[] = []
+    let para: string[] = []
+    const flush = () => {
+      if (para.length) {
+        html.push(`<p>${para.map((l) => render_inline(escape_html(l))).join(`<br>`)}</p>`)
+        para = []
+      }
+    }
+    let i = 0
+    while (i < lines.length) {
+      const is_num = number_re.test(lines[i])
+      const is_bul = bullet_re.test(lines[i])
+      if (is_num || is_bul) {
+        flush()
+        const re = is_num ? number_re : bullet_re
+        const items: string[] = []
+        // Same-type consecutive lines form one list; a type switch ends it.
+        while (i < lines.length && re.test(lines[i])) {
+          items.push(render_inline(escape_html(lines[i].match(re)![1])))
+          i++
+        }
+        const tag = is_num ? `ol` : `ul`
+        html.push(`<${tag}>${items.map((it) => `<li>${it}</li>`).join(``)}</${tag}>`)
+        continue
+      }
+      if (lines[i].trim() === ``) {
+        flush()
+        i++
+        continue
+      }
+      para.push(lines[i])
+      i++
+    }
+    flush()
+    return html.join(``)
   }
 </script>
 
@@ -353,12 +412,42 @@
       {:else}
         {#each slice.messages.list as msg, i (i)}
           {@const text = get_display_text(msg.content)}
-          {#if text}
-            <div class="ai-msg" class:user={msg.role === `user`}>
-              <!-- Safe: render_markdown HTML-escapes its input before applying
-                   the tiny inline transform, so no user text reaches the DOM
-                   unescaped. -->
-              <div class="ai-msg-body">{@html render_markdown(text)}</div>
+          {@const is_user = msg.role === `user`}
+          {@const is_last = i === slice.messages.list.length - 1}
+          <!-- Show the assistant bubble even with EMPTY text while a round is in
+               flight: a tool-only first turn (round 0 = the tool call, no prose;
+               the summary arrives in round 1) would otherwise render nothing, so
+               the reply looks like it never came and the user re-sends. -->
+          {@const show_working = !is_user && !text && is_last && slice.loading.value}
+          {#if text || show_working}
+            <!-- Grouped avatar: only the first assistant message of a consecutive
+                 run shows the CatBot disc; later bubbles align under it. -->
+            {@const group_start = !is_user &&
+            (i === 0 || slice.messages.list[i - 1]?.role !== `assistant`)}
+            <div class="ai-row" class:user={is_user}>
+              {#if !is_user}
+                <div class="ai-avatar-slot">
+                  {#if group_start}
+                    <div class="ai-avatar" aria-hidden="true"><Icon icon="Cat" /></div>
+                  {/if}
+                </div>
+              {/if}
+              <div class="ai-msg" class:user={is_user}>
+                {#if text}
+                  <!-- Safe: render_markdown HTML-escapes its input before applying
+                       the tiny inline transform, so no user text reaches the DOM
+                       unescaped. -->
+                  <div class="ai-msg-body">{@html render_markdown(text)}</div>
+                  {#if format_time(msg.timestamp)}
+                    <span class="ai-msg-time">{format_time(msg.timestamp)}</span>
+                  {/if}
+                {:else}
+                  <div class="ai-msg-body ai-msg-working" aria-live="polite">
+                    <span class="ai-dots" aria-hidden="true"></span>
+                    <span>{t(`mobile.ai_thinking`)}</span>
+                  </div>
+                {/if}
+              </div>
             </div>
           {/if}
         {/each}
@@ -402,13 +491,6 @@
           </div>
         {/if}
       {/each}
-
-      {#if slice.loading.value}
-        <div class="ai-thinking" aria-live="polite">
-          <span class="ai-dots" aria-hidden="true"></span>
-          <span>{t(`mobile.ai_thinking`)}</span>
-        </div>
-      {/if}
 
       {#if error_text}
         <div class="ai-error" role="alert">
@@ -498,8 +580,8 @@
     flex-shrink: 0;
     padding: 8px 10px;
     padding-top: max(8px, env(safe-area-inset-top));
-    background: rgba(0, 0, 0, 0.3);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--page-bg, #0e1117);
+    border-bottom: 1px solid rgba(128, 128, 140, 0.18);
   }
   .ai-head-btn {
     display: inline-flex;
@@ -647,22 +729,68 @@
     font-size: 0.7em;
     margin: 0;
   }
+  .ai-row {
+    display: flex;
+    align-self: stretch;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .ai-row.user {
+    flex-direction: row-reverse; /* bubble hugs the right edge, no avatar slot */
+  }
+  .ai-avatar-slot {
+    flex-shrink: 0;
+    width: 28px; /* reserved even when empty so grouped bubbles stay aligned */
+  }
+  .ai-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    font-size: 17px; /* Icon is height:1em → ~17px cat */
+    color: #fff;
+    border-radius: 50%;
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent-color, #0a84ff) 88%, #fff) 0%,
+      var(--accent-color, #0a84ff) 55%,
+      color-mix(in srgb, var(--accent-color, #0a84ff) 78%, #000) 100%
+    );
+    box-shadow: 0 1px 3px
+      color-mix(in srgb, var(--accent-color, #0a84ff) 35%, transparent);
+  }
   .ai-msg {
-    max-width: 86%;
-    padding: 10px 12px;
-    border-radius: 12px;
+    max-width: 84%;
+    padding: 9px 13px;
+    border-radius: 17px;
+    border-bottom-left-radius: 5px; /* subtle tail toward the assistant side */
     font-size: 15px;
     line-height: 1.5;
     color: var(--text-color, #e0e0e0);
     background: var(--surface-bg, #1a1a2e);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    align-self: flex-start;
+    border: 1px solid rgba(128, 128, 140, 0.16);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   }
   .ai-msg.user {
-    align-self: flex-end;
     color: #fff;
     background: var(--accent-color, #0a84ff);
-    border-color: var(--accent-color, #0a84ff);
+    border-color: transparent;
+    border-radius: 17px;
+    border-bottom-right-radius: 5px; /* tail toward the user side */
+  }
+  .ai-msg-time {
+    display: block;
+    margin-top: 4px;
+    font-size: 0.68em;
+    line-height: 1;
+    text-align: right;
+    color: var(--text-color-muted, #94a3b8);
+    opacity: 0.7;
+  }
+  .ai-msg.user .ai-msg-time {
+    color: rgba(255, 255, 255, 0.85);
+    opacity: 0.85;
   }
   .ai-msg-body :global(p) {
     margin: 0 0 0.5em;
@@ -670,19 +798,41 @@
   .ai-msg-body :global(p:last-child) {
     margin-bottom: 0;
   }
-  .ai-msg-body :global(code) {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.9em;
-    padding: 1px 5px;
-    border-radius: 5px;
-    background: rgba(0, 0, 0, 0.3);
+  .ai-msg-body :global(ul),
+  .ai-msg-body :global(ol) {
+    margin: 0.35em 0;
+    padding-left: 1.25em;
   }
-  .ai-thinking {
+  .ai-msg-body :global(ul:last-child),
+  .ai-msg-body :global(ol:last-child) {
+    margin-bottom: 0;
+  }
+  .ai-msg-body :global(li) {
+    margin: 0.2em 0;
+    padding-left: 0.15em;
+  }
+  .ai-msg-body :global(li)::marker {
+    color: var(--text-color-muted, #94a3b8);
+  }
+  .ai-msg-body :global(code) {
+    /* Non-monospace: same sans typeface as the body so the message reads as one
+       font. A subtle tinted chip (+ medium weight) still marks it as a code /
+       tool name without the monospace contrast. */
+    font-family: inherit;
+    font-size: 0.94em;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: rgba(128, 128, 140, 0.16);
+    word-break: break-word;
+  }
+  /* In-bubble "working" indicator for an assistant turn that's mid-tool-loop
+     with no text yet (replaces the old detached Thinking strip). */
+  .ai-msg-working {
     display: flex;
     align-items: center;
     gap: 8px;
-    align-self: flex-start;
-    font-size: 0.85em;
+    font-size: 0.92em;
     color: var(--text-color-muted, #94a3b8);
   }
   .ai-dots {
@@ -731,46 +881,71 @@
     align-items: flex-end;
     gap: 8px;
     flex-shrink: 0;
-    padding: 10px;
+    padding: 10px 12px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
-    background: rgba(0, 0, 0, 0.3);
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    /* Solid, theme-aware bar so the safe-area edge blends instead of letting the
+       page show through (the old translucent black left a light gap on iOS). */
+    background: var(--page-bg, #0e1117);
+    border-top: 1px solid rgba(128, 128, 140, 0.18);
   }
   .ai-input {
     flex: 1;
     min-width: 0;
+    min-height: 40px;
     max-height: 120px;
-    padding: 10px 12px;
+    padding: 9px 14px;
     font-size: 16px; /* >=16px stops iOS zoom-on-focus. */
     font-family: inherit;
     line-height: 1.4;
     color: var(--text-color, #e0e0e0);
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 10px;
+    /* Neutral fill that reads on light + dark (was muddy on the light theme). */
+    background: rgba(128, 128, 140, 0.12);
+    border: 1px solid rgba(128, 128, 140, 0.28);
+    border-radius: 20px; /* pill */
     outline: none;
     resize: none;
     box-sizing: border-box;
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .ai-input::placeholder {
+    color: var(--text-color-muted, #94a3b8);
+    opacity: 0.7;
   }
   .ai-input:focus {
-    border-color: var(--accent-color, #3b82f6);
+    border-color: var(--accent-color, #6366f1);
+    background: rgba(128, 128, 140, 0.06);
   }
   .ai-send {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    width: 44px;
-    height: 44px;
+    width: 40px;
+    height: 40px;
     font-size: 18px;
     color: #fff;
+    /* Gradient derived from the theme accent (lighter top-left → deeper
+       bottom-right) so it stays on-theme in both light and dark. Fallback to the
+       flat accent for any engine without color-mix. */
     background: var(--accent-color, #0a84ff);
+    background: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--accent-color, #0a84ff) 88%, #fff) 0%,
+      var(--accent-color, #0a84ff) 55%,
+      color-mix(in srgb, var(--accent-color, #0a84ff) 78%, #000) 100%
+    );
     border: none;
-    border-radius: 10px;
+    border-radius: 50%; /* circular send, sits flush with the pill input */
     cursor: pointer;
+    box-shadow: 0 2px 6px
+      color-mix(in srgb, var(--accent-color, #0a84ff) 40%, transparent);
+    transition: opacity 0.12s ease, transform 0.06s ease;
+  }
+  .ai-send:active {
+    transform: scale(0.92);
   }
   .ai-send:disabled {
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: default;
   }
   .ai-send.stop {

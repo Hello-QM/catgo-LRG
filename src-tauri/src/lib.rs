@@ -196,6 +196,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .manage(Mutex::new(OpenedFiles { paths: Vec::new() }))
         .manage(db::DbState::default())

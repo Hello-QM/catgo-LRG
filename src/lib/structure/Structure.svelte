@@ -76,6 +76,11 @@
   import { build_structure_context } from '$lib/chat/context'
   import { analysis_sessions, get_analysis_session, get_session_blob } from '$lib/chat/analysis-session-store.svelte'
   import { start_mcp_bridge, type McpBridgeDeps } from './controllers/tool-handler'
+  import {
+    register_viewer_action_handler,
+    type ViewerActionHandler,
+    unregister_viewer_action_handler,
+  } from '$lib/chat/viewer-tool-executor'
   import { isMobile } from '$lib/api/transport'
   import { set_current_structure, current_structure_state } from './current-structure.svelte'
   import { molecular_fragments, type MolecularFragment } from './controllers/fragments'
@@ -93,8 +98,8 @@
   import { create_transform_controller } from './controllers/transform-controller.svelte'
   import { create_viewer_controller } from './controllers/viewer-controller.svelte'
 
-  load_i18n_module('structure')
-  load_i18n_module('common')
+  load_i18n_module(`structure`)
+  load_i18n_module(`common`)
   import { create_selection_state } from './state/selection-state.svelte'
   import { create_charge_labels_state } from './state/charge-labels-state.svelte'
   import { create_measurement_state } from './state/measurement-state.svelte'
@@ -155,7 +160,7 @@
   type EventHandler = (data: StructureHandlerData) => void
 
   // Detect macOS for platform-specific keybindings
-  const is_mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
+  const is_mac = typeof navigator !== `undefined` && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
 
   // Check if box selection modifier is pressed (Cmd on Mac, Ctrl on Windows/Linux)
   function is_box_select_modifier(event: MouseEvent | KeyboardEvent): boolean {
@@ -169,8 +174,8 @@
   let analysis = $state<ReturnType<typeof create_analysis_controller>>(undefined as any)
   let transform: ReturnType<typeof create_transform_controller>
   let viewer: ReturnType<typeof create_viewer_controller>
-  let scene_props = $state<ReturnType<typeof create_settings_controller>['scene_props']>(undefined as any)
-  let lattice_props = $state<ReturnType<typeof create_settings_controller>['lattice_props']>(undefined as any)
+  let scene_props = $state<ReturnType<typeof create_settings_controller>[`scene_props`]>(undefined as any)
+  let lattice_props = $state<ReturnType<typeof create_settings_controller>[`lattice_props`]>(undefined as any)
 
   let center_camera_trigger = $state(0) // Increment to trigger camera centering on new structure
   let reset_camera_up_trigger = $state(0) // Increment to reset camera.up to [0,1,0] after slab cut
@@ -663,7 +668,7 @@
   let rac_result = $state<RacResult | null>(null)
   let rac_loading = $state(false)
   let wl_hashes = $state.raw<WlHashResult[] | null>(null)
-  let cap_replace_smiles = $state('')
+  let cap_replace_smiles = $state(``)
   let cap_replace_loading = $state(false)
   let cap_replace_error = $state<string | null>(null)
 
@@ -733,13 +738,13 @@
   let optimade_pending_pymatgen = $state<PymatgenStructure | null>(null) // Pending PymatgenStructure for preview
   let optimade_pending_provider = $state<string | null>(null) // Provider name for preview
   let optimade_preview_details = $state<Array<{ label: string; value: string; mono?: boolean }>>([])
-  let optimade_preview_formula = $state<string>('')
+  let optimade_preview_formula = $state<string>(``)
   let optimade_preview_lattice = $state<{ a: number; b: number; c: number; alpha: number; beta: number; gamma: number } | null>(null)
-  let optimade_preview_title = $state<string>('Preview Structure Import')
+  let optimade_preview_title = $state<string>(`Preview Structure Import`)
   let pubchem_import_position: [number, number, number] | null = $state(null) // Position to place PubChem imported structure
   let paste_content_modal_visible = $state(false) // Paste content modal visibility
   let vacuum_box_modal_visible = $state(false) // Vacuum box modal visibility
-  let pending_tool_after_wrap = $state<'slab_cutter' | 'lattice_pane' | 'adsorption_pane' | 'vasp_export' | null>(null)
+  let pending_tool_after_wrap = $state<`slab_cutter` | `lattice_pane` | `adsorption_pane` | `vasp_export` | null>(null)
   let periodic_table_visible = $state(false) // Periodic table modal for element selection
   // Structure loading stage
   let {
@@ -812,7 +817,7 @@
     // Symmetry analysis data (bindable for external access)
     symmetry_data = $bindable<MoyoDataset | null>(null),
     // Auto-align structure on load using principal axes
-    align_on_load = $bindable<'none' | 'principal_axes'>('principal_axes'),
+    align_on_load = $bindable<`none` | `principal_axes`>(`principal_axes`),
     // Remote file origin for "save structure back" feature
     remote_origin = $bindable<{ session_id: string; file_path: string } | null>(null),
     cube_file = null,
@@ -924,7 +929,7 @@
       // Symmetry analysis data (bindable for external access)
       symmetry_data?: MoyoDataset | null
       // Auto-align structure on load using principal axes
-      align_on_load?: 'none' | 'principal_axes'
+      align_on_load?: `none` | `principal_axes`
       // Remote file origin for "save structure back" feature
       remote_origin?: { session_id: string; file_path: string } | null
       // Bulk reference for pseudo-hydrogen passivation (auto-set from slab cutter, or passed externally)
@@ -1287,13 +1292,13 @@
   // Auto-align structure to principal axes on load
   // Skip alignment when cube_file is present - atom positions must match the volumetric grid
   $effect(() => {
-    if (align_on_load !== 'principal_axes' || !structure || !structure.sites || structure.sites.length === 0 || cube_file || pencil.pencil_mode_active || build.build_pane_open || trajectory_active) {
+    if (align_on_load !== `principal_axes` || !structure || !structure.sites || structure.sites.length === 0 || cube_file || pencil.pencil_mode_active || build.build_pane_open || trajectory_active) {
       return
     }
 
     // Create a unique ID for this structure based on site count and first/last positions
-    const first_xyz = structure.sites[0]?.xyz?.join(',') ?? ''
-    const last_xyz = structure.sites[structure.sites.length - 1]?.xyz?.join(',') ?? ''
+    const first_xyz = structure.sites[0]?.xyz?.join(`,`) ?? ``
+    const last_xyz = structure.sites[structure.sites.length - 1]?.xyz?.join(`,`) ?? ``
     const structure_id = `${structure.sites.length}-${first_xyz}-${last_xyz}`
 
     // Skip if already aligned this exact structure
@@ -1636,7 +1641,7 @@
 
   // --- File preview split-view state ---
   let show_preview = $state(false)
-  let preview_mode = $state<'image' | 'pdf' | 'markdown' | 'csv' | 'excel' | 'text'>(`text`)
+  let preview_mode = $state<`image` | `pdf` | `markdown` | `csv` | `excel` | `text`>(`text`)
   let preview_content = $state(``)
   let preview_binary_data = $state(``)
   let preview_mime_type = $state(``)
@@ -1656,7 +1661,7 @@
 
   let cube_pane_open = $state(!!untrack(() => cube_file))  // Cube file isosurface panel
 
-  let is_molecule = $derived(!!structure && !('lattice' in structure && (structure as any).lattice))
+  let is_molecule = $derived(!!structure && !(`lattice` in structure && (structure as any).lattice))
 
   // Context menu sections — delegated to pure functions in controllers/viewer-controller.ts
   let ctx_constraints_section = $derived(build_constraints_section({
@@ -1990,17 +1995,17 @@
 
   // Clear selection when clicking outside the viewer
   $effect(() => {
-    if (typeof window === 'undefined') return
+    if (typeof window === `undefined`) return
 
     function handle_outside_click(event: MouseEvent) {
       // Check if click is on UI elements that shouldn't clear selection
       const target = event.target as Element
       if (
-        target.closest('.context-menu') ||
-        target.closest('.element-selector') ||
-        target.closest('.common-molecules-menu') ||
-        target.closest('.control-buttons') ||
-        target.closest('.measure-mode-dropdown')
+        target.closest(`.context-menu`) ||
+        target.closest(`.element-selector`) ||
+        target.closest(`.common-molecules-menu`) ||
+        target.closest(`.control-buttons`) ||
+        target.closest(`.measure-mode-dropdown`)
       ) {
         return
       }
@@ -2021,9 +2026,9 @@
       }
     }
 
-    window.addEventListener('click', handle_outside_click)
+    window.addEventListener(`click`, handle_outside_click)
     return () => {
-      window.removeEventListener('click', handle_outside_click)
+      window.removeEventListener(`click`, handle_outside_click)
     }
   })
 
@@ -2047,7 +2052,7 @@
   let webgpu_available = $state(true)
   $effect(() => {
     let cancelled = false
-    import('./gpu/webgpu-context').then(({ probe_webgpu_available }) =>
+    import(`./gpu/webgpu-context`).then(({ probe_webgpu_available }) =>
       probe_webgpu_available().then((ok) => {
         if (cancelled) return
         webgpu_available = ok
@@ -2271,6 +2276,38 @@
     }
   })
 
+  // Bridge CatBot's viewer-control tools (toggle/camera/selection/appearance) to
+  // THIS viewer while it is the active tab. Mirrors the MCP-bridge effect above,
+  // but: (1) gated on is_active so only the focused viewer holds the single
+  // registry slot; (2) NO isMobile() skip — the registry is pure client-side, so
+  // mobile (same client-direct tool loop) MUST register or the 12 view tools are
+  // dead on iOS. Preview/popup/trajectory instances (no tab_id) never register.
+  $effect(() => {
+    if (tab_id === undefined || !is_active) return
+    const handler: ViewerActionHandler = {
+      set_scene_prop: (key, value) => settings.set_scene_prop(key, value),
+      reset_camera: () => reset_camera(),
+      set_selection: (indices) => {
+        selected_sites = indices
+      },
+      select_by_element: (element) => {
+        const sites = (structure?.sites ?? []) as { species?: { element?: string }[] }[]
+        const idx: number[] = []
+        for (let i = 0; i < sites.length; i++) {
+          if (sites[i]?.species?.[0]?.element === element) idx.push(i)
+        }
+        selected_sites = idx
+        return idx.length
+      },
+      clear_selection: () => {
+        selected_sites = []
+      },
+      site_count: () => structure?.sites?.length ?? 0,
+    }
+    register_viewer_action_handler(handler)
+    return () => unregister_viewer_action_handler(handler)
+  })
+
   // Push-on-edit: any structure mutation (add/delete/replace/drag/lattice)
   // triggers an immediate push so lab claude sees the new state within
   // ~30ms instead of waiting up to 5s for the heartbeat. JSON.stringify
@@ -2315,12 +2352,12 @@
     // Capture the state we're undoing FROM (the forward state) so redo() can
     // restore it. Snapshot-based redo — see selection-state redo_history.
     sel_state.push_redo(structure)
-    if (entry.kind === 'structure') {
+    if (entry.kind === `structure`) {
       structure = entry.structure
       pencil.pop_bond_undo()
       return
     }
-    if (entry.kind === 'atom') {
+    if (entry.kind === `atom`) {
       // Sparse atom-delete undo: splice the removed Site objects back
       // into `structure.sites` at their original indices. Iterating
       // `removed_indices` ascending with direct indices is correct —
@@ -2408,12 +2445,12 @@
 
   // Auto-open the tool that triggered vacuum box wrapping
   $effect(() => {
-    if (pending_tool_after_wrap && structure && 'lattice' in structure) {
+    if (pending_tool_after_wrap && structure && `lattice` in structure) {
       const tool = pending_tool_after_wrap
       pending_tool_after_wrap = null
-      if (tool === 'slab_cutter') build.open_build_tab('slab_cutter')
-      else if (tool === 'lattice_pane') build.open_build_tab('lattice')
-      else if (tool === 'adsorption_pane') build.open_build_tab('adsorption')
+      if (tool === `slab_cutter`) build.open_build_tab(`slab_cutter`)
+      else if (tool === `lattice_pane`) build.open_build_tab(`lattice`)
+      else if (tool === `adsorption_pane`) build.open_build_tab(`adsorption`)
       // vasp_export: pane already open, guard passes automatically
     }
   })
@@ -2661,24 +2698,24 @@
     optimade_pending_structure = optimade_struct
     optimade_pending_pymatgen = pymatgen_struct
 
-    const provider = optimade_struct.attributes?.database_provider ?? 'OPTIMADE'
+    const provider = optimade_struct.attributes?.database_provider ?? `OPTIMADE`
     optimade_pending_provider = provider
 
     const attrs = optimade_struct.attributes ?? {}
     const formula =
-      attrs.chemical_formula_descriptive ?? attrs.chemical_formula_reduced ?? 'Unknown formula'
+      attrs.chemical_formula_descriptive ?? attrs.chemical_formula_reduced ?? `Unknown formula`
     const sites =
       attrs.n_sites ??
       (Array.isArray(attrs.cartesian_site_positions) ? attrs.cartesian_site_positions.length : 0)
 
-    optimade_preview_title = 'Preview Structure Import'
+    optimade_preview_title = `Preview Structure Import`
     optimade_preview_formula = formula
     optimade_preview_lattice = null // let modal compute from optimade_structure (legacy fallback)
     optimade_preview_details = [
-      { label: 'ID:', value: String(optimade_struct.id ?? ''), mono: true },
-      { label: 'Formula:', value: formula },
-      { label: 'Sites:', value: String(sites) },
-      { label: 'Database:', value: provider },
+      { label: `ID:`, value: String(optimade_struct.id ?? ``), mono: true },
+      { label: `Formula:`, value: formula },
+      { label: `Sites:`, value: String(sites) },
+      { label: `Database:`, value: provider },
     ]
 
     optimade_preview_visible = true
@@ -2693,11 +2730,11 @@
   ) {
     optimade_pending_structure = null // not OPTIMADE
     optimade_pending_pymatgen = pymatgen_struct
-    optimade_pending_provider = 'PubChem'
+    optimade_pending_provider = `PubChem`
 
-    const cid = compound?.id?.id?.cid ?? search_result?.cid ?? ''
-    const formula = search_result?.formula ?? ''
-    const name = search_result?.name ?? ''
+    const cid = compound?.id?.id?.cid ?? search_result?.cid ?? ``
+    const formula = search_result?.formula ?? ``
+    const name = search_result?.name ?? ``
     const weight = search_result?.weight
     const heavy = search_result?.HeavyAtomCount
     const n_atoms = Array.isArray(compound?.atoms?.element)
@@ -2705,14 +2742,14 @@
       : (heavy ?? 0)
 
     const rows: Array<{ label: string; value: string; mono?: boolean }> = []
-    if (cid) rows.push({ label: 'CID:', value: String(cid), mono: true })
-    if (name) rows.push({ label: 'Name:', value: name })
-    if (formula) rows.push({ label: 'Formula:', value: formula })
-    if (n_atoms) rows.push({ label: 'Atoms:', value: String(n_atoms) })
-    if (typeof weight === 'number') rows.push({ label: 'Weight:', value: `${weight.toFixed(2)} g/mol` })
-    rows.push({ label: 'Database:', value: 'PubChem' })
+    if (cid) rows.push({ label: `CID:`, value: String(cid), mono: true })
+    if (name) rows.push({ label: `Name:`, value: name })
+    if (formula) rows.push({ label: `Formula:`, value: formula })
+    if (n_atoms) rows.push({ label: `Atoms:`, value: String(n_atoms) })
+    if (typeof weight === `number`) rows.push({ label: `Weight:`, value: `${weight.toFixed(2)} g/mol` })
+    rows.push({ label: `Database:`, value: `PubChem` })
 
-    optimade_preview_title = 'Preview Compound Import'
+    optimade_preview_title = `Preview Compound Import`
     optimade_preview_formula = formula
     optimade_preview_lattice = null // molecules — no crystallographic lattice
     optimade_preview_details = rows
@@ -2732,7 +2769,7 @@
       optimade_pending_pymatgen = null
       optimade_pending_provider = null
       optimade_preview_details = []
-      optimade_preview_formula = ''
+      optimade_preview_formula = ``
       optimade_preview_lattice = null
     }
   }
@@ -2744,7 +2781,7 @@
     optimade_pending_pymatgen = null
     optimade_pending_provider = null
     optimade_preview_details = []
-    optimade_preview_formula = ''
+    optimade_preview_formula = ``
     optimade_preview_lattice = null
   }
 
@@ -2753,7 +2790,7 @@
     const input = event.target as HTMLInputElement
     const file = input.files?.[0]
     if (!file || !molecule_import_position || !structure) {
-      input.value = '' // Reset input
+      input.value = `` // Reset input
       return
     }
 
@@ -2773,11 +2810,11 @@
         selected_sites = []
       }
     } catch (error) {
-      console.error('Failed to import molecule:', error)
+      console.error(`Failed to import molecule:`, error)
     }
 
     // Reset state
-    input.value = ''
+    input.value = ``
     molecule_import_position = null
   }
 
@@ -2989,7 +3026,7 @@
   {:else if error_msg}
     <div class="error-state">
       <p class="error">{error_msg}</p>
-      <button onclick={() => (error_msg = undefined)}>{t('common.dismiss')}</button>
+      <button onclick={() => (error_msg = undefined)}>{t(`common.dismiss`)}</button>
     </div>
   {:else if (structure?.sites?.length ?? 0) > 0}
     <StructureToolbar
@@ -3046,12 +3083,12 @@
           bind:show={build.build_pane_open}
           bind:active_tab={build.active_build_tab}
           disabled_tabs={build.has_vacuum ? [] : [
-            { id: 'adsorption', reason: 'Add vacuum to enable' },
-            { id: 'adsorbate', reason: 'Add vacuum to enable' },
-            { id: 'water_layer', reason: 'Add vacuum to enable' },
+            { id: `adsorption`, reason: `Add vacuum to enable` },
+            { id: `adsorbate`, reason: `Add vacuum to enable` },
+            { id: `water_layer`, reason: `Add vacuum to enable` },
           ]}
         >
-          {#if build.active_build_tab === 'lattice' && structure}
+          {#if build.active_build_tab === `lattice` && structure}
             <LatticePane
               embedded={true}
               bind:structure
@@ -3063,7 +3100,7 @@
               on_push_undo={push_to_undo}
               on_reset_view={() => align_view_to_lattice()}
             />
-          {:else if build.active_build_tab === 'slab_cutter' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `slab_cutter` && structure && `lattice` in structure}
             <MillerSlabCutterPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3088,7 +3125,7 @@
               on_structure_change={(new_struct) => build.handle_slab_structure_change(new_struct)}
               on_reset_view={() => align_view_to_lattice()}
             />
-          {:else if build.active_build_tab === 'adsorption' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `adsorption` && structure && `lattice` in structure}
             <AdsorptionSitePane
               embedded={true}
               structure={structure as PymatgenStructure}
@@ -3098,7 +3135,7 @@
               bind:selected_site_idx={build.selected_adsorption_site_idx}
               bind:delete_site_ref={build.delete_adsorption_site_fn}
             />
-          {:else if build.active_build_tab === 'adsorbate' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `adsorbate` && structure && `lattice` in structure}
             <AdsorbatePlacementPane
               embedded={true}
               bind:this={build.adsorbate_placement_ref}
@@ -3117,19 +3154,19 @@
                 optimization_pane_open = true
               }}
             />
-          {:else if build.active_build_tab === 'water_layer' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `water_layer` && structure && `lattice` in structure}
             <WaterLayerPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
               pane_open={true}
               on_push_undo={push_to_undo}
               on_structure_change={(new_struct) => {
-                console.log(`[Structure.svelte water on_structure_change] new_struct.sites: ${new_struct?.sites?.length}, O: ${new_struct?.sites?.filter((s: any) => s.species?.[0]?.element === 'O').length}`)
+                console.log(`[Structure.svelte water on_structure_change] new_struct.sites: ${new_struct?.sites?.length}, O: ${new_struct?.sites?.filter((s: any) => s.species?.[0]?.element === `O`).length}`)
                 build.handle_structure_modify(new_struct)
                 console.log(`[Structure.svelte water] after assignment, structure.sites: ${structure?.sites?.length}`)
               }}
             />
-          {:else if build.active_build_tab === 'pseudo_h' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `pseudo_h` && structure && `lattice` in structure}
             <PseudoHydrogenPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3164,7 +3201,7 @@
                 }
               }}
             />
-          {:else if build.active_build_tab === 'moire'}
+          {:else if build.active_build_tab === `moire`}
             <MoirePane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3173,7 +3210,7 @@
               on_push_undo={push_to_undo}
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
             />
-          {:else if build.active_build_tab === 'nanotube'}
+          {:else if build.active_build_tab === `nanotube`}
             <NanotubePane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3181,7 +3218,7 @@
               on_push_undo={push_to_undo}
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
             />
-          {:else if build.active_build_tab === 'reticular'}
+          {:else if build.active_build_tab === `reticular`}
             <ReticularPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3189,7 +3226,7 @@
               on_push_undo={push_to_undo}
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
             />
-          {:else if build.active_build_tab === 'nanoscroll'}
+          {:else if build.active_build_tab === `nanoscroll`}
             <NanoscrollPane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3197,7 +3234,7 @@
               on_push_undo={push_to_undo}
               on_structure_change={(new_struct) => build.handle_structure_replace_and_fit(new_struct)}
             />
-          {:else if build.active_build_tab === 'heterostructure'}
+          {:else if build.active_build_tab === `heterostructure`}
             <HeterostructurePane
               embedded={true}
               bind:structure={structure as PymatgenStructure}
@@ -3207,7 +3244,7 @@
               {on_save_to_database}
               {on_export_to_hpc}
             />
-          {:else if build.active_build_tab === 'doping' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `doping` && structure && `lattice` in structure}
             <DopingPane
               bind:this={build.doping_pane_ref}
               bind:structure={structure as PymatgenStructure}
@@ -3221,7 +3258,7 @@
               pt_window_open={build.doping_pt_window_open}
               on_reopen_pt={() => build.doping_pt_panel_ref?.open_pt_window()}
             />
-          {:else if build.active_build_tab === 'pathway' && structure && 'lattice' in structure}
+          {:else if build.active_build_tab === `pathway` && structure && `lattice` in structure}
             <PathwayBuilderPane
               bind:structure={structure as PymatgenStructure}
               selected_sites={selected_sites}
@@ -3230,8 +3267,8 @@
                 on_file_load?.({ trajectory: traj, filename: `reaction_pathway.json` } as any)
               }}
             />
-          {:else if structure && !('lattice' in structure && (structure as any).lattice) && ['slab_cutter', 'adsorption', 'adsorbate', 'water_layer', 'pseudo_h', 'doping', 'pathway'].includes(build.active_build_tab)}
-            <p class="needs-lattice-hint">{t('structure.requires_periodic_lattice', { tab: t('structure.lattice_tab') })}</p>
+          {:else if structure && !(`lattice` in structure && (structure as any).lattice) && [`slab_cutter`, `adsorption`, `adsorbate`, `water_layer`, `pseudo_h`, `doping`, `pathway`].includes(build.active_build_tab)}
+            <p class="needs-lattice-hint">{t(`structure.requires_periodic_lattice`, { tab: t(`structure.lattice_tab`) })}</p>
           {/if}
         </BuildPane>
         {/if}
@@ -3263,7 +3300,7 @@
             on_toggle_pinned={xrd.toggle_pinned_visibility}
             on_structure_import={(s) => { center_camera_trigger++; structure = s }}
           >
-            {#if analysis.active_analysis_tab ==='md'}
+            {#if analysis.active_analysis_tab ===`md`}
               <MdAnalysisPane
                 trajectory_b64={imported_traj_b64}
                 trajectory_format={imported_traj_format}
@@ -3277,10 +3314,10 @@
               />
               <!-- Slow-Growth inline trigger -->
               <section class="sg-section">
-                <h5 class="sg-section-title">{t('structure.slow_growth_post_processing')}</h5>
+                <h5 class="sg-section-title">{t(`structure.slow_growth_post_processing`)}</h5>
                 <div class="sg-upload-row">
                   <label class="sg-upload-btn">
-                    {t('structure.upload_report')}
+                    {t(`structure.upload_report`)}
                     <input type="file" accept="*" onchange={(e) => {
                       slow_growth_pane_open = true
                       const input = e.target as HTMLInputElement
@@ -3294,17 +3331,17 @@
                   <button class="sg-upload-btn" onclick={() => {
                     slow_growth_pane_open = true
                     window.dispatchEvent(new CustomEvent(`catgo-sg-paste`))
-                  }}>{t('structure.paste_report')}</button>
+                  }}>{t(`structure.paste_report`)}</button>
                   <button class="sg-upload-btn" onclick={() => {
                     slow_growth_pane_open = true
                     window.dispatchEvent(new CustomEvent(`catgo-sg-detect-report`))
-                  }} title={t('structure.detect_report_title')}>{t('structure.detect_report')}</button>
+                  }} title={t(`structure.detect_report_title`)}>{t(`structure.detect_report`)}</button>
                   {#if slow_growth_pane_open}
-                    <button class="sg-upload-btn sg-close" onclick={() => slow_growth_pane_open = false}>{t('common.close')}</button>
+                    <button class="sg-upload-btn sg-close" onclick={() => slow_growth_pane_open = false}>{t(`common.close`)}</button>
                   {/if}
                 </div>
               </section>
-            {:else if analysis.active_analysis_tab ==='electronic'}
+            {:else if analysis.active_analysis_tab ===`electronic`}
               <div class="electronic-sub-tabs">
                 <button
                   class:active={electronic_sub_tab === `dos`}
@@ -3317,11 +3354,11 @@
                 <button
                   class:active={electronic_sub_tab === `bands`}
                   onclick={() => electronic_sub_tab = `bands`}
-                >{t('structure.bands')}</button>
+                >{t(`structure.bands`)}</button>
                 <button
                   class:active={electronic_sub_tab === `charge`}
                   onclick={() => electronic_sub_tab = `charge`}
-                >{t('structure.charge')}</button>
+                >{t(`structure.charge`)}</button>
               </div>
               {#if electronic_sub_tab === `dos`}
                 <DosAnalysisPane
@@ -3362,7 +3399,7 @@
                         const text = await file.text()
                         let cube_text: string
                         try {
-                          const { chgcar_to_cube } = await import('$lib/electronic/chgdiff-wasm')
+                          const { chgcar_to_cube } = await import(`$lib/electronic/chgdiff-wasm`)
                           cube_text = await chgcar_to_cube(text)
                         } catch (wasm_err) {
                           console.warn(`[CHGCAR] WASM path failed, falling back to backend:`, wasm_err)
@@ -3376,7 +3413,7 @@
                           cube_text = await resp.text()
                         }
                         const cube_filename = file.name + `.cube`
-                        const { parse_cube_header, cube_atoms_to_molecule } = await import('$lib/cube/parse-cube')
+                        const { parse_cube_header, cube_atoms_to_molecule } = await import(`$lib/cube/parse-cube`)
                         const header = parse_cube_header(cube_text)
                         const molecule = cube_atoms_to_molecule(header)
                         if (molecule.sites.length > 0) {
@@ -3393,7 +3430,7 @@
                       // .cube file — parse header to update structure
                       try {
                         const text = await file.text()
-                        const { parse_cube_header, cube_atoms_to_molecule } = await import('$lib/cube/parse-cube')
+                        const { parse_cube_header, cube_atoms_to_molecule } = await import(`$lib/cube/parse-cube`)
                         const header = parse_cube_header(text)
                         const molecule = cube_atoms_to_molecule(header)
                         if (molecule.sites.length > 0) {
@@ -3412,25 +3449,25 @@
                   }}
                 />
               {/if}
-            {:else if analysis.active_analysis_tab ==='phase'}
+            {:else if analysis.active_analysis_tab ===`phase`}
               <section class="module-placeholder">
-                <h5>{t('structure.phase_analysis')}</h5>
+                <h5>{t(`structure.phase_analysis`)}</h5>
                 <ul>
-                  <li>{t('structure.phase_diagram')}</li>
-                  <li>{t('structure.convex_hull')}</li>
-                  <li>{t('structure.stability_analysis')}</li>
-                  <li>{t('structure.formation_energy')}</li>
+                  <li>{t(`structure.phase_diagram`)}</li>
+                  <li>{t(`structure.convex_hull`)}</li>
+                  <li>{t(`structure.stability_analysis`)}</li>
+                  <li>{t(`structure.formation_energy`)}</li>
                 </ul>
               </section>
-            {:else if analysis.active_analysis_tab ==='structure_analysis'}
+            {:else if analysis.active_analysis_tab ===`structure_analysis`}
               <section class="symmetry-analysis-section">
                 {#if !structure || !(`lattice` in structure)}
-                  <p class="sym-hint">{t('structure.load_periodic_for_symmetry')}</p>
+                  <p class="sym-hint">{t(`structure.load_periodic_for_symmetry`)}</p>
                 {:else}
-                  <h5 class="sym-heading">{t('structure.symmetry')}</h5>
+                  <h5 class="sym-heading">{t(`structure.symmetry`)}</h5>
                   <div class="sym-controls">
                     <label class="sym-control-row">
-                      <span>{t('structure.precision')}</span>
+                      <span>{t(`structure.precision`)}</span>
                       <input
                         type="number"
                         step="1e-5"
@@ -3442,10 +3479,10 @@
                       />
                     </label>
                     <label class="sym-control-row">
-                      <span>{t('structure.algorithm')}</span>
+                      <span>{t(`structure.algorithm`)}</span>
                       <select
                         value={analysis.symmetry_settings.algo}
-                        onchange={(e) => analysis.symmetry_settings = { ...analysis.symmetry_settings, algo: e.currentTarget.value as 'Moyo' | 'Spglib' }}
+                        onchange={(e) => analysis.symmetry_settings = { ...analysis.symmetry_settings, algo: e.currentTarget.value as `Moyo` | `Spglib` }}
                       >
                         <option value="Moyo">Moyo</option>
                         <option value="Spglib">Spglib</option>
@@ -3453,18 +3490,18 @@
                     </label>
                   </div>
                   <button class="sym-analyze-btn" onclick={analysis.run_symmetry_analysis} disabled={analysis.symmetry_loading}>
-                    {analysis.symmetry_loading ? t('structure.analyzing') : t('structure.analyze')}
+                    {analysis.symmetry_loading ? t(`structure.analyzing`) : t(`structure.analyze`)}
                   </button>
                   {#if analysis.symmetry_error}
                     <p class="sym-error">{analysis.symmetry_error}</p>
                   {/if}
                   {#if symmetry_data}
                     <div class="sym-results">
-                      <div>{t('structure.space_group')} <strong>{symmetry_data.number} ({symmetry_data.hm_symbol ?? '?'})</strong></div>
-                      <div>{t('structure.crystal_system')} <strong>{spacegroup_to_crystal_sys(symmetry_data.number)}</strong></div>
-                      <div>{t('structure.hall_number_label')} <strong>{symmetry_data.hall_number}</strong></div>
-                      <div>{t('structure.pearson_label')} <strong>{symmetry_data.pearson_symbol}</strong></div>
-                      <div>{t('structure.sym_ops_label')} <strong>{symmetry_data.operations.length}</strong></div>
+                      <div>{t(`structure.space_group`)} <strong>{symmetry_data.number} ({symmetry_data.hm_symbol ?? `?`})</strong></div>
+                      <div>{t(`structure.crystal_system`)} <strong>{spacegroup_to_crystal_sys(symmetry_data.number)}</strong></div>
+                      <div>{t(`structure.hall_number_label`)} <strong>{symmetry_data.hall_number}</strong></div>
+                      <div>{t(`structure.pearson_label`)} <strong>{symmetry_data.pearson_symbol}</strong></div>
+                      <div>{t(`structure.sym_ops_label`)} <strong>{symmetry_data.operations.length}</strong></div>
                     </div>
                     {@const wyckoff_positions = wyckoff_positions_from_moyo(symmetry_data, structure)}
                     {#if wyckoff_positions.length > 0}
@@ -3478,34 +3515,34 @@
 
                   <!-- MOF Topology Analysis -->
                   <hr class="section-divider" />
-                  <h5 class="sym-heading">{t('structure.mof_topology')}</h5>
+                  <h5 class="sym-heading">{t(`structure.mof_topology`)}</h5>
                   <button class="sym-analyze-btn" onclick={run_mof_analysis} disabled={mof_loading}>
-                    {mof_loading ? t('structure.analyzing') : t('structure.analyze')}
+                    {mof_loading ? t(`structure.analyzing`) : t(`structure.analyze`)}
                   </button>
                   {#if mof_error}
                     <p class="sym-error">{mof_error}</p>
                   {/if}
                   {#if mof_clusters !== null}
                     {#if !mof_clusters.is_mof}
-                      <p class="sym-hint">{t('structure.not_mof_structure')}</p>
+                      <p class="sym-hint">{t(`structure.not_mof_structure`)}</p>
                     {:else}
-                      {@const nodes = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === 'Node')}
-                      {@const linkers = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === 'Linker')}
-                      {@const ligands = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === 'Ligand')}
+                      {@const nodes = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === `Node`)}
+                      {@const linkers = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === `Linker`)}
+                      {@const ligands = mof_clusters.sbus.map((s, i) => ({...s, _idx: i})).filter(s => normalize_sbu_type(s.sbu_type) === `Ligand`)}
                       <div class="sym-results">
-                        <div>{t('structure.mof_nodes')} <strong>{nodes.length}</strong></div>
-                        <div>{t('structure.mof_linkers')} <strong>{linkers.length}</strong></div>
+                        <div>{t(`structure.mof_nodes`)} <strong>{nodes.length}</strong></div>
+                        <div>{t(`structure.mof_linkers`)} <strong>{linkers.length}</strong></div>
                         {#if ligands.length > 0}
-                          <div>{t('structure.mof_caps')} <strong>{ligands.length}</strong></div>
+                          <div>{t(`structure.mof_caps`)} <strong>{ligands.length}</strong></div>
                         {/if}
                       </div>
                       <div class="mof-sbu-list">
                         {#each nodes as sbu}
                           {@const sbu_hash = wl_hashes?.find(h => h.sbu_index === sbu._idx)}
                           <button class="mof-sbu-row" onclick={() => { selected_sites = [...sbu.atom_indices] }}
-                            title={t('structure.click_highlight_atoms', { n: sbu.atom_indices.length })}>
-                            <span class="mof-sbu-badge node">{t('structure.node')}</span>
-                            <span>{sbu.formula || t('common.atoms_count', { n: sbu.atom_indices.length })}</span>
+                            title={t(`structure.click_highlight_atoms`, { n: sbu.atom_indices.length })}>
+                            <span class="mof-sbu-badge node">{t(`structure.node`)}</span>
+                            <span>{sbu.formula || t(`common.atoms_count`, { n: sbu.atom_indices.length })}</span>
                             {#if sbu_hash}
                               <span class="mof-wl-hash">#{sbu_hash.hash.toString(16).slice(0, 8)}</span>
                             {/if}
@@ -3514,9 +3551,9 @@
                         {#each linkers as sbu}
                           {@const sbu_hash = wl_hashes?.find(h => h.sbu_index === sbu._idx)}
                           <button class="mof-sbu-row" onclick={() => { selected_sites = [...sbu.atom_indices] }}
-                            title={t('structure.click_highlight_atoms', { n: sbu.atom_indices.length })}>
-                            <span class="mof-sbu-badge linker">{t('structure.linker')}</span>
-                            <span>{sbu.formula || t('common.atoms_count', { n: sbu.atom_indices.length })}</span>
+                            title={t(`structure.click_highlight_atoms`, { n: sbu.atom_indices.length })}>
+                            <span class="mof-sbu-badge linker">{t(`structure.linker`)}</span>
+                            <span>{sbu.formula || t(`common.atoms_count`, { n: sbu.atom_indices.length })}</span>
                             {#if sbu_hash}
                               <span class="mof-wl-hash">#{sbu_hash.hash.toString(16).slice(0, 8)}</span>
                             {/if}
@@ -3525,9 +3562,9 @@
                         {#each ligands as sbu}
                           {@const sbu_hash = wl_hashes?.find(h => h.sbu_index === sbu._idx)}
                           <button class="mof-sbu-row" onclick={() => { selected_sites = [...sbu.atom_indices] }}
-                            title={t('structure.click_highlight_atoms', { n: sbu.atom_indices.length })}>
-                            <span class="mof-sbu-badge cap">{t('structure.cap')}</span>
-                            <span>{sbu.formula || t('common.atoms_count', { n: sbu.atom_indices.length })}</span>
+                            title={t(`structure.click_highlight_atoms`, { n: sbu.atom_indices.length })}>
+                            <span class="mof-sbu-badge cap">{t(`structure.cap`)}</span>
+                            <span>{sbu.formula || t(`common.atoms_count`, { n: sbu.atom_indices.length })}</span>
                             {#if sbu_hash}
                               <span class="mof-wl-hash">#{sbu_hash.hash.toString(16).slice(0, 8)}</span>
                             {/if}
@@ -3539,12 +3576,12 @@
                       {@const func_groups = mof_clusters?.functional_groups ?? []}
                       {#if func_groups.length > 0}
                         <div style="margin-top: 6px">
-                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">{t('structure.functional_groups')}</div>
+                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">{t(`structure.functional_groups`)}</div>
                           {#each func_groups as fg}
                             <button class="mof-sbu-row" onclick={() => { selected_sites = [...fg.atom_indices] }}
-                              title={t('structure.click_highlight')}>
+                              title={t(`structure.click_highlight`)}>
                               <span class="mof-sbu-badge func">-{fg.name}</span>
-                              <span style="font-size: 0.75rem">{t('structure.on_sbu', { n: fg.parent_sbu })}</span>
+                              <span style="font-size: 0.75rem">{t(`structure.on_sbu`, { n: fg.parent_sbu })}</span>
                             </button>
                           {/each}
                         </div>
@@ -3558,17 +3595,17 @@
                           try {
                             rac_result = await compute_rac(structure, mof_analysis_result.bonds_json, mof_clusters)
                           } catch (err) {
-                            console.warn('[MOF] RAC failed:', err)
+                            console.warn(`[MOF] RAC failed:`, err)
                           } finally {
                             rac_loading = false
                           }
                         }} disabled={rac_loading || !mof_clusters?.is_mof}>
-                          {rac_loading ? t('structure.computing_rac') : t('structure.compute_rac')}
+                          {rac_loading ? t(`structure.computing_rac`) : t(`structure.compute_rac`)}
                         </button>
                         {#if rac_result}
                           <div class="rac-table-container">
                             <table class="rac-table">
-                              <thead><tr><th>{t('common.name')}</th><th>{t('structure.value')}</th></tr></thead>
+                              <thead><tr><th>{t(`common.name`)}</th><th>{t(`structure.value`)}</th></tr></thead>
                               <tbody>
                                 {#each rac_result.descriptors.slice(0, 20) as d}
                                   <tr><td>{d.name}</td><td>{d.value.toFixed(4)}</td></tr>
@@ -3576,17 +3613,17 @@
                               </tbody>
                             </table>
                             {#if rac_result.descriptors.length > 20}
-                              <p class="sym-hint">{t('structure.total_descriptors_first20', { n: rac_result.descriptors.length })}</p>
+                              <p class="sym-hint">{t(`structure.total_descriptors_first20`, { n: rac_result.descriptors.length })}</p>
                             {/if}
                             <button class="sym-analyze-btn" style="margin-top: 4px" onclick={() => {
                               if (!rac_result) return
-                              const csv = ['name,value', ...rac_result.descriptors.map(d => `${d.name},${d.value}`)].join('\n')
-                              const blob = new Blob([csv], { type: 'text/csv' })
+                              const csv = [`name,value`, ...rac_result.descriptors.map(d => `${d.name},${d.value}`)].join(`\n`)
+                              const blob = new Blob([csv], { type: `text/csv` })
                               const url = URL.createObjectURL(blob)
-                              const a = document.createElement('a')
-                              a.href = url; a.download = 'rac_descriptors.csv'; a.click()
+                              const a = document.createElement(`a`)
+                              a.href = url; a.download = `rac_descriptors.csv`; a.click()
                               URL.revokeObjectURL(url)
-                            }}>{t('structure.export_csv')}</button>
+                            }}>{t(`structure.export_csv`)}</button>
                           </div>
                         {/if}
                       </div>
@@ -3594,12 +3631,12 @@
                       <!-- Cap Replacement -->
                       {#if ligands.length > 0}
                         <div style="margin-top: 8px">
-                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">{t('structure.replace_caps')}</div>
+                          <div style="font-size: 0.8rem; font-weight: 600; margin-bottom: 3px">{t(`structure.replace_caps`)}</div>
                           <div style="display: flex; gap: 4px">
                             <input
                               type="text"
                               bind:value={cap_replace_smiles}
-                              placeholder={t('structure.smiles_placeholder')}
+                              placeholder={t(`structure.smiles_placeholder`)}
                               class="mof-smiles-input"
                             />
                             <button class="sym-analyze-btn" disabled={cap_replace_loading || !cap_replace_smiles.trim()}
@@ -3609,8 +3646,8 @@
                                 cap_replace_error = null
                                 try {
                                   const resp = await fetch(`${API_BASE}/structure-ops/smiles-to-xyz`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
+                                    method: `POST`,
+                                    headers: { 'Content-Type': `application/json` },
                                     body: JSON.stringify({ smiles: cap_replace_smiles }),
                                   })
                                   if (!resp.ok) throw new Error(await resp.text())
@@ -3621,7 +3658,7 @@
                                   if (new_struct) {
                                     structure = new_struct
                                   } else {
-                                    cap_replace_error = t('structure.cap_replacement_failed')
+                                    cap_replace_error = t(`structure.cap_replacement_failed`)
                                   }
                                 } catch (err) {
                                   cap_replace_error = err instanceof Error ? err.message : String(err)
@@ -3629,7 +3666,7 @@
                                   cap_replace_loading = false
                                 }
                               }}>
-                              {cap_replace_loading ? '...' : t('common.apply')}
+                              {cap_replace_loading ? `...` : t(`common.apply`)}
                             </button>
                           </div>
                           {#if cap_replace_error}
@@ -3641,7 +3678,7 @@
                   {/if}
                 {/if}
               </section>
-            {:else if analysis.active_analysis_tab === 'vibration'}
+            {:else if analysis.active_analysis_tab === `vibration`}
               <FreqAnalysisPane
                 on_play_vibration={(data) => {
                   vibration_data = { ...data, playing: true }
@@ -3669,7 +3706,7 @@
             {scene}
             {camera}
             selected_indices={selected_sites}
-            on_request_vacuum_box={() => open_vacuum_box_for_tool('vasp_export')}
+            on_request_vacuum_box={() => open_vacuum_box_for_tool(`vasp_export`)}
             bind:crop_mode_active={interaction.crop_mode_active}
             bind:crop_region={interaction.crop_region}
             {trajectory_context}
@@ -3739,7 +3776,7 @@
               // Large remote trajectory already materialized to a backend-local
               // file — build a streamed trajectory and open it in the viewer.
               try {
-                const { load_remote_trajectory } = await import('$lib/trajectory/remote-frame-loader')
+                const { load_remote_trajectory } = await import(`$lib/trajectory/remote-frame-loader`)
                 const trajectory = await load_remote_trajectory(local_path, filename)
                 if (trajectory && on_file_load) on_file_load({ trajectory, filename } as any)
               } catch (e) {
@@ -3749,7 +3786,7 @@
             on_load_trajectory={async (content, filename, remote_origin) => {
               // Route through on_file_load so App.svelte can open in Trajectory viewer
               try {
-                const { parse_trajectory_data } = await import('$lib/trajectory/parse')
+                const { parse_trajectory_data } = await import(`$lib/trajectory/parse`)
                 const trajectory = await parse_trajectory_data(content, filename)
                 if (trajectory && on_file_load) {
                   if (remote_origin) {
@@ -3937,7 +3974,7 @@
               if (!meas_state.current_continuous_measurement_sites.includes(site_idx)) {
                 meas_state.current_continuous_measurement_sites = [...meas_state.current_continuous_measurement_sites, site_idx]
                 // Auto-create measurement when we have enough sites
-                const min_sites = meas_state.measure_mode === 'dihedral' ? 4 : meas_state.measure_mode === 'angle' ? 3 : 2
+                const min_sites = meas_state.measure_mode === `dihedral` ? 4 : meas_state.measure_mode === `angle` ? 3 : 2
                 if (meas_state.current_continuous_measurement_sites.length >= min_sites) {
                   const new_measurement: Measurement = {
                     id: `meas_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -4000,8 +4037,8 @@
               : undefined}
             pencil_mode_active={pencil.pencil_mode_active}
             pencil_ghost_atom={pencil.pencil_ghost_atom}
-            on_pencil_atom_click={pencil.pencil_add_mode === 'bonds' ? undefined : pencil.handle_pencil_atom_click}
-            bond_mode_active={pencil.pencil_mode_active && pencil.pencil_add_mode === 'bonds'}
+            on_pencil_atom_click={pencil.pencil_add_mode === `bonds` ? undefined : pencil.handle_pencil_atom_click}
+            bond_mode_active={pencil.pencil_mode_active && pencil.pencil_add_mode === `bonds`}
             manual_bonds={pencil.manual_bonds}
             bond_manager={pencil.bond_manager}
             bind:atom_fast_ops={scene_atom_fast_ops}
@@ -4109,7 +4146,7 @@
     </div>
 
     {#if interaction.axis_lock_key}
-      {@const axis_colors = { x: 'red', y: 'green', z: 'blue' }}
+      {@const axis_colors = { x: `red`, y: `green`, z: `blue` }}
       <div class="axis-lock-indicator" style:color={axis_colors[interaction.axis_lock_key]}>
         Rotating on {interaction.axis_lock_key.toUpperCase()}-axis
       </div>
@@ -4122,7 +4159,7 @@
           <rect x="8" y="2" width="8" height="4" rx="1"/>
         </svg>
         <span>{atom_clipboard.sites.length} atoms copied</span>
-        <button class="clipboard-dismiss" onclick={() => { atom_clipboard.sites = null; atom_clipboard.paste_count = 0 }} title={t('structure.clear_clipboard')}>&times;</button>
+        <button class="clipboard-dismiss" onclick={() => { atom_clipboard.sites = null; atom_clipboard.paste_count = 0 }} title={t(`structure.clear_clipboard`)}>&times;</button>
       </div>
     {/if}
 
@@ -4175,11 +4212,11 @@
       sections={[
         {
           id: `Add Atom`,
-          title: t('structure.add_atom_section'),
+          title: t(`structure.add_atom_section`),
           options: [
             {
               value: `add`,
-              label: t('structure.add_atom_label', { elem: selected_add_element }),
+              label: t(`structure.add_atom_label`, { elem: selected_add_element }),
               icon: `Atom`,
               disabled: !context_menu_3d_position,
             },
@@ -4187,51 +4224,51 @@
         },
         {
           id: `Selection`,
-          title: t('structure.selection_section'),
+          title: t(`structure.selection_section`),
           options: [
             ...unique_elements.map((el) => ({
               value: `select_element_${el}`,
-              label: t('structure.select_all_elem', { elem: el }),
+              label: t(`structure.select_all_elem`, { elem: el }),
             })),
             {
-              value: 'select_all',
-              label: t('common.select_all'),
+              value: `select_all`,
+              label: t(`common.select_all`),
               disabled: !structure?.sites?.length,
             },
             {
-              value: 'Invert',
-              label: t('structure.invert_selection'),
-              icon: 'Reset',
+              value: `Invert`,
+              label: t(`structure.invert_selection`),
+              icon: `Reset`,
               disabled: !structure?.sites?.length,
             },
             {
-              value: 'clear',
-              label: t('structure.clear_selection'),
+              value: `clear`,
+              label: t(`structure.clear_selection`),
               disabled: selected_sites.length === 0,
             },
           ],
         },
         {
           id: `Edit Atoms`,
-          title: t('structure.edit_atoms'),
+          title: t(`structure.edit_atoms`),
           options: [
             {
               value: `replace`,
               label: context_menu_target_site !== null
-                ? t('structure.replace_with_elem', { elem: selected_add_element })
+                ? t(`structure.replace_with_elem`, { elem: selected_add_element })
                 : selected_sites.length > 0
-                ? t('structure.replace_selected_with_elem', { n: selected_sites.length, elem: selected_add_element })
-                : t('structure.replace_with_elem', { elem: selected_add_element }),
+                ? t(`structure.replace_selected_with_elem`, { n: selected_sites.length, elem: selected_add_element })
+                : t(`structure.replace_with_elem`, { elem: selected_add_element }),
               icon: `Reset`,
               disabled: context_menu_target_site === null && selected_sites.length === 0,
             },
             {
               value: `delete`,
               label: context_menu_target_site !== null
-                ? t('structure.delete_atom')
+                ? t(`structure.delete_atom`)
                 : selected_sites.length > 0
-                ? t('structure.delete_selected', { n: selected_sites.length })
-                : t('structure.delete_atom'),
+                ? t(`structure.delete_selected`, { n: selected_sites.length })
+                : t(`structure.delete_atom`),
               icon: `Close`,
               disabled: context_menu_target_site === null &&
                 selected_sites.length === 0,
@@ -4239,16 +4276,16 @@
             {
               value: `hide`,
               label: context_menu_target_site !== null
-                ? t('structure.hide_atom')
+                ? t(`structure.hide_atom`)
                 : selected_sites.length > 0
-                ? t('structure.hide_selected', { n: selected_sites.length })
-                : t('structure.hide_atom'),
+                ? t(`structure.hide_selected`, { n: selected_sites.length })
+                : t(`structure.hide_atom`),
               disabled: context_menu_target_site === null &&
                 selected_sites.length === 0,
             },
             {
               value: `show_all`,
-              label: t('structure.show_all_atoms'),
+              label: t(`structure.show_all_atoms`),
               disabled: hidden_sites.size === 0,
             },
           ],
@@ -4257,36 +4294,36 @@
         ...ctx_charge_label_section,
         {
           id: `Atom Color`,
-          title: t('structure.atom_color'),
+          title: t(`structure.atom_color`),
           options: [
             {
               value: `set_color`,
               label: context_menu_target_site !== null
-                ? t('structure.set_color')
+                ? t(`structure.set_color`)
                 : selected_sites.length > 0
-                ? t('structure.set_color_selected', { n: selected_sites.length })
-                : t('structure.set_color'),
+                ? t(`structure.set_color_selected`, { n: selected_sites.length })
+                : t(`structure.set_color`),
               disabled: context_menu_target_site === null && selected_sites.length === 0,
             },
             {
               value: `reset_color`,
               label: context_menu_target_site !== null
-                ? t('structure.reset_color')
+                ? t(`structure.reset_color`)
                 : selected_sites.length > 0
-                ? t('structure.reset_color_selected', { n: selected_sites.length })
-                : t('structure.reset_color'),
+                ? t(`structure.reset_color_selected`, { n: selected_sites.length })
+                : t(`structure.reset_color`),
               disabled: context_menu_target_site === null && selected_sites.length === 0,
             },
             {
               value: `reset_all_colors`,
-              label: t('structure.reset_all_colors'),
+              label: t(`structure.reset_all_colors`),
               disabled: site_color_overrides.size === 0,
             },
           ],
         },
         {
           id: `Defect Atom`,
-          title: t('structure.defect_atom'),
+          title: t(`structure.defect_atom`),
           options: [
             {
               value: `toggle_ghost`,
@@ -4295,39 +4332,39 @@
             },
             {
               value: `clear_all_ghosts`,
-              label: t('structure.clear_all_ghosts'),
+              label: t(`structure.clear_all_ghosts`),
               disabled: ghost_atom_indices.size === 0,
             },
           ],
         },
         {
           id: `Import`,
-          title: t('common.import'),
+          title: t(`common.import`),
           options: [
             {
-              value: 'import_molecule',
-              label: t('structure.import_molecule_here'),
-              icon: 'Plus',
+              value: `import_molecule`,
+              label: t(`structure.import_molecule_here`),
+              icon: `Plus`,
               disabled: !context_menu_3d_position || !structure,
             },
             {
-              value: 'load_charges',
-              label: t('structure.load_charges_acf'),
+              value: `load_charges`,
+              label: t(`structure.load_charges_acf`),
               disabled: !structure,
             },
           ],
         },
         {
-          title: t('structure.clipping'),
+          title: t(`structure.clipping`),
           options: [
             {
               value: `clip_here`,
-              label: t('structure.clip_around_atom'),
+              label: t(`structure.clip_around_atom`),
               disabled: context_menu_target_site === null,
             },
             {
               value: `clip_clear`,
-              label: t('structure.clear_clipping'),
+              label: t(`structure.clear_clipping`),
               disabled: !scene_props.clip_active,
             },
           ],
@@ -4337,38 +4374,38 @@
           options: [
             {
               value: `isolate_node`,
-              label: t('structure.isolate_node'),
+              label: t(`structure.isolate_node`),
               disabled: context_menu_target_site === null,
             },
             {
               value: `clear_isolation`,
-              label: t('structure.clear_isolation'),
+              label: t(`structure.clear_isolation`),
               disabled: !isolated_node_atoms,
             },
           ],
         }] : []),
         // [2025-02] "Save to project" section — only shown when desktop app provides callback
         ...((on_save_to_project || on_save_to_database || on_export_to_hpc || on_export_to_file || on_edit_as_text) ? [{ // Save / Export section
-          title: t('structure.save_export'),
+          title: t(`structure.save_export`),
           options: [
             ...(on_save_to_database ?? on_save_to_project ? [{
-              value: on_save_to_database ? 'save_to_database' : 'save_to_project',
-              label: t('structure.save_to_catgo_database'),
+              value: on_save_to_database ? `save_to_database` : `save_to_project`,
+              label: t(`structure.save_to_catgo_database`),
               disabled: !structure,
             }] : []),
             ...(on_export_to_hpc ? [{
-              value: 'export_to_hpc',
-              label: t('structure.export_to_hpc'),
+              value: `export_to_hpc`,
+              label: t(`structure.export_to_hpc`),
               disabled: !structure,
             }] : []),
             ...(on_export_to_file ? [{
-              value: 'export_to_file',
-              label: t('structure.export_to_local_computer'),
+              value: `export_to_file`,
+              label: t(`structure.export_to_local_computer`),
               disabled: !structure,
             }] : []),
             ...(on_edit_as_text ? [{
-              value: 'edit_as_text',
-              label: t('structure.edit_as_text'),
+              value: `edit_as_text`,
+              label: t(`structure.edit_as_text`),
               disabled: !structure,
             }] : []),
           ],
@@ -4382,7 +4419,7 @@
       {@const selector_top = `${selector_position.y}px`}
       {@const selector_left = `${selector_position.x}px`}
       <div class="element-selector" style:top={selector_top} style:left={selector_left}>
-        <div class="element-selector-header">{t('structure.select_element')}</div>
+        <div class="element-selector-header">{t(`structure.select_element`)}</div>
         <div class="element-grid">
           {#each elem_symbols as element}
             <button
@@ -4401,25 +4438,25 @@
 
   {:else if structure}
     <div class="empty-structure-state">
-      <p>{t('structure.no_atoms_in_structure')}</p>
+      <p>{t(`structure.no_atoms_in_structure`)}</p>
       <div class="empty-actions">
         <button class="empty-action-btn" onclick={() => { if (on_clear_structure) on_clear_structure(); else structure = undefined }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M12 5v14M5 12h14"/>
           </svg>
-          {t('structure.import_new')}
+          {t(`structure.import_new`)}
         </button>
         <button class="empty-action-btn" onclick={() => undo()} disabled={!sel_state.can_undo}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M3 10h13a4 4 0 010 8H7"/>
             <path d="M3 10l4-4M3 10l4 4"/>
           </svg>
-          {t('common.undo')}
+          {t(`common.undo`)}
         </button>
       </div>
     </div>
   {:else}
-    <p class="warn">{t('structure.no_structure_provided')}</p>
+    <p class="warn">{t(`structure.no_structure_provided`)}</p>
   {/if}
 
   <!-- Hidden file input for molecule import -->
@@ -4522,7 +4559,7 @@
     <div class="periodic-table-modal-overlay" onclick={() => periodic_table_visible = false}>
       <div class="periodic-table-modal" onclick={(e) => e.stopPropagation()}>
         <div class="periodic-table-modal-header">
-          <h3>{t('structure.select_element')}</h3>
+          <h3>{t(`structure.select_element`)}</h3>
           <button
             type="button"
             class="close-btn"
@@ -4552,7 +4589,7 @@
         </div>
         <div class="periodic-table-modal-footer">
           <span class="selected-element-display">
-            {t('structure.selected_elem', { elem: selected_add_element })}
+            {t(`structure.selected_elem`, { elem: selected_add_element })}
           </span>
         </div>
       </div>
@@ -4571,7 +4608,7 @@
         onclick={(e) => e.stopPropagation()}
       >
         <div class="charge-color-row">
-          <span class="charge-color-label">{t('structure.text')}</span>
+          <span class="charge-color-label">{t(`structure.text`)}</span>
           <input
             type="color"
             value={(charge_state.charge_label_colors.get(charge_state.charge_color_menu.idx) ?? {}).text || `#9e9e9e`}
@@ -4585,7 +4622,7 @@
           />
         </div>
         <div class="charge-color-row">
-          <span class="charge-color-label">{t('structure.background_label')}</span>
+          <span class="charge-color-label">{t(`structure.background_label`)}</span>
           <input
             type="color"
             value={(charge_state.charge_label_colors.get(charge_state.charge_color_menu.idx) ?? {}).bg || `#14141e`}
@@ -4607,7 +4644,7 @@
             charge_state.charge_label_colors = updated
             charge_state.charge_color_menu = null
           }}
-        >{t('structure.reset_colors')}</button>
+        >{t(`structure.reset_colors`)}</button>
         <button
           class="charge-color-reset charge-color-remove"
           onclick={() => {
@@ -4618,7 +4655,7 @@
             charge_state.charge_label_colors = updated
             charge_state.charge_color_menu = null
           }}
-        >{t('structure.remove_label')}</button>
+        >{t(`structure.remove_label`)}</button>
       </div>
     </div>
   {/if}
@@ -4665,24 +4702,24 @@
   {#if show_md_panel}
     <div class="md-panel">
       <div class="md-panel-header">
-        <span class="md-panel-title">{md_plot_data?.title || t('structure.md_analysis')}</span>
+        <span class="md-panel-title">{md_plot_data?.title || t(`structure.md_analysis`)}</span>
         <div class="md-panel-controls">
           <button
             class="md-settings-btn"
             class:active={md_settings_open}
-            title={t('structure.plot_settings')}
+            title={t(`structure.plot_settings`)}
             onclick={() => md_settings_open = !md_settings_open}
           >&#9881;</button>
           <button
             class="md-layout-btn"
-            title={t('structure.toggle_hv_layout')}
+            title={t(`structure.toggle_hv_layout`)}
             onclick={() => md_layout = md_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {md_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
           <button
             class="md-close-btn"
-            title={t('structure.close_panel_label', { name: 'MD' })}
+            title={t(`structure.close_panel_label`, { name: `MD` })}
             onclick={() => md_plot_data = null}
           >&times;</button>
         </div>
@@ -4691,19 +4728,19 @@
         <div class="md-settings-bar">
           <label class="md-setting">
             <span>X</span>
-            <input type="text" bind:value={md_x_label} placeholder={t('structure.x_label')} />
+            <input type="text" bind:value={md_x_label} placeholder={t(`structure.x_label`)} />
           </label>
           <label class="md-setting">
             <span>Y</span>
-            <input type="text" bind:value={md_y_label} placeholder={t('structure.y_label')} />
+            <input type="text" bind:value={md_y_label} placeholder={t(`structure.y_label`)} />
           </label>
           <label class="md-setting md-checkbox">
             <input type="checkbox" bind:checked={md_show_gridlines} />
-            <span>{t('structure.grid')}</span>
+            <span>{t(`structure.grid`)}</span>
           </label>
           <label class="md-setting md-checkbox">
             <input type="checkbox" bind:checked={md_show_legend} />
-            <span>{t('structure.legend')}</span>
+            <span>{t(`structure.legend`)}</span>
           </label>
         </div>
       {/if}
@@ -4729,7 +4766,7 @@
         <div class="dos-panel-controls">
           <button
             class="dos-layout-btn"
-            title={t('structure.toggle_hv_layout')}
+            title={t(`structure.toggle_hv_layout`)}
             onclick={() => dos_layout = dos_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {dos_layout === `horizontal` ? `\u2194` : `\u2195`}
@@ -4739,7 +4776,7 @@
           <button class="dos-export-btn" onclick={() => { if (dos_plot_ref) { const csv = dos_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `dos_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
           <button
             class="dos-close-btn"
-            title={t('structure.close_panel_label', { name: 'DOS' })}
+            title={t(`structure.close_panel_label`, { name: `DOS` })}
             onclick={() => { dos_state.dos_result = null; dos_state.dband_result = null }}
           >&times;</button>
         </div>
@@ -4773,19 +4810,19 @@
   {#if xrd.show_panel}
     <div class="xrd-panel" class:vertical={xrd.layout === `vertical`}>
       <div class="xrd-panel-header">
-        <span class="xrd-panel-title">{xrd.pinned_patterns.length > 0 ? t('structure.xrd_pattern_series', { n: xrd.bar_series.length }) : t('structure.xrd_pattern')}</span>
+        <span class="xrd-panel-title">{xrd.pinned_patterns.length > 0 ? t(`structure.xrd_pattern_series`, { n: xrd.bar_series.length }) : t(`structure.xrd_pattern`)}</span>
         <div class="xrd-panel-actions">
           <button
             class="xrd-layout-btn"
             onclick={xrd.toggle_layout}
-            title={t('structure.toggle_hv_layout')}
+            title={t(`structure.toggle_hv_layout`)}
           >
             {xrd.layout === `horizontal` ? `\u2B82` : `\u2B81`}
           </button>
           <button
             class="xrd-close-btn"
             onclick={() => { analysis.active_analysis_tab = `electronic` }}
-            title={t('structure.close_panel_label', { name: 'XRD' })}
+            title={t(`structure.close_panel_label`, { name: `XRD` })}
           >
             <Icon icon="Close" />
           </button>
@@ -4806,12 +4843,12 @@
         <BarPlot
           series={xrd.bar_series}
           x_axis={{
-            label: t('structure.two_theta_degrees'),
+            label: t(`structure.two_theta_degrees`),
             label_shift: { y: 12 },
             range: xrd.angle_range,
           }}
           y_axis={{
-            label: t('structure.intensity_au'),
+            label: t(`structure.intensity_au`),
             label_shift: { x: 2 },
             range: [0, 100],
           }}
@@ -4832,7 +4869,7 @@
         <div class="dos-panel-controls">
           <button
             class="dos-layout-btn"
-            title={t('structure.toggle_hv_layout')}
+            title={t(`structure.toggle_hv_layout`)}
             onclick={() => cohp_layout = cohp_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {cohp_layout === `horizontal` ? `\u2194` : `\u2195`}
@@ -4842,7 +4879,7 @@
           <button class="dos-export-btn" onclick={() => { if (cohp_plot_ref) { const csv = cohp_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `cohp_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
           <button
             class="dos-close-btn"
-            title={t('structure.close_panel_label', { name: 'COHP' })}
+            title={t(`structure.close_panel_label`, { name: `COHP` })}
             onclick={() => { cohp_state.cohp_result = null }}
           >&times;</button>
         </div>
@@ -4879,11 +4916,11 @@
   {#if show_band_panel && band_state.band_data}
     <div class="dos-panel">
       <div class="dos-panel-header">
-        <span class="dos-panel-title">{t('structure.bands')}</span>
+        <span class="dos-panel-title">{t(`structure.bands`)}</span>
         <div class="dos-panel-controls">
           <button
             class="dos-layout-btn"
-            title={t('structure.toggle_hv_layout')}
+            title={t(`structure.toggle_hv_layout`)}
             onclick={() => band_layout = band_layout === `horizontal` ? `vertical` : `horizontal`}
           >
             {band_layout === `horizontal` ? `\u2194` : `\u2195`}
@@ -4893,7 +4930,7 @@
           <button class="dos-export-btn" onclick={() => { if (band_plot_ref) { const csv = band_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `band_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
           <button
             class="dos-close-btn"
-            title={t('structure.close_panel_label', { name: t('structure.bands') })}
+            title={t(`structure.close_panel_label`, { name: t(`structure.bands`) })}
             onclick={() => { band_state.band_data = null; band_state.projections = null }}
           >&times;</button>
         </div>
@@ -4947,7 +4984,7 @@
       {#if side_panel_minimized}
         <button
           class="side-panel-restore-btn"
-          title={t('structure.restore_panel')}
+          title={t(`structure.restore_panel`)}
           onclick={() => { side_panel_minimized = false }}
         >
           {(show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`) ? `\u25B4` : `\u25C2`}
@@ -4997,7 +5034,7 @@
       {/if}
       <!-- Terminal persists outside minimize conditional — hidden via CSS, PTY stays alive -->
       {#if show_terminal}
-        <div class="terminal-wrapper" style:display={side_panel_minimized ? 'none' : null}>
+        <div class="terminal-wrapper" style:display={side_panel_minimized ? `none` : null}>
           {#key terminal_session_id}
           <TerminalPanel
             layout={terminal_layout}

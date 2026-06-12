@@ -13,14 +13,25 @@
 // pane is visible.
 
 import type { AnyStructure } from '$lib'
-import type { HeterostructureMatch, LateralMatch } from '$lib/api/heterostructure'
+import type {
+  HeterostructureMatch,
+  LateralMatch,
+  LateralSearchParams,
+} from '$lib/api/heterostructure'
 
 const _state = $state<{
   film: AnyStructure | null
   matches: HeterostructureMatch[]
   lateral_matches: LateralMatch[]
+  lateral_search_params: LateralSearchParams | null
   bulk: AnyStructure | null
-}>({ film: null, matches: [], lateral_matches: [], bulk: null })
+}>({
+  film: null,
+  matches: [],
+  lateral_matches: [],
+  lateral_search_params: null,
+  bulk: null,
+})
 
 /** Stash the FILM structure for the next heterostructure search/build. */
 export function set_film_stash(s: AnyStructure): void {
@@ -50,6 +61,19 @@ export function set_lateral_matches(m: LateralMatch[]): void {
 /** The candidate LATERAL matches from the most recent search (empty if none yet). */
 export function get_lateral_matches(): LateralMatch[] {
   return _state.lateral_matches
+}
+
+/** Stash the LATERAL search params alongside the matches. The lateral build
+ *  re-runs the edge-match search internally and selects by match_id, so it MUST
+ *  re-run with the SAME params the search used — otherwise the rebuilt candidate
+ *  list diverges and the chosen index/id maps to the wrong (or no) match. */
+export function set_lateral_search_params(p: LateralSearchParams): void {
+  _state.lateral_search_params = p
+}
+
+/** The params of the most recent lateral search, or null if none yet. */
+export function get_lateral_search_params(): LateralSearchParams | null {
+  return _state.lateral_search_params
 }
 
 /** Stash the BULK reference crystal for surface passivation (pseudo-hydrogen).

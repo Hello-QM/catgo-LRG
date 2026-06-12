@@ -1,31 +1,64 @@
 export { default as ChatPane } from './ChatPane.svelte'
-export type { AgentType, Attachment, ChatConfig, ChatMessage, ContentBlock, DocChunk, LLMProvider, ProviderMode, ProviderInfoResponse, SessionSummary, TextBlock, ToolUseBlock, ToolResultBlock } from './types'
-export { SDK_PROVIDERS, agent_from_provider, default_mode_for, get_display_text, get_tool_uses } from './types'
-export type { ToolDefinition } from './tools'
-export { TOOL_DEFINITIONS } from './tools'
-export type { WorkflowActionHandler } from './workflow-tool-executor'
-export { register_workflow_action_handler, unregister_workflow_action_handler } from './workflow-tool-executor'
-export type { ChatPosition, ChatSlice, PaperSession, ToolEntry, PermissionEntry } from './chat-state.svelte'
+export type {
+  AgentType,
+  Attachment,
+  ChatConfig,
+  ChatMessage,
+  ContentBlock,
+  DocChunk,
+  LLMProvider,
+  ProviderInfoResponse,
+  ProviderMode,
+  SessionSummary,
+  TextBlock,
+  ToolResultBlock,
+  ToolUseBlock,
+} from './types'
 export {
-  chat_config,
-  chat_username,
-  chat_position,
-  set_chat_position,
-  broadcast_chat_context,
-  listen_chat_context,
-  get_chat_slice,
-  remove_chat_slice,
+  agent_from_provider,
+  default_mode_for,
+  get_display_text,
+  get_tool_uses,
+  SDK_PROVIDERS,
+} from './types'
+export type { ToolDefinition } from './tools'
+export type { WorkflowActionHandler } from './workflow-tool-executor'
+export {
+  register_workflow_action_handler,
+  unregister_workflow_action_handler,
+} from './workflow-tool-executor'
+export type {
+  ChatPosition,
+  ChatSlice,
+  PaperSession,
+  PermissionEntry,
+  ToolEntry,
+} from './chat-state.svelte'
+export {
   agent_sessions,
+  broadcast_chat_context,
   cancel_generation,
+  chat_config,
+  chat_position,
+  chat_username,
   clear_chat_history,
   clear_paper,
+  delete_session,
+  get_chat_slice,
   import_doi,
   import_paper,
-  send_message,
-  update_config,
-  session_list,
-  resume_session,
+  listen_chat_context,
   new_session,
-  delete_session,
+  remove_chat_slice,
+  resume_session,
+  send_message,
+  session_list,
+  set_chat_position,
+  update_config,
 } from './chat-state.svelte'
-export { build_structure_context, build_workflow_context, build_paper_context, build_paper_context_from_doi } from './context'
+export {
+  build_paper_context,
+  build_paper_context_from_doi,
+  build_structure_context,
+  build_workflow_context,
+} from './context'

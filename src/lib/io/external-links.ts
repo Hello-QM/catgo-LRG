@@ -8,8 +8,13 @@
 // release-notes links) silently did nothing on mobile.
 //
 // This installs ONE capture-phase click listener that routes any cross-origin
-// http(s) anchor through `shell.open` (system browser). In a regular browser
-// build it is a no-op. Same-origin links and non-http schemes are untouched.
+// http(s) anchor through the opener plugin (`openUrl` → system browser). We use
+// tauri-plugin-opener, NOT shell.open: shell's `open` command runs desktop-only
+// code (it shells out to `open`/`xdg-open`) and silently no-ops on iOS, so the
+// shell version worked on desktop but never opened anything on the phone.
+// tauri-plugin-opener routes to native UIApplication.open (iOS) / ACTION_VIEW
+// (Android). In a regular browser build this is a no-op. Same-origin links and
+// non-http schemes are untouched.
 import { check_tauri } from './tauri'
 
 let installed = false
@@ -43,9 +48,9 @@ export function install_external_link_handler(): void {
 
       event.preventDefault()
       event.stopPropagation()
-      void import(`@tauri-apps/plugin-shell`)
-        .then(({ open }) => open(url.toString()))
-        .catch((err) => console.warn(`[external-links] shell.open failed:`, err))
+      void import(`@tauri-apps/plugin-opener`)
+        .then(({ openUrl }) => openUrl(url.toString()))
+        .catch((err) => console.warn(`[external-links] openUrl failed:`, err))
     },
     true,
   )
