@@ -5927,8 +5927,13 @@
     border: 1px solid var(--border-color, #444);
     border-radius: 8px;
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
-    width: min-content;
-    max-width: calc(100vw - 32px);
+    /* A DEFINITE width is required: the periodic table inside uses
+       `container-type: inline-size` with `cqw` units, so without a resolved
+       container width its tiles collapse to ~0. `width: min-content` doesn't
+       break that circular dependency (cqw is treated as 0 during intrinsic
+       sizing); a concrete width does. Capped to the viewport (minus a margin)
+       so it never overflows a narrow pane. */
+    width: min(720px, calc(100vw - 32px));
     max-height: calc(100vh - 32px);
     overflow: auto;
   }
@@ -5960,7 +5965,11 @@
   }
   .periodic-table-modal-content {
     padding: 16px;
+    /* Fill the modal's definite width (set on .periodic-table-modal) so the
+       periodic table's container-query units resolve against a real width. */
     min-width: 0;
+    box-sizing: border-box;
+    width: 100%;
     overflow: auto;
   }
   .periodic-table-modal-content :global(.periodic-table) {
