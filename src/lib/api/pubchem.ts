@@ -4,8 +4,17 @@
 
 declare const __CATGO_STATIC_ONLY__: boolean
 import { API_BASE as _DEFAULT_API } from './config'
+import { isMobile } from './transport'
 
-const IS_STATIC = typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__
+// "Direct" = query PubChem's REST API straight from the client (it allows CORS)
+// instead of proxying through the Python backend. True in static web builds AND
+// on mobile — iOS has no backend, so without `|| isMobile()` these calls hit a
+// dead server and hang (mirrors optimade.ts / materials-project.ts). Evaluated
+// at module load, which on the WKWebView SPA happens client-side (navigator
+// defined); isMobile() is SSR-safe and returns false during the build.
+const IS_STATIC =
+  (typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__) ||
+  isMobile()
 const PUBCHEM_API = `https://pubchem.ncbi.nlm.nih.gov/rest/pug`
 
 // API base URL - same as compute.ts

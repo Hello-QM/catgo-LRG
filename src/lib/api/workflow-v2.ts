@@ -1,5 +1,6 @@
 // src/lib/api/workflow-v2.ts — engine workflow API (paths: /api/engine/workflows, /api/engine/tasks)
 import { API_BASE } from './config'
+import { isMobile } from './transport'
 
 async function handle<T>(r: Response): Promise<T> {
   if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`)
@@ -332,6 +333,10 @@ export function v2_monitor_ws_url(api_base: string, workflow_id: string): string
 }
 
 export function connect_v2_monitor(workflow_id: string, callbacks: V2MonitorCallbacks): { close: () => void } {
+  // No backend on mobile. This monitor otherwise reconnects FOREVER (60s slow
+  // poll for hours-long jobs), so without this guard it would hammer a dead host
+  // for the whole session. Inert no-op on mobile.
+  if (isMobile()) return { close: () => {} }
   const url = v2_monitor_ws_url(API_BASE, workflow_id)
 
   let ws: WebSocket | null = null
