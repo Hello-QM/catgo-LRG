@@ -5,9 +5,10 @@
  * Uses factory function pattern — $state must be created in component context.
  */
 
-import { readRemoteFile, uploadFile, downloadFile, getDownloadUrl, mergeStructuresFromDir, hpc_mkdir, hpc_delete, hpc_rename, hpc_copy, hpc_move } from '$lib/api/hpc'
+import { readRemoteFile, uploadFile, getDownloadUrl, mergeStructuresFromDir, hpc_mkdir, hpc_delete, hpc_rename, hpc_copy, hpc_move } from '$lib/api/hpc'
 import { read_file } from '$lib/api/project'
 import { LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
+import { start_hpc_managed_download } from '$lib/downloads/hpc-download'
 import type { RemoteFile } from '$lib/api/hpc'
 
 export interface HpcBrowserCallbacks {
@@ -243,6 +244,14 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
       hpc_loading_file = { name: filename, size: file.is_dir ? undefined : file.size_bytes }
       hpc_upload_progress = file.is_dir ? null : 0
 
+      const handled = await start_hpc_managed_download({
+        session_id: source,
+        remote_path: file.path,
+        filename,
+        is_dir: file.is_dir,
+      })
+      if (handled) return
+
       const global_download = (globalThis as Record<string, unknown>).download
       if (typeof document !== `undefined` && typeof global_download !== `function`) {
         const link = document.createElement(`a`)
@@ -255,11 +264,6 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
         link.remove()
         return
       }
-
-      const blob = await downloadFile(source, file.path, (p) => { hpc_upload_progress = p })
-      // Use unified download (Tauri save dialog -> File System Access API -> <a> fallback)
-      const { download } = await import(`$lib/io/fetch`)
-      download(blob, filename, blob.type || `application/octet-stream`)
     } catch (err) {
       hpc_files_error = `Download failed: ${err}`
     } finally {

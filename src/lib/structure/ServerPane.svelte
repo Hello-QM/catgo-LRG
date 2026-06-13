@@ -23,7 +23,6 @@
     fetchOverview,
     readRemoteFile,
     readRemoteBinaryFile,
-    downloadFile,
     getDownloadUrl,
     mergeStructuresFromDir,
     checkInstallStatus,
@@ -40,6 +39,7 @@
     type InstallStatus,
     type CatgoLaunchState,
   } from '$lib/api/hpc'
+  import { start_hpc_managed_download } from '$lib/downloads/hpc-download'
   import {
     type HPCSession,
     LOCAL_SESSION_ID,
@@ -859,6 +859,14 @@
     active_session.upload_progress = file.is_dir ? null : 0
 
     try {
+      const handled = await start_hpc_managed_download({
+        session_id,
+        remote_path: file.path,
+        filename,
+        is_dir: file.is_dir,
+      })
+      if (handled) return
+
       const global_download = (globalThis as Record<string, unknown>).download
       if (typeof document !== `undefined` && typeof global_download !== `function`) {
         const link = document.createElement(`a`)
@@ -871,12 +879,6 @@
         link.remove()
         return
       }
-
-      const blob = await downloadFile(session_id, file.path, (p) => {
-        if (active_session?.session_id === session_id) active_session.upload_progress = p
-      })
-      const { download } = await import(`$lib/io/fetch`)
-      download(blob, filename, blob.type || `application/octet-stream`)
     } catch (e: any) {
       loading_error = t('common.download_failed_reason', { reason: e?.message || String(e) })
     } finally {
