@@ -78,7 +78,7 @@ def test_cluster_full_is_submittable_roundtrip():
 
 _REF = (
     "#!/bin/bash\n#SBATCH --job-name=old\n#SBATCH --time=01:00:00\n"
-    "source /home/wli7/intel/oneapi/setvars.sh\nconda activate pmg\n"
+    "source /opt/intel/oneapi/setvars.sh\nconda activate pmg\n"
     "srun vasp_std > vasp.log 2>&1\n"
 )
 
@@ -93,7 +93,7 @@ def test_adapt_overrides_directives_keeps_preamble_once():
     assert "#SBATCH --time=12:00:00" in out
     assert "#SBATCH --account=abc123" in out
     assert "old" not in out and "01:00:00" not in out
-    assert "source /home/wli7/intel/oneapi/setvars.sh" in out
+    assert "source /opt/intel/oneapi/setvars.sh" in out
     assert "conda activate pmg" in out
     assert out.count("srun vasp_std") == 1   # not duplicated
 
