@@ -95,7 +95,8 @@ export async function start_hpc_managed_download_with_deps(
   if (!deps.check_tauri()) return false
 
   if (deps.is_mobile()) {
-    const task = deps.manager.add({
+    // `add` already opens the panel; just record the unsupported-platform task.
+    deps.manager.add({
       filename: input.filename,
       source_path: input.remote_path,
       platform: 'mobile',
@@ -105,8 +106,6 @@ export async function start_hpc_managed_download_with_deps(
       total_bytes: null,
       error: deps.translate('common.download_mobile_unsupported'),
     })
-    deps.manager.panel_open = true
-    deps.manager.update(task.id, {})
     return true
   }
 
