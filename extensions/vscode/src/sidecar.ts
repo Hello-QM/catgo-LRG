@@ -145,6 +145,24 @@ async function follow_redirect_download(
 export async function ensure_sidecar_binary(
   context: vscode.ExtensionContext,
 ): Promise<string> {
+  // User-provided binary takes precedence and skips the ~460MB download — the
+  // escape hatch for offline / Remote-SSH hosts (scp the binary in once).
+  const override_path = vscode.workspace
+    .getConfiguration('catgo.server')
+    .get<string>('sidecarPath', '')
+    .trim()
+  if (override_path) {
+    if (!(await file_exists(override_path))) {
+      const reason = `catgo.server.sidecarPath is set to "${override_path}" but no file exists there.`
+      vscode.window.showErrorMessage(reason)
+      throw new Error(reason)
+    }
+    if (process.platform !== `win32`) {
+      try { await fsp.chmod(override_path, 0o755) } catch { /* not owner / already +x */ }
+    }
+    return override_path
+  }
+
   const bundled = bundled_binary_path(context)
   if (await file_exists(bundled)) return bundled
 

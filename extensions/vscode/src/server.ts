@@ -17,6 +17,56 @@ function health_check(port: number, timeout_ms = 2000): Promise<boolean> {
   })
 }
 
+/** Extract a port from `catgo.server.url` — accepts a bare port ("8000") or a URL. */
+function parse_external_port(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number(trimmed)
+    return n > 0 && n <= 65535 ? n : null
+  }
+  try {
+    const u = new URL(trimmed)
+    const n = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80
+    return n > 0 && n <= 65535 ? n : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * When `catgo.server.url` is set, connect to that already-running server instead
+ * of downloading/spawning the bundled sidecar. We never own this process, so
+ * `server_process` stays null (stop_server won't touch it). The webview reaches
+ * it via `127.0.0.1:<port>` — under Remote-SSH VS Code forwards the host's
+ * localhost, so a server run on the extension host is reachable as-is.
+ */
+async function adopt_external_server(): Promise<number | null> {
+  const url = vscode.workspace.getConfiguration('catgo.server').get<string>('url', '')
+  const port = parse_external_port(url)
+  if (port === null) {
+    if (url.trim()) {
+      vscode.window.showErrorMessage(
+        `catgo.server.url ("${url}") is not a valid URL or port; ignoring.`,
+      )
+    }
+    return null
+  }
+  // The external server may still be coming up — retry a few times.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (await health_check(port)) {
+      server_port = port
+      return port
+    }
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  vscode.window.showErrorMessage(
+    `catgo.server.url is set but no healthy CatGo server responded on port ${port}. ` +
+    `Start it on the extension host (e.g. \`python -m catgo.server --port ${port}\`) and reload.`,
+  )
+  return null
+}
+
 export async function start_server(context: vscode.ExtensionContext): Promise<number | null> {
   // If a start is already in flight, return the same promise (prevents concurrent spawns)
   if (in_flight_start) return in_flight_start
@@ -25,6 +75,12 @@ export async function start_server(context: vscode.ExtensionContext): Promise<nu
     const alive = await health_check(server_port)
     if (alive) return server_port
     stop_server()
+  }
+
+  // Adopt an externally-managed server when configured (skips download + spawn).
+  if (vscode.workspace.getConfiguration('catgo.server').get<string>('url', '').trim()) {
+    if (server_port && (await health_check(server_port))) return server_port
+    return adopt_external_server()
   }
 
   let binary: string
