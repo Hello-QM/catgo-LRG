@@ -1,0 +1,14 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows the iOS chat to request mic/speech authorization and run on-device dictation."
+permissions = [
+  "allow-request-permission",
+  "allow-supported-locales",
+  "allow-start-listening",
+  "allow-stop-listening",
+  # Built-in iOS listener commands addPluginListener() calls — needed for the
+  # partial/final transcript event stream to reach the webview.
+  "allow-register-listener",
+  "allow-remove-listener",
+]

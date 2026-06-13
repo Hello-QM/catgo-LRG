@@ -94,3 +94,4 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 tauri-plugin-bg-grace = { path = "plugins/tauri-plugin-bg-grace" }
+tauri-plugin-ios-speech = { path = "plugins/tauri-plugin-ios-speech" }

@@ -38,7 +38,9 @@ repos:
         stages: [pre-commit, commit-msg]
         args:
           [--ignore-words-list, 'te,ba,nd,ore,claus,manuel,sade,devlop,trough,coul,ontop,datas', --check-filenames]
-        exclude: 'pnpm-lock\.yaml$'
+        # Lock files contain package names that read as typos (e.g. the Rust
+        # `inout` crate in Cargo.lock) — skip them, like pnpm-lock.yaml.
+        exclude: '(pnpm-lock\.yaml|Cargo\.lock)$'
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.45.0

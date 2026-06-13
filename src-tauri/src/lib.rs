@@ -211,6 +211,12 @@ pub fn run() {
     #[cfg(target_os = "ios")]
     let builder = builder.plugin(tauri_plugin_bg_grace::init());
 
+    // iOS only: native on-device speech-to-text for the chat input. WebKit has
+    // no Web Speech API, so the mobile mic button bridges to SFSpeechRecognizer
+    // through this plugin (see plugins/tauri-plugin-ios-speech).
+    #[cfg(target_os = "ios")]
+    let builder = builder.plugin(tauri_plugin_ios_speech::init());
+
     // Desktop-only managed state: the Python/Node sidecars (BackendState,
     // AgentState) and the local-PTY terminal (PtyState) only exist on desktop.
     #[cfg(desktop)]

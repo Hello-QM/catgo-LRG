@@ -22,6 +22,11 @@ export const icon_data = {
     viewBox: `0 0 24 24`,
     path: `M8.59 16.59L13.17 12L8.59 7.41L10 6l6 6l-6 6z`,
   },
+  Mic: { // mdi:microphone — mobile chat voice input
+    viewBox: `0 0 24 24`,
+    path:
+      `M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3m7 9c0 3.53-2.61 6.43-6 6.92V21h-2v-3.08c-3.39-.49-6-3.39-6-6.92h2a5 5 0 0 0 5 5a5 5 0 0 0 5-5h2z`,
+  },
   Collapse: {
     viewBox: `0 0 24 24`,
     path:

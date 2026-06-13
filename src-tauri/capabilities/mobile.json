@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "mobile",
+  "description": "iOS-only permissions. Scoped to mobile so desktop capability validation never sees plugins that aren't compiled on desktop (e.g. ios-speech).",
+  "platforms": ["iOS", "android"],
+  "windows": ["main"],
+  "permissions": ["ios-speech:default"]
+}

@@ -1,0 +1,14 @@
+[package]
+name = "tauri-plugin-ios-speech"
+version = "0.1.0"
+description = "On-device speech-to-text for the iOS chat input via SFSpeechRecognizer + AVAudioEngine — streams partial transcripts to the webview, no API key, audio never leaves the phone"
+edition = "2021"
+links = "tauri-plugin-ios-speech"
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }
