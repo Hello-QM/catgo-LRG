@@ -6,7 +6,10 @@
   "license": "AGPL-3.0-or-later",
   "publisher": "Guangsheng",
   "icon": "icon.png",
-  "repository": "https://github.com/Hello-QM/catgo-LRG",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hello-QM/catgo-LRG.git"
+  },
   "categories": [
     "Data Science",
     "Machine Learning",
