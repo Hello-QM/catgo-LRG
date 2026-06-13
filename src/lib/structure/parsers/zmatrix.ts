@@ -18,7 +18,7 @@ function unit(a: Vec3): Vec3 {
 }
 const DEG = Math.PI / 180
 
-interface ZRow {
+export interface ZRow {
   el: string
   r1?: number // 1-based ref
   bond?: number

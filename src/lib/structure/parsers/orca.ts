@@ -8,6 +8,27 @@
 import type { Site, Vec3 } from '$lib'
 import { type ParsedStructure, validate_element_symbol } from './common'
 import { make_site, strip_comment } from './dft-common'
+import { type ZRow, zmatrix_to_sites } from './zmatrix'
+
+// ORCA internal coords: `El r1 r2 r3 bond angle dihedral` (refs 1-based, 0 = none).
+function internal_to_sites(lines: string[], start: number): Site[] | null {
+  const rows: ZRow[] = []
+  for (let i = start; i < lines.length; i++) {
+    const line = strip_comment(lines[i])
+    if (!line) continue
+    if (line.startsWith(`*`)) break
+    const t = line.split(/\s+/)
+    if (t.length < 7) continue
+    const [r1, r2, r3] = [Number(t[1]), Number(t[2]), Number(t[3])]
+    const [bond, angle, dih] = [Number(t[4]), Number(t[5]), Number(t[6])]
+    const row: ZRow = { el: t[0] }
+    if (r1 > 0) { row.r1 = r1; row.bond = bond }
+    if (r2 > 0) { row.r2 = r2; row.angle = angle }
+    if (r3 > 0) { row.r3 = r3; row.dih = dih }
+    rows.push(row)
+  }
+  return rows.length > 0 ? zmatrix_to_sites(rows) : null
+}
 
 function atoms_from_lines(lines: string[], start: number, stop: (l: string) => boolean): Site[] {
   const sites: Site[] = []
@@ -36,11 +57,16 @@ export function parse_orca(content: string): ParsedStructure | null {
       const line = strip_comment(lines[i])
       const m = line.match(/^\*\s*(\w+)/)
       if (!m) continue
-      if (m[1].toLowerCase() === `xyz`) {
+      const kind = m[1].toLowerCase()
+      if (kind === `xyz`) {
         const sites = atoms_from_lines(lines, i + 1, (l) => l.startsWith(`*`))
         return sites.length > 0 ? { sites } : null
       }
-      break // `* xyzfile` / `* int` etc. → not inline Cartesian
+      if (kind === `int` || kind === `internal`) {
+        const sites = internal_to_sites(lines, i + 1)
+        return sites && sites.length > 0 ? { sites } : null
+      }
+      break // `* xyzfile` (external) → null
     }
 
     // Form 2: `%coords … Coords … end … end`

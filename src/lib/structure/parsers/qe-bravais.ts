@@ -48,6 +48,16 @@ export function lattice_from_ibrav(
       const tz = Math.sqrt((1 + 2 * cc) / 3)
       return M([[tx, -ty, tz], [0, 2 * ty, tz], [-tx, -ty, tz]])
     }
+    case -5: { // trigonal R, 3-fold axis along z; cd4 = cos(α)
+      if (cd4 === null) return null
+      const cc = cd4
+      const ty = Math.sqrt((1 - cc) / 6)
+      const tz = Math.sqrt((1 + 2 * cc) / 3)
+      const ap = 1 / S3 // a'/a
+      const u = tz - 2 * Math.SQRT2 * ty
+      const v = tz + Math.SQRT2 * ty
+      return M([[ap * u, ap * v, ap * v], [ap * v, ap * u, ap * v], [ap * v, ap * v, ap * u]])
+    }
     case 6:
       if (!coa) return null
       return M([[1, 0, 0], [0, 1, 0], [0, 0, coa]])
@@ -83,6 +93,11 @@ export function lattice_from_ibrav(
       if (!boa || !coa || cd4 === null) return null
       const sg = Math.sqrt(1 - cd4 * cd4)
       return M([[0.5, 0, -coa / 2], [boa * cd4, boa * sg, 0], [0.5, 0, coa / 2]])
+    }
+    case -13: { // base-centered monoclinic, unique axis b; cd5 = cos(β)
+      if (!boa || !coa || cd5 === null) return null
+      const sb = Math.sqrt(1 - cd5 * cd5)
+      return M([[0.5, boa / 2, 0], [-0.5, boa / 2, 0], [coa * cd5, 0, coa * sb]])
     }
     case 14: { // triclinic; cd4=cos(bc)=cosα, cd5=cos(ac)=cosβ, cd6=cos(ab)=cosγ
       if (!boa || !coa || cd4 === null || cd5 === null || cd6 === null) return null
