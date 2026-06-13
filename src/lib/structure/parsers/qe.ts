@@ -46,27 +46,67 @@ function is_card_header(line: string): boolean {
   return CARD_HEADERS.has(first)
 }
 
+// Build the cell (Å) from ibrav + lattice lengths for the common Bravais types.
+// Returns null for ibrav values not handled here. a/b/c are in Å.
+function lattice_from_ibrav(
+  ibrav: number,
+  a: number | null,
+  b: number | null,
+  c: number | null,
+): Matrix3x3 | null {
+  if (!a) return null
+  switch (ibrav) {
+    case 1: // simple cubic
+      return [[a, 0, 0], [0, a, 0], [0, 0, a]]
+    case 2: // fcc
+      return [[-a / 2, 0, a / 2], [0, a / 2, a / 2], [-a / 2, a / 2, 0]]
+    case 3: // bcc
+      return [[a / 2, a / 2, a / 2], [-a / 2, a / 2, a / 2], [-a / 2, -a / 2, a / 2]]
+    case 4: // hexagonal
+      if (!c) return null
+      return [[a, 0, 0], [-a / 2, (a * Math.sqrt(3)) / 2, 0], [0, 0, c]]
+    case 6: // simple tetragonal
+      if (!c) return null
+      return [[a, 0, 0], [0, a, 0], [0, 0, c]]
+    case 8: // simple orthorhombic
+      if (!b || !c) return null
+      return [[a, 0, 0], [0, b, 0], [0, 0, c]]
+    default:
+      return null
+  }
+}
+
 export function parse_qe(content: string): ParsedStructure | null {
   try {
-    // ibrav must be 0 for this parser (explicit CELL_PARAMETERS).
     const ibrav_str = scalar(content, /ibrav\s*=\s*(-?\d+)/i)
-    if (ibrav_str !== null && Number(ibrav_str) !== 0) {
-      console.warn(`QE parser: ibrav=${ibrav_str} not supported (only ibrav=0).`)
-      return null
-    }
+    const ibrav = ibrav_str !== null ? Number(ibrav_str) : 0
 
+    const num = (s: string | null) => (s ? parseFloat(normalize_scientific_notation(s)) : null)
     // alat in Å: prefer `A` (Å), else celldm(1) (bohr).
-    const a_ang = scalar(content, /(?:^|[\s,&])A\s*=\s*([\d.eEdD+-]+)/im)
-    const celldm1 = scalar(content, /celldm\(1\)\s*=\s*([\d.eEdD+-]+)/i)
-    let alat: number | null = null
-    if (a_ang) alat = parseFloat(normalize_scientific_notation(a_ang))
-    else if (celldm1) alat = parseFloat(normalize_scientific_notation(celldm1)) * BOHR_TO_ANG
+    const a_ang = num(scalar(content, /(?:^|[\s,&])A\s*=\s*([\d.eEdD+-]+)/im))
+    const celldm1 = num(scalar(content, /celldm\(1\)\s*=\s*([\d.eEdD+-]+)/i))
+    const alat: number | null = a_ang ?? (celldm1 !== null ? celldm1 * BOHR_TO_ANG : null)
+
+    // b, c in Å for ibrav≠0: prefer B/C (Å), else celldm(2)/celldm(3) (× alat).
+    const b_ang = num(scalar(content, /(?:^|[\s,&])B\s*=\s*([\d.eEdD+-]+)/im))
+    const c_ang = num(scalar(content, /(?:^|[\s,&])C\s*=\s*([\d.eEdD+-]+)/im))
+    const celldm2 = num(scalar(content, /celldm\(2\)\s*=\s*([\d.eEdD+-]+)/i))
+    const celldm3 = num(scalar(content, /celldm\(3\)\s*=\s*([\d.eEdD+-]+)/i))
+    const b_len = b_ang ?? (celldm2 !== null && alat !== null ? celldm2 * alat : null)
+    const c_len = c_ang ?? (celldm3 !== null && alat !== null ? celldm3 * alat : null)
 
     const lines = content.split(/\r?\n/).map(strip_comment)
 
-    // ── CELL_PARAMETERS ──
+    // ── Lattice: ibrav≠0 generates the cell; ibrav=0 reads CELL_PARAMETERS ──
     let matrix: Matrix3x3 | null = null
-    for (let i = 0; i < lines.length; i++) {
+    if (ibrav !== 0) {
+      matrix = lattice_from_ibrav(ibrav, alat, b_len, c_len)
+      if (!matrix) {
+        console.warn(`QE parser: ibrav=${ibrav} not supported (or missing cell lengths).`)
+        return null
+      }
+    }
+    for (let i = 0; matrix === null && i < lines.length; i++) {
       if (lines[i].toUpperCase().startsWith(`CELL_PARAMETERS`)) {
         const unit = unit_token(lines[i]) || (alat ? `alat` : `bohr`)
         const vecs: Vec3[] = []

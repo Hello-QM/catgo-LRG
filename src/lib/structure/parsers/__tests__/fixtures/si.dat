@@ -1,0 +1,12 @@
+Atoms.Number  2
+Atoms.SpeciesAndCoordinates.Unit  FRAC
+<Atoms.SpeciesAndCoordinates
+ 1 Si 0.00000000 0.00000000 0.00000000 0.0 0.0
+ 2 Si 0.25000000 0.25000000 0.25000000 0.0 0.0
+Atoms.SpeciesAndCoordinates>
+Atoms.UnitVectors.Unit  Ang
+<Atoms.UnitVectors
+ 0.00000000 2.71500000 2.71500000
+ 2.71500000 0.00000000 2.71500000
+ 2.71500000 2.71500000 0.00000000
+Atoms.UnitVectors>

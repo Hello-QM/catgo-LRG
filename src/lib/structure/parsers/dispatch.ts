@@ -22,6 +22,10 @@ import { parse_castep_cell } from './castep'
 import { parse_siesta_fdf } from './siesta'
 import { parse_qe } from './qe'
 import { parse_outcar } from './outcar'
+import { parse_openmx } from './openmx'
+import { parse_abacus_stru } from './abacus'
+import { parse_orca } from './orca'
+import { parse_gaussian_input } from './gaussian-input'
 import {
   is_optimade_raw,
   parse_optimade_from_raw,
@@ -85,8 +89,26 @@ export function parse_structure_file(
     // YAML files (phonopy)
     if (ext === `yaml` || ext === `yml`) return parse_phonopy_yaml(content)
 
-    // CP2K input/restart files
-    if (ext === `inp` || ext === `restart`) return parse_cp2k(content)
+    // .inp is shared by CP2K and ORCA — disambiguate by the ORCA geometry opener.
+    if (ext === `inp`) {
+      if (/^\s*\*\s*xyz(file)?\b/im.test(content)) {
+        const orca = parse_orca(content)
+        if (orca) return orca
+      }
+      return parse_cp2k(content)
+    }
+    if (ext === `restart`) return parse_cp2k(content)
+
+    // ORCA input (explicit extension)
+    if (ext === `orcainp`) return parse_orca(content)
+
+    // Gaussian input
+    if (ext === `gjf` || ext === `com`) return parse_gaussian_input(content)
+
+    // OpenMX input
+    if (ext === `dat` && /<Atoms\.SpeciesAndCoordinates/i.test(content)) {
+      return parse_openmx(content)
+    }
 
     // VASP vasprun.xml
     if (ext === `xml`) return parse_vasprun_xml(content)
@@ -106,6 +128,12 @@ export function parse_structure_file(
 
     // VASP OUTCAR (extensionless). Check before POSCAR (also extensionless).
     if (base_filename.includes(`outcar`)) return parse_outcar(content)
+
+    // ABACUS STRU (extensionless). Distinct from POSCAR (has named sections).
+    if (base_filename === `stru` || base_filename.includes(`stru`)) {
+      const abacus = parse_abacus_stru(content)
+      if (abacus) return abacus
+    }
 
     // POSCAR files may not have extensions or have various names
     if (ext === `poscar` || base_filename.includes(`poscar`)) {
@@ -162,9 +190,27 @@ export function parse_structure_file(
     if (result) return result
   }
 
+  // ABACUS STRU detection: named sections (check before QE — both use ATOMIC_POSITIONS)
+  if (/^\s*LATTICE_VECTORS/im.test(content) && /^\s*ATOMIC_POSITIONS/im.test(content)) {
+    const result = parse_abacus_stru(content)
+    if (result) return result
+  }
+
   // Quantum ESPRESSO detection: namelist + positions card
   if (/ATOMIC_POSITIONS/i.test(content) && /CELL_PARAMETERS/i.test(content)) {
     const result = parse_qe(content)
+    if (result) return result
+  }
+
+  // OpenMX detection: coordinates block
+  if (/<Atoms\.SpeciesAndCoordinates/i.test(content)) {
+    const result = parse_openmx(content)
+    if (result) return result
+  }
+
+  // ORCA detection: Cartesian geometry opener
+  if (/^\s*\*\s*xyz\b/im.test(content)) {
+    const result = parse_orca(content)
     if (result) return result
   }
 
@@ -302,10 +348,12 @@ export function is_structure_file(filename: string): boolean {
   if (STRUCTURE_EXTENSIONS_REGEX.test(name)) return true
   if (VASP_FILES_REGEX.test(name)) return true
 
-  // CASTEP (.cell) / SIESTA (.fdf)
-  if (/\.(cell|fdf)$/i.test(name)) return true
+  // CASTEP (.cell) / SIESTA (.fdf) / Gaussian (.gjf/.com) / ORCA (.orcainp)
+  if (/\.(cell|fdf|gjf|com|orcainp)$/i.test(name)) return true
   // VASP OUTCAR (extensionless, possibly suffixed e.g. OUTCAR.relax)
   if (/(^|[._-])outcar(\.|$)/i.test(name) || name === `outcar`) return true
+  // ABACUS STRU (extensionless)
+  if (/(^|[._-])stru(\.|$)/i.test(name) || name === `stru`) return true
   // Quantum ESPRESSO input — only the conventional pw.x filenames to avoid
   // matching unrelated `.in` files.
   if (/(^|[._-])(pw|scf|nscf|relax|vc-relax|vcrelax|bands)\.in$/i.test(name)) return true
