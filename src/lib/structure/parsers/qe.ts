@@ -1,6 +1,7 @@
 // Quantum ESPRESSO (pw.x) input parser.
-// Scope: ibrav=0 with an explicit CELL_PARAMETERS card. Handles ATOMIC_POSITIONS
-// in alat/bohr/angstrom/crystal. Written from the pw.x input description.
+// Handles ibrav=0 (explicit CELL_PARAMETERS) and the full ibrav≠0 Bravais table
+// (see qe-bravais.ts). ATOMIC_POSITIONS in alat/bohr/angstrom/crystal.
+// Written from the pw.x input description.
 
 import type { Matrix3x3 } from '$lib/math'
 import type { Site, Vec3 } from '$lib'
@@ -9,6 +10,7 @@ import {
   normalize_scientific_notation,
   validate_element_symbol,
 } from './common'
+import { lattice_from_ibrav } from './qe-bravais'
 import {
   BOHR_TO_ANG,
   cart_to_frac,
@@ -46,36 +48,6 @@ function is_card_header(line: string): boolean {
   return CARD_HEADERS.has(first)
 }
 
-// Build the cell (Å) from ibrav + lattice lengths for the common Bravais types.
-// Returns null for ibrav values not handled here. a/b/c are in Å.
-function lattice_from_ibrav(
-  ibrav: number,
-  a: number | null,
-  b: number | null,
-  c: number | null,
-): Matrix3x3 | null {
-  if (!a) return null
-  switch (ibrav) {
-    case 1: // simple cubic
-      return [[a, 0, 0], [0, a, 0], [0, 0, a]]
-    case 2: // fcc
-      return [[-a / 2, 0, a / 2], [0, a / 2, a / 2], [-a / 2, a / 2, 0]]
-    case 3: // bcc
-      return [[a / 2, a / 2, a / 2], [-a / 2, a / 2, a / 2], [-a / 2, -a / 2, a / 2]]
-    case 4: // hexagonal
-      if (!c) return null
-      return [[a, 0, 0], [-a / 2, (a * Math.sqrt(3)) / 2, 0], [0, 0, c]]
-    case 6: // simple tetragonal
-      if (!c) return null
-      return [[a, 0, 0], [0, a, 0], [0, 0, c]]
-    case 8: // simple orthorhombic
-      if (!b || !c) return null
-      return [[a, 0, 0], [0, b, 0], [0, 0, c]]
-    default:
-      return null
-  }
-}
-
 export function parse_qe(content: string): ParsedStructure | null {
   try {
     const ibrav_str = scalar(content, /ibrav\s*=\s*(-?\d+)/i)
@@ -87,22 +59,36 @@ export function parse_qe(content: string): ParsedStructure | null {
     const celldm1 = num(scalar(content, /celldm\(1\)\s*=\s*([\d.eEdD+-]+)/i))
     const alat: number | null = a_ang ?? (celldm1 !== null ? celldm1 * BOHR_TO_ANG : null)
 
-    // b, c in Å for ibrav≠0: prefer B/C (Å), else celldm(2)/celldm(3) (× alat).
+    // b/a, c/a ratios: from celldm(2)/(3), or B/A, C/A.
     const b_ang = num(scalar(content, /(?:^|[\s,&])B\s*=\s*([\d.eEdD+-]+)/im))
     const c_ang = num(scalar(content, /(?:^|[\s,&])C\s*=\s*([\d.eEdD+-]+)/im))
     const celldm2 = num(scalar(content, /celldm\(2\)\s*=\s*([\d.eEdD+-]+)/i))
     const celldm3 = num(scalar(content, /celldm\(3\)\s*=\s*([\d.eEdD+-]+)/i))
-    const b_len = b_ang ?? (celldm2 !== null && alat !== null ? celldm2 * alat : null)
-    const c_len = c_ang ?? (celldm3 !== null && alat !== null ? celldm3 * alat : null)
+    const boa = celldm2 ?? (b_ang !== null && a_ang ? b_ang / a_ang : null)
+    const coa = celldm3 ?? (c_ang !== null && a_ang ? c_ang / a_ang : null)
+
+    // Angle cosines: celldm(4..6), or cosBC/cosAC/cosAB mapped per QE convention.
+    const celldm4 = num(scalar(content, /celldm\(4\)\s*=\s*([\d.eEdD+-]+)/i))
+    const celldm5 = num(scalar(content, /celldm\(5\)\s*=\s*([\d.eEdD+-]+)/i))
+    const celldm6 = num(scalar(content, /celldm\(6\)\s*=\s*([\d.eEdD+-]+)/i))
+    const cosbc = num(scalar(content, /cosBC\s*=\s*([\d.eEdD+-]+)/i))
+    const cosac = num(scalar(content, /cosAC\s*=\s*([\d.eEdD+-]+)/i))
+    const cosab = num(scalar(content, /cosAB\s*=\s*([\d.eEdD+-]+)/i))
+    // QE: for ibrav=14 celldm(4,5,6)=cos(bc,ac,ab); for 12/13 celldm(4)=cos(ab=γ);
+    // for -12 celldm(5)=cos(ac=β); for 5 celldm(4)=cos(α). The cos* keywords map:
+    //   celldm(4)←cosBC (ibrav 14) or cosAB (ibrav 12/13); celldm(5)←cosAC; celldm(6)←cosAB.
+    const cd4 = celldm4 ?? (ibrav === 14 ? cosbc : cosab)
+    const cd5 = celldm5 ?? cosac
+    const cd6 = celldm6 ?? cosab
 
     const lines = content.split(/\r?\n/).map(strip_comment)
 
     // ── Lattice: ibrav≠0 generates the cell; ibrav=0 reads CELL_PARAMETERS ──
     let matrix: Matrix3x3 | null = null
     if (ibrav !== 0) {
-      matrix = lattice_from_ibrav(ibrav, alat, b_len, c_len)
+      matrix = lattice_from_ibrav(ibrav, alat, boa, coa, cd4, cd5, cd6)
       if (!matrix) {
-        console.warn(`QE parser: ibrav=${ibrav} not supported (or missing cell lengths).`)
+        console.warn(`QE parser: ibrav=${ibrav} not supported (or missing cell parameters).`)
         return null
       }
     }
