@@ -18,6 +18,10 @@ import { parse_mol2 } from './mol2'
 import { parse_lammps_data } from './lammps'
 import { parse_cp2k } from './cp2k'
 import { parse_phonopy_yaml } from './phonopy'
+import { parse_castep_cell } from './castep'
+import { parse_siesta_fdf } from './siesta'
+import { parse_qe } from './qe'
+import { parse_outcar } from './outcar'
 import {
   is_optimade_raw,
   parse_optimade_from_raw,
@@ -87,6 +91,22 @@ export function parse_structure_file(
     // VASP vasprun.xml
     if (ext === `xml`) return parse_vasprun_xml(content)
 
+    // CASTEP cell files
+    if (ext === `cell`) return parse_castep_cell(content)
+
+    // SIESTA fdf files
+    if (ext === `fdf`) return parse_siesta_fdf(content)
+
+    // Quantum ESPRESSO input (scf.in / relax.in / pw.in). parse_qe returns null
+    // for non-QE `.in` files (e.g. ibrav≠0 or no CELL_PARAMETERS) → fall through.
+    if (ext === `in`) {
+      const qe = parse_qe(content)
+      if (qe) return qe
+    }
+
+    // VASP OUTCAR (extensionless). Check before POSCAR (also extensionless).
+    if (base_filename.includes(`outcar`)) return parse_outcar(content)
+
     // POSCAR files may not have extensions or have various names
     if (ext === `poscar` || base_filename.includes(`poscar`)) {
       return parse_poscar(content)
@@ -121,6 +141,30 @@ export function parse_structure_file(
   // vasprun.xml detection: look for <modeling> root tag
   if (content.trimStart().startsWith(`<?xml`) || content.trimStart().startsWith(`<modeling`)) {
     const result = parse_vasprun_xml(content)
+    if (result) return result
+  }
+
+  // OUTCAR detection: VASP output signatures
+  if (content.includes(`direct lattice vectors`) && content.includes(`TOTAL-FORCE`)) {
+    const result = parse_outcar(content)
+    if (result) return result
+  }
+
+  // CASTEP .cell detection: lattice block
+  if (/%block\s+lattice_(cart|abc)/i.test(content)) {
+    const result = parse_castep_cell(content)
+    if (result) return result
+  }
+
+  // SIESTA .fdf detection: coordinates block keyword
+  if (/AtomicCoordinatesAndAtomicSpecies/i.test(content)) {
+    const result = parse_siesta_fdf(content)
+    if (result) return result
+  }
+
+  // Quantum ESPRESSO detection: namelist + positions card
+  if (/ATOMIC_POSITIONS/i.test(content) && /CELL_PARAMETERS/i.test(content)) {
+    const result = parse_qe(content)
     if (result) return result
   }
 
@@ -257,6 +301,14 @@ export function is_structure_file(filename: string): boolean {
   // Always structure formats
   if (STRUCTURE_EXTENSIONS_REGEX.test(name)) return true
   if (VASP_FILES_REGEX.test(name)) return true
+
+  // CASTEP (.cell) / SIESTA (.fdf)
+  if (/\.(cell|fdf)$/i.test(name)) return true
+  // VASP OUTCAR (extensionless, possibly suffixed e.g. OUTCAR.relax)
+  if (/(^|[._-])outcar(\.|$)/i.test(name) || name === `outcar`) return true
+  // Quantum ESPRESSO input — only the conventional pw.x filenames to avoid
+  // matching unrelated `.in` files.
+  if (/(^|[._-])(pw|scf|nscf|relax|vc-relax|vcrelax|bands)\.in$/i.test(name)) return true
   // CHGCAR/AECCAR/LOCPOT/ELFCAR/PARCHG — VASP volumetric data (handled as cube conversion)
   if (/\.(cube|cub)$/i.test(name)) return true
   const basename = name.replace(/\.(gz|bz2|xz|zst)$/i, ``)
