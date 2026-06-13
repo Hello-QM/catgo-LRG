@@ -1,4 +1,4 @@
-# Open VSX namespace ownership
+# Open VSX namespace verification
 
 ## The warning
 
@@ -8,59 +8,68 @@ On the Open VSX listing (used by Cursor / VSCodium / Theia) the CatGo extension 
 > account is not a verified publisher of the namespace **"Guangsheng"** of this
 > extension.
 
-### What it means
+## Actual state (confirmed via the Open VSX public API, 2026-06-13)
 
-On Open VSX a *namespace* (the `publisher` field in `extensions/vscode/package.json`,
-here `Guangsheng`) is separate from the *account* whose token (`OVSX_PAT`) runs the
-publish (here `RedStar-Iron`). When the namespace has **no owner**, anyone may publish
-into it, and Open VSX flags every version as coming from an unverified publisher.
+`GET https://open-vsx.org/api/Guangsheng` and `.../Guangsheng/catgo`:
 
-The fix is to make the publishing account a verified **owner/member** of the
-`Guangsheng` namespace.
-
-## What the repo already does
-
-`.github/workflows/vsix-publish.yml` runs `ovsx create-namespace "$publisher"` before
-publishing. That makes the `OVSX_PAT` account the namespace owner **the first time the
-namespace is created**. It is idempotent (an already-owned namespace is a no-op).
-
-`extensions/vscode/package.json` uses the object form of `repository` pointing at the
-GitHub repo — Open VSX reads this for self-service ownership verification.
-
-## One-time manual step (required for an *existing* un-owned namespace)
-
-`create-namespace` cannot retroactively claim a namespace that already exists without an
-owner (which is the current state). Do this once:
-
-1. Sign in to <https://open-vsx.org> with the **GitHub account that owns the
-   `OVSX_PAT`** (i.e. `RedStar-Iron`, or whichever account you want to publish from).
-2. Generate / confirm an access token under *Settings → Access Tokens* and make sure the
-   GitHub secret **`OVSX_PAT`** matches that account.
-3. Claim the namespace. Either:
-   - **CLI:** `npx ovsx create-namespace Guangsheng -p <token>` (works only if the
-     namespace is genuinely un-owned), **or**
-   - **Ownership request:** open an issue at
-     <https://github.com/EclipseFdn/open-vsx.org> using the *namespace ownership*
-     template, naming the `Guangsheng` namespace and proving control of
-     `github.com/Hello-QM/catgo-LRG`.
-4. For the **verified** badge, the linked GitHub account must have push access to the
-   repo named in `repository` (`Hello-QM/catgo-LRG`). Add `RedStar-Iron` to the
-   `Hello-QM` org / repo, or publish from an account that already has access.
-
-### Alternative: publish under an owned namespace
-
-If claiming `Guangsheng` is not practical, change `publisher` in
-`extensions/vscode/package.json` to a namespace the publishing account already owns.
-Note this changes the extension's Open VSX identity (URL, install id) and loses
-continuity with existing installs — only do this deliberately.
-
-## Verify
-
-After the namespace is owned, re-run the publish workflow:
-
-```bash
-gh workflow run vsix-publish.yml --ref main
+```json
+{ "name": "Guangsheng", "verified": false, "access": "restricted" }
+{ "namespace": "Guangsheng", "name": "catgo", "version": "1.1.15",
+  "verified": false, "namespaceAccess": "restricted",
+  "publishedBy": { "loginName": "RedStar-Iron", "provider": "github" } }
 ```
 
-The warning disappears on the next published version. The VS Code Marketplace
-(`vsce`) is unaffected — it has no equivalent namespace-ownership concept.
+So the namespace is **not** ownerless:
+
+- `access: restricted` + RedStar-Iron successfully publishes ⇒ **RedStar-Iron is already a
+  member (contributor)** of the `Guangsheng` namespace.
+- The warning is purely because **`verified: false`** — the namespace has no *verified
+  owner*. `ovsx create-namespace` does **not** help here (it errors "already exists"); it
+  only matters for a brand-new namespace.
+
+To clear the warning the namespace must become **verified**, which requires an *owner*
+role granted by the Open VSX / Eclipse admins through a one-time claim request.
+
+## What the repo already does (PR #330)
+
+- `extensions/vscode/package.json` — `repository` is the object form with `.git`, the
+  link the Eclipse reviewers check to approve the claim.
+- `.github/workflows/vsix-publish.yml` — idempotent `ovsx create-namespace` step (a
+  harmless no-op now; correct safety net if the namespace is ever recreated fresh).
+
+## The fix — one-time manual claim (requires the RedStar-Iron GitHub account)
+
+This is the only step that removes the warning, and it can only be done by a human with
+the publishing GitHub identity — it cannot be automated from CI or a token.
+
+1. Sign in to <https://github.com> as **RedStar-Iron** (the account that owns `OVSX_PAT`).
+2. Open the claim form:
+   <https://github.com/EclipseFdn/open-vsx.org/issues/new?template=claim-namespace-ownership.yml>
+3. Fill it in (our evidence is the strongest "VS Code Publisher with Repo" path — should be
+   approved quickly):
+
+   - **Title:** `Claiming namespace Guangsheng`
+   - **Namespace:** `Guangsheng`
+   - **Claim evidence:** check **"VS Code Publisher with Repo"** — justified because:
+     - `Guangsheng` is a VS Code Marketplace publisher:
+       <https://marketplace.visualstudio.com/items?itemName=Guangsheng.catgo> (HTTP 200).
+     - That extension's `package.json` declares a GitHub repo:
+       `https://github.com/Hello-QM/catgo-LRG.git`.
+   - **Account Age:** RedStar-Iron (github.com/RedStar-Iron, id 49940294) was created
+     2019-04-24 → well over the 12-month public-history requirement.
+
+4. After Eclipse grants ownership, re-run the publish so a new version inherits the
+   verified namespace:
+
+   ```bash
+   gh workflow run vsix-publish.yml --ref main
+   ```
+
+The warning disappears on the next published version. VS Code Marketplace (`vsce`) has no
+namespace-verification concept and is unaffected.
+
+## Alternative (only if the claim is rejected)
+
+Change `publisher` in `extensions/vscode/package.json` to a namespace RedStar-Iron can
+self-verify. This changes the extension's Open VSX identity (URL / install id) and loses
+continuity with existing installs — do it deliberately, not as a shortcut.
