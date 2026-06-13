@@ -36,6 +36,7 @@ const common: Record<string, string> = {
   reset:              `重置`,
   clear:              `清除`,
   clear_all:          `全部清除`,
+  choose:             `选择`,
   select:             `选择`,
   select_all:         `全选`,
   deselect_all:       `取消全选`,

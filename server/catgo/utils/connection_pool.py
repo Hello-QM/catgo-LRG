@@ -249,6 +249,16 @@ class HPCConnectionPool:
                 connect_kwargs["client_keys"] = []
                 preferred_auth = "password,keyboard-interactive"
                 logger.info("[CatGo:HPC] Password auth: skipping publickey")
+            elif config.key_content:
+                # Browser/mobile file pickers cannot expose a stable local path.
+                # Use the selected private key from memory and never persist it.
+                key_text = config.key_content.get_secret_value()
+                passphrase = password if password else None
+                connect_kwargs["client_keys"] = [asyncssh.import_private_key(key_text, passphrase)]
+                connect_kwargs["agent_forwarding"] = False
+                connect_kwargs["agent_path"] = None
+                preferred_auth = "publickey,keyboard-interactive"
+                logger.info("[CatGo:HPC] Using imported in-memory private key")
             elif config.key_file:
                 # Key-based auth with explicit key file
                 expanded = str(Path(config.key_file).expanduser())
@@ -278,11 +288,12 @@ class HPCConnectionPool:
                 connect_kwargs["password"] = password
 
             logger.info(
-                "[CatGo:HPC] DEBUG auth_method=%s, has_password=%s, has_key_file=%s, "
+                "[CatGo:HPC] DEBUG auth_method=%s, has_password=%s, has_key_file=%s, has_key_content=%s, "
                 "preferred_auth=%s, client_keys=%s",
                 config.auth_method.value,
                 bool(password),
                 bool(config.key_file),
+                bool(config.key_content),
                 preferred_auth,
                 connect_kwargs.get("client_keys", "not set"),
             )

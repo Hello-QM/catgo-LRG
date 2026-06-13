@@ -70,6 +70,7 @@ function toRustHost(h: {
   method: HpcConnectConfig[`method`]
   password?: string
   keyPath?: string
+  keyContent?: string
   passphrase?: string
 }): Record<string, unknown> {
   return {
@@ -81,6 +82,7 @@ function toRustHost(h: {
     method: h.method,
     password: h.password,
     key_path: h.keyPath,
+    key_content: h.keyContent,
     passphrase: h.passphrase,
   }
 }

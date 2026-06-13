@@ -15,6 +15,7 @@
   } from '$lib/api/hpc'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { hpc_session_store, refresh_hpc_sessions, add_session, remove_session } from '$lib/hpc-sessions.svelte'
+  import { pick_hpc_key_file } from '$lib/hpc-key-file'
 
   load_i18n_module('common')
   load_i18n_module('structure')
@@ -43,6 +44,8 @@
   let password = $state(``)
   let auth_method = $state<AuthMethod>(`password`)
   let key_file = $state(``)
+  let key_content = $state(``)
+  let key_selected_name = $state(``)
   let use_jump = $state(false)
   let jump_host = $state(``)
   let jump_port = $state(22)
@@ -90,6 +93,8 @@
     username = p.username
     auth_method = p.auth_method
     key_file = p.key_file ?? ``
+    key_content = ``
+    key_selected_name = ``
     scheduler = p.scheduler
     ssh_alias = p.ssh_alias ?? ``
     work_root = p.work_root ?? ``
@@ -177,6 +182,7 @@
       password: password || undefined,
       auth_method,
       key_file: key_file || undefined,
+      key_content: key_content || undefined,
       scheduler,
       jump_host: use_jump ? jump_host : undefined,
       jump_port: use_jump ? jump_port : undefined,
@@ -277,6 +283,19 @@
     try {
       await disconnectSession(session_id)
     } catch { /* already closed */ }
+  }
+
+  async function choose_key_file() {
+    const selected = await pick_hpc_key_file()
+    if (!selected) return
+    key_selected_name = selected.name
+    if (selected.path) {
+      key_file = selected.path
+      key_content = ``
+    } else if (selected.content) {
+      key_file = selected.name
+      key_content = selected.content
+    }
   }
 
   function close() {
@@ -468,7 +487,13 @@
                 {/if}
                 <label class="full-span">
                   {t('structure.key_file')} <span class="hint">{t('common.optional')}</span>
-                  <input type="text" bind:value={key_file} placeholder={t('structure.key_file_placeholder')} />
+                  <div class="key-file-row">
+                    <input type="text" bind:value={key_file} placeholder={t('structure.key_file_placeholder')} oninput={() => { key_content = ``; key_selected_name = `` }} />
+                    <button type="button" class="btn-secondary key-file-btn" onclick={choose_key_file}>{t('common.choose')}</button>
+                  </div>
+                  {#if key_content && key_selected_name}
+                    <span class="hint">{t('structure.key_file_imported', { name: key_selected_name })}</span>
+                  {/if}
                 </label>
               {/if}
               <label>
@@ -905,6 +930,22 @@
   .hint {
     font-weight: 400;
     color: var(--text-color-dim, light-dark(#9ca3af, #94a3b8));
+  }
+
+  .key-file-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .key-file-row input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .key-file-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
   .form-hint {

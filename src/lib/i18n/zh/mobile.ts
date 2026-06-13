@@ -63,6 +63,7 @@ const mobile: Record<string, string> = {
   method_keyboard: `键盘交互`,
   field_password: `密码`,
   field_private_key_path: `私钥路径`,
+  key_file_imported: `已选择私钥：{name}。仅用于本次连接，不会保存。`,
   field_passphrase: `私钥口令（可选）`,
   keyboard_hint: `连接后系统会提示你输入所需的验证码。`,
   use_jump_host: `使用跳板机 (ProxyJump)`,

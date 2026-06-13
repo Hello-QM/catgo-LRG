@@ -63,6 +63,7 @@ const mobile: Record<string, string> = {
   method_keyboard: `Keyboard-interactive`,
   field_password: `Password`,
   field_private_key_path: `Private key path`,
+  key_file_imported: `Selected private key: {name}. It will be used for this connection only and will not be saved.`,
   field_passphrase: `Passphrase (optional)`,
   keyboard_hint: `You'll be prompted for any codes after connecting.`,
   use_jump_host: `Use a jump host (ProxyJump)`,

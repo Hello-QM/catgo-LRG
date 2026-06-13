@@ -180,6 +180,7 @@ const structure: Record<string, string> = {
   password: `密码`,
   key_file: `密钥文件`,
   key_file_hint: `（可选——服务器需要指定密钥时填写）`,
+  key_file_imported: `已选择私钥：{name}。仅用于本次连接，不会保存。`,
   scheduler: `调度器`,
   work_root: `工作根目录`,
   work_root_placeholder: `例如 ~/projects/my-work 或 /work/home/user/project`,

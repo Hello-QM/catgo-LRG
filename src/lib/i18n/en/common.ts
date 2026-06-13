@@ -37,6 +37,7 @@ const common: Record<string, string> = {
   reset:              `Reset`,
   clear:              `Clear`,
   clear_all:          `Clear All`,
+  choose:             `Choose`,
   select:             `Select`,
   select_all:         `Select All`,
   deselect_all:       `Deselect All`,

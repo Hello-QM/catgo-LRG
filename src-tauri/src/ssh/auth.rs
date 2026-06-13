@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use russh::client::{self, AuthResult, KeyboardInteractiveAuthResponse, Prompt};
-use russh::keys::{load_secret_key, HashAlg, PrivateKeyWithHashAlg};
+use russh::keys::{decode_secret_key, load_secret_key, HashAlg, PrivateKeyWithHashAlg};
 
 use super::handler::MobileHandler;
 use super::state::{PendingAuth, PendingStage, SshHandle, SshSession, SshState, TargetPlan};
@@ -55,9 +55,13 @@ pub enum AuthConfig {
     /// Username + password.
     Password { password: String },
     /// Public key loaded from a file path on disk. `passphrase` decrypts an
-    /// encrypted private key (`None`/empty => unencrypted).
+    /// encrypted private key (`None`/empty => unencrypted). `key_content` is
+    /// used by browser/mobile pickers which cannot expose a stable file path.
     Publickey {
-        key_path: String,
+        #[serde(default)]
+        key_path: Option<String>,
+        #[serde(default)]
+        key_content: Option<String>,
         #[serde(default)]
         passphrase: Option<String>,
     },
@@ -152,13 +156,24 @@ async fn authenticate(mut handle: SshHandle, username: &str, auth: &AuthConfig) 
                 Err(e) => AuthOutcome::Failed(format!("Password auth error: {e}")),
             }
         }
-        AuthConfig::Publickey { key_path, passphrase } => {
+        AuthConfig::Publickey { key_path, key_content, passphrase } => {
             let pass_ref = passphrase.as_deref().filter(|s| !s.is_empty());
-            let key = match load_secret_key(key_path, pass_ref) {
-                Ok(k) => k,
-                Err(e) => {
-                    return AuthOutcome::Failed(format!("Could not load private key {key_path}: {e}"))
+            let key = if let Some(content) = key_content.as_deref().filter(|s| !s.trim().is_empty()) {
+                match decode_secret_key(content, pass_ref) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        return AuthOutcome::Failed(format!("Could not parse selected private key: {e}"))
+                    }
                 }
+            } else if let Some(path) = key_path.as_deref().filter(|s| !s.trim().is_empty()) {
+                match load_secret_key(path, pass_ref) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        return AuthOutcome::Failed(format!("Could not load private key {path}: {e}"))
+                    }
+                }
+            } else {
+                return AuthOutcome::Failed("Public-key authentication requires a key file".into())
             };
             let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), Some(HashAlg::Sha512));
             match handle.authenticate_publickey(username, key_with_alg).await {
