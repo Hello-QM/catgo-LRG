@@ -3,6 +3,8 @@
   import { init_i18n, t, load_i18n_module } from '$lib/i18n/index.svelte'
   import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import { Structure, Trajectory } from '$lib'
+  import MolstarViewer from '$lib/structure/bio/MolstarViewer.svelte'
+  import BioViewerToggle from '$lib/structure/bio/BioViewerToggle.svelte'
   import { PathwayControls } from '$lib/trajectory'
   import type { AnyStructure } from '$lib'
   import { parse_cube_header, cube_atoms_to_molecule } from '$lib/cube'
@@ -14,6 +16,7 @@
   import { is_trajectory_file, parse_trajectory_data } from '$lib/trajectory/parse'
   import type { TrajectoryType } from '$lib/trajectory'
   import { parse_structure_file, is_structure_file } from '$lib/structure/parse'
+  import { detect_bio } from '$lib/structure/bio/detect'
   import '$lib/theme/themes.js'
   import StatusPopout from '$lib/workflow/StatusPopout.svelte'
   import { apply_theme_to_dom, get_theme_preference } from '$lib/theme'
@@ -990,6 +993,22 @@
       }
     }
 
+    // Biological macromolecule (protein / nucleic acid) → render in Mol*.
+    // Bio files bypass pymatgen/ferrox entirely: handing Mol* the raw text
+    // preserves residue/chain/secondary-structure and skips the (expensive,
+    // metadata-lossy) native parse of large proteins.
+    const bio = detect_bio(text, filename)
+    if (bio.isBio && bio.format) {
+      return {
+        kind: `entry`,
+        entry: {
+          filename, source_path: null, format: ext, structure: undefined,
+          trajectory: undefined, is_trajectory: false, cube_file: null,
+          viewer_kind: `molstar`, bio_raw_content: text, bio_format: bio.format,
+        },
+      }
+    }
+
     const parsed = parse_structure_file(text, filename)
     if (parsed?.sites?.length) {
       return { kind: `entry`, entry: { filename, source_path: null, format: ext, structure: parsed, trajectory: undefined, is_trajectory: false, cube_file: null } }
@@ -1008,7 +1027,15 @@
     local_file_path: string | null = null,
   ) {
     const p = ts.panes[target]
-    if (e.cube_file) {
+    if (e.viewer_kind === `molstar`) {
+      // Bio file → Mol* pane; no parsed structure, raw text carried below.
+      p.is_trajectory_mode = false
+      p.trajectory = null
+      p.structure = undefined
+      p.cube_file = null
+      p.initial_site_count = 0
+      p.initial_structure_ref = null
+    } else if (e.cube_file) {
       p.structure = clone_structure(e.structure)
       p.initial_site_count = e.structure?.sites?.length ?? 0
       p.initial_structure_ref = e.structure ?? null
@@ -1038,8 +1065,29 @@
     p.remote_origin = remote_origin
     p.local_file_path = local_file_path
     p.source_filename = e.filename
+    p.viewer_kind = e.viewer_kind ?? `native`
+    p.bio_raw_content = e.bio_raw_content
+    p.bio_format = e.bio_format
     ts.active_pane = target
     update_tab_label(tab_id)
+  }
+
+  /** Flip a pane between Mol* and the native viewer (manual override). */
+  function toggle_pane_viewer(ts: StructureTabState, idx: number) {
+    const p = ts.panes[idx]
+    if (!p.bio_raw_content) return
+    if (p.viewer_kind === `molstar`) {
+      // → native: parse the raw text on demand (lazy; only when overridden).
+      const parsed = parse_structure_file(p.bio_raw_content, p.source_filename || `bio`)
+      if (parsed?.sites?.length) {
+        p.structure = parsed
+        p.initial_site_count = parsed.sites.length
+        p.initial_structure_ref = parsed
+      }
+      p.viewer_kind = `native`
+    } else {
+      p.viewer_kind = `molstar`
+    }
   }
 
   async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) {
@@ -1766,7 +1814,27 @@
                     />
                   {/snippet}
                 </Trajectory>
+              {:else if pane.viewer_kind === `molstar` && pane.bio_raw_content}
+                <div class="bio-pane-wrap">
+                  <BioViewerToggle
+                    is_molstar={true}
+                    on_toggle={() => toggle_pane_viewer(ts, idx)}
+                  />
+                  {#key pane.bio_raw_content}
+                    <MolstarViewer
+                      content={pane.bio_raw_content}
+                      format={pane.bio_format ?? `pdb`}
+                      label={pane.source_filename ?? `structure`}
+                    />
+                  {/key}
+                </div>
               {:else if pane.structure}
+                {#if pane.bio_raw_content}
+                  <BioViewerToggle
+                    is_molstar={false}
+                    on_toggle={() => toggle_pane_viewer(ts, idx)}
+                  />
+                {/if}
                 <Structure
                   tab_id={tab.id}
                   is_active={ts.active_pane === idx && tab.id === tm.active_tab_id}
@@ -2289,6 +2357,11 @@
 <Toast />
 
 <style>
+  .bio-pane-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
   .sidebar-editor-overlay {
     position: fixed;
     top: 50%;
