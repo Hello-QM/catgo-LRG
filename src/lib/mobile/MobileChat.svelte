@@ -103,6 +103,7 @@
       lp_fired = false // long-press already opened the sheet; swallow the click
       return
     }
+    setup_open = false // selecting a tab leaves settings → show that chat
     switch_chat_tab(id)
   }
   function sheet_close(): void {
@@ -241,7 +242,14 @@
   const configured = $derived(
     has_key || (key_optional && chat_config.base_url.trim().length > 0),
   )
-  const show_setup = $derived(setup_open || (key_checked && !configured))
+  // Force the setup card for a first-run, unconfigured chat (onboarding). But do
+  // NOT pin it once the chat has history — otherwise a returning user on an
+  // unconfigured provider is TRAPPED in settings (the gear toggle can't escape,
+  // since !configured keeps this true). With history, the gear controls setup and
+  // a failed send's error already points them at the key.
+  const show_setup = $derived(
+    setup_open || (key_checked && !configured && slice.messages.list.length === 0),
+  )
 
   // 401 / invalid-key detection on the slice error so we can offer a shortcut
   // back to setup without echoing the raw provider body (which might reflect the
@@ -347,10 +355,12 @@
     lang_sheet_open = false
   }
 
-  // Tear down on unmount so a remount doesn't leak listeners or leave the mic
-  // hot (same lifecycle hazard the chat-stream aborts hit in commit e806e198).
+  // On unmount: clear the transcript handler (IPC-free now — on_transcript's
+  // cleanup is just a reference swap) and stop the mic IF it's still recording.
+  // The listener teardown used to fire `remove_listener` invokes here, which
+  // wedged the WKWebView main thread and froze the app on every minimize.
   $effect(() => () => {
-    if (mic_listening) void stop_listening()
+    if (mic_listening) void stop_listening().catch(() => {})
     mic_unlisten?.()
     mic_unlisten = null
   })
@@ -518,9 +528,11 @@
       <button
         type="button"
         class="ai-head-btn"
+        class:active={setup_open}
         aria-label={t(`mobile.ai_setup`)}
         title={t(`mobile.ai_setup`)}
-        onclick={() => (setup_open = true)}
+        aria-pressed={setup_open}
+        onclick={() => (setup_open = !setup_open)}
       ><Icon icon="Settings" /></button>
       <button
         type="button"
@@ -788,6 +800,12 @@
     border: 1px solid transparent;
     border-radius: 8px;
     cursor: pointer;
+  }
+  /* Gear lights up while the settings card is open, so tapping it again to go
+     back to the chat reads as a toggle. */
+  .ai-head-btn.active {
+    color: var(--accent-color, #6366f1);
+    background: var(--surface-2, rgba(148, 163, 184, 0.12));
   }
   .ai-head-ctrls {
     display: flex;

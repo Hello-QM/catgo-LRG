@@ -11,7 +11,7 @@
  * events (live textarea updates) → a `final` event (or stop_listening()) ends
  * the turn. Always call the unlisten fns returned by on_transcript() on cleanup.
  */
-import { addPluginListener, invoke, type PluginListener } from '@tauri-apps/api/core'
+import { addPluginListener, invoke } from '@tauri-apps/api/core'
 
 const PLUGIN = `ios-speech`
 
@@ -109,41 +109,46 @@ export interface TranscriptHandlers {
   on_error?: (message: string) => void
 }
 
-/**
- * Subscribe to the plugin's transcript events. Returns an unlisten fn — call it
- * when the chat unmounts or the mic turns off, or the listeners leak across
- * remounts (the same bug class as the chat-stream aborts in commit e806e198).
- */
-export async function on_transcript(h: TranscriptHandlers): Promise<() => void> {
-  const subs: PluginListener[] = []
-  if (h.on_partial) {
-    subs.push(
+// Register the native event listeners ONCE for the app's lifetime, and route
+// every event to whatever handler is currently active. We deliberately NEVER
+// unregister: firing `remove_listener` invokes while Svelte tears down the chat
+// (on minimize) wedged the WKWebView main thread and froze the app. Swapping a
+// plain module reference instead is free — no IPC on unmount.
+let listeners_ready: Promise<void> | null = null
+let current: TranscriptHandlers | null = null
+
+function ensure_listeners(): Promise<void> {
+  if (!listeners_ready) {
+    listeners_ready = (async () => {
       await addPluginListener<TranscriptEvent>(
         PLUGIN,
         `partial`,
-        (e) => h.on_partial!(e.text),
-      ),
-    )
-  }
-  if (h.on_final) {
-    subs.push(
+        (e) => current?.on_partial?.(e.text),
+      )
       await addPluginListener<TranscriptEvent>(
         PLUGIN,
         `final`,
-        (e) => h.on_final!(e.text),
-      ),
-    )
-  }
-  if (h.on_error) {
-    subs.push(
+        (e) => current?.on_final?.(e.text),
+      )
       await addPluginListener<SpeechErrorEvent>(
         PLUGIN,
         `error`,
-        (e) => h.on_error!(e.message),
-      ),
-    )
+        (e) => current?.on_error?.(e.message),
+      )
+    })()
   }
+  return listeners_ready
+}
+
+/**
+ * Make `h` the active transcript handler. Returns a cleanup that just clears the
+ * handler reference (a plain assignment — NO native call, so it is safe to run
+ * during a component unmount). The native listeners stay registered for the app.
+ */
+export async function on_transcript(h: TranscriptHandlers): Promise<() => void> {
+  await ensure_listeners()
+  current = h
   return () => {
-    for (const s of subs) void s.unregister()
+    if (current === h) current = null
   }
 }

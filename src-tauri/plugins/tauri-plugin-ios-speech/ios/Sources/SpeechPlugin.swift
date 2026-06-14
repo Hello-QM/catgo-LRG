@@ -6,6 +6,18 @@
 // transcripts are pushed to the webview as `partial` / `final` events. When the
 // device supports it we force on-device recognition, so the audio never leaves
 // the phone and it works offline with no API key.
+//
+// THREADING: every AVAudioEngine / AVAudioSession / recognizer mutation runs on
+// a single serial background queue. This is load-bearing, not cosmetic:
+//   - AVAudioEngine.stop() and AVAudioSession.setActive(false,
+//     .notifyOthersOnDeactivation) can BLOCK. Running them on the main thread
+//     freezes the whole WKWebView (it renders on main) — which is exactly what
+//     happened when minimizing the chat tore the session down on the main thread.
+//   - teardown() is reachable from three places (the recognition callback's own
+//     thread, stopListening, and a fresh startListening). Serializing them on one
+//     queue prevents a concurrent engine.stop()/removeTap race/deadlock.
+// Commands resolve immediately; the audio work hops onto `queue` and never makes
+// the JS caller (or the main thread) wait.
 
 import AVFoundation
 import Foundation
@@ -20,6 +32,7 @@ struct StartArgs: Decodable {
 }
 
 class SpeechPlugin: Plugin {
+  private let queue = DispatchQueue(label: "com.catgo.ios-speech")
   private let audioEngine = AVAudioEngine()
   private var recognizer: SFSpeechRecognizer?
   private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -28,7 +41,8 @@ class SpeechPlugin: Plugin {
   // transcript has been delivered. SFSpeechRecognizer emits a trailing
   // kAFAssistantErrorDomain error (1110 "No speech detected", or a cancellation)
   // as the session tears down — benign noise that arrives AFTER a good result.
-  // We use these to suppress that false error instead of surfacing it.
+  // We use these to suppress that false error instead of surfacing it. Only
+  // touched on `queue`.
   private var isStopping = false
   private var hasResult = false
 
@@ -59,13 +73,30 @@ class SpeechPlugin: Plugin {
       invoke.reject("bad arguments: \(error.localizedDescription)")
       return
     }
+    queue.async { [weak self] in
+      self?.startInternal(localeId: args.locale, invoke: invoke)
+    }
+  }
 
-    // Re-entrancy guard: a second start without a stop would stack taps/tasks.
-    stopInternal()
+  // End the session deliberately (mic button tapped off / chat unmounted). The
+  // teardown is async on `queue`, so the JS caller and main thread never wait.
+  @objc public func stopListening(_ invoke: Invoke) {
+    queue.async { [weak self] in
+      guard let self = self else { return }
+      self.isStopping = true
+      self.request?.endAudio()
+      self.teardown()
+    }
+    invoke.resolve()
+  }
+
+  // MUST run on `queue`.
+  private func startInternal(localeId: String?, invoke: Invoke) {
+    teardown() // re-entrancy guard (serial queue makes this safe)
     isStopping = false
     hasResult = false
 
-    let locale = args.locale.map { Locale(identifier: $0) } ?? Locale.current
+    let locale = localeId.map { Locale(identifier: $0) } ?? Locale.current
     guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
       invoke.reject("speech recognition unavailable for locale \(locale.identifier)")
       return
@@ -94,47 +125,48 @@ class SpeechPlugin: Plugin {
       audioEngine.prepare()
       try audioEngine.start()
     } catch {
-      stopInternal()
+      teardown()
       invoke.reject("could not start audio: \(error.localizedDescription)")
       return
     }
 
     task = recognizer.recognitionTask(with: request) { [weak self] result, error in
       guard let self = self else { return }
+      // The callback runs on SFSpeech's own thread; hop to `queue` so reading
+      // results and tearing down can't race startListening/stopListening.
       if let result = result {
-        self.hasResult = true
         let text = result.bestTranscription.formattedString
-        if result.isFinal {
-          self.trigger("final", data: ["text": text])
-          self.stopInternal()
-        } else {
-          self.trigger("partial", data: ["text": text])
+        let isFinal = result.isFinal
+        self.queue.async {
+          self.hasResult = true
+          if isFinal {
+            self.trigger("final", data: ["text": text])
+            self.teardown()
+          } else {
+            self.trigger("partial", data: ["text": text])
+          }
         }
       }
       if let error = error {
-        // Suppress the benign teardown error (e.g. "No speech detected") that
-        // fires when we deliberately stop OR after a transcript already arrived.
-        // Only surface an error if recognition genuinely produced nothing.
-        if !self.isStopping && !self.hasResult {
-          self.trigger("error", data: ["message": error.localizedDescription])
+        let message = error.localizedDescription
+        self.queue.async {
+          // Suppress the benign teardown error (e.g. "No speech detected") that
+          // fires on a deliberate stop or after a transcript already arrived.
+          if !self.isStopping && !self.hasResult {
+            self.trigger("error", data: ["message": message])
+          }
+          self.teardown()
         }
-        self.stopInternal()
       }
     }
 
     invoke.resolve()
   }
 
-  // End the session deliberately (mic button tapped off). Emit whatever the
-  // recognizer has so far as the final transcript, then tear down.
-  @objc public func stopListening(_ invoke: Invoke) {
-    isStopping = true // suppress the trailing "no speech" error on teardown
-    request?.endAudio()
-    stopInternal()
-    invoke.resolve()
-  }
-
-  private func stopInternal() {
+  // Stop the engine, cancel the task, release the session. MUST run on `queue`;
+  // idempotent. Runs off the main thread so a blocking stop/deactivate can never
+  // freeze the WebView.
+  private func teardown() {
     if audioEngine.isRunning {
       audioEngine.stop()
       audioEngine.inputNode.removeTap(onBus: 0)
