@@ -35,9 +35,9 @@
 
 - [ ] **Step 1: Install molstar**
 
-Run:
+Run (from the repo root):
 ```bash
-cd /home/james0001/project/catgo-LRG && pnpm add molstar
+pnpm add molstar
 ```
 Expected: `package.json` gains a `"molstar": "^4.x.x"` line under `dependencies`; `pnpm-lock.yaml` updates.
 
