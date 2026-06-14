@@ -1072,21 +1072,37 @@
     update_tab_label(tab_id)
   }
 
-  /** Flip a pane between Mol* and the native viewer (manual override). */
-  function toggle_pane_viewer(ts: StructureTabState, idx: number) {
+  /**
+   * Flip a pane between Mol* and the native viewer (manual override).
+   * Works for ANY loaded structure, not just auto-detected bio files: when a
+   * pane has no bio raw text yet (a crystal, a built/fetched structure), we
+   * serialize its current structure to a format Mol* reads (CIF when periodic
+   * so the cell survives, else XYZ) and hand that to Mol*.
+   */
+  async function toggle_pane_viewer(ts: StructureTabState, idx: number) {
     const p = ts.panes[idx]
-    if (!p.bio_raw_content) return
     if (p.viewer_kind === `molstar`) {
       // → native: parse the raw text on demand (lazy; only when overridden).
-      const parsed = parse_structure_file(p.bio_raw_content, p.source_filename || `bio`)
-      if (parsed?.sites?.length) {
-        p.structure = parsed
-        p.initial_site_count = parsed.sites.length
-        p.initial_structure_ref = parsed
+      if (p.bio_raw_content) {
+        const parsed = parse_structure_file(p.bio_raw_content, p.source_filename || `bio`)
+        if (parsed?.sites?.length) {
+          p.structure = parsed
+          p.initial_site_count = parsed.sites.length
+          p.initial_structure_ref = parsed
+        }
       }
       p.viewer_kind = `native`
     } else {
-      p.viewer_kind = `molstar`
+      // → Mol*: ensure we have raw text Mol* can parse.
+      if (!p.bio_raw_content && p.structure?.sites?.length) {
+        const { structure_to_cif_str, structure_to_xyz_str } = await import(`$lib/structure/export`)
+        const periodic = !!(p.structure as { lattice?: { matrix?: unknown } })?.lattice?.matrix
+        p.bio_raw_content = periodic
+          ? structure_to_cif_str(p.structure)
+          : structure_to_xyz_str(p.structure)
+        p.bio_format = periodic ? `mmcif` : `xyz`
+      }
+      if (p.bio_raw_content) p.viewer_kind = `molstar`
     }
   }
 
@@ -1816,25 +1832,32 @@
                 </Trajectory>
               {:else if pane.viewer_kind === `molstar` && pane.bio_raw_content}
                 <div class="bio-pane-wrap">
-                  <BioViewerToggle
-                    is_molstar={true}
-                    on_toggle={() => toggle_pane_viewer(ts, idx)}
-                  />
-                  {#key pane.bio_raw_content}
-                    <MolstarViewer
-                      content={pane.bio_raw_content}
-                      format={pane.bio_format ?? `pdb`}
-                      label={pane.source_filename ?? `structure`}
+                  <div class="bio-toolbar">
+                    <BioViewerToggle
+                      is_molstar={true}
+                      on_toggle={() => toggle_pane_viewer(ts, idx)}
                     />
-                  {/key}
+                    <span class="bio-toolbar-name">{pane.source_filename ?? `structure`}</span>
+                  </div>
+                  <div class="bio-viewer-fill">
+                    {#key pane.bio_raw_content}
+                      <MolstarViewer
+                        content={pane.bio_raw_content}
+                        format={pane.bio_format ?? `pdb`}
+                        label={pane.source_filename ?? `structure`}
+                      />
+                    {/key}
+                  </div>
                 </div>
               {:else if pane.structure}
-                {#if pane.bio_raw_content}
+                <!-- Universal manual entry: any loaded structure can be opened
+                     in Mol* (serialized on demand by toggle_pane_viewer). -->
+                <div class="bio-float-tl">
                   <BioViewerToggle
                     is_molstar={false}
                     on_toggle={() => toggle_pane_viewer(ts, idx)}
                   />
-                {/if}
+                </div>
                 <Structure
                   tab_id={tab.id}
                   is_active={ts.active_pane === idx && tab.id === tm.active_tab_id}
@@ -2361,6 +2384,37 @@
     position: relative;
     width: 100%;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .bio-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-color, #ddd);
+    background: var(--panel-bg, rgba(0, 0, 0, 0.03));
+  }
+  .bio-toolbar-name {
+    font-size: 0.78rem;
+    color: var(--text-muted, #777);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .bio-viewer-fill {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
+  }
+  /* Universal "Open in Mol*" button over a native viewer — top-left, clear of
+     the native viewer's own bottom/right controls. */
+  .bio-float-tl {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 20;
   }
   .sidebar-editor-overlay {
     position: fixed;

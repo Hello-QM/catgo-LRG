@@ -297,18 +297,33 @@
     show_loaded(filename, origin)
   }
 
-  /** Flip the mobile viewer between Mol* and native (manual override). */
-  function toggle_mobile_viewer(): void {
-    if (!bio_raw_content) return
-    if (bio_viewer) {
+  /**
+   * Flip the mobile viewer between Mol* and native (manual override). Works for
+   * ANY loaded structure: with no bio raw text yet we serialize the current
+   * structure (CIF when periodic, else XYZ) and hand it to Mol*.
+   */
+  async function toggle_mobile_viewer(): Promise<void> {
+    if (bio_viewer && bio_raw_content) {
       // → native: parse the raw text on demand
       const parsed = parse_any_structure(bio_raw_content, local_filename)
       if (parsed) structure = parsed
       bio_viewer = false
     } else {
-      // → Mol*
-      structure = undefined
-      bio_viewer = true
+      // → Mol*: serialize the current structure if we have no raw text yet
+      if (!bio_raw_content && structure?.sites?.length) {
+        const { structure_to_cif_str, structure_to_xyz_str } = await import(
+          '$lib/structure/export'
+        )
+        const periodic = !!structure?.lattice?.matrix
+        bio_raw_content = periodic
+          ? structure_to_cif_str(structure)
+          : structure_to_xyz_str(structure)
+        bio_format = periodic ? 'mmcif' : 'xyz'
+      }
+      if (bio_raw_content) {
+        structure = undefined
+        bio_viewer = true
+      }
     }
   }
 
@@ -599,15 +614,21 @@
           />
         {:else if bio_raw_content && bio_viewer && !structure}
           <div class="mw-bio-wrap">
-            <BioViewerToggle is_molstar={true} on_toggle={toggle_mobile_viewer} />
-            {#key bio_raw_content}
-              <MolstarViewer content={bio_raw_content} format={bio_format} label={local_filename} />
-            {/key}
+            <div class="mw-bio-toolbar">
+              <BioViewerToggle is_molstar={true} on_toggle={toggle_mobile_viewer} />
+              <span class="mw-bio-name">{local_filename}</span>
+            </div>
+            <div class="mw-bio-fill">
+              {#key bio_raw_content}
+                <MolstarViewer content={bio_raw_content} format={bio_format} label={local_filename} />
+              {/key}
+            </div>
           </div>
         {:else if has_structure}
-          {#if bio_raw_content}
+          <!-- Universal manual entry: any loaded structure → Mol* on demand. -->
+          <div class="mw-bio-float">
             <BioViewerToggle is_molstar={false} on_toggle={toggle_mobile_viewer} />
-          {/if}
+          </div>
           <Structure
             bind:structure
             bind:saveable_structure
@@ -1094,6 +1115,35 @@
     position: relative;
     width: 100%;
     height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .mw-bio-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-color, #ddd);
+    background: var(--panel-bg, rgba(0, 0, 0, 0.03));
+  }
+  .mw-bio-name {
+    font-size: 0.78rem;
+    color: var(--text-muted, #777);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mw-bio-fill {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
+  }
+  .mw-bio-float {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 20;
   }
   .mw-body.split-h .mw-struct,
   .mw-body.split-v .mw-struct {
