@@ -4,6 +4,7 @@
   import { ContextMenu, Icon, Spinner, toggle_fullscreen } from '$lib'
   import { type ColorSchemeName, element_color_schemes } from '$lib/colors'
   import { decompress_file, load_from_url, check_tauri } from '$lib/io'
+  import { download } from '$lib/io/fetch'
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import { API_BASE } from '$lib/api/config'
@@ -1383,6 +1384,8 @@
   })
   let dos_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let dos_plot_ref: DosPlot | undefined = $state()
+  let dos_export_status: string | null = $state(null)
+  let dos_exporting: string | null = $state(null)
   let show_dos_panel = $derived(dos_state.dos_result !== null)
   let dband_center_for_plot = $derived(
     dos_state.show_dband_line && typeof dos_state.dband_result?.center_rel === `number` &&
@@ -1409,6 +1412,8 @@
   })
   let band_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let band_plot_ref: BandPlot | undefined = $state()
+  let band_export_status: string | null = $state(null)
+  let band_exporting: string | null = $state(null)
   let show_band_panel = $derived(band_state.band_data !== null)
 
   // COHP analysis state
@@ -1436,7 +1441,59 @@
   })
   let cohp_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let cohp_plot_ref: CohpPlot | undefined = $state()
+  let cohp_export_status: string | null = $state(null)
+  let cohp_exporting: string | null = $state(null)
   let show_cohp_panel = $derived(cohp_state.cohp_result !== null)
+
+  type ElectronicPlotRef = DosPlot | CohpPlot | BandPlot
+  type ExportFormat = `png` | `svg` | `csv`
+
+  async function data_url_to_blob(data_url: string): Promise<Blob> {
+    const response = await fetch(data_url)
+    return response.blob()
+  }
+
+  async function export_electronic_plot(
+    plot_ref: ElectronicPlotRef | undefined,
+    format: ExportFormat,
+    base_name: string,
+    set_status: (value: string | null) => void,
+    set_exporting: (value: string | null) => void,
+  ) {
+    set_status(null)
+    if (!plot_ref) {
+      set_status(`Plot is still loading. Please try again in a moment.`)
+      return
+    }
+    set_exporting(format)
+    try {
+      if (format === `csv`) {
+        const csv = plot_ref.export_csv()
+        if (!csv) {
+          set_status(`No exportable data is available for this plot.`)
+          return
+        }
+        const filename = `${base_name}_data.csv`
+        download(csv, filename, `text/csv;charset=utf-8`)
+        set_status(`Export started: ${filename}. Check your browser downloads or the system default Downloads folder.`)
+        return
+      }
+
+      const url = await plot_ref.export_image(format)
+      if (!url) {
+        set_status(`Plot export is not ready yet. Please try again in a moment.`)
+        return
+      }
+      const filename = `${base_name}_plot.${format}`
+      download(await data_url_to_blob(url), filename, format === `svg` ? `image/svg+xml` : `image/png`)
+      set_status(`Export started: ${filename}. Check your browser downloads or the system default Downloads folder.`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set_status(`Failed to export ${format.toUpperCase()}: ${message}`)
+    } finally {
+      set_exporting(null)
+    }
+  }
   let workflow_pane_open = $state(false)  // Workflow pane
   let slow_growth_pane_open = $state(false)  // Slow-growth post-processing
   let io_pane_open = $state(false)  // IO (import/export) pane
@@ -4771,9 +4828,9 @@
           >
             {dos_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (dos_plot_ref) { const url = await dos_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `dos_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (dos_plot_ref) { const url = await dos_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `dos_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (dos_plot_ref) { const csv = dos_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `dos_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `png`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `svg`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `csv`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: `DOS` })}
@@ -4782,6 +4839,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if dos_export_status}
+          <div class="dos-export-status">{dos_export_status}</div>
+        {/if}
         <DosPlot
           bind:this={dos_plot_ref}
           grid={dos_state.dos_result.grid}
@@ -4874,9 +4934,9 @@
           >
             {cohp_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (cohp_plot_ref) { const url = await cohp_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `cohp_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (cohp_plot_ref) { const url = await cohp_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `cohp_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (cohp_plot_ref) { const csv = cohp_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `cohp_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `png`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `svg`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `csv`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: `COHP` })}
@@ -4885,6 +4945,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if cohp_export_status}
+          <div class="dos-export-status">{cohp_export_status}</div>
+        {/if}
         <CohpPlot
           bind:this={cohp_plot_ref}
           energies={cohp_state.cohp_result.energies}
@@ -4925,9 +4988,9 @@
           >
             {band_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (band_plot_ref) { const url = await band_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `band_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (band_plot_ref) { const url = await band_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `band_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (band_plot_ref) { const csv = band_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `band_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `png`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `svg`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `csv`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: t(`structure.bands`) })}
@@ -4936,6 +4999,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if band_export_status}
+          <div class="dos-export-status">{band_export_status}</div>
+        {/if}
         <BandPlot
           bind:this={band_plot_ref}
           distance={band_state.band_data.distance}
@@ -5313,12 +5379,32 @@
     font-size: 0.75em;
   }
   .dos-layout-btn:hover, .dos-export-btn:hover { background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15)); }
+  .dos-export-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
   .dos-close-btn { color: var(--error-color, #f55); }
   .dos-close-btn:hover { background: rgba(255, 60, 60, 0.2); }
   .dos-plot-area {
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
+  }
+  .dos-export-status {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    max-width: min(360px, calc(100% - 16px));
+    padding: 5px 8px;
+    border: 1px solid light-dark(rgba(37, 99, 235, 0.3), rgba(125, 211, 252, 0.35));
+    border-radius: 4px;
+    background: light-dark(rgba(239, 246, 255, 0.95), rgba(12, 39, 64, 0.9));
+    color: light-dark(#1d4ed8, #bfdbfe);
+    font-size: 0.75em;
+    line-height: 1.35;
+    pointer-events: none;
   }
 
   /* Electronic sub-tabs (DOS / COHP) inside Analysis pane */
