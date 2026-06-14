@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detect_bio } from './detect'
+import { detect_bio } from '../detect'
 
 const PROTEIN_PDB = `HEADER    OXYGEN TRANSPORT
 SEQRES   1 A    3  VAL LEU SER
