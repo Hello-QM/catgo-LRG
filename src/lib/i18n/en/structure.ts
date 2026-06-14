@@ -1627,5 +1627,7 @@ const structure: Record<string, string> = {
   trajectory_format_ase: `ASE trajectory (.traj)`,
   trajectory_format_pymatgen: `Pymatgen trajectory JSON`,
   trajectory_format_compressed: `Compressed files (.gz)`,
+  bio_open_in_native: `Open in native viewer`,
+  bio_open_in_molstar: `Open in Mol*`,
 }
 export default structure
