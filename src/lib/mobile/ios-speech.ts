@@ -135,7 +135,12 @@ function ensure_listeners(): Promise<void> {
         `error`,
         (e) => current?.on_error?.(e.message),
       )
-    })()
+    })().catch((err) => {
+      // Don't cache a failure — null it so the next mic tap retries instead of
+      // rejecting forever (which would break voice input for the whole session).
+      listeners_ready = null
+      throw err
+    })
   }
   return listeners_ready
 }

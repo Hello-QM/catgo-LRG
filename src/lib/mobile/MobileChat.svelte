@@ -430,6 +430,12 @@
       }
       mic_listening = true
       await start_listening(voice_locale || undefined)
+    } catch (e) {
+      // A rejected invoke (e.g. start_listening for an unsupported locale, or a
+      // listener-registration failure) must surface as an error, not an unhandled
+      // rejection that hijacks the screen. Reset the button if a start failed.
+      mic_listening = false
+      slice.error.value = e instanceof Error ? e.message : t(`mobile.ai_mic_denied`)
     } finally {
       mic_busy = false
     }
