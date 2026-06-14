@@ -28,17 +28,321 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: `首页`, link: `/zh/` },
-          { text: `指南`, link: `/zh/guide/installation` },
-          { text: `CatBot AI`, link: `/zh/guide/catbot` },
-          { text: `GitHub`, link: `https://github.com/Hello-QM/catgo-LRG` },
+          { text: `指南`, link: `/zh/guide/overview` },
+          { text: `教程`, link: `/zh/tutorials/basics/getting-started` },
+          {
+            text: `模块`,
+            items: [
+              { text: `概览`, link: `/zh/modules/` },
+              {
+                text: `核心`,
+                items: [
+                  { text: `结构查看器`, link: `/zh/modules/core/structure-viewer` },
+                  { text: `文件 I/O`, link: `/zh/modules/core/file-io` },
+                  { text: `键合`, link: `/zh/modules/core/bonding` },
+                  { text: `设置`, link: `/zh/modules/core/settings` },
+                ],
+              },
+              {
+                text: `分析`,
+                items: [
+                  {
+                    text: `电子结构`,
+                    link: `/zh/modules/electronic/band-structure`,
+                  },
+                  { text: `MD 分析`, link: `/zh/modules/md-analysis/rdf` },
+                  { text: `光谱分析`, link: `/zh/modules/analysis/spectroscopy` },
+                ],
+              },
+              {
+                text: `功能`,
+                items: [
+                  { text: `工作流引擎`, link: `/zh/modules/workflow/workflow-engine` },
+                  { text: `AI 聊天`, link: `/zh/modules/ai/chat-system` },
+                  { text: `手势追踪`, link: `/zh/modules/interaction/gesture-tracking` },
+                  { text: `MCP 服务器`, link: `/zh/modules/server/mcp-server` },
+                ],
+              },
+            ],
+          },
+          { text: `开发者`, link: `/zh/developer/contributing` },
+          {
+            text: `更多`,
+            items: [
+              { text: `图库`, link: `/zh/guide/gallery` },
+              { text: `技巧与提示`, link: `/zh/guide/tips-and-tricks` },
+              { text: `配置`, link: `/zh/reference/configuration` },
+              { text: `FAQ`, link: `/zh/reference/faq` },
+              { text: `更新日志`, link: `/zh/reference/changelog` },
+            ],
+          },
         ],
         sidebar: {
           '/zh/guide/': [
             {
               text: `入门`,
               items: [
+                { text: `概览`, link: `/zh/guide/overview` },
                 { text: `安装`, link: `/zh/guide/installation` },
                 { text: `CatBot AI`, link: `/zh/guide/catbot` },
+                { text: `图库`, link: `/zh/guide/gallery` },
+                { text: `技巧与提示`, link: `/zh/guide/tips-and-tricks` },
+              ],
+            },
+          ],
+
+          '/zh/tutorials/': [
+            {
+              text: `教程`,
+              link: `/zh/tutorials/`,
+              items: [
+                {
+                  text: `基础`,
+                  collapsed: false,
+                  items: [
+                    { text: `快速上手`, link: `/zh/tutorials/basics/getting-started` },
+                  ],
+                },
+                {
+                  text: `结构`,
+                  collapsed: false,
+                  items: [
+                    { text: `构建表面 slab`, link: `/zh/tutorials/structures/building-slabs` },
+                    { text: `结构优化`, link: `/zh/tutorials/structures/optimization` },
+                    {
+                      text: `数据库搜索`,
+                      link: `/zh/tutorials/structures/database-search`,
+                    },
+                  ],
+                },
+                {
+                  text: `可视化`,
+                  collapsed: false,
+                  items: [
+                    {
+                      text: `电荷密度可视化`,
+                      link: `/zh/tutorials/visualization/density-viz`,
+                    },
+                    { text: `轨迹`, link: `/zh/tutorials/visualization/trajectories` },
+                  ],
+                },
+                {
+                  text: `工作流`,
+                  collapsed: false,
+                  items: [
+                    { text: `工作流`, link: `/zh/tutorials/workflows/workflows` },
+                  ],
+                },
+                {
+                  text: `电子结构分析`,
+                  collapsed: false,
+                  items: [
+                    { text: `能带结构`, link: `/zh/tutorials/electronic/band-structure` },
+                    { text: `DOS 分析`, link: `/zh/tutorials/electronic/dos-analysis` },
+                    { text: `COHP 分析`, link: `/zh/tutorials/electronic/cohp-analysis` },
+                  ],
+                },
+                {
+                  text: `MD 分析`,
+                  collapsed: false,
+                  items: [
+                    { text: `RDF 分析`, link: `/zh/tutorials/md-analysis/rdf-analysis` },
+                    { text: `RMSD 与 RMSF`, link: `/zh/tutorials/md-analysis/rmsd-rmsf` },
+                    {
+                      text: `氢键检测`,
+                      link: `/zh/tutorials/md-analysis/hbond-detection`,
+                    },
+                    {
+                      text: `聚类与 PCA`,
+                      link: `/zh/tutorials/md-analysis/clustering-pca`,
+                    },
+                  ],
+                },
+                {
+                  text: `AI 功能`,
+                  collapsed: false,
+                  items: [
+                    { text: `AI 聊天`, link: `/zh/tutorials/ai/ai-chat` },
+                    { text: `文献导入`, link: `/zh/tutorials/ai/literature-import` },
+                  ],
+                },
+                {
+                  text: `交互`,
+                  collapsed: false,
+                  items: [
+                    {
+                      text: `手势与手部追踪`,
+                      link: `/zh/tutorials/interaction/gesture-hand-tracking`,
+                    },
+                    { text: `语音控制`, link: `/zh/tutorials/interaction/voice-control` },
+                  ],
+                },
+                {
+                  text: `桌面端`,
+                  collapsed: false,
+                  items: [
+                    { text: `桌面应用`, link: `/zh/tutorials/desktop/desktop-app` },
+                  ],
+                },
+                {
+                  text: `服务器`,
+                  collapsed: false,
+                  items: [
+                    { text: `MCP 服务器`, link: `/zh/tutorials/server/mcp-server` },
+                    { text: `服务器 API`, link: `/zh/tutorials/server/server-api` },
+                  ],
+                },
+              ],
+            },
+          ],
+
+          '/zh/modules/': [
+            {
+              text: `模块参考`,
+              link: `/zh/modules/`,
+              items: [
+                {
+                  text: `核心`,
+                  collapsed: false,
+                  items: [
+                    { text: `结构查看器`, link: `/zh/modules/core/structure-viewer` },
+                    { text: `文件 I/O`, link: `/zh/modules/core/file-io` },
+                    { text: `晶格与晶胞`, link: `/zh/modules/core/lattice-cell` },
+                    { text: `键合`, link: `/zh/modules/core/bonding` },
+                    { text: `设置`, link: `/zh/modules/core/settings` },
+                  ],
+                },
+                {
+                  text: `晶体学`,
+                  collapsed: false,
+                  items: [
+                    {
+                      text: `表面与 slab`,
+                      link: `/zh/modules/crystallography/surfaces-slabs`,
+                    },
+                    { text: `对称性`, link: `/zh/modules/crystallography/symmetry` },
+                    { text: `超胞`, link: `/zh/modules/crystallography/supercells` },
+                  ],
+                },
+                {
+                  text: `电子结构`,
+                  collapsed: false,
+                  items: [
+                    { text: `能带结构`, link: `/zh/modules/electronic/band-structure` },
+                    { text: `态密度`, link: `/zh/modules/electronic/dos` },
+                    { text: `COHP`, link: `/zh/modules/electronic/cohp` },
+                  ],
+                },
+                {
+                  text: `MD 分析`,
+                  collapsed: false,
+                  items: [
+                    { text: `径向分布函数`, link: `/zh/modules/md-analysis/rdf` },
+                    { text: `动力学（RMSD/RMSF）`, link: `/zh/modules/md-analysis/dynamics` },
+                    { text: `密度分布`, link: `/zh/modules/md-analysis/density-profile` },
+                    { text: `氢键`, link: `/zh/modules/md-analysis/hbonds` },
+                    { text: `聚类与 PCA`, link: `/zh/modules/md-analysis/clustering` },
+                  ],
+                },
+                {
+                  text: `动力学与优化`,
+                  collapsed: false,
+                  items: [
+                    { text: `轨迹`, link: `/zh/modules/dynamics/trajectories` },
+                    { text: `优化`, link: `/zh/modules/dynamics/optimization` },
+                  ],
+                },
+                {
+                  text: `分析与光谱`,
+                  collapsed: false,
+                  items: [
+                    { text: `光谱分析`, link: `/zh/modules/analysis/spectroscopy` },
+                    { text: `相图`, link: `/zh/modules/analysis/phase-diagrams` },
+                    { text: `组成`, link: `/zh/modules/analysis/composition` },
+                    { text: `元素周期表`, link: `/zh/modules/analysis/periodic-table` },
+                  ],
+                },
+                {
+                  text: `工作流`,
+                  collapsed: false,
+                  items: [
+                    { text: `工作流引擎`, link: `/zh/modules/workflow/workflow-engine` },
+                    { text: `节点类型`, link: `/zh/modules/workflow/node-types` },
+                    { text: `作业脚本`, link: `/zh/modules/workflow/job-scripts` },
+                    {
+                      text: `项目仪表盘`,
+                      link: `/zh/modules/workflow/project-dashboard`,
+                    },
+                  ],
+                },
+                {
+                  text: `AI 与语言`,
+                  collapsed: false,
+                  items: [
+                    { text: `聊天系统`, link: `/zh/modules/ai/chat-system` },
+                    { text: `工作流工具`, link: `/zh/modules/ai/workflow-tools` },
+                    { text: `文献导入`, link: `/zh/modules/ai/literature-import` },
+                  ],
+                },
+                {
+                  text: `交互`,
+                  collapsed: false,
+                  items: [
+                    {
+                      text: `手势追踪`,
+                      link: `/zh/modules/interaction/gesture-tracking`,
+                    },
+                    { text: `语音控制`, link: `/zh/modules/interaction/voice-control` },
+                    { text: `Atom Art`, link: `/zh/modules/interaction/atom-art` },
+                  ],
+                },
+                {
+                  text: `集成`,
+                  collapsed: false,
+                  items: [
+                    {
+                      text: `密度可视化`,
+                      link: `/zh/modules/integrations/density-visualization`,
+                    },
+                    {
+                      text: `数据库集成`,
+                      link: `/zh/modules/integrations/database-integration`,
+                    },
+                  ],
+                },
+                {
+                  text: `服务器`,
+                  collapsed: false,
+                  items: [
+                    { text: `MCP 服务器`, link: `/zh/modules/server/mcp-server` },
+                    { text: `REST API`, link: `/zh/modules/server/rest-api` },
+                  ],
+                },
+              ],
+            },
+          ],
+
+          '/zh/developer/': [
+            {
+              text: `开发者指南`,
+              items: [
+                { text: `贡献指南`, link: `/zh/developer/contributing` },
+                { text: `开发指南`, link: `/zh/developer/development-guide` },
+                { text: `桌面端构建`, link: `/zh/developer/desktop-build` },
+                { text: `布局模式`, link: `/zh/developer/layout-patterns` },
+                { text: `Plotly 配置`, link: `/zh/developer/plotly-config` },
+                { text: `API 层规范`, link: `/zh/developer/api-layer-spec` },
+              ],
+            },
+          ],
+
+          '/zh/reference/': [
+            {
+              text: `参考`,
+              items: [
+                { text: `配置`, link: `/zh/reference/configuration` },
+                { text: `FAQ`, link: `/zh/reference/faq` },
+                { text: `更新日志`, link: `/zh/reference/changelog` },
               ],
             },
           ],

@@ -95,6 +95,34 @@ def test_dedup_leading_freq_table_not_double_counted(tmp_path):
     assert r.imag_freqs_cm == []
 
 
+# Real VASP fixed-width SUMMARY POMASS line GLUES adjacent masses when one
+# needs >6 chars: e.g. O (16.00) + Pt (195.08) -> "16.00195.08", which
+# .split() cannot tokenise. The clean per-POTCAR "; ZVAL" lines must be used
+# as the fallback. (Live bug: Pt(111)-ORR *OOH freq, masses H/O/Pt.)
+_OUTCAR_GLUED_POMASS = textwrap.dedent("""\
+   ions per type =               1 1 2
+  POMASS =    1.000; ZVAL   =    1.000    mass and valenz
+  POMASS =   16.000; ZVAL   =    6.000    mass and valenz
+  POMASS =  195.080; ZVAL   =   10.000    mass and valenz
+ position of ions in cartesian coordinates  (Angst):
+   0.0000000  0.0000000  0.0000000
+   0.0000000  0.0000000  1.1000000
+   0.0000000  0.0000000  2.2000000
+   0.0000000  0.0000000  3.3000000
+  POMASS =   1.00 16.00195.08
+""")
+
+
+def test_glued_summary_pomass_falls_back_to_header_masses(tmp_path):
+    p = tmp_path / "OUTCAR"
+    p.write_text(_OUTCAR_GLUED_POMASS)
+    r = parse_outcar_freqs(p)
+    # 3 element types (H, O, Pt) with counts 1,1,2 -> masses per atom
+    assert r.masses_amu == [1.0, 16.0, 195.08, 195.08]
+    assert r.atom_types == [0, 1, 2, 2]
+    assert r.total_atoms == 4
+
+
 def test_eigenvectors_for_real_excludes_imag(tmp_path):
     """E1 — IR spectrum (real modes only) needs an explicit getter.
     Don't slice by len(real_freqs_cm) — imag_mode_indices is the

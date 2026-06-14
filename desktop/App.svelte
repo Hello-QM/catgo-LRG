@@ -117,6 +117,7 @@
   // Extracted dialog sub-components
   import ExportSaveDialog from './components/ExportSaveDialog.svelte'
   import CloseAllModal from './components/CloseAllModal.svelte'
+  import DownloadManager from './components/DownloadManager.svelte'
 
   init_i18n().then(() => load_i18n_module(`app`))
 
@@ -2287,6 +2288,7 @@
 {/if}
 
 <Toast />
+<DownloadManager />
 
 <style>
   .sidebar-editor-overlay {

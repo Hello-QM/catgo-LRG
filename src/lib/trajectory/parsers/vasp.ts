@@ -177,3 +177,92 @@ export const parse_vasp_xdatcar = (content: string, filename?: string): Trajecto
     },
   }
 }
+
+// ── VASP OUTCAR trajectory (one frame per ionic step) ──
+
+function outcar_elements(lines: string[]): ElementSymbol[] {
+  const species: string[] = []
+  for (const line of lines) {
+    const m = line.match(/VRHFIN\s*=\s*([A-Za-z]+)/)
+    if (m) species.push(m[1])
+  }
+  if (species.length === 0) {
+    for (const line of lines) {
+      const m = line.match(/^\s*POTCAR:\s+\S+\s+([A-Za-z]+)/)
+      if (m && species[species.length - 1] !== m[1]) species.push(m[1])
+    }
+  }
+  let counts: number[] = []
+  for (const line of lines) {
+    const m = line.match(/ions per type\s*=\s*(.+)$/)
+    if (m) { counts = m[1].trim().split(/\s+/).map(Number).filter((n) => !isNaN(n)); break }
+  }
+  if (species.length === 0 || counts.length !== species.length) return []
+  const out: ElementSymbol[] = []
+  for (let i = 0; i < species.length; i++) {
+    for (let n = 0; n < counts[i]; n++) out.push(species[i] as ElementSymbol)
+  }
+  return out
+}
+
+/** Parse every ionic step in an OUTCAR into trajectory frames (Cartesian + forces). */
+export const parse_vasp_outcar = (content: string, filename?: string): TrajectoryType => {
+  const lines = content.split(/\r?\n/)
+  const elements = outcar_elements(lines)
+  if (elements.length === 0) throw new Error(`OUTCAR: could not determine elements`)
+  const n_atoms = elements.length
+  const pbc: Pbc = [true, true, true]
+
+  const frames: TrajectoryFrame[] = []
+  let lattice: Matrix3x3 | null = null
+  let step = 0
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(`direct lattice vectors`)) {
+      const m: number[][] = []
+      for (let r = 1; r <= 3 && i + r < lines.length; r++) {
+        const nums = lines[i + r].trim().split(WHITESPACE).map(Number)
+        if (nums.length >= 3 && nums.slice(0, 3).every((n) => Number.isFinite(n))) {
+          m.push([nums[0], nums[1], nums[2]])
+        }
+      }
+      if (m.length === 3) lattice = m as Matrix3x3
+      continue
+    }
+    if (lines[i].includes(`POSITION`) && lines[i].includes(`TOTAL-FORCE`)) {
+      const positions: number[][] = []
+      const forces: number[][] = []
+      for (let j = i + 1; j < lines.length && positions.length < n_atoms; j++) {
+        const t = lines[j].trim()
+        if (t.startsWith(`---`) || t === ``) { if (positions.length === 0) continue; else break }
+        const nums = t.split(WHITESPACE).map(Number)
+        if (nums.length < 3 || nums.slice(0, 3).some((n) => !Number.isFinite(n))) break
+        positions.push([nums[0], nums[1], nums[2]])
+        if (nums.length >= 6) forces.push([nums[3], nums[4], nums[5]])
+      }
+      if (positions.length === n_atoms && lattice) {
+        frames.push(create_trajectory_frame(
+          positions,
+          elements,
+          lattice,
+          pbc,
+          step++,
+          { volume: math.calc_lattice_params(lattice).volume },
+          forces.length === n_atoms ? forces : undefined,
+        ))
+      }
+    }
+  }
+
+  if (frames.length === 0) throw new Error(`OUTCAR: no ionic steps found`)
+  return {
+    frames,
+    metadata: {
+      filename,
+      source_format: `vasp_outcar`,
+      frame_count: frames.length,
+      total_atoms: n_atoms,
+      periodic_boundary_conditions: pbc,
+    },
+  }
+}

@@ -52,7 +52,7 @@ import { parse_gaussian_output } from './parsers/gaussian'
 import { parse_torch_sim_hdf5 } from './parsers/hdf5'
 import { parse_json_trajectory } from './parsers/json'
 import { parse_lammps_dump } from './parsers/lammps'
-import { parse_vasp_xdatcar } from './parsers/vasp'
+import { parse_vasp_outcar, parse_vasp_xdatcar } from './parsers/vasp'
 import { parse_xyz_trajectory } from './parsers/xyz'
 
 // Unified format detection
@@ -84,6 +84,18 @@ const FORMAT_PATTERNS = {
       lines.some((line) => line.includes(`Direct configuration=`)) &&
       !isNaN(parseFloat(lines[1])) &&
       lines.slice(2, 5).every((line) => line.trim().split(/\s+/).length === 3)
+  },
+  // OUTCAR with 2+ ionic steps is a trajectory; a single-step OUTCAR stays a
+  // static structure (handled by the structure parser).
+  outcar: (data: string, filename?: string) => {
+    const basename = filename?.toLowerCase().split(`/`).pop() || ``
+    const looks_outcar = basename.includes(`outcar`) ||
+      (data.includes(`direct lattice vectors`) && data.includes(`TOTAL-FORCE`))
+    if (!looks_outcar) return false
+    let count = 0
+    let idx = 0
+    while (count < 2 && (idx = data.indexOf(`TOTAL-FORCE`, idx)) !== -1) { count++; idx += 11 }
+    return count >= 2
   },
 
   xyz_multi: (data: string, filename?: string) => {
@@ -154,6 +166,17 @@ export function is_trajectory_file(filename: string, content?: string): boolean 
     return false // Without content, can't determine — treat as structure
   }
 
+  // OUTCAR — trajectory only when it has 2+ ionic steps (else a static structure)
+  if (/(^|[._-])outcar(\.|$)/i.test(base_name) || base_name === `outcar`) {
+    if (content) {
+      let count = 0
+      let idx = 0
+      while (count < 2 && (idx = content.indexOf(`TOTAL-FORCE`, idx)) !== -1) { count++; idx += 11 }
+      return count >= 2
+    }
+    return false
+  }
+
   // Always detect these specific trajectory formats
   if (TRAJ_EXTENSIONS_REGEX.test(base_name) || XDATCAR_REGEX.test(base_name)) return true
 
@@ -186,6 +209,9 @@ export async function parse_trajectory_data(
     if (FORMAT_PATTERNS.xyz_multi(content, filename)) return parse_xyz_trajectory(content)
     if (FORMAT_PATTERNS.vasp(content, filename)) {
       return parse_vasp_xdatcar(content, filename)
+    }
+    if (FORMAT_PATTERNS.outcar(content, filename)) {
+      return parse_vasp_outcar(content, filename)
     }
     if (FORMAT_PATTERNS.lammps_dump(content, filename)) {
       return parse_lammps_dump(content, filename)

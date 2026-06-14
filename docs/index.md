@@ -5,6 +5,9 @@ hero:
   name: CatGo
   text: AI-Driven Workbench for Computational Materials Science
   tagline: Build structures, run workflows, and chat with CatBot — all from one window.
+  image:
+    src: /logo-light.svg
+    alt: CatGo
   actions:
     - theme: brand
       text: Get Started

@@ -615,11 +615,6 @@ export const NODE_DEFINITIONS: Record<string, NodeDefinition> = {
           key: `cartesian_opt`, label: `Cartesian Optimization (COpt)`, type: `boolean`, default: false, group: `Optimization`,
           help: `Optimize in Cartesian rather than internal coordinates. Useful for surface/periodic systems.`,
         },
-        {
-          key: `max_iterations`, label: `Max Iterations`, type: `number`, default: 50, group: `Optimization`,
-          min: 10, max: 200,
-          help: `Maximum geometry optimization cycles.`,
-        },
       ]),
       // ── xTB params ──
       ...xtb_only([
@@ -1604,10 +1599,6 @@ Used for ZPE corrections, thermodynamics, and TS verification.
         {
           key: `nimages`, label: `Number of Images`, type: `number`, default: 8, group: `NEB`, min: 4, max: 20,
           help: `NEB images between reactant/product. 8-12 typical; more=smoother path.`,
-        },
-        {
-          key: `neb_cycles`, label: `Max NEB Iterations`, type: `number`, default: 100, group: `NEB`, min: 10, max: 500,
-          help: `Maximum NEB optimization iterations.`,
         },
         {
           key: `uno`, label: `Generate Natural Orbitals (UNO)`, type: `boolean`, default: false, group: `Output`,

@@ -13,7 +13,7 @@ export const TS_SEARCH_NODE: NodeDefinition = {
   description: `Transition state search`,
   inputs: [`structure`, `structure_product`],
   outputs: [`structure`, `energy`, `frequencies`, `trajectory`],
-  default_params: { system_type: `molecular`, software: `sella`, calculator: `xtb`, calculator_method: `GFN2-xTB`, ENCUT: 520, EDIFF: `1e-5`, kpoints: `1×1×1`, fmax: 0.01, max_steps: 500, order: 1, delta: 0.01, gamma: 0.4, method: `r2SCAN-3c`, basis: `6-31G`, nimages: 8, spring_k: 0.1, neb_cycles: 100, charge: 0, multiplicity: 1 },
+  default_params: { system_type: `molecular`, software: `sella`, calculator: `xtb`, calculator_method: `GFN2-xTB`, ENCUT: 520, EDIFF: `1e-5`, kpoints: `1×1×1`, fmax: 0.01, max_steps: 500, order: 1, delta: 0.01, gamma: 0.4, method: `r2SCAN-3c`, basis: `6-31G`, nimages: 8, spring_k: 0.1, charge: 0, multiplicity: 1 },
   help_text: `**Transition State Search** — Find saddle points on the PES.
 
 **Software options:**
@@ -286,10 +286,6 @@ export const TS_SEARCH_NODE: NodeDefinition = {
       {
         key: `nimages`, label: `Number of Images`, type: `number`, default: 8, group: `NEB`, min: 4, max: 20,
         help: `NEB images between reactant/product. 8-12 typical; more=smoother path.`,
-      },
-      {
-        key: `neb_cycles`, label: `Max NEB Iterations`, type: `number`, default: 100, group: `NEB`, min: 10, max: 500,
-        help: `Maximum NEB optimization iterations.`,
       },
       {
         key: `uno`, label: `Generate Natural Orbitals (UNO)`, type: `boolean`, default: false, group: `Output`,

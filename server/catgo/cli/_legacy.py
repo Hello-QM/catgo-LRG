@@ -119,9 +119,40 @@ def cmd_setup(args):
     else:
         print(f"  [INFO] Claude Code CLI not found (optional — MCP still works)")
 
+    # 5. Install Claude Code campaign skills (symlink repo -> ~/.claude/skills)
+    _install_claude_skills(server_dir, claude_dir)
+
     print()
     print("Setup complete! Start the server with: catgo serve")
     print(f"Then use Claude Code — CatGo MCP tools will be available automatically.")
+
+
+def _install_claude_skills(server_dir: Path, claude_dir: Path):
+    """Symlink the repo's Claude Code campaign skills into ~/.claude/skills so a
+    fresh clone gets them (the canonical copies ship in the repo; this just makes
+    Claude Code discover them globally). Idempotent; never clobbers a real dir."""
+    # Resolve the repo skills dir relative to THIS file (server/catgo/cli/_legacy.py
+    # -> server/catgo/workflow/skills); robust regardless of cwd / _server_dir shape.
+    repo_skills = Path(__file__).resolve().parent.parent / "workflow" / "skills"
+    dest_root = claude_dir / "skills"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    sources = sorted(repo_skills.glob("catgo-*"))
+    if not sources:
+        return
+    n = 0
+    for src in sources:
+        if not (src / "SKILL.md").is_file():
+            continue
+        link = dest_root / src.name
+        if link.is_symlink() or not link.exists():
+            if link.is_symlink():
+                link.unlink()
+            link.symlink_to(src)
+            n += 1
+        else:
+            print(f"  [WARN] {link} is a real dir (not a symlink) — left as-is")
+    print(f"  [OK] linked {n} Claude Code skill(s) -> {dest_root} "
+          f"(catgo-campaign, -conventions, -loop, gibbs-pipeline)")
 
 
 def _check_environment(port: int, mcp_script: Path):

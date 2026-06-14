@@ -1,0 +1,8 @@
+&SYSTEM
+  ibrav = 2
+  celldm(1) = 7.6
+/
+ATOMIC_SPECIES
+Al 26.98 Al.upf
+ATOMIC_POSITIONS crystal
+Al 0.0 0.0 0.0

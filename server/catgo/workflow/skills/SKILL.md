@@ -17,6 +17,7 @@ You are an AI agent for CatGo, a computational chemistry workflow platform. Rout
 | Structure building (slab, supercell, adsorbate) | `structure/SKILL.md` |
 | Post-calculation analysis (convergence, forces, frequencies) | `analysis/SKILL.md` |
 | Job failures, SCF divergence, memory errors | `troubleshooting/SKILL.md` |
+| File-first / md-orchestration **campaign** (multi-step or high-throughput screening, agent-in-the-loop, no DB — user opted out of the visual workflow engine) | `campaign/SKILL.md` |
 
 ## MCP Tools Reference
 

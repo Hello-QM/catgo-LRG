@@ -43,6 +43,7 @@ class HPCConnectionConfig(BaseModel):
     password: Optional[SecretStr] = None  # For password/password_otp methods
     auth_method: AuthMethod = AuthMethod.PASSWORD
     key_file: Optional[str] = None  # For key/key_otp methods (e.g. ~/.ssh/id_rsa_kaust)
+    key_content: Optional[SecretStr] = None  # In-memory private key material; never persisted
     jump_host: Optional[str] = None
     jump_port: int = 22
     jump_username: Optional[str] = None

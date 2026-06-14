@@ -138,11 +138,6 @@ Choose system type first — periodic (crystal/slab) or molecular (cluster/molec
         ],
         help: `MinSteps=geometry opt only, Freq=also run frequency analysis after optimization.`,
       },
-      {
-        key: `max_iterations`, label: `Max Iterations`, type: `number`, default: 50, group: `Optimization`,
-        min: 10, max: 200,
-        help: `Maximum geometry optimization cycles.`,
-      },
     ]),
     // ── xTB params ──
     ...xtb_only([

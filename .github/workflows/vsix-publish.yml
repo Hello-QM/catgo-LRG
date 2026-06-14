@@ -103,6 +103,28 @@ jobs:
             fi
           fi
 
+      # Claim ownership of the Open VSX namespace so published extensions are not
+      # flagged "not a verified publisher of the namespace". The token's account
+      # becomes the namespace owner. Idempotent: a namespace that already exists
+      # (owned by this account from a prior run) is a tolerated no-op. If the
+      # namespace exists but is owned by a DIFFERENT account, this step warns and
+      # the one-time ownership transfer must be requested manually — see
+      # deploy/vscode/OPEN-VSX-NAMESPACE.md.
+      - name: Ensure Open VSX namespace ownership
+        if: ${{ (github.event_name == 'push' || inputs.dry_run == false) && env.OVSX_PAT != '' }}
+        working-directory: extensions/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set +e
+          ns=$(node -p "require('./package.json').publisher")
+          out=$(pnpm dlx ovsx create-namespace "$ns" 2>&1)
+          code=$?
+          echo "$out"
+          if [ "$code" -ne 0 ] && ! echo "$out" | grep -qiE "already (exists|owned)"; then
+            echo "::warning::Could not create/claim Open VSX namespace '$ns' (exit $code). If it is owned by another account, request ownership manually — see deploy/vscode/OPEN-VSX-NAMESPACE.md."
+          fi
+
       - name: Publish to Open VSX (Cursor / VSCodium / Theia)
         if: ${{ (github.event_name == 'push' || inputs.dry_run == false) && env.OVSX_PAT != '' }}
         working-directory: extensions/vscode

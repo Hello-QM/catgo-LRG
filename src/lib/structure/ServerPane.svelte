@@ -23,7 +23,6 @@
     fetchOverview,
     readRemoteFile,
     readRemoteBinaryFile,
-    downloadFile,
     getDownloadUrl,
     mergeStructuresFromDir,
     checkInstallStatus,
@@ -40,6 +39,7 @@
     type InstallStatus,
     type CatgoLaunchState,
   } from '$lib/api/hpc'
+  import { start_hpc_managed_download } from '$lib/downloads/hpc-download'
   import {
     type HPCSession,
     LOCAL_SESSION_ID,
@@ -58,6 +58,7 @@
     filter_jobs,
   } from './server-utils'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { pick_hpc_key_file } from '$lib/hpc-key-file'
 
   load_i18n_module('structure')
   load_i18n_module('common')
@@ -178,6 +179,8 @@
   let password = $state(``)
   let auth_method = $state<AuthMethod>(`password`)
   let key_file = $state(``)
+  let key_content = $state(``)
+  let key_selected_name = $state(``)
   let use_jump = $state(false)
   let jump_host = $state(``)
   let jump_port = $state(22)
@@ -302,6 +305,8 @@
     username = p.username
     auth_method = p.auth_method
     key_file = p.key_file ?? ``
+    key_content = ``
+    key_selected_name = ``
     scheduler = p.scheduler
     ssh_alias = p.ssh_alias ?? ``
     work_root = p.work_root ?? ``
@@ -395,6 +400,7 @@
       password: password || undefined,
       auth_method,
       key_file: key_file || undefined,
+      key_content: key_content || undefined,
       scheduler,
       jump_host: use_jump ? jump_host : undefined,
       jump_port: use_jump ? jump_port : undefined,
@@ -447,6 +453,19 @@
     // Store ws_conn on the reactive proxy
     const s = get_session(sid)
     if (s) s.ws_conn = ws
+  }
+
+  async function choose_key_file() {
+    const selected = await pick_hpc_key_file()
+    if (!selected) return
+    key_selected_name = selected.name
+    if (selected.path) {
+      key_file = selected.path
+      key_content = ``
+    } else if (selected.content) {
+      key_file = selected.name
+      key_content = selected.content
+    }
   }
 
   async function do_connect_ssh_config() {
@@ -885,6 +904,14 @@
     active_session.upload_progress = file.is_dir ? null : 0
 
     try {
+      const handled = await start_hpc_managed_download({
+        session_id,
+        remote_path: file.path,
+        filename,
+        is_dir: file.is_dir,
+      })
+      if (handled) return
+
       const global_download = (globalThis as Record<string, unknown>).download
       if (typeof document !== `undefined` && typeof global_download !== `function`) {
         const link = document.createElement(`a`)
@@ -897,12 +924,6 @@
         link.remove()
         return
       }
-
-      const blob = await downloadFile(session_id, file.path, (p) => {
-        if (active_session?.session_id === session_id) active_session.upload_progress = p
-      })
-      const { download } = await import(`$lib/io/fetch`)
-      download(blob, filename, blob.type || `application/octet-stream`)
     } catch (e: any) {
       loading_error = t('common.download_failed_reason', { reason: e?.message || String(e) })
     } finally {
@@ -1494,7 +1515,13 @@
                 {/if}
                 <label class="full-span">
                   {t('structure.key_file')} <span class="optional-hint">{t('structure.key_file_hint')}</span>
-                  <input type="text" bind:value={key_file} placeholder={t('structure.key_file_placeholder')} />
+                  <div class="key-file-row">
+                    <input type="text" bind:value={key_file} placeholder={t('structure.key_file_placeholder')} oninput={() => { key_content = ``; key_selected_name = `` }} />
+                    <button type="button" class="secondary key-file-btn" onclick={choose_key_file}>{t('common.choose')}</button>
+                  </div>
+                  {#if key_content && key_selected_name}
+                    <span class="optional-hint">{t('structure.key_file_imported', { name: key_selected_name })}</span>
+                  {/if}
                 </label>
               {/if}
               <label>
@@ -1958,6 +1985,19 @@
     font-size: 0.85em;
     opacity: 0.5;
     font-weight: normal;
+  }
+  .key-file-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .key-file-row input {
+    flex: 1;
+    min-width: 0;
+  }
+  .key-file-btn {
+    flex-shrink: 0;
+    white-space: nowrap;
   }
   .form-hint.warning {
     font-size: 0.82em;

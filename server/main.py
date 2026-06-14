@@ -121,6 +121,7 @@ from catgo.routers import (
     hub_router,
     file_sandbox_router,
     skills_router,
+    campaign_router,
     tool_bridge_router,
     plugins_router,
 )
@@ -505,6 +506,7 @@ app.include_router(system_router, prefix="/api")
 app.include_router(hub_router, prefix="/api")
 app.include_router(file_sandbox_router, prefix="/api")
 app.include_router(skills_router, prefix="/api")
+app.include_router(campaign_router, prefix="/api")
 
 # THIN-SKIP includes — registered only outside thin mode (heavy deps).
 if not CATGO_THIN:

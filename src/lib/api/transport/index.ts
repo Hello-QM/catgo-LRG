@@ -28,6 +28,8 @@ export interface HpcHostConfig {
   password?: string
   /** Path to the private key file when `method === 'publickey'`. */
   keyPath?: string
+  /** In-memory private key text when the platform cannot expose a stable path. */
+  keyContent?: string
   /** Optional passphrase decrypting an encrypted private key. */
   passphrase?: string
 }

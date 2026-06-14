@@ -69,6 +69,7 @@ _ROUTERS: dict[str, str] = {
     "file_sandbox_router": "file_sandbox",
     "kmc_router": "kmc",
     "skills_router": "skills",
+    "campaign_router": "campaign",
 }
 
 __all__ = list(_ROUTERS.keys())

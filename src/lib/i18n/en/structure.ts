@@ -180,6 +180,7 @@ const structure: Record<string, string> = {
   password: `Password`,
   key_file: `Key File`,
   key_file_hint: `(optional — specify if server needs a specific key)`,
+  key_file_imported: `Selected private key: {name}. It will be used for this connection only and will not be saved.`,
   scheduler: `Scheduler`,
   work_root: `Work root`,
   work_root_placeholder: `e.g. ~/projects/my-work or /work/home/user/project`,

@@ -66,22 +66,41 @@ def parse_outcar_freqs(path) -> FreqData:
     counts = [int(x) for x in m.group(1).split()]
     total = sum(counts)
 
-    # Per-POTCAR lines look like "POMASS =  16.00; ZVAL = 6.00" (one
-    # value). The per-type SUMMARY line is "POMASS = m1 m2 ..." (only
-    # floats, no ';'/ZVAL, one value per element type) — that is the one
-    # we want; grabbing the first POMASS match would bind a single-type
-    # POTCAR header on real multi-element OUTCARs.
+    # Two kinds of POMASS lines exist in the OUTCAR:
+    #   (a) per-POTCAR header  "POMASS =  16.000; ZVAL = 6.000 ..." — exactly
+    #       ONE value, one such line per element type, printed in type order.
+    #   (b) the per-type SUMMARY "POMASS = m1 m2 m3 ..." (no ';'/ZVAL).
+    # The summary line (b) is fixed-width and VASP does NOT separate adjacent
+    # fields when a mass needs >6 chars: e.g. Pt's 195.08 abuts O's 16.00 as
+    # "16.00195.08", which a naive .split() cannot tokenise. So prefer the
+    # clean per-POTCAR lines (a): collect every "; ZVAL" POMASS in order and
+    # use them iff the count matches the number of element types — robust and
+    # avoids the glued-summary parse failure entirely.
     masses: list = []
+    header_masses: list = []
     for ln in lines:
         s = ln.strip()
-        if not s.startswith("POMASS") or ";" in s or "ZVAL" in s:
+        if not s.startswith("POMASS"):
+            continue
+        if ";" in s or "ZVAL" in s:
+            mm = re.match(r"POMASS\s*=\s*([\d.]+)", s)
+            if mm:
+                header_masses.append(float(mm.group(1)))
             continue
         mm = re.match(r"POMASS\s*=\s*([\d.\s]+)$", s)
         if mm:
-            cand = [float(x) for x in mm.group(1).split()]
+            try:
+                # The summary line is fixed-width and may glue fields
+                # (e.g. "16.00195.08") into a single non-float token —
+                # skip it on failure and fall back to header_masses.
+                cand = [float(x) for x in mm.group(1).split()]
+            except ValueError:
+                continue
             if len(cand) == len(counts):
                 masses = cand
                 break
+    if not masses and len(header_masses) >= len(counts):
+        masses = header_masses[:len(counts)]
 
     masses_per_atom: list = []
     atom_types: list = []

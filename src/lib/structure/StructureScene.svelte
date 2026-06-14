@@ -245,6 +245,13 @@
   // atom count change (args change). ensure_instance_capacity() handles growth.
   const INITIAL_MESH_CAPACITY = 64
 
+  // Maximum rendered covalent bond length (Å). The longest real single bonds
+  // (e.g. heavy-metal–metal) are ~3.5 Å; 4 Å leaves headroom while still
+  // discarding bonds stretched across the cell by a PBC/image rendering
+  // artifact (the minimum-image distance is short, but a raw straight-line
+  // draw spans the whole cell).
+  const MAX_BOND_LENGTH = 4.0
+
   // Shared empty positions buffer for BondManagerInstances when the new bond
   // system is disabled or the structure has no sites.
   const EMPTY_POSITIONS = new Float32Array(0)
@@ -2820,6 +2827,10 @@
     // Start with auto-detected bonds, filter out deleted, hidden, and invalid transforms
     let result = bond_pairs.filter((bond) => {
       if (!bond.transform_matrix || bond.transform_matrix.some((v) => !Number.isFinite(v))) return false
+      // Hard cap on rendered bond length. No real covalent bond exceeds this;
+      // anything longer is a PBC/image rendering artifact (e.g. a bond drawn
+      // straight across the cell instead of via the minimum image), so drop it.
+      if (bond.bond_length > MAX_BOND_LENGTH) return false
       const key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
       if (_deleted_bond_keys.has(key)) return false
       if (!is_site_visible(bond.site_idx_1) || !is_site_visible(bond.site_idx_2)) return false

@@ -1,0 +1,15 @@
+SystemName test
+LatticeConstant 1.0 Ang
+%block LatticeVectors
+  0.0000000000 2.7150000000 2.7150000000
+  2.7150000000 0.0000000000 2.7150000000
+  2.7150000000 2.7150000000 0.0000000000
+%endblock LatticeVectors
+%block ChemicalSpeciesLabel
+  1 14 Si
+%endblock ChemicalSpeciesLabel
+AtomicCoordinatesFormat Fractional
+%block AtomicCoordinatesAndAtomicSpecies
+  0.0000000000 0.0000000000 0.0000000000 1
+  0.2500000000 0.2500000000 0.2500000000 1
+%endblock AtomicCoordinatesAndAtomicSpecies

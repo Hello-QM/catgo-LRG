@@ -1,0 +1,13 @@
+Atoms.Number  3
+Atoms.SpeciesAndCoordinates.Unit  FRAC
+<Atoms.SpeciesAndCoordinates
+ 1 O 0.10000000 0.20000000 0.30000000 0.0 0.0
+ 2 H 0.40000000 0.50000000 0.60000000 0.0 0.0
+ 3 H 0.70000000 0.80000000 0.15000000 0.0 0.0
+Atoms.SpeciesAndCoordinates>
+Atoms.UnitVectors.Unit  Ang
+<Atoms.UnitVectors
+ 4.00000000 0.00000000 0.00000000
+ 1.20000000 3.60000000 0.00000000
+ 0.80000000 0.50000000 5.10000000
+Atoms.UnitVectors>

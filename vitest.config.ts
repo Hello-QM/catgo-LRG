@@ -20,6 +20,11 @@ export default defineConfig({
   },
   test: {
     environment: 'happy-dom',
+    // Global setup: localStorage polyfill (Node 25's native stub lacks
+    // getItem/setItem), ResizeObserver mock, and i18n seeding. Previously only
+    // applied to files that imported setup.ts for its helpers, leaving suites
+    // like theme/materials-project with a broken native localStorage on Node 25.
+    setupFiles: ['./tests/vitest/setup.ts'],
     include: ['tests/vitest/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
     globals: false,
     // quickhull3d ships an ESM index.js that imports `./QuickHull` without

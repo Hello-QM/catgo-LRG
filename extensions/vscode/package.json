@@ -6,7 +6,10 @@
   "license": "AGPL-3.0-or-later",
   "publisher": "Guangsheng",
   "icon": "icon.png",
-  "repository": "https://github.com/Hello-QM/catgo-LRG",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hello-QM/catgo-LRG.git"
+  },
   "categories": [
     "Data Science",
     "Machine Learning",
@@ -463,6 +466,16 @@
           "description": "Backend server port. 0 = auto-assign a free port.",
           "minimum": 0,
           "maximum": 65535
+        },
+        "catgo.server.url": {
+          "type": "string",
+          "default": "",
+          "description": "Connect to an already-running CatGo server instead of downloading and spawning the bundled sidecar. Accepts a full URL (e.g. http://127.0.0.1:8000) or a bare port. Only the port is used; the server must be reachable on localhost of the extension host. Useful on offline / Remote-SSH hosts where you run the Python server from source (e.g. `python -m catgo.server --port 8000`)."
+        },
+        "catgo.server.sidecarPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to a pre-placed catgo-server binary. When set, the extension uses it and skips the ~460MB download. Useful on offline / Remote-SSH hosts where you scp the binary in once."
         },
         "catgo.trajectory.auto_play": {
           "type": "boolean",

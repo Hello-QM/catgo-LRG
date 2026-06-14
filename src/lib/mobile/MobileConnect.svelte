@@ -28,6 +28,7 @@
   import { endpointKey, reuseSession, rememberSession } from './sessions'
   import { clusters } from './clusters.svelte'
   import { t } from '$lib/i18n/index.svelte'
+  import { pick_hpc_key_file } from '$lib/hpc-key-file'
 
   export interface ConnectedMeta {
     host: string
@@ -68,6 +69,8 @@
   let method = $state<HpcAuthMethod>(`password`)
   let password = $state(``)
   let key_path = $state(``)
+  let key_content = $state(``)
+  let key_selected_name = $state(``)
   let passphrase = $state(``)
 
   // Optional jump host (ProxyJump / bastion). When `jump_enabled`, the jump host
@@ -80,6 +83,8 @@
   let jump_method = $state<HpcAuthMethod>(`password`)
   let jump_password = $state(``)
   let jump_key_path = $state(``)
+  let jump_key_content = $state(``)
+  let jump_key_selected_name = $state(``)
   let jump_passphrase = $state(``)
 
   // ─── Flow state ───
@@ -161,6 +166,8 @@
     username = c.username
     method = c.method
     key_path = c.keyPath ?? ``
+    key_content = ``
+    key_selected_name = ``
     password = `` // reset; filled (masked) from the store below for password auth
     error_msg = ``
     auto_password = ``
@@ -189,6 +196,8 @@
     username = ``
     method = `keyboard-interactive`
     key_path = ``
+    key_content = ``
+    key_selected_name = ``
     password = ``
     passphrase = ``
     auto_password = ``
@@ -216,6 +225,30 @@
       },
       Date.now(),
     )
+  }
+
+  async function choose_key_file(kind: `target` | `jump`): Promise<void> {
+    const selected = await pick_hpc_key_file()
+    if (!selected) return
+    if (kind === `jump`) {
+      jump_key_selected_name = selected.name
+      if (selected.path) {
+        jump_key_path = selected.path
+        jump_key_content = ``
+      } else if (selected.content) {
+        jump_key_path = selected.name
+        jump_key_content = selected.content
+      }
+      return
+    }
+    key_selected_name = selected.name
+    if (selected.path) {
+      key_path = selected.path
+      key_content = ``
+    } else if (selected.content) {
+      key_path = selected.name
+      key_content = selected.content
+    }
   }
 
   /** Apply a connect / submitOtp result: succeed, advance OTP round, or error. */
@@ -346,6 +379,7 @@
         method,
         password: method === `password` ? password : undefined,
         keyPath: method === `publickey` ? key_path.trim() || undefined : undefined,
+        keyContent: method === `publickey` ? key_content || undefined : undefined,
         passphrase: method === `publickey` ? passphrase || undefined : undefined,
         jump: jump_enabled && jump_host.trim()
           ? {
@@ -355,6 +389,7 @@
               method: jump_method,
               password: jump_method === `password` ? jump_password : undefined,
               keyPath: jump_method === `publickey` ? jump_key_path.trim() || undefined : undefined,
+              keyContent: jump_method === `publickey` ? jump_key_content || undefined : undefined,
               passphrase: jump_method === `publickey` ? jump_passphrase || undefined : undefined,
             }
           : undefined,
@@ -426,6 +461,8 @@
   const can_submit = $derived(
     host.trim().length > 0 &&
       username.trim().length > 0 &&
+      (method !== `publickey` || key_path.trim().length > 0 || key_content.length > 0) &&
+      (!jump_enabled || jump_method !== `publickey` || jump_key_path.trim().length > 0 || jump_key_content.length > 0) &&
       !connecting,
   )
 </script>
@@ -576,14 +613,21 @@
       {:else if method === `publickey`}
         <label class="field">
           <span>{t(`mobile.field_private_key_path`)}</span>
-          <input
-            type="text"
-            autocapitalize="off"
-            autocorrect="off"
-            spellcheck="false"
-            placeholder="~/.ssh/id_ed25519"
-            bind:value={key_path}
-          />
+          <div class="key-file-row">
+            <input
+              type="text"
+              autocapitalize="off"
+              autocorrect="off"
+              spellcheck="false"
+              placeholder="~/.ssh/id_ed25519"
+              bind:value={key_path}
+              oninput={() => { key_content = ``; key_selected_name = `` }}
+            />
+            <button type="button" class="key-file-btn" onclick={() => choose_key_file(`target`)}>{t('common.choose')}</button>
+          </div>
+          {#if key_content && key_selected_name}
+            <small>{t('mobile.key_file_imported', { name: key_selected_name })}</small>
+          {/if}
         </label>
         <label class="field">
           <span>{t(`mobile.field_passphrase`)}</span>
@@ -644,14 +688,21 @@
           {:else if jump_method === `publickey`}
             <label class="field">
               <span>{t(`mobile.field_private_key_path`)}</span>
-              <input
-                type="text"
-                autocapitalize="off"
-                autocorrect="off"
-                spellcheck="false"
-                placeholder="~/.ssh/id_ed25519"
-                bind:value={jump_key_path}
-              />
+              <div class="key-file-row">
+                <input
+                  type="text"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                  placeholder="~/.ssh/id_ed25519"
+                  bind:value={jump_key_path}
+                  oninput={() => { jump_key_content = ``; jump_key_selected_name = `` }}
+                />
+                <button type="button" class="key-file-btn" onclick={() => choose_key_file(`jump`)}>{t('common.choose')}</button>
+              </div>
+              {#if jump_key_content && jump_key_selected_name}
+                <small>{t('mobile.key_file_imported', { name: jump_key_selected_name })}</small>
+              {/if}
             </label>
             <label class="field">
               <span>{t(`mobile.field_passphrase`)}</span>
@@ -953,6 +1004,30 @@
   .field input:focus,
   .field select:focus {
     border-color: var(--accent-color, #3b82f6);
+  }
+  .field small {
+    color: var(--text-color-muted, #94a3b8);
+    font-size: 0.78em;
+  }
+  .key-file-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .key-file-row input {
+    flex: 1;
+    min-width: 0;
+  }
+  .key-file-btn {
+    flex-shrink: 0;
+    min-height: 44px;
+    padding: 0 12px;
+    color: var(--accent-color, #3b82f6);
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
   }
   .method-hint {
     font-size: 0.82em;

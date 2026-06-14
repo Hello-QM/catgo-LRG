@@ -31,6 +31,7 @@ export interface HPCConnectionConfig {
   password?: string
   auth_method: AuthMethod
   key_file?: string // For key/key_otp auth (e.g. ~/.ssh/id_rsa_kaust)
+  key_content?: string // In-memory key material from browser/mobile file pickers; never persisted
   jump_host?: string
   jump_port?: number
   jump_username?: string
