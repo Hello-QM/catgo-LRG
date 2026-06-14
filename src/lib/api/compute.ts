@@ -344,6 +344,13 @@ export function runOptimization(
     onError: (error: Error) => void
   },
 ): WSConnection {
+  // No backend on mobile. The WS guard in connectOptimizationWS fails fast, but
+  // its onError below would then fall back to optimizeStructure() — a plain fetch
+  // to the dead backend that hangs. Short-circuit here too.
+  if (isMobile()) {
+    callbacks.onError(new Error(`Optimization is unavailable on mobile (no backend)`))
+    return { cancel: () => {}, disconnect: () => {}, isConnected: () => false }
+  }
   // Try WebSocket first
   const connection = connectOptimizationWS(structure, config, {
     onProgress: callbacks.onProgress,

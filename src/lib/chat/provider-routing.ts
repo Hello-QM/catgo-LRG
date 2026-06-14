@@ -165,7 +165,8 @@ export async function llm_fetch(url: string, init?: RequestInit): Promise<Respon
     // offline — the socket sits in SYN_SENT with no RST) hangs each attempt for
     // the full idle timeout, which on iOS reads as the whole app freezing. A LAN
     // handshake is sub-100ms, so 10s is generous and still fails fast on a dead
-    // host. Caller-supplied options win if they set their own connectTimeout.
+    // host. (connectTimeout is fixed at 10s for all llm_fetch calls — `init` is
+    // a plain RequestInit and carries no connectTimeout to override it.)
     return tauriFetch(url, { connectTimeout: 10_000, ...init })
   }
   if (needs_relay(url) && relay_credential_allowed(url, init)) {

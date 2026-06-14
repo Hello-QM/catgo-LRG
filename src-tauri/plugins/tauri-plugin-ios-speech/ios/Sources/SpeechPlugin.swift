@@ -45,6 +45,12 @@ class SpeechPlugin: Plugin {
   // touched on `queue`.
   private var isStopping = false
   private var hasResult = false
+  // Tracks whether the input-node tap is installed. We can't key teardown's
+  // removeTap on audioEngine.isRunning: if audioEngine.start() throws AFTER
+  // installTap, the engine isn't running but the tap IS installed — and a second
+  // installTap on the same bus throws an uncatchable NSException ("already has a
+  // tap installed"), crashing the app on the next start. Only touched on `queue`.
+  private var isTapInstalled = false
 
   // BCP-47 identifiers this device can actually recognize, so the JS picker
   // never offers a locale that would fail at start (accents = en-GB/en-IN/…,
@@ -122,6 +128,7 @@ class SpeechPlugin: Plugin {
       inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
         self?.request?.append(buffer)
       }
+      isTapInstalled = true
       audioEngine.prepare()
       try audioEngine.start()
     } catch {
@@ -169,7 +176,12 @@ class SpeechPlugin: Plugin {
   private func teardown() {
     if audioEngine.isRunning {
       audioEngine.stop()
+    }
+    // Remove the tap based on whether it was installed, NOT on isRunning — a
+    // failed start() leaves the engine stopped but the tap installed (see M1).
+    if isTapInstalled {
       audioEngine.inputNode.removeTap(onBus: 0)
+      isTapInstalled = false
     }
     task?.cancel()
     request = nil

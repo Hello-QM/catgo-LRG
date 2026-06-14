@@ -317,6 +317,10 @@
   // ios-speech.ts). Mic is offered only on the native shell; in a plain browser
   // the plugin commands don't exist.
   let mic_listening = $state(false)
+  // Guards toggle_mic against re-entry: a rapid double-tap could otherwise fire a
+  // new start_listening before the previous stop_listening IPC resolved, colliding
+  // two sessions at the native plugin.
+  let mic_busy = $state(false)
   const mic_supported = isMobile()
   // Whatever was already typed when dictation began. The recognizer streams the
   // FULL running transcript each event (not deltas), so we render base + result
@@ -401,28 +405,34 @@
   }
 
   async function toggle_mic(): Promise<void> {
-    if (mic_listening) {
-      mic_listening = false
-      await stop_listening() // emits one last `final` → apply_transcript
-      return
+    if (mic_busy) return // ignore taps while a start/stop IPC is in flight
+    mic_busy = true
+    try {
+      if (mic_listening) {
+        mic_listening = false
+        await stop_listening() // emits one last `final` → apply_transcript
+        return
+      }
+      const granted = await request_speech_permission()
+      if (!granted) {
+        slice.error.value = t(`mobile.ai_mic_denied`)
+        return
+      }
+      mic_base = input
+      // Subscribe before starting so no early partial is missed; reuse one set of
+      // listeners across sessions (re-tapping mic just re-arms start_listening).
+      if (!mic_unlisten) {
+        mic_unlisten = await on_transcript({
+          on_partial: (txt) => apply_transcript(txt, false),
+          on_final: (txt) => apply_transcript(txt, true),
+          on_error: on_mic_error,
+        })
+      }
+      mic_listening = true
+      await start_listening(voice_locale || undefined)
+    } finally {
+      mic_busy = false
     }
-    const granted = await request_speech_permission()
-    if (!granted) {
-      slice.error.value = t(`mobile.ai_mic_denied`)
-      return
-    }
-    mic_base = input
-    // Subscribe before starting so no early partial is missed; reuse one set of
-    // listeners across sessions (re-tapping mic just re-arms start_listening).
-    if (!mic_unlisten) {
-      mic_unlisten = await on_transcript({
-        on_partial: (txt) => apply_transcript(txt, false),
-        on_final: (txt) => apply_transcript(txt, true),
-        on_error: on_mic_error,
-      })
-    }
-    mic_listening = true
-    await start_listening(voice_locale || undefined)
   }
 
   // ── Lightweight markdown → safe HTML (no katex / hljs) ──

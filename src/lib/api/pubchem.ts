@@ -227,6 +227,20 @@ function parse_elements_from_formula(formula: string): string[] {
 export async function autocomplete_pubchem(term: string, limit = 8): Promise<string[]> {
   if (term.length < 2) return []
   try {
+    if (IS_STATIC) {
+      // No backend (mobile / static web): hit PubChem's autocomplete endpoint
+      // directly (CORS-open). It lives at /rest/autocomplete, NOT under
+      // PUBCHEM_API (/rest/pug), and returns { dictionary_terms: { compound } }.
+      const url = `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/${
+        encodeURIComponent(term)
+      }/json?limit=${limit}`
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const data = await response.json() as {
+        dictionary_terms?: { compound?: string[] }
+      }
+      return data.dictionary_terms?.compound ?? []
+    }
     const url = `${API_BASE}/pubchem/autocomplete?term=${
       encodeURIComponent(term)
     }&limit=${limit}`
