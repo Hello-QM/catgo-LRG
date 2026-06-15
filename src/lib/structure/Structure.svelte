@@ -841,6 +841,7 @@
     on_edit_as_text,
     on_open_file_overlay,
     on_open_workflow_editor,
+    on_open_in_molstar,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -976,6 +977,9 @@
       on_open_file_overlay?: (file_path: string, filename: string, session_id: string) => void
       // Callback to open a workflow in the full editor. Receives workflow_id.
       on_open_workflow_editor?: (workflow_id: string) => void
+      // Callback to open the current structure in the Mol* bio viewer. When provided,
+      // a DNA toolbar button is shown (used by the desktop multi-pane host).
+      on_open_in_molstar?: () => void
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -3096,6 +3100,7 @@
       {remote_origin}
       {structure}
       on_upload_to_hpc={() => { hpc_upload_open = true }}
+      {on_open_in_molstar}
       {molecular_fragments}
       {reset_text}
       {wrapper}

@@ -1851,14 +1851,6 @@
                   </div>
                 </div>
               {:else if pane.structure}
-                <!-- Universal manual entry: any loaded structure can be opened
-                     in Mol* (serialized on demand by toggle_pane_viewer). -->
-                <div class="bio-float-tl">
-                  <BioViewerToggle
-                    is_molstar={false}
-                    on_toggle={() => toggle_pane_viewer(ts, idx)}
-                  />
-                </div>
                 <Structure
                   tab_id={tab.id}
                   is_active={ts.active_pane === idx && tab.id === tm.active_tab_id}
@@ -1887,6 +1879,7 @@
                   on_open_workflow_editor={(workflow_id: string) => {
                     handle_sidebar_open_workflow(workflow_id)
                   }}
+                  on_open_in_molstar={() => toggle_pane_viewer(ts, idx)}
                   fullscreen_toggle={false}
                   allow_file_drop={false}
                   show_controls={true}
@@ -2409,14 +2402,6 @@
     flex: 1 1 auto;
     min-height: 0;
     position: relative;
-  }
-  /* Universal "Open in Mol*" button over a native viewer — top-left, clear of
-     the native viewer's own bottom/right controls. */
-  .bio-float-tl {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    z-index: 20;
   }
   .sidebar-editor-overlay {
     position: fixed;
