@@ -13,6 +13,9 @@
   import { line, curveMonotoneX } from 'd3-shape'
   import { extent } from 'd3-array'
   import { onMount, onDestroy } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module(`structure`)
 
   let {
     show = $bindable(false),
@@ -273,7 +276,7 @@
   function export_csv() {
     export_status = ``
     if (!constraint_data) {
-      export_status = `No parsed slow-growth data is available to export.`
+      export_status = t(`structure.export_no_slowgrowth_data`)
       return
     }
     exporting = true
@@ -296,7 +299,7 @@
       }
 
       if (rows.length === 0) {
-        export_status = `No rows are available to export for constraint #${active_constraint}.`
+        export_status = t(`structure.export_no_rows`, { constraint: active_constraint })
         return
       }
 
@@ -309,10 +312,10 @@
       a.download = filename
       a.click()
       URL.revokeObjectURL(url)
-      export_status = `Export started: ${filename}. Check your browser downloads or the system default Downloads folder.`
+      export_status = t(`structure.export_started`, { filename })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      export_status = `Failed to export CSV: ${message}`
+      export_status = t(`structure.export_failed`, { what: `CSV`, message })
     } finally {
       exporting = false
     }

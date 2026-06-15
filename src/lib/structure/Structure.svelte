@@ -1462,7 +1462,7 @@
   ) {
     set_status(null)
     if (!plot_ref) {
-      set_status(`Plot is still loading. Please try again in a moment.`)
+      set_status(t(`structure.export_plot_loading`))
       return
     }
     set_exporting(format)
@@ -1470,26 +1470,26 @@
       if (format === `csv`) {
         const csv = plot_ref.export_csv()
         if (!csv) {
-          set_status(`No exportable data is available for this plot.`)
+          set_status(t(`structure.export_no_plot_data`))
           return
         }
         const filename = `${base_name}_data.csv`
         download(csv, filename, `text/csv;charset=utf-8`)
-        set_status(`Export started: ${filename}. Check your browser downloads or the system default Downloads folder.`)
+        set_status(t(`structure.export_started`, { filename }))
         return
       }
 
       const url = await plot_ref.export_image(format)
       if (!url) {
-        set_status(`Plot export is not ready yet. Please try again in a moment.`)
+        set_status(t(`structure.export_plot_not_ready`))
         return
       }
       const filename = `${base_name}_plot.${format}`
       download(await data_url_to_blob(url), filename, format === `svg` ? `image/svg+xml` : `image/png`)
-      set_status(`Export started: ${filename}. Check your browser downloads or the system default Downloads folder.`)
+      set_status(t(`structure.export_started`, { filename }))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      set_status(`Failed to export ${format.toUpperCase()}: ${message}`)
+      set_status(t(`structure.export_failed`, { what: format.toUpperCase(), message }))
     } finally {
       set_exporting(null)
     }
