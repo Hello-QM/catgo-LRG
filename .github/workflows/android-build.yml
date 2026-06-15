@@ -1,0 +1,179 @@
+# Build the CatGo Android app on a GitHub-hosted Linux runner.
+#
+# Android (unlike iOS) can be built on Linux, and its .apk can be installed
+# directly (sideloaded) — so this uploads the signed APK straight to a GitHub
+# release. Triggered manually.
+#
+#   • No keystore secrets set -> builds an UNSIGNED universal APK as a smoke
+#     test that the frontend + Rust lib compile and bundle for Android.
+#   • Keystore secrets set     -> signs the APK with apksigner (your upload key)
+#     and, if `release_tag` is given, uploads it to that GitHub release.
+#
+# Add these repo secrets (Settings -> Secrets and variables -> Actions) to sign:
+#   ANDROID_KEYSTORE_BASE64    base64 of your upload keystore (.jks):
+#                                base64 -w0 ~/.catgo-keys/catgo-upload.jks
+#   ANDROID_KEYSTORE_PASSWORD  the keystore (store) password
+#   ANDROID_KEY_ALIAS          the key alias, e.g. catgo-upload
+#   ANDROID_KEY_PASSWORD       the key password
+#
+# IMPORTANT: Android requires the SAME upload key across updates. Use the exact
+# keystore that signed previous CatGo APKs, or existing users can't update.
+name: Android build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Upload the signed APK to this GitHub release tag (e.g. v1.1.16). Leave empty to only keep the workflow artifact.'
+        type: string
+        required: false
+        default: ''
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    name: Build Android app
+    env:
+      NODE_OPTIONS: --max-old-space-size=6144
+      NDK_VERSION: 26.1.10909125
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK + build-tools
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
+          echo "NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_HOME}"; ls "${ANDROID_HOME}/ndk/${NDK_VERSION}" >/dev/null && echo "NDK ok"
+
+      - name: Setup Rust + Android targets
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri -> target
+            extensions/rust-wasm -> target
+          cache-on-failure: true
+
+      - name: Install wasm-pack
+        # The Tauri beforeBuildCommand (pnpm desktop:build -> build:wasm) compiles
+        # the ferrox/chgdiff/catrender WASM crates and hard-fails if wasm-pack is
+        # missing. Mirror desktop / iOS CI.
+        run: |
+          if ! command -v wasm-pack >/dev/null 2>&1; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          wasm-pack --version
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate documentation chunks
+        # vite build imports src/lib/chat/rag.ts -> ./docs-chunks.json. Without it
+        # the frontend build fails with "Could not resolve ./docs-chunks.json".
+        run: pnpm run build:doc-chunks
+
+      - name: Initialise the Android project
+        # Generates src-tauri/gen/android (gitignored, regenerated). Idempotent.
+        # Android keeps the tauri.conf identifier (com.catgo.app). tauri.android.conf.json
+        # sets externalBin:[] so NO catgo-server sidecar is bundled — the mobile app
+        # is backend-free.
+        run: pnpm tauri android init
+
+      - name: Generate app icons (CatGo cat)
+        run: pnpm tauri icon desktop/logo.png
+
+      - name: Build the universal release APK (unsigned)
+        # VITE_STATIC_ONLY=1: no Python sidecar / LAN backend on mobile, so stray
+        # backend fetches return a friendly 503 instead of hanging on localhost.
+        # Mobile-native paths (local view/edit, DB import via isMobile() direct
+        # fetch, SSH terminal/files over russh) still work; backend-only UI is
+        # already hidden on mobile.
+        env:
+          VITE_STATIC_ONLY: '1'
+        run: pnpm tauri android build --apk
+
+      - name: Sign the APK (apksigner)
+        id: sign
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          APK_DIR="src-tauri/gen/android/app/build/outputs/apk/universal/release"
+          UNSIGNED=$(find "$APK_DIR" -name 'app-universal-release*.apk' -print -quit)
+          if [ -z "${UNSIGNED}" ]; then echo "::error::No universal release APK found under $APK_DIR"; exit 1; fi
+          echo "Built APK: ${UNSIGNED}"
+          VERSION=$(node -p "require('./package.json').version")
+          OUT="CatGo-v${VERSION}-android-universal.apk"
+
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret — leaving the APK UNSIGNED (smoke build, not installable for updates)."
+            cp "${UNSIGNED}" "${OUT}"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "apk=${OUT}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BT=$(ls -d "${ANDROID_HOME}/build-tools/"*/ | sort -V | tail -1)
+          echo "Using build-tools: ${BT}"
+          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > upload.jks
+          # zipalign first (required for apksigner v2+), then sign.
+          "${BT}zipalign" -p -f 4 "${UNSIGNED}" aligned.apk
+          "${BT}apksigner" sign \
+            --ks upload.jks \
+            --ks-pass "pass:${ANDROID_KEYSTORE_PASSWORD}" \
+            --ks-key-alias "${ANDROID_KEY_ALIAS}" \
+            --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
+            --out "${OUT}" aligned.apk
+          "${BT}apksigner" verify --print-certs "${OUT}" | grep -iE "Signer #1 certificate (DN|SHA-256)" || true
+          rm -f upload.jks aligned.apk
+          echo "Signed APK: ${OUT}"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "apk=${OUT}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK to the GitHub release
+        if: ${{ inputs.release_tag != '' && steps.sign.outputs.signed == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ inputs.release_tag }}" "${{ steps.sign.outputs.apk }}" --clobber
+          echo "Uploaded ${{ steps.sign.outputs.apk }} to release ${{ inputs.release_tag }}"
+
+      - name: Upload workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catgo-android
+          path: CatGo-v*-android-universal.apk
+          if-no-files-found: warn
