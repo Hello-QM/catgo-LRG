@@ -18,7 +18,7 @@
     "@sapphi-red/web-noise-suppressor": "^0.3.5",
     "@spglib/moyo-wasm": "^0.7.1",
     "@sveltejs/kit": "^2.48.4",
-    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/api": "~2.9.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
@@ -211,6 +211,9 @@
     "dist"
   ],
   "pnpm": {
+    "overrides": {
+      "@tauri-apps/api": "2.9.1"
+    },
     "onlyBuiltDependencies": [
       "esbuild",
       "node-pty",
