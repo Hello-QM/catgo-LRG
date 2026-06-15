@@ -112,11 +112,17 @@ def register_mcp_http(api_base: str) -> str:
     return url
 
 
-def install_skills(skills_src: Path, prefer_symlink: bool) -> list[str]:
+def install_skills(
+    skills_src: Path, prefer_symlink: bool, name_glob: str = "catgo-*"
+) -> list[str]:
     """Install Claude Code skills from ``skills_src`` into ``~/.claude/skills``.
 
-    For each direct subdirectory of ``skills_src`` that contains a ``SKILL.md``,
-    refresh ``~/.claude/skills/<name>``:
+    Only subdirectories whose name matches ``name_glob`` (default ``catgo-*``,
+    i.e. the catgo campaign skills) are installed — NOT the bundled compute
+    skills (abinit/vasp/orca/…), which are provided separately by the
+    autochem-core plugin and would collide. For each matching direct
+    subdirectory of ``skills_src`` that contains a ``SKILL.md``, refresh
+    ``~/.claude/skills/<name>``:
 
     * remove any existing target first (symlink → ``unlink``, dir → ``rmtree``,
       file → ``unlink``) so re-runs never stack stale copies, then
@@ -135,7 +141,7 @@ def install_skills(skills_src: Path, prefer_symlink: bool) -> list[str]:
     if not skills_src.is_dir():
         return installed
 
-    for src in sorted(p for p in skills_src.iterdir() if p.is_dir()):
+    for src in sorted(p for p in skills_src.glob(name_glob) if p.is_dir()):
         if not (src / "SKILL.md").is_file():
             continue
         target = dest_root / src.name
