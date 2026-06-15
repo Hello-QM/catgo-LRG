@@ -1445,6 +1445,16 @@
   let cohp_exporting: string | null = $state(null)
   let show_cohp_panel = $derived(cohp_state.cohp_result !== null)
 
+  // Number of open electronic plots (DOS / COHP / Band) sharing the dos-split grid.
+  // They stack beside (or below) the structure; this count drives the grid track count.
+  let electronic_plot_count = $derived(
+    (show_dos_panel ? 1 : 0) + (show_cohp_panel ? 1 : 0) + (show_band_panel ? 1 : 0),
+  )
+  // Whichever electronic panel is open picks the split orientation (DOS > COHP > Band).
+  let electronic_split_layout = $derived(
+    show_dos_panel ? dos_layout : show_cohp_panel ? cohp_layout : band_layout,
+  )
+
   type ElectronicPlotRef = DosPlot | CohpPlot | BandPlot
   type ExportFormat = `png` | `svg` | `csv`
 
@@ -1705,6 +1715,14 @@
   let preview_filename = $state(``)
   let preview_file_path = $state(``)
   let preview_session_id = $state(``)
+
+  // True when a chat or side (terminal/editor/preview) panel is open and therefore
+  // owns the grid-template (an earlier branch in the inline grid-template ternary
+  // fires). The electronic-plot grid-template must only apply when this is false,
+  // otherwise it would clobber the chat/side layout (e.g. chat-bottom + a DOS panel).
+  let chat_side_owns_grid = $derived(
+    chat_pane_open || show_terminal || show_editor || show_preview,
+  )
 
   // --- Remote structure origin (for push-back) --- (now a $bindable prop, see props block)
 
@@ -2988,9 +3006,9 @@
   class:xrd-split={xrd.show_panel}
   class:xrd-horizontal={xrd.show_panel && xrd.layout === `horizontal`}
   class:xrd-vertical={xrd.show_panel && xrd.layout === `vertical`}
-  class:dos-split={show_dos_panel || show_cohp_panel}
-  class:dos-horizontal={(show_dos_panel || show_cohp_panel) && (show_dos_panel ? dos_layout : cohp_layout) === `horizontal`}
-  class:dos-vertical={(show_dos_panel || show_cohp_panel) && (show_dos_panel ? dos_layout : cohp_layout) === `vertical`}
+  class:dos-split={show_dos_panel || show_cohp_panel || show_band_panel}
+  class:dos-horizontal={(show_dos_panel || show_cohp_panel || show_band_panel) && electronic_split_layout === `horizontal`}
+  class:dos-vertical={(show_dos_panel || show_cohp_panel || show_band_panel) && electronic_split_layout === `vertical`}
   class:slice-split={show_slice_panel}
   class:slice-horizontal={show_slice_panel && slice_layout === `horizontal`}
   class:slice-vertical={show_slice_panel && slice_layout === `vertical`}
@@ -3007,7 +3025,11 @@
       ? side_panel_minimized ? `1fr 0px 28px` : `1fr 4px ${side_panel_size}%`
       : chat_pane_open && chat_position.value === `right`
         ? `1fr 5px minmax(280px, ${chat_panel_size}%)`
-        : undefined}
+        : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `horizontal`
+          ? `1fr 1fr`
+          : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `vertical`
+            ? `1fr`
+            : undefined}
   style:grid-template-rows={chat_pane_open && chat_position.value === `bottom` && !(show_terminal || show_editor || show_preview)
       ? `1fr 5px ${chat_bottom_size}%`
       : chat_pane_open && chat_position.value === `bottom` && (show_terminal || show_editor || show_preview) && !side_panel_minimized
@@ -3016,7 +3038,11 @@
           ? `1fr 1fr`
           : !chat_pane_open && (show_terminal || show_editor || show_preview) && (show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`)
             ? side_panel_minimized ? `1fr 0px 28px` : `1fr 4px ${side_panel_size}%`
-            : undefined}
+            : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `horizontal`
+              ? `repeat(${electronic_plot_count}, 1fr)`
+              : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `vertical`
+                ? `1fr repeat(${electronic_plot_count}, 1fr)`
+                : undefined}
 >
   <div class="structure-main">
   <!-- Box selection overlay - uses transform for GPU-accelerated positioning -->
@@ -5284,6 +5310,25 @@
     position: relative;
     min-height: 0;
     min-width: 0;
+  }
+  /* Electronic plots (DOS / COHP / Band) stack beside the structure.
+     The grid-template tracks are set inline (one row per open plot); these
+     rules pin the structure to one track and flow the plots into the other. */
+  /* Horizontal: structure on the left spanning all rows, plots stacked in col 2 */
+  .structure.dos-split.dos-horizontal > .structure-main {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .structure.dos-split.dos-horizontal > .dos-panel {
+    grid-column: 2;
+  }
+  /* Vertical: structure on top (row 1), plots stacked below in col 1 */
+  .structure.dos-split.dos-vertical > .structure-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .structure.dos-split.dos-vertical > .dos-panel {
+    grid-column: 1;
   }
   /* Chat split-view grid layout */
   .structure.chat-split {
