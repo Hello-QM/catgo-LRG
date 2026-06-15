@@ -37,8 +37,12 @@ export function snap(v: number): number {
   return Math.round(v / GRID) * GRID
 }
 
+// Monotonic counter: guarantees unique ids even within the same millisecond.
+// (Math.random alone collided ~0.3% per 100 calls and intermittently flaked the
+// uniqueness test in CI.)
+let _id_seq = 0
 export function uid(): string {
-  return `n${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+  return `n${Date.now().toString(36)}-${(_id_seq++).toString(36)}`
 }
 
 // ─── Param display helpers ───
@@ -182,7 +186,7 @@ export function clone_for_paste(
     return { ...n, id: new_id, x: n.x + 40, y: n.y + 40 }
   })
   const new_edges = clipboard.edges.map(e => ({
-    ...e, id: `e${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    ...e, id: `e${Date.now().toString(36)}-${(_id_seq++).toString(36)}`,
     from: id_map[e.from], to: id_map[e.to],
   }))
   return { nodes: new_nodes, edges: new_edges }
