@@ -141,7 +141,22 @@ def generate_job_script(
 
     # Resolve each field with priority: params > job_defaults > fallback
     def _get(key: str, fallback: str = "") -> str:
-        val = params.get(key) or job_defaults.get(key) or fallback
+        aliases = {
+            "cpus_per_task": ("ppn",),
+            "partition": ("queue",),
+            "walltime": ("time_limit",),
+        }
+        keys = (key, *aliases.get(key, ()))
+        val = None
+        for candidate in keys:
+            val = params.get(candidate)
+            if val:
+                break
+            val = job_defaults.get(candidate)
+            if val:
+                break
+        if not val:
+            val = fallback
         return str(val) if val else ""
 
     task_id = task.get("id", "")[:8]
