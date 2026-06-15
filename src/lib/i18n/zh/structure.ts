@@ -1429,6 +1429,8 @@ const structure: Record<string, string> = {
   band_projection_failed: `投影计算失败`,
   band_parsing: `正在解析...`,
   band_kpoints_optional: `KPOINTS（可选）：`,
+  band_kpoints_required: `该能带需要 line-mode 的 KPOINTS 文件。请先在上方 KPOINTS 栏选择，再重新选 vasprun.xml。`,
+  band_kpoints_hint: `提示：沿对称线的能带还需要 line-mode 的 KPOINTS 文件。请在下方设置，并在选 vasprun.xml 之前先设好。`,
   band_metal_status: `金属性？`,
   band_metal: `金属`,
   band_semicond: `半导体`,

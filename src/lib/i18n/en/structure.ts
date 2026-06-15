@@ -1429,6 +1429,8 @@ const structure: Record<string, string> = {
   band_projection_failed: `Projection failed`,
   band_parsing: `Parsing...`,
   band_kpoints_optional: `KPOINTS (optional):`,
+  band_kpoints_required: `This band run needs a line-mode KPOINTS file. Pick it in the KPOINTS field above first, then re-select vasprun.xml.`,
+  band_kpoints_hint: `Tip: a band structure along symmetry lines also needs its line-mode KPOINTS file. Set it below BEFORE choosing vasprun.xml.`,
   band_metal_status: `Metal?`,
   band_metal: `metal`,
   band_semicond: `semicond`,

@@ -67,6 +67,21 @@
   // File inputs
   let kpoints_file = $state<File | null>(null)
   let show_file_dialog = $state(false)
+  // Set when a line-mode band vasprun was uploaded without the required KPOINTS;
+  // drives a friendly reminder + highlights the KPOINTS field instead of dumping
+  // the raw pymatgen error.
+  let kpoints_needed = $state(false)
+
+  /** Map an upload error to a user-facing message (friendly KPOINTS hint). */
+  function upload_error_message(e: any): string {
+    const raw = e?.message ?? ``
+    if (/KPOINTS not found|symmetry lines/i.test(raw)) {
+      kpoints_needed = true
+      return t('structure.band_kpoints_required')
+    }
+    kpoints_needed = false
+    return raw || t('structure.dos_upload_failed')
+  }
 
   // Derived
   let unique_elements: string[] = $derived(
@@ -82,6 +97,7 @@
     error_msg = ``
     try {
       session = await upload_band_vasprun(file, kpoints_file ?? undefined)
+      kpoints_needed = false
       proj_groups = []
       band_state.band_data = null
       band_state.projections = null
@@ -89,7 +105,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || t('structure.dos_upload_failed')
+      error_msg = upload_error_message(e)
     } finally {
       uploading = false
     }
@@ -104,6 +120,7 @@
     error_msg = ``
     try {
       session = await upload_band_vasprun(file, kpoints_file ?? undefined)
+      kpoints_needed = false
       proj_groups = []
       band_state.band_data = null
       band_state.projections = null
@@ -111,7 +128,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || t('structure.dos_upload_failed')
+      error_msg = upload_error_message(e)
     } finally {
       uploading = false
     }
@@ -238,7 +255,8 @@
             {t('structure.browse_remote')}
           </button>
         </div>
-        <div class="kpoints-row">
+        <p class="kpoints-hint">{t('structure.band_kpoints_hint')}</p>
+        <div class="kpoints-row" class:needs-kpoints={kpoints_needed}>
           <label class="kpoints-label">
             {t('structure.band_kpoints_optional')}
             <input
@@ -446,6 +464,7 @@
     error_msg = ''
     try {
       session = await upload_band_vasprun(file, kpoints_file ?? undefined)
+      kpoints_needed = false
       proj_groups = []
       band_state.band_data = null
       band_state.projections = null
@@ -453,7 +472,7 @@
         on_structure_loaded(session.structure as PymatgenStructure)
       }
     } catch (e: any) {
-      error_msg = e.message || t('structure.dos_upload_failed')
+      error_msg = upload_error_message(e)
     } finally {
       uploading = false
     }
@@ -485,7 +504,25 @@
     background: var(--accent-color, #007acc); color: white;
     border-radius: 4px; cursor: pointer; font-size: 0.9em;
   }
-  .kpoints-row { margin-top: 10px; }
+  .kpoints-hint {
+    margin: 10px 0 2px;
+    font-size: 0.8em;
+    line-height: 1.35;
+    color: var(--text-color-muted, rgba(255, 255, 255, 0.6));
+  }
+  .kpoints-row { margin-top: 4px; }
+  .kpoints-row.needs-kpoints {
+    border: 1px solid var(--error-color, #f88);
+    border-radius: 4px;
+    padding: 4px 6px;
+    background: light-dark(rgba(220, 38, 38, 0.06), rgba(255, 60, 60, 0.1));
+    animation: kpoints-pulse 1.2s ease-in-out 2;
+  }
+  .kpoints-row.needs-kpoints .kpoints-label { color: var(--error-color, #f88); }
+  @keyframes kpoints-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; }
+    50% { box-shadow: 0 0 0 3px var(--error-color, rgba(255, 136, 136, 0.45)); }
+  }
   .kpoints-label { font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.5)); }
   .kpoints-label input { font-size: 0.85em; margin-left: 4px; }
   .info-bar {
