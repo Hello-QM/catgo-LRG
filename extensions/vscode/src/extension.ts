@@ -67,6 +67,7 @@ interface WebviewData {
   wasm_binary?: string // base64-encoded ferrox WASM binary
   moyo_wasm_binary?: string // base64-encoded moyo WASM binary
   chgdiff_wasm_binary?: string // base64-encoded chgdiff WASM binary
+  catrender_wasm_binary?: string // base64-encoded catrender WASM binary
   server_port?: number // backend server port for API calls
 }
 
@@ -384,6 +385,19 @@ export const create_html = (
         console.log(`[CatGO] Successfully loaded chgdiff WASM binary (${chgdiff_buffer.length} bytes → ${data_with_wasm.chgdiff_wasm_binary.length} base64 chars)`)
       } else {
         console.warn(`[CatGO] No chgdiff WASM files found in ${assets_dir}`)
+      }
+
+      // Load catrender WASM (molecular SVG renderer)
+      const catrender_files = fs
+        .readdirSync(assets_dir)
+        .filter((f) => f.startsWith(`catrender_wasm_bg-`) && f.endsWith(`.wasm`))
+      if (catrender_files.length > 0) {
+        const catrender_path = path.join(assets_dir, catrender_files[0])
+        const catrender_buffer = fs.readFileSync(catrender_path)
+        data_with_wasm.catrender_wasm_binary = catrender_buffer.toString(`base64`)
+        console.log(`[CatGO] Successfully loaded catrender WASM binary (${catrender_buffer.length} bytes → ${data_with_wasm.catrender_wasm_binary.length} base64 chars)`)
+      } else {
+        console.warn(`[CatGO] No catrender WASM files found in ${assets_dir}`)
       }
     } else {
       console.warn(`[CatGO] Assets directory does not exist: ${assets_dir}`)
