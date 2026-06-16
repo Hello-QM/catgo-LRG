@@ -107,3 +107,48 @@ function replaceNode(node: PaneNode, id: string, replacement: PaneNode): PaneNod
   if (a === node.children[0] && b === node.children[1]) return node
   return { ...node, children: [a, b] }
 }
+
+export function setRatio(root: PaneNode, splitId: string, ratio: number): PaneNode {
+  const clamped = Math.max(0.2, Math.min(0.8, ratio))
+  function go(node: PaneNode): PaneNode {
+    if (node.kind === 'leaf') return node
+    if (node.id === splitId) return { ...node, ratio: clamped }
+    const a = go(node.children[0]); const b = go(node.children[1])
+    if (a === node.children[0] && b === node.children[1]) return node
+    return { ...node, children: [a, b] }
+  }
+  return go(root)
+}
+
+/**
+ * Open-file target: reuse the first empty leaf; else split the active leaf
+ * (one at a time) up to CAP; else null (caller opens a new tab).
+ * Direction reproduces the old single->splitH (first split 'h') then 'v'.
+ */
+export function escalateForImport(root: PaneNode, activeLeafId: string): { root: PaneNode; leafId: string } | null {
+  const empty = findFirstEmptyLeaf(root)
+  if (empty) return { root, leafId: empty.id }
+  const dir: SplitDir = leafCount(root) === 1 ? 'h' : 'v'
+  const split = splitLeaf(root, activeLeafId, dir)
+  if (!split) return null
+  return { root: split.root, leafId: split.newLeafId }
+}
+
+export function buildPreset(preset: PresetId): PaneNode {
+  if (preset === 'single') return create_empty_leaf()
+  if (preset === 'splitH') return { kind: 'split', id: next_id('split'), direction: 'h', ratio: 0.5, children: [create_empty_leaf(), create_empty_leaf()] }
+  if (preset === 'splitV') return { kind: 'split', id: next_id('split'), direction: 'v', ratio: 0.5, children: [create_empty_leaf(), create_empty_leaf()] }
+  // quad = h-split of two v-splits
+  const col = (): SplitNode => ({ kind: 'split', id: next_id('split'), direction: 'v', ratio: 0.5, children: [create_empty_leaf(), create_empty_leaf()] })
+  return { kind: 'split', id: next_id('split'), direction: 'h', ratio: 0.5, children: [col(), col()] }
+}
+
+export function matchesPreset(root: PaneNode): PresetId | null {
+  if (root.kind === 'leaf') return 'single'
+  const [a, b] = root.children
+  if (a.kind === 'leaf' && b.kind === 'leaf') return root.direction === 'h' ? 'splitH' : 'splitV'
+  if (root.direction === 'h' && a.kind === 'split' && b.kind === 'split'
+    && a.direction === 'v' && b.direction === 'v'
+    && a.children.every(c => c.kind === 'leaf') && b.children.every(c => c.kind === 'leaf')) return 'quad'
+  return null
+}

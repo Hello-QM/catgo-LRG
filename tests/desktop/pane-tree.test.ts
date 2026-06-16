@@ -77,3 +77,55 @@ describe('splitLeaf / removeLeaf', () => {
     expect(removeLeaf(only, only.id)).toBe(only)
   })
 })
+
+describe('setRatio', () => {
+  it('sets a split ratio (pure) and clamps 0.2..0.8', () => {
+    const root = split('S', 'h', 0.5, create_empty_leaf(), create_empty_leaf())
+    expect((setRatio(root, 'S', 0.7) as SplitNode).ratio).toBe(0.7)
+    expect((setRatio(root, 'S', 0.01) as SplitNode).ratio).toBe(0.2)
+    expect((setRatio(root, 'S', 0.99) as SplitNode).ratio).toBe(0.8)
+    expect(setRatio(root, 'missing', 0.7)).toBe(root)
+  })
+})
+
+describe('escalateForImport (open-file target policy)', () => {
+  it('1->2->3->4 leaves one at a time, then null at CAP (open new tab)', () => {
+    let root: PaneNode = create_empty_leaf()
+    let active = (root as LeafNode).id
+    // fill the first leaf so it is no longer empty
+    ;(root as LeafNode).content.pane.structure = { sites: [{}] } as never
+    for (let n = 2; n <= CAP; n++) {
+      const r = escalateForImport(root, active)!
+      root = r.root; active = r.leafId
+      expect(leafCount(root)).toBe(n)
+      findLeafById(root, active)!.content.pane.structure = { sites: [{}] } as never
+    }
+    expect(escalateForImport(root, active)).toBeNull()
+  })
+  it('reuses an existing empty leaf instead of splitting', () => {
+    const filled = create_empty_leaf(); filled.content.pane.structure = { sites: [{}] } as never
+    const empty = create_empty_leaf()
+    const root = split('S', 'h', 0.5, filled, empty)
+    const r = escalateForImport(root, filled.id)!
+    expect(r.leafId).toBe(empty.id)
+    expect(leafCount(r.root)).toBe(2) // no new split
+  })
+})
+
+describe('buildPreset / matchesPreset', () => {
+  it('builds canonical preset trees', () => {
+    expect(leafCount(buildPreset('single'))).toBe(1)
+    expect(leafCount(buildPreset('splitH'))).toBe(2)
+    expect((buildPreset('splitH') as SplitNode).direction).toBe('h')
+    expect((buildPreset('splitV') as SplitNode).direction).toBe('v')
+    expect(leafCount(buildPreset('quad'))).toBe(4)
+  })
+  it('matchesPreset recognizes the canonical shapes, else null', () => {
+    expect(matchesPreset(buildPreset('single'))).toBe('single')
+    expect(matchesPreset(buildPreset('splitH'))).toBe('splitH')
+    expect(matchesPreset(buildPreset('splitV'))).toBe('splitV')
+    expect(matchesPreset(buildPreset('quad'))).toBe('quad')
+    const custom = split('S', 'h', 0.5, split('S2', 'v', 0.5, create_empty_leaf(), create_empty_leaf()), create_empty_leaf())
+    expect(matchesPreset(custom)).toBeNull() // left-2-right-1
+  })
+})
