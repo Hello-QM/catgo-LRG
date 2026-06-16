@@ -229,6 +229,73 @@ git commit -m "feat(terminal-leaves): session lifecycle (close kills PTY, popout
 
 ---
 
+## Task 4b: Window-local terminal CWD sync + independent popout file system (T7)
+
+**Files:** Modify `src/lib/structure/TerminalPanel.svelte`, `desktop/sidebar/cwd-sync.svelte.ts`, `desktop/lib/popout-manager.ts`, `desktop/App.svelte`.
+
+**Two real bugs + one isolation requirement:**
+1. **Local Directory Sync never worked.** `create_cwd_sync_cleanup` (`desktop/sidebar/cwd-sync.svelte.ts:20`) only sets up listeners when `source && source !== 'catgo' && source !== 'localdb'` — i.e. **only for HPC**. A LOCAL terminal + local Files panel (`source === 'catgo'`) gets NO listener, so `cd` never moves the local browser. It also only ever calls `set_hpc_current_path` — there is no local-nav path.
+2. **Cross-window leak.** The producer broadcasts CWD via `BroadcastChannel` to ALL windows, moving the origin window's Files panel from a popout.
+3. **Independent popout** (T7): a popped-out terminal should open a full app window with its own Files panel + sync.
+
+- [ ] **Step 4b.1: Producer — drop cross-window broadcast.** In `src/lib/structure/TerminalPanel.svelte` (lines ~297-302), REMOVE the `try { const bc = new BroadcastChannel('catgo-terminal-cwd'); bc.postMessage({ path, session_id, seq }); bc.close() } catch {}` block. KEEP `on_cwd_change?.(path)` and the same-window `window.dispatchEvent(new CustomEvent('catgo-terminal-cwd', { detail: { path, session_id, seq } }))`. Net: CWD reaches only listeners in its OWN window.
+
+- [ ] **Step 4b.2: Consumer — fix local sync + window-local.** Rewrite `create_cwd_sync_cleanup` in `desktop/sidebar/cwd-sync.svelte.ts` so it ALWAYS wires the same-window listener (for both local and HPC), routes by source, and drops the BroadcastChannel:
+
+```ts
+export function create_cwd_sync_cleanup(
+  source: string,
+  get_hpc_current_path: () => string,
+  set_hpc_current_path: (path: string) => void,
+  navigate_local: (path: string) => void,
+): (() => void) {
+  const apply = (path: string | undefined) => {
+    if (!path) return
+    const is_hpc = !!source && source !== `catgo` && source !== `localdb`
+    if (is_hpc) {
+      if (path !== get_hpc_current_path()) set_hpc_current_path(path)
+    } else {
+      navigate_local(path) // local Files panel follows the terminal CWD
+    }
+  }
+  const win_handler = (event: Event) => apply((event as CustomEvent).detail?.path)
+  window.addEventListener(`catgo-terminal-cwd`, win_handler)
+  return () => window.removeEventListener(`catgo-terminal-cwd`, win_handler)
+}
+```
+
+- [ ] **Step 4b.3: Caller — pass the local-nav callback.** In `desktop/Sidebar.svelte` (lines ~121-127), pass `fsb.fs_browse` as the 4th arg:
+
+```svelte
+$effect(() => {
+  return create_cwd_sync_cleanup(
+    source,
+    () => hpc.hpc_current_path,
+    (path) => { hpc.hpc_current_path = path },
+    (path) => { fsb.fs_browse(path) },
+  )
+})
+```
+
+(Confirm `fsb` is in scope — it is, from `create_fs_browser_state` at Sidebar.svelte:255, and `fsb.fs_browse` is its exported nav. This is what makes `cd` in a local terminal move the local Files panel — the reported bug.)
+
+- [ ] **Step 4b.3a: Verify** — `pnpm check` no new errors; manual: local terminal `cd /tmp` → Files panel navigates to `/tmp` (the fix); a popout's `cd` does NOT move the origin window.
+
+- [ ] **Step 4b.4: Independent popout = full app window.** Change the terminal popout so it opens a NORMAL app window (with sidebar/file browser), not the bare `#terminal` `TerminalWindow`. In `popout-manager.ts`, add/adjust `popout_terminal_leaf(tab_id, leaf_id, ...)` to open `window.open(`${origin}${pathname}#newterm?session_id=…&host=…&username=…&sync_cwd=…`, ...)` where the popout window, on parsing `#newterm`, creates a **terminal-root tab** in its own app instance (full shell). Implement the `#newterm` hash handling in App's hash-route effect (App.svelte ~357-392): create a terminal tab seeded with `create_terminal_leaf({ session_id, host, username, sync_cwd })` and switch to it; do NOT enter the bare-popout `terminal` mode. The new window thus has its own sidebar + file browser + the terminal's own Directory Sync toggle, fully isolated.
+  - The origin leaf is removed from the source window (`removeLeaf`) after opening, mirroring current popout behavior.
+  - Tauri path: use `WebviewWindow` with the `#newterm` URL (same pattern as existing popouts).
+
+- [ ] **Step 4b.5: Commit**
+
+```bash
+git add src/lib/structure/TerminalPanel.svelte desktop/sidebar/cwd-sync.svelte.ts desktop/lib/popout-manager.ts desktop/App.svelte
+git commit -m "feat(terminal-leaves): window-local CWD sync + full-window terminal popout (independent file systems)"
+```
+
+> **Note for verification (Task 8):** smoke that a popped-out terminal's `cd` does NOT move the origin window's Files panel, and that the popout window has its own Files panel + Directory Sync toggle that follows only its own terminal.
+
+---
+
 ## Task 5: Remove the desktop side-panel terminal (`Structure.svelte`, D8-gated)
 
 **Files:** Modify `src/lib/structure/Structure.svelte`.

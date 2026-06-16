@@ -294,13 +294,9 @@
               const seq = ++_cwd_seq
               // Local callback (inline terminal in Structure.svelte)
               on_cwd_change?.(path)
-              // Broadcast for cross-window sync (other windows)
-              try {
-                const bc = new BroadcastChannel(`catgo-terminal-cwd`)
-                bc.postMessage({ path, session_id, seq })
-                bc.close()
-              } catch { /* BroadcastChannel not supported */ }
-              // Same-window sync (BroadcastChannel doesn't deliver to sender's context)
+              // Window-local sync only — each window's Files panel follows its own
+              // terminal. No cross-window BroadcastChannel: a popped-out terminal must
+              // NOT move the origin window's file system (windows are independent).
               window.dispatchEvent(new CustomEvent(`catgo-terminal-cwd`, { detail: { path, session_id, seq } }))
             }
           } catch {

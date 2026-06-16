@@ -123,6 +123,7 @@
       source,
       () => hpc.hpc_current_path,
       (path) => { hpc.hpc_current_path = path },
+      (path) => { fsb.fs_browse(path) },
     )
   })
 

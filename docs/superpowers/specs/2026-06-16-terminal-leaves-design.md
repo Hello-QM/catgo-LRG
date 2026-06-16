@@ -31,6 +31,7 @@ explicit "split and pick the new cell's type" switcher is **Subproject 3**.
 | T4 | The in-viewer **side-panel terminal** (`show_terminal`/`TerminalPanel` in shared `Structure.svelte`) is **removed** on desktop; terminals live only as tree leaves. |
 | T5 | v2 "add terminal" entry points: the empty-leaf landing **"Terminal" card** converts that leaf to a terminal; the top **"+Terminal"** tab opens a terminal-root tab. (A split-then-choose-type switcher is deferred to Subproject 3.) |
 | T6 | Leaf cap stays **4** (terminals are cheap/no-WebGL; revisit later if needed). |
+| T7 | **Window-local CWD sync** (user request): a terminal's Directory Sync drives only its **own window's** file browser. Drop the cross-window `BroadcastChannel("catgo-terminal-cwd")`; keep the same-window `CustomEvent`. Popping out a terminal opens a **full app window** (own sidebar/file browser + per-terminal sync toggle), so each window has an independent file system and a popout never moves the origin window's files. |
 | **D8** | **Mobile unchanged.** Verified: mobile uses `MobileWorkspace`'s own `.mw-term`, independent of `Structure.svelte`'s desktop side panel. |
 
 ## 3. Hard constraints

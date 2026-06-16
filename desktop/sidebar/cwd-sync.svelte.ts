@@ -1,39 +1,35 @@
 /**
- * 5E: CWD sync — BroadcastChannel + CustomEvent listeners for terminal CWD changes.
+ * 5E: CWD sync — same-window CustomEvent listener for terminal CWD changes.
  * Extracted from Sidebar.svelte.
  */
 
 /**
- * Creates a CWD sync effect that listens for terminal directory changes.
- * Must be called inside a component's $effect context.
+ * Creates a CWD sync effect that listens for terminal directory changes in THIS
+ * window and moves the active Files panel to follow the terminal's CWD.
  *
- * @param get_source - getter for current source
- * @param get_hpc_current_path - getter for hpc_current_path
- * @param set_hpc_current_path - setter for hpc_current_path
- * @returns cleanup function
+ * Window-local only (same-window CustomEvent — no cross-window BroadcastChannel),
+ * so a popped-out terminal never moves the origin window's file system. Routes by
+ * source: HPC browser via set_hpc_current_path, local browser via navigate_local.
+ * (Previously local sync was never wired — the listener only ran for HPC sources.)
+ *
+ * @returns cleanup function (always — the listener is wired for every source)
  */
 export function create_cwd_sync_cleanup(
   source: string,
   get_hpc_current_path: () => string,
   set_hpc_current_path: (path: string) => void,
-): (() => void) | undefined {
-  if (source && source !== `catgo` && source !== `localdb`) {
-    const bc = new BroadcastChannel(`catgo-terminal-cwd`)
-    const bc_handler = (event: MessageEvent) => {
-      const { path } = event.data
-      if (path && path !== get_hpc_current_path()) set_hpc_current_path(path)
-    }
-    bc.addEventListener(`message`, bc_handler)
-    const win_handler = (event: Event) => {
-      const { path } = (event as CustomEvent).detail
-      if (path && path !== get_hpc_current_path()) set_hpc_current_path(path)
-    }
-    window.addEventListener(`catgo-terminal-cwd`, win_handler)
-    return () => {
-      bc.removeEventListener(`message`, bc_handler)
-      bc.close()
-      window.removeEventListener(`catgo-terminal-cwd`, win_handler)
+  navigate_local: (path: string) => void,
+): (() => void) {
+  const apply = (path: string | undefined) => {
+    if (!path) return
+    const is_hpc = !!source && source !== `catgo` && source !== `localdb`
+    if (is_hpc) {
+      if (path !== get_hpc_current_path()) set_hpc_current_path(path)
+    } else {
+      navigate_local(path)
     }
   }
-  return undefined
+  const win_handler = (event: Event) => apply((event as CustomEvent).detail?.path)
+  window.addEventListener(`catgo-terminal-cwd`, win_handler)
+  return () => window.removeEventListener(`catgo-terminal-cwd`, win_handler)
 }
