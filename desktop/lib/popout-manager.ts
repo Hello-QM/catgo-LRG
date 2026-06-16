@@ -7,6 +7,7 @@
 
 import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
+import { findLeafById, leaves } from '../pane-tree'
 
 /** Open a structure in a new popout window via localStorage transfer. */
 export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean) {
@@ -71,9 +72,12 @@ export function load_popout_structure(
     // Ensure a structure tab exists and load the data
     const ts = get_active_ts()
     if (ts) {
-      ts.panes[ts.active_pane].structure = structure
-      ts.panes[ts.active_pane].source_filename = filename
-      ts.panes[ts.active_pane].modified = false
+      const leaf = findLeafById(ts.root, ts.active_leaf_id) ?? leaves(ts.root)[0]
+      if (!leaf) return
+      const pane = leaf.content.pane
+      pane.structure = structure
+      pane.source_filename = filename
+      pane.modified = false
       update_tab_label(active_tab_id)
     }
   } catch (e) {
@@ -84,13 +88,15 @@ export function load_popout_structure(
 /** Open a split-view pane in a new window. */
 export async function popout_pane(
   tab_id: string,
-  pane_idx: number,
+  leaf_id: string,
   tab_states: Record<string, StructureTabState>,
   is_tauri: boolean,
 ) {
   const ts = tab_states[tab_id]
   if (!ts) return
-  const pane = ts.panes[pane_idx]
+  const leaf = findLeafById(ts.root, leaf_id)
+  if (!leaf) return
+  const pane = leaf.content.pane
 
   if (pane.mode === `workflow` && pane.workflow_id) {
     // Workflows have their own popout mechanism
