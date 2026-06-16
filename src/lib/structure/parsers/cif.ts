@@ -356,12 +356,22 @@ export function parse_cif(
     }
 
     // Extract cell parameters and build lattice
-    const lengths = extract_cif_cell_parameters(text, `cell_length`, strict)
-    const angles = extract_cif_cell_parameters(text, `cell_angle`, strict)
+    let lengths = extract_cif_cell_parameters(text, `cell_length`, strict)
+    let angles = extract_cif_cell_parameters(text, `cell_angle`, strict)
 
     if (lengths.length < 3 || angles.length < 3) {
-      console.error(`Insufficient cell parameters in CIF file`)
-      return null
+      // Some CIFs (e.g. a CatGo export that dropped the lattice) carry
+      // fractional coordinates with no unit cell. Rather than refuse to load,
+      // fall back to a default cubic cell so the structure is still viewable.
+      // Geometry is approximate — re-export with a real cell for accuracy.
+      if (coords_type === `fract`) {
+        console.warn(`CIF has no unit cell; using a default 10 Å cubic cell (geometry approximate)`)
+        lengths = [10, 10, 10]
+        angles = [90, 90, 90]
+      } else {
+        console.error(`Insufficient cell parameters in CIF file`)
+        return null
+      }
     }
 
     // Build lattice and create sites
