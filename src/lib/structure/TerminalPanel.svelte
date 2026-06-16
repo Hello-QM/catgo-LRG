@@ -69,14 +69,16 @@
     host ? `${username || ``}@${host}` : `Terminal`
   )
 
-  // Always inject OSC 7 PROMPT_COMMAND on remote session connect (needed for Ctrl+click
-  // path resolution even when sync_cwd is off). sync_cwd only controls whether CWD changes
-  // are broadcast to the file browser.
+  // Always inject OSC 7 PROMPT_COMMAND once the PTY is up — local OR remote (needed for
+  // Ctrl+click path resolution and Directory Sync even when sync_cwd is off). Local shells
+  // need it just as much as remote: a plain bash emits no OSC 7 on its own, so without this
+  // the local Files panel never follows the terminal's cwd. sync_cwd only controls whether
+  // CWD changes are broadcast to the file browser.
   let _osc7_injected = false
   let _osc7_quiescence_timer: ReturnType<typeof setTimeout> | null = null
   let _osc7_data_listener: (() => void) | null = null
   $effect(() => {
-    if (!pty_ref || !session_id) {
+    if (!pty_ref) {
       _osc7_injected = false
       if (_osc7_quiescence_timer) clearTimeout(_osc7_quiescence_timer)
       if (_osc7_data_listener) { _osc7_data_listener(); _osc7_data_listener = null }
