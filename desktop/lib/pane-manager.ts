@@ -7,7 +7,7 @@
 
 import type { PaneState, StructureTabState } from '../pane-utils'
 import { create_empty_pane, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
-import { findLeafById, leafCount, leaves, removeLeaf } from '../pane-tree'
+import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
 import { list_projects, save_structure_to_db } from '$lib/api/project'
@@ -24,7 +24,19 @@ export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: st
   if (!ts) return
   const leaf = findLeafById(ts.root, leaf_id)
   if (!leaf) return
-  const pane = leaf.content.pane
+  // Terminal leaves close directly (kill session via Task 4 hook); no
+  // save-confirm banner — there is no saveable structure.
+  if (isTerminalLeaf(leaf)) {
+    ts.close_confirm_leaf_id = null
+    if (leafCount(ts.root) > 1) {
+      ts.root = removeLeaf(ts.root, leaf_id)
+      if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+    }
+    deps.update_tab_label(tab_id)
+    return
+  }
+  const pane = structurePane(leaf)
+  if (!pane) return
   // Workflow panes: only prompt if user has opened/edited a workflow
   if (pane.mode === 'workflow') {
     if (pane.modified) {
@@ -51,7 +63,8 @@ export function close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: stri
   ts.close_confirm_leaf_id = null
   if (leafCount(ts.root) <= 1) {
     const leaf = findLeafById(ts.root, leaf_id)
-    if (leaf) Object.assign(leaf.content.pane, create_empty_pane())
+    const pane = leaf && structurePane(leaf)
+    if (pane) Object.assign(pane, create_empty_pane())
     deps.update_tab_label(tab_id)
     return
   }
@@ -79,7 +92,7 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
   const ts = deps.tab_states[tab_id]
   if (!ts) return
   const leaf = findLeafById(ts.root, leaf_id)
-  const pane = leaf?.content.pane
+  const pane = leaf ? structurePane(leaf) : null
   if (!pane) return
   const structure = (pane.saveable_structure ?? pane.structure) as Record<string, unknown> | undefined
   if (!structure) {

@@ -10,7 +10,7 @@ import {
   type StructureTabState,
   pane_has_content, create_tab_state,
 } from '../pane-utils'
-import { leaves, matchesPreset, type PresetId } from '../pane-tree'
+import { leaves, matchesPreset, isTerminalLeaf, structurePane, type PresetId } from '../pane-tree'
 import {
   ensure_workflow_slice,
   remove_workflow_slice,
@@ -51,7 +51,11 @@ export function create_tab_manager() {
     // Skip the badge on the currently-active tab — user already sees its
     // content; the count is just visual noise on the active tab.
     if (t.id === active_tab_id) return t
-    const badge = leaves(ts.root).filter(l => pane_has_content(l.content.pane)).length
+    const badge = leaves(ts.root).filter(l => {
+      if (isTerminalLeaf(l)) return true
+      const pane = structurePane(l)
+      return !!pane && pane_has_content(pane)
+    }).length
     return { ...t, badge: badge > 0 ? badge : undefined }
   }))
 
@@ -132,7 +136,10 @@ export function create_tab_manager() {
     if (tab.type === `structure`) {
       const ts = tab_states_record[id]
       if (ts) {
-        const loaded = leaves(ts.root).filter(l => pane_has_content(l.content.pane)).length
+        const loaded = leaves(ts.root).filter(l => {
+          const pane = structurePane(l)
+          return !!pane && pane_has_content(pane)
+        }).length
         if (loaded > 0) {
           tab_close_confirm_id = id
           return
@@ -204,7 +211,8 @@ export function create_tab_manager() {
     // is the lab/MCP receiver, even after a structure loads in it.
     const prefix = tab_id === `default` ? `🤖 ` : ``
     const fallback = tab_id === `default` ? `External` : `Structure`
-    const pane = leaves(ts.root).map(l => l.content.pane).find(p => p.structure)
+    const all_leaves = leaves(ts.root)
+    const pane = all_leaves.map(l => structurePane(l)).find(p => p?.structure)
     if (pane?.structure?.sites?.length) {
       const counts: Record<string, number> = {}
       for (const site of pane.structure.sites) {
@@ -214,8 +222,13 @@ export function create_tab_manager() {
       const formula = Object.entries(counts).map(([el, n]) => n > 1 ? `${el}${n}` : el).join(``)
       if (formula) { tab.label = `${prefix}${formula}`; return }
     }
-    if (leaves(ts.root).some(l => l.content.pane.mode === 'workflow')) {
+    if (all_leaves.some(l => structurePane(l)?.mode === 'workflow')) {
       tab.label = `${prefix}Workflow`
+      return
+    }
+    // A tab whose only content is terminal leaves labels as Terminal.
+    if (all_leaves.length > 0 && all_leaves.every(l => isTerminalLeaf(l))) {
+      tab.label = `${prefix}Terminal`
       return
     }
     tab.label = `${prefix}${fallback}`

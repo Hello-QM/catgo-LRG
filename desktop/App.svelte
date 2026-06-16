@@ -58,7 +58,7 @@
   import {
     type LeafNode, type PresetId,
     leaves, leafCount, findLeafById, findFirstEmptyLeaf,
-    escalateForImport, setRatio, create_empty_leaf,
+    escalateForImport, setRatio, create_empty_leaf, structurePane,
   } from './pane-tree'
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
@@ -302,7 +302,8 @@
     if (!ts) return
     const leaf = findLeafById(ts.root, ts.active_leaf_id)
     if (!leaf) return
-    const pane = leaf.content.pane
+    const pane = structurePane(leaf)
+    if (!pane) return
     // If pane has no structure, load water so Structure mounts
     if (!pane.structure && !pane.trajectory && !pane.cube_file) {
       pane.structure = clone_structure(water as unknown as AnyStructure)
@@ -416,7 +417,8 @@
     if (!ts) return
     const active_leaf = findLeafById(ts.root, ts.active_leaf_id)
     if (!active_leaf) return
-    const pane = active_leaf.content.pane
+    const pane = structurePane(active_leaf)
+    if (!pane) return
     const filename = pane.source_filename || `structure.cif`
 
     // Determine format from filename
@@ -459,8 +461,8 @@
         if (parsed?.sites?.length) {
           const target_ts = tab_states[target_tab_id]
           const leaf = target_ts ? findLeafById(target_ts.root, target_leaf_id) : null
-          if (target_ts && leaf) {
-            const p = leaf.content.pane
+          const p = leaf ? structurePane(leaf) : null
+          if (target_ts && p) {
             p.structure = clone_structure(parsed)
             p.initial_structure_ref = parsed
             p.initial_site_count = parsed.sites.length
@@ -484,7 +486,7 @@
     const ts = tm.tab_states[ts_tab_id]
     if (!ts) return
     // If this workflow is already open in a pane, switch to it and signal reload
-    const existing = leaves(ts.root).find(l => l.content.pane.mode === `workflow` && l.content.pane.workflow_id === workflow_id)
+    const existing = leaves(ts.root).find(l => structurePane(l)?.mode === `workflow` && structurePane(l)?.workflow_id === workflow_id)
     if (existing) {
       tm.active_tab_id = ts_tab_id
       ts.active_leaf_id = existing.id
@@ -493,8 +495,9 @@
       return
     }
     const target = findFirstEmptyLeaf(ts.root) ?? findLeafById(ts.root, ts.active_leaf_id)
-    if (!target) return
-    Object.assign(target.content.pane, { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact })
+    const target_pane = target ? structurePane(target) : null
+    if (!target || !target_pane) return
+    Object.assign(target_pane, { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact })
     ts.active_leaf_id = target.id
     tm.active_tab_id = ts_tab_id
     update_tab_label(ts_tab_id)
@@ -541,16 +544,18 @@
     const ts = tm.tab_states[tab_id]
     if (!ts) return
     const leaf = leaves(ts.root)[0]
+    const pane = leaf ? structurePane(leaf) : null
+    if (!pane) return
     // Guard: if create_tab hit the 12-tab limit, active_tab didn't change —
     // don't silently overwrite the existing tab's structure
-    if (tab_id === prev_tab_id && leaf.content.pane.structure) {
+    if (tab_id === prev_tab_id && pane.structure) {
       console.warn(`[App] Tab limit reached, cannot open structure in new tab`)
       return
     }
-    leaf.content.pane.structure = clone_structure(struct)
-    leaf.content.pane.initial_structure_ref = struct
-    leaf.content.pane.initial_site_count = struct.sites?.length ?? 0
-    leaf.content.pane.modified = false
+    pane.structure = clone_structure(struct)
+    pane.initial_structure_ref = struct
+    pane.initial_site_count = struct.sites?.length ?? 0
+    pane.modified = false
     // Set tab label — use tm.tabs (raw $state), not tabs_with_badges ($derived copy)
     const tab = tm.tabs.find(t => t.id === tab_id)
     if (tab && label) tab.label = label
@@ -560,7 +565,8 @@
   function get_current_structure(): Record<string, unknown> | null {
     const ts = get_active_ts()
     if (!ts) return null
-    const pane = findLeafById(ts.root, ts.active_leaf_id)?.content.pane
+    const active_leaf = findLeafById(ts.root, ts.active_leaf_id)
+    const pane = active_leaf ? structurePane(active_leaf) : null
     if (!pane?.structure) return null
     return pane.structure as unknown as Record<string, unknown>
   }
@@ -602,7 +608,8 @@
   $effect(() => {
     for (const ts of Object.values(tab_states)) {
       for (const leaf of leaves(ts.root)) {
-        const pane = leaf.content.pane
+        const pane = structurePane(leaf)
+        if (!pane) continue
         if (pane.structure && !pane.modified) {
           if (pane.initial_site_count > 0 && pane.structure.sites.length !== pane.initial_site_count) {
             pane.modified = true
@@ -799,7 +806,8 @@
     const leaf = findLeafById(ts.root, modal.import_target_leaf)
     if (!leaf) return
     // Mutate the pane in-place so Svelte 5's deep $state proxy tracks the change
-    const pane = leaf.content.pane
+    const pane = structurePane(leaf)
+    if (!pane) return
     pane.structure = clone_structure(imported as AnyStructure)
     pane.initial_site_count = imported.sites.length
     pane.initial_structure_ref = imported as AnyStructure
@@ -1014,7 +1022,8 @@
   ) {
     const leaf = findLeafById(ts.root, leaf_id)
     if (!leaf) return
-    const p = leaf.content.pane
+    const p = structurePane(leaf)
+    if (!p) return
     if (e.cube_file) {
       p.structure = clone_structure(e.structure)
       p.initial_site_count = e.structure?.sites?.length ?? 0
@@ -1145,7 +1154,8 @@
     } else {
       ts.active_library_id = null
       const leaf = findLeafById(ts.root, ts.active_leaf_id)
-      if (leaf) Object.assign(leaf.content.pane, create_empty_pane())
+      const pane = leaf ? structurePane(leaf) : null
+      if (pane) Object.assign(pane, create_empty_pane())
       update_tab_label(tab_id)
     }
   }
@@ -1182,8 +1192,8 @@
         const new_ts = tab_states[tm.active_tab_id]
         if (!new_ts) return
         const new_leaf = leaves(new_ts.root)[0]
-        if (data.structure) {
-          const p = new_leaf.content.pane
+        const p = new_leaf ? structurePane(new_leaf) : null
+        if (data.structure && p) {
           p.structure = clone_structure(data.structure)
           p.is_trajectory_mode = false
           p.trajectory = null
@@ -1199,7 +1209,8 @@
       const target_id = r.leafId
       const target_leaf = findLeafById(ts.root, target_id)
       if (!target_leaf) return
-      const p = target_leaf.content.pane
+      const p = structurePane(target_leaf)
+      if (!p) return
       if (data.structure) {
         p.structure = clone_structure(data.structure)
         p.is_trajectory_mode = false
@@ -1361,7 +1372,8 @@
     const ts = tab_states[t.id]
     if (!ts) return false
     const first = leaves(ts.root)[0]
-    return !!first && !pane_has_content(first.content.pane)
+    const pane = first ? structurePane(first) : null
+    return !!pane && !pane_has_content(pane)
   })
 
   // Global SSE listener for the External/MCP "default" panel.
@@ -1389,8 +1401,9 @@
       if (!struct) return false
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
-      if (!ts || !first) return false
-      first.content.pane.structure = clone_structure(struct)
+      const pane = first ? structurePane(first) : null
+      if (!ts || !pane) return false
+      pane.structure = clone_structure(struct)
       update_tab_label(`default`)
       return true
     }
@@ -1441,8 +1454,8 @@
     function inject_trajectory_into_external(traj: TrajectoryType, raw: string, filename: string): boolean {
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
-      if (!ts || !first) return false
-      const pane = first.content.pane
+      const pane = first ? structurePane(first) : null
+      if (!ts || !pane) return false
       pane.trajectory = traj
       pane.structure = undefined  // mutually exclusive
       pane.is_trajectory_mode = true
@@ -1516,8 +1529,9 @@
     if (struct?.sites?.length) {
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
-      if (first) {
-        first.content.pane.structure = clone_structure(struct)
+      const pane = first ? structurePane(first) : null
+      if (pane) {
+        pane.structure = clone_structure(struct)
         update_tab_label(`default`)
       }
       return
@@ -1529,8 +1543,9 @@
         if (!cached?.sites?.length) return
         const ts = tab_states[`default`]
         const first = ts ? leaves(ts.root)[0] : null
-        if (first) {
-          first.content.pane.structure = clone_structure(cached)
+        const pane = first ? structurePane(first) : null
+        if (pane) {
+          pane.structure = clone_structure(cached)
           update_tab_label(`default`)
         }
       })
@@ -1626,7 +1641,8 @@
     on_save_workflow={() => {
       const ts = get_active_ts()
       if (!ts) return null
-      const pane = findLeafById(ts.root, ts.active_leaf_id)?.content.pane
+      const active_leaf = findLeafById(ts.root, ts.active_leaf_id)
+      const pane = active_leaf ? structurePane(active_leaf) : null
       return pane?.mode === `workflow` ? (pane.workflow_id ?? null) : null
     }}
     refresh_counter={sidebar.refresh_counter}
@@ -2187,7 +2203,7 @@
   {@const confirm_tab = tm.tabs.find(t => t.id === tm.tab_close_confirm_id)}
   {@const confirm_ts = tab_states[tm.tab_close_confirm_id]}
   {#if confirm_tab && confirm_ts}
-    {@const structure_count = leaves(confirm_ts.root).filter(l => pane_has_content(l.content.pane)).length}
+    {@const structure_count = leaves(confirm_ts.root).filter(l => { const p = structurePane(l); return !!p && pane_has_content(p) }).length}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

@@ -7,7 +7,7 @@
 
 import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
-import { findLeafById, leaves } from '../pane-tree'
+import { findLeafById, leaves, isTerminalLeaf, structurePane } from '../pane-tree'
 
 /** Open a structure in a new popout window via localStorage transfer. */
 export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean) {
@@ -74,7 +74,8 @@ export function load_popout_structure(
     if (ts) {
       const leaf = findLeafById(ts.root, ts.active_leaf_id) ?? leaves(ts.root)[0]
       if (!leaf) return
-      const pane = leaf.content.pane
+      const pane = structurePane(leaf)
+      if (!pane) return
       pane.structure = structure
       pane.source_filename = filename
       pane.modified = false
@@ -96,7 +97,11 @@ export async function popout_pane(
   if (!ts) return
   const leaf = findLeafById(ts.root, leaf_id)
   if (!leaf) return
-  const pane = leaf.content.pane
+  const pane = structurePane(leaf)
+  if (!pane) {
+    if (isTerminalLeaf(leaf)) return // terminal popout handled by popout_terminal_leaf (Task 4)
+    return
+  }
 
   if (pane.mode === `workflow` && pane.workflow_id) {
     // Workflows have their own popout mechanism

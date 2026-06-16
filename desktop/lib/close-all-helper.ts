@@ -13,7 +13,7 @@ import {
   auto_name as _auto_name, serialize_structure_content,
   create_tab_state,
 } from '../pane-utils'
-import { leaves } from '../pane-tree'
+import { leaves, structurePane } from '../pane-tree'
 import { save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 
@@ -30,8 +30,8 @@ export function build_close_all_entries(
     const ts = tab_states[tab.id]
     if (!ts) continue
     for (const leaf of leaves(ts.root)) {
-      const pane = leaf.content.pane
-      if (!pane_has_content(pane)) continue
+      const pane = structurePane(leaf)
+      if (!pane || !pane_has_content(pane)) continue
       const structure = pane.saveable_structure ?? pane.structure
       const formula = structure?.sites?.length ? _auto_name(structure as Record<string, unknown>) : (pane.trajectory ? `Trajectory` : `Cube`)
       let save_target: CloseAllEntry[`save_target`] = `none`
@@ -71,7 +71,7 @@ export async function execute_close_all_saves(
     const ts = tab_states[entry.tab_id]
     if (!ts) continue
     const leaf = leaves(ts.root).find(l => l.id === entry.leaf_id)
-    const pane = leaf?.content.pane
+    const pane = leaf ? structurePane(leaf) : null
     if (!pane) continue
     const structure = (pane.saveable_structure ?? pane.structure) as Record<string, unknown> | undefined
     if (!structure) continue

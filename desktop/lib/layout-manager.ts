@@ -6,9 +6,12 @@
  * content would be lost.
  */
 
-import type { PaneState, StructureTabState } from '../pane-utils'
+import type { StructureTabState } from '../pane-utils'
 import { pane_has_content } from '../pane-utils'
-import { buildPreset, leaves, matchesPreset, type PresetId } from '../pane-tree'
+import {
+  buildPreset, leaves, matchesPreset, isTerminalLeaf, structurePane,
+  type LeafContent, type PresetId,
+} from '../pane-tree'
 
 export interface LayoutManagerDeps {
   get_active_ts: () => StructureTabState | null
@@ -26,11 +29,26 @@ function preset_leaf_count(preset: PresetId): number {
   return 2
 }
 
-/** Rebuild the tab's tree from a preset, dropping populated panes into its leaves. */
-function apply_preset(ts: StructureTabState, preset: PresetId, filled: PaneState[]) {
+/**
+ * Leaf contents worth carrying across a preset switch: terminal leaves (always)
+ * plus structure leaves that hold renderable content. Terminals survive a
+ * preset change with their session intact (we carry the whole `content`).
+ */
+function filled_contents(ts: StructureTabState): LeafContent[] {
+  return leaves(ts.root)
+    .filter(l => {
+      if (isTerminalLeaf(l)) return true
+      const pane = structurePane(l)
+      return !!pane && pane_has_content(pane)
+    })
+    .map(l => l.content)
+}
+
+/** Rebuild the tab's tree from a preset, dropping populated contents into its leaves. */
+function apply_preset(ts: StructureTabState, preset: PresetId, filled: LeafContent[]) {
   const root = buildPreset(preset)
   const slots = leaves(root)
-  for (let i = 0; i < slots.length && i < filled.length; i++) slots[i].content.pane = filled[i]
+  for (let i = 0; i < slots.length && i < filled.length; i++) slots[i].content = filled[i]
   ts.root = root
   ts.active_leaf_id = slots[0].id
   ts.close_confirm_leaf_id = null
@@ -41,7 +59,7 @@ export function handle_layout_change(deps: LayoutManagerDeps, preset: PresetId) 
   if (!ts) return
   if (matchesPreset(ts.root) === preset) return
 
-  const filled = leaves(ts.root).map(l => l.content.pane).filter(pane_has_content)
+  const filled = filled_contents(ts)
   const target = preset_leaf_count(preset)
 
   if (filled.length > target) {
@@ -62,7 +80,7 @@ export function confirm_layout_change(deps: LayoutManagerDeps) {
 
   // Truncate: keep only as many populated panes as the preset has leaves.
   const target = preset_leaf_count(new_layout)
-  const filled = leaves(ts.root).map(l => l.content.pane).filter(pane_has_content).slice(0, target)
+  const filled = filled_contents(ts).slice(0, target)
 
   apply_preset(ts, new_layout, filled)
   deps.set_pending_layout_change(null)
