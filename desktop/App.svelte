@@ -1303,6 +1303,33 @@
     }
   }
 
+  // Open a terminal as a pane-tree LEAF (replaces the old Structure side-panel
+  // terminal). Escalates the active leaf into a fresh pane (split up to CAP), or
+  // opens a new tab when all panes are full, then converts that leaf to a
+  // terminal. `term` carries an optional remote SSH session (HPC Connect →
+  // Terminal); omitted = a local shell.
+  function open_terminal_leaf(tab_id: string, leaf_id: string, term?: Partial<TerminalLeafState>) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const t: TerminalLeafState = { sync_cwd: false, ...term }
+    const r = escalateForImport(ts.root, leaf_id)
+    if (!r) {
+      // All panes full — open a new tab and convert its first leaf.
+      open_tab(`structure`)
+      const new_ts = tab_states[tm.active_tab_id]
+      if (!new_ts) return
+      const new_leaf = leaves(new_ts.root)[0]
+      if (!new_leaf) return
+      new_ts.root = setLeafContent(new_ts.root, new_leaf.id, { type: `terminal`, term: t })
+      new_ts.active_leaf_id = new_leaf.id
+      update_tab_label(tm.active_tab_id)
+      return
+    }
+    ts.root = setLeafContent(r.root, r.leafId, { type: `terminal`, term: t })
+    ts.active_leaf_id = r.leafId
+    update_tab_label(tab_id)
+  }
+
   // Pane management, close-save, and export functions are in ./lib/pane-manager.ts and ./lib/export-handlers.ts
 
   // Export / save dialog functions are in ./lib/export-handlers.ts
@@ -1905,6 +1932,9 @@
               on_edit_as_text={open_edit_as_text}
               on_open_file_overlay={(file_path: string, filename: string, session_id: string) => {
                 handle_terminal_open_file(file_path, filename, session_id)
+              }}
+              on_open_terminal={(term?: Partial<TerminalLeafState>) => {
+                open_terminal_leaf(tab.id, leaf.id, term)
               }}
               on_open_workflow_editor={(workflow_id: string) => {
                 handle_sidebar_open_workflow(workflow_id)
