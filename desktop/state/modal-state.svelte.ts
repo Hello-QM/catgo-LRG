@@ -22,7 +22,7 @@ class ModalState {
   search_provider = $state(``)
   paste_content_visible = $state(false)
   import_target_tab = $state(`structure-1`)
-  import_target_pane = $state(0)
+  import_target_leaf = $state('')
   optimade_search_element = $state(``)
   // Database import preview
   db_preview_visible = $state(false)
@@ -41,7 +41,7 @@ class ModalState {
 export interface CloseAllEntry {
   tab_id: string
   label: string
-  pane_idx: number
+  leaf_id: string
   formula: string
   save_target: `local` | `hpc` | `database` | `none`
   save_path?: string
