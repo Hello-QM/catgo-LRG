@@ -61,6 +61,8 @@ export interface StructureTabState {
   root: PaneNode
   active_leaf_id: string
   close_confirm_leaf_id: string | null
+  /** Leaf currently maximized/zoomed to fill the tab workspace, or null. */
+  maximized_leaf_id: string | null
   /** Per-tab structure library (sidebar). Cleared automatically on tab close. */
   library: LibraryEntry[]
   active_library_id: string | null
@@ -106,6 +108,7 @@ export function create_tab_state(): StructureTabState {
     root,
     active_leaf_id: root.id,
     close_confirm_leaf_id: null,
+    maximized_leaf_id: null,
     library: [],
     active_library_id: null,
   }
@@ -118,6 +121,7 @@ export function create_terminal_tab_state(opts?: Partial<TerminalLeafState>): St
     root,
     active_leaf_id: root.id,
     close_confirm_leaf_id: null,
+    maximized_leaf_id: null,
     library: [],
     active_library_id: null,
   }
