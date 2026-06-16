@@ -142,3 +142,14 @@ describe('not-found ops are no-ops', () => {
     expect(removeLeaf(root, 'missing')).toBe(root)
   })
 })
+
+import { create_tab_state } from '../../desktop/pane-utils'
+describe('create_tab_state', () => {
+  it('starts as one empty structure leaf, active = that leaf', () => {
+    const ts = create_tab_state()
+    expect(leafCount(ts.root)).toBe(1)
+    expect(ts.active_leaf_id).toBe((ts.root as LeafNode).id)
+    expect(isEmptyLeaf(ts.root as LeafNode)).toBe(true)
+    expect(ts.close_confirm_leaf_id).toBeNull()
+  })
+})
