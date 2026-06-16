@@ -1821,6 +1821,17 @@
           {#if term}
             <span class="panel-label">{terminalLabel(term)}</span>
             <button
+              class="panel-sync-btn"
+              class:active={term.sync_cwd}
+              onclick={(e) => { e.stopPropagation(); term.sync_cwd = !term.sync_cwd }}
+              title={term.sync_cwd ? t(`app.dir_sync_on`) : t(`app.dir_sync_off`)}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+            </button>
+            <button
               class="panel-popout-btn"
               onclick={(e) => { e.stopPropagation(); popout_terminal_leaf(tab.id, leaf.id) }}
               title={t(`app.open_in_new_window`)}
@@ -2634,6 +2645,7 @@
 
   .panel-popout-btn,
   .panel-maximize-btn,
+  .panel-sync-btn,
   .panel-close-btn {
     display: flex;
     align-items: center;
@@ -2648,6 +2660,15 @@
     cursor: pointer;
     opacity: 0;
     transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+  /* Directory-sync toggle: stays visible + blue when ON so the state is obvious. */
+  .panel-sync-btn.active {
+    opacity: 1;
+    color: var(--accent-color, #3b82f6);
+  }
+  .panel-sync-btn:hover {
+    background: rgba(59, 130, 246, 0.5);
+    color: white;
   }
 
   /* Hover-reveal lives in PaneTree.svelte (.pane:hover :global(.panel-*-btn))

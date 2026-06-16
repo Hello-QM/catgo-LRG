@@ -95,6 +95,7 @@
      so the descendant parts need :global(). (moved verbatim from App.svelte) */
   .pane:hover :global(.panel-popout-btn),
   .pane:hover :global(.panel-maximize-btn),
+  .pane:hover :global(.panel-sync-btn),
   .pane:hover :global(.panel-close-btn),
   .pane:hover :global(.panel-type-btn) { opacity: 1; }
   .pane.dragover::after {
