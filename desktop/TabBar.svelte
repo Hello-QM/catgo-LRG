@@ -51,6 +51,23 @@
   let show_add_menu = $state(false)
   let can_close = $derived(tabs.length > 0)
 
+  // Tab-bar dropdowns must be position:fixed with measured coords. As
+  // position:absolute they paint BEHIND the workspace/view-container (a
+  // stacking-context trap), so they are invisible and clicks fall through to
+  // the page below.
+  let add_btn = $state<HTMLElement | undefined>()
+  let layout_btn = $state<HTMLElement | undefined>()
+  let add_menu_pos = $state({ top: 0, left: 0 })
+  let layout_menu_pos = $state({ top: 0, left: 0 })
+
+  function open_add_menu() {
+    show_add_menu = !show_add_menu
+    if (show_add_menu && add_btn) {
+      const r = add_btn.getBoundingClientRect()
+      add_menu_pos = { top: Math.round(r.bottom + 4), left: Math.round(r.left) }
+    }
+  }
+
   function handle_tab_mousedown(event: MouseEvent, tab: AppTab) {
     if (event.button === 1 && can_close) {
       event.preventDefault()
@@ -60,6 +77,11 @@
 
   function handle_layout_click() {
     show_layout_menu = !show_layout_menu
+    if (show_layout_menu && layout_btn) {
+      const r = layout_btn.getBoundingClientRect()
+      // right-align the menu under the trigger (menu ~180px wide)
+      layout_menu_pos = { top: Math.round(r.bottom + 4), left: Math.round(r.right - 180) }
+    }
   }
 
   function handle_layout_select(id: LayoutType) {
@@ -130,13 +152,13 @@
     {/each}
 
     <div class="add-tab-container">
-      <button class="add-tab-btn" onclick={() => show_add_menu = !show_add_menu} title={t('app.new_tab')}>
+      <button bind:this={add_btn} class="add-tab-btn" onclick={open_add_menu} title={t('app.new_tab')}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path d="M12 5v14M5 12h14" />
         </svg>
       </button>
       {#if show_add_menu}
-        <div class="add-menu">
+        <div class="add-menu" style="top:{add_menu_pos.top}px; left:{add_menu_pos.left}px">
           <button class="add-menu-item" onclick={() => handle_add(`structure`)}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d={tab_icons.structure} />
@@ -163,14 +185,14 @@
 
   {#if layout !== undefined}
     <div class="layout-menu-container">
-      <button class="layout-trigger" onclick={handle_layout_click} title={t('app.layout') + ': ' + current_layout_option.label}>
+      <button bind:this={layout_btn} class="layout-trigger" onclick={handle_layout_click} title={t('app.layout') + ': ' + current_layout_option.label}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d={current_layout_option.icon} />
         </svg>
         <span class="layout-trigger-label">{current_layout_option.label}</span>
       </button>
       {#if show_layout_menu}
-        <div class="layout-menu">
+        <div class="layout-menu" style="top:{layout_menu_pos.top}px; left:{layout_menu_pos.left}px">
           {#each layout_options as opt}
             <button
               class="layout-menu-item"
@@ -409,10 +431,7 @@
   }
 
   .layout-menu {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
+    position: fixed;
     min-width: min(160px, calc(100vw - 16px));
     max-width: calc(100vw - 16px);
     max-height: calc(100vh - 48px);
@@ -528,10 +547,7 @@
   }
 
   .add-menu {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 4px;
+    position: fixed;
     min-width: 140px;
     background: var(--dialog-bg, var(--surface-bg, #1c1c2e));
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
