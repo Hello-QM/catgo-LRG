@@ -9,21 +9,22 @@
     drag_target_leaf: string | null
     close_confirm_leaf_id: string | null
     active_split_id: string | null
-    leaf_body: Snippet<[LeafNode]>     // App renders the viewer/landing for a leaf
+    leaf_body: Snippet<[LeafNode]>     // App renders the viewer/landing for a structure leaf
+    terminal_body: Snippet<[LeafNode]> // App renders the TerminalPanel for a terminal leaf
     header: Snippet<[LeafNode]>        // App renders the dot+label+popout+close buttons
     banner: Snippet<[LeafNode]>        // App renders the close-confirm banner
     on_activate: (leaf_id: string) => void
     on_split_mousedown: (e: MouseEvent, split_id: string, dir: 'h' | 'v') => void
     on_split_dblclick: (split_id: string) => void
   }
-  let { node, multi, active_leaf_id, drag_target_leaf, close_confirm_leaf_id, active_split_id, leaf_body, header, banner, on_activate, on_split_mousedown, on_split_dblclick }: Props = $props()
+  let { node, multi, active_leaf_id, drag_target_leaf, close_confirm_leaf_id, active_split_id, leaf_body, terminal_body, header, banner, on_activate, on_split_mousedown, on_split_dblclick }: Props = $props()
 </script>
 
 {#if node.kind === 'split'}
   {@const s = node as SplitNode}
   <div class="split {s.direction === 'h' ? 'h' : 'v'}">
     <div class="split-child" style={`flex-basis:calc(${s.ratio * 100}% - 3px)`}>
-      <svelte:self node={s.children[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
+      <svelte:self node={s.children[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
     <div
       class="grid-divider {s.direction === 'h' ? 'grid-divider-col' : 'grid-divider-row'}"
@@ -34,7 +35,7 @@
       aria-orientation={s.direction === 'h' ? 'vertical' : 'horizontal'}
     ></div>
     <div class="split-child" style={`flex-basis:calc(${(1 - s.ratio) * 100}% - 3px)`}>
-      <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
+      <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
   </div>
 {:else}
@@ -54,7 +55,13 @@
       <div class="panel-header">{@render header(leaf)}</div>
     {/if}
     {@render banner(leaf)}
-    <div class="panel-content">{@render leaf_body(leaf)}</div>
+    <div class="panel-content">
+      {#if leaf.content.type === 'terminal'}
+        {@render terminal_body(leaf)}
+      {:else}
+        {@render leaf_body(leaf)}
+      {/if}
+    </div>
   </div>
 {/if}
 

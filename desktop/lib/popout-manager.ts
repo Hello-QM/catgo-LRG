@@ -145,6 +145,43 @@ export async function popout_workflow(
   close_tab(`workflow`); switch_to_structure()
 }
 
+/**
+ * Open a terminal *leaf*'s session in a new bare-terminal window. Unlike
+ * `popout_terminal` (which manages the top-level Terminal tab), this is a fire-and-
+ * forget popout for a pane-tree terminal leaf: it just opens the `#terminal` window
+ * with the session params. The caller removes the leaf from its source tree.
+ */
+export async function popout_terminal_session(
+  is_tauri: boolean,
+  terminal: { init_session_id?: string; init_host?: string; init_username?: string; init_sync_cwd: boolean },
+) {
+  const params = new URLSearchParams()
+  if (terminal.init_session_id) params.set(`session_id`, terminal.init_session_id)
+  if (terminal.init_host) params.set(`host`, terminal.init_host)
+  if (terminal.init_username) params.set(`username`, terminal.init_username)
+  if (terminal.init_sync_cwd) params.set(`sync_cwd`, `true`)
+  const qs = params.toString()
+  const url = `${window.location.origin}${window.location.pathname}#terminal${qs ? `?${qs}` : ``}`
+  const win_id = `terminal-${Date.now()}`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const term_window = new WebviewWindow(win_id, {
+        title: terminal.init_host ? `${terminal.init_username || ``}@${terminal.init_host}` : `CatGo - Terminal`,
+        url, width: 900, height: 600, center: true, resizable: true, decorations: true,
+      })
+      term_window.once(`tauri://error`, (e) => {
+        console.error(`Terminal window error:`, e)
+        window.open(url, win_id, `width=900,height=600,resizable=yes`)
+      })
+      return
+    } catch (err) {
+      console.error(`Tauri WebviewWindow failed:`, err)
+    }
+  }
+  window.open(url, win_id, `width=900,height=600,resizable=yes`)
+}
+
 /** Open the terminal tab in a new window. */
 export async function popout_terminal(
   is_tauri: boolean,

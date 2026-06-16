@@ -21,7 +21,8 @@
   import { readFile } from '@tauri-apps/plugin-fs'
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
-  import { TerminalWindow, DopingPTWindow } from '$lib/structure'
+  import { TerminalWindow, TerminalPanel, DopingPTWindow } from '$lib/structure'
+  import { terminal_font_state } from '$lib/state.svelte'
   import { ChatPane } from '$lib/chat'
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
@@ -59,6 +60,7 @@
     type LeafNode, type PresetId,
     leaves, leafCount, findLeafById, findFirstEmptyLeaf,
     escalateForImport, setRatio, create_empty_leaf, structurePane,
+    removeLeaf, terminalState, type TerminalLeafState,
   } from './pane-tree'
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
@@ -73,6 +75,7 @@
   import {
     load_popout_structure, popout_pane as _popout_pane,
     popout_workflow as _popout_workflow, popout_terminal as _popout_terminal,
+    popout_terminal_session as _popout_terminal_session,
     open_structure_in_new_window, parse_and_open_structure_window,
   } from './lib/popout-manager'
   // Extracted sidebar handlers
@@ -279,6 +282,53 @@
     return false
   }
   function handle_terminal_open_file(file_path: string, filename: string, session_id: string) { return _handle_terminal_open_file(sidebar_deps, file_path, filename, session_id) }
+  // Ctrl+click file-open from a terminal *leaf* — derive filename from the path and
+  // use the leaf's own session_id (reuses the same handler the side-panel terminal used).
+  function handle_terminal_leaf_open_file(file_path: string, term: TerminalLeafState) {
+    const name = file_path.split(`/`).pop() || file_path
+    return handle_terminal_open_file(file_path, name, term.session_id || ``)
+  }
+  // Header label for a terminal leaf: remote host > shell > CWD basename > 'Terminal'.
+  function terminalLabel(term: TerminalLeafState): string {
+    return term.host ?? term.shell ?? (term.cwd ? term.cwd.split(/[/\\]/).pop() : undefined) ?? `Terminal`
+  }
+  // Close a terminal leaf: drop it from the tree (TerminalPanel's $effect cleanup kills
+  // the PTY on unmount). If it was the sole leaf, reset to a fresh empty structure leaf.
+  function close_terminal_leaf(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    if (leafCount(ts.root) <= 1) {
+      ts.root = create_empty_leaf()
+      ts.active_leaf_id = ts.root.id
+    } else {
+      ts.root = removeLeaf(ts.root, leaf_id)
+      if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+    }
+    update_tab_label(tab_id)
+  }
+  // Pop a terminal leaf out into its own window, then drop it from the source tree.
+  function popout_terminal_leaf(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const leaf = findLeafById(ts.root, leaf_id)
+    if (!leaf) return
+    const term = terminalState(leaf)
+    if (!term) return
+    _popout_terminal_session(is_tauri, {
+      init_session_id: term.session_id,
+      init_host: term.host,
+      init_username: term.username,
+      init_sync_cwd: term.sync_cwd,
+    })
+    if (leafCount(ts.root) <= 1) {
+      ts.root = create_empty_leaf()
+      ts.active_leaf_id = ts.root.id
+    } else {
+      ts.root = removeLeaf(ts.root, leaf_id)
+      if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+    }
+    update_tab_label(tab_id)
+  }
   function handle_unload(tab_id: string, leaf_id: string) { _handle_unload(pane_deps, tab_id, leaf_id) }
   function close_panel(tab_id: string, leaf_id: string) { _close_panel(pane_deps, tab_id, leaf_id) }
   function save_and_close_panel(tab_id: string, leaf_id: string) { return _save_and_close_panel(pane_deps, tab_id, leaf_id) }
@@ -1688,20 +1738,19 @@
           on_split_mousedown={(e, sid, dir) => start_split_resize(e, sid, dir, tab.id)}
           on_split_dblclick={(sid) => { ts.root = setRatio(ts.root, sid, 0.5) }}
           {leaf_body}
+          {terminal_body}
           {header}
           {banner}
         />
 
         {#snippet header(leaf: LeafNode)}
-          {@const pane = leaf.content.pane}
-          {#if pane_has_content(pane)}
-            <span class="panel-dot"></span>
-          {/if}
-          <span class="panel-label">{get_pane_label(pane)}</span>
-          {#if pane_has_content(pane)}
+          {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {@const term = leaf.content.type === `terminal` ? leaf.content.term : undefined}
+          {#if term}
+            <span class="panel-label">{terminalLabel(term)}</span>
             <button
               class="panel-popout-btn"
-              onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, leaf.id) }}
+              onclick={(e) => { e.stopPropagation(); popout_terminal_leaf(tab.id, leaf.id) }}
               title={t(`app.open_in_new_window`)}
             >
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -1710,21 +1759,48 @@
                 <line x1="10" y1="14" x2="21" y2="3"/>
               </svg>
             </button>
+            <button
+              class="panel-close-btn"
+              onclick={(e) => { e.stopPropagation(); close_terminal_leaf(tab.id, leaf.id) }}
+              title={t(`app.close_panel`)}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          {:else if pane}
+            {#if pane_has_content(pane)}
+              <span class="panel-dot"></span>
+            {/if}
+            <span class="panel-label">{get_pane_label(pane)}</span>
+            {#if pane_has_content(pane)}
+              <button
+                class="panel-popout-btn"
+                onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, leaf.id) }}
+                title={t(`app.open_in_new_window`)}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                  <polyline points="15 3 21 3 21 9"/>
+                  <line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+              </button>
+            {/if}
+            <button
+              class="panel-close-btn"
+              onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, leaf.id) }}
+              title={t(`app.close_panel`)}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
           {/if}
-          <button
-            class="panel-close-btn"
-            onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, leaf.id) }}
-            title={t(`app.close_panel`)}
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
         {/snippet}
 
         {#snippet banner(leaf: LeafNode)}
-          {#if ts.close_confirm_leaf_id === leaf.id}
-            {@const pane = leaf.content.pane}
+          {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {#if pane && ts.close_confirm_leaf_id === leaf.id}
             <div class="panel-close-banner">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
@@ -1771,7 +1847,8 @@
         {/snippet}
 
         {#snippet leaf_body(leaf: LeafNode)}
-          {@const pane = leaf.content.pane}
+          {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {#if pane}
           {#if pane.mode === `workflow`}
             <WorkflowView
               initial_workflow_id={pane.workflow_id}
@@ -2074,6 +2151,26 @@
                 {/if}
               </div>
             </div>
+          {/if}
+          {/if}
+        {/snippet}
+
+        {#snippet terminal_body(leaf: LeafNode)}
+          {@const term = leaf.content.type === `terminal` ? leaf.content.term : undefined}
+          {#if term}
+            <TerminalPanel
+              show_header={false}
+              session_id={term.session_id}
+              host={term.host}
+              username={term.username}
+              shell={term.shell}
+              font_size={terminal_font_state.font_size}
+              font_family={terminal_font_state.font_family}
+              bind:sync_cwd={term.sync_cwd}
+              on_cwd_change={(c) => { term.cwd = c }}
+              on_open_file={(p) => handle_terminal_leaf_open_file(p, term)}
+              ondisconnect={() => close_terminal_leaf(tab.id, leaf.id)}
+            />
           {/if}
         {/snippet}
         </div><!-- end structure-workspace -->
