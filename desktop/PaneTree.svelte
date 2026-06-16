@@ -22,7 +22,7 @@
 {#if node.kind === 'split'}
   {@const s = node as SplitNode}
   <div class="split {s.direction === 'h' ? 'h' : 'v'}">
-    <div class="split-child" style={s.direction === 'h' ? `flex-basis:${s.ratio * 100}%` : `flex-basis:${s.ratio * 100}%`}>
+    <div class="split-child" style={`flex-basis:calc(${s.ratio * 100}% - 3px)`}>
       <svelte:self node={s.children[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
     <div
@@ -33,7 +33,7 @@
       role="separator"
       aria-orientation={s.direction === 'h' ? 'vertical' : 'horizontal'}
     ></div>
-    <div class="split-child" style={`flex-basis:${(1 - s.ratio) * 100}%`}>
+    <div class="split-child" style={`flex-basis:calc(${(1 - s.ratio) * 100}% - 3px)`}>
       <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
   </div>

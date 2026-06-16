@@ -6,11 +6,11 @@
  */
 
 import type { PaneState, StructureTabState } from '../pane-utils'
-import { create_empty_pane, pane_has_content, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
+import { create_empty_pane, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
 import { findLeafById, leafCount, leaves, removeLeaf } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
-import { list_projects, save_structure_to_db, write_file } from '$lib/api/project'
+import { list_projects, save_structure_to_db } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 
 export interface PaneManagerDeps {
