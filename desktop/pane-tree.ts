@@ -52,22 +52,30 @@ function next_id(prefix: string): string {
 }
 
 export function leaves(node: PaneNode): LeafNode[] {
+  if (!node) return []
   if (node.kind === 'leaf') return [node]
+  if (!node.children) return []
   return [...leaves(node.children[0]), ...leaves(node.children[1])]
 }
 
 export function leafCount(node: PaneNode): number {
-  return node.kind === 'leaf' ? 1 : leafCount(node.children[0]) + leafCount(node.children[1])
+  if (!node) return 0
+  if (node.kind === 'leaf') return 1
+  if (!node.children) return 0
+  return leafCount(node.children[0]) + leafCount(node.children[1])
 }
 
 export function findLeafById(node: PaneNode, id: string): LeafNode | null {
+  if (!node) return null
   if (node.kind === 'leaf') return node.id === id ? node : null
+  if (!node.children) return null
   return findLeafById(node.children[0], id) ?? findLeafById(node.children[1], id)
 }
 
 export function findSplit(node: PaneNode, id: string): SplitNode | null {
-  if (node.kind === 'leaf') return null
+  if (!node || node.kind === 'leaf') return null
   if (node.id === id) return node
+  if (!node.children) return null
   return findSplit(node.children[0], id) ?? findSplit(node.children[1], id)
 }
 

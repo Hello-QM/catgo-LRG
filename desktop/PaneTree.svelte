@@ -22,7 +22,7 @@
   let { node, multi, active_leaf_id, drag_target_leaf, close_confirm_leaf_id, active_split_id, maximized_leaf_id, leaf_body, terminal_body, header, banner, on_activate, on_split_mousedown, on_split_dblclick }: Props = $props()
 </script>
 
-{#if node.kind === 'split'}
+{#if node && node.kind === 'split' && node.children}
   {@const s = node as SplitNode}
   {@const max0 = maximized_leaf_id ? subtreeContains(s.children[0], maximized_leaf_id) : null}
   {@const max1 = maximized_leaf_id ? subtreeContains(s.children[1], maximized_leaf_id) : null}
@@ -46,7 +46,7 @@
       <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
   </div>
-{:else}
+{:else if node && node.kind === 'leaf'}
   {@const leaf = node as LeafNode}
   <div
     class="pane"
