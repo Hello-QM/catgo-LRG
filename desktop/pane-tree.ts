@@ -11,7 +11,18 @@ import { create_empty_pane, pane_has_content } from './pane-utils'
 export type SplitDir = 'h' | 'v' // 'h' = side by side (vertical divider); 'v' = stacked (horizontal divider)
 export type PresetId = 'single' | 'splitH' | 'splitV' | 'quad'
 
-export type LeafContent = { type: 'structure'; pane: PaneState }
+export interface TerminalLeafState {
+  session_id?: string
+  host?: string
+  username?: string
+  shell?: string
+  sync_cwd: boolean
+  cwd?: string
+}
+
+export type LeafContent =
+  | { type: 'structure'; pane: PaneState }
+  | { type: 'terminal'; term: TerminalLeafState }
 
 export interface LeafNode {
   kind: 'leaf'
@@ -62,6 +73,26 @@ export function findSplit(node: PaneNode, id: string): SplitNode | null {
 
 export function create_empty_leaf(): LeafNode {
   return { kind: 'leaf', id: next_id('leaf'), content: { type: 'structure', pane: create_empty_pane() } }
+}
+
+export function isStructureLeaf(leaf: LeafNode): boolean {
+  return leaf.content.type === 'structure'
+}
+
+export function isTerminalLeaf(leaf: LeafNode): boolean {
+  return leaf.content.type === 'terminal'
+}
+
+export function structurePane(leaf: LeafNode): PaneState | null {
+  return leaf.content.type === 'structure' ? leaf.content.pane : null
+}
+
+export function terminalState(leaf: LeafNode): TerminalLeafState | null {
+  return leaf.content.type === 'terminal' ? leaf.content.term : null
+}
+
+export function create_terminal_leaf(opts?: Partial<TerminalLeafState>): LeafNode {
+  return { kind: 'leaf', id: next_id('term'), content: { type: 'terminal', term: { sync_cwd: false, ...opts } } }
 }
 
 /** A leaf is "empty" when it is a structure leaf holding nothing renderable. */

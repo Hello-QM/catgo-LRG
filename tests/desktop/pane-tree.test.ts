@@ -6,6 +6,9 @@ import {
   removeLeaf, setRatio, splitLeaf,
   type LeafNode, type PaneNode, type SplitNode,
 } from '../../desktop/pane-tree'
+import {
+  create_terminal_leaf, isStructureLeaf, isTerminalLeaf, structurePane, terminalState,
+} from '../../desktop/pane-tree'
 
 const leaf = (id: string): LeafNode => ({ kind: 'leaf', id, content: { type: 'structure', pane: create_empty_pane() } })
 const split = (id: string, dir: 'h' | 'v', ratio: number, a: PaneNode, b: PaneNode): SplitNode => ({ kind: 'split', id, direction: dir, ratio, children: [a, b] })
@@ -151,5 +154,30 @@ describe('create_tab_state', () => {
     expect(ts.active_leaf_id).toBe((ts.root as LeafNode).id)
     expect(isEmptyLeaf(ts.root as LeafNode)).toBe(true)
     expect(ts.close_confirm_leaf_id).toBeNull()
+  })
+})
+
+describe('terminal leaves', () => {
+  it('create_terminal_leaf makes a terminal leaf with a unique id and given state', () => {
+    const t = create_terminal_leaf({ shell: 'bash', sync_cwd: true })
+    expect(t.kind).toBe('leaf')
+    expect(isTerminalLeaf(t)).toBe(true)
+    expect(isStructureLeaf(t)).toBe(false)
+    expect(terminalState(t)?.shell).toBe('bash')
+    expect(terminalState(t)?.sync_cwd).toBe(true)
+    expect(structurePane(t)).toBeNull()
+    expect(create_terminal_leaf().id).not.toBe(t.id)
+  })
+  it('structure leaf: structurePane returns the pane, terminalState null', () => {
+    const s = create_empty_leaf()
+    expect(isStructureLeaf(s)).toBe(true)
+    expect(structurePane(s)).toBe(s.content.type === 'structure' ? s.content.pane : null)
+    expect(terminalState(s)).toBeNull()
+  })
+  it('a terminal leaf is never "empty" and never an import target', () => {
+    const t = create_terminal_leaf()
+    expect(isEmptyLeaf(t)).toBe(false)
+    const root = split('S', 'h', 0.5, t, create_empty_leaf())
+    expect(findFirstEmptyLeaf(root)?.id).not.toBe(t.id) // the empty structure leaf, not the terminal
   })
 })
