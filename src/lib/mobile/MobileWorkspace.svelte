@@ -625,10 +625,6 @@
             </div>
           </div>
         {:else if has_structure}
-          <!-- Universal manual entry: any loaded structure → Mol* on demand. -->
-          <div class="mw-bio-float">
-            <BioViewerToggle is_molstar={false} on_toggle={toggle_mobile_viewer} />
-          </div>
           <Structure
             bind:structure
             bind:saveable_structure
@@ -638,6 +634,7 @@
             allow_file_drop={false}
             persist_settings={false}
             hidden_toolbar_items={HIDDEN_TOOLBAR}
+            on_open_in_molstar={toggle_mobile_viewer}
             tab_id="mobile"
             is_active={true}
           />
@@ -1138,12 +1135,6 @@
     flex: 1 1 auto;
     min-height: 0;
     position: relative;
-  }
-  .mw-bio-float {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    z-index: 20;
   }
   .mw-body.split-h .mw-struct,
   .mw-body.split-v .mw-struct {
