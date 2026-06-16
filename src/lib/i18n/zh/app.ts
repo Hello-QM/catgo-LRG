@@ -176,5 +176,10 @@ const app: Record<string, string> = {
   no_workflows_yet: `暂无工作流。请新建或使用上面的模板。`,
   static_mode_workflow_title: `工作流引擎`,
   static_mode_workflow_message: `工作流执行、HPC 集成和项目管理需要使用 CatGo 桌面应用。你仍然可以在浏览器中使用 3D 结构查看器和构建工具。`,
+
+  // Open-target preference
+  open_in_split: `分屏`,
+  open_in_window: `新窗口`,
+  open_files_in: `打开文件到`,
 }
 export default app

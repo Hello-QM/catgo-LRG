@@ -22,7 +22,7 @@
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
   import { TerminalPanel, DopingPTWindow } from '$lib/structure'
-  import { terminal_font_state } from '$lib/state.svelte'
+  import { terminal_font_state, open_target_state, resolve_open_target } from '$lib/state.svelte'
   import { ChatPane } from '$lib/chat'
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
@@ -197,6 +197,8 @@
     get_drag_target_pane: () => drag_target_leaf,
     set_drag_target_pane: (v) => { drag_target_leaf = v },
     set_is_loading: (v) => { is_loading = v },
+    get_open_target: () => open_target_state.value,
+    open_in_window: (content, filename) => parse_and_open_structure_window(content, filename, is_tauri),
   }
   const resize_deps_min: ResizeDepsMin = {
     tab_states,
@@ -770,10 +772,11 @@
   let file_input_target_tab = ``
   let file_input_target_leaf = ``
 
-  async function handle_open_file(tab_id: string, leaf_id: string) {
+  async function handle_open_file(tab_id: string, leaf_id: string, shift = false) {
     const ts = tab_states[tab_id]
     if (!ts) return
     ts.active_leaf_id = leaf_id
+    const target = resolve_open_target(open_target_state.value, shift)
     if (is_tauri) {
       try {
         // Pick paths first; divert large trajectories to the backend streamer
@@ -789,6 +792,10 @@
           const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
           const results = await tauri_read_dropped_paths(read_paths, accept)
           if (results.length > 0) {
+            if (target === 'window' && results.length === 1) {
+              await parse_and_open_structure_window(results[0].content as string, results[0].filename, is_tauri)
+              return
+            }
             await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), leaf_id)
           }
         }
@@ -2091,7 +2098,7 @@
               {/if}
 
               <div class="import-sidebar">
-                <button class="import-card add-own-card" onclick={() => handle_open_file(tab.id, leaf.id)}>
+                <button class="import-card add-own-card" onclick={(e) => handle_open_file(tab.id, leaf.id, e.shiftKey)}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
                   </svg>

@@ -5,6 +5,7 @@
  */
 
 import type { StructureTabState } from '../pane-utils'
+import { resolve_open_target } from '$lib/state.svelte'
 import { findFirstEmptyLeaf } from '../pane-tree'
 
 export interface ImportItem {
@@ -27,6 +28,8 @@ export interface DragDropDeps {
   get_drag_target_pane: () => string | null
   set_drag_target_pane: (v: string | null) => void
   set_is_loading: (v: boolean) => void
+  get_open_target: () => 'split' | 'window'
+  open_in_window: (content: string, filename: string) => Promise<void>
 }
 
 /* Minimal File System Entry typings (non-standard webkit API). */
@@ -125,6 +128,11 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       }
       const { read_file } = await import(`$lib/api/project`)
       const result = await read_file(fs_path)
+      const fs_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
+      if (fs_target === 'window') {
+        await deps.open_in_window(result.content, result.name)
+        return
+      }
       await deps.process_file_content(deps.get_active_tab_id(), result.content, result.name, target_leaf_id)
       ts.active_leaf_id = target_leaf_id
     } catch (err) {
@@ -169,6 +177,16 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       to_import.push(c)
     }
     if (to_import.length === 0) { ts.active_leaf_id = target_leaf_id; return }
+    if (to_import.length === 1) {
+      const drop_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
+      if (drop_target === 'window') {
+        const single = to_import[0]
+        const content = await single.file.text()
+        await deps.open_in_window(content, single.file.name)
+        ts.active_leaf_id = target_leaf_id
+        return
+      }
+    }
     await deps.import_many(
       deps.get_active_tab_id(),
       to_import.map(c => ({ file: c.file, filename: c.file.name, path: c.path })),

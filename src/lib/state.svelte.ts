@@ -190,3 +190,34 @@ export const save_pane_font_size = (size: number): void => {
     // Silently fail
   }
 }
+
+// ── open-target preference ──────────────────────────────────────────────────
+export type OpenTarget = 'split' | 'window'
+
+const OPEN_TARGET_KEY = `catgo-open-target`
+let initial_open_target: OpenTarget = 'split'
+try {
+  if (typeof window !== `undefined` && globalThis.localStorage) {
+    const saved = localStorage.getItem(OPEN_TARGET_KEY)
+    if (saved === 'split' || saved === 'window') initial_open_target = saved
+  }
+} catch {
+  // Fallback for test environments
+}
+
+export const open_target_state = $state<{ value: OpenTarget }>({ value: initial_open_target })
+
+export function set_open_target(v: OpenTarget): void {
+  open_target_state.value = v
+  try {
+    if (typeof window !== `undefined` && globalThis.localStorage) localStorage.setItem(OPEN_TARGET_KEY, v)
+  } catch {
+    // Silently fail
+  }
+}
+
+/** Per-open override: holding Shift flips the global default. */
+export function resolve_open_target(deflt: OpenTarget, shift: boolean): OpenTarget {
+  if (!shift) return deflt
+  return deflt === 'split' ? 'window' : 'split'
+}
