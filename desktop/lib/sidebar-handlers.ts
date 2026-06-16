@@ -6,8 +6,8 @@
  */
 
 import type { AnyStructure } from '$lib'
-import type { StructureTabState, PaneState } from '../pane-utils'
-import { pane_has_content } from '../pane-utils'
+import type { StructureTabState } from '../pane-utils'
+import { findFirstEmptyLeaf } from '../pane-tree'
 import { sidebar } from '../state/sidebar-state.svelte'
 import { parse_and_open_structure_window } from './popout-manager'
 
@@ -15,7 +15,7 @@ export interface SidebarHandlerDeps {
   get_active_ts: () => StructureTabState | null
   get_active_tab_id: () => string
   get_active_tab_type: () => string
-  process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) => Promise<void>
+  process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, leaf_id: string, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) => Promise<void>
   update_tab_label: (tab_id: string) => void
   is_tauri: boolean
   set_is_loading: (v: boolean) => void
@@ -33,8 +33,8 @@ export function handle_sidebar_load(deps: SidebarHandlerDeps, content: string | 
   }
   const ts = deps.get_active_ts()
   if (!ts) return
-  const pane_idx = ts.panes.findIndex(p => !pane_has_content(p))
-  const target = pane_idx >= 0 ? pane_idx : ts.active_pane
+  const empty = findFirstEmptyLeaf(ts.root)
+  const target = empty ? empty.id : ts.active_leaf_id
   const origin = (file_path && session_id) ? { session_id, file_path } : null
   // Local filesystem path: file_path is set but session_id is not (not HPC)
   const local_path = (file_path && !session_id) ? file_path : null
@@ -78,8 +78,8 @@ export function handle_sidebar_load_trajectory(deps: SidebarHandlerDeps, content
   }
   const ts = deps.get_active_ts()
   if (!ts) return
-  const pane_idx = ts.panes.findIndex(p => !pane_has_content(p))
-  const target = pane_idx >= 0 ? pane_idx : ts.active_pane
+  const empty = findFirstEmptyLeaf(ts.root)
+  const target = empty ? empty.id : ts.active_leaf_id
   deps.process_file_content(deps.get_active_tab_id(), content, filename, target)
 }
 
