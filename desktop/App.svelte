@@ -21,8 +21,8 @@
   import { readFile } from '@tauri-apps/plugin-fs'
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
-  import { TerminalPanel, DopingPTWindow } from '$lib/structure'
-  import { terminal_font_state, open_target_state, resolve_open_target } from '$lib/state.svelte'
+  import { TerminalWindow, DopingPTWindow } from '$lib/structure'
+  import { open_target_state, resolve_open_target } from '$lib/state.svelte'
   import { ChatPane } from '$lib/chat'
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
@@ -1836,17 +1836,7 @@
           {@const term = leaf.content.type === `terminal` ? leaf.content.term : undefined}
           {#if term}
             <span class="panel-label">{terminalLabel(term)}</span>
-            <button
-              class="panel-sync-btn"
-              class:active={term.sync_cwd}
-              onclick={(e) => { e.stopPropagation(); term.sync_cwd = !term.sync_cwd }}
-              title={term.sync_cwd ? t(`app.dir_sync_on`) : t(`app.dir_sync_off`)}
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-              </svg>
-            </button>
+            <!-- Directory Sync / font / shell now live inside TerminalWindow (per tab). -->
             <button
               class="panel-popout-btn"
               onclick={(e) => { e.stopPropagation(); popout_terminal_leaf(tab.id, leaf.id) }}
@@ -2311,18 +2301,18 @@
         {#snippet terminal_body(leaf: LeafNode)}
           {@const term = leaf.content.type === `terminal` ? leaf.content.term : undefined}
           {#if term}
-            <TerminalPanel
-              show_header={false}
-              session_id={term.session_id}
-              host={term.host}
-              username={term.username}
-              shell={term.shell}
-              font_size={terminal_font_state.font_size}
-              font_family={terminal_font_state.font_family}
-              bind:sync_cwd={term.sync_cwd}
-              on_cwd_change={(c) => { term.cwd = c }}
+            <!-- TerminalWindow provides the full terminal chrome inside the leaf:
+                 internal tabs (multiple shells, "+"), per-tab shell picker, font
+                 settings, and per-tab Directory Sync. The leaf header above only
+                 carries the tree controls (type-switch / maximize / popout / close). -->
+            <TerminalWindow
+              initial_session_id={term.session_id}
+              initial_host={term.host}
+              initial_username={term.username}
+              initial_sync_cwd={term.sync_cwd}
+              onpopout={() => popout_terminal_leaf(tab.id, leaf.id)}
+              onclose={() => close_terminal_leaf(tab.id, leaf.id)}
               on_open_file={(p) => handle_terminal_leaf_open_file(p, term)}
-              ondisconnect={() => close_terminal_leaf(tab.id, leaf.id)}
             />
           {/if}
         {/snippet}
@@ -2661,7 +2651,6 @@
 
   .panel-popout-btn,
   .panel-maximize-btn,
-  .panel-sync-btn,
   .panel-close-btn {
     display: flex;
     align-items: center;
@@ -2677,16 +2666,6 @@
     opacity: 0;
     transition: opacity 0.15s, background 0.15s, color 0.15s;
   }
-  /* Directory-sync toggle: stays visible + blue when ON so the state is obvious. */
-  .panel-sync-btn.active {
-    opacity: 1;
-    color: var(--accent-color, #3b82f6);
-  }
-  .panel-sync-btn:hover {
-    background: rgba(59, 130, 246, 0.5);
-    color: white;
-  }
-
   /* Hover-reveal lives in PaneTree.svelte (.pane:hover :global(.panel-*-btn))
      because .pane is rendered there while these buttons render in App's scope. */
 
