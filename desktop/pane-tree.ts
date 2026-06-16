@@ -32,7 +32,9 @@ export type PaneNode = SplitNode | LeafNode
 /** Max leaves per tab (spec D6). Preserves the old single->2->4 GPU envelope. */
 export const CAP = 4
 
-let _id_counter = 0
+// Seed from a random base so a Vite HMR module reload (which resets module
+// state) mints a disjoint id space and cannot collide with ids in live trees.
+let _id_counter = Math.floor(Math.random() * 1e9)
 function next_id(prefix: string): string {
   _id_counter += 1
   return `${prefix}-${_id_counter}`

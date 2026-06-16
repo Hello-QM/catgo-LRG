@@ -129,3 +129,16 @@ describe('buildPreset / matchesPreset', () => {
     expect(matchesPreset(custom)).toBeNull() // left-2-right-1
   })
 })
+
+describe('not-found ops are no-ops', () => {
+  it('splitLeaf returns null for a missing leaf id', () => {
+    const root = create_empty_leaf()
+    expect(splitLeaf(root, 'missing', 'h')).toBeNull()
+  })
+  it('removeLeaf returns the same root reference for a missing id', () => {
+    const a = create_empty_leaf()
+    const b = create_empty_leaf()
+    const root = split('S', 'h', 0.5, a, b)
+    expect(removeLeaf(root, 'missing')).toBe(root)
+  })
+})
