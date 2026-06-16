@@ -160,6 +160,7 @@
     get_active_ts,
     get_active_tab_id: () => tm.active_tab_id,
     get_active_tab_type: () => tm.active_tab_type,
+    get_open_target: () => open_target_state.value,
     process_file_content,
     update_tab_label,
     get is_tauri() { return is_tauri },
