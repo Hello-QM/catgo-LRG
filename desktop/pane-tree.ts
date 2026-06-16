@@ -71,6 +71,11 @@ export function findSplit(node: PaneNode, id: string): SplitNode | null {
   return findSplit(node.children[0], id) ?? findSplit(node.children[1], id)
 }
 
+/** True iff a leaf with `leafId` lives anywhere in `node`'s subtree. */
+export function subtreeContains(node: PaneNode, leafId: string): boolean {
+  return findLeafById(node, leafId) !== null
+}
+
 export function create_empty_leaf(): LeafNode {
   return { kind: 'leaf', id: next_id('leaf'), content: { type: 'structure', pane: create_empty_pane() } }
 }

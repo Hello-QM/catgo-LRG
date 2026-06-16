@@ -3,7 +3,7 @@ import { create_empty_pane } from '../../desktop/pane-utils'
 import {
   CAP, buildPreset, create_empty_leaf, escalateForImport, findFirstEmptyLeaf,
   findLeafById, findSplit, isEmptyLeaf, leafCount, leaves, matchesPreset,
-  removeLeaf, setLeafContent, setRatio, splitLeaf,
+  removeLeaf, setLeafContent, setRatio, splitLeaf, subtreeContains,
   type LeafNode, type PaneNode, type SplitNode,
 } from '../../desktop/pane-tree'
 import {
@@ -187,5 +187,16 @@ describe('terminal leaves', () => {
     expect(out.id).toBe(s.id) // same leaf id
     expect(isTerminalLeaf(out)).toBe(true)
     expect(terminalState(out)?.sync_cwd).toBe(false)
+  })
+})
+
+describe('subtreeContains', () => {
+  it('true iff the leaf is somewhere in the node subtree', () => {
+    const a = create_empty_leaf(); const b = create_empty_leaf(); const c = create_empty_leaf()
+    const root = split('S1', 'h', 0.5, split('S2', 'v', 0.5, a, b), c)
+    expect(subtreeContains(root, a.id)).toBe(true)
+    expect(subtreeContains((root as SplitNode).children[1], a.id)).toBe(false)
+    expect(subtreeContains((root as SplitNode).children[1], c.id)).toBe(true)
+    expect(subtreeContains(root, 'nope')).toBe(false)
   })
 })
