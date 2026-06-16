@@ -761,9 +761,13 @@
 
 <style>
   .terminal-panel {
+    /* Fill the pane-tree leaf's .panel-content (position:relative; height:0;
+       flex:1). Without absolute fill, this flex column collapses to the xterm's
+       initial fitted height, leaving the rest of the pane blank. */
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
     min-height: 0;
     min-width: 0;
     overflow: hidden;
