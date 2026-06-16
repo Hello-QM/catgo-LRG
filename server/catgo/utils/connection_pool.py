@@ -394,7 +394,14 @@ class HPCConnectionPool:
                     f"(e.g. ~/.ssh/id_rsa_myhost) to avoid trying wrong keys."
                 )
                 raise ConnectionError(hint) from exc
-            if "getaddrinfo" in msg.lower():
+            dns_markers = (
+                "getaddrinfo",
+                "name or service not known",
+                "nodename nor servname",
+                "temporary failure in name resolution",
+                "could not resolve hostname",
+            )
+            if any(marker in msg.lower() for marker in dns_markers):
                 # DNS resolution failed — identify which host
                 failed_host = config.host
                 all_resolved = True
