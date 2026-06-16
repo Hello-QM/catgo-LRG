@@ -4,7 +4,10 @@
   import type { Snippet } from 'svelte'
 
   interface Props {
-    node: PaneNode
+    // May transiently be undefined: when a split collapses (close-leaf), a child
+    // <svelte:self>'s `node={s.children[0]}` getter can re-run against a parent
+    // whose node is now a leaf (no .children) before the {#if} tears it down.
+    node: PaneNode | undefined
     multi: boolean // leafCount(root) > 1 — gates per-leaf header chrome
     active_leaf_id: string
     drag_target_leaf: string | null
@@ -24,13 +27,13 @@
 
 {#if node && node.kind === 'split' && node.children}
   {@const s = node as SplitNode}
-  {@const max0 = maximized_leaf_id ? subtreeContains(s.children[0], maximized_leaf_id) : null}
-  {@const max1 = maximized_leaf_id ? subtreeContains(s.children[1], maximized_leaf_id) : null}
+  {@const max0 = maximized_leaf_id && s.children ? subtreeContains(s.children[0], maximized_leaf_id) : null}
+  {@const max1 = maximized_leaf_id && s.children ? subtreeContains(s.children[1], maximized_leaf_id) : null}
   {@const basis0 = maximized_leaf_id ? (max0 ? '100%' : '0%') : `calc(${s.ratio * 100}% - 3px)`}
   {@const basis1 = maximized_leaf_id ? (max1 ? '100%' : '0%') : `calc(${(1 - s.ratio) * 100}% - 3px)`}
   <div class="split {s.direction === 'h' ? 'h' : 'v'}" class:maximizing={!!maximized_leaf_id}>
     <div class="split-child" style={`flex-basis:${basis0}`}>
-      <svelte:self node={s.children[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
+      <svelte:self node={s.children?.[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
     {#if !maximized_leaf_id}
       <div
@@ -43,7 +46,7 @@
       ></div>
     {/if}
     <div class="split-child" style={`flex-basis:${basis1}`}>
-      <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
+      <svelte:self node={s.children?.[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
   </div>
 {:else if node && node.kind === 'leaf'}
