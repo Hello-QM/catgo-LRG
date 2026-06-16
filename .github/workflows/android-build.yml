@@ -29,6 +29,10 @@ on:
         required: false
         default: ''
 
+# Needed for `gh release upload` to attach the APK to a release.
+permissions:
+  contents: write
+
 jobs:
   android:
     runs-on: ubuntu-22.04
