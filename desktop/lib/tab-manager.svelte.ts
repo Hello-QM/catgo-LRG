@@ -7,9 +7,10 @@
 
 import type { AppTab } from '../TabBar.svelte'
 import {
-  type LayoutType, type StructureTabState,
-  layout_panel_count, pane_has_content, create_empty_pane, create_tab_state,
+  type StructureTabState,
+  pane_has_content, create_tab_state,
 } from '../pane-utils'
+import { leaves, matchesPreset, type PresetId } from '../pane-tree'
 import {
   ensure_workflow_slice,
   remove_workflow_slice,
@@ -50,8 +51,7 @@ export function create_tab_manager() {
     // Skip the badge on the currently-active tab — user already sees its
     // content; the count is just visual noise on the active tab.
     if (t.id === active_tab_id) return t
-    const count = layout_panel_count(ts.layout)
-    const badge = ts.panes.slice(0, count).filter(p => pane_has_content(p)).length
+    const badge = leaves(ts.root).filter(l => pane_has_content(l.content.pane)).length
     return { ...t, badge: badge > 0 ? badge : undefined }
   }))
 
@@ -59,11 +59,11 @@ export function create_tab_manager() {
     if (active_tab_type !== `structure`) return undefined
     const ts = tab_states_record[active_tab_id]
     if (!ts) return undefined
-    return ts.layout
+    return matchesPreset(ts.root)
   })
 
   let tab_close_confirm_id = $state<string | null>(null)
-  let pending_layout_change = $state<{ tab_id: string, new_layout: LayoutType, lost_count: number } | null>(null)
+  let pending_layout_change = $state<{ tab_id: string, new_layout: PresetId, lost_count: number } | null>(null)
 
   function create_tab(type: `structure` | `workflow`) {
     if (type === `workflow`) {
@@ -114,6 +114,16 @@ export function create_tab_manager() {
     active_tab_id = `default`
   }
 
+  function reset_ts_to_empty(ts: StructureTabState, tab: AppTab) {
+    const r = create_tab_state()
+    ts.root = r.root
+    ts.active_leaf_id = r.active_leaf_id
+    ts.close_confirm_leaf_id = null
+    ts.library = []
+    ts.active_library_id = null
+    tab.label = `Structure`
+  }
+
   function request_close_tab(id: string) {
     const tab = tabs.find(t => t.id === id)
     if (!tab) return
@@ -122,8 +132,7 @@ export function create_tab_manager() {
     if (tab.type === `structure`) {
       const ts = tab_states_record[id]
       if (ts) {
-        const count = layout_panel_count(ts.layout)
-        const loaded = ts.panes.slice(0, count).filter(p => pane_has_content(p)).length
+        const loaded = leaves(ts.root).filter(l => pane_has_content(l.content.pane)).length
         if (loaded > 0) {
           tab_close_confirm_id = id
           return
@@ -135,16 +144,7 @@ export function create_tab_manager() {
     if (tabs.length <= 1) {
       if (tab.type === `structure`) {
         const ts = tab_states_record[id]
-        if (ts) {
-          for (let i = 0; i < 4; i++) ts.panes[i] = create_empty_pane()
-          ts.layout = 'single'
-          ts.active_pane = 0
-          ts.col_split = 50
-          ts.row_split = 50
-          ts.library = []
-          ts.active_library_id = null
-          tab.label = `Structure`
-        }
+        if (ts) reset_ts_to_empty(ts, tab)
       }
       return
     }
@@ -160,17 +160,7 @@ export function create_tab_manager() {
     // Last tab: reset to empty landing page instead of removing
     if (tabs.length <= 1 && tab.type === `structure`) {
       const ts = tab_states_record[id]
-      if (ts) {
-        for (let i = 0; i < 4; i++) ts.panes[i] = create_empty_pane()
-        ts.layout = 'single'
-        ts.active_pane = 0
-        ts.col_split = 50
-        ts.row_split = 50
-        ts.close_confirm_pane = null
-        ts.library = []
-        ts.active_library_id = null
-        tab.label = `Structure`
-      }
+      if (ts) reset_ts_to_empty(ts, tab)
       return
     }
 
@@ -214,7 +204,7 @@ export function create_tab_manager() {
     // is the lab/MCP receiver, even after a structure loads in it.
     const prefix = tab_id === `default` ? `🤖 ` : ``
     const fallback = tab_id === `default` ? `External` : `Structure`
-    const pane = ts.panes.find(p => p.structure)
+    const pane = leaves(ts.root).map(l => l.content.pane).find(p => p.structure)
     if (pane?.structure?.sites?.length) {
       const counts: Record<string, number> = {}
       for (const site of pane.structure.sites) {
@@ -224,8 +214,7 @@ export function create_tab_manager() {
       const formula = Object.entries(counts).map(([el, n]) => n > 1 ? `${el}${n}` : el).join(``)
       if (formula) { tab.label = `${prefix}${formula}`; return }
     }
-    const count = layout_panel_count(ts.layout)
-    if (ts.panes.slice(0, count).some(p => p.mode === 'workflow')) {
+    if (leaves(ts.root).some(l => l.content.pane.mode === 'workflow')) {
       tab.label = `${prefix}Workflow`
       return
     }
@@ -249,7 +238,8 @@ export function create_tab_manager() {
     get active_tab() { return active_tab },
     get active_tab_type() { return active_tab_type },
     // IMPORTANT: Return the raw $state proxy — do NOT wrap in a getter
-    // so that callers can mutate nested properties (e.g. tab_states[id].panes[0].structure = ...)
+    // so that callers can mutate nested properties
+    // (e.g. findLeafById(tab_states[id].root, leaf_id).content.pane.structure = ...)
     tab_states: tab_states_record,
     get_active_ts,
     get tabs_with_badges() { return tabs_with_badges },
@@ -257,7 +247,7 @@ export function create_tab_manager() {
     get tab_close_confirm_id() { return tab_close_confirm_id },
     set tab_close_confirm_id(v: string | null) { tab_close_confirm_id = v },
     get pending_layout_change() { return pending_layout_change },
-    set pending_layout_change(v: { tab_id: string, new_layout: LayoutType, lost_count: number } | null) { pending_layout_change = v },
+    set pending_layout_change(v: { tab_id: string, new_layout: PresetId, lost_count: number } | null) { pending_layout_change = v },
     create_tab,
     create_remote_tab,
     close_tab,
