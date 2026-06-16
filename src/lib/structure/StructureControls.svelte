@@ -1119,7 +1119,7 @@
         />
       </label>
       <label>
-        {t('structure.max_coordination')}
+        {t(`structure.max_coordination`)}
         <input
           type="number"
           min="4"
@@ -1136,11 +1136,11 @@
         />
       </label>
       <label>
-        {t('structure.polyhedra_color_label')}
+        {t(`structure.polyhedra_color_label`)}
         <select bind:value={scene_props.polyhedra_color_mode}>
-          <option value="vertex">{t('structure.color_mode_vertex')}</option>
-          <option value="center">{t('structure.color_mode_center')}</option>
-          <option value="uniform">{t('structure.color_mode_uniform')}</option>
+          <option value="vertex">{t(`structure.color_mode_vertex`)}</option>
+          <option value="center">{t(`structure.color_mode_center`)}</option>
+          <option value="uniform">{t(`structure.color_mode_uniform`)}</option>
         </select>
         {#if scene_props.polyhedra_color_mode === `uniform`}
           <input type="color" bind:value={scene_props.polyhedra_color} />
@@ -1188,7 +1188,7 @@
       {/if}
       <label>
         <input type="checkbox" bind:checked={scene_props.polyhedra_show_edges} />
-        {t('structure.show_edges')}
+        {t(`structure.show_edges`)}
         {#if scene_props.polyhedra_show_edges}
           <input type="color" bind:value={scene_props.polyhedra_edge_color} />
         {/if}

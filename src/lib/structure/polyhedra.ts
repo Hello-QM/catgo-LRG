@@ -13,12 +13,6 @@ import { element_data } from '$lib/element'
 import { get_bond_key } from './bonding'
 import qh from 'quickhull3d'
 
-// Face coloring strategy for polyhedra (ported from matterviz):
-//   vertex  — each hull corner takes the color of the atom that forms it
-//   center  — every corner takes the center atom's color
-//   uniform — every corner takes a single custom color
-export type PolyhedraColorMode = `vertex` | `center` | `uniform`
-
 // --- Types ---
 
 export interface PolyhedronData {
