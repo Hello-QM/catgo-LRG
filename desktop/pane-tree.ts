@@ -71,3 +71,39 @@ export function findFirstEmptyLeaf(node: PaneNode): LeafNode | null {
   for (const l of leaves(node)) if (isEmptyLeaf(l)) return l
   return null
 }
+
+/** Replace `leafId` with a split of [existing, newEmptyLeaf]. Returns null at CAP. */
+export function splitLeaf(root: PaneNode, leafId: string, direction: SplitDir): { root: PaneNode; newLeafId: string } | null {
+  if (leafCount(root) >= CAP) return null
+  const target = findLeafById(root, leafId)
+  if (!target) return null
+  const newLeaf = create_empty_leaf()
+  const replacement: SplitNode = { kind: 'split', id: next_id('split'), direction, ratio: 0.5, children: [target, newLeaf] }
+  return { root: replaceNode(root, leafId, replacement), newLeafId: newLeaf.id }
+}
+
+/** Remove a leaf; collapse its parent split so the sibling takes the parent's place. */
+export function removeLeaf(root: PaneNode, leafId: string): PaneNode {
+  if (root.kind === 'leaf') return root // never destroy the sole leaf
+  return removeIn(root, leafId)
+}
+
+function removeIn(node: SplitNode, leafId: string): PaneNode {
+  const [a, b] = node.children
+  if (a.kind === 'leaf' && a.id === leafId) return b
+  if (b.kind === 'leaf' && b.id === leafId) return a
+  const na = a.kind === 'split' ? removeIn(a, leafId) : a
+  const nb = b.kind === 'split' ? removeIn(b, leafId) : b
+  if (na === a && nb === b) return node
+  return { ...node, children: [na, nb] }
+}
+
+/** Pure structural replace of a node (by id) anywhere in the tree. */
+function replaceNode(node: PaneNode, id: string, replacement: PaneNode): PaneNode {
+  if (node.kind === 'leaf') return node.id === id ? replacement : node
+  if (node.id === id) return replacement
+  const a = replaceNode(node.children[0], id, replacement)
+  const b = replaceNode(node.children[1], id, replacement)
+  if (a === node.children[0] && b === node.children[1]) return node
+  return { ...node, children: [a, b] }
+}
