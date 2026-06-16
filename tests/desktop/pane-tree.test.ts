@@ -3,7 +3,7 @@ import { create_empty_pane } from '../../desktop/pane-utils'
 import {
   CAP, buildPreset, create_empty_leaf, escalateForImport, findFirstEmptyLeaf,
   findLeafById, findSplit, isEmptyLeaf, leafCount, leaves, matchesPreset,
-  removeLeaf, setRatio, splitLeaf,
+  removeLeaf, setLeafContent, setRatio, splitLeaf,
   type LeafNode, type PaneNode, type SplitNode,
 } from '../../desktop/pane-tree'
 import {
@@ -179,5 +179,13 @@ describe('terminal leaves', () => {
     expect(isEmptyLeaf(t)).toBe(false)
     const root = split('S', 'h', 0.5, t, create_empty_leaf())
     expect(findFirstEmptyLeaf(root)?.id).not.toBe(t.id) // the empty structure leaf, not the terminal
+  })
+  it('setLeafContent converts a structure leaf to a terminal, keeping its id', () => {
+    const s = create_empty_leaf()
+    const root = setLeafContent(s, s.id, { type: 'terminal', term: { sync_cwd: false } })
+    const out = findLeafById(root, s.id)!
+    expect(out.id).toBe(s.id) // same leaf id
+    expect(isTerminalLeaf(out)).toBe(true)
+    expect(terminalState(out)?.sync_cwd).toBe(false)
   })
 })

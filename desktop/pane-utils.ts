@@ -5,8 +5,8 @@
  */
 
 import type { AnyStructure } from '$lib'
-import type { PaneNode } from './pane-tree'
-import { create_empty_leaf } from './pane-tree'
+import type { PaneNode, TerminalLeafState } from './pane-tree'
+import { create_empty_leaf, create_terminal_leaf } from './pane-tree'
 
 // ========== Types ==========
 
@@ -102,6 +102,18 @@ export function content_to_base64(content: string | ArrayBuffer): string {
 
 export function create_tab_state(): StructureTabState {
   const root = create_empty_leaf()
+  return {
+    root,
+    active_leaf_id: root.id,
+    close_confirm_leaf_id: null,
+    library: [],
+    active_library_id: null,
+  }
+}
+
+/** Like create_tab_state, but the root leaf holds a terminal (for a "+Terminal" tab). */
+export function create_terminal_tab_state(opts?: Partial<TerminalLeafState>): StructureTabState {
+  const root = create_terminal_leaf(opts)
   return {
     root,
     active_leaf_id: root.id,

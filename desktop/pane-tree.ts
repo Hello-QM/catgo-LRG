@@ -115,6 +115,11 @@ export function splitLeaf(root: PaneNode, leafId: string, direction: SplitDir): 
   return { root: replaceNode(root, leafId, replacement), newLeafId: newLeaf.id }
 }
 
+/** Replace a leaf's content in place (keeps the same leaf id). Pure. */
+export function setLeafContent(root: PaneNode, leafId: string, content: LeafContent): PaneNode {
+  return replaceNode(root, leafId, { kind: 'leaf', id: leafId, content })
+}
+
 /** Remove a leaf; collapse its parent split so the sibling takes the parent's place. */
 export function removeLeaf(root: PaneNode, leafId: string): PaneNode {
   if (root.kind === 'leaf') return root // never destroy the sole leaf

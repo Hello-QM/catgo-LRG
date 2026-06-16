@@ -3,6 +3,8 @@ const app: Record<string, string> = {
   // TabBar
   close_tab: `Close tab`,
   new_tab: `New tab`,
+  new_structure_tab: `Structure`,
+  new_terminal_tab: `Terminal`,
   close_all_tabs: `Close all tabs`,
   layout_single: `Single`,
   layout_split_h: `Side by Side`,

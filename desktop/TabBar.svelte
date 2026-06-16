@@ -41,13 +41,14 @@
     onactivate: (id: string) => void
     onclose: (id: string) => void
     oncloseall?: () => void
-    onadd: (type: 'structure' | 'workflow') => void
+    onadd: (type: 'structure' | 'terminal') => void
     layout?: LayoutType
     onlayoutchange?: (layout: LayoutType) => void
     children?: Snippet
   } = $props()
 
   let show_layout_menu = $state(false)
+  let show_add_menu = $state(false)
   let can_close = $derived(tabs.length > 0)
 
   function handle_tab_mousedown(event: MouseEvent, tab: AppTab) {
@@ -71,6 +72,14 @@
     if (show_layout_menu && !target.closest(`.layout-menu-container`)) {
       show_layout_menu = false
     }
+    if (show_add_menu && !target.closest(`.add-tab-container`)) {
+      show_add_menu = false
+    }
+  }
+
+  function handle_add(type: 'structure' | 'terminal') {
+    show_add_menu = false
+    onadd(type)
   }
 
   const tab_icons: Record<string, string> = {
@@ -120,11 +129,29 @@
       </div>
     {/each}
 
-    <button class="add-tab-btn" onclick={() => onadd(`structure`)} title={t('app.new_tab')}>
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <path d="M12 5v14M5 12h14" />
-      </svg>
-    </button>
+    <div class="add-tab-container">
+      <button class="add-tab-btn" onclick={() => show_add_menu = !show_add_menu} title={t('app.new_tab')}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
+      </button>
+      {#if show_add_menu}
+        <div class="add-menu">
+          <button class="add-menu-item" onclick={() => handle_add(`structure`)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d={tab_icons.structure} />
+            </svg>
+            <span>{t('app.new_structure_tab')}</span>
+          </button>
+          <button class="add-menu-item" onclick={() => handle_add(`terminal`)}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d={tab_icons.terminal} />
+            </svg>
+            <span>{t('app.new_terminal_tab')}</span>
+          </button>
+        </div>
+      {/if}
+    </div>
     {#if oncloseall && tabs.length > 1}
       <button class="close-all-btn" onclick={oncloseall} title={t('app.close_all_tabs')}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -493,6 +520,46 @@
   }
 
   /* ===== Add button ===== */
+  .add-tab-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .add-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    min-width: 140px;
+    background: var(--dialog-bg, var(--surface-bg, #1c1c2e));
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+    border-radius: 8px;
+    padding: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    z-index: 100000030;
+  }
+
+  .add-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text-color, #374151);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .add-menu-item:hover {
+    background: var(--btn-bg, rgba(128, 128, 128, 0.1));
+  }
+
   .add-tab-btn {
     display: flex;
     align-items: center;

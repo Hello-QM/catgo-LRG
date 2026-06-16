@@ -21,7 +21,7 @@
   import { readFile } from '@tauri-apps/plugin-fs'
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
-  import { TerminalWindow, TerminalPanel, DopingPTWindow } from '$lib/structure'
+  import { TerminalPanel, DopingPTWindow } from '$lib/structure'
   import { terminal_font_state } from '$lib/state.svelte'
   import { ChatPane } from '$lib/chat'
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
@@ -60,7 +60,7 @@
     type LeafNode, type PresetId,
     leaves, leafCount, findLeafById, findFirstEmptyLeaf,
     escalateForImport, setRatio, create_empty_leaf, structurePane,
-    removeLeaf, terminalState, type TerminalLeafState,
+    removeLeaf, setLeafContent, terminalState, type TerminalLeafState,
   } from './pane-tree'
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
@@ -74,7 +74,7 @@
   // Extracted popout manager
   import {
     load_popout_structure, popout_pane as _popout_pane,
-    popout_workflow as _popout_workflow, popout_terminal as _popout_terminal,
+    popout_workflow as _popout_workflow,
     popout_terminal_session as _popout_terminal_session,
     open_structure_in_new_window, parse_and_open_structure_window,
   } from './lib/popout-manager'
@@ -206,7 +206,6 @@
   // Thin wrappers that pass deps
   function popout_pane(tab_id: string, leaf_id: string) { return _popout_pane(tab_id, leaf_id, tab_states, is_tauri) }
   function popout_workflow() { return _popout_workflow(is_tauri, close_tab, switch_to_structure) }
-  function popout_terminal() { return _popout_terminal(is_tauri, terminal, close_tab, switch_to_structure) }
   function handle_sidebar_load(content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) { _handle_sidebar_load(sidebar_deps, content, filename, file_path, session_id) }
   function handle_sidebar_preview(mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) { _handle_sidebar_preview(sidebar_deps, mode, filename, file_path, session_id, content, binary_data, mime_type) }
   function handle_sidebar_open_editor(content: string, filename: string, file_path: string, session_id: string) { _handle_sidebar_open_editor(sidebar_deps, content, filename, file_path, session_id) }
@@ -427,10 +426,12 @@
           open_tab(`workflow`)
         } else if (!STATIC_ONLY && hash.startsWith(`#terminal`)) {
           terminal.parse_hash(hash)
-          if (!tm.tabs.find(t => t.type === `terminal`)) {
-            tm.tabs = [...tm.tabs, { id: `terminal`, type: `terminal`, label: `Terminal`, closable: true }]
-          }
-          tm.active_tab_id = `terminal`
+          tm.create_terminal_popout_tab({
+            session_id: terminal.init_session_id,
+            host: terminal.init_host,
+            username: terminal.init_username,
+            sync_cwd: terminal.init_sync_cwd,
+          })
         } else if (hash.startsWith(`#structure`)) {
           load_popout_structure(hash, get_active_ts, tm.active_tab_id, update_tab_label)
         }
@@ -441,10 +442,12 @@
           open_tab(`workflow`)
         } else if (!STATIC_ONLY && window.location.hash.startsWith(`#terminal`)) {
           terminal.parse_hash(window.location.hash)
-          if (!tm.tabs.find(t => t.type === `terminal`)) {
-            tm.tabs = [...tm.tabs, { id: `terminal`, type: `terminal`, label: `Terminal`, closable: true }]
-          }
-          tm.active_tab_id = `terminal`
+          tm.create_terminal_popout_tab({
+            session_id: terminal.init_session_id,
+            host: terminal.init_host,
+            username: terminal.init_username,
+            sync_cwd: terminal.init_sync_cwd,
+          })
         }
       }
       window.addEventListener(`hashchange`, on_hash)
@@ -1714,7 +1717,7 @@
   {#if tab.id === tm.active_tab_id || tab.type === `structure` || tab.type === `workflow` || tab.type === `terminal`}
   <div class="view-layer" class:view-layer-hidden={tab.id !== tm.active_tab_id} inert={tab.id !== tm.active_tab_id || undefined}>
 
-    {#if tab.type === `structure`}
+    {#if tab.type === `structure` || tab.type === `terminal`}
       {@const ts = tab_states[tab.id]}
       {#if ts}
         <div class="structure-workspace">
@@ -2099,11 +2102,8 @@
                 </button>
 
                 <button class="import-card terminal-card" onclick={() => {
-                  console.log(`[CatGo:UI] Welcome card clicked: Terminal → loading structure + opening Terminal panel`)
-                  pane.structure = clone_structure(water as unknown as AnyStructure)
-                  pane.initial_site_count = (water as any).sites?.length ?? 0
-                  pane.initial_structure_ref = water as unknown as AnyStructure
-                  pane.initial_panel = `terminal`
+                  console.log(`[CatGo:UI] Welcome card clicked: Terminal → converting leaf to a terminal`)
+                  ts.root = setLeafContent(ts.root, leaf.id, { type: `terminal`, term: { sync_cwd: false } })
                   ts.active_leaf_id = leaf.id
                   update_tab_label(tab.id)
                 }}>
@@ -2181,20 +2181,6 @@
         tab_id={tab.id}
         onclose={() => { close_tab(`workflow`); switch_to_structure() }}
         onpopout={popout_workflow}
-      />
-
-    {:else if !STATIC_ONLY && tab.type === `terminal`}
-      <TerminalWindow
-        initial_session_id={terminal.init_session_id}
-        initial_host={terminal.init_host}
-        initial_username={terminal.init_username}
-        initial_sync_cwd={terminal.init_sync_cwd}
-        onclose={() => { close_tab(`terminal`); switch_to_structure() }}
-        onpopout={popout_terminal}
-        on_open_file={async (file_path) => {
-          const name = file_path.split(`/`).pop() || file_path
-          await handle_terminal_open_file(file_path, name, terminal.init_session_id || ``)
-        }}
       />
     {/if}
 

@@ -3,6 +3,8 @@ const app: Record<string, string> = {
   // TabBar
   close_tab: `关闭标签页`,
   new_tab: `新建标签页`,
+  new_structure_tab: `结构`,
+  new_terminal_tab: `终端`,
   close_all_tabs: `关闭所有标签页`,
   layout_single: `单面板`,
   layout_split_h: `左右分屏`,
