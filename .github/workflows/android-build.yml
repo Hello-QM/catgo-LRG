@@ -38,9 +38,10 @@ jobs:
       NDK_VERSION: 26.1.10909125
     steps:
       - name: Checkout repository
+        # Builds the dispatched ref (--ref). `release_tag` is ONLY the upload
+        # target, not the build source — so you can build `main` and upload the
+        # APK to an existing release tag.
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
