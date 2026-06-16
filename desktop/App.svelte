@@ -313,6 +313,32 @@
     ts.maximized_leaf_id = ts.maximized_leaf_id === leaf_id ? null : leaf_id
     if (ts.maximized_leaf_id) ts.active_leaf_id = leaf_id
   }
+  // Switch a leaf's content type between 'structure', 'terminal', and 'empty'.
+  // Both 'structure' and 'empty' yield a fresh empty structure leaf; the distinction
+  // only matters for the menu label (empty explicitly resets, structure = same).
+  let type_menu_leaf_id = $state<string | null>(null)
+
+  function switch_leaf_type(tab_id: string, leaf_id: string, type: 'structure' | 'terminal' | 'empty') {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const content = type === 'terminal'
+      ? { type: 'terminal' as const, term: { sync_cwd: false } }
+      : { type: 'structure' as const, pane: create_empty_pane() }
+    ts.root = setLeafContent(ts.root, leaf_id, content)
+    ts.active_leaf_id = leaf_id
+    if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
+    type_menu_leaf_id = null
+    update_tab_label(tab_id)
+  }
+
+  // Close type menu when clicking outside.
+  $effect(() => {
+    if (type_menu_leaf_id === null) return
+    const close = () => { type_menu_leaf_id = null }
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  })
+
   // Pop a terminal leaf out into its own window, then drop it from the source tree.
   function popout_terminal_leaf(tab_id: string, leaf_id: string) {
     const ts = tab_states[tab_id]
@@ -1798,6 +1824,22 @@
                 <line x1="10" y1="14" x2="21" y2="3"/>
               </svg>
             </button>
+            <div class="panel-type-container">
+              <button
+                class="panel-type-btn"
+                onclick={(e) => { e.stopPropagation(); type_menu_leaf_id = type_menu_leaf_id === leaf.id ? null : leaf.id }}
+                title={t(`app.change_pane_type`)}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              </button>
+              {#if type_menu_leaf_id === leaf.id}
+                <div class="panel-type-menu" role="menu">
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'structure') }}>{t(`app.type_structure`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'terminal') }}>{t(`app.type_terminal`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'empty') }}>{t(`app.type_empty`)}</button>
+                </div>
+              {/if}
+            </div>
             <button
               class="panel-maximize-btn"
               onclick={(e) => { e.stopPropagation(); toggle_maximize(tab.id, leaf.id) }}
@@ -1836,6 +1878,22 @@
                 </svg>
               </button>
             {/if}
+            <div class="panel-type-container">
+              <button
+                class="panel-type-btn"
+                onclick={(e) => { e.stopPropagation(); type_menu_leaf_id = type_menu_leaf_id === leaf.id ? null : leaf.id }}
+                title={t(`app.change_pane_type`)}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              </button>
+              {#if type_menu_leaf_id === leaf.id}
+                <div class="panel-type-menu" role="menu">
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'structure') }}>{t(`app.type_structure`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'terminal') }}>{t(`app.type_terminal`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'empty') }}>{t(`app.type_empty`)}</button>
+                </div>
+              {/if}
+            </div>
             <button
               class="panel-maximize-btn"
               onclick={(e) => { e.stopPropagation(); toggle_maximize(tab.id, leaf.id) }}
@@ -2597,6 +2655,65 @@
   .panel-close-btn:hover {
     background: rgba(220, 38, 38, 0.5);
     color: white;
+  }
+
+  .panel-type-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .panel-type-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-color-dim, #9ca3af);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .panel-type-btn:hover {
+    background: rgba(59, 130, 246, 0.5);
+    color: white;
+  }
+
+  .panel-type-menu {
+    position: absolute;
+    top: 20px;
+    right: 0;
+    z-index: 1000;
+    background: var(--page-bg, #1c1d21);
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    min-width: 120px;
+    overflow: hidden;
+  }
+
+  .panel-type-menu button {
+    padding: 6px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--text-color, #e2e8f0);
+    cursor: pointer;
+    font-size: 12px;
+    text-align: left;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+
+  .panel-type-menu button:hover {
+    background: rgba(59, 130, 246, 0.2);
   }
 
   /* .panel-content geometry lives in PaneTree.svelte (height:0 keep-warm base). */
