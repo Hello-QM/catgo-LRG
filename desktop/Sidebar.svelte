@@ -116,8 +116,8 @@
     return () => hpc.cleanup()
   })
 
-  // CWD sync: listen for terminal directory changes via BroadcastChannel (cross-window)
-  // AND CustomEvent (same-window, since BroadcastChannel doesn't deliver to sender's context)
+  // CWD sync: follow terminal directory changes in THIS window only (same-window
+  // CustomEvent — no cross-window BroadcastChannel, so popouts stay independent).
   $effect(() => {
     return create_cwd_sync_cleanup(
       source,

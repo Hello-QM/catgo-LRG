@@ -20,16 +20,24 @@ export function create_cwd_sync_cleanup(
   set_hpc_current_path: (path: string) => void,
   navigate_local: (path: string) => void,
 ): (() => void) {
-  const apply = (path: string | undefined) => {
+  const is_hpc_source = !!source && source !== `catgo` && source !== `localdb`
+  const apply = (path: string | undefined, session_id: string | undefined) => {
     if (!path) return
-    const is_hpc = !!source && source !== `catgo` && source !== `localdb`
-    if (is_hpc) {
-      if (path !== get_hpc_current_path()) set_hpc_current_path(path)
+    if (session_id) {
+      // Remote terminal CWD — only follow it when the active file source IS that
+      // exact session (else a remote path would mis-navigate the local browser).
+      if (is_hpc_source && session_id === source && path !== get_hpc_current_path()) {
+        set_hpc_current_path(path)
+      }
     } else {
-      navigate_local(path)
+      // Local terminal CWD — only drives the local Files panel.
+      if (!is_hpc_source) navigate_local(path)
     }
   }
-  const win_handler = (event: Event) => apply((event as CustomEvent).detail?.path)
+  const win_handler = (event: Event) => {
+    const d = (event as CustomEvent).detail
+    apply(d?.path, d?.session_id)
+  }
   window.addEventListener(`catgo-terminal-cwd`, win_handler)
   return () => window.removeEventListener(`catgo-terminal-cwd`, win_handler)
 }
