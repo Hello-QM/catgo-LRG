@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PaneNode, LeafNode, SplitNode } from './pane-tree'
+  import { subtreeContains } from './pane-tree'
   import type { Snippet } from 'svelte'
 
   interface Props {
@@ -9,6 +10,7 @@
     drag_target_leaf: string | null
     close_confirm_leaf_id: string | null
     active_split_id: string | null
+    maximized_leaf_id: string | null // when set, only the subtree holding it is visible (others stay warm at 0 size)
     leaf_body: Snippet<[LeafNode]>     // App renders the viewer/landing for a structure leaf
     terminal_body: Snippet<[LeafNode]> // App renders the TerminalPanel for a terminal leaf
     header: Snippet<[LeafNode]>        // App renders the dot+label+popout+close buttons
@@ -17,25 +19,31 @@
     on_split_mousedown: (e: MouseEvent, split_id: string, dir: 'h' | 'v') => void
     on_split_dblclick: (split_id: string) => void
   }
-  let { node, multi, active_leaf_id, drag_target_leaf, close_confirm_leaf_id, active_split_id, leaf_body, terminal_body, header, banner, on_activate, on_split_mousedown, on_split_dblclick }: Props = $props()
+  let { node, multi, active_leaf_id, drag_target_leaf, close_confirm_leaf_id, active_split_id, maximized_leaf_id, leaf_body, terminal_body, header, banner, on_activate, on_split_mousedown, on_split_dblclick }: Props = $props()
 </script>
 
 {#if node.kind === 'split'}
   {@const s = node as SplitNode}
-  <div class="split {s.direction === 'h' ? 'h' : 'v'}">
-    <div class="split-child" style={`flex-basis:calc(${s.ratio * 100}% - 3px)`}>
-      <svelte:self node={s.children[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
+  {@const max0 = maximized_leaf_id ? subtreeContains(s.children[0], maximized_leaf_id) : null}
+  {@const max1 = maximized_leaf_id ? subtreeContains(s.children[1], maximized_leaf_id) : null}
+  {@const basis0 = maximized_leaf_id ? (max0 ? '100%' : '0%') : `calc(${s.ratio * 100}% - 3px)`}
+  {@const basis1 = maximized_leaf_id ? (max1 ? '100%' : '0%') : `calc(${(1 - s.ratio) * 100}% - 3px)`}
+  <div class="split {s.direction === 'h' ? 'h' : 'v'}" class:maximizing={!!maximized_leaf_id}>
+    <div class="split-child" style={`flex-basis:${basis0}`}>
+      <svelte:self node={s.children[0]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
-    <div
-      class="grid-divider {s.direction === 'h' ? 'grid-divider-col' : 'grid-divider-row'}"
-      class:active={active_split_id === s.id}
-      onmousedown={(e) => on_split_mousedown(e, s.id, s.direction)}
-      ondblclick={() => on_split_dblclick(s.id)}
-      role="separator"
-      aria-orientation={s.direction === 'h' ? 'vertical' : 'horizontal'}
-    ></div>
-    <div class="split-child" style={`flex-basis:calc(${(1 - s.ratio) * 100}% - 3px)`}>
-      <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
+    {#if !maximized_leaf_id}
+      <div
+        class="grid-divider {s.direction === 'h' ? 'grid-divider-col' : 'grid-divider-row'}"
+        class:active={active_split_id === s.id}
+        onmousedown={(e) => on_split_mousedown(e, s.id, s.direction)}
+        ondblclick={() => on_split_dblclick(s.id)}
+        role="separator"
+        aria-orientation={s.direction === 'h' ? 'vertical' : 'horizontal'}
+      ></div>
+    {/if}
+    <div class="split-child" style={`flex-basis:${basis1}`}>
+      <svelte:self node={s.children[1]} {multi} {active_leaf_id} {drag_target_leaf} {close_confirm_leaf_id} {active_split_id} {maximized_leaf_id} {leaf_body} {terminal_body} {header} {banner} {on_activate} {on_split_mousedown} {on_split_dblclick} />
     </div>
   </div>
 {:else}
