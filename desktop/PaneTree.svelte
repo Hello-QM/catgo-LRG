@@ -75,6 +75,40 @@
   .pane { position: relative; overflow: hidden; background: var(--surface-bg, var(--page-bg)); cursor: pointer; display: flex; flex-direction: column; width: 100%; height: 100%; }
   .pane.warn-glow { box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.5); }
 
+  /* Pane state visuals that cross the App<->PaneTree scope boundary: .pane lives
+     here, but its header buttons / import cards render via App-defined snippets,
+     so the descendant parts need :global(). (moved verbatim from App.svelte) */
+  .pane:hover :global(.panel-popout-btn),
+  .pane:hover :global(.panel-close-btn) { opacity: 1; }
+  .pane.dragover::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 100000005;
+    box-shadow: inset 0 0 0 3px #22c55e;
+  }
+  .pane.dragover :global(.import-card.add-own-card) {
+    border-color: #22c55e;
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+  }
+  .pane.dragover :global(.import-card.add-own-card .import-title) { color: #22c55e; }
+
+  /* Panel header flex container (its dot/label/buttons render via App snippets,
+     styled by App's scoped CSS). Moved verbatim from App.svelte. */
+  .panel-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    min-height: 28px;
+    background: var(--page-bg, #0f1520);
+    border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
+    font-size: 11px;
+    user-select: none;
+  }
+
   /* Content area — height:0 is load-bearing for the WebGL canvas */
   .panel-content { flex: 1; min-height: 0; position: relative; overflow: hidden; height: 0; }
 
