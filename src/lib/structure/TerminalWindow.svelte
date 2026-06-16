@@ -368,7 +368,7 @@
         {/if}
       </div>
 
-      {#if active_tab?.session_id}
+      {#if active_tab}
         <button
           class="tw-icon-btn tw-sync-btn"
           class:active={active_tab.sync_cwd}
