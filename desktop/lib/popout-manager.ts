@@ -9,6 +9,29 @@ import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
 import { findLeafById, leaves, isTerminalLeaf, structurePane } from '../pane-tree'
 
+/**
+ * Open a FILE PATH in a new app window that loads/streams it there. Used for
+ * large trajectories (e.g. multi-GB AIMD .xyz) that can't be serialized into a
+ * structure popout — the new window re-streams the path via the backend.
+ */
+export async function open_path_in_new_window(path: string, filename: string, is_tauri: boolean) {
+  const url = `${window.location.origin}${window.location.pathname}#openpath?path=${encodeURIComponent(path)}&name=${encodeURIComponent(filename)}`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const win = new WebviewWindow(`openpath-${Date.now()}`, {
+        title: filename || `CatGo`,
+        url, width: 1000, height: 760, center: true, resizable: true, decorations: true,
+      })
+      win.once(`tauri://error`, () => {
+        window.open(url, `_blank`, `width=1000,height=760,resizable=yes`)
+      })
+      return
+    } catch {}
+  }
+  window.open(url, `_blank`, `width=1000,height=760,resizable=yes`)
+}
+
 /** Open a structure in a new popout window via localStorage transfer. */
 export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean) {
   const key = `catgo-popout-${Date.now()}`

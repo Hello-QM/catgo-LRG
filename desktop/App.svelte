@@ -76,7 +76,7 @@
     load_popout_structure, popout_pane as _popout_pane,
     popout_workflow as _popout_workflow,
     popout_terminal_session as _popout_terminal_session,
-    open_structure_in_new_window, parse_and_open_structure_window,
+    open_structure_in_new_window, parse_and_open_structure_window, open_path_in_new_window,
   } from './lib/popout-manager'
   // Extracted sidebar handlers
   import {
@@ -217,7 +217,15 @@
   // Builds a minimal indexed TrajectoryType (frames 0..9 + frame_loader) from
   // the backend index and drops it straight into a pane — no parse-all, no
   // base64. See src/lib/trajectory/remote-frame-loader.ts.
-  async function handle_load_trajectory_stream(path: string, filename: string) {
+  async function handle_load_trajectory_stream(path: string, filename: string, force_local = false) {
+    // "New window" setting → open the path in a fresh app window that streams it
+    // there (can't serialize a multi-GB trajectory into a structure popout).
+    // force_local=true is used by the #openpath handler so the new window itself
+    // loads locally instead of recursively opening yet another window.
+    if (!force_local && open_target_state.value === `window`) {
+      open_path_in_new_window(path, filename, is_tauri)
+      return
+    }
     let tab_id = tm.active_tab_id
     let ts = tab_states[tab_id]
     if (!ts) return
@@ -471,6 +479,13 @@
           })
         } else if (hash.startsWith(`#structure`)) {
           load_popout_structure(hash, get_active_ts, tm.active_tab_id, update_tab_label)
+        } else if (hash.startsWith(`#openpath`)) {
+          // A "New window" file open: stream the path into THIS new window's tree.
+          // force_local=true so it loads here instead of opening yet another window.
+          const params = new URLSearchParams(hash.slice(hash.indexOf(`?`) + 1))
+          const p = params.get(`path`)
+          const n = params.get(`name`) || `trajectory`
+          if (p) handle_load_trajectory_stream(p, n, true)
         }
       })
       if (popout_chat_mode || popout_status_mode || popout_doping_pt_mode) return
