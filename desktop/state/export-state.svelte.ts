@@ -18,7 +18,7 @@ class ExportState {
   fs_loading = $state(false)
 
   // Close-after-export linkage
-  close_after = $state<{ tab_id: string; pane_idx: number } | null>(null)
+  close_after = $state<{ tab_id: string; leaf_id: string } | null>(null)
 
   // Save-on-close state
   close_save_projects = $state<ProjectSummary[]>([])
