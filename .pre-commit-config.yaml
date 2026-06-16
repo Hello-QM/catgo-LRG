@@ -37,7 +37,7 @@ repos:
       - id: codespell
         stages: [pre-commit, commit-msg]
         args:
-          [--ignore-words-list, 'te,ba,nd,ore,claus,manuel,sade,devlop,trough,coul,ontop,datas', --check-filenames]
+          [--ignore-words-list, 'te,ba,nd,ore,claus,manuel,sade,devlop,trough,coul,ontop,datas,hel', --check-filenames]
         # Lock files contain package names that read as typos (e.g. the Rust
         # `inout` crate in Cargo.lock) — skip them, like pnpm-lock.yaml.
         exclude: '(pnpm-lock\.yaml|Cargo\.lock)$'

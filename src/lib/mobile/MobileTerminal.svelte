@@ -19,6 +19,8 @@
 -->
 <script lang="ts">
   import { to_control } from '$lib/mobile/control-chars'
+  import { createInputDedup, reconcileReplacement } from '$lib/mobile/terminal-input-dedup'
+  import { createImeGuard } from '$lib/mobile/terminal-ime'
   import { transport } from '$lib/api/transport'
   import Icon from '$lib/Icon.svelte'
   import MobileTerminalKeyBar from '$lib/structure/MobileTerminalKeyBar.svelte'
@@ -129,6 +131,7 @@
     let fit_addon: any = null
     let observer: ResizeObserver | null = null
     let touch_ac: AbortController | null = null
+    let ime_ac: AbortController | null = null
     let disposed = false
     let opened_channel: string | null = null
 
@@ -250,12 +253,127 @@
         opened_channel = ch
         status = `connected`
 
+        // ─── iOS WKWebView input fixes (two distinct bugs, one set of listeners) ─
+        // 1. Latin de-dup: xterm 6.0.0 can emit ONE genuine soft-keyboard
+        //    insertion to onData twice (typing "hello" lands as "hhelllo"). WebKit
+        //    fires `beforeinput` exactly once per insertion, so we note it and drop
+        //    the duplicate onData. See terminal-input-dedup.ts.
+        // 2. CJK IME: WKWebView routes Chinese/Korean composition through
+        //    non-standard beforeinput inputTypes that xterm mishandles. The guard
+        //    buffers the composed text and writes it itself, suppressing xterm's
+        //    own emission during composition. See terminal-ime.ts.
+        // Order in onData below is load-bearing: IME suppression → dedup → Ctrl
+        // fold, so composition residue and duplicates are dropped before they can
+        // be mistaken for a real keystroke or fold the sticky Ctrl.
+        const ime_log = (...a: unknown[]) => {
+          if ((window as { __CATGO_IME_DEBUG?: boolean }).__CATGO_IME_DEBUG) {
+            console.log(`[mobile-term]`, ...a)
+          }
+        }
+        const dedup = createInputDedup()
+        // Set by a dictation-replacement beforeinput (see below): drop the single
+        // xterm onData echo that follows, since we already reconciled the PTY.
+        let dict_drop_echo = false
+        // The guard writes committed CJK text straight to the PTY (xterm's own
+        // emission is suppressed). A composition commit also ends any armed
+        // sticky-Ctrl — folding a multi-char CJK string to a control char is
+        // meaningless, so just clear it rather than leave it stuck.
+        const ime = createImeGuard({
+          write: (text) => {
+            if (!channel_id) return
+            kb_ctrl_armed = false
+            transport.ptyWrite(session_id, channel_id, encoder.encode(text)).catch(() => {})
+          },
+        })
+        ime_ac = new AbortController()
+        const xt = term.textarea
+        if (xt) {
+          const sig = { signal: ime_ac.signal }
+          xt.addEventListener(`beforeinput`, (e) => {
+            const ie = e as InputEvent
+            ime_log(
+              `beforeinput`,
+              ie.inputType,
+              JSON.stringify(ie.data),
+              `sel=${xt.selectionStart}..${xt.selectionEnd}`,
+            )
+            // A fresh event clears any stale drop flag (see onData below).
+            dict_drop_echo = false
+            // CJK composition events are consumed by the guard (we write the text
+            // ourselves); block xterm from also processing them.
+            if (ime.on_before_input(ie.inputType, ie.data)) {
+              ie.preventDefault()
+              return
+            }
+            // iOS dictation: an insertText over a NON-collapsed selection is a
+            // REPLACEMENT of the previous partial (e.g. "hel" -> "hello"), not an
+            // append. xterm would emit the whole word again ("helhello"); instead
+            // reconcile the PTY to the textarea — keep the common prefix, backspace
+            // the diverged tail, send the rest — and drop xterm's echo. Normal
+            // typing always has a collapsed caret, so it skips this and stays on
+            // the dedup path. We do NOT preventDefault: the textarea must keep the
+            // running value so the next dictation event diffs against it.
+            const ss = xt.selectionStart
+            const se = xt.selectionEnd
+            if (
+              ie.inputType === `insertText` && ie.data != null &&
+              ss != null && se != null && ss !== se
+            ) {
+              const { backspaces, send } = reconcileReplacement(xt.value, ss, se, ie.data)
+              const out = `\x7f`.repeat(backspaces) + send
+              ime_log(`dictation reconcile`, `bs=${backspaces}`, JSON.stringify(send))
+              if (out && channel_id) {
+                transport.ptyWrite(session_id, channel_id, encoder.encode(out)).catch(() => {})
+              }
+              dict_drop_echo = true // xterm will still echo `data`; drop it in onData
+              return
+            }
+            // Ordinary input — feed it to the Latin dedup as ground truth.
+            dedup.note_before_input(ie.data)
+          }, sig)
+          xt.addEventListener(`compositionstart`, () => {
+            ime_log(`compositionstart`)
+            ime.on_composition_start()
+          }, sig)
+          xt.addEventListener(`compositionend`, (e) => {
+            const ce = e as CompositionEvent
+            ime_log(`compositionend`, JSON.stringify(ce.data))
+            ime.on_composition_end(ce.data)
+            // Clear the textarea synchronously so xterm's deferred
+            // _finalizeComposition can't re-read the composed text and re-send it.
+            // The resulting DEL is swallowed by the residue window in onData.
+            if (xt.value) xt.value = ``
+          }, sig)
+          xt.addEventListener(`keydown`, (e) => {
+            ime.on_keydown((e as KeyboardEvent).keyCode)
+          }, sig)
+        }
+
         // Stdin: xterm -> PTY. When the key bar's sticky Ctrl is armed, fold
         // the next single soft-keyboard character into its control char
         // (Ctrl then `c` -> 0x03 = SIGINT) — letters only exist on the soft
         // keyboard, so the bar can't produce Ctrl+C by itself.
         term.onData((data: string) => {
           if (disposed || !channel_id) return
+          // Drop xterm's echo of a dictation replacement we already reconciled
+          // from beforeinput (consume the flag so a later control key is unaffected).
+          if (dict_drop_echo) {
+            dict_drop_echo = false
+            ime_log(`drop dict echo`, JSON.stringify(data))
+            return
+          }
+          // Suppress during CJK composition (the guard writes the commit itself)
+          // and briefly after it (confirmation-key residue).
+          if (ime.should_suppress(data)) {
+            ime_log(`suppress`, JSON.stringify(data))
+            return
+          }
+          // Drop xterm's duplicate Latin emission — before the Ctrl fold so it
+          // can't be mistaken for a second keystroke.
+          if (!dedup.accept(data)) {
+            ime_log(`drop dup`, JSON.stringify(data))
+            return
+          }
           let out = data
           if (kb_ctrl_armed) {
             // Disarm on ANY input: a predictive-keyboard burst (length > 1)
@@ -384,6 +502,7 @@
       disposed = true
       observer?.disconnect()
       touch_ac?.abort()
+      ime_ac?.abort()
       const ch = opened_channel ?? channel_id
       if (ch) transport.ptyClose(sid, ch).catch(() => {})
       channel_id = null
