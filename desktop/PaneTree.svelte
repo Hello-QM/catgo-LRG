@@ -59,7 +59,9 @@
     onclick={() => on_activate(leaf.id)}
     onkeydown={(e) => { if (e.key === 'Enter') on_activate(leaf.id) }}
   >
-    {#if multi}
+    {#if multi || leaf.content.type === 'terminal'}
+      <!-- A lone terminal leaf still needs its header (Directory Sync / popout /
+           close); a lone structure leaf has its own in-viewer toolbar instead. -->
       <div class="panel-header">{@render header(leaf)}</div>
     {/if}
     {@render banner(leaf)}
