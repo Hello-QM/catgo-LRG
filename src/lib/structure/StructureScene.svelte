@@ -93,9 +93,11 @@
     update_gpu_picker as update_gpu_picker_impl,
     type GpuPickerDeps,
   } from './gpu-picker-integration.svelte'
+  import { on_ferrox_wasm_ready } from './ferrox-wasm'
   import {
     create_bond_state,
     compute_bond_connectivity,
+    invalidate_bonds_for_recompute,
     compute_bond_connectivity_for_frame,
     clear_trajectory_bond_frame_cache,
     build_bond_pairs,
@@ -2036,6 +2038,21 @@
       bonding_options, external_dragging,
     )
   })
+
+  // The first bond computation can run before the ferrox WASM finishes loading
+  // (a popout window loads its structure at mount; mobile cold-starts are slow).
+  // compute_bonds_sync then falls back to the pure-JS path, which emits NO
+  // cross-cell PBC bonds. When WASM finishes, recompute ONCE with the real
+  // (PBC-aware) detector. Done imperatively + untracked so it can't entangle
+  // with the reactive bond effect above (that would loop on bond_state writes).
+  $effect(() => on_ferrox_wasm_ready(() => untrack(() => {
+    invalidate_bonds_for_recompute(bond_state, bond_input)
+    compute_bond_connectivity(
+      bond_state, (pairs) => { bond_pairs = pairs },
+      bond_input, show_bonds, lattice, bonding_strategy,
+      bonding_options, external_dragging,
+    )
+  })))
 
   // Phase 7 — image-atom decorator layout. Enumerates the crystaltoolkit /
   // VESTA-style boundary-atom set: every site whose fractional coords are
