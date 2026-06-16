@@ -57,3 +57,17 @@ export function findSplit(node: PaneNode, id: string): SplitNode | null {
   if (node.id === id) return node
   return findSplit(node.children[0], id) ?? findSplit(node.children[1], id)
 }
+
+export function create_empty_leaf(): LeafNode {
+  return { kind: 'leaf', id: next_id('leaf'), content: { type: 'structure', pane: create_empty_pane() } }
+}
+
+/** A leaf is "empty" when it is a structure leaf holding nothing renderable. */
+export function isEmptyLeaf(leaf: LeafNode): boolean {
+  return leaf.content.type === 'structure' && !pane_has_content(leaf.content.pane)
+}
+
+export function findFirstEmptyLeaf(node: PaneNode): LeafNode | null {
+  for (const l of leaves(node)) if (isEmptyLeaf(l)) return l
+  return null
+}

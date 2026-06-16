@@ -26,3 +26,21 @@ describe('leaves / leafCount / find', () => {
     expect(findSplit(root, 'A')).toBeNull()
   })
 })
+
+describe('empty leaves', () => {
+  it('create_empty_leaf is an empty structure leaf with a unique id', () => {
+    const a = create_empty_leaf(); const b = create_empty_leaf()
+    expect(a.kind).toBe('leaf')
+    expect(a.content.type).toBe('structure')
+    expect(isEmptyLeaf(a)).toBe(true)
+    expect(a.id).not.toBe(b.id)
+  })
+  it('findFirstEmptyLeaf returns first content-free leaf or null', () => {
+    const filled = create_empty_leaf(); filled.content.pane.structure = { sites: [{}] } as never
+    const empty = create_empty_leaf()
+    const root = split('S', 'h', 0.5, filled, empty)
+    expect(findFirstEmptyLeaf(root)?.id).toBe(empty.id)
+    const full = split('S2', 'h', 0.5, filled, filled)
+    expect(findFirstEmptyLeaf(full)).toBeNull()
+  })
+})
