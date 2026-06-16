@@ -196,14 +196,22 @@ class HPCConnectionPool:
                     jump_kwargs["tunnel"] = tunnel
 
                 if config.jump_password:
-                    # Jump host has its own password → use kbdint
+                    # Jump host has its own password.
+                    # KbdintSSHClient only answers the "keyboard-interactive"
+                    # method, so we ALSO pass `password` for the plain SSH
+                    # "password" method — many ordinary Linux boxes (e.g. a lab
+                    # machine over Tailscale) only offer "password", not kbdint.
+                    # Without this, the only attempted method is kbdint and the
+                    # jump host returns "Permission denied".
                     jp = config.jump_password.get_secret_value()
 
                     def jump_client_factory() -> KbdintSSHClient:
                         return KbdintSSHClient(password=jp)
 
                     jump_kwargs["client_factory"] = jump_client_factory
-                    jump_kwargs["preferred_auth"] = "keyboard-interactive,password"
+                    jump_kwargs["password"] = jp
+                    jump_kwargs["preferred_auth"] = "password,keyboard-interactive"
+                    jump_kwargs["client_keys"] = []
                     jump_conn = await asyncssh.connect(**jump_kwargs)
                 else:
                     # No jump password → use SSH key auth
