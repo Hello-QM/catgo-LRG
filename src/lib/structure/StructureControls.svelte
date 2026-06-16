@@ -1077,6 +1077,9 @@
       show_polyhedra: scene_props.show_polyhedra,
       polyhedra_opacity: scene_props.polyhedra_opacity,
       polyhedra_opacity_mode: scene_props.polyhedra_opacity_mode,
+      polyhedra_color_mode: scene_props.polyhedra_color_mode,
+      polyhedra_show_edges: scene_props.polyhedra_show_edges,
+      polyhedra_max_neighbors: scene_props.polyhedra_max_neighbors,
       polyhedra_edge_color: scene_props.polyhedra_edge_color,
       hide_polyhedra_center_atoms: scene_props.hide_polyhedra_center_atoms,
       hide_polyhedra_internal_bonds: scene_props.hide_polyhedra_internal_bonds,
@@ -1085,6 +1088,10 @@
       scene_props.show_polyhedra = DEFAULTS.structure.show_polyhedra
       scene_props.polyhedra_center_elements = DEFAULTS.structure.polyhedra_center_elements
       scene_props.polyhedra_min_coordination = DEFAULTS.structure.polyhedra_min_coordination
+      scene_props.polyhedra_max_neighbors = DEFAULTS.structure.polyhedra_max_neighbors
+      scene_props.polyhedra_color_mode = DEFAULTS.structure.polyhedra_color_mode
+      scene_props.polyhedra_color = DEFAULTS.structure.polyhedra_color
+      scene_props.polyhedra_show_edges = DEFAULTS.structure.polyhedra_show_edges
       scene_props.polyhedra_opacity_mode = DEFAULTS.structure.polyhedra_opacity_mode
       scene_props.polyhedra_opacity = DEFAULTS.structure.polyhedra_opacity
       scene_props.polyhedra_opacity_near = DEFAULTS.structure.polyhedra_opacity_near
@@ -1110,6 +1117,34 @@
           step="1"
           bind:value={scene_props.polyhedra_min_coordination}
         />
+      </label>
+      <label>
+        {t('structure.max_coordination')}
+        <input
+          type="number"
+          min="4"
+          max="16"
+          step="1"
+          bind:value={scene_props.polyhedra_max_neighbors}
+        />
+        <input
+          type="range"
+          min="4"
+          max="16"
+          step="1"
+          bind:value={scene_props.polyhedra_max_neighbors}
+        />
+      </label>
+      <label>
+        {t('structure.polyhedra_color_label')}
+        <select bind:value={scene_props.polyhedra_color_mode}>
+          <option value="vertex">{t('structure.color_mode_vertex')}</option>
+          <option value="center">{t('structure.color_mode_center')}</option>
+          <option value="uniform">{t('structure.color_mode_uniform')}</option>
+        </select>
+        {#if scene_props.polyhedra_color_mode === `uniform`}
+          <input type="color" bind:value={scene_props.polyhedra_color} />
+        {/if}
       </label>
       <label>
         {t('structure.opacity_mode')}
@@ -1152,19 +1187,24 @@
         </label>
       {/if}
       <label>
-        {t('structure.edge_color')}
-        <input type="color" bind:value={scene_props.polyhedra_edge_color} />
+        <input type="checkbox" bind:checked={scene_props.polyhedra_show_edges} />
+        {t('structure.show_edges')}
+        {#if scene_props.polyhedra_show_edges}
+          <input type="color" bind:value={scene_props.polyhedra_edge_color} />
+        {/if}
       </label>
-      <label>
-        {t('structure.opacity')}
-        <input
-          type="range"
-          min="0"
-          max="1"
-          step="0.05"
-          bind:value={scene_props.polyhedra_edge_opacity}
-        />
-      </label>
+      {#if scene_props.polyhedra_show_edges}
+        <label>
+          {t('structure.opacity')}
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            bind:value={scene_props.polyhedra_edge_opacity}
+          />
+        </label>
+      {/if}
       <label>
         <input type="checkbox" bind:checked={scene_props.hide_polyhedra_center_atoms} />
         {t('structure.hide_center_atoms')}

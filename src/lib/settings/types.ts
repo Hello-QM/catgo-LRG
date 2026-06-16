@@ -37,6 +37,9 @@ export type AtomColorMode = (typeof ATOM_COLOR_MODE_OPTIONS)[number]
 export const polyhedra_opacity_modes = [`uniform`, `depth_gradient`] as const
 export type PolyhedraOpacityMode = (typeof polyhedra_opacity_modes)[number]
 
+export const polyhedra_color_modes = [`vertex`, `center`, `uniform`] as const
+export type PolyhedraColorMode = (typeof polyhedra_color_modes)[number]
+
 // Reusable type definitions for common setting patterns
 type DisplayConfigType = {
   x_grid: SettingType<boolean>
@@ -201,8 +204,12 @@ export interface SettingsConfig {
     show_polyhedra: SettingType<boolean>
     polyhedra_center_elements: SettingType<string[]>
     polyhedra_min_coordination: SettingType<number>
+    polyhedra_max_neighbors: SettingType<number>
     polyhedra_metals_only: SettingType<boolean>
     polyhedra_cutoff: SettingType<number>
+    polyhedra_color_mode: SettingType<PolyhedraColorMode>
+    polyhedra_color: SettingType<string>
+    polyhedra_show_edges: SettingType<boolean>
     polyhedra_opacity_mode: SettingType<PolyhedraOpacityMode>
     polyhedra_opacity: SettingType<number>
     polyhedra_opacity_near: SettingType<number>

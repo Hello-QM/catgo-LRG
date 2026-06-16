@@ -18,6 +18,7 @@
     opacity_far = 0.1,
     edge_color = `#333333`,
     edge_opacity = 0.8,
+    show_edges = true,
     camera_position = [0, 0, 50] as [number, number, number],
     depth_range = [0, 100] as [number, number],
   }: {
@@ -28,6 +29,7 @@
     opacity_far?: number
     edge_color?: string
     edge_opacity?: number
+    show_edges?: boolean
     camera_position?: [number, number, number]
     depth_range?: [number, number]
   } = $props()
@@ -154,7 +156,7 @@
   />
 {/if}
 
-{#if geometry.edge_count > 0}
+{#if show_edges && geometry.edge_count > 0}
   <T.LineSegments
     geometry={edge_geom}
     material={edge_material}

@@ -79,6 +79,7 @@
     get_polyhedra_hidden_atoms,
     get_polyhedra_hidden_bond_keys,
     type MergedPolyhedraGeometry,
+    type PolyhedronData,
   } from './polyhedra'
   import type { MofClusters } from './mof-analysis'
   import { CanvasTooltip } from './index'
@@ -611,8 +612,12 @@
     show_polyhedra = false,
     polyhedra_center_elements = [] as string[],
     polyhedra_min_coordination = 3,
+    polyhedra_max_neighbors = 8,
     polyhedra_metals_only = true,
     polyhedra_cutoff = 3.5,
+    polyhedra_color_mode = `vertex` as import('$lib/settings').PolyhedraColorMode,
+    polyhedra_color = `#4a90d9`,
+    polyhedra_show_edges = true,
     polyhedra_opacity_mode = `uniform` as import('$lib/settings').PolyhedraOpacityMode,
     polyhedra_opacity = 0.4,
     polyhedra_opacity_near = 0.6,
@@ -860,8 +865,12 @@
     show_polyhedra?: boolean
     polyhedra_center_elements?: string[]
     polyhedra_min_coordination?: number
+    polyhedra_max_neighbors?: number
     polyhedra_metals_only?: boolean
     polyhedra_cutoff?: number
+    polyhedra_color_mode?: import('$lib/settings').PolyhedraColorMode
+    polyhedra_color?: string
+    polyhedra_show_edges?: boolean
     polyhedra_opacity_mode?: import('$lib/settings').PolyhedraOpacityMode
     polyhedra_opacity?: number
     polyhedra_opacity_near?: number
@@ -2570,7 +2579,7 @@
     try {
       return compute_polyhedra_fast(
         structure, polyhedra_center_elements ?? [], polyhedra_min_coordination ?? 3,
-        polyhedra_metals_only ?? true, polyhedra_cutoff ?? 3.5,
+        polyhedra_metals_only ?? true, polyhedra_cutoff ?? 3.5, polyhedra_max_neighbors ?? 8,
       )
     } catch (err) {
       console.warn(`[CatGo] Polyhedra computation failed:`, err)
@@ -2584,10 +2593,30 @@
     edge_positions: new Float32Array(0), edge_count: 0,
   }
 
+  // Color of a structure site: per-element override > property color (coordination/
+  // Wyckoff modes) > element color > gray fallback. Mirrors catgo's atom-color path.
+  const polyhedra_site_color = (site_idx: number): string => {
+    const site = structure?.sites[site_idx]
+    const element = site?.species?.[0]?.element ?? ``
+    const override = polyhedra_color_overrides?.[element]
+    if (override) return override
+    const orig_idx = get_orig_site_idx(site, site_idx)
+    return property_colors?.colors[orig_idx] ??
+      (element && colors.element?.[element]) ?? `#808080`
+  }
+
   let polyhedra_geometry = $derived.by(() => {
     if (!polyhedra_data.length) return EMPTY_POLYHEDRA_GEOM
+    // Resolve each hull corner's color per the active color mode. neighbor_indices
+    // is parallel to vertices; -1 marks a PBC image -> fall back to the center color.
+    const get_vertex_color = (poly: PolyhedronData, vertex_local_idx: number): string => {
+      if (polyhedra_color_mode === `uniform`) return polyhedra_color
+      if (polyhedra_color_mode === `center`) return polyhedra_site_color(poly.center_idx)
+      const site_idx = poly.neighbor_indices[vertex_local_idx]
+      return site_idx >= 0 ? polyhedra_site_color(site_idx) : polyhedra_site_color(poly.center_idx)
+    }
     try {
-      return merge_polyhedra_geometry(polyhedra_data, polyhedra_color_overrides ?? {})
+      return merge_polyhedra_geometry(polyhedra_data, get_vertex_color)
     } catch (err) {
       console.warn(`[CatGo] Polyhedra geometry merge failed:`, err)
       return EMPTY_POLYHEDRA_GEOM
@@ -4912,6 +4941,7 @@
             opacity_far={polyhedra_opacity_far}
             edge_color={polyhedra_edge_color}
             edge_opacity={polyhedra_edge_opacity}
+            show_edges={polyhedra_show_edges}
             camera_position={_polyhedra_camera_pos}
             depth_range={_polyhedra_depth_range}
           />

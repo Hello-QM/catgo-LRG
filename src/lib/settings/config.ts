@@ -495,6 +495,13 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 3,
       maximum: 12,
     },
+    polyhedra_max_neighbors: {
+      value: 8,
+      description:
+        `Maximum coordination number for a polyhedron (skips e.g. CN-12 cuboctahedra around large A-site cations)`,
+      minimum: 4,
+      maximum: 16,
+    },
     polyhedra_metals_only: {
       value: true,
       description:
@@ -505,6 +512,24 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description: `Maximum bond length for polyhedra neighbor search (Å)`,
       minimum: 1.5,
       maximum: 6.0,
+    },
+    polyhedra_color_mode: {
+      value: `vertex` as const,
+      description:
+        `Color polyhedra by the atoms at their corners, the center atom, or a single custom color`,
+      enum: {
+        vertex: `Vertex Atoms`,
+        center: `Center Atom`,
+        uniform: `Custom Color`,
+      },
+    },
+    polyhedra_color: {
+      value: `#4a90d9`,
+      description: `Custom polyhedra face color (used when color mode is Custom Color)`,
+    },
+    polyhedra_show_edges: {
+      value: true,
+      description: `Draw outlines along polyhedra edges`,
     },
     polyhedra_opacity_mode: {
       value: `uniform` as const,
