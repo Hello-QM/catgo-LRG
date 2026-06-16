@@ -94,6 +94,7 @@
      here, but its header buttons / import cards render via App-defined snippets,
      so the descendant parts need :global(). (moved verbatim from App.svelte) */
   .pane:hover :global(.panel-popout-btn),
+  .pane:hover :global(.panel-maximize-btn),
   .pane:hover :global(.panel-close-btn) { opacity: 1; }
   .pane.dragover::after {
     content: '';

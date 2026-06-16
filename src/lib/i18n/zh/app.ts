@@ -14,6 +14,8 @@ const app: Record<string, string> = {
   // Panel
   open_in_new_window: `在新窗口打开`,
   close_panel: `关闭面板`,
+  maximize_pane: `最大化面板`,
+  restore_pane: `还原面板`,
   workflow_will_be_closed: `工作流将被关闭。`,
   local: `本地`,
   hpc: `HPC`,

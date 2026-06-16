@@ -152,6 +152,7 @@ export function create_tab_manager() {
     ts.root = r.root
     ts.active_leaf_id = r.active_leaf_id
     ts.close_confirm_leaf_id = null
+    ts.maximized_leaf_id = null
     ts.library = []
     ts.active_library_id = null
     // A last terminal tab being closed reverts to the structure landing page.

@@ -70,6 +70,7 @@ export function close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: stri
   }
   ts.root = removeLeaf(ts.root, leaf_id)
   if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+  if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
   deps.update_tab_label(tab_id)
 }
 

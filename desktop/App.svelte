@@ -303,7 +303,15 @@
       ts.root = removeLeaf(ts.root, leaf_id)
       if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
     }
+    if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
     update_tab_label(tab_id)
+  }
+  // Toggle maximize/zoom for a leaf: fills the tab workspace, others stay warm at 0 size.
+  function toggle_maximize(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    ts.maximized_leaf_id = ts.maximized_leaf_id === leaf_id ? null : leaf_id
+    if (ts.maximized_leaf_id) ts.active_leaf_id = leaf_id
   }
   // Pop a terminal leaf out into its own window, then drop it from the source tree.
   function popout_terminal_leaf(tab_id: string, leaf_id: string) {
@@ -1763,6 +1771,7 @@
           active_leaf_id={ts.active_leaf_id}
           drag_target_leaf={tab.id === tm.active_tab_id ? drag_target_leaf : null}
           close_confirm_leaf_id={ts.close_confirm_leaf_id}
+          maximized_leaf_id={ts.maximized_leaf_id}
           {active_split_id}
           on_activate={(id) => ts.active_leaf_id = id}
           on_split_mousedown={(e, sid, dir) => start_split_resize(e, sid, dir, tab.id)}
@@ -1788,6 +1797,17 @@
                 <polyline points="15 3 21 3 21 9"/>
                 <line x1="10" y1="14" x2="21" y2="3"/>
               </svg>
+            </button>
+            <button
+              class="panel-maximize-btn"
+              onclick={(e) => { e.stopPropagation(); toggle_maximize(tab.id, leaf.id) }}
+              title={ts.maximized_leaf_id === leaf.id ? t(`app.restore_pane`) : t(`app.maximize_pane`)}
+            >
+              {#if ts.maximized_leaf_id === leaf.id}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 9H5V5M15 9h4V5M9 15H5v4M15 15h4v4"/></svg>
+              {:else}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/></svg>
+              {/if}
             </button>
             <button
               class="panel-close-btn"
@@ -1816,6 +1836,17 @@
                 </svg>
               </button>
             {/if}
+            <button
+              class="panel-maximize-btn"
+              onclick={(e) => { e.stopPropagation(); toggle_maximize(tab.id, leaf.id) }}
+              title={ts.maximized_leaf_id === leaf.id ? t(`app.restore_pane`) : t(`app.maximize_pane`)}
+            >
+              {#if ts.maximized_leaf_id === leaf.id}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 9H5V5M15 9h4V5M9 15H5v4M15 15h4v4"/></svg>
+              {:else}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/></svg>
+              {/if}
+            </button>
             <button
               class="panel-close-btn"
               onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, leaf.id) }}
@@ -2537,6 +2568,7 @@
   }
 
   .panel-popout-btn,
+  .panel-maximize-btn,
   .panel-close-btn {
     display: flex;
     align-items: center;
@@ -2556,7 +2588,8 @@
   /* Hover-reveal lives in PaneTree.svelte (.pane:hover :global(.panel-*-btn))
      because .pane is rendered there while these buttons render in App's scope. */
 
-  .panel-popout-btn:hover {
+  .panel-popout-btn:hover,
+  .panel-maximize-btn:hover {
     background: rgba(59, 130, 246, 0.5);
     color: white;
   }

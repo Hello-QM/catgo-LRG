@@ -83,6 +83,10 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
       }
     }
     if (event.key === `Escape`) {
+      if (ts.maximized_leaf_id) {
+        ts.maximized_leaf_id = null
+        return
+      }
       if (deps.get_tab_close_confirm_id()) {
         deps.set_tab_close_confirm_id(null)
         return

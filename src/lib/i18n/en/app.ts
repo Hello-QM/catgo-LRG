@@ -14,6 +14,8 @@ const app: Record<string, string> = {
   // Panel
   open_in_new_window: `Open in new window`,
   close_panel: `Close panel`,
+  maximize_pane: `Maximize panel`,
+  restore_pane: `Restore panel`,
   workflow_will_be_closed: `Workflow will be closed.`,
   local: `Local`,
   hpc: `HPC`,
