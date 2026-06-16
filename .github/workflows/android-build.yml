@@ -118,7 +118,7 @@ jobs:
         # already hidden on mobile.
         env:
           VITE_STATIC_ONLY: '1'
-        run: pnpm tauri android build --apk
+        run: pnpm tauri android build --apk true
 
       - name: Sign the APK (apksigner)
         id: sign
