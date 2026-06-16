@@ -531,8 +531,9 @@ describe(`Export functionality`, () => {
       expect(() => func(undefined)).toThrow(error_msg)
     })
 
+    // POSCAR has no concept of a non-periodic structure, so it still throws.
+    // CIF supports molecules — see the dedicated no-lattice case below.
     it.each([
-      { func: structure_to_cif_str, error_msg: `No lattice information for CIF export` },
       {
         func: structure_to_poscar_str,
         error_msg: `No lattice information for POSCAR export`,
@@ -548,6 +549,21 @@ describe(`Export functionality`, () => {
         }],
       }
       expect(() => func(structure_no_lattice)).toThrow(error_msg)
+    })
+
+    it(`exports a Cartesian CIF (no cell) for a structure without lattice`, () => {
+      const structure_no_lattice: AnyStructure = {
+        sites: [{
+          species: [{ element: `H`, occu: 1, oxidation_state: 0 }],
+          xyz: [0.0, 0.0, 0.0],
+          abc: [0.0, 0.0, 0.0],
+          label: `H`,
+          properties: {},
+        }],
+      }
+      const cif = structure_to_cif_str(structure_no_lattice)
+      expect(cif).toMatch(/_atom_site_Cartn_x/)
+      expect(cif).not.toMatch(/_cell_length/)
     })
 
     it.each(
