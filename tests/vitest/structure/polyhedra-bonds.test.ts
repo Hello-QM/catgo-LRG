@@ -113,26 +113,39 @@ describe(`compute_polyhedra_from_bonds — distance trim`, () => {
   })
 })
 
+// Two independent octahedra: Ti (framework) at origin, Ba (spectator A-site) far
+// away, EACH with its own 6 O at 2 Å so both clear the trim + CN gates and only
+// apply_framework_filters can hide Ba.
+function two_octahedra(): { sites: Site[]; bonds: BondPair[] } {
+  const BA: Vec3 = [20, 0, 0]
+  const ba_o: Vec3[] = OCTA_OFFSETS.map((o) => [o[0] + 20, o[1], o[2]] as Vec3)
+  const sites = [
+    site(`Ti`, [0, 0, 0]), // 0
+    ...OCTA_OFFSETS.map((o) => site(`O`, o)), // 1..6
+    site(`Ba`, BA), // 7
+    ...ba_o.map((o) => site(`O`, o)), // 8..13
+  ]
+  const bonds = [
+    ...OCTA_OFFSETS.map((o, k) => bond(0, k + 1, [0, 0, 0], o)),
+    ...ba_o.map((o, k) => bond(7, k + 8, BA, o)),
+  ]
+  return { sites, bonds }
+}
+
 describe(`compute_polyhedra_from_bonds — framework filters`, () => {
-  it(`hides spectator Ba but keeps Ti octahedra`, () => {
-    // Ti(0) octahedron of 6 O (1..6); Ba(7) also "coordinated" by the same 6 O
-    const sites = [...octahedron_sites(), site(`Ba`, [4, 0, 0])]
-    const ba_bonds = OCTA_OFFSETS.map((o, k) => bond(7, k + 1, [4, 0, 0], o))
-    const bonds = [...octahedron_bonds(), ...ba_bonds]
+  it(`hides spectator Ba but keeps Ti (auto mode runs apply_framework_filters)`, () => {
+    const { sites, bonds } = two_octahedra()
     const polys = compute_polyhedra_from_bonds(struct(sites), bonds)
     const elems = polys.map((p) => p.center_element)
     expect(elems).toContain(`Ti`)
     expect(elems).not.toContain(`Ba`)
   })
 
-  it(`explicit center_elements bypasses anion + framework filters`, () => {
-    // force O as a center: normally excluded (non-metal), explicit keeps it
-    const polys = compute_polyhedra_from_bonds(
-      struct(octahedron_sites()),
-      octahedron_bonds(),
-      { center_elements: [`Ti`], min_coordination: 6 },
-    )
-    expect(polys).toHaveLength(1)
-    expect(polys[0].center_element).toBe(`Ti`)
+  it(`explicit center_elements bypasses the framework filter (Ba kept)`, () => {
+    const { sites, bonds } = two_octahedra()
+    const polys = compute_polyhedra_from_bonds(struct(sites), bonds, {
+      center_elements: [`Ba`],
+    })
+    expect(polys.map((p) => p.center_element)).toContain(`Ba`)
   })
 })
