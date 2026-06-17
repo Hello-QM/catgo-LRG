@@ -110,6 +110,14 @@ jobs:
       - name: Build ferrox-wasm package
         run: cd extensions/rust-wasm && pnpm build
 
+      # predev.mjs (run by `desktop:dev`) builds chgdiff + catrender WASM on
+      # first start via `build-wasm.mjs --if-missing`. In CI that on-demand
+      # compile takes minutes, so the dev server isn't ready when Playwright
+      # connects (page.goto → ERR_CONNECTION_REFUSED). Prebuild them here —
+      # ferrox above is already built, so --if-missing only does the other two.
+      - name: Prebuild chgdiff + catrender WASM (so the e2e dev server starts immediately)
+        run: node scripts/build-wasm.mjs --if-missing
+
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
