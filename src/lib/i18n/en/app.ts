@@ -3,6 +3,8 @@ const app: Record<string, string> = {
   // TabBar
   close_tab: `Close tab`,
   new_tab: `New tab`,
+  new_structure_tab: `Structure`,
+  new_terminal_tab: `Terminal`,
   close_all_tabs: `Close all tabs`,
   layout_single: `Single`,
   layout_split_h: `Side by Side`,
@@ -12,6 +14,19 @@ const app: Record<string, string> = {
   // Panel
   open_in_new_window: `Open in new window`,
   close_panel: `Close panel`,
+  maximize_pane: `Maximize panel`,
+  restore_pane: `Restore panel`,
+  change_pane_type: `Change pane type`,
+  type_structure: `Structure`,
+  type_terminal: `Terminal`,
+  type_empty: `Empty`,
+  dir_sync_on: `Directory sync ON — Files panel follows terminal CWD`,
+  dir_sync_off: `Directory sync OFF — click to follow terminal CWD`,
+  ask_catbot: `Ask CatBot about this terminal`,
+  connect_new_cluster: `Connect new cluster…`,
+  allow: `Allow`,
+  agent_terminal_approve_title: `Agent wants to run in your terminal`,
+  agent_terminal_autorun: `Run agent terminal commands without asking (this session)`,
   workflow_will_be_closed: `Workflow will be closed.`,
   local: `Local`,
   hpc: `HPC`,
@@ -168,5 +183,10 @@ const app: Record<string, string> = {
   no_workflows_yet: `No workflows yet. Create one or use a template above.`,
   static_mode_workflow_title: `Workflow Engine`,
   static_mode_workflow_message: `Workflow execution, HPC integration, and project management require the CatGo desktop app. You can still use the 3D structure viewer and build tools in the browser.`,
+
+  // Open-target preference
+  open_in_split: `Split pane`,
+  open_in_window: `New window`,
+  open_files_in: `Open files in`,
 }
 export default app

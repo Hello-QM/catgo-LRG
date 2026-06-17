@@ -651,6 +651,75 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_campaign",
+        description=(
+            "Create and drive a CatGo Campaign — the md-orchestration system for "
+            "exploratory / HPC research studies (agent-driven folder + markdown). "
+            "READ the campaign skill first: catgo_skills(action='read', skill='campaign'). "
+            "Actions map to the `catgo campaign` CLI:\n"
+            "  new        — scaffold a new campaign folder (args: <name> [--location DIR] ...)\n"
+            "  fetch-ref  — fetch reference data\n"
+            "  submit     — submit a calculation\n"
+            "  poll       — poll job status\n"
+            "  aggregate  — aggregate results\n"
+            "  report     — build the report\n"
+            "  ingest     — ingest literature\n"
+            "  archive    — archive the campaign\n"
+            "After `new`, work the scaffolded folder with your own bash/file tools."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["new", "fetch-ref", "submit", "poll", "aggregate", "report", "ingest", "archive"],
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Extra CLI args passed verbatim, e.g. ['my-study', '--location', '/home/james/research'].",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
+        name="catgo_terminal",
+        description=(
+            "Operate the user's VISIBLE terminal pane (local or HPC) — the same one "
+            "they see on screen, with its own cwd / env / SSH session. Each "
+            "run/send_keys/interrupt asks the user to approve in the app. Prefer "
+            "'run' for non-interactive commands; 'send_keys' to answer a prompt or "
+            "drive a TUI; 'read' to inspect the current buffer (no approval). Output "
+            "reflects the visible terminal, NOT your own agent shell. If the terminal "
+            "is inside tmux or a full-screen app (vim/less/htop), 'run' cannot capture "
+            "output and returns a notice — drive it with 'send_keys' (type the command "
+            "+ '<enter>') then 'read'."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["read", "run", "send_keys", "interrupt"],
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to run (action=run).",
+                },
+                "keys": {
+                    "type": "string",
+                    "description": "Keys to send (action=send_keys), e.g. 'y<enter>', '<c-c>'.",
+                },
+                "lines": {
+                    "type": "number",
+                    "description": "Trailing lines to read (action=read, default 40).",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
         name="catgo_validate_config",
         description=(
             "Validate the user's VASP/HPC cluster configuration against the LIVE "
@@ -2048,6 +2117,66 @@ async def _handle_skills(args: dict) -> list[TextContent]:
             return [T(type="text", text=f"Error reading skill {skill}: {e}")]
 
     return [T(type="text", text=f"Unknown skills action: {action}. Use 'list' or 'read'.")]
+
+
+# ---------------------------------------------------------------------------
+# Campaign Handler — let SDK agents run the `catgo campaign` md-orchestration CLI
+# ---------------------------------------------------------------------------
+
+
+# Pure argv builder kept as a thin alias over the shared helper so the SDK-agent
+# path and the client-direct HTTP route stay in lock-step (DRY). The PYTHONPATH
+# fix + subprocess live in catgo.campaign_cli.run_campaign_cli.
+from catgo.campaign_cli import campaign_argv as _campaign_argv  # noqa: E402
+from catgo.campaign_cli import run_campaign_cli as _run_campaign_cli  # noqa: E402
+
+
+async def _handle_campaign(args: dict) -> list[TextContent]:
+    """Run the `catgo campaign` CLI on behalf of an SDK agent and return its output."""
+    action = str(args.get("action") or "").strip()
+    extra = [str(a) for a in (args.get("args") or [])]
+    if not action:
+        return [TextContent(type="text", text="error: 'action' is required")]
+    try:
+        text, code = await _run_campaign_cli(action, extra)
+    except ValueError as e:
+        return [TextContent(type="text", text=f"error: {e}")]
+    except Exception as e:  # noqa: BLE001 — surface any launcher error to the agent
+        return [TextContent(type="text", text=f"[catgo campaign {action}] error: {e}")]
+    if code == -1 and not text:
+        return [TextContent(type="text", text=f"[catgo campaign {action}] still running after 300s — check the campaign folder / poll later.")]
+    status = "ok" if code == 0 else f"exit {code}"
+    return [TextContent(type="text", text=f"[catgo campaign {action}] {status}\n{text}".rstrip())]
+
+
+async def _handle_terminal(args: dict) -> list[TextContent]:
+    """Drive the renderer's visible terminal via the terminal_bridge round-trip."""
+    from catgo.routers.terminal_bridge import request_terminal  # in-process; no self-HTTP
+
+    action = str(args.get("action") or "").strip()
+    if action not in {"read", "run", "send_keys", "interrupt"}:
+        return [TextContent(type="text", text="error: action must be read|run|send_keys|interrupt")]
+    payload: dict = {}
+    if action == "run":
+        payload["command"] = str(args.get("command") or "")
+    elif action == "send_keys":
+        payload["keys"] = str(args.get("keys") or "")
+    elif action == "read":
+        payload["lines"] = int(args.get("lines") or 40)
+    res = await request_terminal(action, payload)
+    if res.get("error"):
+        return [TextContent(type="text", text=f"[terminal] {res['error']}")]
+    if res.get("denied"):
+        return [TextContent(type="text", text="[terminal] the user denied this command.")]
+    body = res.get("output", "")
+    if res.get("exit_code") is not None:
+        tail = f"\n(exit {res['exit_code']})"
+    elif res.get("running"):
+        tail = "\n(still running — read or send_keys to continue)"
+    else:
+        tail = ""
+    target = res.get("target", "?")
+    return [TextContent(type="text", text=f"[terminal:{action}] target={target}\n{body}{tail}".rstrip())]
 
 
 # ---------------------------------------------------------------------------

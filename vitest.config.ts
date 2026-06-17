@@ -25,7 +25,7 @@ export default defineConfig({
     // applied to files that imported setup.ts for its helpers, leaving suites
     // like theme/materials-project with a broken native localStorage on Node 25.
     setupFiles: ['./tests/vitest/setup.ts'],
-    include: ['tests/vitest/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
+    include: ['tests/vitest/**/*.test.ts', 'tests/desktop/**/*.test.ts', 'src/**/__tests__/**/*.test.ts'],
     globals: false,
     // quickhull3d ships an ESM index.js that imports `./QuickHull` without
     // an extension. Node's ESM resolver rejects that — force Vite to

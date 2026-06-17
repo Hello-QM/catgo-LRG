@@ -15,6 +15,7 @@
   import { create_rename_save_state } from './sidebar/rename-save-dialogs.svelte'
   import FilePickerModal from './components/FilePickerModal.svelte'
   import { create_cwd_sync_cleanup } from './sidebar/cwd-sync.svelte'
+  import { open_target_state, set_open_target } from '$lib/state.svelte'
   import { open_context_menu, make_project_target, make_result_target, make_workflow_target } from './sidebar/sidebar-context-menus'
   import {
     list_projects,
@@ -116,13 +117,14 @@
     return () => hpc.cleanup()
   })
 
-  // CWD sync: listen for terminal directory changes via BroadcastChannel (cross-window)
-  // AND CustomEvent (same-window, since BroadcastChannel doesn't deliver to sender's context)
+  // CWD sync: follow terminal directory changes in THIS window only (same-window
+  // CustomEvent — no cross-window BroadcastChannel, so popouts stay independent).
   $effect(() => {
     return create_cwd_sync_cleanup(
       source,
       () => hpc.hpc_current_path,
       (path) => { hpc.hpc_current_path = path },
+      (path) => { fsb.fs_browse(path) },
     )
   })
 
@@ -1481,6 +1483,23 @@
       {/if}
     </div>
 
+    <!-- Open destination toggle -->
+    <div class="open-target-row">
+      <span class="open-target-label">{t('app.open_files_in')}</span>
+      <div class="open-target-btns">
+        <button
+          class="open-target-btn"
+          class:active={open_target_state.value === 'split'}
+          onclick={() => set_open_target('split')}
+        >{t('app.open_in_split')}</button>
+        <button
+          class="open-target-btn"
+          class:active={open_target_state.value === 'window'}
+          onclick={() => set_open_target('window')}
+        >{t('app.open_in_window')}</button>
+      </div>
+    </div>
+
     <!-- System diagnostics toggle -->
     <div class="sidebar-footer">
       <button class="sidebar-status-btn" onclick={() => show_diagnostics = !show_diagnostics}>
@@ -2172,6 +2191,37 @@
 
   .fs-toggle-btn.active {
     color: #60a5fa;
+  }
+
+  .open-target-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    font-size: 0.8em;
+  }
+  .open-target-label {
+    flex: 1;
+    color: var(--text-muted, #888);
+    white-space: nowrap;
+  }
+  .open-target-btns {
+    display: flex;
+    gap: 2px;
+  }
+  .open-target-btn {
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--border, #444);
+    background: transparent;
+    color: var(--text-muted, #888);
+    cursor: pointer;
+    font-size: 0.9em;
+  }
+  .open-target-btn.active {
+    background: var(--accent, #4d9ee5);
+    color: #fff;
+    border-color: var(--accent, #4d9ee5);
   }
 
   .fs-toggle-btn .chevron {

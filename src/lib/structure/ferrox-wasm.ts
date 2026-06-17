@@ -462,6 +462,10 @@ import { browser } from '$app/environment'
 let wasm_module: FerroxWasmModule | null = null
 let init_promise: Promise<FerroxWasmModule> | null = null
 
+/** One-shot listeners fired the moment the WASM module finishes initializing.
+ *  See on_ferrox_wasm_ready below. */
+const _ready_listeners = new Set<() => void>()
+
 /** Cached WebAssembly.Module for Worker transfer via postMessage. */
 let cached_wasm_compiled_module: WebAssembly.Module | null = null
 
@@ -538,6 +542,15 @@ export function ensure_ferrox_wasm_ready(wasm_url_or_binary?: string | Uint8Arra
         }
 
         wasm_module = mod
+        // Notify anything that ran the JS bond fallback while WASM was still
+        // loading (popout windows / slow mobile cold-starts) so it can recompute.
+        if (_ready_listeners.size > 0) {
+          const cbs = [..._ready_listeners]
+          _ready_listeners.clear()
+          for (const cb of cbs) {
+            try { cb() } catch { /* a listener throwing must not break init */ }
+          }
+        }
         return mod
       } catch (err) {
         // Clear the promise on failure so retry is possible
@@ -555,6 +568,24 @@ export function ensure_ferrox_wasm_ready(wasm_url_or_binary?: string | Uint8Arra
 // Check if the module is already initialized
 export function is_ferrox_wasm_ready(): boolean {
   return wasm_module !== null
+}
+
+/** Run `cb` once the ferrox WASM module is initialized. Fires immediately
+ *  (synchronously) if it is already ready; otherwise fires once on first init
+ *  and the listener is then dropped. Returns an unsubscribe function.
+ *
+ *  Used by the bond viewer: the first bond computation can race the eager WASM
+ *  init (a popout window loads its structure at mount; mobile cold-starts are
+ *  slow), in which case compute_bonds_sync falls back to the pure-JS path that
+ *  produces NO cross-cell PBC bonds. This lets the viewer recompute once the
+ *  real WASM detector is available. */
+export function on_ferrox_wasm_ready(cb: () => void): () => void {
+  if (wasm_module) {
+    cb()
+    return () => {}
+  }
+  _ready_listeners.add(cb)
+  return () => { _ready_listeners.delete(cb) }
 }
 
 // Synchronously return the initialized WASM module, or null if not ready.

@@ -5,7 +5,8 @@
  */
 
 import type { StructureTabState } from '../pane-utils'
-import { pane_has_content } from '../pane-utils'
+import { resolve_open_target } from '$lib/state.svelte'
+import { findFirstEmptyLeaf } from '../pane-tree'
 
 export interface ImportItem {
   content?: string | ArrayBuffer
@@ -18,15 +19,17 @@ export interface DragDropDeps {
   get_active_ts: () => StructureTabState | null
   get_active_tab_type: () => string
   get_active_tab_id: () => string
-  process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number) => Promise<void>
-  import_many: (tab_id: string, items: ImportItem[], pane_idx: number) => Promise<void>
+  process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, leaf_id: string) => Promise<void>
+  import_many: (tab_id: string, items: ImportItem[], leaf_id: string) => Promise<void>
   /** If `path` is a large on-disk trajectory, stream it and return true. */
   stream_trajectory: (path: string, filename: string) => Promise<boolean>
   /** If `file` is a large trajectory (web mode, no path), upload+stream it; return true. */
   stream_trajectory_file: (file: File) => Promise<boolean>
-  get_drag_target_pane: () => number | null
-  set_drag_target_pane: (v: number | null) => void
+  get_drag_target_pane: () => string | null
+  set_drag_target_pane: (v: string | null) => void
   set_is_loading: (v: boolean) => void
+  get_open_target: () => 'split' | 'window'
+  open_in_window: (content: string, filename: string) => Promise<void>
 }
 
 /* Minimal File System Entry typings (non-standard webkit API). */
@@ -60,14 +63,12 @@ async function read_entry_files(entry: FsEntry | null, out: Array<{ file: File; 
   }
 }
 
-export function get_pane_from_event(deps: DragDropDeps, event: DragEvent): number {
+export function get_pane_from_event(deps: DragDropDeps, event: DragEvent): string {
   const ts = deps.get_active_ts()
-  if (!ts) return 0
-  const target = event.target as HTMLElement
-  const pane_el = target.closest(`[data-pane]`)
-  if (pane_el) return parseInt(pane_el.getAttribute(`data-pane`) || `0`)
-  const first_empty = ts.panes.findIndex(p => !pane_has_content(p))
-  return first_empty >= 0 ? first_empty : ts.active_pane
+  if (!ts) return ''
+  const el = (event.target as HTMLElement).closest('[data-leaf-id]')
+  if (el) return el.getAttribute('data-leaf-id') || ts.active_leaf_id
+  return findFirstEmptyLeaf(ts.root)?.id ?? ts.active_leaf_id
 }
 
 /** Check if event originates inside sidebar (FileTree has its own drag-drop) */
@@ -111,7 +112,7 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
   event.stopPropagation()
   const ts = deps.get_active_ts()
   if (!ts) return
-  const pane_idx = get_pane_from_event(deps, event)
+  const target_leaf_id = get_pane_from_event(deps, event)
   deps.set_drag_target_pane(null)
 
   // [2026-03] Handle drag from sidebar filesystem browser (server-side file)
@@ -122,13 +123,18 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       // Large on-disk trajectory → stream frame-by-frame, never read it whole.
       const fs_name = fs_path.split(/[/\\]/).pop() || `file`
       if (await deps.stream_trajectory(fs_path, fs_name)) {
-        ts.active_pane = pane_idx
+        ts.active_leaf_id = target_leaf_id
         return
       }
       const { read_file } = await import(`$lib/api/project`)
       const result = await read_file(fs_path)
-      await deps.process_file_content(deps.get_active_tab_id(), result.content, result.name, pane_idx)
-      ts.active_pane = pane_idx
+      const fs_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
+      if (fs_target === 'window') {
+        await deps.open_in_window(result.content, result.name)
+        return
+      }
+      await deps.process_file_content(deps.get_active_tab_id(), result.content, result.name, target_leaf_id)
+      ts.active_leaf_id = target_leaf_id
     } catch (err) {
       console.error(`[Drop] Error reading filesystem file:`, err)
     } finally {
@@ -170,13 +176,23 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       if (await deps.stream_trajectory_file(c.file)) continue
       to_import.push(c)
     }
-    if (to_import.length === 0) { ts.active_pane = pane_idx; return }
+    if (to_import.length === 0) { ts.active_leaf_id = target_leaf_id; return }
+    if (to_import.length === 1) {
+      const drop_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
+      if (drop_target === 'window') {
+        const single = to_import[0]
+        const content = await single.file.text()
+        await deps.open_in_window(content, single.file.name)
+        ts.active_leaf_id = target_leaf_id
+        return
+      }
+    }
     await deps.import_many(
       deps.get_active_tab_id(),
       to_import.map(c => ({ file: c.file, filename: c.file.name, path: c.path })),
-      pane_idx,
+      target_leaf_id,
     )
-    ts.active_pane = pane_idx
+    ts.active_leaf_id = target_leaf_id
   } catch (err) {
     console.error(`[Drop] Error:`, err)
   } finally {

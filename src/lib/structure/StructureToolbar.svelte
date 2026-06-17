@@ -68,10 +68,6 @@
     large_system_mode = $bindable(false),
     webgpu_available = true,
     chat_pane_open = $bindable(false),
-    show_terminal = $bindable(false),
-    side_panel_minimized = $bindable(false),
-    terminal_popped_out = $bindable(false),
-    terminal_popped_sync_cwd = $bindable(false),
     // 测量
     measure_mode = $bindable<`distance` | `angle` | `dihedral`>(`distance`),
     measure_mode_active = $bindable(false),
@@ -88,6 +84,7 @@
     delete_selected_atoms = () => {},
     on_popout_chat = undefined as (() => void) | undefined,
     on_upload_to_hpc = undefined as (() => void) | undefined,
+    on_open_terminal = undefined as (() => void) | undefined,
     on_open_in_molstar = undefined as (() => void) | undefined,
 
     // ── 子组件 snippet (面板组件从 Structure.svelte 传入) ──
@@ -128,10 +125,6 @@
     large_system_mode?: boolean
     webgpu_available?: boolean
     chat_pane_open?: boolean
-    show_terminal?: boolean
-    side_panel_minimized?: boolean
-    terminal_popped_out?: boolean
-    terminal_popped_sync_cwd?: boolean
     measure_mode?: `distance` | `angle` | `dihedral`
     measure_mode_active?: boolean
     measure_menu_open?: boolean
@@ -147,6 +140,9 @@
     delete_selected_atoms?: () => void
     on_popout_chat?: () => void
     on_upload_to_hpc?: () => void
+    // Open a terminal as a pane-tree leaf (desktop). Replaces the old
+    // side-panel terminal toggle.
+    on_open_terminal?: () => void
     on_open_in_molstar?: () => void
 
     // 子组件 snippet
@@ -577,27 +573,17 @@
       {/if}
 
       {#if !hidden_toolbar_items.includes('terminal') && !STATIC_ONLY}
-      <!-- === Terminal === -->
+      <!-- === Terminal === — opens a terminal pane-tree leaf (no longer a
+           side-panel toggle). -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
-          onclick={() => {
-            if (show_terminal) {
-              side_panel_minimized = !side_panel_minimized
-            } else {
-              show_terminal = true
-              side_panel_minimized = false
-              terminal_popped_out = false
-              terminal_popped_sync_cwd = false
-            }
-          }}
+          onclick={() => on_open_terminal?.()}
           class="build-tools-toggle"
-          class:active={show_terminal}
-          class:minimized-indicator={show_terminal && side_panel_minimized}
         >
           <Icon icon="Terminal" />
         </button>
-        <span class="struct-toolbar-tooltip" role="tooltip">{show_terminal && side_panel_minimized ? t('structure.restore_terminal') : show_terminal ? t('structure.minimize_terminal') : t('structure.open_terminal')}</span>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.open_terminal')}</span>
       </span>
       {/if}
 

@@ -211,6 +211,26 @@ export function create_bond_state() {
 }
 
 /**
+ * Force the next compute_bond_connectivity call to recompute from scratch for
+ * `structure`, discarding any cached connectivity. Needed when the ferrox WASM
+ * finishes loading AFTER an initial JS-fallback compute: the fallback produced
+ * no cross-cell PBC bonds and cached that result keyed by the structure ref, so
+ * without busting the cache the WASM bonds would never appear (popout windows,
+ * slow mobile cold-starts). Resetting the fingerprints makes structure_changed
+ * fire; deleting the cache entry stops the fast-path from returning stale bonds.
+ */
+export function invalidate_bonds_for_recompute(
+  bond_state: ReturnType<typeof create_bond_state>,
+  structure: AnyStructure | undefined,
+): void {
+  if (structure) bond_conn_cache.delete(structure as unknown as object)
+  bond_state.last_bond_structure = null
+  bond_state.last_bond_strategy = ``
+  bond_state.last_bond_fingerprint = ``
+  bond_state.last_elem_fingerprint = ``
+}
+
+/**
  * Run the bond connectivity computation logic.
  * Called inside `$effect.pre` in the component.
  *

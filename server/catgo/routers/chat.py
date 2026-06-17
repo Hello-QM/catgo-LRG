@@ -217,13 +217,14 @@ _API_FORMATS = {
 
 # Model lists — minimal seed for the dropdown. The Anthropic SDK accepts the
 # short aliases ("opus" / "sonnet" / "haiku") and resolves them to the
-# latest stable model in that family, so the dropdown stays valid across
-# Anthropic releases without us needing to rev these strings on every model
-# launch.
+# latest stable model in that family. The labels carry NO version number so the
+# dropdown auto-tracks Anthropic releases (the alias always runs the latest) and
+# never displays a stale version — no need to rev these strings on every launch.
+# (Codex/Gemini below keep versions: their ids are specific models, not aliases.)
 _SDK_CLAUDE_MODELS = [
-    {"id": "sonnet", "label": "Default (Sonnet 4.6)"},
-    {"id": "opus", "label": "Opus 4.7"},
-    {"id": "haiku", "label": "Haiku 4.5"},
+    {"id": "sonnet", "label": "Default (Sonnet)"},
+    {"id": "opus", "label": "Opus"},
+    {"id": "haiku", "label": "Haiku"},
 ]
 
 # Empirically verified against this user's ChatGPT-account Codex on

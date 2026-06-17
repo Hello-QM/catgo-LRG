@@ -2674,12 +2674,15 @@ C1 C 0 0 0`
     )
   })
 
-  it(`should return null in non-strict mode`, () => {
+  it(`falls back to a default cubic cell in non-strict mode`, () => {
+    // Non-strict parsing tolerates the malformed `_cell_length_a`, leaving the
+    // fractional-coordinate CIF with no usable cell. Rather than refuse to
+    // load, the parser falls back to a default 10 Å cubic cell so the
+    // structure is still viewable (geometry approximate).
     const result = parse_cif(cif_invalid_length, true, false)
-    expect(result).toBeNull()
-    expect(console_error_spy).toHaveBeenCalledWith(
-      `Insufficient cell parameters in CIF file`,
-    )
+    expect(result).not.toBeNull()
+    expect(result?.lattice?.a).toBe(10)
+    expect(result?.sites?.length).toBe(1)
   })
 })
 

@@ -25,6 +25,7 @@
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
   import { TerminalWindow, DopingPTWindow } from '$lib/structure'
+  import { open_target_state, resolve_open_target } from '$lib/state.svelte'
   import { ChatPane } from '$lib/chat'
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
@@ -50,16 +51,31 @@
   import { terminal } from './state/terminal-state.svelte'
   // Extracted pure utilities
   import {
-    type PaneState, type LayoutType, type StructureTabState, type SampleStructure, type LibraryEntry,
-    layout_panel_count, get_pane_label, create_empty_pane, pane_has_content,
+    type PaneState, type StructureTabState, type SampleStructure, type LibraryEntry,
+    get_pane_label, create_empty_pane, pane_has_content,
     content_to_base64, create_tab_state, auto_name as _auto_name,
-    find_import_target_pane, get_visible_panes, get_grid_style, get_pane_position,
     is_chgcar_file, NON_STRUCTURE_EXTS, update_export_format, format_from_ext,
     serialize_structure_content,
   } from './pane-utils'
+  // Recursive pane tree (replaces the fixed single/splitH/splitV/quad grid)
+  import PaneTree from './PaneTree.svelte'
+  import {
+    type LeafNode, type PresetId,
+    leaves, leafCount, findLeafById, findFirstEmptyLeaf,
+    escalateForImport, setRatio, create_empty_leaf, structurePane,
+    removeLeaf, setLeafContent, terminalState, type TerminalLeafState,
+  } from './pane-tree'
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
+  import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
+  // SDK-agent visible-terminal bridge: global poller + approval card
+  import {
+    start_terminal_bridge_poller,
+    approval as terminal_approval,
+    approval_allow as terminal_approval_allow,
+    approval_deny as terminal_approval_deny,
+  } from './lib/terminal-bridge-poller.svelte'
   // Extracted tab manager (factory — must be called in component context)
   import { create_tab_manager } from './lib/tab-manager.svelte'
   // Extracted close-all helpers (pure functions)
@@ -69,8 +85,9 @@
   // Extracted popout manager
   import {
     load_popout_structure, popout_pane as _popout_pane,
-    popout_workflow as _popout_workflow, popout_terminal as _popout_terminal,
-    open_structure_in_new_window, parse_and_open_structure_window,
+    popout_workflow as _popout_workflow,
+    popout_terminal_session as _popout_terminal_session,
+    open_structure_in_new_window, parse_and_open_structure_window, open_path_in_new_window,
   } from './lib/popout-manager'
   // Extracted sidebar handlers
   import {
@@ -113,9 +130,8 @@
   } from './lib/drag-drop-handlers'
   // Extracted resize handlers
   import {
-    on_divider_mousedown as _on_divider_mousedown,
-    on_center_mousedown as _on_center_mousedown,
-    type ResizeDeps,
+    on_split_drag,
+    type ResizeDepsMin,
   } from './lib/resize-handlers'
   // Extracted dialog sub-components
   import ExportSaveDialog from './components/ExportSaveDialog.svelte'
@@ -146,15 +162,16 @@
   let popout_doping_pt_mode = $state(false)
   let is_loading = $state(false)
   let loading_text = $state(``)
-  let drag_target_pane = $state<number | null>(null)
+  let drag_target_leaf = $state<string | null>(null)
   let is_panel_resizing = $state(false)
-  let resize_axis = $state<`col` | `row`>(`col`)
+  let active_split_id = $state<string | null>(null)
 
   // Dep objects wired to local $state
   const sidebar_deps: SidebarHandlerDeps = {
     get_active_ts,
     get_active_tab_id: () => tm.active_tab_id,
     get_active_tab_type: () => tm.active_tab_type,
+    get_open_target: () => open_target_state.value,
     process_file_content,
     update_tab_label,
     get is_tauri() { return is_tauri },
@@ -178,7 +195,7 @@
     set_pending_layout_change: (v) => { tm.pending_layout_change = v },
   }
   const export_deps: ExportHandlerDeps = {
-    close_panel: (tab_id, pane_idx) => _close_panel(pane_deps, tab_id, pane_idx),
+    close_panel: (tab_id, leaf_id) => _close_panel(pane_deps, tab_id, leaf_id),
     load_close_save_projects,
   }
   const drag_deps: DragDropDeps = {
@@ -189,20 +206,20 @@
     import_many,
     stream_trajectory: (path, filename) => stream_path_if_large(path, filename),
     stream_trajectory_file: (file) => stream_file_if_large(file),
-    get_drag_target_pane: () => drag_target_pane,
-    set_drag_target_pane: (v) => { drag_target_pane = v },
+    get_drag_target_pane: () => drag_target_leaf,
+    set_drag_target_pane: (v) => { drag_target_leaf = v },
     set_is_loading: (v) => { is_loading = v },
+    get_open_target: () => open_target_state.value,
+    open_in_window: (content, filename) => parse_and_open_structure_window(content, filename, is_tauri),
   }
-  const resize_deps: ResizeDeps = {
+  const resize_deps_min: ResizeDepsMin = {
     tab_states,
     set_is_panel_resizing: (v) => { is_panel_resizing = v },
-    set_resize_axis: (v) => { resize_axis = v },
   }
 
   // Thin wrappers that pass deps
-  function popout_pane(tab_id: string, pane_idx: number) { return _popout_pane(tab_id, pane_idx, tab_states, is_tauri) }
+  function popout_pane(tab_id: string, leaf_id: string) { return _popout_pane(tab_id, leaf_id, tab_states, is_tauri) }
   function popout_workflow() { return _popout_workflow(is_tauri, close_tab, switch_to_structure) }
-  function popout_terminal() { return _popout_terminal(is_tauri, terminal, close_tab, switch_to_structure) }
   function handle_sidebar_load(content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) { _handle_sidebar_load(sidebar_deps, content, filename, file_path, session_id) }
   function handle_sidebar_preview(mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) { _handle_sidebar_preview(sidebar_deps, mode, filename, file_path, session_id, content, binary_data, mime_type) }
   function handle_sidebar_open_editor(content: string, filename: string, file_path: string, session_id: string) { _handle_sidebar_open_editor(sidebar_deps, content, filename, file_path, session_id) }
@@ -211,17 +228,29 @@
   // Builds a minimal indexed TrajectoryType (frames 0..9 + frame_loader) from
   // the backend index and drops it straight into a pane — no parse-all, no
   // base64. See src/lib/trajectory/remote-frame-loader.ts.
-  async function handle_load_trajectory_stream(path: string, filename: string) {
+  async function handle_load_trajectory_stream(path: string, filename: string, force_local = false) {
+    // "New window" setting → open the path in a fresh app window that streams it
+    // there (can't serialize a multi-GB trajectory into a structure popout).
+    // force_local=true is used by the #openpath handler so the new window itself
+    // loads locally instead of recursively opening yet another window.
+    if (!force_local && open_target_state.value === `window`) {
+      open_path_in_new_window(path, filename, is_tauri)
+      return
+    }
     let tab_id = tm.active_tab_id
     let ts = tab_states[tab_id]
     if (!ts) return
-    let target = find_import_target_pane(ts, ts.active_pane)
-    if (target === -1) {
+    let target: string
+    const r = escalateForImport(ts.root, ts.active_leaf_id)
+    if (!r) {
       open_tab(`structure`)
       tab_id = tm.active_tab_id
       ts = tab_states[tab_id]
       if (!ts) return
-      target = 0
+      target = ts.active_leaf_id
+    } else {
+      ts.root = r.root
+      target = r.leafId
     }
     try {
       const { load_remote_trajectory } = await import(`$lib/trajectory/remote-frame-loader`)
@@ -274,10 +303,131 @@
     return false
   }
   function handle_terminal_open_file(file_path: string, filename: string, session_id: string) { return _handle_terminal_open_file(sidebar_deps, file_path, filename, session_id) }
-  function handle_unload(tab_id: string, pane_idx: number) { _handle_unload(pane_deps, tab_id, pane_idx) }
-  function close_panel(tab_id: string, pane_idx: number) { _close_panel(pane_deps, tab_id, pane_idx) }
-  function save_and_close_panel(tab_id: string, pane_idx: number) { return _save_and_close_panel(pane_deps, tab_id, pane_idx) }
-  function handle_layout_change(new_layout: LayoutType) { _handle_layout_change(layout_deps, new_layout) }
+  // Ctrl+click file-open from a terminal *leaf* — derive filename from the path and
+  // use the leaf's own session_id (reuses the same handler the side-panel terminal used).
+  function handle_terminal_leaf_open_file(file_path: string, term: TerminalLeafState) {
+    const name = file_path.split(`/`).pop() || file_path
+    return handle_terminal_open_file(file_path, name, term.session_id || ``)
+  }
+  // Header label for a terminal leaf: remote host > shell > CWD basename > 'Terminal'.
+  function terminalLabel(term: TerminalLeafState): string {
+    return term.host ?? term.shell ?? (term.cwd ? term.cwd.split(/[/\\]/).pop() : undefined) ?? `Terminal`
+  }
+  // Close a terminal leaf: drop it from the tree (TerminalPanel's $effect cleanup kills
+  // the PTY on unmount). If it was the sole leaf, reset to a fresh empty structure leaf.
+  function close_terminal_leaf(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    if (leafCount(ts.root) <= 1) {
+      ts.root = create_empty_leaf()
+      ts.active_leaf_id = ts.root.id
+    } else {
+      ts.root = removeLeaf(ts.root, leaf_id)
+      if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+    }
+    if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
+    update_tab_label(tab_id)
+  }
+  // Toggle maximize/zoom for a leaf: fills the tab workspace, others stay warm at 0 size.
+  function toggle_maximize(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    ts.maximized_leaf_id = ts.maximized_leaf_id === leaf_id ? null : leaf_id
+    if (ts.maximized_leaf_id) ts.active_leaf_id = leaf_id
+  }
+  // Switch a leaf's content type between 'structure', 'terminal', and 'empty'.
+  // Both 'structure' and 'empty' yield a fresh empty structure leaf; the distinction
+  // only matters for the menu label (empty explicitly resets, structure = same).
+  let type_menu_leaf_id = $state<string | null>(null)
+
+  function switch_leaf_type(tab_id: string, leaf_id: string, type: 'structure' | 'terminal' | 'empty') {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const content = type === 'terminal'
+      ? { type: 'terminal' as const, term: { sync_cwd: false } }
+      : { type: 'structure' as const, pane: create_empty_pane() }
+    ts.root = setLeafContent(ts.root, leaf_id, content)
+    ts.active_leaf_id = leaf_id
+    if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
+    type_menu_leaf_id = null
+    update_tab_label(tab_id)
+  }
+
+  // Close type menu when clicking outside.
+  $effect(() => {
+    if (type_menu_leaf_id === null) return
+    const close = () => { type_menu_leaf_id = null }
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  })
+
+  // Register the terminal opener for CatBot: when no terminal is active,
+  // this spawns a local terminal leaf in the active tab and waits for its PTY.
+  $effect(() => {
+    set_terminal_opener(async (): Promise<TerminalHandle | null> => {
+      const ts = get_active_ts()
+      if (!ts) return null
+      const r = escalateForImport(ts.root, ts.active_leaf_id)
+      if (!r) return null
+      ts.root = setLeafContent(r.root, r.leafId, { type: `terminal`, term: { sync_cwd: false } })
+      ts.active_leaf_id = r.leafId
+      // Wait (bounded) for the new TerminalPanel to spawn its PTY and register.
+      for (let i = 0; i < 60; i++) {
+        await new Promise((res) => setTimeout(res, 100))
+        const h = get_active_terminal()
+        if (h) return h
+      }
+      return null
+    })
+    return () => set_terminal_opener(null)
+  })
+
+  // Start the SDK-agent terminal bridge poller (per-window). It watches
+  // /api/terminal/pending so backend MCP agents can drive the visible terminal.
+  $effect(() => start_terminal_bridge_poller())
+
+  // Pop a terminal leaf out into its own window, then drop it from the source tree.
+  function popout_terminal_leaf(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const leaf = findLeafById(ts.root, leaf_id)
+    if (!leaf) return
+    const term = terminalState(leaf)
+    if (!term) return
+    _popout_terminal_session(is_tauri, {
+      init_session_id: term.session_id,
+      init_host: term.host,
+      init_username: term.username,
+      init_sync_cwd: term.sync_cwd,
+    })
+    if (leafCount(ts.root) <= 1) {
+      ts.root = create_empty_leaf()
+      ts.active_leaf_id = ts.root.id
+    } else {
+      ts.root = removeLeaf(ts.root, leaf_id)
+      if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+    }
+    update_tab_label(tab_id)
+  }
+  function open_chat_beside(leaf: LeafNode) {
+    const ts = get_active_ts()
+    if (!ts) return
+    const r = escalateForImport(ts.root, leaf.id)
+    if (!r) {
+      // At CAP: fall back to the chat popout window.
+      window.open(`${location.origin}${location.pathname}#chat`, '_blank', 'width=520,height=760')
+      return
+    }
+    ts.root = r.root
+    const new_leaf = findLeafById(ts.root, r.leafId)
+    const pane = new_leaf ? structurePane(new_leaf) : null
+    if (pane) pane.initial_panel = `chat`
+    ts.active_leaf_id = r.leafId
+  }
+  function handle_unload(tab_id: string, leaf_id: string) { _handle_unload(pane_deps, tab_id, leaf_id) }
+  function close_panel(tab_id: string, leaf_id: string) { _close_panel(pane_deps, tab_id, leaf_id) }
+  function save_and_close_panel(tab_id: string, leaf_id: string) { return _save_and_close_panel(pane_deps, tab_id, leaf_id) }
+  function handle_layout_change(new_layout: PresetId) { _handle_layout_change(layout_deps, new_layout) }
   function confirm_layout_change() { _confirm_layout_change(layout_deps) }
   function open_save_dialog(structure: Record<string, unknown>) { _open_save_dialog(export_deps, structure) }
   function open_export_to_hpc(structure: Record<string, unknown>) { _open_export_to_hpc(structure) }
@@ -286,24 +436,26 @@
   function handle_dragover(event: DragEvent) { _handle_dragover(drag_deps, event) }
   function handle_dragleave(event: DragEvent) { _handle_dragleave(drag_deps, event) }
   function handle_drop(event: DragEvent) { return _handle_drop(drag_deps, event) }
-  function on_divider_mousedown(e: MouseEvent, axis: `col` | `row`, tab_id: string) { _on_divider_mousedown(resize_deps, e, axis, tab_id) }
-  function on_center_mousedown(e: MouseEvent, tab_id: string) { _on_center_mousedown(resize_deps, e, tab_id) }
+  function start_split_resize(e: MouseEvent, split_id: string, dir: `h` | `v`, tab_id: string) {
+    on_split_drag(resize_deps_min, e, split_id, dir, tab_id, () => active_split_id = split_id, () => active_split_id = null)
+  }
 
   // ========== Plugin Hub (via Structure.svelte counter prop) ==========
 
-  function open_plugin_hub_on_active_pane() {
+  function open_plugin_hub_on_active_leaf() {
     const ts = get_active_ts()
     if (!ts) return
-    const idx = ts.active_pane
-    const pane = ts.panes[idx]
+    const leaf = findLeafById(ts.root, ts.active_leaf_id)
+    if (!leaf) return
+    const pane = structurePane(leaf)
     if (!pane) return
     // If pane has no structure, load water so Structure mounts
     if (!pane.structure && !pane.trajectory && !pane.cube_file) {
-      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
-      ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
-      ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
+      pane.structure = clone_structure(water as unknown as AnyStructure)
+      pane.initial_site_count = (water as any).sites?.length ?? 0
+      pane.initial_structure_ref = water as unknown as AnyStructure
     }
-    ts.panes[idx].open_plugin_hub = (ts.panes[idx].open_plugin_hub ?? 0) + 1
+    pane.open_plugin_hub = (pane.open_plugin_hub ?? 0) + 1
   }
 
   // ========== Close All Tabs (extracted to ./lib/close-all-helper.ts) ==========
@@ -370,12 +522,21 @@
           open_tab(`workflow`)
         } else if (!STATIC_ONLY && hash.startsWith(`#terminal`)) {
           terminal.parse_hash(hash)
-          if (!tm.tabs.find(t => t.type === `terminal`)) {
-            tm.tabs = [...tm.tabs, { id: `terminal`, type: `terminal`, label: `Terminal`, closable: true }]
-          }
-          tm.active_tab_id = `terminal`
+          tm.create_terminal_popout_tab({
+            session_id: terminal.init_session_id,
+            host: terminal.init_host,
+            username: terminal.init_username,
+            sync_cwd: terminal.init_sync_cwd,
+          })
         } else if (hash.startsWith(`#structure`)) {
           load_popout_structure(hash, get_active_ts, tm.active_tab_id, update_tab_label)
+        } else if (hash.startsWith(`#openpath`)) {
+          // A "New window" file open: stream the path into THIS new window's tree.
+          // force_local=true so it loads here instead of opening yet another window.
+          const params = new URLSearchParams(hash.slice(hash.indexOf(`?`) + 1))
+          const p = params.get(`path`)
+          const n = params.get(`name`) || `trajectory`
+          if (p) handle_load_trajectory_stream(p, n, true)
         }
       })
       if (popout_chat_mode || popout_status_mode || popout_doping_pt_mode) return
@@ -384,10 +545,12 @@
           open_tab(`workflow`)
         } else if (!STATIC_ONLY && window.location.hash.startsWith(`#terminal`)) {
           terminal.parse_hash(window.location.hash)
-          if (!tm.tabs.find(t => t.type === `terminal`)) {
-            tm.tabs = [...tm.tabs, { id: `terminal`, type: `terminal`, label: `Terminal`, closable: true }]
-          }
-          tm.active_tab_id = `terminal`
+          tm.create_terminal_popout_tab({
+            session_id: terminal.init_session_id,
+            host: terminal.init_host,
+            username: terminal.init_username,
+            sync_cwd: terminal.init_sync_cwd,
+          })
         }
       }
       window.addEventListener(`hashchange`, on_hash)
@@ -408,7 +571,10 @@
   async function open_edit_as_text(structure: Record<string, unknown>) {
     const ts = get_active_ts()
     if (!ts) return
-    const pane = ts.panes[ts.active_pane]
+    const active_leaf = findLeafById(ts.root, ts.active_leaf_id)
+    if (!active_leaf) return
+    const pane = structurePane(active_leaf)
+    if (!pane) return
     const filename = pane.source_filename || `structure.cif`
 
     // Determine format from filename
@@ -435,9 +601,9 @@
       else content = structure_to_cif_str(s)
     }
 
-    // Track which tab/pane this editor is tied to for applying changes back
+    // Track which tab/leaf this editor is tied to for applying changes back
     const target_tab_id = tm.active_tab_id
-    const target_pane_idx = ts.active_pane
+    const target_leaf_id = ts.active_leaf_id
 
     sidebar.editor_content = content
     sidebar.editor_filename = filename
@@ -450,11 +616,13 @@
         const parsed = parse_structure_file(new_content, filename)
         if (parsed?.sites?.length) {
           const target_ts = tab_states[target_tab_id]
-          if (target_ts) {
-            target_ts.panes[target_pane_idx].structure = clone_structure(parsed)
-            target_ts.panes[target_pane_idx].initial_structure_ref = parsed
-            target_ts.panes[target_pane_idx].initial_site_count = parsed.sites.length
-            target_ts.panes[target_pane_idx].modified = false
+          const leaf = target_ts ? findLeafById(target_ts.root, target_leaf_id) : null
+          const p = leaf ? structurePane(leaf) : null
+          if (target_ts && p) {
+            p.structure = clone_structure(parsed)
+            p.initial_structure_ref = parsed
+            p.initial_site_count = parsed.sites.length
+            p.modified = false
             update_tab_label(target_tab_id)
           }
         }
@@ -474,19 +642,19 @@
     const ts = tm.tab_states[ts_tab_id]
     if (!ts) return
     // If this workflow is already open in a pane, switch to it and signal reload
-    const existing = ts.panes.findIndex(p => p.mode === `workflow` && p.workflow_id === workflow_id)
-    if (existing >= 0) {
+    const existing = leaves(ts.root).find(l => structurePane(l)?.mode === `workflow` && structurePane(l)?.workflow_id === workflow_id)
+    if (existing) {
       tm.active_tab_id = ts_tab_id
-      ts.active_pane = existing
+      ts.active_leaf_id = existing.id
       // Signal WorkflowEditor to reload from DB (MCP may have added nodes)
       get_workflow_slice(ts_tab_id).workflow_reload_seq.seq++
       return
     }
-    const pane_idx = ts.panes.findIndex(p => !pane_has_content(p))
-    const target = pane_idx >= 0 ? pane_idx : ts.active_pane
-    ts.panes[target] = { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact }
-    ts.panes = [...ts.panes]
-    ts.active_pane = target
+    const target = findFirstEmptyLeaf(ts.root) ?? findLeafById(ts.root, ts.active_leaf_id)
+    const target_pane = target ? structurePane(target) : null
+    if (!target || !target_pane) return
+    Object.assign(target_pane, { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact })
+    ts.active_leaf_id = target.id
     tm.active_tab_id = ts_tab_id
     update_tab_label(ts_tab_id)
   }
@@ -531,16 +699,19 @@
     const tab_id = tm.active_tab_id
     const ts = tm.tab_states[tab_id]
     if (!ts) return
+    const leaf = leaves(ts.root)[0]
+    const pane = leaf ? structurePane(leaf) : null
+    if (!pane) return
     // Guard: if create_tab hit the 12-tab limit, active_tab didn't change —
     // don't silently overwrite the existing tab's structure
-    if (tab_id === prev_tab_id && ts.panes[0].structure) {
+    if (tab_id === prev_tab_id && pane.structure) {
       console.warn(`[App] Tab limit reached, cannot open structure in new tab`)
       return
     }
-    ts.panes[0].structure = clone_structure(struct)
-    ts.panes[0].initial_structure_ref = struct
-    ts.panes[0].initial_site_count = struct.sites?.length ?? 0
-    ts.panes[0].modified = false
+    pane.structure = clone_structure(struct)
+    pane.initial_structure_ref = struct
+    pane.initial_site_count = struct.sites?.length ?? 0
+    pane.modified = false
     // Set tab label — use tm.tabs (raw $state), not tabs_with_badges ($derived copy)
     const tab = tm.tabs.find(t => t.id === tab_id)
     if (tab && label) tab.label = label
@@ -550,7 +721,8 @@
   function get_current_structure(): Record<string, unknown> | null {
     const ts = get_active_ts()
     if (!ts) return null
-    const pane = ts.panes[ts.active_pane]
+    const active_leaf = findLeafById(ts.root, ts.active_leaf_id)
+    const pane = active_leaf ? structurePane(active_leaf) : null
     if (!pane?.structure) return null
     return pane.structure as unknown as Record<string, unknown>
   }
@@ -591,21 +763,12 @@
   // ========== Global Effects ==========
   $effect(() => {
     for (const ts of Object.values(tab_states)) {
-      const cc = ts.panes.filter(p => pane_has_content(p)).length
-      const current_count = layout_panel_count(ts.layout)
-      if (cc > current_count) {
-        ts.layout = cc <= 2 ? `splitH` : `quad`
-      }
-    }
-  })
-
-  $effect(() => {
-    for (const ts of Object.values(tab_states)) {
-      for (let i = 0; i < ts.panes.length; i++) {
-        const pane = ts.panes[i]
+      for (const leaf of leaves(ts.root)) {
+        const pane = structurePane(leaf)
+        if (!pane) continue
         if (pane.structure && !pane.modified) {
           if (pane.initial_site_count > 0 && pane.structure.sites.length !== pane.initial_site_count) {
-            ts.panes[i].modified = true
+            pane.modified = true
           }
         }
       }
@@ -622,9 +785,9 @@
     try {
       const content = await readFile(file_path)
       const text = new TextDecoder().decode(content)
-      const target_pane = ts.panes.findIndex(p => !pane_has_content(p))
-      const pane_idx = target_pane >= 0 ? target_pane : ts.active_pane
-      await process_file_content(tm.active_tab_id, text, filename, pane_idx, null, file_path)
+      const empty = findFirstEmptyLeaf(ts.root)
+      const leaf_id = empty ? empty.id : ts.active_leaf_id
+      await process_file_content(tm.active_tab_id, text, filename, leaf_id, null, file_path)
     } catch (err) {
       console.error(`[Tauri] Error reading file:`, err)
     } finally {
@@ -674,12 +837,13 @@
   let file_input_ref = $state<HTMLInputElement | undefined>()
   let folder_input_ref = $state<HTMLInputElement | undefined>()
   let file_input_target_tab = ``
-  let file_input_target_pane = 0
+  let file_input_target_leaf = ``
 
-  async function handle_open_file(tab_id: string, pane_idx: number) {
+  async function handle_open_file(tab_id: string, leaf_id: string, shift = false) {
     const ts = tab_states[tab_id]
     if (!ts) return
-    ts.active_pane = pane_idx
+    ts.active_leaf_id = leaf_id
+    const target = resolve_open_target(open_target_state.value, shift)
     if (is_tauri) {
       try {
         // Pick paths first; divert large trajectories to the backend streamer
@@ -695,7 +859,11 @@
           const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
           const results = await tauri_read_dropped_paths(read_paths, accept)
           if (results.length > 0) {
-            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+            if (target === 'window' && results.length === 1) {
+              await parse_and_open_structure_window(results[0].content as string, results[0].filename, is_tauri)
+              return
+            }
+            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), leaf_id)
           }
         }
       } catch (err) {
@@ -703,16 +871,16 @@
       }
     } else {
       file_input_target_tab = tab_id
-      file_input_target_pane = pane_idx
+      file_input_target_leaf = leaf_id
       file_input_ref?.click()
     }
   }
 
   /** Open a folder and import every recognizable structure file inside it. */
-  async function handle_open_folder(tab_id: string, pane_idx: number) {
+  async function handle_open_folder(tab_id: string, leaf_id: string) {
     const ts = tab_states[tab_id]
     if (!ts) return
-    ts.active_pane = pane_idx
+    ts.active_leaf_id = leaf_id
     const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
     if (is_tauri) {
       try {
@@ -728,7 +896,7 @@
         if (read_paths.length > 0) {
           const results = await tauri_read_dropped_paths(read_paths, accept)
           if (results.length > 0) {
-            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), pane_idx)
+            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), leaf_id)
           }
         }
       } catch (err) {
@@ -736,7 +904,7 @@
       }
     } else {
       file_input_target_tab = tab_id
-      file_input_target_pane = pane_idx
+      file_input_target_leaf = leaf_id
       folder_input_ref?.click()
     }
   }
@@ -755,7 +923,7 @@
         await import_many(
           file_input_target_tab,
           to_import.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
-          file_input_target_pane,
+          file_input_target_leaf,
         )
       }
     } catch (err) {
@@ -781,7 +949,7 @@
         await import_many(
           file_input_target_tab,
           to_import.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
-          file_input_target_pane,
+          file_input_target_leaf,
         )
       }
     } catch (err) {
@@ -796,9 +964,11 @@
     if (!ts) return
     if (!imported?.sites?.length) return
 
-    const target = modal.import_target_pane
+    const leaf = findLeafById(ts.root, modal.import_target_leaf)
+    if (!leaf) return
     // Mutate the pane in-place so Svelte 5's deep $state proxy tracks the change
-    const pane = ts.panes[target]
+    const pane = structurePane(leaf)
+    if (!pane) return
     pane.structure = clone_structure(imported as AnyStructure)
     pane.initial_site_count = imported.sites.length
     pane.initial_structure_ref = imported as AnyStructure
@@ -1022,12 +1192,15 @@
   function apply_entry_to_pane(
     tab_id: string,
     ts: StructureTabState,
-    target: number,
+    leaf_id: string,
     e: LibraryEntry,
     remote_origin: { session_id: string; file_path: string } | null = null,
     local_file_path: string | null = null,
   ) {
-    const p = ts.panes[target]
+    const leaf = findLeafById(ts.root, leaf_id)
+    if (!leaf) return
+    const p = structurePane(leaf)
+    if (!p) return
     if (e.viewer_kind === `molstar`) {
       // Bio file → Mol* pane; no parsed structure, raw text carried below.
       p.is_trajectory_mode = false
@@ -1069,7 +1242,7 @@
     p.viewer_kind = e.viewer_kind ?? `native`
     p.bio_raw_content = e.bio_raw_content
     p.bio_format = e.bio_format
-    ts.active_pane = target
+    ts.active_leaf_id = leaf_id
     update_tab_label(tab_id)
   }
 
@@ -1080,8 +1253,7 @@
    * serialize its current structure to a format Mol* reads (CIF when periodic
    * so the cell survives, else XYZ) and hand that to Mol*.
    */
-  async function toggle_pane_viewer(ts: StructureTabState, idx: number) {
-    const p = ts.panes[idx]
+  async function toggle_pane_viewer(p: PaneState) {
     if (p.viewer_kind === `molstar`) {
       // → native: parse the raw text on demand (lazy; only when overridden).
       if (p.bio_raw_content) {
@@ -1107,17 +1279,20 @@
     }
   }
 
-  async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) {
+  async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, leaf_id: string, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) {
     const ts = tab_states[tab_id]
     if (!ts) return
-    let target = find_import_target_pane(ts, pane_idx)
-    if (target === -1) {
+    let target: string
+    const r = escalateForImport(ts.root, leaf_id)
+    if (!r) {
       // All panes full — open a new tab and load there
       open_tab(`structure`)
       const new_ts = tab_states[tm.active_tab_id]
       if (!new_ts) return
-      return process_file_content(tm.active_tab_id, content, filename, 0, remote_origin, local_file_path)
+      return process_file_content(tm.active_tab_id, content, filename, new_ts.active_leaf_id, remote_origin, local_file_path)
     }
+    ts.root = r.root
+    target = r.leafId
     const outcome = await ingest_one(content, filename)
     if (outcome.kind === `skip`) return
     if (outcome.kind === `editor`) {
@@ -1141,11 +1316,11 @@
   async function import_many(
     tab_id: string,
     items: Array<{ content?: string | ArrayBuffer; filename: string; file?: File; path?: string | null }>,
-    pane_idx: number,
+    leaf_id: string,
   ) {
     const ts = tab_states[tab_id]
     if (!ts) return
-    ts.active_pane = pane_idx
+    ts.active_leaf_id = leaf_id
     is_loading = true
     const start = ts.library.length
     let failures = 0
@@ -1183,7 +1358,7 @@
     if (!ts) return
     const entry = ts.library.find(e => e.id === id)
     if (!entry) return
-    apply_entry_to_pane(tab_id, ts, ts.active_pane, entry)
+    apply_entry_to_pane(tab_id, ts, ts.active_leaf_id, entry)
     ts.active_library_id = id
     tick().then(() => window.dispatchEvent(new Event(`resize`)))
   }
@@ -1199,7 +1374,9 @@
       select_library_entry(tab_id, ts.library[0].id)
     } else {
       ts.active_library_id = null
-      ts.panes[ts.active_pane] = create_empty_pane()
+      const leaf = findLeafById(ts.root, ts.active_leaf_id)
+      const pane = leaf ? structurePane(leaf) : null
+      if (pane) Object.assign(pane, create_empty_pane())
       update_tab_label(tab_id)
     }
   }
@@ -1212,11 +1389,11 @@
     ts.active_library_id = null
   }
 
-  function create_on_file_drop(tab_id: string, pane_idx: number) {
+  function create_on_file_drop(tab_id: string, leaf_id: string) {
     return async (content: string | ArrayBuffer, filename: string) => {
       is_loading = true
       try {
-        await process_file_content(tab_id, content, filename, pane_idx)
+        await process_file_content(tab_id, content, filename, leaf_id)
       } catch (err) {
         console.error(err)
       } finally {
@@ -1225,68 +1402,100 @@
     }
   }
 
-  function create_on_file_load(tab_id: string, pane_idx: number) {
+  function create_on_file_load(tab_id: string, leaf_id: string) {
     return (data: { structure?: AnyStructure; filename?: string; trajectory?: unknown }) => {
       const ts = tab_states[tab_id]
       if (!ts) return
-      let target = find_import_target_pane(ts, pane_idx)
-      if (target === -1) {
+      const r = escalateForImport(ts.root, leaf_id)
+      if (!r) {
         // All panes full — open a new tab
         open_tab(`structure`)
         const new_ts = tab_states[tm.active_tab_id]
         if (!new_ts) return
-        target = 0
-        // Re-bind to new tab
-        const new_panes = new_ts.panes
-        if (data.structure) {
-          new_panes[0].structure = clone_structure(data.structure)
-          new_panes[0].is_trajectory_mode = false
-          new_panes[0].trajectory = null
-          new_panes[0].initial_site_count = data.structure.sites?.length ?? 0
-          new_panes[0].initial_structure_ref = data.structure
-          new_panes[0].modified = false
-          new_ts.panes = [...new_panes]
+        const new_leaf = leaves(new_ts.root)[0]
+        const p = new_leaf ? structurePane(new_leaf) : null
+        if (data.structure && p) {
+          p.structure = clone_structure(data.structure)
+          p.is_trajectory_mode = false
+          p.trajectory = null
+          p.initial_site_count = data.structure.sites?.length ?? 0
+          p.initial_structure_ref = data.structure
+          p.modified = false
+          new_ts.active_leaf_id = new_leaf.id
           update_tab_label(tm.active_tab_id)
         }
         return
       }
+      ts.root = r.root
+      const target_id = r.leafId
+      const target_leaf = findLeafById(ts.root, target_id)
+      if (!target_leaf) return
+      const p = structurePane(target_leaf)
+      if (!p) return
       if (data.structure) {
-        ts.panes[target].structure = clone_structure(data.structure)
-        ts.panes[target].is_trajectory_mode = false
-        ts.panes[target].trajectory = null
-        ts.panes[target].initial_site_count = data.structure.sites?.length ?? 0
-        ts.panes[target].initial_structure_ref = data.structure
-        ts.panes[target].modified = false
+        p.structure = clone_structure(data.structure)
+        p.is_trajectory_mode = false
+        p.trajectory = null
+        p.initial_site_count = data.structure.sites?.length ?? 0
+        p.initial_structure_ref = data.structure
+        p.modified = false
       }
       if (data.trajectory) {
         const traj = data.trajectory as { frames?: unknown[]; metadata?: { source_format?: string } }
         if (traj.metadata?.source_format === `single_structure` && traj.frames?.length === 1) {
           const frame = traj.frames[0] as { structure?: AnyStructure }
           if (frame?.structure) {
-            ts.panes[target].structure = clone_structure(frame.structure)
-            ts.panes[target].is_trajectory_mode = false
-            ts.panes[target].trajectory = null
-            ts.panes[target].initial_site_count = frame.structure.sites?.length ?? 0
-            ts.panes[target].initial_structure_ref = frame.structure
-            ts.panes[target].modified = false
-            ts.panes[target].selected_sites = []
-            ts.panes[target].current_step_idx = 0
-            ts.active_pane = target
+            p.structure = clone_structure(frame.structure)
+            p.is_trajectory_mode = false
+            p.trajectory = null
+            p.initial_site_count = frame.structure.sites?.length ?? 0
+            p.initial_structure_ref = frame.structure
+            p.modified = false
+            p.selected_sites = []
+            p.current_step_idx = 0
+            ts.active_leaf_id = target_id
             update_tab_label(tab_id)
             return
           }
         }
-        ts.panes[target].trajectory = data.trajectory
-        ts.panes[target].is_trajectory_mode = true
-        ts.panes[target].structure = undefined
-        ts.panes[target].initial_site_count = 0
-        ts.panes[target].modified = false
+        p.trajectory = data.trajectory
+        p.is_trajectory_mode = true
+        p.structure = undefined
+        p.initial_site_count = 0
+        p.modified = false
       }
-      ts.panes[target].selected_sites = []
-      ts.panes[target].current_step_idx = 0
-      ts.active_pane = target
+      p.selected_sites = []
+      p.current_step_idx = 0
+      ts.active_leaf_id = target_id
       update_tab_label(tab_id)
     }
+  }
+
+  // Open a terminal as a pane-tree LEAF (replaces the old Structure side-panel
+  // terminal). Escalates the active leaf into a fresh pane (split up to CAP), or
+  // opens a new tab when all panes are full, then converts that leaf to a
+  // terminal. `term` carries an optional remote SSH session (HPC Connect →
+  // Terminal); omitted = a local shell.
+  function open_terminal_leaf(tab_id: string, leaf_id: string, term?: Partial<TerminalLeafState>) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const t: TerminalLeafState = { sync_cwd: false, ...term }
+    const r = escalateForImport(ts.root, leaf_id)
+    if (!r) {
+      // All panes full — open a new tab and convert its first leaf.
+      open_tab(`structure`)
+      const new_ts = tab_states[tm.active_tab_id]
+      if (!new_ts) return
+      const new_leaf = leaves(new_ts.root)[0]
+      if (!new_leaf) return
+      new_ts.root = setLeafContent(new_ts.root, new_leaf.id, { type: `terminal`, term: t })
+      new_ts.active_leaf_id = new_leaf.id
+      update_tab_label(tm.active_tab_id)
+      return
+    }
+    ts.root = setLeafContent(r.root, r.leafId, { type: `terminal`, term: t })
+    ts.active_leaf_id = r.leafId
+    update_tab_label(tab_id)
   }
 
   // Pane management, close-save, and export functions are in ./lib/pane-manager.ts and ./lib/export-handlers.ts
@@ -1361,10 +1570,10 @@
             try {
               const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
               const files = await tauri_read_dropped_paths(read_paths, accept)
-              const target_pane = ts.panes.findIndex(p => !pane_has_content(p))
-              const pane_idx = target_pane >= 0 ? target_pane : ts.active_pane
+              const empty = findFirstEmptyLeaf(ts.root)
+              const leaf_id = empty ? empty.id : ts.active_leaf_id
               if (files.length > 0) {
-                await import_many(tm.active_tab_id, files.map(f => ({ content: f.content, filename: f.filename, path: f.path })), pane_idx)
+                await import_many(tm.active_tab_id, files.map(f => ({ content: f.content, filename: f.filename, path: f.path })), leaf_id)
               } else {
                 show_toast({ message: `Could not read any file from the drop`, variant: `warning` })
               }
@@ -1410,7 +1619,9 @@
     if (!t || t.type !== `structure`) return false
     const ts = tab_states[t.id]
     if (!ts) return false
-    return !pane_has_content(ts.panes[0])
+    const first = leaves(ts.root)[0]
+    const pane = first ? structurePane(first) : null
+    return !!pane && !pane_has_content(pane)
   })
 
   // Global SSE listener for the External/MCP "default" panel.
@@ -1437,8 +1648,10 @@
     function inject_into_external(struct: AnyStructure | null | undefined): boolean {
       if (!struct) return false
       const ts = tab_states[`default`]
-      if (!ts || !ts.panes?.[0]) return false
-      ts.panes[0].structure = clone_structure(struct)
+      const first = ts ? leaves(ts.root)[0] : null
+      const pane = first ? structurePane(first) : null
+      if (!ts || !pane) return false
+      pane.structure = clone_structure(struct)
       update_tab_label(`default`)
       return true
     }
@@ -1488,8 +1701,9 @@
 
     function inject_trajectory_into_external(traj: TrajectoryType, raw: string, filename: string): boolean {
       const ts = tab_states[`default`]
-      if (!ts || !ts.panes?.[0]) return false
-      const pane = ts.panes[0]
+      const first = ts ? leaves(ts.root)[0] : null
+      const pane = first ? structurePane(first) : null
+      if (!ts || !pane) return false
       pane.trajectory = traj
       pane.structure = undefined  // mutually exclusive
       pane.is_trajectory_mode = true
@@ -1562,8 +1776,10 @@
     tm.create_remote_tab()
     if (struct?.sites?.length) {
       const ts = tab_states[`default`]
-      if (ts?.panes?.[0]) {
-        ts.panes[0].structure = clone_structure(struct)
+      const first = ts ? leaves(ts.root)[0] : null
+      const pane = first ? structurePane(first) : null
+      if (pane) {
+        pane.structure = clone_structure(struct)
         update_tab_label(`default`)
       }
       return
@@ -1574,8 +1790,10 @@
       .then((cached: AnyStructure | null) => {
         if (!cached?.sites?.length) return
         const ts = tab_states[`default`]
-        if (ts?.panes?.[0]) {
-          ts.panes[0].structure = clone_structure(cached)
+        const first = ts ? leaves(ts.root)[0] : null
+        const pane = first ? structurePane(first) : null
+        if (pane) {
+          pane.structure = clone_structure(cached)
           update_tab_label(`default`)
         }
       })
@@ -1611,7 +1829,7 @@
   onclose={request_close_tab}
   oncloseall={open_close_all_dialog}
   onadd={open_tab}
-  layout={tm.active_layout}
+  layout={tm.active_layout ?? undefined}
   onlayoutchange={handle_layout_change}
 >
   <!-- Sidebar toggle button -->
@@ -1671,8 +1889,9 @@
     on_save_workflow={() => {
       const ts = get_active_ts()
       if (!ts) return null
-      const pane = ts.panes[ts.active_pane]
-      return pane.mode === `workflow` ? (pane.workflow_id ?? null) : null
+      const active_leaf = findLeafById(ts.root, ts.active_leaf_id)
+      const pane = active_leaf ? structurePane(active_leaf) : null
+      return pane?.mode === `workflow` ? (pane.workflow_id ?? null) : null
     }}
     refresh_counter={sidebar.refresh_counter}
   />
@@ -1693,12 +1912,9 @@
   {#if tab.id === tm.active_tab_id || tab.type === `structure` || tab.type === `workflow` || tab.type === `terminal`}
   <div class="view-layer" class:view-layer-hidden={tab.id !== tm.active_tab_id} inert={tab.id !== tm.active_tab_id || undefined}>
 
-    {#if tab.type === `structure`}
+    {#if tab.type === `structure` || tab.type === `terminal`}
       {@const ts = tab_states[tab.id]}
       {#if ts}
-        {@const visible = get_visible_panes(ts)}
-        {@const panel_count = layout_panel_count(ts.layout)}
-
         <div class="structure-workspace">
         {#if ts.library.length >= 2}
           <StructureLibrary
@@ -1709,477 +1925,537 @@
             on_clear={() => clear_library(tab.id)}
           />
         {/if}
-        <div class="grid-container" class:resizing={is_panel_resizing} style={get_grid_style(ts)}>
-          {#each visible as idx (idx)}
-            {@const pane = ts.panes[idx]}
-            <div
-              class="pane"
-              class:active={ts.active_pane === idx}
-              class:dragover={tab.id === tm.active_tab_id && drag_target_pane === idx}
-              class:warn-glow={ts.close_confirm_pane === idx}
-              data-pane={idx}
-              style={get_pane_position(ts.layout, idx)}
-              onclick={() => ts.active_pane = idx}
-              role="button"
-              tabindex="0"
+        <PaneTree
+          root={ts.root}
+          multi={leafCount(ts.root) > 1}
+          active_leaf_id={ts.active_leaf_id}
+          drag_target_leaf={tab.id === tm.active_tab_id ? drag_target_leaf : null}
+          close_confirm_leaf_id={ts.close_confirm_leaf_id}
+          maximized_leaf_id={ts.maximized_leaf_id}
+          {active_split_id}
+          on_activate={(id) => ts.active_leaf_id = id}
+          on_split_mousedown={(e, sid, dir) => start_split_resize(e, sid, dir, tab.id)}
+          on_split_dblclick={(sid) => { ts.root = setRatio(ts.root, sid, 0.5) }}
+          {leaf_body}
+          {terminal_body}
+          {header}
+          {banner}
+        />
+
+        {#snippet header(leaf: LeafNode)}
+          {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {@const term = leaf.content.type === `terminal` ? leaf.content.term : undefined}
+          {#if term}
+            <span class="panel-label">{terminalLabel(term)}</span>
+            <!-- Directory Sync / font / shell now live inside TerminalWindow (per tab). -->
+            <button
+              class="panel-popout-btn"
+              onclick={(e) => { e.stopPropagation(); popout_terminal_leaf(tab.id, leaf.id) }}
+              title={t(`app.open_in_new_window`)}
             >
-              <!-- Panel header bar -->
-              {#if panel_count > 1}
-                <div class="panel-header">
-                  {#if pane_has_content(pane)}
-                    <span class="panel-dot"></span>
-                  {/if}
-                  <span class="panel-label">{get_pane_label(pane)}</span>
-                  {#if pane_has_content(pane)}
-                    <button
-                      class="panel-popout-btn"
-                      onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, idx) }}
-                      title={t(`app.open_in_new_window`)}
-                    >
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
-                        <polyline points="15 3 21 3 21 9"/>
-                        <line x1="10" y1="14" x2="21" y2="3"/>
-                      </svg>
-                    </button>
-                  {/if}
-                  <button
-                    class="panel-close-btn"
-                    onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, idx) }}
-                    title={t(`app.close_panel`)}
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                      <path d="M18 6L6 18M6 6l12 12" />
-                    </svg>
-                  </button>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+            </button>
+            <div class="panel-type-container">
+              <button
+                class="panel-type-btn"
+                onclick={(e) => { e.stopPropagation(); type_menu_leaf_id = type_menu_leaf_id === leaf.id ? null : leaf.id }}
+                title={t(`app.change_pane_type`)}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              </button>
+              {#if type_menu_leaf_id === leaf.id}
+                <div class="panel-type-menu" role="menu">
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'structure') }}>{t(`app.type_structure`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'terminal') }}>{t(`app.type_terminal`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'empty') }}>{t(`app.type_empty`)}</button>
                 </div>
               {/if}
-
-              <!-- Inline close confirmation banner -->
-              {#if ts.close_confirm_pane === idx}
-                <div class="panel-close-banner">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
-                  </svg>
-                  {#if ts.panes[idx].mode === `workflow`}
-                    <span>{t(`app.workflow_will_be_closed`)}</span>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t(`common.cancel`)}</button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t(`common.close`)}</button>
-                  {:else}
-                    <span>{t(`common.save_before_closing`)}</span>
-                    <!-- svelte-ignore a11y_no_static_element_interactions -->
-                    <select class="banner-select target-select" bind:value={exp.close_save_target} onclick={(e) => e.stopPropagation()}>
-                      <option value="local">{t(`app.local`)}</option>
-                      {#if ts.panes[idx].remote_origin?.session_id}
-                        <option value="hpc">{t(`app.hpc`)}</option>
-                      {/if}
-                      <option value="project">{t(`app.catgo_db`)}</option>
-                    </select>
-                    {#if exp.close_save_target === `project` && exp.close_save_projects.length > 0}
-                      <!-- svelte-ignore a11y_no_static_element_interactions -->
-                      <select class="banner-select" bind:value={exp.close_save_project_id} onclick={(e) => e.stopPropagation()}>
-                        {#snippet banner_select_options(projects: ProjectSummary[], depth: number)}
-                          {#each projects as p (p.id)}
-                            <option value={p.id}>{`\u00A0\u00A0`.repeat(depth)}{p.name}</option>
-                            {#if save_project_children[p.id]?.length}
-                              {@render banner_select_options(save_project_children[p.id], depth + 1)}
-                            {/if}
-                          {/each}
-                        {/snippet}
-                        {@render banner_select_options(save_project_roots, 0)}
-                      </select>
-                    {/if}
-                    {#if exp.close_save_target === `hpc`}
-                      <span class="banner-path" title={ts.panes[idx].remote_origin?.file_path}>{ts.panes[idx].remote_origin?.file_path?.split(/[/\\]/).pop()}</span>
-                    {/if}
-                    <button class="banner-btn save" disabled={exp.close_saving} onclick={(e) => { e.stopPropagation(); save_and_close_panel(tab.id, idx) }}>
-                      {exp.close_saving ? t(`common.saving`) : t(`common.save_and_close`)}
-                    </button>
-                    <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, idx) }}>{t(`common.close`)}</button>
-                    <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_pane = null }}>{t(`common.cancel`)}</button>
-                  {/if}
-                </div>
-              {/if}
-
-              <!-- Panel content -->
-              <div class="panel-content">
-              {#if pane.mode === `workflow`}
-                <WorkflowView
-                  initial_workflow_id={pane.workflow_id}
-                  compact={pane.workflow_compact ?? false}
-                  tab_id={tab.id}
-                  onclose={() => { ts.panes[idx] = create_empty_pane(); ts.panes = [...ts.panes]; update_tab_label(tab.id) }}
-                  onchange={() => { ts.panes[idx].modified = true }}
-                  ondbchange={() => { sidebar.refresh_counter++ }}
-                />
-              {:else if pane.is_trajectory_mode && pane.trajectory}
-                <Trajectory
-                  trajectory={pane.trajectory as any}
-                  bind:selected_sites={ts.panes[idx].selected_sites}
-                  bind:current_step_idx={ts.panes[idx].current_step_idx}
-                  on_file_load={create_on_file_load(tab.id, idx)}
-                  fullscreen_toggle={false}
-                  allow_file_drop={false}
-                  structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format, tab_id: tab.id, is_active: ts.active_pane === idx && tab.id === tm.active_tab_id }}
-                  style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
-                >
-                  {#snippet trajectory_controls({ trajectory: traj, current_step_idx: step, on_step_change })}
-                    <PathwayControls
-                      trajectory={traj}
-                      current_step_idx={step}
-                      {on_step_change}
-                    />
-                  {/snippet}
-                </Trajectory>
-              {:else if pane.viewer_kind === `molstar` && pane.bio_raw_content}
-                <div class="bio-pane-wrap">
-                  <div class="bio-toolbar">
-                    <BioViewerToggle
-                      is_molstar={true}
-                      on_toggle={() => toggle_pane_viewer(ts, idx)}
-                    />
-                    <span class="bio-toolbar-name">{pane.source_filename ?? `structure`}</span>
-                  </div>
-                  <div class="bio-viewer-fill">
-                    {#key pane.bio_raw_content}
-                      <MolstarViewer
-                        content={pane.bio_raw_content}
-                        format={pane.bio_format ?? `pdb`}
-                        label={pane.source_filename ?? `structure`}
-                      />
-                    {/key}
-                  </div>
-                </div>
-              {:else if pane.structure}
-                <Structure
-                  tab_id={tab.id}
-                  is_active={ts.active_pane === idx && tab.id === tm.active_tab_id}
-                  bind:structure={ts.panes[idx].structure}
-                  bind:saveable_structure={ts.panes[idx].saveable_structure}
-                  bind:selected_sites={ts.panes[idx].selected_sites}
-                  bind:remote_origin={ts.panes[idx].remote_origin}
-                  bind:open_plugin_hub={ts.panes[idx].open_plugin_hub}
-                  cube_file={pane.cube_file}
-                  initial_panel={pane.initial_panel}
-                  on_file_load={create_on_file_load(tab.id, idx)}
-                  on_file_drop={create_on_file_drop(tab.id, idx)}
-                  on_structure_imported={() => update_tab_label(tab.id)}
-                  on_save_to_project={open_save_dialog}
-                  on_save_to_database={open_save_dialog}
-                  on_clear_structure={() => {
-                    ts.panes[idx] = create_empty_pane()
-                    update_tab_label(tab.id)
-                  }}
-                  on_export_to_hpc={open_export_to_hpc}
-                  on_export_to_file={open_export_to_file}
-                  on_edit_as_text={open_edit_as_text}
-                  on_open_file_overlay={(file_path: string, filename: string, session_id: string) => {
-                    handle_terminal_open_file(file_path, filename, session_id)
-                  }}
-                  on_open_workflow_editor={(workflow_id: string) => {
-                    handle_sidebar_open_workflow(workflow_id)
-                  }}
-                  on_open_in_molstar={() => toggle_pane_viewer(ts, idx)}
-                  fullscreen_toggle={false}
-                  allow_file_drop={false}
-                  show_controls={true}
-                  style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
-                />
-              {:else}
-                <div class="landing-page" class:secondary-pane={idx > 0} class:quad-layout={ts.layout === `quad`} class:stacked-layout={ts.layout === `splitV`}>
-                  {#if idx === 0}
-                    <!-- Landing-only GitHub link — invites users to star the repo -->
-                    <a
-                      class="github-star"
-                      href="https://github.com/Hello-QM/catgo-LRG"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title="Star CatGo on GitHub"
-                    >
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
-                      </svg>
-                      <span class="github-star-text">Star on GitHub</span>
-                      <svg class="github-star-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M12 17.27l5.18 3.13-1.37-5.9 4.59-3.97-6.04-.52L12 4.5 9.64 10l-6.04.52 4.59 3.97-1.37 5.9z"/>
-                      </svg>
-                    </a>
-                    <div class="samples-grid">
-                      {#each sample_structures as sample}
-                        <button
-                          class="sample-card"
-                          onclick={() => {
-                            ts.panes[idx].structure = clone_structure(sample.data)
-                            ts.panes[idx].initial_site_count = sample.data.sites?.length ?? 0
-                            ts.panes[idx].initial_structure_ref = sample.data
-                            ts.panes[idx].modified = false
-                            ts.active_pane = idx
-                            update_tab_label(tab.id)
-                          }}
-                        >
-                          <div class="sample-preview">
-                            <!-- align_on_load="none" prevents auto principal-axes rotation that
-                                 would flatten the water V-shape into the XY plane (invisible from -Y camera).
-                                 Orthographic projection + zoom for consistent sizing in the preview card. -->
-                            <Structure
-                              structure={sample.data}
-                              show_controls={false}
-                              fullscreen_toggle={false}
-                              allow_file_drop={false}
-                              align_on_load="none"
-                              persist_settings={false}
-                              scene_props={{ atom_radius: 1.6, camera_projection: `orthographic`, initial_zoom: 100 } as any}
-                              style="--struct-height: 100%; --struct-width: 100%; pointer-events: none;"
-                            />
-                          </div>
-                          <div class="sample-info">
-                            <span class="sample-name">{sample.name}</span>
-                            <span class="sample-formula">{sample.formula}</span>
-                          </div>
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-
-                  <div class="import-sidebar">
-                    <button class="import-card add-own-card" onclick={() => handle_open_file(tab.id, idx)}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`common.open_file`)}</span>
-                        <span class="import-desc">{t(`app.multi_select_or_drop`)}</span>
-                      </div>
-                    </button>
-
-                    <button class="import-card add-own-card" onclick={() => handle_open_folder(tab.id, idx)}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                        <path d="M2 10h20"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`common.open_folder`)}</span>
-                        <span class="import-desc">{t(`app.load_all_structures`)}</span>
-                      </div>
-                    </button>
-
-                    <button class="import-card database-card" onclick={() => { modal.import_target_tab = tab.id; modal.import_target_pane = idx; modal.optimade_search_element = ``; modal.search_provider = STATIC_ONLY ? `pubchem` : `mp`; modal.search_visible = true }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4s8-1.79 8-4s-3.58-4-8-4M4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9M4 14v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`app.search_database`)}</span>
-                        <span class="import-desc">{STATIC_ONLY ? t(`app.pubchem_molecules`) : t(`app.optimade_pubchem`)}</span>
-                      </div>
-                    </button>
-
-                    <button class="import-card paste-card" onclick={() => { modal.import_target_tab = tab.id; modal.import_target_pane = idx; modal.paste_content_visible = true }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-                        <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-                        <path d="M9 12h6M9 16h6"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`common.paste`)}</span>
-                        <span class="import-desc">POSCAR/CONTCAR</span>
-                      </div>
-                    </button>
-
-                    {#if !STATIC_ONLY}
-                    <button class="import-card workflow-card" onclick={() => { ts.panes[idx].mode = `workflow`; ts.panes = [...ts.panes]; update_tab_label(tab.id) }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <rect x="2" y="3" width="6" height="5" rx="1" />
-                        <rect x="16" y="3" width="6" height="5" rx="1" />
-                        <rect x="9" y="16" width="6" height="5" rx="1" />
-                        <path d="M5 8v3a2 2 0 002 2h10a2 2 0 002-2V8" />
-                        <path d="M12 13v3" />
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`common.workflow`)}</span>
-                        <span class="import-desc">{t(`app.pipeline_editor`)}</span>
-                      </div>
-                    </button>
-                    {/if}
-
-                    <button class="import-card builder-card" onclick={() => {
-                      ts.panes[idx].structure = {
-                        lattice: {
-                          matrix: [[2.46, 0, 0], [1.23, 2.1304, 0], [0, 0, 20]] as [number[], number[], number[]],
-                          a: 2.46, b: 2.46, c: 20,
-                          alpha: 90, beta: 90, gamma: 120,
-                          volume: 104.82,
-                          pbc: [true, true, true] as [boolean, boolean, boolean],
-                        },
-                        sites: [
-                          { species: [{ element: `C`, occu: 1, oxidation_state: 0 }], abc: [0, 0, 0.5], xyz: [0, 0, 10], label: `C`, properties: {} },
-                          { species: [{ element: `C`, occu: 1, oxidation_state: 0 }], abc: [0.3333, 0.3333, 0.5], xyz: [1.23, 0.7101, 10], label: `C`, properties: {} },
-                        ],
-                      } as unknown as AnyStructure
-                      ts.panes[idx].initial_site_count = 2
-                      ts.panes[idx].initial_structure_ref = ts.panes[idx].structure
-                      ts.panes[idx].modified = false
-                      ts.active_pane = idx
-                    }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <circle cx="12" cy="8" r="2.5"/>
-                        <circle cx="6" cy="16" r="2.5"/>
-                        <circle cx="18" cy="16" r="2.5"/>
-                        <path d="M12 10.5v2.5l-4.5 3M12 13l4.5 3"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`app.build`)}</span>
-                        <span class="import-desc">{t(`app.build_desc`)}</span>
-                      </div>
-                    </button>
-
-                    <!-- AI Chat: shown in STATIC_ONLY too — CatBot runs client-direct
-                         in-browser (no backend) and can fetch/build structures from empty state. -->
-                    <button class="import-card chat-card" onclick={() => {
-                      console.log(`[CatGo:UI] Welcome card clicked: AI Chat → loading structure + opening Chat panel`)
-                      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
-                      ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
-                      ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
-                      ts.panes[idx].initial_panel = `chat`
-                      ts.active_pane = idx
-                      update_tab_label(tab.id)
-                    }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`app.ai_chat`)}</span>
-                        <span class="import-desc">{t(`app.ask_questions`)}</span>
-                      </div>
-                    </button>
-
-                    {#if !STATIC_ONLY}
-                    <button class="import-card hpc-card" onclick={() => {
-                      console.log(`[CatGo:UI] Welcome card clicked: HPC → loading structure + opening HPC panel`)
-                      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
-                      ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
-                      ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
-                      ts.panes[idx].initial_panel = `hpc`
-                      ts.active_pane = idx
-                      update_tab_label(tab.id)
-                    }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`app.hpc`)}</span>
-                        <span class="import-desc">{t(`app.remote_connect`)}</span>
-                      </div>
-                    </button>
-
-                    <button class="import-card terminal-card" onclick={() => {
-                      console.log(`[CatGo:UI] Welcome card clicked: Terminal → loading structure + opening Terminal panel`)
-                      ts.panes[idx].structure = clone_structure(water as unknown as AnyStructure)
-                      ts.panes[idx].initial_site_count = (water as any).sites?.length ?? 0
-                      ts.panes[idx].initial_structure_ref = water as unknown as AnyStructure
-                      ts.panes[idx].initial_panel = `terminal`
-                      ts.active_pane = idx
-                      update_tab_label(tab.id)
-                    }}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
-                      </svg>
-                      <div class="import-text">
-                        <span class="import-title">{t(`app.terminal`)}</span>
-                        <span class="import-desc">{t(`app.local_shell`)}</span>
-                      </div>
-                    </button>
-                    {/if}
-
-                    <!-- Plugins Card (only show on main pane, hide in static mode) -->
-                    {#if !STATIC_ONLY && idx === 0}
-                      <button class="import-card plugins-card" onclick={() => open_plugin_hub_on_active_pane()}>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                          <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-                          <path d="M2 17l10 5 10-5"/>
-                          <path d="M2 12l10 5 10-5"/>
-                        </svg>
-                        <div class="import-text">
-                          <span class="import-title">{t(`app.plugins`)}</span>
-                          <span class="import-desc">{t(`app.extend_catgo`)}</span>
-                        </div>
-                      </button>
-
-                      <!-- External Card — opens (or focuses) the 🤖 External tab.
-                           Lab claude / external MCP pushes land here without
-                           clobbering your working panes. Distinct from the HPC
-                           card above (which is SSH/Slurm). -->
-                      <button class="import-card external-card" onclick={() => open_external_tab()}>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                          <circle cx="12" cy="12" r="2"/>
-                          <path d="M16.24 7.76a6 6 0 0 1 0 8.49"/>
-                          <path d="M7.76 16.25a6 6 0 0 1 0-8.49"/>
-                          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-                          <path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>
-                        </svg>
-                        <div class="import-text">
-                          <span class="import-title">{t(`app.external`)}</span>
-                          <span class="import-desc">{t(`app.receive_from_lab`)}</span>
-                        </div>
-                      </button>
-                    {/if}
-                  </div>
-                </div>
-              {/if}
-
-              </div><!-- end panel-content -->
             </div>
-          {/each}
-
-          <!-- Resize handles -->
-          {#if ts.layout === `splitH`}
-            <div
-              class="grid-divider grid-divider-col"
-              class:active={is_panel_resizing && resize_axis === `col`}
-              style="grid-column: 2; grid-row: 1;"
-              onmousedown={(e) => on_divider_mousedown(e, `col`, tab.id)}
-              ondblclick={() => { ts.col_split = 50 }}
-              role="separator"
-              aria-orientation="vertical"
-            ></div>
-          {:else if ts.layout === `splitV`}
-            <div
-              class="grid-divider grid-divider-row"
-              class:active={is_panel_resizing && resize_axis === `row`}
-              style="grid-column: 1; grid-row: 2;"
-              onmousedown={(e) => on_divider_mousedown(e, `row`, tab.id)}
-              ondblclick={() => { ts.row_split = 50 }}
-              role="separator"
-              aria-orientation="horizontal"
-            ></div>
-          {:else if ts.layout === `quad`}
-            <div
-              class="grid-divider grid-divider-col"
-              class:active={is_panel_resizing && resize_axis === `col`}
-              style="grid-column: 2; grid-row: 1 / span 3;"
-              onmousedown={(e) => on_divider_mousedown(e, `col`, tab.id)}
-              ondblclick={() => { ts.col_split = 50 }}
-              role="separator"
-              aria-orientation="vertical"
-            ></div>
-            <div
-              class="grid-divider grid-divider-row"
-              class:active={is_panel_resizing && resize_axis === `row`}
-              style="grid-column: 1 / span 3; grid-row: 2;"
-              onmousedown={(e) => on_divider_mousedown(e, `row`, tab.id)}
-              ondblclick={() => { ts.row_split = 50 }}
-              role="separator"
-              aria-orientation="horizontal"
-            ></div>
-            <div
-              class="grid-divider grid-divider-center"
-              class:active={is_panel_resizing}
-              style="grid-column: 2; grid-row: 2; z-index: 2;"
-              onmousedown={(e) => on_center_mousedown(e, tab.id)}
-              ondblclick={() => { ts.col_split = 50; ts.row_split = 50 }}
-              role="separator"
-            ></div>
+            <button
+              class="panel-maximize-btn"
+              onclick={(e) => { e.stopPropagation(); toggle_maximize(tab.id, leaf.id) }}
+              title={ts.maximized_leaf_id === leaf.id ? t(`app.restore_pane`) : t(`app.maximize_pane`)}
+            >
+              {#if ts.maximized_leaf_id === leaf.id}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 9H5V5M15 9h4V5M9 15H5v4M15 15h4v4"/></svg>
+              {:else}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/></svg>
+              {/if}
+            </button>
+            <button
+              class="panel-close-btn"
+              onclick={(e) => { e.stopPropagation(); close_terminal_leaf(tab.id, leaf.id) }}
+              title={t(`app.close_panel`)}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          {:else if pane}
+            {#if pane_has_content(pane)}
+              <span class="panel-dot"></span>
+            {/if}
+            <span class="panel-label">{get_pane_label(pane)}</span>
+            {#if pane_has_content(pane)}
+              <button
+                class="panel-popout-btn"
+                onclick={(e) => { e.stopPropagation(); popout_pane(tab.id, leaf.id) }}
+                title={t(`app.open_in_new_window`)}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                  <polyline points="15 3 21 3 21 9"/>
+                  <line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+              </button>
+            {/if}
+            <div class="panel-type-container">
+              <button
+                class="panel-type-btn"
+                onclick={(e) => { e.stopPropagation(); type_menu_leaf_id = type_menu_leaf_id === leaf.id ? null : leaf.id }}
+                title={t(`app.change_pane_type`)}
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+              </button>
+              {#if type_menu_leaf_id === leaf.id}
+                <div class="panel-type-menu" role="menu">
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'structure') }}>{t(`app.type_structure`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'terminal') }}>{t(`app.type_terminal`)}</button>
+                  <button role="menuitem" onclick={(e) => { e.stopPropagation(); switch_leaf_type(tab.id, leaf.id, 'empty') }}>{t(`app.type_empty`)}</button>
+                </div>
+              {/if}
+            </div>
+            <button
+              class="panel-maximize-btn"
+              onclick={(e) => { e.stopPropagation(); toggle_maximize(tab.id, leaf.id) }}
+              title={ts.maximized_leaf_id === leaf.id ? t(`app.restore_pane`) : t(`app.maximize_pane`)}
+            >
+              {#if ts.maximized_leaf_id === leaf.id}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 9H5V5M15 9h4V5M9 15H5v4M15 15h4v4"/></svg>
+              {:else}
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8V4h4M20 8V4h-4M4 16v4h4M20 16v4h-4"/></svg>
+              {/if}
+            </button>
+            <button
+              class="panel-close-btn"
+              onclick={(e) => { e.stopPropagation(); handle_unload(tab.id, leaf.id) }}
+              title={t(`app.close_panel`)}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
           {/if}
-        </div>
+        {/snippet}
+
+        {#snippet banner(leaf: LeafNode)}
+          {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {#if pane && ts.close_confirm_leaf_id === leaf.id}
+            <div class="panel-close-banner">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 9v2m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
+              </svg>
+              {#if pane.mode === `workflow`}
+                <span>{t(`app.workflow_will_be_closed`)}</span>
+                <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_leaf_id = null }}>{t(`common.cancel`)}</button>
+                <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, leaf.id) }}>{t(`common.close`)}</button>
+              {:else}
+                <span>{t(`common.save_before_closing`)}</span>
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <select class="banner-select target-select" bind:value={exp.close_save_target} onclick={(e) => e.stopPropagation()}>
+                  <option value="local">{t(`app.local`)}</option>
+                  {#if pane.remote_origin?.session_id}
+                    <option value="hpc">{t(`app.hpc`)}</option>
+                  {/if}
+                  <option value="project">{t(`app.catgo_db`)}</option>
+                </select>
+                {#if exp.close_save_target === `project` && exp.close_save_projects.length > 0}
+                  <!-- svelte-ignore a11y_no_static_element_interactions -->
+                  <select class="banner-select" bind:value={exp.close_save_project_id} onclick={(e) => e.stopPropagation()}>
+                    {#snippet banner_select_options(projects: ProjectSummary[], depth: number)}
+                      {#each projects as p (p.id)}
+                        <option value={p.id}>{`  `.repeat(depth)}{p.name}</option>
+                        {#if save_project_children[p.id]?.length}
+                          {@render banner_select_options(save_project_children[p.id], depth + 1)}
+                        {/if}
+                      {/each}
+                    {/snippet}
+                    {@render banner_select_options(save_project_roots, 0)}
+                  </select>
+                {/if}
+                {#if exp.close_save_target === `hpc`}
+                  <span class="banner-path" title={pane.remote_origin?.file_path}>{pane.remote_origin?.file_path?.split(/[/\\]/).pop()}</span>
+                {/if}
+                <button class="banner-btn save" disabled={exp.close_saving} onclick={(e) => { e.stopPropagation(); save_and_close_panel(tab.id, leaf.id) }}>
+                  {exp.close_saving ? t(`common.saving`) : t(`common.save_and_close`)}
+                </button>
+                <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, leaf.id) }}>{t(`common.close`)}</button>
+                <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_leaf_id = null }}>{t(`common.cancel`)}</button>
+              {/if}
+            </div>
+          {/if}
+        {/snippet}
+
+        {#snippet leaf_body(leaf: LeafNode)}
+          {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {#if pane}
+          {#if pane.mode === `workflow`}
+            <WorkflowView
+              initial_workflow_id={pane.workflow_id}
+              compact={pane.workflow_compact ?? false}
+              tab_id={tab.id}
+              onclose={() => { Object.assign(pane, create_empty_pane()); update_tab_label(tab.id) }}
+              onchange={() => { pane.modified = true }}
+              ondbchange={() => { sidebar.refresh_counter++ }}
+            />
+          {:else if pane.is_trajectory_mode && pane.trajectory}
+            <Trajectory
+              trajectory={pane.trajectory as any}
+              bind:selected_sites={pane.selected_sites}
+              bind:current_step_idx={pane.current_step_idx}
+              on_file_load={create_on_file_load(tab.id, leaf.id)}
+              fullscreen_toggle={false}
+              allow_file_drop={false}
+              structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format, tab_id: tab.id, is_active: ts.active_leaf_id === leaf.id && tab.id === tm.active_tab_id }}
+              style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
+            >
+              {#snippet trajectory_controls({ trajectory: traj, current_step_idx: step, on_step_change })}
+                <PathwayControls
+                  trajectory={traj}
+                  current_step_idx={step}
+                  {on_step_change}
+                />
+              {/snippet}
+            </Trajectory>
+          {:else if pane.viewer_kind === `molstar` && pane.bio_raw_content}
+            <div class="bio-pane-wrap">
+              <div class="bio-toolbar">
+                <BioViewerToggle is_molstar={true} on_toggle={() => toggle_pane_viewer(pane)} />
+                <span class="bio-toolbar-name">{pane.source_filename ?? `structure`}</span>
+              </div>
+              <div class="bio-viewer-fill">
+                {#key pane.bio_raw_content}
+                  <MolstarViewer content={pane.bio_raw_content} format={pane.bio_format ?? `pdb`} label={pane.source_filename ?? `structure`} />
+                {/key}
+              </div>
+            </div>
+          {:else if pane.structure}
+            <Structure
+              tab_id={tab.id}
+              is_active={ts.active_leaf_id === leaf.id && tab.id === tm.active_tab_id}
+              bind:structure={pane.structure}
+              bind:saveable_structure={pane.saveable_structure}
+              bind:selected_sites={pane.selected_sites}
+              bind:remote_origin={pane.remote_origin}
+              bind:open_plugin_hub={pane.open_plugin_hub}
+              cube_file={pane.cube_file}
+              initial_panel={pane.initial_panel}
+              on_file_load={create_on_file_load(tab.id, leaf.id)}
+              on_file_drop={create_on_file_drop(tab.id, leaf.id)}
+              on_structure_imported={() => update_tab_label(tab.id)}
+              on_save_to_project={open_save_dialog}
+              on_save_to_database={open_save_dialog}
+              on_clear_structure={() => {
+                Object.assign(pane, create_empty_pane())
+                update_tab_label(tab.id)
+              }}
+              on_export_to_hpc={open_export_to_hpc}
+              on_export_to_file={open_export_to_file}
+              on_edit_as_text={open_edit_as_text}
+              on_open_file_overlay={(file_path: string, filename: string, session_id: string) => {
+                handle_terminal_open_file(file_path, filename, session_id)
+              }}
+              on_open_terminal={(term?: Partial<TerminalLeafState>) => {
+                open_terminal_leaf(tab.id, leaf.id, term)
+              }}
+              on_open_workflow_editor={(workflow_id: string) => {
+                handle_sidebar_open_workflow(workflow_id)
+              }}
+              on_open_in_molstar={() => toggle_pane_viewer(pane)}
+              fullscreen_toggle={false}
+              allow_file_drop={false}
+              show_controls={true}
+              style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
+            />
+          {:else if pane.initial_panel === `chat`}
+            <!-- Standalone CatBot pane (e.g. "Ask CatBot" from a terminal): no
+                 structure needed — the chat drives the active terminal via the
+                 global terminal registry. -->
+            <div class="pane-chat-fill">
+              <ChatPane
+                tab_id={tab.id}
+                is_pane={true}
+                on_close={() => { Object.assign(pane, create_empty_pane()); update_tab_label(tab.id) }}
+                on_popout={() => {
+                  window.open(`${location.origin}${location.pathname}#chat`, '_blank', 'width=520,height=760')
+                  Object.assign(pane, create_empty_pane())
+                  update_tab_label(tab.id)
+                }}
+              />
+            </div>
+          {:else}
+            {@const is_primary = leaf.id === leaves(ts.root)[0].id}
+            <div class="landing-page" class:secondary-pane={!is_primary} class:compact={leafCount(ts.root) > 1}>
+              {#if is_primary}
+                <!-- Landing-only GitHub link — invites users to star the repo -->
+                <a
+                  class="github-star"
+                  href="https://github.com/Hello-QM/catgo-LRG"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Star CatGo on GitHub"
+                >
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.65 7.65 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
+                  </svg>
+                  <span class="github-star-text">Star on GitHub</span>
+                  <svg class="github-star-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M12 17.27l5.18 3.13-1.37-5.9 4.59-3.97-6.04-.52L12 4.5 9.64 10l-6.04.52 4.59 3.97-1.37 5.9z"/>
+                  </svg>
+                </a>
+                <div class="samples-grid">
+                  {#each sample_structures as sample}
+                    <button
+                      class="sample-card"
+                      onclick={() => {
+                        pane.structure = clone_structure(sample.data)
+                        pane.initial_site_count = sample.data.sites?.length ?? 0
+                        pane.initial_structure_ref = sample.data
+                        pane.modified = false
+                        ts.active_leaf_id = leaf.id
+                        update_tab_label(tab.id)
+                      }}
+                    >
+                      <div class="sample-preview">
+                        <!-- align_on_load="none" prevents auto principal-axes rotation that
+                             would flatten the water V-shape into the XY plane (invisible from -Y camera).
+                             Orthographic projection + zoom for consistent sizing in the preview card. -->
+                        <Structure
+                          structure={sample.data}
+                          show_controls={false}
+                          fullscreen_toggle={false}
+                          allow_file_drop={false}
+                          align_on_load="none"
+                          persist_settings={false}
+                          scene_props={{ atom_radius: 1.6, camera_projection: `orthographic`, initial_zoom: 100 } as any}
+                          style="--struct-height: 100%; --struct-width: 100%; pointer-events: none;"
+                        />
+                      </div>
+                      <div class="sample-info">
+                        <span class="sample-name">{sample.name}</span>
+                        <span class="sample-formula">{sample.formula}</span>
+                      </div>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+
+              <div class="import-sidebar">
+                <button class="import-card add-own-card" onclick={(e) => handle_open_file(tab.id, leaf.id, e.shiftKey)}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`common.open_file`)}</span>
+                    <span class="import-desc">{t(`app.multi_select_or_drop`)}</span>
+                  </div>
+                </button>
+
+                <button class="import-card add-own-card" onclick={() => handle_open_folder(tab.id, leaf.id)}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    <path d="M2 10h20"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`common.open_folder`)}</span>
+                    <span class="import-desc">{t(`app.load_all_structures`)}</span>
+                  </div>
+                </button>
+
+                <button class="import-card database-card" onclick={() => { modal.import_target_tab = tab.id; modal.import_target_leaf = leaf.id; modal.optimade_search_element = ``; modal.search_provider = STATIC_ONLY ? `pubchem` : `mp`; modal.search_visible = true }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M12 3C7.58 3 4 4.79 4 7s3.58 4 8 4s8-1.79 8-4s-3.58-4-8-4M4 9v3c0 2.21 3.58 4 8 4s8-1.79 8-4V9M4 14v3c0 2.21 3.58 4 8 4s8-1.79 8-4v-3"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`app.search_database`)}</span>
+                    <span class="import-desc">{STATIC_ONLY ? t(`app.pubchem_molecules`) : t(`app.optimade_pubchem`)}</span>
+                  </div>
+                </button>
+
+                <button class="import-card paste-card" onclick={() => { modal.import_target_tab = tab.id; modal.import_target_leaf = leaf.id; modal.paste_content_visible = true }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                    <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+                    <path d="M9 12h6M9 16h6"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`common.paste`)}</span>
+                    <span class="import-desc">POSCAR/CONTCAR</span>
+                  </div>
+                </button>
+
+                {#if !STATIC_ONLY}
+                <button class="import-card workflow-card" onclick={() => { pane.mode = `workflow`; update_tab_label(tab.id) }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2" y="3" width="6" height="5" rx="1" />
+                    <rect x="16" y="3" width="6" height="5" rx="1" />
+                    <rect x="9" y="16" width="6" height="5" rx="1" />
+                    <path d="M5 8v3a2 2 0 002 2h10a2 2 0 002-2V8" />
+                    <path d="M12 13v3" />
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`common.workflow`)}</span>
+                    <span class="import-desc">{t(`app.pipeline_editor`)}</span>
+                  </div>
+                </button>
+                {/if}
+
+                <button class="import-card builder-card" onclick={() => {
+                  pane.structure = {
+                    lattice: {
+                      matrix: [[2.46, 0, 0], [1.23, 2.1304, 0], [0, 0, 20]] as [number[], number[], number[]],
+                      a: 2.46, b: 2.46, c: 20,
+                      alpha: 90, beta: 90, gamma: 120,
+                      volume: 104.82,
+                      pbc: [true, true, true] as [boolean, boolean, boolean],
+                    },
+                    sites: [
+                      { species: [{ element: `C`, occu: 1, oxidation_state: 0 }], abc: [0, 0, 0.5], xyz: [0, 0, 10], label: `C`, properties: {} },
+                      { species: [{ element: `C`, occu: 1, oxidation_state: 0 }], abc: [0.3333, 0.3333, 0.5], xyz: [1.23, 0.7101, 10], label: `C`, properties: {} },
+                    ],
+                  } as unknown as AnyStructure
+                  pane.initial_site_count = 2
+                  pane.initial_structure_ref = pane.structure
+                  pane.modified = false
+                  ts.active_leaf_id = leaf.id
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="8" r="2.5"/>
+                    <circle cx="6" cy="16" r="2.5"/>
+                    <circle cx="18" cy="16" r="2.5"/>
+                    <path d="M12 10.5v2.5l-4.5 3M12 13l4.5 3"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`app.build`)}</span>
+                    <span class="import-desc">{t(`app.build_desc`)}</span>
+                  </div>
+                </button>
+
+                <!-- AI Chat: shown in STATIC_ONLY too — CatBot runs client-direct
+                     in-browser (no backend) and can fetch/build structures from empty state. -->
+                <button class="import-card chat-card" onclick={() => {
+                  // Open a full CatBot pane (no forced structure). CatBot runs
+                  // client-direct and can fetch/build structures from empty state
+                  // if asked; the standalone-chat leaf_body branch renders it.
+                  pane.initial_panel = `chat`
+                  ts.active_leaf_id = leaf.id
+                  update_tab_label(tab.id)
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`app.ai_chat`)}</span>
+                    <span class="import-desc">{t(`app.ask_questions`)}</span>
+                  </div>
+                </button>
+
+                {#if !STATIC_ONLY}
+                <button class="import-card hpc-card" onclick={() => {
+                  console.log(`[CatGo:UI] Welcome card clicked: HPC → loading structure + opening HPC panel`)
+                  pane.structure = clone_structure(water as unknown as AnyStructure)
+                  pane.initial_site_count = (water as any).sites?.length ?? 0
+                  pane.initial_structure_ref = water as unknown as AnyStructure
+                  pane.initial_panel = `hpc`
+                  ts.active_leaf_id = leaf.id
+                  update_tab_label(tab.id)
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`app.hpc`)}</span>
+                    <span class="import-desc">{t(`app.remote_connect`)}</span>
+                  </div>
+                </button>
+
+                <button class="import-card terminal-card" onclick={() => {
+                  console.log(`[CatGo:UI] Welcome card clicked: Terminal → converting leaf to a terminal`)
+                  ts.root = setLeafContent(ts.root, leaf.id, { type: `terminal`, term: { sync_cwd: false } })
+                  ts.active_leaf_id = leaf.id
+                  update_tab_label(tab.id)
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+                  </svg>
+                  <div class="import-text">
+                    <span class="import-title">{t(`app.terminal`)}</span>
+                    <span class="import-desc">{t(`app.local_shell`)}</span>
+                  </div>
+                </button>
+                {/if}
+
+                <!-- Plugins Card (only show on main pane, hide in static mode) -->
+                {#if !STATIC_ONLY && is_primary}
+                  <button class="import-card plugins-card" onclick={() => open_plugin_hub_on_active_leaf()}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                      <path d="M2 17l10 5 10-5"/>
+                      <path d="M2 12l10 5 10-5"/>
+                    </svg>
+                    <div class="import-text">
+                      <span class="import-title">{t(`app.plugins`)}</span>
+                      <span class="import-desc">{t(`app.extend_catgo`)}</span>
+                    </div>
+                  </button>
+
+                  <!-- External Card — opens (or focuses) the 🤖 External tab.
+                       Lab claude / external MCP pushes land here without
+                       clobbering your working panes. Distinct from the HPC
+                       card above (which is SSH/Slurm). -->
+                  <button class="import-card external-card" onclick={() => open_external_tab()}>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <circle cx="12" cy="12" r="2"/>
+                      <path d="M16.24 7.76a6 6 0 0 1 0 8.49"/>
+                      <path d="M7.76 16.25a6 6 0 0 1 0-8.49"/>
+                      <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                      <path d="M4.93 19.07a10 10 0 0 1 0-14.14"/>
+                    </svg>
+                    <div class="import-text">
+                      <span class="import-title">{t(`app.external`)}</span>
+                      <span class="import-desc">{t(`app.receive_from_lab`)}</span>
+                    </div>
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/if}
+          {/if}
+        {/snippet}
+
+        {#snippet terminal_body(leaf: LeafNode)}
+          {@const term = leaf.content.type === `terminal` ? leaf.content.term : undefined}
+          {#if term}
+            <!-- TerminalWindow provides the full terminal chrome inside the leaf:
+                 internal tabs (multiple shells, "+"), per-tab shell picker, font
+                 settings, and per-tab Directory Sync. The leaf header above only
+                 carries the tree controls (type-switch / maximize / popout / close). -->
+            <TerminalWindow
+              initial_session_id={term.session_id}
+              initial_host={term.host}
+              initial_username={term.username}
+              initial_sync_cwd={term.sync_cwd}
+              onpopout={() => popout_terminal_leaf(tab.id, leaf.id)}
+              onclose={() => close_terminal_leaf(tab.id, leaf.id)}
+              on_open_file={(p) => handle_terminal_leaf_open_file(p, term)}
+              on_ask_catbot={() => open_chat_beside(leaf)}
+            />
+          {/if}
+        {/snippet}
         </div><!-- end structure-workspace -->
       {/if}
 
@@ -2188,20 +2464,6 @@
         tab_id={tab.id}
         onclose={() => { close_tab(`workflow`); switch_to_structure() }}
         onpopout={popout_workflow}
-      />
-
-    {:else if !STATIC_ONLY && tab.type === `terminal`}
-      <TerminalWindow
-        initial_session_id={terminal.init_session_id}
-        initial_host={terminal.init_host}
-        initial_username={terminal.init_username}
-        initial_sync_cwd={terminal.init_sync_cwd}
-        onclose={() => { close_tab(`terminal`); switch_to_structure() }}
-        onpopout={popout_terminal}
-        on_open_file={async (file_path) => {
-          const name = file_path.split(`/`).pop() || file_path
-          await handle_terminal_open_file(file_path, name, terminal.init_session_id || ``)
-        }}
       />
     {/if}
 
@@ -2307,7 +2569,7 @@
   {@const confirm_tab = tm.tabs.find(t => t.id === tm.tab_close_confirm_id)}
   {@const confirm_ts = tab_states[tm.tab_close_confirm_id]}
   {#if confirm_tab && confirm_ts}
-    {@const structure_count = confirm_ts.panes.slice(0, layout_panel_count(confirm_ts.layout)).filter(p => pane_has_content(p)).length}
+    {@const structure_count = leaves(confirm_ts.root).filter(l => { const p = structurePane(l); return !!p && pane_has_content(p) }).length}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -2337,6 +2599,29 @@
       <div class="modal-actions">
         <button class="modal-btn cancel" onclick={() => tm.pending_layout_change = null}>{t(`common.cancel`)}</button>
         <button class="modal-btn danger" onclick={confirm_layout_change}>{t(`app.continue`)}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- SDK-agent terminal command approval -->
+{#if terminal_approval.pending}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="modal-overlay" onclick={terminal_approval_deny}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
+      <h3>{t(`app.agent_terminal_approve_title`)}</h3>
+      <p class="agent-term-detail">
+        <span class="agent-term-action">{terminal_approval.pending.action}</span>
+        <code>{terminal_approval.pending.detail}</code>
+      </p>
+      <label class="agent-term-autorun">
+        <input type="checkbox" bind:checked={terminal_approval.auto_run} />
+        {t(`app.agent_terminal_autorun`)}
+      </label>
+      <div class="modal-actions">
+        <button class="modal-btn cancel" onclick={terminal_approval_deny}>{t(`common.cancel`)}</button>
+        <button class="modal-btn danger" onclick={terminal_approval_allow}>{t(`app.allow`)}</button>
       </div>
     </div>
   </div>
@@ -2526,57 +2811,16 @@
     width: 100%;
     height: 100%;
   }
-  .structure-workspace > .grid-container {
+  /* PaneTree renders its root (.split or .pane) as the direct child here;
+     the split/pane/divider/content geometry now lives in PaneTree.svelte. */
+  .structure-workspace > :global(.split),
+  .structure-workspace > :global(.pane) {
     flex: 1;
     min-width: 0;
   }
 
-  .grid-container {
-    display: grid;
-    width: 100%;
-    height: 100%;
-  }
-
-  /* Resize dividers */
-  .grid-divider {
-    background: var(--border-color, rgba(128, 128, 128, 0.2));
-    transition: background 0.15s;
-    z-index: 1;
-  }
-  .grid-divider-col { cursor: col-resize; }
-  .grid-divider-row { cursor: row-resize; }
-  .grid-divider-center { cursor: move; }
-  .grid-divider:hover, .grid-divider.active {
-    background: var(--accent-color, #3b82f6);
-  }
-  .grid-container.resizing .pane { pointer-events: none; }
-  .grid-container.resizing { user-select: none; }
-
-  .pane {
-    position: relative;
-    overflow: hidden;
-    background: var(--surface-bg, var(--page-bg));
-    cursor: pointer;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .pane.warn-glow {
-    box-shadow: inset 0 0 0 2px rgba(245, 158, 11, 0.5);
-  }
-
-  /* Panel header */
-  .panel-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    min-height: 28px;
-    background: var(--page-bg, #0f1520);
-    border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.15));
-    font-size: 11px;
-    user-select: none;
-  }
+  /* .panel-header flex container is PaneTree's element (styled there); the
+     dot/label/buttons below render via App snippets so stay App-scoped. */
 
   .panel-dot {
     width: 6px;
@@ -2597,6 +2841,7 @@
   }
 
   .panel-popout-btn,
+  .panel-maximize-btn,
   .panel-close-btn {
     display: flex;
     align-items: center;
@@ -2612,13 +2857,11 @@
     opacity: 0;
     transition: opacity 0.15s, background 0.15s, color 0.15s;
   }
+  /* Hover-reveal lives in PaneTree.svelte (.pane:hover :global(.panel-*-btn))
+     because .pane is rendered there while these buttons render in App's scope. */
 
-  .pane:hover .panel-popout-btn,
-  .pane:hover .panel-close-btn {
-    opacity: 1;
-  }
-
-  .panel-popout-btn:hover {
+  .panel-popout-btn:hover,
+  .panel-maximize-btn:hover {
     background: rgba(59, 130, 246, 0.5);
     color: white;
   }
@@ -2628,15 +2871,66 @@
     color: white;
   }
 
-  /* Panel content area */
-  .panel-content {
-    flex: 1;
-    min-height: 0;
+  .panel-type-container {
     position: relative;
-    overflow: hidden;
-    /* Definite height base for percentage-based children (Three.js canvas) */
-    height: 0;
+    display: flex;
+    align-items: center;
   }
+
+  .panel-type-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-color-dim, #9ca3af);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+
+  .panel-type-btn:hover {
+    background: rgba(59, 130, 246, 0.5);
+    color: white;
+  }
+
+  .panel-type-menu {
+    position: absolute;
+    top: 20px;
+    right: 0;
+    z-index: 1000;
+    background: var(--page-bg, #1c1d21);
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    min-width: 120px;
+    overflow: hidden;
+  }
+
+  .panel-type-menu button {
+    padding: 6px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--text-color, #e2e8f0);
+    cursor: pointer;
+    font-size: 12px;
+    text-align: left;
+    transition: background 0.1s;
+    white-space: nowrap;
+  }
+
+  .panel-type-menu button:hover {
+    background: rgba(59, 130, 246, 0.2);
+  }
+
+  /* .panel-content geometry lives in PaneTree.svelte (height:0 keep-warm base). */
 
   /* Inline panel close confirmation banner */
   .panel-close-banner {
@@ -2783,6 +3077,39 @@
     gap: 8px;
   }
 
+  .agent-term-detail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 12px 0 !important;
+  }
+  .agent-term-action {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-color-muted, #6b7280);
+  }
+  .agent-term-detail code {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 13px;
+    color: var(--text-color, #111827);
+    background: var(--surface-alt, rgba(0, 0, 0, 0.05));
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .agent-term-autorun {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-color-muted, #6b7280);
+    margin: 0 0 18px 0;
+    cursor: pointer;
+  }
+
   .modal-btn {
     padding: 6px 16px;
     border-radius: 6px;
@@ -2849,13 +3176,15 @@
     to { opacity: 1; }
   }
 
-  .pane.dragover::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 100000005;
-    box-shadow: inset 0 0 0 3px #22c55e;
+  /* .pane.dragover glow + add-own-card highlight live in PaneTree.svelte
+     (.pane is rendered there; cards render in App's scope via :global). */
+
+  /* Standalone CatBot pane (full-pane chat, no structure viewer) */
+  .pane-chat-fill {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Original horizontal layout (restored) */
@@ -3041,26 +3370,20 @@
     color: #93c5fd;
   }
 
-  .pane.dragover .import-card.add-own-card {
-    border-color: #22c55e;
-    background: rgba(34, 197, 94, 0.15);
-    color: #22c55e;
-  }
+  /* .pane.dragover .import-card.add-own-card highlight lives in PaneTree.svelte. */
 
-  .pane.dragover .import-card.add-own-card .import-title {
-    color: #22c55e;
-  }
-
-  /* Quad layout responsive import */
-  .landing-page.quad-layout {
+  /* Compact landing — any tab with more than one leaf (was quad/stacked layout):
+     hide the samples grid + descriptions, grid the import cards to avoid scroll. */
+  .landing-page.compact {
     padding: 8px;
+    overflow-y: hidden;
   }
 
-  .landing-page.quad-layout .samples-grid {
+  .landing-page.compact .samples-grid {
     display: none;
   }
 
-  .landing-page.quad-layout .import-sidebar {
+  .landing-page.compact .import-sidebar {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px;
@@ -3068,54 +3391,22 @@
     max-width: 280px;
   }
 
-  .landing-page.quad-layout .import-card {
+  .landing-page.compact .import-card {
     padding: 6px 8px;
     gap: 6px;
   }
 
-  .landing-page.quad-layout .import-card svg {
+  .landing-page.compact .import-card svg {
     width: 16px;
     height: 16px;
   }
 
-  .landing-page.quad-layout .import-desc {
+  .landing-page.compact .import-desc {
     display: none;
   }
 
-  .landing-page.quad-layout .import-title {
+  .landing-page.compact .import-title {
     font-size: 0.8rem;
-  }
-
-  /* Stacked (splitV) layout — compact grid to avoid scrolling */
-  .landing-page.stacked-layout {
-    padding: 12px;
-    overflow-y: hidden;
-  }
-
-  .landing-page.stacked-layout .samples-grid {
-    display: none;
-  }
-
-  .landing-page.stacked-layout .import-sidebar {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    width: 100%;
-    max-width: 520px;
-  }
-
-  .landing-page.stacked-layout .import-card {
-    padding: 8px 10px;
-    gap: 8px;
-  }
-
-  .landing-page.stacked-layout .import-card svg {
-    width: 18px;
-    height: 18px;
-  }
-
-  .landing-page.stacked-layout .import-desc {
-    display: none;
 
   /* [2025-02] Alternative vertical layout — commented out for future reference
   .landing-page {

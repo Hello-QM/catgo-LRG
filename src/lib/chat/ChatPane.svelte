@@ -94,6 +94,25 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     }
   })
 
+  // Auto-fetch live models when on/switching to an API provider that has a key
+  // and isn't cached yet — so the dropdown reflects the provider's real
+  // /v1/models instead of the curated seed, with no manual button click. Keyed
+  // on the provider (not the key string) so it fires on provider switch / mount,
+  // not on every keystroke; first-time key entry still uses the button. SDK
+  // agents have no /models endpoint and ollama fetches its own tags on mount, so
+  // both are skipped here.
+  const _auto_fetched = new Set<string>()
+  $effect(() => {
+    const provider = chat_config.provider
+    untrack(() => {
+      if (PROVIDER_META[provider]?.group !== `api`) return
+      if (_auto_fetched.has(provider)) return  // once per session — cached list shows instantly meanwhile
+      if (!chat_config.api_key?.trim()) return
+      _auto_fetched.add(provider)
+      fetch_provider_models()  // refreshes the cache so newly-released models appear
+    })
+  })
+
 
   /** Test the current provider configuration */
   async function test_provider_connection() {
@@ -206,7 +225,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         const models = data.models as { id: string; label: string }[]
         const updates: Partial<typeof chat_config> = {
           fetched_models: { ...(chat_config.fetched_models ?? {}), [chat_config.provider]: models },
-          model: models[0]?.id ?? chat_config.model,
+          // Keep the user's current model if the live list still has it (so an
+          // auto-fetch on mount/provider-switch doesn't reset their choice);
+          // otherwise fall back to the first model.
+          model: models.find((m) => m.id === chat_config.model)?.id ?? models[0]?.id ?? chat_config.model,
         }
         if (chat_config.provider === `custom` && data.api_format) {
           updates.api_format = data.api_format
@@ -235,6 +257,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_close = () => {},
     on_popout = undefined,
     is_popout = false,
+    is_pane = false,
     tab_id,
   }: {
     structure?: AnyStructure
@@ -243,6 +266,11 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_close?: () => void
     on_popout?: () => void
     is_popout?: boolean
+    // True when the chat is a leaf in the pane tree (standalone CatBot pane),
+    // not the docked sidebar chat. Docked-position toggles (right/bottom) are
+    // meaningless for a pane — the pane chrome owns layout — so they are hidden;
+    // popout opens the chat window via on_popout.
+    is_pane?: boolean
     // Per-tab identifier used to resolve the ChatPane's workflow slice and to
     // route workflow pushes to the originating tab (Phase 2). Falls back to
     // "default" for popouts and standalone contexts — those share a single
@@ -398,6 +426,30 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     if (active_tab === `sessions`) {
       // Use untrack to avoid re-triggering when sessions_loading changes inside fetch
       untrack(() => fetch_backend_sessions())
+    }
+  })
+
+  // Auto-restore the most recent API (client-direct) session on first load so a
+  // reload doesn't lose the conversation. SDK chats are resumed manually from
+  // the Sessions tab (their session id is backend-managed). Runs once, and only
+  // into an empty chat (never clobbers an in-progress conversation).
+  const SDK_AGENT_NAMES = new Set([`claude`, `codex`, `gemini`])
+  let _restored_api = false
+  $effect(() => {
+    if (_restored_api) return
+    if (!is_client_direct(chat_config)) return
+    _restored_api = true
+    const slice = get_chat_slice(tab_slice_id)
+    if (slice.messages.list.length > 0 || slice.local_session_id.value) return
+    const newest = untrack(() => session_list.list)
+      .filter((s) => !SDK_AGENT_NAMES.has(s.agent))
+      .sort((a, b) => b.last_active - a.last_active)[0]
+    if (!newest) return
+    const msgs = load_session_messages(newest.session_id)
+    if (msgs.length > 0) {
+      slice.messages.list = msgs
+      slice.local_session_id.value = newest.session_id
+      agent_sessions[newest.agent] = newest.session_id
     }
   })
   let textarea_el: HTMLTextAreaElement | undefined = $state(undefined)
@@ -1028,34 +1080,37 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     </div>
     <div class="chat-header-actions">
       {#if !is_popout}
-        <!-- Position toggle buttons -->
-        <button
-          type="button"
-          class="chat-action-btn"
-          class:active={chat_position.value === `right`}
-          title={t('chat.dock_right')}
-          onclick={() => set_chat_position(`right`)}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="10" y1="2" x2="10" y2="14" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          class="chat-action-btn"
-          class:active={chat_position.value === `bottom`}
-          title={t('chat.dock_bottom')}
-          onclick={() => set_chat_position(`bottom`)}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="1" y1="10" x2="15" y2="10" />
-          </svg>
-        </button>
+        {#if !is_pane}
+          <!-- Position toggle buttons (docked chat only — a pane is positioned
+               by the pane chrome, so these are hidden in pane mode). -->
+          <button
+            type="button"
+            class="chat-action-btn"
+            class:active={chat_position.value === `right`}
+            title={t('chat.dock_right')}
+            onclick={() => set_chat_position(`right`)}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="10" y1="2" x2="10" y2="14" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="chat-action-btn"
+            class:active={chat_position.value === `bottom`}
+            title={t('chat.dock_bottom')}
+            onclick={() => set_chat_position(`bottom`)}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="1" y1="10" x2="15" y2="10" />
+            </svg>
+          </button>
+        {/if}
         <button
           type="button"
           class="chat-action-btn"
           title={t('chat.open_in_new_window')}
-          onclick={() => { set_chat_position(`popout`); on_popout?.() }}
+          onclick={() => { if (!is_pane) set_chat_position(`popout`); on_popout?.() }}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3" /><path d="M10 2h4v4" /><line x1="14" y1="2" x2="8" y2="8" />

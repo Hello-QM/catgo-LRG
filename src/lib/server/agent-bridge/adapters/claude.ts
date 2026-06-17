@@ -201,6 +201,33 @@ function* translateMessage(msg: any): Generator<AgentEvent> {
 }
 
 // ---------------------------------------------------------------------------
+// Text-loss guard: pure helper
+// ---------------------------------------------------------------------------
+
+/** When a turn's final `assistant` message carries text but NO partial deltas
+ *  streamed for it (the classic cold-start first turn), return those text
+ *  blocks as `text` events so the reply is not silently dropped. Returns `[]`
+ *  when text already streamed (`streamedTextLen > 0`) to avoid duplicating it.
+ *
+ *  `translateMessage` deliberately skips the text blocks on the `assistant`
+ *  message, assuming `stream_event` partials already delivered them — this is
+ *  the safety net for the turns where they didn't (blank-bubble bug). */
+export function assistant_text_fallback(
+  assistantMsg: any,
+  streamedTextLen: number,
+): AgentEvent[] {
+  if (streamedTextLen > 0) return []
+  const content: any[] = (assistantMsg?.message as any)?.content ?? []
+  const out: AgentEvent[] = []
+  for (const block of content) {
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
+      out.push({ type: 'text', text: block.text })
+    }
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
 // Security gate: pure permission decision helper
 // ---------------------------------------------------------------------------
 
@@ -342,7 +369,25 @@ export function createClaudeAdapter(): AgentAdapter {
         },
       })
 
+      // Track streamed text per turn so a turn that emits NO partial deltas
+      // (cold-start first turn) still surfaces its final text via the fallback
+      // — otherwise the reply is silently dropped (blank bubble, then cleaned
+      // up by chat-state, so the user sees "no reply" until a second send).
+      let streamedTextLen = 0
       for await (const msg of q) {
+        if (
+          (msg as any).type === 'stream_event' &&
+          (msg as any).event?.type === 'content_block_delta' &&
+          (msg as any).event?.delta?.type === 'text_delta'
+        ) {
+          streamedTextLen += String((msg as any).event.delta.text ?? '').length
+        }
+        if ((msg as any).type === 'assistant') {
+          for (const event of assistant_text_fallback(msg, streamedTextLen)) {
+            yield event
+          }
+          streamedTextLen = 0 // turn boundary — reset for the next assistant turn
+        }
         for (const event of translateMessage(msg)) {
           yield event
         }

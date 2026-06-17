@@ -95,19 +95,31 @@ async function spawnTauriPty(cols: number, rows: number, cwd?: string): Promise<
     async kill() { await invoke(`pty_kill`, { id }) },
 
     onData(cb: (data: Uint8Array) => void): () => void {
+      // `cancelled` guards the case where the caller unsubscribes BEFORE the
+      // async listen() resolves (rapid subscribe/unsubscribe, e.g. one per
+      // run_command): without it the listener would register after off() and
+      // leak for the PTY's lifetime.
       let unlisten: (() => void) | null = null
+      let cancelled = false
       listen<{ id: number; data: string }>(`pty-output`, (event) => {
         if (event.payload.id === id) cb(b64ToBytes(event.payload.data))
-      }).then((fn) => { unlisten = fn; unlisteners.push(fn) })
-      return () => unlisten?.()
+      }).then((fn) => {
+        if (cancelled) { fn(); return }
+        unlisten = fn; unlisteners.push(fn)
+      })
+      return () => { cancelled = true; unlisten?.() }
     },
 
     onExit(cb: () => void): () => void {
       let unlisten: (() => void) | null = null
+      let cancelled = false
       listen<{ id: number; success: boolean }>(`pty-exit`, (event) => {
         if (event.payload.id === id) cb()
-      }).then((fn) => { unlisten = fn; unlisteners.push(fn) })
-      return () => unlisten?.()
+      }).then((fn) => {
+        if (cancelled) { fn(); return }
+        unlisten = fn; unlisteners.push(fn)
+      })
+      return () => { cancelled = true; unlisten?.() }
     },
 
     dispose() {

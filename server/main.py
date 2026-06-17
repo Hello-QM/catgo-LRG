@@ -124,6 +124,7 @@ from catgo.routers import (
     campaign_router,
     tool_bridge_router,
     plugins_router,
+    terminal_bridge_router,
 )
 
 # THIN-SKIP routers — heavy domain builders/analysis (pymatgen/ase/etc).
@@ -561,6 +562,7 @@ app.include_router(pty_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(structure_ops_router, prefix="/api")
 app.include_router(view_capture_router, prefix="/api")
+app.include_router(terminal_bridge_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(tool_bridge_router, prefix="/api")
 app.include_router(system_router, prefix="/api")

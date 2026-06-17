@@ -6,6 +6,8 @@
   import { fetchAvailableShells, type ShellInfo } from '$lib/api/pty'
   import { hpc_session_store, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
   import { terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
+  import { t } from '$lib/i18n/index.svelte'
+  import ConnectDialog from '$lib/ConnectDialog.svelte'
 
   let {
     initial_session_id,
@@ -14,6 +16,7 @@
     initial_sync_cwd = false,
     onclose,
     onpopout,
+    on_ask_catbot,
     on_open_file,
   }: {
     /** Pre-fill the first tab with a remote session. */
@@ -24,6 +27,7 @@
     initial_sync_cwd?: boolean
     onclose?: () => void
     onpopout?: () => void
+    on_ask_catbot?: () => void
     /** Callback when user Ctrl+clicks a file path in the terminal output. */
     on_open_file?: (file_path: string) => void
   } = $props()
@@ -106,12 +110,6 @@
     username?: string
     shell?: string
     sync_cwd: boolean
-    split: `none` | `horizontal` | `vertical`
-    split_session_id?: string
-    split_host?: string
-    split_username?: string
-    split_shell?: string
-    split_label?: string
   }
 
   let _tab_counter = 0
@@ -127,7 +125,6 @@
       username: s?.username,
       shell: s?.shell,
       sync_cwd: !!s?.session_id, // Auto-enable CWD sync for remote terminals
-      split: `none`,
     }
   }
 
@@ -144,7 +141,6 @@
         host: initial_host,
         username: initial_username,
         sync_cwd: initial_sync_cwd || !!initial_session_id, // Auto-enable for remote
-        split: `none`,
       }
       tabs = [first]
       active_tab_id = first.id
@@ -156,6 +152,7 @@
   // ====== New tab dropdown ======
 
   let show_new_menu = $state(false)
+  let show_connect_dialog = $state(false)
 
   function add_tab(server?: ServerOption) {
     const tab = make_tab(server)
@@ -177,41 +174,10 @@
     }
   }
 
-  // ====== Split management ======
-
-  let show_split_menu = $state(false)
-
-  function split_tab(direction: `horizontal` | `vertical`, server?: ServerOption) {
-    const tab = tabs.find((t) => t.id === active_tab_id)
-    if (!tab || tab.split !== `none`) return
-    const s = server || { label: tab.label, session_id: tab.session_id, host: tab.host, username: tab.username, shell: tab.shell }
-    tab.split = direction
-    tab.split_session_id = s.session_id
-    tab.split_host = s.host
-    tab.split_username = s.username
-    tab.split_shell = s.shell
-    tab.split_label = s.label
-    tabs = [...tabs]
-    show_split_menu = false
-  }
-
-  function unsplit_tab() {
-    const tab = tabs.find((t) => t.id === active_tab_id)
-    if (!tab) return
-    tab.split = `none`
-    tab.split_session_id = undefined
-    tab.split_host = undefined
-    tab.split_username = undefined
-    tab.split_shell = undefined
-    tab.split_label = undefined
-    tabs = [...tabs]
-  }
-
   let show_font_menu = $state(false)
 
   function handle_global_click() {
     if (show_new_menu) show_new_menu = false
-    if (show_split_menu) show_split_menu = false
     if (show_font_menu) show_font_menu = false
   }
 </script>
@@ -246,7 +212,7 @@
       <button
         class="tw-icon-btn"
         title="New terminal tab"
-        onclick={(e) => { e.stopPropagation(); show_new_menu = !show_new_menu; show_split_menu = false }}
+        onclick={(e) => { e.stopPropagation(); show_new_menu = !show_new_menu }}
       >+</button>
       {#if show_new_menu}
         {@const local_options = servers.filter((s) => !s.session_id)}
@@ -273,44 +239,14 @@
           {#if servers_loading}
             <div class="tw-dropdown-note">Loading...</div>
           {/if}
+          <div class="tw-dropdown-divider"></div>
+          <button class="tw-dropdown-item" onclick={(e) => { e.stopPropagation(); show_connect_dialog = true; show_new_menu = false }}>
+            <span class="tw-dropdown-icon">🔗</span>
+            {t('app.connect_new_cluster')}
+          </button>
           <button class="tw-dropdown-item tw-dropdown-refresh" onclick={(e) => { e.stopPropagation(); refresh_servers() }}>
             ↻ Refresh
           </button>
-        </div>
-      {/if}
-    </div>
-
-    <!-- Split button with dropdown -->
-    <div class="tw-dropdown-wrap">
-      <button
-        class="tw-icon-btn"
-        title={active_tab?.split !== `none` ? `Unsplit pane` : `Split pane`}
-        onclick={(e) => {
-          e.stopPropagation()
-          if (active_tab?.split !== `none`) {
-            unsplit_tab()
-          } else {
-            show_split_menu = !show_split_menu
-            show_new_menu = false
-          }
-        }}
-      >{active_tab?.split !== `none` ? `▣` : `⊞`}</button>
-      {#if show_split_menu}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="tw-dropdown" onclick={(e) => e.stopPropagation()}>
-          <div class="tw-dropdown-header">Split Pane</div>
-          <div class="tw-dropdown-subheader">Direction</div>
-          {#each servers as server}
-            <button class="tw-dropdown-item" onclick={() => split_tab(`horizontal`, server)}>
-              ⬌ {server.label}
-            </button>
-          {/each}
-          <div class="tw-dropdown-divider"></div>
-          {#each servers as server}
-            <button class="tw-dropdown-item" onclick={() => split_tab(`vertical`, server)}>
-              ⬍ {server.label}
-            </button>
-          {/each}
         </div>
       {/if}
     </div>
@@ -322,7 +258,7 @@
         <button
           class="tw-icon-btn"
           title="Terminal font settings"
-          onclick={(e) => { e.stopPropagation(); show_font_menu = !show_font_menu; show_new_menu = false; show_split_menu = false }}
+          onclick={(e) => { e.stopPropagation(); show_font_menu = !show_font_menu; show_new_menu = false }}
         ><Icon icon="Settings" /></button>
         {#if show_font_menu}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -368,7 +304,7 @@
         {/if}
       </div>
 
-      {#if active_tab?.session_id}
+      {#if active_tab}
         <button
           class="tw-icon-btn tw-sync-btn"
           class:active={active_tab.sync_cwd}
@@ -376,6 +312,11 @@
           onclick={() => { if (active_tab) active_tab.sync_cwd = !active_tab.sync_cwd; tabs = [...tabs] }}
         >
           <Icon icon="Link" />
+        </button>
+      {/if}
+      {#if on_ask_catbot}
+        <button class="tw-icon-btn" title={t('app.ask_catbot')} onclick={on_ask_catbot}>
+          <Icon icon="Chat" />
         </button>
       {/if}
       {#if onpopout}
@@ -393,8 +334,6 @@
       <div
         class="tw-pane-container"
         class:active={active_tab_id === tab.id}
-        class:split-h={tab.split === `horizontal`}
-        class:split-v={tab.split === `vertical`}
       >
         <div class="tw-pane">
           <TerminalPanel
@@ -409,26 +348,14 @@
             {on_open_file}
           />
         </div>
-        {#if tab.split !== `none`}
-          <div class="tw-divider"></div>
-          <div class="tw-pane">
-            <TerminalPanel
-              session_id={tab?.split_session_id ?? ``}
-              host={tab?.split_host}
-              username={tab?.split_username}
-              shell={tab?.split_shell}
-              font_size={terminal_font_state.font_size}
-              font_family={terminal_font_state.font_family}
-              show_header={false}
-              bind:sync_cwd={tab.sync_cwd}
-              {on_open_file}
-            />
-          </div>
-        {/if}
       </div>
     {/each}
   </div>
 </div>
+
+<!-- Connect-new-cluster modal: on success it adds the session to the shared
+     hpc store, which the $effect above picks up to refresh the "+" Remote list. -->
+<ConnectDialog bind:show={show_connect_dialog} />
 
 <style>
   .tw {
@@ -681,36 +608,7 @@
   }
   .tw-pane-container.active {
     display: flex;
-  }
-  /* Single pane */
-  .tw-pane-container:not(.split-h):not(.split-v) {
     flex-direction: column;
-  }
-  /* Horizontal split */
-  .tw-pane-container.split-h {
-    flex-direction: row;
-  }
-  .tw-pane-container.split-h > .tw-divider {
-    width: 3px;
-    background: var(--border-color, rgba(0, 0, 0, 0.1));
-    cursor: col-resize;
-    flex-shrink: 0;
-  }
-  .tw-pane-container.split-h > .tw-divider:hover {
-    background: rgba(59, 130, 246, 0.3);
-  }
-  /* Vertical split */
-  .tw-pane-container.split-v {
-    flex-direction: column;
-  }
-  .tw-pane-container.split-v > .tw-divider {
-    height: 3px;
-    background: var(--border-color, rgba(0, 0, 0, 0.1));
-    cursor: row-resize;
-    flex-shrink: 0;
-  }
-  .tw-pane-container.split-v > .tw-divider:hover {
-    background: rgba(59, 130, 246, 0.3);
   }
 
   .tw-pane {

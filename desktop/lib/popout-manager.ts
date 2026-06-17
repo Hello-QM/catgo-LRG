@@ -7,6 +7,30 @@
 
 import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
+import { findLeafById, leaves, isTerminalLeaf, structurePane } from '../pane-tree'
+
+/**
+ * Open a FILE PATH in a new app window that loads/streams it there. Used for
+ * large trajectories (e.g. multi-GB AIMD .xyz) that can't be serialized into a
+ * structure popout — the new window re-streams the path via the backend.
+ */
+export async function open_path_in_new_window(path: string, filename: string, is_tauri: boolean) {
+  const url = `${window.location.origin}${window.location.pathname}#openpath?path=${encodeURIComponent(path)}&name=${encodeURIComponent(filename)}`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const win = new WebviewWindow(`openpath-${Date.now()}`, {
+        title: filename || `CatGo`,
+        url, width: 1000, height: 760, center: true, resizable: true, decorations: true,
+      })
+      win.once(`tauri://error`, () => {
+        window.open(url, `_blank`, `width=1000,height=760,resizable=yes`)
+      })
+      return
+    } catch {}
+  }
+  window.open(url, `_blank`, `width=1000,height=760,resizable=yes`)
+}
 
 /** Open a structure in a new popout window via localStorage transfer. */
 export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean) {
@@ -71,9 +95,13 @@ export function load_popout_structure(
     // Ensure a structure tab exists and load the data
     const ts = get_active_ts()
     if (ts) {
-      ts.panes[ts.active_pane].structure = structure
-      ts.panes[ts.active_pane].source_filename = filename
-      ts.panes[ts.active_pane].modified = false
+      const leaf = findLeafById(ts.root, ts.active_leaf_id) ?? leaves(ts.root)[0]
+      if (!leaf) return
+      const pane = structurePane(leaf)
+      if (!pane) return
+      pane.structure = structure
+      pane.source_filename = filename
+      pane.modified = false
       update_tab_label(active_tab_id)
     }
   } catch (e) {
@@ -84,13 +112,19 @@ export function load_popout_structure(
 /** Open a split-view pane in a new window. */
 export async function popout_pane(
   tab_id: string,
-  pane_idx: number,
+  leaf_id: string,
   tab_states: Record<string, StructureTabState>,
   is_tauri: boolean,
 ) {
   const ts = tab_states[tab_id]
   if (!ts) return
-  const pane = ts.panes[pane_idx]
+  const leaf = findLeafById(ts.root, leaf_id)
+  if (!leaf) return
+  const pane = structurePane(leaf)
+  if (!pane) {
+    if (isTerminalLeaf(leaf)) return // terminal popout handled by popout_terminal_leaf (Task 4)
+    return
+  }
 
   if (pane.mode === `workflow` && pane.workflow_id) {
     // Workflows have their own popout mechanism
@@ -132,6 +166,43 @@ export async function popout_workflow(
   }
   window.open(url, `workflow-editor`, `width=1400,height=900,resizable=yes`)
   close_tab(`workflow`); switch_to_structure()
+}
+
+/**
+ * Open a terminal *leaf*'s session in a new bare-terminal window. Unlike
+ * `popout_terminal` (which manages the top-level Terminal tab), this is a fire-and-
+ * forget popout for a pane-tree terminal leaf: it just opens the `#terminal` window
+ * with the session params. The caller removes the leaf from its source tree.
+ */
+export async function popout_terminal_session(
+  is_tauri: boolean,
+  terminal: { init_session_id?: string; init_host?: string; init_username?: string; init_sync_cwd: boolean },
+) {
+  const params = new URLSearchParams()
+  if (terminal.init_session_id) params.set(`session_id`, terminal.init_session_id)
+  if (terminal.init_host) params.set(`host`, terminal.init_host)
+  if (terminal.init_username) params.set(`username`, terminal.init_username)
+  if (terminal.init_sync_cwd) params.set(`sync_cwd`, `true`)
+  const qs = params.toString()
+  const url = `${window.location.origin}${window.location.pathname}#terminal${qs ? `?${qs}` : ``}`
+  const win_id = `terminal-${Date.now()}`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const term_window = new WebviewWindow(win_id, {
+        title: terminal.init_host ? `${terminal.init_username || ``}@${terminal.init_host}` : `CatGo - Terminal`,
+        url, width: 900, height: 600, center: true, resizable: true, decorations: true,
+      })
+      term_window.once(`tauri://error`, (e) => {
+        console.error(`Terminal window error:`, e)
+        window.open(url, win_id, `width=900,height=600,resizable=yes`)
+      })
+      return
+    } catch (err) {
+      console.error(`Tauri WebviewWindow failed:`, err)
+    }
+  }
+  window.open(url, win_id, `width=900,height=600,resizable=yes`)
 }
 
 /** Open the terminal tab in a new window. */
