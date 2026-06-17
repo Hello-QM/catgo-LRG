@@ -144,6 +144,71 @@ export function build_bond_adjacency(
   return adj
 }
 
+export interface PolyhedraBondOptions {
+  center_elements?: string[] // force-include allow-list; bypasses anion + CN cap
+  min_coordination?: number // default 4
+  max_neighbors?: number // skip CN above this (e.g. CN-12); default 8
+  metals_only?: boolean // default true: only metal centers in auto mode
+  distance_factor?: number // trim vertices beyond min_bond*(1+factor); default 0.3
+}
+
+// Bond-graph coordination polyhedra. Vertices are bonded anion neighbours taken
+// straight from the rendered bond graph (positions already PBC-correct via
+// bond.pos), classified per-vertex by is_anion_vertex.
+export function compute_polyhedra_from_bonds(
+  structure: AnyStructure,
+  bonds: readonly BondPair[],
+  options: PolyhedraBondOptions = {},
+): PolyhedronData[] {
+  const {
+    center_elements = [],
+    min_coordination = 4,
+    max_neighbors = 8,
+    metals_only = true,
+  } = options
+  if (!structure?.sites?.length || bonds.length === 0) return []
+
+  const explicit = center_elements.length > 0
+  const allow = new Set(center_elements)
+  const adjacency = build_bond_adjacency(bonds)
+  const candidates: PolyhedronData[] = []
+
+  for (const [center_idx, neighbors] of adjacency) {
+    const c_element = get_site_element(structure, center_idx)
+    if (!c_element) continue
+    if (explicit) {
+      if (!allow.has(c_element)) continue
+    } else if (metals_only && !is_metal(c_element)) {
+      continue
+    }
+    const c_pos = structure.sites[center_idx]?.xyz
+    if (!c_pos) continue
+
+    const c_en = get_electronegativity(c_element)
+    const c_is_metal = is_metal(c_element)
+
+    const kept_idx: number[] = []
+    const kept_pos: number[][] = []
+    for (const n of neighbors) {
+      const n_el = get_site_element(structure, n.idx)
+      if (!explicit && !is_anion_vertex(c_en, c_is_metal, n_el, 0)) continue
+      kept_idx.push(n.idx)
+      kept_pos.push([n.pos[0], n.pos[1], n.pos[2]])
+    }
+    if (kept_idx.length < min_coordination) continue
+    if (!explicit && kept_idx.length > max_neighbors) continue
+
+    candidates.push({
+      center_idx,
+      center_element: c_element,
+      neighbor_indices: kept_idx,
+      vertices: kept_pos,
+    })
+  }
+
+  return candidates
+}
+
 // --- Fast polyhedra: distance cutoff + Crystal Toolkit electronegativity filter ---
 
 /**

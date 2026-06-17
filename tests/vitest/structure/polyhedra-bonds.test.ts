@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { build_bond_adjacency } from '$lib/structure/polyhedra'
-import type { BondPair, Vec3 } from '$lib/structure'
+import { build_bond_adjacency, compute_polyhedra_from_bonds } from '$lib/structure/polyhedra'
+import type { AnyStructure, BondPair, Site, Vec3 } from '$lib/structure'
 
 function bond(
   i: number,
@@ -37,5 +37,67 @@ describe(`build_bond_adjacency`, () => {
   it(`skips self-bonds`, () => {
     const adj = build_bond_adjacency([bond(0, 0, [0, 0, 0], [0, 0, 0])])
     expect(adj.get(0)).toBeUndefined()
+  })
+})
+
+function site(element: string, xyz: Vec3): Site {
+  return {
+    species: [{ element, occu: 1, oxidation_state: 0 }],
+    xyz,
+    abc: xyz,
+    label: element,
+    properties: {},
+  } as unknown as Site
+}
+
+function struct(sites: Site[]): AnyStructure {
+  return { sites } as unknown as AnyStructure
+}
+
+// Ti at origin (idx 0) octahedrally coordinated by 6 O at ±2 Å (idx 1..6)
+const OCTA_OFFSETS: Vec3[] = [
+  [2, 0, 0], [-2, 0, 0], [0, 2, 0], [0, -2, 0], [0, 0, 2], [0, 0, -2],
+]
+function octahedron_sites(): Site[] {
+  return [site(`Ti`, [0, 0, 0]), ...OCTA_OFFSETS.map((o) => site(`O`, o))]
+}
+function octahedron_bonds(): BondPair[] {
+  return OCTA_OFFSETS.map((o, k) => bond(0, k + 1, [0, 0, 0], o))
+}
+
+describe(`compute_polyhedra_from_bonds — core`, () => {
+  it(`forms one CN-6 octahedron around a metal center`, () => {
+    const polys = compute_polyhedra_from_bonds(
+      struct(octahedron_sites()),
+      octahedron_bonds(),
+    )
+    expect(polys).toHaveLength(1)
+    expect(polys[0].center_element).toBe(`Ti`)
+    expect(polys[0].center_idx).toBe(0)
+    expect(polys[0].neighbor_indices).toHaveLength(6)
+  })
+
+  it(`keeps the polyhedron when one neighbour is non-anion (per-vertex, not per-poly veto)`, () => {
+    // add a 7th neighbour Na (idx 7) bonded to Ti — non-anion, dropped per-vertex
+    const sites = [...octahedron_sites(), site(`Na`, [3, 0, 0])]
+    const bonds = [...octahedron_bonds(), bond(0, 7, [0, 0, 0], [3, 0, 0])]
+    const polys = compute_polyhedra_from_bonds(struct(sites), bonds)
+    expect(polys).toHaveLength(1)
+    expect(polys[0].neighbor_indices).toHaveLength(6) // Na excluded, 6 O kept
+  })
+
+  it(`drops centers below min_coordination`, () => {
+    const sites = [site(`Ti`, [0, 0, 0]), site(`O`, [2, 0, 0]), site(`O`, [0, 2, 0])]
+    const bonds = [bond(0, 1, [0, 0, 0], [2, 0, 0]), bond(0, 2, [0, 0, 0], [0, 2, 0])]
+    expect(compute_polyhedra_from_bonds(struct(sites), bonds)).toHaveLength(0) // CN 2 < 4
+  })
+
+  it(`closes across PBC using image positions carried on the bond`, () => {
+    // Ti at a corner; 6 O reached only via image bonds (pos_2 already image-shifted)
+    const polys = compute_polyhedra_from_bonds(
+      struct(octahedron_sites()),
+      OCTA_OFFSETS.map((o, k) => bond(0, k + 1, [0, 0, 0], o, [1, 0, 0])),
+    )
+    expect(polys[0].neighbor_indices).toHaveLength(6)
   })
 })
