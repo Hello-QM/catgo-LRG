@@ -40,13 +40,16 @@ function escape_re(s: string): string {
  * accumulated (ANSI-stripped) PTY text. Returns null until the END marker lands.
  * The echoed command can't false-match: its literal text is `%s_BEGIN` and the
  * marker there is quote-wrapped, never `MARKER_BEGIN` / `MARKER_END_<digits>`.
+ * The END match is newline-anchored (the real marker prints as `\n…_END_…`), so
+ * a command whose own output contains the token mid-line can't truncate capture.
+ * The per-call random marker makes deliberate collision near-impossible anyway.
  */
 export function extract_result(raw: string, marker: string): { output: string; exit_code: number | null } | null {
   const begin = `${marker}_BEGIN`
   const bi = raw.indexOf(begin)
   if (bi < 0) return null
   const after = raw.slice(bi + begin.length)
-  const m = after.match(new RegExp(`${escape_re(marker)}_END_(\\d+)`))
+  const m = after.match(new RegExp(`(?:^|\\n)${escape_re(marker)}_END_(\\d+)`))
   if (!m || m.index === undefined) return null
   const output = after.slice(0, m.index).replace(/^\n+/, '').replace(/\n+$/, '')
   return { output, exit_code: parseInt(m[1], 10) }

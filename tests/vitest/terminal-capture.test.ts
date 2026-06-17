@@ -46,6 +46,11 @@ describe('wrap_command / extract_result', () => {
     const raw = echo + `\n${marker}_BEGIN\n` + 'hi\n' + `\n${marker}_END_0\n`
     expect(extract_result(raw, marker)).toEqual({ output: 'hi', exit_code: 0 })
   })
+  it('ignores an END token that appears mid-line in command output', () => {
+    const marker = '__CATGO_5_mno__'
+    const raw = `\n${marker}_BEGIN\n` + `prefix ${marker}_END_9 still going\n` + `\n${marker}_END_0\n`
+    expect(extract_result(raw, marker)).toEqual({ output: `prefix ${marker}_END_9 still going`, exit_code: 0 })
+  })
 })
 
 describe('resolve_keys', () => {
