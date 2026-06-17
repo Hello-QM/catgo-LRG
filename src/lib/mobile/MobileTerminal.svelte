@@ -306,7 +306,8 @@
           write: (text) => {
             if (!channel_id) return
             kb_ctrl_armed = false
-            transport.ptyWrite(session_id, channel_id, encoder.encode(text)).catch(() => {})
+            transport.ptyWrite(session_id, channel_id, encoder.encode(text))
+              .then(() => note_write(true), () => note_write(false))
           },
         })
         ime_ac = new AbortController()
@@ -347,7 +348,8 @@
               const out = `\x7f`.repeat(backspaces) + send
               ime_log(`dictation reconcile`, `bs=${backspaces}`, JSON.stringify(send))
               if (out && channel_id) {
-                transport.ptyWrite(session_id, channel_id, encoder.encode(out)).catch(() => {})
+                transport.ptyWrite(session_id, channel_id, encoder.encode(out))
+                  .then(() => note_write(true), () => note_write(false))
               }
               dict_drop_echo = true // xterm will still echo `data`; drop it in onData
               return
