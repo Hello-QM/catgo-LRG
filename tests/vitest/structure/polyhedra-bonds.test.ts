@@ -101,3 +101,14 @@ describe(`compute_polyhedra_from_bonds — core`, () => {
     expect(polys[0].neighbor_indices).toHaveLength(6)
   })
 })
+
+describe(`compute_polyhedra_from_bonds — distance trim`, () => {
+  it(`trims an over-long 7th bond relative to the shortest`, () => {
+    // 6 O at 2 Å + 1 O at 3.5 Å (idx 7); factor 0.3 -> cutoff 2.6, so the long one drops
+    const sites = [...octahedron_sites(), site(`O`, [3.5, 0, 0])]
+    const bonds = [...octahedron_bonds(), bond(0, 7, [0, 0, 0], [3.5, 0, 0])]
+    const polys = compute_polyhedra_from_bonds(struct(sites), bonds)
+    expect(polys[0].neighbor_indices).toHaveLength(6)
+    expect(polys[0].neighbor_indices).not.toContain(7)
+  })
+})

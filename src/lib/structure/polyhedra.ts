@@ -165,6 +165,7 @@ export function compute_polyhedra_from_bonds(
     min_coordination = 4,
     max_neighbors = 8,
     metals_only = true,
+    distance_factor = 0.3,
   } = options
   if (!structure?.sites?.length || bonds.length === 0) return []
 
@@ -187,22 +188,31 @@ export function compute_polyhedra_from_bonds(
     const c_en = get_electronegativity(c_element)
     const c_is_metal = is_metal(c_element)
 
-    const kept_idx: number[] = []
-    const kept_pos: number[][] = []
+    // collect anion vertices with distances
+    const vtx: { idx: number; pos: Vec3; dist: number }[] = []
+    let min_dist = Infinity
     for (const n of neighbors) {
       const n_el = get_site_element(structure, n.idx)
       if (!explicit && !is_anion_vertex(c_en, c_is_metal, n_el, 0)) continue
-      kept_idx.push(n.idx)
-      kept_pos.push([n.pos[0], n.pos[1], n.pos[2]])
+      const dist = Math.hypot(
+        n.pos[0] - c_pos[0], n.pos[1] - c_pos[1], n.pos[2] - c_pos[2],
+      )
+      vtx.push({ idx: n.idx, pos: n.pos, dist })
+      if (dist < min_dist) min_dist = dist
     }
-    if (kept_idx.length < min_coordination) continue
-    if (!explicit && kept_idx.length > max_neighbors) continue
+    if (vtx.length < min_coordination) continue
+
+    // VESTA-like local cutoff: drop bonds far longer than the shortest kept bond
+    const cutoff = min_dist * (1 + distance_factor)
+    const kept = vtx.filter((v) => v.dist <= cutoff)
+    if (kept.length < min_coordination) continue
+    if (!explicit && kept.length > max_neighbors) continue
 
     candidates.push({
       center_idx,
       center_element: c_element,
-      neighbor_indices: kept_idx,
-      vertices: kept_pos,
+      neighbor_indices: kept.map((v) => v.idx),
+      vertices: kept.map((v) => [v.pos[0], v.pos[1], v.pos[2]]),
     })
   }
 
