@@ -400,6 +400,30 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
       untrack(() => fetch_backend_sessions())
     }
   })
+
+  // Auto-restore the most recent API (client-direct) session on first load so a
+  // reload doesn't lose the conversation. SDK chats are resumed manually from
+  // the Sessions tab (their session id is backend-managed). Runs once, and only
+  // into an empty chat (never clobbers an in-progress conversation).
+  const SDK_AGENT_NAMES = new Set([`claude`, `codex`, `gemini`])
+  let _restored_api = false
+  $effect(() => {
+    if (_restored_api) return
+    if (!is_client_direct(chat_config)) return
+    _restored_api = true
+    const slice = get_chat_slice(tab_slice_id)
+    if (slice.messages.list.length > 0 || slice.local_session_id.value) return
+    const newest = untrack(() => session_list.list)
+      .filter((s) => !SDK_AGENT_NAMES.has(s.agent))
+      .sort((a, b) => b.last_active - a.last_active)[0]
+    if (!newest) return
+    const msgs = load_session_messages(newest.session_id)
+    if (msgs.length > 0) {
+      slice.messages.list = msgs
+      slice.local_session_id.value = newest.session_id
+      agent_sessions[newest.agent] = newest.session_id
+    }
+  })
   let textarea_el: HTMLTextAreaElement | undefined = $state(undefined)
   let copied_idx: number | null = $state(null)
   let file_input_el: HTMLInputElement | undefined = $state(undefined)
