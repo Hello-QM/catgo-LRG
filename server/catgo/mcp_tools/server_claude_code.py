@@ -684,6 +684,39 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_terminal",
+        description=(
+            "Operate the user's VISIBLE terminal pane (local or HPC) — the same one "
+            "they see on screen, with its own cwd / env / SSH session. Each "
+            "run/send_keys/interrupt asks the user to approve in the app. Prefer "
+            "'run' for non-interactive commands; 'send_keys' to answer a prompt or "
+            "drive a TUI; 'read' to inspect the current buffer (no approval). Output "
+            "reflects the visible terminal, NOT your own agent shell."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["read", "run", "send_keys", "interrupt"],
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to run (action=run).",
+                },
+                "keys": {
+                    "type": "string",
+                    "description": "Keys to send (action=send_keys), e.g. 'y<enter>', '<c-c>'.",
+                },
+                "lines": {
+                    "type": "number",
+                    "description": "Trailing lines to read (action=read, default 40).",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
         name="catgo_validate_config",
         description=(
             "Validate the user's VASP/HPC cluster configuration against the LIVE "
@@ -2114,6 +2147,36 @@ async def _handle_campaign(args: dict) -> list[TextContent]:
         return [TextContent(type="text", text=f"[catgo campaign {action}] still running after 300s — check the campaign folder / poll later.")]
     except Exception as e:  # noqa: BLE001 — surface any launcher error to the agent
         return [TextContent(type="text", text=f"[catgo campaign {action}] error: {e}")]
+
+
+async def _handle_terminal(args: dict) -> list[TextContent]:
+    """Drive the renderer's visible terminal via the terminal_bridge round-trip."""
+    from catgo.routers.terminal_bridge import request_terminal  # in-process; no self-HTTP
+
+    action = str(args.get("action") or "").strip()
+    if action not in {"read", "run", "send_keys", "interrupt"}:
+        return [TextContent(type="text", text="error: action must be read|run|send_keys|interrupt")]
+    payload: dict = {}
+    if action == "run":
+        payload["command"] = str(args.get("command") or "")
+    elif action == "send_keys":
+        payload["keys"] = str(args.get("keys") or "")
+    elif action == "read":
+        payload["lines"] = int(args.get("lines") or 40)
+    res = await request_terminal(action, payload)
+    if res.get("error"):
+        return [TextContent(type="text", text=f"[terminal] {res['error']}")]
+    if res.get("denied"):
+        return [TextContent(type="text", text="[terminal] the user denied this command.")]
+    body = res.get("output", "")
+    if res.get("exit_code") is not None:
+        tail = f"\n(exit {res['exit_code']})"
+    elif res.get("running"):
+        tail = "\n(still running — read or send_keys to continue)"
+    else:
+        tail = ""
+    target = res.get("target", "?")
+    return [TextContent(type="text", text=f"[terminal:{action}] target={target}\n{body}{tail}".rstrip())]
 
 
 # ---------------------------------------------------------------------------
