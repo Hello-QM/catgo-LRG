@@ -44,7 +44,7 @@ export const TERMINAL_TOOLS: TerminalToolEntry[] = [
     def: {
       name: 'run_command',
       kind: 'mutate',
-      description: 'Run a non-interactive shell command in the active terminal pane and return its output + exit code. If output shows a prompt or `running` is true, the command may be waiting for input — use send_keys. Works for local and HPC terminals.',
+      description: 'Run a non-interactive shell command in the active terminal pane and return its output + exit code. If output shows a prompt or `running` is true, the command may be waiting for input — use send_keys. Works for local and HPC terminals. NOTE: inside tmux or a full-screen TUI (vim/less/htop), this cannot capture output — it returns a notice; drive those with send_keys (type the command + "<enter>") then read_terminal.',
       input_schema: {
         type: 'object',
         properties: { command: { type: 'string', description: 'The shell command to run.' } },

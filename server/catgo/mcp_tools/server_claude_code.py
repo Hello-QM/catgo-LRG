@@ -691,7 +691,10 @@ TOOLS = [
             "run/send_keys/interrupt asks the user to approve in the app. Prefer "
             "'run' for non-interactive commands; 'send_keys' to answer a prompt or "
             "drive a TUI; 'read' to inspect the current buffer (no approval). Output "
-            "reflects the visible terminal, NOT your own agent shell."
+            "reflects the visible terminal, NOT your own agent shell. If the terminal "
+            "is inside tmux or a full-screen app (vim/less/htop), 'run' cannot capture "
+            "output and returns a notice — drive it with 'send_keys' (type the command "
+            "+ '<enter>') then 'read'."
         ),
         inputSchema={
             "type": "object",

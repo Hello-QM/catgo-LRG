@@ -87,6 +87,15 @@
     const pty = pty_ref
     if (!pty) return { output: 'Terminal not ready.', exit_code: null, running: false }
     if (_run_busy) return { output: 'Terminal is busy running another command.', exit_code: null, running: false }
+    if (panel_is_alt_screen()) {
+      return {
+        output: 'The terminal is inside tmux or a full-screen app (alternate screen). '
+          + 'Command capture is unreliable here — use send_keys to type the command '
+          + 'followed by "<enter>", then read the terminal to see the result.',
+        exit_code: null,
+        running: true,
+      }
+    }
     _run_busy = true
     const marker = next_marker()
     const decoder = new TextDecoder()
@@ -123,6 +132,15 @@
 
   async function panel_interrupt(): Promise<void> {
     if (pty_ref) await pty_ref.write('\x03')
+  }
+
+  // True when the terminal is showing the alternate screen — i.e. a full-screen
+  // app owns the display: tmux, vim, less, htop, etc. Marker-based run_command
+  // is unreliable there (constant redraws garble the markers, and if the active
+  // pane runs an app the command text is typed INTO it), so run_command refuses
+  // and steers the caller to send_keys + read instead.
+  function panel_is_alt_screen(): boolean {
+    return term_ref?.buffer?.active?.type === 'alternate'
   }
 
   function panel_read_buffer(lines = 40): string {
