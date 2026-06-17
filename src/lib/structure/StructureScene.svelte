@@ -74,7 +74,7 @@
   import { get_orig_site_idx, type AtomPropertyColors } from './atom-properties'
   import CoordinationPolyhedra from './CoordinationPolyhedra.svelte'
   import {
-    compute_polyhedra_fast,
+    compute_polyhedra_from_bonds,
     merge_polyhedra_geometry,
     get_polyhedra_hidden_atoms,
     get_polyhedra_hidden_bond_keys,
@@ -2573,14 +2573,16 @@
     return out
   })
 
-  // --- Polyhedra computation (fast distance cutoff + electronegativity filter) ---
+  // --- Polyhedra computation (bond-graph: uses filtered_bond_pairs) ---
   let polyhedra_data = $derived.by(() => {
     if (!show_polyhedra || !structure?.sites) return []
     try {
-      return compute_polyhedra_fast(
-        structure, polyhedra_center_elements ?? [], polyhedra_min_coordination ?? 3,
-        polyhedra_metals_only ?? true, polyhedra_cutoff ?? 3.5, polyhedra_max_neighbors ?? 8,
-      )
+      return compute_polyhedra_from_bonds(structure, filtered_bond_pairs, {
+        center_elements: polyhedra_center_elements ?? [],
+        min_coordination: polyhedra_min_coordination ?? 4,
+        max_neighbors: polyhedra_max_neighbors ?? 8,
+        metals_only: polyhedra_metals_only ?? true,
+      })
     } catch (err) {
       console.warn(`[CatGo] Polyhedra computation failed:`, err)
       return []
