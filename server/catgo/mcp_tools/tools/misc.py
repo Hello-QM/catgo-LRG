@@ -164,7 +164,7 @@ TOOLS: list[dict] = [
                 "page": {"type": "integer", "default": 1, "description": "Page number for batch_results (default 1)."},
                 "params": {"type": "object", "description": "Node parameters (for set_params, add_node). For structure_input: pass mp_id (e.g. 'mp-825') to fetch a specific material instead of capturing the viewer."},
                 "category": {"type": "string", "description": "Filter category (for node_types)."},
-                "run_config": {"type": "object", "description": "HPC run config (for run). Keys: hpc_session_id, queue, nodes, ppn, walltime, modules, env_commands."},
+                "run_config": {"type": "object", "description": "HPC run config (for run). Accepts hpc_session_id/default_session_id, queue/partition, nodes, ppn/cpus_per_task, ntasks, walltime, memory, account, modules/module_loads, env_commands/python_env."},
                 "operations": {
                     "type": "array",
                     "description": "Array of operations for batch action.",

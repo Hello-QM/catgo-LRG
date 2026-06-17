@@ -15,5 +15,13 @@
 	     Required when CFBundleDocumentTypes is declared (ITMS-90737). -->
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+
+	<!-- Chat voice input (tauri-plugin-ios-speech). iOS needs BOTH: the mic key
+	     for AVAudioEngine capture, the speech key for SFSpeechRecognizer. Omit
+	     either and the OS silently blocks dictation — no prompt, no transcript. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CatGo uses the microphone so you can dictate chat messages to the AI assistant.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>CatGo transcribes your speech on-device to type chat messages for you.</string>
 </dict>
 </plist>

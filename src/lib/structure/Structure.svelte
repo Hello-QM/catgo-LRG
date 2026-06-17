@@ -4,6 +4,7 @@
   import { ContextMenu, Icon, Spinner, toggle_fullscreen } from '$lib'
   import { type ColorSchemeName, element_color_schemes } from '$lib/colors'
   import { decompress_file, load_from_url, check_tauri } from '$lib/io'
+  import { download } from '$lib/io/fetch'
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import { API_BASE } from '$lib/api/config'
@@ -840,6 +841,7 @@
     on_open_file_overlay,
     on_open_terminal,
     on_open_workflow_editor,
+    on_open_in_molstar,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -985,6 +987,9 @@
       }) => void
       // Callback to open a workflow in the full editor. Receives workflow_id.
       on_open_workflow_editor?: (workflow_id: string) => void
+      // Callback to open the current structure in the Mol* bio viewer. When provided,
+      // a DNA toolbar button is shown (used by the desktop multi-pane host).
+      on_open_in_molstar?: () => void
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -1393,6 +1398,8 @@
   })
   let dos_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let dos_plot_ref: DosPlot | undefined = $state()
+  let dos_export_status: string | null = $state(null)
+  let dos_exporting: string | null = $state(null)
   let show_dos_panel = $derived(dos_state.dos_result !== null)
   let dband_center_for_plot = $derived(
     dos_state.show_dband_line && typeof dos_state.dband_result?.center_rel === `number` &&
@@ -1419,6 +1426,8 @@
   })
   let band_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let band_plot_ref: BandPlot | undefined = $state()
+  let band_export_status: string | null = $state(null)
+  let band_exporting: string | null = $state(null)
   let show_band_panel = $derived(band_state.band_data !== null)
 
   // COHP analysis state
@@ -1446,7 +1455,69 @@
   })
   let cohp_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let cohp_plot_ref: CohpPlot | undefined = $state()
+  let cohp_export_status: string | null = $state(null)
+  let cohp_exporting: string | null = $state(null)
   let show_cohp_panel = $derived(cohp_state.cohp_result !== null)
+
+  // Number of open electronic plots (DOS / COHP / Band) sharing the dos-split grid.
+  // They stack beside (or below) the structure; this count drives the grid track count.
+  let electronic_plot_count = $derived(
+    (show_dos_panel ? 1 : 0) + (show_cohp_panel ? 1 : 0) + (show_band_panel ? 1 : 0),
+  )
+  // Whichever electronic panel is open picks the split orientation (DOS > COHP > Band).
+  let electronic_split_layout = $derived(
+    show_dos_panel ? dos_layout : show_cohp_panel ? cohp_layout : band_layout,
+  )
+
+  type ElectronicPlotRef = DosPlot | CohpPlot | BandPlot
+  type ExportFormat = `png` | `svg` | `csv`
+
+  async function data_url_to_blob(data_url: string): Promise<Blob> {
+    const response = await fetch(data_url)
+    return response.blob()
+  }
+
+  async function export_electronic_plot(
+    plot_ref: ElectronicPlotRef | undefined,
+    format: ExportFormat,
+    base_name: string,
+    set_status: (value: string | null) => void,
+    set_exporting: (value: string | null) => void,
+  ) {
+    set_status(null)
+    if (!plot_ref) {
+      set_status(t(`structure.export_plot_loading`))
+      return
+    }
+    set_exporting(format)
+    try {
+      if (format === `csv`) {
+        const csv = plot_ref.export_csv()
+        if (!csv) {
+          set_status(t(`structure.export_no_plot_data`))
+          return
+        }
+        const filename = `${base_name}_data.csv`
+        download(csv, filename, `text/csv;charset=utf-8`)
+        set_status(t(`structure.export_started`, { filename }))
+        return
+      }
+
+      const url = await plot_ref.export_image(format)
+      if (!url) {
+        set_status(t(`structure.export_plot_not_ready`))
+        return
+      }
+      const filename = `${base_name}_plot.${format}`
+      download(await data_url_to_blob(url), filename, format === `svg` ? `image/svg+xml` : `image/png`)
+      set_status(t(`structure.export_started`, { filename }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set_status(t(`structure.export_failed`, { what: format.toUpperCase(), message }))
+    } finally {
+      set_exporting(null)
+    }
+  }
   let workflow_pane_open = $state(false)  // Workflow pane
   let slow_growth_pane_open = $state(false)  // Slow-growth post-processing
   let io_pane_open = $state(false)  // IO (import/export) pane
@@ -1624,6 +1695,14 @@
   let preview_filename = $state(``)
   let preview_file_path = $state(``)
   let preview_session_id = $state(``)
+
+  // True when a chat or side (terminal/editor/preview) panel is open and therefore
+  // owns the grid-template (an earlier branch in the inline grid-template ternary
+  // fires). The electronic-plot grid-template must only apply when this is false,
+  // otherwise it would clobber the chat/side layout (e.g. chat-bottom + a DOS panel).
+  let chat_side_owns_grid = $derived(
+    chat_pane_open || show_editor || show_preview,
+  )
 
   // --- Remote structure origin (for push-back) --- (now a $bindable prop, see props block)
 
@@ -2907,9 +2986,9 @@
   class:xrd-split={xrd.show_panel}
   class:xrd-horizontal={xrd.show_panel && xrd.layout === `horizontal`}
   class:xrd-vertical={xrd.show_panel && xrd.layout === `vertical`}
-  class:dos-split={show_dos_panel || show_cohp_panel}
-  class:dos-horizontal={(show_dos_panel || show_cohp_panel) && (show_dos_panel ? dos_layout : cohp_layout) === `horizontal`}
-  class:dos-vertical={(show_dos_panel || show_cohp_panel) && (show_dos_panel ? dos_layout : cohp_layout) === `vertical`}
+  class:dos-split={show_dos_panel || show_cohp_panel || show_band_panel}
+  class:dos-horizontal={(show_dos_panel || show_cohp_panel || show_band_panel) && electronic_split_layout === `horizontal`}
+  class:dos-vertical={(show_dos_panel || show_cohp_panel || show_band_panel) && electronic_split_layout === `vertical`}
   class:slice-split={show_slice_panel}
   class:slice-horizontal={show_slice_panel && slice_layout === `horizontal`}
   class:slice-vertical={show_slice_panel && slice_layout === `vertical`}
@@ -2925,14 +3004,22 @@
       ? side_panel_minimized ? `1fr 0px 28px` : `1fr 4px ${side_panel_size}%`
       : chat_pane_open && chat_position.value === `right`
         ? `1fr 5px minmax(280px, ${chat_panel_size}%)`
-        : undefined}
+        : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `horizontal`
+          ? `1fr 1fr`
+          : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `vertical`
+            ? `1fr`
+            : undefined}
   style:grid-template-rows={chat_pane_open && chat_position.value === `bottom` && !(show_editor || show_preview)
       ? `1fr 5px ${chat_bottom_size}%`
       : chat_pane_open && chat_position.value === `bottom` && (show_editor || show_preview) && !side_panel_minimized
         ? `1fr 5px ${chat_bottom_size}%`
         : chat_pane_open && chat_position.value === `right` && (show_editor || show_preview) && !side_panel_minimized
           ? `1fr 1fr`
-          : undefined}
+          : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `horizontal`
+            ? `repeat(${electronic_plot_count}, 1fr)`
+            : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `vertical`
+              ? `1fr repeat(${electronic_plot_count}, 1fr)`
+              : undefined}
 >
   <div class="structure-main">
   <!-- Box selection overlay - uses transform for GPU-accelerated positioning -->
@@ -3012,6 +3099,7 @@
       {remote_origin}
       {structure}
       on_upload_to_hpc={() => { hpc_upload_open = true }}
+      {on_open_in_molstar}
       {molecular_fragments}
       {reset_text}
       {wrapper}
@@ -4738,9 +4826,9 @@
           >
             {dos_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (dos_plot_ref) { const url = await dos_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `dos_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (dos_plot_ref) { const url = await dos_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `dos_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (dos_plot_ref) { const csv = dos_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `dos_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `png`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `svg`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `csv`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: `DOS` })}
@@ -4749,6 +4837,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if dos_export_status}
+          <div class="dos-export-status">{dos_export_status}</div>
+        {/if}
         <DosPlot
           bind:this={dos_plot_ref}
           grid={dos_state.dos_result.grid}
@@ -4841,9 +4932,9 @@
           >
             {cohp_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (cohp_plot_ref) { const url = await cohp_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `cohp_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (cohp_plot_ref) { const url = await cohp_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `cohp_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (cohp_plot_ref) { const csv = cohp_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `cohp_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `png`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `svg`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `csv`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: `COHP` })}
@@ -4852,6 +4943,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if cohp_export_status}
+          <div class="dos-export-status">{cohp_export_status}</div>
+        {/if}
         <CohpPlot
           bind:this={cohp_plot_ref}
           energies={cohp_state.cohp_result.energies}
@@ -4892,9 +4986,9 @@
           >
             {band_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (band_plot_ref) { const url = await band_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `band_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (band_plot_ref) { const url = await band_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `band_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (band_plot_ref) { const csv = band_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `band_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `png`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `svg`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `csv`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: t(`structure.bands`) })}
@@ -4903,6 +4997,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if band_export_status}
+          <div class="dos-export-status">{band_export_status}</div>
+        {/if}
         <BandPlot
           bind:this={band_plot_ref}
           distance={band_state.band_data.distance}
@@ -5057,6 +5154,25 @@
     min-height: 0;
     min-width: 0;
   }
+  /* Electronic plots (DOS / COHP / Band) stack beside the structure.
+     The grid-template tracks are set inline (one row per open plot); these
+     rules pin the structure to one track and flow the plots into the other. */
+  /* Horizontal: structure on the left spanning all rows, plots stacked in col 2 */
+  .structure.dos-split.dos-horizontal > .structure-main {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .structure.dos-split.dos-horizontal > .dos-panel {
+    grid-column: 2;
+  }
+  /* Vertical: structure on top (row 1), plots stacked below in col 1 */
+  .structure.dos-split.dos-vertical > .structure-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .structure.dos-split.dos-vertical > .dos-panel {
+    grid-column: 1;
+  }
   /* Chat split-view grid layout */
   .structure.chat-split {
     display: grid;
@@ -5151,12 +5267,32 @@
     font-size: 0.75em;
   }
   .dos-layout-btn:hover, .dos-export-btn:hover { background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15)); }
+  .dos-export-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
   .dos-close-btn { color: var(--error-color, #f55); }
   .dos-close-btn:hover { background: rgba(255, 60, 60, 0.2); }
   .dos-plot-area {
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
+  }
+  .dos-export-status {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    max-width: min(360px, calc(100% - 16px));
+    padding: 5px 8px;
+    border: 1px solid light-dark(rgba(37, 99, 235, 0.3), rgba(125, 211, 252, 0.35));
+    border-radius: 4px;
+    background: light-dark(rgba(239, 246, 255, 0.95), rgba(12, 39, 64, 0.9));
+    color: light-dark(#1d4ed8, #bfdbfe);
+    font-size: 0.75em;
+    line-height: 1.35;
+    pointer-events: none;
   }
 
   /* Electronic sub-tabs (DOS / COHP) inside Analysis pane */

@@ -24,16 +24,17 @@
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import Icon from '$lib/Icon.svelte'
-  import { get_display_text } from '$lib/chat/types'
+  import { get_display_text, SDK_PROVIDERS } from '$lib/chat/types'
   import {
     cancel_generation,
     chat_config,
     get_chat_slice,
     send_message,
     set_session_api_key,
+    update_config,
   } from '$lib/chat/chat-state.svelte'
   import type { PermissionEntry } from '$lib/chat/chat-state.svelte'
-  import { loadApiKey, redact } from './ai-keys'
+  import { loadApiKey, mobile_chat_providers, redact } from './ai-keys'
   import MobileChatSetup from './MobileChatSetup.svelte'
   import { build_structure_context } from '$lib/chat/context'
   import type { AnyStructure } from '$lib'
@@ -48,6 +49,18 @@
     switch_chat_tab,
   } from './chat-tabs.svelte'
   import { t } from '$lib/i18n/index.svelte'
+  import { isMobile } from '$lib/api/transport'
+  import {
+    load_voice_locale,
+    locale_label,
+    locale_short,
+    on_transcript,
+    request_speech_permission,
+    save_voice_locale,
+    start_listening,
+    stop_listening,
+    supported_locales,
+  } from './ios-speech'
 
   interface Props {
     /** Dismiss the overlay back to the workspace. */
@@ -90,6 +103,7 @@
       lp_fired = false // long-press already opened the sheet; swallow the click
       return
     }
+    setup_open = false // selecting a tab leaves settings → show that chat
     switch_chat_tab(id)
   }
   function sheet_close(): void {
@@ -97,6 +111,15 @@
       close_chat_tab(sheet_tab)
       sheet_tab = null
     }
+  }
+
+  // A provider persisted from a DESKTOP session may be an SDK agent (sdk-claude/
+  // codex/gemini). Those need the backend agent sidecar, which doesn't exist on
+  // mobile — selecting one would hang the chat on send (it tries to reach an
+  // absent 127.0.0.1 agent port). Reset to the first mobile-eligible provider so
+  // the setup card prompts for a real key-direct one. Runs once at mount.
+  if (SDK_PROVIDERS.has(chat_config.provider)) {
+    update_config({ provider: mobile_chat_providers()[0] ?? `gemini` })
   }
 
   // The current provider, read reactively off the persisted (non-secret) config.
@@ -219,7 +242,14 @@
   const configured = $derived(
     has_key || (key_optional && chat_config.base_url.trim().length > 0),
   )
-  const show_setup = $derived(setup_open || (key_checked && !configured))
+  // Force the setup card for a first-run, unconfigured chat (onboarding). But do
+  // NOT pin it once the chat has history — otherwise a returning user on an
+  // unconfigured provider is TRAPPED in settings (the gear toggle can't escape,
+  // since !configured keeps this true). With history, the gear controls setup and
+  // a failed send's error already points them at the key.
+  const show_setup = $derived(
+    setup_open || (key_checked && !configured && slice.messages.list.length === 0),
+  )
 
   // 401 / invalid-key detection on the slice error so we can offer a shortcut
   // back to setup without echoing the raw provider body (which might reflect the
@@ -278,6 +308,136 @@
     if (e.key === `Enter` && !e.shiftKey) {
       e.preventDefault()
       void send()
+    }
+  }
+
+  // ── Voice input (native iOS SFSpeechRecognizer via tauri-plugin-ios-speech) ──
+  // WebKit has no Web Speech API, so unlike the desktop ChatPane this does NOT
+  // use webkitSpeechRecognition — it bridges to the native plugin (see
+  // ios-speech.ts). Mic is offered only on the native shell; in a plain browser
+  // the plugin commands don't exist.
+  let mic_listening = $state(false)
+  // Guards toggle_mic against re-entry: a rapid double-tap could otherwise fire a
+  // new start_listening before the previous stop_listening IPC resolved, colliding
+  // two sessions at the native plugin.
+  let mic_busy = $state(false)
+  const mic_supported = isMobile()
+  // Whatever was already typed when dictation began. The recognizer streams the
+  // FULL running transcript each event (not deltas), so we render base + result
+  // — preserving text the user typed before tapping the mic.
+  let mic_base = ``
+  let mic_unlisten: (() => void) | null = null
+
+  // ── Voice language / accent ──
+  // Selected BCP-47 locale (`''` = device default). Switching to en-GB/en-IN/
+  // zh-CN/zh-TW/… swaps SFSpeechRecognizer's model, which is how accents and
+  // Chinese get picked up. `voice_locales` is the device-supported set (fetched
+  // once), so the picker never offers a locale that would fail at start.
+  let voice_locale = $state(load_voice_locale())
+  let voice_locales = $state<string[]>([])
+  let lang_sheet_open = $state(false)
+
+  // Fetch the device's supported locales once the mic is available. If the
+  // remembered choice isn't supported (different device), fall back to the
+  // device language, then en-US, then the first supported locale.
+  $effect(() => {
+    if (!mic_supported) return
+    supported_locales()
+      .then((list) => {
+        voice_locales = list
+        if (voice_locale && list.includes(voice_locale)) return
+        const fallback = list.find((c) => c === navigator.language) ??
+          list.find((c) => c === `en-US`) ?? list[0] ?? ``
+        voice_locale = fallback
+      })
+      .catch(() => {/* plugin unavailable — pill just shows the default */})
+  })
+
+  function pick_locale(code: string): void {
+    voice_locale = code
+    save_voice_locale(code)
+    lang_sheet_open = false
+  }
+
+  // On unmount: clear the transcript handler (IPC-free now — on_transcript's
+  // cleanup is just a reference swap) and stop the mic IF it's still recording.
+  // The listener teardown used to fire `remove_listener` invokes here, which
+  // wedged the WKWebView main thread and froze the app on every minimize.
+  $effect(() => () => {
+    if (mic_listening) void stop_listening().catch(() => {})
+    mic_unlisten?.()
+    mic_unlisten = null
+  })
+
+  // TODO(you): apply a streamed transcript to the composer.
+  //
+  // Called for every recognizer event: `text` is the FULL transcript so far,
+  // `is_final` is true once speech settles (silence) or stop_mic() is called.
+  // `mic_base` holds whatever was in the box before dictation started.
+  //
+  // Decisions this function encodes (this is the product call, not boilerplate):
+  //   1. Merge — replace the whole box, or append the transcript to `mic_base`
+  //      so pre-typed text survives? (The recognizer gives the full running
+  //      string each time, so set `input` outright — don't concatenate events.)
+  //   2. On `is_final` — keep the text in the box for the user to review/edit
+  //      and tap Send (safe: no mis-sends from a misheard word), OR auto-send
+  //      immediately (fast, hands-free, but a stray noise can fire a message)?
+  //      If you auto-send, also flip `mic_listening = false`.
+  //
+  // Keep it ~6-10 lines. Helpers in scope: `input` ($state, bound to the
+  // textarea), `mic_base`, `mic_listening` ($state), `send()`.
+  function apply_transcript(text: string, is_final: boolean): void {
+    // Preserve anything typed before the mic started. The recognizer streams the
+    // FULL running transcript each event, so set `input` outright — concatenating
+    // would duplicate ("show show the…"). Add a space only when joining onto
+    // existing text that doesn't already end in whitespace.
+    const sep = mic_base && !/\s$/.test(mic_base) ? ` ` : ``
+    input = mic_base + sep + text
+    // Review-before-send: leave the text in the box for the user to eyeball and
+    // tap Send. A misheard word must not auto-fire a message (which could run a
+    // viewer tool). `final` also means the session ended, so reset the button.
+    if (is_final) mic_listening = false
+  }
+
+  function on_mic_error(message: string): void {
+    slice.error.value = message
+    mic_listening = false
+  }
+
+  async function toggle_mic(): Promise<void> {
+    if (mic_busy) return // ignore taps while a start/stop IPC is in flight
+    mic_busy = true
+    try {
+      if (mic_listening) {
+        mic_listening = false
+        await stop_listening() // emits one last `final` → apply_transcript
+        return
+      }
+      const granted = await request_speech_permission()
+      if (!granted) {
+        slice.error.value = t(`mobile.ai_mic_denied`)
+        return
+      }
+      mic_base = input
+      // Subscribe before starting so no early partial is missed; reuse one set of
+      // listeners across sessions (re-tapping mic just re-arms start_listening).
+      if (!mic_unlisten) {
+        mic_unlisten = await on_transcript({
+          on_partial: (txt) => apply_transcript(txt, false),
+          on_final: (txt) => apply_transcript(txt, true),
+          on_error: on_mic_error,
+        })
+      }
+      mic_listening = true
+      await start_listening(voice_locale || undefined)
+    } catch (e) {
+      // A rejected invoke (e.g. start_listening for an unsupported locale, or a
+      // listener-registration failure) must surface as an error, not an unhandled
+      // rejection that hijacks the screen. Reset the button if a start failed.
+      mic_listening = false
+      slice.error.value = e instanceof Error ? e.message : t(`mobile.ai_mic_denied`)
+    } finally {
+      mic_busy = false
     }
   }
 
@@ -384,9 +544,11 @@
       <button
         type="button"
         class="ai-head-btn"
+        class:active={setup_open}
         aria-label={t(`mobile.ai_setup`)}
         title={t(`mobile.ai_setup`)}
-        onclick={() => (setup_open = true)}
+        aria-pressed={setup_open}
+        onclick={() => (setup_open = !setup_open)}
       ><Icon icon="Settings" /></button>
       <button
         type="button"
@@ -522,6 +684,24 @@
         bind:value={input}
         onkeydown={on_input_keydown}
       ></textarea>
+      {#if mic_supported}
+        {#if voice_locale}
+          <button
+            type="button"
+            class="ai-lang-pill"
+            aria-label={t(`mobile.ai_voice_language`)}
+            onclick={() => (lang_sheet_open = true)}
+          >{locale_short(voice_locale)}</button>
+        {/if}
+        <button
+          type="button"
+          class="ai-mic"
+          class:listening={mic_listening}
+          aria-label={t(`mobile.ai_voice_input`)}
+          aria-pressed={mic_listening}
+          onclick={toggle_mic}
+        ><Icon icon="Mic" /></button>
+      {/if}
       {#if slice.loading.value}
         <button
           type="button"
@@ -556,6 +736,46 @@
           {t(`mobile.ai_close_chat`)}
         </button>
         <button type="button" class="ai-sheet-btn" onclick={() => (sheet_tab = null)}>
+          {t(`common.cancel`)}
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  {#if lang_sheet_open}
+    <!-- Voice-language / accent picker. Only device-supported locales appear. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div
+      class="ai-sheet-backdrop"
+      role="presentation"
+      onclick={() => (lang_sheet_open = false)}
+    >
+      <div
+        class="ai-sheet"
+        role="dialog"
+        aria-modal="true"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+      >
+        <div class="ai-sheet-title">{t(`mobile.ai_voice_language`)}</div>
+        <div class="ai-lang-list">
+          {#each voice_locales as code (code)}
+            <button
+              type="button"
+              class="ai-sheet-btn ai-lang-row"
+              class:selected={code === voice_locale}
+              onclick={() => pick_locale(code)}
+            >
+              <span>{locale_label(code)}</span>
+              {#if code === voice_locale}<Icon icon="Check" />{/if}
+            </button>
+          {/each}
+        </div>
+        <button
+          type="button"
+          class="ai-sheet-btn"
+          onclick={() => (lang_sheet_open = false)}
+        >
           {t(`common.cancel`)}
         </button>
       </div>
@@ -596,6 +816,12 @@
     border: 1px solid transparent;
     border-radius: 8px;
     cursor: pointer;
+  }
+  /* Gear lights up while the settings card is open, so tapping it again to go
+     back to the chat reads as a toggle. */
+  .ai-head-btn.active {
+    color: var(--accent-color, #6366f1);
+    background: var(--surface-2, rgba(148, 163, 184, 0.12));
   }
   .ai-head-ctrls {
     display: flex;
@@ -697,6 +923,51 @@
   .ai-sheet-btn.danger {
     color: #ff6b6b;
     border-color: rgba(255, 107, 107, 0.5);
+  }
+  .ai-sheet-title {
+    padding: 4px 4px 8px;
+    font-size: 0.78em;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: var(--text-color-muted, #94a3b8);
+  }
+  /* Scrollable so a device with many supported locales doesn't overflow. */
+  .ai-lang-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 48vh;
+    overflow-y: auto;
+  }
+  .ai-lang-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px;
+    text-align: left;
+  }
+  .ai-lang-row.selected {
+    color: var(--accent-color, #0a84ff);
+    border-color: color-mix(in srgb, var(--accent-color, #0a84ff) 55%, transparent);
+  }
+  /* Compact accent/language pill in the composer (e.g. "EN-US"). */
+  .ai-lang-pill {
+    flex-shrink: 0;
+    height: 40px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--text-color-muted, #94a3b8);
+    background: var(--surface-2, rgba(148, 163, 184, 0.12));
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: transform 0.06s ease, color 0.12s ease;
+  }
+  .ai-lang-pill:active {
+    transform: scale(0.94);
   }
   .ai-setup-host {
     flex: 1;
@@ -878,7 +1149,10 @@
   }
   .ai-composer {
     display: flex;
-    align-items: flex-end;
+    /* Center so the language pill / mic / send sit level with the text box on a
+       single line (flex-end dropped the pill low). The textarea grows upward to
+       max-height for multi-line, keeping the controls vertically centered. */
+    align-items: center;
     gap: 8px;
     flex-shrink: 0;
     padding: 10px 12px;
@@ -950,6 +1224,39 @@
   }
   .ai-send.stop {
     background: #ff6b6b;
+  }
+  /* Mic: a neutral ghost circle that goes solid-red and pulses while listening,
+     so the recording state is unmistakable next to the accent Send button. */
+  .ai-mic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+    color: var(--text-color-muted, #94a3b8);
+    background: var(--surface-2, rgba(148, 163, 184, 0.12));
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.06s ease, background 0.12s ease, color 0.12s ease;
+  }
+  .ai-mic:active {
+    transform: scale(0.92);
+  }
+  .ai-mic.listening {
+    color: #fff;
+    background: #ff3b30;
+    animation: ai-mic-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes ai-mic-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.5);
+    }
+    50% {
+      box-shadow: 0 0 0 6px rgba(255, 59, 48, 0);
+    }
   }
   .ai-tool {
     margin: 2px 0;

@@ -252,6 +252,13 @@ export function connectHPC(
   config: HPCConnectionConfig,
   callbacks: HPCWSCallbacks,
 ): HPCWSConnection {
+  // Mobile has no Python backend, so this WebSocket would sit in SYN_SENT with
+  // no connect timeout and hang for minutes. Mobile uses transport.connect()
+  // (native SSH) instead — fail fast with an inert connection here.
+  if (isMobile()) {
+    callbacks.onError(`HPC WebSocket is unavailable on mobile (no backend)`)
+    return { submit_otp: () => {}, disconnect: () => {}, isConnected: () => false }
+  }
   const ws_url = `${WS_BASE}/hpc/connect`
   let ws: WebSocket | null = null
   let connected = false

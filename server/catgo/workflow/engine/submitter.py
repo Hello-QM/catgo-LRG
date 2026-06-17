@@ -300,7 +300,7 @@ async def _submit_one(
     job_script_param = params.get("job_script", "")
     has_placeholders = "{{" in job_script_param and "}}" in job_script_param
 
-    if job_script_param and "#SBATCH" in job_script_param and not has_placeholders:
+    if job_script_param and _has_scheduler_directives(job_script_param) and not has_placeholders:
         # Fully-substituted explicit script — pass through unchanged.
         job_script = job_script_param
     else:
@@ -312,7 +312,7 @@ async def _submit_one(
                 wf_config.get("job_script_template", "")
                 or wf_config.get("hpc", {}).get("job_script_template", "")
             )
-        if template_source and "#SBATCH" in template_source:
+        if template_source and _has_scheduler_directives(template_source):
             params_with_template = {**params, "job_script_template": template_source}
             params_with_template.pop("job_script", None)
             job_script = generate_job_script(engine_key, work_dir, task, params_with_template, config)
@@ -388,45 +388,119 @@ async def _submit_job(
 ) -> tuple[bool, str, str]:
     """Submit job to HPC scheduler. Returns (success, message, job_id).
 
-    If job_script contains #SBATCH, write it as submit.sh and sbatch directly.
-    Otherwise fall through to scheduler's auto-header generation.
+    If job_script contains scheduler directives, write it as submit.sh and submit
+    directly. Otherwise fall through to scheduler auto-header generation.
     """
-    if job_script and "#SBATCH" in job_script:
-        # Write complete script and submit via sbatch
+    directive_kind = _scheduler_directive_kind(job_script)
+    if directive_kind:
+        submit_cmd = _submit_command_for_script(hpc, directive_kind)
+        if not submit_cmd:
+            return (False, f"Unsupported scheduler directive: {directive_kind}", "")
+
         script_path = f"{work_dir}/submit.sh"
+        safe_script_path = shlex.quote(script_path)
+        safe_work_dir = shlex.quote(work_dir)
         await hpc.run_on_owner(lambda: hpc.conn.run(
-            f"cat > {script_path} << 'CATGO_EOF'\n{job_script}\nCATGO_EOF", check=True
+            f"cat > {safe_script_path} << 'CATGO_EOF'\n{job_script}\nCATGO_EOF", check=True
         ))
-        await hpc.run_on_owner(lambda: hpc.conn.run(f"chmod +x {script_path}", check=True))
+        await hpc.run_on_owner(lambda: hpc.conn.run(f"chmod +x {safe_script_path}", check=True))
         result = await hpc.run_on_owner(
-            lambda: hpc.conn.run(f"cd {work_dir} && sbatch submit.sh", check=False)
+            lambda: hpc.conn.run(f"cd {safe_work_dir} && {submit_cmd} submit.sh", check=False)
         )
         stdout = (result.stdout or "").strip() if hasattr(result, 'stdout') else str(result)
         stderr = (result.stderr or "").strip() if hasattr(result, 'stderr') else ""
-        # Parse job ID from "Submitted batch job 12345"
-        job_id = ""
-        for word in stdout.split():
-            if word.isdigit():
-                job_id = word
-                break
+        job_id = _parse_scheduler_job_id(stdout, directive_kind)
         if job_id:
             return (True, f"Job submitted: {job_id}", job_id)
-        # Include both stdout and stderr in the error message
         err_detail = stderr or stdout or "(no output)"
-        return (False, f"sbatch failed: {err_detail}", "")
-    else:
-        return await hpc.run_on_owner(lambda: hpc.scheduler.submit_job(
-            hpc.conn,
-            script_content=job_script or "",
-            job_name=f"catgo-{node_type}",
-            work_dir=work_dir,
-            partition=params.get("partition"),
-            nodes=params.get("nodes"),
-            ntasks=params.get("ntasks"),
-            cpus_per_task=params.get("cpus_per_task"),
-            time_limit=params.get("walltime"),
-            memory=params.get("memory"),
-        ))
+        return (False, f"{submit_cmd} failed: {err_detail}", "")
+
+    scheduler_params = _scheduler_submit_params(params, config)
+    return await hpc.run_on_owner(lambda: hpc.scheduler.submit_job(
+        hpc.conn,
+        script_content=job_script or "",
+        job_name=f"catgo-{node_type}",
+        work_dir=work_dir,
+        partition=scheduler_params["partition"],
+        nodes=scheduler_params["nodes"],
+        ntasks=scheduler_params["ntasks"],
+        cpus_per_task=scheduler_params["cpus_per_task"],
+        time_limit=scheduler_params["walltime"],
+        memory=scheduler_params["memory"],
+    ))
+
+
+def _has_scheduler_directives(job_script: str) -> bool:
+    return _scheduler_directive_kind(job_script) is not None
+
+
+def _scheduler_directive_kind(job_script: str) -> str | None:
+    if not job_script:
+        return None
+    has_slurm = "#SBATCH" in job_script
+    has_pbs = "#PBS" in job_script
+    if has_pbs and not has_slurm:
+        return "pbs"
+    if has_slurm and not has_pbs:
+        return "slurm"
+    if has_pbs and has_slurm:
+        return "mixed"
+    return None
+
+
+def _submit_command_for_script(hpc, directive_kind: str) -> str:
+    scheduler_name = hpc.scheduler.__class__.__name__.lower()
+    if directive_kind == "pbs":
+        return "qsub"
+    if directive_kind == "slurm":
+        return "sbatch"
+    if directive_kind == "mixed":
+        if "pbs" in scheduler_name:
+            return "qsub"
+        if "slurm" in scheduler_name:
+            return "sbatch"
+    return ""
+
+
+def _parse_scheduler_job_id(stdout: str, directive_kind: str) -> str:
+    if not stdout:
+        return ""
+    words = stdout.split()
+    if directive_kind == "pbs":
+        return words[0].strip() if words else ""
+
+    for word in reversed(words):
+        if word.isdigit():
+            return word
+    return ""
+
+
+def _scheduler_submit_params(params: dict, config: dict) -> dict:
+    """Merge task params with workflow job defaults for scheduler auto-headers."""
+    job_defaults = config.get("hpc", {}).get("job_defaults", {})
+
+    def _pick(*keys: str, fallback=None):
+        for source in (params, job_defaults):
+            for key in keys:
+                val = source.get(key)
+                if val is not None and val != "":
+                    return val
+        return fallback
+
+    def _as_int(value, fallback: int) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    return {
+        "partition": _pick("partition", "queue", fallback=None),
+        "nodes": _as_int(_pick("nodes", fallback=1), 1),
+        "ntasks": _as_int(_pick("ntasks", fallback=1), 1),
+        "cpus_per_task": _as_int(_pick("cpus_per_task", "ppn", fallback=1), 1),
+        "walltime": str(_pick("walltime", "time_limit", fallback="24:00:00")),
+        "memory": _pick("memory", fallback=None),
+    }
 
 
 # Recommended POTCAR variants (same as pymatgen defaults)

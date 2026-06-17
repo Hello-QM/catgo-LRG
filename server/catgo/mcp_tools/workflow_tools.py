@@ -1062,6 +1062,64 @@ _ACTION_REQUIRED: dict[str, list[str]] = {
 }
 
 
+def _normalize_run_config_aliases(user_config: dict) -> dict:
+    """Accept user-facing HPC aliases and emit WorkflowRunConfig fields."""
+    config = dict(user_config or {})
+    if not config:
+        return config
+
+    job_params = dict(config.get("default_job_params") or {})
+
+    session_id = config.pop("hpc_session_id", None) or config.pop("session_id", None)
+    if session_id and not config.get("default_session_id"):
+        config["default_session_id"] = session_id
+
+    alias_to_job_param = {
+        "nodes": "nodes",
+        "ntasks": "ntasks",
+        "ppn": "cpus_per_task",
+        "cpus_per_task": "cpus_per_task",
+        "walltime": "walltime",
+        "time_limit": "walltime",
+        "queue": "partition",
+        "partition": "partition",
+        "memory": "memory",
+        "account": "account",
+    }
+    for alias, target in alias_to_job_param.items():
+        if alias in config:
+            val = config.pop(alias)
+            if val is not None and val != "":
+                job_params[target] = val
+
+    if job_params:
+        config["default_job_params"] = job_params
+
+    module_loads = config.pop("modules", None) or config.pop("module_loads", None)
+    python_env = config.pop("env_commands", None) or config.pop("python_env", None)
+    active_session = config.get("default_session_id")
+    if active_session and (module_loads or python_env):
+        cluster_configs = dict(config.get("cluster_configs") or {})
+        cluster_cfg = dict(cluster_configs.get(active_session) or {})
+        if module_loads:
+            cluster_cfg["module_loads"] = module_loads
+        if python_env:
+            cluster_cfg["python_env"] = python_env
+        if job_params:
+            cluster_cfg["default_job_params"] = {
+                **dict(cluster_cfg.get("default_job_params") or {}),
+                **job_params,
+            }
+        cluster_configs[active_session] = cluster_cfg
+        config["cluster_configs"] = cluster_configs
+
+    hpc_markers = {"default_session_id", "default_job_params", "cluster_configs"}
+    if "execution_mode" not in config and any(k in config for k in hpc_markers):
+        config["execution_mode"] = "hpc"
+
+    return config
+
+
 async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
     """Handle all workflow operations via a single unified tool.
 
@@ -1822,7 +1880,7 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
                 ))]
 
             # Safety: require explicit run_config or confirm=true to prevent accidental execution
-            user_config = args.get("run_config") or args.get("params") or {}
+            user_config = _normalize_run_config_aliases(args.get("run_config") or args.get("params") or {})
             if not user_config and not args.get("confirm"):
                 return [_t(type="text", text=(
                     "\u26a0\ufe0f MCP `run` will IMMEDIATELY execute the workflow (not open a UI dialog). "
@@ -1861,7 +1919,7 @@ async def _handle_workflow(client: httpx.AsyncClient, args: dict) -> list[TextCo
             return [_t(type="text", text=f"Workflow {wf_id} paused. Use action='resume' to continue.")]
 
         if action == "resume":
-            user_config = args.get("run_config") or args.get("params") or {}
+            user_config = _normalize_run_config_aliases(args.get("run_config") or args.get("params") or {})
             config = {
                 "execution_mode": user_config.get("execution_mode", "local"),
                 "base_work_dir": user_config.get("base_work_dir", "~/calculations"),

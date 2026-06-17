@@ -85,6 +85,7 @@
     on_popout_chat = undefined as (() => void) | undefined,
     on_upload_to_hpc = undefined as (() => void) | undefined,
     on_open_terminal = undefined as (() => void) | undefined,
+    on_open_in_molstar = undefined as (() => void) | undefined,
 
     // ── 子组件 snippet (面板组件从 Structure.svelte 传入) ──
     children,
@@ -142,6 +143,7 @@
     // Open a terminal as a pane-tree leaf (desktop). Replaces the old
     // side-panel terminal toggle.
     on_open_terminal?: () => void
+    on_open_in_molstar?: () => void
 
     // 子组件 snippet
     children?: Snippet
@@ -465,6 +467,20 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.analysis_tools')}</span>
       </span>
+
+      {#if on_open_in_molstar}
+      <!-- === Open current structure in the Mol* bio viewer === -->
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          onclick={() => on_open_in_molstar?.()}
+          class="build-tools-toggle"
+        >
+          <Icon icon="Dna" />
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.bio_open_in_molstar')}</span>
+      </span>
+      {/if}
 
       {#if !hidden_toolbar_items.includes('workflow') && !STATIC_ONLY}
       <!-- === Workflow === -->

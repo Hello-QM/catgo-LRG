@@ -63,7 +63,8 @@ const mobile: Record<string, string> = {
   method_keyboard: `Keyboard-interactive`,
   field_password: `Password`,
   field_private_key_path: `Private key path`,
-  key_file_imported: `Selected private key: {name}. It will be used for this connection only and will not be saved.`,
+  key_file_imported:
+    `Selected private key: {name}. It will be used for this connection only and will not be saved.`,
   field_passphrase: `Passphrase (optional)`,
   keyboard_hint: `You'll be prompted for any codes after connecting.`,
   use_jump_host: `Use a jump host (ProxyJump)`,
@@ -162,6 +163,10 @@ const mobile: Record<string, string> = {
   ai_minimize: `Minimize`,
   ai_close_chat: `Close chat`,
   ai_stop: `Stop`,
+  ai_voice_input: `Voice input`,
+  ai_voice_language: `Voice language`,
+  ai_mic_denied:
+    `Microphone or speech access was denied. Enable it for CatGo in Settings → CatGo.`,
   ai_thinking: `Thinking…`,
   ai_empty: `Ask me anything about your structure or research.`,
   ai_no_key: `Add an API key to start chatting.`,

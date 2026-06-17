@@ -30,7 +30,11 @@ must not submit/cancel jobs or touch the :8000 backend.
 4. **Auto-advance each newly-converged calc to its NEXT plan step — per species, PIPELINE,
    not a barrier.** A converged geo_opt immediately triggers that species' next step (e.g.
    freq in a Gibbs study) from its CONTCAR; don't wait for siblings, don't wait for a user
-   reminder. Render next-step inputs → input-file gate → `submit_calc.py`.
+   reminder. Render next-step inputs → **input-file gate** → `submit_calc.py`.
+   **⛔ INPUT-FILE GATE (hard rule):** "auto-advance" means auto-PREP, NOT auto-submit. Sync the
+   converged CONTCAR **and** the next-step INCAR to the LOCAL folder, tell the user the exact LOCAL
+   paths of INCAR + CONTCAR, and WAIT — the user checks/edits the files on disk. Submit ONLY after
+   the user confirms. Do NOT push to the CatGO viewer as a substitute, and NEVER auto-submit. (YOLO waives.)
 5. Stage/decision point → `python aggregate.py --project <dir> --plot` → summary → checkpoint.
 6. Group meeting → `python make_report.py --project <dir> --occasion groupmeeting`.
 7. Unhandleable problem → write it to STATUS/LESSONS and stop (surface to the user).
