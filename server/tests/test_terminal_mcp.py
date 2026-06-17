@@ -2,10 +2,35 @@
 import asyncio
 
 from catgo.mcp_tools import server_claude_code as scc
+from catgo.routers import terminal_bridge as tb
 
 
 def _run(args):
     return asyncio.run(scc._handle_terminal(args))
+
+
+def test_handler_resolves_through_real_bridge():
+    """End-to-end backend round-trip: the MCP handler awaits the REAL
+    request_terminal, a (renderer-simulated) result POST resolves it."""
+    async def go():
+        handler_task = asyncio.ensure_future(
+            scc._handle_terminal({"action": "read", "lines": 10})
+        )
+        pending = []
+        for _ in range(20):
+            await asyncio.sleep(0)
+            pending = tb.list_pending()["pending"]
+            if pending:
+                break
+        assert len(pending) == 1
+        assert pending[0]["action"] == "read"
+        rid = pending[0]["request_id"]
+        tb.post_result({"request_id": rid, "output": "BUFFER_XYZ", "target": "local shell"})
+        return await handler_task
+
+    out = asyncio.run(go())
+    assert "BUFFER_XYZ" in out[0].text
+    assert "local shell" in out[0].text
 
 
 def test_bad_action_rejected():
