@@ -2094,6 +2094,16 @@
               show_controls={true}
               style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
             />
+          {:else if pane.initial_panel === `chat`}
+            <!-- Standalone CatBot pane (e.g. "Ask CatBot" from a terminal): no
+                 structure needed — the chat drives the active terminal via the
+                 global terminal registry. -->
+            <div class="pane-chat-fill">
+              <ChatPane
+                tab_id={tab.id}
+                on_close={() => { Object.assign(pane, create_empty_pane()); update_tab_label(tab.id) }}
+              />
+            </div>
           {:else}
             {@const is_primary = leaf.id === leaves(ts.root)[0].id}
             <div class="landing-page" class:secondary-pane={!is_primary} class:compact={leafCount(ts.root) > 1}>
@@ -2245,10 +2255,9 @@
                 <!-- AI Chat: shown in STATIC_ONLY too — CatBot runs client-direct
                      in-browser (no backend) and can fetch/build structures from empty state. -->
                 <button class="import-card chat-card" onclick={() => {
-                  console.log(`[CatGo:UI] Welcome card clicked: AI Chat → loading structure + opening Chat panel`)
-                  pane.structure = clone_structure(water as unknown as AnyStructure)
-                  pane.initial_site_count = (water as any).sites?.length ?? 0
-                  pane.initial_structure_ref = water as unknown as AnyStructure
+                  // Open a full CatBot pane (no forced structure). CatBot runs
+                  // client-direct and can fetch/build structures from empty state
+                  // if asked; the standalone-chat leaf_body branch renders it.
                   pane.initial_panel = `chat`
                   ts.active_leaf_id = leaf.id
                   update_tab_label(tab.id)
@@ -2992,6 +3001,14 @@
 
   /* .pane.dragover glow + add-own-card highlight live in PaneTree.svelte
      (.pane is rendered there; cards render in App's scope via :global). */
+
+  /* Standalone CatBot pane (full-pane chat, no structure viewer) */
+  .pane-chat-fill {
+    height: 100%;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
 
   /* Original horizontal layout (restored) */
   .landing-page {
