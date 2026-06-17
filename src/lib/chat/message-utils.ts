@@ -22,9 +22,11 @@ export function redact(s: string): string {
 /** Static fallback model lists (used only when backend is unreachable) */
 export const FALLBACK_MODELS: Partial<Record<LLMProvider, { id: string; label: string }[]>> = {
   'sdk-claude': [
-    { id: `sonnet`, label: `Default (Sonnet 4.6)` },
-    { id: `opus`, label: `Opus 4.7` },
-    { id: `haiku`, label: `Haiku 4.5` },
+    // Aliases resolve to the latest in each family — no version in the label so
+    // it never goes stale (see _SDK_CLAUDE_MODELS in server/catgo/routers/chat.py).
+    { id: `sonnet`, label: `Default (Sonnet)` },
+    { id: `opus`, label: `Opus` },
+    { id: `haiku`, label: `Haiku` },
   ],
 }
 
