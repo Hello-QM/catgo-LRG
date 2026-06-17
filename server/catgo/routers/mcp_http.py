@@ -53,6 +53,7 @@ from catgo.mcp_tools.server_claude_code import (
     _handle_workflow_engine,
     _handle_diagnose,
     _handle_skills,
+    _handle_campaign,
     API_BASE,
 )
 
@@ -240,6 +241,8 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
                 return await _handle_diagnose(arguments)
             elif name == "catgo_skills":
                 return await _handle_skills(arguments)
+            elif name == "catgo_campaign":
+                return await _handle_campaign(arguments)
             else:
                 return [T(type="text", text=f"Unknown tool: {name}")]
     except httpx.ConnectError:

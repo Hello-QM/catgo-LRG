@@ -651,6 +651,39 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_campaign",
+        description=(
+            "Create and drive a CatGo Campaign — the md-orchestration system for "
+            "exploratory / HPC research studies (agent-driven folder + markdown). "
+            "READ the campaign skill first: catgo_skills(action='read', skill='campaign'). "
+            "Actions map to the `catgo campaign` CLI:\n"
+            "  new        — scaffold a new campaign folder (args: <name> [--location DIR] ...)\n"
+            "  fetch-ref  — fetch reference data\n"
+            "  submit     — submit a calculation\n"
+            "  poll       — poll job status\n"
+            "  aggregate  — aggregate results\n"
+            "  report     — build the report\n"
+            "  ingest     — ingest literature\n"
+            "  archive    — archive the campaign\n"
+            "After `new`, work the scaffolded folder with your own bash/file tools."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["new", "fetch-ref", "submit", "poll", "aggregate", "report", "ingest", "archive"],
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Extra CLI args passed verbatim, e.g. ['my-study', '--location', '/home/james/research'].",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
         name="catgo_validate_config",
         description=(
             "Validate the user's VASP/HPC cluster configuration against the LIVE "
@@ -2048,6 +2081,39 @@ async def _handle_skills(args: dict) -> list[TextContent]:
             return [T(type="text", text=f"Error reading skill {skill}: {e}")]
 
     return [T(type="text", text=f"Unknown skills action: {action}. Use 'list' or 'read'.")]
+
+
+# ---------------------------------------------------------------------------
+# Campaign Handler — let SDK agents run the `catgo campaign` md-orchestration CLI
+# ---------------------------------------------------------------------------
+
+
+def _campaign_argv(action: str, extra: list[str]) -> list[str]:
+    """Build the argv for `python -m catgo campaign <action> <extra...>` (pure, testable)."""
+    return [sys.executable, "-m", "catgo", "campaign", action, *extra]
+
+
+async def _handle_campaign(args: dict) -> list[TextContent]:
+    """Run the `catgo campaign` CLI on behalf of an SDK agent and return its output."""
+    action = str(args.get("action") or "").strip()
+    extra = [str(a) for a in (args.get("args") or [])]
+    if not action:
+        return [TextContent(type="text", text="error: 'action' is required")]
+    argv = _campaign_argv(action, extra)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+        text = (out or b"").decode("utf-8", "replace")
+        status = "ok" if proc.returncode == 0 else f"exit {proc.returncode}"
+        return [TextContent(type="text", text=f"[catgo campaign {action}] {status}\n{text}".rstrip())]
+    except asyncio.TimeoutError:
+        return [TextContent(type="text", text=f"[catgo campaign {action}] still running after 300s — check the campaign folder / poll later.")]
+    except Exception as e:  # noqa: BLE001 — surface any launcher error to the agent
+        return [TextContent(type="text", text=f"[catgo campaign {action}] error: {e}")]
 
 
 # ---------------------------------------------------------------------------
