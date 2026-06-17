@@ -132,7 +132,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         `Suppress cross-cell bond stubs whose partner image atom is not drawn (matches Materials Project / VESTA defaults)`,
     },
     bonding_strategy: {
-      value: `solid_angle`,
+      value: `atom_radii`,
       description: `Method for determining bonds between atoms`,
       enum: {
         electroneg_ratio: `Electronegativity Ratio`,
