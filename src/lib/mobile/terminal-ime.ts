@@ -34,6 +34,8 @@ export function isCJK(text: string): boolean {
 // textarea clear we do) can emit a stray space/enter/DEL. Swallow those for a
 // brief window. The window is armed ONLY by a composition ending, so pure Latin
 // typing never enters it (a deliberately-typed space/Enter is never eaten).
+// `\u00a0` (non-breaking space) is included because some IMEs/keyboards emit NBSP
+// rather than a plain space as the confirmation key after a composition.
 const POST_COMPOSE_MS = 80
 const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\x7f`, `\u00a0`])
 

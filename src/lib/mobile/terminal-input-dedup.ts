@@ -20,6 +20,13 @@
 // erase the diverging tail, and the bytes to send. A common-prefix check avoids
 // erasing/retyping the unchanged head, so an unchanged refinement ("hello" ->
 // "hello") is a no-op — no flicker, no duplicate.
+//
+// ASSUMES the PTY is at an interactive shell prompt, where the visible line IS
+// the line-editor buffer and a DEL erases one char. Inside a full-screen TUI
+// (vim/less/a curses app) the DELs would not map to the buffer — dictation into
+// a TUI is the known unsupported corner case. (Prefix compare is by UTF-16 code
+// unit; a divergence mid-surrogate-pair could split an emoji — negligible for
+// terminal input.)
 export function reconcileReplacement(
   val: string,
   selStart: number,

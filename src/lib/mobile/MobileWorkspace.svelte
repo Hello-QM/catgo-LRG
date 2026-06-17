@@ -827,9 +827,11 @@
                 role="presentation"
                 onclick={() => (add_sheet_visible = false)}
               >
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <div
                   class="mw-addsheet"
                   role="dialog"
+                  tabindex="-1"
                   aria-label={t(`mobile.term_new`)}
                   onclick={(e) => e.stopPropagation()}
                 >
