@@ -1,12 +1,11 @@
 // Coordination polyhedra computation for structure visualization.
 //
-// Two algorithms available:
-//   1. CrystalNN (Voronoi + solid angle + electronegativity) — default, via Rust WASM
-//   2. Distance cutoff (3.5 Å) — synchronous fallback
-//
-// Crystal Toolkit electronegativity filter: polyhedra are drawn only around
-// the LEAST electronegative site in each coordination cluster (i.e. metals/cations),
-// preventing overlapping polyhedra in ionic/covalent structures.
+// Bond-graph algorithm: vertices are bonded anion neighbours from the rendered
+// bond graph (positions already PBC-correct via bond.pos_1/pos_2), classified
+// per-vertex by is_anion_vertex. Crystal Toolkit electronegativity filter:
+// polyhedra are drawn only around the LEAST electronegative site in each
+// coordination cluster (i.e. metals/cations), preventing overlapping polyhedra
+// in ionic/covalent structures.
 
 import type { AnyStructure, BondPair, Vec3 } from '$lib'
 import { element_data } from '$lib/element'
@@ -52,28 +51,6 @@ function get_site_element(structure: AnyStructure, site_idx: number): string {
     (max, s) => (s.occu > max.occu ? s : max),
     site.species[0],
   ).element
-}
-
-// --- Lattice math ---
-
-function get_lattice_vectors(structure: AnyStructure): [Vec3, Vec3, Vec3] | null {
-  const lat = (structure as any).lattice
-  if (!lat?.matrix) return null
-  const m = lat.matrix
-  return [
-    [m[0][0], m[0][1], m[0][2]],
-    [m[1][0], m[1][1], m[1][2]],
-    [m[2][0], m[2][1], m[2][2]],
-  ]
-}
-
-function add_v3(a: number[], b: Vec3): [number, number, number] {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-function dist_sq(a: number[], b: number[]): number {
-  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2]
-  return dx * dx + dy * dy + dz * dz
 }
 
 // --- Electronegativity lookup ---
@@ -220,58 +197,6 @@ export function compute_polyhedra_from_bonds(
   return apply_framework_filters(structure, candidates)
 }
 
-// --- Fast polyhedra: distance cutoff + Crystal Toolkit electronegativity filter ---
-
-/**
- * Compute polyhedra using distance-based neighbor search + electronegativity filter.
- *
- * Fast (synchronous, no WASM) — uses the same 3.5Å cutoff as before,
- * plus Crystal Toolkit's rule: polyhedra only around the least electronegative
- * site in each coordination cluster (prevents overlapping polyhedra).
- */
-export function compute_polyhedra_fast(
-  structure: AnyStructure,
-  center_elements: string[],
-  min_coordination: number,
-  metals_only: boolean = true,
-  max_bond_length: number = 3.5,
-  max_neighbors: number = 8,
-): PolyhedronData[] {
-  // Get raw distance-based polyhedra (fast, synchronous). center_elements acts as
-  // a force-include allow-list: when non-empty it bypasses the EN/metals/spectator
-  // filters AND the max_neighbors cap (matches catgo's documented bypass at 107).
-  const explicit = center_elements.length > 0
-  const raw = compute_polyhedra_with_pbc(
-    structure, center_elements, min_coordination, max_bond_length, max_neighbors, explicit,
-  )
-
-  // If user explicitly selected elements, skip electronegativity/spectator filters
-  if (explicit) return raw
-
-  // Apply Crystal Toolkit electronegativity filter + metals_only (catgo's primary gate)
-  const en_filtered = raw.filter((poly) => {
-    if (metals_only && !is_metal(poly.center_element)) return false
-
-    // All neighbors must be strictly more electronegative than the center
-    const c_en = get_electronegativity(poly.center_element)
-    const neighbor_elements = poly.neighbor_indices.map((idx) =>
-      idx >= 0 ? get_site_element(structure, idx) : ``,
-    )
-    const all_more_en = neighbor_elements.every((el) => {
-      if (!el) return true
-      return get_electronegativity(el) > c_en
-    })
-    const all_same = neighbor_elements.every((el) => el === poly.center_element)
-    return all_more_en && !all_same
-  })
-
-  // Additive VESTA-style passes (ported from matterviz), layered after the EN gate:
-  // (1) hide spectator A-site cations (alkali, heavy alkaline-earth) when a
-  //     non-spectator framework cation exists; purely-ionic binaries (NaCl) keep them.
-  // (2) hide weakly-bound species (mean bond dist / covalent-radii sum > weak_bond_norm)
-  //     when a strong non-spectator framework species exists (e.g. lone-pair Bi3+).
-  return apply_framework_filters(structure, en_filtered)
-}
 
 // Spectator + weak-bond hiding over the EN-passing candidates. Composition-based
 // so boundary-truncated framework copies don't promote A-site clutter.
@@ -332,105 +257,6 @@ function apply_framework_filters(
     if (is_spectator_center(el) && has_framework_potential) return false
     return !is_weak_species(el)
   })
-}
-
-// --- Distance-based fallback (legacy) ---
-// For each center atom, search all atoms in 27 cells (3x3x3 neighborhood)
-// to find neighbors within a distance cutoff. This is independent of bond detection.
-
-export function compute_polyhedra_with_pbc(
-  structure: AnyStructure,
-  center_elements: string[],
-  min_coordination: number,
-  max_bond_length: number = 3.5,  // Å — typical max coordination bond length
-  max_neighbors: number = 8,      // skip centers with CN above this (clutter cap)
-  explicit: boolean = false,      // center_elements force-included: bypass anion-vertex filter + cap
-): PolyhedronData[] {
-  if (!structure?.sites?.length) return []
-
-  const lattice = get_lattice_vectors(structure)
-  const is_periodic = !!lattice
-
-  // Determine which elements are centers
-  const target_elements = center_elements.length > 0
-    ? new Set(center_elements)
-    : new Set(
-        structure.sites
-          .map((_, idx) => get_site_element(structure, idx))
-          .filter((el) => el && is_metal(el)),
-      )
-
-  if (target_elements.size === 0) return []
-
-  const max_dist_sq = max_bond_length * max_bond_length
-  const polyhedra: PolyhedronData[] = []
-
-  // For each potential center atom
-  for (let c = 0; c < structure.sites.length; c++) {
-    const c_element = get_site_element(structure, c)
-    if (!target_elements.has(c_element)) continue
-
-    const c_pos = structure.sites[c].xyz
-
-    // Per-vertex anion filter (auto-detect only): a neighbor qualifies as a hull
-    // vertex only if it is an anion-former (nonmetal/metalloid more EN than center).
-    // Force-included (explicit) centers keep every neighbor within cutoff.
-    const c_en = get_electronegativity(c_element)
-    const c_is_metal = is_metal(c_element)
-    const accept_vertex = (v_idx: number): boolean =>
-      explicit || is_anion_vertex(c_en, c_is_metal, get_site_element(structure, v_idx), 0)
-
-    // Search for neighbor atoms within distance cutoff
-    // Include periodic images by shifting through 27 cells
-    const neighbor_indices: number[] = []
-    const neighbor_positions: number[][] = []
-
-    for (let v = 0; v < structure.sites.length; v++) {
-      if (v === c) continue  // Skip self
-      if (!accept_vertex(v)) continue
-      const v_pos = structure.sites[v].xyz
-
-      if (is_periodic && lattice) {
-        // Check 27 periodic images (da, db, dc ∈ {-1, 0, 1})
-        for (let da = -1; da <= 1; da++) {
-          for (let db = -1; db <= 1; db++) {
-            for (let dc = -1; dc <= 1; dc++) {
-              const shifted: [number, number, number] = [
-                v_pos[0] + da * lattice[0][0] + db * lattice[1][0] + dc * lattice[2][0],
-                v_pos[1] + da * lattice[0][1] + db * lattice[1][1] + dc * lattice[2][1],
-                v_pos[2] + da * lattice[0][2] + db * lattice[1][2] + dc * lattice[2][2],
-              ]
-              const d2 = dist_sq(c_pos, shifted)
-              if (d2 > 0.01 && d2 <= max_dist_sq) {
-                neighbor_indices.push(v)
-                neighbor_positions.push(shifted)
-              }
-            }
-          }
-        }
-      } else {
-        // Non-periodic: simple distance check
-        const d2 = dist_sq(c_pos, v_pos)
-        if (d2 > 0.01 && d2 <= max_dist_sq) {
-          neighbor_indices.push(v)
-          neighbor_positions.push([v_pos[0], v_pos[1], v_pos[2]])
-        }
-      }
-    }
-
-    if (neighbor_positions.length < min_coordination) continue
-    // CN cap (clutter heuristic) — force-included centers bypass it
-    if (!explicit && neighbor_positions.length > max_neighbors) continue
-
-    polyhedra.push({
-      center_idx: c,
-      center_element: c_element,
-      neighbor_indices,
-      vertices: neighbor_positions,
-    })
-  }
-
-  return polyhedra
 }
 
 // --- Convex hull + geometry merging ---
