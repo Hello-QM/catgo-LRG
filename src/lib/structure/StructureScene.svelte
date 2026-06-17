@@ -2576,12 +2576,24 @@
   let polyhedra_data = $derived.by(() => {
     if (!show_polyhedra || !structure?.sites) return []
     try {
+      // Compute on the UNIT-CELL structure only. When image atoms are shown,
+      // `structure.sites` is expanded with boundary image copies appended after
+      // `num_original_sites`; feeding those to the bond graph double-counts each
+      // vertex (a center bonds to both the original neighbour and its coincident
+      // image-atom site), producing duplicate coincident vertices that degenerate
+      // the convex hull into a half-shell. PBC closure across cell boundaries is
+      // already handled by the bond jimage shift, and image-atom polyhedra are
+      // added separately in `polyhedra_data_with_images`.
+      const base_structure =
+        num_original_sites !== undefined && num_original_sites < structure.sites.length
+          ? { ...structure, sites: structure.sites.slice(0, num_original_sites) }
+          : structure
       // Polyhedra need coordination-complete bonds, independent of the user's
       // render bond mode (solid_angle under-coordinates octahedra). Compute
       // atom_radii bonds (PBC-aware via WASM) just for polyhedra; fall back to
       // the rendered bonds if the sync path is unavailable (large cell / no WASM).
-      const poly_bonds = compute_bonds_sync(structure, `atom_radii`, {}) ?? visible_bond_pairs
-      return compute_polyhedra_from_bonds(structure, poly_bonds, {
+      const poly_bonds = compute_bonds_sync(base_structure, `atom_radii`, {}) ?? visible_bond_pairs
+      return compute_polyhedra_from_bonds(base_structure, poly_bonds, {
         center_elements: polyhedra_center_elements ?? [],
         min_coordination: polyhedra_min_coordination ?? 4,
         max_neighbors: polyhedra_max_neighbors ?? 8,
