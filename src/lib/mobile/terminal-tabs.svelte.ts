@@ -124,6 +124,19 @@ export function ensure_tab(session_id: string, cluster: string): void {
   add_tab(session_id, cluster)
 }
 
+/** Repoint every tab on `old_id` to `new_id` after a reconnect minted a fresh
+ *  session for the same endpoint. Preserves each tab's identity (id/seq/cwd), so
+ *  its MobileTerminal re-runs its `$effect` (the `session_id` prop changed),
+ *  re-opens the PTY on the new session, and — because `persist_key` is derived
+ *  from the unchanged `seq` (`catgo-<seq>`) — re-attaches the SAME surviving
+ *  tmux session, restoring the running job. */
+export function repoint_session(old_id: string, new_id: string): void {
+  if (old_id === new_id) return
+  for (const tab of term_tabs.tabs) {
+    if (tab.session_id === old_id) tab.session_id = new_id
+  }
+}
+
 /** Close all tabs bound to one session (cluster eject). Unlike close_tab,
  *  closing the last tab overall does NOT respawn — an empty strip is correct
  *  when no cluster is connected. */

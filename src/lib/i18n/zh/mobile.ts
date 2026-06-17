@@ -72,6 +72,7 @@ const mobile: Record<string, string> = {
   connection_failed: `连接失败。`,
   saved_pw_rejected: `已保存的密码被拒绝 — 可能已更改。请重新输入以连接。`,
   auth_cancelled: `认证已取消。`,
+  reconnecting_to: `正在重新连接到 {target}…`,
 
   // ── 保存密码提示 (MobileConnect) ─────────────────────────────────────
   save_pw_title: `保存此集群的密码？`,

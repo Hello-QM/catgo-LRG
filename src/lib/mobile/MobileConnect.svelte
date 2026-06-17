@@ -43,9 +43,16 @@
     on_connected?: (session_id: string, meta: ConnectedMeta) => void
     /** Disconnect one live cluster (endpoint key) — owned by the workspace. */
     on_eject?: (key: string) => void
+    /** When set (by the workspace on resume after a lock dropped the session),
+     * auto-fill from this saved connection and reconnect once — reusing saved
+     * creds (silent if OTP-free; surfaces OtpDialog otherwise). */
+    auto_reconnect?: SavedConnection | null
+    /** Called when an auto-reconnect attempt fails/cancels, so the workspace can
+     * clear its `reconnect_target` (else it would re-trigger on a later mount). */
+    on_reconnect_failed?: () => void
   }
 
-  let { on_connected, on_eject }: Props = $props()
+  let { on_connected, on_eject, auto_reconnect, on_reconnect_failed }: Props = $props()
 
   function connected_meta(): ConnectedMeta {
     const h = host.trim()
@@ -155,6 +162,40 @@
       method = recent.method
       if (recent.keyPath) key_path = recent.keyPath
     })
+  })
+
+  // Auto-reconnect (workspace resumed after a lock killed the session): pre-fill
+  // from the saved connection and run connect() exactly once. Reuses all the
+  // existing saved-password / OTP machinery — silent when the round is OTP-free,
+  // OtpDialog when a live passcode is needed. `did_auto_reconnect` makes it fire
+  // once even though it tracks `auto_reconnect` (so a prop set after mount still
+  // triggers it).
+  let auto_reconnecting = $state(false)
+  let did_auto_reconnect = false
+  $effect(() => {
+    const tgt = auto_reconnect
+    if (!tgt || did_auto_reconnect || connecting || auto_reconnecting) return
+    did_auto_reconnect = true
+    auto_reconnecting = true
+    pick_saved(tgt)
+    void connect().finally(() => {
+      auto_reconnecting = false
+    })
+  })
+
+  // Tell the workspace to drop its `reconnect_target` once an auto-reconnect has
+  // settled into a FAILED state (error shown, not connecting, no OTP pending) —
+  // otherwise the stale target would re-trigger on a later mount. Success doesn't
+  // hit this: on_connected unmounts this component before an error is set.
+  let reconnect_fail_notified = false
+  $effect(() => {
+    if (
+      auto_reconnect && !auto_reconnecting && !connecting && !otp_visible &&
+      error_msg && !reconnect_fail_notified
+    ) {
+      reconnect_fail_notified = true
+      on_reconnect_failed?.()
+    }
   })
 
   /** Fill the form from a saved connection (tap-to-reconnect), and load its
@@ -471,6 +512,12 @@
   <div class="connect-card">
     <div class="connect-title">{t(`mobile.connect_title`)}</div>
 
+    {#if auto_reconnect && (auto_reconnecting || connecting || otp_visible)}
+      <div class="reconnect-banner" role="status">
+        {t(`mobile.reconnecting_to`, { target: connectionLabel(auto_reconnect) })}
+      </div>
+    {/if}
+
     {#if clusters.list.length > 0}
       <!-- Clusters the user is logged into RIGHT NOW. Tap = make it the active
            one (instant — the session is already authenticated); ⏏ = disconnect
@@ -623,10 +670,10 @@
               bind:value={key_path}
               oninput={() => { key_content = ``; key_selected_name = `` }}
             />
-            <button type="button" class="key-file-btn" onclick={() => choose_key_file(`target`)}>{t('common.choose')}</button>
+            <button type="button" class="key-file-btn" onclick={() => choose_key_file(`target`)}>{t(`common.choose`)}</button>
           </div>
           {#if key_content && key_selected_name}
-            <small>{t('mobile.key_file_imported', { name: key_selected_name })}</small>
+            <small>{t(`mobile.key_file_imported`, { name: key_selected_name })}</small>
           {/if}
         </label>
         <label class="field">
@@ -698,10 +745,10 @@
                   bind:value={jump_key_path}
                   oninput={() => { jump_key_content = ``; jump_key_selected_name = `` }}
                 />
-                <button type="button" class="key-file-btn" onclick={() => choose_key_file(`jump`)}>{t('common.choose')}</button>
+                <button type="button" class="key-file-btn" onclick={() => choose_key_file(`jump`)}>{t(`common.choose`)}</button>
               </div>
               {#if jump_key_content && jump_key_selected_name}
-                <small>{t('mobile.key_file_imported', { name: jump_key_selected_name })}</small>
+                <small>{t(`mobile.key_file_imported`, { name: jump_key_selected_name })}</small>
               {/if}
             </label>
             <label class="field">
@@ -724,6 +771,20 @@
     </form>
   </div>
 </div>
+
+{#if auto_reconnect && (auto_reconnecting || connecting || otp_visible) && !error_msg}
+  <!-- Clean "reconnecting" screen that COVERS the connect form during an
+       auto-reconnect, so a dropped session doesn't flash the whole setup UI —
+       it just shows progress. Below the OTP dialog's z-index (1000) so a 2FA
+       prompt still pops over it. On failure, error_msg unhides the form so the
+       user can fix it manually. -->
+  <div class="reconnect-screen" role="status">
+    <div class="reconnect-spin"></div>
+    <div class="reconnect-msg">
+      {t(`mobile.reconnecting_to`, { target: connectionLabel(auto_reconnect) })}
+    </div>
+  </div>
+{/if}
 
 {#if otp_visible}
   <OtpDialog
@@ -1040,6 +1101,46 @@
     border: 1px solid rgba(255, 107, 107, 0.3);
     border-radius: 8px;
     padding: 8px 10px;
+  }
+  .reconnect-banner {
+    font-size: 0.85em;
+    color: #3b82f6;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 8px;
+    padding: 8px 10px;
+  }
+  /* Full-screen "reconnecting" cover (see template) — sits over the connect form
+     during an auto-reconnect, below the OTP dialog (z 1000). */
+  .reconnect-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 24px;
+    text-align: center;
+    background: var(--page-bg, #0e1117);
+  }
+  .reconnect-spin {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(59, 130, 246, 0.25);
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: reconnect-spin 0.8s linear infinite;
+  }
+  @keyframes reconnect-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .reconnect-msg {
+    font-size: 0.95em;
+    color: var(--text-color, #e0e0e0);
   }
   .connect-btn {
     min-height: 48px;

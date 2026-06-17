@@ -5593,8 +5593,10 @@ dependencies = [
 name = "tauri-plugin-bg-grace"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "tauri",
  "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

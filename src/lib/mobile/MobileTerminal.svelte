@@ -24,6 +24,7 @@
   import { transport } from '$lib/api/transport'
   import Icon from '$lib/Icon.svelte'
   import MobileTerminalKeyBar from '$lib/structure/MobileTerminalKeyBar.svelte'
+  import { screen_wake, set_keep_awake } from '$lib/mobile/screen-wake.svelte'
 
   interface Props {
     /** Live HPC session id (from MobileConnect). */
@@ -31,13 +32,25 @@
     /** Called with the shell's cwd whenever it changes (parsed from OSC 7), so
      * the Files tab can follow the terminal. */
     on_cwd?: (path: string) => void
+    /** When set, attach-or-create a tmux session of this name on shell start so
+     * the remote session (and any running job) survives the SSH connection
+     * dropping while iOS suspends the app on lock/background. Must be a
+     * tmux-safe name (e.g. `catgo-1`). Omitted -> plain shell. */
+    persist_key?: string
+    /** Tapped from the "connection lost" overlay — asks the workspace to
+     * reconnect this terminal's cluster (re-auth + re-attach tmux). */
+    on_reconnect?: () => void
   }
 
-  let { session_id, on_cwd }: Props = $props()
+  let { session_id, on_cwd, persist_key, on_reconnect }: Props = $props()
 
   let container_el: HTMLDivElement | undefined = $state()
   let status = $state<`init` | `connected` | `error`>(`init`)
   let error_msg = $state(``)
+  // Set true when a write to the PTY fails mid-session (the SSH socket died —
+  // typically an iOS suspend on lock/background). Drives the "connection lost"
+  // overlay so the terminal doesn't just silently freeze. Reset on (re)connect.
+  let conn_lost = $state(false)
 
   // Refs the keybar handler needs (set once the PTY is open).
   let channel_id: string | null = null
@@ -50,7 +63,9 @@
   /** Forward a raw byte string (from the key bar) to the PTY as stdin. */
   function send_keys(seq: string): void {
     if (!channel_id) return
-    transport.ptyWrite(session_id, channel_id, encoder.encode(seq)).catch(() => {})
+    transport
+      .ptyWrite(session_id, channel_id, encoder.encode(seq))
+      .catch(() => (conn_lost = true))
     // Keep focus on the hidden textarea so the soft keyboard stays up.
     term_ref?.focus()
   }
@@ -252,6 +267,7 @@
         channel_id = ch
         opened_channel = ch
         status = `connected`
+        conn_lost = false // fresh channel — clear any prior "lost" overlay
 
         // ─── iOS WKWebView input fixes (two distinct bugs, one set of listeners) ─
         // 1. Latin de-dup: xterm 6.0.0 can emit ONE genuine soft-keyboard
@@ -384,7 +400,7 @@
           }
           transport
             .ptyWrite(session_id, channel_id, encoder.encode(out))
-            .catch(() => {})
+            .catch(() => (conn_lost = true))
         })
 
         // Resize: keep the remote PTY in sync with xterm's grid.
@@ -454,15 +470,35 @@
         // the cwd. Register per shell — zsh uses precmd_functions (it ignores
         // bash's PROMPT_COMMAND), bash uses PROMPT_COMMAND. Emit the cwd once, then
         // print the private OSC 99 sentinel that opens the render gate above — so
-        // this whole (echoed) line is never painted. Leading space keeps it out of
-        // bash history; the sentinel uses a real ESC so the echoed source (literal
-        // backslashes) can't false-match it.
-        const osc7_setup =
-          ` _catgo_osc7(){ printf '\\033]7;file://%s%s\\a' "\${HOSTNAME:-\$HOST}" "\$PWD"; };` +
+        // this whole (echoed) line is never painted. The sentinel uses a real ESC
+        // so the echoed source (literal backslashes) can't false-match it.
+        const osc7_body =
+          `_catgo_osc7(){ printf '\\033]7;file://%s%s\\a' "\${HOSTNAME:-\$HOST}" "\$PWD"; };` +
           ` if [ -n "\$ZSH_VERSION" ]; then typeset -ga precmd_functions; precmd_functions+=(_catgo_osc7);` +
           ` else PROMPT_COMMAND="_catgo_osc7\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}"; fi;` +
-          ` _catgo_osc7; printf '\\033]99;catgo\\a'\n`
-        transport.ptyWrite(session_id, ch, encoder.encode(osc7_setup)).catch(() => {})
+          ` _catgo_osc7; printf '\\033]99;catgo\\a';`
+
+        // When a persist key is set: attach-or-create a tmux session so the remote
+        // shell + any running job survive the SSH connection dropping (iOS freezes
+        // the app — and its sockets — within ~30s of lock/background). `exec`
+        // replaces the login shell, so leaving tmux ends the channel cleanly. On
+        // RE-ATTACH we deliberately send nothing more — injecting the osc7 setup
+        // into a shell that may have a job running would type into that job. So
+        // cwd-follow + the render gate apply only to the no-tmux else branch (the
+        // Files tab won't follow cwd inside tmux — acceptable for persistence). If
+        // tmux is absent the `if` falls through to the plain-shell setup. Leading
+        // space keeps the whole line out of (bash) history.
+        // Print the OSC 99 render-gate sentinel BEFORE exec'ing tmux/screen so the
+        // gate closes instantly (discarding the echoed setup line) instead of
+        // waiting out its 1.5s fallback and then reset()-flushing on top of tmux's
+        // own attach redraw — that double-clear is the "flashes twice" on reconnect.
+        const sentinel = `printf '\\033]99;catgo\\a';`
+        const setup = persist_key
+          ? ` if command -v tmux >/dev/null 2>&1; then ${sentinel} exec tmux new-session -A -s ${persist_key};` +
+            ` elif command -v screen >/dev/null 2>&1; then ${sentinel} exec screen -DR ${persist_key};` +
+            ` else ${osc7_body} fi\n`
+          : ` ${osc7_body}\n`
+        transport.ptyWrite(session_id, ch, encoder.encode(setup)).catch(() => {})
 
         // Selection = copy: in a touch UI there's no right-click/Ctrl-C, so push
         // any non-empty selection straight to the clipboard. navigator.clipboard
@@ -523,6 +559,21 @@
     {:else if status === `error`}
       <div class="mt-error">{error_msg}</div>
     {/if}
+    {#if conn_lost}
+      <!-- Mid-session drop (iOS suspended the app on lock/background and killed
+           the socket). Show it instead of letting xterm silently freeze. The
+           remote tmux session usually survives, so Reconnect re-attaches it. -->
+      <div class="mt-lost" role="alert">
+        <div class="mt-lost-title">Connection lost</div>
+        <div class="mt-lost-sub">
+          The phone locking or backgrounding dropped the SSH connection. Your
+          remote session is likely still running — reconnect to re-attach it.
+        </div>
+        <button type="button" class="mt-lost-btn" onclick={() => on_reconnect?.()}>
+          Reconnect
+        </button>
+      </div>
+    {/if}
   </div>
   <!-- When the keyboard is up, the bar floats fixed just above it (so it's
        reachable even in split mode where the pane is too short to hold it in
@@ -537,6 +588,21 @@
   >
     {#if keybar_open}
       <MobileTerminalKeyBar on_key={send_keys} bind:ctrl_armed={kb_ctrl_armed} />
+      <!-- Keep-screen-awake toggle (default on): while on, the screen won't
+           auto-lock in the terminal, so an auto-lock can't drop the connection.
+           Sun = awake, Moon = auto-lock allowed. -->
+      <button
+        type="button"
+        class="mt-keybar-toggle"
+        class:awake-off={!screen_wake.enabled}
+        onpointerdown={(e) => e.preventDefault()}
+        onclick={() => {
+          set_keep_awake(!screen_wake.enabled)
+          term_ref?.focus()
+        }}
+        aria-label={screen_wake.enabled ? `Screen stays awake — tap to allow auto-lock` : `Auto-lock allowed — tap to keep screen awake`}
+        title={screen_wake.enabled ? `Keep awake: on` : `Keep awake: off`}
+      ><Icon icon={screen_wake.enabled ? `Sun` : `Moon`} /></button>
     {/if}
     <button
       type="button"
@@ -636,6 +702,10 @@
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
+  /* Keep-awake toggle in the OFF state: muted so the blue "on" reads as active. */
+  .mt-keybar-toggle.awake-off {
+    color: var(--text-color-muted, #94a3b8);
+  }
   .mt-keybar-toggle:active {
     background: var(--key-bg, #2d2d2d);
   }
@@ -648,5 +718,49 @@
     padding: 12px;
     font-size: 0.85em;
     color: #ff6b6b;
+  }
+  /* "Connection lost" overlay — covers the frozen xterm so the drop is obvious
+     and offers a one-tap reconnect (re-attaches the surviving tmux session). */
+  .mt-lost {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    text-align: center;
+    background: rgba(14, 17, 23, 0.92);
+    backdrop-filter: blur(2px);
+  }
+  .mt-lost-title {
+    font-size: 1.05em;
+    font-weight: 600;
+    color: #ff6b6b;
+  }
+  .mt-lost-sub {
+    font-size: 0.85em;
+    line-height: 1.4;
+    color: var(--text-color-muted, #94a3b8);
+    max-width: 320px;
+  }
+  .mt-lost-btn {
+    margin-top: 4px;
+    min-height: 44px;
+    padding: 0 24px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: #3b82f6;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .mt-lost-btn:active {
+    background: #2563eb;
   }
 </style>

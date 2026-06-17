@@ -74,6 +74,7 @@ const mobile: Record<string, string> = {
   saved_pw_rejected:
     `Saved password was rejected — it may have changed. Enter it again to reconnect.`,
   auth_cancelled: `Authentication cancelled.`,
+  reconnecting_to: `Reconnecting to {target}…`,
 
   // ── Save-password prompt (MobileConnect) ─────────────────────────────
   save_pw_title: `Save password for this cluster?`,
