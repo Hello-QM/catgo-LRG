@@ -66,6 +66,13 @@
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
   import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
+  // SDK-agent visible-terminal bridge: global poller + approval card
+  import {
+    start_terminal_bridge_poller,
+    approval as terminal_approval,
+    approval_allow as terminal_approval_allow,
+    approval_deny as terminal_approval_deny,
+  } from './lib/terminal-bridge-poller.svelte'
   // Extracted tab manager (factory — must be called in component context)
   import { create_tab_manager } from './lib/tab-manager.svelte'
   // Extracted close-all helpers (pure functions)
@@ -371,6 +378,10 @@
     })
     return () => set_terminal_opener(null)
   })
+
+  // Start the SDK-agent terminal bridge poller (per-window). It watches
+  // /api/terminal/pending so backend MCP agents can drive the visible terminal.
+  $effect(() => start_terminal_bridge_poller())
 
   // Pop a terminal leaf out into its own window, then drop it from the source tree.
   function popout_terminal_leaf(tab_id: string, leaf_id: string) {
@@ -2511,6 +2522,29 @@
   </div>
 {/if}
 
+<!-- SDK-agent terminal command approval -->
+{#if terminal_approval.pending}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="modal-overlay" onclick={terminal_approval_deny}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
+      <h3>{t(`app.agent_terminal_approve_title`)}</h3>
+      <p class="agent-term-detail">
+        <span class="agent-term-action">{terminal_approval.pending.action}</span>
+        <code>{terminal_approval.pending.detail}</code>
+      </p>
+      <label class="agent-term-autorun">
+        <input type="checkbox" bind:checked={terminal_approval.auto_run} />
+        {t(`app.agent_terminal_autorun`)}
+      </label>
+      <div class="modal-actions">
+        <button class="modal-btn cancel" onclick={terminal_approval_deny}>{t(`common.cancel`)}</button>
+        <button class="modal-btn danger" onclick={terminal_approval_allow}>{t(`app.allow`)}</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <!-- Unified Export / Save dialog (extracted to ExportSaveDialog.svelte) -->
 <ExportSaveDialog
   {save_project_roots}
@@ -2931,6 +2965,39 @@
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .agent-term-detail {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin: 0 0 12px 0 !important;
+  }
+  .agent-term-action {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-color-muted, #6b7280);
+  }
+  .agent-term-detail code {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 13px;
+    color: var(--text-color, #111827);
+    background: var(--surface-alt, rgba(0, 0, 0, 0.05));
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .agent-term-autorun {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-color-muted, #6b7280);
+    margin: 0 0 18px 0;
+    cursor: pointer;
   }
 
   .modal-btn {
