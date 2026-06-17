@@ -206,7 +206,6 @@ export interface SettingsConfig {
     polyhedra_min_coordination: SettingType<number>
     polyhedra_max_neighbors: SettingType<number>
     polyhedra_metals_only: SettingType<boolean>
-    polyhedra_cutoff: SettingType<number>
     polyhedra_color_mode: SettingType<PolyhedraColorMode>
     polyhedra_color: SettingType<string>
     polyhedra_show_edges: SettingType<boolean>

@@ -507,12 +507,6 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description:
         `Only show polyhedra around metal atoms (uncheck to include non-metals)`,
     },
-    polyhedra_cutoff: {
-      value: 3.5,
-      description: `Maximum bond length for polyhedra neighbor search (Å)`,
-      minimum: 1.5,
-      maximum: 6.0,
-    },
     polyhedra_color_mode: {
       value: `vertex` as const,
       description:

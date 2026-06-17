@@ -614,7 +614,6 @@
     polyhedra_min_coordination = 3,
     polyhedra_max_neighbors = 8,
     polyhedra_metals_only = true,
-    polyhedra_cutoff = 3.5,
     polyhedra_color_mode = `vertex` as import('$lib/settings').PolyhedraColorMode,
     polyhedra_color = `#4a90d9`,
     polyhedra_show_edges = true,
@@ -867,7 +866,6 @@
     polyhedra_min_coordination?: number
     polyhedra_max_neighbors?: number
     polyhedra_metals_only?: boolean
-    polyhedra_cutoff?: number
     polyhedra_color_mode?: import('$lib/settings').PolyhedraColorMode
     polyhedra_color?: string
     polyhedra_show_edges?: boolean
