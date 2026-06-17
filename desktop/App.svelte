@@ -2112,7 +2112,13 @@
             <div class="pane-chat-fill">
               <ChatPane
                 tab_id={tab.id}
+                is_pane={true}
                 on_close={() => { Object.assign(pane, create_empty_pane()); update_tab_label(tab.id) }}
+                on_popout={() => {
+                  window.open(`${location.origin}${location.pathname}#chat`, '_blank', 'width=520,height=760')
+                  Object.assign(pane, create_empty_pane())
+                  update_tab_label(tab.id)
+                }}
               />
             </div>
           {:else}

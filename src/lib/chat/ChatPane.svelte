@@ -235,6 +235,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_close = () => {},
     on_popout = undefined,
     is_popout = false,
+    is_pane = false,
     tab_id,
   }: {
     structure?: AnyStructure
@@ -243,6 +244,11 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_close?: () => void
     on_popout?: () => void
     is_popout?: boolean
+    // True when the chat is a leaf in the pane tree (standalone CatBot pane),
+    // not the docked sidebar chat. Docked-position toggles (right/bottom) are
+    // meaningless for a pane — the pane chrome owns layout — so they are hidden;
+    // popout opens the chat window via on_popout.
+    is_pane?: boolean
     // Per-tab identifier used to resolve the ChatPane's workflow slice and to
     // route workflow pushes to the originating tab (Phase 2). Falls back to
     // "default" for popouts and standalone contexts — those share a single
@@ -1052,34 +1058,37 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     </div>
     <div class="chat-header-actions">
       {#if !is_popout}
-        <!-- Position toggle buttons -->
-        <button
-          type="button"
-          class="chat-action-btn"
-          class:active={chat_position.value === `right`}
-          title={t('chat.dock_right')}
-          onclick={() => set_chat_position(`right`)}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="10" y1="2" x2="10" y2="14" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          class="chat-action-btn"
-          class:active={chat_position.value === `bottom`}
-          title={t('chat.dock_bottom')}
-          onclick={() => set_chat_position(`bottom`)}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-            <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="1" y1="10" x2="15" y2="10" />
-          </svg>
-        </button>
+        {#if !is_pane}
+          <!-- Position toggle buttons (docked chat only — a pane is positioned
+               by the pane chrome, so these are hidden in pane mode). -->
+          <button
+            type="button"
+            class="chat-action-btn"
+            class:active={chat_position.value === `right`}
+            title={t('chat.dock_right')}
+            onclick={() => set_chat_position(`right`)}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="10" y1="2" x2="10" y2="14" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="chat-action-btn"
+            class:active={chat_position.value === `bottom`}
+            title={t('chat.dock_bottom')}
+            onclick={() => set_chat_position(`bottom`)}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="1" y="2" width="14" height="12" rx="1.5" /><line x1="1" y1="10" x2="15" y2="10" />
+            </svg>
+          </button>
+        {/if}
         <button
           type="button"
           class="chat-action-btn"
           title={t('chat.open_in_new_window')}
-          onclick={() => { set_chat_position(`popout`); on_popout?.() }}
+          onclick={() => { if (!is_pane) set_chat_position(`popout`); on_popout?.() }}
         >
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M6 2H3a1 1 0 00-1 1v10a1 1 0 001 1h10a1 1 0 001-1v-3" /><path d="M10 2h4v4" /><line x1="14" y1="2" x2="8" y2="8" />
