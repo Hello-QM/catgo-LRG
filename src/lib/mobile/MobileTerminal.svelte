@@ -60,12 +60,20 @@
   let fit_ref: { fit: () => void } | null = null
   const encoder = new TextEncoder()
 
+  /** Track PTY-write health: a failed stdin write means the channel died (iOS
+   *  suspended the app) → raise the "connection lost" overlay; a later success
+   *  clears it, so a transient blip doesn't pin the overlay until a reconnect. */
+  function note_write(ok: boolean): void {
+    if (!ok) conn_lost = true
+    else if (conn_lost) conn_lost = false
+  }
+
   /** Forward a raw byte string (from the key bar) to the PTY as stdin. */
   function send_keys(seq: string): void {
     if (!channel_id) return
     transport
       .ptyWrite(session_id, channel_id, encoder.encode(seq))
-      .catch(() => (conn_lost = true))
+      .then(() => note_write(true), () => note_write(false))
     // Keep focus on the hidden textarea so the soft keyboard stays up.
     term_ref?.focus()
   }
@@ -400,7 +408,7 @@
           }
           transport
             .ptyWrite(session_id, channel_id, encoder.encode(out))
-            .catch(() => (conn_lost = true))
+            .then(() => note_write(true), () => note_write(false))
         })
 
         // Resize: keep the remote PTY in sync with xterm's grid.

@@ -165,17 +165,24 @@
   })
 
   // Auto-reconnect (workspace resumed after a lock killed the session): pre-fill
-  // from the saved connection and run connect() exactly once. Reuses all the
-  // existing saved-password / OTP machinery — silent when the round is OTP-free,
-  // OtpDialog when a live passcode is needed. `did_auto_reconnect` makes it fire
-  // once even though it tracks `auto_reconnect` (so a prop set after mount still
-  // triggers it).
+  // from the saved connection and run connect(). Reuses all the existing
+  // saved-password / OTP machinery — silent when the round is OTP-free, OtpDialog
+  // when a live passcode is needed.
   let auto_reconnecting = $state(false)
-  let did_auto_reconnect = false
+  // The target we've already kicked off, by IDENTITY. Each reconnect produces a
+  // fresh SavedConnection object (loadConnections() returns new objects), so a
+  // NEW target re-fires — but the same one won't loop. Resetting per-target also
+  // clears `reconnect_fail_notified` so a later failure can notify again (else,
+  // after the first failure, reconnect_target would stay stuck non-null).
+  let handled_reconnect: SavedConnection | null = null
+  // Notified the workspace once an auto-reconnect settled into a FAILED state
+  // (so it drops `reconnect_target`); reset per new target above.
+  let reconnect_fail_notified = false
   $effect(() => {
     const tgt = auto_reconnect
-    if (!tgt || did_auto_reconnect || connecting || auto_reconnecting) return
-    did_auto_reconnect = true
+    if (!tgt || tgt === handled_reconnect || connecting || auto_reconnecting) return
+    handled_reconnect = tgt
+    reconnect_fail_notified = false
     auto_reconnecting = true
     pick_saved(tgt)
     void connect().finally(() => {
@@ -185,9 +192,7 @@
 
   // Tell the workspace to drop its `reconnect_target` once an auto-reconnect has
   // settled into a FAILED state (error shown, not connecting, no OTP pending) —
-  // otherwise the stale target would re-trigger on a later mount. Success doesn't
-  // hit this: on_connected unmounts this component before an error is set.
-  let reconnect_fail_notified = false
+  // otherwise the stale target would re-trigger on a later mount.
   $effect(() => {
     if (
       auto_reconnect && !auto_reconnecting && !connecting && !otp_visible &&
@@ -783,6 +788,10 @@
     <div class="reconnect-msg">
       {t(`mobile.reconnecting_to`, { target: connectionLabel(auto_reconnect) })}
     </div>
+    <!-- Escape hatch: if the reconnect hangs, drop back to the form. -->
+    <button type="button" class="reconnect-cancel" onclick={() => on_reconnect_failed?.()}>
+      {t(`common.cancel`)}
+    </button>
   </div>
 {/if}
 
@@ -1141,6 +1150,19 @@
   .reconnect-msg {
     font-size: 0.95em;
     color: var(--text-color, #e0e0e0);
+  }
+  .reconnect-cancel {
+    margin-top: 8px;
+    min-height: 40px;
+    padding: 0 20px;
+    font-size: 0.9em;
+    color: var(--text-color-muted, #94a3b8);
+    background: transparent;
+    border: 1px solid var(--keybar-border, #333);
+    border-radius: 10px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
   .connect-btn {
     min-height: 48px;

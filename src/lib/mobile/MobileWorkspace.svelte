@@ -152,10 +152,11 @@
     const sc = loadConnections().find((c) =>
       c.host === cluster.host && c.port === cluster.port && c.username === cluster.username
     )
-    if (sc) {
-      reconnect_target = sc
-      session_id = null // mount MobileConnect; it auto-reconnects
-    }
+    // With a saved connection we auto-reconnect; without one we still surface the
+    // connect form (session_id=null) so the user can re-enter creds — never a
+    // dead "Connection lost" overlay whose Reconnect button does nothing.
+    if (sc) reconnect_target = sc
+    session_id = null
   }
 
   $effect(() => {
