@@ -112,3 +112,27 @@ describe(`compute_polyhedra_from_bonds — distance trim`, () => {
     expect(polys[0].neighbor_indices).not.toContain(7)
   })
 })
+
+describe(`compute_polyhedra_from_bonds — framework filters`, () => {
+  it(`hides spectator Ba but keeps Ti octahedra`, () => {
+    // Ti(0) octahedron of 6 O (1..6); Ba(7) also "coordinated" by the same 6 O
+    const sites = [...octahedron_sites(), site(`Ba`, [4, 0, 0])]
+    const ba_bonds = OCTA_OFFSETS.map((o, k) => bond(7, k + 1, [4, 0, 0], o))
+    const bonds = [...octahedron_bonds(), ...ba_bonds]
+    const polys = compute_polyhedra_from_bonds(struct(sites), bonds)
+    const elems = polys.map((p) => p.center_element)
+    expect(elems).toContain(`Ti`)
+    expect(elems).not.toContain(`Ba`)
+  })
+
+  it(`explicit center_elements bypasses anion + framework filters`, () => {
+    // force O as a center: normally excluded (non-metal), explicit keeps it
+    const polys = compute_polyhedra_from_bonds(
+      struct(octahedron_sites()),
+      octahedron_bonds(),
+      { center_elements: [`Ti`], min_coordination: 6 },
+    )
+    expect(polys).toHaveLength(1)
+    expect(polys[0].center_element).toBe(`Ti`)
+  })
+})

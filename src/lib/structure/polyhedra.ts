@@ -216,7 +216,8 @@ export function compute_polyhedra_from_bonds(
     })
   }
 
-  return candidates
+  if (explicit) return candidates
+  return apply_framework_filters(structure, candidates)
 }
 
 // --- Fast polyhedra: distance cutoff + Crystal Toolkit electronegativity filter ---
