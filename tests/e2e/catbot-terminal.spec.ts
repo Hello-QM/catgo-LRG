@@ -17,6 +17,11 @@ const BASE = process.env.CATGO_E2E_URL ?? 'http://localhost:3186'
 const REGISTRY_URL = '/src/lib/structure/terminal-registry.svelte.ts'
 
 test('run_command captures real terminal output via the registry', async ({ page }) => {
+  // page.goto (cold app + WASM init) plus the 20s registration wait can exceed
+  // the default 30s per-test budget, which made the test TIME OUT (fail) instead
+  // of reaching the graceful `test.skip` below when no backend/PTY is present
+  // (the CI e2e job runs the frontend dev server only). Give it room to skip.
+  test.setTimeout(60_000)
   await page.goto(BASE)
 
   // Open a local terminal from the landing grid.
