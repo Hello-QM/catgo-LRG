@@ -2133,11 +2133,21 @@ async def _handle_campaign(args: dict) -> list[TextContent]:
     if not action:
         return [TextContent(type="text", text="error: 'action' is required")]
     argv = _campaign_argv(action, extra)
+    # The `catgo` package lives at server/ but the backend process runs from a
+    # different cwd and catgo isn't pip-installed, so a bare `python -m catgo`
+    # subprocess fails with "No module named catgo". Put server/ (this file is
+    # server/catgo/mcp_tools/server_claude_code.py) on the child's PYTHONPATH.
+    server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    child_env = {
+        **os.environ,
+        "PYTHONPATH": server_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
+    }
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            env=child_env,
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
         text = (out or b"").decode("utf-8", "replace")
