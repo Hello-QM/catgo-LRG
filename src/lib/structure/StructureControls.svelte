@@ -1108,6 +1108,31 @@
       {t('structure.show_polyhedra')}
     </label>
     {#if scene_props.show_polyhedra}
+      {#if available_elements.length}
+        <div
+          style="display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:4px 0;"
+        >
+          <span>{t('structure.polyhedra_centers')}</span>
+          {#if !scene_props.polyhedra_center_elements?.length}
+            <em style="opacity:0.6;">{t('structure.polyhedra_centers_auto')}</em>
+          {/if}
+          {#each available_elements as el (el)}
+            <label style="display:inline-flex; align-items:center; gap:2px;">
+              <input
+                type="checkbox"
+                checked={scene_props.polyhedra_center_elements?.includes(el) ?? false}
+                onchange={(e) => {
+                  const cur = scene_props.polyhedra_center_elements ?? []
+                  scene_props.polyhedra_center_elements = e.currentTarget.checked
+                    ? [...cur, el]
+                    : cur.filter((x) => x !== el)
+                }}
+              />
+              {el}
+            </label>
+          {/each}
+        </div>
+      {/if}
       <label>
         {t('structure.min_coordination')}
         <input

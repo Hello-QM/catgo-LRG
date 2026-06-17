@@ -183,4 +183,26 @@ describe(`compute_polyhedra_from_bonds — framework filters`, () => {
     })
     expect(polys.map((p) => p.center_element)).toContain(`Ba`)
   })
+
+  it(`explicit center_elements restricts centers to the allow-list`, () => {
+    const { sites, bonds } = two_octahedra()
+    const polys = compute_polyhedra_from_bonds(struct(sites), bonds, {
+      center_elements: [`Ti`],
+    })
+    const elems = polys.map((p) => p.center_element)
+    expect(elems).toContain(`Ti`)
+    expect(elems).not.toContain(`Ba`) // Ba not in allow-list
+  })
+
+  it(`explicit center_elements still applies anion-vertex selection`, () => {
+    // Ti octahedron + a 7th non-anion Na neighbour; even in explicit mode the
+    // Na vertex must be dropped (clean coordination shell), leaving CN 6.
+    const sites = [...octahedron_sites(), site(`Na`, [3, 0, 0])]
+    const bonds = [...octahedron_bonds(), bond(0, 7, [0, 0, 0], [3, 0, 0])]
+    const polys = compute_polyhedra_from_bonds(struct(sites), bonds, {
+      center_elements: [`Ti`],
+    })
+    expect(polys).toHaveLength(1)
+    expect(polys[0].neighbor_indices).toHaveLength(6) // Na excluded
+  })
 })

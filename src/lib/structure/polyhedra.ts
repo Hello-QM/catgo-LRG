@@ -142,7 +142,9 @@ export function build_bond_adjacency(
 }
 
 export interface PolyhedraBondOptions {
-  center_elements?: string[] // force-include allow-list; bypasses anion + CN cap
+  center_elements?: string[] // allow-list of center elements (matterviz "Centers");
+  // keeps anion-vertex selection + distance trim, but bypasses the CN cap and the
+  // spectator/framework auto-hide so explicitly chosen elements always draw.
   min_coordination?: number // default 4
   max_neighbors?: number // skip CN above this (e.g. CN-12); default 8
   metals_only?: boolean // default true: only metal centers in auto mode
@@ -194,7 +196,9 @@ export function compute_polyhedra_from_bonds(
     let min_dist = Infinity
     for (const n of neighbors) {
       const n_el = get_site_element(structure, n.idx)
-      if (!explicit && !is_anion_vertex(c_en, c_is_metal, n_el, 0)) continue
+      // Anion-vertex selection applies in every mode (incl. explicit allow-list) so
+      // chosen centers still get clean coordination shells, not cation-cation bonds.
+      if (!is_anion_vertex(c_en, c_is_metal, n_el, 0)) continue
       const dist = Math.hypot(
         n.pos[0] - c_pos[0], n.pos[1] - c_pos[1], n.pos[2] - c_pos[2],
       )
