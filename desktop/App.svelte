@@ -395,6 +395,21 @@
     }
     update_tab_label(tab_id)
   }
+  function open_chat_beside(leaf: LeafNode) {
+    const ts = get_active_ts()
+    if (!ts) return
+    const r = escalateForImport(ts.root, leaf.id)
+    if (!r) {
+      // At CAP: fall back to the chat popout window.
+      window.open(`${location.origin}${location.pathname}#chat`, '_blank', 'width=520,height=760')
+      return
+    }
+    ts.root = r.root
+    const new_leaf = findLeafById(ts.root, r.leafId)
+    const pane = new_leaf ? structurePane(new_leaf) : null
+    if (pane) pane.initial_panel = `chat`
+    ts.active_leaf_id = r.leafId
+  }
   function handle_unload(tab_id: string, leaf_id: string) { _handle_unload(pane_deps, tab_id, leaf_id) }
   function close_panel(tab_id: string, leaf_id: string) { _close_panel(pane_deps, tab_id, leaf_id) }
   function save_and_close_panel(tab_id: string, leaf_id: string) { return _save_and_close_panel(pane_deps, tab_id, leaf_id) }
@@ -2335,6 +2350,7 @@
               onpopout={() => popout_terminal_leaf(tab.id, leaf.id)}
               onclose={() => close_terminal_leaf(tab.id, leaf.id)}
               on_open_file={(p) => handle_terminal_leaf_open_file(p, term)}
+              on_ask_catbot={() => open_chat_beside(leaf)}
             />
           {/if}
         {/snippet}

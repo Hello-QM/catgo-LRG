@@ -6,6 +6,7 @@
   import { fetchAvailableShells, type ShellInfo } from '$lib/api/pty'
   import { hpc_session_store, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
   import { terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
+  import { t } from '$lib/i18n/index.svelte'
 
   let {
     initial_session_id,
@@ -14,6 +15,7 @@
     initial_sync_cwd = false,
     onclose,
     onpopout,
+    on_ask_catbot,
     on_open_file,
   }: {
     /** Pre-fill the first tab with a remote session. */
@@ -24,6 +26,7 @@
     initial_sync_cwd?: boolean
     onclose?: () => void
     onpopout?: () => void
+    on_ask_catbot?: () => void
     /** Callback when user Ctrl+clicks a file path in the terminal output. */
     on_open_file?: (file_path: string) => void
   } = $props()
@@ -302,6 +305,11 @@
           onclick={() => { if (active_tab) active_tab.sync_cwd = !active_tab.sync_cwd; tabs = [...tabs] }}
         >
           <Icon icon="Link" />
+        </button>
+      {/if}
+      {#if on_ask_catbot}
+        <button class="tw-icon-btn" title={t('app.ask_catbot')} onclick={on_ask_catbot}>
+          <Icon icon="Chat" />
         </button>
       {/if}
       {#if onpopout}
