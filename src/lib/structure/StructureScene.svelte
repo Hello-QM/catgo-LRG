@@ -4450,6 +4450,18 @@
     }
   })
 
+  // Orthographic pan-speed normalization (applied per-drag in `onstart` below).
+  // TrackballControls._panCamera scales on-screen pan by `_eye.length()` (the
+  // camera→target distance). With ortho, the 1/zoom term cancels against the
+  // projection's ×zoom, but eye.length has NO such cancellation — so the same drag
+  // pans little when the camera sits close (small molecule) and a lot when it sits
+  // far (large cell). We can't use structure_size as a proxy: compute_structure_size
+  // returns a flat 10 for non-periodic systems (no lattice), so it doesn't track the
+  // real distance. Instead we read the true eye length at drag start and set panSpeed
+  // = pan_speed × PAN_REF_EYE / eye, which makes on-screen pan ∝ pan_speed for every
+  // structure. PAN_REF_EYE is the eye length at which the user's pan_speed is left
+  // unchanged. Perspective pan already tracks the cursor 1:1, so it's left alone.
+  const PAN_REF_EYE = 50
   let trackball_controls_props = $derived.by(() => ({
     rotateSpeed: rotate_speed,
     zoomSpeed: camera_projection === `orthographic` ? zoom_speed * 2 : zoom_speed,
@@ -4476,6 +4488,12 @@
     // The target is managed programmatically in the $effect blocks above.
     onstart: () => {
       camera_is_moving = true
+      // Normalize ortho pan to the true camera→target distance so a drag pans the
+      // same on-screen amount regardless of structure size (see PAN_REF_EYE note).
+      if (camera && orbit_controls?.target && camera_projection === `orthographic`) {
+        const eye = (camera as any).position.distanceTo(orbit_controls.target)
+        ;(orbit_controls as any).panSpeed = pan_speed * PAN_REF_EYE / Math.max(0.001, eye)
+      }
       capture_trackball_view_state()
       if (!trackball_is_rotating()) clear_trackball_rotation_inertia()
       // Don't clear hovered_idx here - let it stay so rotation stays disabled on atoms.
