@@ -1,8 +1,19 @@
 # API (Client-Direct) Session Persistence — Design Spec
 
 **Date:** 2026-06-16
-**Status:** Approved (design); ready for implementation plan
+**Status:** SHIPPED — but **PIVOTED during implementation** (commit 23e0930). See note below.
 **Branch target:** `feat/pane-tree-core`
+
+> **⚠️ Implementation pivot (2026-06-16):** During build we found CatGo *already* has a
+> client-side session system — `session_list` + `persist_session_messages`/`load_session_messages`
+> (localStorage), surfaced in the Sessions tab (`all_sessions`, resume/delete). The only gap was
+> that the round-end persist keyed off `agent_from_provider(provider)` → **null for API providers**,
+> so API rounds were skipped. So instead of the IndexedDB store below, we **extended the existing
+> system**: API rounds mint a per-tab id, call `record_session` + `persist_session_messages`, set it
+> on resume, reset on `new_session`, and `ChatPane` auto-restores the newest API session on mount.
+> No new store, no new dependency, ~49 lines. The IndexedDB design below is retained for reference
+> only — the localStorage cap (400 msgs/session) is accepted (same as SDK sessions). If that cap
+> ever bites, migrating *all* sessions to IndexedDB is the principled follow-up.
 
 ## Goal
 
