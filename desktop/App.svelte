@@ -65,6 +65,7 @@
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
+  import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
   // Extracted tab manager (factory — must be called in component context)
   import { create_tab_manager } from './lib/tab-manager.svelte'
   // Extracted close-all helpers (pure functions)
@@ -348,6 +349,27 @@
     const close = () => { type_menu_leaf_id = null }
     window.addEventListener('click', close)
     return () => window.removeEventListener('click', close)
+  })
+
+  // Register the terminal opener for CatBot: when no terminal is active,
+  // this spawns a local terminal leaf in the active tab and waits for its PTY.
+  $effect(() => {
+    set_terminal_opener(async (): Promise<TerminalHandle | null> => {
+      const ts = get_active_ts()
+      if (!ts) return null
+      const r = escalateForImport(ts.root, ts.active_leaf_id)
+      if (!r) return null
+      ts.root = setLeafContent(r.root, r.leafId, { type: `terminal`, term: { sync_cwd: false } })
+      ts.active_leaf_id = r.leafId
+      // Wait (bounded) for the new TerminalPanel to spawn its PTY and register.
+      for (let i = 0; i < 60; i++) {
+        await new Promise((res) => setTimeout(res, 100))
+        const h = get_active_terminal()
+        if (h) return h
+      }
+      return null
+    })
+    return () => set_terminal_opener(null)
   })
 
   // Pop a terminal leaf out into its own window, then drop it from the source tree.
