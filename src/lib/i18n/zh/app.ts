@@ -22,6 +22,7 @@ const app: Record<string, string> = {
   type_empty: `清空`,
   dir_sync_on: `目录同步 开 — 文件面板跟随终端目录`,
   dir_sync_off: `目录同步 关 — 点击开启跟随终端目录`,
+  ask_catbot: `让 CatBot 处理此终端`,
   workflow_will_be_closed: `工作流将被关闭。`,
   local: `本地`,
   hpc: `HPC`,

@@ -22,6 +22,7 @@ const app: Record<string, string> = {
   type_empty: `Empty`,
   dir_sync_on: `Directory sync ON — Files panel follows terminal CWD`,
   dir_sync_off: `Directory sync OFF — click to follow terminal CWD`,
+  ask_catbot: `Ask CatBot about this terminal`,
   workflow_will_be_closed: `Workflow will be closed.`,
   local: `Local`,
   hpc: `HPC`,
