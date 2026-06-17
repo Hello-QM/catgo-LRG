@@ -94,6 +94,25 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     }
   })
 
+  // Auto-fetch live models when on/switching to an API provider that has a key
+  // and isn't cached yet — so the dropdown reflects the provider's real
+  // /v1/models instead of the curated seed, with no manual button click. Keyed
+  // on the provider (not the key string) so it fires on provider switch / mount,
+  // not on every keystroke; first-time key entry still uses the button. SDK
+  // agents have no /models endpoint and ollama fetches its own tags on mount, so
+  // both are skipped here.
+  const _auto_fetched = new Set<string>()
+  $effect(() => {
+    const provider = chat_config.provider
+    untrack(() => {
+      if (PROVIDER_META[provider]?.group !== `api`) return
+      if (_auto_fetched.has(provider)) return  // once per session — cached list shows instantly meanwhile
+      if (!chat_config.api_key?.trim()) return
+      _auto_fetched.add(provider)
+      fetch_provider_models()  // refreshes the cache so newly-released models appear
+    })
+  })
+
 
   /** Test the current provider configuration */
   async function test_provider_connection() {
@@ -206,7 +225,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         const models = data.models as { id: string; label: string }[]
         const updates: Partial<typeof chat_config> = {
           fetched_models: { ...(chat_config.fetched_models ?? {}), [chat_config.provider]: models },
-          model: models[0]?.id ?? chat_config.model,
+          // Keep the user's current model if the live list still has it (so an
+          // auto-fetch on mount/provider-switch doesn't reset their choice);
+          // otherwise fall back to the first model.
+          model: models.find((m) => m.id === chat_config.model)?.id ?? models[0]?.id ?? chat_config.model,
         }
         if (chat_config.provider === `custom` && data.api_format) {
           updates.api_format = data.api_format
