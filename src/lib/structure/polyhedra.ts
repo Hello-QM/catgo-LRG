@@ -121,6 +121,29 @@ function is_anion_vertex(
   return center_is_metal && n_data?.nonmetal === true
 }
 
+// --- Bond graph adjacency helper ---
+
+// Site index -> bonded neighbours, each carrying the neighbour's Cartesian
+// position taken from the bond endpoint. CatGo bonds already apply the PBC
+// `jimage` to pos_1/pos_2, so cross-cell neighbours come back at their image
+// position and polyhedra close across boundaries with no structure expansion.
+export function build_bond_adjacency(
+  bonds: readonly BondPair[],
+): Map<number, { idx: number; pos: Vec3 }[]> {
+  const adj = new Map<number, { idx: number; pos: Vec3 }[]>()
+  const link = (from: number, to: number, pos: Vec3) => {
+    const list = adj.get(from)
+    if (list) list.push({ idx: to, pos })
+    else adj.set(from, [{ idx: to, pos }])
+  }
+  for (const b of bonds) {
+    if (b.site_idx_1 === b.site_idx_2) continue
+    link(b.site_idx_1, b.site_idx_2, b.pos_2)
+    link(b.site_idx_2, b.site_idx_1, b.pos_1)
+  }
+  return adj
+}
+
 // --- Fast polyhedra: distance cutoff + Crystal Toolkit electronegativity filter ---
 
 /**
