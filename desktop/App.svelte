@@ -1852,7 +1852,7 @@
           />
         {/if}
         <PaneTree
-          node={ts.root}
+          root={ts.root}
           multi={leafCount(ts.root) > 1}
           active_leaf_id={ts.active_leaf_id}
           drag_target_leaf={tab.id === tm.active_tab_id ? drag_target_leaf : null}
