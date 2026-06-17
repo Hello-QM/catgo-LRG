@@ -46,6 +46,7 @@
   }
   import { type BondingStrategy, compute_bond_transform, get_bond_key } from './bonding'
   import { compute_bonds_sync } from './workers/bond-worker-api'
+  import { apply_bond_distance_rules } from './bond-distance-rules'
   import type { BondKind } from './bonding/bond-manager.svelte'
   import { BOND_KIND } from './bonding/bond-manager.svelte'
   import { BondManager } from './bonding/bond-manager.svelte'
@@ -2609,7 +2610,17 @@
       // render bond mode (solid_angle under-coordinates octahedra). Compute
       // atom_radii bonds (PBC-aware via WASM) just for polyhedra; fall back to
       // the rendered bonds if the sync path is unavailable (large cell / no WASM).
-      const poly_bonds = compute_bonds_sync(base_structure, `atom_radii`, {}) ?? visible_bond_pairs
+      const poly_bonds_raw = compute_bonds_sync(base_structure, `atom_radii`, {}) ??
+        visible_bond_pairs
+      // Honour per-pair distance rules in polyhedra too, so a ruled pair's
+      // coordination shell matches the rendered bonds (generate + filter).
+      const base_lat_m = (base_structure as { lattice?: { matrix?: unknown } }).lattice?.matrix
+      const base_lat = (Array.isArray(base_lat_m) && base_lat_m.length === 3)
+        ? base_lat_m as [Vec3, Vec3, Vec3]
+        : null
+      const poly_bonds = apply_bond_distance_rules(
+        base_structure, base_lat, poly_bonds_raw, bond_distance_rules ?? [],
+      )
       return compute_polyhedra_from_bonds(base_structure, poly_bonds, {
         center_elements: polyhedra_center_elements ?? [],
         min_coordination: polyhedra_min_coordination ?? 4,
@@ -2903,12 +2914,17 @@
     const _rules_len = bond_distance_rules?.length ?? 0
     const _deleted_size = _deleted_bond_keys.size
 
-    // Build element-pair distance rule lookup map
-    const rule_map = new Map<string, { min: number; max: number }>()
-    for (const r of bond_distance_rules ?? []) {
-      const key = [r.element_1, r.element_2].sort().join(`-`)
-      rule_map.set(key, { min: r.min_dist, max: r.max_dist })
-    }
+    // Apply per-element-pair distance rules. For a ruled pair this REPLACES the
+    // strategy bonds with every PBC pair within [min,max] (so it both removes
+    // over-long bonds and ADDS missing in-range bonds the strategy didn't find);
+    // pairs without a rule keep their strategy bonds untouched.
+    const lat_m = (bond_struct as { lattice?: { matrix?: unknown } }).lattice?.matrix
+    const lat_matrix = (Array.isArray(lat_m) && lat_m.length === 3)
+      ? lat_m as [Vec3, Vec3, Vec3]
+      : null
+    const ruled_bonds = apply_bond_distance_rules(
+      bond_struct, lat_matrix, bond_pairs, bond_distance_rules ?? [],
+    )
 
     const is_site_visible = (site_idx: number) => {
       const site = bond_struct.sites[site_idx]
@@ -2922,8 +2938,8 @@
       return has_visible_element && prop_visible
     }
 
-    // Start with auto-detected bonds, filter out deleted, hidden, and invalid transforms
-    let result = bond_pairs.filter((bond) => {
+    // Start from the rule-aware bonds; filter out deleted, hidden, and invalid transforms
+    let result = ruled_bonds.filter((bond) => {
       if (!bond.transform_matrix || bond.transform_matrix.some((v) => !Number.isFinite(v))) return false
       // Hard cap on rendered bond length. No real covalent bond exceeds this;
       // anything longer is a PBC/image rendering artifact (e.g. a bond drawn
@@ -2932,16 +2948,6 @@
       const key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
       if (_deleted_bond_keys.has(key)) return false
       if (!is_site_visible(bond.site_idx_1) || !is_site_visible(bond.site_idx_2)) return false
-      // Per-element-pair distance rule filtering
-      if (rule_map.size > 0) {
-        const el1 = bond_struct.sites[bond.site_idx_1]?.species[0]?.element
-        const el2 = bond_struct.sites[bond.site_idx_2]?.species[0]?.element
-        if (el1 && el2) {
-          const pair_key = [el1, el2].sort().join(`-`)
-          const rule = rule_map.get(pair_key)
-          if (rule && (bond.bond_length < rule.min || bond.bond_length > rule.max)) return false
-        }
-      }
       return true
     })
 
