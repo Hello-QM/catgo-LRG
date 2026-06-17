@@ -50,8 +50,12 @@ function site(element: string, xyz: Vec3): Site {
   } as unknown as Site
 }
 
-function struct(sites: Site[]): AnyStructure {
-  return { sites } as unknown as AnyStructure
+function struct(
+  sites: Site[],
+  matrix?: [[number,number,number],[number,number,number],[number,number,number]],
+): AnyStructure {
+  if (!matrix) return { sites } as unknown as AnyStructure
+  return { sites, lattice: { matrix } } as unknown as AnyStructure
 }
 
 // Ti at origin (idx 0) octahedrally coordinated by 6 O at ±2 Å (idx 1..6)
@@ -92,13 +96,44 @@ describe(`compute_polyhedra_from_bonds — core`, () => {
     expect(compute_polyhedra_from_bonds(struct(sites), bonds)).toHaveLength(0) // CN 2 < 4
   })
 
-  it(`closes across PBC using image positions carried on the bond`, () => {
-    // Ti at a corner; 6 O reached only via image bonds (pos_2 already image-shifted)
-    const polys = compute_polyhedra_from_bonds(
-      struct(octahedron_sites()),
-      OCTA_OFFSETS.map((o, k) => bond(0, k + 1, [0, 0, 0], o, [1, 0, 0])),
+  it(`closes across PBC: raw in-cell pos_2 + non-zero jimage + real lattice`, () => {
+    // 4 Å cubic lattice. Ti at origin. 6 O neighbours: three have in-cell positions
+    // (jimage [0,0,0]) and three are across a cell boundary (negative jiimages).
+    // build_bond_adjacency must apply the shift pos + lattice·jimage; without it
+    // the cross-cell vertices stay at wrong in-cell coordinates.
+    const LAT: [[number,number,number],[number,number,number],[number,number,number]] =
+      [[4,0,0],[0,4,0],[0,0,4]]
+    // Pairs: [home-cell pos, jimage] → expected final vertex pos after shift.
+    // In-cell O (jimage [0,0,0]): final pos = home pos.
+    // Cross-cell O (jimage e.g. [0,-1,0]): final pos = home + lattice·jimage.
+    const BONDS: Array<{ o_home: [number,number,number]; ji: [number,number,number]; expected: [number,number,number] }> = [
+      { o_home: [2,0,0],  ji: [0, 0, 0],  expected: [ 2, 0, 0] },
+      { o_home: [2,0,0],  ji: [-1,0, 0],  expected: [-2, 0, 0] },  // shift by -4 in x
+      { o_home: [0,2,0],  ji: [0, 0, 0],  expected: [ 0, 2, 0] },
+      { o_home: [0,2,0],  ji: [0,-1, 0],  expected: [ 0,-2, 0] },  // shift by -4 in y
+      { o_home: [0,0,2],  ji: [0, 0, 0],  expected: [ 0, 0, 2] },
+      { o_home: [0,0,2],  ji: [0, 0,-1],  expected: [ 0, 0,-2] },  // shift by -4 in z
+    ]
+    const sites = [
+      site(`Ti`, [0, 0, 0] as [number,number,number]),
+      ...BONDS.map((_, k) => site(`O`, BONDS[k].o_home)),
+    ]
+    const bonds_arr = BONDS.map((b, k) =>
+      bond(0, k + 1, [0, 0, 0] as [number,number,number], b.o_home, b.ji),
     )
+
+    const polys = compute_polyhedra_from_bonds(struct(sites, LAT), bonds_arr)
+    expect(polys).toHaveLength(1)
     expect(polys[0].neighbor_indices).toHaveLength(6)
+    // Each expected vertex must appear in the polyhedron vertices
+    const verts = polys[0].vertices
+    for (const { expected } of BONDS) {
+      const [ex, ey, ez] = expected
+      expect(
+        verts.some(v => Math.abs(v[0]-ex) < 1e-9 && Math.abs(v[1]-ey) < 1e-9 && Math.abs(v[2]-ez) < 1e-9),
+        `vertex at ${expected}`,
+      ).toBe(true)
+    }
   })
 })
 

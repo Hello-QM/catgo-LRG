@@ -100,12 +100,30 @@ function is_anion_vertex(
 
 // --- Bond graph adjacency helper ---
 
-// Site index -> bonded neighbours, each carrying the neighbour's Cartesian
-// position taken from the bond endpoint. CatGo bonds already apply the PBC
-// `jimage` to pos_1/pos_2, so cross-cell neighbours come back at their image
-// position and polyhedra close across boundaries with no structure expansion.
+// Apply lattice·jimage offset to a Cartesian position.
+// m = lattice matrix rows [a, b, c]; only applied when jimage is non-zero and
+// lattice is present. Mirrors bond-computation-controller.svelte.ts apply_jimage.
+function shift_by_jimage(
+  p: Vec3,
+  j: [number, number, number],
+  m: [Vec3, Vec3, Vec3] | null,
+): Vec3 {
+  if (!m || (j[0] === 0 && j[1] === 0 && j[2] === 0)) return p
+  return [
+    p[0] + j[0] * m[0][0] + j[1] * m[1][0] + j[2] * m[2][0],
+    p[1] + j[0] * m[0][1] + j[1] * m[1][1] + j[2] * m[2][1],
+    p[2] + j[0] * m[0][2] + j[1] * m[1][2] + j[2] * m[2][2],
+  ]
+}
+
+// Site index -> bonded neighbours with PBC-correct Cartesian positions.
+// When lattice is supplied, cross-cell neighbours are shifted by lattice·jimage:
+//   forward  (neighbour = site_idx_2): pos = shift(pos_2,  +jimage, lattice)
+//   reverse  (neighbour = site_idx_1): pos = shift(pos_1,  -jimage, lattice)
+// When lattice is null the base pos is used unchanged (molecules / jimage [0,0,0]).
 export function build_bond_adjacency(
   bonds: readonly BondPair[],
+  lattice: [Vec3, Vec3, Vec3] | null = null,
 ): Map<number, { idx: number; pos: Vec3 }[]> {
   const adj = new Map<number, { idx: number; pos: Vec3 }[]>()
   const link = (from: number, to: number, pos: Vec3) => {
@@ -115,8 +133,10 @@ export function build_bond_adjacency(
   }
   for (const b of bonds) {
     if (b.site_idx_1 === b.site_idx_2) continue
-    link(b.site_idx_1, b.site_idx_2, b.pos_2)
-    link(b.site_idx_2, b.site_idx_1, b.pos_1)
+    const j = b.jimage ?? [0, 0, 0] as [number, number, number]
+    const neg_j: [number, number, number] = [-j[0], -j[1], -j[2]]
+    link(b.site_idx_1, b.site_idx_2, shift_by_jimage(b.pos_2, j, lattice))
+    link(b.site_idx_2, b.site_idx_1, shift_by_jimage(b.pos_1, neg_j, lattice))
   }
   return adj
 }
@@ -148,7 +168,11 @@ export function compute_polyhedra_from_bonds(
 
   const explicit = center_elements.length > 0
   const allow = new Set(center_elements)
-  const adjacency = build_bond_adjacency(bonds)
+  const lattice = (structure as { lattice?: { matrix?: unknown } }).lattice?.matrix
+  const lat = (Array.isArray(lattice) && lattice.length === 3)
+    ? lattice as [Vec3, Vec3, Vec3]
+    : null
+  const adjacency = build_bond_adjacency(bonds, lat)
   const candidates: PolyhedronData[] = []
 
   for (const [center_idx, neighbors] of adjacency) {
