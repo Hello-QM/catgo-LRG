@@ -32,6 +32,12 @@ export interface PaneState {
   local_file_path?: string | null
   /** Filename of the loaded structure file */
   source_filename?: string | null
+  /** Which viewer renders this pane. Absent/'native' = Three.js viewer. */
+  viewer_kind?: 'native' | 'molstar'
+  /** Raw file text for Mol* (bio files bypass pymatgen parsing). */
+  bio_raw_content?: string
+  /** Mol* format string ('pdb' | 'mmcif') for loadStructureFromData. */
+  bio_format?: string
 }
 
 export type LayoutType = 'single' | 'splitH' | 'splitV' | 'quad'
@@ -55,6 +61,9 @@ export interface LibraryEntry {
   cube_file?: File | null
   raw_traj_b64?: string
   raw_traj_format?: string
+  viewer_kind?: 'native' | 'molstar'
+  bio_raw_content?: string
+  bio_format?: string
 }
 
 export interface StructureTabState {

@@ -13,6 +13,9 @@
   import { line, curveMonotoneX } from 'd3-shape'
   import { extent } from 'd3-array'
   import { onMount, onDestroy } from 'svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+
+  load_i18n_module(`structure`)
 
   let {
     show = $bindable(false),
@@ -28,6 +31,8 @@
   let active_constraint = $state(1)
   let active_plot = $state<'mean_force' | 'free_energy' | 'cv' | 'dA_dxsi'>(`free_energy`)
   let detect_status = $state(``)
+  let export_status = $state(``)
+  let exporting = $state(false)
   let source_label = $state(``) // show where the REPORT came from
   /** Track terminal CWD per session_id for REPORT detection */
   let session_cwd = $state(new Map<string, string>())
@@ -269,32 +274,51 @@
   })
 
   function export_csv() {
-    if (!constraint_data) return
-    const cd = constraint_data
-    const has_bm_data = cd.mean_force.length > 0 && cd.mean_force.some((v: number) => v !== 0)
-    let header: string
-    let rows: string[]
-
-    if (has_bm_data) {
-      header = `step,cv_target,cv_actual,cv_diff,lambda,z_inv_sqrt,GkT,mean_force,delta_F`
-      rows = cd.step.map((s: number, i: number) =>
-        `${s},${cd.cv_target[i]},${cd.cv_actual[i]},${cd.cv_diff[i]},${cd.lambda_val[i]},${cd.z_inv_sqrt[i]},${cd.GkT[i]},${cd.mean_force[i]},${cd.delta_F[i]}`,
-      )
-    } else {
-      header = `step,cv,dcv,dA_dxsi,delta_F`
-      rows = cd.step.map((s: number, i: number) =>
-        `${s},${cd.cv[i]},${cd.dcv[i]},${cd.dA_dxsi[i]},${cd.delta_F[i]}`,
-      )
+    export_status = ``
+    if (!constraint_data) {
+      export_status = t(`structure.export_no_slowgrowth_data`)
+      return
     }
+    exporting = true
+    try {
+      const cd = constraint_data
+      const has_bm_data = cd.mean_force.length > 0 && cd.mean_force.some((v: number) => v !== 0)
+      let header: string
+      let rows: string[]
 
-    const csv_text = [header, ...rows].join(`\n`)
-    const blob = new Blob([csv_text], { type: `text/csv` })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `slow_growth_b${active_constraint}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+      if (has_bm_data) {
+        header = `step,cv_target,cv_actual,cv_diff,lambda,z_inv_sqrt,GkT,mean_force,delta_F`
+        rows = cd.step.map((s: number, i: number) =>
+          `${s},${cd.cv_target[i]},${cd.cv_actual[i]},${cd.cv_diff[i]},${cd.lambda_val[i]},${cd.z_inv_sqrt[i]},${cd.GkT[i]},${cd.mean_force[i]},${cd.delta_F[i]}`,
+        )
+      } else {
+        header = `step,cv,dcv,dA_dxsi,delta_F`
+        rows = cd.step.map((s: number, i: number) =>
+          `${s},${cd.cv[i]},${cd.dcv[i]},${cd.dA_dxsi[i]},${cd.delta_F[i]}`,
+        )
+      }
+
+      if (rows.length === 0) {
+        export_status = t(`structure.export_no_rows`, { constraint: active_constraint })
+        return
+      }
+
+      const csv_text = [header, ...rows].join(`\n`)
+      const blob = new Blob([csv_text], { type: `text/csv;charset=utf-8` })
+      const url = URL.createObjectURL(blob)
+      const filename = `slow_growth_b${active_constraint}.csv`
+      const a = document.createElement(`a`)
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      export_status = t(`structure.export_started`, { filename })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      export_status = t(`structure.export_failed`, { what: `CSV`, message })
+    } finally {
+      exporting = false
+    }
   }
 </script>
 
@@ -488,8 +512,13 @@
 
     <!-- Export -->
     <div class="export-row">
-      <button class="sg-btn" onclick={export_csv}>Export CSV</button>
+      <button class="sg-btn" onclick={export_csv} disabled={exporting || !constraint_data}>
+        {exporting ? `Exporting...` : `Export CSV`}
+      </button>
     </div>
+    {#if export_status}
+      <div class="export-status">{export_status}</div>
+    {/if}
   {/if}
 </DraggablePane>
 
@@ -547,6 +576,10 @@
     cursor: pointer;
   }
   .sg-btn:hover { background: rgba(255,255,255,0.12); }
+  .sg-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .detect-btn {
     background: rgba(79, 195, 247, 0.1);
     border-color: rgba(79, 195, 247, 0.3);
@@ -654,5 +687,10 @@
     display: flex;
     gap: 0.5rem;
     margin-top: 0.5rem;
+  }
+  .export-status {
+    margin-top: 0.35rem;
+    font-size: 0.78em;
+    color: #fbbf24;
   }
 </style>

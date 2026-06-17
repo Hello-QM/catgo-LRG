@@ -247,6 +247,58 @@ def _sync_seed_workflow_templates() -> None:
         logger.warning("Workflow template seeding failed: %s", exc)
 
 
+def _sync_setup_claude_integration() -> None:
+    """Blocking: register the catgo MCP server + skills with Claude Code.
+
+    Runs ONLY in the bundled (frozen) desktop app. Installer users have no
+    `catgo` CLI on PATH, so the server self-registers on startup: it writes the
+    HTTP MCP entry to ``~/.claude.json`` (the file Claude Code actually reads —
+    NOT ``~/.claude/mcp.json``) pointing at this server's own ``/api/mcp``, and
+    copies the campaign skills into ``~/.claude/skills``.
+
+    Gated on ``sys.frozen`` and an env opt-out so dev runs are untouched. Fully
+    guarded; ``ensure_claude_integration`` never raises. Idempotent — fine to
+    run on every launch.
+
+    The base URL is built from the module-global ``SERVER_PORT``, which is the
+    exact port uvicorn binds (the frozen sidecar is started with no ``--port``,
+    so ``run_port == SERVER_PORT``; and a frozen exe is never inside a worktree,
+    so the offset is 0 → port 8000 unless ``SERVER_PORT`` env overrides it).
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if os.environ.get("CATGO_NO_CLAUDE_SETUP") in ("1", "true"):
+        return
+    try:
+        from catgo.setup_claude import (
+            default_skills_dir,
+            ensure_claude_integration,
+        )
+
+        api_base = f"http://127.0.0.1:{SERVER_PORT}/api"
+        result = ensure_claude_integration(
+            api_base=api_base,
+            prefer_symlink=False,  # copy, not symlink — Windows non-admin safe
+            skills_src=default_skills_dir(),
+        )
+        if result.get("errors"):
+            logger.warning(
+                "Claude integration self-setup partial: mcp_url=%s skills=%d errors=%s",
+                result.get("mcp_url"),
+                len(result.get("skills") or []),
+                result["errors"],
+            )
+        else:
+            logger.info(
+                "Claude integration ready: MCP %s registered in %s, %d skill(s) installed",
+                result.get("mcp_url"),
+                result.get("claude_json"),
+                len(result.get("skills") or []),
+            )
+    except Exception as exc:
+        logger.warning("Claude integration self-setup failed (non-fatal): %s", exc)
+
+
 def _move_spa_fallback_last(app: "FastAPI") -> None:
     """Move the SPA catch-all route (`/{full_path:path}`) to the end of the
     route table so routers included after import time are matched first.
@@ -316,6 +368,15 @@ async def _deferred_startup(app: "FastAPI") -> None:
         await loop.run_in_executor(None, _sync_seed_workflow_templates)
     except Exception as exc:
         logger.warning("Workflow template executor failed: %s", exc)
+
+    # 5. Claude Code integration self-setup — register the catgo MCP server in
+    #    ~/.claude.json and install the campaign skills into ~/.claude/skills.
+    #    Only in the bundled (frozen) desktop app, where the user has no `catgo`
+    #    CLI on PATH to run `catgo setup` themselves. Idempotent (every launch).
+    try:
+        await loop.run_in_executor(None, _sync_setup_claude_integration)
+    except Exception as exc:
+        logger.warning("Claude integration self-setup executor failed: %s", exc)
 
 
 @asynccontextmanager

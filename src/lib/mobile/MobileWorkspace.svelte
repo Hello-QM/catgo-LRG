@@ -17,6 +17,9 @@
 -->
 <script lang="ts">
   import Structure from '$lib/structure/Structure.svelte'
+  import MolstarViewer from '$lib/structure/bio/MolstarViewer.svelte'
+  import BioViewerToggle from '$lib/structure/bio/BioViewerToggle.svelte'
+  import { detect_bio } from '$lib/structure/bio/detect'
   import Trajectory from '$lib/trajectory/Trajectory.svelte'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import { parse_any_structure } from '$lib/structure/parsers/dispatch'
@@ -84,6 +87,10 @@
   // Where the open structure came from, so Save knows to write it back.
   let remote_origin = $state<{ path: string; filename: string } | null>(null)
   let local_filename = $state(`structure.vasp`)
+  // Biomolecular files (PDB / bio-mmCIF) render in Mol*, not the native viewer.
+  let bio_raw_content = $state<string | null>(null)
+  let bio_format = $state(`pdb`)
+  let bio_viewer = $state(true)
   let files_open = $state(false)
   // AI chat overlay — available whenever the workspace is shown (works without a
   // cluster connection: the key-direct LLM path needs no backend).
@@ -322,6 +329,11 @@
     filename: string,
     origin: { path: string } | null,
   ): Promise<void> {
+    // Clear any prior bio state so a later trajectory/material load isn't
+    // hijacked by a stale protein.
+    bio_raw_content = null
+    bio_format = `pdb`
+    bio_viewer = true
     // Multi-frame file -> load the whole trajectory (with playback), not frame 1.
     if (is_trajectory_file(filename, content)) {
       try {
@@ -337,6 +349,19 @@
         /* fall back to single-structure parsing */
       }
     }
+    // Biological macromolecule → render in Mol* (bypass pymatgen parsing,
+    // which would drop residue/chain and choke on large proteins).
+    const bio = detect_bio(content, filename)
+    if (bio.isBio && bio.format) {
+      bio_raw_content = content
+      bio_format = bio.format
+      bio_viewer = true
+      structure = undefined
+      trajectory = undefined
+      saveable_structure = undefined
+      show_loaded(filename, origin)
+      return
+    }
     const parsed = parse_any_structure(content, filename)
     if (!parsed) {
       save_msg = t(`mobile.could_not_parse`, { filename })
@@ -346,6 +371,36 @@
     trajectory = undefined
     saveable_structure = undefined
     show_loaded(filename, origin)
+  }
+
+  /**
+   * Flip the mobile viewer between Mol* and native (manual override). Works for
+   * ANY loaded structure: with no bio raw text yet we serialize the current
+   * structure (CIF when periodic, else XYZ) and hand it to Mol*.
+   */
+  async function toggle_mobile_viewer(): Promise<void> {
+    if (bio_viewer && bio_raw_content) {
+      // → native: parse the raw text on demand
+      const parsed = parse_any_structure(bio_raw_content, local_filename)
+      if (parsed) structure = parsed
+      bio_viewer = false
+    } else {
+      // → Mol*: serialize the current structure if we have no raw text yet
+      if (!bio_raw_content && structure?.sites?.length) {
+        const { structure_to_cif_str, structure_to_xyz_str } = await import(
+          `$lib/structure/export`
+        )
+        const periodic = !!structure?.lattice?.matrix
+        bio_raw_content = periodic
+          ? structure_to_cif_str(structure)
+          : structure_to_xyz_str(structure)
+        bio_format = periodic ? `mmcif` : `xyz`
+      }
+      if (bio_raw_content) {
+        structure = undefined
+        bio_viewer = true
+      }
+    }
   }
 
   // ── Local file open (no cluster needed) ──
@@ -646,6 +701,18 @@
               hidden_toolbar_items: HIDDEN_TOOLBAR,
             }}
           />
+        {:else if bio_raw_content && bio_viewer && !structure}
+          <div class="mw-bio-wrap">
+            <div class="mw-bio-toolbar">
+              <BioViewerToggle is_molstar={true} on_toggle={toggle_mobile_viewer} />
+              <span class="mw-bio-name">{local_filename}</span>
+            </div>
+            <div class="mw-bio-fill">
+              {#key bio_raw_content}
+                <MolstarViewer content={bio_raw_content} format={bio_format} label={local_filename} />
+              {/key}
+            </div>
+          </div>
         {:else if has_structure}
           <Structure
             bind:structure
@@ -656,6 +723,7 @@
             allow_file_drop={false}
             persist_settings={false}
             hidden_toolbar_items={HIDDEN_TOOLBAR}
+            on_open_in_molstar={toggle_mobile_viewer}
             tab_id="mobile"
             is_active={true}
           />
@@ -1138,6 +1206,34 @@
   .mw-struct :global(.structure-main) {
     height: 100%;
     width: 100%;
+  }
+  .mw-bio-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .mw-bio-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-color, #ddd);
+    background: var(--panel-bg, rgba(0, 0, 0, 0.03));
+  }
+  .mw-bio-name {
+    font-size: 0.78rem;
+    color: var(--text-muted, #777);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mw-bio-fill {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
   }
   .mw-body.split-h .mw-struct,
   .mw-body.split-v .mw-struct {
