@@ -51,6 +51,7 @@ import { load_run_config } from '$lib/workflow/run-config-store'
 import { iter_workflow_slices } from '$lib/workflow/workflow-state.svelte'
 import { VIEWER_TOOLS } from './viewer-tools'
 import { TERMINAL_TOOLS } from './terminal-tools'
+import { CAMPAIGN_TOOLS } from './campaign-tools'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
 interface MutSite {
@@ -1463,6 +1464,7 @@ export async function execute_tool(
 // viewer-tools, which would hit a const temporal-dead-zone during circular init.
 for (const { def, run } of VIEWER_TOOLS) register(def, run)
 for (const { def, run } of TERMINAL_TOOLS) register(def, run)
+for (const { def, run } of CAMPAIGN_TOOLS) register(def, run)
 
 // Re-export so later tasks can register mutating tools that write structures back.
 export { register, set_current_structure }

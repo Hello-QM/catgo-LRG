@@ -2121,9 +2121,11 @@ async def _handle_skills(args: dict) -> list[TextContent]:
 # ---------------------------------------------------------------------------
 
 
-def _campaign_argv(action: str, extra: list[str]) -> list[str]:
-    """Build the argv for `python -m catgo campaign <action> <extra...>` (pure, testable)."""
-    return [sys.executable, "-m", "catgo", "campaign", action, *extra]
+# Pure argv builder kept as a thin alias over the shared helper so the SDK-agent
+# path and the client-direct HTTP route stay in lock-step (DRY). The PYTHONPATH
+# fix + subprocess live in catgo.campaign_cli.run_campaign_cli.
+from catgo.campaign_cli import campaign_argv as _campaign_argv  # noqa: E402
+from catgo.campaign_cli import run_campaign_cli as _run_campaign_cli  # noqa: E402
 
 
 async def _handle_campaign(args: dict) -> list[TextContent]:
@@ -2132,31 +2134,16 @@ async def _handle_campaign(args: dict) -> list[TextContent]:
     extra = [str(a) for a in (args.get("args") or [])]
     if not action:
         return [TextContent(type="text", text="error: 'action' is required")]
-    argv = _campaign_argv(action, extra)
-    # The `catgo` package lives at server/ but the backend process runs from a
-    # different cwd and catgo isn't pip-installed, so a bare `python -m catgo`
-    # subprocess fails with "No module named catgo". Put server/ (this file is
-    # server/catgo/mcp_tools/server_claude_code.py) on the child's PYTHONPATH.
-    server_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    child_env = {
-        **os.environ,
-        "PYTHONPATH": server_dir + os.pathsep + os.environ.get("PYTHONPATH", ""),
-    }
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=child_env,
-        )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
-        text = (out or b"").decode("utf-8", "replace")
-        status = "ok" if proc.returncode == 0 else f"exit {proc.returncode}"
-        return [TextContent(type="text", text=f"[catgo campaign {action}] {status}\n{text}".rstrip())]
-    except asyncio.TimeoutError:
-        return [TextContent(type="text", text=f"[catgo campaign {action}] still running after 300s — check the campaign folder / poll later.")]
+        text, code = await _run_campaign_cli(action, extra)
+    except ValueError as e:
+        return [TextContent(type="text", text=f"error: {e}")]
     except Exception as e:  # noqa: BLE001 — surface any launcher error to the agent
         return [TextContent(type="text", text=f"[catgo campaign {action}] error: {e}")]
+    if code == -1 and not text:
+        return [TextContent(type="text", text=f"[catgo campaign {action}] still running after 300s — check the campaign folder / poll later.")]
+    status = "ok" if code == 0 else f"exit {code}"
+    return [TextContent(type="text", text=f"[catgo campaign {action}] {status}\n{text}".rstrip())]
 
 
 async def _handle_terminal(args: dict) -> list[TextContent]:

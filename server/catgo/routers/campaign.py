@@ -12,6 +12,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from catgo.campaign_cli import run_campaign_cli
+
 router = APIRouter(prefix="/campaign", tags=["campaign"])
 
 _TEMPLATES = ("blank", "saa_her")
@@ -21,6 +23,11 @@ class CampaignCreateRequest(BaseModel):
     name: str
     base: str                       # parent directory (user-chosen location)
     template: str = "blank"
+
+
+class CampaignRunRequest(BaseModel):
+    action: str
+    args: list[str] = []
 
 
 def _campaign_lib():
@@ -53,3 +60,24 @@ def create_campaign(req: CampaignCreateRequest) -> dict:
     except Exception as exc:  # noqa: BLE001 — surface a clean 400 to the UI
         raise HTTPException(status_code=400, detail=f"scaffold failed: {exc}")
     return {"ok": True, "path": str(root), "name": name, "template": req.template}
+
+
+@router.post("/run")
+async def run_campaign(req: CampaignRunRequest) -> dict:
+    """Run any `catgo campaign <action> <args>` for the client-direct (API)
+    chat path, which can't reach the backend-only catgo_campaign MCP tool.
+    Mirrors that tool; the action is enum-validated and no shell is used."""
+    try:
+        output, exit_code = await run_campaign_cli(
+            req.action, [str(a) for a in req.args],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500 to the UI
+        raise HTTPException(status_code=500, detail=f"campaign run failed: {exc}")
+    return {
+        "ok": exit_code == 0,
+        "action": req.action,
+        "exit_code": exit_code,
+        "output": output,
+    }
