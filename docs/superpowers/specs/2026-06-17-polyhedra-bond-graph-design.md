@@ -2,7 +2,14 @@
 
 **Date:** 2026-06-17
 **Branch:** `feat/polyhedra-bond-graph`
-**Status:** design approved, pending plan
+**Status:** implemented on `feat/polyhedra-bond-graph`.
+
+> **CORRECTION (post-implementation):** the "BondPair already has `jimage` applied"
+> claim below (Key insight section) was WRONG — `bond.pos_1`/`pos_2` are RAW in-cell
+> base positions; the effective neighbour position is `pos + lattice·jimage`. The shift
+> is applied explicitly in `build_bond_adjacency` (forward `+jimage`, reverse `−jimage`),
+> which now takes the lattice matrix. PBC closure works, but via that explicit shift, not
+> "automatically". See `.git/sdd/final-fix-report.md` / commit `d320ac2`.
 
 ## Problem
 
