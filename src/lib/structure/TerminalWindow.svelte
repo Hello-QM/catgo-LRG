@@ -7,6 +7,7 @@
   import { hpc_session_store, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
   import { terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { t } from '$lib/i18n/index.svelte'
+  import ConnectDialog from '$lib/ConnectDialog.svelte'
 
   let {
     initial_session_id,
@@ -151,6 +152,7 @@
   // ====== New tab dropdown ======
 
   let show_new_menu = $state(false)
+  let show_connect_dialog = $state(false)
 
   function add_tab(server?: ServerOption) {
     const tab = make_tab(server)
@@ -237,6 +239,11 @@
           {#if servers_loading}
             <div class="tw-dropdown-note">Loading...</div>
           {/if}
+          <div class="tw-dropdown-divider"></div>
+          <button class="tw-dropdown-item" onclick={(e) => { e.stopPropagation(); show_connect_dialog = true; show_new_menu = false }}>
+            <span class="tw-dropdown-icon">🔗</span>
+            {t('app.connect_new_cluster')}
+          </button>
           <button class="tw-dropdown-item tw-dropdown-refresh" onclick={(e) => { e.stopPropagation(); refresh_servers() }}>
             ↻ Refresh
           </button>
@@ -345,6 +352,10 @@
     {/each}
   </div>
 </div>
+
+<!-- Connect-new-cluster modal: on success it adds the session to the shared
+     hpc store, which the $effect above picks up to refresh the "+" Remote list. -->
+<ConnectDialog bind:show={show_connect_dialog} />
 
 <style>
   .tw {
