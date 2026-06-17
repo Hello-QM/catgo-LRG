@@ -45,6 +45,7 @@
     Mesh.prototype.raycast = acceleratedRaycast
   }
   import { type BondingStrategy, compute_bond_transform, get_bond_key } from './bonding'
+  import { compute_bonds_sync } from './workers/bond-worker-api'
   import type { BondKind } from './bonding/bond-manager.svelte'
   import { BOND_KIND } from './bonding/bond-manager.svelte'
   import { BondManager } from './bonding/bond-manager.svelte'
@@ -2575,16 +2576,55 @@
   let polyhedra_data = $derived.by(() => {
     if (!show_polyhedra || !structure?.sites) return []
     try {
-      return compute_polyhedra_from_bonds(structure, filtered_bond_pairs, {
+      // Polyhedra need coordination-complete bonds, independent of the user's
+      // render bond mode (solid_angle under-coordinates octahedra). Compute
+      // atom_radii bonds (PBC-aware via WASM) just for polyhedra; fall back to
+      // the rendered bonds if the sync path is unavailable (large cell / no WASM).
+      const poly_bonds = compute_bonds_sync(structure, `atom_radii`, {}) ?? visible_bond_pairs
+      return compute_polyhedra_from_bonds(structure, poly_bonds, {
         center_elements: polyhedra_center_elements ?? [],
         min_coordination: polyhedra_min_coordination ?? 4,
         max_neighbors: polyhedra_max_neighbors ?? 8,
-        metals_only: polyhedra_metals_only ?? true,
+        metals_only: polyhedra_metals_only ?? false,
       })
     } catch (err) {
       console.warn(`[CatGo] Polyhedra computation failed:`, err)
       return []
     }
+  })
+
+  // Extend unit-cell polyhedra with copies for rendered image atoms.
+  // Hidden-atom/bond derivations stay on `polyhedra_data` (unit-cell only) so
+  // the same center_idx is not processed twice there. Only the geometry
+  // consumer (merge_polyhedra_geometry) needs the extended list.
+  let polyhedra_data_with_images = $derived.by((): PolyhedronData[] => {
+    if (!show_polyhedra || !show_image_atoms || !polyhedra_data.length) return polyhedra_data
+    const layout = image_atom_layout
+    if (!layout.n_image_atoms) return polyhedra_data
+    const mat = lattice?.matrix
+    if (!mat) return polyhedra_data
+    const center_set = new Set(polyhedra_data.map((p) => p.center_idx))
+    const extras: PolyhedronData[] = []
+    for (let img = 0; img < layout.n_image_atoms; img++) {
+      const orig_idx = layout.orig_site_indices[img]
+      if (!center_set.has(orig_idx)) continue
+      const jx = layout.jimage_offsets[img * 3]
+      const jy = layout.jimage_offsets[img * 3 + 1]
+      const jz = layout.jimage_offsets[img * 3 + 2]
+      // shift = jx*row0 + jy*row1 + jz*row2
+      const sx = jx * mat[0][0] + jy * mat[1][0] + jz * mat[2][0]
+      const sy = jx * mat[0][1] + jy * mat[1][1] + jz * mat[2][1]
+      const sz = jx * mat[0][2] + jy * mat[1][2] + jz * mat[2][2]
+      const proto = polyhedra_data.find((p) => p.center_idx === orig_idx)!
+      extras.push({
+        center_idx: proto.center_idx,
+        center_element: proto.center_element,
+        neighbor_indices: proto.neighbor_indices,
+        vertices: proto.vertices.map(([vx, vy, vz]) => [vx + sx, vy + sy, vz + sz]),
+      })
+    }
+    if (!extras.length) return polyhedra_data
+    return [...polyhedra_data, ...extras]
   })
 
   const EMPTY_POLYHEDRA_GEOM: MergedPolyhedraGeometry = {
@@ -2606,7 +2646,7 @@
   }
 
   let polyhedra_geometry = $derived.by(() => {
-    if (!polyhedra_data.length) return EMPTY_POLYHEDRA_GEOM
+    if (!polyhedra_data_with_images.length) return EMPTY_POLYHEDRA_GEOM
     // Resolve each hull corner's color per the active color mode. neighbor_indices
     // is parallel to vertices; -1 marks a PBC image -> fall back to the center color.
     const get_vertex_color = (poly: PolyhedronData, vertex_local_idx: number): string => {
@@ -2616,7 +2656,7 @@
       return site_idx >= 0 ? polyhedra_site_color(site_idx) : polyhedra_site_color(poly.center_idx)
     }
     try {
-      return merge_polyhedra_geometry(polyhedra_data, get_vertex_color)
+      return merge_polyhedra_geometry(polyhedra_data_with_images, get_vertex_color)
     } catch (err) {
       console.warn(`[CatGo] Polyhedra geometry merge failed:`, err)
       return EMPTY_POLYHEDRA_GEOM
@@ -2808,7 +2848,7 @@
   // Track which bonds are manual (for visual feedback)
   let manual_bond_keys = $derived.by(() => new Set(manual_bonds.map(b => get_bond_key(b.site_idx_1, b.site_idx_2))))
 
-  let filtered_bond_pairs = $derived.by(() => {
+  let visible_bond_pairs = $derived.by(() => {
     // Use last_bond_structure for site lookups — bond indices reference the
     // structure bonds were computed against. This also avoids a redundant
     // cascade (filtered → instanced → GPU) every time structure changes.
@@ -2898,6 +2938,16 @@
       })
     }
 
+    return result
+  })
+
+  // Bonds as actually rendered: visible_bond_pairs minus polyhedra-internal bonds
+  // (the polyhedron face covers them) and sphere-clip culling. Kept DOWNSTREAM of
+  // visible_bond_pairs so polyhedra_data (which consumes visible_bond_pairs) does
+  // NOT depend on polyhedra_hidden_bond_keys — that closes a derived cycle
+  // (polyhedra_data → bonds → polyhedra_hidden_bond_keys → polyhedra_data).
+  let filtered_bond_pairs = $derived.by(() => {
+    let result = visible_bond_pairs
     // Filter bonds hidden by polyhedra
     if (polyhedra_hidden_bond_keys.size > 0) {
       result = result.filter((bond) => {
@@ -2905,7 +2955,6 @@
         return !polyhedra_hidden_bond_keys.has(key)
       })
     }
-
     // Filter bonds outside sphere clipping radius
     if (clip_active && effective_clip_center && structure?.sites) {
       const r2 = clip_radius * clip_radius
@@ -2919,7 +2968,6 @@
       // Hide bonds where BOTH endpoints are outside the clip radius
       result = result.filter((bond) => is_inside(bond.site_idx_1) || is_inside(bond.site_idx_2))
     }
-
     return result
   })
 
