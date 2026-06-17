@@ -663,6 +663,15 @@ export async function send_message(
             }
             break
           case `result`:
+            // Surface SDK / bridge error results (e.g. usage-limit, spawn
+            // failure) instead of silently dropping them — otherwise an errored
+            // turn produces an empty bubble that gets cleaned up, reading as
+            // "no reply". errorMessage is set on the bridge's error path; the
+            // SDK's own result only carries isError.
+            if (event.isError) {
+              slice.error.value = (event.errorMessage as string) ||
+                `The agent returned an error (it may have hit a usage limit or failed to start). Try again.`
+            }
             break
           case `done`:
             // Stream finished cleanly. Normalise any indicator state — see
