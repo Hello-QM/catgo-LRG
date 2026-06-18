@@ -1611,19 +1611,6 @@
 
   // Drag/drop, resize handlers are in ./lib/drag-drop-handlers.ts and ./lib/resize-handlers.ts
 
-  let show_lab_link = $derived.by(() => {
-    // Show only on the landing state of the *currently active* structure
-    // tab. Using the first tab let the link bleed through to other tabs
-    // that already had a structure loaded.
-    const t = tm.active_tab
-    if (!t || t.type !== `structure`) return false
-    const ts = tab_states[t.id]
-    if (!ts) return false
-    const first = leaves(ts.root)[0]
-    const pane = first ? structurePane(first) : null
-    return !!pane && !pane_has_content(pane)
-  })
-
   // Global SSE listener for the External/MCP "default" panel.
   //
   // Lab claude (and any MCP client without an X-CatGo-Tab-Id header)
@@ -2217,6 +2204,18 @@
                     <path d="M12 17.27l5.18 3.13-1.37-5.9 4.59-3.97-6.04-.52L12 4.5 9.64 10l-6.04.52 4.59 3.97-1.37 5.9z"/>
                   </svg>
                 </a>
+                <!-- Lab link — same mode as the GitHub link above: an
+                     absolutely-positioned pill inside the landing block (top-left,
+                     mirroring GitHub at top-right). Landing-only by construction. -->
+                <a
+                  href="https://wanlulilab.ucsd.edu"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="lab-link"
+                  title="Dr. Wanlu Li Lab @ UCSD"
+                >
+                  Dr. Wanlu Li @UCSD
+                </a>
                 <div class="samples-grid">
                   {#each sample_structures as sample}
                     <button
@@ -2516,19 +2515,6 @@
       </div>
     </div>
   </div>
-{/if}
-
-<!-- Lab link -->
-{#if show_lab_link}
-  <a
-    href="https://wanlulilab.ucsd.edu"
-    target="_blank"
-    rel="noopener noreferrer"
-    class="lab-link"
-    title="Dr. Wanlu Li Lab @ UCSD"
-  >
-    Dr. Wanlu Li @UCSD
-  </a>
 {/if}
 
 <!-- Database search modal (needs backend proxy) -->
@@ -3435,25 +3421,34 @@
   */
   }
 
+  /* Same mode as .github-star: an absolutely-positioned pill in the landing
+     corner (top-left, mirroring GitHub at top-right) — not a fixed badge. */
   .lab-link {
-    position: fixed;
-    bottom: 12px;
-    right: 12px;
+    position: absolute;
+    top: 14px;
+    left: 16px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     padding: 6px 12px;
-    background: var(--surface-bg, rgba(30, 41, 59, 0.8));
-    border: 1px solid var(--text-color-muted, rgba(71, 85, 105, 0.4));
-    border-radius: 6px;
-    color: var(--text-color-muted, rgba(148, 163, 184, 0.9));
-    font-size: 11px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
     text-decoration: none;
-    z-index: 100;
-    transition: all 0.2s ease;
+    color: var(--text-color-muted, #9ca3af);
+    background: var(--surface-bg, rgba(255, 255, 255, 0.05));
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s, transform 0.15s;
   }
 
   .lab-link:hover {
-    background: rgba(30, 41, 59, 0.95);
-    border-color: rgba(59, 130, 246, 0.5);
-    color: #60a5fa;
+    color: var(--text-color, #f3f4f6);
+    background: var(--surface-bg-hover, rgba(255, 255, 255, 0.1));
+    border-color: var(--accent-color, cornflowerblue);
+    transform: translateY(-1px);
   }
 
   .loading {
