@@ -57,6 +57,7 @@ const structure: Record<string, string> = {
   outside_opacity: `外部不透明度`,
   polyhedra: `多面体`,
   show_polyhedra: `显示多面体`,
+  polyhedra_bond_scale: `键长系数`,
   polyhedra_centers: `中心元素`,
   polyhedra_centers_auto: `自动`,
   min_coordination: `最小配位数`,

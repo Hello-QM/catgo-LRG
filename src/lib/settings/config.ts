@@ -510,6 +510,16 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 4,
       maximum: 16,
     },
+    polyhedra_bond_scale: {
+      value: 1.15,
+      description:
+        `Bond cutoff for the atom_radii bonds that build polyhedra: connect when ` +
+        `distance ≤ scale × (sum of covalent radii). Tune independently of the ` +
+        `displayed bonds — lower for tighter coordination shells, higher to close ` +
+        `polyhedra with longer metal-ligand bonds.`,
+      minimum: 1.0,
+      maximum: 1.4,
+    },
     polyhedra_metals_only: {
       value: true,
       description:

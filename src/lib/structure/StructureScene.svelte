@@ -618,6 +618,7 @@
     polyhedra_center_elements = [] as string[],
     polyhedra_min_coordination = 3,
     polyhedra_max_neighbors = 8,
+    polyhedra_bond_scale = DEFAULTS.structure.polyhedra_bond_scale,
     polyhedra_metals_only = true,
     polyhedra_color_mode = `vertex` as import('$lib/settings').PolyhedraColorMode,
     polyhedra_color = `#4a90d9`,
@@ -871,6 +872,7 @@
     polyhedra_center_elements?: string[]
     polyhedra_min_coordination?: number
     polyhedra_max_neighbors?: number
+    polyhedra_bond_scale?: number
     polyhedra_metals_only?: boolean
     polyhedra_color_mode?: import('$lib/settings').PolyhedraColorMode
     polyhedra_color?: string
@@ -2616,10 +2618,11 @@
           : structure
       // Polyhedra need coordination-complete bonds, independent of the user's
       // render bond mode (solid_angle under-coordinates octahedra). Compute
-      // atom_radii bonds (PBC-aware via WASM) just for polyhedra; fall back to
-      // the rendered bonds if the sync path is unavailable (large cell / no WASM).
+      // atom_radii bonds (PBC-aware via WASM) just for polyhedra, with their own
+      // scale knob; fall back to the rendered bonds if the sync path is
+      // unavailable (large cell / no WASM).
       const poly_bonds_raw =
-        compute_bonds_sync(base_structure, `atom_radii`, { scale: bond_scale }) ??
+        compute_bonds_sync(base_structure, `atom_radii`, { scale: polyhedra_bond_scale }) ??
         visible_bond_pairs
       // Honour per-pair distance rules in polyhedra too, so a ruled pair's
       // coordination shell matches the rendered bonds (generate + filter).

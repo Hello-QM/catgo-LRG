@@ -1105,6 +1105,7 @@
       polyhedra_color_mode: scene_props.polyhedra_color_mode,
       polyhedra_show_edges: scene_props.polyhedra_show_edges,
       polyhedra_max_neighbors: scene_props.polyhedra_max_neighbors,
+      polyhedra_bond_scale: scene_props.polyhedra_bond_scale,
       polyhedra_edge_color: scene_props.polyhedra_edge_color,
       hide_polyhedra_center_atoms: scene_props.hide_polyhedra_center_atoms,
       hide_polyhedra_internal_bonds: scene_props.hide_polyhedra_internal_bonds,
@@ -1114,6 +1115,7 @@
       scene_props.polyhedra_center_elements = DEFAULTS.structure.polyhedra_center_elements
       scene_props.polyhedra_min_coordination = DEFAULTS.structure.polyhedra_min_coordination
       scene_props.polyhedra_max_neighbors = DEFAULTS.structure.polyhedra_max_neighbors
+      scene_props.polyhedra_bond_scale = DEFAULTS.structure.polyhedra_bond_scale
       scene_props.polyhedra_color_mode = DEFAULTS.structure.polyhedra_color_mode
       scene_props.polyhedra_color = DEFAULTS.structure.polyhedra_color
       scene_props.polyhedra_show_edges = DEFAULTS.structure.polyhedra_show_edges
@@ -1183,6 +1185,27 @@
           max="16"
           step="1"
           bind:value={scene_props.polyhedra_max_neighbors}
+        />
+      </label>
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.polyhedra_bond_scale.description,
+        })}
+      >
+        {t(`structure.polyhedra_bond_scale`)}
+        <input
+          type="number"
+          min={SETTINGS_CONFIG.structure.polyhedra_bond_scale.minimum}
+          max={SETTINGS_CONFIG.structure.polyhedra_bond_scale.maximum}
+          step={0.05}
+          bind:value={scene_props.polyhedra_bond_scale}
+        />
+        <input
+          type="range"
+          min={SETTINGS_CONFIG.structure.polyhedra_bond_scale.minimum}
+          max={SETTINGS_CONFIG.structure.polyhedra_bond_scale.maximum}
+          step={0.05}
+          bind:value={scene_props.polyhedra_bond_scale}
         />
       </label>
       <label>

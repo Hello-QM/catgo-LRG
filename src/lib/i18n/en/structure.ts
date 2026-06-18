@@ -57,6 +57,7 @@ const structure: Record<string, string> = {
   outside_opacity: `Outside Opacity`,
   polyhedra: `Polyhedra`,
   show_polyhedra: `Show Polyhedra`,
+  polyhedra_bond_scale: `Bond scale`,
   polyhedra_centers: `Centers`,
   polyhedra_centers_auto: `Auto`,
   min_coordination: `Min Coordination`,
