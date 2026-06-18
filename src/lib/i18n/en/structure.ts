@@ -48,6 +48,7 @@ const structure: Record<string, string> = {
   orthographic: `Orthographic`,
   strategy: `Strategy`,
   thickness: `Thickness`,
+  bond_scale: `Bond scale`,
   cell_edge_stub_bonds: `Cell-edge stub bonds`,
   stub_length: `Stub Length`,
   clipping: `Clipping`,

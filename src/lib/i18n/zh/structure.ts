@@ -48,6 +48,7 @@ const structure: Record<string, string> = {
   orthographic: `正交`,
   strategy: `策略`,
   thickness: `粗细`,
+  bond_scale: `键长系数`,
   cell_edge_stub_bonds: `晶胞边缘短键`,
   stub_length: `短键长度`,
   clipping: `裁剪`,

@@ -458,6 +458,7 @@
     show_image_atoms = false,
     bonding_strategy = DEFAULTS.structure.bonding_strategy,
     bonding_options = {},
+    bond_scale = DEFAULTS.structure.bond_scale,
     show_hydrogen_bonds = DEFAULTS.structure.show_hydrogen_bonds,
     hbond_distance_cutoff = DEFAULTS.structure.hbond_distance_cutoff,
     hbond_angle_cutoff = DEFAULTS.structure.hbond_angle_cutoff,
@@ -709,6 +710,7 @@
     bond_color?: string
     bonding_strategy?: BondingStrategy
     bonding_options?: Record<string, unknown>
+    bond_scale?: number
     show_hydrogen_bonds?: boolean
     hbond_distance_cutoff?: number
     hbond_angle_cutoff?: number
@@ -2040,11 +2042,17 @@
   // cross-cell bonds with `image` populated; the renderer paints two
   // halves anchored at the original atoms.
   let bond_input = $derived(bond_input_structure ?? structure)
+  // Merge the user-tunable `bond_scale` into the strategy options. atom_radii
+  // reads `scale` (bond iff dist ≤ scale·Σr); electroneg/solid_angle ignore it.
+  let bonding_options_eff = $derived({
+    ...(bonding_options as Record<string, unknown>),
+    scale: bond_scale,
+  })
   $effect.pre(() => {
     compute_bond_connectivity(
       bond_state, (pairs) => { bond_pairs = pairs },
       bond_input, show_bonds, lattice, bonding_strategy,
-      bonding_options, external_dragging,
+      bonding_options_eff, external_dragging,
     )
   })
 
@@ -2059,7 +2067,7 @@
     compute_bond_connectivity(
       bond_state, (pairs) => { bond_pairs = pairs },
       bond_input, show_bonds, lattice, bonding_strategy,
-      bonding_options, external_dragging,
+      bonding_options_eff, external_dragging,
     )
   })))
 
@@ -2610,7 +2618,8 @@
       // render bond mode (solid_angle under-coordinates octahedra). Compute
       // atom_radii bonds (PBC-aware via WASM) just for polyhedra; fall back to
       // the rendered bonds if the sync path is unavailable (large cell / no WASM).
-      const poly_bonds_raw = compute_bonds_sync(base_structure, `atom_radii`, {}) ??
+      const poly_bonds_raw =
+        compute_bonds_sync(base_structure, `atom_radii`, { scale: bond_scale }) ??
         visible_bond_pairs
       // Honour per-pair distance rules in polyhedra too, so a ruled pair's
       // coordination shell matches the rendered bonds (generate + filter).
@@ -3659,7 +3668,7 @@
         // behavior as flag-off), which is still correct but slower.
         const ok = apply_atom_add_incremental(
           bond_state, added, bond_manager, new_sites as Site[],
-          structure, bonding_strategy, bonding_options as Record<string, unknown>,
+          structure, bonding_strategy, bonding_options_eff,
         )
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -3691,7 +3700,7 @@
         // element change — covalent radius shifts).
         const ok = apply_atom_replace_incremental(
           bond_state, replacements, bond_manager, new_sites as Site[],
-          structure, bonding_strategy, bonding_options as Record<string, unknown>,
+          structure, bonding_strategy, bonding_options_eff,
         )
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -3716,7 +3725,7 @@
         // apply_atom_move_incremental about the drag fast-path.
         const ok = apply_atom_move_incremental(
           bond_state, moved, bond_manager, new_sites as Site[],
-          structure, bonding_strategy, bonding_options as Record<string, unknown>,
+          structure, bonding_strategy, bonding_options_eff,
         )
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -5355,7 +5364,7 @@
           {cutting_slab_preview}
           {cutting_show_bonds}
           {bonding_strategy}
-          {bonding_options}
+          bonding_options={bonding_options_eff}
           {bond_thickness}
           {bond_color}
           {ambient_light}

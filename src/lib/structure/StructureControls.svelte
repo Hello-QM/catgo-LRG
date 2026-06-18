@@ -943,6 +943,7 @@
         bonding_strategy: scene_props.bonding_strategy,
         bond_color: scene_props.bond_color,
         bond_thickness: scene_props.bond_thickness,
+        bond_scale: scene_props.bond_scale,
         incomplete_periodic_edge_mode: scene_props.incomplete_periodic_edge_mode,
         incomplete_edge_length_scale: scene_props.incomplete_edge_length_scale,
       }}
@@ -950,6 +951,7 @@
         scene_props.bonding_strategy = DEFAULTS.structure.bonding_strategy
         scene_props.bond_color = DEFAULTS.structure.bond_color
         scene_props.bond_thickness = DEFAULTS.structure.bond_thickness
+        scene_props.bond_scale = DEFAULTS.structure.bond_scale
         scene_props.incomplete_periodic_edge_mode = DEFAULTS.structure.incomplete_periodic_edge_mode
         scene_props.incomplete_edge_length_scale = DEFAULTS.structure.incomplete_edge_length_scale
       }}
@@ -966,6 +968,29 @@
           {/each}
         </select>
       </label>
+      {#if scene_props.bonding_strategy === `atom_radii`}
+        <label
+          {@attach tooltip({
+            content: SETTINGS_CONFIG.structure.bond_scale.description,
+          })}
+        >
+          {t('structure.bond_scale')}
+          <input
+            type="number"
+            min={SETTINGS_CONFIG.structure.bond_scale.minimum}
+            max={SETTINGS_CONFIG.structure.bond_scale.maximum}
+            step={0.05}
+            bind:value={scene_props.bond_scale}
+          />
+          <input
+            type="range"
+            min={SETTINGS_CONFIG.structure.bond_scale.minimum}
+            max={SETTINGS_CONFIG.structure.bond_scale.maximum}
+            step={0.05}
+            bind:value={scene_props.bond_scale}
+          />
+        </label>
+      {/if}
       <label>
         {t('structure.color')} <input type="color" bind:value={scene_props.bond_color} />
       </label>

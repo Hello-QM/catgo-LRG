@@ -144,6 +144,14 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       value: {},
       description: `Additional parameters for the bonding strategy`,
     },
+    bond_scale: {
+      value: 1.15,
+      description:
+        `Atom Radii strategy: bond when distance ≤ scale × (sum of covalent radii). ` +
+        `Lower = fewer, tighter bonds; higher = catches longer/stretched contacts.`,
+      minimum: 1.0,
+      maximum: 1.4,
+    },
     show_hydrogen_bonds: {
       value: false,
       description: `Show hydrogen bonds as dashed lines`,
