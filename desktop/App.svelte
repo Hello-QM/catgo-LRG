@@ -62,7 +62,7 @@
   import {
     type LeafNode, type PresetId,
     leaves, leafCount, findLeafById, findFirstEmptyLeaf,
-    escalateForImport, setRatio, create_empty_leaf, structurePane,
+    escalateForImport, setRatio, create_empty_leaf, structurePane, splitLeaf,
     removeLeaf, setLeafContent, terminalState, type TerminalLeafState,
   } from './pane-tree'
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
@@ -2198,6 +2198,49 @@
                   }
                   Object.assign(pane, create_empty_pane())
                   update_tab_label(tab.id)
+                }}
+                on_view_split={async () => {
+                  // Split this chat leaf into: left = 3D structure viewer with
+                  // the structure CatBot just loaded (pulled from the panel
+                  // store), right = the chat (history kept — keyed by tab id).
+                  let struct: AnyStructure | null = null
+                  try {
+                    const r = await fetch(
+                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
+                    )
+                    if (r.ok) struct = await r.json()
+                  } catch { /* ignore */ }
+                  const res = splitLeaf(ts.root, leaf.id, `h`)
+                  if (!res) return
+                  ts.root = res.root
+                  const left = findLeafById(ts.root, leaf.id)
+                  const lp = left ? structurePane(left) : null
+                  if (lp) {
+                    lp.initial_panel = undefined
+                    if (struct?.sites?.length) {
+                      lp.structure = clone_structure(struct)
+                      lp.initial_site_count = struct.sites.length
+                      lp.initial_structure_ref = struct
+                      lp.modified = false
+                    }
+                  }
+                  const right = findLeafById(ts.root, res.newLeafId)
+                  const rp = right ? structurePane(right) : null
+                  if (rp) rp.initial_panel = `chat`
+                  ts.active_leaf_id = res.newLeafId
+                  update_tab_label(tab.id)
+                }}
+                on_view_new_window={async () => {
+                  try {
+                    const r = await fetch(
+                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
+                    )
+                    if (!r.ok) return
+                    const struct = await r.json()
+                    await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
+                  } catch (e) {
+                    console.warn(`[CatGo] open structure window failed:`, e)
+                  }
                 }}
               />
             </div>

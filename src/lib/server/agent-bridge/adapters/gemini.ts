@@ -24,6 +24,7 @@ import { registerAdapter } from '../adapter.js'
 import type { AgentEvent, SessionInfo, StreamParams } from '../types.js'
 import { GeminiCliNotFoundError, spawn_gemini_acp } from '../acp/client.js'
 import { mapPermissionRequest, translateUpdate } from '../acp/translate.js'
+import { decide_tool_permission } from './claude.js'
 import { GeminiProcessPool } from '../acp/process-pool.js'
 
 // One pool per agent-bridge process. Shut down on SIGTERM by server.ts.
@@ -81,11 +82,28 @@ class EventPump {
 function buildPermissionOutcome(
   rpcParams: any,
   permissionCallback: StreamParams['permissionCallback'],
+  skipPermissions: boolean | undefined,
 ) {
   const tc = rpcParams?.toolCall ?? rpcParams ?? {}
+  const toolName = String(tc.title ?? tc.kind ?? tc.toolName ?? '')
+  const toolId = String(tc.toolCallId ?? tc.id ?? '')
+
+  // Auto-allow CatGo MCP tools (same policy as the Claude adapter). Gemini's
+  // ACP renders these as title "catgo_view (catgo MCP Server)" /
+  // toolCallId "mcp_catgo_catgo_view__…". Without this the tool call blocks on
+  // a frontend permission round-trip that never resolves in a popout/standalone
+  // window — the model then sits at "处理中" forever.
+  if (
+    decide_tool_permission(toolName, skipPermissions) === 'allow' ||
+    toolName.includes('catgo') ||
+    toolId.includes('catgo')
+  ) {
+    return Promise.resolve(mapPermissionRequest(rpcParams, 'allow'))
+  }
+
   return permissionCallback({
-    id: String(tc.toolCallId ?? tc.id ?? ''),
-    toolName: String(tc.title ?? tc.kind ?? tc.toolName ?? ''),
+    id: toolId,
+    toolName,
     input: tc.input ?? {},
   }).then((result) =>
     mapPermissionRequest(rpcParams, result.behavior === 'allow' ? 'allow' : 'deny'),
@@ -121,7 +139,7 @@ async function* streamPersistent(
   params: StreamParams,
   chatId: string,
 ): AsyncGenerator<AgentEvent> {
-  const { prompt, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt } = params
+  const { prompt, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt, skipPermissions } = params
 
   let handle
   try {
@@ -141,7 +159,7 @@ async function* streamPersistent(
   handle.onNotification = (notifParams: any) => {
     for (const ev of translateUpdate(notifParams?.update)) pump.push(ev)
   }
-  handle.onPermission = (rpcParams: any) => buildPermissionOutcome(rpcParams, permissionCallback)
+  handle.onPermission = (rpcParams: any) => buildPermissionOutcome(rpcParams, permissionCallback, skipPermissions)
 
   const onAbort = () => {
     handle.client.notify('session/cancel', { sessionId: handle.sessionId })
@@ -199,6 +217,7 @@ async function* streamPersistent(
 async function* streamOneShot(params: StreamParams): AsyncGenerator<AgentEvent> {
   const {
     prompt, sessionId, model, cwd, mcpServerUrl, permissionCallback, abortSignal, tabId, systemPrompt,
+    skipPermissions,
   } = params
 
   let spawned
@@ -221,7 +240,7 @@ async function* streamOneShot(params: StreamParams): AsyncGenerator<AgentEvent> 
     for (const ev of translateUpdate(notifParams?.update)) pump.push(ev)
   })
   client.onRequest('session/request_permission', (rpcParams: any) =>
-    buildPermissionOutcome(rpcParams, permissionCallback),
+    buildPermissionOutcome(rpcParams, permissionCallback, skipPermissions),
   )
 
   const onAbort = () => {
