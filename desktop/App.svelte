@@ -2164,25 +2164,34 @@
               }}
               on_open_in_molstar={() => toggle_pane_viewer(pane)}
               on_view_split_request={(struct) => {
-                // Docked-chat "新pane": split this leaf, keep the current
-                // structure (A) here, drop CatBot's loaded structure (B) in
-                // the new pane (mirrors the standalone on_view_split, but B is
-                // the passed struct rather than re-fetched into the old pane).
+                // Docked-chat "新pane": open CatBot's loaded structure (B) in a
+                // NEW TAB, leaving this tab's viewer (A) untouched. A new tab gets
+                // its own tab.id = its own panel_id, so the two structures don't
+                // fight over a shared panel store — panes WITHIN one tab share
+                // tab.id and would clobber each other (each pane's MCP bridge
+                // pushes to the same panel, and the sibling's push gets applied).
                 if (!struct?.sites?.length) return
-                const res = splitLeaf(ts.root, leaf.id, `h`)
-                if (!res) return
-                ts.root = res.root
-                const right = findLeafById(ts.root, res.newLeafId)
-                const rp = right ? structurePane(right) : null
-                if (rp) {
-                  rp.initial_panel = undefined
-                  rp.structure = clone_structure(struct)
-                  rp.initial_site_count = struct.sites.length
-                  rp.initial_structure_ref = struct
-                  rp.modified = false
+                const prev_tab_id = tm.active_tab_id
+                tm.create_tab(`structure`)
+                const new_tab_id = tm.active_tab_id
+                const nts = tm.tab_states[new_tab_id]
+                if (!nts) return
+                const nleaf = leaves(nts.root)[0]
+                const np = nleaf ? structurePane(nleaf) : null
+                if (!np) return
+                // Guard: 12-tab limit didn't open a new tab → don't clobber.
+                if (new_tab_id === prev_tab_id && np.structure) {
+                  console.warn(`[App] Tab limit reached, cannot open structure in new tab`)
+                  return
                 }
-                ts.active_leaf_id = res.newLeafId
-                update_tab_label(tab.id)
+                np.initial_panel = undefined
+                np.structure = clone_structure(struct)
+                np.initial_site_count = struct.sites.length
+                np.initial_structure_ref = struct
+                np.modified = false
+                const ntab = tm.tabs.find(t => t.id === new_tab_id)
+                if (ntab) ntab.label = `CatBot structure`
+                tm.update_tab_label(new_tab_id)
               }}
               fullscreen_toggle={false}
               allow_file_drop={false}

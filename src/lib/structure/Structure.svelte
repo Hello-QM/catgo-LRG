@@ -996,8 +996,9 @@
       // Callback to open the current structure in the Mol* bio viewer. When provided,
       // a DNA toolbar button is shown (used by the desktop multi-pane host).
       on_open_in_molstar?: () => void
-      // Docked chat escalate: split this pane and load CatBot's structure (passed
-      // in) into the NEW pane, keeping the current structure in this one.
+      // Docked chat escalate: open CatBot's loaded structure (passed in) in a
+      // NEW TAB, leaving this tab's viewer untouched. A new tab has its own
+      // panel_id; panes within ONE tab share tab.id and would clobber each other.
       on_view_split_request?: (struct: AnyStructure) => void
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
