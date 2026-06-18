@@ -217,7 +217,10 @@ const server = createServer(async (req, res) => {
       return
     }
     if (url.pathname === '/health' && req.method === 'GET') {
-      jsonResponse(res, 200, { ok: true, port: AGENT_PORT })
+      // `service` is an identity marker: the desktop shell probes /health and
+      // only treats a port as "the agent already running" when it sees this,
+      // so a foreign process squatting the port is not mistaken for us.
+      jsonResponse(res, 200, { ok: true, service: 'catgo-agent', port: AGENT_PORT })
       return
     }
 

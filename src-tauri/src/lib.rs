@@ -505,15 +505,63 @@ pub fn run() {
             // (`claude`, `codex`, `gemini`). Desktop launchers strip PATH, so
             // we re-augment it here with the usual user-bin locations or the
             // CLIs won't be found in production.
-            let agent_port = std::env::var("CATGO_AGENT_PORT").unwrap_or_else(|_| "8001".to_string());
-            let agent_already_running = {
+            // Identity-aware probe: only treat the port as "agent already running"
+            // when /health carries our `catgo-agent` marker — so an unrelated
+            // process squatting the port (common on shared boxes / random Windows
+            // apps) is NOT mistaken for us.
+            fn probe_catgo_agent(port: u16) -> bool {
+                use std::io::{Read, Write};
                 use std::net::TcpStream;
-                let addr = format!("127.0.0.1:{}", agent_port);
-                TcpStream::connect_timeout(
-                    &addr.parse().unwrap(),
-                    std::time::Duration::from_millis(500),
-                ).is_ok()
+                use std::time::Duration;
+                let Ok(addr) = format!("127.0.0.1:{port}").parse() else {
+                    return false;
+                };
+                let Ok(mut s) = TcpStream::connect_timeout(&addr, Duration::from_millis(400))
+                else {
+                    return false;
+                };
+                let _ = s.set_read_timeout(Some(Duration::from_millis(700)));
+                if s
+                    .write_all(b"GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                    .is_err()
+                {
+                    return false;
+                }
+                let mut buf = String::new();
+                let _ = s.read_to_string(&mut buf);
+                buf.contains("catgo-agent")
+            }
+            fn port_is_free(port: u16) -> bool {
+                std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+            }
+
+            let preferred_port: u16 = std::env::var("CATGO_AGENT_PORT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(8001);
+            let agent_already_running = probe_catgo_agent(preferred_port);
+
+            // Port to spawn the agent on (used only when one isn't already
+            // running): the preferred port if free, else the next free port so a
+            // squatter on the preferred port can't stop the agent from starting.
+            let agent_port = if agent_already_running || port_is_free(preferred_port) {
+                preferred_port.to_string()
+            } else {
+                log::warn!(
+                    "[CatGo] agent port {} is taken by another process — picking a free port",
+                    preferred_port
+                );
+                (preferred_port + 1..preferred_port + 50)
+                    .find(|p| port_is_free(*p))
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| preferred_port.to_string())
             };
+
+            // Set once we actually have a reachable agent. Left false (e.g. dev
+            // builds with no bundled sidecar, or a spawn failure), the webview is
+            // NOT given a port and falls back to the relative /api/agent/* URL —
+            // i.e. the dev vite-plugin-agent-bridge.
+            let mut agent_available = agent_already_running;
 
             if agent_already_running {
                 log::info!(
@@ -554,6 +602,7 @@ pub fn run() {
                         match cmd.spawn() {
                             Ok((mut rx, child)) => {
                                 log::info!("[CatGo] Agent bridge started (sidecar) on port {}", agent_port);
+                                agent_available = true;
                                 if let Ok(mut state) = app.state::<Mutex<AgentState>>().lock() {
                                     state.child = Some(child);
                                     state.spawned_by_us = true;
@@ -597,12 +646,17 @@ pub fn run() {
                 }
             }
 
-            // Expose the agent port to the webview so `sdk-stream.ts` can
-            // build the absolute URL (otherwise it would try `/api/agent/stream`
-            // against the webview's own origin, which 404s in production).
-            if let Some(win) = app.get_webview_window("main") {
-                let init = format!("window.__CATGO_AGENT_PORT__ = {};", agent_port);
-                let _ = win.eval(&init);
+            // Expose the agent port to the webview so `sdk-stream.ts` can build
+            // the absolute URL. Only when we actually have a reachable agent —
+            // otherwise leave it unset so the FE uses the relative /api/agent/*
+            // URL (served by vite-plugin-agent-bridge in dev). Pointing the
+            // webview at a port with no agent (or a foreign process) is what
+            // caused CatBot's "Not Found".
+            if agent_available {
+                if let Some(win) = app.get_webview_window("main") {
+                    let init = format!("window.__CATGO_AGENT_PORT__ = {};", agent_port);
+                    let _ = win.eval(&init);
+                }
             }
             } // end #[cfg(desktop)] sidecar block
 
