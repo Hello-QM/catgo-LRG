@@ -32,10 +32,12 @@ pub struct Bond {
 /// Options for atom_radii bonding algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomRadiiOptions {
-    /// Absolute tolerance in Angstroms added to covalent radii sum (default: 0.3)
-    /// Bond if: (r1 + r2) - tolerance <= distance <= (r1 + r2) + tolerance
-    #[serde(default = "default_tolerance")]
-    pub tolerance: f64,
+    /// Multiplicative cutoff on the covalent radii sum (default: 1.2).
+    /// Bond if: min_bond_dist <= distance <= scale * (r1 + r2).
+    /// A proportional cutoff scales with atom size, unlike a fixed absolute
+    /// pad which is too tight for large atoms / stretched metallic contacts.
+    #[serde(default = "default_scale")]
+    pub scale: f64,
     /// Minimum bond distance in Angstroms (default: 0.4)
     #[serde(default = "default_min_dist")]
     pub min_bond_dist: f64,
@@ -48,8 +50,8 @@ pub struct AtomRadiiOptions {
     pub include_periodic_images: bool,
 }
 
-fn default_tolerance() -> f64 {
-    0.3
+fn default_scale() -> f64 {
+    1.2
 }
 fn default_min_dist() -> f64 {
     0.4
@@ -61,7 +63,7 @@ fn default_max_dist() -> f64 {
 impl Default for AtomRadiiOptions {
     fn default() -> Self {
         Self {
-            tolerance: default_tolerance(),
+            scale: default_scale(),
             min_bond_dist: default_min_dist(),
             max_bond_dist: default_max_dist(),
             include_periodic_images: false,
@@ -157,8 +159,8 @@ impl ElementProps {
 
 /// Detect bonds using covalent radii sum.
 ///
-/// A bond is detected if the distance between two atoms is less than
-/// the sum of their covalent radii times (1 + tolerance).
+/// A bond is detected if the distance between two atoms is at most
+/// `scale` times the sum of their covalent radii.
 ///
 /// This is the fastest algorithm, suitable for quick visualization.
 pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions) -> Vec<Bond> {
@@ -215,8 +217,7 @@ pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions
 
         let r1 = props[center_idx].covalent_radius;
         let r2 = props[neighbor_idx].covalent_radius;
-        let expected = r1 + r2;
-        let upper_bound = expected + options.tolerance;
+        let upper_bound = (r1 + r2) * options.scale;
 
         // Only check upper bound: coordination bonds (M-O, M-N) are often
         // significantly shorter than the covalent radii sum. The lower bound
@@ -838,5 +839,41 @@ mod tests {
             assert!(hb.da_distance < 3.5, "D···A distance should be < 3.5 Å");
             assert!(hb.strength > 0.0);
         }
+    }
+
+    #[test]
+    fn test_atom_radii_metal_scale() {
+        // Two Cu atoms 3.05 Å apart. The covalent-radii sum is 2.64 Å, so the
+        // legacy absolute window (sum + 0.3 = 2.94 Å) drops this real metallic
+        // contact. A multiplicative cutoff (1.2 * sum = 3.17 Å) keeps it.
+        let lattice = Lattice::cubic(20.0);
+        let species = vec![Species::neutral(Element::Cu), Species::neutral(Element::Cu)];
+        let frac_coords = vec![
+            Vector3::new(0.25, 0.25, 0.25),
+            Vector3::new(0.25 + 3.05 / 20.0, 0.25, 0.25),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_atom_radii(&structure, &AtomRadiiOptions::default());
+        assert_eq!(
+            bonds.len(),
+            1,
+            "Cu-Cu at 3.05 Å is a metallic contact within 1.2*(r1+r2); must bond"
+        );
+    }
+
+    #[test]
+    fn test_atom_radii_scale_rejects_far() {
+        // Two Cu atoms 3.30 Å apart sit beyond 1.2 * sum (3.17 Å) — no bond.
+        let lattice = Lattice::cubic(20.0);
+        let species = vec![Species::neutral(Element::Cu), Species::neutral(Element::Cu)];
+        let frac_coords = vec![
+            Vector3::new(0.25, 0.25, 0.25),
+            Vector3::new(0.25 + 3.30 / 20.0, 0.25, 0.25),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_atom_radii(&structure, &AtomRadiiOptions::default());
+        assert!(bonds.is_empty(), "Cu-Cu at 3.30 Å exceeds 1.2*(r1+r2); must not bond");
     }
 }
