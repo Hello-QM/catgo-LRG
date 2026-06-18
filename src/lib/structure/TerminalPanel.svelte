@@ -5,6 +5,8 @@
   import { spawnPty, type PtySession } from '$lib/api/pty'
   import { Icon } from '$lib'
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
+  import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
+  import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
 
   let {
     layout = `horizontal`,
@@ -69,18 +71,116 @@
     host ? `${username || ``}@${host}` : `Terminal`
   )
 
-  // Always inject OSC 7 PROMPT_COMMAND on remote session connect (needed for Ctrl+click
-  // path resolution even when sync_cwd is off). sync_cwd only controls whether CWD changes
-  // are broadcast to the file browser.
+  // Always inject OSC 7 PROMPT_COMMAND once the PTY is up — local OR remote (needed for
+  // Ctrl+click path resolution and Directory Sync even when sync_cwd is off). Local shells
+  // need it just as much as remote: a plain bash emits no OSC 7 on its own, so without this
+  // the local Files panel never follows the terminal's cwd. sync_cwd only controls whether
+  // CWD changes are broadcast to the file browser.
+  const panel_id = `term-panel-${Math.random().toString(36).slice(2, 10)}`
+  let _run_busy = false
+  let _registered = false
+
+  async function panel_run_command(
+    cmd: string,
+    opts?: { timeout_ms?: number },
+  ): Promise<{ output: string; exit_code: number | null; running: boolean }> {
+    const pty = pty_ref
+    if (!pty) return { output: 'Terminal not ready.', exit_code: null, running: false }
+    if (_run_busy) return { output: 'Terminal is busy running another command.', exit_code: null, running: false }
+    if (panel_is_alt_screen()) {
+      return {
+        output: 'The terminal is inside tmux or a full-screen app (alternate screen). '
+          + 'Command capture is unreliable here — use send_keys to type the command '
+          + 'followed by "<enter>", then read the terminal to see the result.',
+        exit_code: null,
+        running: true,
+      }
+    }
+    _run_busy = true
+    const marker = next_marker()
+    const decoder = new TextDecoder()
+    let acc = ''
+    let settle: ((v: { output: string; exit_code: number | null; running: boolean }) => void) | null = null
+    let timeout_handle: ReturnType<typeof setTimeout> | null = null
+    const done = new Promise<{ output: string; exit_code: number | null; running: boolean }>((resolve) => {
+      settle = resolve
+    })
+    const off = pty.onData((bytes) => {
+      acc += decoder.decode(bytes, { stream: true })
+      const res = extract_result(strip_ansi(acc), marker)
+      if (res) {
+        if (timeout_handle) clearTimeout(timeout_handle)
+        settle?.({ output: res.output.slice(-8000), exit_code: res.exit_code, running: false })
+      }
+    })
+    timeout_handle = setTimeout(() => {
+      settle?.({ output: strip_ansi(acc).slice(-4000), exit_code: null, running: true })
+    }, opts?.timeout_ms ?? 15000)
+    try {
+      await pty.write(wrap_command(cmd, marker))
+      return await done
+    } finally {
+      off()
+      if (timeout_handle) clearTimeout(timeout_handle)
+      _run_busy = false
+    }
+  }
+
+  async function panel_send_keys(data: string): Promise<void> {
+    if (pty_ref) await pty_ref.write(data)
+  }
+
+  async function panel_interrupt(): Promise<void> {
+    if (pty_ref) await pty_ref.write('\x03')
+  }
+
+  // True when the terminal is showing the alternate screen — i.e. a full-screen
+  // app owns the display: tmux, vim, less, htop, etc. Marker-based run_command
+  // is unreliable there (constant redraws garble the markers, and if the active
+  // pane runs an app the command text is typed INTO it), so run_command refuses
+  // and steers the caller to send_keys + read instead.
+  function panel_is_alt_screen(): boolean {
+    return term_ref?.buffer?.active?.type === 'alternate'
+  }
+
+  function panel_read_buffer(lines = 40): string {
+    const term = term_ref
+    if (!term?.buffer?.active) return ''
+    const buf = term.buffer.active
+    const end = buf.baseY + buf.cursorY
+    const start = Math.max(0, end - lines)
+    const out: string[] = []
+    for (let y = start; y <= end; y++) {
+      const line = buf.getLine(y)
+      if (line) out.push(line.translateToString(true))
+    }
+    return out.join('\n').replace(/\n+$/, '')
+  }
+
   let _osc7_injected = false
   let _osc7_quiescence_timer: ReturnType<typeof setTimeout> | null = null
   let _osc7_data_listener: (() => void) | null = null
   $effect(() => {
-    if (!pty_ref || !session_id) {
+    if (!pty_ref) {
+      if (_registered) { unregister_terminal(panel_id); _registered = false }
       _osc7_injected = false
       if (_osc7_quiescence_timer) clearTimeout(_osc7_quiescence_timer)
       if (_osc7_data_listener) { _osc7_data_listener(); _osc7_data_listener = null }
       return
+    }
+    if (!_registered) {
+      _registered = true
+      register_terminal({
+        id: panel_id,
+        session_id: session_id ?? '',
+        host,
+        username,
+        is_remote: !!session_id,
+        run_command: panel_run_command,
+        send_keys: panel_send_keys,
+        interrupt: panel_interrupt,
+        read_buffer: panel_read_buffer,
+      })
     }
     if (!_osc7_injected) {
       _osc7_injected = true
@@ -294,13 +394,9 @@
               const seq = ++_cwd_seq
               // Local callback (inline terminal in Structure.svelte)
               on_cwd_change?.(path)
-              // Broadcast for cross-window sync (other windows)
-              try {
-                const bc = new BroadcastChannel(`catgo-terminal-cwd`)
-                bc.postMessage({ path, session_id, seq })
-                bc.close()
-              } catch { /* BroadcastChannel not supported */ }
-              // Same-window sync (BroadcastChannel doesn't deliver to sender's context)
+              // Window-local sync only — each window's Files panel follows its own
+              // terminal. No cross-window BroadcastChannel: a popped-out terminal must
+              // NOT move the origin window's file system (windows are independent).
               window.dispatchEvent(new CustomEvent(`catgo-terminal-cwd`, { detail: { path, session_id, seq } }))
             }
           } catch {
@@ -311,6 +407,7 @@
 
         terminal = term
         term_ref = term
+        term.textarea?.addEventListener('focus', () => mark_terminal_active(panel_id))
         fit_addon = fit
         fit_ref = fit
 
@@ -596,6 +693,8 @@
 
     return () => {
       disposed = true
+      unregister_terminal(panel_id)
+      _registered = false
       observer?.disconnect()
       vis_observer?.disconnect()
       unlisten_data?.()
@@ -765,9 +864,13 @@
 
 <style>
   .terminal-panel {
+    /* Fill the pane-tree leaf's .panel-content (position:relative; height:0;
+       flex:1). Without absolute fill, this flex column collapses to the xterm's
+       initial fitted height, leaving the rest of the pane blank. */
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
-    border-left: 1px solid rgba(255, 255, 255, 0.08);
     min-height: 0;
     min-width: 0;
     overflow: hidden;

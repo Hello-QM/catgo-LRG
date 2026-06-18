@@ -32,10 +32,12 @@ pub struct Bond {
 /// Options for atom_radii bonding algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtomRadiiOptions {
-    /// Absolute tolerance in Angstroms added to covalent radii sum (default: 0.3)
-    /// Bond if: (r1 + r2) - tolerance <= distance <= (r1 + r2) + tolerance
-    #[serde(default = "default_tolerance")]
-    pub tolerance: f64,
+    /// Multiplicative cutoff on the covalent radii sum (default: 1.2).
+    /// Bond if: min_bond_dist <= distance <= scale * (r1 + r2).
+    /// A proportional cutoff scales with atom size, unlike a fixed absolute
+    /// pad which is too tight for large atoms / stretched metallic contacts.
+    #[serde(default = "default_scale")]
+    pub scale: f64,
     /// Minimum bond distance in Angstroms (default: 0.4)
     #[serde(default = "default_min_dist")]
     pub min_bond_dist: f64,
@@ -48,8 +50,8 @@ pub struct AtomRadiiOptions {
     pub include_periodic_images: bool,
 }
 
-fn default_tolerance() -> f64 {
-    0.3
+fn default_scale() -> f64 {
+    1.2
 }
 fn default_min_dist() -> f64 {
     0.4
@@ -61,7 +63,7 @@ fn default_max_dist() -> f64 {
 impl Default for AtomRadiiOptions {
     fn default() -> Self {
         Self {
-            tolerance: default_tolerance(),
+            scale: default_scale(),
             min_bond_dist: default_min_dist(),
             max_bond_dist: default_max_dist(),
             include_periodic_images: false,
@@ -72,9 +74,6 @@ impl Default for AtomRadiiOptions {
 /// Options for electroneg_ratio bonding algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElectronegOptions {
-    /// Maximum electronegativity difference for bonding (default: 1.7)
-    #[serde(default = "default_en_threshold")]
-    pub electronegativity_threshold: f64,
     /// Max distance as multiple of sum of covalent radii (default: 2.0)
     #[serde(default = "default_max_ratio")]
     pub max_distance_ratio: f64,
@@ -98,9 +97,6 @@ pub struct ElectronegOptions {
     pub strength_threshold: f64,
 }
 
-fn default_en_threshold() -> f64 {
-    1.7
-}
 fn default_max_ratio() -> f64 {
     2.0
 }
@@ -123,7 +119,6 @@ fn default_strength_threshold() -> f64 {
 impl Default for ElectronegOptions {
     fn default() -> Self {
         Self {
-            electronegativity_threshold: default_en_threshold(),
             max_distance_ratio: default_max_ratio(),
             min_bond_dist: default_min_dist(),
             metal_metal_penalty: default_mm_penalty(),
@@ -157,8 +152,8 @@ impl ElementProps {
 
 /// Detect bonds using covalent radii sum.
 ///
-/// A bond is detected if the distance between two atoms is less than
-/// the sum of their covalent radii times (1 + tolerance).
+/// A bond is detected if the distance between two atoms is at most
+/// `scale` times the sum of their covalent radii.
 ///
 /// This is the fastest algorithm, suitable for quick visualization.
 pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions) -> Vec<Bond> {
@@ -215,8 +210,7 @@ pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions
 
         let r1 = props[center_idx].covalent_radius;
         let r2 = props[neighbor_idx].covalent_radius;
-        let expected = r1 + r2;
-        let upper_bound = expected + options.tolerance;
+        let upper_bound = (r1 + r2) * options.scale;
 
         // Only check upper bound: coordination bonds (M-O, M-N) are often
         // significantly shorter than the covalent radii sum. The lower bound
@@ -266,8 +260,30 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
     let mut bonds = Vec::new();
     let min_dist_sq = options.min_bond_dist * options.min_bond_dist;
 
-    // Track closest bond for each atom (for strength normalization)
-    let mut closest: HashMap<usize, f64> = HashMap::new();
+    // Pass 1: per-atom minimum NORMALIZED neighbour distance (dist / Σr) over
+    // every geometric candidate (both directions, no pair dedup). Used below to
+    // damp bonds that are long *relative to the atom's tightest contact* — this
+    // is what stops a dense metal from bonding to its 2nd/3rd shell (matterviz's
+    // closest-neighbour penalty). Precomputed so it is order-independent (the
+    // neighbour list is not distance-sorted).
+    let mut closest_norm: HashMap<usize, f64> = HashMap::new();
+    for idx in 0..center_indices.len() {
+        let dist = distances[idx];
+        if dist * dist < min_dist_sq {
+            continue;
+        }
+        let ci = center_indices[idx];
+        let ni = neighbor_indices[idx];
+        let sum_radii = props[ci].covalent_radius + props[ni].covalent_radius;
+        if dist > sum_radii * options.max_distance_ratio {
+            continue;
+        }
+        let norm = dist / sum_radii;
+        closest_norm
+            .entry(ci)
+            .and_modify(|d| *d = d.min(norm))
+            .or_insert(norm);
+    }
 
     for idx in 0..center_indices.len() {
         let center_idx = center_indices[idx];
@@ -302,11 +318,11 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
             continue;
         }
 
-        // Check electronegativity constraint
+        // Electronegativity difference modulates strength (below) but never
+        // rejects a bond: a large ΔEN is a strong ionic bond (Li-O, Na-Cl),
+        // not a non-bond. (Earlier a hard `en_diff > threshold` cutoff here
+        // dropped every ionic bond — chemically backwards.)
         let en_diff = (p1.electronegativity - p2.electronegativity).abs();
-        if en_diff > options.electronegativity_threshold {
-            continue;
-        }
 
         // Calculate base strength from distance
         let dist_ratio = dist / sum_radii;
@@ -339,15 +355,18 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
             strength *= options.same_species_penalty;
         }
 
-        // Track closest distances
-        closest
-            .entry(center_idx)
-            .and_modify(|d| *d = d.min(dist))
-            .or_insert(dist);
-        closest
-            .entry(neighbor_idx)
-            .and_modify(|d| *d = d.min(dist))
-            .or_insert(dist);
+        // Closest-neighbour penalty: damp bonds that are long relative to each
+        // endpoint's tightest contact. A bond at an atom's own minimum has
+        // ratio 1 (no penalty); longer ones decay as exp(-(ratio-1)/0.5),
+        // pushing 2nd-shell metallic contacts below the strength threshold so
+        // the viewer shows the coordination shell, not a hedgehog.
+        for atom in [center_idx, neighbor_idx] {
+            if let Some(&c) = closest_norm.get(&atom) {
+                if c > 0.0 && dist_ratio > c {
+                    strength *= (-(dist_ratio / c - 1.0) / 0.5).exp();
+                }
+            }
+        }
 
         if strength >= options.strength_threshold {
             bonds.push(Bond {
@@ -381,6 +400,12 @@ pub struct SolidAngleOptions {
     /// Minimum bond strength to include (default: 0.05)
     #[serde(default = "default_sa_strength_threshold")]
     pub strength_threshold: f64,
+    /// Distance sanity: drop a Voronoi contact whose length exceeds this
+    /// multiple of the covalent-radii sum (default: 1.5). Suppresses
+    /// anion-anion polyhedra edges (e.g. O-O) while keeping M-O and metal
+    /// bonds. Set very large to keep pure radius-free Voronoi behaviour.
+    #[serde(default = "default_sa_max_ratio")]
+    pub max_distance_ratio: f64,
 }
 
 fn default_min_solid_angle() -> f64 {
@@ -392,6 +417,9 @@ fn default_min_face_area() -> f64 {
 fn default_sa_strength_threshold() -> f64 {
     0.05
 }
+fn default_sa_max_ratio() -> f64 {
+    1.5
+}
 
 impl Default for SolidAngleOptions {
     fn default() -> Self {
@@ -401,6 +429,7 @@ impl Default for SolidAngleOptions {
             max_distance: default_max_dist(),
             min_bond_dist: default_min_dist(),
             strength_threshold: default_sa_strength_threshold(),
+            max_distance_ratio: default_sa_max_ratio(),
         }
     }
 }
@@ -411,74 +440,156 @@ impl Default for SolidAngleOptions {
 /// the solid angle subtended by the atom pair and a Gaussian distance penalty.
 /// This is a geometry-only algorithm (no chemical preferences).
 pub fn detect_bonds_solid_angle(structure: &Structure, options: &SolidAngleOptions) -> Vec<Bond> {
+    use glam::DVec3;
+    use meshless_voronoi::{Dimensionality, Voronoi};
+    use std::collections::HashSet;
+
     let num_sites = structure.num_sites();
     if num_sites < 2 {
         return Vec::new();
     }
 
-    let species = structure.species();
-    let props: Vec<ElementProps> = species
+    // A bonded pair shares a Voronoi face. This is radius-free geometry, so it
+    // gets octahedra (6) / tetrahedra (4) right and naturally excludes
+    // cation-cation pairs an anion sits between (no shared face).
+    //
+    // meshless_voronoi's periodic box is axis-aligned, so it is only correct
+    // for orthogonal cells (hexagonal/triclinic would tessellate wrongly).
+    // Instead build a NON-periodic supercell of explicit image atoms around the
+    // home cell and tessellate that: correct for ANY lattice, and each image
+    // atom carries its exact Cartesian position → exact distance + jimage. A
+    // slab's vacuum side simply yields unbounded (boundary) faces → no bond.
+    // Covalent radii for the distance sanity that trims anion-anion edges.
+    let radii: Vec<f64> = structure
+        .species()
         .iter()
-        .map(|sp| ElementProps::from_element(sp.element))
+        .map(|sp| sp.element.covalent_radius().unwrap_or(1.5))
         .collect();
 
-    let cutoff = options.max_distance;
-    let (center_indices, neighbor_indices, image_offsets, distances) =
-        structure.get_neighbor_list(cutoff, 1e-8, true);
+    let cart = structure.cart_coords();
+    let m = structure.lattice.matrix();
+    let avec = nalgebra::Vector3::new(m[(0, 0)], m[(0, 1)], m[(0, 2)]);
+    let bvec = nalgebra::Vector3::new(m[(1, 0)], m[(1, 1)], m[(1, 2)]);
+    let cvec = nalgebra::Vector3::new(m[(2, 0)], m[(2, 1)], m[(2, 2)]);
 
+    // Replicate far enough that every home-cell atom is fully enclosed (≥ one
+    // image past the search radius along each axis).
+    let reps = |v: &nalgebra::Vector3<f64>| -> i32 {
+        let len = v.norm();
+        if len < 1e-6 {
+            1
+        } else {
+            (options.max_distance / len).ceil().max(1.0) as i32
+        }
+    };
+    let (na, nb, nc) = (reps(&avec), reps(&bvec), reps(&cvec));
+
+    // A tiny deterministic jitter (≪ bond-length resolution) breaks the exact
+    // coplanar/collinear degeneracies of symmetric crystals that otherwise make
+    // meshless_voronoi's plane-intersection panic. Deterministic so results are
+    // reproducible (no RNG, which is unavailable on wasm anyway).
+    let jitter = |seed: u64| -> f64 {
+        (seed.wrapping_mul(2_654_435_761) % 4001) as f64 / 4000.0 * 2e-6 - 1e-6
+    };
+    let mut sc_pos: Vec<DVec3> = Vec::new();
+    let mut sc_map: Vec<(usize, [i32; 3])> = Vec::new(); // supercell idx -> (home idx, image)
+    let mut central: Vec<usize> = Vec::new(); // supercell indices of the home (image 0) atoms
+    for da in -na..=na {
+        for db in -nb..=nb {
+            for dc in -nc..=nc {
+                let shift = avec * (da as f64) + bvec * (db as f64) + cvec * (dc as f64);
+                for k in 0..num_sites {
+                    if da == 0 && db == 0 && dc == 0 {
+                        central.push(sc_pos.len());
+                    }
+                    let p = cart[k] + shift;
+                    let s = sc_pos.len() as u64;
+                    sc_map.push((k, [da, db, dc]));
+                    sc_pos.push(DVec3::new(
+                        p.x + jitter(3 * s),
+                        p.y + jitter(3 * s + 1),
+                        p.z + jitter(3 * s + 2),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Bounding box for the non-periodic tessellation.
+    let mut lo = sc_pos[0];
+    let mut hi = sc_pos[0];
+    for p in &sc_pos {
+        lo = lo.min(*p);
+        hi = hi.max(*p);
+    }
+    let margin = DVec3::splat(1.0);
+    let anchor = lo - margin;
+    let extent = (hi - lo) + margin * 2.0;
+    let voronoi = Voronoi::build(&sc_pos, anchor, extent, Dimensionality::ThreeD, false);
+
+    let min_dist = options.min_bond_dist;
     let mut bonds = Vec::new();
-    let min_dist_sq = options.min_bond_dist * options.min_bond_dist;
+    let mut seen: HashSet<(usize, usize, [i32; 3])> = HashSet::new();
 
-    for idx in 0..center_indices.len() {
-        let center_idx = center_indices[idx];
-        let neighbor_idx = neighbor_indices[idx];
-        let image = image_offsets[idx];
-        let dist = distances[idx];
-
-        // Pair-level dedup with PBC awareness (see detect_bonds_atom_radii).
-        if center_idx == neighbor_idx {
-            if image[0] < 0
-                || (image[0] == 0 && image[1] < 0)
-                || (image[0] == 0 && image[1] == 0 && image[2] <= 0)
-            {
+    for &sc_i in &central {
+        let (i, _) = sc_map[sc_i];
+        let center = sc_pos[sc_i];
+        for face in voronoi.cells()[sc_i].faces(&voronoi) {
+            let area = face.area();
+            if area < 1e-9 {
                 continue;
             }
-        } else if center_idx > neighbor_idx {
-            continue;
-        }
+            // Boundary faces (cluster surface / vacuum) have no neighbour.
+            let raw = if face.left() == sc_i {
+                match face.right() {
+                    Some(r) => r,
+                    None => continue,
+                }
+            } else {
+                face.left()
+            };
+            let (j, image) = sc_map[raw];
 
+            let dist = (sc_pos[raw] - center).length();
+            if dist < min_dist {
+                continue;
+            }
+            // Distance sanity: a shared Voronoi face that is far longer than the
+            // covalent-radii sum is a polyhedra edge (anion-anion), not a bond.
+            if dist > options.max_distance_ratio * (radii[i] + radii[j]) {
+                continue;
+            }
+            // Solid-angle fraction Ω/4π ≈ A / (4π r²).
+            let saf = area / (4.0 * std::f64::consts::PI * dist * dist);
+            if saf < options.min_solid_angle {
+                continue;
+            }
 
-        let dist_sq = dist * dist;
-        if dist_sq < min_dist_sq {
-            continue;
-        }
+            // Canonicalise (min, max, image-relative-to-min) so the same face
+            // seen from both atoms dedupes to one bond.
+            let key = if i < j {
+                (i, j, image)
+            } else if i > j {
+                (j, i, [-image[0], -image[1], -image[2]])
+            } else {
+                if image[0] < 0
+                    || (image[0] == 0 && image[1] < 0)
+                    || (image[0] == 0 && image[1] == 0 && image[2] <= 0)
+                {
+                    continue;
+                }
+                (i, j, image)
+            };
+            if !seen.insert(key) {
+                continue;
+            }
 
-        let r1 = props[center_idx].covalent_radius;
-        let r2 = props[neighbor_idx].covalent_radius;
-        let avg_r = (r1 + r2) / 2.0;
-        let face_area = std::f64::consts::PI * avg_r * avg_r;
-        let solid_angle = face_area / dist_sq;
-
-        if solid_angle < options.min_solid_angle || face_area < options.min_face_area {
-            continue;
-        }
-
-        // Gaussian distance penalty centered at ideal bond length (sum of covalent radii)
-        let sum_radii = r1 + r2;
-        let ratio = dist / sum_radii;
-        let dist_penalty = (-((ratio - 1.0).powi(2)) / 0.4).exp();
-
-        // Normalize solid angle by full sphere (4π steradians)
-        let angle_strength = (solid_angle / (4.0 * std::f64::consts::PI)).min(1.0);
-        let strength = angle_strength * dist_penalty;
-
-        if strength > options.strength_threshold {
             bonds.push(Bond {
-                site_idx_1: center_idx,
-                site_idx_2: neighbor_idx,
+                site_idx_1: key.0,
+                site_idx_2: key.1,
                 bond_length: dist,
-                strength,
-                image,
+                strength: saf.min(1.0),
+                image: key.2,
             });
         }
     }
@@ -765,12 +876,21 @@ mod tests {
         let options = ElectronegOptions::default();
         let bonds = detect_bonds_electroneg(&structure, &options);
 
-        // Should detect ionic Na-Cl bonds
         assert!(!bonds.is_empty(), "Should detect Na-Cl bonds");
 
-        // Metal-nonmetal bonus should boost strength
-        for bond in &bonds {
-            assert!(bond.strength > 0.3);
+        // The ionic Na-Cl bonds (idx 0-3 = Na, 4-7 = Cl) must be present and
+        // strong — a large ΔEN is an ionic bond, not a rejected pair. The
+        // metal-nonmetal bonus boosts them well above any same-species contact.
+        let na_cl: Vec<_> = bonds
+            .iter()
+            .filter(|b| (b.site_idx_1 < 4) != (b.site_idx_2 < 4))
+            .collect();
+        assert!(
+            !na_cl.is_empty(),
+            "Should detect ionic Na-Cl bonds (large ΔEN must not be rejected)"
+        );
+        for b in &na_cl {
+            assert!(b.strength > 0.5, "Na-Cl ionic bond should be strong, got {}", b.strength);
         }
     }
 
@@ -795,7 +915,17 @@ mod tests {
         for bond in &bonds {
             assert!(bond.bond_length > 0.4);
             assert!(bond.strength > 0.0);
+            // Voronoi coordination: rock-salt cells are cubes → 6 faces toward
+            // the opposite species only. No same-species (Na-Na / Cl-Cl) bonds.
+            let cross = (bond.site_idx_1 < 4) != (bond.site_idx_2 < 4);
+            assert!(
+                cross,
+                "solid_angle must not bond same species in NaCl: {}-{}",
+                bond.site_idx_1, bond.site_idx_2
+            );
         }
+        // 6-fold coordination: 4 Na × 6 Cl = 24 unique Na-Cl bonds.
+        assert_eq!(bonds.len(), 24, "rock-salt is 6-coordinate");
     }
 
     #[test]
@@ -838,5 +968,129 @@ mod tests {
             assert!(hb.da_distance < 3.5, "D···A distance should be < 3.5 Å");
             assert!(hb.strength > 0.0);
         }
+    }
+
+    #[test]
+    fn test_atom_radii_metal_scale() {
+        // Two Cu atoms 3.05 Å apart. The covalent-radii sum is 2.64 Å, so the
+        // legacy absolute window (sum + 0.3 = 2.94 Å) drops this real metallic
+        // contact. A multiplicative cutoff (1.2 * sum = 3.17 Å) keeps it.
+        let lattice = Lattice::cubic(20.0);
+        let species = vec![Species::neutral(Element::Cu), Species::neutral(Element::Cu)];
+        let frac_coords = vec![
+            Vector3::new(0.25, 0.25, 0.25),
+            Vector3::new(0.25 + 3.05 / 20.0, 0.25, 0.25),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_atom_radii(&structure, &AtomRadiiOptions::default());
+        assert_eq!(
+            bonds.len(),
+            1,
+            "Cu-Cu at 3.05 Å is a metallic contact within 1.2*(r1+r2); must bond"
+        );
+    }
+
+    #[test]
+    fn test_atom_radii_scale_rejects_far() {
+        // Two Cu atoms 3.30 Å apart sit beyond 1.2 * sum (3.17 Å) — no bond.
+        let lattice = Lattice::cubic(20.0);
+        let species = vec![Species::neutral(Element::Cu), Species::neutral(Element::Cu)];
+        let frac_coords = vec![
+            Vector3::new(0.25, 0.25, 0.25),
+            Vector3::new(0.25 + 3.30 / 20.0, 0.25, 0.25),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_atom_radii(&structure, &AtomRadiiOptions::default());
+        assert!(bonds.is_empty(), "Cu-Cu at 3.30 Å exceeds 1.2*(r1+r2); must not bond");
+    }
+
+    fn fcc_cu() -> Structure {
+        // Conventional FCC Cu cell (a = 3.615 Å): 1st shell at a/√2 = 2.556 Å,
+        // 2nd shell at a = 3.615 Å.
+        let lattice = Lattice::cubic(3.615);
+        let species = vec![Species::neutral(Element::Cu); 4];
+        let frac_coords = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.5, 0.5, 0.0),
+            Vector3::new(0.5, 0.0, 0.5),
+            Vector3::new(0.0, 0.5, 0.5),
+        ];
+        Structure::new(lattice, species, frac_coords)
+    }
+
+    #[test]
+    fn test_electroneg_no_second_shell_in_metal() {
+        // electroneg must not paint a hedgehog: with the closest-neighbor
+        // penalty, only the 1st coordination shell (~2.56 Å) survives; the
+        // 2nd shell at 3.615 Å is suppressed below the strength threshold.
+        let bonds = detect_bonds_electroneg(&fcc_cu(), &ElectronegOptions::default());
+        assert!(!bonds.is_empty(), "FCC Cu must have 1st-shell metallic bonds");
+        let max_len = bonds.iter().map(|b| b.bond_length).fold(0.0_f64, f64::max);
+        assert!(
+            max_len < 3.0,
+            "longest electroneg bond should be 1st-shell (~2.56 Å), got {max_len:.3} Å \
+             (2nd shell at 3.615 Å leaked in — closest-neighbor penalty missing)"
+        );
+    }
+
+    #[test]
+    fn test_solid_angle_drops_anion_edge() {
+        // Two O atoms 2.6 Å apart share a Voronoi face, but 2.6 > 1.5·Σr(O,O)
+        // (≈1.98 Å), so the distance sanity must drop this O-O polyhedra edge.
+        let lattice = Lattice::cubic(12.0);
+        let species = vec![Species::neutral(Element::O), Species::neutral(Element::O)];
+        let frac_coords = vec![
+            Vector3::new(0.4, 0.5, 0.5),
+            Vector3::new(0.4 + 2.6 / 12.0, 0.5, 0.5),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_solid_angle(&structure, &SolidAngleOptions::default());
+        assert!(bonds.is_empty(), "O-O at 2.6 Å exceeds 1.5·Σr; must not bond");
+    }
+
+    #[test]
+    fn test_solid_angle_hcp_non_orthogonal() {
+        // HCP (γ = 120°, non-orthogonal): every atom is 12-coordinate. An
+        // axis-aligned periodic Voronoi gets this wrong (6); the non-periodic
+        // supercell tessellation must recover the full 12.
+        let lattice = Lattice::hexagonal(3.21, 5.21);
+        let species = vec![Species::neutral(Element::Mg); 2];
+        let frac_coords = vec![
+            Vector3::new(1.0 / 3.0, 2.0 / 3.0, 0.25),
+            Vector3::new(2.0 / 3.0, 1.0 / 3.0, 0.75),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_solid_angle(&structure, &SolidAngleOptions::default());
+        // coordination = 2 * bonds / atoms
+        let coordination = 2 * bonds.len() / 2;
+        assert_eq!(
+            coordination, 12,
+            "HCP must be 12-coordinate via supercell Voronoi, got {coordination}"
+        );
+    }
+
+    #[test]
+    fn test_electroneg_bonds_ionic_lio() {
+        // Li-O is a strong ionic bond (ΔEN ≈ 2.5). electroneg must NOT drop it
+        // just because the electronegativity difference is large — a big ΔEN is
+        // an ionic bond, not a non-bond.
+        let lattice = Lattice::cubic(15.0);
+        let species = vec![Species::neutral(Element::Li), Species::neutral(Element::O)];
+        let frac_coords = vec![
+            Vector3::new(0.3, 0.3, 0.3),
+            Vector3::new(0.3 + 2.0 / 15.0, 0.3, 0.3),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_electroneg(&structure, &ElectronegOptions::default());
+        assert_eq!(
+            bonds.len(),
+            1,
+            "Li-O at 2.0 Å is a real ionic bond; electroneg must detect it"
+        );
     }
 }

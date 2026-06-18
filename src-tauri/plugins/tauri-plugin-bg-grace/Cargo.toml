@@ -7,6 +7,8 @@ links = "tauri-plugin-bg-grace"
 
 [dependencies]
 tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

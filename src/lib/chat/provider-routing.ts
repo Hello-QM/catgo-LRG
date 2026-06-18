@@ -159,7 +159,15 @@ export async function llm_fetch(url: string, init?: RequestInit): Promise<Respon
   if (isMobile()) {
     // No try/relay fallback: surface the error instead of leaking the key.
     const { fetch: tauriFetch } = await import(`@tauri-apps/plugin-http`)
-    return tauriFetch(url, init)
+    // connectTimeout bounds ONLY the TCP handshake — not the model's response
+    // time (the caller's 60s idle watchdog covers that). Without it, a host that
+    // is configured but silently unreachable (e.g. an Ollama server that's now
+    // offline — the socket sits in SYN_SENT with no RST) hangs each attempt for
+    // the full idle timeout, which on iOS reads as the whole app freezing. A LAN
+    // handshake is sub-100ms, so 10s is generous and still fails fast on a dead
+    // host. (connectTimeout is fixed at 10s for all llm_fetch calls — `init` is
+    // a plain RequestInit and carries no connectTimeout to override it.)
+    return tauriFetch(url, { connectTimeout: 10_000, ...init })
   }
   if (needs_relay(url) && relay_credential_allowed(url, init)) {
     return fetch(relay_url(url), init)
@@ -170,6 +178,11 @@ export async function llm_fetch(url: string, init?: RequestInit): Promise<Respon
 /** True when the tool-calling loop should run in-browser (no backend proxy). */
 export function is_client_direct(config: ChatConfig): boolean {
   if (SDK_PROVIDERS.has(config.provider)) return false // SDK agents always backend
+  // Mobile has NO Python backend, so every non-SDK provider must run in-browser.
+  // The native HTTP plugin handles CORS, so even hosts that need the backend
+  // proxy on web (e.g. NVIDIA via requires_backend_chat) are reachable direct.
+  // Without this, a custom/NVIDIA base URL routes to the absent backend and hangs.
+  if (isMobile()) return true
   if (!STATIC_ONLY && config.provider === `custom` && config.client_direct !== true) {
     return false
   }

@@ -254,6 +254,14 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
     cleanup: () => {
       stopped = true
       close_sse?.()
+      // Clear this panel's backend structure on unmount. The backend store can
+      // outlive the tab; without this, a closed/replaced structure tab leaves a
+      // stale structure that CatBot (bound to the same panel_id) later reads as
+      // a phantom the user can't find in any open view.
+      if (!STATIC_ONLY) {
+        fetch(`${API_BASE}/view/reset?panel_id=${deps.panel_id}`, { method: `POST` })
+          .catch(() => {})
+      }
     },
     request_push,
   }

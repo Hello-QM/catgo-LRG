@@ -22,6 +22,11 @@ export const icon_data = {
     viewBox: `0 0 24 24`,
     path: `M8.59 16.59L13.17 12L8.59 7.41L10 6l6 6l-6 6z`,
   },
+  Mic: { // mdi:microphone — mobile chat voice input
+    viewBox: `0 0 24 24`,
+    path:
+      `M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3m7 9c0 3.53-2.61 6.43-6 6.92V21h-2v-3.08c-3.39-.49-6-3.39-6-6.92h2a5 5 0 0 0 5 5a5 5 0 0 0 5-5h2z`,
+  },
   Collapse: {
     viewBox: `0 0 24 24`,
     path:
@@ -590,6 +595,11 @@ export const icon_data = {
     viewBox: `0 0 24 24`,
     path:
       `<g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></g>`,
+  },
+  Dna: { // mdi:dna — double-helix for opening a structure in the Mol* bio viewer
+    viewBox: `0 0 24 24`,
+    path:
+      `M4 2h2v2c0 1.42.68 2.66 1.73 3.5C6.68 8.34 6 9.58 6 11v2c0 1.42.68 2.66 1.73 3.5C6.68 17.34 6 18.58 6 20v2H4v-2c0-1.42.68-2.66 1.73-3.5C4.68 15.66 4 14.42 4 13v-2c0-1.42.68-2.66 1.73-3.5C4.68 6.66 4 5.42 4 4V2m14 0h2v2c0 1.42-.68 2.66-1.73 3.5C19.32 8.34 20 9.58 20 11v2c0 1.42-.68 2.66-1.73 3.5C19.32 17.34 20 18.58 20 20v2h-2v-2c0-1.42-.68-2.66-1.73-3.5C17.32 15.66 18 14.42 18 13v-2c0-1.42-.68-2.66-1.73-3.5C17.32 6.66 18 5.42 18 4V2M8 5v.5c0 .56.18 1.08.5 1.5h7c.32-.42.5-.94.5-1.5V5H8m.5 4c-.16.21-.29.45-.36.7L8 10h8l-.14-.3c-.07-.25-.2-.49-.36-.7h-7m-.34 6c.07.25.2.49.36.7h7c.16-.21.29-.45.36-.7H8.16M8 19v-.5c0-.56.18-1.08.5-1.5h7c.32.42.5.94.5 1.5v.5H8Z`,
   },
 } as const
 

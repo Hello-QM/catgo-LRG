@@ -1,66 +1,53 @@
 /**
  * Panel resize handlers — extracted from App.svelte.
  *
- * Mouse-drag handlers for resizing split panes.
+ * Per-SplitNode ratio drag for the recursive pane tree (replaces the old
+ * fixed col/row grid dividers + quad center handle).
  */
 
 import type { StructureTabState } from '../pane-utils'
+import { findSplit, setRatio } from '../pane-tree'
 
-export interface ResizeDeps {
+export interface ResizeDepsMin {
   tab_states: Record<string, StructureTabState>
   set_is_panel_resizing: (v: boolean) => void
-  set_resize_axis: (v: 'col' | 'row') => void
 }
 
-export function on_divider_mousedown(deps: ResizeDeps, e: MouseEvent, axis: 'col' | 'row', tab_id: string) {
-  e.preventDefault()
+export function on_split_drag(
+  deps: ResizeDepsMin,
+  e: MouseEvent,
+  split_id: string,
+  dir: 'h' | 'v',
+  tab_id: string,
+  on_start: () => void,
+  on_end: () => void,
+) {
   const ts = deps.tab_states[tab_id]
   if (!ts) return
-  const container = (e.target as HTMLElement).closest(`.grid-container`) as HTMLElement
-  if (!container) return
-  deps.set_is_panel_resizing(true)
-  deps.set_resize_axis(axis)
-  const start = axis === 'col' ? e.clientX : e.clientY
-  const start_pct = axis === 'col' ? ts.col_split : ts.row_split
-
-  function on_move(ev: MouseEvent) {
-    const rect = container.getBoundingClientRect()
-    const total = axis === 'col' ? rect.width : rect.height
-    const delta_pct = ((axis === 'col' ? ev.clientX : ev.clientY) - start) / total * 100
-    const new_pct = Math.max(20, Math.min(80, start_pct + delta_pct))
-    if (axis === 'col') ts.col_split = new_pct
-    else ts.row_split = new_pct
-  }
-  function on_up() {
-    deps.set_is_panel_resizing(false)
-    window.removeEventListener(`mousemove`, on_move)
-    window.removeEventListener(`mouseup`, on_up)
-  }
-  window.addEventListener(`mousemove`, on_move)
-  window.addEventListener(`mouseup`, on_up)
-}
-
-export function on_center_mousedown(deps: ResizeDeps, e: MouseEvent, tab_id: string) {
+  const node = findSplit(ts.root, split_id)
+  if (!node) return
+  const root_el = (e.target as HTMLElement).parentElement // .pane-tree-root
+  if (!root_el) return
+  // The divider carries its split's % extent along the drag axis (data-split-span)
+  // so nested-split drags convert px → ratio against the split's own size, not
+  // the whole tree.
+  const span_pct = parseFloat((e.target as HTMLElement).dataset.splitSpan ?? '100') || 100
   e.preventDefault()
-  const ts = deps.tab_states[tab_id]
-  if (!ts) return
-  const container = (e.target as HTMLElement).closest(`.grid-container`) as HTMLElement
-  if (!container) return
   deps.set_is_panel_resizing(true)
-  const start_x = e.clientX
-  const start_y = e.clientY
-  const start_col = ts.col_split
-  const start_row = ts.row_split
-
+  on_start()
+  const start = dir === 'h' ? e.clientX : e.clientY
+  const start_ratio = node.ratio
   function on_move(ev: MouseEvent) {
-    const rect = container.getBoundingClientRect()
-    ts.col_split = Math.max(20, Math.min(80, start_col + (ev.clientX - start_x) / rect.width * 100))
-    ts.row_split = Math.max(20, Math.min(80, start_row + (ev.clientY - start_y) / rect.height * 100))
+    const rect = root_el!.getBoundingClientRect()
+    const total = (dir === 'h' ? rect.width : rect.height) * (span_pct / 100)
+    const delta = total > 0 ? ((dir === 'h' ? ev.clientX : ev.clientY) - start) / total : 0
+    ts!.root = setRatio(ts!.root, split_id, start_ratio + delta)
   }
   function on_up() {
-    deps.set_is_panel_resizing(false)
     window.removeEventListener(`mousemove`, on_move)
     window.removeEventListener(`mouseup`, on_up)
+    deps.set_is_panel_resizing(false)
+    on_end()
   }
   window.addEventListener(`mousemove`, on_move)
   window.addEventListener(`mouseup`, on_up)

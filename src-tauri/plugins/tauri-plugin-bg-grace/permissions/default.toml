@@ -1,0 +1,5 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = "Allows the iOS terminal to keep the screen awake (disable auto-lock) while in use."
+permissions = ["allow-set-idle-timer"]

@@ -12,7 +12,7 @@ import { save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 
 export interface ExportHandlerDeps {
-  close_panel: (tab_id: string, pane_idx: number) => void
+  close_panel: (tab_id: string, leaf_id: string) => void
   load_close_save_projects: () => void
 }
 
@@ -84,7 +84,7 @@ export async function do_export(deps: ExportHandlerDeps) {
     }
     exp.dialog = null
     if (exp.close_after) {
-      deps.close_panel(exp.close_after.tab_id, exp.close_after.pane_idx)
+      deps.close_panel(exp.close_after.tab_id, exp.close_after.leaf_id)
       exp.close_after = null
     }
   } catch (e) {

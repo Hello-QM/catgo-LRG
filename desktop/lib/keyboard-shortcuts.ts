@@ -5,8 +5,9 @@
  * No $state needed.
  */
 
-import type { StructureTabState, LayoutType } from '../pane-utils'
-import { layout_panel_count } from '../pane-utils'
+import type { StructureTabState } from '../pane-utils'
+import type { PresetId } from '../pane-tree'
+import { leafCount, leaves } from '../pane-tree'
 
 export interface KeyboardShortcutDeps {
   get_tabs: () => { id: string; type: string }[]
@@ -15,12 +16,12 @@ export interface KeyboardShortcutDeps {
   toggle_sidebar: () => void
   open_tab: (type: `structure` | `workflow`) => void
   get_active_ts: () => StructureTabState | null
-  handle_open_file: (tab_id: string, pane_idx: number) => void
-  handle_unload: (tab_id: string, pane_idx: number) => void
+  handle_open_file: (tab_id: string, leaf_id: string) => void
+  handle_unload: (tab_id: string, leaf_id: string) => void
   request_close_tab: (id: string) => void
   get_tab_close_confirm_id: () => string | null
   set_tab_close_confirm_id: (id: string | null) => void
-  get_pending_layout_change: () => { tab_id: string; new_layout: LayoutType; lost_count: number } | null
+  get_pending_layout_change: () => { tab_id: string; new_layout: PresetId; lost_count: number } | null
   set_pending_layout_change: (v: null) => void
 }
 
@@ -71,18 +72,21 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
 
     if (ctrl && event.key === `o`) {
       event.preventDefault()
-      deps.handle_open_file(active_tab_id, ts.active_pane)
+      deps.handle_open_file(active_tab_id, ts.active_leaf_id)
     }
     if (ctrl && event.key === `w`) {
       event.preventDefault()
-      const panel_count = layout_panel_count(ts.layout)
-      if (panel_count > 1) {
-        deps.handle_unload(active_tab_id, ts.active_pane)
+      if (leafCount(ts.root) > 1) {
+        deps.handle_unload(active_tab_id, ts.active_leaf_id)
       } else {
         deps.request_close_tab(active_tab_id)
       }
     }
     if (event.key === `Escape`) {
+      if (ts.maximized_leaf_id) {
+        ts.maximized_leaf_id = null
+        return
+      }
       if (deps.get_tab_close_confirm_id()) {
         deps.set_tab_close_confirm_id(null)
         return
@@ -91,8 +95,8 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
         deps.set_pending_layout_change(null)
         return
       }
-      if (ts.close_confirm_pane !== null) {
-        ts.close_confirm_pane = null
+      if (ts.close_confirm_leaf_id !== null) {
+        ts.close_confirm_leaf_id = null
         return
       }
     }
@@ -102,9 +106,8 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
     }
     if (event.key >= `1` && event.key <= `4` && !ctrl) {
       const idx = parseInt(event.key) - 1
-      if (idx < layout_panel_count(ts.layout)) {
-        ts.active_pane = idx
-      }
+      const ids = leaves(ts.root).map(l => l.id)
+      if (idx < ids.length) ts.active_leaf_id = ids[idx]
     }
   }
 }

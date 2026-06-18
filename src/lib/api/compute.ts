@@ -100,6 +100,7 @@ export interface OptimizationResult {
 }
 
 import { API_BASE as _DEFAULT_API, WS_BASE as _DEFAULT_WS } from './config'
+import { isMobile } from './transport'
 
 // Default API base URL - can be overridden
 let API_BASE = _DEFAULT_API
@@ -223,6 +224,12 @@ export function connectOptimizationWS(
   config: OptimizationConfig,
   callbacks: WSCallbacks,
 ): WSConnection {
+  // No backend on mobile — this WebSocket would hang in SYN_SENT with no connect
+  // timeout. Fail fast with an inert connection instead.
+  if (isMobile()) {
+    callbacks.onError(new Error(`Optimization is unavailable on mobile (no backend)`))
+    return { cancel: () => {}, disconnect: () => {}, isConnected: () => false }
+  }
   const request_id = `opt_${Date.now()}_${Math.random().toString(36).slice(2)}`
   const ws_url = `${WS_BASE}/optimize/ws`
 
@@ -337,6 +344,13 @@ export function runOptimization(
     onError: (error: Error) => void
   },
 ): WSConnection {
+  // No backend on mobile. The WS guard in connectOptimizationWS fails fast, but
+  // its onError below would then fall back to optimizeStructure() — a plain fetch
+  // to the dead backend that hangs. Short-circuit here too.
+  if (isMobile()) {
+    callbacks.onError(new Error(`Optimization is unavailable on mobile (no backend)`))
+    return { cancel: () => {}, disconnect: () => {}, isConnected: () => false }
+  }
   // Try WebSocket first
   const connection = connectOptimizationWS(structure, config, {
     onProgress: callbacks.onProgress,

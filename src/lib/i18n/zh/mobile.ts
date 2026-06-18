@@ -72,6 +72,7 @@ const mobile: Record<string, string> = {
   connection_failed: `连接失败。`,
   saved_pw_rejected: `已保存的密码被拒绝 — 可能已更改。请重新输入以连接。`,
   auth_cancelled: `认证已取消。`,
+  reconnecting_to: `正在重新连接到 {target}…`,
 
   // ── 保存密码提示 (MobileConnect) ─────────────────────────────────────
   save_pw_title: `保存此集群的密码？`,
@@ -159,6 +160,9 @@ const mobile: Record<string, string> = {
   ai_minimize: `最小化`,
   ai_close_chat: `关闭对话`,
   ai_stop: `停止`,
+  ai_voice_input: `语音输入`,
+  ai_voice_language: `语音语言`,
+  ai_mic_denied: `麦克风或语音识别权限被拒绝。请在「设置 → CatGo」中为 CatGo 开启。`,
   ai_thinking: `思考中…`,
   ai_empty: `关于你的结构或研究，尽管问我。`,
   ai_no_key: `添加 API 密钥即可开始对话。`,

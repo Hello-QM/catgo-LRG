@@ -8,6 +8,7 @@ import {
   ensure_tab,
   MAX_TABS,
   path_basename,
+  repoint_session,
   set_tab_cwd,
   switch_tab,
   term_tabs,
@@ -145,17 +146,55 @@ describe(`terminal-tabs registry`, () => {
     expect(term_tabs.tabs.length).toBe(0)
     expect(term_tabs.active_id).toBe(null)
   })
+
+  it(`repoint_session moves a cluster's tabs to a new session, keeping seq`, () => {
+    // Reconnect mints a fresh session id; repoint must preserve each tab's seq
+    // (hence its catgo-<seq> tmux name) so the surviving session re-attaches.
+    ensure_tab(`old`, `me@a`)
+    add_tab(`old`, `me@a`)
+    const seqs = term_tabs.tabs.map((t) => t.seq)
+    repoint_session(`old`, `new`)
+    expect(term_tabs.tabs.every((t) => t.session_id === `new`)).toBe(true)
+    expect(term_tabs.tabs.map((t) => t.seq)).toEqual(seqs)
+  })
+
+  it(`repoint_session is a no-op for old===new and leaves other sessions alone`, () => {
+    ensure_tab(`a`, `me@a`)
+    ensure_tab(`b`, `me@b`)
+    repoint_session(`a`, `a`) // no-op
+    repoint_session(`x`, `y`) // no matching tabs
+    expect(term_tabs.tabs.map((t) => t.session_id)).toEqual([`a`, `b`])
+  })
 })
 
 describe(`clusters registry`, () => {
   it(`register / switch / remove round-trip`, async () => {
-    const { clusters, get_active_cluster, register_cluster, remove_cluster, set_active_cluster } =
-      await import(`../clusters.svelte`)
+    const {
+      clusters,
+      get_active_cluster,
+      register_cluster,
+      remove_cluster,
+      set_active_cluster,
+    } = await import(`../clusters.svelte`)
     clusters.list.length = 0
     clusters.active_key = null
 
-    register_cluster({ key: `a:22:u`, session_id: `s1`, host: `a`, port: 22, username: `u`, label: `u@a` })
-    register_cluster({ key: `b:22:u`, session_id: `s2`, host: `b`, port: 22, username: `u`, label: `u@b` })
+    register_cluster({
+      key: `a:22:u`,
+      session_id: `s1`,
+      host: `a`,
+      port: 22,
+      username: `u`,
+      label: `u@a`,
+    })
+    register_cluster({
+      key: `b:22:u`,
+      session_id: `s2`,
+      host: `b`,
+      port: 22,
+      username: `u`,
+      label: `u@b`,
+    })
     expect(clusters.list.length).toBe(2)
     expect(clusters.active_key).toBe(`b:22:u`) // newest connect becomes active
 
@@ -176,8 +215,22 @@ describe(`clusters registry`, () => {
     const { clusters, register_cluster } = await import(`../clusters.svelte`)
     clusters.list.length = 0
     clusters.active_key = null
-    register_cluster({ key: `a:22:u`, session_id: `s1`, host: `a`, port: 22, username: `u`, label: `u@a` })
-    register_cluster({ key: `a:22:u`, session_id: `s9`, host: `a`, port: 22, username: `u`, label: `nick` })
+    register_cluster({
+      key: `a:22:u`,
+      session_id: `s1`,
+      host: `a`,
+      port: 22,
+      username: `u`,
+      label: `u@a`,
+    })
+    register_cluster({
+      key: `a:22:u`,
+      session_id: `s9`,
+      host: `a`,
+      port: 22,
+      username: `u`,
+      label: `nick`,
+    })
     expect(clusters.list.length).toBe(1)
     expect(clusters.list[0].session_id).toBe(`s9`)
     expect(clusters.list[0].label).toBe(`nick`)

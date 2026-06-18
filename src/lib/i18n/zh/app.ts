@@ -3,6 +3,8 @@ const app: Record<string, string> = {
   // TabBar
   close_tab: `关闭标签页`,
   new_tab: `新建标签页`,
+  new_structure_tab: `结构`,
+  new_terminal_tab: `终端`,
   close_all_tabs: `关闭所有标签页`,
   layout_single: `单面板`,
   layout_split_h: `左右分屏`,
@@ -12,6 +14,19 @@ const app: Record<string, string> = {
   // Panel
   open_in_new_window: `在新窗口打开`,
   close_panel: `关闭面板`,
+  maximize_pane: `最大化面板`,
+  restore_pane: `还原面板`,
+  change_pane_type: `切换面板类型`,
+  type_structure: `结构`,
+  type_terminal: `终端`,
+  type_empty: `清空`,
+  dir_sync_on: `目录同步 开 — 文件面板跟随终端目录`,
+  dir_sync_off: `目录同步 关 — 点击开启跟随终端目录`,
+  ask_catbot: `让 CatBot 处理此终端`,
+  connect_new_cluster: `连接新集群…`,
+  allow: `允许`,
+  agent_terminal_approve_title: `Agent 想在你的终端执行命令`,
+  agent_terminal_autorun: `本会话内自动执行 Agent 终端命令，不再询问`,
   workflow_will_be_closed: `工作流将被关闭。`,
   local: `本地`,
   hpc: `HPC`,
@@ -168,5 +183,10 @@ const app: Record<string, string> = {
   no_workflows_yet: `暂无工作流。请新建或使用上面的模板。`,
   static_mode_workflow_title: `工作流引擎`,
   static_mode_workflow_message: `工作流执行、HPC 集成和项目管理需要使用 CatGo 桌面应用。你仍然可以在浏览器中使用 3D 结构查看器和构建工具。`,
+
+  // Open-target preference
+  open_in_split: `分屏`,
+  open_in_window: `新窗口`,
+  open_files_in: `打开文件到`,
 }
 export default app

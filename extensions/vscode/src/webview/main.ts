@@ -58,6 +58,7 @@ export interface CatGoData {
   wasm_binary?: string // base64-encoded ferrox WASM binary from extension
   moyo_wasm_binary?: string // base64-encoded moyo WASM binary from extension
   chgdiff_wasm_binary?: string // base64-encoded chgdiff WASM binary from extension
+  catrender_wasm_binary?: string // base64-encoded catrender WASM binary from extension
 }
 
 export interface ParseResult {
@@ -833,6 +834,21 @@ async function initialize() {
     }
   } else {
     console.log(`[CatGO Webview] No chgdiff WASM binary provided by extension - will fetch from bundled assets`)
+  }
+
+  // Stash catrender WASM binary for lazy init when the molecular SVG renderer
+  // is first used. catrender-wasm.ts reads globalThis.__catgo_catrender_wasm.
+  if (catgo_data?.catrender_wasm_binary) {
+    try {
+      console.log(`[CatGO Webview] Received catrender WASM binary (${catgo_data.catrender_wasm_binary.length} base64 chars)`)
+      const catrender_buffer = base64_to_array_buffer(catgo_data.catrender_wasm_binary)
+      ;(globalThis as unknown as { __catgo_catrender_wasm?: ArrayBuffer }).__catgo_catrender_wasm = catrender_buffer
+      console.log(`[CatGO Webview] Stashed catrender WASM binary on globalThis (${catrender_buffer.byteLength} bytes)`)
+    } catch (error) {
+      console.warn(`[CatGO Webview] Failed to decode catrender WASM binary:`, error)
+    }
+  } else {
+    console.log(`[CatGO Webview] No catrender WASM binary provided by extension - will fetch from bundled assets`)
   }
 
   // Initialize moyo WASM with binary data if provided by extension

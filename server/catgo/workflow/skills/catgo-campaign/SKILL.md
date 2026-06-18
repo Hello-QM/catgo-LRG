@@ -34,10 +34,16 @@ complete. A wrong path fails every job — if unsure, STOP and ask.
 2. **Plan** — ASK the user: brainstorm the plan together (literature-grounded, one
    question at a time, propose approaches) OR use the template / generate directly.
 3. **Reference script** (optional): `catgo campaign fetch-ref --project <dir> --ssh <alias> --remote_path <.sb>`
-4. **Per calc**: build inputs (catgo slab/convert/… into the calc folder), SHOW the
-   rendered inputs to the user (input-file gate), then
-   `catgo campaign submit --project <dir> --calc calc/<stage>/<candidate> --ssh <alias>`
+4. **Per calc**: build inputs into the LOCAL calc folder, then the **input-file gate** (below),
+   then `catgo campaign submit --project <dir> --calc calc/<stage>/<candidate> --ssh <alias>`
    (skip the gate only on explicit YOLO opt-in).
+
+   **⛔ INPUT-FILE GATE (hard rule — catgo-campaign + autochem).** Before ANY submit (and after a
+   calc converges, before building the NEXT step's inputs): sync the CONTCAR **and** the INCAR to
+   the LOCAL campaign folder, and **tell the user the exact LOCAL file paths** of the INCAR +
+   CONTCAR. The user reviews / edits / confirms the files THEMSELVES on disk. Submit ONLY after the
+   user explicitly confirms. Do **NOT** push structures to the CatGO viewer as a substitute for
+   local-file review of inputs, and **NEVER auto-submit**. (Waived only by explicit YOLO.)
 5. **Loop** (~10 min, user-triggered): `catgo campaign poll --project <dir> --ssh <alias>`
    marks DONE/FAILED via squeue→sacct. A scheduler DONE != converged — open the
    work_dir outputs to confirm, write numbers into the calc's `result.md`, log gotchas

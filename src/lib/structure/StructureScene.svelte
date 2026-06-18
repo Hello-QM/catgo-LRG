@@ -45,6 +45,8 @@
     Mesh.prototype.raycast = acceleratedRaycast
   }
   import { type BondingStrategy, compute_bond_transform, get_bond_key } from './bonding'
+  import { compute_bonds_sync } from './workers/bond-worker-api'
+  import { apply_bond_distance_rules } from './bond-distance-rules'
   import type { BondKind } from './bonding/bond-manager.svelte'
   import { BOND_KIND } from './bonding/bond-manager.svelte'
   import { BondManager } from './bonding/bond-manager.svelte'
@@ -74,11 +76,12 @@
   import { get_orig_site_idx, type AtomPropertyColors } from './atom-properties'
   import CoordinationPolyhedra from './CoordinationPolyhedra.svelte'
   import {
-    compute_polyhedra_fast,
+    compute_polyhedra_from_bonds,
     merge_polyhedra_geometry,
     get_polyhedra_hidden_atoms,
     get_polyhedra_hidden_bond_keys,
     type MergedPolyhedraGeometry,
+    type PolyhedronData,
   } from './polyhedra'
   import type { MofClusters } from './mof-analysis'
   import { CanvasTooltip } from './index'
@@ -93,9 +96,11 @@
     update_gpu_picker as update_gpu_picker_impl,
     type GpuPickerDeps,
   } from './gpu-picker-integration.svelte'
+  import { on_ferrox_wasm_ready } from './ferrox-wasm'
   import {
     create_bond_state,
     compute_bond_connectivity,
+    invalidate_bonds_for_recompute,
     compute_bond_connectivity_for_frame,
     clear_trajectory_bond_frame_cache,
     build_bond_pairs,
@@ -453,6 +458,7 @@
     show_image_atoms = false,
     bonding_strategy = DEFAULTS.structure.bonding_strategy,
     bonding_options = {},
+    bond_scale = DEFAULTS.structure.bond_scale,
     show_hydrogen_bonds = DEFAULTS.structure.show_hydrogen_bonds,
     hbond_distance_cutoff = DEFAULTS.structure.hbond_distance_cutoff,
     hbond_angle_cutoff = DEFAULTS.structure.hbond_angle_cutoff,
@@ -611,8 +617,12 @@
     show_polyhedra = false,
     polyhedra_center_elements = [] as string[],
     polyhedra_min_coordination = 3,
+    polyhedra_max_neighbors = 8,
+    polyhedra_bond_scale = DEFAULTS.structure.polyhedra_bond_scale,
     polyhedra_metals_only = true,
-    polyhedra_cutoff = 3.5,
+    polyhedra_color_mode = `vertex` as import('$lib/settings').PolyhedraColorMode,
+    polyhedra_color = `#4a90d9`,
+    polyhedra_show_edges = true,
     polyhedra_opacity_mode = `uniform` as import('$lib/settings').PolyhedraOpacityMode,
     polyhedra_opacity = 0.4,
     polyhedra_opacity_near = 0.6,
@@ -701,6 +711,7 @@
     bond_color?: string
     bonding_strategy?: BondingStrategy
     bonding_options?: Record<string, unknown>
+    bond_scale?: number
     show_hydrogen_bonds?: boolean
     hbond_distance_cutoff?: number
     hbond_angle_cutoff?: number
@@ -860,8 +871,12 @@
     show_polyhedra?: boolean
     polyhedra_center_elements?: string[]
     polyhedra_min_coordination?: number
+    polyhedra_max_neighbors?: number
+    polyhedra_bond_scale?: number
     polyhedra_metals_only?: boolean
-    polyhedra_cutoff?: number
+    polyhedra_color_mode?: import('$lib/settings').PolyhedraColorMode
+    polyhedra_color?: string
+    polyhedra_show_edges?: boolean
     polyhedra_opacity_mode?: import('$lib/settings').PolyhedraOpacityMode
     polyhedra_opacity?: number
     polyhedra_opacity_near?: number
@@ -2029,13 +2044,34 @@
   // cross-cell bonds with `image` populated; the renderer paints two
   // halves anchored at the original atoms.
   let bond_input = $derived(bond_input_structure ?? structure)
+  // Merge the user-tunable `bond_scale` into the strategy options. atom_radii
+  // reads `scale` (bond iff dist ≤ scale·Σr); electroneg/solid_angle ignore it.
+  let bonding_options_eff = $derived({
+    ...(bonding_options as Record<string, unknown>),
+    scale: bond_scale,
+  })
   $effect.pre(() => {
     compute_bond_connectivity(
       bond_state, (pairs) => { bond_pairs = pairs },
       bond_input, show_bonds, lattice, bonding_strategy,
-      bonding_options, external_dragging,
+      bonding_options_eff, external_dragging,
     )
   })
+
+  // The first bond computation can run before the ferrox WASM finishes loading
+  // (a popout window loads its structure at mount; mobile cold-starts are slow).
+  // compute_bonds_sync then falls back to the pure-JS path, which emits NO
+  // cross-cell PBC bonds. When WASM finishes, recompute ONCE with the real
+  // (PBC-aware) detector. Done imperatively + untracked so it can't entangle
+  // with the reactive bond effect above (that would loop on bond_state writes).
+  $effect(() => on_ferrox_wasm_ready(() => untrack(() => {
+    invalidate_bonds_for_recompute(bond_state, bond_input)
+    compute_bond_connectivity(
+      bond_state, (pairs) => { bond_pairs = pairs },
+      bond_input, show_bonds, lattice, bonding_strategy,
+      bonding_options_eff, external_dragging,
+    )
+  })))
 
   // Phase 7 — image-atom decorator layout. Enumerates the crystaltoolkit /
   // VESTA-style boundary-atom set: every site whose fractional coords are
@@ -2564,18 +2600,83 @@
     return out
   })
 
-  // --- Polyhedra computation (fast distance cutoff + electronegativity filter) ---
+  // --- Polyhedra computation (bond-graph: uses filtered_bond_pairs) ---
   let polyhedra_data = $derived.by(() => {
     if (!show_polyhedra || !structure?.sites) return []
     try {
-      return compute_polyhedra_fast(
-        structure, polyhedra_center_elements ?? [], polyhedra_min_coordination ?? 3,
-        polyhedra_metals_only ?? true, polyhedra_cutoff ?? 3.5,
+      // Compute on the UNIT-CELL structure only. When image atoms are shown,
+      // `structure.sites` is expanded with boundary image copies appended after
+      // `num_original_sites`; feeding those to the bond graph double-counts each
+      // vertex (a center bonds to both the original neighbour and its coincident
+      // image-atom site), producing duplicate coincident vertices that degenerate
+      // the convex hull into a half-shell. PBC closure across cell boundaries is
+      // already handled by the bond jimage shift, and image-atom polyhedra are
+      // added separately in `polyhedra_data_with_images`.
+      const base_structure =
+        num_original_sites !== undefined && num_original_sites < structure.sites.length
+          ? { ...structure, sites: structure.sites.slice(0, num_original_sites) }
+          : structure
+      // Polyhedra need coordination-complete bonds, independent of the user's
+      // render bond mode (solid_angle under-coordinates octahedra). Compute
+      // atom_radii bonds (PBC-aware via WASM) just for polyhedra, with their own
+      // scale knob; fall back to the rendered bonds if the sync path is
+      // unavailable (large cell / no WASM).
+      const poly_bonds_raw =
+        compute_bonds_sync(base_structure, `atom_radii`, { scale: polyhedra_bond_scale }) ??
+        visible_bond_pairs
+      // Honour per-pair distance rules in polyhedra too, so a ruled pair's
+      // coordination shell matches the rendered bonds (generate + filter).
+      const base_lat_m = (base_structure as { lattice?: { matrix?: unknown } }).lattice?.matrix
+      const base_lat = (Array.isArray(base_lat_m) && base_lat_m.length === 3)
+        ? base_lat_m as [Vec3, Vec3, Vec3]
+        : null
+      const poly_bonds = apply_bond_distance_rules(
+        base_structure, base_lat, poly_bonds_raw, bond_distance_rules ?? [],
       )
+      return compute_polyhedra_from_bonds(base_structure, poly_bonds, {
+        center_elements: polyhedra_center_elements ?? [],
+        min_coordination: polyhedra_min_coordination ?? 4,
+        max_neighbors: polyhedra_max_neighbors ?? 8,
+        metals_only: polyhedra_metals_only ?? false,
+      })
     } catch (err) {
       console.warn(`[CatGo] Polyhedra computation failed:`, err)
       return []
     }
+  })
+
+  // Extend unit-cell polyhedra with copies for rendered image atoms.
+  // Hidden-atom/bond derivations stay on `polyhedra_data` (unit-cell only) so
+  // the same center_idx is not processed twice there. Only the geometry
+  // consumer (merge_polyhedra_geometry) needs the extended list.
+  let polyhedra_data_with_images = $derived.by((): PolyhedronData[] => {
+    if (!show_polyhedra || !show_image_atoms || !polyhedra_data.length) return polyhedra_data
+    const layout = image_atom_layout
+    if (!layout.n_image_atoms) return polyhedra_data
+    const mat = lattice?.matrix
+    if (!mat) return polyhedra_data
+    const center_set = new Set(polyhedra_data.map((p) => p.center_idx))
+    const extras: PolyhedronData[] = []
+    for (let img = 0; img < layout.n_image_atoms; img++) {
+      const orig_idx = layout.orig_site_indices[img]
+      if (!center_set.has(orig_idx)) continue
+      const jx = layout.jimage_offsets[img * 3]
+      const jy = layout.jimage_offsets[img * 3 + 1]
+      const jz = layout.jimage_offsets[img * 3 + 2]
+      // shift = jx*row0 + jy*row1 + jz*row2
+      const sx = jx * mat[0][0] + jy * mat[1][0] + jz * mat[2][0]
+      const sy = jx * mat[0][1] + jy * mat[1][1] + jz * mat[2][1]
+      const sz = jx * mat[0][2] + jy * mat[1][2] + jz * mat[2][2]
+      const proto = polyhedra_data.find((p) => p.center_idx === orig_idx)!
+      extras.push({
+        center_idx: proto.center_idx,
+        center_element: proto.center_element,
+        neighbor_indices: proto.neighbor_indices,
+        vertices: proto.vertices.map(([vx, vy, vz]) => [vx + sx, vy + sy, vz + sz]),
+      })
+    }
+    if (!extras.length) return polyhedra_data
+    return [...polyhedra_data, ...extras]
   })
 
   const EMPTY_POLYHEDRA_GEOM: MergedPolyhedraGeometry = {
@@ -2584,10 +2685,30 @@
     edge_positions: new Float32Array(0), edge_count: 0,
   }
 
+  // Color of a structure site: per-element override > property color (coordination/
+  // Wyckoff modes) > element color > gray fallback. Mirrors catgo's atom-color path.
+  const polyhedra_site_color = (site_idx: number): string => {
+    const site = structure?.sites[site_idx]
+    const element = site?.species?.[0]?.element ?? ``
+    const override = polyhedra_color_overrides?.[element]
+    if (override) return override
+    const orig_idx = get_orig_site_idx(site, site_idx)
+    return property_colors?.colors[orig_idx] ??
+      (element && colors.element?.[element]) ?? `#808080`
+  }
+
   let polyhedra_geometry = $derived.by(() => {
-    if (!polyhedra_data.length) return EMPTY_POLYHEDRA_GEOM
+    if (!polyhedra_data_with_images.length) return EMPTY_POLYHEDRA_GEOM
+    // Resolve each hull corner's color per the active color mode. neighbor_indices
+    // is parallel to vertices; -1 marks a PBC image -> fall back to the center color.
+    const get_vertex_color = (poly: PolyhedronData, vertex_local_idx: number): string => {
+      if (polyhedra_color_mode === `uniform`) return polyhedra_color
+      if (polyhedra_color_mode === `center`) return polyhedra_site_color(poly.center_idx)
+      const site_idx = poly.neighbor_indices[vertex_local_idx]
+      return site_idx >= 0 ? polyhedra_site_color(site_idx) : polyhedra_site_color(poly.center_idx)
+    }
     try {
-      return merge_polyhedra_geometry(polyhedra_data, polyhedra_color_overrides ?? {})
+      return merge_polyhedra_geometry(polyhedra_data_with_images, get_vertex_color)
     } catch (err) {
       console.warn(`[CatGo] Polyhedra geometry merge failed:`, err)
       return EMPTY_POLYHEDRA_GEOM
@@ -2779,7 +2900,7 @@
   // Track which bonds are manual (for visual feedback)
   let manual_bond_keys = $derived.by(() => new Set(manual_bonds.map(b => get_bond_key(b.site_idx_1, b.site_idx_2))))
 
-  let filtered_bond_pairs = $derived.by(() => {
+  let visible_bond_pairs = $derived.by(() => {
     // Use last_bond_structure for site lookups — bond indices reference the
     // structure bonds were computed against. This also avoids a redundant
     // cascade (filtered → instanced → GPU) every time structure changes.
@@ -2805,12 +2926,21 @@
     const _rules_len = bond_distance_rules?.length ?? 0
     const _deleted_size = _deleted_bond_keys.size
 
-    // Build element-pair distance rule lookup map
-    const rule_map = new Map<string, { min: number; max: number }>()
-    for (const r of bond_distance_rules ?? []) {
-      const key = [r.element_1, r.element_2].sort().join(`-`)
-      rule_map.set(key, { min: r.min_dist, max: r.max_dist })
-    }
+    // Apply per-element-pair distance rules. For a ruled pair this REPLACES the
+    // strategy bonds with every PBC pair within [min,max] (so it both removes
+    // over-long bonds and ADDS missing in-range bonds the strategy didn't find);
+    // pairs without a rule keep their strategy bonds untouched.
+    const lat_m = (bond_struct as { lattice?: { matrix?: unknown } }).lattice?.matrix
+    const lat_matrix = (Array.isArray(lat_m) && lat_m.length === 3)
+      ? lat_m as [Vec3, Vec3, Vec3]
+      : null
+    // During trajectory playback `bond_struct.sites[].xyz` are the loaded
+    // frame, not the one on screen. Pass the animated frame positions so ruled
+    // bonds track the trajectory instead of freezing at frame 0.
+    const ruled_bonds = apply_bond_distance_rules(
+      bond_struct, lat_matrix, bond_pairs, bond_distance_rules ?? [],
+      trajectory_frame_positions ?? null,
+    )
 
     const is_site_visible = (site_idx: number) => {
       const site = bond_struct.sites[site_idx]
@@ -2824,8 +2954,8 @@
       return has_visible_element && prop_visible
     }
 
-    // Start with auto-detected bonds, filter out deleted, hidden, and invalid transforms
-    let result = bond_pairs.filter((bond) => {
+    // Start from the rule-aware bonds; filter out deleted, hidden, and invalid transforms
+    let result = ruled_bonds.filter((bond) => {
       if (!bond.transform_matrix || bond.transform_matrix.some((v) => !Number.isFinite(v))) return false
       // Hard cap on rendered bond length. No real covalent bond exceeds this;
       // anything longer is a PBC/image rendering artifact (e.g. a bond drawn
@@ -2834,16 +2964,6 @@
       const key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
       if (_deleted_bond_keys.has(key)) return false
       if (!is_site_visible(bond.site_idx_1) || !is_site_visible(bond.site_idx_2)) return false
-      // Per-element-pair distance rule filtering
-      if (rule_map.size > 0) {
-        const el1 = bond_struct.sites[bond.site_idx_1]?.species[0]?.element
-        const el2 = bond_struct.sites[bond.site_idx_2]?.species[0]?.element
-        if (el1 && el2) {
-          const pair_key = [el1, el2].sort().join(`-`)
-          const rule = rule_map.get(pair_key)
-          if (rule && (bond.bond_length < rule.min || bond.bond_length > rule.max)) return false
-        }
-      }
       return true
     })
 
@@ -2869,6 +2989,16 @@
       })
     }
 
+    return result
+  })
+
+  // Bonds as actually rendered: visible_bond_pairs minus polyhedra-internal bonds
+  // (the polyhedron face covers them) and sphere-clip culling. Kept DOWNSTREAM of
+  // visible_bond_pairs so polyhedra_data (which consumes visible_bond_pairs) does
+  // NOT depend on polyhedra_hidden_bond_keys — that closes a derived cycle
+  // (polyhedra_data → bonds → polyhedra_hidden_bond_keys → polyhedra_data).
+  let filtered_bond_pairs = $derived.by(() => {
+    let result = visible_bond_pairs
     // Filter bonds hidden by polyhedra
     if (polyhedra_hidden_bond_keys.size > 0) {
       result = result.filter((bond) => {
@@ -2876,7 +3006,6 @@
         return !polyhedra_hidden_bond_keys.has(key)
       })
     }
-
     // Filter bonds outside sphere clipping radius
     if (clip_active && effective_clip_center && structure?.sites) {
       const r2 = clip_radius * clip_radius
@@ -2890,7 +3019,6 @@
       // Hide bonds where BOTH endpoints are outside the clip radius
       result = result.filter((bond) => is_inside(bond.site_idx_1) || is_inside(bond.site_idx_2))
     }
-
     return result
   })
 
@@ -3547,7 +3675,7 @@
         // behavior as flag-off), which is still correct but slower.
         const ok = apply_atom_add_incremental(
           bond_state, added, bond_manager, new_sites as Site[],
-          structure, bonding_strategy, bonding_options as Record<string, unknown>,
+          structure, bonding_strategy, bonding_options_eff,
         )
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -3579,7 +3707,7 @@
         // element change — covalent radius shifts).
         const ok = apply_atom_replace_incremental(
           bond_state, replacements, bond_manager, new_sites as Site[],
-          structure, bonding_strategy, bonding_options as Record<string, unknown>,
+          structure, bonding_strategy, bonding_options_eff,
         )
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -3604,7 +3732,7 @@
         // apply_atom_move_incremental about the drag fast-path.
         const ok = apply_atom_move_incremental(
           bond_state, moved, bond_manager, new_sites as Site[],
-          structure, bonding_strategy, bonding_options as Record<string, unknown>,
+          structure, bonding_strategy, bonding_options_eff,
         )
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -4450,6 +4578,18 @@
     }
   })
 
+  // Orthographic pan-speed normalization (applied per-drag in `onstart` below).
+  // TrackballControls._panCamera scales on-screen pan by `_eye.length()` (the
+  // camera→target distance). With ortho, the 1/zoom term cancels against the
+  // projection's ×zoom, but eye.length has NO such cancellation — so the same drag
+  // pans little when the camera sits close (small molecule) and a lot when it sits
+  // far (large cell). We can't use structure_size as a proxy: compute_structure_size
+  // returns a flat 10 for non-periodic systems (no lattice), so it doesn't track the
+  // real distance. Instead we read the true eye length at drag start and set panSpeed
+  // = pan_speed × PAN_REF_EYE / eye, which makes on-screen pan ∝ pan_speed for every
+  // structure. PAN_REF_EYE is the eye length at which the user's pan_speed is left
+  // unchanged. Perspective pan already tracks the cursor 1:1, so it's left alone.
+  const PAN_REF_EYE = 50
   let trackball_controls_props = $derived.by(() => ({
     rotateSpeed: rotate_speed,
     zoomSpeed: camera_projection === `orthographic` ? zoom_speed * 2 : zoom_speed,
@@ -4476,6 +4616,12 @@
     // The target is managed programmatically in the $effect blocks above.
     onstart: () => {
       camera_is_moving = true
+      // Normalize ortho pan to the true camera→target distance so a drag pans the
+      // same on-screen amount regardless of structure size (see PAN_REF_EYE note).
+      if (camera && orbit_controls?.target && camera_projection === `orthographic`) {
+        const eye = (camera as any).position.distanceTo(orbit_controls.target)
+        ;(orbit_controls as any).panSpeed = pan_speed * PAN_REF_EYE / Math.max(0.001, eye)
+      }
       capture_trackball_view_state()
       if (!trackball_is_rotating()) clear_trackball_rotation_inertia()
       // Don't clear hovered_idx here - let it stay so rotation stays disabled on atoms.
@@ -4912,6 +5058,7 @@
             opacity_far={polyhedra_opacity_far}
             edge_color={polyhedra_edge_color}
             edge_opacity={polyhedra_edge_opacity}
+            show_edges={polyhedra_show_edges}
             camera_position={_polyhedra_camera_pos}
             depth_range={_polyhedra_depth_range}
           />
@@ -5224,7 +5371,7 @@
           {cutting_slab_preview}
           {cutting_show_bonds}
           {bonding_strategy}
-          {bonding_options}
+          bonding_options={bonding_options_eff}
           {bond_thickness}
           {bond_color}
           {ambient_light}

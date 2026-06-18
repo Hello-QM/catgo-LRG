@@ -1,17 +1,15 @@
 // Coordination polyhedra computation for structure visualization.
 //
-// Two algorithms available:
-//   1. CrystalNN (Voronoi + solid angle + electronegativity) — default, via Rust WASM
-//   2. Distance cutoff (3.5 Å) — synchronous fallback
-//
-// Crystal Toolkit electronegativity filter: polyhedra are drawn only around
-// the LEAST electronegative site in each coordination cluster (i.e. metals/cations),
-// preventing overlapping polyhedra in ionic/covalent structures.
+// Bond-graph algorithm: vertices are bonded anion neighbours from the rendered
+// bond graph (positions already PBC-correct via bond.pos_1/pos_2), classified
+// per-vertex by is_anion_vertex. Crystal Toolkit electronegativity filter:
+// polyhedra are drawn only around the LEAST electronegative site in each
+// coordination cluster (i.e. metals/cations), preventing overlapping polyhedra
+// in ionic/covalent structures.
 
 import type { AnyStructure, BondPair, Vec3 } from '$lib'
 import { element_data } from '$lib/element'
 import { get_bond_key } from './bonding'
-import { colors as global_colors } from '$lib/state.svelte'
 import qh from 'quickhull3d'
 
 // --- Types ---
@@ -19,7 +17,7 @@ import qh from 'quickhull3d'
 export interface PolyhedronData {
   center_idx: number
   center_element: string
-  neighbor_indices: number[]     // site indices (may be -1 for periodic images)
+  neighbor_indices: number[]     // site indices (may be -1 for periodic images), parallel to vertices
   vertices: number[][]           // [x, y, z][] — Cartesian positions of neighbors
 }
 
@@ -55,28 +53,6 @@ function get_site_element(structure: AnyStructure, site_idx: number): string {
   ).element
 }
 
-// --- Lattice math ---
-
-function get_lattice_vectors(structure: AnyStructure): [Vec3, Vec3, Vec3] | null {
-  const lat = (structure as any).lattice
-  if (!lat?.matrix) return null
-  const m = lat.matrix
-  return [
-    [m[0][0], m[0][1], m[0][2]],
-    [m[1][0], m[1][1], m[1][2]],
-    [m[2][0], m[2][1], m[2][2]],
-  ]
-}
-
-function add_v3(a: number[], b: Vec3): [number, number, number] {
-  return [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-function dist_sq(a: number[], b: number[]): number {
-  const dx = a[0] - b[0], dy = a[1] - b[1], dz = a[2] - b[2]
-  return dx * dx + dy * dy + dz * dz
-}
-
 // --- Electronegativity lookup ---
 
 function get_electronegativity(element: string): number {
@@ -84,147 +60,251 @@ function get_electronegativity(element: string): number {
   return el?.electronegativity ?? 2.0  // default for unknowns
 }
 
-// --- Fast polyhedra: distance cutoff + Crystal Toolkit electronegativity filter ---
+// --- Element-data helpers for VESTA-style center/vertex filtering (ported from matterviz) ---
 
-/**
- * Compute polyhedra using distance-based neighbor search + electronegativity filter.
- *
- * Fast (synchronous, no WASM) — uses the same 3.5Å cutoff as before,
- * plus Crystal Toolkit's rule: polyhedra only around the least electronegative
- * site in each coordination cluster (prevents overlapping polyhedra).
- */
-export function compute_polyhedra_fast(
-  structure: AnyStructure,
-  center_elements: string[],
-  min_coordination: number,
-  metals_only: boolean = true,
-  max_bond_length: number = 3.5,
-): PolyhedronData[] {
-  // Get raw distance-based polyhedra (fast, synchronous)
-  const raw = compute_polyhedra_with_pbc(structure, center_elements, min_coordination, max_bond_length)
+const element_lookup = new Map(element_data.map((el) => [el.symbol as string, el]))
 
-  // If user explicitly selected elements, skip electronegativity filter
-  if (center_elements.length > 0) return raw
+// Large low-valent A-site cations whose coordination polyhedra (CN 8-12) tend to
+// obscure the structural framework. VESTA-style figures draw the framework
+// (e.g. TiO6 in BaTiO3) and leave these as plain spheres. They still get polyhedra
+// when they are the only qualifying cations (e.g. NaCl) or when force-included.
+const SPECTATOR_CATEGORIES = new Set([`alkali metal`])
+const HEAVY_ALKALINE_EARTHS = new Set([`Ca`, `Sr`, `Ba`, `Ra`])
 
-  // Apply Crystal Toolkit electronegativity filter + metals_only
-  return raw.filter((poly) => {
-    if (metals_only && !is_metal(poly.center_element)) return false
-
-    // All neighbors must be strictly more electronegative than the center
-    const c_en = get_electronegativity(poly.center_element)
-    const neighbor_elements = poly.neighbor_indices.map((idx) =>
-      idx >= 0 ? get_site_element(structure, idx) : ``,
-    )
-    const all_more_en = neighbor_elements.every((el) => {
-      if (!el) return true
-      return get_electronegativity(el) > c_en
-    })
-    const all_same = neighbor_elements.every((el) => el === poly.center_element)
-    return all_more_en && !all_same
-  })
+export function is_spectator_center(element: string): boolean {
+  return SPECTATOR_CATEGORIES.has(element_lookup.get(element)?.category ?? ``) ||
+    HEAVY_ALKALINE_EARTHS.has(element)
 }
 
-// --- Distance-based fallback (legacy) ---
-// For each center atom, search all atoms in 27 cells (3x3x3 neighborhood)
-// to find neighbors within a distance cutoff. This is independent of bond detection.
+function get_covalent_radius(element: string): number | null {
+  return element_lookup.get(element)?.covalent_radius ?? null
+}
 
-export function compute_polyhedra_with_pbc(
+// A neighbor counts as a polyhedron vertex only if it is an anion-former: a
+// nonmetal/metalloid more electronegative than the center. Keeps spurious
+// cation-cation bonds from contaminating coordination shells. Auto-detect only.
+function is_anion_vertex(
+  center_en: number,
+  center_is_metal: boolean,
+  neighbor_element: string,
+  margin: number,
+): boolean {
+  if (!neighbor_element) return false
+  const n_data = element_lookup.get(neighbor_element)
+  if (n_data?.metal) return false
+  const n_en = n_data?.electronegativity ?? null
+  if (n_en !== null) return n_en > center_en + margin
+  // EN data missing: only metal centers with nonmetal neighbors qualify
+  return center_is_metal && n_data?.nonmetal === true
+}
+
+// --- Bond graph adjacency helper ---
+
+// Apply lattice·jimage offset to a Cartesian position.
+// m = lattice matrix rows [a, b, c]; only applied when jimage is non-zero and
+// lattice is present. Mirrors bond-computation-controller.svelte.ts apply_jimage.
+function shift_by_jimage(
+  p: Vec3,
+  j: [number, number, number],
+  m: [Vec3, Vec3, Vec3] | null,
+): Vec3 {
+  if (!m || (j[0] === 0 && j[1] === 0 && j[2] === 0)) return p
+  return [
+    p[0] + j[0] * m[0][0] + j[1] * m[1][0] + j[2] * m[2][0],
+    p[1] + j[0] * m[0][1] + j[1] * m[1][1] + j[2] * m[2][1],
+    p[2] + j[0] * m[0][2] + j[1] * m[1][2] + j[2] * m[2][2],
+  ]
+}
+
+// Site index -> bonded neighbours with PBC-correct Cartesian positions.
+// When lattice is supplied, cross-cell neighbours are shifted by lattice·jimage:
+//   forward  (neighbour = site_idx_2): pos = shift(pos_2,  +jimage, lattice)
+//   reverse  (neighbour = site_idx_1): pos = shift(pos_1,  -jimage, lattice)
+// When lattice is null the base pos is used unchanged (molecules / jimage [0,0,0]).
+export function build_bond_adjacency(
+  bonds: readonly BondPair[],
+  lattice: [Vec3, Vec3, Vec3] | null = null,
+): Map<number, { idx: number; pos: Vec3 }[]> {
+  const adj = new Map<number, { idx: number; pos: Vec3 }[]>()
+  const link = (from: number, to: number, pos: Vec3) => {
+    const list = adj.get(from)
+    if (list) list.push({ idx: to, pos })
+    else adj.set(from, [{ idx: to, pos }])
+  }
+  for (const b of bonds) {
+    if (b.site_idx_1 === b.site_idx_2) continue
+    const j = b.jimage ?? [0, 0, 0] as [number, number, number]
+    const neg_j: [number, number, number] = [-j[0], -j[1], -j[2]]
+    link(b.site_idx_1, b.site_idx_2, shift_by_jimage(b.pos_2, j, lattice))
+    link(b.site_idx_2, b.site_idx_1, shift_by_jimage(b.pos_1, neg_j, lattice))
+  }
+  return adj
+}
+
+export interface PolyhedraBondOptions {
+  center_elements?: string[] // allow-list of center elements (matterviz "Centers");
+  // keeps anion-vertex selection + distance trim, but bypasses the CN cap and the
+  // spectator/framework auto-hide so explicitly chosen elements always draw.
+  min_coordination?: number // default 4
+  max_neighbors?: number // skip CN above this (e.g. CN-12); default 8
+  metals_only?: boolean // default true: only metal centers in auto mode
+  distance_factor?: number // trim vertices beyond min_bond*(1+factor); default 0.3
+}
+
+// Bond-graph coordination polyhedra. Vertices are bonded anion neighbours taken
+// straight from the rendered bond graph (positions already PBC-correct via
+// bond.pos), classified per-vertex by is_anion_vertex.
+export function compute_polyhedra_from_bonds(
   structure: AnyStructure,
-  center_elements: string[],
-  min_coordination: number,
-  max_bond_length: number = 3.5,  // Å — typical max coordination bond length
+  bonds: readonly BondPair[],
+  options: PolyhedraBondOptions = {},
 ): PolyhedronData[] {
-  if (!structure?.sites?.length) return []
+  const {
+    center_elements = [],
+    min_coordination = 4,
+    max_neighbors = 8,
+    metals_only = true,
+    distance_factor = 0.3,
+  } = options
+  if (!structure?.sites?.length || bonds.length === 0) return []
 
-  const lattice = get_lattice_vectors(structure)
-  const is_periodic = !!lattice
+  const explicit = center_elements.length > 0
+  const allow = new Set(center_elements)
+  const lattice = (structure as { lattice?: { matrix?: unknown } }).lattice?.matrix
+  const lat = (Array.isArray(lattice) && lattice.length === 3)
+    ? lattice as [Vec3, Vec3, Vec3]
+    : null
+  const adjacency = build_bond_adjacency(bonds, lat)
+  const candidates: PolyhedronData[] = []
 
-  // Determine which elements are centers
-  const target_elements = center_elements.length > 0
-    ? new Set(center_elements)
-    : new Set(
-        structure.sites
-          .map((_, idx) => get_site_element(structure, idx))
-          .filter((el) => el && is_metal(el)),
-      )
-
-  if (target_elements.size === 0) return []
-
-  const max_dist_sq = max_bond_length * max_bond_length
-  const polyhedra: PolyhedronData[] = []
-
-  // For each potential center atom
-  for (let c = 0; c < structure.sites.length; c++) {
-    const c_element = get_site_element(structure, c)
-    if (!target_elements.has(c_element)) continue
-
-    const c_pos = structure.sites[c].xyz
-
-    // Search for neighbor atoms within distance cutoff
-    // Include periodic images by shifting through 27 cells
-    const neighbor_indices: number[] = []
-    const neighbor_positions: number[][] = []
-
-    for (let v = 0; v < structure.sites.length; v++) {
-      if (v === c) continue  // Skip self
-      const v_pos = structure.sites[v].xyz
-
-      if (is_periodic && lattice) {
-        // Check 27 periodic images (da, db, dc ∈ {-1, 0, 1})
-        for (let da = -1; da <= 1; da++) {
-          for (let db = -1; db <= 1; db++) {
-            for (let dc = -1; dc <= 1; dc++) {
-              const shifted: [number, number, number] = [
-                v_pos[0] + da * lattice[0][0] + db * lattice[1][0] + dc * lattice[2][0],
-                v_pos[1] + da * lattice[0][1] + db * lattice[1][1] + dc * lattice[2][1],
-                v_pos[2] + da * lattice[0][2] + db * lattice[1][2] + dc * lattice[2][2],
-              ]
-              const d2 = dist_sq(c_pos, shifted)
-              if (d2 > 0.01 && d2 <= max_dist_sq) {
-                neighbor_indices.push(v)
-                neighbor_positions.push(shifted)
-              }
-            }
-          }
-        }
-      } else {
-        // Non-periodic: simple distance check
-        const d2 = dist_sq(c_pos, v_pos)
-        if (d2 > 0.01 && d2 <= max_dist_sq) {
-          neighbor_indices.push(v)
-          neighbor_positions.push([v_pos[0], v_pos[1], v_pos[2]])
-        }
-      }
+  for (const [center_idx, neighbors] of adjacency) {
+    const c_element = get_site_element(structure, center_idx)
+    if (!c_element) continue
+    if (explicit) {
+      if (!allow.has(c_element)) continue
+    } else if (metals_only && !is_metal(c_element)) {
+      continue
     }
+    const c_pos = structure.sites[center_idx]?.xyz
+    if (!c_pos) continue
 
-    if (neighbor_positions.length < min_coordination) continue
+    const c_en = get_electronegativity(c_element)
+    const c_is_metal = is_metal(c_element)
 
-    polyhedra.push({
-      center_idx: c,
+    // collect anion vertices with distances
+    const vtx: { idx: number; pos: Vec3; dist: number }[] = []
+    let min_dist = Infinity
+    for (const n of neighbors) {
+      const n_el = get_site_element(structure, n.idx)
+      // Anion-vertex selection applies in every mode (incl. explicit allow-list) so
+      // chosen centers still get clean coordination shells, not cation-cation bonds.
+      if (!is_anion_vertex(c_en, c_is_metal, n_el, 0)) continue
+      const dist = Math.hypot(
+        n.pos[0] - c_pos[0], n.pos[1] - c_pos[1], n.pos[2] - c_pos[2],
+      )
+      vtx.push({ idx: n.idx, pos: n.pos, dist })
+      if (dist < min_dist) min_dist = dist
+    }
+    if (vtx.length < min_coordination) continue
+
+    // VESTA-like local cutoff: drop bonds far longer than the shortest kept bond
+    const cutoff = min_dist * (1 + distance_factor)
+    const kept = vtx.filter((v) => v.dist <= cutoff)
+    if (kept.length < min_coordination) continue
+    if (!explicit && kept.length > max_neighbors) continue
+
+    candidates.push({
+      center_idx,
       center_element: c_element,
-      neighbor_indices,
-      vertices: neighbor_positions,
+      neighbor_indices: kept.map((v) => v.idx),
+      vertices: kept.map((v) => [v.pos[0], v.pos[1], v.pos[2]]),
     })
   }
 
-  return polyhedra
+  if (explicit) return candidates
+  return apply_framework_filters(structure, candidates)
+}
+
+
+// Spectator + weak-bond hiding over the EN-passing candidates. Composition-based
+// so boundary-truncated framework copies don't promote A-site clutter.
+const WEAK_BOND_NORM = 1.15
+function apply_framework_filters(
+  structure: AnyStructure,
+  candidates: PolyhedronData[],
+): PolyhedronData[] {
+  if (candidates.length === 0) return candidates
+
+  // Framework potential test is composition-based (over ALL elements in the
+  // structure, incl. anions) so the most-EN element is the anion: a non-spectator
+  // cation less electronegative than it could coordinate the anions. Matches
+  // matterviz; keeps e.g. Ba hidden in BaTiO3 (Ti < O) but Na visible in NaCl.
+  const all_elements = [
+    ...new Set(structure.sites.map((_, idx) => get_site_element(structure, idx)).filter(Boolean)),
+  ]
+  const max_en = Math.max(...all_elements.map((el) => get_electronegativity(el)))
+  const has_framework_potential = all_elements.some((el) =>
+    !is_spectator_center(el) && get_electronegativity(el) < max_en
+  )
+
+  // Per-species mean normalized bond distance (bond / covalent-radii sum)
+  const norm_by_species = new Map<string, { sum: number; count: number }>()
+  for (const poly of candidates) {
+    const r_center = get_covalent_radius(poly.center_element)
+    const c_pos = structure.sites[poly.center_idx]?.xyz
+    if (r_center === null || !c_pos) continue
+    let sum = 0, count = 0
+    for (let i = 0; i < poly.vertices.length; i++) {
+      const n_idx = poly.neighbor_indices[i]
+      const n_el = n_idx >= 0 ? get_site_element(structure, n_idx) : ``
+      const r_n = n_el ? get_covalent_radius(n_el) : null
+      if (r_n === null) continue
+      const v = poly.vertices[i]
+      const dist = Math.hypot(v[0] - c_pos[0], v[1] - c_pos[1], v[2] - c_pos[2])
+      sum += dist / (r_center + r_n)
+      count++
+    }
+    if (count === 0) continue
+    const entry = norm_by_species.get(poly.center_element) ?? { sum: 0, count: 0 }
+    entry.sum += sum / count
+    entry.count++
+    norm_by_species.set(poly.center_element, entry)
+  }
+  const species_norm = (el: string): number | null => {
+    const e = norm_by_species.get(el)
+    return e ? e.sum / e.count : null
+  }
+  const has_strong_species = [...norm_by_species.keys()].some(
+    (el) => (species_norm(el) ?? Infinity) <= WEAK_BOND_NORM && !is_spectator_center(el),
+  )
+  const is_weak_species = (el: string): boolean =>
+    has_strong_species && (species_norm(el) ?? 0) > WEAK_BOND_NORM
+
+  return candidates.filter((poly) => {
+    const el = poly.center_element
+    if (is_spectator_center(el) && has_framework_potential) return false
+    return !is_weak_species(el)
+  })
 }
 
 // --- Convex hull + geometry merging ---
 
-function compute_hull_faces(vertices: number[][]): number[][] {
+function compute_hull_faces(
+  vertices: number[][],
+): { faces: number[][]; degenerate: boolean } {
   if (vertices.length < 4) {
-    return [[0, 1, 2]]
+    // Single flat triangle: non-manifold, edges drawn verbatim (no crease test)
+    return { faces: [[0, 1, 2]], degenerate: true }
   }
   try {
-    return qh(vertices as [number, number, number][]) as number[][]
+    return { faces: qh(vertices as [number, number, number][]) as number[][], degenerate: false }
   } catch {
-    // Degenerate (coplanar) — fan triangulation
+    // Degenerate (coplanar) — fan triangulation, non-manifold: draw all edges
     const faces: number[][] = []
     for (let i = 1; i < vertices.length - 1; i++) {
       faces.push([0, i, i + 1])
     }
-    return faces
+    return { faces, degenerate: true }
   }
 }
 
@@ -237,9 +317,31 @@ function hex_to_rgb(hex: string): [number, number, number] {
   ]
 }
 
+// Unit normal of a triangle from three Cartesian vertices.
+function tri_normal(
+  a: number[],
+  b: number[],
+  c: number[],
+): [number, number, number] {
+  let nx = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
+  let ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2])
+  let nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+  const len = Math.hypot(nx, ny, nz)
+  if (len > 0) {
+    nx /= len
+    ny /= len
+    nz /= len
+  }
+  return [nx, ny, nz]
+}
+
+// Merge all polyhedra into single non-indexed position/color arrays. `get_vertex_color`
+// resolves the color of each hull corner (vertex atom color, center color, or uniform)
+// as a hex string. Crease detection omits coplanar quad diagonals (e.g. cube/octahedron
+// faces) so only real creases + boundary edges are drawn; degenerate hulls keep all edges.
 export function merge_polyhedra_geometry(
   polyhedra: PolyhedronData[],
-  color_overrides: Record<string, string>,
+  get_vertex_color: (poly: PolyhedronData, vertex_local_idx: number) => string,
 ): MergedPolyhedraGeometry {
   if (polyhedra.length === 0) {
     return {
@@ -252,71 +354,97 @@ export function merge_polyhedra_geometry(
     }
   }
 
-  const hulls: { faces: number[][]; edge_set: Set<string> }[] = []
+  const hulls: { faces: number[][]; degenerate: boolean }[] = []
   let total_tris = 0
-  let total_edges = 0
+  let max_edges = 0
 
   for (const poly of polyhedra) {
-    const faces = compute_hull_faces(poly.vertices)
-    const edge_set = new Set<string>()
-    for (const face of faces) {
-      for (let i = 0; i < face.length; i++) {
-        const a = face[i]
-        const b = face[(i + 1) % face.length]
-        const key = a < b ? `${a}-${b}` : `${b}-${a}`
-        edge_set.add(key)
-      }
-    }
-    hulls.push({ faces, edge_set })
+    const { faces, degenerate } = compute_hull_faces(poly.vertices)
+    hulls.push({ faces, degenerate })
     total_tris += faces.length
-    total_edges += edge_set.size
+    max_edges += faces.length * 3  // upper bound; dedup + crease test only remove edges
   }
 
   const face_positions = new Float32Array(total_tris * 9)
   const face_colors = new Float32Array(total_tris * 9)
   const face_polyhedron_ids = new Float32Array(total_tris * 3)
-  const edge_positions = new Float32Array(total_edges * 6)
+  const edge_positions = new Float32Array(max_edges * 6)
+  const rgb_cache = new Map<string, [number, number, number]>()
 
   let tri_offset = 0
   let edge_offset = 0
+
+  // Per-undirected-edge state for crease detection
+  type EdgeEntry = {
+    a: number
+    b: number
+    nx: number
+    ny: number
+    nz: number
+    crease: boolean
+    shared: boolean
+  }
 
   for (let p = 0; p < polyhedra.length; p++) {
     const poly = polyhedra[p]
     const hull = hulls[p]
 
-    let color: [number, number, number]
-    if (color_overrides[poly.center_element]) {
-      color = hex_to_rgb(color_overrides[poly.center_element])
-    } else {
-      const el_color = global_colors.element?.[poly.center_element]
-      if (el_color) {
-        color = hex_to_rgb(el_color)
-      } else {
-        color = [0, 0.7, 0.9]
+    // Resolve per-hull-vertex colors once (closure indexes local vertex order)
+    const vert_rgb = new Float32Array(poly.vertices.length * 3)
+    for (let v = 0; v < poly.vertices.length; v++) {
+      const color = get_vertex_color(poly, v)
+      let channels = rgb_cache.get(color)
+      if (!channels) {
+        channels = color.startsWith(`#`) ? hex_to_rgb(color) : [0.5, 0.5, 0.5]
+        rgb_cache.set(color, channels)
       }
+      vert_rgb[v * 3] = channels[0]
+      vert_rgb[v * 3 + 1] = channels[1]
+      vert_rgb[v * 3 + 2] = channels[2]
     }
 
+    const edge_map = new Map<string, EdgeEntry>()
     for (const face of hull.faces) {
+      const va = poly.vertices[face[0]]
+      const vb = poly.vertices[face[1]]
+      const vc = poly.vertices[face[2]]
+      const [nx, ny, nz] = tri_normal(va, vb, vc)
+
       for (let v = 0; v < 3; v++) {
-        const vert = poly.vertices[face[v]]
+        const local = face[v]
+        const vert = poly.vertices[local]
         const base = tri_offset * 9 + v * 3
         face_positions[base] = vert[0]
         face_positions[base + 1] = vert[1]
         face_positions[base + 2] = vert[2]
-        face_colors[base] = color[0]
-        face_colors[base + 1] = color[1]
-        face_colors[base + 2] = color[2]
+        face_colors[base] = vert_rgb[local * 3]
+        face_colors[base + 1] = vert_rgb[local * 3 + 1]
+        face_colors[base + 2] = vert_rgb[local * 3 + 2]
         face_polyhedron_ids[tri_offset * 3 + v] = p
       }
       tri_offset++
+
+      for (let i = 0; i < 3; i++) {
+        const a = face[i]
+        const b = face[(i + 1) % 3]
+        const key = a < b ? `${a}-${b}` : `${b}-${a}`
+        const entry = edge_map.get(key)
+        if (entry) {
+          entry.shared = true
+          // Two faces sharing this edge: a crease only if their normals diverge
+          entry.crease = nx * entry.nx + ny * entry.ny + nz * entry.nz < 1 - 1e-3
+        } else {
+          edge_map.set(key, { a, b, nx, ny, nz, crease: false, shared: false })
+        }
+      }
     }
 
-    for (const edge_key of hull.edge_set) {
-      const [a_str, b_str] = edge_key.split(`-`)
-      const a = parseInt(a_str)
-      const b = parseInt(b_str)
-      const va = poly.vertices[a]
-      const vb = poly.vertices[b]
+    // Emit edges: on degenerate (non-manifold) hulls draw all; otherwise drop
+    // diagonals interior to coplanar face groups (quad diagonals on a cube)
+    for (const entry of edge_map.values()) {
+      if (!hull.degenerate && entry.shared && !entry.crease) continue
+      const va = poly.vertices[entry.a]
+      const vb = poly.vertices[entry.b]
       const base = edge_offset * 6
       edge_positions[base] = va[0]
       edge_positions[base + 1] = va[1]
@@ -333,8 +461,8 @@ export function merge_polyhedra_geometry(
     face_colors,
     face_polyhedron_ids,
     face_count: total_tris,
-    edge_positions,
-    edge_count: total_edges,
+    edge_positions: edge_positions.slice(0, edge_offset * 6),
+    edge_count: edge_offset,
   }
 }
 

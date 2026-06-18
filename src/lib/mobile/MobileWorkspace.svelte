@@ -17,6 +17,9 @@
 -->
 <script lang="ts">
   import Structure from '$lib/structure/Structure.svelte'
+  import MolstarViewer from '$lib/structure/bio/MolstarViewer.svelte'
+  import BioViewerToggle from '$lib/structure/bio/BioViewerToggle.svelte'
+  import { detect_bio } from '$lib/structure/bio/detect'
   import Trajectory from '$lib/trajectory/Trajectory.svelte'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import { parse_any_structure } from '$lib/structure/parsers/dispatch'
@@ -29,7 +32,8 @@
   import MobileFiles from './MobileFiles.svelte'
   import MobileChat from './MobileChat.svelte'
   import KeySetup from './KeySetup.svelte'
-  import { loadConnections } from './connections'
+  import { loadConnections, type SavedConnection } from './connections'
+  import { apply_idle_timer, screen_wake } from './screen-wake.svelte'
   import { tick } from 'svelte'
   import {
     active_cwd,
@@ -39,6 +43,7 @@
     ensure_tab,
     MAX_TABS,
     path_basename,
+    repoint_session,
     set_tab_cwd,
     switch_tab,
     term_tabs,
@@ -52,7 +57,7 @@
     set_active_cluster,
   } from './clusters.svelte'
   import type { ConnectedMeta } from './MobileConnect.svelte'
-  import { endpointKey } from './sessions'
+  import { endpointKey, reuseSession } from './sessions'
   import { check_tauri } from '$lib/io/tauri'
   import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import Icon from '$lib/Icon.svelte'
@@ -82,6 +87,10 @@
   // Where the open structure came from, so Save knows to write it back.
   let remote_origin = $state<{ path: string; filename: string } | null>(null)
   let local_filename = $state(`structure.vasp`)
+  // Biomolecular files (PDB / bio-mmCIF) render in Mol*, not the native viewer.
+  let bio_raw_content = $state<string | null>(null)
+  let bio_format = $state(`pdb`)
+  let bio_viewer = $state(true)
   let files_open = $state(false)
   // AI chat overlay — available whenever the workspace is shown (works without a
   // cluster connection: the key-direct LLM path needs no backend).
@@ -120,6 +129,81 @@
       // Restore the split only if the user didn't manually pick another view.
       if (mode === `terminal`) mode = mode_before_kb
       mode_before_kb = null
+    }
+  })
+
+  // ─── Auto-reconnect on resume ───
+  // iOS suspends the app (and tears down its sockets) ~30s after lock/background,
+  // so a locked phone loses the SSH session. When we return to the foreground,
+  // probe the active cluster's session; if it died, mount MobileConnect targeted
+  // at this endpoint to re-authenticate (saved creds reused; OTP clusters surface
+  // the dialog). on_connected then repoints the tabs so the surviving tmux
+  // session re-attaches. Set while a reconnect is pending → MobileConnect runs it.
+  let reconnect_target = $state<SavedConnection | null>(null)
+  let resume_checking = false
+
+  // Trigger a reconnect for `cluster` by mounting MobileConnect targeted at its
+  // saved connection (reuses creds; OTP clusters surface the dialog). Shared by
+  // the resume probe and the terminal's "connection lost" Reconnect button.
+  function trigger_reconnect(
+    cluster: { host: string; port: number; username: string } | null,
+  ): void {
+    if (!cluster || reconnect_target) return
+    const sc = loadConnections().find((c) =>
+      c.host === cluster.host && c.port === cluster.port && c.username === cluster.username
+    )
+    // With a saved connection we auto-reconnect; without one we still surface the
+    // connect form (session_id=null) so the user can re-enter creds — never a
+    // dead "Connection lost" overlay whose Reconnect button does nothing.
+    if (sc) reconnect_target = sc
+    session_id = null
+  }
+
+  $effect(() => {
+    const on_visible = () => {
+      if (document.visibilityState !== `visible`) return
+      // Only act when a terminal is live; on the connect form there's nothing to
+      // recover (and it avoids a reconnect loop once we've shown the form).
+      if (session_id === null || resume_checking || reconnect_target) return
+      const active = get_active_cluster()
+      if (!active) return
+      resume_checking = true
+      void (async () => {
+        try {
+          // reuseSession runs a cheap `true` exec; null => the session is dead
+          // (and it drops the stale reuse entry for us).
+          const alive = await reuseSession(active.key)
+          if (alive) return
+          trigger_reconnect(active)
+        } catch {
+          /* probe failed; leave the terminal as-is for a manual reconnect */
+        } finally {
+          resume_checking = false
+        }
+      })()
+    }
+    document.addEventListener(`visibilitychange`, on_visible)
+    window.addEventListener(`pageshow`, on_visible)
+    return () => {
+      document.removeEventListener(`visibilitychange`, on_visible)
+      window.removeEventListener(`pageshow`, on_visible)
+    }
+  })
+
+  // Keep the screen awake while a terminal is connected and the app is foreground
+  // (unless the user turned the pref off), so an auto-lock can't background +
+  // suspend the app and drop the SSH session. A manual lock still suspends — iOS
+  // rule. Re-applied on visibility changes; released on teardown.
+  $effect(() => {
+    const enabled = screen_wake.enabled
+    const connected = session_id !== null
+    const apply = () =>
+      void apply_idle_timer(connected && enabled && document.visibilityState === `visible`)
+    apply()
+    document.addEventListener(`visibilitychange`, apply)
+    return () => {
+      document.removeEventListener(`visibilitychange`, apply)
+      void apply_idle_timer(false)
     }
   })
 
@@ -246,6 +330,11 @@
     filename: string,
     origin: { path: string } | null,
   ): Promise<void> {
+    // Clear any prior bio state so a later trajectory/material load isn't
+    // hijacked by a stale protein.
+    bio_raw_content = null
+    bio_format = `pdb`
+    bio_viewer = true
     // Multi-frame file -> load the whole trajectory (with playback), not frame 1.
     if (is_trajectory_file(filename, content)) {
       try {
@@ -261,6 +350,19 @@
         /* fall back to single-structure parsing */
       }
     }
+    // Biological macromolecule → render in Mol* (bypass pymatgen parsing,
+    // which would drop residue/chain and choke on large proteins).
+    const bio = detect_bio(content, filename)
+    if (bio.isBio && bio.format) {
+      bio_raw_content = content
+      bio_format = bio.format
+      bio_viewer = true
+      structure = undefined
+      trajectory = undefined
+      saveable_structure = undefined
+      show_loaded(filename, origin)
+      return
+    }
     const parsed = parse_any_structure(content, filename)
     if (!parsed) {
       save_msg = t(`mobile.could_not_parse`, { filename })
@@ -270,6 +372,36 @@
     trajectory = undefined
     saveable_structure = undefined
     show_loaded(filename, origin)
+  }
+
+  /**
+   * Flip the mobile viewer between Mol* and native (manual override). Works for
+   * ANY loaded structure: with no bio raw text yet we serialize the current
+   * structure (CIF when periodic, else XYZ) and hand it to Mol*.
+   */
+  async function toggle_mobile_viewer(): Promise<void> {
+    if (bio_viewer && bio_raw_content) {
+      // → native: parse the raw text on demand
+      const parsed = parse_any_structure(bio_raw_content, local_filename)
+      if (parsed) structure = parsed
+      bio_viewer = false
+    } else {
+      // → Mol*: serialize the current structure if we have no raw text yet
+      if (!bio_raw_content && structure?.sites?.length) {
+        const { structure_to_cif_str, structure_to_xyz_str } = await import(
+          `$lib/structure/export`
+        )
+        const periodic = !!structure?.lattice?.matrix
+        bio_raw_content = periodic
+          ? structure_to_cif_str(structure)
+          : structure_to_xyz_str(structure)
+        bio_format = periodic ? `mmcif` : `xyz`
+      }
+      if (bio_raw_content) {
+        structure = undefined
+        bio_viewer = true
+      }
+    }
   }
 
   // ── Local file open (no cluster needed) ──
@@ -377,16 +509,29 @@
   }
 
   function on_connected(id: string, meta: ConnectedMeta): void {
-    session_id = id
+    const key = endpointKey(meta.host, meta.port, meta.username)
+    // Reconnect case: we already have this endpoint (its session just died and
+    // we re-authed). Move its existing tabs onto the new session so each keeps
+    // its `seq` -> same `catgo-<seq>` tmux name -> the surviving session
+    // re-attaches with the job intact. A fresh connect (no existing cluster, or
+    // the reuse short-circuit returning the same id) seeds/refocuses a tab.
+    const existing = clusters.list.find((x) => x.key === key)
+    const old_session = existing?.session_id
+    reconnect_target = null // consumed
     register_cluster({
-      key: endpointKey(meta.host, meta.port, meta.username),
+      key,
       session_id: id,
       host: meta.host,
       port: meta.port,
       username: meta.username,
       label: meta.label,
     })
-    ensure_tab(id, meta.label) // seed (or refocus) this cluster's terminal tab
+    if (old_session !== undefined && old_session !== id) {
+      repoint_session(old_session, id)
+    } else {
+      ensure_tab(id, meta.label) // seed (or refocus) this cluster's terminal tab
+    }
+    session_id = id // set last: cluster + tabs already point at the new session
     if (mode === `choose`) mode = `terminal`
 
     // Offer SSH-key passwordless setup once per endpoint (skip if already keyed
@@ -557,6 +702,18 @@
               hidden_toolbar_items: HIDDEN_TOOLBAR,
             }}
           />
+        {:else if bio_raw_content && bio_viewer && !structure}
+          <div class="mw-bio-wrap">
+            <div class="mw-bio-toolbar">
+              <BioViewerToggle is_molstar={true} on_toggle={toggle_mobile_viewer} />
+              <span class="mw-bio-name">{local_filename}</span>
+            </div>
+            <div class="mw-bio-fill">
+              {#key bio_raw_content}
+                <MolstarViewer content={bio_raw_content} format={bio_format} label={local_filename} />
+              {/key}
+            </div>
+          </div>
         {:else if has_structure}
           <Structure
             bind:structure
@@ -567,6 +724,7 @@
             allow_file_drop={false}
             persist_settings={false}
             hidden_toolbar_items={HIDDEN_TOOLBAR}
+            on_open_in_molstar={toggle_mobile_viewer}
             tab_id="mobile"
             is_active={true}
           />
@@ -652,6 +810,11 @@
                     bind:this={term_refs[tab.id]}
                     session_id={tab.session_id}
                     on_cwd={(p) => set_tab_cwd(tab.id, p)}
+                    persist_key={`catgo-${tab.seq}`}
+                    on_reconnect={() => {
+                      const c = clusters.list.find((x) => x.session_id === tab.session_id)
+                      trigger_reconnect(c ?? get_active_cluster())
+                    }}
                   />
                 </div>
               {/each}
@@ -664,9 +827,11 @@
                 role="presentation"
                 onclick={() => (add_sheet_visible = false)}
               >
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <div
                   class="mw-addsheet"
                   role="dialog"
+                  tabindex="-1"
                   aria-label={t(`mobile.term_new`)}
                   onclick={(e) => e.stopPropagation()}
                 >
@@ -690,7 +855,12 @@
           </div>
         {:else}
           <div class="mw-connect">
-            <MobileConnect {on_connected} on_eject={eject_cluster} />
+            <MobileConnect
+              {on_connected}
+              on_eject={eject_cluster}
+              auto_reconnect={reconnect_target}
+              on_reconnect_failed={() => (reconnect_target = null)}
+            />
           </div>
         {/if}
       </div>
@@ -1039,6 +1209,34 @@
   .mw-struct :global(.structure-main) {
     height: 100%;
     width: 100%;
+  }
+  .mw-bio-wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  .mw-bio-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 8px;
+    border-bottom: 1px solid var(--border-color, #ddd);
+    background: var(--panel-bg, rgba(0, 0, 0, 0.03));
+  }
+  .mw-bio-name {
+    font-size: 0.78rem;
+    color: var(--text-muted, #777);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mw-bio-fill {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
   }
   .mw-body.split-h .mw-struct,
   .mw-body.split-v .mw-struct {

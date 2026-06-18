@@ -9,9 +9,11 @@ import type { CloseAllEntry } from '../state/modal-state.svelte'
 import type { StructureTabState } from '../pane-utils'
 import type { AppTab } from '../TabBar.svelte'
 import {
-  layout_panel_count, pane_has_content, create_empty_pane,
+  pane_has_content,
   auto_name as _auto_name, serialize_structure_content,
+  create_tab_state,
 } from '../pane-utils'
+import { leaves, structurePane } from '../pane-tree'
 import { save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 
@@ -27,10 +29,9 @@ export function build_close_all_entries(
     if (tab.type !== `structure`) continue
     const ts = tab_states[tab.id]
     if (!ts) continue
-    const count = layout_panel_count(ts.layout)
-    for (let i = 0; i < count; i++) {
-      const pane = ts.panes[i]
-      if (!pane_has_content(pane)) continue
+    for (const leaf of leaves(ts.root)) {
+      const pane = structurePane(leaf)
+      if (!pane || !pane_has_content(pane)) continue
       const structure = pane.saveable_structure ?? pane.structure
       const formula = structure?.sites?.length ? _auto_name(structure as Record<string, unknown>) : (pane.trajectory ? `Trajectory` : `Cube`)
       let save_target: CloseAllEntry[`save_target`] = `none`
@@ -47,7 +48,7 @@ export function build_close_all_entries(
       entries.push({
         tab_id: tab.id,
         label: tab.label,
-        pane_idx: i,
+        leaf_id: leaf.id,
         formula,
         save_target,
         save_path,
@@ -69,7 +70,9 @@ export async function execute_close_all_saves(
     if (!entry.checked) continue
     const ts = tab_states[entry.tab_id]
     if (!ts) continue
-    const pane = ts.panes[entry.pane_idx]
+    const leaf = leaves(ts.root).find(l => l.id === entry.leaf_id)
+    const pane = leaf ? structurePane(leaf) : null
+    if (!pane) continue
     const structure = (pane.saveable_structure ?? pane.structure) as Record<string, unknown> | undefined
     if (!structure) continue
 
@@ -110,11 +113,12 @@ export function close_all_structure_tabs(
       // Last structure tab: reset to empty instead of closing
       const ts = tab_states[id]
       if (ts) {
-        for (let i = 0; i < 4; i++) ts.panes[i] = create_empty_pane()
-        ts.layout = `single`
-        ts.active_pane = 0
-        ts.col_split = 50
-        ts.row_split = 50
+        const r = create_tab_state()
+        ts.root = r.root
+        ts.active_leaf_id = r.active_leaf_id
+        ts.close_confirm_leaf_id = null
+        ts.library = []
+        ts.active_library_id = null
         const tab = tabs.find(t => t.id === id)
         if (tab) tab.label = `Structure`
       }

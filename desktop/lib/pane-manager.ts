@@ -5,11 +5,12 @@
  * and project listing for save dialogs.
  */
 
-import type { PaneState, StructureTabState, LayoutType } from '../pane-utils'
-import { layout_panel_count, create_empty_pane, pane_has_content, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
+import type { PaneState, StructureTabState } from '../pane-utils'
+import { create_empty_pane, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
+import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
-import { list_projects, save_structure_to_db, write_file } from '$lib/api/project'
+import { list_projects, save_structure_to_db } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 
 export interface PaneManagerDeps {
@@ -18,68 +19,58 @@ export interface PaneManagerDeps {
   export_fs_browse: (dir: string) => void
 }
 
-export function handle_unload(deps: PaneManagerDeps, tab_id: string, pane_idx: number) {
+export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
   const ts = deps.tab_states[tab_id]
   if (!ts) return
-  const pane = ts.panes[pane_idx]
+  const leaf = findLeafById(ts.root, leaf_id)
+  if (!leaf) return
+  // Terminal leaves close directly (kill session via Task 4 hook); no
+  // save-confirm banner — there is no saveable structure.
+  if (isTerminalLeaf(leaf)) {
+    ts.close_confirm_leaf_id = null
+    if (leafCount(ts.root) > 1) {
+      ts.root = removeLeaf(ts.root, leaf_id)
+      if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+    }
+    deps.update_tab_label(tab_id)
+    return
+  }
+  const pane = structurePane(leaf)
+  if (!pane) return
   // Workflow panes: only prompt if user has opened/edited a workflow
   if (pane.mode === 'workflow') {
     if (pane.modified) {
-      ts.close_confirm_pane = pane_idx
+      ts.close_confirm_leaf_id = leaf_id
       return
     }
-    close_panel(deps, tab_id, pane_idx)
+    close_panel(deps, tab_id, leaf_id)
     return
   }
   // Structure panes: prompt if has content
   const has_content = !!(pane.structure || pane.trajectory || pane.cube_file)
   if (has_content) {
-    ts.close_confirm_pane = pane_idx
+    ts.close_confirm_leaf_id = leaf_id
     init_close_save_target(pane)
     if (pane.structure) load_close_save_projects()
     return
   }
-  close_panel(deps, tab_id, pane_idx)
+  close_panel(deps, tab_id, leaf_id)
 }
 
-export function close_panel(deps: PaneManagerDeps, tab_id: string, pane_idx: number) {
+export function close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
   const ts = deps.tab_states[tab_id]
   if (!ts) return
-  const panel_count = layout_panel_count(ts.layout)
-
-  // If only 1 panel, reset to single empty (don't close the tab)
-  if (panel_count <= 1) {
-    ts.panes[0] = create_empty_pane()
-    ts.layout = 'single'
-    ts.active_pane = 0
-    ts.close_confirm_pane = null
+  ts.close_confirm_leaf_id = null
+  if (leafCount(ts.root) <= 1) {
+    const leaf = findLeafById(ts.root, leaf_id)
+    const pane = leaf && structurePane(leaf)
+    if (pane) Object.assign(pane, create_empty_pane())
     deps.update_tab_label(tab_id)
     return
   }
-
-  // Clear the panel being closed
-  ts.close_confirm_pane = null
-  ts.panes[pane_idx] = create_empty_pane()
-
-  // Consolidate non-empty panes to lower indices
-  const visible: PaneState[] = []
-  for (let i = 0; i < panel_count; i++) {
-    if (i !== pane_idx) visible.push(ts.panes[i])
-  }
-
-  // Fill remaining slots with empty panes
-  for (let i = 0; i < 4; i++) {
-    ts.panes[i] = i < visible.length ? visible[i] : create_empty_pane()
-  }
-
-  // Reduce layout: 4->splitH, 2->single
-  const new_count = panel_count - 1
-  if (new_count <= 1) ts.layout = 'single'
-  else if (new_count <= 2) ts.layout = ts.layout === 'splitV' ? 'splitV' : 'splitH'
-  // new_count === 3 from quad -> go to splitH
-  else ts.layout = 'splitH'
-
-  if (ts.active_pane >= layout_panel_count(ts.layout)) ts.active_pane = 0
+  ts.root = removeLeaf(ts.root, leaf_id)
+  if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
+  if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
   deps.update_tab_label(tab_id)
 }
 
@@ -98,21 +89,23 @@ export function init_close_save_target(pane: PaneState) {
   else exp.close_save_target = `project`
 }
 
-export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string, pane_idx: number) {
+export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
   const ts = deps.tab_states[tab_id]
   if (!ts) return
-  const pane = ts.panes[pane_idx]
+  const leaf = findLeafById(ts.root, leaf_id)
+  const pane = leaf ? structurePane(leaf) : null
+  if (!pane) return
   const structure = (pane.saveable_structure ?? pane.structure) as Record<string, unknown> | undefined
   if (!structure) {
-    close_panel(deps, tab_id, pane_idx)
+    close_panel(deps, tab_id, leaf_id)
     return
   }
   exp.close_saving = true
   try {
     if (exp.close_save_target === `local`) {
       // Open export dialog with folder browser, close panel after save
-      exp.close_after = { tab_id, pane_idx }
-      ts.close_confirm_pane = null
+      exp.close_after = { tab_id, leaf_id }
+      ts.close_confirm_leaf_id = null
       const name = _auto_name(structure)
       exp.pending_structure = structure
       exp.error = ``
@@ -143,7 +136,7 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
       await save_structure_to_db(structure, _auto_name(structure), exp.close_save_project_id || undefined)
     }
     sidebar.refresh_counter++
-    close_panel(deps, tab_id, pane_idx)
+    close_panel(deps, tab_id, leaf_id)
   } catch (e) {
     exp.error = e instanceof Error ? e.message : `Save failed`
     console.error(`Save before close failed:`, e)

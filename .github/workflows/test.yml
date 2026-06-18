@@ -110,6 +110,14 @@ jobs:
       - name: Build ferrox-wasm package
         run: cd extensions/rust-wasm && pnpm build
 
+      # predev.mjs (run by `desktop:dev`) builds chgdiff + catrender WASM on
+      # first start via `build-wasm.mjs --if-missing`. In CI that on-demand
+      # compile takes minutes, so the dev server isn't ready when Playwright
+      # connects (page.goto → ERR_CONNECTION_REFUSED). Prebuild them here —
+      # ferrox above is already built, so --if-missing only does the other two.
+      - name: Prebuild chgdiff + catrender WASM (so the e2e dev server starts immediately)
+        run: node scripts/build-wasm.mjs --if-missing
+
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
 
@@ -118,4 +126,9 @@ jobs:
       # non-gating, and the step must show a real X when tests fail (#310 —
       # the double continue-on-error painted a failing suite green).
       - name: Run e2e tests
+        # playwright.config starts the dev server with PORT=3005, but the smoke
+        # test defaults its target URL to :3186 (the local dev port). Point it at
+        # the server this job actually started, else page.goto → ERR_CONNECTION_REFUSED.
+        env:
+          CATGO_E2E_URL: http://localhost:3005
         run: npx playwright test

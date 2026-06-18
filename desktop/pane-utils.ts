@@ -5,6 +5,8 @@
  */
 
 import type { AnyStructure } from '$lib'
+import type { PaneNode, TerminalLeafState } from './pane-tree'
+import { create_empty_leaf, create_terminal_leaf } from './pane-tree'
 
 // ========== Types ==========
 
@@ -32,9 +34,13 @@ export interface PaneState {
   local_file_path?: string | null
   /** Filename of the loaded structure file */
   source_filename?: string | null
+  /** Which viewer renders this pane. Absent/'native' = Three.js viewer. */
+  viewer_kind?: 'native' | 'molstar'
+  /** Raw file text for Mol* (bio files bypass pymatgen parsing). */
+  bio_raw_content?: string
+  /** Mol* format string ('pdb' | 'mmcif') for loadStructureFromData. */
+  bio_format?: string
 }
-
-export type LayoutType = 'single' | 'splitH' | 'splitV' | 'quad'
 
 /**
  * One imported structure held in a tab's structure-library sidebar.
@@ -55,27 +61,23 @@ export interface LibraryEntry {
   cube_file?: File | null
   raw_traj_b64?: string
   raw_traj_format?: string
+  viewer_kind?: 'native' | 'molstar'
+  bio_raw_content?: string
+  bio_format?: string
 }
 
 export interface StructureTabState {
-  panes: PaneState[]
-  layout: LayoutType
-  active_pane: number
-  close_confirm_pane: number | null
-  col_split: number
-  row_split: number
+  root: PaneNode
+  active_leaf_id: string
+  close_confirm_leaf_id: string | null
+  /** Leaf currently maximized/zoomed to fill the tab workspace, or null. */
+  maximized_leaf_id: string | null
   /** Per-tab structure library (sidebar). Cleared automatically on tab close. */
   library: LibraryEntry[]
   active_library_id: string | null
 }
 
 // ========== Pure Functions ==========
-
-export function layout_panel_count(layout: LayoutType): number {
-  if (layout === 'single') return 1
-  if (layout === 'splitH' || layout === 'splitV') return 2
-  return 4
-}
 
 export function get_pane_label(pane: PaneState): string {
   if (pane.mode === 'workflow') return `Workflow`
@@ -95,7 +97,7 @@ export function get_pane_label(pane: PaneState): string {
 }
 
 export function create_empty_pane(): PaneState {
-  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, open_plugin_hub: 0 }
+  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, open_plugin_hub: 0, initial_panel: undefined }
 }
 
 export function pane_has_content(p: PaneState): boolean {
@@ -110,13 +112,25 @@ export function content_to_base64(content: string | ArrayBuffer): string {
 }
 
 export function create_tab_state(): StructureTabState {
+  const root = create_empty_leaf()
   return {
-    panes: [create_empty_pane(), create_empty_pane(), create_empty_pane(), create_empty_pane()],
-    layout: 'single',
-    active_pane: 0,
-    close_confirm_pane: null,
-    col_split: 50,
-    row_split: 50,
+    root,
+    active_leaf_id: root.id,
+    close_confirm_leaf_id: null,
+    maximized_leaf_id: null,
+    library: [],
+    active_library_id: null,
+  }
+}
+
+/** Like create_tab_state, but the root leaf holds a terminal (for a "+Terminal" tab). */
+export function create_terminal_tab_state(opts?: Partial<TerminalLeafState>): StructureTabState {
+  const root = create_terminal_leaf(opts)
+  return {
+    root,
+    active_leaf_id: root.id,
+    close_confirm_leaf_id: null,
+    maximized_leaf_id: null,
     library: [],
     active_library_id: null,
   }
@@ -135,49 +149,6 @@ export function auto_name(structure: Record<string, unknown>): string {
     counts[el] = (counts[el] || 0) + 1
   }
   return Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)).map(([el, n]) => n > 1 ? `${el}${n}` : el).join(``)
-}
-
-/** Determine the import target pane when loading a new structure into a tab. */
-export function find_import_target_pane(ts: StructureTabState, source_pane: number): number {
-  const { panes } = ts
-  const source_has_content = pane_has_content(panes[source_pane])
-  if (!source_has_content) return source_pane
-  const panel_count = layout_panel_count(ts.layout)
-  // Look for empty pane within visible panels first
-  let target = -1
-  for (let i = 0; i < panel_count; i++) {
-    if (!pane_has_content(panes[i])) { target = i; break }
-  }
-  if (target < 0) {
-    if (ts.layout === 'single') { ts.layout = 'splitH'; target = 1 }
-    else if (ts.layout === 'splitH' || ts.layout === 'splitV') { ts.layout = 'quad'; target = 2 }
-    else return -1
-  }
-  return target
-}
-
-// ========== Grid Layout Helpers ==========
-
-export function get_visible_panes(ts: StructureTabState): number[] {
-  return Array.from({ length: layout_panel_count(ts.layout) }, (_, i) => i)
-}
-
-export function get_grid_style(ts: StructureTabState): string {
-  switch (ts.layout) {
-    case 'single': return `grid-template-columns: 1fr; grid-template-rows: 1fr;`
-    case 'splitH': return `grid-template-columns: ${ts.col_split}% 6px 1fr; grid-template-rows: 1fr;`
-    case 'splitV': return `grid-template-columns: 1fr; grid-template-rows: ${ts.row_split}% 6px 1fr;`
-    case 'quad': return `grid-template-columns: ${ts.col_split}% 6px 1fr; grid-template-rows: ${ts.row_split}% 6px 1fr;`
-  }
-}
-
-export function get_pane_position(layout: LayoutType, idx: number): string {
-  if (layout === 'single') return ``
-  if (layout === 'splitH') return `grid-column: ${idx === 0 ? 1 : 3}; grid-row: 1;`
-  if (layout === 'splitV') return `grid-column: 1; grid-row: ${idx === 0 ? 1 : 3};`
-  const col = [1, 3, 1, 3][idx]
-  const row = [1, 1, 3, 3][idx]
-  return `grid-column: ${col}; grid-row: ${row};`
 }
 
 // ========== Sample Structures ==========

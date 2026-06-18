@@ -8,6 +8,7 @@
 import { check_tauri } from '$lib/io/tauri'
 import type { WorkflowDetail, WorkflowSummary, WorkflowTemplate, WorkflowRunConfig, WorkflowRunStatus, StepInfo } from '$lib/workflow/workflow-types'
 import { API_BASE, desktop_backend_available } from './config'
+import { isMobile } from './transport'
 
 declare const __CATGO_DESKTOP__: boolean // set by vite.desktop.config.ts define
 
@@ -556,6 +557,9 @@ export function connect_workflow_monitor(workflow_id: string, callbacks: {
   on_initial_state?: (data: { workflow_status: string; steps: Array<{ id: string; status: string; hpc_job_id?: string; error_message?: string }> }) => void
   on_error?: (error: string) => void
 }): { close: () => void } {
+  // No backend on mobile — the monitor WebSocket has no connect timeout and
+  // retries on a dead host. Inert no-op on mobile.
+  if (isMobile()) return { close: () => {} }
   // Always use WebSocket — Python engine broadcasts directly
   return connect_websocket_monitor(workflow_id, callbacks)
 }

@@ -10,8 +10,28 @@ import Tauri
 import UIKit
 import WebKit
 
+struct SetIdleArgs: Decodable {
+  // true => keep the screen awake (UIApplication.isIdleTimerDisabled = true).
+  let disabled: Bool
+}
+
 class BgGracePlugin: Plugin {
   private var bgTask: UIBackgroundTaskIdentifier = .invalid
+
+  // Keep the screen awake while the user is in the terminal, so an auto-lock
+  // can't background the app and drop the SSH connection. isIdleTimerDisabled is
+  // a UIApplication property and must be set on the main thread.
+  @objc public func setIdleTimer(_ invoke: Invoke) {
+    do {
+      let args = try invoke.parseArgs(SetIdleArgs.self)
+      DispatchQueue.main.async {
+        UIApplication.shared.isIdleTimerDisabled = args.disabled
+      }
+      invoke.resolve()
+    } catch {
+      invoke.reject("bad arguments: \(error.localizedDescription)")
+    }
+  }
 
   @objc public override func load(webview: WKWebView) {
     let center = NotificationCenter.default

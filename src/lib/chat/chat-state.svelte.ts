@@ -221,6 +221,10 @@ export interface ChatSlice {
   // Session-scoped tool-approval bypass (NOT persisted — a fresh session
   // always re-gates). Read at send time, threaded into the Claude adapter.
   skip_permission: { value: boolean }
+  // Client-direct (API) providers get no backend session id, so we mint one per
+  // tab and record it into the same session_list the Sessions tab reads. Stays
+  // '' for SDK agents (they use agent_sessions instead).
+  local_session_id: { value: string }
   // Plain (non-$state) field — abort_controller is a DOM class we cancel
   // via a method call; wrapping it in a $state proxy adds nothing.
   abort_controller: AbortController | null
@@ -258,6 +262,7 @@ function make_chat_slice(): ChatSlice {
       | null,
   })
   const skip_permission = $state({ value: false })
+  const local_session_id = $state({ value: `` })
   return {
     messages,
     loading,
@@ -270,6 +275,7 @@ function make_chat_slice(): ChatSlice {
     paper_session,
     pending_send,
     skip_permission,
+    local_session_id,
     abort_controller: null,
   }
 }
@@ -657,6 +663,15 @@ export async function send_message(
             }
             break
           case `result`:
+            // Surface SDK / bridge error results (e.g. usage-limit, spawn
+            // failure) instead of silently dropping them — otherwise an errored
+            // turn produces an empty bubble that gets cleaned up, reading as
+            // "no reply". errorMessage is set on the bridge's error path; the
+            // SDK's own result only carries isError.
+            if (event.isError) {
+              slice.error.value = (event.errorMessage as string) ||
+                `The agent returned an error (it may have hit a usage limit or failed to start). Try again.`
+            }
             break
           case `done`:
             // Stream finished cleanly. Normalise any indicator state — see
@@ -886,9 +901,21 @@ export async function send_message(
     // in agent_sessions for the current provider's agent.
     try {
       const persist_agent = agent_from_provider(chat_config.provider)
-      const persist_sid = persist_agent ? agent_sessions[persist_agent] : undefined
-      if (persist_sid) {
-        persist_session_messages(persist_sid, slice.messages.list)
+      if (persist_agent) {
+        const persist_sid = agent_sessions[persist_agent]
+        if (persist_sid) persist_session_messages(persist_sid, slice.messages.list)
+      } else if (slice.messages.list.length > 0) {
+        // Client-direct (API) provider — no backend session id. Mint one per tab
+        // and record it into the same session_list / message store the SDK path
+        // uses, so the Sessions tab can list, resume, and delete it.
+        if (!slice.local_session_id.value) {
+          slice.local_session_id.value = `api-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        }
+        const sid = slice.local_session_id.value
+        const first_user = slice.messages.list.find((m) => m.role === `user`)
+        const topic = first_user ? get_display_text(first_user.content) : ``
+        record_session(chat_config.provider, sid, topic, chat_config.model)
+        persist_session_messages(sid, slice.messages.list)
       }
     } catch { /* persistence is best-effort, never block the UI */ }
     // Drain a message the user composed mid-stream. queueMicrotask so this
@@ -1083,6 +1110,9 @@ export function resume_session(
   slice.skip_permission.value = false
   clear_workflow_events(tab_id)
   agent_sessions[agent] = session_id
+  // For API sessions the per-tab id is what the round-end persist updates;
+  // setting it here makes a resumed API conversation keep saving to the same id.
+  slice.local_session_id.value = session_id
   slice.messages.list = messages ?? []
 }
 
@@ -1092,6 +1122,7 @@ export function new_session(agent?: string, tab_id: string = `default`): void {
   slice.messages.list = []
   slice.error.value = ``
   slice.skip_permission.value = false
+  slice.local_session_id.value = ``
 
   clear_workflow_events(tab_id)
   if (agent) {

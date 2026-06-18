@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "catgo"
-version = "1.1.15"
+version = "1.1.16"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -675,6 +675,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-http",
+ "tauri-plugin-ios-speech",
  "tauri-plugin-log",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
@@ -5592,8 +5593,10 @@ dependencies = [
 name = "tauri-plugin-bg-grace"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "tauri",
  "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5673,6 +5676,16 @@ dependencies = [
  "tokio",
  "url",
  "urlpattern",
+]
+
+[[package]]
+name = "tauri-plugin-ios-speech"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

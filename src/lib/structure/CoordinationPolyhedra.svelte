@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { MergedPolyhedraGeometry } from './polyhedra'
   import type { PolyhedraOpacityMode } from '$lib/settings'
-  import { T } from '@threlte/core'
+  import { T, useThrelte } from '@threlte/core'
   import {
     BufferGeometry,
     BufferAttribute,
@@ -18,6 +18,7 @@
     opacity_far = 0.1,
     edge_color = `#333333`,
     edge_opacity = 0.8,
+    show_edges = true,
     camera_position = [0, 0, 50] as [number, number, number],
     depth_range = [0, 100] as [number, number],
   }: {
@@ -28,9 +29,16 @@
     opacity_far?: number
     edge_color?: string
     edge_opacity?: number
+    show_edges?: boolean
     camera_position?: [number, number, number]
     depth_range?: [number, number]
   } = $props()
+
+  // Threlte 8 is render-on-demand: in-place uniform/material mutations below are
+  // invisible to its prop-change invalidation (only <T> prop swaps auto-invalidate),
+  // so opacity/edge tweaks wouldn't paint until the next pointer event. Invalidate
+  // explicitly after each mutation.
+  const threlte = useThrelte()
 
   // --- Face geometry ---
   let face_geom = $derived.by(() => {
@@ -120,6 +128,7 @@
     face_material.uniforms.u_depth_min.value = depth_range[0]
     face_material.uniforms.u_depth_max.value = depth_range[1]
     face_material.needsUpdate = true
+    threlte.invalidate()
   })
 
   // --- Edge geometry ---
@@ -142,6 +151,7 @@
     edge_material.color.set(edge_color)
     edge_material.opacity = edge_opacity
     edge_material.needsUpdate = true
+    threlte.invalidate()
   })
 </script>
 
@@ -154,7 +164,7 @@
   />
 {/if}
 
-{#if geometry.edge_count > 0}
+{#if show_edges && geometry.edge_count > 0}
   <T.LineSegments
     geometry={edge_geom}
     material={edge_material}

@@ -4,6 +4,7 @@
   import { ContextMenu, Icon, Spinner, toggle_fullscreen } from '$lib'
   import { type ColorSchemeName, element_color_schemes } from '$lib/colors'
   import { decompress_file, load_from_url, check_tauri } from '$lib/io'
+  import { download } from '$lib/io/fetch'
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import { API_BASE } from '$lib/api/config'
@@ -12,7 +13,7 @@
   import { DEFAULTS, type ShowBonds } from '$lib/settings'
   import type { BondingStrategy } from './bonding'
   import { create_trajectory_bond_cache, wire_trajectory_bond_cache } from './trajectory-bond-cache.svelte'
-  import { colors, atom_clipboard, terminal_font_state } from '$lib/state.svelte'
+  import { colors, atom_clipboard } from '$lib/state.svelte'
   import type { PymatgenStructure } from '$lib/structure'
   import {
     align_to_principal_axes,
@@ -141,7 +142,6 @@
   import { MAX_SELECTED_SITES } from './measure'
   import { is_acf_dat, parse_acf_dat } from './parse-charges'
   import { SlicePanel } from '$lib/cube'
-  import TerminalPanel from './TerminalPanel.svelte'
   import MonacoEditorPanel from './MonacoEditorPanel.svelte'
   import FilePreviewPanel from './FilePreviewPanel.svelte'
   import type { SliceResult, AtomSliceInfo } from '$lib/cube/slice'
@@ -839,7 +839,9 @@
     on_export_to_file,
     on_edit_as_text,
     on_open_file_overlay,
+    on_open_terminal,
     on_open_workflow_editor,
+    on_open_in_molstar,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -973,8 +975,21 @@
       // Callback to open a remote file in a floating overlay (editor/preview). Called from terminal Ctrl+click.
       // Parent handles reading + file type routing (binary vs text, preview vs editor).
       on_open_file_overlay?: (file_path: string, filename: string, session_id: string) => void
+      // Open a terminal as a pane-tree LEAF (desktop). Replaces the old in-pane
+      // side-panel terminal. `term` carries an optional remote SSH session
+      // (HPC Connect → Terminal); omitted = a local shell. Mobile leaves this
+      // unset and uses its own .mw-term instead.
+      on_open_terminal?: (term?: {
+        session_id?: string
+        host?: string
+        username?: string
+        sync_cwd?: boolean
+      }) => void
       // Callback to open a workflow in the full editor. Receives workflow_id.
       on_open_workflow_editor?: (workflow_id: string) => void
+      // Callback to open the current structure in the Mol* bio viewer. When provided,
+      // a DNA toolbar button is shown (used by the desktop multi-pane host).
+      on_open_in_molstar?: () => void
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -1383,6 +1398,8 @@
   })
   let dos_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let dos_plot_ref: DosPlot | undefined = $state()
+  let dos_export_status: string | null = $state(null)
+  let dos_exporting: string | null = $state(null)
   let show_dos_panel = $derived(dos_state.dos_result !== null)
   let dband_center_for_plot = $derived(
     dos_state.show_dband_line && typeof dos_state.dband_result?.center_rel === `number` &&
@@ -1409,6 +1426,8 @@
   })
   let band_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let band_plot_ref: BandPlot | undefined = $state()
+  let band_export_status: string | null = $state(null)
+  let band_exporting: string | null = $state(null)
   let show_band_panel = $derived(band_state.band_data !== null)
 
   // COHP analysis state
@@ -1436,7 +1455,69 @@
   })
   let cohp_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let cohp_plot_ref: CohpPlot | undefined = $state()
+  let cohp_export_status: string | null = $state(null)
+  let cohp_exporting: string | null = $state(null)
   let show_cohp_panel = $derived(cohp_state.cohp_result !== null)
+
+  // Number of open electronic plots (DOS / COHP / Band) sharing the dos-split grid.
+  // They stack beside (or below) the structure; this count drives the grid track count.
+  let electronic_plot_count = $derived(
+    (show_dos_panel ? 1 : 0) + (show_cohp_panel ? 1 : 0) + (show_band_panel ? 1 : 0),
+  )
+  // Whichever electronic panel is open picks the split orientation (DOS > COHP > Band).
+  let electronic_split_layout = $derived(
+    show_dos_panel ? dos_layout : show_cohp_panel ? cohp_layout : band_layout,
+  )
+
+  type ElectronicPlotRef = DosPlot | CohpPlot | BandPlot
+  type ExportFormat = `png` | `svg` | `csv`
+
+  async function data_url_to_blob(data_url: string): Promise<Blob> {
+    const response = await fetch(data_url)
+    return response.blob()
+  }
+
+  async function export_electronic_plot(
+    plot_ref: ElectronicPlotRef | undefined,
+    format: ExportFormat,
+    base_name: string,
+    set_status: (value: string | null) => void,
+    set_exporting: (value: string | null) => void,
+  ) {
+    set_status(null)
+    if (!plot_ref) {
+      set_status(t(`structure.export_plot_loading`))
+      return
+    }
+    set_exporting(format)
+    try {
+      if (format === `csv`) {
+        const csv = plot_ref.export_csv()
+        if (!csv) {
+          set_status(t(`structure.export_no_plot_data`))
+          return
+        }
+        const filename = `${base_name}_data.csv`
+        download(csv, filename, `text/csv;charset=utf-8`)
+        set_status(t(`structure.export_started`, { filename }))
+        return
+      }
+
+      const url = await plot_ref.export_image(format)
+      if (!url) {
+        set_status(t(`structure.export_plot_not_ready`))
+        return
+      }
+      const filename = `${base_name}_plot.${format}`
+      download(await data_url_to_blob(url), filename, format === `svg` ? `image/svg+xml` : `image/png`)
+      set_status(t(`structure.export_started`, { filename }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      set_status(t(`structure.export_failed`, { what: format.toUpperCase(), message }))
+    } finally {
+      set_exporting(null)
+    }
+  }
   let workflow_pane_open = $state(false)  // Workflow pane
   let slow_growth_pane_open = $state(false)  // Slow-growth post-processing
   let io_pane_open = $state(false)  // IO (import/export) pane
@@ -1457,15 +1538,9 @@
   let job_detail_session_id = $state(``)
   let job_detail_job_id = $state(``)
 
-  // --- Terminal split-view state ---
-  let show_terminal = $state(false)
-  let terminal_layout = $state<`horizontal` | `vertical`>(`horizontal`)
-  let terminal_session_id = $state<string | undefined>()
-  let terminal_host = $state(``)
-  let terminal_username = $state(``)
-  let terminal_sync_cwd = $state(false)
-  let terminal_popped_out = $state(false)
-  let terminal_popped_sync_cwd = $state(false)
+  // --- Side-panel (editor/preview) split-view state ---
+  // (The terminal moved out to pane-tree leaves; editor/preview still use the
+  // side panel.) `server_nav_path` drives ServerPane's external navigation.
   let server_nav_path = $state<string | undefined>()
   let side_panel_size = $state(50) // percentage of total space for side panel
   let side_panel_minimized = $state(false)
@@ -1480,8 +1555,9 @@
       } else if (initial_panel === `chat`) {
         chat_pane_open = true
       } else if (initial_panel === `terminal`) {
-        show_terminal = true
-        side_panel_minimized = false
+        // Terminals now live as pane-tree leaves — open one instead of the
+        // (removed) in-pane side-panel terminal.
+        on_open_terminal?.()
       } else if (initial_panel === `doping`) {
         build.build_pane_open = true
         build.active_build_tab = `doping`
@@ -1495,50 +1571,21 @@
     }
   })
 
-  // Listen for CWD changes from popped-out terminal via BroadcastChannel.
-  // Uses sequence counter + debounce to avoid stale/out-of-order updates.
-  let _last_cwd_seq = 0
-  let _cwd_debounce_timer: ReturnType<typeof setTimeout> | null = null
-  $effect(() => {
-    if (!terminal_popped_out || !terminal_popped_sync_cwd) return
-    const bc = new BroadcastChannel(`catgo-terminal-cwd`)
-    bc.onmessage = (event: MessageEvent) => {
-      const { path, seq } = event.data
-      if (!path) return
-      if (typeof seq === `number` && seq <= _last_cwd_seq) return
-      if (typeof seq === `number`) _last_cwd_seq = seq
-      if (_cwd_debounce_timer) clearTimeout(_cwd_debounce_timer)
-      _cwd_debounce_timer = setTimeout(() => {
-        server_nav_path = path
-        _cwd_debounce_timer = null
-      }, 150)
-    }
-    return () => {
-      bc.close()
-      if (_cwd_debounce_timer) clearTimeout(_cwd_debounce_timer)
-    }
-  })
-
   function start_side_resize(event: PointerEvent) {
     event.preventDefault()
     is_side_resizing = true
-    const is_vertical = show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`
     const rect = wrapper?.getBoundingClientRect()
     if (!rect) return
 
-    document.body.style.cursor = is_vertical ? `row-resize` : `col-resize`
+    // Editor/preview side panel is always a horizontal (left/right) split now
+    // that the terminal (the only vertical user) lives in pane-tree leaves.
+    document.body.style.cursor = `col-resize`
     document.body.style.userSelect = `none`
 
     function on_move(e: PointerEvent) {
       if (!rect) return
-      let pct: number
-      if (is_vertical) {
-        const offset = e.clientY - rect.top
-        pct = 100 - (offset / rect.height) * 100
-      } else {
-        const offset = e.clientX - rect.left
-        pct = 100 - (offset / rect.width) * 100
-      }
+      const offset = e.clientX - rect.left
+      const pct = 100 - (offset / rect.width) * 100
       side_panel_size = Math.max(15, Math.min(80, pct))
     }
 
@@ -1648,6 +1695,14 @@
   let preview_filename = $state(``)
   let preview_file_path = $state(``)
   let preview_session_id = $state(``)
+
+  // True when a chat or side (terminal/editor/preview) panel is open and therefore
+  // owns the grid-template (an earlier branch in the inline grid-template ternary
+  // fires). The electronic-plot grid-template must only apply when this is false,
+  // otherwise it would clobber the chat/side layout (e.g. chat-bottom + a DOS panel).
+  let chat_side_owns_grid = $derived(
+    chat_pane_open || show_editor || show_preview,
+  )
 
   // --- Remote structure origin (for push-back) --- (now a $bindable prop, see props block)
 
@@ -2931,35 +2986,40 @@
   class:xrd-split={xrd.show_panel}
   class:xrd-horizontal={xrd.show_panel && xrd.layout === `horizontal`}
   class:xrd-vertical={xrd.show_panel && xrd.layout === `vertical`}
-  class:dos-split={show_dos_panel || show_cohp_panel}
-  class:dos-horizontal={(show_dos_panel || show_cohp_panel) && (show_dos_panel ? dos_layout : cohp_layout) === `horizontal`}
-  class:dos-vertical={(show_dos_panel || show_cohp_panel) && (show_dos_panel ? dos_layout : cohp_layout) === `vertical`}
+  class:dos-split={show_dos_panel || show_cohp_panel || show_band_panel}
+  class:dos-horizontal={(show_dos_panel || show_cohp_panel || show_band_panel) && electronic_split_layout === `horizontal`}
+  class:dos-vertical={(show_dos_panel || show_cohp_panel || show_band_panel) && electronic_split_layout === `vertical`}
   class:slice-split={show_slice_panel}
   class:slice-horizontal={show_slice_panel && slice_layout === `horizontal`}
   class:slice-vertical={show_slice_panel && slice_layout === `vertical`}
-  class:side-split={(show_terminal || show_editor || show_preview) && !chat_pane_open}
-  class:side-horizontal={(show_terminal || show_editor || show_preview) && !chat_pane_open && !(show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`)}
-  class:side-vertical={show_terminal && !show_editor && !show_preview && !chat_pane_open && terminal_layout === `vertical`}
-  class:side-minimized={side_panel_minimized && (show_terminal || show_editor || show_preview)}
-  class:chat-split={chat_pane_open && chat_position.value === `right` && !(show_terminal || show_editor || show_preview)}
-  class:chat-bottom={chat_pane_open && chat_position.value === `bottom` && !(show_terminal || show_editor || show_preview)}
-  class:combined-split={chat_pane_open && chat_position.value === `right` && (show_terminal || show_editor || show_preview)}
-  class:combined-bottom={chat_pane_open && chat_position.value === `bottom` && (show_terminal || show_editor || show_preview)}
-  style:grid-template-columns={(chat_pane_open && chat_position.value === `right` && (show_terminal || show_editor || show_preview))
-        || ((show_terminal || show_editor || show_preview) && !(show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`))
+  class:side-split={(show_editor || show_preview) && !chat_pane_open}
+  class:side-horizontal={(show_editor || show_preview) && !chat_pane_open}
+  class:side-minimized={side_panel_minimized && (show_editor || show_preview)}
+  class:chat-split={chat_pane_open && chat_position.value === `right` && !(show_editor || show_preview)}
+  class:chat-bottom={chat_pane_open && chat_position.value === `bottom` && !(show_editor || show_preview)}
+  class:combined-split={chat_pane_open && chat_position.value === `right` && (show_editor || show_preview)}
+  class:combined-bottom={chat_pane_open && chat_position.value === `bottom` && (show_editor || show_preview)}
+  style:grid-template-columns={(chat_pane_open && chat_position.value === `right` && (show_editor || show_preview))
+        || (show_editor || show_preview)
       ? side_panel_minimized ? `1fr 0px 28px` : `1fr 4px ${side_panel_size}%`
       : chat_pane_open && chat_position.value === `right`
         ? `1fr 5px minmax(280px, ${chat_panel_size}%)`
-        : undefined}
-  style:grid-template-rows={chat_pane_open && chat_position.value === `bottom` && !(show_terminal || show_editor || show_preview)
-      ? `1fr 5px ${chat_bottom_size}%`
-      : chat_pane_open && chat_position.value === `bottom` && (show_terminal || show_editor || show_preview) && !side_panel_minimized
-        ? `1fr 5px ${chat_bottom_size}%`
-        : chat_pane_open && chat_position.value === `right` && (show_terminal || show_editor || show_preview) && !side_panel_minimized
+        : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `horizontal`
           ? `1fr 1fr`
-          : !chat_pane_open && (show_terminal || show_editor || show_preview) && (show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`)
-            ? side_panel_minimized ? `1fr 0px 28px` : `1fr 4px ${side_panel_size}%`
+          : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `vertical`
+            ? `1fr`
             : undefined}
+  style:grid-template-rows={chat_pane_open && chat_position.value === `bottom` && !(show_editor || show_preview)
+      ? `1fr 5px ${chat_bottom_size}%`
+      : chat_pane_open && chat_position.value === `bottom` && (show_editor || show_preview) && !side_panel_minimized
+        ? `1fr 5px ${chat_bottom_size}%`
+        : chat_pane_open && chat_position.value === `right` && (show_editor || show_preview) && !side_panel_minimized
+          ? `1fr 1fr`
+          : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `horizontal`
+            ? `repeat(${electronic_plot_count}, 1fr)`
+            : !chat_side_owns_grid && electronic_plot_count > 0 && electronic_split_layout === `vertical`
+              ? `1fr repeat(${electronic_plot_count}, 1fr)`
+              : undefined}
 >
   <div class="structure-main">
   <!-- Box selection overlay - uses transform for GPU-accelerated positioning -->
@@ -3039,6 +3099,7 @@
       {remote_origin}
       {structure}
       on_upload_to_hpc={() => { hpc_upload_open = true }}
+      {on_open_in_molstar}
       {molecular_fragments}
       {reset_text}
       {wrapper}
@@ -3062,10 +3123,7 @@
       {webgpu_available}
       bind:chat_pane_open
       on_popout_chat={popout_chat}
-      bind:show_terminal
-      bind:side_panel_minimized
-      bind:terminal_popped_out
-      bind:terminal_popped_sync_cwd
+      on_open_terminal={() => on_open_terminal?.()}
       bind:measure_mode={meas_state.measure_mode}
       bind:measure_mode_active={meas_state.measure_mode_active}
       bind:measure_menu_open={meas_state.measure_menu_open}
@@ -3724,12 +3782,9 @@
               job_detail_open = true
             }}
             on_open_terminal={(sid, host, user) => {
-              terminal_session_id = sid
-              terminal_host = host
-              terminal_username = user
-              show_terminal = true
-              terminal_popped_out = false
-              terminal_popped_sync_cwd = false
+              // HPC Connect → Terminal: open a terminal pane-tree leaf wired to
+              // the remote SSH session (was the in-pane side-panel terminal).
+              on_open_terminal?.({ session_id: sid, host, username: user, sync_cwd: false })
             }}
             on_load_structure={(content, filename, file_path, sid) => {
               const parsed = parse_any_structure(content, filename)
@@ -4771,9 +4826,9 @@
           >
             {dos_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (dos_plot_ref) { const url = await dos_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `dos_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (dos_plot_ref) { const url = await dos_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `dos_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (dos_plot_ref) { const csv = dos_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `dos_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `png`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `svg`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `csv`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: `DOS` })}
@@ -4782,6 +4837,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if dos_export_status}
+          <div class="dos-export-status">{dos_export_status}</div>
+        {/if}
         <DosPlot
           bind:this={dos_plot_ref}
           grid={dos_state.dos_result.grid}
@@ -4874,9 +4932,9 @@
           >
             {cohp_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (cohp_plot_ref) { const url = await cohp_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `cohp_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (cohp_plot_ref) { const url = await cohp_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `cohp_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (cohp_plot_ref) { const csv = cohp_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `cohp_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `png`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `svg`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `csv`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: `COHP` })}
@@ -4885,6 +4943,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if cohp_export_status}
+          <div class="dos-export-status">{cohp_export_status}</div>
+        {/if}
         <CohpPlot
           bind:this={cohp_plot_ref}
           energies={cohp_state.cohp_result.energies}
@@ -4925,9 +4986,9 @@
           >
             {band_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" onclick={async () => { if (band_plot_ref) { const url = await band_plot_ref.export_image(`png`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `band_plot.png`; a.click() } } }}>PNG</button>
-          <button class="dos-export-btn" onclick={async () => { if (band_plot_ref) { const url = await band_plot_ref.export_image(`svg`); if (url) { const a = document.createElement(`a`); a.href = url; a.download = `band_plot.svg`; a.click() } } }}>SVG</button>
-          <button class="dos-export-btn" onclick={() => { if (band_plot_ref) { const csv = band_plot_ref.export_csv(); if (csv) { const blob = new Blob([csv], { type: `text/csv` }); const url = URL.createObjectURL(blob); const a = document.createElement(`a`); a.href = url; a.download = `band_data.csv`; a.click(); URL.revokeObjectURL(url) } } }}>CSV</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `png`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `png` ? `...` : `PNG`}</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `svg`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `svg` ? `...` : `SVG`}</button>
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `csv`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `csv` ? `...` : `CSV`}</button>
           <button
             class="dos-close-btn"
             title={t(`structure.close_panel_label`, { name: t(`structure.bands`) })}
@@ -4936,6 +4997,9 @@
         </div>
       </div>
       <div class="dos-plot-area">
+        {#if band_export_status}
+          <div class="dos-export-status">{band_export_status}</div>
+        {/if}
         <BandPlot
           bind:this={band_plot_ref}
           distance={band_state.band_data.distance}
@@ -4974,8 +5038,8 @@
     />
   {/if}
 
-  <!-- Side panels: terminal + editor (stacked when both visible) -->
-  {#if show_terminal || show_editor || show_preview}
+  <!-- Side panels: editor + preview (terminal moved to pane-tree leaves) -->
+  {#if show_editor || show_preview}
     {#if !side_panel_minimized}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="resize-handle" onpointerdown={start_side_resize}></div>
@@ -4987,7 +5051,7 @@
           title={t(`structure.restore_panel`)}
           onclick={() => { side_panel_minimized = false }}
         >
-          {(show_terminal && !show_editor && !show_preview && terminal_layout === `vertical`) ? `\u25B4` : `\u25C2`}
+          {`\u25C2`}
         </button>
       {:else}
         {#if show_editor}
@@ -5031,135 +5095,6 @@
             onclose={() => { show_preview = false }}
           />
         {/if}
-      {/if}
-      <!-- Terminal persists outside minimize conditional — hidden via CSS, PTY stays alive -->
-      {#if show_terminal}
-        <div class="terminal-wrapper" style:display={side_panel_minimized ? `none` : null}>
-          {#key terminal_session_id}
-          <TerminalPanel
-            layout={terminal_layout}
-            session_id={terminal_session_id}
-            host={terminal_host}
-            username={terminal_username}
-            font_size={terminal_font_state.font_size}
-            font_family={terminal_font_state.font_family}
-            bind:sync_cwd={terminal_sync_cwd}
-            on_cwd_change={(path) => { server_nav_path = path }}
-            on_open_file={async (file_path) => {
-              if (!terminal_session_id) return
-              const name = file_path.split(`/`).pop() || file_path
-              // Delegate to parent overlay handler if available (App.svelte handles reading + routing)
-              if (on_open_file_overlay) {
-                on_open_file_overlay(file_path, name, terminal_session_id)
-                return
-              }
-              // Internal fallback: detect file type and route to correct panel
-              const lower = name.toLowerCase()
-              const is_img = /\.(png|jpg|jpeg|gif|bmp|webp|svg|ico|tiff?)$/i.test(lower)
-              const is_pdf_f = /\.pdf$/i.test(lower)
-              const is_excel_f = /\.(xlsx?|xlsm|xlsb|ods)$/i.test(lower)
-              const is_csv = /\.(csv|tsv)$/i.test(lower)
-              const is_md = /\.(md|rst)$/i.test(lower)
-              const is_binary = is_img || is_pdf_f || is_excel_f
-              try {
-                // Structure files → load directly into this viewer
-                const { is_structure_file } = await import(`$lib/structure/parse`)
-                const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
-                if (is_structure_file(name) || is_trajectory_file(name)) {
-                  const { readRemoteFile } = await import(`$lib/api/hpc`)
-                  const result = await readRemoteFile(terminal_session_id, file_path)
-                  if (result.success && result.content !== undefined) {
-                    const { parse_structure_file } = await import(`$lib/structure/parse`)
-                    const parsed = parse_structure_file(result.content, name)
-                    if (parsed) {
-                      structure = parsed as AnyStructure
-                    }
-                  }
-                  return
-                }
-                if (is_binary) {
-                  const { readRemoteBinaryFile } = await import(`$lib/api/hpc`)
-                  const result = await readRemoteBinaryFile(terminal_session_id, file_path)
-                  if (result.success) {
-                    preview_mode = is_img ? `image` : is_pdf_f ? `pdf` : `excel`
-                    preview_filename = name
-                    preview_content = ``
-                    preview_binary_data = result.data
-                    preview_mime_type = result.mime_type
-                    preview_file_path = file_path
-                    preview_session_id = terminal_session_id
-                    show_preview = true
-                    show_editor = false
-                  }
-                } else {
-                  const { readRemoteFile } = await import(`$lib/api/hpc`)
-                  const result = await readRemoteFile(terminal_session_id, file_path)
-                  if (result.success && result.content !== undefined) {
-                    if (is_csv || is_md) {
-                      preview_mode = is_csv ? `csv` : `markdown`
-                      preview_filename = name
-                      preview_content = result.content
-                      preview_binary_data = ``
-                      preview_mime_type = ``
-                      preview_file_path = file_path
-                      preview_session_id = terminal_session_id
-                      show_preview = true
-                      show_editor = false
-                    } else {
-                      editor_content = result.content
-                      editor_filename = name
-                      editor_file_path = file_path
-                      editor_session_id = terminal_session_id
-                      show_editor = true
-                      show_preview = false
-                    }
-                  }
-                }
-              } catch (e) {
-                console.error(`Failed to open file from terminal:`, e)
-              }
-            }}
-            onclose={() => { side_panel_minimized = true }}
-            ondisconnect={() => {
-              show_terminal = false
-              terminal_session_id = undefined
-              terminal_host = ``
-              terminal_username = ``
-            }}
-            onlayout_toggle={() => terminal_layout = terminal_layout === `horizontal` ? `vertical` : `horizontal`}
-            onpopout={() => {
-              const params = new URLSearchParams()
-              if (terminal_session_id) params.set(`session_id`, terminal_session_id)
-              if (terminal_host) params.set(`host`, terminal_host)
-              if (terminal_username) params.set(`username`, terminal_username)
-              if (terminal_sync_cwd) params.set(`sync_cwd`, `true`)
-              const qs = params.toString()
-              const url = `${window.location.origin}${window.location.pathname}#terminal${qs ? `?${qs}` : ``}`
-              const win_id = `terminal-${Date.now()}`
-              if (check_tauri()) {
-                import(`@tauri-apps/api/webviewWindow`).then(({ WebviewWindow }) => {
-                  new WebviewWindow(win_id, {
-                    title: terminal_host ? `${terminal_username}@${terminal_host}` : `CatGo - Terminal`,
-                    url,
-                    width: 900,
-                    height: 600,
-                    center: true,
-                    resizable: true,
-                    decorations: true,
-                  })
-                }).catch(() => {
-                  window.open(url, win_id, `width=900,height=600,resizable=yes`)  // Tauri unavailable — fall back to browser window
-                })
-              } else {
-                window.open(url, win_id, `width=900,height=600,resizable=yes`)
-              }
-              terminal_popped_out = true
-              terminal_popped_sync_cwd = terminal_sync_cwd
-              // Keep the inline terminal running — don't destroy it on popout
-            }}
-          />
-          {/key}
-        </div>
       {/if}
     </div>
   {/if}
@@ -5218,6 +5153,25 @@
     position: relative;
     min-height: 0;
     min-width: 0;
+  }
+  /* Electronic plots (DOS / COHP / Band) stack beside the structure.
+     The grid-template tracks are set inline (one row per open plot); these
+     rules pin the structure to one track and flow the plots into the other. */
+  /* Horizontal: structure on the left spanning all rows, plots stacked in col 2 */
+  .structure.dos-split.dos-horizontal > .structure-main {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .structure.dos-split.dos-horizontal > .dos-panel {
+    grid-column: 2;
+  }
+  /* Vertical: structure on top (row 1), plots stacked below in col 1 */
+  .structure.dos-split.dos-vertical > .structure-main {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .structure.dos-split.dos-vertical > .dos-panel {
+    grid-column: 1;
   }
   /* Chat split-view grid layout */
   .structure.chat-split {
@@ -5313,12 +5267,32 @@
     font-size: 0.75em;
   }
   .dos-layout-btn:hover, .dos-export-btn:hover { background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15)); }
+  .dos-export-btn:disabled {
+    opacity: 0.55;
+    cursor: wait;
+  }
   .dos-close-btn { color: var(--error-color, #f55); }
   .dos-close-btn:hover { background: rgba(255, 60, 60, 0.2); }
   .dos-plot-area {
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
+  }
+  .dos-export-status {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    max-width: min(360px, calc(100% - 16px));
+    padding: 5px 8px;
+    border: 1px solid light-dark(rgba(37, 99, 235, 0.3), rgba(125, 211, 252, 0.35));
+    border-radius: 4px;
+    background: light-dark(rgba(239, 246, 255, 0.95), rgba(12, 39, 64, 0.9));
+    color: light-dark(#1d4ed8, #bfdbfe);
+    font-size: 0.75em;
+    line-height: 1.35;
+    pointer-events: none;
   }
 
   /* Electronic sub-tabs (DOS / COHP) inside Analysis pane */
@@ -5489,22 +5463,14 @@
     grid-template-columns: 1fr 4px 50%;
     grid-template-rows: 1fr;
   }
-  .structure.side-vertical {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 4px 50%;
-  }
   .structure.side-split > .structure-main {
     display: block;
     position: relative;
     min-height: 0;
     min-width: 0;
   }
-  .structure.side-vertical :global(.terminal-panel) {
-    border-left: none;
-    border-top: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
-  }
 
-  /* --- Combined split-view layout (chat top-right + terminal/editor bottom-right) --- */
+  /* --- Combined split-view layout (chat top-right + editor/preview bottom-right) --- */
   .structure.combined-split {
     display: grid;
   }
@@ -5608,10 +5574,6 @@
     width: 4px;
     cursor: col-resize;
   }
-  .structure.side-vertical > .resize-handle {
-    height: 4px;
-    cursor: row-resize;
-  }
 
   .side-panels {
     display: flex;
@@ -5626,16 +5588,8 @@
     min-height: 0;
     min-width: 0;
   }
-  .side-panels > .terminal-wrapper {
-    display: flex;
-    flex-direction: column;
-  }
-  .side-panels > .terminal-wrapper > :global(*) {
-    flex: 1;
-    min-height: 0;
-  }
 
-  /* Restore button (minimize button removed — terminal header has its own close) */
+  /* Restore button (minimize button removed — editor/preview header has its own close) */
   .side-panel-restore-btn {
     position: absolute;
     z-index: 6;
@@ -5671,9 +5625,6 @@
   }
   .structure.side-horizontal .side-panels-minimized .side-panel-restore-btn {
     border-left: 2px solid var(--accent-color, #3b82f6);
-  }
-  .structure.side-vertical .side-panels-minimized .side-panel-restore-btn {
-    border-top: 2px solid var(--accent-color, #3b82f6);
   }
 
   /* --- Push-back button highlight --- */

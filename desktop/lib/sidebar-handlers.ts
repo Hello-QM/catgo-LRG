@@ -6,16 +6,18 @@
  */
 
 import type { AnyStructure } from '$lib'
-import type { StructureTabState, PaneState } from '../pane-utils'
-import { pane_has_content } from '../pane-utils'
+import type { StructureTabState } from '../pane-utils'
+import { findFirstEmptyLeaf } from '../pane-tree'
 import { sidebar } from '../state/sidebar-state.svelte'
 import { parse_and_open_structure_window } from './popout-manager'
+import { show_toast } from '$lib/toast-state.svelte'
 
 export interface SidebarHandlerDeps {
   get_active_ts: () => StructureTabState | null
   get_active_tab_id: () => string
   get_active_tab_type: () => string
-  process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, pane_idx: number, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) => Promise<void>
+  get_open_target: () => 'split' | 'window'
+  process_file_content: (tab_id: string, content: string | ArrayBuffer, filename: string, leaf_id: string, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) => Promise<void>
   update_tab_label: (tab_id: string) => void
   is_tauri: boolean
   set_is_loading: (v: boolean) => void
@@ -26,19 +28,24 @@ export interface SidebarHandlerDeps {
 }
 
 export function handle_sidebar_load(deps: SidebarHandlerDeps, content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) {
-  // When terminal tab is active, open structure in a new window
-  if (deps.get_active_tab_type() === `terminal` && typeof content === `string`) {
+  // "New window" setting → open in a draggable popout. Otherwise load into the
+  // current tab's tree (splitLeaf adds a structure leaf even on a terminal tab).
+  if (deps.get_open_target() === `window` && typeof content === `string`) {
     parse_and_open_structure_window(content, filename, deps.is_tauri)
     return
   }
   const ts = deps.get_active_ts()
   if (!ts) return
-  const pane_idx = ts.panes.findIndex(p => !pane_has_content(p))
-  const target = pane_idx >= 0 ? pane_idx : ts.active_pane
+  const empty = findFirstEmptyLeaf(ts.root)
+  const target = empty ? empty.id : ts.active_leaf_id
   const origin = (file_path && session_id) ? { session_id, file_path } : null
   // Local filesystem path: file_path is set but session_id is not (not HPC)
   const local_path = (file_path && !session_id) ? file_path : null
   deps.process_file_content(deps.get_active_tab_id(), content, filename, target, origin, local_path)
+    .catch((e) => {
+      console.error(`Failed to load ${filename}:`, e)
+      show_toast({ message: `Could not load ${filename}: ${e instanceof Error ? e.message : String(e)}`, variant: `error` })
+    })
 }
 
 export function handle_sidebar_preview(_deps: SidebarHandlerDeps, mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) {
@@ -71,16 +78,20 @@ export function handle_sidebar_open_editor(_deps: SidebarHandlerDeps, content: s
 }
 
 export function handle_sidebar_load_trajectory(deps: SidebarHandlerDeps, content: string, filename: string, _meta?: { session_id: string; dir_path: string }) {
-  // When terminal tab is active, open in a new window
-  if (deps.get_active_tab_type() === `terminal`) {
+  // "New window" setting → popout; otherwise load into the current tab's tree.
+  if (deps.get_open_target() === `window`) {
     parse_and_open_structure_window(content, filename, deps.is_tauri)
     return
   }
   const ts = deps.get_active_ts()
   if (!ts) return
-  const pane_idx = ts.panes.findIndex(p => !pane_has_content(p))
-  const target = pane_idx >= 0 ? pane_idx : ts.active_pane
+  const empty = findFirstEmptyLeaf(ts.root)
+  const target = empty ? empty.id : ts.active_leaf_id
   deps.process_file_content(deps.get_active_tab_id(), content, filename, target)
+    .catch((e) => {
+      console.error(`Failed to load ${filename}:`, e)
+      show_toast({ message: `Could not load ${filename}: ${e instanceof Error ? e.message : String(e)}`, variant: `error` })
+    })
 }
 
 /** Open a remote file from terminal Ctrl+click, routing by file type to the appropriate viewer. */

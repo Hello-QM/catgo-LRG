@@ -4,8 +4,17 @@
 
 declare const __CATGO_STATIC_ONLY__: boolean
 import { API_BASE as _DEFAULT_API } from './config'
+import { isMobile } from './transport'
 
-const IS_STATIC = typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__
+// "Direct" = query PubChem's REST API straight from the client (it allows CORS)
+// instead of proxying through the Python backend. True in static web builds AND
+// on mobile — iOS has no backend, so without `|| isMobile()` these calls hit a
+// dead server and hang (mirrors optimade.ts / materials-project.ts). Evaluated
+// at module load, which on the WKWebView SPA happens client-side (navigator
+// defined); isMobile() is SSR-safe and returns false during the build.
+const IS_STATIC =
+  (typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__) ||
+  isMobile()
 const PUBCHEM_API = `https://pubchem.ncbi.nlm.nih.gov/rest/pug`
 
 // API base URL - same as compute.ts
@@ -218,6 +227,20 @@ function parse_elements_from_formula(formula: string): string[] {
 export async function autocomplete_pubchem(term: string, limit = 8): Promise<string[]> {
   if (term.length < 2) return []
   try {
+    if (IS_STATIC) {
+      // No backend (mobile / static web): hit PubChem's autocomplete endpoint
+      // directly (CORS-open). It lives at /rest/autocomplete, NOT under
+      // PUBCHEM_API (/rest/pug), and returns { dictionary_terms: { compound } }.
+      const url = `https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/compound/${
+        encodeURIComponent(term)
+      }/json?limit=${limit}`
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const data = await response.json() as {
+        dictionary_terms?: { compound?: string[] }
+      }
+      return data.dictionary_terms?.compound ?? []
+    }
     const url = `${API_BASE}/pubchem/autocomplete?term=${
       encodeURIComponent(term)
     }&limit=${limit}`
