@@ -97,7 +97,7 @@ export function get_pane_label(pane: PaneState): string {
 }
 
 export function create_empty_pane(): PaneState {
-  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, open_plugin_hub: 0 }
+  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, open_plugin_hub: 0, initial_panel: undefined }
 }
 
 export function pane_has_content(p: PaneState): boolean {

@@ -2177,8 +2177,25 @@
                 tab_id={tab.id}
                 is_pane={true}
                 on_close={() => { Object.assign(pane, create_empty_pane()); update_tab_label(tab.id) }}
-                on_popout={() => {
-                  window.open(`${location.origin}${location.pathname}#chat`, '_blank', 'width=520,height=760')
+                on_popout={async () => {
+                  // Tauri-aware popout (mirrors Structure.svelte popout_chat):
+                  // plain window.open does not create a window in a Tauri
+                  // WebView, so try the Tauri WebviewWindow API first and only
+                  // fall back to window.open in a real browser.
+                  const popout_tab_id = encodeURIComponent(tab.id ?? `default`)
+                  const url = `${location.origin}${location.pathname}#chat?tab_id=${popout_tab_id}`
+                  try {
+                    const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+                    const w = new WebviewWindow(`catgo-chat`, {
+                      title: `CatGo - AI Chat`,
+                      url, width: 500, height: 700, center: true, resizable: true, decorations: true,
+                    })
+                    w.once(`tauri://error`, () => {
+                      window.open(url, `catgo-chat`, `width=500,height=700,resizable=yes`)
+                    })
+                  } catch {
+                    window.open(url, `catgo-chat`, `width=500,height=700,resizable=yes`)
+                  }
                   Object.assign(pane, create_empty_pane())
                   update_tab_label(tab.id)
                 }}
