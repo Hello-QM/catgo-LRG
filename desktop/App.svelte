@@ -2163,6 +2163,27 @@
                 handle_sidebar_open_workflow(workflow_id)
               }}
               on_open_in_molstar={() => toggle_pane_viewer(pane)}
+              on_view_split_request={(struct) => {
+                // Docked-chat "新pane": split this leaf, keep the current
+                // structure (A) here, drop CatBot's loaded structure (B) in
+                // the new pane (mirrors the standalone on_view_split, but B is
+                // the passed struct rather than re-fetched into the old pane).
+                if (!struct?.sites?.length) return
+                const res = splitLeaf(ts.root, leaf.id, `h`)
+                if (!res) return
+                ts.root = res.root
+                const right = findLeafById(ts.root, res.newLeafId)
+                const rp = right ? structurePane(right) : null
+                if (rp) {
+                  rp.initial_panel = undefined
+                  rp.structure = clone_structure(struct)
+                  rp.initial_site_count = struct.sites.length
+                  rp.initial_structure_ref = struct
+                  rp.modified = false
+                }
+                ts.active_leaf_id = res.newLeafId
+                update_tab_label(tab.id)
+              }}
               fullscreen_toggle={false}
               allow_file_drop={false}
               show_controls={true}
@@ -2241,6 +2262,22 @@
                   } catch (e) {
                     console.warn(`[CatGo] open structure window failed:`, e)
                   }
+                }}
+                has_sibling_structure={leaves(ts.root).some(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })}
+                on_view_overwrite={async () => {
+                  // Overwrite the FIRST content-bearing sibling structure leaf
+                  // with the structure CatBot just loaded for this tab.
+                  let struct: AnyStructure | null = null
+                  try {
+                    const r = await fetch(
+                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
+                    )
+                    if (r.ok) struct = await r.json()
+                  } catch { /* ignore */ }
+                  if (!struct?.sites?.length) return
+                  const target = leaves(ts.root).find(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })
+                  const tp = target ? structurePane(target) : null
+                  if (tp) { tp.structure = clone_structure(struct); tp.modified = false }
                 }}
               />
             </div>

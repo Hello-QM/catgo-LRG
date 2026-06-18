@@ -73,6 +73,11 @@
   import LargeSystemOverlay from './gpu/LargeSystemOverlay.svelte'
   import ReticularPane from '$lib/structure/ReticularPane.svelte'
   import { ChatPane, get_display_text } from '$lib/chat'
+  import { clone_structure } from '$lib/structure/clone'
+  // Popout helper lives in the desktop shell; the function body only uses the
+  // AnyStructure type at runtime, so importing it here is safe for the docked
+  // chat's "open loaded structure in a new window" affordance.
+  import { open_structure_in_new_window } from '../../../desktop/lib/popout-manager'
   import { send_message, get_chat_slice, chat_position } from '$lib/chat/chat-state.svelte'
   import { build_structure_context } from '$lib/chat/context'
   import { analysis_sessions, get_analysis_session, get_session_blob } from '$lib/chat/analysis-session-store.svelte'
@@ -842,6 +847,7 @@
     on_open_terminal,
     on_open_workflow_editor,
     on_open_in_molstar,
+    on_view_split_request,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -990,6 +996,9 @@
       // Callback to open the current structure in the Mol* bio viewer. When provided,
       // a DNA toolbar button is shown (used by the desktop multi-pane host).
       on_open_in_molstar?: () => void
+      // Docked chat escalate: split this pane and load CatBot's structure (passed
+      // in) into the NEW pane, keeping the current structure in this one.
+      on_view_split_request?: (struct: AnyStructure) => void
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -4736,6 +4745,31 @@
       {selected_sites}
       on_close={() => { chat_pane_open = false }}
       on_popout={popout_chat}
+      has_sibling_structure={!!structure}
+      on_view_overwrite={async () => {
+        try {
+          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
+          if (!r.ok) return
+          const struct = await r.json()
+          if (struct?.sites?.length) structure = clone_structure(struct)
+        } catch (e) { console.warn(`[CatGo] overwrite from chat failed:`, e) }
+      }}
+      on_view_split={async () => {
+        try {
+          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
+          if (!r.ok) return
+          const struct = await r.json()
+          if (struct?.sites?.length) on_view_split_request?.(struct)
+        } catch (e) { console.warn(`[CatGo] split from chat failed:`, e) }
+      }}
+      on_view_new_window={async () => {
+        try {
+          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
+          if (!r.ok) return
+          const struct = await r.json()
+          await open_structure_in_new_window(struct, `CatBot structure`, check_tauri())
+        } catch (e) { console.warn(`[CatGo] open structure window failed:`, e) }
+      }}
     />
   {:else if chat_pane_open && chat_position.value === `bottom`}
     <div
@@ -4750,6 +4784,31 @@
       {selected_sites}
       on_close={() => { chat_pane_open = false }}
       on_popout={popout_chat}
+      has_sibling_structure={!!structure}
+      on_view_overwrite={async () => {
+        try {
+          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
+          if (!r.ok) return
+          const struct = await r.json()
+          if (struct?.sites?.length) structure = clone_structure(struct)
+        } catch (e) { console.warn(`[CatGo] overwrite from chat failed:`, e) }
+      }}
+      on_view_split={async () => {
+        try {
+          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
+          if (!r.ok) return
+          const struct = await r.json()
+          if (struct?.sites?.length) on_view_split_request?.(struct)
+        } catch (e) { console.warn(`[CatGo] split from chat failed:`, e) }
+      }}
+      on_view_new_window={async () => {
+        try {
+          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
+          if (!r.ok) return
+          const struct = await r.json()
+          await open_structure_in_new_window(struct, `CatBot structure`, check_tauri())
+        } catch (e) { console.warn(`[CatGo] open structure window failed:`, e) }
+      }}
     />
   {/if}
 
