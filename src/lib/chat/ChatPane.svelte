@@ -340,6 +340,13 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         // Only fresh loads raise the card; edits (supercell, etc.) carry
         // intent:edit and must not nag the user to re-open a viewer.
         if (data?.intent !== `load`) return
+        // Docked chat (beside a viewer, !is_pane): only surface the card when the
+        // load landed in an ALREADY-occupied viewer (had_structure) — that's when
+        // the user must choose overwrite/split/new-window. A load into an EMPTY
+        // docked viewer auto-applies and is shown, so no card. The standalone
+        // viewer-less chat pane (is_pane) has no viewer to render the load, so it
+        // always cards (PR #370 behaviour).
+        if (!is_pane && !data?.had_structure) return
         const s = data?.structure
         const n = s?.sites?.length ?? 0
         if (!n) return
