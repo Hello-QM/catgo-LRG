@@ -4,7 +4,7 @@ Embeds the MCP server directly in the FastAPI backend so Claude Code
 can connect with just a URL (no Python or source code needed on the client):
 
     ~/.claude/mcp.json:
-    {"mcpServers": {"catgo": {"type": "http", "url": "http://localhost:8000/api/mcp"}}}
+    {"mcpServers": {"catgo": {"type": "http", "url": "http://localhost:8000/api/mcp/"}}}
 
 DEADLOCK PREVENTION:
 

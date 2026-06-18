@@ -1828,7 +1828,9 @@ PYEOF
         "PY_CLAUDEMD_EOF\n"
     )
 
-    mcp_url = f"http://localhost:{remote_port}/api/mcp"
+    # Starlette mounts the MCP ASGI app below this prefix, so HTTP clients
+    # must address the mounted root with a trailing slash.
+    mcp_url = f"http://localhost:{remote_port}/api/mcp/"
 
     try:
         # Register MCP server via `claude mcp add` (idempotent — overwrites if exists).

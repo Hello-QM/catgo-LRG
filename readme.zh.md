@@ -257,7 +257,7 @@ catbot-plugin 使用的那套 stdio MCP server。
               ▼
         provider adapter                        (Claude 路径: @anthropic-ai/claude-agent-sdk query())
               │
-              │  MCP server URL: http://localhost:<port>/api/mcp
+              │  MCP server URL: http://localhost:<port>/api/mcp/
               │  加 X-CatGo-Tab-Id，让工具结果回到当前查看器 tab
               ▼
         server/catgo/routers/mcp_http.py
