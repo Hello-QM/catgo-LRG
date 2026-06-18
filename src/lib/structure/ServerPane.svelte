@@ -1029,10 +1029,17 @@
     }
   }
 
-  // ====== File preview (image/pdf/excel/markdown/csv) ======
+  // ====== File preview (image/pdf/excel/markdown/csv/docx) ======
 
   async function open_remote_preview(file: RemoteFile, preview_type: string) {
-    if (!active_session || !on_preview_file) return
+    if (!active_session) return
+    // .docx opens in the dedicated document-viewer window (mammoth renderer)
+    if (preview_type === `docx`) {
+      const { handle_sidebar_preview } = await import(`$lib/desktop/sidebar-handlers`)
+      await handle_sidebar_preview({ name: file.name, path: file.path, session_id: active_session.session_id })
+      return
+    }
+    if (!on_preview_file) return
     loading_file = { name: file.name, size: file.size_bytes }
     loading_error = null
     try {
