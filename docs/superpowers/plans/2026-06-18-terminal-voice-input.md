@@ -167,7 +167,7 @@ Generalize `get_pipeline` and `preload_whisper_model` (currently hardcoded to wh
 
 **Files:**
 - Modify: `src/lib/gesture/local-whisper.ts`
-- Test: `src/lib/gesture/local-whisper.test.ts`
+- Test: `src/lib/gesture/__tests__/local-whisper.test.ts` (repo convention: tests live in `__tests__/`)
 
 **Interfaces:**
 - Consumes: `resolve_model_id`, `DEFAULT_WHISPER_MODEL_ID` from `./whisper-models` (Task 1).
@@ -182,7 +182,7 @@ Generalize `get_pipeline` and `preload_whisper_model` (currently hardcoded to wh
 `@huggingface/transformers` is dynamically imported inside `get_pipeline`, so `vi.mock` it. `preload_whisper_model` does NOT touch the mic or VAD, so it is safe to call in jsdom.
 
 ```ts
-// src/lib/gesture/local-whisper.test.ts
+// src/lib/gesture/__tests__/local-whisper.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const pipeline_spy = vi.fn(async () => async () => ({ text: `` }))
@@ -199,7 +199,7 @@ describe('local-whisper model id threading', () => {
   })
 
   it('preload uses an explicit model id verbatim', async () => {
-    const { preload_whisper_model } = await import('./local-whisper')
+    const { preload_whisper_model } = await import('../local-whisper')
     await preload_whisper_model('en', undefined, 'onnx-community/whisper-small')
     expect(pipeline_spy).toHaveBeenCalledWith(
       'automatic-speech-recognition',
@@ -209,8 +209,8 @@ describe('local-whisper model id threading', () => {
   })
 
   it('preload falls back to a registry model when no id given', async () => {
-    const { preload_whisper_model } = await import('./local-whisper')
-    const { WHISPER_MODELS } = await import('./whisper-models')
+    const { preload_whisper_model } = await import('../local-whisper')
+    const { WHISPER_MODELS } = await import('../whisper-models')
     await preload_whisper_model('zh-CN')
     const used = pipeline_spy.mock.calls[0][1]
     expect(WHISPER_MODELS.some((m) => m.id === used)).toBe(true)
@@ -220,7 +220,7 @@ describe('local-whisper model id threading', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test -- src/lib/gesture/local-whisper.test.ts`
+Run: `pnpm test -- src/lib/gesture/__tests__/local-whisper.test.ts`
 Expected: FAIL — `preload_whisper_model` ignores the 3rd arg / pipeline called with `onnx-community/whisper-tiny`.
 
 - [ ] **Step 3: Edit `local-whisper.ts`**
@@ -316,7 +316,7 @@ In `set_language`, replace the `pipeline_promise = null; current_model_id = null
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `pnpm test -- src/lib/gesture/local-whisper.test.ts`
+Run: `pnpm test -- src/lib/gesture/__tests__/local-whisper.test.ts`
 Expected: PASS (2 tests).
 
 - [ ] **Step 5: Verify no regression in existing callers**
@@ -327,7 +327,7 @@ Expected: full suite green; type-check shows no NEW errors (the repo has ~15 pre
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/lib/gesture/local-whisper.ts src/lib/gesture/local-whisper.test.ts
+git add src/lib/gesture/local-whisper.ts src/lib/gesture/__tests__/local-whisper.test.ts
 git commit -m "feat(voice): let local-whisper load any registry model id"
 ```
 
@@ -339,7 +339,7 @@ A small per-terminal class that owns recording + model state and forwards only f
 
 **Files:**
 - Create: `src/lib/structure/terminal-voice.svelte.ts`
-- Test: `src/lib/structure/terminal-voice.test.ts`
+- Test: `src/lib/structure/__tests__/terminal-voice.test.ts` (repo convention: tests live in `__tests__/`)
 
 **Interfaces:**
 - Consumes: `DEFAULT_WHISPER_MODEL_ID` from `$lib/gesture/whisper-models`; `LocalWhisperEngine`, `ModelStatus` from `$lib/gesture/local-whisper`; `VoiceEvent` from `$lib/gesture/gesture-types`.
@@ -350,9 +350,9 @@ A small per-terminal class that owns recording + model state and forwards only f
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-// src/lib/structure/terminal-voice.test.ts
+// src/lib/structure/__tests__/terminal-voice.test.ts
 import { describe, it, expect, vi } from 'vitest'
-import { TerminalVoice } from './terminal-voice.svelte'
+import { TerminalVoice } from '../terminal-voice.svelte'
 import type { VoiceEvent } from '$lib/gesture/gesture-types'
 
 function fake_event(text: string, is_final: boolean): VoiceEvent {
@@ -417,7 +417,7 @@ describe('TerminalVoice', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pnpm test -- src/lib/structure/terminal-voice.test.ts`
+Run: `pnpm test -- src/lib/structure/__tests__/terminal-voice.test.ts`
 Expected: FAIL — `Cannot find module './terminal-voice.svelte'`.
 
 - [ ] **Step 3: Write the implementation**
@@ -521,13 +521,13 @@ export class TerminalVoice {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pnpm test -- src/lib/structure/terminal-voice.test.ts`
+Run: `pnpm test -- src/lib/structure/__tests__/terminal-voice.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/lib/structure/terminal-voice.svelte.ts src/lib/structure/terminal-voice.test.ts
+git add src/lib/structure/terminal-voice.svelte.ts src/lib/structure/__tests__/terminal-voice.test.ts
 git commit -m "feat(voice): terminal voice-dictation controller"
 ```
 
