@@ -1,4 +1,6 @@
 <script module lang="ts">
+  import DOMPurify from 'dompurify'
+
   export function base64_to_arraybuffer(b64: string): ArrayBuffer {
     const bin = atob(b64)
     const len = bin.length
@@ -6,11 +8,19 @@
     for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i)
     return bytes.buffer
   }
+
+  export function sanitize_docx_html(raw: string): string {
+    // Keep DOMPurify's default XSS protections (strips <script>, on* handlers,
+    // javascript:/data: on hrefs) but allow data: URIs on <img> so mammoth's
+    // inline base64 images render.
+    return DOMPurify.sanitize(raw, {
+      ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
+      ADD_DATA_URI_TAGS: ['img'],
+    })
+  }
 </script>
 
 <script lang="ts">
-  import DOMPurify from 'dompurify'
-
   let { base64 }: { base64: string } = $props()
   let html = $state(``)
   let error = $state(``)
@@ -24,7 +34,7 @@
       try {
         const mammoth = (await import(`mammoth`)).default ?? (await import(`mammoth`))
         const result = await mammoth.convertToHtml({ arrayBuffer: base64_to_arraybuffer(b64) })
-        html = DOMPurify.sanitize(result.value, { ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i })
+        html = sanitize_docx_html(result.value)
       } catch (e) {
         error = e instanceof Error ? e.message : String(e)
       }

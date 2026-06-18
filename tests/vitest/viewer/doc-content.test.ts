@@ -37,4 +37,8 @@ describe('load_doc_content', () => {
     const r = await load_doc_content(tab({ local_path: null, inline_key: 'catgo-docs-inline-x' }))
     expect(r.text).toBe('INLINE')
   })
+  it('degrades gracefully for local-path binary (no base64 endpoint in v1)', async () => {
+    const r = await load_doc_content(tab({ kind: 'pdf', filename: 'd.pdf', local_path: '/tmp/d.pdf', origin: null, inline_key: null }))
+    expect(r).toEqual({ text: null, binary: null, mime: null })
+  })
 })
