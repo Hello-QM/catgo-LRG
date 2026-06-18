@@ -9,6 +9,8 @@
 </script>
 
 <script lang="ts">
+  import DOMPurify from 'dompurify'
+
   let { base64 }: { base64: string } = $props()
   let html = $state(``)
   let error = $state(``)
@@ -22,7 +24,7 @@
       try {
         const mammoth = (await import(`mammoth`)).default ?? (await import(`mammoth`))
         const result = await mammoth.convertToHtml({ arrayBuffer: base64_to_arraybuffer(b64) })
-        html = result.value
+        html = DOMPurify.sanitize(result.value, { ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i })
       } catch (e) {
         error = e instanceof Error ? e.message : String(e)
       }
