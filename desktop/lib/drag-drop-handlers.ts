@@ -7,6 +7,8 @@
 import type { StructureTabState } from '../pane-utils'
 import { resolve_open_target } from '$lib/state.svelte'
 import { findFirstEmptyLeaf } from '../pane-tree'
+import { open_doc_window } from './popout-manager'
+import { build_doc_ref } from '$lib/viewer/doc-ref'
 
 export interface ImportItem {
   content?: string | ArrayBuffer
@@ -30,6 +32,7 @@ export interface DragDropDeps {
   set_is_loading: (v: boolean) => void
   get_open_target: () => 'split' | 'window'
   open_in_window: (content: string, filename: string) => Promise<void>
+  is_tauri: boolean
 }
 
 /* Minimal File System Entry typings (non-standard webkit API). */
@@ -128,6 +131,12 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       }
       const { read_file } = await import(`$lib/api/project`)
       const result = await read_file(fs_path)
+      const { is_structure_file } = await import(`$lib/structure/parse`)
+      const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
+      if (!is_structure_file(result.name, result.content) && !is_trajectory_file(result.name, result.content)) {
+        await open_doc_window(build_doc_ref(result.name, { content: result.content, local_path: fs_path }), deps.is_tauri)
+        return
+      }
       const fs_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
       if (fs_target === 'window') {
         await deps.open_in_window(result.content, result.name)
@@ -178,9 +187,16 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
     }
     if (to_import.length === 0) { ts.active_leaf_id = target_leaf_id; return }
     if (to_import.length === 1) {
+      const single = to_import[0]
+      const { is_structure_file } = await import(`$lib/structure/parse`)
+      const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
+      if (!is_structure_file(single.file.name) && !is_trajectory_file(single.file.name)) {
+        const content = await single.file.text()
+        await open_doc_window(build_doc_ref(single.file.name, { content }), deps.is_tauri)
+        return
+      }
       const drop_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
       if (drop_target === 'window') {
-        const single = to_import[0]
         const content = await single.file.text()
         await deps.open_in_window(content, single.file.name)
         ts.active_leaf_id = target_leaf_id

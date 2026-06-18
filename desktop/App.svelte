@@ -212,6 +212,7 @@
     set_is_loading: (v) => { is_loading = v },
     get_open_target: () => open_target_state.value,
     open_in_window: (content, filename) => parse_and_open_structure_window(content, filename, is_tauri),
+    is_tauri,
   }
   const resize_deps_min: ResizeDepsMin = {
     tab_states,
