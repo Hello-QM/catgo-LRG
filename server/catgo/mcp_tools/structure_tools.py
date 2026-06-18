@@ -403,7 +403,7 @@ async def _handle_fetch_crystal(client: httpx.AsyncClient, arguments: dict) -> l
     except Exception as exc:
         logger.warning("[fetch-crystal] conventional cell standardization failed: %s, using raw", exc)
 
-    push_err = await _push_structure_to_viewer(client, struct_dict)
+    push_err = await _push_structure_to_viewer(client, struct_dict, intent="load")
     logger.info("[fetch-crystal] push result: %s", push_err or "ok")
 
     # Build summary
@@ -502,7 +502,7 @@ async def _handle_fetch_molecule(client: httpx.AsyncClient, arguments: dict) -> 
     except Exception as exc:
         return [TextContent(type="text", text=f"Failed to convert PubChem structure: {exc}")]
 
-    push_err = await _push_structure_to_viewer(client, struct_dict)
+    push_err = await _push_structure_to_viewer(client, struct_dict, intent="load")
 
     nsites = len(struct_dict.get("sites", []))
     desc = compound_name
