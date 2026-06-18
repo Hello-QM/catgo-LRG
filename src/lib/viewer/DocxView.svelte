@@ -14,7 +14,7 @@
     // javascript:/data: on hrefs) but allow data: URIs on <img> so mammoth's
     // inline base64 images render.
     return DOMPurify.sanitize(raw, {
-      ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel):/i,
+      ALLOWED_URI_REGEXP: /^(?:https?|mailto|tel|blob):/i,
       ADD_DATA_URI_TAGS: ['img'],
     })
   }
@@ -26,13 +26,22 @@
   let error = $state(``)
   // 'input' = no bytes reached us; 'output' = mammoth returned no HTML.
   let empty = $state<'' | 'input' | 'output'>(``)
+  // Blob URLs minted for embedded images this render — revoked on re-render/unmount.
+  let blob_urls: string[] = []
+
+  function revoke_blobs(): void {
+    for (const u of blob_urls) URL.revokeObjectURL(u)
+    blob_urls = []
+  }
 
   $effect(() => {
     error = ``
     html = ``
     empty = ``
+    revoke_blobs()
     const b64 = base64
     if (!b64) { empty = `input`; return }
+    let cancelled = false
     ;(async () => {
       try {
         // Use mammoth's prebuilt browser bundle — the default `mammoth` entry is
@@ -40,7 +49,25 @@
         // @ts-expect-error no type declarations for the browser bundle subpath
         const mod = await import(`mammoth/mammoth.browser.js`)
         const mammoth = mod.default ?? mod
-        const result = await mammoth.convertToHtml({ arrayBuffer: base64_to_arraybuffer(b64) })
+        // Emit embedded images as lightweight blob: URLs instead of mammoth's
+        // default inline base64 data URIs — the latter bloat the HTML by the
+        // full image size, making DOMPurify + DOM parsing slow for image-heavy
+        // docs. Blob URLs keep the HTML tiny and let the WebView load images
+        // lazily from memory.
+        const minted: string[] = []
+        const convert_image = mammoth.images.imgElement(async (image: { read: (e: string) => Promise<string>; contentType: string }) => {
+          const data = await image.read(`base64`)
+          const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0))
+          const url = URL.createObjectURL(new Blob([bytes], { type: image.contentType }))
+          minted.push(url)
+          return { src: url }
+        })
+        const result = await mammoth.convertToHtml(
+          { arrayBuffer: base64_to_arraybuffer(b64) },
+          { convertImage: convert_image },
+        )
+        if (cancelled) { for (const u of minted) URL.revokeObjectURL(u); return }
+        blob_urls = minted
         const safe = sanitize_docx_html(result.value || ``)
         html = safe
         if (!safe.trim()) empty = `output`
@@ -48,6 +75,7 @@
         error = e instanceof Error ? e.message : String(e)
       }
     })()
+    return () => { cancelled = true; revoke_blobs() }
   })
 </script>
 
