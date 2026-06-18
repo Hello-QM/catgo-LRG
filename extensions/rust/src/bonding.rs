@@ -430,74 +430,144 @@ impl Default for SolidAngleOptions {
 /// the solid angle subtended by the atom pair and a Gaussian distance penalty.
 /// This is a geometry-only algorithm (no chemical preferences).
 pub fn detect_bonds_solid_angle(structure: &Structure, options: &SolidAngleOptions) -> Vec<Bond> {
+    use glam::DVec3;
+    use meshless_voronoi::{Dimensionality, Voronoi};
+    use std::collections::HashSet;
+
     let num_sites = structure.num_sites();
     if num_sites < 2 {
         return Vec::new();
     }
 
-    let species = structure.species();
-    let props: Vec<ElementProps> = species
-        .iter()
-        .map(|sp| ElementProps::from_element(sp.element))
-        .collect();
+    // A bonded pair shares a Voronoi face. This is radius-free geometry, so it
+    // gets octahedra (6) / tetrahedra (4) right and naturally excludes
+    // cation-cation pairs an anion sits between (no shared face).
+    //
+    // meshless_voronoi's periodic box is axis-aligned, so it is only correct
+    // for orthogonal cells (hexagonal/triclinic would tessellate wrongly).
+    // Instead build a NON-periodic supercell of explicit image atoms around the
+    // home cell and tessellate that: correct for ANY lattice, and each image
+    // atom carries its exact Cartesian position → exact distance + jimage. A
+    // slab's vacuum side simply yields unbounded (boundary) faces → no bond.
+    let cart = structure.cart_coords();
+    let m = structure.lattice.matrix();
+    let avec = nalgebra::Vector3::new(m[(0, 0)], m[(0, 1)], m[(0, 2)]);
+    let bvec = nalgebra::Vector3::new(m[(1, 0)], m[(1, 1)], m[(1, 2)]);
+    let cvec = nalgebra::Vector3::new(m[(2, 0)], m[(2, 1)], m[(2, 2)]);
 
-    let cutoff = options.max_distance;
-    let (center_indices, neighbor_indices, image_offsets, distances) =
-        structure.get_neighbor_list(cutoff, 1e-8, true);
+    // Replicate far enough that every home-cell atom is fully enclosed (≥ one
+    // image past the search radius along each axis).
+    let reps = |v: &nalgebra::Vector3<f64>| -> i32 {
+        let len = v.norm();
+        if len < 1e-6 {
+            1
+        } else {
+            (options.max_distance / len).ceil().max(1.0) as i32
+        }
+    };
+    let (na, nb, nc) = (reps(&avec), reps(&bvec), reps(&cvec));
 
+    // A tiny deterministic jitter (≪ bond-length resolution) breaks the exact
+    // coplanar/collinear degeneracies of symmetric crystals that otherwise make
+    // meshless_voronoi's plane-intersection panic. Deterministic so results are
+    // reproducible (no RNG, which is unavailable on wasm anyway).
+    let jitter = |seed: u64| -> f64 {
+        (seed.wrapping_mul(2_654_435_761) % 4001) as f64 / 4000.0 * 2e-6 - 1e-6
+    };
+    let mut sc_pos: Vec<DVec3> = Vec::new();
+    let mut sc_map: Vec<(usize, [i32; 3])> = Vec::new(); // supercell idx -> (home idx, image)
+    let mut central: Vec<usize> = Vec::new(); // supercell indices of the home (image 0) atoms
+    for da in -na..=na {
+        for db in -nb..=nb {
+            for dc in -nc..=nc {
+                let shift = avec * (da as f64) + bvec * (db as f64) + cvec * (dc as f64);
+                for k in 0..num_sites {
+                    if da == 0 && db == 0 && dc == 0 {
+                        central.push(sc_pos.len());
+                    }
+                    let p = cart[k] + shift;
+                    let s = sc_pos.len() as u64;
+                    sc_map.push((k, [da, db, dc]));
+                    sc_pos.push(DVec3::new(
+                        p.x + jitter(3 * s),
+                        p.y + jitter(3 * s + 1),
+                        p.z + jitter(3 * s + 2),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Bounding box for the non-periodic tessellation.
+    let mut lo = sc_pos[0];
+    let mut hi = sc_pos[0];
+    for p in &sc_pos {
+        lo = lo.min(*p);
+        hi = hi.max(*p);
+    }
+    let margin = DVec3::splat(1.0);
+    let anchor = lo - margin;
+    let extent = (hi - lo) + margin * 2.0;
+    let voronoi = Voronoi::build(&sc_pos, anchor, extent, Dimensionality::ThreeD, false);
+
+    let min_dist = options.min_bond_dist;
     let mut bonds = Vec::new();
-    let min_dist_sq = options.min_bond_dist * options.min_bond_dist;
+    let mut seen: HashSet<(usize, usize, [i32; 3])> = HashSet::new();
 
-    for idx in 0..center_indices.len() {
-        let center_idx = center_indices[idx];
-        let neighbor_idx = neighbor_indices[idx];
-        let image = image_offsets[idx];
-        let dist = distances[idx];
-
-        // Pair-level dedup with PBC awareness (see detect_bonds_atom_radii).
-        if center_idx == neighbor_idx {
-            if image[0] < 0
-                || (image[0] == 0 && image[1] < 0)
-                || (image[0] == 0 && image[1] == 0 && image[2] <= 0)
-            {
+    for &sc_i in &central {
+        let (i, _) = sc_map[sc_i];
+        let center = sc_pos[sc_i];
+        for face in voronoi.cells()[sc_i].faces(&voronoi) {
+            let area = face.area();
+            if area < 1e-9 {
                 continue;
             }
-        } else if center_idx > neighbor_idx {
-            continue;
-        }
+            // Boundary faces (cluster surface / vacuum) have no neighbour.
+            let raw = if face.left() == sc_i {
+                match face.right() {
+                    Some(r) => r,
+                    None => continue,
+                }
+            } else {
+                face.left()
+            };
+            let (j, image) = sc_map[raw];
 
+            let dist = (sc_pos[raw] - center).length();
+            if dist < min_dist {
+                continue;
+            }
+            // Solid-angle fraction Ω/4π ≈ A / (4π r²).
+            let saf = area / (4.0 * std::f64::consts::PI * dist * dist);
+            if saf < options.min_solid_angle {
+                continue;
+            }
 
-        let dist_sq = dist * dist;
-        if dist_sq < min_dist_sq {
-            continue;
-        }
+            // Canonicalise (min, max, image-relative-to-min) so the same face
+            // seen from both atoms dedupes to one bond.
+            let key = if i < j {
+                (i, j, image)
+            } else if i > j {
+                (j, i, [-image[0], -image[1], -image[2]])
+            } else {
+                if image[0] < 0
+                    || (image[0] == 0 && image[1] < 0)
+                    || (image[0] == 0 && image[1] == 0 && image[2] <= 0)
+                {
+                    continue;
+                }
+                (i, j, image)
+            };
+            if !seen.insert(key) {
+                continue;
+            }
 
-        let r1 = props[center_idx].covalent_radius;
-        let r2 = props[neighbor_idx].covalent_radius;
-        let avg_r = (r1 + r2) / 2.0;
-        let face_area = std::f64::consts::PI * avg_r * avg_r;
-        let solid_angle = face_area / dist_sq;
-
-        if solid_angle < options.min_solid_angle || face_area < options.min_face_area {
-            continue;
-        }
-
-        // Gaussian distance penalty centered at ideal bond length (sum of covalent radii)
-        let sum_radii = r1 + r2;
-        let ratio = dist / sum_radii;
-        let dist_penalty = (-((ratio - 1.0).powi(2)) / 0.4).exp();
-
-        // Normalize solid angle by full sphere (4π steradians)
-        let angle_strength = (solid_angle / (4.0 * std::f64::consts::PI)).min(1.0);
-        let strength = angle_strength * dist_penalty;
-
-        if strength > options.strength_threshold {
             bonds.push(Bond {
-                site_idx_1: center_idx,
-                site_idx_2: neighbor_idx,
+                site_idx_1: key.0,
+                site_idx_2: key.1,
                 bond_length: dist,
-                strength,
-                image,
+                strength: saf.min(1.0),
+                image: key.2,
             });
         }
     }
@@ -823,7 +893,17 @@ mod tests {
         for bond in &bonds {
             assert!(bond.bond_length > 0.4);
             assert!(bond.strength > 0.0);
+            // Voronoi coordination: rock-salt cells are cubes → 6 faces toward
+            // the opposite species only. No same-species (Na-Na / Cl-Cl) bonds.
+            let cross = (bond.site_idx_1 < 4) != (bond.site_idx_2 < 4);
+            assert!(
+                cross,
+                "solid_angle must not bond same species in NaCl: {}-{}",
+                bond.site_idx_1, bond.site_idx_2
+            );
         }
+        // 6-fold coordination: 4 Na × 6 Cl = 24 unique Na-Cl bonds.
+        assert_eq!(bonds.len(), 24, "rock-salt is 6-coordinate");
     }
 
     #[test]
@@ -930,6 +1010,28 @@ mod tests {
             max_len < 3.0,
             "longest electroneg bond should be 1st-shell (~2.56 Å), got {max_len:.3} Å \
              (2nd shell at 3.615 Å leaked in — closest-neighbor penalty missing)"
+        );
+    }
+
+    #[test]
+    fn test_solid_angle_hcp_non_orthogonal() {
+        // HCP (γ = 120°, non-orthogonal): every atom is 12-coordinate. An
+        // axis-aligned periodic Voronoi gets this wrong (6); the non-periodic
+        // supercell tessellation must recover the full 12.
+        let lattice = Lattice::hexagonal(3.21, 5.21);
+        let species = vec![Species::neutral(Element::Mg); 2];
+        let frac_coords = vec![
+            Vector3::new(1.0 / 3.0, 2.0 / 3.0, 0.25),
+            Vector3::new(2.0 / 3.0, 1.0 / 3.0, 0.75),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_solid_angle(&structure, &SolidAngleOptions::default());
+        // coordination = 2 * bonds / atoms
+        let coordination = 2 * bonds.len() / 2;
+        assert_eq!(
+            coordination, 12,
+            "HCP must be 12-coordinate via supercell Voronoi, got {coordination}"
         );
     }
 
