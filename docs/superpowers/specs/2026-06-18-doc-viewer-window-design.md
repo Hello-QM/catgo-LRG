@@ -169,4 +169,9 @@ window's 3D pane tree.
 
 - pptx: add a `pptx` kind + renderer later (server-side LibreOffice→PDF reusing
   the PDF tab is the leading candidate). The renderer map makes this additive.
+  Reference: **mutyai/pptviewer** (https://github.com/mutyai/pptviewer, MIT) —
+  a VS Code extension that does exactly this: LibreOffice headless converts
+  .pptx/.ppt → PDF, then shows a PDF preview. Confirms the LibreOffice→PDF
+  route; the trade-off is a LibreOffice dependency on the backend host. (It is
+  NOT a client-side JS renderer.)
 - Whether to persist the open tab set across app restarts (v1: no).
