@@ -7,8 +7,6 @@
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
   import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
-  import { TerminalVoice } from './terminal-voice.svelte'
-  import { WHISPER_MODELS } from '$lib/gesture/whisper-models'
 
   let {
     layout = `horizontal`,
@@ -68,8 +66,6 @@
   /** Monotonic sequence counter for CWD broadcasts — receivers discard stale messages. */
   let _cwd_seq = 0
   let show_font_menu = $state(false)
-  const voice = new TerminalVoice()
-  let show_voice_menu = $state(false)
 
   const title = $derived(
     host ? `${username || ``}@${host}` : `Terminal`
@@ -748,7 +744,7 @@
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="terminal-panel" onclick={() => { if (show_font_menu) show_font_menu = false; if (show_voice_menu) show_voice_menu = false }}>
+<div class="terminal-panel" onclick={() => { if (show_font_menu) show_font_menu = false }}>
   {#if show_header}
     <div class="terminal-panel-header">
       <span class="terminal-panel-title">
@@ -811,46 +807,6 @@
                   </select>
                 </label>
               </div>
-            </div>
-          {/if}
-        </div>
-        <!-- Voice dictation: mic toggle + model picker -->
-        <div class="tp-dropdown-wrap">
-          <button
-            class="terminal-voice-btn"
-            class:active={voice.recording}
-            disabled={!voice.is_supported}
-            title={voice.is_supported
-              ? (voice.recording ? `Stop dictation` : `Dictate into terminal`)
-              : `Voice dictation needs microphone access (unsupported here)`}
-            onclick={(e) => {
-              e.stopPropagation()
-              voice.toggle((t) => panel_send_keys(t))
-            }}
-          ><Icon icon="Mic" /></button>
-          <button
-            class="terminal-voice-caret"
-            title="Choose speech model"
-            onclick={(e) => { e.stopPropagation(); show_voice_menu = !show_voice_menu }}
-          >▾</button>
-          {#if show_voice_menu}
-            <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-            <div class="tp-font-dropdown" onclick={(e) => e.stopPropagation()}>
-              <div class="tp-font-header">Speech model</div>
-              {#each WHISPER_MODELS as m}
-                <button
-                  class="tp-voice-model"
-                  class:selected={voice.model_id === m.id}
-                  onclick={() => { voice.set_model(m.id); show_voice_menu = false }}
-                >{m.label} · ~{m.size_mb}MB</button>
-              {/each}
-              {#if voice.model_status === `downloading`}
-                <div class="tp-voice-progress">
-                  Downloading… {Math.round(voice.download_progress)}%
-                </div>
-              {:else if voice.model_status === `error` || voice.error}
-                <div class="tp-voice-progress error">Model failed — try again</div>
-              {/if}
             </div>
           {/if}
         </div>
@@ -1065,39 +1021,6 @@
   }
   .tp-font-control select:focus {
     border-color: var(--accent-color, #3b82f6);
-  }
-
-  .terminal-voice-btn.active {
-    color: #e5484d;
-  }
-  .terminal-voice-caret {
-    padding: 0 2px;
-    font-size: 10px;
-    opacity: 0.7;
-  }
-  .tp-voice-model {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 4px 8px;
-    background: none;
-    border: none;
-    cursor: pointer;
-    font-size: 12px;
-  }
-  .tp-voice-model.selected {
-    font-weight: 600;
-  }
-  .tp-voice-model:hover {
-    background: rgba(127, 127, 127, 0.15);
-  }
-  .tp-voice-progress {
-    padding: 4px 8px;
-    font-size: 11px;
-    opacity: 0.8;
-  }
-  .tp-voice-progress.error {
-    color: #e5484d;
   }
 
   .terminal-container {

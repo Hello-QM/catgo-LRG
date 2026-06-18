@@ -2,6 +2,9 @@
   import { untrack } from 'svelte'
   import TerminalPanel from './TerminalPanel.svelte'
   import { Icon } from '$lib'
+  import { TerminalVoice } from './terminal-voice.svelte'
+  import { WHISPER_MODELS } from '$lib/gesture/whisper-models'
+  import { get_active_terminal } from './terminal-registry.svelte'
   import { fetchConnections, type ConnectionInfo } from '$lib/api/hpc'
   import { fetchAvailableShells, type ShellInfo } from '$lib/api/pty'
   import { hpc_session_store, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
@@ -176,9 +179,21 @@
 
   let show_font_menu = $state(false)
 
+  // ====== Voice dictation ======
+  // Reuses the in-browser local-Whisper engine. Final transcripts are typed
+  // into the ACTIVE tab's PTY via the terminal registry (same path CatBot
+  // uses), with no Enter appended.
+  const voice = new TerminalVoice()
+  let show_voice_menu = $state(false)
+
+  function toggle_voice() {
+    voice.toggle((text) => { get_active_terminal()?.send_keys(text) })
+  }
+
   function handle_global_click() {
     if (show_new_menu) show_new_menu = false
     if (show_font_menu) show_font_menu = false
+    if (show_voice_menu) show_voice_menu = false
   }
 </script>
 
@@ -300,6 +315,42 @@
                 </select>
               </label>
             </div>
+          </div>
+        {/if}
+      </div>
+
+      <!-- Voice dictation: mic toggle + speech-model picker -->
+      <div class="tw-dropdown-wrap">
+        <button
+          class="tw-icon-btn tw-voice-btn"
+          class:active={voice.recording}
+          disabled={!voice.is_supported}
+          title={voice.is_supported
+            ? (voice.recording ? `Stop dictation` : `Dictate into the active terminal`)
+            : `Voice dictation needs microphone access (unsupported here)`}
+          onclick={(e) => { e.stopPropagation(); toggle_voice() }}
+        ><Icon icon="Mic" /></button>
+        <button
+          class="tw-icon-btn tw-voice-caret"
+          title="Choose speech model"
+          onclick={(e) => { e.stopPropagation(); show_voice_menu = !show_voice_menu; show_font_menu = false; show_new_menu = false }}
+        >▾</button>
+        {#if show_voice_menu}
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="tw-dropdown tw-voice-dropdown" onclick={(e) => e.stopPropagation()}>
+            <div class="tw-dropdown-header">Speech model</div>
+            {#each WHISPER_MODELS as m}
+              <button
+                class="tw-dropdown-item"
+                class:tw-voice-selected={voice.model_id === m.id}
+                onclick={() => { voice.set_model(m.id); show_voice_menu = false }}
+              >{m.label} · ~{m.size_mb}MB</button>
+            {/each}
+            {#if voice.model_status === `downloading`}
+              <div class="tw-dropdown-note">Downloading… {Math.round(voice.download_progress)}%</div>
+            {:else if voice.model_status === `error` || voice.error}
+              <div class="tw-dropdown-note tw-voice-error">Model failed — try again</div>
+            {/if}
           </div>
         {/if}
       </div>
@@ -450,6 +501,23 @@
   }
   .tw-sync-btn.active {
     color: var(--accent-color, #3b82f6);
+  }
+  .tw-voice-btn.active {
+    color: #e5484d;
+  }
+  .tw-voice-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .tw-voice-caret {
+    padding: 4px 2px;
+    font-size: 0.7em;
+  }
+  .tw-voice-selected {
+    font-weight: 600;
+  }
+  .tw-voice-error {
+    color: #e5484d;
   }
   .tw-icon-btn:hover {
     background: var(--surface-bg-hover, rgba(0, 0, 0, 0.05));
