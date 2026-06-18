@@ -1,46 +1,67 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { enqueue_pending, drain_pending, sweep_inline_keys } from '../../../src/lib/viewer/doc-channel'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { send_open_doc, on_open_doc, emit_docs_ready, on_docs_ready } from '../../../src/lib/viewer/doc-channel'
 import type { DocRef } from '../../../src/lib/viewer/doc-viewer-state.svelte'
 
 const ref = (n: string): DocRef => ({
-  filename: n, kind: 'text', editable: true, origin: null, local_path: `/tmp/${n}`, inline_key: null,
+  filename: n, kind: 'text', editable: true, view: 'edit',
+  origin: null, local_path: `/tmp/${n}`, inline: null,
 })
 
-beforeEach(() => localStorage.clear())
+// BroadcastChannel is not available in jsdom; stub it for web-path tests.
+class FakeBC {
+  static instances: FakeBC[] = []
+  onmessage: ((e: MessageEvent) => void) | null = null
+  messages: unknown[] = []
+  closed = false
+  constructor(public name: string) { FakeBC.instances.push(this) }
+  postMessage(data: unknown) {
+    this.messages.push(data)
+    // Deliver to all open listeners on the same channel.
+    FakeBC.instances
+      .filter(bc => bc !== this && bc.name === this.name && !bc.closed && bc.onmessage)
+      .forEach(bc => bc.onmessage!(new MessageEvent('message', { data })))
+  }
+  close() { this.closed = true }
+}
 
-describe('doc-channel pending queue', () => {
-  it('enqueues and drains in order, then clears', () => {
-    enqueue_pending(ref('a.txt'))
-    enqueue_pending(ref('b.txt'))
-    const drained = drain_pending()
-    expect(drained.map(r => r.filename)).toEqual(['a.txt', 'b.txt'])
-    expect(drain_pending()).toEqual([])
+beforeEach(() => {
+  FakeBC.instances = []
+  vi.stubGlobal('BroadcastChannel', FakeBC)
+})
+
+describe('on_open_doc / send_open_doc (web path)', () => {
+  it('delivers a ref to a registered listener', async () => {
+    const received: DocRef[] = []
+    const off = on_open_doc((r) => received.push(r), false)
+    await send_open_doc(ref('a.txt'), false)
+    expect(received).toHaveLength(1)
+    expect(received[0].filename).toBe('a.txt')
+    off()
   })
-  it('drain on empty returns []', () => {
-    expect(drain_pending()).toEqual([])
+
+  it('does not deliver after unsubscribe', async () => {
+    const received: DocRef[] = []
+    const off = on_open_doc((r) => received.push(r), false)
+    off()
+    await send_open_doc(ref('b.txt'), false)
+    expect(received).toHaveLength(0)
   })
 })
 
-describe('sweep_inline_keys', () => {
-  it('removes orphaned inline keys not in keep list', () => {
-    localStorage.setItem('catgo-docs-inline-a', 'data-a')
-    localStorage.setItem('catgo-docs-inline-b', 'data-b')
-    localStorage.setItem('other', 'untouched')
-    sweep_inline_keys(['catgo-docs-inline-a'])
-    expect(localStorage.getItem('catgo-docs-inline-a')).toBe('data-a')
-    expect(localStorage.getItem('catgo-docs-inline-b')).toBeNull()
-    expect(localStorage.getItem('other')).toBe('untouched')
+describe('on_docs_ready / emit_docs_ready (web path)', () => {
+  it('calls the ready callback when docs window emits ready', async () => {
+    const fired: number[] = []
+    const off = on_docs_ready(() => fired.push(1), false)
+    await emit_docs_ready(false)
+    expect(fired).toHaveLength(1)
+    off()
   })
 
-  it('removes all inline keys when keep list is empty', () => {
-    localStorage.setItem('catgo-docs-inline-x', 'x')
-    sweep_inline_keys([])
-    expect(localStorage.getItem('catgo-docs-inline-x')).toBeNull()
-  })
-
-  it('is a no-op when there are no inline keys', () => {
-    localStorage.setItem('other', 'safe')
-    sweep_inline_keys([])
-    expect(localStorage.getItem('other')).toBe('safe')
+  it('does not fire open-doc listeners for ready events', async () => {
+    const docRefs: DocRef[] = []
+    const off = on_open_doc((r) => docRefs.push(r), false)
+    await emit_docs_ready(false)
+    expect(docRefs).toHaveLength(0)
+    off()
   })
 })

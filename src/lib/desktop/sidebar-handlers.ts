@@ -4,7 +4,7 @@
  * to the doc window via the doc-channel.
  */
 import { build_doc_ref } from '$lib/viewer/doc-ref'
-import { send_open_doc, enqueue_pending } from '$lib/viewer/doc-channel'
+import { send_open_doc } from '$lib/viewer/doc-channel'
 import { check_tauri } from '$lib/io/tauri'
 
 export interface RemoteFile {
@@ -22,9 +22,7 @@ export async function handle_sidebar_preview(file: RemoteFile): Promise<void> {
     origin: { session_id: file.session_id, file_path: file.path },
     view: 'preview',
   })
-  const is_tauri = check_tauri()
-  enqueue_pending(ref)
-  await send_open_doc(ref, is_tauri)
+  await send_open_doc(ref, check_tauri())
 }
 
 /**
@@ -36,7 +34,5 @@ export async function handle_sidebar_open_editor(file: RemoteFile): Promise<void
     origin: { session_id: file.session_id, file_path: file.path },
     view: 'edit',
   })
-  const is_tauri = check_tauri()
-  enqueue_pending(ref)
-  await send_open_doc(ref, is_tauri)
+  await send_open_doc(ref, check_tauri())
 }

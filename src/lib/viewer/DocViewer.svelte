@@ -18,7 +18,7 @@
   import type { DocTab } from './doc-viewer-state.svelte'
   import { load_doc_content, save_doc_content } from './doc-content'
   import { resolve_doc_kind } from './doc-kind'
-  import { drain_pending, on_open_doc, sweep_inline_keys } from './doc-channel'
+  import { on_open_doc, emit_docs_ready } from './doc-channel'
   import FilePreviewPanel from '$lib/structure/FilePreviewPanel.svelte'
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
   import DocxView from './DocxView.svelte'
@@ -31,9 +31,10 @@
   let loaded = $state<Record<string, { text: string | null; binary: string | null; mime: string | null }>>({})
 
   $effect(() => {
-    for (const ref of drain_pending()) open_doc(ref)
+    // Subscribe first so no event is missed between listen setup and ready signal.
     const off = on_open_doc((ref) => open_doc(ref), is_tauri)
-    sweep_inline_keys(doc_viewer.tabs.map((t) => t.inline_key).filter(Boolean) as string[])
+    // Signal to the opener that we are ready to receive the queued ref.
+    void emit_docs_ready(is_tauri)
     return off
   })
 
