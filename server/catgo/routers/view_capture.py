@@ -649,7 +649,7 @@ async def upload_and_load(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Parse failed: {exc}")
 
-    view_state.push_structure(struct_dict, panel_id)
+    view_state.push_structure(struct_dict, panel_id, intent="load")
     n = len(struct_dict.get("sites", []))
     logger.info("upload-and-load: %s → panel '%s', %d sites", filename or "<unnamed>", panel_id, n)
     return {
@@ -724,7 +724,7 @@ async def merge_upload(
         raise HTTPException(status_code=500, detail=f"Merge failed: {exc}")
 
     merged = result.structure if hasattr(result, "structure") else result.get("structure", {})
-    view_state.push_structure(merged, panel_id)
+    view_state.push_structure(merged, panel_id, intent="edit")
     n = len(merged.get("sites", []))
     logger.info("merge-upload: %s + panel '%s' → %d sites at %s", file.filename or "<unnamed>", panel_id, n, pos)
     return {

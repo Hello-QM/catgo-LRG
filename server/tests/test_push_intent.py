@@ -57,3 +57,34 @@ def test_push_structure_load_intent(monkeypatch):
     )
     view_state.push_structure({"sites": []}, panel_id="p1", intent="load")
     assert seen["data"]["intent"] == "load"
+
+
+def test_upload_and_load_route_tags_intent_load(monkeypatch):
+    """The PREFERRED file-load path (POST /view/upload-and-load) must tag
+    its push as a LOAD — loading a brand-new structure from disk should
+    prompt, not silently overwrite the viewer's current structure.
+
+    Calls the route handler directly with a real UploadFile (no TestClient
+    / FastAPI app import / SSE / MCP-patch scaffolding); monkeypatches
+    push_structure to capture the intent it threads through.
+    """
+    import asyncio
+    import io
+
+    from starlette.datastructures import UploadFile
+
+    from catgo.routers import view_capture
+
+    captured = {}
+    monkeypatch.setattr(
+        view_capture.view_state, "push_structure",
+        lambda sd, pid, intent="edit", **kw: captured.update(intent=intent, pid=pid),
+    )
+
+    xyz = b"2\n\nH 0.0 0.0 0.0\nH 0.0 0.0 0.74\n"
+    uf = UploadFile(filename="mol.xyz", file=io.BytesIO(xyz))
+    res = asyncio.run(view_capture.upload_and_load(file=uf, panel_id="default"))
+
+    assert res["status"] == "ok"
+    assert captured["intent"] == "load"
+    assert captured["pid"] == "default"
