@@ -163,7 +163,7 @@ git commit -m "feat(voice): selectable Whisper model registry"
 
 ### Task 2: Thread an explicit model id through the local-whisper pipeline
 
-Generalize `get_pipeline` and `preload_whisper_model` (currently hardcoded to whisper-tiny) to accept any model id, and let `LocalWhisperEngine` take an optional `model_id`. Existing callers (gesture nav, chat) keep working via the language fallback.
+Generalize `get_pipeline` and `preload_whisper_model` (currently hardcoded to whisper-tiny) to accept any model id, and let `LocalWhisperEngine` take an optional `model_id`. Existing callers (gesture nav, chat) keep working via the language fallback. NOTE (recorded post-review): the multilingual default shifts from `whisper-tiny` to `whisper-base` (= `DEFAULT_WHISPER_MODEL_ID`), so the gesture/chat *non-English* path now loads the larger, more accurate base model on first use (English path unchanged). Accepted as an intentional accuracy upgrade.
 
 **Files:**
 - Modify: `src/lib/gesture/local-whisper.ts`
