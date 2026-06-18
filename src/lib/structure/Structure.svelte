@@ -4746,29 +4746,14 @@
       on_close={() => { chat_pane_open = false }}
       on_popout={popout_chat}
       has_sibling_structure={!!structure}
-      on_view_overwrite={async () => {
-        try {
-          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
-          if (!r.ok) return
-          const struct = await r.json()
-          if (struct?.sites?.length) structure = clone_structure(struct)
-        } catch (e) { console.warn(`[CatGo] overwrite from chat failed:`, e) }
+      on_view_overwrite={(_panelId, struct) => {
+        if (struct?.sites?.length) structure = clone_structure(struct)
       }}
-      on_view_split={async () => {
-        try {
-          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
-          if (!r.ok) return
-          const struct = await r.json()
-          if (struct?.sites?.length) on_view_split_request?.(struct)
-        } catch (e) { console.warn(`[CatGo] split from chat failed:`, e) }
+      on_view_split={(_panelId, struct) => {
+        if (struct?.sites?.length) on_view_split_request?.(struct)
       }}
-      on_view_new_window={async () => {
-        try {
-          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
-          if (!r.ok) return
-          const struct = await r.json()
-          await open_structure_in_new_window(struct, `CatBot structure`, check_tauri())
-        } catch (e) { console.warn(`[CatGo] open structure window failed:`, e) }
+      on_view_new_window={(_panelId, struct) => {
+        if (struct?.sites?.length) open_structure_in_new_window(struct, `CatBot structure`, check_tauri())
       }}
     />
   {:else if chat_pane_open && chat_position.value === `bottom`}
@@ -4785,29 +4770,14 @@
       on_close={() => { chat_pane_open = false }}
       on_popout={popout_chat}
       has_sibling_structure={!!structure}
-      on_view_overwrite={async () => {
-        try {
-          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
-          if (!r.ok) return
-          const struct = await r.json()
-          if (struct?.sites?.length) structure = clone_structure(struct)
-        } catch (e) { console.warn(`[CatGo] overwrite from chat failed:`, e) }
+      on_view_overwrite={(_panelId, struct) => {
+        if (struct?.sites?.length) structure = clone_structure(struct)
       }}
-      on_view_split={async () => {
-        try {
-          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
-          if (!r.ok) return
-          const struct = await r.json()
-          if (struct?.sites?.length) on_view_split_request?.(struct)
-        } catch (e) { console.warn(`[CatGo] split from chat failed:`, e) }
+      on_view_split={(_panelId, struct) => {
+        if (struct?.sites?.length) on_view_split_request?.(struct)
       }}
-      on_view_new_window={async () => {
-        try {
-          const r = await fetch(`${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab_id ?? `default`)}`)
-          if (!r.ok) return
-          const struct = await r.json()
-          await open_structure_in_new_window(struct, `CatBot structure`, check_tauri())
-        } catch (e) { console.warn(`[CatGo] open structure window failed:`, e) }
+      on_view_new_window={(_panelId, struct) => {
+        if (struct?.sites?.length) open_structure_in_new_window(struct, `CatBot structure`, check_tauri())
       }}
     />
   {/if}

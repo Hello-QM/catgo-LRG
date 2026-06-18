@@ -271,12 +271,12 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_popout?: () => void
     // When CatBot loads a structure into this (viewer-less) pane, offer to view
     // it. Wired only by the standalone chat pane; undefined elsewhere.
-    on_view_split?: (panelId: string) => void
-    on_view_new_window?: (panelId: string) => void
+    on_view_split?: (panelId: string, struct: AnyStructure) => void
+    on_view_new_window?: (panelId: string, struct: AnyStructure) => void
     // True when the host already has a structure in its viewer (docked chat).
     // Enables the "overwrite the existing viewer" option on the load card.
     has_sibling_structure?: boolean
-    on_view_overwrite?: (panelId: string) => void
+    on_view_overwrite?: (panelId: string, struct: AnyStructure) => void
     is_popout?: boolean
     // True when the chat is a leaf in the pane tree (standalone CatBot pane),
     // not the docked sidebar chat. Docked-position toggles (right/bottom) are
@@ -316,7 +316,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   // viewer uses; on a real push, surface a card offering split-view / new
   // window. Only active when the host wired the view handlers (standalone chat
   // pane) — docked chat already has a sibling viewer.
-  let loaded_view_card = $state<{ formula: string; n: number; panelId: string } | null>(null)
+  let loaded_view_card = $state<{ formula: string; n: number; panelId: string; structure: AnyStructure } | null>(null)
   let last_loaded_fp = ``
   function struct_formula(s: { sites?: { species?: { element?: string }[] }[] }): string {
     const counts: Record<string, number> = {}
@@ -346,7 +346,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         const fp = `${n}:${struct_formula(s)}`
         if (fp === last_loaded_fp) return
         last_loaded_fp = fp
-        loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id! }
+        loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id!, structure: s }
       } catch { /* ignore parse errors */ }
     })
     return () => es.close()
@@ -1648,21 +1648,21 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_overwrite?.(loaded_view_card!.panelId); loaded_view_card = null }}
+              onclick={() => { on_view_overwrite?.(loaded_view_card!.panelId, loaded_view_card!.structure); loaded_view_card = null }}
             >{t('chat.view_overwrite')}</button>
           {/if}
           {#if on_view_split}
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_split?.(loaded_view_card!.panelId); loaded_view_card = null }}
+              onclick={() => { on_view_split?.(loaded_view_card!.panelId, loaded_view_card!.structure); loaded_view_card = null }}
             >{t('chat.view_split')}</button>
           {/if}
           {#if on_view_new_window}
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId); loaded_view_card = null }}
+              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId, loaded_view_card!.structure); loaded_view_card = null }}
             >{t('chat.view_new_window')}</button>
           {/if}
           <button type="button" class="lsc-dismiss" title={t('chat.dismiss')} onclick={() => loaded_view_card = null}>✕</button>

@@ -2220,17 +2220,10 @@
                   Object.assign(pane, create_empty_pane())
                   update_tab_label(tab.id)
                 }}
-                on_view_split={async () => {
+                on_view_split={(_panelId, struct) => {
                   // Split this chat leaf into: left = 3D structure viewer with
-                  // the structure CatBot just loaded (pulled from the panel
-                  // store), right = the chat (history kept — keyed by tab id).
-                  let struct: AnyStructure | null = null
-                  try {
-                    const r = await fetch(
-                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
-                    )
-                    if (r.ok) struct = await r.json()
-                  } catch { /* ignore */ }
+                  // the structure CatBot just loaded (carried in the load card),
+                  // right = the chat (history kept — keyed by tab id).
                   const res = splitLeaf(ts.root, leaf.id, `h`)
                   if (!res) return
                   ts.root = res.root
@@ -2251,29 +2244,20 @@
                   ts.active_leaf_id = res.newLeafId
                   update_tab_label(tab.id)
                 }}
-                on_view_new_window={async () => {
+                on_view_new_window={async (_panelId, struct) => {
                   try {
-                    const r = await fetch(
-                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
-                    )
-                    if (!r.ok) return
-                    const struct = await r.json()
-                    await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
+                    if (struct?.sites?.length) {
+                      await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
+                    }
                   } catch (e) {
                     console.warn(`[CatGo] open structure window failed:`, e)
                   }
                 }}
                 has_sibling_structure={leaves(ts.root).some(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })}
-                on_view_overwrite={async () => {
+                on_view_overwrite={(_panelId, struct) => {
                   // Overwrite the FIRST content-bearing sibling structure leaf
-                  // with the structure CatBot just loaded for this tab.
-                  let struct: AnyStructure | null = null
-                  try {
-                    const r = await fetch(
-                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
-                    )
-                    if (r.ok) struct = await r.json()
-                  } catch { /* ignore */ }
+                  // with the structure CatBot just loaded for this tab (carried
+                  // in the load card).
                   if (!struct?.sites?.length) return
                   const target = leaves(ts.root).find(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })
                   const tp = target ? structurePane(target) : null
