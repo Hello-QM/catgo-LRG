@@ -16,7 +16,7 @@
   import type { DocTab } from './doc-viewer-state.svelte'
   import { load_doc_content, save_doc_content } from './doc-content'
   import { resolve_doc_kind } from './doc-kind'
-  import { drain_pending, on_open_doc } from './doc-channel'
+  import { drain_pending, on_open_doc, sweep_inline_keys } from './doc-channel'
   import FilePreviewPanel from '$lib/structure/FilePreviewPanel.svelte'
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
   import DocxView from './DocxView.svelte'
@@ -30,6 +30,7 @@
   $effect(() => {
     for (const ref of drain_pending()) open_doc(ref)
     const off = on_open_doc((ref) => open_doc(ref), is_tauri)
+    sweep_inline_keys(doc_viewer.tabs.map((t) => t.inline_key).filter(Boolean) as string[])
     return off
   })
 

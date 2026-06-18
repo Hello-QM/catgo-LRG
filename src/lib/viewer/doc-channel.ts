@@ -1,6 +1,7 @@
 import type { DocRef } from './doc-viewer-state.svelte'
 
 const PENDING_KEY = `catgo-docs-pending`
+const INLINE_PREFIX = `catgo-docs-inline-`
 const CHANNEL = `catgo-docs`
 const EVENT = `catgo-open-doc`
 
@@ -60,4 +61,19 @@ export function on_open_doc(cb: (ref: DocRef) => void, is_tauri: boolean): () =>
   const bc = new BroadcastChannel(CHANNEL)
   bc.onmessage = (e) => cb(e.data as DocRef)
   return () => bc.close()
+}
+
+/** Remove inline-content keys not referenced by any live tab (orphans from refs that never loaded). */
+export function sweep_inline_keys(keep: string[]): void {
+  try {
+    const keepSet = new Set(keep)
+    const toRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(INLINE_PREFIX) && !keepSet.has(k)) toRemove.push(k)
+    }
+    for (const k of toRemove) localStorage.removeItem(k)
+  } catch {
+    // non-fatal
+  }
 }

@@ -133,7 +133,7 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       const result = await read_file(fs_path)
       const { is_structure_file } = await import(`$lib/structure/parse`)
       const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
-      if (!is_structure_file(result.name, result.content) && !is_trajectory_file(result.name, result.content)) {
+      if (!is_structure_file(result.name) && !is_trajectory_file(result.name, result.content)) {
         await open_doc_window(build_doc_ref(result.name, { content: result.content, local_path: fs_path }), deps.is_tauri)
         return
       }
