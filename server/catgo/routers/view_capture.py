@@ -361,15 +361,21 @@ def get_current_structure(
     """
     struct = _panel_structures.get(panel_id, {})
     if not struct:
-        for pid, candidate in _panel_structures.items():
-            if pid == panel_id:
-                continue
-            if candidate:
-                logger.debug(
-                    "get_current_structure: panel '%s' empty, falling back to '%s'",
-                    panel_id, pid,
-                )
-                return candidate
+        # Only the "default" sentinel may borrow another panel's structure —
+        # that's the value tool callers pass when they don't know the real
+        # frontend panel id. An EXPLICIT panel that happens to be empty must
+        # NOT inherit a different panel's (possibly stale) structure: doing so
+        # made CatBot report a phantom structure the user couldn't find.
+        if panel_id == "default":
+            for pid, candidate in _panel_structures.items():
+                if pid == panel_id:
+                    continue
+                if candidate:
+                    logger.debug(
+                        "get_current_structure: panel '%s' empty, falling back to '%s'",
+                        panel_id, pid,
+                    )
+                    return candidate
         raise HTTPException(
             status_code=404,
             detail=f"No structure available for panel '{panel_id}'. "
