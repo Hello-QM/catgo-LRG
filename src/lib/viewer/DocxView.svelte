@@ -24,17 +24,26 @@
   let { base64 }: { base64: string } = $props()
   let html = $state(``)
   let error = $state(``)
+  // 'input' = no bytes reached us; 'output' = mammoth returned no HTML.
+  let empty = $state<'' | 'input' | 'output'>(``)
 
   $effect(() => {
     error = ``
     html = ``
+    empty = ``
     const b64 = base64
-    if (!b64) return
+    if (!b64) { empty = `input`; return }
     ;(async () => {
       try {
-        const mammoth = (await import(`mammoth`)).default ?? (await import(`mammoth`))
+        // Use mammoth's prebuilt browser bundle — the default `mammoth` entry is
+        // the Node build and silently yields empty output in a WebView.
+        // @ts-expect-error no type declarations for the browser bundle subpath
+        const mod = await import(`mammoth/mammoth.browser.js`)
+        const mammoth = mod.default ?? mod
         const result = await mammoth.convertToHtml({ arrayBuffer: base64_to_arraybuffer(b64) })
-        html = sanitize_docx_html(result.value)
+        const safe = sanitize_docx_html(result.value || ``)
+        html = safe
+        if (!safe.trim()) empty = `output`
       } catch (e) {
         error = e instanceof Error ? e.message : String(e)
       }
@@ -43,7 +52,11 @@
 </script>
 
 {#if error}
-  <div class="docx-error">{error}</div>
+  <div class="docx-error">Failed to render .docx: {error}</div>
+{:else if empty === `input`}
+  <div class="docx-error">No document content received (the file may not have been read).</div>
+{:else if empty === `output`}
+  <div class="docx-error">mammoth produced no HTML for this .docx (unsupported content, e.g. images/tables only).</div>
 {:else}
   <!-- mammoth output is structural HTML from a .docx; rendered read-only -->
   <div class="docx-body">{@html html}</div>
