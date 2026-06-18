@@ -47,10 +47,15 @@ export async function send_open_doc(ref: DocRef, is_tauri: boolean): Promise<voi
 export function on_open_doc(cb: (ref: DocRef) => void, is_tauri: boolean): () => void {
   if (is_tauri) {
     let un: (() => void) | null = null
+    let cancelled = false
     import(`@tauri-apps/api/event`).then(({ listen }) => {
-      listen<DocRef>(EVENT, (e) => cb(e.payload)).then((u) => { un = u })
+      if (cancelled) return
+      listen<DocRef>(EVENT, (e) => cb(e.payload)).then((u) => {
+        if (cancelled) u()
+        else un = u
+      })
     })
-    return () => { if (un) un() }
+    return () => { cancelled = true; if (un) un() }
   }
   const bc = new BroadcastChannel(CHANNEL)
   bc.onmessage = (e) => cb(e.data as DocRef)
