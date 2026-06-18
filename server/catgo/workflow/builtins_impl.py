@@ -189,7 +189,10 @@ def run_slab_gen(
         slabs = gen.get_slabs()
         if not slabs:
             raise RuntimeError(f"SlabGenerator returned no slabs for miller=({h},{k},{l})")
-        slab = slabs[0]
+        # Orthogonalize c so it is perpendicular to the ab surface plane (vacuum
+        # cleanly along c) — matches the interactive /structure-ops slab path and
+        # the ferrox primary path; the raw oriented cell has a tilted c.
+        slab = slabs[0].get_orthogonal_c_slab()
 
     # --- Supercell (applies to BOTH paths) ---
     sa = int(params.get("supercell_a", 1) or 1)
