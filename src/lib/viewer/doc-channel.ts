@@ -1,6 +1,7 @@
 import type { DocRef } from './doc-viewer-state.svelte'
 
 const CHANNEL = `catgo-docs`
+const READY_CHANNEL = `catgo-docs-ready`
 const EVENT = `catgo-open-doc`
 const READY_EVENT = `catgo-docs-ready`
 
@@ -53,7 +54,7 @@ export async function emit_docs_ready(is_tauri: boolean): Promise<void> {
     }
   }
   try {
-    const bc = new BroadcastChannel(CHANNEL)
+    const bc = new BroadcastChannel(READY_CHANNEL)
     bc.postMessage({ type: READY_EVENT })
     bc.close()
   } catch {
@@ -75,9 +76,7 @@ export function on_docs_ready(cb: () => void, is_tauri: boolean): () => void {
     })
     return () => { cancelled = true; if (un) un() }
   }
-  const bc = new BroadcastChannel(CHANNEL)
-  bc.onmessage = (e) => {
-    if ((e.data as { type?: string })?.type === READY_EVENT) cb()
-  }
+  const bc = new BroadcastChannel(READY_CHANNEL)
+  bc.onmessage = () => cb()
   return () => bc.close()
 }
