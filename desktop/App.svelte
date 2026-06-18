@@ -19,6 +19,7 @@
   import { detect_bio } from '$lib/structure/bio/detect'
   import '$lib/theme/themes.js'
   import StatusPopout from '$lib/workflow/StatusPopout.svelte'
+  import DocViewer from '$lib/viewer/DocViewer.svelte'
   import { apply_theme_to_dom, get_theme_preference } from '$lib/theme'
   import ThemeControl from '$lib/theme/ThemeControl.svelte'
   import { readFile } from '@tauri-apps/plugin-fs'
@@ -160,6 +161,7 @@
   let popout_chat_tab_id = $state(`default`)
   let popout_status_mode = $state(false)
   let popout_doping_pt_mode = $state(false)
+  let popout_docs_mode = $state(false)
   let is_loading = $state(false)
   let loading_text = $state(``)
   let drag_target_leaf = $state<string | null>(null)
@@ -518,6 +520,9 @@
         } else if (hash.startsWith(`#doping-pt`)) {
           popout_doping_pt_mode = true
           return
+        } else if (hash.startsWith(`#docs`)) {
+          popout_docs_mode = true
+          return
         } else if (hash.startsWith(`#workflow`)) {
           open_tab(`workflow`)
         } else if (!STATIC_ONLY && hash.startsWith(`#terminal`)) {
@@ -539,7 +544,7 @@
           if (p) handle_load_trajectory_stream(p, n, true)
         }
       })
-      if (popout_chat_mode || popout_status_mode || popout_doping_pt_mode) return
+      if (popout_chat_mode || popout_status_mode || popout_doping_pt_mode || popout_docs_mode) return
       const on_hash = () => {
         if (window.location.hash.startsWith(`#workflow`)) {
           open_tab(`workflow`)
@@ -1629,7 +1634,7 @@
   //
   // Skipped in popout modes and STATIC_ONLY (no backend to subscribe to).
   $effect(() => {
-    if (STATIC_ONLY || popout_chat_mode || popout_status_mode || popout_doping_pt_mode) return
+    if (STATIC_ONLY || popout_chat_mode || popout_status_mode || popout_doping_pt_mode || popout_docs_mode) return
     const es = new EventSource(`${API_BASE}/view/subscribe?panel_id=default`)
 
     function inject_into_external(struct: AnyStructure | null | undefined): boolean {
@@ -1803,6 +1808,8 @@
 <StatusPopout />
 {:else if popout_doping_pt_mode}
 <DopingPTWindow />
+{:else if popout_docs_mode}
+<DocViewer />
 {:else if is_mobile}
 <MobileWorkspace />
 {:else}

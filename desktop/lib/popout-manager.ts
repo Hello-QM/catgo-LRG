@@ -205,6 +205,41 @@ export async function popout_terminal_session(
   window.open(url, win_id, `width=900,height=600,resizable=yes`)
 }
 
+import type { DocRef } from '$lib/viewer/doc-viewer-state.svelte'
+import { enqueue_pending, send_open_doc } from '$lib/viewer/doc-channel'
+
+/**
+ * Open (or focus) the single document-viewer window and deliver a file ref.
+ * Reuses the labelled `catgo-docs` window; for a fresh window the ref is queued
+ * in localStorage (drained on the window's mount) to avoid the create-race.
+ */
+export async function open_doc_window(ref: DocRef, is_tauri: boolean) {
+  const url = `${window.location.origin}${window.location.pathname}#docs`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      const existing = await WebviewWindow.getByLabel(`catgo-docs`)
+      if (existing) {
+        await send_open_doc(ref, true)
+        try { await existing.setFocus() } catch {}
+        return
+      }
+      enqueue_pending(ref)
+      const win = new WebviewWindow(`catgo-docs`, {
+        title: `CatGo - Documents`,
+        url, width: 1000, height: 760, center: true, resizable: true, decorations: true,
+      })
+      win.once(`tauri://error`, () => { window.open(url, `catgo-docs`, `width=1000,height=760,resizable=yes`) })
+      return
+    } catch {}
+  }
+  // Web: reuse the named window; queue + live post both fire.
+  enqueue_pending(ref)
+  const w = window.open(url, `catgo-docs`, `width=1000,height=760,resizable=yes`)
+  await send_open_doc(ref, false)
+  try { w?.focus() } catch {}
+}
+
 /** Open the terminal tab in a new window. */
 export async function popout_terminal(
   is_tauri: boolean,
