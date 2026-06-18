@@ -40,6 +40,23 @@ describe(`apply_bond_distance_rules`, () => {
     expect(out).toHaveLength(1) // P-O untouched (no P-O rule)
   })
 
+  it(`uses current-frame positions (trajectory) instead of static xyz`, () => {
+    // Static geometry: Fe-O at 2.5 Å, outside [0, 2.3] → no bond.
+    // The trajectory's current frame moved O to 2.0 Å → the rule must
+    // regenerate the bond from the FRAME position, not the static one.
+    const s = struct([site(`Fe`, [0, 0, 0]), site(`O`, [2.5, 0, 0])])
+    const frame = new Float32Array([0, 0, 0, 2.0, 0, 0])
+    const out = apply_bond_distance_rules(
+      s,
+      null,
+      [],
+      [{ element_1: `Fe`, element_2: `O`, min_dist: 0, max_dist: 2.3 }],
+      frame,
+    )
+    expect(out).toHaveLength(1)
+    expect(out[0].bond_length).toBeCloseTo(2.0, 3)
+  })
+
   it(`removes a ruled-pair bond that is longer than max`, () => {
     // Fe-O at 2.5 Å, rule max 2.3 -> dropped, and not regenerated (out of range)
     const s = struct([site(`Fe`, [0, 0, 0]), site(`O`, [2.5, 0, 0])])

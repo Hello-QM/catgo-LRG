@@ -2934,8 +2934,12 @@
     const lat_matrix = (Array.isArray(lat_m) && lat_m.length === 3)
       ? lat_m as [Vec3, Vec3, Vec3]
       : null
+    // During trajectory playback `bond_struct.sites[].xyz` are the loaded
+    // frame, not the one on screen. Pass the animated frame positions so ruled
+    // bonds track the trajectory instead of freezing at frame 0.
     const ruled_bonds = apply_bond_distance_rules(
       bond_struct, lat_matrix, bond_pairs, bond_distance_rules ?? [],
+      trajectory_frame_positions ?? null,
     )
 
     const is_site_visible = (site_idx: number) => {

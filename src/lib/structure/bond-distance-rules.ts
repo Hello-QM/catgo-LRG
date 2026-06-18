@@ -57,9 +57,21 @@ export function apply_bond_distance_rules(
   lattice: [Vec3, Vec3, Vec3] | null,
   bonds: readonly BondPair[],
   rules: readonly BondDistanceRuleLike[],
+  // Optional current-frame Cartesian positions (flat xyz). During trajectory
+  // playback the structure's `sites[].xyz` are the loaded frame, not the one
+  // on screen — pass the animated positions so ruled bonds track the frame
+  // instead of freezing at frame 0. Ignored unless its length matches sites.
+  frame_positions?: Float32Array | null,
 ): BondPair[] {
   if (!rules.length) return [...bonds]
   if (!structure?.sites?.length) return [...bonds]
+
+  const use_frame = !!frame_positions
+    && frame_positions.length === structure.sites.length * 3
+  const pos_of = (idx: number): Vec3 =>
+    use_frame
+      ? [frame_positions![idx * 3], frame_positions![idx * 3 + 1], frame_positions![idx * 3 + 2]]
+      : (structure.sites[idx].xyz as Vec3)
 
   const ruled = new Map<string, { min: number; max: number }>()
   for (const r of rules) {
@@ -87,12 +99,12 @@ export function apply_bond_distance_rules(
   for (let i = 0; i < sites.length; i++) {
     const ei = site_element(structure, i)
     if (!ei) continue
-    const pi = sites[i].xyz as Vec3
+    const pi = pos_of(i)
     for (let j = i; j < sites.length; j++) {
       const ej = site_element(structure, j)
       const rule = ruled.get(pair_key(ei, ej))
       if (!rule) continue
-      const pj = sites[j].xyz as Vec3
+      const pj = pos_of(j)
       for (let a = -ra; a <= ra; a++) {
         for (let b = -rb; b <= rb; b++) {
           for (let c = -rc; c <= rc; c++) {
