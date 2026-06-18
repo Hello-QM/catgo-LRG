@@ -382,6 +382,39 @@ register(
   },
 )
 
+/** Look up a molecule by name in PubChem → {cid, smiles}. Shared by
+ *  fetch_pubchem (search) and load_pubchem (load). Throws a clear error if
+ *  there is no match or no SMILES.
+ *
+ *  PubChem renamed its SMILES properties (2025): `CanonicalSMILES` →
+ *  `ConnectivitySMILES` / `SMILES`. The legacy property name is still accepted
+ *  by the request URL (HTTP 200), but the RESPONSE now keys the value under the
+ *  new name — so the old read of `p.CanonicalSMILES` silently returned
+ *  undefined. Keep the still-accepted legacy request property, but read every
+ *  known spelling from the response and fail loudly if none is present. */
+async function pubchem_lookup(name: string): Promise<{ cid: number; smiles: string }> {
+  const encoded = encodeURIComponent(name)
+  const url =
+    `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encoded}/property/CanonicalSMILES/JSON`
+  const resp = await relay_fetch(url)
+  if (!resp.ok) throw new Error(`PubChem error ${resp.status}`)
+  const data = (await resp.json()) as {
+    PropertyTable?: {
+      Properties?: {
+        CID: number
+        SMILES?: string
+        ConnectivitySMILES?: string
+        CanonicalSMILES?: string
+      }[]
+    }
+  }
+  const p = data.PropertyTable?.Properties?.[0]
+  if (!p) throw new Error(`No PubChem match for "${name}"`)
+  const smiles = p.SMILES ?? p.ConnectivitySMILES ?? p.CanonicalSMILES
+  if (!smiles) throw new Error(`PubChem returned no SMILES for "${name}"`)
+  return { cid: p.CID, smiles }
+}
+
 // ── fetch_pubchem (read) ──
 register(
   {
@@ -398,32 +431,81 @@ register(
     },
   },
   async (input) => {
-    const name = encodeURIComponent(String(input.name))
-    // PubChem renamed its SMILES properties (2025): `CanonicalSMILES` →
-    // `ConnectivitySMILES` / `SMILES`. The legacy property name is still accepted
-    // by the request URL (HTTP 200), but the RESPONSE now keys the value under
-    // the new name — so the old read of `p.CanonicalSMILES` silently returned
-    // undefined. Keep the still-accepted legacy request property, but read every
-    // known spelling from the response and fail loudly if none is present.
-    const url =
-      `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${name}/property/CanonicalSMILES/JSON`
-    const resp = await relay_fetch(url)
-    if (!resp.ok) throw new Error(`PubChem error ${resp.status}`)
-    const data = (await resp.json()) as {
-      PropertyTable?: {
-        Properties?: {
-          CID: number
-          SMILES?: string
-          ConnectivitySMILES?: string
-          CanonicalSMILES?: string
-        }[]
-      }
+    return await pubchem_lookup(String(input.name))
+  },
+)
+
+// ── load_pubchem (mutate) ──
+register(
+  {
+    name: `load_pubchem`,
+    description:
+      `Load a molecule from PubChem into the viewer by name (e.g. 'methane', 'benzene') so it becomes the current structure. Fetches the 3D structure. Use this to actually LOAD a molecule (fetch_pubchem only looks up the CID/SMILES). This replaces the currently loaded structure.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        name: { type: `string`, description: `Molecule name, e.g. "methane".` },
+      },
+      required: [`name`],
+    },
+  },
+  async (input) => {
+    const name = String(input.name)
+    // 1. name → SMILES (+CID), reusing fetch_pubchem's lookup.
+    const { cid, smiles } = await pubchem_lookup(name)
+    // 2. SMILES → 3D Cartesian coords via the Python backend (RDKit/Open Babel).
+    let resp: Response
+    try {
+      resp = await fetch(`${API_BASE}/structure-ops/smiles-to-xyz`, {
+        method: `POST`,
+        headers: { 'Content-Type': `application/json` },
+        body: JSON.stringify({ smiles }),
+      })
+    } catch {
+      // fetch() rejects only on network-level failure: mobile/static builds have
+      // no Python backend at API_BASE, and desktop may not have it running.
+      throw new Error(
+        `Loading a PubChem molecule needs the CatGo backend (SMILES→3D), which is unreachable (mobile/static build, or backend not running).`,
+      )
     }
-    const p = data.PropertyTable?.Properties?.[0]
-    if (!p) throw new Error(`No PubChem match for "${input.name}"`)
-    const smiles = p.SMILES ?? p.ConnectivitySMILES ?? p.CanonicalSMILES
-    if (!smiles) throw new Error(`PubChem returned no SMILES for "${input.name}"`)
-    return { cid: p.CID, smiles }
+    if (!resp.ok) {
+      throw new Error(
+        `SMILES→3D failed (HTTP ${resp.status}) for "${name}" (${smiles}): ${await resp
+          .text()}`,
+      )
+    }
+    const { elements, cart_coords } = (await resp.json()) as {
+      elements: string[]
+      cart_coords: number[][]
+      bonding_atom_idx: number
+    }
+    if (!elements?.length || elements.length !== cart_coords?.length) {
+      throw new Error(`SMILES→3D returned no usable coordinates for "${name}".`)
+    }
+    // 3. Build a non-periodic MOLECULE (no lattice). Site shape mirrors the XYZ
+    //    parser / pubchem_to_pymatgen: cartesian xyz, abc = xyz for molecules.
+    const sites = elements.map((element, idx) => {
+      const xyz = (cart_coords[idx] ?? [0, 0, 0]).map(Number)
+      return {
+        species: [{ element, occu: 1, oxidation_state: 0 }],
+        abc: [...xyz],
+        xyz,
+        label: `${element}${idx + 1}`,
+        properties: {},
+      }
+    })
+    const struct = { sites } as unknown as AnyStructure
+    // 4. Make it the current structure.
+    set_current_structure(struct)
+    // 5. Compact result (formula derived from elements).
+    const counts = new Map<string, number>()
+    for (const el of elements) counts.set(el, (counts.get(el) ?? 0) + 1)
+    const formula = [...counts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([el, n]) => (n === 1 ? el : `${el}${n}`))
+      .join(``)
+    return { loaded: name, cid, formula, num_sites: sites.length }
   },
 )
 
