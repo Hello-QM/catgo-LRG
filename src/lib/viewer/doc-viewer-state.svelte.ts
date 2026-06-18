@@ -7,7 +7,7 @@ export interface DocRef {
   view: 'preview' | 'edit'
   origin: { session_id: string; file_path: string } | null
   local_path: string | null
-  inline_key: string | null
+  inline: { text: string | null; binary: string | null; mime: string | null } | null
 }
 
 export interface DocTab extends DocRef {
@@ -20,10 +20,10 @@ export const doc_viewer = $state<{ tabs: DocTab[]; active_id: string | null }>({
   active_id: null,
 })
 
-export function dedupe_key(ref: Pick<DocRef, 'origin' | 'local_path' | 'inline_key' | 'filename'>): string {
+export function dedupe_key(ref: Pick<DocRef, 'origin' | 'local_path' | 'inline' | 'filename'>): string {
   if (ref.origin) return `hpc:${ref.origin.session_id}:${ref.origin.file_path}`
   if (ref.local_path) return `local:${ref.local_path}`
-  if (ref.inline_key) return `inline:${ref.inline_key}`
+  if (ref.inline) return `inline:${ref.filename}`
   return `name:${ref.filename}`
 }
 

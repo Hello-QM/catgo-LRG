@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 vi.mock('$lib/api/project', () => ({
   read_file: vi.fn(async (p: string) => ({ path: p, name: 'a.txt', content: 'LOCAL' })),
@@ -15,10 +15,8 @@ import type { DocTab } from '../../../src/lib/viewer/doc-viewer-state.svelte'
 
 const tab = (over: Partial<DocTab>): DocTab => ({
   id: 'd1', filename: 'a.txt', kind: 'text', editable: true,
-  origin: null, local_path: '/tmp/a.txt', inline_key: null, dirty: false, ...over,
+  origin: null, local_path: '/tmp/a.txt', inline: null, dirty: false, view: 'edit', ...over,
 })
-
-beforeEach(() => localStorage.clear())
 
 describe('load_doc_content', () => {
   it('reads local text', async () => {
@@ -32,13 +30,16 @@ describe('load_doc_content', () => {
     const r = await load_doc_content(tab({ kind: 'pdf', filename: 'd.pdf', origin: { session_id: 's', file_path: '/r/d.pdf' }, local_path: null }))
     expect(r).toEqual({ text: null, binary: 'BASE64', mime: 'application/pdf' })
   })
-  it('reads inline text from localStorage', async () => {
-    localStorage.setItem('catgo-docs-inline-x', JSON.stringify({ text: 'INLINE' }))
-    const r = await load_doc_content(tab({ local_path: null, inline_key: 'catgo-docs-inline-x' }))
+  it('reads inline text carried in the ref', async () => {
+    const r = await load_doc_content(tab({ local_path: null, inline: { text: 'INLINE', binary: null, mime: null } }))
     expect(r.text).toBe('INLINE')
   })
+  it('reads inline binary carried in the ref', async () => {
+    const r = await load_doc_content(tab({ local_path: null, inline: { text: null, binary: 'B64', mime: 'image/png' } }))
+    expect(r).toEqual({ text: null, binary: 'B64', mime: 'image/png' })
+  })
   it('degrades gracefully for local-path binary (no base64 endpoint in v1)', async () => {
-    const r = await load_doc_content(tab({ kind: 'pdf', filename: 'd.pdf', local_path: '/tmp/d.pdf', origin: null, inline_key: null }))
+    const r = await load_doc_content(tab({ kind: 'pdf', filename: 'd.pdf', local_path: '/tmp/d.pdf', origin: null, inline: null }))
     expect(r).toEqual({ text: null, binary: null, mime: null })
   })
 })

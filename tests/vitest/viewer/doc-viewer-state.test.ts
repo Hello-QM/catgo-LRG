@@ -4,7 +4,7 @@ import type { DocRef } from '../../../src/lib/viewer/doc-viewer-state.svelte'
 
 const ref = (over: Partial<DocRef> = {}): DocRef => ({
   filename: 'a.txt', kind: 'text', editable: true, view: 'edit',
-  origin: null, local_path: '/tmp/a.txt', inline_key: null, ...over,
+  origin: null, local_path: '/tmp/a.txt', inline: null, ...over,
 })
 
 beforeEach(() => { doc_viewer.tabs = []; doc_viewer.active_id = null })
@@ -42,5 +42,11 @@ describe('doc-viewer-state', () => {
     expect(doc_viewer.tabs[0].view).toBe('preview')
     set_view(a, 'edit')
     expect(doc_viewer.tabs[0].view).toBe('edit')
+  })
+  it('dedupes path-less inline refs by filename', () => {
+    const id1 = open_doc(ref({ filename: 'drop.txt', local_path: null, inline: { text: 'A', binary: null, mime: null } }))
+    const id2 = open_doc(ref({ filename: 'drop.txt', local_path: null, inline: { text: 'B', binary: null, mime: null } }))
+    expect(id2).toBe(id1)
+    expect(doc_viewer.tabs).toHaveLength(1)
   })
 })

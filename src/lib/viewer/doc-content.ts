@@ -9,19 +9,9 @@ export interface DocContent {
 const BINARY_KINDS = new Set(['pdf', 'image', 'excel', 'docx'])
 
 export async function load_doc_content(tab: DocTab): Promise<DocContent> {
-  // Inline payload (path-less drops / in-memory content) handed over via localStorage.
-  if (tab.inline_key) {
-    try {
-      const raw = localStorage.getItem(tab.inline_key)
-      localStorage.removeItem(tab.inline_key)
-      if (raw) {
-        const parsed = JSON.parse(raw) as { text?: string; binary?: string; mime?: string }
-        return { text: parsed.text ?? null, binary: parsed.binary ?? null, mime: parsed.mime ?? null }
-      }
-    } catch {
-      // fall through to empty
-    }
-    return { text: null, binary: null, mime: null }
+  // Inline payload carried directly in the ref — cross-window safe (no localStorage).
+  if (tab.inline) {
+    return { text: tab.inline.text, binary: tab.inline.binary, mime: tab.inline.mime }
   }
 
   const want_binary = BINARY_KINDS.has(tab.kind)
