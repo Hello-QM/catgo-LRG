@@ -59,6 +59,72 @@ def test_push_structure_load_intent(monkeypatch):
     assert seen["data"]["intent"] == "load"
 
 
+def test_push_structure_emits_had_structure_self_computed(monkeypatch):
+    """`push_structure` self-computes `had_structure` BEFORE the write —
+    whether the target panel was occupied before this push — and rides it
+    into the SSE event. This is the backend-authoritative signal the FE
+    hold-gate ORs against its (racy) own structure read.
+
+    First push into a fresh panel → had_structure False. A second push into
+    the now-occupied panel → had_structure True.
+    """
+    events = []
+    monkeypatch.setattr(
+        view_state, "_notify",
+        lambda pid, ev, data: events.append(data),
+    )
+    panel = "had-struct-probe"
+    # Ensure a clean slate (module-level store persists across tests).
+    view_state.panel_structures.pop(panel, None)
+    view_state.panel_pending_updates.pop(panel, None)
+    try:
+        view_state.push_structure({"sites": [{"a": 1}]}, panel_id=panel, intent="load")
+        assert events[-1]["had_structure"] is False
+
+        view_state.push_structure({"sites": [{"a": 2}]}, panel_id=panel, intent="load")
+        assert events[-1]["had_structure"] is True
+    finally:
+        view_state.panel_structures.pop(panel, None)
+        view_state.panel_pending_updates.pop(panel, None)
+
+
+def test_push_structure_explicit_had_structure_override(monkeypatch):
+    """When `had_structure` is passed explicitly it is used verbatim (the
+    pending-update leg forwards the helper's pre-push probe rather than
+    re-deriving from a store the /push leg may have already overwritten)."""
+    seen = {}
+    monkeypatch.setattr(
+        view_state, "_notify",
+        lambda pid, ev, data: seen.update(data=data),
+    )
+    panel = "had-struct-explicit"
+    view_state.panel_structures.pop(panel, None)
+    try:
+        # Store is empty, but caller passes had_structure=True → use the value.
+        view_state.push_structure(
+            {"sites": []}, panel_id=panel, intent="load", had_structure=True
+        )
+        assert seen["data"]["had_structure"] is True
+    finally:
+        view_state.panel_structures.pop(panel, None)
+
+
+def test_notify_structure_emits_had_structure_passed(monkeypatch):
+    """`notify_structure` rides the PASSED had_structure value (it must not
+    self-compute — by the time the pending-update leg calls it, the /push
+    leg may have already overwritten the store)."""
+    seen = {}
+    monkeypatch.setattr(
+        view_state, "_notify",
+        lambda pid, ev, data: seen.update(data=data),
+    )
+    view_state.notify_structure("p1", {"sites": []}, intent="load", had_structure=True)
+    assert seen["data"]["had_structure"] is True
+
+    view_state.notify_structure("p1", {"sites": []})
+    assert seen["data"]["had_structure"] is False
+
+
 def test_upload_and_load_route_tags_intent_load(monkeypatch):
     """The PREFERRED file-load path (POST /view/upload-and-load) must tag
     its push as a LOAD — loading a brand-new structure from disk should

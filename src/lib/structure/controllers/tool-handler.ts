@@ -42,9 +42,20 @@ export interface McpBridgeDeps {
  * the user is asked where it goes instead of clobbering the pane. Edits, and
  * loads into an empty viewer, always apply. Snapshot replays carry no intent
  * (`undefined`) so reconnect always restores the pane.
+ *
+ * `had_structure_backend` is the backend-authoritative occupancy flag carried
+ * in the SSE `structure` event — whether the target panel ALREADY held a
+ * structure before this push. The local `viewer_has_structure` read can be
+ * momentarily empty during a scene remount / `view/reset` race, so we hold a
+ * `load` when EITHER signal says the pane was occupied. Defaults to `false`
+ * so existing 2-arg callers (and snapshot replays) are unchanged.
  */
-export function should_apply_push(intent: string | undefined, viewer_has_structure: boolean): boolean {
-  return !(intent === `load` && viewer_has_structure)
+export function should_apply_push(
+  intent: string | undefined,
+  viewer_has_structure: boolean,
+  had_structure_backend: boolean = false,
+): boolean {
+  return !(intent === `load` && (viewer_has_structure || had_structure_backend))
 }
 
 /** Start MCP bridge loops + SSE subscription.
@@ -219,7 +230,7 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
     const on_struct_payload = (ev: Event) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data)
-        if (data.structure && should_apply_push(data.intent, !!deps.get_structure())) {
+        if (data.structure && should_apply_push(data.intent, !!deps.get_structure(), !!data.had_structure)) {
           apply_structure_event(data.structure)
         }
       } catch (err) {

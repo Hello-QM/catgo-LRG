@@ -396,13 +396,23 @@ def set_pending_structure_update(
     data: dict[str, Any],
     panel_id: str = Query("default", description="Panel identifier for multi-panel support"),
     intent: str = Query("edit", description="'edit' (apply in place) or 'load' (fresh load — frontend may prompt before overwriting)"),
+    had_structure: bool = Query(False, description="Whether the target panel was occupied BEFORE this push (backend-authoritative hold signal; probed by the MCP helper pre-push)"),
 ):
-    """MCP tools push modified structures here for the frontend to pick up."""
+    """MCP tools push modified structures here for the frontend to pick up.
+
+    `had_structure` is forwarded into the SSE event so the frontend's
+    hold-gate can ORs it against its own (racy) structure read. The MCP
+    helper probes the panel BEFORE either push leg overwrites the store and
+    passes the value here; `notify_structure` rides it verbatim.
+    """
     struct = data.get("structure", {})
     pending = _get_panel_pending(panel_id)
     pending.append(struct)
-    view_state.notify_structure(panel_id, struct, intent=intent)
-    logger.debug("Pending structure update queued for panel '%s' (intent=%s)", panel_id, intent)
+    view_state.notify_structure(panel_id, struct, intent=intent, had_structure=had_structure)
+    logger.debug(
+        "Pending structure update queued for panel '%s' (intent=%s, had_structure=%s)",
+        panel_id, intent, had_structure,
+    )
     return {"status": "ok"}
 
 
