@@ -34,6 +34,19 @@ export interface McpBridgeDeps {
   get_wrapper: () => HTMLElement | undefined
 }
 
+/** Decide whether a structure SSE push should auto-apply to the viewer.
+ *
+ * Backend tags each structure event with `intent`: `load` = a brand-new
+ * structure (fetch/build), `edit` = a mutation of the current one. A `load`
+ * push is held (returns `false`) when the viewer already shows a structure —
+ * the user is asked where it goes instead of clobbering the pane. Edits, and
+ * loads into an empty viewer, always apply. Snapshot replays carry no intent
+ * (`undefined`) so reconnect always restores the pane.
+ */
+export function should_apply_push(intent: string | undefined, viewer_has_structure: boolean): boolean {
+  return !(intent === `load` && viewer_has_structure)
+}
+
 /** Start MCP bridge loops + SSE subscription.
  *
  * Returns `{ cleanup, request_push }`:
@@ -206,7 +219,9 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
     const on_struct_payload = (ev: Event) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data)
-        if (data.structure) apply_structure_event(data.structure)
+        if (data.structure && should_apply_push(data.intent, !!deps.get_structure())) {
+          apply_structure_event(data.structure)
+        }
       } catch (err) {
         console.warn(`[CatGo] SSE structure parse error:`, err)
       }
