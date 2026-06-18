@@ -235,7 +235,8 @@ describe(`heterostructure tools`, () => {
     expect(out.error).toMatch(/set_film/i)
   })
 
-  it(`build_heterostructure uses stashed transforms and writes the result back`, async () => {
+  it(`build_heterostructure uses stashed transforms and holds the result (viewer non-empty → card)`, async () => {
+    set_current_structure(CUBIC_NACL as never)
     set_film_stash(CUBIC_NACL as never)
     set_hetero_matches([FAKE_MATCH])
     const built = {
@@ -263,8 +264,12 @@ describe(`heterostructure tools`, () => {
     expect(spy.mock.calls[0][3]).toEqual(FAKE_MATCH.film_transformation)
     expect(out.num_sites).toBe(8)
     expect(out.strain).toBe(0.5)
-    // set_current_structure received the built (8-site) structure
-    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(8)
+    // Viewer already had a structure → the build is HELD (staged as a pending
+    // card), not applied. applied=false and the current structure is unchanged
+    // (still the 2-site CUBIC_NACL, not the 8-site build).
+    expect(out.applied).toBe(false)
+    expect(out.note).toMatch(/Overwrite \/ Split \/ New window/i)
+    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(2)
     spy.mockRestore()
   })
 
@@ -326,7 +331,8 @@ describe(`lateral heterostructure tools`, () => {
     expect(out.error).toMatch(/set_film/i)
   })
 
-  it(`build_lateral_heterostructure uses the stashed match and writes the result back`, async () => {
+  it(`build_lateral_heterostructure uses the stashed match and holds the result (viewer non-empty → card)`, async () => {
+    set_current_structure(CUBIC_NACL as never)
     set_film_stash(CUBIC_NACL as never)
     set_lateral_matches([FAKE_LATERAL])
     const built = {
@@ -354,7 +360,12 @@ describe(`lateral heterostructure tools`, () => {
     expect(out.num_sites).toBe(14)
     expect(out.strain).toBe(1.2)
     expect(out.n_atoms_A).toBe(6)
-    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(14)
+    // Viewer already had a structure → the build is HELD (staged as a pending
+    // card), not applied. applied=false and the current structure is unchanged
+    // (still the 2-site CUBIC_NACL, not the 14-site build).
+    expect(out.applied).toBe(false)
+    expect(out.note).toMatch(/Overwrite \/ Split \/ New window/i)
+    expect((get_current_structure() as never as { sites: unknown[] }).sites).toHaveLength(2)
     spy.mockRestore()
   })
 

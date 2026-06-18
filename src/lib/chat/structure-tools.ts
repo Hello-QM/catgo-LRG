@@ -899,8 +899,18 @@ register(
         vacuum: input.vacuum === undefined ? 15 : Number(input.vacuum),
       },
     )
-    set_current_structure(result.structure as never)
-    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
+    return {
+      num_sites: (result.structure as unknown as MutStructure).sites.length,
+      applied,
+      note: applied
+        ? `Built the nanotube into the viewer.`
+        : `Built the nanotube (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
+    }
   },
 )
 
@@ -932,8 +942,18 @@ register(
     if (input.inner_radius !== undefined) params.inner_radius = Number(input.inner_radius)
     if (input.length !== undefined) params.length = Number(input.length)
     const result = await buildNanoscroll(require_structure() as never, params)
-    set_current_structure(result.structure as never)
-    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
+    return {
+      num_sites: (result.structure as unknown as MutStructure).sites.length,
+      applied,
+      note: applied
+        ? `Built the nanoscroll into the viewer.`
+        : `Built the nanoscroll (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
+    }
   },
 )
 
@@ -975,8 +995,18 @@ register(
       throw new Error(`No commensurate moiré cell found near ${twist_angle}°.`)
     }
     const result = await buildMoireBilayer(layer, candidate, null, {})
-    set_current_structure(result.structure as never)
-    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
+    return {
+      num_sites: (result.structure as unknown as MutStructure).sites.length,
+      applied,
+      note: applied
+        ? `Built the moiré bilayer into the viewer.`
+        : `Built the moiré bilayer (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
+    }
   },
 )
 
@@ -1183,11 +1213,19 @@ register(
       twist_angle,
       xy_shift ?? [0, 0],
     )
-    set_current_structure(result.structure as never)
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
     return {
       num_sites: result.n_atoms,
       strain: result.strain,
       match_area: result.match_area,
+      applied,
+      note: applied
+        ? `Built the heterostructure into the viewer.`
+        : `Built the heterostructure (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
     }
   },
 )
@@ -1345,13 +1383,21 @@ register(
       params,
       search_params,
     )
-    set_current_structure(result.structure as never)
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
     return {
       num_sites: result.n_atoms,
       strain: result.strain,
       n_atoms_A: result.n_atoms_A,
       n_atoms_B: result.n_atoms_B,
       interface_length: result.interface_length,
+      applied,
+      note: applied
+        ? `Built the lateral heterostructure into the viewer.`
+        : `Built the lateral heterostructure (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
     }
   },
 )
