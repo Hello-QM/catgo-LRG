@@ -124,6 +124,7 @@ async def _get_current_structure_direct(
 
 async def _push_structure_direct(
     client: httpx.AsyncClient, struct: dict, panel_id: str = "default",
+    intent: str = "edit",
 ) -> str | None:
     """In-process replacement — writes shared memory instead of HTTP.
 
@@ -147,7 +148,7 @@ async def _push_structure_direct(
             target = ctx_panel
 
     try:
-        push_structure(struct, target)
+        push_structure(struct, target, intent=intent)
         return None
     except Exception as exc:
         return str(exc)

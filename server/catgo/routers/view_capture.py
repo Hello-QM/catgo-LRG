@@ -331,6 +331,7 @@ def update_structure_info(
 def push_structure(
     data: dict[str, Any],
     panel_id: str = Query("default", description="Panel identifier for multi-panel support"),
+    intent: str = Query("edit", description="'edit' (apply in place) or 'load' (fresh load — frontend may prompt before overwriting)"),
 ):
     """Frontend pushes the full pymatgen structure dict for MCP tool access.
 
@@ -339,11 +340,17 @@ def push_structure(
     to track "active panel" causes oscillation. Explicit signal lives
     at POST /view/active-panel instead, driven by tm.active_tab_id in
     desktop/App.svelte.
+
+    It also does NOT emit an SSE `structure` event — that is the job of
+    /structure/pending-update (and view_state.push_structure on the
+    upload/merge paths). `intent` is accepted here only so the dual-POST
+    helper (`_push_structure_to_viewer`) can send the same query param to
+    both endpoints; the live SSE tag is applied on the pending-update leg.
     """
     struct = data.get("structure", {})
     _panel_structures[panel_id] = struct
     n = len(struct.get("sites", []))
-    logger.debug("Full structure pushed for panel '%s': %d sites", panel_id, n)
+    logger.debug("Full structure pushed for panel '%s': %d sites (intent=%s)", panel_id, n, intent)
     return {"status": "ok", "num_sites": n}
 
 
@@ -388,13 +395,14 @@ def get_current_structure(
 def set_pending_structure_update(
     data: dict[str, Any],
     panel_id: str = Query("default", description="Panel identifier for multi-panel support"),
+    intent: str = Query("edit", description="'edit' (apply in place) or 'load' (fresh load — frontend may prompt before overwriting)"),
 ):
     """MCP tools push modified structures here for the frontend to pick up."""
     struct = data.get("structure", {})
     pending = _get_panel_pending(panel_id)
     pending.append(struct)
-    view_state.notify_structure(panel_id, struct)
-    logger.debug("Pending structure update queued for panel '%s'", panel_id)
+    view_state.notify_structure(panel_id, struct, intent=intent)
+    logger.debug("Pending structure update queued for panel '%s' (intent=%s)", panel_id, intent)
     return {"status": "ok"}
 
 

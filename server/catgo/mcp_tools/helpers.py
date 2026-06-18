@@ -144,6 +144,7 @@ def _cart_to_frac(lattice_matrix: list[list[float]], cart_xyz: list[float]) -> l
 
 async def _push_structure_to_viewer(
     client: httpx.AsyncClient, struct_dict: dict, panel_id: str | None = None,
+    intent: str = "edit",
 ) -> str | None:
     """Push a pymatgen structure dict to the CatGO viewer.
 
@@ -154,6 +155,11 @@ async def _push_structure_to_viewer(
             ``current_panel_id`` ContextVar — which MCP HTTP middleware sets
             from the ``X-CatGo-Tab-Id`` header so pushes land in the tab that
             actually issued the chat request.
+        intent: ``"edit"`` (default — apply in place) or ``"load"`` (a fresh
+            load; the frontend may prompt before overwriting an existing
+            structure). Forwarded as a query param to BOTH endpoints so the
+            SSE ``structure`` event carries the tag regardless of which leg
+            the frontend acts on first.
 
     Returns None on success, or an error message string on failure.
     Never raises — errors are returned as strings so the tool can still
@@ -163,12 +169,12 @@ async def _push_structure_to_viewer(
     try:
         await client.post(
             f"{API_BASE}/view/structure/push",
-            params={"panel_id": target_panel},
+            params={"panel_id": target_panel, "intent": intent},
             json={"structure": struct_dict},
         )
         await client.post(
             f"{API_BASE}/view/structure/pending-update",
-            params={"panel_id": target_panel},
+            params={"panel_id": target_panel, "intent": intent},
             json={"structure": struct_dict},
         )
         return None

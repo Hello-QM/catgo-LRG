@@ -86,9 +86,15 @@ def _notify(panel_id: str, event: str, data: dict) -> None:
             )
 
 
-def notify_structure(panel_id: str, struct: dict) -> None:
-    """Notify SSE subscribers that a new structure is available."""
-    _notify(panel_id, "structure", {"structure": struct})
+def notify_structure(panel_id: str, struct: dict, intent: str = "edit") -> None:
+    """Notify SSE subscribers that a new structure is available.
+
+    `intent` tags whether this push EDITS the existing structure (default —
+    the viewer applies it in place) or LOADS a fresh one ("load" — the
+    frontend may prompt the user before overwriting). Carried through to the
+    SSE event payload so the frontend can gate on it.
+    """
+    _notify(panel_id, "structure", {"structure": struct, "intent": intent})
 
 
 def notify_workflow(panel_id: str, workflow_id: str) -> None:
@@ -182,15 +188,19 @@ def get_active_structure() -> dict | None:
     return get_structure(last_active_panel_id)
 
 
-def push_structure(struct: dict, panel_id: str = "default") -> None:
+def push_structure(struct: dict, panel_id: str = "default", intent: str = "edit") -> None:
     """Store structure, queue for legacy poll, and notify SSE subscribers.
 
     Does NOT call mark_active — this is the path MCP pushes take, and lab
     pushes shouldn't change the user's idea of which panel is "active".
+
+    `intent` ("edit" default | "load") rides along into the SSE event so the
+    frontend can prompt before overwriting on a fresh load. See
+    `notify_structure` for the full rationale.
     """
     panel_structures[panel_id] = struct
     get_panel_pending(panel_id).append(struct)
-    _notify(panel_id, "structure", {"structure": struct})
+    _notify(panel_id, "structure", {"structure": struct, "intent": intent})
     n = len(struct.get("sites", []))
     logger.debug("Structure pushed for panel '%s': %d sites", panel_id, n)
 
