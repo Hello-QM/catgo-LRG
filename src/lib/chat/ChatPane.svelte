@@ -44,7 +44,11 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   import { get_tool_results_for, is_streaming } from './tool-execution'
   import { copy_to_clipboard, handle_messages_click } from './attachment-utils'
   import { run_slash, SLASH_COMMANDS } from './slash-commands'
-  import { get_current_structure } from '$lib/structure/current-structure.svelte'
+  import {
+    clear_pending_client_load,
+    get_current_structure,
+    pending_client_load_state,
+  } from '$lib/structure/current-structure.svelte'
 
 
   // Dynamic providers from backend
@@ -358,6 +362,34 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     })
     return () => es.close()
   })
+
+  // ── Client-direct LOAD (DeepSeek/Qwen/etc. + STATIC_ONLY web) → same card ──
+  // Client-direct providers run the tool loop in-browser: their load tools call
+  // client_load_or_card, which stages a pending load (instead of applying it)
+  // when the viewer already holds a structure. Watch that pending signal and
+  // surface the SAME card. Pure client-side — works with zero backend, unlike
+  // the SSE effect above (which is gated on STATIC_ONLY/!tab_id).
+  $effect(() => {
+    if (!on_view_split && !on_view_new_window && !on_view_overwrite) return
+    const pend = pending_client_load_state().value
+    if (!pend) return
+    const fp = `${pend.n}:${pend.formula}`
+    if (fp === last_loaded_fp) return
+    last_loaded_fp = fp
+    loaded_view_card = {
+      formula: pend.formula,
+      n: pend.n,
+      panelId: tab_id ?? `default`,
+      structure: pend.structure,
+    }
+  })
+
+  // Dismiss the loaded-structure card AND consume the client-side pending
+  // signal, so the new pending effect can't immediately re-fire the card.
+  const dismiss_loaded_card = () => {
+    loaded_view_card = null
+    clear_pending_client_load()
+  }
 
   // Keep workflow context in sync with active workflow
   $effect(() => {
@@ -1655,24 +1687,24 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_overwrite?.(loaded_view_card!.panelId, loaded_view_card!.structure); loaded_view_card = null }}
+              onclick={() => { on_view_overwrite?.(loaded_view_card!.panelId, loaded_view_card!.structure); dismiss_loaded_card() }}
             >{t('chat.view_overwrite')}</button>
           {/if}
           {#if on_view_split}
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_split?.(loaded_view_card!.panelId, loaded_view_card!.structure); loaded_view_card = null }}
+              onclick={() => { on_view_split?.(loaded_view_card!.panelId, loaded_view_card!.structure); dismiss_loaded_card() }}
             >{t('chat.view_split')}</button>
           {/if}
           {#if on_view_new_window}
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId, loaded_view_card!.structure); loaded_view_card = null }}
+              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId, loaded_view_card!.structure); dismiss_loaded_card() }}
             >{t('chat.view_new_window')}</button>
           {/if}
-          <button type="button" class="lsc-dismiss" title={t('chat.dismiss')} onclick={() => loaded_view_card = null}>✕</button>
+          <button type="button" class="lsc-dismiss" title={t('chat.dismiss')} onclick={() => dismiss_loaded_card()}>✕</button>
         </div>
       </div>
     {/if}

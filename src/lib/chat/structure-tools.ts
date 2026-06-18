@@ -1,6 +1,7 @@
 import type { AnyStructure } from '$lib'
 import type { ClientTool, ToolKind } from './types'
 import {
+  client_load_or_card,
   get_current_structure,
   set_current_structure,
 } from '$lib/structure/current-structure.svelte'
@@ -371,13 +372,21 @@ register(
     if (!struct) throw new Error(`Structure "${input.id}" not found on ${provider}.`)
     const pymatgen = optimade_to_pymatgen(struct)
     if (!pymatgen) throw new Error(`Could not parse structure "${input.id}".`)
-    set_current_structure(pymatgen as never)
     const sites = (pymatgen as { sites?: unknown[] }).sites ?? []
+    const formula =
+      (struct.attributes as { chemical_formula_reduced?: string } | undefined)
+        ?.chemical_formula_reduced ?? String(input.id)
+    const applied = client_load_or_card(pymatgen as never, formula, sites.length)
     return {
       loaded: String(input.id),
-      formula: (struct.attributes as { chemical_formula_reduced?: string } | undefined)
-        ?.chemical_formula_reduced,
+      formula:
+        (struct.attributes as { chemical_formula_reduced?: string } | undefined)
+          ?.chemical_formula_reduced,
       num_sites: sites.length,
+      applied,
+      message: applied
+        ? `Loaded ${input.id} into the viewer.`
+        : `Loaded ${input.id}. The viewer already has a structure — choose where to put it (Overwrite / Split / New window) in the card.`,
     }
   },
 )
@@ -496,16 +505,28 @@ register(
       }
     })
     const struct = { sites } as unknown as AnyStructure
-    // 4. Make it the current structure.
-    set_current_structure(struct)
-    // 5. Compact result (formula derived from elements).
+    // 4. Compact formula (derived from elements) — needed for both the card
+    //    label and the result.
     const counts = new Map<string, number>()
     for (const el of elements) counts.set(el, (counts.get(el) ?? 0) + 1)
     const formula = [...counts.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([el, n]) => (n === 1 ? el : `${el}${n}`))
       .join(``)
-    return { loaded: name, cid, formula, num_sites: sites.length }
+    // 5. Apply if the viewer is empty; otherwise stage a pending load so the
+    //    ChatPane card asks where to put it (overwrite / split / new window).
+    const n = sites.length
+    const applied = client_load_or_card(struct as never, formula, n)
+    return {
+      loaded: name,
+      cid,
+      formula,
+      num_sites: n,
+      applied,
+      message: applied
+        ? `Loaded ${name} (CID ${cid}) into the viewer.`
+        : `Loaded ${name} (CID ${cid}). The viewer already has a structure — choose where to put it (Overwrite / Split / New window) in the card.`,
+    }
   },
 )
 
