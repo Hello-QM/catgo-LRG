@@ -11,6 +11,7 @@ export function build_doc_ref(
     mime?: string
     origin?: { session_id: string; file_path: string }
     local_path?: string
+    view?: 'preview' | 'edit'
   },
 ): DocRef {
   const info = resolve_doc_kind(filename, src.mime)
@@ -26,10 +27,21 @@ export function build_doc_ref(
       // If storage fails the renderer shows an empty/error state; non-fatal.
     }
   }
+  let view: 'preview' | 'edit'
+  if (src.view !== undefined) {
+    view = src.view
+  } else if (info.kind === 'markdown' || info.kind === 'html') {
+    view = 'preview'
+  } else if (info.kind === 'text') {
+    view = 'edit'
+  } else {
+    view = 'preview'
+  }
   return {
     filename,
     kind: info.kind,
     editable: info.editable,
+    view,
     origin: src.origin ?? null,
     local_path: src.local_path ?? null,
     inline_key,

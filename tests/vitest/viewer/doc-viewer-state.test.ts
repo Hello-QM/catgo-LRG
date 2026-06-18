@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { doc_viewer, open_doc, close_tab, activate, set_dirty } from '../../../src/lib/viewer/doc-viewer-state.svelte'
+import { doc_viewer, open_doc, close_tab, activate, set_dirty, set_view } from '../../../src/lib/viewer/doc-viewer-state.svelte'
 import type { DocRef } from '../../../src/lib/viewer/doc-viewer-state.svelte'
 
 const ref = (over: Partial<DocRef> = {}): DocRef => ({
-  filename: 'a.txt', kind: 'text', editable: true,
+  filename: 'a.txt', kind: 'text', editable: true, view: 'edit',
   origin: null, local_path: '/tmp/a.txt', inline_key: null, ...over,
 })
 
@@ -35,5 +35,12 @@ describe('doc-viewer-state', () => {
     const a = open_doc(ref())
     set_dirty(a, true)
     expect(doc_viewer.tabs[0].dirty).toBe(true)
+  })
+  it('set_view changes the view on the matching tab', () => {
+    const a = open_doc(ref({ view: 'edit' }))
+    set_view(a, 'preview')
+    expect(doc_viewer.tabs[0].view).toBe('preview')
+    set_view(a, 'edit')
+    expect(doc_viewer.tabs[0].view).toBe('edit')
   })
 })

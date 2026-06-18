@@ -4,6 +4,7 @@ export interface DocRef {
   filename: string
   kind: DocKind
   editable: boolean
+  view: 'preview' | 'edit'
   origin: { session_id: string; file_path: string } | null
   local_path: string | null
   inline_key: string | null
@@ -62,4 +63,9 @@ export function close_tab(id: string): void {
 export function set_dirty(id: string, dirty: boolean): void {
   const t = doc_viewer.tabs.find((x) => x.id === id)
   if (t) t.dirty = dirty
+}
+
+export function set_view(id: string, view: 'preview' | 'edit'): void {
+  const t = doc_viewer.tabs.find((x) => x.id === id)
+  if (t) t.view = view
 }

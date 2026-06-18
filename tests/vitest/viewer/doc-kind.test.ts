@@ -14,6 +14,11 @@ describe('resolve_doc_kind', () => {
     expect(resolve_doc_kind('s.xlsx')).toEqual({ kind: 'excel', editable: false, preview_mode: 'excel' })
     expect(resolve_doc_kind('r.docx')).toEqual({ kind: 'docx', editable: false, preview_mode: null })
   })
+  it('maps html kinds', () => {
+    expect(resolve_doc_kind('page.html')).toEqual({ kind: 'html', editable: true, preview_mode: null })
+    expect(resolve_doc_kind('page.htm')).toEqual({ kind: 'html', editable: true, preview_mode: null })
+    expect(resolve_doc_kind('page.xhtml')).toEqual({ kind: 'html', editable: true, preview_mode: null })
+  })
   it('falls back unknown extensions to editable text', () => {
     expect(resolve_doc_kind('weird.zzz')).toEqual({ kind: 'text', editable: true, preview_mode: null })
   })

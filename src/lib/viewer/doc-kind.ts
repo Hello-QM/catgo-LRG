@@ -1,4 +1,4 @@
-export type DocKind = 'text' | 'markdown' | 'csv' | 'pdf' | 'image' | 'excel' | 'docx'
+export type DocKind = 'text' | 'markdown' | 'csv' | 'pdf' | 'image' | 'excel' | 'docx' | 'html'
 export type PreviewMode = 'image' | 'pdf' | 'markdown' | 'csv' | 'excel' | 'text'
 
 export interface DocKindInfo {
@@ -20,6 +20,7 @@ export function resolve_doc_kind(filename: string, _mime?: string): DocKindInfo 
   if (CSV.test(name)) return { kind: 'csv', editable: false, preview_mode: 'csv' }
   if (MD.test(name)) return { kind: 'markdown', editable: true, preview_mode: 'markdown' }
   if (/\.docx?$/i.test(name)) return { kind: 'docx', editable: false, preview_mode: null }
+  if (/\.(html?|xhtml)$/i.test(name)) return { kind: 'html', editable: true, preview_mode: null }
   // Everything else (txt, source code, unknown) → editable plain text in Monaco.
   return { kind: 'text', editable: true, preview_mode: null }
 }
