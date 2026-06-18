@@ -267,8 +267,37 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
     let mut bonds = Vec::new();
     let min_dist_sq = options.min_bond_dist * options.min_bond_dist;
 
-    // Track closest bond for each atom (for strength normalization)
-    let mut closest: HashMap<usize, f64> = HashMap::new();
+    // Pass 1: per-atom minimum NORMALIZED neighbour distance (dist / Σr) over
+    // every geometric candidate (both directions, no pair dedup). Used below to
+    // damp bonds that are long *relative to the atom's tightest contact* — this
+    // is what stops a dense metal from bonding to its 2nd/3rd shell (matterviz's
+    // closest-neighbour penalty). Precomputed so it is order-independent (the
+    // neighbour list is not distance-sorted).
+    let mut closest_norm: HashMap<usize, f64> = HashMap::new();
+    for idx in 0..center_indices.len() {
+        let dist = distances[idx];
+        if dist * dist < min_dist_sq {
+            continue;
+        }
+        let ci = center_indices[idx];
+        let ni = neighbor_indices[idx];
+        let sum_radii = props[ci].covalent_radius + props[ni].covalent_radius;
+        if dist > sum_radii * options.max_distance_ratio {
+            continue;
+        }
+        // Only count BONDABLE neighbours (same en filter as the bond loop), so
+        // an atom's "closest contact" is its nearest *bond*, not a nearer pair
+        // that electronegativity rejects (e.g. Na-Cl while bonding Na-Na).
+        let en_diff = (props[ci].electronegativity - props[ni].electronegativity).abs();
+        if en_diff > options.electronegativity_threshold {
+            continue;
+        }
+        let norm = dist / sum_radii;
+        closest_norm
+            .entry(ci)
+            .and_modify(|d| *d = d.min(norm))
+            .or_insert(norm);
+    }
 
     for idx in 0..center_indices.len() {
         let center_idx = center_indices[idx];
@@ -340,15 +369,18 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
             strength *= options.same_species_penalty;
         }
 
-        // Track closest distances
-        closest
-            .entry(center_idx)
-            .and_modify(|d| *d = d.min(dist))
-            .or_insert(dist);
-        closest
-            .entry(neighbor_idx)
-            .and_modify(|d| *d = d.min(dist))
-            .or_insert(dist);
+        // Closest-neighbour penalty: damp bonds that are long relative to each
+        // endpoint's tightest contact. A bond at an atom's own minimum has
+        // ratio 1 (no penalty); longer ones decay as exp(-(ratio-1)/0.5),
+        // pushing 2nd-shell metallic contacts below the strength threshold so
+        // the viewer shows the coordination shell, not a hedgehog.
+        for atom in [center_idx, neighbor_idx] {
+            if let Some(&c) = closest_norm.get(&atom) {
+                if c > 0.0 && dist_ratio > c {
+                    strength *= (-(dist_ratio / c - 1.0) / 0.5).exp();
+                }
+            }
+        }
 
         if strength >= options.strength_threshold {
             bonds.push(Bond {
@@ -875,5 +907,34 @@ mod tests {
 
         let bonds = detect_bonds_atom_radii(&structure, &AtomRadiiOptions::default());
         assert!(bonds.is_empty(), "Cu-Cu at 3.30 Å exceeds 1.2*(r1+r2); must not bond");
+    }
+
+    fn fcc_cu() -> Structure {
+        // Conventional FCC Cu cell (a = 3.615 Å): 1st shell at a/√2 = 2.556 Å,
+        // 2nd shell at a = 3.615 Å.
+        let lattice = Lattice::cubic(3.615);
+        let species = vec![Species::neutral(Element::Cu); 4];
+        let frac_coords = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.5, 0.5, 0.0),
+            Vector3::new(0.5, 0.0, 0.5),
+            Vector3::new(0.0, 0.5, 0.5),
+        ];
+        Structure::new(lattice, species, frac_coords)
+    }
+
+    #[test]
+    fn test_electroneg_no_second_shell_in_metal() {
+        // electroneg must not paint a hedgehog: with the closest-neighbor
+        // penalty, only the 1st coordination shell (~2.56 Å) survives; the
+        // 2nd shell at 3.615 Å is suppressed below the strength threshold.
+        let bonds = detect_bonds_electroneg(&fcc_cu(), &ElectronegOptions::default());
+        assert!(!bonds.is_empty(), "FCC Cu must have 1st-shell metallic bonds");
+        let max_len = bonds.iter().map(|b| b.bond_length).fold(0.0_f64, f64::max);
+        assert!(
+            max_len < 3.0,
+            "longest electroneg bond should be 1st-shell (~2.56 Å), got {max_len:.3} Å \
+             (2nd shell at 3.615 Å leaked in — closest-neighbor penalty missing)"
+        );
     }
 }
