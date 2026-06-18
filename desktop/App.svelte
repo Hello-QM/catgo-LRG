@@ -88,6 +88,7 @@
     popout_workflow as _popout_workflow,
     popout_terminal_session as _popout_terminal_session,
     open_structure_in_new_window, parse_and_open_structure_window, open_path_in_new_window,
+    prewarm_doc_window,
   } from './lib/popout-manager'
   // Extracted sidebar handlers
   import {
@@ -570,6 +571,16 @@
 
   $effect(() => {
     sidebar.persist()
+  })
+
+  // Pre-warm the docs window after startup so the first file-open is near-instant.
+  // Runs only in the real main window (not any popout route).
+  $effect(() => {
+    if (!is_tauri) return
+    const h = window.location.hash
+    if (h.startsWith(`#docs`) || h.startsWith(`#chat`) || h.startsWith(`#status`) || h.startsWith(`#doping-pt`) || h.startsWith(`#terminal`) || h.startsWith(`#workflow`) || h.startsWith(`#structure`) || h.startsWith(`#openpath`)) return
+    const id = setTimeout(() => { void prewarm_doc_window(is_tauri) }, 2500)
+    return () => clearTimeout(id)
   })
 
   /** Open the current structure in the text editor for direct editing. */

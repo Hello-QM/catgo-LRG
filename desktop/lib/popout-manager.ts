@@ -208,6 +208,24 @@ export async function popout_terminal_session(
 import type { DocRef } from '$lib/viewer/doc-viewer-state.svelte'
 import { enqueue_pending, send_open_doc } from '$lib/viewer/doc-channel'
 
+/** Pre-create the documents window hidden so the first file-open is instant.
+ * Idempotent: no-op if it already exists. Main-window only (callers must guard). */
+export async function prewarm_doc_window(is_tauri: boolean) {
+  if (!is_tauri) return
+  try {
+    const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+    const existing = await WebviewWindow.getByLabel(`catgo-docs`)
+    if (existing) return
+    const url = `${window.location.origin}${window.location.pathname}#docs`
+    const win = new WebviewWindow(`catgo-docs`, {
+      title: `CatGo - Documents`,
+      url, width: 1000, height: 760, center: true, resizable: true, decorations: true,
+      visible: false,
+    })
+    win.once(`tauri://error`, () => {})
+  } catch {}
+}
+
 /**
  * Open (or focus) the single document-viewer window and deliver a file ref.
  * Reuses the labelled `catgo-docs` window; for a fresh window the ref is queued
@@ -221,6 +239,8 @@ export async function open_doc_window(ref: DocRef, is_tauri: boolean) {
       const existing = await WebviewWindow.getByLabel(`catgo-docs`)
       if (existing) {
         await send_open_doc(ref, true)
+        try { await existing.show() } catch {}
+        try { await existing.unminimize() } catch {}
         try { await existing.setFocus() } catch {}
         return
       }
