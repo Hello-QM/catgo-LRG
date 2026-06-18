@@ -258,6 +258,8 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_popout = undefined,
     on_view_split = undefined,
     on_view_new_window = undefined,
+    has_sibling_structure = false,
+    on_view_overwrite = undefined,
     is_popout = false,
     is_pane = false,
     tab_id,
@@ -271,6 +273,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     // it. Wired only by the standalone chat pane; undefined elsewhere.
     on_view_split?: (panelId: string) => void
     on_view_new_window?: (panelId: string) => void
+    // True when the host already has a structure in its viewer (docked chat).
+    // Enables the "overwrite the existing viewer" option on the load card.
+    has_sibling_structure?: boolean
+    on_view_overwrite?: (panelId: string) => void
     is_popout?: boolean
     // True when the chat is a leaf in the pane tree (standalone CatBot pane),
     // not the docked sidebar chat. Docked-position toggles (right/bottom) are
@@ -324,13 +330,17 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   }
   $effect(() => {
     if (STATIC_ONLY || !tab_id) return
-    if (!on_view_split && !on_view_new_window) return
+    if (!on_view_split && !on_view_new_window && !on_view_overwrite) return
     const es = new EventSource(`${API_BASE}/view/subscribe?panel_id=${encodeURIComponent(tab_id)}`)
     // `structure` only (not `snapshot`): we want real new pushes, not the
     // replay the backend sends on connect.
     es.addEventListener(`structure`, (ev) => {
       try {
-        const s = JSON.parse((ev as MessageEvent).data)?.structure
+        const data = JSON.parse((ev as MessageEvent).data)
+        // Only fresh loads raise the card; edits (supercell, etc.) carry
+        // intent:edit and must not nag the user to re-open a viewer.
+        if (data?.intent !== `load`) return
+        const s = data?.structure
         const n = s?.sites?.length ?? 0
         if (!n) return
         const fp = `${n}:${struct_formula(s)}`
@@ -1634,6 +1644,13 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         <span class="lsc-label">📦 {t('chat.loaded_structure')}
           <strong>{loaded_view_card.formula}</strong> ({loaded_view_card.n})</span>
         <div class="lsc-actions">
+          {#if has_sibling_structure && on_view_overwrite}
+            <button
+              type="button"
+              class="lsc-btn"
+              onclick={() => { on_view_overwrite?.(loaded_view_card!.panelId); loaded_view_card = null }}
+            >{t('chat.view_overwrite')}</button>
+          {/if}
           {#if on_view_split}
             <button
               type="button"

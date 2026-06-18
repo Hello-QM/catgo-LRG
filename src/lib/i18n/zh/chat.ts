@@ -16,6 +16,7 @@ const chat: Record<string, string> = {
   loaded_structure: `已加载`,
   view_split: `⊟ 分屏查看`,
   view_new_window: `⧉ 新窗口`,
+  view_overwrite: `⟳ 覆盖`,
   provider: `提供方`,
   local_free: `本地（免费）`,
   sdk_agents: `SDK 代理`,

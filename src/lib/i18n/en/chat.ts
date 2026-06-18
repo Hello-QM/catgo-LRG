@@ -16,6 +16,7 @@ const chat: Record<string, string> = {
   loaded_structure: `Loaded`,
   view_split: `⊟ Split view`,
   view_new_window: `⧉ New window`,
+  view_overwrite: `⟳ Overwrite`,
   provider: `Provider`,
   local_free: `Local (Free)`,
   sdk_agents: `SDK Agents`,
