@@ -39,7 +39,6 @@
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
   import PasteContentModal from '$lib/structure/PasteContentModal.svelte'
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
-  import FilePreviewPanel from '$lib/structure/FilePreviewPanel.svelte'
   import type { PymatgenStructure } from '$lib/structure'
   import { serialize_structure } from '$lib/api/project'
   import type { ProjectSummary } from '$lib/api/project'
@@ -2589,30 +2588,6 @@
   </div>
 {/if}
 
-<!-- Sidebar file preview overlay (images, PDFs, markdown, csv, etc.) -->
-{#if sidebar.preview_open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="sidebar-preview-backdrop" onclick={(e) => { if (e.target === e.currentTarget) sidebar.preview_open = false }}>
-    <div class="sidebar-editor-overlay" style="display: flex; flex-direction: column;">
-      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid light-dark(rgba(0,0,0,0.12), rgba(255,255,255,0.1));">
-        <span style="font-weight: 500; font-size: 13px;">{sidebar.preview_filename}</span>
-        <button onclick={() => sidebar.preview_open = false} style="background: none; border: none; cursor: pointer; font-size: 16px; color: light-dark(#666, #999); padding: 2px 6px;">✕</button>
-      </div>
-      <div style="flex: 1; min-height: 0; overflow: auto;">
-        <FilePreviewPanel
-          mode={sidebar.preview_mode}
-          filename={sidebar.preview_filename}
-          content={sidebar.preview_content}
-          binary_data={sidebar.preview_binary_data}
-          mime_type={sidebar.preview_mime_type}
-          file_path={sidebar.preview_file_path}
-          session_id={sidebar.preview_session_id}
-          onclose={() => sidebar.preview_open = false}
-        />
-      </div>
-    </div>
-  </div>
-{/if}
 
 <!-- Database search modal (needs backend proxy) -->
 {#if modal.search_visible}

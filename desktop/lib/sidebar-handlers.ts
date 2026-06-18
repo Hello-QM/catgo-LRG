@@ -8,8 +8,8 @@
 import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
 import { findFirstEmptyLeaf } from '../pane-tree'
-import { sidebar } from '../state/sidebar-state.svelte'
-import { parse_and_open_structure_window } from './popout-manager'
+import { parse_and_open_structure_window, open_doc_window } from './popout-manager'
+import { build_doc_ref } from '$lib/viewer/doc-ref'
 import { show_toast } from '$lib/toast-state.svelte'
 
 export interface SidebarHandlerDeps {
@@ -48,33 +48,18 @@ export function handle_sidebar_load(deps: SidebarHandlerDeps, content: string | 
     })
 }
 
-export function handle_sidebar_preview(_deps: SidebarHandlerDeps, mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) {
-  sidebar.preview_mode = mode as typeof sidebar.preview_mode
-  sidebar.preview_filename = filename
-  sidebar.preview_content = content || ``
-  sidebar.preview_binary_data = binary_data || ``
-  sidebar.preview_mime_type = mime_type || ``
-  sidebar.preview_file_path = file_path || ``
-  sidebar.preview_session_id = session_id || ``
-  sidebar.preview_open = true
-  sidebar.editor_open = false
+export function handle_sidebar_preview(deps: SidebarHandlerDeps, _mode: string, filename: string, file_path: string, session_id: string, content?: string, binary_data?: string, mime_type?: string) {
+  const origin = session_id ? { session_id, file_path } : undefined
+  const local_path = !session_id && file_path ? file_path : undefined
+  const ref = build_doc_ref(filename, { content, binary: binary_data, mime: mime_type, origin, local_path })
+  void open_doc_window(ref, deps.is_tauri)
 }
 
-export function handle_sidebar_open_editor(_deps: SidebarHandlerDeps, content: string, filename: string, file_path: string, session_id: string) {
-  sidebar.editor_content = content
-  sidebar.editor_filename = filename
-  // If session_id is empty, treat file_path as local filesystem path
-  if (session_id) {
-    sidebar.editor_file_path = file_path
-    sidebar.editor_session_id = session_id
-    sidebar.editor_local_path = ``
-  } else {
-    sidebar.editor_file_path = ``
-    sidebar.editor_session_id = ``
-    sidebar.editor_local_path = file_path
-  }
-  sidebar.editor_on_save = null
-  sidebar.editor_open = true
+export function handle_sidebar_open_editor(deps: SidebarHandlerDeps, content: string, filename: string, file_path: string, session_id: string) {
+  const origin = session_id ? { session_id, file_path } : undefined
+  const local_path = !session_id && file_path ? file_path : undefined
+  const ref = build_doc_ref(filename, { content, origin, local_path })
+  void open_doc_window(ref, deps.is_tauri)
 }
 
 export function handle_sidebar_load_trajectory(deps: SidebarHandlerDeps, content: string, filename: string, _meta?: { session_id: string; dir_path: string }) {
