@@ -15,7 +15,7 @@
   import { create_rename_save_state } from './sidebar/rename-save-dialogs.svelte'
   import FilePickerModal from './components/FilePickerModal.svelte'
   import { create_cwd_sync_cleanup } from './sidebar/cwd-sync.svelte'
-  import { open_target_state, set_open_target } from '$lib/state.svelte'
+  import { open_target_state, set_open_kind, set_open_mode } from '$lib/state.svelte'
   import { open_context_menu, make_project_target, make_result_target, make_workflow_target } from './sidebar/sidebar-context-menus'
   import {
     list_projects,
@@ -1483,21 +1483,34 @@
       {/if}
     </div>
 
-    <!-- Open destination toggle -->
+    <!-- Open destination toggle: kind (tab/split/window) + mode (new/overwrite) -->
     <div class="open-target-row">
       <span class="open-target-label">{t('app.open_files_in')}</span>
       <div class="open-target-btns">
         <button
           class="open-target-btn"
-          class:active={open_target_state.value === 'split'}
-          onclick={() => set_open_target('split')}
+          class:active={open_target_state.value.kind === 'tab'}
+          onclick={() => set_open_kind('tab')}
+        >{t('app.open_in_tab')}</button>
+        <button
+          class="open-target-btn"
+          class:active={open_target_state.value.kind === 'split'}
+          onclick={() => set_open_kind('split')}
         >{t('app.open_in_split')}</button>
         <button
           class="open-target-btn"
-          class:active={open_target_state.value === 'window'}
-          onclick={() => set_open_target('window')}
+          class:active={open_target_state.value.kind === 'window'}
+          onclick={() => set_open_kind('window')}
         >{t('app.open_in_window')}</button>
       </div>
+      <button
+        class="open-mode-toggle"
+        class:overwrite={open_target_state.value.mode === 'overwrite'}
+        title={t('app.open_mode_hint')}
+        onclick={() => set_open_mode(open_target_state.value.mode === 'new' ? 'overwrite' : 'new')}
+      >{open_target_state.value.mode === 'new'
+          ? t('app.open_mode_new')
+          : t('app.open_mode_overwrite')}</button>
     </div>
 
     <!-- System diagnostics toggle -->

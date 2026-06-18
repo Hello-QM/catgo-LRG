@@ -5,7 +5,7 @@
  */
 
 import type { StructureTabState } from '../pane-utils'
-import { resolve_open_target } from '$lib/state.svelte'
+import { resolve_open_target, type OpenTarget } from '$lib/state.svelte'
 import { findFirstEmptyLeaf } from '../pane-tree'
 
 export interface ImportItem {
@@ -28,8 +28,8 @@ export interface DragDropDeps {
   get_drag_target_pane: () => string | null
   set_drag_target_pane: (v: string | null) => void
   set_is_loading: (v: boolean) => void
-  get_open_target: () => 'split' | 'window'
-  open_in_window: (content: string, filename: string) => Promise<void>
+  get_open_target: () => OpenTarget
+  open_in_window: (content: string, filename: string, reuse?: boolean) => Promise<void>
 }
 
 /* Minimal File System Entry typings (non-standard webkit API). */
@@ -129,8 +129,8 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       const { read_file } = await import(`$lib/api/project`)
       const result = await read_file(fs_path)
       const fs_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
-      if (fs_target === 'window') {
-        await deps.open_in_window(result.content, result.name)
+      if (fs_target.kind === 'window') {
+        await deps.open_in_window(result.content, result.name, fs_target.mode === 'overwrite')
         return
       }
       await deps.process_file_content(deps.get_active_tab_id(), result.content, result.name, target_leaf_id)
@@ -179,10 +179,10 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
     if (to_import.length === 0) { ts.active_leaf_id = target_leaf_id; return }
     if (to_import.length === 1) {
       const drop_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
-      if (drop_target === 'window') {
+      if (drop_target.kind === 'window') {
         const single = to_import[0]
         const content = await single.file.text()
-        await deps.open_in_window(content, single.file.name)
+        await deps.open_in_window(content, single.file.name, drop_target.mode === 'overwrite')
         ts.active_leaf_id = target_leaf_id
         return
       }
