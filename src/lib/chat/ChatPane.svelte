@@ -256,6 +256,8 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     selected_sites = [],
     on_close = () => {},
     on_popout = undefined,
+    on_view_split = undefined,
+    on_view_new_window = undefined,
     is_popout = false,
     is_pane = false,
     tab_id,
@@ -265,6 +267,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     selected_sites?: number[]
     on_close?: () => void
     on_popout?: () => void
+    // When CatBot loads a structure into this (viewer-less) pane, offer to view
+    // it. Wired only by the standalone chat pane; undefined elsewhere.
+    on_view_split?: (panelId: string) => void
+    on_view_new_window?: (panelId: string) => void
     is_popout?: boolean
     // True when the chat is a leaf in the pane tree (standalone CatBot pane),
     // not the docked sidebar chat. Docked-position toggles (right/bottom) are
@@ -296,6 +302,44 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
       selected_sites,
     })
     broadcast_chat_context(tab_slice_id)
+  })
+
+  // ── "CatBot loaded a structure" → offer to view it ──────────────────────
+  // In a viewer-less chat pane, a structure CatBot loads is pushed to the
+  // backend panel but never rendered. Subscribe to the same push channel the
+  // viewer uses; on a real push, surface a card offering split-view / new
+  // window. Only active when the host wired the view handlers (standalone chat
+  // pane) — docked chat already has a sibling viewer.
+  let loaded_view_card = $state<{ formula: string; n: number; panelId: string } | null>(null)
+  let last_loaded_fp = ``
+  function struct_formula(s: { sites?: { species?: { element?: string }[] }[] }): string {
+    const counts: Record<string, number> = {}
+    for (const site of s.sites ?? []) {
+      const el = site.species?.[0]?.element ?? `?`
+      counts[el] = (counts[el] ?? 0) + 1
+    }
+    return Object.entries(counts)
+      .map(([el, n]) => (n > 1 ? `${el}${n}` : el))
+      .join(``)
+  }
+  $effect(() => {
+    if (STATIC_ONLY || !tab_id) return
+    if (!on_view_split && !on_view_new_window) return
+    const es = new EventSource(`${API_BASE}/view/subscribe?panel_id=${encodeURIComponent(tab_id)}`)
+    // `structure` only (not `snapshot`): we want real new pushes, not the
+    // replay the backend sends on connect.
+    es.addEventListener(`structure`, (ev) => {
+      try {
+        const s = JSON.parse((ev as MessageEvent).data)?.structure
+        const n = s?.sites?.length ?? 0
+        if (!n) return
+        const fp = `${n}:${struct_formula(s)}`
+        if (fp === last_loaded_fp) return
+        last_loaded_fp = fp
+        loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id! }
+      } catch { /* ignore parse errors */ }
+    })
+    return () => es.close()
   })
 
   // Keep workflow context in sync with active workflow
@@ -1584,6 +1628,31 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
       </div>
     {/if}
 
+    <!-- CatBot loaded a structure into this viewer-less pane — offer to view it -->
+    {#if loaded_view_card}
+      <div class="loaded-structure-card">
+        <span class="lsc-label">📦 {t('chat.loaded_structure')}
+          <strong>{loaded_view_card.formula}</strong> ({loaded_view_card.n})</span>
+        <div class="lsc-actions">
+          {#if on_view_split}
+            <button
+              type="button"
+              class="lsc-btn"
+              onclick={() => { on_view_split?.(loaded_view_card!.panelId); loaded_view_card = null }}
+            >{t('chat.view_split')}</button>
+          {/if}
+          {#if on_view_new_window}
+            <button
+              type="button"
+              class="lsc-btn"
+              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId); loaded_view_card = null }}
+            >{t('chat.view_new_window')}</button>
+          {/if}
+          <button type="button" class="lsc-dismiss" title={t('chat.dismiss')} onclick={() => loaded_view_card = null}>✕</button>
+        </div>
+      </div>
+    {/if}
+
     <!-- Input area -->
     <div class="chat-input-area">
       {#if slice.paper_session.session_id}
@@ -2595,6 +2664,45 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   }
 
   /* Input area */
+  .loaded-structure-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin: 4px 8px;
+    padding: 8px 12px;
+    border: 1px solid var(--accent-color, cornflowerblue);
+    border-radius: 8px;
+    background: var(--surface-bg, rgba(100, 149, 237, 0.08));
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .loaded-structure-card .lsc-label { color: var(--text-color, inherit); }
+  .loaded-structure-card .lsc-actions { display: flex; align-items: center; gap: 6px; }
+  .loaded-structure-card .lsc-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    border: 1px solid var(--accent-color, cornflowerblue);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--accent-color, cornflowerblue);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .loaded-structure-card .lsc-btn:hover {
+    background: var(--accent-color, cornflowerblue);
+    color: #fff;
+  }
+  .loaded-structure-card .lsc-dismiss {
+    border: none;
+    background: transparent;
+    color: var(--text-color-muted, #888);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 4px;
+  }
+
   .chat-input-area {
     padding: 6px 8px 8px;
     border-top: 1px solid var(--pane-card-border, rgba(0, 0, 0, 0.08));
