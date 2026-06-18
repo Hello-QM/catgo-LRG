@@ -16,7 +16,12 @@ export function build_doc_ref(
 ): DocRef {
   const info = resolve_doc_kind(filename, src.mime)
   let inline_key: string | null = null
-  if (!src.origin && !src.local_path) {
+  // Stash content inline when the caller already read the bytes (binary preview
+  // — e.g. a local .docx read client-side via Tauri readFile), or when there is
+  // no path to re-read from. Using the pre-read bytes avoids a backend re-read
+  // that can't resolve a local session. load_doc_content prefers inline_key, so
+  // this also wins over any origin/local_path kept below.
+  if (src.binary != null || (!src.origin && !src.local_path)) {
     _inline_seq += 1
     inline_key = `catgo-docs-inline-${_inline_seq}-${filename}`
     try {

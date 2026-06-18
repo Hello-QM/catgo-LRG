@@ -1033,17 +1033,13 @@
 
   async function open_remote_preview(file: RemoteFile, preview_type: string) {
     if (!active_session) return
-    // .docx opens in the dedicated document-viewer window (mammoth renderer)
-    if (preview_type === `docx`) {
-      const { handle_sidebar_preview } = await import(`$lib/desktop/sidebar-handlers`)
-      await handle_sidebar_preview({ name: file.name, path: file.path, session_id: active_session.session_id })
-      return
-    }
     if (!on_preview_file) return
     loading_file = { name: file.name, size: file.size_bytes }
     loading_error = null
     try {
-      const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel`
+      // .docx is read as base64 and routed (via on_preview_file → the document
+      // window) to the mammoth DocxView, the same path as image/pdf/excel.
+      const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel` || preview_type === `docx`
       if (is_binary) {
         const result = await readRemoteBinaryFile(active_session.session_id, file.path)
         if (result.success) {
