@@ -10,6 +10,7 @@ import type { VoiceCallback, VoiceErrorCallback } from './voice-engine'
 import { match_command_with_score } from './voice-engine'
 import { start_vad, stop_vad } from './vad'
 import type { AudioPipeline } from './audio-pipeline'
+import { resolve_model_id } from './whisper-models'
 
 // ─── Model Status ────────────────────────────────────────────────────
 
@@ -19,18 +20,13 @@ export type ModelProgressCallback = (status: ModelStatus, progress?: number) => 
 
 // ─── Singleton Pipeline ──────────────────────────────────────────────
 
-const MODEL_EN = `onnx-community/whisper-tiny.en`
-const MODEL_MULTI = `onnx-community/whisper-tiny`
-
 let pipeline_promise: Promise<any> | null = null
 let current_model_id: string | null = null
 
 async function get_pipeline(
-  language: string,
+  model_id: string,
   on_progress?: ModelProgressCallback,
 ): Promise<any> {
-  const model_id = language === `en` ? MODEL_EN : MODEL_MULTI
-
   // Return cached pipeline if same model
   if (pipeline_promise && current_model_id === model_id) {
     return pipeline_promise
@@ -45,7 +41,6 @@ async function get_pipeline(
   pipeline_promise = (async () => {
     const { pipeline, env } = await import(`@huggingface/transformers`)
 
-    // Prefer WebGPU, fall back to WASM
     if (env.backends?.onnx?.wasm) {
       env.backends.onnx.wasm.numThreads = 1
     }
@@ -76,12 +71,13 @@ async function get_pipeline(
   }
 }
 
-/** Pre-load the Whisper model (e.g. from settings UI). */
+/** Pre-load a Whisper model (e.g. from settings UI). */
 export async function preload_whisper_model(
   language = `en`,
   on_progress?: ModelProgressCallback,
+  model_id?: string,
 ): Promise<void> {
-  await get_pipeline(language, on_progress)
+  await get_pipeline(resolve_model_id(model_id, language), on_progress)
 }
 
 // ─── Local Whisper Engine ────────────────────────────────────────────
@@ -95,9 +91,14 @@ export class LocalWhisperEngine {
   private transcribing = false
   private pipeline: AudioPipeline | null = null
   private on_progress: ModelProgressCallback | undefined
+  private model_id: string | null = null
 
   constructor(on_progress?: ModelProgressCallback) {
     this.on_progress = on_progress
+  }
+
+  get current_model_id(): string | null {
+    return this.model_id
   }
 
   get is_supported(): boolean {
@@ -115,16 +116,18 @@ export class LocalWhisperEngine {
     ai_enabled = false,
     on_error?: VoiceErrorCallback,
     noise_suppression = false,
+    model_id?: string,
   ): Promise<void> {
     if (this.running) return
     this.callback = callback
     this.error_callback = on_error ?? null
     this.language = language.split(`-`)[0]
     this.ai_enabled = ai_enabled
+    this.model_id = resolve_model_id(model_id, this.language)
 
     try {
       // Load model first (may trigger download)
-      await get_pipeline(this.language, this.on_progress)
+      await get_pipeline(this.model_id, this.on_progress)
 
       // Optionally create noise suppression pipeline
       let stream: MediaStream | undefined
@@ -167,11 +170,13 @@ export class LocalWhisperEngine {
 
   set_language(lang: string, ai_enabled = false): void {
     const new_lang = lang.split(`-`)[0]
-    const model_changed = (new_lang === `en`) !== (this.language === `en`)
+    const new_model_id = resolve_model_id(undefined, new_lang)
+    const model_changed = new_model_id !== this.model_id
     this.language = new_lang
     this.ai_enabled = ai_enabled
+    this.model_id = new_model_id
 
-    // If switching between en ↔ multilingual, the pipeline will reload on next transcription
+    // If the resolved model changed, the pipeline will reload on next transcription
     if (model_changed) {
       pipeline_promise = null
       current_model_id = null
@@ -186,7 +191,10 @@ export class LocalWhisperEngine {
     this.transcribing = true
 
     try {
-      const pipe = await get_pipeline(this.language, this.on_progress)
+      const pipe = await get_pipeline(
+        this.model_id ?? resolve_model_id(undefined, this.language),
+        this.on_progress,
+      )
 
       const result = await pipe(audio, {
         language: this.language === `en` ? undefined : this.language,
