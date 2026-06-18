@@ -74,9 +74,6 @@ impl Default for AtomRadiiOptions {
 /// Options for electroneg_ratio bonding algorithm.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ElectronegOptions {
-    /// Maximum electronegativity difference for bonding (default: 1.7)
-    #[serde(default = "default_en_threshold")]
-    pub electronegativity_threshold: f64,
     /// Max distance as multiple of sum of covalent radii (default: 2.0)
     #[serde(default = "default_max_ratio")]
     pub max_distance_ratio: f64,
@@ -100,9 +97,6 @@ pub struct ElectronegOptions {
     pub strength_threshold: f64,
 }
 
-fn default_en_threshold() -> f64 {
-    1.7
-}
 fn default_max_ratio() -> f64 {
     2.0
 }
@@ -125,7 +119,6 @@ fn default_strength_threshold() -> f64 {
 impl Default for ElectronegOptions {
     fn default() -> Self {
         Self {
-            electronegativity_threshold: default_en_threshold(),
             max_distance_ratio: default_max_ratio(),
             min_bond_dist: default_min_dist(),
             metal_metal_penalty: default_mm_penalty(),
@@ -285,13 +278,6 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
         if dist > sum_radii * options.max_distance_ratio {
             continue;
         }
-        // Only count BONDABLE neighbours (same en filter as the bond loop), so
-        // an atom's "closest contact" is its nearest *bond*, not a nearer pair
-        // that electronegativity rejects (e.g. Na-Cl while bonding Na-Na).
-        let en_diff = (props[ci].electronegativity - props[ni].electronegativity).abs();
-        if en_diff > options.electronegativity_threshold {
-            continue;
-        }
         let norm = dist / sum_radii;
         closest_norm
             .entry(ci)
@@ -332,11 +318,11 @@ pub fn detect_bonds_electroneg(structure: &Structure, options: &ElectronegOption
             continue;
         }
 
-        // Check electronegativity constraint
+        // Electronegativity difference modulates strength (below) but never
+        // rejects a bond: a large ΔEN is a strong ionic bond (Li-O, Na-Cl),
+        // not a non-bond. (Earlier a hard `en_diff > threshold` cutoff here
+        // dropped every ionic bond — chemically backwards.)
         let en_diff = (p1.electronegativity - p2.electronegativity).abs();
-        if en_diff > options.electronegativity_threshold {
-            continue;
-        }
 
         // Calculate base strength from distance
         let dist_ratio = dist / sum_radii;
@@ -798,12 +784,21 @@ mod tests {
         let options = ElectronegOptions::default();
         let bonds = detect_bonds_electroneg(&structure, &options);
 
-        // Should detect ionic Na-Cl bonds
         assert!(!bonds.is_empty(), "Should detect Na-Cl bonds");
 
-        // Metal-nonmetal bonus should boost strength
-        for bond in &bonds {
-            assert!(bond.strength > 0.3);
+        // The ionic Na-Cl bonds (idx 0-3 = Na, 4-7 = Cl) must be present and
+        // strong — a large ΔEN is an ionic bond, not a rejected pair. The
+        // metal-nonmetal bonus boosts them well above any same-species contact.
+        let na_cl: Vec<_> = bonds
+            .iter()
+            .filter(|b| (b.site_idx_1 < 4) != (b.site_idx_2 < 4))
+            .collect();
+        assert!(
+            !na_cl.is_empty(),
+            "Should detect ionic Na-Cl bonds (large ΔEN must not be rejected)"
+        );
+        for b in &na_cl {
+            assert!(b.strength > 0.5, "Na-Cl ionic bond should be strong, got {}", b.strength);
         }
     }
 
@@ -935,6 +930,27 @@ mod tests {
             max_len < 3.0,
             "longest electroneg bond should be 1st-shell (~2.56 Å), got {max_len:.3} Å \
              (2nd shell at 3.615 Å leaked in — closest-neighbor penalty missing)"
+        );
+    }
+
+    #[test]
+    fn test_electroneg_bonds_ionic_lio() {
+        // Li-O is a strong ionic bond (ΔEN ≈ 2.5). electroneg must NOT drop it
+        // just because the electronegativity difference is large — a big ΔEN is
+        // an ionic bond, not a non-bond.
+        let lattice = Lattice::cubic(15.0);
+        let species = vec![Species::neutral(Element::Li), Species::neutral(Element::O)];
+        let frac_coords = vec![
+            Vector3::new(0.3, 0.3, 0.3),
+            Vector3::new(0.3 + 2.0 / 15.0, 0.3, 0.3),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_electroneg(&structure, &ElectronegOptions::default());
+        assert_eq!(
+            bonds.len(),
+            1,
+            "Li-O at 2.0 Å is a real ionic bond; electroneg must detect it"
         );
     }
 }
