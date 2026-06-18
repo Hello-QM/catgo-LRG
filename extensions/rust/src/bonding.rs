@@ -400,6 +400,12 @@ pub struct SolidAngleOptions {
     /// Minimum bond strength to include (default: 0.05)
     #[serde(default = "default_sa_strength_threshold")]
     pub strength_threshold: f64,
+    /// Distance sanity: drop a Voronoi contact whose length exceeds this
+    /// multiple of the covalent-radii sum (default: 1.5). Suppresses
+    /// anion-anion polyhedra edges (e.g. O-O) while keeping M-O and metal
+    /// bonds. Set very large to keep pure radius-free Voronoi behaviour.
+    #[serde(default = "default_sa_max_ratio")]
+    pub max_distance_ratio: f64,
 }
 
 fn default_min_solid_angle() -> f64 {
@@ -411,6 +417,9 @@ fn default_min_face_area() -> f64 {
 fn default_sa_strength_threshold() -> f64 {
     0.05
 }
+fn default_sa_max_ratio() -> f64 {
+    1.5
+}
 
 impl Default for SolidAngleOptions {
     fn default() -> Self {
@@ -420,6 +429,7 @@ impl Default for SolidAngleOptions {
             max_distance: default_max_dist(),
             min_bond_dist: default_min_dist(),
             strength_threshold: default_sa_strength_threshold(),
+            max_distance_ratio: default_sa_max_ratio(),
         }
     }
 }
@@ -449,6 +459,13 @@ pub fn detect_bonds_solid_angle(structure: &Structure, options: &SolidAngleOptio
     // home cell and tessellate that: correct for ANY lattice, and each image
     // atom carries its exact Cartesian position → exact distance + jimage. A
     // slab's vacuum side simply yields unbounded (boundary) faces → no bond.
+    // Covalent radii for the distance sanity that trims anion-anion edges.
+    let radii: Vec<f64> = structure
+        .species()
+        .iter()
+        .map(|sp| sp.element.covalent_radius().unwrap_or(1.5))
+        .collect();
+
     let cart = structure.cart_coords();
     let m = structure.lattice.matrix();
     let avec = nalgebra::Vector3::new(m[(0, 0)], m[(0, 1)], m[(0, 2)]);
@@ -535,6 +552,11 @@ pub fn detect_bonds_solid_angle(structure: &Structure, options: &SolidAngleOptio
 
             let dist = (sc_pos[raw] - center).length();
             if dist < min_dist {
+                continue;
+            }
+            // Distance sanity: a shared Voronoi face that is far longer than the
+            // covalent-radii sum is a polyhedra edge (anion-anion), not a bond.
+            if dist > options.max_distance_ratio * (radii[i] + radii[j]) {
                 continue;
             }
             // Solid-angle fraction Ω/4π ≈ A / (4π r²).
@@ -1011,6 +1033,22 @@ mod tests {
             "longest electroneg bond should be 1st-shell (~2.56 Å), got {max_len:.3} Å \
              (2nd shell at 3.615 Å leaked in — closest-neighbor penalty missing)"
         );
+    }
+
+    #[test]
+    fn test_solid_angle_drops_anion_edge() {
+        // Two O atoms 2.6 Å apart share a Voronoi face, but 2.6 > 1.5·Σr(O,O)
+        // (≈1.98 Å), so the distance sanity must drop this O-O polyhedra edge.
+        let lattice = Lattice::cubic(12.0);
+        let species = vec![Species::neutral(Element::O), Species::neutral(Element::O)];
+        let frac_coords = vec![
+            Vector3::new(0.4, 0.5, 0.5),
+            Vector3::new(0.4 + 2.6 / 12.0, 0.5, 0.5),
+        ];
+        let structure = Structure::new(lattice, species, frac_coords);
+
+        let bonds = detect_bonds_solid_angle(&structure, &SolidAngleOptions::default());
+        assert!(bonds.is_empty(), "O-O at 2.6 Å exceeds 1.5·Σr; must not bond");
     }
 
     #[test]
