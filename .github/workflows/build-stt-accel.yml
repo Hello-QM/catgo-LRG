@@ -147,6 +147,7 @@ jobs:
       - name: Upload manifest
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}  # manifest job has no checkout → tell gh the repo
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REF_NAME: ${{ github.ref_name }}
         run: |
