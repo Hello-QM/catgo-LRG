@@ -1408,6 +1408,8 @@ const structure: Record<string, string> = {
   dos_axis_width: `Axis width:`,
   dos_tick_length: `Tick length:`,
   dos_tick_width: `Tick width:`,
+  dos_title_size: `Title size:`,
+  dos_font_size: `Font size:`,
   dos_series_visibility: `Series Visibility`,
   dos_line_styles: `Line Styles`,
   dos_line_solid: `Solid`,

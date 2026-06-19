@@ -1408,6 +1408,8 @@ const structure: Record<string, string> = {
   dos_axis_width: `坐标轴线宽：`,
   dos_tick_length: `刻度长度：`,
   dos_tick_width: `刻度线宽：`,
+  dos_title_size: `标题字号：`,
+  dos_font_size: `字号：`,
   dos_series_visibility: `序列可见性`,
   dos_line_styles: `线型`,
   dos_line_solid: `实线`,

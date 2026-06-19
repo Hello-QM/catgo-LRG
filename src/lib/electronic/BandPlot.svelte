@@ -22,6 +22,8 @@
     axis_line_width = 1,
     tick_length = 5,
     tick_width = 1,
+    title_size = 14,
+    font_size = 12,
     legend_visible = true,
   }: {
     distance: number[]
@@ -42,6 +44,8 @@
     axis_line_width?: number
     tick_length?: number
     tick_width?: number
+    title_size?: number
+    font_size?: number
     legend_visible?: boolean
   } = $props()
 
@@ -236,7 +240,7 @@
 
     const layout: any = {
       xaxis: {
-        title: { text: `Wave Vector` },
+        title: { text: `Wave Vector`, font: { size: title_size } },
         tickmode: `array`,
         tickvals: tick_positions,
         ticktext: tick_labels,
@@ -248,7 +252,7 @@
         ...tick_props_obj,
       },
       yaxis: {
-        title: { text: `E \u2013 E<sub>f</sub> (eV)` },
+        title: { text: `E \u2013 E<sub>f</sub> (eV)`, font: { size: title_size } },
         range: [emin, emax],
         zeroline: false,
         ...grid_props,
@@ -259,11 +263,11 @@
       annotations,
       plot_bgcolor: `rgba(0,0,0,0)`,
       paper_bgcolor: `rgba(0,0,0,0)`,
-      font: { family: pc.font, color: pc.text, size: 11 },
+      font: { family: pc.font, color: pc.text, size: font_size },
       showlegend: legend_visible,
       legend: {
         bgcolor: pc.legend_bg,
-        font: { family: pc.font, color: pc.text, size: 10 },
+        font: { family: pc.font, color: pc.text, size: font_size },
       },
       margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,

@@ -710,6 +710,24 @@
             class="range-input"
           />
         </div>
+        <div class="range-row">
+          <span>{t('structure.dos_title_size')}</span>
+          <input
+            type="number"
+            bind:value={dos_state.title_size}
+            min="6" max="24" step="1"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>{t('structure.dos_font_size')}</span>
+          <input
+            type="number"
+            bind:value={dos_state.font_size}
+            min="6" max="24" step="1"
+            class="range-input"
+          />
+        </div>
       </div>
     </details>
 

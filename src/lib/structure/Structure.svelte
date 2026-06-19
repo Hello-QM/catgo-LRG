@@ -1403,6 +1403,8 @@
     axis_line_width: 1,
     tick_length: 5,
     tick_width: 1,
+    title_size: 14,
+    font_size: 12,
     legend_visible: true,
     hidden_series: [],
   })
@@ -1432,6 +1434,8 @@
     axis_line_width: 1,
     tick_length: 5,
     tick_width: 1,
+    title_size: 14,
+    font_size: 12,
     legend_visible: true,
   })
   let band_layout = $state<`horizontal` | `vertical`>(`horizontal`)
@@ -1459,6 +1463,8 @@
     axis_line_width: 1,
     tick_length: 5,
     tick_width: 1,
+    title_size: 14,
+    font_size: 12,
     legend_visible: true,
     hidden_series: [],
     line_styles: {},
@@ -4890,6 +4896,8 @@
           axis_line_width={dos_state.axis_line_width}
           tick_length={dos_state.tick_length}
           tick_width={dos_state.tick_width}
+          title_size={dos_state.title_size}
+          font_size={dos_state.font_size}
           legend_visible={dos_state.legend_visible}
           hidden_series={dos_state.hidden_series}
         />
@@ -4998,6 +5006,8 @@
           axis_line_width={cohp_state.axis_line_width}
           tick_length={cohp_state.tick_length}
           tick_width={cohp_state.tick_width}
+          title_size={cohp_state.title_size}
+          font_size={cohp_state.font_size}
           legend_visible={cohp_state.legend_visible}
           hidden_series={cohp_state.hidden_series}
         />
@@ -5052,6 +5062,8 @@
           axis_line_width={band_state.axis_line_width}
           tick_length={band_state.tick_length}
           tick_width={band_state.tick_width}
+          title_size={band_state.title_size}
+          font_size={band_state.font_size}
           legend_visible={band_state.legend_visible}
         />
       </div>

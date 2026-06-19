@@ -101,6 +101,8 @@ export function create_tool_controller(deps: ToolDeps) {
     axis_line_width: 1,
     tick_length: 5,
     tick_width: 1,
+    title_size: 14,
+    font_size: 12,
     legend_visible: true,
     hidden_series: [],
   })
@@ -127,6 +129,8 @@ export function create_tool_controller(deps: ToolDeps) {
     axis_line_width: 1,
     tick_length: 5,
     tick_width: 1,
+    title_size: 14,
+    font_size: 12,
     legend_visible: true,
   })
   let band_layout = $state<'horizontal' | 'vertical'>('horizontal')
@@ -150,6 +154,8 @@ export function create_tool_controller(deps: ToolDeps) {
     axis_line_width: 1,
     tick_length: 5,
     tick_width: 1,
+    title_size: 14,
+    font_size: 12,
     legend_visible: true,
     hidden_series: [],
     line_styles: {},

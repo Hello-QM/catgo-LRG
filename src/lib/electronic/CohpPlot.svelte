@@ -22,6 +22,8 @@
     axis_line_width = 1,
     tick_length = 5,
     tick_width = 1,
+    title_size = 14,
+    font_size = 12,
     legend_visible = true,
     hidden_series = [],
   }: {
@@ -43,6 +45,8 @@
     axis_line_width?: number
     tick_length?: number
     tick_width?: number
+    title_size?: number
+    font_size?: number
     legend_visible?: boolean
     hidden_series?: string[]
   } = $props()
@@ -260,7 +264,7 @@
 
     const cohp_label = invert_cohp ? `\u2013COHP (eV)` : `COHP (eV)`
     const energy_axis = {
-      title: { text: `E \u2013 E<sub>f</sub> (eV)` },
+      title: { text: `E \u2013 E<sub>f</sub> (eV)`, font: { size: title_size } },
       zeroline: false,
       range: is_horizontal ? (y_range ?? undefined) : (x_range ?? undefined),
       ...grid_props,
@@ -268,7 +272,7 @@
       ...tick_props,
     }
     const cohp_axis = {
-      title: { text: cohp_label },
+      title: { text: cohp_label, font: { size: title_size } },
       zeroline: true,
       range: is_horizontal ? (x_range ?? undefined) : (y_range ?? undefined),
       ...grid_props,
@@ -282,11 +286,11 @@
       shapes,
       plot_bgcolor: `rgba(0,0,0,0)`,
       paper_bgcolor: `rgba(0,0,0,0)`,
-      font: { family: pc.font, color: pc.text, size: 11 },
+      font: { family: pc.font, color: pc.text, size: font_size },
       showlegend: legend_visible,
       legend: {
         bgcolor: pc.legend_bg,
-        font: { family: pc.font, color: pc.text, size: 10 },
+        font: { family: pc.font, color: pc.text, size: font_size },
       },
       margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,
