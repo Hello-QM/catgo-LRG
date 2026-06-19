@@ -317,6 +317,12 @@
   // ios-speech.ts). Mic is offered only on the native shell; in a plain browser
   // the plugin commands don't exist.
   let mic_listening = $state(false)
+  // Set true once the user manually edits the box during/after dictation. The
+  // recognizer streams the FULL running transcript each event, so apply_transcript
+  // reassigns `input` outright — which would clobber a user's deletion/edit (and
+  // make Chinese feel un-deletable while the mic is live). Once the user takes
+  // over the box we freeze transcript application until the next mic tap.
+  let mic_edited = $state(false)
   // Guards toggle_mic against re-entry: a rapid double-tap could otherwise fire a
   // new start_listening before the previous stop_listening IPC resolved, colliding
   // two sessions at the native plugin.
@@ -369,6 +375,45 @@
     mic_unlisten = null
   })
 
+  // The user typed/deleted in the box. If the mic is live, freeze transcript
+  // application (so the recognizer can't overwrite the edit) and end the session.
+  // bind:value assignments do NOT fire `input`, so this only catches real edits.
+  function on_user_edit(): void {
+    if (mic_listening && !mic_edited) {
+      mic_edited = true
+      mic_listening = false
+      void stop_listening().catch(() => {})
+    }
+  }
+
+  // ── Soft-keyboard inset (B1) ──
+  // On iOS WKWebView the keyboard shrinks window.visualViewport but NOT the
+  // layout viewport, so the bottom-anchored composer (.ai-overlay is
+  // position:absolute inset:0) stays behind the keyboard. Pad the overlay bottom
+  // by the keyboard overlap so the composer floats above it. On Android the
+  // native MainActivity inset listener already shrinks the WebView and
+  // visualViewport does NOT shrink for the IME, so this computes ~0 and we don't
+  // double-count. Mirrors MobileTerminal's kb_inset.
+  let kb_inset = $state(0)
+  $effect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    let last = -1
+    const update = () => {
+      const next = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))
+      if (next === last) return
+      last = next
+      kb_inset = next
+    }
+    update()
+    vv.addEventListener(`resize`, update)
+    vv.addEventListener(`scroll`, update)
+    return () => {
+      vv.removeEventListener(`resize`, update)
+      vv.removeEventListener(`scroll`, update)
+    }
+  })
+
   // TODO(you): apply a streamed transcript to the composer.
   //
   // Called for every recognizer event: `text` is the FULL transcript so far,
@@ -387,6 +432,11 @@
   // Keep it ~6-10 lines. Helpers in scope: `input` ($state, bound to the
   // textarea), `mic_base`, `mic_listening` ($state), `send()`.
   function apply_transcript(text: string, is_final: boolean): void {
+    // The user grabbed the box mid-dictation (edited/deleted) — stop overwriting
+    // it. Without this, every streamed transcript (incl. the final emitted by
+    // stop_listening) reassigns `input` and wipes the user's edit, so deleting
+    // Chinese while the mic is live feels impossible.
+    if (mic_edited) return
     // Preserve anything typed before the mic started. The recognizer streams the
     // FULL running transcript each event, so set `input` outright — concatenating
     // would duplicate ("show show the…"). Add a space only when joining onto
@@ -419,6 +469,7 @@
         return
       }
       mic_base = input
+      mic_edited = false // fresh session — transcripts may drive the box again
       // Subscribe before starting so no early partial is missed; reuse one set of
       // listeners across sessions (re-tapping mic just re-arms start_listening).
       if (!mic_unlisten) {
@@ -510,7 +561,7 @@
   }
 </script>
 
-<div class="ai-overlay">
+<div class="ai-overlay" style="padding-bottom: {kb_inset}px">
   <header class="ai-head">
     <!-- Chat tab strip: tap = switch, long-press = close sheet, + = new (capped
          at MAX_CHAT_TABS). Mirrors the terminal tab bar. -->
@@ -683,6 +734,7 @@
         placeholder={t(`mobile.ai_message_placeholder`)}
         bind:value={input}
         onkeydown={on_input_keydown}
+        oninput={on_user_edit}
       ></textarea>
       {#if mic_supported}
         {#if voice_locale}
@@ -791,6 +843,9 @@
     display: flex;
     flex-direction: column;
     background: var(--page-bg, #0e1117);
+    /* padding-bottom is set inline to the soft-keyboard inset (B1) so the
+       composer floats above the keyboard on iOS; glide it to avoid a jump. */
+    transition: padding-bottom 0.18s ease;
   }
   .ai-head {
     display: flex;
