@@ -40,6 +40,17 @@ export class TerminalVoice {
 
   private make_engine: () => VoiceEngineLike
   private engine: VoiceEngineLike | null = null
+  // Lazy Traditional→Simplified converter. Whisper's multilingual model emits
+  // Traditional Chinese for Mandarin; convert to Simplified for zh-CN. Loaded
+  // on first Chinese utterance so non-Chinese use pays nothing.
+  private t2s: ((s: string) => string) | null = null
+
+  private async ensure_t2s(): Promise<(s: string) => string> {
+    if (this.t2s) return this.t2s
+    const OpenCC: any = await import(`opencc-js`)
+    this.t2s = OpenCC.Converter({ from: `t`, to: `cn` })
+    return this.t2s!
+  }
 
   constructor(make_engine?: () => VoiceEngineLike) {
     this.make_engine = make_engine
@@ -81,10 +92,16 @@ export class TerminalVoice {
     this.error = null
     if (!this.engine) this.engine = this.make_engine()
 
-    const on_event = (e: VoiceEvent) => {
+    const on_event = async (e: VoiceEvent) => {
       if (!e.is_final) return
-      const text = e.raw_text.trim()
+      let text = e.raw_text.trim()
       if (!text) return
+      if (this.language.startsWith(`zh`)) {
+        try {
+          const conv = await this.ensure_t2s()
+          text = conv(text)
+        } catch { /* fall back to raw (Traditional) text */ }
+      }
       send(`${text} `)
     }
     const on_error = (err: string) => {
