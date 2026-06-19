@@ -70,11 +70,15 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          git clone --depth 1 https://github.com/ggml-org/whisper.cpp src
-          cmake -S src -B src/build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=1
-          cmake --build src/build --config Release --target whisper-cli
+          # Clone into RUNNER_TEMP, NOT "src" — the repo (checked out here) already
+          # has its own src/ directory, so `git clone ... src` would collide.
+          $wc = Join-Path $env:RUNNER_TEMP 'whispercpp'
+          git clone --depth 1 https://github.com/ggml-org/whisper.cpp $wc
+          if (-not (Test-Path "$wc/CMakeLists.txt")) { throw "whisper.cpp clone failed" }
+          cmake -S $wc -B $wc/build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=1
+          cmake --build $wc/build --config Release --target whisper-cli
           New-Item -ItemType Directory -Force "dist/${{ matrix.key }}" | Out-Null
-          Copy-Item "src/build/bin/Release/*" "dist/${{ matrix.key }}/" -Recurse -Force
+          Copy-Item "$wc/build/bin/Release/*" "dist/${{ matrix.key }}/" -Recurse -Force
 
       - name: Package + checksum
         shell: bash
