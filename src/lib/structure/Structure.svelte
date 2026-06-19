@@ -5291,10 +5291,12 @@
   }
   .dos-layout-btn, .dos-export-btn, .dos-close-btn {
     padding: 2px 6px;
-    background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08));
-    border: 1px solid light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.12));
+    background: light-dark(rgba(0, 0, 0, 0.05), rgba(255, 255, 255, 0.08));
+    border: 1px solid light-dark(rgba(0, 0, 0, 0.18), rgba(255, 255, 255, 0.18));
     border-radius: 3px;
-    color: var(--struct-text-color, #ccc);
+    /* Theme-aware text so the buttons read as clickable on a light header
+       (the old flat #ccc washed out to look disabled in light mode). */
+    color: light-dark(#374151, #ccc);
     cursor: pointer;
     font-size: 0.75em;
   }
