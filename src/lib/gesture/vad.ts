@@ -30,6 +30,14 @@ export async function start_vad(config: VadConfig): Promise<void> {
   const { MicVAD } = await import(`@ricky0123/vad-web`)
 
   const vad_options: any = {
+    // Load the VAD worklet + Silero ONNX model and the onnxruntime-web wasm from
+    // CDNs pinned to the installed versions. The Vite build does not emit these
+    // assets into the app, so the defaults ("./silero_vad_legacy.onnx", local
+    // ort wasm) 404 — fatal on machines without WebGPU, which fall back to wasm.
+    // Versions MUST match the installed @ricky0123/vad-web and onnxruntime-web.
+    baseAssetPath: `https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.30/dist/`,
+    onnxWASMBasePath:
+      `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/`,
     positiveSpeechThreshold: config.positive_speech_threshold ?? 0.5,
     negativeSpeechThreshold: config.negative_speech_threshold ?? 0.35,
     minSpeechFrames: config.min_speech_frames ?? 6,

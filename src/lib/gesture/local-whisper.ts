@@ -43,6 +43,16 @@ async function get_pipeline(
 
     if (env.backends?.onnx?.wasm) {
       env.backends.onnx.wasm.numThreads = 1
+      // Load the onnxruntime-web wasm runtime from a CDN pinned to the version
+      // @huggingface/transformers bundles. Without this, the WASM backend (the
+      // fallback when WebGPU is unavailable — e.g. machines without a discrete
+      // GPU) tries to fetch ort-wasm-*.mjs from the app's own /assets, which the
+      // Vite build does not emit, producing "no available backend found". The
+      // version MUST match @huggingface/transformers' onnxruntime-web dep.
+      if (!env.backends.onnx.wasm.wasmPaths) {
+        env.backends.onnx.wasm.wasmPaths =
+          `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/`
+      }
     }
 
     on_progress?.(`downloading`, 0)
