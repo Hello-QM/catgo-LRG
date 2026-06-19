@@ -2020,7 +2020,12 @@
     min-height: var(--traj-min-height, var(--min-height));
     border-radius: var(--border-radius);
     box-sizing: border-box;
-    contain: layout;
+    /* NOTE: no `contain: layout` here. With it, on a pane-close relayout the
+       slot grows but the Threlte <Canvas> wrapper's ResizeObserver never fires,
+       so renderer.setSize + invalidate never run and the on-demand canvas keeps
+       a stale/blank buffer (plain .structure panes, which lack `contain: layout`,
+       repaint fine). `container-type: size` already supplies the size containment
+       the inner panes' cqh units need. */
     z-index: var(--traj-z-index, 1);
     container-type: size; /* enable cqh for panes if explicit height is set */
   }

@@ -134,6 +134,7 @@ export interface SettingsConfig {
     hide_incomplete_bonds: SettingType<boolean>
     bonding_strategy: SettingType<BondingStrategy>
     bonding_options: SettingType<Record<string, number>>
+    bond_scale: SettingType<number>
     show_hydrogen_bonds: SettingType<boolean>
     hbond_distance_cutoff: SettingType<number>
     hbond_angle_cutoff: SettingType<number>
@@ -205,6 +206,7 @@ export interface SettingsConfig {
     polyhedra_center_elements: SettingType<string[]>
     polyhedra_min_coordination: SettingType<number>
     polyhedra_max_neighbors: SettingType<number>
+    polyhedra_bond_scale: SettingType<number>
     polyhedra_metals_only: SettingType<boolean>
     polyhedra_color_mode: SettingType<PolyhedraColorMode>
     polyhedra_color: SettingType<string>

@@ -63,6 +63,7 @@ const _importers: Record<Locale, Record<string, ModuleImporter>> = {
     workflow:  () => import('./en/workflow'),
     chat:      () => import('./en/chat'),
     mobile:    () => import('./en/mobile'),
+    viewer:    () => import('./en/viewer'),
   },
   zh: {
     common:    () => import('./zh/common'),
@@ -72,6 +73,7 @@ const _importers: Record<Locale, Record<string, ModuleImporter>> = {
     workflow:  () => import('./zh/workflow'),
     chat:      () => import('./zh/chat'),
     mobile:    () => import('./zh/mobile'),
+    viewer:    () => import('./zh/viewer'),
   },
 }
 

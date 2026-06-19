@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "CatGo - Catalyst Editor",
+        "title": "CatGo - AI Workbench for Computational Materials",
         "width": 1400,
         "height": 900,
         "minWidth": 800,
