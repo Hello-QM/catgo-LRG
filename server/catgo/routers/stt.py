@@ -1,78 +1,63 @@
-"""Local speech-to-text — pluggable native engine.
+"""Local speech-to-text — pluggable native engine + optional GPU accelerator.
 
 Desktop/Tauri voice dictation routes audio here instead of running Whisper in
-the webview. On WebKit engines (WebKitGTK on Linux, WKWebView on macOS/iOS —
-every Tauri webview except Windows' Chromium WebView2) the onnxruntime-web WASM
-backend leaks ~0.8 GB of unreclaimable linear memory per inference, so a few
-utterances OOM-kill the WebContent process (blank window). Native inference
-avoids the webview entirely.
-
-Two engines, selected by ``CATGO_STT_ENGINE``:
+the webview (WebKit webviews leak ~0.8 GB of unreclaimable WASM memory per
+inference and OOM). Two engines, chosen at runtime (engine_state, persisted):
 
 - ``faster-whisper`` (default): CTranslate2. CPU int8 everywhere, CUDA float16
-  when an NVIDIA GPU is present. Self-contained pip dependency.
-- ``whispercpp``: shells out to a whisper.cpp ``whisper-cli`` binary. Its value
-  is the **Vulkan** backend, which runs on AMD/Intel iGPUs that CTranslate2
-  (CUDA-only) cannot target. Requires a Vulkan-built ``whisper-cli`` and GGML
-  models supplied by the host:
-    CATGO_WHISPERCPP_BIN     path to whisper-cli (default: "whisper-cli" on PATH)
-    CATGO_WHISPERCPP_MODELS  dir of ggml-<size>.bin (default ~/.cache/whisper.cpp/models)
+  on NVIDIA. Bundled in the sidecar.
+- ``whispercpp``: shells out to a whisper.cpp ``whisper-cli`` built with Vulkan
+  (AMD/Intel iGPU) or Metal (Apple). Not bundled — downloaded on demand via the
+  /accel/* endpoints into a per-user dir (see catgo.stt.accel).
 
-The browser still runs the (tiny) Silero VAD and POSTs each finished segment as
-raw little-endian float32 PCM at 16 kHz. Language post-processing (zh
-Traditional→Simplified) stays on the client.
+The browser still runs the Silero VAD and POSTs each segment as raw
+little-endian float32 PCM at 16 kHz. zh Traditional→Simplified stays client-side.
 """
 
 import logging
 import os
-import shutil
 import subprocess
 import tempfile
 import wave
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query, Request
 from pydantic import BaseModel
+
+from ..stt import accel, engine_state
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stt", tags=["stt"])
 
-# ─── Config ──────────────────────────────────────────────────────────────
-_ENGINE = (os.environ.get("CATGO_STT_ENGINE") or "faster-whisper").strip().lower()
-# CPU inference threads. faster-whisper/CTranslate2 defaults to a conservative 4;
-# whisper.cpp uses this for -t too. Overridable via CATGO_STT_CPU_THREADS.
+# CPU inference threads. CTranslate2 defaults to a conservative 4; whisper.cpp
+# uses this for -t too. Overridable via CATGO_STT_CPU_THREADS.
 _CPU_THREADS = int(os.environ.get("CATGO_STT_CPU_THREADS") or min(8, os.cpu_count() or 4))
-_WHISPERCPP_BIN = os.environ.get("CATGO_WHISPERCPP_BIN") or "whisper-cli"
-_WHISPERCPP_MODELS = (
-    os.environ.get("CATGO_WHISPERCPP_MODELS")
-    or os.path.expanduser("~/.cache/whisper.cpp/models")
-)
 
-# Map the client's whisper model ids / aliases to a canonical size name shared by
-# both engines (faster-whisper size and whisper.cpp ggml-<size>.bin).
 _SIZE_ALIASES = {
-    "tiny": "tiny",
-    "tiny.en": "tiny.en",
-    "base": "base",
-    "base.en": "base.en",
-    "small": "small",
-    "small.en": "small.en",
-    "medium": "medium",
-    "medium.en": "medium.en",
-    "large": "large-v3",
-    "large-v2": "large-v2",
-    "large-v3": "large-v3",
-    "large-v3-turbo": "large-v3-turbo",
-    "turbo": "large-v3-turbo",
+    "tiny": "tiny", "tiny.en": "tiny.en",
+    "base": "base", "base.en": "base.en",
+    "small": "small", "small.en": "small.en",
+    "medium": "medium", "medium.en": "medium.en",
+    "large": "large-v3", "large-v2": "large-v2", "large-v3": "large-v3",
+    "large-v3-turbo": "large-v3-turbo", "turbo": "large-v3-turbo",
 }
 
 
 def _resolve_size(model: str) -> str:
-    """Turn a client model id (e.g. 'onnx-community/whisper-base') into a shared
-    size name ('base'). Unknown ids fall back to 'base'."""
     name = (model or "").split("/")[-1].lower().replace("whisper-", "")
     return _SIZE_ALIASES.get(name, "base")
+
+
+def _whispercpp_bin() -> str:
+    return os.environ.get("CATGO_WHISPERCPP_BIN") or str(accel.binary_path())
+
+
+def _whispercpp_model_path(size: str) -> str:
+    override = os.environ.get("CATGO_WHISPERCPP_MODELS")
+    if override:
+        return os.path.join(override, f"ggml-{size}.bin")
+    return str(accel.model_path(size))
 
 
 # ─── faster-whisper engine ───────────────────────────────────────────────
@@ -81,7 +66,6 @@ _device_compute: tuple[str, str] | None = None
 
 
 def _select_device() -> tuple[str, str]:
-    """Probe for a usable CUDA device, else fall back to CPU int8."""
     try:
         import ctranslate2
 
@@ -101,9 +85,6 @@ def _build_model(size: str, device: str, compute_type: str):
     try:
         return WhisperModel(size, **kwargs)
     except Exception as exc:
-        # First-run download pulls weights from HuggingFace, frequently blocked
-        # (e.g. mainland China). Retry once via hf-mirror.com unless the user
-        # pinned their own HF_ENDPOINT.
         if os.environ.get("HF_ENDPOINT"):
             raise
         logger.warning(
@@ -128,9 +109,6 @@ def _get_model(size: str):
         try:
             _model_cache[key] = _build_model(size, device, compute_type)
         except Exception as exc:
-            # A CUDA device was detected but the runtime (cuBLAS/cuDNN) is missing
-            # or incompatible — don't 500, fall back to CPU int8 for this and all
-            # subsequent loads.
             if device != "cuda":
                 raise
             logger.warning("CUDA STT load failed (%s); falling back to CPU int8", exc)
@@ -148,21 +126,14 @@ def _transcribe_faster_whisper(audio: np.ndarray, lang: str | None, size: str):
     return text, getattr(info, "language", None)
 
 
-# ─── whisper.cpp (Vulkan) engine ─────────────────────────────────────────
-def _whispercpp_model_path(size: str) -> str:
-    return os.path.join(_WHISPERCPP_MODELS, f"ggml-{size}.bin")
-
-
+# ─── whisper.cpp (Vulkan/Metal) engine ───────────────────────────────────
 def _transcribe_whispercpp(audio: np.ndarray, lang: str | None, size: str):
     model_path = _whispercpp_model_path(size)
     if not os.path.exists(model_path):
         raise HTTPException(
             status_code=503,
-            detail=f"whisper.cpp model missing: {model_path} "
-            f"(download-ggml-model.sh {size})",
+            detail=f"whisper.cpp model missing: ggml-{size}.bin (download it first)",
         )
-
-    # whisper.cpp reads a 16 kHz mono PCM16 WAV file.
     pcm16 = np.clip(audio * 32767.0, -32768, 32767).astype("<i2")
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         wav_path = tf.name
@@ -172,20 +143,13 @@ def _transcribe_whispercpp(audio: np.ndarray, lang: str | None, size: str):
             w.setsampwidth(2)
             w.setframerate(16000)
             w.writeframes(pcm16.tobytes())
-
-        cmd = [
-            _WHISPERCPP_BIN, "-m", model_path, "-f", wav_path,
-            "-nt",  # no timestamps → clean text on stdout
-            "-t", str(_CPU_THREADS),
-        ]
+        cmd = [_whispercpp_bin(), "-m", model_path, "-f", wav_path, "-nt", "-t", str(_CPU_THREADS)]
         if lang:
             cmd += ["-l", lang]
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except FileNotFoundError:
-            raise HTTPException(
-                status_code=503, detail=f"whisper-cli not found: {_WHISPERCPP_BIN}"
-            )
+            raise HTTPException(status_code=503, detail="whisper-cli not installed")
         if proc.returncode != 0:
             logger.error("whisper.cpp failed: %s", proc.stderr[-500:])
             raise HTTPException(status_code=500, detail="whisper.cpp transcription failed")
@@ -198,7 +162,7 @@ def _transcribe_whispercpp(audio: np.ndarray, lang: str | None, size: str):
             pass
 
 
-# ─── API ─────────────────────────────────────────────────────────────────
+# ─── API models ──────────────────────────────────────────────────────────
 class STTHealth(BaseModel):
     available: bool
     engine: str
@@ -211,30 +175,35 @@ class STTResult(BaseModel):
     language: str | None = None
 
 
+class AccelStatus(BaseModel):
+    platform_key: str | None
+    gpu_api: str | None
+    gpu_name: str | None
+    engine: str
+    binary_installed: bool
+    models_installed: list[str]
+    download: dict
+
+
+class EngineChoice(BaseModel):
+    engine: str
+
+
+# ─── Transcription ─────────────────────────────────────────────────────────
 @router.get("/health", response_model=STTHealth)
 def health() -> STTHealth:
-    """Report whether native STT is usable, which engine, and on what device.
-    The client uses this to decide between backend STT and the WASM fallback."""
-    if _ENGINE == "whispercpp":
-        ok = bool(shutil.which(_WHISPERCPP_BIN) or os.path.exists(_WHISPERCPP_BIN))
-        return STTHealth(
-            available=ok, engine="whispercpp",
-            device="vulkan/cpu", compute_type="ggml",
-        )
+    engine = engine_state.get_engine()
+    if engine == "whispercpp":
+        ok = os.path.exists(_whispercpp_bin())
+        return STTHealth(available=ok, engine="whispercpp", device="vulkan/metal/cpu", compute_type="ggml")
     try:
         import faster_whisper  # noqa: F401
 
         device, compute_type = _select_device()
-        return STTHealth(
-            available=True, engine="faster-whisper",
-            device=device, compute_type=compute_type,
-        )
+        return STTHealth(available=True, engine="faster-whisper", device=device, compute_type=compute_type)
     except Exception as exc:
         logger.info("Native STT unavailable: %s", exc)
-        return STTHealth(
-            available=False, engine="faster-whisper",
-            device="none", compute_type="none",
-        )
+        return STTHealth(available=False, engine="faster-whisper", device="none", compute_type="none")
 
 
 @router.post("/transcribe", response_model=STTResult)
@@ -243,13 +212,11 @@ async def transcribe(
     language: str = Query("en", description="BCP-47-ish tag; 'auto'/'' = detect"),
     model: str = Query("base", description="Client model id or size alias"),
 ) -> STTResult:
-    """Transcribe a raw float32 PCM (16 kHz mono, little-endian) request body."""
     raw = await request.body()
     if not raw:
         raise HTTPException(status_code=400, detail="empty audio body")
     if len(raw) % 4 != 0:
         raise HTTPException(status_code=400, detail="body length not float32-aligned")
-
     audio = np.frombuffer(raw, dtype="<f4").astype(np.float32)
     if audio.size == 0:
         return STTResult(text="", language=None)
@@ -257,8 +224,7 @@ async def transcribe(
     size = _resolve_size(model)
     lang = None if language in ("", "auto") else language.split("-")[0]
     try:
-        if _ENGINE == "whispercpp":
-            # whisper.cpp wants a concrete language code; default to English.
+        if engine_state.get_engine() == "whispercpp":
             text, out_lang = _transcribe_whispercpp(audio, lang or "en", size)
         else:
             text, out_lang = _transcribe_faster_whisper(audio, lang, size)
@@ -267,5 +233,48 @@ async def transcribe(
     except Exception as exc:
         logger.exception("STT transcription failed")
         raise HTTPException(status_code=500, detail=f"transcription failed: {exc}")
-
     return STTResult(text=text, language=out_lang)
+
+
+# ─── Accelerator management ────────────────────────────────────────────────
+@router.get("/accel/status", response_model=AccelStatus)
+def accel_status() -> AccelStatus:
+    gpu = accel.detect_gpu()
+    return AccelStatus(
+        platform_key=accel.platform_key(),
+        gpu_api=gpu["gpu_api"],
+        gpu_name=gpu["gpu_name"],
+        engine=engine_state.get_engine(),
+        binary_installed=accel.binary_installed(),
+        models_installed=accel.installed_models(),
+        download=accel.get_download(),
+    )
+
+
+@router.post("/accel/install")
+def accel_install(background: BackgroundTasks) -> dict:
+    if accel.get_download().get("active"):
+        raise HTTPException(status_code=409, detail="a download is already in progress")
+    if not accel.platform_key():
+        raise HTTPException(status_code=400, detail="no GPU accelerator for this platform")
+    background.add_task(accel.install_binary)
+    return {"started": True}
+
+
+@router.post("/accel/model")
+def accel_model(background: BackgroundTasks, size: str = Query(...)) -> dict:
+    if accel.get_download().get("active"):
+        raise HTTPException(status_code=409, detail="a download is already in progress")
+    background.add_task(accel.download_model, _resolve_size(size))
+    return {"started": True}
+
+
+@router.post("/accel/engine")
+def accel_engine(choice: EngineChoice = Body(...)) -> dict:
+    engine = choice.engine
+    if engine not in engine_state.VALID_ENGINES:
+        raise HTTPException(status_code=400, detail=f"unknown engine: {engine}")
+    if engine == "whispercpp" and not os.path.exists(_whispercpp_bin()):
+        raise HTTPException(status_code=400, detail="whisper.cpp not installed — download it first")
+    engine_state.set_engine(engine)
+    return {"engine": engine}
