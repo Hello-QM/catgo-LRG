@@ -218,6 +218,11 @@ export class LocalWhisperEngine {
       const result = await pipe(audio, {
         language: this.language === `en` ? undefined : this.language,
         task: `transcribe`,
+        // Anti-hallucination: Whisper degenerates into endless repeated
+        // multilingual fragments on near-silent / very short / noisy clips.
+        // Block repeated n-grams and penalize repetition to break the loop.
+        no_repeat_ngram_size: 3,
+        repetition_penalty: 1.2,
       })
 
       const text = (result as any)?.text?.trim()
