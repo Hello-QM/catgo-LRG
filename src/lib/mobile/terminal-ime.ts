@@ -31,13 +31,14 @@ export function isCJK(text: string): boolean {
 }
 
 // After a composition commits, xterm's deferred _finalizeComposition (and the
-// textarea clear we do) can emit a stray space/enter/DEL. Swallow those for a
-// brief window. The window is armed ONLY by a composition ending, so pure Latin
-// typing never enters it (a deliberately-typed space/Enter is never eaten).
+// textarea clear we do) can emit a stray space/enter. Swallow those for a brief
+// window. The window is armed ONLY by a composition ending, so pure Latin typing
+// never enters it (a deliberately-typed space/Enter is never eaten).
 // `\u00a0` (non-breaking space) is included because some IMEs/keyboards emit NBSP
 // rather than a plain space as the confirmation key after a composition.
+// DEL (`\x7f`, Backspace) is deliberately NOT in this set \u2014 see should_suppress.
 const POST_COMPOSE_MS = 80
-const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\x7f`, `\u00a0`])
+const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\u00a0`])
 
 export interface ImeGuard {
   /** From `beforeinput`. Returns true if this was a CJK-composition event the
@@ -112,6 +113,11 @@ export function createImeGuard(opts: {
       if (wk_composing && key_code !== 229) flush()
     },
     should_suppress(data) {
+      // A Backspace/DEL reaching onData is always a real edit intent — never
+      // swallow it. WKWebView fires compositionend unreliably for CJK, so
+      // std_composing can stick `true` and would otherwise eat every backspace,
+      // leaving the user unable to delete Chinese they just typed.
+      if (data === `\x7f`) return false
       if (std_composing || wk_composing) return true
       if (post_compose_until > 0) {
         if (now() < post_compose_until && IME_CONFIRM_KEYS.has(data)) return true

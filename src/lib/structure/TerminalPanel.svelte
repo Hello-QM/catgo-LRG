@@ -446,7 +446,10 @@
         let post_compose_until = 0     // suppress confirmation-key residue until this time
 
         const POST_COMPOSE_MS = 80
-        const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\x7f`, `\u00a0`])
+        // DEL (`\x7f`, Backspace) is deliberately NOT here \u2014 it is never IME
+        // residue, and WebKit's unreliable CJK compositionend can otherwise
+        // leave std_composing stuck and eat every backspace (see onData below).
+        const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\u00a0`])
 
         // ─── IME event tracing (enable: window.__CATGO_IME_DEBUG = true) ───
         const ime_log = (...args: any[]) => {
@@ -564,6 +567,14 @@
         // Suppress onData during any form of IME composition, and suppress
         // confirmation-key residue (space/enter) briefly after composition ends.
         term.onData((data: string) => {
+          // A Backspace/DEL is always a real edit intent — never swallow it.
+          // WebKit fires compositionend unreliably for CJK, so std_composing can
+          // stick `true` and would otherwise eat every backspace, leaving the
+          // user unable to delete Chinese they just typed.
+          if (data === `\x7f`) {
+            pty_session?.write(data).catch(() => {})
+            return
+          }
           if (std_composing || wk_composing) {
             ime_log(`onData SUPPRESS (composing)`, { data, hex: [...data].map(c => c.codePointAt(0)!.toString(16)) })
             return

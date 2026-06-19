@@ -73,6 +73,22 @@ describe(`createImeGuard`, () => {
     expect(g.should_suppress(` `)).toBe(false)
   })
 
+  it(`never swallows Backspace (DEL) — not as residue, not mid-composition`, () => {
+    // Regression: on iOS/Android WKWebView, compositionend for CJK is
+    // unreliable, so std_composing could stick true and eat EVERY backspace —
+    // the user could not delete Chinese characters they had just typed. A DEL
+    // reaching onData is always a real edit intent; honor it unconditionally.
+    let t = 1000
+    const g = createImeGuard({ write: vi.fn(), now: () => t })
+    // In the post-compose residue window: space is dropped, Backspace is NOT.
+    g.on_composition_end(`字`)
+    expect(g.should_suppress(` `)).toBe(true)
+    expect(g.should_suppress(`\x7f`)).toBe(false)
+    // Even while a composition is (stuck) open, Backspace passes through.
+    g.on_composition_start()
+    expect(g.should_suppress(`\x7f`)).toBe(false)
+  })
+
   it(`never arms the residue window for pure Latin typing`, () => {
     const g = createImeGuard({ write: vi.fn(), now: () => 0 })
     // No composition has happened, so a typed space is never suppressed.
