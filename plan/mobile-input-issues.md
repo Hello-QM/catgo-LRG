@@ -91,7 +91,7 @@ B1 (chat composer) is independent frontend work.
 |---|---|---|
 | A-chat delete | confirmed | edit-stops-transcript fix |
 | A-terminal delete | confirmed | drop `\x7f` from IME_CONFIRM_KEYS |
-| A2 overwrite | confirmed + 1 unknown | segment-commit; need product decision + device log |
+| A2 overwrite | WONTFIX | iOS SFSpeech only; built-in OS dictation is enough — whisper.cpp dropped, in-app mic left as-is (see plan/whisper-on-mobile.md) |
 | B1 chat covered | confirmed | float composer on visualViewport |
 | B2 keybar covered | needs device evidence | verify APK has patch |
 | C status-bar overlap | needs device evidence | verify APK has patch |

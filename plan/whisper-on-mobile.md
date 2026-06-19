@@ -1,3 +1,13 @@
+> **DECISION (2026-06-19): NOT pursuing.** The built-in OS keyboard dictation
+> (Android Gboard / iOS 听写) is already strong enough for CJK and other input,
+> and it feeds text fields as ordinary input — the terminal CJK `insertText` fix
+> (commit d4a7db3) already covers dictation into the terminal. Building/shipping
+> a whisper.cpp engine + model download was judged not worth the size/battery/
+> maintenance cost. This document is retained for the analysis (esp. why
+> WASM-in-WebView is forbidden — the WebKit OOM leak) should the decision be
+> revisited. The in-app SFSpeech mic button (iOS) stays as-is; its multi-sentence
+> "second sentence overwrites first" quirk (A2) is left unfixed.
+
 # Native whisper.cpp on-device STT for CatGo mobile — design + implementation plan (2026-06-19)
 
 Replace the iOS-only `SFSpeechRecognizer` voice input with **whisper.cpp linked
