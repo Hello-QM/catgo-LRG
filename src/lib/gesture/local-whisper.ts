@@ -58,7 +58,11 @@ async function get_pipeline(
       const isolated = typeof globalThis !== `undefined`
         && (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true
       const cores = (typeof navigator !== `undefined` && navigator.hardwareConcurrency) || 4
-      env.backends.onnx.wasm.numThreads = isolated ? Math.min(4, cores) : 1
+      // Use most cores but leave ~2 for the audio worklet / VAD / UI, and cap at
+      // 8 — beyond that wasm Whisper is memory-bandwidth bound and thread-sync
+      // overhead eats the gains (16 threads ≠ 2× of 8). Single thread without
+      // cross-origin isolation (no SharedArrayBuffer).
+      env.backends.onnx.wasm.numThreads = isolated ? Math.max(1, Math.min(8, cores - 2)) : 1
       // Load the onnxruntime-web wasm runtime from a CDN pinned to the version
       // @huggingface/transformers bundles. Without this, the WASM backend (the
       // fallback when WebGPU is unavailable — e.g. machines without a discrete
