@@ -227,7 +227,8 @@ export class LocalWhisperEngine {
     // If the resolved model changed, the pipeline will reload on next transcription
     if (model_changed) {
       pipeline_promise = null
-      current_model_id = null
+      current_key = null // reset the cache key so the pipeline rebuilds (was a
+      // ReferenceError: current_model_id is a getter, not the module-level var)
       console.info(`[LocalWhisper] Language changed, model will reload on next transcription`)
     }
   }
