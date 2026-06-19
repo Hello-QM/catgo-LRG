@@ -68,7 +68,11 @@ async function get_pipeline(
 
     const pipe = await pipeline(`automatic-speech-recognition`, model_id, {
       dtype: `q8`,
-      device: `auto`,
+      // Force the CPU wasm backend. `auto` prefers WebGPU when the browser
+      // exposes it, but q8-quantized Whisper on WebGPU (esp. integrated GPUs)
+      // produces garbage/hallucinated output. wasm is slower but correct.
+      // (A proper WebGPU path would need an fp16/fp32 model variant.)
+      device: `wasm`,
       progress_callback: (data: any) => {
         if (data.status === `progress` && typeof data.progress === `number`) {
           on_progress?.(`downloading`, data.progress)
