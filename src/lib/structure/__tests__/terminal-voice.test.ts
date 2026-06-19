@@ -82,6 +82,24 @@ describe('TerminalVoice', () => {
     expect(sent).toEqual([`one `])
   })
 
+  it('on_error fully stops — no phantom dictation with the button off', async () => {
+    // Regression: on_error only cleared `recording`, leaving the VAD/mic running
+    // so it kept transcribing + injecting while the mic button showed off.
+    let on_err: ((e: string) => void) | null = null
+    const engine = {
+      is_supported: true,
+      start: vi.fn((_cb: any, _l: any, _ai: any, oe: any) => { on_err = oe }),
+      stop: vi.fn(),
+    }
+    const tv = new TerminalVoice(() => engine)
+    await tv.toggle(() => {})
+    expect(tv.recording).toBe(true)
+
+    on_err!('audio-capture')
+    expect(tv.recording).toBe(false)
+    expect(engine.stop).toHaveBeenCalled()
+  })
+
   it('reports unsupported when the engine is unsupported', () => {
     const tv = new TerminalVoice(() => ({ is_supported: false, start: vi.fn(), stop: vi.fn() }))
     expect(tv.is_supported).toBe(false)

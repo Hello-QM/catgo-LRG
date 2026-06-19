@@ -76,3 +76,10 @@ export function stop_vad(): void {
 export function is_vad_running(): boolean {
   return vad_instance !== null
 }
+
+// Dev only: on hot-reload, tear down the live MicVAD. Otherwise its mic stream +
+// audio worklet keep running (orphaned) across reloads and fire the stale
+// callback — phantom dictation with the button off.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => stop_vad())
+}

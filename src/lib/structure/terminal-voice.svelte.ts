@@ -146,7 +146,9 @@ export class TerminalVoice {
     }
     const on_error = (err: string) => {
       this.error = err
-      this.recording = false
+      // Fully stop — clearing only `recording` would leave the VAD/mic running,
+      // so it keeps transcribing and injecting with the button visibly off.
+      this.stop()
     }
 
     // Single global voice: stop whichever pane was recording before taking over.
@@ -165,7 +167,7 @@ export class TerminalVoice {
         this.accel,
       )
     } catch {
-      this.recording = false
+      this.stop() // tear down any partially-started VAD/mic
     }
   }
 
