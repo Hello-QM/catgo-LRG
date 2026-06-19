@@ -32,42 +32,82 @@ export async function open_path_in_new_window(path: string, filename: string, is
   window.open(url, `_blank`, `width=1000,height=760,resizable=yes`)
 }
 
-/** Open a structure in a new popout window via localStorage transfer. */
-export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean) {
-  const key = `catgo-popout-${Date.now()}`
-  localStorage.setItem(key, JSON.stringify({ structure, filename }))
-  const url = `${window.location.origin}${window.location.pathname}#structure?key=${encodeURIComponent(key)}`
+/**
+ * Open the AI chat in its own window. Tauri-aware: a bare `window.open` is
+ * intercepted inside the Tauri WebView and never spawns an OS window, so we use
+ * a `WebviewWindow` there (mirrors Structure.svelte's popout_chat).
+ */
+export async function open_chat_in_new_window(is_tauri: boolean, tab_id?: string) {
+  const url = `${window.location.origin}${window.location.pathname}#chat${tab_id ? `?tab_id=${encodeURIComponent(tab_id)}` : ``}`
   if (is_tauri) {
     try {
       const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
-      const win = new WebviewWindow(`structure-${Date.now()}`, {
-        title: filename || `CatGo - Structure`,
-        url, width: 900, height: 700, center: true, resizable: true, decorations: true,
+      const win = new WebviewWindow(`catgo-chat-${Date.now()}`, {
+        title: `CatGo - Chat`,
+        url, width: 520, height: 760, center: true, resizable: true, decorations: true,
       })
       win.once(`tauri://error`, () => {
-        window.open(url, `_blank`, `width=900,height=700,resizable=yes`)
+        window.open(url, `_blank`, `width=520,height=760,resizable=yes`)
       })
       return
     } catch {}
   }
-  window.open(url, `_blank`, `width=900,height=700,resizable=yes`)
+  window.open(url, `_blank`, `width=520,height=760,resizable=yes`)
+}
+
+/**
+ * Open a structure in a new popout window via localStorage transfer.
+ * `reuse=true` ("Window + Overwrite") targets a single stable window instead of
+ * spawning a fresh one each time: in the browser `window.open` with a fixed name
+ * reloads the same window; in Tauri we focus the existing labelled window.
+ */
+export async function open_structure_in_new_window(structure: AnyStructure, filename: string, is_tauri: boolean, reuse = false) {
+  const stamp = reuse ? `reuse` : `${Date.now()}`
+  const key = `catgo-popout-${stamp}`
+  localStorage.setItem(key, JSON.stringify({ structure, filename }))
+  const url = `${window.location.origin}${window.location.pathname}#structure?key=${encodeURIComponent(key)}`
+  const label = `structure-${stamp}`
+  const win_name = reuse ? label : `_blank`
+  if (is_tauri) {
+    try {
+      const { WebviewWindow } = await import(`@tauri-apps/api/webviewWindow`)
+      if (reuse) {
+        const existing = await WebviewWindow.getByLabel(label)
+        if (existing) {
+          // Tell the live popout to reload the new payload, then focus it.
+          try { await existing.emit(`catgo-reload-structure`, { key }) } catch {}
+          try { await existing.setFocus() } catch {}
+          return
+        }
+      }
+      const win = new WebviewWindow(label, {
+        title: filename || `CatGo - Structure`,
+        url, width: 900, height: 700, center: true, resizable: true, decorations: true,
+      })
+      win.once(`tauri://error`, () => {
+        window.open(url, win_name, `width=900,height=700,resizable=yes`)
+      })
+      return
+    } catch {}
+  }
+  window.open(url, win_name, `width=900,height=700,resizable=yes`)
 }
 
 /** Parse content and open the structure in a new window. */
-export async function parse_and_open_structure_window(content: string, filename: string, is_tauri: boolean) {
+export async function parse_and_open_structure_window(content: string, filename: string, is_tauri: boolean, reuse = false) {
   try {
     const { is_trajectory_file, parse_trajectory_data } = await import(`$lib/trajectory/parse`)
     if (is_trajectory_file(filename, content)) {
       const traj = await parse_trajectory_data(content, filename)
       if (traj?.frames?.length) {
-        await open_structure_in_new_window(traj.frames[0].structure as AnyStructure, filename, is_tauri)
+        await open_structure_in_new_window(traj.frames[0].structure as AnyStructure, filename, is_tauri, reuse)
         return
       }
     }
     const { parse_structure_file } = await import(`$lib/structure/parse`)
     const parsed = parse_structure_file(content, filename)
     if (parsed) {
-      await open_structure_in_new_window(parsed as AnyStructure, filename, is_tauri)
+      await open_structure_in_new_window(parsed as AnyStructure, filename, is_tauri, reuse)
     }
   } catch (e) {
     console.error(`Failed to parse structure for new window:`, e)
