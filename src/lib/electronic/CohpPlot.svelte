@@ -282,11 +282,11 @@
       shapes,
       plot_bgcolor: `rgba(0,0,0,0)`,
       paper_bgcolor: `rgba(0,0,0,0)`,
-      font: { color: pc.text, size: 11 },
+      font: { family: pc.font, color: pc.text, size: 11 },
       showlegend: legend_visible,
       legend: {
         bgcolor: pc.legend_bg,
-        font: { color: pc.text, size: 10 },
+        font: { family: pc.font, color: pc.text, size: 10 },
       },
       margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,
