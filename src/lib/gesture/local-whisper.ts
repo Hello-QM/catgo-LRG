@@ -42,7 +42,16 @@ async function get_pipeline(
     const { pipeline, env } = await import(`@huggingface/transformers`)
 
     if (env.backends?.onnx?.wasm) {
-      env.backends.onnx.wasm.numThreads = 1
+      // Multi-threaded wasm needs SharedArrayBuffer, which only exists when the
+      // page is cross-origin isolated (COOP/COEP headers). When it is, use up to
+      // 4 cores for a big CPU-inference speedup (the common case on machines
+      // without usable WebGPU, e.g. integrated graphics under WebKitGTK); when
+      // it is not, fall back to a single thread (the safe default — more threads
+      // without isolation would fail to init).
+      const isolated = typeof globalThis !== `undefined`
+        && (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true
+      const cores = (typeof navigator !== `undefined` && navigator.hardwareConcurrency) || 4
+      env.backends.onnx.wasm.numThreads = isolated ? Math.min(4, cores) : 1
       // Load the onnxruntime-web wasm runtime from a CDN pinned to the version
       // @huggingface/transformers bundles. Without this, the WASM backend (the
       // fallback when WebGPU is unavailable — e.g. machines without a discrete
