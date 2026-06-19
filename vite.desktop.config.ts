@@ -29,6 +29,14 @@ import {
 } from './vite.shared'
 import { Buffer } from 'node:buffer'
 
+// Cross-origin isolation headers (enables SharedArrayBuffer → multi-threaded
+// wasm). `credentialless` keeps cross-origin (HuggingFace/jsdelivr) fetches
+// working without requiring CORP headers on those responses.
+const COI_HEADERS = {
+  'Cross-Origin-Opener-Policy': `same-origin`,
+  'Cross-Origin-Embedder-Policy': `credentialless`,
+}
+
 const offset = worktree_offset()
 const desktop_port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3100 + offset
 const srv_port = server_port(offset)
@@ -824,12 +832,23 @@ export default defineConfig({
     port: desktop_port,
     strictPort: true,
     fs: { strict: false },
+    // Cross-origin isolation → SharedArrayBuffer → multi-threaded wasm for local
+    // Whisper STT (big CPU speedup when WebGPU is unavailable). COEP is
+    // `credentialless` (not `require-corp`) so cross-origin model/wasm fetches
+    // from the HuggingFace Hub and jsdelivr still work without CORP headers.
+    headers: COI_HEADERS,
     // Point the HMR client at the LAN dev server explicitly — without an
     // explicit clientPort it tries port 80 (ws://<host>/) first, fails, and
     // only then falls back. clientPort pins it to the actual dev-server port.
     ...(tauri_dev_host
       ? { hmr: { protocol: `ws`, host: tauri_dev_host, clientPort: desktop_port } }
       : {}),
+  },
+
+  preview: {
+    port: desktop_port,
+    strictPort: true,
+    headers: COI_HEADERS,
   },
 
   define: {
