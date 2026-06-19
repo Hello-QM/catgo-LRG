@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             key: linux-x64-vulkan
             backend: vulkan
             ext: tar.gz
@@ -48,7 +48,7 @@ jobs:
         run: echo "TAG=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_ENV"
 
       - name: Install Vulkan toolchain (Linux)
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake glslc glslang-tools spirv-headers libvulkan-dev
@@ -57,7 +57,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         uses: jakoch/install-vulkan-sdk-action@v1
         with:
-          vulkan_version: 1.3.275.0
+          vulkan_version: latest
           install_runtime: true
           cache: true
 

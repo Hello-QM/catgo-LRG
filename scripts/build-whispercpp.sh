@@ -21,6 +21,11 @@ case "$BACKEND" in
   *) echo "unknown backend: $BACKEND (expected vulkan|metal)" >&2; exit 1 ;;
 esac
 
+# Resolve OUT to an absolute path BEFORE cd-ing into the temp workdir — a relative
+# OUT would otherwise land inside $WORK and be deleted by the trap below.
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 git clone --depth 1 --branch "$REF" https://github.com/ggml-org/whisper.cpp "$WORK/src" \
