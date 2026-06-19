@@ -147,7 +147,7 @@
           type: `scatter`,
           mode: `lines`,
           name: `${s.label} (down)`,
-          line: { color, width: lw, dash: `dash` },
+          line: { color, width: lw, dash },
           showlegend: true,
           visible: is_hidden ? `legendonly` : true,
         }
