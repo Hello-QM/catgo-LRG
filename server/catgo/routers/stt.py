@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 import wave
 
 import numpy as np
@@ -63,6 +64,10 @@ def _whispercpp_model_path(size: str) -> str:
 # ─── faster-whisper engine ───────────────────────────────────────────────
 _model_cache: dict[str, object] = {}
 _device_compute: tuple[str, str] | None = None
+# Serializes model build + the cuda→cpu fallback. FastAPI runs sync endpoints in
+# a threadpool, so concurrent first requests could otherwise build the same model
+# twice or race on _device_compute during fallback.
+_model_lock = threading.Lock()
 
 
 def _select_device() -> tuple[str, str]:
@@ -96,12 +101,14 @@ def _build_model(size: str, device: str, compute_type: str):
 
 def _get_model(size: str):
     global _device_compute
-    if _device_compute is None:
-        _device_compute = _select_device()
-        logger.info("STT engine: faster-whisper device=%s compute=%s", *_device_compute)
-    device, compute_type = _device_compute
-    key = f"{size}:{device}"
-    if key not in _model_cache:
+    with _model_lock:
+        if _device_compute is None:
+            _device_compute = _select_device()
+            logger.info("STT engine: faster-whisper device=%s compute=%s", *_device_compute)
+        device, compute_type = _device_compute
+        key = f"{size}:{device}"
+        if key in _model_cache:
+            return _model_cache[key]
         logger.info(
             "STT loading model %s (%s/%s, cpu_threads=%s)",
             size, device, compute_type, _CPU_THREADS if device == "cpu" else "-",
@@ -115,8 +122,9 @@ def _get_model(size: str):
             _device_compute = ("cpu", "int8")
             device, compute_type = _device_compute
             key = f"{size}:{device}"
-            _model_cache[key] = _build_model(size, device, compute_type)
-    return _model_cache[key]
+            if key not in _model_cache:
+                _model_cache[key] = _build_model(size, device, compute_type)
+        return _model_cache[key]
 
 
 def _transcribe_faster_whisper(audio: np.ndarray, lang: str | None, size: str):

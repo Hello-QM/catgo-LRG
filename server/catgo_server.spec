@@ -67,7 +67,15 @@ try:
         + collect_submodules('ctranslate2')
         + collect_submodules('faster_whisper')
     )
-except Exception:
+except Exception as _stt_exc:
+    # Don't fail the whole build, but make a missing dep loud — otherwise the
+    # shipped sidecar silently has no native STT and falls back to the broken
+    # in-webview WASM path. Install `faster-whisper` before building.
+    print(
+        f"WARNING [catgo_server.spec]: faster-whisper not collected ({_stt_exc!r}); "
+        "native STT will be UNAVAILABLE in this build — `pip install faster-whisper`",
+        file=sys.stderr,
+    )
     ctranslate2_bins, faster_whisper_datas, stt_hiddenimports = [], [], []
 
 a = Analysis(
