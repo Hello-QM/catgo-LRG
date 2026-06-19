@@ -30,6 +30,20 @@ export function isCJK(text: string): boolean {
   )
 }
 
+/** Hangul (Korean) on the first code point. A Hangul jamo/syllable typed as a
+ *  standalone insertText may be REBUILT by a following insertReplacementText, so
+ *  it must be buffered; non-Hangul CJK (Chinese/Japanese) insertText is final. */
+export function isHangul(text: string): boolean {
+  const cp = text.codePointAt(0) ?? 0
+  return (
+    (cp >= 0x1100 && cp <= 0x11ff) || // Hangul Jamo
+    (cp >= 0x3130 && cp <= 0x318f) || // Hangul Compatibility Jamo
+    (cp >= 0xac00 && cp <= 0xd7af) || // Hangul Syllables
+    (cp >= 0xa960 && cp <= 0xa97f) || // Hangul Jamo Extended-A
+    (cp >= 0xd7b0 && cp <= 0xd7ff) //    Hangul Jamo Extended-B
+  )
+}
+
 // After a composition commits, xterm's deferred _finalizeComposition (and the
 // textarea clear we do) can emit a stray space/enter. Swallow those for a brief
 // window. The window is armed ONLY by a composition ending, so pure Latin typing
@@ -89,12 +103,23 @@ export function createImeGuard(opts: {
         wk_pending = data
         return true
       }
-      // A standalone CJK character may start a new composition (Korean jamo):
-      // flush the previous buffer, then buffer this one.
       if (input_type === `insertText` && data && isCJK(data)) {
-        flush()
-        wk_composing = true
-        wk_pending = data
+        flush() // emit any prior buffered partial first
+        if (isHangul(data)) {
+          // A standalone Hangul jamo/syllable may be REBUILT by a following
+          // insertReplacementText (ㅎ → 하 → 한, or 가 → 각) — buffer it so the
+          // rebuild replaces rather than appends.
+          wk_composing = true
+          wk_pending = data
+        } else {
+          // Chinese / Japanese: the committed word arrives as a collapsed
+          // insertText with NO composition events on this WebView (observed on
+          // Android). It is final and never rebuilt, so write it on arrival.
+          // Buffering it would strand the LAST word — it would flush only on the
+          // NEXT event, dropping the latest input ("会少最新的输入").
+          opts.write(data)
+          post_compose_until = now() + POST_COMPOSE_MS
+        }
         return true
       }
       return false
@@ -106,7 +131,15 @@ export function createImeGuard(opts: {
     on_composition_end(committed) {
       std_composing = false
       post_compose_until = now() + POST_COMPOSE_MS
-      if (committed) opts.write(committed)
+      // The composition is over: emit the final text and CLEAR the WK buffer so
+      // the last CJK word is never stranded waiting for a keydown that won't come
+      // ("会少最新的输入" — the latest word dropped). Prefer the event's committed
+      // data; fall back to the buffered partial when the platform delivers the
+      // text via beforeinput and sends a dataless compositionend.
+      const text = committed || wk_pending
+      wk_composing = false
+      wk_pending = ``
+      if (text) opts.write(text)
     },
     on_keydown(key_code) {
       // keyCode 229 = "IME is processing" — don't flush mid-composition.

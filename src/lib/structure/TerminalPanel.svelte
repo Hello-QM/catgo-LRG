@@ -498,8 +498,13 @@
           xt_textarea.addEventListener(`compositionend`, (e: CompositionEvent) => {
             ime_log(`compositionend`, { data: e.data, textarea: xt_textarea.value })
             std_composing = false
-            const committed = e.data
             post_compose_until = performance.now() + POST_COMPOSE_MS
+            // Prefer the event's committed data; fall back to the buffered WK
+            // partial and CLEAR the buffer so the last CJK word is never stranded
+            // waiting for a keydown that won't come ("会少最新的输入").
+            const committed = e.data || wk_pending
+            wk_composing = false
+            wk_pending = ``
             if (committed) {
               ime_log(`compositionend → PTY write`, { data: committed })
               pty_session?.write(committed).catch(() => {})
@@ -540,13 +545,29 @@
               return
             }
 
-            // insertText with CJK character: may be WKWebView starting a new
-            // composition (especially Korean jamo). Flush previous, buffer new.
+            // insertText with a CJK character. Flush any previous partial first.
             if (e.inputType === `insertText` && data && isCJK(data)) {
               wkFlush()
-              wk_composing = true
-              wk_pending = data
-              ime_log(`beforeinput insertText CJK → buffer`, { data })
+              const cp0 = data.codePointAt(0) ?? 0
+              const isHangul = (cp0 >= 0x1100 && cp0 <= 0x11FF) ||
+                (cp0 >= 0x3130 && cp0 <= 0x318F) || (cp0 >= 0xAC00 && cp0 <= 0xD7AF) ||
+                (cp0 >= 0xA960 && cp0 <= 0xA97F) || (cp0 >= 0xD7B0 && cp0 <= 0xD7FF)
+              if (isHangul) {
+                // Korean jamo/syllable may be REBUILT by a following
+                // insertReplacementText (ㅎ→하→한, 가→각) — buffer it.
+                wk_composing = true
+                wk_pending = data
+                ime_log(`beforeinput insertText Hangul → buffer`, { data })
+              } else {
+                // Chinese/Japanese: the committed word arrives as a collapsed
+                // insertText with NO composition events. It is final and never
+                // rebuilt — write it on arrival. Buffering it would strand the
+                // LAST word (flushed only on the NEXT event), dropping the latest
+                // input ("会少最新的输入").
+                pty_session?.write(data).catch(() => {})
+                post_compose_until = performance.now() + POST_COMPOSE_MS
+                ime_log(`beforeinput insertText CJK → PTY write`, { data })
+              }
               e.preventDefault()
               e.stopPropagation()
               return
