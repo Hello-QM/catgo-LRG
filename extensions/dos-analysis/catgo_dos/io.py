@@ -37,6 +37,16 @@ def _parse_float_fields(text: str) -> list[float]:
     return [float(match.group(0)) for match in _FLOAT_RE.finditer(text)]
 
 
+def _normalize_adjacent_signed_floats(text: str) -> str:
+    """Insert whitespace between adjacent floats while preserving exponents.
+
+    VASP can emit fixed-width values without a separating space when the next
+    value is signed, e.g. ``0.30000000-0.10000000``. Add a space before that
+    sign globally, but do not touch exponent signs such as ``1.25E-03``.
+    """
+    return re.sub(r"(?<=[0-9])([+-])(?=[0-9.])", r" \1", text)
+
+
 def _decode(x: object) -> str:
     if isinstance(x, (bytes, np.bytes_)):
         return x.decode()
@@ -315,6 +325,8 @@ def read_procar(
     -------
     VaspData
     """
+    procar_text = _normalize_adjacent_signed_floats(procar_text)
+
     # --- Step 1: Parse header ---
     # Line 2: "# of k-points:  N   # of bands:  M   # of ions:  K"
     header_match = re.search(
@@ -331,7 +343,7 @@ def read_procar(
 
     # --- Step 2: Parse k-points and weights ---
     kpoint_pattern = re.compile(
-        r"k-point\s+(\d+)\s*:\s+([-.\d\s]+?)weight\s*=\s*([-.\d]+)"
+        r"k-point\s+(\d+)\s*:\s+([-+.\d\sEe]+?)weight\s*=\s*([-+.\dEe]+)"
     )
     kp_matches = kpoint_pattern.findall(procar_text)
 
@@ -354,9 +366,11 @@ def read_procar(
     kpoints = np.zeros((nkpts, 3))
     kweights = np.zeros(nkpts)
     for i in range(nkpts):
-        coords = kp_matches[i][1].split()
-        kpoints[i] = [float(c) for c in coords[:3]]
-        kweights[i] = float(kp_matches[i][2])
+        coords = _parse_float_fields(kp_matches[i][1])
+        if len(coords) < 3:
+            raise ValueError(f"Could not parse k-point coordinates from PROCAR entry {i + 1}")
+        kpoints[i] = coords[:3]
+        kweights[i] = _parse_float_fields(kp_matches[i][2])[0]
 
     # Normalize weights to sum to 1
     wsum = kweights.sum()
