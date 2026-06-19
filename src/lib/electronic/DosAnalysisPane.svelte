@@ -128,6 +128,12 @@
     session ? [...new Set(session.elements)] : []
   )
 
+  $effect(() => {
+    if (selection_mode === `element` && !new_element && unique_elements.length > 0) {
+      new_element = unique_elements[0]
+    }
+  })
+
   function get_orbital_value(): string {
     return new_orbital === `custom` ? new_orbital_custom : new_orbital
   }

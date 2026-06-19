@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PDOSSeries } from './types'
+  import { plot_theme_colors } from './plot-theme.svelte'
 
   let {
     grid = [],
@@ -102,6 +103,7 @@
   $effect(() => {
     if (!Plotly || !plot_div || grid.length === 0 || series.length === 0) return
 
+    const pc = plot_theme_colors()
     const traces: any[] = []
     // Track color index per original series position (so colors stay stable)
     for (let i = 0; i < series.length; i++) {
@@ -212,12 +214,12 @@
     // Axis appearance shared properties
     const grid_props = {
       showgrid: show_gridlines,
-      gridcolor: `rgba(255,255,255,0.1)`,
+      gridcolor: pc.grid,
       gridwidth: 1,
     }
     const line_props = {
       showline: show_axis_lines,
-      linecolor: `rgba(200,200,200,0.5)`,
+      linecolor: pc.line,
       linewidth: axis_line_width,
       mirror: show_axis_lines,
     }
@@ -225,7 +227,7 @@
       ticks: `outside` as const,
       ticklen: tick_length,
       tickwidth: tick_width,
-      tickcolor: `rgba(200,200,200,0.5)`,
+      tickcolor: pc.tick,
     }
 
     const energy_axis = {
@@ -252,11 +254,11 @@
       annotations,
       plot_bgcolor: `rgba(0,0,0,0)`,
       paper_bgcolor: `rgba(0,0,0,0)`,
-      font: { color: `#ccc`, size: 11 },
+      font: { color: pc.text, size: 11 },
       showlegend: legend_visible,
       legend: {
-        bgcolor: `rgba(0,0,0,0.3)`,
-        font: { color: `#ccc`, size: 10 },
+        bgcolor: pc.legend_bg,
+        font: { color: pc.text, size: 10 },
       },
       margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,
