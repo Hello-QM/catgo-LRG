@@ -1,0 +1,149 @@
+name: Build STT accelerator
+
+# Builds prebuilt whisper.cpp `whisper-cli` (GPU backends) for the optional
+# in-app STT accelerator and attaches them — plus a manifest the app reads — to
+# a GitHub Release. Not part of the app release; cut on demand.
+#   Vulkan → Linux/Windows (AMD/Intel iGPU);  Metal → macOS (Apple Silicon).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish assets under
+        default: stt-accel-v1
+  push:
+    tags: ['stt-accel-v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            key: linux-x64-vulkan
+            backend: vulkan
+            ext: tar.gz
+          - os: macos-latest
+            key: macos-arm64-metal
+            backend: metal
+            ext: tar.gz
+          - os: windows-latest
+            key: windows-x64-vulkan
+            backend: vulkan
+            ext: zip
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "TAG=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Install Vulkan toolchain (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake glslc glslang-tools spirv-headers libvulkan-dev
+
+      - name: Install Vulkan SDK (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.275.0
+          install_runtime: true
+          cache: true
+
+      - name: Build (Unix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: bash scripts/build-whispercpp.sh ${{ matrix.backend }} "dist/${{ matrix.key }}"
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/whisper.cpp src
+          cmake -S src -B src/build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=1
+          cmake --build src/build --config Release --target whisper-cli
+          New-Item -ItemType Directory -Force "dist/${{ matrix.key }}" | Out-Null
+          Copy-Item "src/build/bin/Release/*" "dist/${{ matrix.key }}/" -Recurse -Force
+
+      - name: Package + checksum
+        shell: bash
+        run: |
+          mkdir -p out
+          asset="whisper-cli-${{ matrix.key }}.${{ matrix.ext }}"
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            ( cd "dist/${{ matrix.key }}" && 7z a -tzip "$GITHUB_WORKSPACE/out/$asset" . )
+          else
+            tar -C "dist/${{ matrix.key }}" -czf "out/$asset" .
+          fi
+          if command -v sha256sum >/dev/null; then
+            sha=$(sha256sum "out/$asset" | awk '{print $1}')
+          else
+            sha=$(shasum -a 256 "out/$asset" | awk '{print $1}')
+          fi
+          echo "$sha" > "out/$asset.sha256"
+          echo "ASSET=$asset" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.key }}
+          path: out/*
+
+      - name: Upload to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "CatGo STT GPU accelerator binaries"
+          gh release upload "$TAG" "out/$ASSET" "out/$ASSET.sha256" --clobber
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Assemble manifest
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="${INPUT_TAG:-$REF_NAME}"
+          BASE="https://github.com/$REPO/releases/download/$TAG"
+          python3 - "$BASE" <<'PY'
+          import json, sys, glob, os
+          base = sys.argv[1]
+          binaries = {}
+          for shafile in glob.glob('artifacts/**/*.sha256', recursive=True):
+              asset = os.path.basename(shafile)[:-len('.sha256')]
+              key = asset[len('whisper-cli-'):]
+              for suf in ('.tar.gz', '.zip'):
+                  if key.endswith(suf):
+                      key = key[:-len(suf)]
+                      break
+              binaries[key] = {'url': f'{base}/{asset}', 'sha256': open(shafile).read().strip()}
+          json.dump({'version': '1', 'binaries': binaries},
+                    open('stt-accel-manifest.json', 'w'), indent=2)
+          print(open('stt-accel-manifest.json').read())
+          PY
+      - name: Upload manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          gh release upload "${INPUT_TAG:-$REF_NAME}" stt-accel-manifest.json --clobber
