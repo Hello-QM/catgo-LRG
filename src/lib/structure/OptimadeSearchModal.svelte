@@ -916,7 +916,7 @@
                     {@const sg_number = prov.spacegroup_number ?? comp?.spacegroup_number}
                     {@const e_above_hull = mp_data?.energy_above_hull ?? prov.energy_above_hull}
                     {@const formation_energy = mp_data?.formation_energy_per_atom ?? prov.formation_energy ?? attrs._mp_formation_energy_per_atom}
-                    {@const band_gap = mp_data?.band_gap ?? prov.band_gap}
+                    {@const band_gap = mp_data?.band_gap ?? prov.band_gap ?? attrs._mp_band_gap ?? attrs._odbx_band_gap ?? attrs._exmpl_band_gap}
                     {@const is_stable = mp_data?.is_stable ?? prov.is_stable}
                     {@const volume = comp?.volume}
                     {@const density = comp?.density}
