@@ -632,6 +632,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   let voice_recording = $state(false)
   let voice_supported = $state(false)
   let recognition: any = null
+  // Set once the user edits the box while recording. onresult rewrites the whole
+  // input_text each event, so without this a deletion/edit is instantly clobbered
+  // by the next interim result (Chinese feels un-deletable while the mic is live).
+  let voice_edited = $state(false)
 
   $effect(() => {
     voice_supported = typeof window !== `undefined` &&
@@ -659,6 +663,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     recognition.lang = voice_language
 
     recognition.onresult = (event: any) => {
+      if (voice_edited) return // user took over the box — don't clobber their edit
       let transcript = ``
       for (let i = 0; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript
@@ -674,6 +679,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     }
     recognition.onerror = () => { voice_recording = false }
 
+    voice_edited = false // fresh session — transcripts may drive the box again
     voice_recording = true
     recognition.start()
   }
@@ -879,6 +885,17 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     if (!textarea_el) return
     textarea_el.style.height = `auto`
     textarea_el.style.height = `${Math.min(textarea_el.scrollHeight, 120)}px`
+  }
+
+  // Real user edit on the composer. A programmatic `input_text = transcript`
+  // assignment does NOT fire `input`, so this only trips on genuine typing/
+  // deletion — at which point we stop voice from overwriting the box.
+  function on_input_edit() {
+    auto_resize()
+    if (voice_recording && !voice_edited) {
+      voice_edited = true
+      stop_voice()
+    }
   }
 
   $effect(() => {
@@ -1820,7 +1837,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
           bind:value={input_text}
           bind:this={textarea_el}
           onkeydown={handle_keydown}
-          oninput={auto_resize}
+          oninput={on_input_edit}
           onpaste={handle_attach_paste}
           onfocus={(e) => { const w = (e.target as HTMLElement).closest(`.input-wrapper`); w?.classList.add(`focused`) }}
           onblur={(e) => { const w = (e.target as HTMLElement).closest(`.input-wrapper`); w?.classList.remove(`focused`) }}
