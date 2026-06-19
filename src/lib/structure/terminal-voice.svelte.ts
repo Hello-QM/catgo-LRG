@@ -11,6 +11,8 @@ import { LocalWhisperEngine, type ModelStatus } from '$lib/gesture/local-whisper
 import { DEFAULT_WHISPER_MODEL_ID } from '$lib/gesture/whisper-models'
 import type { VoiceEvent } from '$lib/gesture/gesture-types'
 
+export type Accel = `cpu` | `gpu`
+
 export interface VoiceEngineLike {
   readonly is_supported: boolean
   start(
@@ -20,12 +22,14 @@ export interface VoiceEngineLike {
     on_error?: (err: string) => void,
     noise_suppression?: boolean,
     model_id?: string,
+    accel?: Accel,
   ): void | Promise<void>
   stop(): void
 }
 
 const STORAGE_KEY = `catgo-terminal-voice-model`
 const LANG_KEY = `catgo-terminal-voice-lang`
+const ACCEL_KEY = `catgo-terminal-voice-accel`
 
 export class TerminalVoice {
   recording = $state(false)
@@ -36,6 +40,9 @@ export class TerminalVoice {
   // lean), `zh-CN` → forced Chinese, etc. Forcing the language fixes Chinese
   // speech being transcribed as English under auto-detect on short audio.
   language = $state(`en-US`)
+  // `cpu` = wasm/q8 (correct everywhere). `gpu` = WebGPU/fp16 (faster where
+  // WebGPU is sound; opt-in because some integrated GPUs misbehave).
+  accel = $state<Accel>(`cpu`)
   error = $state<string | null>(null)
 
   private make_engine: () => VoiceEngineLike
@@ -64,6 +71,8 @@ export class TerminalVoice {
       if (saved) this.model_id = saved
       const lang = localStorage.getItem(LANG_KEY)
       if (lang) this.language = lang
+      const accel = localStorage.getItem(ACCEL_KEY)
+      if (accel === `cpu` || accel === `gpu`) this.accel = accel
     }
   }
 
@@ -82,6 +91,12 @@ export class TerminalVoice {
     if (typeof localStorage !== `undefined`) localStorage.setItem(LANG_KEY, lang)
     // Apply live if an engine exists so a mid-session change takes effect.
     ;(this.engine as { set_language?: (l: string) => void } | null)?.set_language?.(lang)
+  }
+
+  set_accel(accel: Accel): void {
+    this.accel = accel
+    if (typeof localStorage !== `undefined`) localStorage.setItem(ACCEL_KEY, accel)
+    // Takes effect on the next start() (pipeline reloads for the new backend).
   }
 
   async toggle(send: (text: string) => void, language?: string): Promise<void> {
@@ -111,7 +126,15 @@ export class TerminalVoice {
 
     this.recording = true
     try {
-      await this.engine.start(on_event, language ?? this.language, false, on_error, false, this.model_id)
+      await this.engine.start(
+        on_event,
+        language ?? this.language,
+        false,
+        on_error,
+        false,
+        this.model_id,
+        this.accel,
+      )
     } catch {
       this.recording = false
     }

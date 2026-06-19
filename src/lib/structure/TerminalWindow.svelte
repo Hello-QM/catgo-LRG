@@ -355,7 +355,16 @@
                 onclick={() => { voice.set_language(l.tag) }}
               >{l.label}</button>
             {/each}
-            <div class="tw-dropdown-note">中英混合：选「中文」+ 更大模型(Small / Large turbo)效果最好</div>
+            <div class="tw-dropdown-divider"></div>
+            <div class="tw-dropdown-header">Acceleration</div>
+            {#each [{ a: `cpu`, label: `CPU (稳定)` }, { a: `gpu`, label: `GPU / WebGPU (实验·更快)` }] as opt}
+              <button
+                class="tw-dropdown-item"
+                class:tw-voice-selected={voice.accel === opt.a}
+                onclick={() => { voice.set_accel(opt.a === `gpu` ? `gpu` : `cpu`) }}
+              >{opt.label}</button>
+            {/each}
+            <div class="tw-dropdown-note">中英混合：选「中文」+ 更大模型。GPU 需浏览器支持 WebGPU,出乱码就切回 CPU</div>
             {#if voice.model_status === `downloading`}
               <div class="tw-dropdown-note">Downloading… {Math.round(voice.download_progress)}%</div>
             {:else if voice.model_status === `error` || voice.error}

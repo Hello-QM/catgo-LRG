@@ -20,21 +20,28 @@ export type ModelProgressCallback = (status: ModelStatus, progress?: number) => 
 
 // ─── Singleton Pipeline ──────────────────────────────────────────────
 
+/** Inference backend. cpu = wasm + q8 (correct everywhere, slower). gpu =
+ * WebGPU + fp16 (fast where WebGPU is sound; q8-on-WebGPU hallucinates, so the
+ * GPU path uses an fp16 model variant instead). */
+export type Accel = `cpu` | `gpu`
+
 let pipeline_promise: Promise<any> | null = null
-let current_model_id: string | null = null
+let current_key: string | null = null
 
 async function get_pipeline(
   model_id: string,
+  accel: Accel = `cpu`,
   on_progress?: ModelProgressCallback,
 ): Promise<any> {
-  // Return cached pipeline if same model
-  if (pipeline_promise && current_model_id === model_id) {
+  const key = `${model_id}::${accel}`
+  // Return cached pipeline if same model + backend
+  if (pipeline_promise && current_key === key) {
     return pipeline_promise
   }
 
-  // New model needed — reset
+  // New model/backend needed — reset
   pipeline_promise = null
-  current_model_id = model_id
+  current_key = key
 
   on_progress?.(`loading`)
 
@@ -66,13 +73,12 @@ async function get_pipeline(
 
     on_progress?.(`downloading`, 0)
 
+    // CPU path: wasm + q8 (correct everywhere). GPU path: WebGPU + fp16 — q8 on
+    // WebGPU produces garbage/hallucinated output (esp. integrated GPUs), so the
+    // GPU path uses the fp16 model variant, which runs correctly on WebGPU.
     const pipe = await pipeline(`automatic-speech-recognition`, model_id, {
-      dtype: `q8`,
-      // Force the CPU wasm backend. `auto` prefers WebGPU when the browser
-      // exposes it, but q8-quantized Whisper on WebGPU (esp. integrated GPUs)
-      // produces garbage/hallucinated output. wasm is slower but correct.
-      // (A proper WebGPU path would need an fp16/fp32 model variant.)
-      device: `wasm`,
+      dtype: accel === `gpu` ? `fp16` : `q8`,
+      device: accel === `gpu` ? `webgpu` : `wasm`,
       progress_callback: (data: any) => {
         if (data.status === `progress` && typeof data.progress === `number`) {
           on_progress?.(`downloading`, data.progress)
@@ -88,7 +94,7 @@ async function get_pipeline(
     return await pipeline_promise
   } catch (err) {
     pipeline_promise = null
-    current_model_id = null
+    current_key = null
     on_progress?.(`error`)
     throw err
   }
@@ -99,8 +105,9 @@ export async function preload_whisper_model(
   language = `en`,
   on_progress?: ModelProgressCallback,
   model_id?: string,
+  accel: Accel = `cpu`,
 ): Promise<void> {
-  await get_pipeline(resolve_model_id(model_id, language), on_progress)
+  await get_pipeline(resolve_model_id(model_id, language), accel, on_progress)
 }
 
 // ─── Local Whisper Engine ────────────────────────────────────────────
@@ -115,6 +122,7 @@ export class LocalWhisperEngine {
   private pipeline: AudioPipeline | null = null
   private on_progress: ModelProgressCallback | undefined
   private model_id: string | null = null
+  private accel: Accel = `cpu`
 
   constructor(on_progress?: ModelProgressCallback) {
     this.on_progress = on_progress
@@ -140,6 +148,7 @@ export class LocalWhisperEngine {
     on_error?: VoiceErrorCallback,
     noise_suppression = false,
     model_id?: string,
+    accel: Accel = `cpu`,
   ): Promise<void> {
     if (this.running) return
     this.callback = callback
@@ -147,10 +156,11 @@ export class LocalWhisperEngine {
     this.language = language.split(`-`)[0]
     this.ai_enabled = ai_enabled
     this.model_id = resolve_model_id(model_id, this.language)
+    this.accel = accel
 
     try {
       // Load model first (may trigger download)
-      await get_pipeline(this.model_id, this.on_progress)
+      await get_pipeline(this.model_id, this.accel, this.on_progress)
 
       // Optionally create noise suppression pipeline
       let stream: MediaStream | undefined
@@ -216,6 +226,7 @@ export class LocalWhisperEngine {
     try {
       const pipe = await get_pipeline(
         this.model_id ?? resolve_model_id(undefined, this.language),
+        this.accel,
         this.on_progress,
       )
 
