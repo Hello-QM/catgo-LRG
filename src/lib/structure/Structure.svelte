@@ -1510,6 +1510,7 @@
         const filename = `${base_name}_data.csv`
         download(csv, filename, `text/csv;charset=utf-8`)
         set_status(t(`structure.export_started`, { filename }))
+        setTimeout(() => set_status(null), 4000)
         return
       }
 
@@ -1521,6 +1522,7 @@
       const filename = `${base_name}_plot.${format}`
       download(await data_url_to_blob(url), filename, format === `svg` ? `image/svg+xml` : `image/png`)
       set_status(t(`structure.export_started`, { filename }))
+      setTimeout(() => set_status(null), 4000)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       set_status(t(`structure.export_failed`, { what: format.toUpperCase(), message }))

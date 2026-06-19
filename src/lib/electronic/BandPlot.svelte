@@ -234,7 +234,7 @@
 
     const layout: any = {
       xaxis: {
-        title: ``,
+        title: { text: `Wave Vector` },
         tickmode: `array`,
         tickvals: tick_positions,
         ticktext: tick_labels,
@@ -246,7 +246,7 @@
         ...tick_props_obj,
       },
       yaxis: {
-        title: `E \u2013 E<sub>f</sub> (eV)`,
+        title: { text: `E \u2013 E<sub>f</sub> (eV)` },
         range: [emin, emax],
         zeroline: false,
         ...grid_props,
@@ -263,7 +263,7 @@
         bgcolor: `rgba(0,0,0,0.3)`,
         font: { color: `#ccc`, size: 10 },
       },
-      margin: { l: 55, r: 10, t: 10, b: 30 },
+      margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,
       hovermode: `closest`,
       autosize: true,

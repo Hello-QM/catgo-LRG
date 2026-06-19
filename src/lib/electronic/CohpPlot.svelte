@@ -258,7 +258,7 @@
 
     const cohp_label = invert_cohp ? `\u2013COHP (eV)` : `COHP (eV)`
     const energy_axis = {
-      title: `E \u2013 E<sub>f</sub> (eV)`,
+      title: { text: `E \u2013 E<sub>f</sub> (eV)` },
       zeroline: false,
       range: is_horizontal ? (y_range ?? undefined) : (x_range ?? undefined),
       ...grid_props,
@@ -266,7 +266,7 @@
       ...tick_props,
     }
     const cohp_axis = {
-      title: cohp_label,
+      title: { text: cohp_label },
       zeroline: true,
       range: is_horizontal ? (x_range ?? undefined) : (y_range ?? undefined),
       ...grid_props,
@@ -286,7 +286,7 @@
         bgcolor: `rgba(0,0,0,0.3)`,
         font: { color: `#ccc`, size: 10 },
       },
-      margin: { l: 55, r: 10, t: 10, b: 40 },
+      margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,
       hovermode: is_horizontal ? `y unified` : `x unified`,
       autosize: true,
