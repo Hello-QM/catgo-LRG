@@ -193,13 +193,31 @@ def _pick_asset(manifest: dict, key: str) -> dict | None:
     return (manifest.get("binaries") or {}).get(key)
 
 
+def _is_within(base: Path, target: Path) -> bool:
+    try:
+        target.resolve().relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _extract(archive: Path, dest_dir: Path) -> None:
+    """Extract an archive, rejecting path-traversal (Zip/Tar Slip) and link
+    members so a malicious/compromised asset can't write outside dest_dir."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     if archive.name.endswith(".zip"):
         with zipfile.ZipFile(archive) as z:
+            for name in z.namelist():
+                if not _is_within(dest_dir, dest_dir / name):
+                    raise ValueError(f"unsafe path in archive: {name}")
             z.extractall(dest_dir)
     else:  # .tar.gz / .tgz
         with tarfile.open(archive) as t:
+            for m in t.getmembers():
+                if m.issym() or m.islnk():
+                    raise ValueError(f"link member not allowed: {m.name}")
+                if not _is_within(dest_dir, dest_dir / m.name):
+                    raise ValueError(f"unsafe path in archive: {m.name}")
             t.extractall(dest_dir)
 
 

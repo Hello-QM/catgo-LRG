@@ -62,6 +62,47 @@ def test_verify_and_place_sha_mismatch(accel, tmp_path):
     assert not src.exists()  # cleaned up
 
 
+def test_extract_rejects_tar_slip(accel, tmp_path):
+    import io
+    import tarfile
+
+    arc = tmp_path / "evil.tar.gz"
+    with tarfile.open(arc, "w:gz") as t:
+        data = b"pwned"
+        info = tarfile.TarInfo("../escape.txt")
+        info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+    with pytest.raises(ValueError):
+        accel._extract(arc, tmp_path / "dest")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_extract_rejects_zip_slip(accel, tmp_path):
+    import zipfile
+
+    arc = tmp_path / "evil.zip"
+    with zipfile.ZipFile(arc, "w") as z:
+        z.writestr("../escape.txt", "pwned")
+    with pytest.raises(ValueError):
+        accel._extract(arc, tmp_path / "dest")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_extract_ok(accel, tmp_path):
+    import io
+    import tarfile
+
+    arc = tmp_path / "ok.tar.gz"
+    with tarfile.open(arc, "w:gz") as t:
+        data = b"hi"
+        info = tarfile.TarInfo("whisper-cli")
+        info.size = len(data)
+        t.addfile(info, io.BytesIO(data))
+    dest = tmp_path / "dest"
+    accel._extract(arc, dest)
+    assert (dest / "whisper-cli").read_bytes() == b"hi"
+
+
 def test_paths_and_installed(accel, tmp_path):
     assert str(accel.install_dir()).startswith(str(tmp_path))
     assert accel.model_path("small").name == "ggml-small.bin"

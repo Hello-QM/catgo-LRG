@@ -6,6 +6,16 @@
   import { WHISPER_MODELS } from '$lib/gesture/whisper-models'
   import { get_active_terminal } from './terminal-registry.svelte'
   import { backend_stt_available } from '$lib/gesture/backend-whisper'
+  import {
+    accel_status,
+    accel_install,
+    accel_download_model,
+    accel_set_engine,
+    poll_accel_progress,
+    resolve_stt_size,
+    type AccelStatus,
+    type SttEngine,
+  } from '$lib/gesture/stt-accel'
   import { fetchConnections, type ConnectionInfo } from '$lib/api/hpc'
   import { fetchAvailableShells, type ShellInfo } from '$lib/api/pty'
   import { hpc_session_store, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
@@ -191,6 +201,37 @@
   let stt_backend = $state(false)
   $effect(() => { backend_stt_available().then((v) => { stt_backend = v }) })
 
+  // Optional GPU accelerator (whisper.cpp Vulkan/Metal) — status refreshed when
+  // the voice menu opens; download/enable drives it via the backend /accel/* API.
+  let accel_state = $state<AccelStatus | null>(null)
+  let accel_busy = $state(false)
+  async function refresh_accel() { accel_state = await accel_status() }
+  $effect(() => { if (show_voice_menu) refresh_accel() })
+
+  async function enable_gpu() {
+    accel_busy = true
+    try {
+      if (accel_state && !accel_state.binary_installed) {
+        await accel_install()
+        await poll_accel_progress((s) => { accel_state = s })
+      }
+      const size = resolve_stt_size(voice.model_id)
+      if (accel_state && !accel_state.models_installed.includes(size)) {
+        await accel_download_model(size)
+        await poll_accel_progress((s) => { accel_state = s })
+      }
+      await accel_set_engine(`whispercpp`)
+      await refresh_accel()
+    } finally {
+      accel_busy = false
+    }
+  }
+
+  async function set_stt_engine(engine: SttEngine) {
+    await accel_set_engine(engine)
+    await refresh_accel()
+  }
+
   function toggle_voice() {
     voice.toggle((text) => { get_active_terminal()?.send_keys(text) })
   }
@@ -360,7 +401,30 @@
                 onclick={() => { voice.set_language(l.tag) }}
               >{l.label}</button>
             {/each}
-            {#if stt_backend}
+            {#if accel_state?.gpu_api}
+              <div class="tw-dropdown-divider"></div>
+              <div class="tw-dropdown-header">GPU 加速 · {accel_state.gpu_api}</div>
+              <div class="tw-dropdown-note">
+                {accel_state.gpu_name ?? accel_state.gpu_api} —
+                {accel_state.engine === `whispercpp` ? `已启用` : `未启用`}
+              </div>
+              {#if accel_state.download.active}
+                <div class="tw-dropdown-note">下载中（{accel_state.download.kind}）{accel_state.download.pct}%…</div>
+              {:else if accel_state.engine === `whispercpp`}
+                <button class="tw-dropdown-item tw-voice-selected" onclick={() => set_stt_engine(`faster-whisper`)}>切回 CPU（faster-whisper）</button>
+              {:else}
+                <button class="tw-dropdown-item" disabled={accel_busy} onclick={enable_gpu}>
+                  {accel_busy
+                    ? `处理中…`
+                    : accel_state.binary_installed
+                    ? `启用 GPU 加速（whisper.cpp）`
+                    : `下载并启用 GPU（whisper.cpp，~60MB + 模型）`}
+                </button>
+              {/if}
+              {#if accel_state.download.error}
+                <div class="tw-dropdown-note tw-voice-error">下载失败：{accel_state.download.error}</div>
+              {/if}
+            {:else if stt_backend}
               <div class="tw-dropdown-divider"></div>
               <div class="tw-dropdown-note">原生后端转写（设备自动：CPU / CUDA）· 不占内存 · 可放心选更大模型。中英混合选「中文」+ 更大模型</div>
             {:else}
