@@ -25,12 +25,17 @@ export interface VoiceEngineLike {
 }
 
 const STORAGE_KEY = `catgo-terminal-voice-model`
+const LANG_KEY = `catgo-terminal-voice-lang`
 
 export class TerminalVoice {
   recording = $state(false)
   model_status = $state<ModelStatus>(`idle`)
   download_progress = $state(0)
   model_id = $state(DEFAULT_WHISPER_MODEL_ID)
+  // BCP-47-ish tag handed to the engine; `en-US` → Whisper auto-detect (English
+  // lean), `zh-CN` → forced Chinese, etc. Forcing the language fixes Chinese
+  // speech being transcribed as English under auto-detect on short audio.
+  language = $state(`en-US`)
   error = $state<string | null>(null)
 
   private make_engine: () => VoiceEngineLike
@@ -46,6 +51,8 @@ export class TerminalVoice {
     if (typeof localStorage !== `undefined`) {
       const saved = localStorage.getItem(STORAGE_KEY)
       if (saved) this.model_id = saved
+      const lang = localStorage.getItem(LANG_KEY)
+      if (lang) this.language = lang
     }
   }
 
@@ -59,7 +66,14 @@ export class TerminalVoice {
     if (typeof localStorage !== `undefined`) localStorage.setItem(STORAGE_KEY, id)
   }
 
-  async toggle(send: (text: string) => void, language = `en-US`): Promise<void> {
+  set_language(lang: string): void {
+    this.language = lang
+    if (typeof localStorage !== `undefined`) localStorage.setItem(LANG_KEY, lang)
+    // Apply live if an engine exists so a mid-session change takes effect.
+    ;(this.engine as { set_language?: (l: string) => void } | null)?.set_language?.(lang)
+  }
+
+  async toggle(send: (text: string) => void, language?: string): Promise<void> {
     if (this.recording) {
       this.stop()
       return
@@ -80,7 +94,7 @@ export class TerminalVoice {
 
     this.recording = true
     try {
-      await this.engine.start(on_event, language, false, on_error, false, this.model_id)
+      await this.engine.start(on_event, language ?? this.language, false, on_error, false, this.model_id)
     } catch {
       this.recording = false
     }

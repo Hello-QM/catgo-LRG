@@ -346,6 +346,16 @@
                 onclick={() => { voice.set_model(m.id); show_voice_menu = false }}
               >{m.label} · ~{m.size_mb}MB</button>
             {/each}
+            <div class="tw-dropdown-divider"></div>
+            <div class="tw-dropdown-header">Spoken language</div>
+            {#each [{ tag: `en-US`, label: `English / 自动` }, { tag: `zh-CN`, label: `中文 (普通话)` }] as l}
+              <button
+                class="tw-dropdown-item"
+                class:tw-voice-selected={voice.language === l.tag}
+                onclick={() => { voice.set_language(l.tag) }}
+              >{l.label}</button>
+            {/each}
+            <div class="tw-dropdown-note">中英混合：选「中文」+ 更大模型(Small / Large turbo)效果最好</div>
             {#if voice.model_status === `downloading`}
               <div class="tw-dropdown-note">Downloading… {Math.round(voice.download_progress)}%</div>
             {:else if voice.model_status === `error` || voice.error}
