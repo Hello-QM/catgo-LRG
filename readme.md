@@ -49,17 +49,143 @@ Scan to join the CatGo QQ group:
 
 ## ✨ Features
 
+CatGo is far more than a structure viewer. One window spans the whole
+computational-materials loop — **read almost any code's files → build & edit →
+run DFT / ML / MD → submit to HPC → analyse → publish** — with an AI copilot
+(**CatBot**) and a visual workflow engine threaded through all of it.
+
 | Area                       | Capability                                                                                                                                                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **3D Viewer**              | Crystals · molecules · surfaces · trajectories · PBC image atoms · bond rendering across cell boundaries · selectable polyhedra · per-element / per-site colour overrides · light, dark, white, black themes       |
-| **CatBot**                 | Natural-language structure operations and workflow authoring via Claude, Codex, Gemini, or OpenAI                                                                                                                  |
-| **Workflow**               | DAG editor for chained calculations (opt → SP → DOS / NEB / MD / slow-growth …) with one-click stock-recipe Quick-Build (HER, OER, ORR, NRR, CO₂RR, NEB, slow-growth, DOS)                                         |
-| **HPC**                    | SSH terminal, file browser, job submit and monitor, OTP + jump-host + SOCKS5                                                                                                                                       |
-| **DFT inputs**             | Native: VASP, Quantum ESPRESSO, LAMMPS, CP2K, ORCA. CatBot-drafted only (skill text, no workflow node executor): GPAW, ABINIT, SIESTA, DFTB+, Gaussian                                                             |
-| **ML potentials**          | MACE (incl. mace_mp foundation), CHGNet, M3GNet (via matgl)                                                                                                                                                        |
-| **Other fast calculators** | EMT (effective-medium theory), xTB / GFN-xTB (semi-empirical tight-binding via tblite + xtb-CLI)                                                                                                                   |
-| **Analysis**               | DOS / PDOS, band structure, COHP / ICOHP, d-band centre, charge-density cube isosurface, volcano plots, Gibbs free-energy corrections, Bader-charge label overlay (reads pre-computed values from site properties) |
-| **Catalysis**              | OER / HER / ORR / CO₂RR / NRR pathways, ICONST templates for slow-growth, C–N coupling reaction network                                                                                                            |
+| **3D Viewer**              | Crystals · molecules · surfaces · trajectories · PBC image atoms · bonds rendered **across cell boundaries** · selectable polyhedra · per-element / per-site colour overrides · ortho **&** perspective cameras · interactive lighting (ambient/key/fill/rim) · light, dark, white, black themes · live 3D axis indicator |
+| **Multi-pane workspace**   | Tabs · tiling split-view · pop-out windows · drag-drop panes · each pane an **independent** structure/trajectory with its own state · sidebar structure library bound pane-by-pane                                  |
+| **Open ~30 formats**       | VASP, Quantum ESPRESSO, CP2K, ABACUS, ORCA, Gaussian, CASTEP, SIESTA, OpenMX, LAMMPS, ASE `.traj`, phonopy, HDF5, CIF, XYZ/extXYZ, mol2, PDB, cube/CHGCAR — inputs **and** outputs (see [Supported formats](#-supported-formats)) |
+| **Write ready-to-run decks** | Format-preserving export to VASP, QE, CP2K, ABACUS, ORCA, Gaussian, LAMMPS, GROMACS, AMBER, SPARK — keeps your headers & keywords intact                                                                          |
+| **Edit & build**           | Move/add/delete/copy-paste atoms · manual & auto bonds · lattice editing (with optional atom scaling) · supercells · single/multi/**box** selection · distance/angle/dihedral measurement · selective-dynamics fixed atoms · full undo/redo · right-click menu · element picker |
+| **Structure builders**     | Miller-index slab cutter · adsorbate & dual-adsorbate placement · moiré / twisted bilayers · nanotube roller (CNT/BNNT/chiral) · nanoscroll · heterostructure stacker (lattice-matched) · reticular / MOF · doping & substitution · pseudo-H passivation · water layers |
+| **CatBot (AI)**            | Natural-language structure ops, builders & workflow authoring via Claude, Codex, Gemini, Ollama, DeepSeek/Qwen/Kimi/GLM — ~28 MCP tools + on-demand DFT skill guides                                               |
+| **Workflow**               | DAG editor for chained calculations (opt → SP → DOS / NEB / MD / slow-growth …) with one-click Quick-Build recipes (HER, OER, ORR, NRR, CO₂RR, NEB, slow-growth, DOS)                                              |
+| **HPC**                    | SSH terminal · remote file browser · job submit & monitor · SLURM / PBS / LSF / SGE · OTP + jump-host + SOCKS5                                                                                                     |
+| **DFT inputs**             | Native workflow engine: VASP, Quantum ESPRESSO, LAMMPS, CP2K, ORCA. CatBot-drafted (skill text): GPAW, ABINIT, SIESTA, DFTB+, Gaussian                                                                            |
+| **ML / fast calculators**  | MACE (incl. mace_mp foundation), CHGNet, M3GNet (matgl); EMT; xTB / GFN-xTB — for cheap pre-screening before DFT                                                                                                   |
+| **Analysis**               | DOS / PDOS, band structure, COHP / ICOHP, d-band centre, Brillouin zone, XRD, RDF, MSD/MD analytics, charge-density isosurfaces, volcano plots, Gibbs free-energy diagrams, phase diagrams (2D/3D/4D)              |
+| **Catalysis**              | OER / HER / ORR / CO₂RR / NRR pathways, ICONST slow-growth templates, C–N coupling reaction network                                                                                                               |
+| **Import & databases**     | Drag-drop · paste · OPTIMADE search (Materials Project, MC3D, Alexandria, MaterialsCloud, OMDB, 2DMatPedia) · PubChem molecule search                                                                              |
+| **Export**                 | HD PNG / JPG / TIFF / SVG / PDF renders · GLB / OBJ 3D models · trajectory video (WebM / MP4) & PNG-sequence · DOS/XRD CSV                                                                                          |
+| **More**                   | Document viewer (PDF/DOCX/XLSX/CSV/Markdown/HTML) · Mol\* bio viewer · WebGPU large-system rendering · integrated terminal · voice & gesture control · plugin hub · iOS / Android builds · English / 中文            |
+
+---
+
+## 🧩 Editions & scope
+
+> The feature and format tables on this page describe the **CatGo desktop client** — the full workbench. The other editions reuse the same viewer core but ship a different shell around it.
+
+| Edition | What it does |
+| --- | --- |
+| **Desktop client** (Windows · macOS · Linux) | **The full workbench** — viewer, editing, builders, CatBot, workflow engine, HPC submit/monitor, analysis suites, every import/export |
+| **Web app** — <https://app.catgo-ucsd.org> | Runs in the browser with the same interactive viewer; backend-dependent features (workflow *execution*, HPC) depend on a connected server |
+| **VS Code extension** | Embeds the **full single-window viewer** — view, animate **and edit** structures/trajectories, the structure toolbar (builders, analysis, OPTIMADE/PubChem import), save/export, right in the editor (+ remote-SSH file viewing). It does **not** load the desktop shell: no multi-pane tabbed workspace, no standalone workflow editor, no HPC job manager. See its [README](extensions/vscode/readme.md) |
+| **Claude Code / MCP plugin** (`catbot-plugin/`) | An AI tool layer (~60 tools) that drives a **running** CatGo from an agent — it doesn't render anything itself |
+
+So the parts that are **desktop-client (shell) only** are the multi-pane tabbed workspace, the visual workflow DAG editor, and the HPC terminal/job manager. Editing, builders, export and the in-viewer tools come along with the embedded viewer.
+
+---
+
+## 📂 Supported formats
+
+CatGo speaks the file languages of most DFT, MD and quantum-chemistry codes —
+not just POSCAR and CIF. **Read** = open/import into the viewer; **Write** =
+export a ready-to-run input or a structure file (headers & keywords preserved).
+
+### By software / code
+
+| Software | Read | Write |
+| --- | --- | --- |
+| **VASP** | POSCAR · CONTCAR · `.vasp` · vasprun.xml · OUTCAR · XDATCAR · CHGCAR/AECCAR/LOCPOT/ELFCAR/PARCHG | POSCAR · INCAR · KPOINTS (full input deck) |
+| **Quantum ESPRESSO** | pw.x input (`.in`, scf/relax/…) | pw.x input |
+| **CP2K** | `.inp` · `.restart` | CP2K input (`&CELL`/`&COORD`/`&KPOINTS`) |
+| **ABACUS** | STRU | INPUT + STRU + KPT |
+| **ORCA** | `.inp` / `.out` (xyz / internal / `%coords`) | ORCA input |
+| **Gaussian** | `.gjf` / `.com` (+ Z-matrix) · `.log` / `.out` · cube | `.gjf` |
+| **CASTEP** | `.cell` | — |
+| **SIESTA** | `.fdf` | — |
+| **OpenMX** | `.dat` | — |
+| **LAMMPS** | `.data` / `.lmp` · dump / `.lammpstrj` | data + run script |
+| **GROMACS** | — | `.mdp` + `.gro` + `.top` |
+| **AMBER** | — | mdin |
+| **ASE** | `.traj` (binary) · extXYZ | extXYZ |
+| **phonopy / phono3py** | YAML | — |
+| **SPARK** (kMC/MKM) | — | kMC / MKM deck |
+
+### Generic & molecular
+
+| Kind | Read | Write |
+| --- | --- | --- |
+| Crystallography | CIF · mCIF · pymatgen JSON · OPTIMADE JSON | CIF · pymatgen JSON |
+| Molecular | XYZ · extXYZ · mol2 · PDB · PubChem JSON | XYZ · extXYZ · mol2 · PDB |
+| Trajectory / MD | XDATCAR · OUTCAR · extXYZ (multi) · ASE `.traj` · LAMMPS dump · HDF5 (torch-sim / vaspout.h5) · vasprun.xml · JSON frames | extXYZ (multi) · video (WebM/MP4) · PNG-sequence |
+| Volumetric | Gaussian cube · VASP CHGCAR family → isosurface | — |
+| Renders & models | — | PNG · JPG · TIFF · SVG · PDF · **GLB** · **OBJ** |
+| Documents (preview) | PDF · DOCX · XLSX/XLS/ODS · CSV/TSV · Markdown/RST · images | — |
+
+> Reading the wide DFT-code range above is handled by CatGo's in-app parsers.
+> A handful of formats are import-only (CASTEP, SIESTA, OpenMX, phonopy, OUTCAR,
+> vasprun.xml, Gaussian output, cube); the rest round-trip read **and** write.
+
+---
+
+## ⌨️ Keyboard shortcuts
+
+A dense, mouse-light editing experience. `Ctrl` below means **Ctrl or ⌘**.
+
+### File · tabs · panes
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl`+`O` | Open file into the active pane |
+| `Ctrl`+`T` | New structure tab |
+| `Ctrl`+`W` | Close pane (or tab if last pane) |
+| `Ctrl`+`Tab` / `Ctrl`+`Shift`+`Tab` | Next / previous tab |
+| `1` `2` `3` `4` | Activate the *n*-th pane |
+| `Ctrl`+`Enter` | Load pasted structure text |
+| `Ctrl`+`/` | Toggle CatBot chat |
+
+### Selection · editing
+
+| Shortcut | Action |
+| --- | --- |
+| Click / `Ctrl`-drag | Toggle atom / box-select (⌘-drag on macOS) |
+| `Ctrl`+`C` / `Ctrl`+`V` | Copy / paste atoms |
+| `Delete` / `Backspace` | Delete selected atoms, bonds or measurement |
+| `Shift`+`Alt`+`Arrows` / `W` `S` | Move selected atoms (screen plane / depth) |
+| `Shift`+`Arrows` / `W` `S` | Rotate selected atoms (yaw / pitch / roll) |
+| `Shift`-drag / `Shift`+right-drag | Rotate / roll selected atoms |
+| `X` `Y` `Z` (hold) | Lock move/rotate to one axis |
+| `Shift` = 10× · `Ctrl` = 0.1× | Movement step modifier |
+| `Ctrl`+`Z` · `Ctrl`+`Shift`+`Z` / `Ctrl`+`Y` | Undo / redo |
+
+### View · camera
+
+| Shortcut | Action |
+| --- | --- |
+| Left-drag · middle-drag · scroll | Orbit · pan · zoom-to-cursor |
+| `Arrows` / `W` `S` (nothing selected) | Rotate / roll the camera |
+| right-drag (nothing selected) | Roll camera |
+| double-click empty space | Reset camera |
+| `r` | Re-align scene to lattice |
+| `f` · `i` · `g` | Fullscreen · info pane · gesture mode |
+
+### Trajectory playback
+
+| Shortcut | Action |
+| --- | --- |
+| `Space` | Play / pause |
+| `A` / `D` | Previous / next frame |
+| `Ctrl`+`A` / `Ctrl`+`D` · `Home` / `End` | First / last frame |
+| `J` / `L` · `PageUp` / `PageDown` | Jump ∓10 / ∓25 frames |
+| `0`–`9` | Jump to 0 %…90 % of the trajectory |
+| `+` / `−` (while playing) | Faster / slower playback |
+
+> In-app the full list lives under the viewer's **Info pane → Usage tips**.
 
 ---
 

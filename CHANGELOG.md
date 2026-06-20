@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-06-20
+
+### Added
+- **Multi-pane workspace**: tabs, tiling split-view and pop-out windows where **each pane is a fully independent structure/trajectory** with its own frames, playback, edits and caches — loading, scrubbing, editing or closing one pane never disturbs another.
+- **Pane-precise viewer routing**: every viewer has a stable `tab:leaf` id; CatBot and tools can target a pane by id or by position (`top-left`, `bottom-right`, `pane 2`, filename/label).
+- **Library-to-pane binding**: sidebar entries bind to the exact pane displaying them; removing one of two same-name entries closes only its pane, and the two-phase close flow keeps the entry until that pane actually closes.
+- **Docs**: readme now surfaces the full read/write format matrix (by software) and the complete keyboard-shortcut reference; VS Code extension and CatBot plugin descriptions updated to reflect the real format breadth.
+
+### Fixed
+- **Load-into-occupied-pane hold-gate** (restores the #372 contract): a *load* into a pane that already holds a structure is held (overwrite / split / new-window prompt) instead of silently overwriting; `intent`/`had_structure` ride the SSE event again, computed against the resolved pane.
+- **CatBot atom-graph honours PBC**: cross-cell bonds use the minimum-image convention, so periodic slab/bulk atoms are no longer mislabeled `coordination:0` / terminal.
+- **Large in-memory trajectories**: copy-on-write frame cloning bounds peak memory per pane.
+- **Viewer-ref matching**: filenames match by exact name/stem only (no more `"o"` → `POSCAR` mis-route); server gains pane-number matching to match the client.
+- Unique command ids (no same-tick collision); library-removal no longer leaks when save-before-close fails on the HPC/DB path.
+
 ## [1.1.4] - 2026-05-30
 
 ### Added

@@ -193,26 +193,31 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
           releaseBody: |
-            ## CatGo Desktop Application
+            ## CatGo — AI-driven workbench for computational materials science
 
-            This release includes the bundled backend server (excluding MLP libraries).
+            One window for the whole loop: **read almost any code's files → build & edit → run DFT / ML / MD → submit to HPC → analyse → publish.** Ships with the bundled backend server (MLP libraries excluded to keep the download lean).
 
             ### Downloads
-            - **Windows**: Download `.msi` (recommended) or `.exe`
-            - **macOS**: Download `.dmg` (Apple Silicon M1/M2/M3)
+            - **Windows** — `.msi` (recommended) or `.exe`
+            - **macOS** — `.dmg` (Apple Silicon M1/M2/M3)
+            - **Linux** — `.deb` (and `.rpm`)
 
             ### Installation
-            - **Windows**: Run the `.msi` installer
-            - **macOS**: Open `.dmg` and drag CatGo to Applications
+            - **Windows** — run the `.msi` installer
+            - **macOS** — open the `.dmg` and drag CatGo to Applications
+            - **Linux** — `sudo dpkg -i CatGo_*_amd64.deb` (or `sudo rpm -i`)
 
-            ### Features
-            - Built-in calculation backend (xTB, EMT)
-            - OPTIMADE database browser
-            - PubChem molecule search
-            - VASP/QE/LAMMPS input generators
+            ### Highlights
+            - **Reads ~30 formats** — VASP, Quantum ESPRESSO, CP2K, ABACUS, ORCA, Gaussian, CASTEP, SIESTA, OpenMX, LAMMPS, ASE `.traj`, phonopy, HDF5, CIF, XYZ/extXYZ, mol2, PDB, cube/CHGCAR — inputs **and** outputs
+            - **Writes ready-to-run decks** — VASP, QE, CP2K, ABACUS, ORCA, Gaussian, LAMMPS, GROMACS, AMBER, SPARK (headers & keywords preserved)
+            - **Multi-pane workspace** — tabs, split-view and pop-outs, each pane an independent structure/trajectory
+            - **CatBot** AI copilot (Claude / Codex / Gemini / Ollama / DeepSeek …) + visual DAG workflow engine + HPC submit/monitor
+            - **Builders** — slabs, adsorbates, moiré, nanotubes, heterostructures, MOFs, doping, passivation
+            - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
+            - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
             ### What's New
-            See [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+            See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}${{ matrix.bundles && format(' --bundles {0}', matrix.bundles) || '' }}

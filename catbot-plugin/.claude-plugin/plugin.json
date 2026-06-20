@@ -1,7 +1,7 @@
 {
   "name": "catbot",
-  "description": "CatGO materials science assistant with 61+ crystallography tools for structure visualization, manipulation, surface building, optimization, and database querying",
-  "version": "1.0.0",
+  "description": "CatGo materials-science copilot: 60+ tools to read/write 30+ DFT, MD and quantum-chemistry file formats (VASP, QE, CP2K, ABACUS, ORCA, Gaussian, LAMMPS, CASTEP, SIESTA, OpenMX, ASE), build structures (slabs, adsorbates, moiré, nanotubes, heterostructures, MOFs, doping), generate ready-to-run input decks, author and run DAG workflows, submit & monitor HPC jobs, analyse (DOS/band/COHP/Gibbs/volcano), and query OPTIMADE + PubChem databases.",
+  "version": "1.3.0",
   "author": {
     "name": "Hello-QM",
     "url": "https://github.com/Hello-QM/catgo-LRG"

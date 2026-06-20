@@ -4,21 +4,33 @@
 
 **CatGo** offers a VSCode extension for rendering crystal structures and molecular dynamics (MD) or geometry optimization trajectories directly in the editor to speed up typical materials science/computational chemistry workflows.
 
+> ### Scope — what's in the extension vs the desktop client
+>
+> The extension embeds CatGo's **real interactive viewer** (the same `Structure` and `Trajectory` components as the app), so it does much more than display files:
+>
+> **In the extension** (the full single-window viewer): view & animate · **edit** (move / add / delete atoms, bonds, lattice, selection, measurement, undo/redo, right-click menu) · the structure **toolbar** — builders, analysis panes, OPTIMADE / PubChem import · **save & export** (format-preserving input decks) · display/theme customization · remote-SSH file viewing. CatBot and compute/database features that need a backend activate once you configure an LLM provider and/or download the optional `catgo-server` sidecar.
+>
+> **Desktop client only** — the surrounding workbench *shell*, which the extension does **not** load: the **multi-pane tabbed workspace** (tabs / split-view / pop-out windows), the standalone **visual workflow DAG editor**, and the **HPC terminal & job manager**.
+>
+> For the full workbench use the **[CatGo desktop client](https://github.com/Hello-QM/catgo-LRG/releases)** (Windows / macOS / Linux) or the **[web app](https://app.catgo-ucsd.org)**.
+
 ## ✨ Features
 
 ### 🔬 **Structure Visualization**
 
-- **Crystal Structures**: Visualize CIF, POSCAR, VASP, and other crystallographic formats
-- **Molecular Systems**: Display XYZ, JSON, and YAML molecular structures
-- **Interactive 3D Viewer**: Rotate, zoom, and explore structures with intuitive controls
-- **Atomic Properties**: View element information, bonding, and structural details
+- **Reads most codes, not just CIF/POSCAR** — open the inputs *and* outputs of VASP, Quantum ESPRESSO, CP2K, ABACUS, ORCA, Gaussian, CASTEP, SIESTA, OpenMX and LAMMPS (see [Supported File Formats](#supported-file-formats))
+- **Crystals & molecules** — periodic slabs, bulk and isolated molecules alike
+- **Cross-cell PBC bonds** — bonds rendered correctly across periodic boundaries, with image atoms
+- **Symmetry** — moyo-driven space group + Wyckoff positions
+- **Charge density** — `cube` / VASP `CHGCAR`-family isosurfaces
+- **Interactive 3D Viewer** — rotate, zoom-to-cursor, measure, ortho/perspective cameras
 
 ### 🎬 **Trajectory Analysis**
 
-- **MD Trajectories**: Animate and analyze molecular dynamics simulations
-- **Multi-format Support**: Handle TRAJ, ExtXYZ, HDF5, and compressed formats
-- **Playback Controls**: Navigate through trajectory frames with timeline controls
-- **Frame Analysis**: Extract and analyze individual frames from trajectories
+- **MD / optimization / NEB / IRC** — animate ASE `.traj`, VASP `XDATCAR`/`OUTCAR`/`vasprun.xml`, LAMMPS dumps, extXYZ, HDF5 and pymatgen JSON
+- **Timeline scrubbing** — frame-by-frame navigation with energy / force / per-atom property overlays
+- **Per-frame bonds** — connectivity recomputed each frame
+- **Frame export** — pull any frame out as a structure file
 
 ### 🎨 **Customization**
 
@@ -41,21 +53,35 @@ Search for "CatGo" in the VS Code Extensions marketplace.
 
 ### Supported File Formats
 
-#### Structure Files
+Anything CatGo can parse renders here — far beyond CIF/POSCAR. Use
+**right-click → Render** (or `Ctrl/Cmd+Shift+V`) on any of the following.
 
-- **CIF** - Crystallographic Information Files
-- **POSCAR/CONTCAR** - VASP structure files
-- **XYZ/ExtXYZ** - Standard molecular coordinate formats
-- **JSON** - JSON-formatted structure data
-- **YAML/YML** - YAML structure definitions
+#### Structures, by code
 
-#### Trajectory Files
+| Code | Files |
+| --- | --- |
+| **VASP** | POSCAR · CONTCAR · `.vasp` · vasprun.xml · OUTCAR · CHGCAR/AECCAR/LOCPOT/ELFCAR (isosurface) |
+| **Quantum ESPRESSO** | pw.x input (`.in`) |
+| **CP2K** | `.inp` · `.restart` |
+| **ABACUS** | STRU |
+| **ORCA** | `.inp` · `.out` |
+| **Gaussian** | `.gjf` / `.com` · `.log` / `.out` · cube |
+| **CASTEP** | `.cell` |
+| **SIESTA** | `.fdf` |
+| **OpenMX** | `.dat` |
+| **LAMMPS** | `.data` / `.lmp` |
+| **phonopy** | YAML |
+| Generic | CIF · mCIF · XYZ · extXYZ · mol2 · PDB · pymatgen / OPTIMADE JSON |
 
-- **TRAJ** - ASE trajectory files
-- **ExtXYZ** - Extended XYZ trajectories
-- **HDF5/H5** - `flame` HDF5 trajectory formats
-- **JSON** - `pymatgen` JSON trajectory formats
-- **Compressed files** - `.gz` compressed versions of above
+#### Trajectories
+
+- **ASE** `.traj` (binary)
+- **VASP** `XDATCAR`, `OUTCAR`, `vasprun.xml` (multi-step)
+- **LAMMPS** dump / `.lammpstrj`
+- **extXYZ** multi-frame
+- **HDF5 / H5** — torch-sim & VASP `vaspout.h5`
+- **pymatgen** JSON frames
+- `.gz`-compressed variants of the above
 
 ### Custom Editor Integration
 
