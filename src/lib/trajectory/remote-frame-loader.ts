@@ -174,6 +174,10 @@ export class RemoteFrameLoader implements FrameLoader {
     private readonly total: number,
   ) {}
 
+  fork(): FrameLoader {
+    return new RemoteFrameLoader(this.path, this.total)
+  }
+
   // deno-lint-ignore require-await
   async get_total_frames(): Promise<number> {
     return this.total

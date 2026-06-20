@@ -49,7 +49,7 @@ const NO_STRUCTURE = {
  *  one. */
 function toggle(scene_key: string, subject: string): ViewerToolRun {
   return (input) => {
-    const h = get_viewer_action_handler()
+    const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
     if (!h) return NO_VIEWER
     const visible = as_bool(input.visible)
     h.set_scene_prop(scene_key, visible)
@@ -95,7 +95,7 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
     // show_bonds is an ENUM (never|always|crystals|molecules), not a boolean —
     // map the toggle to 'always'/'never' or the bond renderer silently no-ops.
     run: (input) => {
-      const h = get_viewer_action_handler()
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       const visible = as_bool(input.visible)
       const value = visible ? `always` : `never`
@@ -167,8 +167,8 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
       kind: `read`,
       input_schema: { type: `object`, properties: {} },
     },
-    run: () => {
-      const h = get_viewer_action_handler()
+    run: (input) => {
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       h.reset_camera()
       return { ok: true, message: `Camera reset to the default view.` }
@@ -193,7 +193,7 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
     // Tool input is DEGREES; scene_props.rotation is RADIANS (the UI does the same
     // to_radians() conversion). Skipping this would be a 57x rotation error.
     run: (input) => {
-      const h = get_viewer_action_handler()
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       const to_rad = (d: unknown) => ((Number(d) || 0) * Math.PI) / 180
       const rotation: [number, number, number] = [
@@ -233,7 +233,7 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
       },
     },
     run: (input) => {
-      const h = get_viewer_action_handler()
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       const n = h.site_count()
       if (n === 0) return NO_STRUCTURE
@@ -272,7 +272,7 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
       },
     },
     run: (input) => {
-      const h = get_viewer_action_handler()
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       if (h.site_count() === 0) return NO_STRUCTURE
       const element = String(input.element ?? ``).trim()
@@ -295,8 +295,8 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
       kind: `read`,
       input_schema: { type: `object`, properties: {} },
     },
-    run: () => {
-      const h = get_viewer_action_handler()
+    run: (input) => {
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       h.clear_selection()
       return { ok: true, message: `Cleared the atom selection.` }
@@ -324,7 +324,7 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
       },
     },
     run: (input) => {
-      const h = get_viewer_action_handler()
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       const raw = Number(input.radius)
       if (!Number.isFinite(raw)) {
@@ -358,7 +358,7 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
       },
     },
     run: (input) => {
-      const h = get_viewer_action_handler()
+      const h = get_viewer_action_handler(String(input.viewer_id ?? ``) || undefined)
       if (!h) return NO_VIEWER
       const color = String(input.color ?? ``).trim()
       if (!color) return { status: `error`, message: `color is required` }
@@ -367,3 +367,12 @@ export const VIEWER_TOOLS: { def: ClientTool; run: ViewerToolRun }[] = [
     },
   },
 ]
+
+for (const entry of VIEWER_TOOLS) {
+  const schema = entry.def.input_schema as { properties?: Record<string, unknown> }
+  schema.properties ??= {}
+  schema.properties.viewer_id = {
+    type: `string`,
+    description: `Target viewer_id or pane position alias, e.g. "bottom-right" or "右下角". Omit for the active pane.`,
+  }
+}

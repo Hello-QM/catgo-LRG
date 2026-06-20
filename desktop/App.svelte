@@ -59,6 +59,7 @@
   } from './pane-utils'
   // Recursive pane tree (replaces the fixed single/splitH/splitV/quad grid)
   import PaneTree from './PaneTree.svelte'
+  import { compute_pane_layout, position_alias } from './pane-layout'
   import {
     type LeafNode, type PresetId,
     leaves, leafCount, findLeafById, findFirstEmptyLeaf,
@@ -68,6 +69,7 @@
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
+  import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
   import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
   // SDK-agent visible-terminal bridge: global poller + approval card
   import {
@@ -425,7 +427,12 @@
     ts.active_leaf_id = r.leafId
   }
   function handle_unload(tab_id: string, leaf_id: string) { _handle_unload(pane_deps, tab_id, leaf_id) }
-  function close_panel(tab_id: string, leaf_id: string) { _close_panel(pane_deps, tab_id, leaf_id) }
+  function close_panel(tab_id: string, leaf_id: string) {
+    if (!STATIC_ONLY) {
+      fetch(`${API_BASE}/view/reset?panel_id=${encodeURIComponent(`${tab_id}:${leaf_id}`)}`, { method: `POST` }).catch(() => {})
+    }
+    _close_panel(pane_deps, tab_id, leaf_id)
+  }
   function save_and_close_panel(tab_id: string, leaf_id: string) { return _save_and_close_panel(pane_deps, tab_id, leaf_id) }
   function handle_layout_change(new_layout: PresetId) { _handle_layout_change(layout_deps, new_layout) }
   function confirm_layout_change() { _confirm_layout_change(layout_deps) }
@@ -1219,7 +1226,7 @@
     } else if (e.is_trajectory) {
       p.is_trajectory_mode = true
       p.structure = undefined
-      p.trajectory = e.trajectory
+      p.trajectory = clone_trajectory_for_pane(e.trajectory as TrajectoryType)
       p.initial_site_count = 0
       p.initial_structure_ref = null
       p.cube_file = null
@@ -1458,7 +1465,7 @@
             return
           }
         }
-        p.trajectory = data.trajectory
+        p.trajectory = clone_trajectory_for_pane(data.trajectory as TrajectoryType)
         p.is_trajectory_mode = true
         p.structure = undefined
         p.initial_site_count = 0
@@ -1691,7 +1698,7 @@
       const first = ts ? leaves(ts.root)[0] : null
       const pane = first ? structurePane(first) : null
       if (!ts || !pane) return false
-      pane.trajectory = traj
+      pane.trajectory = clone_trajectory_for_pane(traj)
       pane.structure = undefined  // mutually exclusive
       pane.is_trajectory_mode = true
       pane.source_filename = filename || null
@@ -1742,7 +1749,9 @@
   // popout return, etc.
   $effect(() => {
     if (STATIC_ONLY) return
-    const id = tm.active_tab_id
+    const tab_id = tm.active_tab_id
+    const ts = tab_states[tab_id]
+    const id = ts ? `${tab_id}:${ts.active_leaf_id}` : tab_id
     if (!id) return
     fetch(`${API_BASE}/view/active-panel?panel_id=${encodeURIComponent(id)}`, {
       method: `POST`,
@@ -2089,6 +2098,12 @@
 
         {#snippet leaf_body(leaf: LeafNode)}
           {@const pane = leaf.content.type === `structure` ? leaf.content.pane : undefined}
+          {@const pane_layout = compute_pane_layout(ts.root, ts.maximized_leaf_id)}
+          {@const pane_box = pane_layout.leaves.find((box) => box.leaf.id === leaf.id)}
+          {@const visible_panes = pane_layout.leaves.filter((box) => box.rect.w > 0 && box.rect.h > 0)}
+          {@const pane_number = pane_layout.leaves.findIndex((box) => box.leaf.id === leaf.id) + 1}
+          {@const viewer_id = `${tab.id}:${leaf.id}`}
+          {@const pane_position = pane_box ? position_alias(pane_box.rect, visible_panes.length) : `hidden`}
           {#if pane}
           {#if pane.mode === `workflow`}
             <WorkflowView
@@ -2102,12 +2117,19 @@
           {:else if pane.is_trajectory_mode && pane.trajectory}
             <Trajectory
               trajectory={pane.trajectory as any}
+              {viewer_id}
+              tab_id={tab.id}
+              leaf_id={leaf.id}
+              pane_position={pane_position}
+              {pane_number}
+              filename={pane.source_filename}
+              is_active={ts.active_leaf_id === leaf.id && tab.id === tm.active_tab_id}
               bind:selected_sites={pane.selected_sites}
               bind:current_step_idx={pane.current_step_idx}
               on_file_load={create_on_file_load(tab.id, leaf.id)}
               fullscreen_toggle={false}
               allow_file_drop={false}
-              structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format, tab_id: tab.id, is_active: ts.active_leaf_id === leaf.id && tab.id === tm.active_tab_id }}
+              structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format }}
               style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
             >
               {#snippet trajectory_controls({ trajectory: traj, current_step_idx: step, on_step_change })}
@@ -2133,6 +2155,11 @@
           {:else if pane.structure}
             <Structure
               tab_id={tab.id}
+              {viewer_id}
+              leaf_id={leaf.id}
+              pane_position={pane_position}
+              {pane_number}
+              filename={pane.source_filename}
               is_active={ts.active_leaf_id === leaf.id && tab.id === tm.active_tab_id}
               bind:structure={pane.structure}
               bind:saveable_structure={pane.saveable_structure}

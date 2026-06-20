@@ -57,6 +57,15 @@
     get_keyboard_action,
   } from './trajectory-controls'
   import { apply_displacements, sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
+  import { build_atom_graph } from '$lib/structure/atom-graph'
+  import {
+    register_viewer,
+    refresh_viewer_manifest,
+    set_active_viewer,
+    type ViewerPosition,
+  } from '$lib/structure/viewer-registry.svelte'
+  import { scale_structure_geometry, validate_uniform_topology } from './operations'
+  import type { PaneTrajectory } from './clone'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -113,6 +122,13 @@
     supercell_scaling = $bindable<string>(`1x1x1`),
     show_image_atoms = $bindable<boolean>(false),
     show_hydrogen_bonds = $bindable<boolean | undefined>(undefined),
+    viewer_id,
+    tab_id,
+    leaf_id = ``,
+    pane_position = `single` as ViewerPosition,
+    pane_number = 1,
+    filename = null as string | null,
+    is_active = true,
     ...rest
   }: EventHandlers & HTMLAttributes<HTMLDivElement> & {
     // trajectory data - can be provided directly or loaded from file
@@ -200,6 +216,13 @@
     supercell_scaling?: string
     show_image_atoms?: boolean
     show_hydrogen_bonds?: boolean
+    viewer_id?: string
+    tab_id?: string
+    leaf_id?: string
+    pane_position?: ViewerPosition
+    pane_number?: number
+    filename?: string | null
+    is_active?: boolean
   } = $props()
 
   // PNG sequence export settings
@@ -1507,6 +1530,243 @@
   function handle_atom_replaced(event: { site_indices: number[]; new_element: ElementSymbol }) {
     _apply_topology_op({ kind: `replace`, site_indices: event.site_indices, new_element: event.new_element })
   }
+
+  function manifest_formula(): string {
+    const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+    const counts = new Map<string, number>()
+    for (const site of structure?.sites ?? []) {
+      const el = site.species?.[0]?.element ?? site.label ?? `?`
+      counts.set(el, (counts.get(el) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([el, n]) => n === 1 ? el : `${el}${n}`)
+      .join(``)
+  }
+
+  function inspect_trajectory_atoms() {
+    const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+    return build_atom_graph(structure)
+  }
+
+  function require_editable_memory_trajectory(): TrajectoryType {
+    if (!trajectory) throw new Error(`No trajectory loaded.`)
+    // @ts-expect-error frame_loader is a runtime extension
+    if (trajectory.frame_loader) {
+      throw new Error(`All-frame edits on streamed trajectories are not available until every frame is materialized.`)
+    }
+    const topology_error = validate_uniform_topology(trajectory)
+    if (topology_error) throw new Error(topology_error)
+    flush_pending_ops()
+    return trajectory
+  }
+
+  function scale_all_frames(factor: number): TrajectoryType {
+    if (!trajectory) throw new Error(`No trajectory loaded.`)
+    if (!Number.isFinite(factor) || factor <= 0) {
+      throw new Error(`Scale factor must be positive.`)
+    }
+    flush_pending_ops()
+    trajectory.frames = trajectory.frames.map((frame) => ({
+      ...frame,
+      structure: scale_structure_geometry(frame.structure, factor),
+    }))
+    const pane_trajectory = trajectory as PaneTrajectory
+    if (pane_trajectory.frame_loader) {
+      pane_trajectory.pane_transformations ??= []
+      pane_trajectory.pane_transformations.push({ kind: `scale_geometry`, factor })
+    }
+    return trajectory
+  }
+
+  function refresh_after_external_edit(): void {
+    position_cache = null
+    force_cache = null
+    topology_initialized = false
+    current_frame = trajectory?.frames?.[current_step_idx] ?? null
+    trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
+    trajectory = trajectory ? { ...trajectory } : trajectory
+  }
+
+  function handle_trajectory_command(action: string, args: Record<string, unknown>) {
+    if (action === `inspect`) return { atoms: inspect_trajectory_atoms(), current_frame: current_step_idx, total_frames }
+    if (action === `add_atom`) {
+      const target = require_editable_memory_trajectory()
+      const element = String(args.element ?? ``) as ElementSymbol
+      const position = Array.isArray(args.position) ? args.position.map(Number) : []
+      if (!element || position.length !== 3 || !position.every(Number.isFinite)) {
+        throw new Error(`element and a 3D Cartesian position are required.`)
+      }
+      target.frames = target.frames.map((frame) => ({
+        ...frame,
+        structure: add_atom(
+          frame.structure,
+          element,
+          [position[0], position[1], position[2]],
+        ),
+      }))
+      refresh_after_external_edit()
+      return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+    }
+    if (action === `delete_atoms`) {
+      const target = require_editable_memory_trajectory()
+      const atom_count = target.frames[0]?.structure.sites.length ?? 0
+      const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
+      if (!indices.length) throw new Error(`At least one valid atom index is required.`)
+      for (let i = 0; i < target.frames.length; i++) {
+        target.frames[i] = { ...target.frames[i], structure: delete_atoms(target.frames[i].structure, indices) }
+      }
+      refresh_after_external_edit()
+      return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+    }
+    if (action === `move_atoms`) {
+      const target = require_editable_memory_trajectory()
+      const moves = new Map<number, [number, number, number]>()
+      for (const move of Array.isArray(args.moves) ? args.moves as Record<string, unknown>[] : []) {
+        const d = Array.isArray(move.displacement) ? move.displacement.map(Number) : []
+        if (Number.isInteger(Number(move.index)) && d.length === 3 && d.every(Number.isFinite)) {
+          moves.set(Number(move.index), [d[0], d[1], d[2]])
+        }
+      }
+      for (let i = 0; i < target.frames.length; i++) {
+        const structure = target.frames[i].structure
+        let inv_flat: [number, number, number, number, number, number, number, number, number] | null = null
+        if (`lattice` in structure && structure.lattice) {
+          const inv = matrix_inverse_3x3(transpose_3x3_matrix(structure.lattice.matrix))
+          inv_flat = [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]]
+        }
+        target.frames[i] = { ...target.frames[i], structure: { ...structure, sites: apply_displacements(structure.sites, moves, inv_flat) } }
+      }
+      refresh_after_external_edit()
+      return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+    }
+    if (action === `replace_atoms`) {
+      const target = require_editable_memory_trajectory()
+      const element = String(args.element ?? ``) as ElementSymbol
+      const atom_count = target.frames[0]?.structure.sites.length ?? 0
+      const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
+      if (!element || !indices.length) throw new Error(`element and atom indices are required.`)
+      target.frames = target.frames.map((frame) => {
+        let structure = frame.structure
+        for (const index of indices) structure = replace_atom(structure, index, element)
+        return { ...frame, structure }
+      })
+      refresh_after_external_edit()
+      return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+    }
+    if (action === `scale_geometry`) {
+      const target = scale_all_frames(Number(args.factor))
+      refresh_after_external_edit()
+      return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+    }
+    throw new Error(`Unsupported trajectory command: ${action}`)
+  }
+
+  $effect(() => {
+    if (!viewer_id || !tab_id) return
+    const cleanup = untrack(() => register_viewer({
+      get_manifest: () => ({
+        viewer_id,
+        tab_id,
+        leaf_id,
+        position: pane_position,
+        pane_number,
+        label: manifest_formula() || filename || `Trajectory`,
+        filename,
+        formula: manifest_formula(),
+        kind: trajectory ? `trajectory` : `empty`,
+        active: is_active,
+        current_frame: current_step_idx,
+        total_frames,
+        atom_count: (current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure)?.sites?.length ?? 0,
+        // @ts-expect-error frame_loader is a runtime extension
+        streaming: !!trajectory?.frame_loader,
+        // @ts-expect-error frame_loader is a runtime extension
+        editable: !!trajectory && !trajectory.frame_loader,
+      }),
+      get_structure: () => current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure,
+      set_structure: (next) => {
+        if (!trajectory?.frames?.[current_step_idx]) return
+        trajectory.frames[current_step_idx] = { ...trajectory.frames[current_step_idx], structure: next }
+        refresh_after_external_edit()
+      },
+      set_scene_prop: (key, value) => {
+        if (trajectory_scene_props) (trajectory_scene_props as Record<string, unknown>)[key] = value
+      },
+      set_selection: (indices) => { selected_sites = indices },
+      select_by_element: (element) => {
+        const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+        const indices = (structure?.sites ?? [])
+          .map((site, idx) => site.species?.[0]?.element === element ? idx : -1)
+          .filter((idx) => idx >= 0)
+        selected_sites = indices
+        return indices.length
+      },
+      clear_selection: () => { selected_sites = [] },
+      inspect_atoms: inspect_trajectory_atoms,
+      add_atom: (element, position) => {
+        const target = require_editable_memory_trajectory()
+        target.frames = target.frames.map((frame) => ({
+          ...frame,
+          structure: add_atom(frame.structure, element as ElementSymbol, position),
+        }))
+        refresh_after_external_edit()
+        return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+      },
+      delete_atoms: (indices) => {
+        const target = require_editable_memory_trajectory()
+        for (let i = 0; i < target.frames.length; i++) {
+          target.frames[i] = { ...target.frames[i], structure: delete_atoms(target.frames[i].structure, indices) }
+        }
+        refresh_after_external_edit()
+        return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+      },
+      replace_atoms: (indices, element) => {
+        const target = require_editable_memory_trajectory()
+        target.frames = target.frames.map((frame) => {
+          let structure = frame.structure
+          for (const index of indices) structure = replace_atom(structure, index, element as ElementSymbol)
+          return { ...frame, structure }
+        })
+        refresh_after_external_edit()
+        return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+      },
+      move_atoms: (displacements) => {
+        const target = require_editable_memory_trajectory()
+        for (let i = 0; i < target.frames.length; i++) {
+          const structure = target.frames[i].structure
+          let inv_flat: [number, number, number, number, number, number, number, number, number] | null = null
+          if (`lattice` in structure && structure.lattice) {
+            const inv = matrix_inverse_3x3(transpose_3x3_matrix(structure.lattice.matrix))
+            inv_flat = [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]]
+          }
+          target.frames[i] = { ...target.frames[i], structure: { ...structure, sites: apply_displacements(structure.sites, displacements, inv_flat) } }
+        }
+        refresh_after_external_edit()
+        return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+      },
+      scale_geometry: (factor) => {
+        const target = scale_all_frames(factor)
+        refresh_after_external_edit()
+        return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
+      },
+    }))
+    return cleanup
+  })
+
+  $effect(() => {
+    if (!viewer_id) return
+    trajectory
+    current_step_idx
+    current_frame
+    pane_position
+    is_active
+    filename
+    refresh_viewer_manifest(viewer_id)
+    if (is_active) set_active_viewer(viewer_id)
+  })
 </script>
 
 <svelte:document
@@ -1878,6 +2138,11 @@
       <div class="structure-container" class:structure-hidden={!show_structure}>
         <Structure
           bind:structure={current_structure}
+          {tab_id}
+          {viewer_id}
+          {is_active}
+          bridge_structure={current_frame?.structure}
+          handle_viewer_command={handle_trajectory_command}
           {trajectory_frame_positions}
           {trajectory_frame_forces}
           trajectory_step_idx={current_step_idx}
@@ -1901,6 +2166,7 @@
             align_on_load: 'none', // Trajectory frames should display raw coordinates, not rotated
             ...structure_props,
           }}
+          register_as_viewer={false}
           bind:supercell_scaling
           bind:show_image_atoms
           bind:scene_props={trajectory_scene_props}

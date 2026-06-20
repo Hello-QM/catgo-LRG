@@ -409,6 +409,52 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_pane",
+        description=(
+            "Target one specific CatGo structure/trajectory pane by viewer_id. "
+            "The system prompt lists every pane and its viewer_id. "
+            "Actions: list (all pane manifests), inspect (atom indices, neighbors, coordination, connected components, terminal/branch candidates), "
+            "add_atom (element + Cartesian position), delete_atoms, replace_atoms "
+            "(element + indices), move_atoms "
+            "(moves=[{index,displacement}]; all trajectory frames), and scale_geometry "
+            "(factor required; real coordinates/lattice, all trajectory frames). "
+            "Use inspect before interpreting semantic descriptions such as terminal branch carbon; "
+            "if multiple candidates match, ask the user instead of guessing."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "viewer_id": {"type": "string", "description": "Exact viewer_id or unique pane position. Omit only for list."},
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "inspect", "add_atom", "delete_atoms", "replace_atoms", "move_atoms", "scale_geometry"],
+                },
+                "element": {"type": "string"},
+                "position": {
+                    "type": "array", "items": {"type": "number"},
+                    "minItems": 3, "maxItems": 3,
+                },
+                "indices": {"type": "array", "items": {"type": "integer"}},
+                "moves": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "index": {"type": "integer"},
+                            "displacement": {
+                                "type": "array", "items": {"type": "number"},
+                                "minItems": 3, "maxItems": 3,
+                            },
+                        },
+                        "required": ["index", "displacement"],
+                    },
+                },
+                "factor": {"type": "number", "exclusiveMinimum": 0},
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
         name="catgo_catalysis",
         description=(
             "Catalysis analysis: compute reaction overpotentials, free energy corrections, "
@@ -2740,6 +2786,29 @@ async def _handle_lateral_heterostructure(
     return [T(type="text", text=msg)]
 
 
+async def _handle_pane(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    action = str(args.get("action", "")).strip()
+    if action == "list":
+        resp = await client.get(f"{API_BASE}/view/manifest")
+        if resp.status_code != 200:
+            return [TextContent(type="text", text=f"catgo_pane failed ({resp.status_code}): {resp.text[:300]}")]
+        return [TextContent(type="text", text=json.dumps(resp.json(), ensure_ascii=False))]
+    viewer_id = str(args.get("viewer_id", "")).strip()
+    if not viewer_id or not action:
+        return [TextContent(type="text", text="viewer_id and action are required.")]
+    arguments = {k: v for k, v in args.items() if k not in ("viewer_id", "action")}
+    resp = await client.post(
+        f"{API_BASE}/view/command",
+        json={"viewer_id": viewer_id, "action": action, "arguments": arguments},
+    )
+    if resp.status_code != 200:
+        return [TextContent(type="text", text=f"catgo_pane failed ({resp.status_code}): {resp.text[:300]}")]
+    data = resp.json()
+    if not data.get("ok", False):
+        return [TextContent(type="text", text=f"catgo_pane failed: {data.get('error', 'unknown error')}")]
+    return [TextContent(type="text", text=json.dumps(data.get("result", {}), ensure_ascii=False))]
+
+
 async def _handle_heterostructure(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
     """Build / search heterostructures between two crystal structures.
 
@@ -3135,6 +3204,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[TextConten
         async with httpx.AsyncClient(timeout=120.0) as client:
             if name == "catgo_structure":
                 return await _handle_structure(client, arguments)
+            elif name == "catgo_pane":
+                return await _handle_pane(client, arguments)
             elif name == "catgo_fetch":
                 return await _handle_fetch(client, arguments)
             elif name == "catgo_workflow":

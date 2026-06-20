@@ -28,8 +28,12 @@ export class TrajFrameReader implements FrameLoader {
   private xyz_offsets?: number[]
   private xyz_offsets_src?: string
 
-  constructor(filename: string) {
+  constructor(private readonly filename: string) {
     this.format = filename.toLowerCase().endsWith(`.traj`) ? `ase` : `xyz`
+  }
+
+  fork(): FrameLoader {
+    return new TrajFrameReader(this.filename)
   }
 
   /**

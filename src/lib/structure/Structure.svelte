@@ -82,6 +82,12 @@
     type ViewerActionHandler,
     unregister_viewer_action_handler,
   } from '$lib/chat/viewer-tool-executor'
+  import {
+    register_viewer,
+    refresh_viewer_manifest,
+    set_active_viewer,
+    type ViewerPosition,
+  } from './viewer-registry.svelte'
   import { isMobile } from '$lib/api/transport'
   import { set_current_structure, current_structure_state } from './current-structure.svelte'
   import { molecular_fragments, type MolecularFragment } from './controllers/fragments'
@@ -133,7 +139,9 @@
   import { get_orig_site_idx } from './atom-properties'
   import { toggle_site_selection } from './scene/picking'
 
-  import { delete_atoms, move_atom, move_atoms_by_displacement, concatenate_structures, merge_structures } from './atom-manipulation'
+  import { add_atom, delete_atoms, move_atom, move_atoms_by_displacement, concatenate_structures, merge_structures, replace_atom } from './atom-manipulation'
+  import { build_atom_graph } from './atom-graph'
+  import { scale_structure_geometry } from '$lib/trajectory/operations'
   import OptimadeSearchModal from './OptimadeSearchModal.svelte'
   import OptimadePreviewModal from './OptimadePreviewModal.svelte'
   import PasteContentModal from './PasteContentModal.svelte'
@@ -857,6 +865,14 @@
     vibration_data = null as { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null,
     initial_bulk = null as PymatgenStructure | null,
     tab_id,
+    viewer_id,
+    leaf_id = ``,
+    pane_position = `single` as ViewerPosition,
+    pane_number = 1,
+    filename = null as string | null,
+    register_as_viewer = true,
+    bridge_structure = undefined as AnyStructure | undefined,
+    handle_viewer_command = undefined as ((action: string, args: Record<string, unknown>) => unknown) | undefined,
     is_active = true,
     // Bindable handle exposing undo/redo to parent (used by mobile toolbar)
     editor_api = $bindable<{
@@ -1024,6 +1040,17 @@
       // correct tab instead of colliding on a single "default" panel.
       // Defaults to "default" for callers that don't supply one.
       tab_id?: string
+      /** Stable pane identity: `<tab_id>:<leaf_id>`. */
+      viewer_id?: string
+      leaf_id?: string
+      pane_position?: ViewerPosition
+      pane_number?: number
+      filename?: string | null
+      /** False for Structure embedded inside Trajectory; Trajectory owns that viewer handle. */
+      register_as_viewer?: boolean
+      /** Alternate structure published through the MCP bridge (trajectory current frame). */
+      bridge_structure?: AnyStructure
+      handle_viewer_command?: (action: string, args: Record<string, unknown>) => unknown
       // True when this pane is the active/focused one in its tab. Only the
       // active pane adopts global current-structure store mutations (CatBot
       // client-direct edits); background panes in a split view must NOT be
@@ -2243,16 +2270,19 @@
   // standalone embeds), fall back to "default" — matching the pre-Phase-1
   // behavior for uninstrumented callers. Stable for the instance's lifetime
   // because the outer {#each} in App.svelte is keyed by tab.id.
-  const panel_id = tab_id ?? `default`
-
-  const mcp_bridge_deps: McpBridgeDeps = {
-    panel_id,
-    get_structure: () => structure,
-    set_structure: (s) => { structure = s as typeof structure },
-    inc_center_camera: () => { center_camera_trigger++ },
-    align_view_to_lattice: () => align_view_to_lattice(),
-    get_selected_sites: () => selected_sites,
-    get_wrapper: () => wrapper,
+  function create_mcp_bridge_deps(): McpBridgeDeps {
+    return {
+      panel_id: viewer_id ?? tab_id ?? `default`,
+      workflow_tab_id: tab_id,
+      get_structure: () => bridge_structure ?? structure,
+      set_structure: (s) => { structure = s as typeof structure },
+      inc_center_camera: () => { center_camera_trigger++ },
+      align_view_to_lattice: () => align_view_to_lattice(),
+      get_selected_sites: () => selected_sites,
+      get_wrapper: () => wrapper,
+      handle_command: (action, args) =>
+        handle_viewer_command ? handle_viewer_command(action, args) : handle_structure_command(action, args),
+    }
   }
 
   // MCP bridge — screenshot loop + state push (50ms throttle, 5s heartbeat) + SSE subscription.
@@ -2272,7 +2302,7 @@
   // recorded — preview/popup instances (no tab_id) must not clobber it.
   let _last_mirrored_to_store: typeof structure | undefined = undefined
   $effect(() => {
-    if (tab_id === undefined) return
+    if (tab_id === undefined || !is_active || !register_as_viewer) return
     if (structure) { _last_mirrored_to_store = structure; set_current_structure(structure) }
   })
 
@@ -2294,7 +2324,7 @@
   let _seen_store_val: typeof structure | null = _cur_store.value as typeof structure
   let _was_active = false
   $effect(() => {
-    if (tab_id === undefined) return
+    if (tab_id === undefined || !register_as_viewer) return
     const v = _cur_store.value as typeof structure // subscribe unconditionally
     if (!is_active) { _was_active = false; return } // inactive/hidden: never adopt
     if (!_was_active) {
@@ -2323,7 +2353,7 @@
     // (the store-adoption effect above), but it has no Python backend — the
     // bridge would just fail a fetch to localhost every 5s. Skip it.
     if (isMobile()) return
-    const bridge = untrack(() => start_mcp_bridge(mcp_bridge_deps))
+    const bridge = untrack(() => start_mcp_bridge(create_mcp_bridge_deps()))
     mcp_request_push = bridge.request_push
     return () => {
       mcp_request_push = null
@@ -2331,14 +2361,12 @@
     }
   })
 
-  // Bridge CatBot's viewer-control tools (toggle/camera/selection/appearance) to
-  // THIS viewer while it is the active tab. Mirrors the MCP-bridge effect above,
-  // but: (1) gated on is_active so only the focused viewer holds the single
-  // registry slot; (2) NO isMobile() skip — the registry is pure client-side, so
-  // mobile (same client-direct tool loop) MUST register or the 12 view tools are
-  // dead on iOS. Preview/popup/trajectory instances (no tab_id) never register.
+  // Bridge CatBot's viewer-control tools (toggle/camera/selection/appearance)
+  // to this exact viewer id. Trajectory's inner Structure intentionally also
+  // registers here: it owns the live camera/scene controls even though the
+  // outer Trajectory owns the pane manifest and all-frame edit semantics.
   $effect(() => {
-    if (tab_id === undefined || !is_active) return
+    if (tab_id === undefined || !viewer_id) return
     const handler: ViewerActionHandler = {
       set_scene_prop: (key, value) => settings.set_scene_prop(key, value),
       reset_camera: () => reset_camera(),
@@ -2359,8 +2387,162 @@
       },
       site_count: () => structure?.sites?.length ?? 0,
     }
-    register_viewer_action_handler(handler)
-    return () => unregister_viewer_action_handler(handler)
+    register_viewer_action_handler(viewer_id, handler)
+    return () => unregister_viewer_action_handler(viewer_id, handler)
+  })
+
+  function viewer_formula(): string {
+    const counts = new Map<string, number>()
+    for (const site of structure?.sites ?? []) {
+      const el = site.species?.[0]?.element ?? site.label ?? `?`
+      counts.set(el, (counts.get(el) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([el, n]) => n === 1 ? el : `${el}${n}`)
+      .join(``)
+  }
+
+  function inspect_viewer_atoms() {
+    return build_atom_graph(structure)
+  }
+
+  function handle_structure_command(action: string, args: Record<string, unknown>) {
+    if (action === `inspect`) return { atoms: inspect_viewer_atoms() }
+    if (!structure) throw new Error(`No structure loaded.`)
+    if (action === `add_atom`) {
+      const element = String(args.element ?? ``) as ElementSymbol
+      const position = Array.isArray(args.position) ? args.position.map(Number) : []
+      if (!element || position.length !== 3 || !position.every(Number.isFinite)) {
+        throw new Error(`element and a 3D Cartesian position are required.`)
+      }
+      structure = add_atom(
+        structure,
+        element,
+        [position[0], position[1], position[2]],
+      ) as typeof structure
+      return { scope: `structure`, atom_count: structure.sites.length }
+    }
+    if (action === `delete_atoms`) {
+      const atom_count = structure.sites.length
+      const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
+      if (!indices.length) throw new Error(`At least one valid atom index is required.`)
+      structure = delete_atoms(structure, indices) as typeof structure
+      return { scope: `structure`, atom_count: structure.sites.length }
+    }
+    if (action === `move_atoms`) {
+      const moves = Array.isArray(args.moves) ? args.moves as Record<string, unknown>[] : []
+      let next = structure
+      for (const move of moves) {
+        const idx = Number(move.index)
+        const delta = Array.isArray(move.displacement) ? move.displacement.map(Number) : []
+        const xyz = next.sites[idx]?.xyz
+        if (!Number.isInteger(idx) || !xyz || delta.length !== 3 || !delta.every(Number.isFinite)) {
+          throw new Error(`Invalid move for atom ${idx}.`)
+        }
+        next = move_atom(next, idx, [xyz[0] + delta[0], xyz[1] + delta[1], xyz[2] + delta[2]])
+      }
+      structure = next as typeof structure
+      return { scope: `structure`, atom_count: structure.sites.length }
+    }
+    if (action === `replace_atoms`) {
+      const element = String(args.element ?? ``) as ElementSymbol
+      const atom_count = structure.sites.length
+      const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
+      if (!element || !indices.length) throw new Error(`element and atom indices are required.`)
+      let next = structure
+      for (const index of indices) next = replace_atom(next, index, element)
+      structure = next as typeof structure
+      return { scope: `structure`, atom_count: structure.sites.length }
+    }
+    if (action === `scale_geometry`) {
+      structure = scale_structure_geometry(structure, Number(args.factor)) as typeof structure
+      return { scope: `structure`, atom_count: structure.sites.length }
+    }
+    throw new Error(`Unsupported viewer command: ${action}`)
+  }
+
+  $effect(() => {
+    if (!viewer_id || !tab_id || !register_as_viewer) return
+    const cleanup = untrack(() => register_viewer({
+      get_manifest: () => ({
+        viewer_id,
+        tab_id,
+        leaf_id,
+        position: pane_position,
+        pane_number,
+        label: `${viewer_formula() || `Structure`}`,
+        filename,
+        formula: viewer_formula(),
+        kind: structure ? `structure` : `empty`,
+        active: is_active,
+        current_frame: 0,
+        total_frames: structure ? 1 : 0,
+        atom_count: structure?.sites?.length ?? 0,
+        streaming: false,
+        editable: !!structure,
+      }),
+      get_structure: () => structure,
+      set_structure: (next) => { structure = next as typeof structure },
+      set_scene_prop: (key, value) => settings.set_scene_prop(key, value),
+      reset_camera,
+      set_selection: (indices) => { selected_sites = indices },
+      select_by_element: (element) => {
+        const indices = (structure?.sites ?? [])
+          .map((site, idx) => site.species?.[0]?.element === element ? idx : -1)
+          .filter((idx) => idx >= 0)
+        selected_sites = indices
+        return indices.length
+      },
+      clear_selection: () => { selected_sites = [] },
+      inspect_atoms: inspect_viewer_atoms,
+      add_atom: (element, position) => {
+        if (!structure) throw new Error(`No structure loaded.`)
+        structure = add_atom(structure, element as ElementSymbol, position) as typeof structure
+        return { viewer_id, scope: `structure`, atom_count: structure.sites.length, total_frames: 1 }
+      },
+      delete_atoms: (indices) => {
+        if (!structure) throw new Error(`No structure loaded.`)
+        structure = delete_atoms(structure, indices) as typeof structure
+        return { viewer_id, scope: `structure`, atom_count: structure.sites.length, total_frames: 1 }
+      },
+      replace_atoms: (indices, element) => {
+        if (!structure) throw new Error(`No structure loaded.`)
+        let next = structure
+        for (const index of indices) next = replace_atom(next, index, element as ElementSymbol)
+        structure = next as typeof structure
+        return { viewer_id, scope: `structure`, atom_count: structure.sites.length, total_frames: 1 }
+      },
+      move_atoms: (displacements) => {
+        if (!structure) throw new Error(`No structure loaded.`)
+        let next = structure
+        for (const [idx, delta] of displacements) {
+          const xyz = next.sites[idx]?.xyz
+          if (!xyz) throw new Error(`Atom index ${idx} is out of range.`)
+          next = move_atom(next, idx, [xyz[0] + delta[0], xyz[1] + delta[1], xyz[2] + delta[2]])
+        }
+        structure = next as typeof structure
+        return { viewer_id, scope: `structure`, atom_count: structure.sites.length, total_frames: 1 }
+      },
+      scale_geometry: (factor) => {
+        if (!structure) throw new Error(`No structure loaded.`)
+        structure = scale_structure_geometry(structure, factor) as typeof structure
+        return { viewer_id, scope: `structure`, atom_count: structure.sites.length, total_frames: 1 }
+      },
+    }))
+    return cleanup
+  })
+
+  $effect(() => {
+    if (!viewer_id || !register_as_viewer) return
+    structure
+    is_active
+    pane_position
+    filename
+    refresh_viewer_manifest(viewer_id)
+    if (is_active) set_active_viewer(viewer_id)
   })
 
   // Push-on-edit: any structure mutation (add/delete/replace/drag/lattice)
@@ -2371,8 +2553,9 @@
   // throttle inside push_loop coalesces rapid edits (e.g. atom drag at
   // 60fps) into ≤20 pushes/sec.
   $effect(() => {
-    if (!structure) return
-    void JSON.stringify(structure)
+    const published = bridge_structure ?? structure
+    if (!published) return
+    void JSON.stringify(published)
     mcp_request_push?.()
   })
 

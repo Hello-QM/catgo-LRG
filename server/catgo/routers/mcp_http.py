@@ -71,6 +71,9 @@ from catgo.routers.view_state import (
     get_active_structure,
     get_active_state_summary,
     get_active_selection_dict,
+    request_viewer_command,
+    list_manifests,
+    resolve_viewer_ref,
 )
 
 
@@ -214,6 +217,35 @@ async def call_tool(name: str, arguments: dict | None) -> list[TextContent]:
         async with httpx.AsyncClient(timeout=120.0) as client:
             if name == "catgo_structure":
                 return await _handle_structure(client, arguments)
+            elif name == "catgo_pane":
+                action = str(arguments.get("action", "")).strip()
+                if action == "list":
+                    from catgo.mcp_tools.helpers import current_panel_id
+                    tab_id = current_panel_id.get()
+                    viewers = list_manifests(tab_id if tab_id != "default" else "")
+                    return [T(type="text", text=_json.dumps(
+                        {"viewers": viewers},
+                        ensure_ascii=False,
+                    ))]
+                viewer_ref = str(arguments.get("viewer_id", "")).strip()
+                if not viewer_ref or not action:
+                    return [T(type="text", text="viewer_id and action are required.")]
+                from catgo.mcp_tools.helpers import current_panel_id
+                tab_id = current_panel_id.get()
+                viewer_id, resolve_error = resolve_viewer_ref(
+                    viewer_ref,
+                    tab_id if tab_id != "default" else "",
+                )
+                if resolve_error or not viewer_id:
+                    return [T(type="text", text=resolve_error or "Viewer was not found.")]
+                command_args = {
+                    k: v for k, v in arguments.items()
+                    if k not in ("viewer_id", "action")
+                }
+                result = await request_viewer_command(viewer_id, action, command_args)
+                if not result.get("ok", False):
+                    return [T(type="text", text=f"catgo_pane failed: {result.get('error', 'unknown error')}")]
+                return [T(type="text", text=_json.dumps(result.get("result", {}), ensure_ascii=False))]
             elif name == "catgo_fetch":
                 return await _handle_fetch(client, arguments)
             elif name == "catgo_workflow":

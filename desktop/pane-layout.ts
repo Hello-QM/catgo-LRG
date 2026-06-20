@@ -6,6 +6,7 @@
  */
 import type { PaneNode } from './pane-tree'
 import type { LeafNode } from './pane-tree'
+import type { ViewerPosition } from '$lib/structure/viewer-registry.svelte'
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface LeafBox { leaf: LeafNode; rect: Rect }
@@ -13,6 +14,18 @@ export interface LeafBox { leaf: LeafNode; rect: Rect }
  *  height for 'v') — the resize handler needs it to convert px → ratio. */
 export interface DividerBox { split_id: string; dir: 'h' | 'v'; rect: Rect; span: number }
 export interface PaneLayout { leaves: LeafBox[]; dividers: DividerBox[] }
+
+export function position_alias(rect: Rect, visible_count: number): ViewerPosition {
+  if (rect.w === 0 || rect.h === 0) return `hidden`
+  if (visible_count <= 1) return `single`
+  const cx = rect.x + rect.w / 2
+  const cy = rect.y + rect.h / 2
+  const full_h = rect.h >= 99
+  const full_w = rect.w >= 99
+  if (full_h) return cx < 50 ? `left` : `right`
+  if (full_w) return cy < 50 ? `top` : `bottom`
+  return `${cy < 50 ? `top` : `bottom`}-${cx < 50 ? `left` : `right`}`
+}
 
 function leaf_ids(node: PaneNode | undefined): string[] {
   if (!node) return []

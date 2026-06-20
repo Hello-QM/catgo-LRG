@@ -37,6 +37,7 @@ panel_selections: dict[str, Any] = {}
 # every supported format (xyz multi-frame, extxyz, LAMMPS dump, xdatcar,
 # vasprun, ...) so we don't replicate the parser server-side.
 panel_trajectories: dict[str, dict[str, str]] = {}
+panel_manifests: dict[str, dict[str, Any]] = {}
 
 pending_workflow_id: str = ""
 
@@ -51,6 +52,7 @@ pending_workflow_id: str = ""
 # them rather than blocking the writer.
 
 panel_subscribers: dict[str, list[asyncio.Queue]] = {}
+pending_commands: dict[str, asyncio.Future] = {}
 
 
 def subscribe(panel_id: str) -> asyncio.Queue:
@@ -106,11 +108,47 @@ def notify_trajectory(panel_id: str, content: str, filename: str) -> None:
     _notify(panel_id, "trajectory", {"content": content, "filename": filename})
 
 
+async def request_viewer_command(
+    panel_id: str,
+    action: str,
+    arguments: dict[str, Any],
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Send a command to one mounted viewer and await its result."""
+    if not has_subscribers(panel_id):
+        return {
+            "ok": False,
+            "error": f"Viewer '{panel_id}' is not mounted or no longer exists.",
+        }
+    loop = asyncio.get_running_loop()
+    command_id = f"cmd-{id(loop)}-{loop.time()}"
+    future = loop.create_future()
+    pending_commands[command_id] = future
+    _notify(panel_id, "command", {
+        "command_id": command_id,
+        "action": action,
+        "arguments": arguments,
+    })
+    try:
+        return await asyncio.wait_for(future, timeout=timeout)
+    finally:
+        pending_commands.pop(command_id, None)
+
+
+def complete_viewer_command(command_id: str, result: dict[str, Any]) -> bool:
+    future = pending_commands.get(command_id)
+    if not future or future.done():
+        return False
+    future.set_result(result)
+    return True
+
+
 def push_trajectory(panel_id: str, content: str, filename: str) -> None:
     """Store trajectory + notify SSE subscribers + clear any stale
     single-structure cache for the same panel (mutually exclusive in
     the viewer — a pane shows EITHER a structure OR a trajectory).
     Replayed on (re)connect via the SSE snapshot mechanism."""
+    panel_id = resolve_panel_id(panel_id)
     panel_trajectories[panel_id] = {"content": content, "filename": filename}
     panel_structures.pop(panel_id, None)
     panel_pending_updates.pop(panel_id, None)
@@ -119,7 +157,50 @@ def push_trajectory(panel_id: str, content: str, filename: str) -> None:
 
 def get_trajectory(panel_id: str) -> dict | None:
     """Return {'content': str, 'filename': str} or None."""
-    return panel_trajectories.get(panel_id)
+    return panel_trajectories.get(resolve_panel_id(panel_id))
+
+
+def update_manifest(panel_id: str, manifest: dict[str, Any]) -> None:
+    panel_manifests[panel_id] = {**manifest, "viewer_id": panel_id}
+
+
+def remove_manifest(panel_id: str) -> None:
+    panel_manifests.pop(panel_id, None)
+
+
+def list_manifests(tab_id: str = "") -> list[dict[str, Any]]:
+    manifests = [
+        manifest for manifest in panel_manifests.values()
+        if not tab_id or manifest.get("tab_id") == tab_id
+    ]
+    return sorted(manifests, key=lambda item: item.get("pane_number", 0))
+
+
+def resolve_viewer_ref(ref: str, tab_id: str = "") -> tuple[str | None, str | None]:
+    """Resolve an exact viewer id or a unique manifest position/name."""
+    if ref in panel_manifests or has_subscribers(ref):
+        return ref, None
+    position_aliases = {
+        "左": "left", "右": "right", "上": "top", "下": "bottom",
+        "左上": "top-left", "右上": "top-right",
+        "左下": "bottom-left", "右下": "bottom-right",
+        "左上角": "top-left", "右上角": "top-right",
+        "左下角": "bottom-left", "右下角": "bottom-right",
+    }
+    normalized = ref.strip().lower().replace(" ", "-")
+    position = position_aliases.get(ref.strip(), normalized)
+    matches = [
+        manifest for manifest in list_manifests(tab_id)
+        if manifest.get("position") == position
+        or manifest.get("label") == ref
+        or ref.lower() in str(manifest.get("filename") or "").lower()
+    ]
+    if len(matches) == 1:
+        return str(matches[0]["viewer_id"]), None
+    if len(matches) > 1:
+        ids = ", ".join(str(item["viewer_id"]) for item in matches)
+        return None, f"Viewer reference '{ref}' is ambiguous: {ids}"
+    return None, f"Viewer '{ref}' was not found"
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +216,22 @@ def get_trajectory(panel_id: str) -> dict | None:
 # do NOT update it (lab shouldn't hijack the notion of "active").
 
 last_active_panel_id: str = "default"
+active_viewer_by_tab: dict[str, str] = {}
+
+
+def _tab_id_for_viewer(panel_id: str) -> str | None:
+    """Return the owning tab for a stable ``<tab>:<leaf>`` viewer id."""
+    if ":" not in panel_id:
+        return None
+    tab_id, _leaf_id = panel_id.rsplit(":", 1)
+    return tab_id or None
+
+
+def resolve_panel_id(panel_id: str) -> str:
+    """Resolve a legacy tab target to that tab's currently active viewer."""
+    if ":" not in panel_id and panel_id in active_viewer_by_tab:
+        return active_viewer_by_tab[panel_id]
+    return panel_id
 
 
 def mark_active(panel_id: str) -> None:
@@ -142,6 +239,9 @@ def mark_active(panel_id: str) -> None:
     global last_active_panel_id
     if panel_id:
         last_active_panel_id = panel_id
+        tab_id = _tab_id_for_viewer(panel_id)
+        if tab_id:
+            active_viewer_by_tab[tab_id] = panel_id
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +250,7 @@ def mark_active(panel_id: str) -> None:
 
 
 def get_panel_pending(panel_id: str) -> deque:
+    panel_id = resolve_panel_id(panel_id)
     if panel_id not in panel_pending_updates:
         panel_pending_updates[panel_id] = deque(maxlen=16)
     return panel_pending_updates[panel_id]
@@ -160,6 +261,7 @@ def get_panel_selection(panel_id: str) -> Any:
 
     Returns a dict (not SelectionState model) to avoid circular imports.
     """
+    panel_id = resolve_panel_id(panel_id)
     if panel_id not in panel_selections:
         panel_selections[panel_id] = {"indices": [], "atoms": []}
     return panel_selections[panel_id]
@@ -172,6 +274,7 @@ def get_panel_selection(panel_id: str) -> Any:
 
 def get_structure(panel_id: str = "default") -> dict | None:
     """Get the structure dict for a SPECIFIC panel. Returns None if empty."""
+    panel_id = resolve_panel_id(panel_id)
     struct = panel_structures.get(panel_id, {})
     return struct if struct else None
 
@@ -188,6 +291,7 @@ def push_structure(struct: dict, panel_id: str = "default") -> None:
     Does NOT call mark_active — this is the path MCP pushes take, and lab
     pushes shouldn't change the user's idea of which panel is "active".
     """
+    panel_id = resolve_panel_id(panel_id)
     panel_structures[panel_id] = struct
     get_panel_pending(panel_id).append(struct)
     _notify(panel_id, "structure", {"structure": struct})
@@ -197,6 +301,7 @@ def push_structure(struct: dict, panel_id: str = "default") -> None:
 
 def get_state_summary(panel_id: str = "default") -> dict[str, Any]:
     """Compact state summary — formula, lattice, selection, etc."""
+    panel_id = resolve_panel_id(panel_id)
     struct_dict = panel_structures.get(panel_id, {})
     if not struct_dict:
         return {"has_structure": False}
@@ -275,20 +380,26 @@ def reset(panel_id: str = "") -> None:
         panel_structure_info.pop(panel_id, None)
         panel_selections.pop(panel_id, None)
         panel_trajectories.pop(panel_id, None)
+        panel_manifests.pop(panel_id, None)
         pq = panel_pending_updates.pop(panel_id, None)
         if pq:
             pq.clear()
         if last_active_panel_id == panel_id:
             last_active_panel_id = "default"
+        for tab_id, viewer_id in list(active_viewer_by_tab.items()):
+            if viewer_id == panel_id:
+                active_viewer_by_tab.pop(tab_id, None)
         logger.info("View state reset for panel '%s'", panel_id)
     else:
         panel_structures.clear()
         panel_structure_info.clear()
         panel_selections.clear()
         panel_trajectories.clear()
+        panel_manifests.clear()
         for pq in panel_pending_updates.values():
             pq.clear()
         panel_pending_updates.clear()
         pending_workflow_id = ""
         last_active_panel_id = "default"
+        active_viewer_by_tab.clear()
         logger.info("View state reset (all panels)")

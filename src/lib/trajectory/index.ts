@@ -68,6 +68,7 @@ export type TrajectoryDataExtractor = (
 ) => Record<string, number>
 
 export interface FrameLoader {
+  fork?: () => FrameLoader
   get_total_frames: (data: string | ArrayBuffer) => Promise<number>
   build_frame_index: (
     data: string | ArrayBuffer,

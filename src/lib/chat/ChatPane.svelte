@@ -249,6 +249,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   import { get_workflow_slice, clear_workflow_events } from '$lib/workflow/workflow-state.svelte'
   import type { WorkflowEvent } from '$lib/workflow/workflow-state.svelte'
   import { chat_position, set_chat_position, broadcast_chat_context, listen_chat_context } from './chat-state.svelte'
+  import { build_workspace_context } from '$lib/structure/viewer-registry.svelte'
 
   let {
     structure = undefined,
@@ -296,11 +297,13 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
 
   // Keep structure context in sync with current structure
   $effect(() => {
-    slice.structure_context.value = build_structure_context({
+    const current = build_structure_context({
       structure,
       symmetry_data,
       selected_sites,
     })
+    const workspace = build_workspace_context(tab_slice_id)
+    slice.structure_context.value = [workspace, current].filter(Boolean).join(`\n\n`)
     broadcast_chat_context(tab_slice_id)
   })
 

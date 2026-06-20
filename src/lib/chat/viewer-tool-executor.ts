@@ -1,4 +1,5 @@
 // Bridge between CatBot's client tools (src/lib/chat/) and the LIVE 3D viewer.
+import { get_active_viewer_id, resolve_viewer } from '$lib/structure/viewer-registry.svelte'
 //
 // Viewer controls (show/hide bonds, camera reset, rotation, atom selection,
 // appearance) are imperative actions on a mounted Svelte component
@@ -30,22 +31,27 @@ export interface ViewerActionHandler {
   site_count: () => number
 }
 
-let active_handler: ViewerActionHandler | null = null
+const handlers = new Map<string, ViewerActionHandler>()
 
 /** Called by the active viewer on mount/activation. */
-export function register_viewer_action_handler(h: ViewerActionHandler): void {
-  active_handler = h
+export function register_viewer_action_handler(viewer_id: string, h: ViewerActionHandler): void {
+  handlers.set(viewer_id, h)
 }
 
 /** Called by the viewer on unmount/deactivation. Identity-checked: only clears
  *  the slot if it still points at THIS handler, so a deactivating viewer's
  *  cleanup can never wipe a freshly-activated viewer's registration (tab-switch
  *  mount/unmount ordering is not guaranteed). */
-export function unregister_viewer_action_handler(h: ViewerActionHandler): void {
-  if (active_handler === h) active_handler = null
+export function unregister_viewer_action_handler(viewer_id: string, h: ViewerActionHandler): void {
+  if (handlers.get(viewer_id) === h) handlers.delete(viewer_id)
 }
 
 /** The active viewer's handler, or null when no viewer is mounted/active. */
-export function get_viewer_action_handler(): ViewerActionHandler | null {
-  return active_handler
+export function get_viewer_action_handler(ref?: string, tab_id?: string): ViewerActionHandler | null {
+  if (ref) {
+    const resolved = resolve_viewer(ref, tab_id)
+    return resolved.manifest ? handlers.get(resolved.manifest.viewer_id) ?? null : null
+  }
+  const active = get_active_viewer_id()
+  return active ? handlers.get(active) ?? null : null
 }

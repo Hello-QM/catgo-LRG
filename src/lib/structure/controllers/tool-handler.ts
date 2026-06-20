@@ -26,12 +26,14 @@ import { get_workflow_slice } from '$lib/workflow/workflow-state.svelte'
 
 export interface McpBridgeDeps {
   panel_id: string
+  workflow_tab_id?: string
   get_structure: () => AnyStructure | undefined
   set_structure: (s: AnyStructure) => void
   inc_center_camera: () => void
   align_view_to_lattice?: () => void
   get_selected_sites: () => number[]
   get_wrapper: () => HTMLElement | undefined
+  handle_command?: (action: string, arguments_: Record<string, unknown>) => unknown
 }
 
 /** Start MCP bridge loops + SSE subscription.
@@ -186,7 +188,7 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
     //     `create`) never reach the canvas. The editor's effect on
     //     workflow_reload_seq has a 250ms trailing-edge debounce, so
     //     storm-bumping is cheap.
-    const slice = get_workflow_slice(deps.panel_id)
+    const slice = get_workflow_slice(deps.workflow_tab_id ?? deps.panel_id)
     if (last_dispatched_workflow_id === workflow_id) {
       slice.workflow_reload_seq.seq++
       return
@@ -226,6 +228,37 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
       }
     })
 
+    es.addEventListener(`command`, async (ev) => {
+      let command_id = ``
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        command_id = String(data.command_id ?? ``)
+        if (!command_id || !deps.handle_command) return
+        const action = String(data.action ?? ``)
+        const result = await deps.handle_command(action, data.arguments ?? {})
+        // Mutation tools may be chained in the same CatBot turn. Publish the
+        // updated pane before acknowledging the command so the next tool never
+        // observes the previous frame/geometry from the backend cache.
+        if (action !== `inspect`) await do_push_now()
+        await fetch(`${API_BASE}/view/command/result`, {
+          method: `POST`,
+          headers: { 'Content-Type': `application/json` },
+          body: JSON.stringify({ command_id, ok: true, result }),
+        })
+      } catch (err) {
+        if (!command_id) return
+        await fetch(`${API_BASE}/view/command/result`, {
+          method: `POST`,
+          headers: { 'Content-Type': `application/json` },
+          body: JSON.stringify({
+            command_id,
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        }).catch(() => {})
+      }
+    })
+
     es.onerror = (err) => {
       // EventSource auto-reconnects on network errors; only log at debug
       // level since the browser handles this transparently. Repeated errors
@@ -240,28 +273,36 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
 
   // Skip all backend interaction in static-only mode (no backend to talk to)
   if (!STATIC_ONLY) {
-    // Clear stale backend state from previous session (backend may outlive browser tab)
-    fetch(`${API_BASE}/view/reset?panel_id=${deps.panel_id}`, { method: `POST` })
-      .then(r => { if (!r.ok) console.warn(`[CatGo] view/reset returned ${r.status}`) })
-      .catch(err => console.debug(`[CatGo] view/reset not reachable:`, err.message))
-
-    poll_screenshot()
-    push_loop()
-    close_sse = start_sse_subscription()
+    // Reset first, then start this viewer's loops. Starting them concurrently
+    // allowed a late reset response to erase the first publish and was one
+    // source of apparently random blank panes.
+    void (async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE}/view/reset?panel_id=${deps.panel_id}`,
+          { method: `POST` },
+        )
+        if (!response.ok) {
+          console.warn(`[CatGo] view/reset returned ${response.status}`)
+        }
+      } catch (err) {
+        console.debug(
+          `[CatGo] view/reset not reachable:`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+      if (stopped) return
+      close_sse = start_sse_subscription()
+      request_push()
+      void poll_screenshot()
+      void push_loop()
+    })()
   }
 
   return {
     cleanup: () => {
       stopped = true
       close_sse?.()
-      // Clear this panel's backend structure on unmount. The backend store can
-      // outlive the tab; without this, a closed/replaced structure tab leaves a
-      // stale structure that CatBot (bound to the same panel_id) later reads as
-      // a phantom the user can't find in any open view.
-      if (!STATIC_ONLY) {
-        fetch(`${API_BASE}/view/reset?panel_id=${deps.panel_id}`, { method: `POST` })
-          .catch(() => {})
-      }
     },
     request_push,
   }

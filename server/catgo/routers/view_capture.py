@@ -745,6 +745,26 @@ def set_active_panel(
     return {"status": "ok", "active_panel_id": view_state.last_active_panel_id}
 
 
+@router.get("/manifest")
+async def get_viewer_manifest(tab_id: str = ""):
+    return {"viewers": view_state.list_manifests(tab_id)}
+
+
+@router.post("/manifest/update")
+async def update_viewer_manifest(data: dict):
+    panel_id = str(data.get("viewer_id", "")).strip()
+    if not panel_id:
+        raise HTTPException(status_code=400, detail="viewer_id is required")
+    view_state.update_manifest(panel_id, data)
+    return {"ok": True}
+
+
+@router.delete("/manifest")
+async def delete_viewer_manifest(viewer_id: str):
+    view_state.remove_manifest(viewer_id)
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------------------
 # Unified state summary (for Claude Code)
 # ---------------------------------------------------------------------------
@@ -824,3 +844,34 @@ async def subscribe_view(
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/command/result")
+async def complete_viewer_command(data: dict):
+    command_id = str(data.get("command_id", ""))
+    if not command_id:
+        raise HTTPException(status_code=400, detail="command_id is required")
+    accepted = view_state.complete_viewer_command(command_id, data)
+    return {"accepted": accepted}
+
+
+@router.post("/command")
+async def request_viewer_command(data: dict):
+    viewer_ref = str(data.get("viewer_id", "")).strip()
+    action = str(data.get("action", "")).strip()
+    if not viewer_ref or not action:
+        raise HTTPException(status_code=400, detail="viewer_id and action are required")
+    panel_id, resolve_error = view_state.resolve_viewer_ref(
+        viewer_ref,
+        str(data.get("tab_id", "")).strip(),
+    )
+    if resolve_error or not panel_id:
+        raise HTTPException(status_code=404, detail=resolve_error or "Viewer was not found")
+    try:
+        return await view_state.request_viewer_command(
+            panel_id,
+            action,
+            data.get("arguments") or {},
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"Viewer '{panel_id}' did not answer")

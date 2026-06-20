@@ -52,6 +52,7 @@ import { iter_workflow_slices } from '$lib/workflow/workflow-state.svelte'
 import { VIEWER_TOOLS } from './viewer-tools'
 import { TERMINAL_TOOLS } from './terminal-tools'
 import { CAMPAIGN_TOOLS } from './campaign-tools'
+import { list_viewers, resolve_viewer } from '$lib/structure/viewer-registry.svelte'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
 interface MutSite {
@@ -95,6 +96,130 @@ function register(def: ClientTool, run: Executor): void {
   REGISTRY.set(def.name, { def, run })
   if (!CLIENT_TOOLS.some((t) => t.name === def.name)) CLIENT_TOOLS.push(def)
 }
+
+function require_viewer(ref?: unknown) {
+  const resolved = resolve_viewer(typeof ref === `string` ? ref : undefined)
+  if (resolved.error || !resolved.handle || !resolved.manifest) {
+    throw new Error(resolved.error ?? `Viewer is not available.`)
+  }
+  return { handle: resolved.handle, manifest: resolved.manifest }
+}
+
+register(
+  {
+    name: `catgo_pane`,
+    description:
+      `Thin adapter for one exact structure/trajectory pane. list returns all panes. inspect returns indexed atoms, neighbors, coordination, connected components, terminal and branch candidates. add_atom, delete_atoms, replace_atoms, move_atoms and scale_geometry target only viewer_id; trajectory edits apply to all frames after topology validation. Inspect semantic atom descriptions first and never guess among equivalent candidates.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        action: {
+          type: `string`,
+          enum: [`list`, `inspect`, `add_atom`, `delete_atoms`, `replace_atoms`, `move_atoms`, `scale_geometry`],
+        },
+        viewer_id: {
+          type: `string`,
+          description: `Stable viewer_id or a unique position alias such as bottom-right/右下角.`,
+        },
+        terminal_only: { type: `boolean`, description: `Optional inspect filter.` },
+        element: { type: `string`, description: `Element for add_atom/replace_atoms or inspect filter.` },
+        position: {
+          type: `array`,
+          items: { type: `number` },
+          minItems: 3,
+          maxItems: 3,
+          description: `Cartesian position in Angstrom for add_atom.`,
+        },
+        indices: { type: `array`, items: { type: `integer` } },
+        moves: {
+          type: `array`,
+          items: {
+            type: `object`,
+            properties: {
+              index: { type: `integer` },
+              displacement: {
+                type: `array`,
+                items: { type: `number` },
+                minItems: 3,
+                maxItems: 3,
+              },
+            },
+            required: [`index`, `displacement`],
+          },
+        },
+        factor: { type: `number`, exclusiveMinimum: 0 },
+      },
+      required: [`action`],
+    },
+  },
+  (input) => {
+    const action = String(input.action ?? ``)
+    if (action === `list`) return { viewers: list_viewers() }
+
+    const { handle, manifest } = require_viewer(input.viewer_id)
+    if (action === `inspect`) {
+      let atoms = handle.inspect_atoms?.() ?? []
+      if (input.element) atoms = atoms.filter((atom) => atom.element === String(input.element))
+      if (input.terminal_only === true) atoms = atoms.filter((atom) => atom.terminal)
+      return { viewer: manifest, atoms }
+    }
+    if (action === `add_atom`) {
+      if (!handle.add_atom) throw new Error(`Viewer ${manifest.viewer_id} does not support atom addition.`)
+      const element = String(input.element ?? ``).trim()
+      const position = Array.isArray(input.position) ? input.position.map(Number) : []
+      if (!element || position.length !== 3 || !position.every(Number.isFinite)) {
+        throw new Error(`element and a 3D Cartesian position are required.`)
+      }
+      return {
+        ...handle.add_atom(element, [position[0], position[1], position[2]]),
+        position: manifest.position,
+        filename: manifest.filename,
+      }
+    }
+    if (action === `delete_atoms`) {
+      if (!handle.delete_atoms) throw new Error(`Viewer ${manifest.viewer_id} does not support atom deletion.`)
+      const indices = [...new Set((Array.isArray(input.indices) ? input.indices : []).map(Number))]
+        .filter((idx) => Number.isInteger(idx) && idx >= 0)
+      if (!indices.length) throw new Error(`At least one valid atom index is required.`)
+      const result = handle.delete_atoms(indices)
+      return { ...result, position: manifest.position, filename: manifest.filename, deleted_indices: indices }
+    }
+    if (action === `move_atoms`) {
+      if (!handle.move_atoms) throw new Error(`Viewer ${manifest.viewer_id} does not support atom movement.`)
+      const moves = new Map<number, [number, number, number]>()
+      for (const move of Array.isArray(input.moves) ? input.moves as Record<string, unknown>[] : []) {
+        const d = Array.isArray(move.displacement) ? move.displacement.map(Number) : []
+        if (Number.isInteger(Number(move.index)) && d.length === 3 && d.every(Number.isFinite)) {
+          moves.set(Number(move.index), [d[0], d[1], d[2]])
+        }
+      }
+      if (!moves.size) throw new Error(`No valid atom moves were supplied.`)
+      return { ...handle.move_atoms(moves), position: manifest.position, filename: manifest.filename }
+    }
+    if (action === `replace_atoms`) {
+      if (!handle.replace_atoms) throw new Error(`Viewer ${manifest.viewer_id} does not support atom replacement.`)
+      const element = String(input.element ?? ``).trim()
+      const indices = [...new Set((Array.isArray(input.indices) ? input.indices : []).map(Number))]
+        .filter((idx) => Number.isInteger(idx) && idx >= 0)
+      if (!element || !indices.length) throw new Error(`element and atom indices are required.`)
+      return {
+        ...handle.replace_atoms(indices, element),
+        position: manifest.position,
+        filename: manifest.filename,
+        replaced_indices: indices,
+        element,
+      }
+    }
+    if (action === `scale_geometry`) {
+      if (!handle.scale_geometry) throw new Error(`Viewer ${manifest.viewer_id} does not support geometry scaling.`)
+      const factor = Number(input.factor)
+      if (!Number.isFinite(factor) || factor <= 0) throw new Error(`factor must be a positive number.`)
+      return { ...handle.scale_geometry(factor), position: manifest.position, filename: manifest.filename, factor }
+    }
+    throw new Error(`Unsupported catgo_pane action: ${action}`)
+  },
+)
 
 /** Require an active structure or throw a user-facing error. */
 function require_structure(): AnyStructure {
