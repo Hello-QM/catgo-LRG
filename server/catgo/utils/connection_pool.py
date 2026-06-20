@@ -68,13 +68,24 @@ def _delete_persisted_session(session_id: str) -> None:
 class HPCConnectionPool:
     """Manages SSH connections with reuse, keepalive, and idle cleanup."""
 
-    IDLE_TIMEOUT = 3600  # 1 hour
+    # Reap a connection only after this many seconds IDLE. Generous by default
+    # (24h) so a session survives normal work gaps like a plain `ssh`/kitty
+    # session — the keepalive below holds the TCP open meanwhile. Set
+    # CATGO_HPC_IDLE_TIMEOUT=0 to never reap on idle. (Was 1h, which silently
+    # dropped connections the user still considered "open".)
+    IDLE_TIMEOUT = int(os.environ.get("CATGO_HPC_IDLE_TIMEOUT", 86400))  # 24h
     OTP_TIMEOUT = 120  # 2 minutes for user to enter OTP
     CLEANUP_INTERVAL = 120  # Check every 2 minutes (keep HPC firewalls from dropping idle TCP)
+    # Mark a connection dead only after this many CONSECUTIVE keepalive failures.
+    # A single failed/slow `echo` on a busy login node is a transient blip, not a
+    # dead connection — requiring a streak avoids killing a session the user is
+    # actively relying on (it would otherwise expire on one hiccup).
+    KEEPALIVE_DEAD_AFTER = int(os.environ.get("CATGO_HPC_KEEPALIVE_DEAD_AFTER", 3))
 
     def __init__(self) -> None:
         self.connections: dict[str, HPCConnection] = {}
         self._dead_connections: dict[str, HPCConnection] = {}  # Keeps metadata for auto-reconnect
+        self._keepalive_fails: dict[str, int] = {}  # consecutive keepalive failures per session
         self._cleanup_task: Optional[asyncio.Task[None]] = None
         # Register always-available local filesystem connection
         self.connections[LOCAL_SESSION_ID] = LocalFileConnection()
@@ -92,7 +103,9 @@ class HPCConnectionPool:
             expired = [
                 sid
                 for sid, hpc in self.connections.items()
-                if sid != LOCAL_SESSION_ID and now - hpc.last_used > self.IDLE_TIMEOUT
+                if sid != LOCAL_SESSION_ID
+                and self.IDLE_TIMEOUT > 0
+                and now - hpc.last_used > self.IDLE_TIMEOUT
             ]
             for sid in expired:
                 logger.info(f"Closing idle connection: {sid}")
@@ -111,12 +124,24 @@ class HPCConnectionPool:
                         hpc.conn.run("echo __catgo_keepalive__", check=False),
                         timeout=15,
                     )
-                    if "__catgo_keepalive__" not in (result.stdout or ""):
-                        logger.warning(f"Keepalive failed for {sid}, marking dead")
-                        hpc._alive = False
+                    if "__catgo_keepalive__" in (result.stdout or ""):
+                        self._keepalive_fails.pop(sid, None)  # healthy — reset streak
+                    else:
+                        self._note_keepalive_failure(sid, hpc, "no echo reply")
                 except Exception as exc:
-                    logger.warning(f"Keepalive error for {sid}: {exc}, marking dead")
-                    hpc._alive = False
+                    self._note_keepalive_failure(sid, hpc, str(exc))
+
+    def _note_keepalive_failure(self, sid: str, hpc: "HPCConnection", reason: str) -> None:
+        """Record a keepalive miss; mark the connection dead only after a STREAK
+        of KEEPALIVE_DEAD_AFTER consecutive failures (transient blips tolerated)."""
+        n = self._keepalive_fails.get(sid, 0) + 1
+        self._keepalive_fails[sid] = n
+        if n >= self.KEEPALIVE_DEAD_AFTER:
+            logger.warning(f"Keepalive failed {n}x for {sid} ({reason}), marking dead")
+            hpc._alive = False
+            self._keepalive_fails.pop(sid, None)
+        else:
+            logger.info(f"Keepalive miss {n}/{self.KEEPALIVE_DEAD_AFTER} for {sid} ({reason})")
 
     async def connect(
         self,
@@ -190,7 +215,11 @@ class HPCConnectionPool:
                     "port": config.jump_port,
                     "username": jump_username,
                     "known_hosts": None,
+                    # SSH-level keepalive (like ssh ServerAliveInterval). count_max
+                    # raised from asyncssh's default 3 so a slow login node needs
+                    # ~3min of silence (6×30s) — not 90s — before SSH drops it.
                     "keepalive_interval": 30,
+                    "keepalive_count_max": 6,
                 }
                 if tunnel:
                     jump_kwargs["tunnel"] = tunnel
@@ -243,7 +272,11 @@ class HPCConnectionPool:
                 "username": config.username,
                 "known_hosts": None,
                 "tunnel": tunnel,
+                # SSH-level keepalive (like ssh ServerAliveInterval). count_max
+                # raised from asyncssh's default 3 so a slow login node needs
+                # ~3min of silence (6×30s) — not 90s — before SSH drops it.
                 "keepalive_interval": 30,
+                "keepalive_count_max": 6,
             }
 
             is_password_auth = config.auth_method in (AuthMethod.PASSWORD, AuthMethod.PASSWORD_OTP)

@@ -260,6 +260,28 @@
   // FileTree refresh trigger (increment to force remount after upload)
   let file_tree_key = $state(0)
 
+  // When a FILE op reports the session expired, recover like the terminal does.
+  // pty.ts already finds a live replacement session for the terminal; the file
+  // browser had no recovery, so it kept querying the dead id (green dot + "Session
+  // expired" + refresh that never helped). Re-sync with the live backend
+  // connections and, if one exists for this host, adopt its id and remount.
+  let last_recovered_sid = $state(``)
+  async function recover_file_session(): Promise<void> {
+    const sess = active_session
+    if (!sess || sess.session_id === LOCAL_SESSION_ID) return
+    const stale = sess.session_id
+    if (stale === last_recovered_sid) return // already tried for this id — avoid a loop
+    last_recovered_sid = stale
+    await refresh_hpc_sessions()
+    const live = hpc_session_store.sessions.find(
+      (s) => s.host === sess.host && s.username === sess.username && s.session_id !== stale,
+    )
+    if (live) {
+      sess.session_id = live.session_id
+      file_tree_key++ // remount FileTree → reloads against the live session
+    }
+  }
+
   /** Find session by stable _id through the reactive array (returns proxy). */
   function get_session(id: string): HPCSession | undefined {
     return sessions.find((s) => s._id === id)
@@ -1858,6 +1880,7 @@
               on_preview_file={(file, type) => open_remote_preview(file, type)}
               on_load_trajectory={(dir, pattern) => merge_dir_as_trajectory(dir, pattern)}
               on_analyze_report={on_analyze_report ? (file) => analyze_remote_report(file) : undefined}
+              on_session_expired={recover_file_session}
               on_navigate={(path) => { if (active_session) active_session.current_path = path }}
               on_download={(file) => download_remote_file(file)}
               on_copy_path={(file) => copy_remote_path(file)}

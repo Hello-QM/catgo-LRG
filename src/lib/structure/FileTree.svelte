@@ -28,6 +28,7 @@
     on_move_file,
     on_upload,
     on_analyze_report,
+    on_session_expired,
     merging_dir = null,
     merge_status = null,
   }: {
@@ -50,6 +51,9 @@
     on_upload?: (files: File[], dest_path: string) => Promise<void>
     /** Analyze a REPORT file for slow-growth post-processing. */
     on_analyze_report?: (file: RemoteFile) => void
+    /** Fired when a file op reports the session expired/gone, so the parent can
+     *  recover a live session and remount (the terminal self-heals; files did not). */
+    on_session_expired?: () => void
     /** Directory name currently being merged (null = idle). */
     merging_dir?: string | null
     /** Status message after merge attempt (null = idle). */
@@ -425,7 +429,13 @@
     try {
       const result = await listFiles(session_id, path)
       if (!result.success) {
-        root_error = result.message || t('common.operation_failed')
+        const m = result.message || ``
+        if (m.includes(`not found`) || m.includes(`expired`)) {
+          root_error = t('sidebar.session_expired')
+          on_session_expired?.() // let the parent recover a live session + remount
+          return { files: [], current_path: path }
+        }
+        root_error = m || t('common.operation_failed')
         return { files: [], current_path: path }
       }
       if (result.files) {
@@ -438,9 +448,10 @@
     } catch (e: any) {
       const msg = e?.message || String(e)
       console.error(`Failed to list ${path}:`, e)
-      // Don't retry on session errors
+      // Don't retry here — hand off to the parent to recover a live session.
       if (msg.includes(`not found`) || msg.includes(`expired`)) {
         root_error = t('sidebar.session_expired')
+        on_session_expired?.()
         return { files: [], current_path: path }
       }
       root_error = msg
