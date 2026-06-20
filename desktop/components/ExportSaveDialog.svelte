@@ -10,14 +10,15 @@
     hpc_path: string
     export_fs_browse: (dir: string) => void
     do_export: () => void
+    oncancel: () => void
   }
 
-  let { save_project_roots, save_project_children, hpc_path, export_fs_browse, do_export }: Props = $props()
+  let { save_project_roots, save_project_children, hpc_path, export_fs_browse, do_export, oncancel }: Props = $props()
 </script>
 
 {#if exp.dialog}
   <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="modal-overlay" onclick={() => { exp.dialog = null; exp.close_after = null }}>
+  <div class="modal-overlay" onclick={oncancel}>
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
     <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
       <h3>{exp.dialog.mode === `project` ? t('app.save_to_db') : t('app.export_to_local', { target: exp.dialog.mode === `hpc` ? t('app.export_to_hpc') : t('app.export_to_local') }).replace('Export to ', '').replace('导出至', '')}</h3>
@@ -134,7 +135,7 @@
         {/if}
       </div>
       <div class="modal-actions">
-        <button class="modal-btn cancel" onclick={() => { exp.dialog = null; exp.close_after = null }}>{t('common.cancel')}</button>
+        <button class="modal-btn cancel" onclick={oncancel}>{t('common.cancel')}</button>
         <button class="modal-btn confirm" disabled={exp.saving || !exp.dialog.filename || (exp.dialog.mode === `file` && !exp.fs_dir)} onclick={do_export}>
           {exp.saving ? t('common.saving') : exp.dialog.mode === `project` ? t('common.save') : t('common.export')}
         </button>

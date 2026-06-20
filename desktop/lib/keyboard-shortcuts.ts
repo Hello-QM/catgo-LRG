@@ -97,6 +97,7 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
       }
       if (ts.close_confirm_leaf_id !== null) {
         ts.close_confirm_leaf_id = null
+        ts.pending_library_removal = null
         return
       }
     }

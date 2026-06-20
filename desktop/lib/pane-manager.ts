@@ -12,11 +12,16 @@ import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
 import { list_projects, save_structure_to_db } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
+import {
+  commit_pending_library_removal,
+  sync_active_library_entry,
+} from './library-pane-bindings'
 
 export interface PaneManagerDeps {
   tab_states: Record<string, StructureTabState>
   update_tab_label: (tab_id: string) => void
   export_fs_browse: (dir: string) => void
+  reset_viewer?: (tab_id: string, leaf_id: string) => void
 }
 
 export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
@@ -60,17 +65,24 @@ export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: st
 export function close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
   const ts = deps.tab_states[tab_id]
   if (!ts) return
+  const closing_leaf = findLeafById(ts.root, leaf_id)
+  if (!closing_leaf) return
+  const closed_entry_id = structurePane(closing_leaf)?.library_entry_id ?? null
   ts.close_confirm_leaf_id = null
+  deps.reset_viewer?.(tab_id, leaf_id)
   if (leafCount(ts.root) <= 1) {
-    const leaf = findLeafById(ts.root, leaf_id)
-    const pane = leaf && structurePane(leaf)
+    const pane = closing_leaf && structurePane(closing_leaf)
     if (pane) Object.assign(pane, create_empty_pane())
+    commit_pending_library_removal(ts, leaf_id, closed_entry_id)
+    sync_active_library_entry(ts)
     deps.update_tab_label(tab_id)
     return
   }
   ts.root = removeLeaf(ts.root, leaf_id)
   if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
   if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
+  commit_pending_library_removal(ts, leaf_id, closed_entry_id)
+  sync_active_library_entry(ts)
   deps.update_tab_label(tab_id)
 }
 

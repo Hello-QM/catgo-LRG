@@ -78,7 +78,7 @@ const app: Record<string, string> = {
 
   // StructureLibrary
   clear_list_hint: `Clear list (keeps the open structure)`,
-  remove_from_list: `Remove from list`,
+  remove_from_list: `Remove from list and close its panel`,
 
   // Sidebar / Desktop
   show_sidebar: `Show sidebar`,

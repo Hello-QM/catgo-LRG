@@ -78,7 +78,7 @@ const app: Record<string, string> = {
 
   // StructureLibrary
   clear_list_hint: `清空列表 (保留当前打开的结构)`,
-  remove_from_list: `从列表中移除`,
+  remove_from_list: `从列表移除并关闭对应面板`,
 
   // Sidebar / Desktop
   show_sidebar: `显示侧边栏`,

@@ -34,6 +34,8 @@ export interface PaneState {
   local_file_path?: string | null
   /** Filename of the loaded structure file */
   source_filename?: string | null
+  /** Stable identity of the structure-library entry currently shown here. */
+  library_entry_id?: string | null
   /** Which viewer renders this pane. Absent/'native' = Three.js viewer. */
   viewer_kind?: 'native' | 'molstar'
   /** Raw file text for Mol* (bio files bypass pymatgen parsing). */
@@ -75,6 +77,8 @@ export interface StructureTabState {
   /** Per-tab structure library (sidebar). Cleared automatically on tab close. */
   library: LibraryEntry[]
   active_library_id: string | null
+  /** A sidebar removal waiting for its bound pane to finish the close flow. */
+  pending_library_removal: { entry_id: string; leaf_id: string } | null
 }
 
 // ========== Pure Functions ==========
@@ -97,7 +101,7 @@ export function get_pane_label(pane: PaneState): string {
 }
 
 export function create_empty_pane(): PaneState {
-  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, open_plugin_hub: 0, initial_panel: undefined }
+  return { mode: 'structure', structure: undefined, saveable_structure: undefined, trajectory: null, is_trajectory_mode: false, cube_file: null, selected_sites: [], current_step_idx: 0, modified: false, initial_site_count: 0, initial_structure_ref: null, raw_traj_b64: '', raw_traj_format: '', remote_origin: null, local_file_path: null, source_filename: null, library_entry_id: null, open_plugin_hub: 0, initial_panel: undefined }
 }
 
 export function pane_has_content(p: PaneState): boolean {
@@ -120,6 +124,7 @@ export function create_tab_state(): StructureTabState {
     maximized_leaf_id: null,
     library: [],
     active_library_id: null,
+    pending_library_removal: null,
   }
 }
 
@@ -133,6 +138,7 @@ export function create_terminal_tab_state(opts?: Partial<TerminalLeafState>): St
     maximized_leaf_id: null,
     library: [],
     active_library_id: null,
+    pending_library_removal: null,
   }
 }
 

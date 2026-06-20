@@ -119,6 +119,7 @@ export function close_all_structure_tabs(
         ts.close_confirm_leaf_id = null
         ts.library = []
         ts.active_library_id = null
+        ts.pending_library_removal = null
         const tab = tabs.find(t => t.id === id)
         if (tab) tab.label = `Structure`
       }

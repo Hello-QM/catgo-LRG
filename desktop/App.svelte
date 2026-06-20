@@ -109,6 +109,12 @@
     save_and_close_panel as _save_and_close_panel,
     type PaneManagerDeps,
   } from './lib/pane-manager'
+  import {
+    cancel_pending_library_removal,
+    leaves_for_library_entry,
+    prepare_library_entry_removal,
+    sync_active_library_entry,
+  } from './lib/library-pane-bindings'
   // Extracted layout manager
   import {
     handle_layout_change as _handle_layout_change,
@@ -187,6 +193,11 @@
     tab_states,
     update_tab_label,
     export_fs_browse: (dir) => export_fs_browse(dir),
+    reset_viewer: (tab_id, leaf_id) => {
+      if (!STATIC_ONLY) {
+        fetch(`${API_BASE}/view/reset?panel_id=${encodeURIComponent(`${tab_id}:${leaf_id}`)}`, { method: `POST` }).catch(() => {})
+      }
+    },
   }
   const layout_deps: LayoutManagerDeps = {
     get_active_ts,
@@ -197,7 +208,7 @@
     set_pending_layout_change: (v) => { tm.pending_layout_change = v },
   }
   const export_deps: ExportHandlerDeps = {
-    close_panel: (tab_id, leaf_id) => _close_panel(pane_deps, tab_id, leaf_id),
+    close_panel: (tab_id, leaf_id) => close_panel(tab_id, leaf_id),
     load_close_save_projects,
   }
   const drag_deps: DragDropDeps = {
@@ -428,10 +439,21 @@
   }
   function handle_unload(tab_id: string, leaf_id: string) { _handle_unload(pane_deps, tab_id, leaf_id) }
   function close_panel(tab_id: string, leaf_id: string) {
-    if (!STATIC_ONLY) {
-      fetch(`${API_BASE}/view/reset?panel_id=${encodeURIComponent(`${tab_id}:${leaf_id}`)}`, { method: `POST` }).catch(() => {})
-    }
     _close_panel(pane_deps, tab_id, leaf_id)
+  }
+  function cancel_panel_close(tab_id: string, leaf_id: string) {
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    ts.close_confirm_leaf_id = null
+    cancel_pending_library_removal(ts, leaf_id)
+  }
+  function cancel_export_dialog() {
+    const close_after = exp.close_after
+    exp.dialog = null
+    exp.close_after = null
+    if (!close_after) return
+    const ts = tab_states[close_after.tab_id]
+    if (ts) cancel_pending_library_removal(ts, close_after.leaf_id)
   }
   function save_and_close_panel(tab_id: string, leaf_id: string) { return _save_and_close_panel(pane_deps, tab_id, leaf_id) }
   function handle_layout_change(new_layout: PresetId) { _handle_layout_change(layout_deps, new_layout) }
@@ -1246,6 +1268,7 @@
     p.remote_origin = remote_origin
     p.local_file_path = local_file_path
     p.source_filename = e.filename
+    p.library_entry_id = ts.library.some((entry) => entry.id === e.id) ? e.id : null
     p.viewer_kind = e.viewer_kind ?? `native`
     p.bio_raw_content = e.bio_raw_content
     p.bio_format = e.bio_format
@@ -1365,27 +1388,32 @@
     if (!ts) return
     const entry = ts.library.find(e => e.id === id)
     if (!entry) return
+    const bound = leaves_for_library_entry(ts, id)
+    if (bound.length > 1) {
+      console.warn(`[structure-library] entry ${id} is bound to multiple panes; refusing to guess`)
+      return
+    }
+    if (bound.length === 1) {
+      ts.active_leaf_id = bound[0].id
+      ts.active_library_id = id
+      tick().then(() => window.dispatchEvent(new Event(`resize`)))
+      return
+    }
     apply_entry_to_pane(tab_id, ts, ts.active_leaf_id, entry)
     ts.active_library_id = id
     tick().then(() => window.dispatchEvent(new Event(`resize`)))
   }
 
-  /** Remove one entry; if it was active, fall back to the first remaining (or clear the pane). */
+  /** Remove one exact entry instance and close only the pane bound to it. */
   function remove_library_entry(tab_id: string, id: string) {
     const ts = tab_states[tab_id]
     if (!ts) return
-    const was_active = ts.active_library_id === id
-    ts.library = ts.library.filter(e => e.id !== id)
-    if (!was_active) return
-    if (ts.library.length > 0) {
-      select_library_entry(tab_id, ts.library[0].id)
-    } else {
-      ts.active_library_id = null
-      const leaf = findLeafById(ts.root, ts.active_leaf_id)
-      const pane = leaf ? structurePane(leaf) : null
-      if (pane) Object.assign(pane, create_empty_pane())
-      update_tab_label(tab_id)
+    const request = prepare_library_entry_removal(ts, id)
+    if (request.kind === `ambiguous`) {
+      console.warn(`[structure-library] entry ${id} is bound to multiple panes; removal cancelled`)
+      return
     }
+    if (request.kind === `close`) handle_unload(tab_id, request.leaf_id)
   }
 
   /** Empty the library list (does not clear what's currently shown in the pane). */
@@ -1929,7 +1957,7 @@
           close_confirm_leaf_id={ts.close_confirm_leaf_id}
           maximized_leaf_id={ts.maximized_leaf_id}
           {active_split_id}
-          on_activate={(id) => ts.active_leaf_id = id}
+          on_activate={(id) => { ts.active_leaf_id = id; sync_active_library_entry(ts) }}
           on_split_mousedown={(e, sid, dir) => start_split_resize(e, sid, dir, tab.id)}
           on_split_dblclick={(sid) => { ts.root = setRatio(ts.root, sid, 0.5) }}
           {leaf_body}
@@ -2057,7 +2085,7 @@
               </svg>
               {#if pane.mode === `workflow`}
                 <span>{t(`app.workflow_will_be_closed`)}</span>
-                <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_leaf_id = null }}>{t(`common.cancel`)}</button>
+                <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); cancel_panel_close(tab.id, leaf.id) }}>{t(`common.cancel`)}</button>
                 <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, leaf.id) }}>{t(`common.close`)}</button>
               {:else}
                 <span>{t(`common.save_before_closing`)}</span>
@@ -2090,7 +2118,7 @@
                   {exp.close_saving ? t(`common.saving`) : t(`common.save_and_close`)}
                 </button>
                 <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, leaf.id) }}>{t(`common.close`)}</button>
-                <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); ts.close_confirm_leaf_id = null }}>{t(`common.cancel`)}</button>
+                <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); cancel_panel_close(tab.id, leaf.id) }}>{t(`common.cancel`)}</button>
               {/if}
             </div>
           {/if}
@@ -2707,6 +2735,7 @@
   hpc_path={sidebar.hpc_path}
   {export_fs_browse}
   {do_export}
+  oncancel={cancel_export_dialog}
 />
 
 

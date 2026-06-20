@@ -155,6 +155,7 @@ export function create_tab_manager() {
     ts.maximized_leaf_id = null
     ts.library = []
     ts.active_library_id = null
+    ts.pending_library_removal = null
     // A last terminal tab being closed reverts to the structure landing page.
     tab.type = `structure`
     tab.label = `Structure`

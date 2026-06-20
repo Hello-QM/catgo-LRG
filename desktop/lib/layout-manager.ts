@@ -57,6 +57,7 @@ function apply_preset(ts: StructureTabState, preset: PresetId, filled: LeafNode[
   ts.root = root
   ts.active_leaf_id = slots[0].id
   ts.close_confirm_leaf_id = null
+  ts.pending_library_removal = null
 }
 
 export function handle_layout_change(deps: LayoutManagerDeps, preset: PresetId) {
