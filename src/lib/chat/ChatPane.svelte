@@ -44,7 +44,11 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   import { get_tool_results_for, is_streaming } from './tool-execution'
   import { copy_to_clipboard, handle_messages_click } from './attachment-utils'
   import { run_slash, SLASH_COMMANDS } from './slash-commands'
-  import { get_current_structure } from '$lib/structure/current-structure.svelte'
+  import {
+    clear_pending_client_load,
+    get_current_structure,
+    pending_client_load_state,
+  } from '$lib/structure/current-structure.svelte'
 
 
   // Dynamic providers from backend
@@ -259,6 +263,8 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_popout = undefined,
     on_view_split = undefined,
     on_view_new_window = undefined,
+    has_sibling_structure = false,
+    on_view_overwrite = undefined,
     is_popout = false,
     is_pane = false,
     tab_id,
@@ -270,8 +276,12 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     on_popout?: () => void
     // When CatBot loads a structure into this (viewer-less) pane, offer to view
     // it. Wired only by the standalone chat pane; undefined elsewhere.
-    on_view_split?: (panelId: string) => void
-    on_view_new_window?: (panelId: string) => void
+    on_view_split?: (panelId: string, struct: AnyStructure) => void
+    on_view_new_window?: (panelId: string, struct: AnyStructure) => void
+    // True when the host already has a structure in its viewer (docked chat).
+    // Enables the "overwrite the existing viewer" option on the load card.
+    has_sibling_structure?: boolean
+    on_view_overwrite?: (panelId: string, struct: AnyStructure) => void
     is_popout?: boolean
     // True when the chat is a leaf in the pane tree (standalone CatBot pane),
     // not the docked sidebar chat. Docked-position toggles (right/bottom) are
@@ -313,7 +323,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   // viewer uses; on a real push, surface a card offering split-view / new
   // window. Only active when the host wired the view handlers (standalone chat
   // pane) — docked chat already has a sibling viewer.
-  let loaded_view_card = $state<{ formula: string; n: number; panelId: string } | null>(null)
+  let loaded_view_card = $state<{ formula: string; n: number; panelId: string; structure: AnyStructure } | null>(null)
   let last_loaded_fp = ``
   function struct_formula(s: { sites?: { species?: { element?: string }[] }[] }): string {
     const counts: Record<string, number> = {}
@@ -327,23 +337,62 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   }
   $effect(() => {
     if (STATIC_ONLY || !tab_id) return
-    if (!on_view_split && !on_view_new_window) return
+    if (!on_view_split && !on_view_new_window && !on_view_overwrite) return
     const es = new EventSource(`${API_BASE}/view/subscribe?panel_id=${encodeURIComponent(tab_id)}`)
     // `structure` only (not `snapshot`): we want real new pushes, not the
     // replay the backend sends on connect.
     es.addEventListener(`structure`, (ev) => {
       try {
-        const s = JSON.parse((ev as MessageEvent).data)?.structure
+        const data = JSON.parse((ev as MessageEvent).data)
+        // Only fresh loads raise the card; edits (supercell, etc.) carry
+        // intent:edit and must not nag the user to re-open a viewer.
+        if (data?.intent !== `load`) return
+        // Docked chat (beside a viewer, !is_pane): only surface the card when the
+        // load landed in an ALREADY-occupied viewer (had_structure) — that's when
+        // the user must choose overwrite/split/new-window. A load into an EMPTY
+        // docked viewer auto-applies and is shown, so no card. The standalone
+        // viewer-less chat pane (is_pane) has no viewer to render the load, so it
+        // always cards (PR #370 behaviour).
+        if (!is_pane && !data?.had_structure) return
+        const s = data?.structure
         const n = s?.sites?.length ?? 0
         if (!n) return
         const fp = `${n}:${struct_formula(s)}`
         if (fp === last_loaded_fp) return
         last_loaded_fp = fp
-        loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id! }
+        loaded_view_card = { formula: struct_formula(s), n, panelId: tab_id!, structure: s }
       } catch { /* ignore parse errors */ }
     })
     return () => es.close()
   })
+
+  // ── Client-direct LOAD (DeepSeek/Qwen/etc. + STATIC_ONLY web) → same card ──
+  // Client-direct providers run the tool loop in-browser: their load tools call
+  // client_load_or_card, which stages a pending load (instead of applying it)
+  // when the viewer already holds a structure. Watch that pending signal and
+  // surface the SAME card. Pure client-side — works with zero backend, unlike
+  // the SSE effect above (which is gated on STATIC_ONLY/!tab_id).
+  $effect(() => {
+    if (!on_view_split && !on_view_new_window && !on_view_overwrite) return
+    const pend = pending_client_load_state().value
+    if (!pend) return
+    const fp = `${pend.n}:${pend.formula}`
+    if (fp === last_loaded_fp) return
+    last_loaded_fp = fp
+    loaded_view_card = {
+      formula: pend.formula,
+      n: pend.n,
+      panelId: tab_id ?? `default`,
+      structure: pend.structure,
+    }
+  })
+
+  // Dismiss the loaded-structure card AND consume the client-side pending
+  // signal, so the new pending effect can't immediately re-fire the card.
+  const dismiss_loaded_card = () => {
+    loaded_view_card = null
+    clear_pending_client_load()
+  }
 
   // Keep workflow context in sync with active workflow
   $effect(() => {
@@ -586,6 +635,10 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
   let voice_recording = $state(false)
   let voice_supported = $state(false)
   let recognition: any = null
+  // Set once the user edits the box while recording. onresult rewrites the whole
+  // input_text each event, so without this a deletion/edit is instantly clobbered
+  // by the next interim result (Chinese feels un-deletable while the mic is live).
+  let voice_edited = $state(false)
 
   $effect(() => {
     voice_supported = typeof window !== `undefined` &&
@@ -613,6 +666,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     recognition.lang = voice_language
 
     recognition.onresult = (event: any) => {
+      if (voice_edited) return // user took over the box — don't clobber their edit
       let transcript = ``
       for (let i = 0; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript
@@ -628,6 +682,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     }
     recognition.onerror = () => { voice_recording = false }
 
+    voice_edited = false // fresh session — transcripts may drive the box again
     voice_recording = true
     recognition.start()
   }
@@ -833,6 +888,17 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     if (!textarea_el) return
     textarea_el.style.height = `auto`
     textarea_el.style.height = `${Math.min(textarea_el.scrollHeight, 120)}px`
+  }
+
+  // Real user edit on the composer. A programmatic `input_text = transcript`
+  // assignment does NOT fire `input`, so this only trips on genuine typing/
+  // deletion — at which point we stop voice from overwriting the box.
+  function on_input_edit() {
+    auto_resize()
+    if (voice_recording && !voice_edited) {
+      voice_edited = true
+      stop_voice()
+    }
   }
 
   $effect(() => {
@@ -1637,21 +1703,28 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
         <span class="lsc-label">📦 {t('chat.loaded_structure')}
           <strong>{loaded_view_card.formula}</strong> ({loaded_view_card.n})</span>
         <div class="lsc-actions">
+          {#if has_sibling_structure && on_view_overwrite}
+            <button
+              type="button"
+              class="lsc-btn"
+              onclick={() => { on_view_overwrite?.(loaded_view_card!.panelId, loaded_view_card!.structure); dismiss_loaded_card() }}
+            >{t('chat.view_overwrite')}</button>
+          {/if}
           {#if on_view_split}
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_split?.(loaded_view_card!.panelId); loaded_view_card = null }}
+              onclick={() => { on_view_split?.(loaded_view_card!.panelId, loaded_view_card!.structure); dismiss_loaded_card() }}
             >{t('chat.view_split')}</button>
           {/if}
           {#if on_view_new_window}
             <button
               type="button"
               class="lsc-btn"
-              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId); loaded_view_card = null }}
+              onclick={() => { on_view_new_window?.(loaded_view_card!.panelId, loaded_view_card!.structure); dismiss_loaded_card() }}
             >{t('chat.view_new_window')}</button>
           {/if}
-          <button type="button" class="lsc-dismiss" title={t('chat.dismiss')} onclick={() => loaded_view_card = null}>✕</button>
+          <button type="button" class="lsc-dismiss" title={t('chat.dismiss')} onclick={() => dismiss_loaded_card()}>✕</button>
         </div>
       </div>
     {/if}
@@ -1767,7 +1840,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
           bind:value={input_text}
           bind:this={textarea_el}
           onkeydown={handle_keydown}
-          oninput={auto_resize}
+          oninput={on_input_edit}
           onpaste={handle_attach_paste}
           onfocus={(e) => { const w = (e.target as HTMLElement).closest(`.input-wrapper`); w?.classList.add(`focused`) }}
           onblur={(e) => { const w = (e.target as HTMLElement).closest(`.input-wrapper`); w?.classList.remove(`focused`) }}

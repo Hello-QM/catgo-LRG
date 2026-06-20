@@ -13,11 +13,17 @@ mcp>=1.0.0
 # SSH/SFTP for HPC connectivity
 asyncssh>=2.14.0
 
+# Native speech-to-text for desktop voice dictation (CTranslate2 Whisper).
+# Runs outside the webview — WebKit Tauri webviews leak WASM memory per
+# inference and OOM. CPU int8 default, CUDA float16 when a GPU is present.
+faster-whisper>=1.0.0
+
 # Scientific computing
 numpy>=1.24.0
 scipy>=1.10.0
 ase>=3.22.0
 pymatgen>=2024.1.0
+intermat>=2024.3.24  # heterostructure build action (catgo_heterostructure); pulls in jarvis-tools
 
 # MD trajectory analysis
 mdtraj>=1.9.9

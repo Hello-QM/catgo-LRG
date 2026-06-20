@@ -10,6 +10,7 @@ import type { VoiceCallback, VoiceErrorCallback } from './voice-engine'
 import { match_command_with_score } from './voice-engine'
 import { start_vad, stop_vad } from './vad'
 import type { AudioPipeline } from './audio-pipeline'
+import { resolve_model_id } from './whisper-models'
 
 // ─── Model Status ────────────────────────────────────────────────────
 
@@ -19,42 +20,80 @@ export type ModelProgressCallback = (status: ModelStatus, progress?: number) => 
 
 // ─── Singleton Pipeline ──────────────────────────────────────────────
 
-const MODEL_EN = `onnx-community/whisper-tiny.en`
-const MODEL_MULTI = `onnx-community/whisper-tiny`
+/** Inference backend. cpu = wasm + q8 (correct everywhere, slower). gpu =
+ * WebGPU + fp16 (fast where WebGPU is sound; q8-on-WebGPU hallucinates, so the
+ * GPU path uses an fp16 model variant instead). */
+export type Accel = `cpu` | `gpu`
 
 let pipeline_promise: Promise<any> | null = null
-let current_model_id: string | null = null
+let current_key: string | null = null
 
 async function get_pipeline(
-  language: string,
+  model_id: string,
+  accel: Accel = `cpu`,
   on_progress?: ModelProgressCallback,
 ): Promise<any> {
-  const model_id = language === `en` ? MODEL_EN : MODEL_MULTI
-
-  // Return cached pipeline if same model
-  if (pipeline_promise && current_model_id === model_id) {
+  const key = `${model_id}::${accel}`
+  // Return cached pipeline if same model + backend
+  if (pipeline_promise && current_key === key) {
     return pipeline_promise
   }
 
-  // New model needed — reset
+  // New model/backend needed — reset
   pipeline_promise = null
-  current_model_id = model_id
+  current_key = key
 
   on_progress?.(`loading`)
 
   pipeline_promise = (async () => {
     const { pipeline, env } = await import(`@huggingface/transformers`)
 
-    // Prefer WebGPU, fall back to WASM
     if (env.backends?.onnx?.wasm) {
-      env.backends.onnx.wasm.numThreads = 1
+      // Multi-threaded wasm needs SharedArrayBuffer, which only exists when the
+      // page is cross-origin isolated (COOP/COEP headers). When it is, use up to
+      // 4 cores for a big CPU-inference speedup (the common case on machines
+      // without usable WebGPU, e.g. integrated graphics under WebKitGTK); when
+      // it is not, fall back to a single thread (the safe default — more threads
+      // without isolation would fail to init).
+      const isolated = typeof globalThis !== `undefined`
+        && (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true
+      const cores = (typeof navigator !== `undefined` && navigator.hardwareConcurrency) || 4
+      // WebKit engines (WebKitGTK on Linux Tauri, WKWebView on macOS/iOS) deadlock
+      // on multi-threaded wasm: the SharedArrayBuffer pthread sync hangs and the
+      // inference call never returns → permanent UI freeze (needs app restart).
+      // Chromium (web, Windows WebView2) and Firefox run multi-threaded fine. The
+      // Chromium UA also contains "AppleWebKit", so a true WebKit engine is one
+      // whose UA has AppleWebKit but NOT Chrome/Chromium/Edg. Force single-thread
+      // there (slower but does not hang).
+      const ua = typeof navigator !== `undefined` ? navigator.userAgent : ``
+      const is_webkit = /AppleWebKit/.test(ua) && !/Chrome|Chromium|Edg\//.test(ua)
+      // Use most cores but leave ~2 for the audio worklet / VAD / UI, and cap at
+      // 8 — beyond that wasm Whisper is memory-bandwidth bound and thread-sync
+      // overhead eats the gains (16 threads ≠ 2× of 8). Single thread without
+      // cross-origin isolation (no SharedArrayBuffer) or on a WebKit engine.
+      env.backends.onnx.wasm.numThreads = (isolated && !is_webkit)
+        ? Math.max(1, Math.min(8, cores - 2))
+        : 1
+      // Load the onnxruntime-web wasm runtime from a CDN pinned to the version
+      // @huggingface/transformers bundles. Without this, the WASM backend (the
+      // fallback when WebGPU is unavailable — e.g. machines without a discrete
+      // GPU) tries to fetch ort-wasm-*.mjs from the app's own /assets, which the
+      // Vite build does not emit, producing "no available backend found". The
+      // version MUST match @huggingface/transformers' onnxruntime-web dep.
+      if (!env.backends.onnx.wasm.wasmPaths) {
+        env.backends.onnx.wasm.wasmPaths =
+          `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/`
+      }
     }
 
     on_progress?.(`downloading`, 0)
 
+    // CPU path: wasm + q8 (correct everywhere). GPU path: WebGPU + fp16 — q8 on
+    // WebGPU produces garbage/hallucinated output (esp. integrated GPUs), so the
+    // GPU path uses the fp16 model variant, which runs correctly on WebGPU.
     const pipe = await pipeline(`automatic-speech-recognition`, model_id, {
-      dtype: `q8`,
-      device: `auto`,
+      dtype: accel === `gpu` ? `fp16` : `q8`,
+      device: accel === `gpu` ? `webgpu` : `wasm`,
       progress_callback: (data: any) => {
         if (data.status === `progress` && typeof data.progress === `number`) {
           on_progress?.(`downloading`, data.progress)
@@ -70,18 +109,20 @@ async function get_pipeline(
     return await pipeline_promise
   } catch (err) {
     pipeline_promise = null
-    current_model_id = null
+    current_key = null
     on_progress?.(`error`)
     throw err
   }
 }
 
-/** Pre-load the Whisper model (e.g. from settings UI). */
+/** Pre-load a Whisper model (e.g. from settings UI). */
 export async function preload_whisper_model(
   language = `en`,
   on_progress?: ModelProgressCallback,
+  model_id?: string,
+  accel: Accel = `cpu`,
 ): Promise<void> {
-  await get_pipeline(language, on_progress)
+  await get_pipeline(resolve_model_id(model_id, language), accel, on_progress)
 }
 
 // ─── Local Whisper Engine ────────────────────────────────────────────
@@ -95,9 +136,15 @@ export class LocalWhisperEngine {
   private transcribing = false
   private pipeline: AudioPipeline | null = null
   private on_progress: ModelProgressCallback | undefined
+  private model_id: string | null = null
+  private accel: Accel = `cpu`
 
   constructor(on_progress?: ModelProgressCallback) {
     this.on_progress = on_progress
+  }
+
+  get current_model_id(): string | null {
+    return this.model_id
   }
 
   get is_supported(): boolean {
@@ -115,16 +162,20 @@ export class LocalWhisperEngine {
     ai_enabled = false,
     on_error?: VoiceErrorCallback,
     noise_suppression = false,
+    model_id?: string,
+    accel: Accel = `cpu`,
   ): Promise<void> {
     if (this.running) return
     this.callback = callback
     this.error_callback = on_error ?? null
     this.language = language.split(`-`)[0]
     this.ai_enabled = ai_enabled
+    this.model_id = resolve_model_id(model_id, this.language)
+    this.accel = accel
 
     try {
       // Load model first (may trigger download)
-      await get_pipeline(this.language, this.on_progress)
+      await get_pipeline(this.model_id, this.accel, this.on_progress)
 
       // Optionally create noise suppression pipeline
       let stream: MediaStream | undefined
@@ -167,14 +218,17 @@ export class LocalWhisperEngine {
 
   set_language(lang: string, ai_enabled = false): void {
     const new_lang = lang.split(`-`)[0]
-    const model_changed = (new_lang === `en`) !== (this.language === `en`)
+    const new_model_id = resolve_model_id(undefined, new_lang)
+    const model_changed = new_model_id !== this.model_id
     this.language = new_lang
     this.ai_enabled = ai_enabled
+    this.model_id = new_model_id
 
-    // If switching between en ↔ multilingual, the pipeline will reload on next transcription
+    // If the resolved model changed, the pipeline will reload on next transcription
     if (model_changed) {
       pipeline_promise = null
-      current_model_id = null
+      current_key = null // reset the cache key so the pipeline rebuilds (was a
+      // ReferenceError: current_model_id is a getter, not the module-level var)
       console.info(`[LocalWhisper] Language changed, model will reload on next transcription`)
     }
   }
@@ -186,11 +240,20 @@ export class LocalWhisperEngine {
     this.transcribing = true
 
     try {
-      const pipe = await get_pipeline(this.language, this.on_progress)
+      const pipe = await get_pipeline(
+        this.model_id ?? resolve_model_id(undefined, this.language),
+        this.accel,
+        this.on_progress,
+      )
 
       const result = await pipe(audio, {
         language: this.language === `en` ? undefined : this.language,
         task: `transcribe`,
+        // Anti-hallucination: Whisper degenerates into endless repeated
+        // multilingual fragments on near-silent / very short / noisy clips.
+        // Block repeated n-grams and penalize repetition to break the loop.
+        no_repeat_ngram_size: 3,
+        repetition_penalty: 1.2,
       })
 
       const text = (result as any)?.text?.trim()

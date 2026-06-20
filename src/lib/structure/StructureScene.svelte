@@ -1287,6 +1287,7 @@
       locked_rotation_pivot = [0, 0, 0]
       current_camera_target = [0, 0, 0]
       initial_target_set = false
+      _did_initial_structure_fit = false
       last_center_trigger = center_camera_trigger
       if (controls_ready) apply_orbit_target([0, 0, 0])
       return
@@ -1922,18 +1923,39 @@
   })
 
   let computed_zoom = $state<number>(untrack(() => initial_zoom))
+  // Last container size this effect actually fit to, so we can tell a real
+  // resize (pane close/relayout grows the slot) apart from a re-run that did
+  // NOT change the box (layout-preset switch, sidebar toggle that only touch
+  // unrelated reactive deps). Tracked untracked — must not re-trigger the effect.
+  let _last_fit_w = untrack(() => width)
+  let _last_fit_h = untrack(() => height)
+  // Latch: a trajectory's first frame arrives async, AFTER the scene mounts, so
+  // the one-shot camera placement ran against an empty structure. Recenter+refit
+  // once when the structure first becomes present; the latch stops playback
+  // frame-steps (which rewrite `structure` on the slow path) from recentering
+  // every frame and fighting the user's pan/zoom.
+  let _did_initial_structure_fit = false
   $effect(() => {
     if (!(width > 0) || !(height > 0)) return
+    // Did the container box itself actually change since the last fit? A pane
+    // close reflows the surviving pane via CSS %, so width/height genuinely grow
+    // and the old ortho zoom (sized for the smaller pane) leaves the model
+    // off-frame. A real size delta MUST re-fit even after the user zoomed.
+    const size_changed = untrack(() =>
+      Math.abs(width - _last_fit_w) > 0.5 || Math.abs(height - _last_fit_h) > 0.5)
     // Once the user zooms (TrackballControls writes camera.zoom directly, so it
     // drifts from the last computed_zoom we applied), stop auto-recomputing:
-    // re-running on a pane resize (layout switch, sidebar toggle) would clobber
-    // their zoom level and visibly rescale the view. Read untracked — camera
-    // mutations must not re-trigger this effect.
+    // re-running on a pane resize WITHOUT a box change (layout switch, sidebar
+    // toggle) would clobber their zoom level and visibly rescale the view. Read
+    // untracked — camera mutations must not re-trigger this effect.
     const user_zoomed = untrack(() => {
       const cam = camera as any
       return cam?.isOrthographicCamera && Math.abs(cam.zoom - computed_zoom) > 1e-3
     })
-    if (user_zoomed) return
+    // Preserve the user's zoom only for non-resize re-runs. On a real size
+    // change we always re-fit (and recenter below) so the model stays framed.
+    if (user_zoomed && !size_changed) return
+    untrack(() => { _last_fit_w = width; _last_fit_h = height })
     const structure_max_dim = Math.max(1, structure_size)
     const viewer_min_dim = Math.min(width, height)
     // Size the view from the atom bounding box when it is tighter than the cell
@@ -1967,6 +1989,17 @@
     if (min_zoom && min_zoom > 0) new_zoom = Math.max(min_zoom, new_zoom)
     if (max_zoom && max_zoom > 0) new_zoom = Math.min(max_zoom, new_zoom)
     computed_zoom = new_zoom
+    // Recenter when (a) the container box changed (pane close/relayout), or
+    // (b) the structure first becomes available — trajectories load their first
+    // frame async, after mount, so the one-shot placement targeted an empty
+    // structure and left the model off-frame. Latch (b) so slow-path frame-steps
+    // don't recenter every frame.
+    const structure_present = !!structure?.sites?.length
+    const first_structure_fit = structure_present && !_did_initial_structure_fit
+    if ((size_changed || first_structure_fit) && structure) {
+      apply_orbit_target(get_camera_fit_target())
+    }
+    if (structure_present) _did_initial_structure_fit = true
   })
 
   // Live camera view snapshot: direction (target→camera) and up vector, refreshed

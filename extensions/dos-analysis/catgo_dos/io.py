@@ -22,6 +22,20 @@ h5py = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
+_FLOAT_RE = re.compile(
+    r"[+-]?(?:(?:\d+\.\d*)|(?:\.\d+)|(?:\d+))(?:[Ee][+-]?\d+)?"
+)
+
+
+def _parse_float_fields(text: str) -> list[float]:
+    """Parse floats even when VASP prints adjacent signed values.
+
+    Some PROCAR files contain fields such as ``0.00000000-0.00000000``
+    without whitespace between values. Splitting on whitespace leaves that as
+    one invalid token, so use a numeric regex to recover both floats.
+    """
+    return [float(match.group(0)) for match in _FLOAT_RE.finditer(text)]
+
 
 def _decode(x: object) -> str:
     if isinstance(x, (bytes, np.bytes_)):
@@ -403,8 +417,8 @@ def read_procar(
     # Use the pattern from pyprocar: find blocks between "ion" headers
     ion_block_pattern = re.compile(
         r"ion\s+(?:s|px|py|pz|dxy|dyz|dz2|dxz|dx2|x2-y2|tot).+?\n"
-        r"((?:\s*\d+\s+[-.\d\se]+\n)*"  # atom lines
-        r"\s*tot\s+[-.\d\se]+)",          # tot line
+        r"((?:\s*\d+\s+[-+.\d\sEe]+\n)*"  # atom lines
+        r"\s*tot\s+[-+.\d\sEe]+)",          # tot line
         re.MULTILINE,
     )
     blocks = ion_block_pattern.findall(procar_text)
@@ -412,7 +426,7 @@ def read_procar(
     if not blocks:
         # Fallback: try simpler pattern
         blocks = re.findall(
-            r"ion.+tot\n([-.\d\seto\n]+?)(?=\n\s*\n|\n\s*band|\n\s*k-point|\Z)",
+            r"ion.+tot\n([-+.\d\sEeto\n]+?)(?=\n\s*\n|\n\s*band|\n\s*k-point|\Z)",
             procar_text,
         )
 
@@ -435,17 +449,20 @@ def read_procar(
                     # Parse each atom line
                     lines = block_text.strip().split("\n")
                     for line in lines:
-                        parts = line.split()
-                        if not parts:
+                        line = line.strip()
+                        if not line:
                             continue
                         try:
                             # First value is ion index or "tot"
-                            if parts[0].lower() == "tot":
+                            if line.lower().startswith("tot"):
                                 continue
-                            ion_idx = int(parts[0]) - 1  # 1-based to 0-based
+                            match = re.match(r"^(\d+)\s+(.*)$", line)
+                            if not match:
+                                continue
+                            ion_idx = int(match.group(1)) - 1  # 1-based to 0-based
                             if 0 <= ion_idx < nions:
                                 # Values are orbitals + tot at end
-                                vals = [float(x) for x in parts[1:]]
+                                vals = _parse_float_fields(match.group(2))
                                 # Take only the orbital channels (skip "tot")
                                 norbs = min(nchannels, len(vals) - 1) if len(vals) > nchannels else len(vals)
                                 projectors[ispin, ion_idx, :norbs, ik, ib] = vals[:norbs]

@@ -114,6 +114,16 @@ pnpm tauri android init
 
 ## 2b. Post-init native patches (REQUIRED — re-apply after every `init`)
 
+> **Automated:** run `bash deploy/android/apply-native-patches.sh` after every
+> `tauri android init` (and before `tauri android build`). It is idempotent and
+> applies BOTH edits below: it copies `deploy/android/overrides/MainActivity.kt`
+> into the generated project and inserts `windowSoftInputMode` into the manifest.
+> CI does this automatically (`.github/workflows/android-build.yml`). Edit the
+> canonical `deploy/android/overrides/MainActivity.kt`, NOT the generated copy.
+> The manual steps below are kept for reference / to understand what the script
+> does. (Skipping it ships an APK whose header is hidden under the status bar and
+> whose keyboard covers the terminal keybar / AI-chat composer.)
+
 `tauri android init` regenerates the native project from the CLI templates, so
 the two edits below must be re-applied after each `init`. Without them the soft
 keyboard covers the terminal's input line on a real device (the desktop/emulator

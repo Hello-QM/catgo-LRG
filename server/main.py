@@ -178,6 +178,7 @@ _DEFERRED_ROUTER_ATTRS: list[str] = ["hpc_router"] if CATGO_THIN else [
     "quacc_router",
     "atomate2_router",
     "forcefield_router",        # ~76 ms (openbabel)
+    "stt_router",               # faster-whisper (CTranslate2) — heavy import
 ]
 
 # Light-weight import; plugin_manager.initialize() is the slow part and is
@@ -254,7 +255,7 @@ def _sync_setup_claude_integration() -> None:
     Runs ONLY in the bundled (frozen) desktop app. Installer users have no
     `catgo` CLI on PATH, so the server self-registers on startup: it writes the
     HTTP MCP entry to ``~/.claude.json`` (the file Claude Code actually reads —
-    NOT ``~/.claude/mcp.json``) pointing at this server's own ``/api/mcp``, and
+    NOT ``~/.claude/mcp.json``) pointing at this server's own ``/api/mcp/``, and
     copies the campaign skills into ``~/.claude/skills``.
 
     Gated on ``sys.frozen`` and an env opt-out so dev runs are untouched. Fully
@@ -595,7 +596,7 @@ app.include_router(tools_router, prefix="/api")
 try:
     from catgo.routers.mcp_http import mcp_asgi_app
     app.mount("/api/mcp", mcp_asgi_app)
-    print("[Server] MCP HTTP endpoint available at /api/mcp")
+    print("[Server] MCP HTTP endpoint available at /api/mcp/")
 except Exception as e:
     print(f"[Server] MCP HTTP setup failed (non-fatal): {e}")
 

@@ -785,12 +785,16 @@
   .draggable-pane :global(input::-webkit-inner-spin-button) {
     display: none;
   }
-  .draggable-pane :global(button) {
+  /* Default chrome for bare pane buttons. Wrapped in :where() so the whole
+     selector has ZERO specificity — it acts as a fallback that any button which
+     sets its own background (e.g. .btn-primary / .btn-compute accent buttons)
+     overrides, instead of this global rule winning and graying them out. */
+  :where(.draggable-pane) :global(:where(button)) {
     width: max-content;
     border-radius: 6px;
     background-color: var(--pane-btn-bg, var(--btn-bg));
   }
-  .draggable-pane :global(button:hover) {
+  :where(.draggable-pane) :global(:where(button:hover)) {
     background-color: var(--pane-btn-bg-hover, var(--btn-bg-hover));
   }
   .draggable-pane :global(select) {

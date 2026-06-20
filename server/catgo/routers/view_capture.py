@@ -331,6 +331,7 @@ def update_structure_info(
 def push_structure(
     data: dict[str, Any],
     panel_id: str = Query("default", description="Panel identifier for multi-panel support"),
+    intent: str = Query("edit", description="'edit' (apply in place) or 'load' (fresh load — frontend may prompt before overwriting)"),
 ):
     """Frontend pushes the full pymatgen structure dict for MCP tool access.
 
@@ -339,11 +340,17 @@ def push_structure(
     to track "active panel" causes oscillation. Explicit signal lives
     at POST /view/active-panel instead, driven by tm.active_tab_id in
     desktop/App.svelte.
+
+    It also does NOT emit an SSE `structure` event — that is the job of
+    /structure/pending-update (and view_state.push_structure on the
+    upload/merge paths). `intent` is accepted here only so the dual-POST
+    helper (`_push_structure_to_viewer`) can send the same query param to
+    both endpoints; the live SSE tag is applied on the pending-update leg.
     """
     struct = data.get("structure", {})
     _panel_structures[panel_id] = struct
     n = len(struct.get("sites", []))
-    logger.debug("Full structure pushed for panel '%s': %d sites", panel_id, n)
+    logger.debug("Full structure pushed for panel '%s': %d sites (intent=%s)", panel_id, n, intent)
     return {"status": "ok", "num_sites": n}
 
 
@@ -388,13 +395,24 @@ def get_current_structure(
 def set_pending_structure_update(
     data: dict[str, Any],
     panel_id: str = Query("default", description="Panel identifier for multi-panel support"),
+    intent: str = Query("edit", description="'edit' (apply in place) or 'load' (fresh load — frontend may prompt before overwriting)"),
+    had_structure: bool = Query(False, description="Whether the target panel was occupied BEFORE this push (backend-authoritative hold signal; probed by the MCP helper pre-push)"),
 ):
-    """MCP tools push modified structures here for the frontend to pick up."""
+    """MCP tools push modified structures here for the frontend to pick up.
+
+    `had_structure` is forwarded into the SSE event so the frontend's
+    hold-gate can ORs it against its own (racy) structure read. The MCP
+    helper probes the panel BEFORE either push leg overwrites the store and
+    passes the value here; `notify_structure` rides it verbatim.
+    """
     struct = data.get("structure", {})
     pending = _get_panel_pending(panel_id)
     pending.append(struct)
-    view_state.notify_structure(panel_id, struct)
-    logger.debug("Pending structure update queued for panel '%s'", panel_id)
+    view_state.notify_structure(panel_id, struct, intent=intent, had_structure=had_structure)
+    logger.debug(
+        "Pending structure update queued for panel '%s' (intent=%s, had_structure=%s)",
+        panel_id, intent, had_structure,
+    )
     return {"status": "ok"}
 
 
@@ -641,7 +659,7 @@ async def upload_and_load(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Parse failed: {exc}")
 
-    view_state.push_structure(struct_dict, panel_id)
+    view_state.push_structure(struct_dict, panel_id, intent="load")
     n = len(struct_dict.get("sites", []))
     logger.info("upload-and-load: %s → panel '%s', %d sites", filename or "<unnamed>", panel_id, n)
     return {
@@ -716,7 +734,7 @@ async def merge_upload(
         raise HTTPException(status_code=500, detail=f"Merge failed: {exc}")
 
     merged = result.structure if hasattr(result, "structure") else result.get("structure", {})
-    view_state.push_structure(merged, panel_id)
+    view_state.push_structure(merged, panel_id, intent="edit")
     n = len(merged.get("sites", []))
     logger.info("merge-upload: %s + panel '%s' → %d sites at %s", file.filename or "<unnamed>", panel_id, n, pos)
     return {

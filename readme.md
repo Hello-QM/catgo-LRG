@@ -263,7 +263,7 @@ You ─ chat ─▶ CatBot pane                         (src/lib/chat/*)
               ▼
         provider adapter                          (for Claude: @anthropic-ai/claude-agent-sdk query())
               │
-              │  MCP server URL: http://localhost:<port>/api/mcp
+              │  MCP server URL: http://localhost:<port>/api/mcp/
               │  plus X-CatGo-Tab-Id so tool results return to the active viewer tab
               ▼
         server/catgo/routers/mcp_http.py

@@ -5,8 +5,10 @@
  */
 
 import type { StructureTabState } from '../pane-utils'
-import { resolve_open_target } from '$lib/state.svelte'
+import { resolve_open_target, type OpenTarget } from '$lib/state.svelte'
 import { findFirstEmptyLeaf } from '../pane-tree'
+import { open_doc_window } from './popout-manager'
+import { build_doc_ref } from '$lib/viewer/doc-ref'
 
 export interface ImportItem {
   content?: string | ArrayBuffer
@@ -28,8 +30,9 @@ export interface DragDropDeps {
   get_drag_target_pane: () => string | null
   set_drag_target_pane: (v: string | null) => void
   set_is_loading: (v: boolean) => void
-  get_open_target: () => 'split' | 'window'
-  open_in_window: (content: string, filename: string) => Promise<void>
+  get_open_target: () => OpenTarget
+  open_in_window: (content: string, filename: string, reuse?: boolean) => Promise<void>
+  is_tauri: boolean
 }
 
 /* Minimal File System Entry typings (non-standard webkit API). */
@@ -128,9 +131,15 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
       }
       const { read_file } = await import(`$lib/api/project`)
       const result = await read_file(fs_path)
+      const { is_structure_file } = await import(`$lib/structure/parse`)
+      const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
+      if (!is_structure_file(result.name) && !is_trajectory_file(result.name, result.content)) {
+        await open_doc_window(build_doc_ref(result.name, { content: result.content, local_path: fs_path }), deps.is_tauri)
+        return
+      }
       const fs_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
-      if (fs_target === 'window') {
-        await deps.open_in_window(result.content, result.name)
+      if (fs_target.kind === 'window') {
+        await deps.open_in_window(result.content, result.name, fs_target.mode === 'overwrite')
         return
       }
       await deps.process_file_content(deps.get_active_tab_id(), result.content, result.name, target_leaf_id)
@@ -178,11 +187,18 @@ export async function handle_drop(deps: DragDropDeps, event: DragEvent) {
     }
     if (to_import.length === 0) { ts.active_leaf_id = target_leaf_id; return }
     if (to_import.length === 1) {
-      const drop_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
-      if (drop_target === 'window') {
-        const single = to_import[0]
+      const single = to_import[0]
+      const { is_structure_file } = await import(`$lib/structure/parse`)
+      const { is_trajectory_file } = await import(`$lib/trajectory/parse`)
+      if (!is_structure_file(single.file.name) && !is_trajectory_file(single.file.name)) {
         const content = await single.file.text()
-        await deps.open_in_window(content, single.file.name)
+        await open_doc_window(build_doc_ref(single.file.name, { content }), deps.is_tauri)
+        return
+      }
+      const drop_target = resolve_open_target(deps.get_open_target(), event.shiftKey ?? false)
+      if (drop_target.kind === 'window') {
+        const content = await single.file.text()
+        await deps.open_in_window(content, single.file.name, drop_target.mode === 'overwrite')
         ts.active_leaf_id = target_leaf_id
         return
       }

@@ -185,8 +185,12 @@ const app: Record<string, string> = {
   static_mode_workflow_message: `Workflow execution, HPC integration, and project management require the CatGo desktop app. You can still use the 3D structure viewer and build tools in the browser.`,
 
   // Open-target preference
-  open_in_split: `Split pane`,
-  open_in_window: `New window`,
+  open_in_tab: `Tab`,
+  open_in_split: `Split`,
+  open_in_window: `Window`,
   open_files_in: `Open files in`,
+  open_mode_new: `New`,
+  open_mode_overwrite: `Overwrite`,
+  open_mode_hint: `Shift to flip`,
 }
 export default app

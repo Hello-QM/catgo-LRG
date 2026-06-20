@@ -73,6 +73,46 @@ describe(`createImeGuard`, () => {
     expect(g.should_suppress(` `)).toBe(false)
   })
 
+  it(`flushes a buffered WK composition on compositionend, even when it carries no data`, () => {
+    // Regression ("会少最新的输入" — the latest CJK word is dropped): a word
+    // buffered via the WK beforeinput path waits for a flush trigger. The LAST
+    // word has no trailing keydown, so compositionend must flush the buffer.
+    // Some platforms deliver an EMPTY compositionend after the real text already
+    // arrived via beforeinput, so fall back to the buffered partial.
+    const write = vi.fn()
+    const g = createImeGuard({ write, now: () => 0 })
+    expect(g.on_before_input(`insertReplacementText`, `你好`)).toBe(true)
+    expect(write).not.toHaveBeenCalled()
+    g.on_composition_end(null) // empty/dataless end — the bug's trigger
+    expect(write).toHaveBeenCalledWith(`你好`)
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it(`does not double-write when compositionend carries the committed text`, () => {
+    const write = vi.fn()
+    const g = createImeGuard({ write, now: () => 0 })
+    g.on_before_input(`insertReplacementText`, `你好`)
+    g.on_composition_end(`你好`) // committed data present — must not also flush buffer
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith(`你好`)
+  })
+
+  it(`never swallows Backspace (DEL) — not as residue, not mid-composition`, () => {
+    // Regression: on iOS/Android WKWebView, compositionend for CJK is
+    // unreliable, so std_composing could stick true and eat EVERY backspace —
+    // the user could not delete Chinese characters they had just typed. A DEL
+    // reaching onData is always a real edit intent; honor it unconditionally.
+    let t = 1000
+    const g = createImeGuard({ write: vi.fn(), now: () => t })
+    // In the post-compose residue window: space is dropped, Backspace is NOT.
+    g.on_composition_end(`字`)
+    expect(g.should_suppress(` `)).toBe(true)
+    expect(g.should_suppress(`\x7f`)).toBe(false)
+    // Even while a composition is (stuck) open, Backspace passes through.
+    g.on_composition_start()
+    expect(g.should_suppress(`\x7f`)).toBe(false)
+  })
+
   it(`never arms the residue window for pure Latin typing`, () => {
     const g = createImeGuard({ write: vi.fn(), now: () => 0 })
     // No composition has happened, so a typed space is never suppressed.
@@ -97,5 +137,21 @@ describe(`createImeGuard`, () => {
     // The second is still pending until a real key flushes it.
     g.on_keydown(13)
     expect(write).toHaveBeenLastCalledWith(`나`)
+  })
+
+  it(`writes a Chinese insertText word immediately (no stranded last word)`, () => {
+    // Android WebView (observed on-device) delivers each committed Chinese word
+    // as a collapsed `insertText` with NO composition events. Buffering it (as we
+    // must for Korean jamo, which rebuild via insertReplacementText) stranded the
+    // LAST word — it flushed only on the NEXT event ("会少最新的输入"). A complete
+    // CJK ideograph is final, so write it on arrival.
+    const write = vi.fn()
+    const g = createImeGuard({ write, now: () => 0 })
+    expect(g.on_before_input(`insertText`, `你好`)).toBe(true)
+    expect(write).toHaveBeenNthCalledWith(1, `你好`)
+    expect(g.on_before_input(`insertText`, `朋友`)).toBe(true)
+    expect(write).toHaveBeenNthCalledWith(2, `朋友`)
+    // No trailing keydown/compositionend needed — both already written.
+    expect(write).toHaveBeenCalledTimes(2)
   })
 })

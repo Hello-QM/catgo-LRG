@@ -28,6 +28,22 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
+  // Structure fingerprint helpers for MP id-migration fallback matching
+  function norm_formula(f: string | undefined): string {
+    if (!f) return ``
+    const counts: Record<string, number> = {}
+    const re = /([A-Z][a-z]?)(\d*)/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(f)) !== null) {
+      if (!m[1]) continue
+      counts[m[1]] = (counts[m[1]] ?? 0) + (m[2] ? parseInt(m[2], 10) : 1)
+    }
+    return Object.keys(counts).sort().map((el) => `${el}${counts[el]}`).join(``)
+  }
+  function struct_key(formula: string | undefined, nsites: number | undefined, sg: string | undefined): string {
+    return `${norm_formula(formula)}|${nsites ?? `?`}|${(sg ?? ``).replace(/\s+/g, ``)}`
+  }
+
   // Lazy-load structure translations
   load_i18n_module('structure')
 
@@ -93,6 +109,8 @@
 
   // Cache for MP summary data (keyed by material_id)
   let mp_summaries = $state<Map<string, MPSummaryData>>(new Map())
+  // Fallback map keyed by structure fingerprint (formula|nsites|sg) for MP id-migration matching
+  let mp_summaries_by_key = $state(new SvelteMap<string, MPSummaryData>())
 
   // Locally computed structure details (keyed by structure id)
   interface ComputedDetails {
@@ -239,6 +257,7 @@
     set_mp_api_key(``)
     mp_has_key = false
     mp_summaries = new Map()
+    mp_summaries_by_key = new SvelteMap()
   }
 
   // Fetch MP summary data by material IDs from OPTIMADE results
@@ -261,20 +280,24 @@
 
       console.log(`[MP ENRICH] Got ${summaries.length} MP results for ${material_ids.length} requested IDs`)
 
-      // Build map keyed by material_id
+      // Build map keyed by material_id + fallback map keyed by structure fingerprint
       const new_map = new SvelteMap<string, MPSummaryData>()
+      const new_by_key = new SvelteMap<string, MPSummaryData>()
       for (const s of summaries) {
         new_map.set(s.material_id, s)
+        const k = struct_key(s.formula_pretty, s.nsites, s.symmetry?.symbol)
+        if (!new_by_key.has(k)) new_by_key.set(k, s)
       }
 
       // Log matching stats
       const matches = material_ids.filter(id => new_map.has(id))
-      console.log(`[MP ENRICH] Matched ${matches.length}/${material_ids.length} structures`)
+      console.log(`[MP ENRICH] Matched ${matches.length}/${material_ids.length} structures by id; fingerprint map has ${new_by_key.size} entries`)
       if (summaries.length > 0) {
         console.log(`[MP ENRICH] Sample MP data:`, summaries[0])
       }
 
       mp_summaries = new_map
+      mp_summaries_by_key = new_by_key
 
       // Re-sort current results by stability now that we have authoritative
       // numbers: energy_above_hull ascending (0 = on the hull), formation
@@ -904,9 +927,10 @@
                 <div class="results-list">
                   {#each search_results.structures as struct (struct.id)}
                     {@const attrs = struct.attributes}
-                    {@const mp_data = mp_summaries.get(struct.id)}
                     {@const prov = extract_provider_details(attrs)}
                     {@const comp = computed_details.get(struct.id)}
+                    {@const mp_data = mp_summaries.get(struct.id)
+                      ?? mp_summaries_by_key.get(struct_key(attrs.chemical_formula_reduced, attrs.nsites ?? attrs.n_sites, prov.spacegroup_symbol ?? comp?.spacegroup_symbol))}
                     {@const formula = mp_data?.formula_pretty ?? attrs.chemical_formula_descriptive ?? attrs.chemical_formula_reduced ?? ``}
                     {@const n_sites = mp_data?.nsites ?? attrs.nsites ?? attrs.n_sites}
                     {@const n_elements = mp_data?.nelements ?? attrs.nelements}
@@ -916,7 +940,7 @@
                     {@const sg_number = prov.spacegroup_number ?? comp?.spacegroup_number}
                     {@const e_above_hull = mp_data?.energy_above_hull ?? prov.energy_above_hull}
                     {@const formation_energy = mp_data?.formation_energy_per_atom ?? prov.formation_energy ?? attrs._mp_formation_energy_per_atom}
-                    {@const band_gap = mp_data?.band_gap ?? prov.band_gap}
+                    {@const band_gap = mp_data?.band_gap ?? prov.band_gap ?? attrs._mp_band_gap ?? attrs._odbx_band_gap ?? attrs._exmpl_band_gap}
                     {@const is_stable = mp_data?.is_stable ?? prov.is_stable}
                     {@const volume = comp?.volume}
                     {@const density = comp?.density}

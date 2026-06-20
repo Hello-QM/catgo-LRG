@@ -171,16 +171,35 @@ export function setRatio(root: PaneNode, splitId: string, ratio: number): PaneNo
   return go(root)
 }
 
+/** The shallowest leaf in the tree (ties broken by traversal order). */
+export function shallowestLeaf(root: PaneNode): LeafNode {
+  let best = root.kind === 'leaf' ? root : leaves(root)[0]
+  let best_depth = Infinity
+  const walk = (node: PaneNode, depth: number): void => {
+    if (node.kind === 'leaf') {
+      if (depth < best_depth) { best_depth = depth; best = node }
+      return
+    }
+    walk(node.children[0], depth + 1)
+    walk(node.children[1], depth + 1)
+  }
+  walk(root, 0)
+  return best
+}
+
 /**
- * Open-file target: reuse the first empty leaf; else split the active leaf
+ * Open-file target: reuse the first empty leaf; else split the SHALLOWEST leaf
  * (one at a time) up to CAP; else null (caller opens a new tab).
- * Direction reproduces the old single->splitH (first split 'h') then 'v'.
+ *
+ * Splitting the shallowest leaf — not the active one — keeps repeated imports
+ * balanced: single → two columns ('h') → 2+1 → 2x2 quad ('v' fills each
+ * column), instead of stacking N panes down the active column (1+N).
  */
-export function escalateForImport(root: PaneNode, activeLeafId: string): { root: PaneNode; leafId: string } | null {
+export function escalateForImport(root: PaneNode, _activeLeafId: string): { root: PaneNode; leafId: string } | null {
   const empty = findFirstEmptyLeaf(root)
   if (empty) return { root, leafId: empty.id }
   const dir: SplitDir = leafCount(root) === 1 ? 'h' : 'v'
-  const split = splitLeaf(root, activeLeafId, dir)
+  const split = splitLeaf(root, shallowestLeaf(root).id, dir)
   if (!split) return null
   return { root: split.root, leafId: split.newLeafId }
 }

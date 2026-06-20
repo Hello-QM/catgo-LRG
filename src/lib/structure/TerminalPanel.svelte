@@ -446,7 +446,10 @@
         let post_compose_until = 0     // suppress confirmation-key residue until this time
 
         const POST_COMPOSE_MS = 80
-        const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\x7f`, `\u00a0`])
+        // DEL (`\x7f`, Backspace) is deliberately NOT here \u2014 it is never IME
+        // residue, and WebKit's unreliable CJK compositionend can otherwise
+        // leave std_composing stuck and eat every backspace (see onData below).
+        const IME_CONFIRM_KEYS = new Set([` `, `\n`, `\r`, `\u00a0`])
 
         // ─── IME event tracing (enable: window.__CATGO_IME_DEBUG = true) ───
         const ime_log = (...args: any[]) => {
@@ -495,8 +498,13 @@
           xt_textarea.addEventListener(`compositionend`, (e: CompositionEvent) => {
             ime_log(`compositionend`, { data: e.data, textarea: xt_textarea.value })
             std_composing = false
-            const committed = e.data
             post_compose_until = performance.now() + POST_COMPOSE_MS
+            // Prefer the event's committed data; fall back to the buffered WK
+            // partial and CLEAR the buffer so the last CJK word is never stranded
+            // waiting for a keydown that won't come ("会少最新的输入").
+            const committed = e.data || wk_pending
+            wk_composing = false
+            wk_pending = ``
             if (committed) {
               ime_log(`compositionend → PTY write`, { data: committed })
               pty_session?.write(committed).catch(() => {})
@@ -537,13 +545,29 @@
               return
             }
 
-            // insertText with CJK character: may be WKWebView starting a new
-            // composition (especially Korean jamo). Flush previous, buffer new.
+            // insertText with a CJK character. Flush any previous partial first.
             if (e.inputType === `insertText` && data && isCJK(data)) {
               wkFlush()
-              wk_composing = true
-              wk_pending = data
-              ime_log(`beforeinput insertText CJK → buffer`, { data })
+              const cp0 = data.codePointAt(0) ?? 0
+              const isHangul = (cp0 >= 0x1100 && cp0 <= 0x11FF) ||
+                (cp0 >= 0x3130 && cp0 <= 0x318F) || (cp0 >= 0xAC00 && cp0 <= 0xD7AF) ||
+                (cp0 >= 0xA960 && cp0 <= 0xA97F) || (cp0 >= 0xD7B0 && cp0 <= 0xD7FF)
+              if (isHangul) {
+                // Korean jamo/syllable may be REBUILT by a following
+                // insertReplacementText (ㅎ→하→한, 가→각) — buffer it.
+                wk_composing = true
+                wk_pending = data
+                ime_log(`beforeinput insertText Hangul → buffer`, { data })
+              } else {
+                // Chinese/Japanese: the committed word arrives as a collapsed
+                // insertText with NO composition events. It is final and never
+                // rebuilt — write it on arrival. Buffering it would strand the
+                // LAST word (flushed only on the NEXT event), dropping the latest
+                // input ("会少最新的输入").
+                pty_session?.write(data).catch(() => {})
+                post_compose_until = performance.now() + POST_COMPOSE_MS
+                ime_log(`beforeinput insertText CJK → PTY write`, { data })
+              }
               e.preventDefault()
               e.stopPropagation()
               return
@@ -564,6 +588,14 @@
         // Suppress onData during any form of IME composition, and suppress
         // confirmation-key residue (space/enter) briefly after composition ends.
         term.onData((data: string) => {
+          // A Backspace/DEL is always a real edit intent — never swallow it.
+          // WebKit fires compositionend unreliably for CJK, so std_composing can
+          // stick `true` and would otherwise eat every backspace, leaving the
+          // user unable to delete Chinese they just typed.
+          if (data === `\x7f`) {
+            pty_session?.write(data).catch(() => {})
+            return
+          }
           if (std_composing || wk_composing) {
             ime_log(`onData SUPPRESS (composing)`, { data, hex: [...data].map(c => c.codePointAt(0)!.toString(16)) })
             return

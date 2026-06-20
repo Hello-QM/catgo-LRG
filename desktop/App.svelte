@@ -19,13 +19,15 @@
   import { detect_bio } from '$lib/structure/bio/detect'
   import '$lib/theme/themes.js'
   import StatusPopout from '$lib/workflow/StatusPopout.svelte'
+  import DocViewer from '$lib/viewer/DocViewer.svelte'
   import { apply_theme_to_dom, get_theme_preference } from '$lib/theme'
   import ThemeControl from '$lib/theme/ThemeControl.svelte'
   import { readFile } from '@tauri-apps/plugin-fs'
   import WorkflowView from './WorkflowView.svelte'
   import { get_workflow_slice, iter_workflow_slices, pending_open_structure } from '$lib/workflow/workflow-state.svelte'
   import { TerminalWindow, DopingPTWindow } from '$lib/structure'
-  import { open_target_state, resolve_open_target } from '$lib/state.svelte'
+  import { open_target_state, resolve_open_target, type OpenTarget } from '$lib/state.svelte'
+  import { plan_open } from './lib/open-dispatch'
   import { ChatPane } from '$lib/chat'
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
@@ -38,7 +40,6 @@
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
   import PasteContentModal from '$lib/structure/PasteContentModal.svelte'
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
-  import FilePreviewPanel from '$lib/structure/FilePreviewPanel.svelte'
   import type { PymatgenStructure } from '$lib/structure'
   import { serialize_structure } from '$lib/api/project'
   import type { ProjectSummary } from '$lib/api/project'
@@ -90,6 +91,8 @@
     popout_workflow as _popout_workflow,
     popout_terminal_session as _popout_terminal_session,
     open_structure_in_new_window, parse_and_open_structure_window, open_path_in_new_window,
+    prewarm_doc_window,
+    open_chat_in_new_window,
   } from './lib/popout-manager'
   // Extracted sidebar handlers
   import {
@@ -168,6 +171,7 @@
   let popout_chat_tab_id = $state(`default`)
   let popout_status_mode = $state(false)
   let popout_doping_pt_mode = $state(false)
+  let popout_docs_mode = $state(false)
   let is_loading = $state(false)
   let loading_text = $state(``)
   let drag_target_leaf = $state<string | null>(null)
@@ -181,6 +185,7 @@
     get_active_tab_type: () => tm.active_tab_type,
     get_open_target: () => open_target_state.value,
     process_file_content,
+    place_single,
     update_tab_label,
     get is_tauri() { return is_tauri },
     set_is_loading: (v) => { is_loading = v },
@@ -223,7 +228,8 @@
     set_drag_target_pane: (v) => { drag_target_leaf = v },
     set_is_loading: (v) => { is_loading = v },
     get_open_target: () => open_target_state.value,
-    open_in_window: (content, filename) => parse_and_open_structure_window(content, filename, is_tauri),
+    open_in_window: (content, filename, reuse) => parse_and_open_structure_window(content, filename, is_tauri, reuse),
+    is_tauri,
   }
   const resize_deps_min: ResizeDepsMin = {
     tab_states,
@@ -246,7 +252,8 @@
     // there (can't serialize a multi-GB trajectory into a structure popout).
     // force_local=true is used by the #openpath handler so the new window itself
     // loads locally instead of recursively opening yet another window.
-    if (!force_local && open_target_state.value === `window`) {
+    const open_t = resolve_open_target(open_target_state.value, false)
+    if (!force_local && open_t.kind === `window`) {
       open_path_in_new_window(path, filename, is_tauri)
       return
     }
@@ -254,16 +261,18 @@
     let ts = tab_states[tab_id]
     if (!ts) return
     let target: string
-    const r = escalateForImport(ts.root, ts.active_leaf_id)
-    if (!r) {
+    const plan = plan_open(ts.root, ts.active_leaf_id, open_t.kind === `window` ? { kind: `split`, mode: `new` } : open_t)
+    if (plan.action === `new-tab`) {
       open_tab(`structure`)
       tab_id = tm.active_tab_id
       ts = tab_states[tab_id]
       if (!ts) return
       target = ts.active_leaf_id
+    } else if (plan.action === `pane`) {
+      ts.root = plan.root
+      target = plan.leafId
     } else {
-      ts.root = r.root
-      target = r.leafId
+      return
     }
     try {
       const { load_remote_trajectory } = await import(`$lib/trajectory/remote-frame-loader`)
@@ -425,17 +434,18 @@
   function open_chat_beside(leaf: LeafNode) {
     const ts = get_active_ts()
     if (!ts) return
-    const r = escalateForImport(ts.root, leaf.id)
-    if (!r) {
-      // At CAP: fall back to the chat popout window.
-      window.open(`${location.origin}${location.pathname}#chat`, '_blank', 'width=520,height=760')
+    // Reuse a free pane if one exists; otherwise open the chat in its own window
+    // rather than cramming a split below the terminal. This covers 1+2 / 2+1
+    // layouts (no empty leaf) and the full 4-pane case — and uses a Tauri
+    // WebviewWindow, since a bare window.open is swallowed inside the WebView.
+    const empty = findFirstEmptyLeaf(ts.root)
+    if (!empty) {
+      open_chat_in_new_window(is_tauri, tm.active_tab_id)
       return
     }
-    ts.root = r.root
-    const new_leaf = findLeafById(ts.root, r.leafId)
-    const pane = new_leaf ? structurePane(new_leaf) : null
+    const pane = structurePane(empty)
     if (pane) pane.initial_panel = `chat`
-    ts.active_leaf_id = r.leafId
+    ts.active_leaf_id = empty.id
   }
   function handle_unload(tab_id: string, leaf_id: string) { _handle_unload(pane_deps, tab_id, leaf_id) }
   function close_panel(tab_id: string, leaf_id: string) {
@@ -547,6 +557,9 @@
         } else if (hash.startsWith(`#doping-pt`)) {
           popout_doping_pt_mode = true
           return
+        } else if (hash.startsWith(`#docs`)) {
+          popout_docs_mode = true
+          return
         } else if (hash.startsWith(`#workflow`)) {
           open_tab(`workflow`)
         } else if (!STATIC_ONLY && hash.startsWith(`#terminal`)) {
@@ -568,7 +581,7 @@
           if (p) handle_load_trajectory_stream(p, n, true)
         }
       })
-      if (popout_chat_mode || popout_status_mode || popout_doping_pt_mode) return
+      if (popout_chat_mode || popout_status_mode || popout_doping_pt_mode || popout_docs_mode) return
       const on_hash = () => {
         if (window.location.hash.startsWith(`#workflow`)) {
           open_tab(`workflow`)
@@ -594,6 +607,16 @@
 
   $effect(() => {
     sidebar.persist()
+  })
+
+  // Pre-warm the docs window after startup so the first file-open is near-instant.
+  // Runs only in the real main window (not any popout route).
+  $effect(() => {
+    if (!is_tauri) return
+    const h = window.location.hash
+    if (h.startsWith(`#docs`) || h.startsWith(`#chat`) || h.startsWith(`#status`) || h.startsWith(`#doping-pt`) || h.startsWith(`#terminal`) || h.startsWith(`#workflow`) || h.startsWith(`#structure`) || h.startsWith(`#openpath`)) return
+    const id = setTimeout(() => { void prewarm_doc_window(is_tauri) }, 2500)
+    return () => clearTimeout(id)
   })
 
   /** Open the current structure in the text editor for direct editing. */
@@ -888,11 +911,16 @@
           const accept = (name: string) => is_structure_file(name) || is_trajectory_file(name) || is_chgcar_file(name)
           const results = await tauri_read_dropped_paths(read_paths, accept)
           if (results.length > 0) {
-            if (target === 'window' && results.length === 1) {
-              await parse_and_open_structure_window(results[0].content as string, results[0].filename, is_tauri)
+            if (target.kind === `window` && results.length === 1) {
+              await parse_and_open_structure_window(results[0].content as string, results[0].filename, is_tauri, target.mode === `overwrite`)
               return
             }
-            await import_many(tab_id, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), leaf_id)
+            const eff = target.kind === `window` ? { kind: `split`, mode: `new` } as OpenTarget : target
+            const plan = plan_open(ts.root, leaf_id, eff)
+            let dtab = tab_id, dleaf = leaf_id
+            if (plan.action === `new-tab`) { const n = open_new_structure_tab(); dtab = n.tab_id; dleaf = n.leaf_id }
+            else if (plan.action === `pane`) { ts.root = plan.root; dleaf = plan.leafId }
+            await import_many(dtab, results.map(r => ({ content: r.content, filename: r.filename, path: r.path })), dleaf)
           }
         }
       } catch (err) {
@@ -949,10 +977,19 @@
         to_import.push(f)
       }
       if (to_import.length > 0) {
+        const target = resolve_open_target(open_target_state.value, false)
+        const ts = tab_states[file_input_target_tab]
+        let dtab = file_input_target_tab, dleaf = file_input_target_leaf
+        if (ts) {
+          const eff = target.kind === `window` ? { kind: `split`, mode: `new` } as OpenTarget : target
+          const plan = plan_open(ts.root, file_input_target_leaf, eff)
+          if (plan.action === `new-tab`) { const n = open_new_structure_tab(); dtab = n.tab_id; dleaf = n.leaf_id }
+          else if (plan.action === `pane`) { ts.root = plan.root; dleaf = plan.leafId }
+        }
         await import_many(
-          file_input_target_tab,
+          dtab,
           to_import.map(f => ({ file: f, filename: f.name, path: (f as File & { webkitRelativePath?: string }).webkitRelativePath || null })),
-          file_input_target_leaf,
+          dleaf,
         )
       }
     } catch (err) {
@@ -1309,20 +1346,69 @@
     }
   }
 
-  async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, leaf_id: string, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null) {
+  /** Open a fresh structure tab and report its id + initial empty leaf. */
+  function open_new_structure_tab(): { tab_id: string; leaf_id: string } {
+    open_tab(`structure`)
+    const tid = tm.active_tab_id
+    const nts = tab_states[tid]
+    return { tab_id: tid, leaf_id: nts?.active_leaf_id ?? `` }
+  }
+
+  /**
+   * Place one file's content according to the resolved open target (kind+mode).
+   * Window → popout (reuse on overwrite); new-tab → fresh tab; pane → the leaf
+   * chosen by plan_open (escalate-split for new, active leaf for overwrite).
+   * ArrayBuffer content can't be serialized into a popout, so window falls back
+   * to a split pane.
+   */
+  async function place_single(
+    tab_id: string,
+    leaf_id: string,
+    content: string | ArrayBuffer,
+    filename: string,
+    target: OpenTarget,
+    origin: { session_id: string; file_path: string } | null = null,
+    local_path: string | null = null,
+  ) {
+    if (target.kind === `window` && typeof content === `string`) {
+      await parse_and_open_structure_window(content, filename, is_tauri, target.mode === `overwrite`)
+      return
+    }
+    const ts = tab_states[tab_id]
+    if (!ts) return
+    const eff = target.kind === `window` ? { kind: `split`, mode: `new` } as OpenTarget : target
+    const plan = plan_open(ts.root, leaf_id, eff)
+    if (plan.action === `new-tab`) {
+      const n = open_new_structure_tab()
+      await process_file_content(n.tab_id, content, filename, n.leaf_id, origin, local_path, true)
+      return
+    }
+    if (plan.action === `pane`) {
+      ts.root = plan.root
+      ts.active_leaf_id = plan.leafId
+      await process_file_content(tab_id, content, filename, plan.leafId, origin, local_path, true)
+    }
+  }
+
+  async function process_file_content(tab_id: string, content: string | ArrayBuffer, filename: string, leaf_id: string, remote_origin?: { session_id: string; file_path: string } | null, local_file_path?: string | null, no_escalate = false) {
     const ts = tab_states[tab_id]
     if (!ts) return
     let target: string
-    const r = escalateForImport(ts.root, leaf_id)
-    if (!r) {
-      // All panes full — open a new tab and load there
-      open_tab(`structure`)
-      const new_ts = tab_states[tm.active_tab_id]
-      if (!new_ts) return
-      return process_file_content(tm.active_tab_id, content, filename, new_ts.active_leaf_id, remote_origin, local_file_path)
+    if (no_escalate) {
+      // Caller (place_single) already chose the exact destination leaf.
+      target = leaf_id
+    } else {
+      const r = escalateForImport(ts.root, leaf_id)
+      if (!r) {
+        // All panes full — open a new tab and load there
+        open_tab(`structure`)
+        const new_ts = tab_states[tm.active_tab_id]
+        if (!new_ts) return
+        return process_file_content(tm.active_tab_id, content, filename, new_ts.active_leaf_id, remote_origin, local_file_path)
+      }
+      ts.root = r.root
+      target = r.leafId
     }
-    ts.root = r.root
-    target = r.leafId
     const outcome = await ingest_one(content, filename)
     if (outcome.kind === `skip`) return
     if (outcome.kind === `editor`) {
@@ -1664,7 +1750,7 @@
   //
   // Skipped in popout modes and STATIC_ONLY (no backend to subscribe to).
   $effect(() => {
-    if (STATIC_ONLY || popout_chat_mode || popout_status_mode || popout_doping_pt_mode) return
+    if (STATIC_ONLY || popout_chat_mode || popout_status_mode || popout_doping_pt_mode || popout_docs_mode) return
     const es = new EventSource(`${API_BASE}/view/subscribe?panel_id=default`)
 
     function inject_into_external(struct: AnyStructure | null | undefined): boolean {
@@ -1840,6 +1926,8 @@
 <StatusPopout />
 {:else if popout_doping_pt_mode}
 <DopingPTWindow />
+{:else if popout_docs_mode}
+<DocViewer />
 {:else if is_mobile}
 <MobileWorkspace />
 {:else}
@@ -1853,7 +1941,7 @@
   onclose={request_close_tab}
   oncloseall={open_close_all_dialog}
   onadd={open_tab}
-  layout={tm.active_layout ?? undefined}
+  layout={tm.active_layout}
   onlayoutchange={handle_layout_change}
 >
   <!-- Sidebar toggle button -->
@@ -2088,7 +2176,7 @@
                 <button class="banner-btn cancel" onclick={(e) => { e.stopPropagation(); cancel_panel_close(tab.id, leaf.id) }}>{t(`common.cancel`)}</button>
                 <button class="banner-btn close" onclick={(e) => { e.stopPropagation(); close_panel(tab.id, leaf.id) }}>{t(`common.close`)}</button>
               {:else}
-                <span>{t(`common.save_before_closing`)}</span>
+                <span>{t(`common.save_before_close`)}</span>
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <select class="banner-select target-select" bind:value={exp.close_save_target} onclick={(e) => e.stopPropagation()}>
                   <option value="local">{t(`app.local`)}</option>
@@ -2218,6 +2306,36 @@
                 handle_sidebar_open_workflow(workflow_id)
               }}
               on_open_in_molstar={() => toggle_pane_viewer(pane)}
+              on_view_split_request={(struct) => {
+                // Docked-chat "新pane": open CatBot's loaded structure (B) in a
+                // NEW TAB, leaving this tab's viewer (A) untouched. A new tab gets
+                // its own tab.id = its own panel_id, so the two structures don't
+                // fight over a shared panel store — panes WITHIN one tab share
+                // tab.id and would clobber each other (each pane's MCP bridge
+                // pushes to the same panel, and the sibling's push gets applied).
+                if (!struct?.sites?.length) return
+                const prev_tab_id = tm.active_tab_id
+                tm.create_tab(`structure`)
+                const new_tab_id = tm.active_tab_id
+                const nts = tm.tab_states[new_tab_id]
+                if (!nts) return
+                const nleaf = leaves(nts.root)[0]
+                const np = nleaf ? structurePane(nleaf) : null
+                if (!np) return
+                // Guard: 12-tab limit didn't open a new tab → don't clobber.
+                if (new_tab_id === prev_tab_id && np.structure) {
+                  console.warn(`[App] Tab limit reached, cannot open structure in new tab`)
+                  return
+                }
+                np.initial_panel = undefined
+                np.structure = clone_structure(struct)
+                np.initial_site_count = struct.sites.length
+                np.initial_structure_ref = struct
+                np.modified = false
+                const ntab = tm.tabs.find(t => t.id === new_tab_id)
+                if (ntab) ntab.label = `CatBot structure`
+                tm.update_tab_label(new_tab_id)
+              }}
               fullscreen_toggle={false}
               allow_file_drop={false}
               show_controls={true}
@@ -2254,17 +2372,10 @@
                   Object.assign(pane, create_empty_pane())
                   update_tab_label(tab.id)
                 }}
-                on_view_split={async () => {
+                on_view_split={(_panelId, struct) => {
                   // Split this chat leaf into: left = 3D structure viewer with
-                  // the structure CatBot just loaded (pulled from the panel
-                  // store), right = the chat (history kept — keyed by tab id).
-                  let struct: AnyStructure | null = null
-                  try {
-                    const r = await fetch(
-                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
-                    )
-                    if (r.ok) struct = await r.json()
-                  } catch { /* ignore */ }
+                  // the structure CatBot just loaded (carried in the load card),
+                  // right = the chat (history kept — keyed by tab id).
                   const res = splitLeaf(ts.root, leaf.id, `h`)
                   if (!res) return
                   ts.root = res.root
@@ -2285,17 +2396,24 @@
                   ts.active_leaf_id = res.newLeafId
                   update_tab_label(tab.id)
                 }}
-                on_view_new_window={async () => {
+                on_view_new_window={async (_panelId, struct) => {
                   try {
-                    const r = await fetch(
-                      `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(tab.id)}`,
-                    )
-                    if (!r.ok) return
-                    const struct = await r.json()
-                    await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
+                    if (struct?.sites?.length) {
+                      await open_structure_in_new_window(struct, `CatBot structure`, is_tauri)
+                    }
                   } catch (e) {
                     console.warn(`[CatGo] open structure window failed:`, e)
                   }
+                }}
+                has_sibling_structure={leaves(ts.root).some(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })}
+                on_view_overwrite={(_panelId, struct) => {
+                  // Overwrite the FIRST content-bearing sibling structure leaf
+                  // with the structure CatBot just loaded for this tab (carried
+                  // in the load card).
+                  if (!struct?.sites?.length) return
+                  const target = leaves(ts.root).find(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })
+                  const tp = target ? structurePane(target) : null
+                  if (tp) { tp.structure = clone_structure(struct); tp.modified = false }
                 }}
               />
             </div>
@@ -2607,30 +2725,6 @@
   </div>
 {/if}
 
-<!-- Sidebar file preview overlay (images, PDFs, markdown, csv, etc.) -->
-{#if sidebar.preview_open}
-  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-  <div class="sidebar-preview-backdrop" onclick={(e) => { if (e.target === e.currentTarget) sidebar.preview_open = false }}>
-    <div class="sidebar-editor-overlay" style="display: flex; flex-direction: column;">
-      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-bottom: 1px solid light-dark(rgba(0,0,0,0.12), rgba(255,255,255,0.1));">
-        <span style="font-weight: 500; font-size: 13px;">{sidebar.preview_filename}</span>
-        <button onclick={() => sidebar.preview_open = false} style="background: none; border: none; cursor: pointer; font-size: 16px; color: light-dark(#666, #999); padding: 2px 6px;">✕</button>
-      </div>
-      <div style="flex: 1; min-height: 0; overflow: auto;">
-        <FilePreviewPanel
-          mode={sidebar.preview_mode}
-          filename={sidebar.preview_filename}
-          content={sidebar.preview_content}
-          binary_data={sidebar.preview_binary_data}
-          mime_type={sidebar.preview_mime_type}
-          file_path={sidebar.preview_file_path}
-          session_id={sidebar.preview_session_id}
-          onclose={() => sidebar.preview_open = false}
-        />
-      </div>
-    </div>
-  </div>
-{/if}
 
 <!-- Database search modal (needs backend proxy) -->
 {#if modal.search_visible}
@@ -3038,7 +3132,9 @@
   .panel-close-banner {
     display: flex;
     align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
+    row-gap: 6px;
     padding: 6px 10px;
     background: rgba(245, 158, 11, 0.1);
     border-bottom: 1px solid rgba(245, 158, 11, 0.3);
@@ -3062,6 +3158,7 @@
     border-radius: 4px;
     font-size: 11px;
     font-weight: 500;
+    white-space: nowrap;
     cursor: pointer;
     transition: all 0.15s;
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.2));

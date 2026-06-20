@@ -185,8 +185,12 @@ const app: Record<string, string> = {
   static_mode_workflow_message: `工作流执行、HPC 集成和项目管理需要使用 CatGo 桌面应用。你仍然可以在浏览器中使用 3D 结构查看器和构建工具。`,
 
   // Open-target preference
+  open_in_tab: `标签页`,
   open_in_split: `分屏`,
   open_in_window: `新窗口`,
   open_files_in: `打开文件到`,
+  open_mode_new: `新建`,
+  open_mode_overwrite: `覆盖`,
+  open_mode_hint: `按 Shift 临时翻转`,
 }
 export default app

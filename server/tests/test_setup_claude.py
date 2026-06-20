@@ -46,20 +46,20 @@ def _make_skills_src(root: Path) -> Path:
 
 def test_register_mcp_http_writes_correct_shape(fake_home):
     url = setup_claude.register_mcp_http("http://127.0.0.1:8000/api")
-    assert url == "http://127.0.0.1:8000/api/mcp"
+    assert url == "http://127.0.0.1:8000/api/mcp/"
 
     claude_json = fake_home / ".claude.json"
     assert claude_json.exists()
     cfg = json.loads(claude_json.read_text())
     assert cfg["mcpServers"]["catgo"] == {
         "type": "http",
-        "url": "http://127.0.0.1:8000/api/mcp",
+        "url": "http://127.0.0.1:8000/api/mcp/",
     }
 
 
 def test_register_mcp_http_strips_trailing_slash(fake_home):
     url = setup_claude.register_mcp_http("http://127.0.0.1:8000/api/")
-    assert url == "http://127.0.0.1:8000/api/mcp"
+    assert url == "http://127.0.0.1:8000/api/mcp/"
 
 
 def test_register_mcp_http_preserves_other_keys(fake_home):
@@ -85,7 +85,7 @@ def test_register_mcp_http_preserves_other_keys(fake_home):
     # Pre-existing unrelated MCP server preserved.
     assert cfg["mcpServers"]["other-server"] == {"type": "stdio", "command": "foo"}
     # catgo entry added.
-    assert cfg["mcpServers"]["catgo"]["url"] == "http://127.0.0.1:8000/api/mcp"
+    assert cfg["mcpServers"]["catgo"]["url"] == "http://127.0.0.1:8000/api/mcp/"
 
 
 def test_register_mcp_http_idempotent(fake_home):
@@ -97,7 +97,7 @@ def test_register_mcp_http_idempotent(fake_home):
     assert list(cfg["mcpServers"].keys()) == ["catgo"]
     assert cfg["mcpServers"]["catgo"] == {
         "type": "http",
-        "url": "http://127.0.0.1:8000/api/mcp",
+        "url": "http://127.0.0.1:8000/api/mcp/",
     }
 
 
@@ -108,7 +108,7 @@ def test_register_mcp_http_recovers_from_corrupt_file(fake_home):
     url = setup_claude.register_mcp_http("http://127.0.0.1:8000/api")
 
     cfg = json.loads(claude_json.read_text())
-    assert url == "http://127.0.0.1:8000/api/mcp"
+    assert url == "http://127.0.0.1:8000/api/mcp/"
     assert cfg["mcpServers"]["catgo"]["url"] == url
 
 
@@ -192,7 +192,7 @@ def test_ensure_claude_integration_happy_path(fake_home, tmp_path):
         skills_src=src,
     )
 
-    assert result["mcp_url"] == "http://127.0.0.1:8000/api/mcp"
+    assert result["mcp_url"] == "http://127.0.0.1:8000/api/mcp/"
     assert sorted(result["skills"]) == ["catgo-campaign", "catgo-gibbs-pipeline"]
     assert result["claude_json"] == str(fake_home / ".claude.json")
     assert "errors" not in result
@@ -214,7 +214,7 @@ def test_ensure_claude_integration_collects_errors_without_raising(
         skills_src=src,
     )
 
-    assert result["mcp_url"] == "http://127.0.0.1:8000/api/mcp"
+    assert result["mcp_url"] == "http://127.0.0.1:8000/api/mcp/"
     assert result["skills"] == []
     assert "skills" in result["errors"]
     assert "PermissionError" in result["errors"]["skills"]

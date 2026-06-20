@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { BandSeries, BandProjection } from './band_types'
+  import { plot_theme_colors } from './plot-theme.svelte'
 
   let {
     distance = [],
@@ -21,6 +22,8 @@
     axis_line_width = 1,
     tick_length = 5,
     tick_width = 1,
+    title_size = 14,
+    font_size = 12,
     legend_visible = true,
   }: {
     distance: number[]
@@ -41,6 +44,8 @@
     axis_line_width?: number
     tick_length?: number
     tick_width?: number
+    title_size?: number
+    font_size?: number
     legend_visible?: boolean
   } = $props()
 
@@ -100,6 +105,7 @@
   $effect(() => {
     if (!Plotly || !plot_div || distance.length === 0 || band_series.length === 0) return
 
+    const pc = plot_theme_colors()
     const traces: any[] = []
     const [emin, emax] = energy_range
 
@@ -216,12 +222,12 @@
     // Axis appearance
     const grid_props = {
       showgrid: show_gridlines,
-      gridcolor: `rgba(255,255,255,0.1)`,
+      gridcolor: pc.grid,
       gridwidth: 1,
     }
     const line_props = {
       showline: show_axis_lines,
-      linecolor: `rgba(200,200,200,0.5)`,
+      linecolor: pc.line,
       linewidth: axis_line_width,
       mirror: show_axis_lines,
     }
@@ -229,12 +235,12 @@
       ticks: `outside` as const,
       ticklen: tick_length,
       tickwidth: tick_width,
-      tickcolor: `rgba(200,200,200,0.5)`,
+      tickcolor: pc.tick,
     }
 
     const layout: any = {
       xaxis: {
-        title: ``,
+        title: { text: `Wave Vector`, font: { size: title_size } },
         tickmode: `array`,
         tickvals: tick_positions,
         ticktext: tick_labels,
@@ -246,7 +252,7 @@
         ...tick_props_obj,
       },
       yaxis: {
-        title: `E \u2013 E<sub>f</sub> (eV)`,
+        title: { text: `E \u2013 E<sub>f</sub> (eV)`, font: { size: title_size } },
         range: [emin, emax],
         zeroline: false,
         ...grid_props,
@@ -257,13 +263,13 @@
       annotations,
       plot_bgcolor: `rgba(0,0,0,0)`,
       paper_bgcolor: `rgba(0,0,0,0)`,
-      font: { color: `#ccc`, size: 11 },
+      font: { family: pc.font, color: pc.text, size: font_size },
       showlegend: legend_visible,
       legend: {
-        bgcolor: `rgba(0,0,0,0.3)`,
-        font: { color: `#ccc`, size: 10 },
+        bgcolor: pc.legend_bg,
+        font: { family: pc.font, color: pc.text, size: font_size },
       },
-      margin: { l: 55, r: 10, t: 10, b: 30 },
+      margin: { l: 60, r: 10, t: 10, b: 45 },
       height: container_height,
       hovermode: `closest`,
       autosize: true,

@@ -33,3 +33,37 @@ export function get_current_structure(): AnyStructure | null {
 export function current_structure_state(): { value: AnyStructure | null } {
   return _state
 }
+
+// A client-direct LOAD awaiting the user's choice (overwrite / split / new-window).
+// Set when a load tool runs while the viewer already shows a structure; the
+// ChatPane card watches this. Pure client-side — no backend (works in STATIC_ONLY web).
+export interface PendingClientLoad { structure: AnyStructure; formula: string; n: number }
+const _pending = $state<{ value: PendingClientLoad | null }>({ value: null })
+
+export function pending_client_load_state(): { value: PendingClientLoad | null } {
+  return _pending
+}
+export function clear_pending_client_load(): void {
+  _pending.value = null
+}
+
+/** Client-direct LOAD entry. If the viewer is EMPTY, apply the structure
+ *  directly (set_current_structure) and return true. If the viewer already has
+ *  a structure, stage it as a pending load (the ChatPane card asks where to put
+ *  it) WITHOUT applying — return false. No backend involved. */
+export function client_load_or_card(
+  struct: AnyStructure,
+  formula: string,
+  n: number,
+): boolean {
+  const cur = get_current_structure()
+  const has = !!cur && Array.isArray((cur as { sites?: unknown[] }).sites) &&
+    (cur as { sites: unknown[] }).sites.length > 0
+  if (!has) {
+    set_current_structure(struct)
+    _pending.value = null
+    return true
+  }
+  _pending.value = { structure: struct, formula, n }
+  return false
+}

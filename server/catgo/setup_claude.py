@@ -15,9 +15,9 @@ idempotent (safe to run on every launch), cross-platform (``pathlib`` only) and
 never raises to the caller — failures are collected and returned so a broken
 skills copy can't take down server startup.
 
-The bundled server mounts an HTTP MCP at ``/api/mcp`` (see
+The bundled server mounts an HTTP MCP at ``/api/mcp/`` (see
 ``main.py``: ``app.mount("/api/mcp", mcp_asgi_app)``), so registration uses the
-HTTP transport (``{"type": "http", "url": ".../api/mcp"}``) — no Python on the
+HTTP transport (``{"type": "http", "url": ".../api/mcp/"}``) — no Python on the
 client side is required.
 """
 
@@ -80,7 +80,11 @@ def register_mcp_http(api_base: str) -> str:
     """Register the catgo HTTP MCP server in ``~/.claude.json``.
 
     ``api_base`` is the API root, e.g. ``http://127.0.0.1:8000/api``; the MCP
-    URL is ``<api_base>/mcp`` (→ ``http://127.0.0.1:8000/api/mcp``).
+    URL is ``<api_base>/mcp/`` (→ ``http://127.0.0.1:8000/api/mcp/``).
+
+    The trailing slash is required by Starlette's mounted ASGI route. Without
+    it, POST requests can fall through to a later GET-only route and return
+    HTTP 405 before reaching the MCP session manager.
 
     Loads the existing config (or ``{}`` if missing / corrupt), sets only the
     ``mcpServers.catgo`` entry — preserving every other ``mcpServers`` entry and
@@ -88,7 +92,7 @@ def register_mcp_http(api_base: str) -> str:
 
     Returns the registered MCP URL.
     """
-    url = api_base.rstrip("/") + "/mcp"
+    url = api_base.rstrip("/") + "/mcp/"
     path = _claude_json_path()
 
     cfg: dict = {}

@@ -36,7 +36,7 @@
     root_boundary?: string
     on_load_structure?: (file: RemoteFile) => void
     on_open_editor?: (file: RemoteFile) => void
-    on_preview_file?: (file: RemoteFile, preview_type: `image` | `pdf` | `markdown` | `csv` | `excel`) => void
+    on_preview_file?: (file: RemoteFile, preview_type: `image` | `pdf` | `markdown` | `csv` | `excel` | `docx`) => void
     on_load_trajectory?: (dir: RemoteFile, pattern: string) => void
     on_navigate?: (path: string) => void
     on_download?: (file: RemoteFile) => void
@@ -244,9 +244,13 @@
     return EXCEL_EXTS.some((ext) => name.toLowerCase().endsWith(ext))
   }
 
+  function is_word(name: string): boolean {
+    return name.toLowerCase().endsWith(`.docx`)
+  }
+
   /** Whether this is a binary file that needs binary reading. */
   function is_binary_preview(name: string): boolean {
-    return is_image(name) || is_pdf(name) || is_excel(name)
+    return is_image(name) || is_pdf(name) || is_excel(name) || is_word(name)
   }
 
   function is_text(name: string): boolean {
@@ -263,7 +267,7 @@
   /** Determine the primary action for a file click. */
   function get_file_action(name: string): `load` | `edit` | `preview` | `none` {
     if (is_loadable(name)) return `load`
-    if (is_image(name) || is_pdf(name) || is_spreadsheet(name) || is_markdown(name) || is_excel(name)) return `preview`
+    if (is_image(name) || is_pdf(name) || is_spreadsheet(name) || is_markdown(name) || is_excel(name) || is_word(name)) return `preview`
     if (is_text(name)) return `edit`
     return `none`
   }
@@ -330,6 +334,7 @@
       const preview_type = is_image(name) ? `image`
         : is_pdf(name) ? `pdf`
         : is_excel(name) ? `excel`
+        : is_word(name) ? `docx`
         : is_markdown(name) ? `markdown`
         : `csv`
       on_preview_file(node.file, preview_type)
