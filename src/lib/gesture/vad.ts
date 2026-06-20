@@ -24,12 +24,22 @@ export interface VadConfig {
 }
 
 let vad_instance: any = null
+// Bumped by every start_vad/stop_vad. `MicVAD.new()` is async and slow (it loads
+// a worklet + the Silero ONNX model from a CDN). If stop_vad() lands while that
+// await is in flight, vad_instance is still null so the old sync stop_vad() was a
+// no-op — then new() resolved and called .start(), spinning the mic up AFTER stop
+// with the button visibly off and NO live instance to stop → unstoppable phantom
+// dictation. A start now captures its generation and, if it has been superseded
+// (a stop or a newer start) by the time MicVAD.new() resolves, destroys the fresh
+// instance instead of starting it.
+let vad_gen = 0
 
 export async function start_vad(config: VadConfig): Promise<void> {
   // Tear down any previous instance first — MicVAD holds the mic and a worklet,
   // so a leaked instance keeps transcribing in parallel (duplicated input). One
   // mic, one VAD.
   stop_vad()
+  const my_gen = ++vad_gen
   // Dynamic import to avoid SSR issues
   const { MicVAD } = await import(`@ricky0123/vad-web`)
 
@@ -59,12 +69,27 @@ export async function start_vad(config: VadConfig): Promise<void> {
     vad_options.stream = config.stream
   }
 
-  vad_instance = await MicVAD.new(vad_options)
+  const inst: any = await MicVAD.new(vad_options)
+  if (my_gen !== vad_gen) {
+    // A stop_vad() (or a newer start_vad) landed while the model was loading —
+    // this instance is stale. Destroy it; do NOT start the mic. Without this the
+    // mic would start after stop and dictate with the button off, unstoppable.
+    try {
+      inst.pause?.()
+      inst.destroy?.()
+    } catch { /* best-effort teardown */ }
+    console.info(`[VAD] start superseded during load — discarded`)
+    return
+  }
+  vad_instance = inst
   vad_instance.start()
   console.info(`[VAD] Silero VAD started`)
 }
 
 export function stop_vad(): void {
+  // Invalidate any in-flight start_vad() whose MicVAD.new() hasn't resolved yet
+  // (the async-start race), so it self-destructs instead of starting the mic.
+  vad_gen++
   if (vad_instance) {
     vad_instance.pause()
     vad_instance.destroy()
