@@ -1651,5 +1651,24 @@ const structure: Record<string, string> = {
   trajectory_format_compressed: `压缩文件 (.gz)`,
   bio_open_in_native: `用原生查看器打开`,
   bio_open_in_molstar: `在 Mol* 中打开`,
+
+  // 预览弹窗 — 电子结构子区域（数据库导入）
+  preview_electronic_heading: `电子结构`,
+  preview_band_gap: `带隙：`,
+  preview_is_metal: `金属性：`,
+  preview_efermi: `费米能：`,
+  preview_cbm: `导带底 (CBM)：`,
+  preview_vbm: `价带顶 (VBM)：`,
+  preview_dos_available: `态密度 (DOS)：`,
+  preview_bands_available: `能带：`,
+  preview_magnetic_ordering: `磁有序：`,
+  preview_yes: `是`,
+  preview_no: `否`,
+  preview_available: `可用`,
+  preview_not_available: `不可用`,
+  preview_metallic: `金属性`,
+  preview_missing: `—`,
+  result_mag: `磁`,
+  result_bands: `能带`,
 }
 export default structure

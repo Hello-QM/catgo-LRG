@@ -2,6 +2,8 @@
  * Modal reactive state — extracted from App.svelte.
  */
 
+import type { ElectronicProps } from '$lib/structure/electronic_preview'
+
 interface PreviewDetailRow {
   label: string
   value: string
@@ -31,6 +33,7 @@ class ModalState {
   db_preview_formula = $state(``)
   db_preview_details = $state<PreviewDetailRow[]>([])
   db_preview_lattice = $state<PreviewLatticeParams | null>(null)
+  db_preview_electronic = $state<ElectronicProps | null>(null)
   // Close-all dialog
   close_all_visible = $state(false)
   close_all_entries = $state<CloseAllEntry[]>([])

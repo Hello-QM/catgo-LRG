@@ -150,6 +150,14 @@ export interface MPSummaryData {
   band_gap?: number
   is_stable?: boolean
   is_metal?: boolean
+  efermi?: number
+  cbm?: number
+  vbm?: number
+  ordering?: string
+  // Availability map MP returns at `has_props`: { dos: bool, bandstructure: bool, ... }.
+  // We only read .dos / .bandstructure for the preview — the full payloads are huge
+  // and would defeat the point of "preview before import".
+  has_props?: Record<string, boolean>
 }
 
 /**
@@ -172,7 +180,7 @@ export async function search_mp_structures(
   if (vscode_api || direct_api()) {
     // Direct Materials Project API call (relay-routed in the web build)
     const params = new URLSearchParams({
-      _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal`,
+      _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal,efermi,cbm,vbm,ordering,has_props`,
       _limit: String(limit),
     })
 
@@ -233,7 +241,7 @@ export async function get_mp_structure_summary(material_id: string): Promise<MPS
     if (vscode_api || direct_api()) {
       // Direct API call (relay-routed in the web build)
       const params = new URLSearchParams({
-        _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal`,
+        _fields: `material_id,formula_pretty,nsites,nelements,symmetry,energy_above_hull,formation_energy_per_atom,band_gap,is_stable,is_metal,efermi,cbm,vbm,ordering,has_props`,
       })
       url = `https://api.materialsproject.org/materials/summary/${material_id}?${params}`
       data = await fetch_json_smart(url, api_key) as typeof data

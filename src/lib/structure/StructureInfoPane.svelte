@@ -8,6 +8,8 @@
   import type { HTMLAttributes } from 'svelte/elements'
   import { SvelteSet } from 'svelte/reactivity'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import ElectronicInfoPanel from './ElectronicInfoPanel.svelte'
+  import type { ElectronicProps } from './electronic_preview'
 
   // Lazy-load structure translations
   load_i18n_module('structure')
@@ -35,6 +37,31 @@
 
   let copied_items = new SvelteSet<string>()
   let sites_expanded = $state(false)
+
+  // Read electronic-structure metadata stashed on the structure at import
+  // (Structure.svelte:handle_optimade_preview attaches `_electronic_props`).
+  // Untyped because PymatgenStructure / AnyStructure don't declare it —
+  // it's a session-local annotation that doesn't survive serialization.
+  let electronic_props = $derived(
+    (structure as unknown as { _electronic_props?: ElectronicProps })?._electronic_props ?? null,
+  )
+
+  let electronic_labels = $derived({
+    band_gap: t(`structure.preview_band_gap`),
+    is_metal: t(`structure.preview_is_metal`),
+    efermi: t(`structure.preview_efermi`),
+    cbm: t(`structure.preview_cbm`),
+    vbm: t(`structure.preview_vbm`),
+    dos_available: t(`structure.preview_dos_available`),
+    bands_available: t(`structure.preview_bands_available`),
+    magnetic_ordering: t(`structure.preview_magnetic_ordering`),
+    yes: t(`structure.preview_yes`),
+    no: t(`structure.preview_no`),
+    available: t(`structure.preview_available`),
+    not_available: t(`structure.preview_not_available`),
+    metallic: t(`structure.preview_metallic`),
+    missing: t(`structure.preview_missing`),
+  })
 
   async function copy_to_clipboard(label: string, value: string, key: string) {
     try {
@@ -310,6 +337,18 @@
   {...rest}
 >
   <h4 style="margin-top: 0">{t('structure.structure_info')}</h4>
+  {#if electronic_props}
+    <section class="electronic-section">
+      <h4>{t('structure.preview_electronic_heading')}</h4>
+      <ElectronicInfoPanel
+        props={electronic_props}
+        labels={electronic_labels}
+        heading={null}
+        hide_when_empty={true}
+      />
+    </section>
+    <hr />
+  {/if}
   {#each pane_data as section, sec_idx (section.title)}
     {#if sec_idx > 0}<hr />{/if}
     <section>

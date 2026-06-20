@@ -90,6 +90,11 @@ async def search_structures(
             "band_gap",
             "is_stable",
             "is_metal",
+            "efermi",
+            "cbm",
+            "vbm",
+            "ordering",
+            "has_props",
         ]),
         "_limit": str(request.limit),
     }
@@ -159,6 +164,11 @@ async def get_structure(
             "band_gap",
             "is_stable",
             "is_metal",
+            "efermi",
+            "cbm",
+            "vbm",
+            "ordering",
+            "has_props",
         ]),
     }
 

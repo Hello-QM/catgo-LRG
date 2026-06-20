@@ -149,6 +149,14 @@
   import { scale_structure_geometry } from '$lib/trajectory/operations'
   import OptimadeSearchModal from './OptimadeSearchModal.svelte'
   import OptimadePreviewModal from './OptimadePreviewModal.svelte'
+  import {
+    buildElectronicRows,
+    electronic_props_from_mp,
+    electronic_props_from_optimade,
+    type ElectronicProps,
+  } from './electronic_preview'
+  import { extract_provider_details } from '$lib/api/optimade'
+  import type { MPSummaryData } from '$lib/api/materials-project'
   import PasteContentModal from './PasteContentModal.svelte'
   import VacuumBoxModal from './VacuumBoxModal.svelte'
   import { translate_sites } from './manipulation'
@@ -751,6 +759,7 @@
   let optimade_pending_pymatgen = $state<PymatgenStructure | null>(null) // Pending PymatgenStructure for preview
   let optimade_pending_provider = $state<string | null>(null) // Provider name for preview
   let optimade_preview_details = $state<Array<{ label: string; value: string; mono?: boolean }>>([])
+  let optimade_preview_electronic = $state<ElectronicProps | null>(null)
   let optimade_preview_formula = $state<string>(``)
   let optimade_preview_lattice = $state<{ a: number; b: number; c: number; alpha: number; beta: number; gamma: number } | null>(null)
   let optimade_preview_title = $state<string>(`Preview Structure Import`)
@@ -1371,7 +1380,16 @@
     }
     untrack(() => {
       const aligned = align_to_principal_axes(structure!)
-      structure = { ...aligned, _aligned: true } as any as typeof structure
+      // Preserve session-local annotations stamped onto the imported structure
+      // (e.g. `_electronic_props` from a database import). `align_to_principal_axes`
+      // returns a fresh object that doesn't carry these forward, so the spread
+      // would otherwise silently drop them.
+      const prior_elec = (structure as any)?._electronic_props
+      structure = {
+        ...aligned,
+        _aligned: true,
+        ...(prior_elec ? { _electronic_props: prior_elec } : {}),
+      } as any as typeof structure
       structure_aligned_id = structure_id
       // The scene may have already locked its rotation pivot from the raw
       // imported coordinates. Recenter once after this automatic load-time
@@ -2950,7 +2968,11 @@
   }
 
   // Handle OPTIMADE structure preview
-  function handle_optimade_preview(optimade_struct: any, pymatgen_struct: PymatgenStructure) {
+  function handle_optimade_preview(
+    optimade_struct: any,
+    pymatgen_struct: PymatgenStructure,
+    mp_summary: MPSummaryData | null = null,
+  ) {
     optimade_pending_structure = optimade_struct
     optimade_pending_pymatgen = pymatgen_struct
 
@@ -2964,6 +2986,19 @@
       attrs.n_sites ??
       (Array.isArray(attrs.cartesian_site_positions) ? attrs.cartesian_site_positions.length : 0)
 
+    // Electronic-structure block: prefer the MP REST summary (richer surface);
+    // fall back to whatever the OPTIMADE adapter put under `_<provider>_*`.
+    let elec: ElectronicProps
+    if (mp_summary) {
+      elec = electronic_props_from_mp(mp_summary)
+    } else {
+      const pd = extract_provider_details(attrs as Record<string, unknown>)
+      elec = electronic_props_from_optimade(pd)
+    }
+    // Stash on the pending pymatgen so the metadata rides through Confirm
+    // into the loaded structure (consumed by StructureInfoPane / overlays).
+    ;(pymatgen_struct as any)._electronic_props = elec
+
     optimade_preview_title = `Preview Structure Import`
     optimade_preview_formula = formula
     optimade_preview_lattice = null // let modal compute from optimade_structure (legacy fallback)
@@ -2973,6 +3008,7 @@
       { label: `Sites:`, value: String(sites) },
       { label: `Database:`, value: provider },
     ]
+    optimade_preview_electronic = elec
 
     optimade_preview_visible = true
   }
@@ -3009,6 +3045,7 @@
     optimade_preview_formula = formula
     optimade_preview_lattice = null // molecules — no crystallographic lattice
     optimade_preview_details = rows
+    optimade_preview_electronic = null // PubChem is molecular — no band/Fermi data
 
     optimade_preview_visible = true
   }
@@ -3025,6 +3062,7 @@
       optimade_pending_pymatgen = null
       optimade_pending_provider = null
       optimade_preview_details = []
+      optimade_preview_electronic = null
       optimade_preview_formula = ``
       optimade_preview_lattice = null
     }
@@ -3037,8 +3075,30 @@
     optimade_pending_pymatgen = null
     optimade_pending_provider = null
     optimade_preview_details = []
+    optimade_preview_electronic = null
     optimade_preview_formula = ``
     optimade_preview_lattice = null
+  }
+
+  // i18n labels for ElectronicInfoPanel — shared by the import-preview modal
+  // and any other surface that reads localized labels off this component.
+  function electronic_i18n_labels() {
+    return {
+      band_gap: t(`structure.preview_band_gap`),
+      is_metal: t(`structure.preview_is_metal`),
+      efermi: t(`structure.preview_efermi`),
+      cbm: t(`structure.preview_cbm`),
+      vbm: t(`structure.preview_vbm`),
+      dos_available: t(`structure.preview_dos_available`),
+      bands_available: t(`structure.preview_bands_available`),
+      magnetic_ordering: t(`structure.preview_magnetic_ordering`),
+      yes: t(`structure.preview_yes`),
+      no: t(`structure.preview_no`),
+      available: t(`structure.preview_available`),
+      not_available: t(`structure.preview_not_available`),
+      metallic: t(`structure.preview_metallic`),
+      missing: t(`structure.preview_missing`),
+    }
   }
 
   // Handle molecule import file selection
@@ -4792,6 +4852,9 @@
     title={optimade_preview_title}
     formula={optimade_preview_formula}
     details={optimade_preview_details}
+    electronic_props={optimade_preview_electronic}
+    electronic_labels={electronic_i18n_labels()}
+    electronic_heading={t(`structure.preview_electronic_heading`)}
     lattice_params={optimade_preview_lattice}
   />
 

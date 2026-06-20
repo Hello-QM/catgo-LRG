@@ -190,12 +190,20 @@ async def get_providers():
 
 
 @router.get("/structure/{provider_id}/{structure_id:path}")
-async def get_structure(provider_id: str, structure_id: str):
+async def get_structure(
+    provider_id: str,
+    structure_id: str,
+    response_fields: Optional[str] = Query(None),
+):
     """Fetch a single structure from an OPTIMADE provider.
 
     Args:
         provider_id: Provider identifier (e.g., 'mp', 'mc3d')
         structure_id: Structure identifier within the provider
+        response_fields: Optional comma-separated OPTIMADE response_fields.
+            MP's OPTIMADE adapter only returns `_mp_*` extras when these are
+            listed explicitly; without it the response carries only standard
+            fields. Forwarded verbatim to the provider.
     """
     # Get provider base URL
     providers_response = await get_providers()
@@ -207,9 +215,9 @@ async def get_structure(provider_id: str, structure_id: str):
 
     base_url = await resolve_provider_url(provider["attributes"]["base_url"])
 
-    # Build query params - don't restrict response_fields so providers
-    # return all available extended fields (providers ignore unknown fields)
     params = {}
+    if response_fields:
+        params["response_fields"] = response_fields
 
     query_string = urlencode(params) if params else ""
 

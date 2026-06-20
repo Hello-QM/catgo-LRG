@@ -1651,5 +1651,24 @@ const structure: Record<string, string> = {
   trajectory_format_compressed: `Compressed files (.gz)`,
   bio_open_in_native: `Open in native viewer`,
   bio_open_in_molstar: `Open in Mol*`,
+
+  // Preview modal — electronic-structure subsection (database imports)
+  preview_electronic_heading: `Electronic structure`,
+  preview_band_gap: `Band gap:`,
+  preview_is_metal: `Metal:`,
+  preview_efermi: `Fermi energy:`,
+  preview_cbm: `CBM:`,
+  preview_vbm: `VBM:`,
+  preview_dos_available: `DOS:`,
+  preview_bands_available: `Bands:`,
+  preview_magnetic_ordering: `Magnetic order:`,
+  preview_yes: `Yes`,
+  preview_no: `No`,
+  preview_available: `available`,
+  preview_not_available: `not available`,
+  preview_metallic: `metallic`,
+  preview_missing: `—`,
+  result_mag: `Mag`,
+  result_bands: `Bands`,
 }
 export default structure
