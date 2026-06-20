@@ -189,6 +189,30 @@ describe(`library entry to pane bindings`, () => {
     expect(ts.pending_library_removal).toBeNull()
   })
 
+  it(`keeps open panes when the library list is cleared, leaving bindings inert`, () => {
+    const { ts, left, right } = two_pane_tab()
+    const first = entry(`a`)
+    const second = entry(`b`)
+    ts.library = [first, second]
+    bind(left, first)
+    bind(right, second)
+
+    // Simulate "Clear list": empty the library, leave panes mounted.
+    ts.library = []
+
+    // Open panes are untouched.
+    expect(leaves(ts.root).map((leaf) => leaf.id)).toEqual([left.id, right.id])
+    expect(structurePane(left)?.library_entry_id).toBe(first.id)
+    // A now-dangling binding is inert: removal reports missing, highlight clears.
+    expect(prepare_library_entry_removal(ts, first.id)).toEqual({ kind: `missing` })
+    ts.active_leaf_id = left.id
+    expect(sync_active_library_entry(ts)).toBeNull()
+    // A direct close commits nothing (no pending removal was armed).
+    close_panel(deps(ts).value, `tab`, left.id)
+    expect(leaves(ts.root).map((leaf) => leaf.id)).toEqual([right.id])
+    expect(ts.library).toEqual([])
+  })
+
   it(`derives sidebar highlighting from the active pane`, () => {
     const { ts, left, right } = two_pane_tab()
     const first = entry(`left`)

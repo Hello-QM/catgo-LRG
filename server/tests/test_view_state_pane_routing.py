@@ -127,3 +127,40 @@ def test_manifest_resolves_unique_position_and_rejects_ambiguity():
         "structure-1:leaf-bottom-a",
         "structure-1:leaf-bottom-b",
     ]
+
+
+def test_manifest_resolves_by_pane_number():
+    view_state.update_manifest(
+        "structure-1:leaf-a",
+        {"tab_id": "structure-1", "position": "left", "pane_number": 1},
+    )
+    view_state.update_manifest(
+        "structure-1:leaf-b",
+        {"tab_id": "structure-1", "position": "right", "pane_number": 2},
+    )
+    assert view_state.resolve_viewer_ref("pane 2", "structure-1") == (
+        "structure-1:leaf-b",
+        None,
+    )
+    assert view_state.resolve_viewer_ref("窗口1", "structure-1") == (
+        "structure-1:leaf-a",
+        None,
+    )
+
+
+def test_manifest_filename_matches_exact_or_stem_not_substring():
+    view_state.update_manifest(
+        "structure-1:leaf-p",
+        {"tab_id": "structure-1", "position": "left", "filename": "POSCAR"},
+    )
+    view_state.update_manifest(
+        "structure-1:leaf-m",
+        {"tab_id": "structure-1", "position": "right", "filename": "mos2.traj"},
+    )
+    # Substring ("o" in "POSCAR") must NOT resolve — that routed to the wrong pane.
+    viewer_id, error = view_state.resolve_viewer_ref("o", "structure-1")
+    assert viewer_id is None
+    assert "not found" in error
+    # Exact name and stem do resolve.
+    assert view_state.resolve_viewer_ref("POSCAR", "structure-1")[0] == "structure-1:leaf-p"
+    assert view_state.resolve_viewer_ref("mos2", "structure-1")[0] == "structure-1:leaf-m"

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import uuid
 from collections import Counter, deque
 from typing import Any
 
@@ -88,9 +90,23 @@ def _notify(panel_id: str, event: str, data: dict) -> None:
             )
 
 
-def notify_structure(panel_id: str, struct: dict) -> None:
-    """Notify SSE subscribers that a new structure is available."""
-    _notify(panel_id, "structure", {"structure": struct})
+def notify_structure(
+    panel_id: str, struct: dict, intent: str = "edit", had_structure: bool = False
+) -> None:
+    """Notify SSE subscribers that a new structure is available.
+
+    `intent` tags whether this push EDITS the existing structure (default —
+    the viewer applies it in place) or LOADS a fresh one ("load" — the
+    frontend may prompt before overwriting). `had_structure` is the
+    backend-authoritative "panel already occupied" flag. Both ride into the
+    SSE payload so the frontend hold-gate (`should_apply_push`) survives the
+    scene-remount race. See PR #372.
+    """
+    _notify(
+        panel_id,
+        "structure",
+        {"structure": struct, "intent": intent, "had_structure": had_structure},
+    )
 
 
 def notify_workflow(panel_id: str, workflow_id: str) -> None:
@@ -121,7 +137,9 @@ async def request_viewer_command(
             "error": f"Viewer '{panel_id}' is not mounted or no longer exists.",
         }
     loop = asyncio.get_running_loop()
-    command_id = f"cmd-{id(loop)}-{loop.time()}"
+    # uuid (not id(loop)+loop.time(), which can collide for two commands issued
+    # in the same tick and clobber each other's pending future).
+    command_id = f"cmd-{uuid.uuid4().hex}"
     future = loop.create_future()
     pending_commands[command_id] = future
     _notify(panel_id, "command", {
@@ -189,11 +207,25 @@ def resolve_viewer_ref(ref: str, tab_id: str = "") -> tuple[str | None, str | No
     }
     normalized = ref.strip().lower().replace(" ", "-")
     position = position_aliases.get(ref.strip(), normalized)
+    ref_l = ref.strip().lower()
+    pane_match = re.fullmatch(r"(?:pane|window|窗口)[-_ ]?(\d+)", normalized)
+    pane_number = int(pane_match.group(1)) if pane_match else None
+
+    def _filename_matches(filename: object) -> bool:
+        # Exact name or stem only — substring ("o" → "POSCAR") routes to the
+        # wrong pane.
+        name = str(filename or "").lower()
+        if not name:
+            return False
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+        return ref_l in (name, stem)
+
     matches = [
         manifest for manifest in list_manifests(tab_id)
         if manifest.get("position") == position
-        or manifest.get("label") == ref
-        or ref.lower() in str(manifest.get("filename") or "").lower()
+        or str(manifest.get("label") or "").lower() == ref_l
+        or (pane_number is not None and manifest.get("pane_number") == pane_number)
+        or _filename_matches(manifest.get("filename"))
     ]
     if len(matches) == 1:
         return str(matches[0]["viewer_id"]), None
@@ -285,16 +317,34 @@ def get_active_structure() -> dict | None:
     return get_structure(last_active_panel_id)
 
 
-def push_structure(struct: dict, panel_id: str = "default") -> None:
+def push_structure(
+    struct: dict,
+    panel_id: str = "default",
+    intent: str = "edit",
+    had_structure: bool | None = None,
+) -> None:
     """Store structure, queue for legacy poll, and notify SSE subscribers.
 
     Does NOT call mark_active — this is the path MCP pushes take, and lab
     pushes shouldn't change the user's idea of which panel is "active".
+
+    `intent` ("edit" default | "load") rides into the SSE event so the
+    frontend can prompt before overwriting on a fresh load. `had_structure`
+    is the backend-authoritative hold signal; when None it is self-computed
+    HERE against the RESOLVED panel, before the store write — the in-process
+    path (upload-and-load, `_push_structure_direct`) overwrites the store
+    itself, so occupancy must be captured first. See PR #372.
     """
     panel_id = resolve_panel_id(panel_id)
+    if had_structure is None:
+        had_structure = bool(panel_structures.get(panel_id))
     panel_structures[panel_id] = struct
     get_panel_pending(panel_id).append(struct)
-    _notify(panel_id, "structure", {"structure": struct})
+    _notify(
+        panel_id,
+        "structure",
+        {"structure": struct, "intent": intent, "had_structure": had_structure},
+    )
     n = len(struct.get("sites", []))
     logger.debug("Structure pushed for panel '%s': %d sites", panel_id, n)
 

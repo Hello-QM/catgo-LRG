@@ -187,10 +187,16 @@ export function resolve_viewer(
     }
   }
   if (!matches.length) {
-    matches = candidates.filter((m) =>
-      m.filename?.toLowerCase().includes(raw.toLowerCase()) ||
-      m.label.toLowerCase().includes(raw.toLowerCase())
-    )
+    // Exact name/stem/label only — substring (`o` → `POSCAR`) routes to the
+    // wrong pane. Mirrors the server's resolve_viewer_ref.
+    const needle = raw.toLowerCase()
+    matches = candidates.filter((m) => {
+      const filename = m.filename?.toLowerCase() ?? ``
+      const stem = filename.includes(`.`)
+        ? filename.slice(0, filename.lastIndexOf(`.`))
+        : filename
+      return filename === needle || stem === needle || m.label.toLowerCase() === needle
+    })
   }
   if (matches.length !== 1) {
     return {

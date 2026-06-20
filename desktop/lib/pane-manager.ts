@@ -13,6 +13,7 @@ import { sidebar } from '../state/sidebar-state.svelte'
 import { list_projects, save_structure_to_db } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 import {
+  cancel_pending_library_removal,
   commit_pending_library_removal,
   sync_active_library_entry,
 } from './library-pane-bindings'
@@ -152,6 +153,10 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
   } catch (e) {
     exp.error = e instanceof Error ? e.message : `Save failed`
     console.error(`Save before close failed:`, e)
+    // The close was abandoned (no dialog opens for the HPC/DB path, so there
+    // is no cancel flow to clean up). Drop the pending removal so a later,
+    // unrelated direct close of this same leaf does not silently commit it.
+    cancel_pending_library_removal(ts, leaf_id)
   } finally {
     exp.close_saving = false
   }

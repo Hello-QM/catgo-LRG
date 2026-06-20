@@ -96,6 +96,58 @@ function clone_frame(frame: TrajectoryFrame): TrajectoryFrame {
   }
 }
 
+/**
+ * Frame count above which per-pane frames are cloned copy-on-write instead of
+ * eagerly. Below it, eager `frames.map(clone_frame)` is simplest and the
+ * memory cost is negligible. Above it (a many-frame *in-memory*, non-indexed
+ * trajectory — large indexed/streamed files only hold a handful of frames in
+ * `.frames`), eagerly duplicating every frame's structure multiplies peak
+ * memory per pane and can jank/OOM the (mobile) WebView, so each frame is
+ * deep-cloned lazily on first access.
+ */
+const LAZY_CLONE_FRAME_THRESHOLD = 256
+
+/**
+ * Copy-on-write frames array: a private backing container (so structural
+ * isolation holds — the trajectory edit paths only ever replace frames by
+ * index or whole-array `.map`, never push/splice/in-place-mutate) whose
+ * elements start as references to the source frames and are deep-cloned the
+ * first time they're read. This bounds memory to the frames a pane actually
+ * touches while preserving the same isolation contract as eager cloning:
+ * mutating one pane's frame never affects another pane or the source.
+ *
+ * The proxy delegates everything except integer-index reads/writes to the
+ * backing array via `Reflect`, so it composes transparently with Svelte's
+ * own `$state` array proxy.
+ */
+function lazy_clone_frames(source: readonly TrajectoryFrame[]): TrajectoryFrame[] {
+  const backing = source.slice() as TrajectoryFrame[]
+  const cloned = new Set<number>()
+  const as_index = (prop: PropertyKey): number => {
+    if (typeof prop !== `string`) return -1
+    const n = Number(prop)
+    return Number.isInteger(n) && n >= 0 ? n : -1
+  }
+  return new Proxy(backing, {
+    get(target, prop, receiver) {
+      const i = as_index(prop)
+      if (i >= 0 && i < target.length && !cloned.has(i)) {
+        target[i] = clone_frame(target[i])
+        cloned.add(i)
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+    set(target, prop, value, receiver) {
+      const i = as_index(prop)
+      // An app-supplied frame is already a fresh, isolated object — record it
+      // as "cloned" so a later read returns it as-is instead of re-cloning
+      // (which would break reference identity / churn reactivity).
+      if (i >= 0) cloned.add(i)
+      return Reflect.set(target, prop, value, receiver)
+    },
+  })
+}
+
 export function apply_trajectory_transformations(
   frame: TrajectoryFrame,
   transformations: TrajectoryTransformation[],
@@ -141,7 +193,9 @@ export function clone_trajectory_for_pane<T extends TrajectoryType | null | unde
   const transformations = clone_data(source.pane_transformations ?? [])
   const copy: PaneTrajectory = {
     ...source,
-    frames: source.frames.map(clone_frame),
+    frames: source.frames.length > LAZY_CLONE_FRAME_THRESHOLD
+      ? lazy_clone_frames(source.frames)
+      : source.frames.map(clone_frame),
     metadata: source.metadata ? clone_data(source.metadata) : source.metadata,
     indexed_frames: source.indexed_frames?.map((x) => ({ ...x })),
     plot_metadata: source.plot_metadata?.map((x) => ({

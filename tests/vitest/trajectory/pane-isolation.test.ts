@@ -29,6 +29,29 @@ describe(`trajectory pane isolation`, () => {
     expect(source.frames[0].structure.sites[0].xyz[0]).toBe(0)
   })
 
+  it(`isolates copy-on-write frames for large trajectories without eager clone`, () => {
+    // > LAZY_CLONE_FRAME_THRESHOLD (256) frames take the lazy COW path.
+    const source: TrajectoryType = {
+      frames: Array.from({ length: 300 }, (_, step) => ({ structure: structure(), step })),
+      metadata: { filename: `big.traj` },
+    }
+    const left = clone_trajectory_for_pane(source)!
+    const right = clone_trajectory_for_pane(source)!
+
+    expect(left.frames.length).toBe(300)
+    // In-place mutation of one pane's frame must not leak to the other or source.
+    left.frames[10].structure.sites[0].xyz[0] = 99
+    expect(right.frames[10].structure.sites[0].xyz[0]).toBe(0)
+    expect(source.frames[10].structure.sites[0].xyz[0]).toBe(0)
+    // Index-replacement (the real edit path) stays pane-local too.
+    right.frames[20] = { structure: structure(), step: 20 }
+    right.frames[20].structure.sites[1].xyz[0] = 42
+    expect(left.frames[20].structure.sites[1].xyz[0]).toBe(1)
+    // map/iteration over the COW array yields cloned frames, not source refs.
+    expect(left.frames.map((f) => f.step)).toHaveLength(300)
+    expect(left.frames[0]).not.toBe(source.frames[0])
+  })
+
   it(`clones Svelte-like proxy metadata without DataCloneError`, () => {
     const frame_metadata = new Proxy({
       forces: [[1, 2, 3]],
