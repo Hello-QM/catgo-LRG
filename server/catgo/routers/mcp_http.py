@@ -4,7 +4,7 @@ Embeds the MCP server directly in the FastAPI backend so Claude Code
 can connect with just a URL (no Python or source code needed on the client):
 
     ~/.claude/mcp.json:
-    {"mcpServers": {"catgo": {"type": "http", "url": "http://localhost:8000/api/mcp"}}}
+    {"mcpServers": {"catgo": {"type": "http", "url": "http://localhost:8000/api/mcp/"}}}
 
 DEADLOCK PREVENTION:
 
@@ -124,6 +124,7 @@ async def _get_current_structure_direct(
 
 async def _push_structure_direct(
     client: httpx.AsyncClient, struct: dict, panel_id: str = "default",
+    intent: str = "edit",
 ) -> str | None:
     """In-process replacement — writes shared memory instead of HTTP.
 
@@ -147,7 +148,7 @@ async def _push_structure_direct(
             target = ctx_panel
 
     try:
-        push_structure(struct, target)
+        push_structure(struct, target, intent=intent)
         return None
     except Exception as exc:
         return str(exc)

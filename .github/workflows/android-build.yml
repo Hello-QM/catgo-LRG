@@ -112,6 +112,15 @@ jobs:
         # is backend-free.
         run: pnpm tauri android init
 
+      - name: Re-apply Android native inset patches
+        # `tauri android init` regenerates gen/android from stock templates,
+        # DROPPING MainActivity.kt's window-inset listener and the manifest's
+        # windowSoftInputMode. Without this the released APK draws under the
+        # status bar (clock/battery overlap the header) and the soft keyboard
+        # covers the terminal keybar / AI-chat composer. Idempotent.
+        # See deploy/android/README.md and plan/mobile-input-issues.md.
+        run: bash deploy/android/apply-native-patches.sh
+
       - name: Generate app icons (CatGo cat)
         run: pnpm tauri icon desktop/logo.png
 

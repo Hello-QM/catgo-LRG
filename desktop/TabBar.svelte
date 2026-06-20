@@ -42,7 +42,10 @@
     onclose: (id: string) => void
     oncloseall?: () => void
     onadd: (type: 'structure' | 'terminal') => void
-    layout?: LayoutType
+    // `null` = a non-standard tree (e.g. 1+2 / 2+1) that matches no preset —
+    // still render the selector (so quad etc. stay reachable); `undefined` =
+    // non-structure tab, hide it.
+    layout?: LayoutType | null
     onlayoutchange?: (layout: LayoutType) => void
     children?: Snippet
   } = $props()

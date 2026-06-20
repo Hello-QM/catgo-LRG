@@ -91,7 +91,9 @@
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--text-color-muted, light-dark(#6b7280, #9ca3af));
+  /* Readable inactive-tab text — the muted #6b7280 read as disabled-gray on
+     light dialogs. Still clearly distinct from the accent active tab below. */
+  color: light-dark(#4b5563, #cbd5e1);
   cursor: pointer;
   font-size: 12px;
   padding: 8px 12px;

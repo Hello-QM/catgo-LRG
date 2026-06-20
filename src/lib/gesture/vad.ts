@@ -26,10 +26,22 @@ export interface VadConfig {
 let vad_instance: any = null
 
 export async function start_vad(config: VadConfig): Promise<void> {
+  // Tear down any previous instance first — MicVAD holds the mic and a worklet,
+  // so a leaked instance keeps transcribing in parallel (duplicated input). One
+  // mic, one VAD.
+  stop_vad()
   // Dynamic import to avoid SSR issues
   const { MicVAD } = await import(`@ricky0123/vad-web`)
 
   const vad_options: any = {
+    // Load the VAD worklet + Silero ONNX model and the onnxruntime-web wasm from
+    // CDNs pinned to the installed versions. The Vite build does not emit these
+    // assets into the app, so the defaults ("./silero_vad_legacy.onnx", local
+    // ort wasm) 404 — fatal on machines without WebGPU, which fall back to wasm.
+    // Versions MUST match the installed @ricky0123/vad-web and onnxruntime-web.
+    baseAssetPath: `https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.30/dist/`,
+    onnxWASMBasePath:
+      `https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/dist/`,
     positiveSpeechThreshold: config.positive_speech_threshold ?? 0.5,
     negativeSpeechThreshold: config.negative_speech_threshold ?? 0.35,
     minSpeechFrames: config.min_speech_frames ?? 6,
@@ -63,4 +75,11 @@ export function stop_vad(): void {
 
 export function is_vad_running(): boolean {
   return vad_instance !== null
+}
+
+// Dev only: on hot-reload, tear down the live MicVAD. Otherwise its mic stream +
+// audio worklet keep running (orphaned) across reloads and fire the stale
+// callback — phantom dictation with the button off.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => stop_vad())
 }

@@ -148,7 +148,7 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
   async function hpc_open_preview(file: RemoteFile, preview_type: string) {
     if (!callbacks.on_preview_file) return
     const source = callbacks.get_source()
-    const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel`
+    const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel` || preview_type === `docx`
     try {
       if (is_binary) {
         const result = await read_binary_content(file)

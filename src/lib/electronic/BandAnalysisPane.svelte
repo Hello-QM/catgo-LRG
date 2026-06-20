@@ -445,6 +445,51 @@
           <input type="checkbox" bind:checked={band_state.show_axis_lines} />
           {t('structure.dos_show_axis_lines')}
         </label>
+        <div class="range-row">
+          <span>{t('structure.dos_axis_width')}</span>
+          <input
+            type="number"
+            bind:value={band_state.axis_line_width}
+            min="0.5" max="5" step="0.5"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>{t('structure.dos_tick_length')}</span>
+          <input
+            type="number"
+            bind:value={band_state.tick_length}
+            min="0" max="15" step="1"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>{t('structure.dos_tick_width')}</span>
+          <input
+            type="number"
+            bind:value={band_state.tick_width}
+            min="0.5" max="5" step="0.5"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>{t('structure.dos_title_size')}</span>
+          <input
+            type="number"
+            bind:value={band_state.title_size}
+            min="6" max="24" step="1"
+            class="range-input"
+          />
+        </div>
+        <div class="range-row">
+          <span>{t('structure.dos_font_size')}</span>
+          <input
+            type="number"
+            bind:value={band_state.font_size}
+            min="6" max="24" step="1"
+            class="range-input"
+          />
+        </div>
       </div>
     </details>
   {/if}

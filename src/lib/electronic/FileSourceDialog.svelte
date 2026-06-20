@@ -752,8 +752,12 @@
   }
 
   .btn-primary {
+    background: var(--accent-color, light-dark(#4f46e5, #3b82f6));
     border-color: var(--accent-color, light-dark(#4f46e5, #3b82f6));
+    color: #fff;
   }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ─── Remote / Workflow content ─── */
   .remote-content,

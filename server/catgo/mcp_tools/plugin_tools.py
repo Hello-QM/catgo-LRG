@@ -130,8 +130,8 @@ async def _handle_plugin_reader(reader_id: str, arguments: dict) -> list[TextCon
         if reader.output_type == "structure" and isinstance(result, dict) and "structure" in result:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    await client.post(f"{API_BASE}/view/structure/push", json={"structure": result["structure"]})
-                    await client.post(f"{API_BASE}/view/structure/pending-update", json={"structure": result["structure"]})
+                    await client.post(f"{API_BASE}/view/structure/push", params={"intent": "load"}, json={"structure": result["structure"]})
+                    await client.post(f"{API_BASE}/view/structure/pending-update", params={"intent": "load"}, json={"structure": result["structure"]})
             except Exception as exc:
                 logger.warning(f"Failed to push reader result to viewer: {exc}")
 

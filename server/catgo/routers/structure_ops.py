@@ -127,9 +127,10 @@ class GenerateSlabRequest(BaseModel):
         "Higher values find more accurate normals but are slower.",
     )
     orthogonalize_c: bool = Field(
-        False,
-        description="If True, orthogonalize the c-vector of the slab "
-        "so it is perpendicular to the surface plane.",
+        True,
+        description="If True (default), orthogonalize the c-vector of the slab "
+        "so it is perpendicular to the ab surface plane (vacuum cleanly along c "
+        "— what surface DFT expects). Set False to keep pymatgen's oriented cell.",
     )
 
 

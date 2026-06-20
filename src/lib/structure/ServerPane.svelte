@@ -1029,14 +1029,17 @@
     }
   }
 
-  // ====== File preview (image/pdf/excel/markdown/csv) ======
+  // ====== File preview (image/pdf/excel/markdown/csv/docx) ======
 
   async function open_remote_preview(file: RemoteFile, preview_type: string) {
-    if (!active_session || !on_preview_file) return
+    if (!active_session) return
+    if (!on_preview_file) return
     loading_file = { name: file.name, size: file.size_bytes }
     loading_error = null
     try {
-      const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel`
+      // .docx is read as base64 and routed (via on_preview_file → the document
+      // window) to the mammoth DocxView, the same path as image/pdf/excel.
+      const is_binary = preview_type === `image` || preview_type === `pdf` || preview_type === `excel` || preview_type === `docx`
       if (is_binary) {
         const result = await readRemoteBinaryFile(active_session.session_id, file.path)
         if (result.success) {

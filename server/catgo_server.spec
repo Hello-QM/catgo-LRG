@@ -17,7 +17,7 @@ MACE and other ML potentials are excluded to keep the bundle size reasonable.
 
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
 
 block_cipher = None
 
@@ -52,10 +52,36 @@ ase_datas = collect_data_files('ase', include_py_files=False)
 # `/api/mcp/*` endpoints 404.
 rfc3987_syntax_datas = collect_data_files('rfc3987_syntax')
 
+# faster-whisper (CTranslate2) — native STT engine for desktop voice dictation.
+# routers/stt.py imports it LAZILY (inside functions), so PyInstaller's static
+# analysis never sees it; without explicit collection the bundled backend ships
+# no native STT and /api/stt/health reports unavailable, forcing the broken
+# in-webview WASM fallback. Collect the package, its submodules, and the
+# CTranslate2 native shared libs. CPU int8 works on every platform incl. Apple
+# Silicon (no NVIDIA); CUDA uses the user's own cuBLAS/cuDNN (not bundled).
+try:
+    ctranslate2_bins = collect_dynamic_libs('ctranslate2')
+    faster_whisper_datas = collect_data_files('faster_whisper')
+    stt_hiddenimports = (
+        ['faster_whisper', 'ctranslate2', 'tokenizers', 'huggingface_hub']
+        + collect_submodules('ctranslate2')
+        + collect_submodules('faster_whisper')
+    )
+except Exception as _stt_exc:
+    # Don't fail the whole build, but make a missing dep loud — otherwise the
+    # shipped sidecar silently has no native STT and falls back to the broken
+    # in-webview WASM path. Install `faster-whisper` before building.
+    print(
+        f"WARNING [catgo_server.spec]: faster-whisper not collected ({_stt_exc!r}); "
+        "native STT will be UNAVAILABLE in this build — `pip install faster-whisper`",
+        file=sys.stderr,
+    )
+    ctranslate2_bins, faster_whisper_datas, stt_hiddenimports = [], [], []
+
 a = Analysis(
     ['main.py'],
     pathex=[str(server_dir)],
-    binaries=[],
+    binaries=ctranslate2_bins,
     datas=[
         # Workflow engine definition YAML files
         ('workflow/engine_defs/*.yaml', 'workflow/engine_defs'),
@@ -85,8 +111,9 @@ a = Analysis(
          'extensions/dos-analysis/catgo_dos'),
         ('../extensions/cohp-analysis/catgo_cohp',
          'extensions/cohp-analysis/catgo_cohp'),
-    ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas,
-    hiddenimports=catgo_submodules + workflow_submodules + dos_submodules + cohp_submodules + [
+    ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas
+      + faster_whisper_datas,
+    hiddenimports=catgo_submodules + workflow_submodules + dos_submodules + cohp_submodules + stt_hiddenimports + [
         # ---------------------------------------------------------------
         # FastAPI / ASGI stack
         # ---------------------------------------------------------------

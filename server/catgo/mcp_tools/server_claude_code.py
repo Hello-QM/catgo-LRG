@@ -1138,17 +1138,25 @@ async def _get_current_structure(
 
 async def _push_structure(
     client: httpx.AsyncClient, struct: dict, panel_id: str = "default",
+    intent: str = "edit",
 ) -> str | None:
-    """Push structure to viewer. Returns None on success, error string on failure."""
+    """Push structure to viewer. Returns None on success, error string on failure.
+
+    ``intent`` is ``"edit"`` (default — apply in place) or ``"load"`` (a fresh
+    load; the frontend may prompt before overwriting an existing structure).
+    Forwarded as a query param to BOTH endpoints. The in-process replacement
+    ``_push_structure_direct`` (mcp_http.py) accepts the same param, so callers
+    passing ``intent="load"`` work on both the HTTP and monkeypatched paths.
+    """
     try:
         await client.post(
             f"{API_BASE}/view/structure/push",
-            params={"panel_id": panel_id},
+            params={"panel_id": panel_id, "intent": intent},
             json={"structure": struct},
         )
         await client.post(
             f"{API_BASE}/view/structure/pending-update",
-            params={"panel_id": panel_id},
+            params={"panel_id": panel_id, "intent": intent},
             json={"structure": struct},
         )
         return None
@@ -1496,7 +1504,7 @@ async def _handle_structure(client: httpx.AsyncClient, args: dict) -> list[TextC
         if resp.status_code != 200:
             return [T(type="text", text=f"parse failed ({resp.status_code}): {resp.text[:300]}")]
         struct = resp.json()
-        push_err = await _push_structure(client, struct)
+        push_err = await _push_structure(client, struct, intent="load")
         summary = _summarize({"structure": struct})
         if push_err:
             summary += f"\n⚠️ Viewer push failed: {push_err}"
@@ -3001,7 +3009,7 @@ async def _handle_nanotube(client: httpx.AsyncClient, args: dict) -> list[TextCo
     new_struct = data.get("structure")
     if not new_struct:
         return [T(type="text", text=f"Nanotube build returned no structure. Response: {json.dumps(data)[:400]}")]
-    push_err = await _push_structure(client, new_struct)
+    push_err = await _push_structure(client, new_struct, intent="load")
     msg = data.get("message") or f"Nanotube built: {data.get('n_atoms', '?')} atoms."
     msg += " Viewer updated."
     if push_err:
@@ -3109,7 +3117,7 @@ async def _handle_moire(client: httpx.AsyncClient, args: dict) -> list[TextConte
     new_struct = data.get("structure")
     if not new_struct:
         return [T(type="text", text=f"Moiré build returned no structure. Response: {json.dumps(data)[:400]}")]
-    push_err = await _push_structure(client, new_struct)
+    push_err = await _push_structure(client, new_struct, intent="load")
     achieved = data.get("angle", candidate.get("angle"))
     msg = data.get("message") or f"Moiré bilayer built: {data.get('n_atoms', '?')} atoms at {achieved}°."
     requested = args.get("angle")

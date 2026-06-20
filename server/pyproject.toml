@@ -30,6 +30,11 @@ dependencies = [
     "ase>=3.22.0",
     "pymatgen>=2024.1.0",
     "networkx>=2.8",
+    # Native speech-to-text for desktop voice dictation (CTranslate2). Runs
+    # Whisper outside the webview — WebKit webviews (Linux/macOS Tauri) leak
+    # unreclaimable WASM memory per inference and OOM. CPU int8 by default,
+    # CUDA float16 when a GPU is present. See routers/stt.py.
+    "faster-whisper>=1.0.0",
 ]
 
 [project.optional-dependencies]

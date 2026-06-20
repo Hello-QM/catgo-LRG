@@ -71,6 +71,7 @@ _ROUTERS: dict[str, str] = {
     "skills_router": "skills",
     "campaign_router": "campaign",
     "terminal_bridge_router": "terminal_bridge",
+    "stt_router": "stt",
 }
 
 __all__ = list(_ROUTERS.keys())

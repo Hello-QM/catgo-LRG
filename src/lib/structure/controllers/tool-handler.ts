@@ -34,6 +34,30 @@ export interface McpBridgeDeps {
   get_wrapper: () => HTMLElement | undefined
 }
 
+/** Decide whether a structure SSE push should auto-apply to the viewer.
+ *
+ * Backend tags each structure event with `intent`: `load` = a brand-new
+ * structure (fetch/build), `edit` = a mutation of the current one. A `load`
+ * push is held (returns `false`) when the viewer already shows a structure —
+ * the user is asked where it goes instead of clobbering the pane. Edits, and
+ * loads into an empty viewer, always apply. Snapshot replays carry no intent
+ * (`undefined`) so reconnect always restores the pane.
+ *
+ * `had_structure_backend` is the backend-authoritative occupancy flag carried
+ * in the SSE `structure` event — whether the target panel ALREADY held a
+ * structure before this push. The local `viewer_has_structure` read can be
+ * momentarily empty during a scene remount / `view/reset` race, so we hold a
+ * `load` when EITHER signal says the pane was occupied. Defaults to `false`
+ * so existing 2-arg callers (and snapshot replays) are unchanged.
+ */
+export function should_apply_push(
+  intent: string | undefined,
+  viewer_has_structure: boolean,
+  had_structure_backend: boolean = false,
+): boolean {
+  return !(intent === `load` && (viewer_has_structure || had_structure_backend))
+}
+
 /** Start MCP bridge loops + SSE subscription.
  *
  * Returns `{ cleanup, request_push }`:
@@ -206,16 +230,36 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
     const on_struct_payload = (ev: Event) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data)
-        if (data.structure) apply_structure_event(data.structure)
+        if (data.structure && should_apply_push(data.intent, !!deps.get_structure(), !!data.had_structure)) {
+          apply_structure_event(data.structure)
+        }
       } catch (err) {
         console.warn(`[CatGo] SSE structure parse error:`, err)
       }
     }
-    // `structure` = real push, `snapshot` = replay on (re)connect. Per-pane
-    // subscribers want to apply both; global listeners (App.svelte) only
-    // subscribe to `structure` so reconnect replays don't re-toast.
+    // `snapshot` = the backend replaying the panel's stored structure on
+    // (re)connect. It carries no `intent`, so it must NOT go through the
+    // load/edit gate — it is ONLY for restoring an EMPTY viewer. A non-empty
+    // viewer already shows its structure (reconnect: identical → skip, no
+    // re-toast) or is deliberately holding a different one while the backend
+    // store diverges (e.g. a held load, or a Split that remounts this pane and
+    // re-subscribes). Applying the snapshot there would clobber what the user
+    // sees — which is exactly how Split used to overwrite the original pane.
+    const on_snapshot_payload = (ev: Event) => {
+      try {
+        const data = JSON.parse((ev as MessageEvent).data)
+        if (data.structure && !deps.get_structure()) {
+          apply_structure_event(data.structure)
+        }
+      } catch (err) {
+        console.warn(`[CatGo] SSE snapshot parse error:`, err)
+      }
+    }
+    // `structure` = real push (gated by intent + had_structure). Global
+    // listeners (App.svelte) only subscribe to `structure` so reconnect
+    // replays don't re-toast.
     es.addEventListener(`structure`, on_struct_payload)
-    es.addEventListener(`snapshot`, on_struct_payload)
+    es.addEventListener(`snapshot`, on_snapshot_payload)
 
     es.addEventListener(`workflow`, (ev) => {
       try {

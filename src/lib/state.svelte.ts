@@ -192,32 +192,61 @@ export const save_pane_font_size = (size: number): void => {
 }
 
 // ── open-target preference ──────────────────────────────────────────────────
-export type OpenTarget = 'split' | 'window'
-
-const OPEN_TARGET_KEY = `catgo-open-target`
-let initial_open_target: OpenTarget = 'split'
-try {
-  if (typeof window !== `undefined` && globalThis.localStorage) {
-    const saved = localStorage.getItem(OPEN_TARGET_KEY)
-    if (saved === 'split' || saved === 'window') initial_open_target = saved
-  }
-} catch {
-  // Fallback for test environments
+// A file opens into one of three destination *kinds* (a tab, a split pane, or a
+// new OS window), in one of two *modes* (create new vs overwrite the current
+// one). Holding Shift at open time flips the mode.
+export type OpenKind = 'tab' | 'split' | 'window'
+export type OpenMode = 'new' | 'overwrite'
+export interface OpenTarget {
+  kind: OpenKind
+  mode: OpenMode
 }
 
-export const open_target_state = $state<{ value: OpenTarget }>({ value: initial_open_target })
+const OPEN_KIND_KEY = `catgo-open-kind`
+const OPEN_MODE_KEY = `catgo-open-mode`
+const LEGACY_OPEN_TARGET_KEY = `catgo-open-target`
 
-export function set_open_target(v: OpenTarget): void {
-  open_target_state.value = v
+function load_initial_open_target(): OpenTarget {
   try {
-    if (typeof window !== `undefined` && globalThis.localStorage) localStorage.setItem(OPEN_TARGET_KEY, v)
+    if (typeof window !== `undefined` && globalThis.localStorage) {
+      const kind = localStorage.getItem(OPEN_KIND_KEY)
+      const mode = localStorage.getItem(OPEN_MODE_KEY)
+      const valid_kind = kind === 'tab' || kind === 'split' || kind === 'window'
+      const valid_mode = mode === 'new' || mode === 'overwrite'
+      if (valid_kind) return { kind, mode: valid_mode ? mode : 'new' }
+      // Migrate the old single-value preference ('split' | 'window').
+      const legacy = localStorage.getItem(LEGACY_OPEN_TARGET_KEY)
+      if (legacy === 'window') return { kind: 'window', mode: 'new' }
+      if (legacy === 'split') return { kind: 'split', mode: 'new' }
+    }
+  } catch {
+    // Fallback for test environments
+  }
+  return { kind: 'split', mode: 'new' }
+}
+
+export const open_target_state = $state<{ value: OpenTarget }>({ value: load_initial_open_target() })
+
+export function set_open_kind(kind: OpenKind): void {
+  open_target_state.value = { ...open_target_state.value, kind }
+  try {
+    if (typeof window !== `undefined` && globalThis.localStorage) localStorage.setItem(OPEN_KIND_KEY, kind)
   } catch {
     // Silently fail
   }
 }
 
-/** Per-open override: holding Shift flips the global default. */
+export function set_open_mode(mode: OpenMode): void {
+  open_target_state.value = { ...open_target_state.value, mode }
+  try {
+    if (typeof window !== `undefined` && globalThis.localStorage) localStorage.setItem(OPEN_MODE_KEY, mode)
+  } catch {
+    // Silently fail
+  }
+}
+
+/** Per-open override: holding Shift flips new⇄overwrite. */
 export function resolve_open_target(deflt: OpenTarget, shift: boolean): OpenTarget {
   if (!shift) return deflt
-  return deflt === 'split' ? 'window' : 'split'
+  return { ...deflt, mode: deflt.mode === 'new' ? 'overwrite' : 'new' }
 }

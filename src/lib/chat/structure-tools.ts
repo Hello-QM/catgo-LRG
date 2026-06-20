@@ -1,6 +1,7 @@
 import type { AnyStructure } from '$lib'
 import type { ClientTool, ToolKind } from './types'
 import {
+  client_load_or_card,
   get_current_structure,
   set_current_structure,
 } from '$lib/structure/current-structure.svelte'
@@ -371,16 +372,57 @@ register(
     if (!struct) throw new Error(`Structure "${input.id}" not found on ${provider}.`)
     const pymatgen = optimade_to_pymatgen(struct)
     if (!pymatgen) throw new Error(`Could not parse structure "${input.id}".`)
-    set_current_structure(pymatgen as never)
     const sites = (pymatgen as { sites?: unknown[] }).sites ?? []
+    const formula =
+      (struct.attributes as { chemical_formula_reduced?: string } | undefined)
+        ?.chemical_formula_reduced ?? String(input.id)
+    const applied = client_load_or_card(pymatgen as never, formula, sites.length)
     return {
       loaded: String(input.id),
-      formula: (struct.attributes as { chemical_formula_reduced?: string } | undefined)
-        ?.chemical_formula_reduced,
+      formula:
+        (struct.attributes as { chemical_formula_reduced?: string } | undefined)
+          ?.chemical_formula_reduced,
       num_sites: sites.length,
+      applied,
+      message: applied
+        ? `Loaded ${input.id} into the viewer.`
+        : `Loaded ${input.id}. The viewer already has a structure — choose where to put it (Overwrite / Split / New window) in the card.`,
     }
   },
 )
+
+/** Look up a molecule by name in PubChem → {cid, smiles}. Shared by
+ *  fetch_pubchem (search) and load_pubchem (load). Throws a clear error if
+ *  there is no match or no SMILES.
+ *
+ *  PubChem renamed its SMILES properties (2025): `CanonicalSMILES` →
+ *  `ConnectivitySMILES` / `SMILES`. The legacy property name is still accepted
+ *  by the request URL (HTTP 200), but the RESPONSE now keys the value under the
+ *  new name — so the old read of `p.CanonicalSMILES` silently returned
+ *  undefined. Keep the still-accepted legacy request property, but read every
+ *  known spelling from the response and fail loudly if none is present. */
+async function pubchem_lookup(name: string): Promise<{ cid: number; smiles: string }> {
+  const encoded = encodeURIComponent(name)
+  const url =
+    `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encoded}/property/CanonicalSMILES/JSON`
+  const resp = await relay_fetch(url)
+  if (!resp.ok) throw new Error(`PubChem error ${resp.status}`)
+  const data = (await resp.json()) as {
+    PropertyTable?: {
+      Properties?: {
+        CID: number
+        SMILES?: string
+        ConnectivitySMILES?: string
+        CanonicalSMILES?: string
+      }[]
+    }
+  }
+  const p = data.PropertyTable?.Properties?.[0]
+  if (!p) throw new Error(`No PubChem match for "${name}"`)
+  const smiles = p.SMILES ?? p.ConnectivitySMILES ?? p.CanonicalSMILES
+  if (!smiles) throw new Error(`PubChem returned no SMILES for "${name}"`)
+  return { cid: p.CID, smiles }
+}
 
 // ── fetch_pubchem (read) ──
 register(
@@ -398,32 +440,93 @@ register(
     },
   },
   async (input) => {
-    const name = encodeURIComponent(String(input.name))
-    // PubChem renamed its SMILES properties (2025): `CanonicalSMILES` →
-    // `ConnectivitySMILES` / `SMILES`. The legacy property name is still accepted
-    // by the request URL (HTTP 200), but the RESPONSE now keys the value under
-    // the new name — so the old read of `p.CanonicalSMILES` silently returned
-    // undefined. Keep the still-accepted legacy request property, but read every
-    // known spelling from the response and fail loudly if none is present.
-    const url =
-      `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${name}/property/CanonicalSMILES/JSON`
-    const resp = await relay_fetch(url)
-    if (!resp.ok) throw new Error(`PubChem error ${resp.status}`)
-    const data = (await resp.json()) as {
-      PropertyTable?: {
-        Properties?: {
-          CID: number
-          SMILES?: string
-          ConnectivitySMILES?: string
-          CanonicalSMILES?: string
-        }[]
-      }
+    return await pubchem_lookup(String(input.name))
+  },
+)
+
+// ── load_pubchem (mutate) ──
+register(
+  {
+    name: `load_pubchem`,
+    description:
+      `Load a molecule from PubChem into the viewer by name (e.g. 'methane', 'benzene') so it becomes the current structure. Fetches the 3D structure. Use this to actually LOAD a molecule (fetch_pubchem only looks up the CID/SMILES). This replaces the currently loaded structure.`,
+    kind: `mutate`,
+    input_schema: {
+      type: `object`,
+      properties: {
+        name: { type: `string`, description: `Molecule name, e.g. "methane".` },
+      },
+      required: [`name`],
+    },
+  },
+  async (input) => {
+    const name = String(input.name)
+    // 1. name → SMILES (+CID), reusing fetch_pubchem's lookup.
+    const { cid, smiles } = await pubchem_lookup(name)
+    // 2. SMILES → 3D Cartesian coords via the Python backend (RDKit/Open Babel).
+    let resp: Response
+    try {
+      resp = await fetch(`${API_BASE}/structure-ops/smiles-to-xyz`, {
+        method: `POST`,
+        headers: { 'Content-Type': `application/json` },
+        body: JSON.stringify({ smiles }),
+      })
+    } catch {
+      // fetch() rejects only on network-level failure: mobile/static builds have
+      // no Python backend at API_BASE, and desktop may not have it running.
+      throw new Error(
+        `Loading a PubChem molecule needs the CatGo backend (SMILES→3D), which is unreachable (mobile/static build, or backend not running).`,
+      )
     }
-    const p = data.PropertyTable?.Properties?.[0]
-    if (!p) throw new Error(`No PubChem match for "${input.name}"`)
-    const smiles = p.SMILES ?? p.ConnectivitySMILES ?? p.CanonicalSMILES
-    if (!smiles) throw new Error(`PubChem returned no SMILES for "${input.name}"`)
-    return { cid: p.CID, smiles }
+    if (!resp.ok) {
+      throw new Error(
+        `SMILES→3D failed (HTTP ${resp.status}) for "${name}" (${smiles}): ${await resp
+          .text()}`,
+      )
+    }
+    const { elements, cart_coords } = (await resp.json()) as {
+      elements: string[]
+      cart_coords: number[][]
+      bonding_atom_idx: number
+    }
+    if (!elements?.length || elements.length !== cart_coords?.length) {
+      throw new Error(`SMILES→3D returned no usable coordinates for "${name}".`)
+    }
+    // 3. Build a non-periodic MOLECULE (no lattice). Site shape mirrors the XYZ
+    //    parser / pubchem_to_pymatgen: cartesian xyz, abc = xyz for molecules.
+    const sites = elements.map((element, idx) => {
+      const xyz = (cart_coords[idx] ?? [0, 0, 0]).map(Number)
+      return {
+        species: [{ element, occu: 1, oxidation_state: 0 }],
+        abc: [...xyz],
+        xyz,
+        label: `${element}${idx + 1}`,
+        properties: {},
+      }
+    })
+    const struct = { sites } as unknown as AnyStructure
+    // 4. Compact formula (derived from elements) — needed for both the card
+    //    label and the result.
+    const counts = new Map<string, number>()
+    for (const el of elements) counts.set(el, (counts.get(el) ?? 0) + 1)
+    const formula = [...counts.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([el, n]) => (n === 1 ? el : `${el}${n}`))
+      .join(``)
+    // 5. Apply if the viewer is empty; otherwise stage a pending load so the
+    //    ChatPane card asks where to put it (overwrite / split / new window).
+    const n = sites.length
+    const applied = client_load_or_card(struct as never, formula, n)
+    return {
+      loaded: name,
+      cid,
+      formula,
+      num_sites: n,
+      applied,
+      message: applied
+        ? `Loaded ${name} (CID ${cid}) into the viewer.`
+        : `Loaded ${name} (CID ${cid}). The viewer already has a structure — choose where to put it (Overwrite / Split / New window) in the card.`,
+    }
   },
 )
 
@@ -796,8 +899,18 @@ register(
         vacuum: input.vacuum === undefined ? 15 : Number(input.vacuum),
       },
     )
-    set_current_structure(result.structure as never)
-    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
+    return {
+      num_sites: (result.structure as unknown as MutStructure).sites.length,
+      applied,
+      note: applied
+        ? `Built the nanotube into the viewer.`
+        : `Built the nanotube (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
+    }
   },
 )
 
@@ -829,8 +942,18 @@ register(
     if (input.inner_radius !== undefined) params.inner_radius = Number(input.inner_radius)
     if (input.length !== undefined) params.length = Number(input.length)
     const result = await buildNanoscroll(require_structure() as never, params)
-    set_current_structure(result.structure as never)
-    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
+    return {
+      num_sites: (result.structure as unknown as MutStructure).sites.length,
+      applied,
+      note: applied
+        ? `Built the nanoscroll into the viewer.`
+        : `Built the nanoscroll (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
+    }
   },
 )
 
@@ -872,8 +995,18 @@ register(
       throw new Error(`No commensurate moiré cell found near ${twist_angle}°.`)
     }
     const result = await buildMoireBilayer(layer, candidate, null, {})
-    set_current_structure(result.structure as never)
-    return { num_sites: (result.structure as unknown as MutStructure).sites.length }
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
+    return {
+      num_sites: (result.structure as unknown as MutStructure).sites.length,
+      applied,
+      note: applied
+        ? `Built the moiré bilayer into the viewer.`
+        : `Built the moiré bilayer (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
+    }
   },
 )
 
@@ -1080,11 +1213,19 @@ register(
       twist_angle,
       xy_shift ?? [0, 0],
     )
-    set_current_structure(result.structure as never)
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
     return {
       num_sites: result.n_atoms,
       strain: result.strain,
       match_area: result.match_area,
+      applied,
+      note: applied
+        ? `Built the heterostructure into the viewer.`
+        : `Built the heterostructure (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
     }
   },
 )
@@ -1242,13 +1383,21 @@ register(
       params,
       search_params,
     )
-    set_current_structure(result.structure as never)
+    const applied = client_load_or_card(
+      result.structure as never,
+      plain_formula(result.structure as never),
+      (result.structure as { sites?: unknown[] }).sites?.length ?? 0,
+    )
     return {
       num_sites: result.n_atoms,
       strain: result.strain,
       n_atoms_A: result.n_atoms_A,
       n_atoms_B: result.n_atoms_B,
       interface_length: result.interface_length,
+      applied,
+      note: applied
+        ? `Built the lateral heterostructure into the viewer.`
+        : `Built the lateral heterostructure (the viewer already has a structure — choose where to put it: Overwrite / Split / New window in the card).`,
     }
   },
 )

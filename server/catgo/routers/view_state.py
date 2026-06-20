@@ -86,9 +86,30 @@ def _notify(panel_id: str, event: str, data: dict) -> None:
             )
 
 
-def notify_structure(panel_id: str, struct: dict) -> None:
-    """Notify SSE subscribers that a new structure is available."""
-    _notify(panel_id, "structure", {"structure": struct})
+def notify_structure(
+    panel_id: str, struct: dict, intent: str = "edit", had_structure: bool = False
+) -> None:
+    """Notify SSE subscribers that a new structure is available.
+
+    `intent` tags whether this push EDITS the existing structure (default —
+    the viewer applies it in place) or LOADS a fresh one ("load" — the
+    frontend may prompt the user before overwriting). Carried through to the
+    SSE event payload so the frontend can gate on it.
+
+    `had_structure` is whether the target panel ALREADY held a non-empty
+    structure BEFORE this push. The frontend's hold-gate ORs this
+    backend-authoritative flag against its own (racy) structure read, so a
+    `load` into an occupied pane is held even when a scene remount /
+    `view/reset` momentarily makes the FE read empty. The PASSED value is
+    used verbatim — do NOT self-compute here, because by the time the
+    pending-update leg calls this the /push leg may have already overwritten
+    the store (making a re-derived value wrong).
+    """
+    _notify(
+        panel_id,
+        "structure",
+        {"structure": struct, "intent": intent, "had_structure": had_structure},
+    )
 
 
 def notify_workflow(panel_id: str, workflow_id: str) -> None:
@@ -182,15 +203,36 @@ def get_active_structure() -> dict | None:
     return get_structure(last_active_panel_id)
 
 
-def push_structure(struct: dict, panel_id: str = "default") -> None:
+def push_structure(
+    struct: dict,
+    panel_id: str = "default",
+    intent: str = "edit",
+    had_structure: bool | None = None,
+) -> None:
     """Store structure, queue for legacy poll, and notify SSE subscribers.
 
     Does NOT call mark_active — this is the path MCP pushes take, and lab
     pushes shouldn't change the user's idea of which panel is "active".
+
+    `intent` ("edit" default | "load") rides along into the SSE event so the
+    frontend can prompt before overwriting on a fresh load. See
+    `notify_structure` for the full rationale.
+
+    `had_structure` is whether the target panel was occupied BEFORE this
+    push (the backend-authoritative hold signal). When None it is
+    self-computed HERE, before the store write — this is the in-process
+    path (upload-and-load, `_push_structure_direct`) which overwrites the
+    store itself, so we must capture occupancy first.
     """
+    if had_structure is None:
+        had_structure = bool(panel_structures.get(panel_id))
     panel_structures[panel_id] = struct
     get_panel_pending(panel_id).append(struct)
-    _notify(panel_id, "structure", {"structure": struct})
+    _notify(
+        panel_id,
+        "structure",
+        {"structure": struct, "intent": intent, "had_structure": had_structure},
+    )
     n = len(struct.get("sites", []))
     logger.debug("Structure pushed for panel '%s': %d sites", panel_id, n)
 

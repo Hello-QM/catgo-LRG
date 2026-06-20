@@ -77,6 +77,8 @@ export interface CohpViewState {
   axis_line_width: number
   tick_length: number
   tick_width: number
+  title_size: number
+  font_size: number
   legend_visible: boolean
   hidden_series: string[]
   line_styles: Record<string, { dash?: string; width?: number; color?: string; fill_color?: string }>

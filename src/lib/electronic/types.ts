@@ -82,6 +82,8 @@ export interface DosViewState {
   axis_line_width: number
   tick_length: number
   tick_width: number
+  title_size: number
+  font_size: number
   legend_visible: boolean
   hidden_series: string[]  // series labels to hide from legend & plot
 }
