@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-06-20
+
+### Fixed
+- **HPC connections from packaged builds** (desktop & VS Code sidecar): the bundled `catgo-server` was missing `pynacl` and `bcrypt`, asyncssh's crypto backends for Ed25519 / Curve25519 / encrypted OpenSSH keys. Without them the SSH handshake/key-auth to clusters (e.g. SDSC Expanse) never completed — the UI hung at "connecting…". They were undeclared deps so PyInstaller never bundled them. Now declared (`requirements.txt`, `pyproject.toml`) and explicitly collected in `catgo_server.spec`. (asyncssh itself was always bundled; the gap was its optional crypto deps.)
+- **Packaged VASP workflows**: `custodian` (job error-correction, lazily imported in `job_script.py` / `workflow_run.py`) was not collected by PyInstaller → workflow runs crashed in packaged builds. Now collected in the spec.
+
+> Note: v1.3.0 was retracted before general availability due to the HPC bundle gap above; v1.3.1 is its corrected replacement (same features/docs).
+
 ## [1.3.0] - 2026-06-20
 
 ### Added

@@ -42,6 +42,18 @@ catgo_submodules = collect_submodules('catgo')
 workflow_submodules = collect_submodules('workflow')
 dos_submodules = collect_submodules('catgo_dos')
 cohp_submodules = collect_submodules('catgo_cohp')
+# HPC SSH stack. asyncssh itself was already bundled (top-level import), but
+# its OPTIONAL crypto backends were NOT: pynacl (Curve25519 / Ed25519 /
+# Chacha20) and bcrypt (encrypted OpenSSH private keys) are imported LAZILY
+# inside asyncssh (e.g. public_key.py) and were never declared deps, so the
+# packaged server shipped without them → asyncssh could not use ed25519 /
+# encrypted keys and HPC connections hung at "connecting...". Pin them (and
+# fully collect asyncssh submodules) so the packaged app can authenticate.
+asyncssh_submodules = collect_submodules('asyncssh')
+# custodian (VASP job error-correction) is imported lazily inside
+# workflow/engine/job_script.py and models/workflow_run.py, so PyInstaller
+# misses it → packaged workflow runs crash. Collect it.
+custodian_submodules = collect_submodules('custodian')
 
 # Collect data files from packages that bundle .json/.json.gz/.yaml etc.
 pymatgen_datas = collect_data_files('pymatgen')
@@ -113,7 +125,21 @@ a = Analysis(
          'extensions/cohp-analysis/catgo_cohp'),
     ] + pymatgen_datas + tblite_datas + ase_datas + rfc3987_syntax_datas
       + faster_whisper_datas,
-    hiddenimports=catgo_submodules + workflow_submodules + dos_submodules + cohp_submodules + stt_hiddenimports + [
+    hiddenimports=catgo_submodules + workflow_submodules + dos_submodules + cohp_submodules + stt_hiddenimports + asyncssh_submodules + custodian_submodules + [
+        # ---------------------------------------------------------------
+        # asyncssh crypto deps (HPC SSH) — lazily used, so pin explicitly
+        # ---------------------------------------------------------------
+        'asyncssh',
+        'bcrypt',
+        'nacl',
+        'nacl.bindings',
+        'nacl.signing',
+        # custodian (VASP job error-correction) — lazily imported in
+        # workflow/engine/job_script.py & models/workflow_run.py
+        'custodian',
+        'custodian.custodian',
+        'custodian.vasp.handlers',
+        'custodian.vasp.jobs',
         # ---------------------------------------------------------------
         # FastAPI / ASGI stack
         # ---------------------------------------------------------------

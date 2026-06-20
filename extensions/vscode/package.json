@@ -2,7 +2,7 @@
   "name": "catgo",
   "displayName": "CatGo",
   "description": "3D viewer for crystal structures, molecules and MD / optimization trajectories — reads the file formats of VASP, Quantum ESPRESSO, CP2K, ABACUS, ORCA, Gaussian, CASTEP, SIESTA, OpenMX, LAMMPS and ASE: POSCAR/CONTCAR · CIF · XYZ/extXYZ · mol2 · PDB · vasprun.xml · OUTCAR · XDATCAR · .traj · HDF5 · cube/CHGCAR isosurfaces. Cross-cell PBC bond rendering, moyo space-group + Wyckoff symmetry, trajectory scrubbing with energy/force overlays, themes that follow VS Code. Right-click → Render, or Ctrl/Cmd+Shift+V.",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "license": "AGPL-3.0-or-later",
   "publisher": "Guangsheng",
   "icon": "icon.png",

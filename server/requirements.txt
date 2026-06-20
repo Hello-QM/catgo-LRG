@@ -12,6 +12,8 @@ mcp>=1.0.0
 
 # SSH/SFTP for HPC connectivity
 asyncssh>=2.14.0
+bcrypt>=4.0.0
+pynacl>=1.5.0
 
 # Native speech-to-text for desktop voice dictation (CTranslate2 Whisper).
 # Runs outside the webview — WebKit Tauri webviews leak WASM memory per
