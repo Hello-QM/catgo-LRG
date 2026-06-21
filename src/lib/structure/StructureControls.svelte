@@ -1041,6 +1041,17 @@
           />
         </label>
       {/if}
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.bond_order_perception.description,
+        })}
+      >
+        <input
+          type="checkbox"
+          bind:checked={scene_props.bond_order_perception}
+        />
+        {t('structure.bond_order_perception')}
+      </label>
     </SettingsSection>
   {/if}
 

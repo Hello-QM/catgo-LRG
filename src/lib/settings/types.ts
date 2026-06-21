@@ -134,6 +134,11 @@ export interface SettingsConfig {
     hide_incomplete_bonds: SettingType<boolean>
     bonding_strategy: SettingType<BondingStrategy>
     bonding_options: SettingType<Record<string, number>>
+    /** When true, perceive double/triple/aromatic bond orders on small
+     *  organic ADSORBATE fragments and draw them as multi-cylinder bonds
+     *  (the metal slab stays single sticks). Default false → byte-identical
+     *  to the single-cylinder path. */
+    bond_order_perception: SettingType<boolean>
     bond_scale: SettingType<number>
     show_hydrogen_bonds: SettingType<boolean>
     hbond_distance_cutoff: SettingType<number>

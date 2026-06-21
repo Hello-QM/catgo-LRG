@@ -150,6 +150,13 @@ export type BondPair = {
    * if it is the zero vector (molecules, intra-cell bonds, manual bonds).
    */
   jimage: [number, number, number]
+  /**
+   * Perceived bond order for adsorbate fragments: 1 (single, default), 1.5
+   * (aromatic), 2 (double), 3 (triple). Purely additive — only the multi-bond
+   * instanced renderer reads it, and only when `bond_order_perception` is on.
+   * Absent / 1 renders as a plain single stick, byte-identical to today.
+   */
+  order?: number
 }
 
 // Topology-only hydrogen bond data (no positions or transforms).
