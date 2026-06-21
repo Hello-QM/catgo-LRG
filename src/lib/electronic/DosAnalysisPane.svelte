@@ -1108,6 +1108,7 @@
   .line-style-row .group-label { min-width: 60px; font-size: 0.9em; }
   .line-style-row select { padding: 2px 4px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08)); border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; color: var(--text-color, #fff); font-size: 0.85em; }
   .width-input { width: 45px; padding: 2px 4px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08)); border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; color: var(--text-color, #fff); font-size: 0.85em; }
+  .color-input { width: 28px; height: 22px; padding: 0; border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; cursor: pointer; background: transparent; }
   .btn-compute { padding: 6px 12px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; display: flex; align-items: center; justify-content: center; gap: 6px; }
   .btn-compute:hover:not(:disabled) { background: #1d4ed8; }
   .btn-compute:disabled { opacity: 0.5; cursor: not-allowed; }
