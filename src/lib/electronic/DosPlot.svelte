@@ -2,6 +2,7 @@
   import type { PDOSSeries } from './types'
   import { plot_theme_colors } from './plot-theme.svelte'
   import { PALETTE_PRESETS } from './palettes'
+  import { compute_export_px } from './export-dims'
 
   let {
     grid = [],
@@ -306,15 +307,21 @@
     return JSON.stringify({ grid, series: visible, efermi }, null, 2)
   }
 
-  export async function export_image(format: `png` | `svg` = `png`): Promise<string | null> {
+  export async function export_image(
+    format: `png` | `svg` = `png`,
+    opts?: { dpi?: number; width_mm?: number },
+  ): Promise<string | null> {
     if (!Plotly || !plot_div) return null
-    const url = await Plotly.toImage(plot_div, {
+    if (format === `png` && opts?.dpi && opts?.width_mm) {
+      const { width, height } = compute_export_px(opts.width_mm, opts.dpi, container_height / 800)
+      return await Plotly.toImage(plot_div, { format, width, height, scale: 1 })
+    }
+    return await Plotly.toImage(plot_div, {
       format,
       width: 800,
       height: container_height,
       scale: 2,
     })
-    return url
   }
 </script>
 
