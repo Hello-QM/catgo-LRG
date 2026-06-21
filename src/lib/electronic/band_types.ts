@@ -1,5 +1,6 @@
 /** TypeScript interfaces for band structure analysis. */
 
+import type { PaletteName } from './palettes'
 import type { PymatgenStructure } from '$lib/structure'
 
 export interface BandBranch {
@@ -80,4 +81,9 @@ export interface BandViewState {
   title_size: number
   font_size: number
   legend_visible: boolean
+  // Line colors (optional; unset -> default blue / tab10 projections)
+  spin_up_color?: string
+  spin_down_color?: string
+  proj_palette?: PaletteName
+  proj_colors?: Record<string, string>
 }
