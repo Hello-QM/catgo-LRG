@@ -1587,7 +1587,7 @@
           [value, label]
           (value)
         }
-          <option {value}>{label}</option>
+          <option {value}>{t(`structure.render_style_${value}`) || label}</option>
         {/each}
       </select>
     </label>
