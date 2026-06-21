@@ -25,6 +25,7 @@ const structure: Record<string, string> = {
   radius: `Radius (Å)`,
   same_size_atoms: `Same size atoms`,
   color_scheme: `Color scheme`,
+  render_style: `Material`,
   labels: `Labels`,
   color: `Color`,
   size: `Size`,

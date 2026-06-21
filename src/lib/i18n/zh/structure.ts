@@ -25,6 +25,7 @@ const structure: Record<string, string> = {
   radius: `半径 (Å)`,
   same_size_atoms: `原子等大`,
   color_scheme: `配色方案`,
+  render_style: `材质`,
   labels: `标签`,
   color: `颜色`,
   size: `大小`,

@@ -41,6 +41,7 @@
     depth_cue_uniforms,
     ambient_light = 0.7,
     directional_light = 0.3,
+    render_style = `glossy`,
   }: {
     atom_data: AtomDataItem[]
     realtime_position_overrides: Map<number, Vec3> | null
@@ -59,6 +60,10 @@
     }
     ambient_light: number
     directional_light: number
+    /** Atom shading style. Branches the fragment lighting on uRenderStyle:
+     *  glossy (studio env + tinted spec), matte (diffuse only, no spec/fresnel),
+     *  toon (3-band cel, AtomCanvas ToonHighlightMaterial). */
+    render_style?: `glossy` | `matte` | `toon`
   } = $props()
 
   const threlte = useThrelte()
@@ -123,6 +128,11 @@
     uniform float uDepthFar;
     uniform vec3 uDepthCueBgColor;
     uniform float uOutlineStrength;
+    uniform int uRenderStyle;  // 0 = glossy, 1 = matte, 2 = toon
+    // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial parity.
+    uniform float uShadowThreshold;
+    uniform float uHighlightThreshold;
+    uniform float uShadowBrightness;
     // projectionMatrix is only auto-injected into vertex shader, must re-declare for fragment
     uniform mat4 projectionMatrix;
 
@@ -218,36 +228,57 @@
         baseColor = mix(vec3(luminance), baseColor, vSaturation);
       }
 
-      // Studio environment lighting (replaces single-light Blinn-Phong diffuse)
       vec3 keyDir = normalize(uLightDir);
       vec3 viewDir = uIsOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-hitPos);
-
-      vec3 env = studio_env(normal, keyDir);
-
-      // Tight Blinn-Phong specular — small, refined highlight.
-      // pow(.., 64) is ~half the cost of pow(.., 80) and gives a tighter
-      // spot than pow 32 (which created broad "white blob" artifacts on
-      // saturated atoms).
-      vec3 halfDir = normalize(keyDir + viewDir);
-      float specular = pow(max(dot(normal, halfDir), 0.0), 64.0);
-
-      // Schlick Fresnel — premium rim highlight
+      // NdotV is needed by both the glossy fresnel and the shared outline pass.
       float NdotV = max(dot(normal, viewDir), 0.0);
-      float fresnel = pow(1.0 - NdotV, 5.0);
 
-      // Tint specular by the atom color so green/red/etc. atoms get a
-      // material-tinted highlight (ceramic look) instead of a pure-white
-      // sticker. mix factor 0.55 = 55% atom color + 45% white.
-      vec3 specColor = mix(vec3(1.0), baseColor, 0.55);
+      vec3 color;
+      if (uRenderStyle == 2) {
+        // ── Toon: 3-band cel shading (AtomCanvas ToonHighlightMaterial) ──
+        // Per-instance baseColor stands in for the reference's uColor/vTint;
+        // vOpacity carries the per-instance alpha (instanceAlpha equivalent).
+        float diffuse = dot(normal, keyDir);
+        if (diffuse > uHighlightThreshold) {
+          color = vec3(1.0, 1.0, 1.0);
+        } else if (diffuse > uShadowThreshold) {
+          color = baseColor;
+        } else {
+          color = baseColor * uShadowBrightness;
+        }
+      } else if (uRenderStyle == 1) {
+        // ── Matte: diffuse-only (roughness 1, metalness 0, no spec/fresnel) ──
+        float diffuse = max(dot(normal, keyDir), 0.0);
+        color = baseColor * (uAmbientIntensity + uDirectionalIntensity * diffuse);
+        color = aces_tonemap(color);
+      } else {
+        // ── Glossy (default): studio env + tinted specular + fresnel rim ──
+        vec3 env = studio_env(normal, keyDir);
 
-      // Compose: env-shaded base color + tinted specular + subtle fresnel
-      float exposure = uAmbientIntensity + uDirectionalIntensity * 0.5;
-      vec3 color = baseColor * env * exposure
+        // Tight Blinn-Phong specular — small, refined highlight.
+        // pow(.., 64) is ~half the cost of pow(.., 80) and gives a tighter
+        // spot than pow 32 (which created broad "white blob" artifacts on
+        // saturated atoms).
+        vec3 halfDir = normalize(keyDir + viewDir);
+        float specular = pow(max(dot(normal, halfDir), 0.0), 64.0);
+
+        // Schlick Fresnel — premium rim highlight
+        float fresnel = pow(1.0 - NdotV, 5.0);
+
+        // Tint specular by the atom color so green/red/etc. atoms get a
+        // material-tinted highlight (ceramic look) instead of a pure-white
+        // sticker. mix factor 0.55 = 55% atom color + 45% white.
+        vec3 specColor = mix(vec3(1.0), baseColor, 0.55);
+
+        // Compose: env-shaded base color + tinted specular + subtle fresnel
+        float exposure = uAmbientIntensity + uDirectionalIntensity * 0.5;
+        color = baseColor * env * exposure
                  + specColor * specular * uDirectionalIntensity * 0.6
                  + vec3(fresnel * 0.12);
 
-      // Filmic tonemap before sRGB encode
-      color = aces_tonemap(color);
+        // Filmic tonemap before sRGB encode
+        color = aces_tonemap(color);
+      }
 
       gl_FragColor = vec4(linearTosRGB(color), vOpacity);
 
@@ -293,8 +324,18 @@
         uDepthFar: depth_cue_uniforms.uDepthFar,
         uDepthCueBgColor: depth_cue_uniforms.uDepthCueBgColor,
         uOutlineStrength: depth_cue_uniforms.uOutlineStrength,
+        uRenderStyle: { value: render_style_to_int(render_style) },
+        // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial defaults.
+        uShadowThreshold: { value: 0.3 },
+        uHighlightThreshold: { value: 0.97 },
+        uShadowBrightness: { value: 0.5 },
       },
     })
+  }
+
+  // glossy = 0, matte = 1, toon = 2 (matches the uRenderStyle branch order).
+  function render_style_to_int(style: `glossy` | `matte` | `toon`): number {
+    return style === `toon` ? 2 : style === `matte` ? 1 : 0
   }
 
   let opaque_material = create_material(false)
@@ -341,6 +382,16 @@
     transparent_material.uniforms.uAmbientIntensity.value = ambient_light
     opaque_material.uniforms.uDirectionalIntensity.value = directional_light
     transparent_material.uniforms.uDirectionalIntensity.value = directional_light
+    // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // Render-style is a uniform int branch in the fragment shader — no recompile,
+  // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
+  $effect(() => {
+    const v = render_style_to_int(render_style)
+    opaque_material.uniforms.uRenderStyle.value = v
+    transparent_material.uniforms.uRenderStyle.value = v
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })

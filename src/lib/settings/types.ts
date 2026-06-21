@@ -24,6 +24,9 @@ export type ShowBonds = (typeof show_bonds_options)[number]
 
 export type CameraProjection = `perspective` | `orthographic`
 
+export const render_style_options = [`glossy`, `matte`, `toon`] as const
+export type RenderStyle = (typeof render_style_options)[number]
+
 export const ATOM_COLOR_MODE_OPTIONS = [
   `element`,
   `coordination`,
@@ -175,6 +178,10 @@ export interface SettingsConfig {
     depth_cue_end: SettingType<number>
     atom_outline_strength: SettingType<number>
     bond_outline_strength: SettingType<number>
+    /** Material/shading style for atoms (orthogonal to color_scheme palette).
+     *  glossy = current default specular look (byte-identical to legacy);
+     *  matte = flat diffuse; toon = 3-band cel/cartoon shading. */
+    render_style: SettingType<RenderStyle>
 
     // Forces & Lattice
     show_force_vectors: SettingType<boolean>

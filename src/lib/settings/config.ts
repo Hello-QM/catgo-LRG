@@ -368,6 +368,12 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 0,
       maximum: 1,
     },
+    render_style: {
+      value: `glossy` as const,
+      description:
+        `Material/shading style for atoms. Glossy = default specular look; Matte = flat diffuse (no highlight); Toon = 3-band cel/cartoon shading. Orthogonal to color_scheme (palette).`,
+      enum: { glossy: `Glossy`, matte: `Matte`, toon: `Toon` },
+    },
 
     // Forces & Lattice
     show_force_vectors: {

@@ -1375,6 +1375,7 @@
       depth_cue_end: scene_props.depth_cue_end,
       atom_outline_strength: scene_props.atom_outline_strength,
       bond_outline_strength: scene_props.bond_outline_strength,
+      render_style: scene_props.render_style,
     }}
     on_reset={() => {
       background_color = undefined
@@ -1386,6 +1387,7 @@
       scene_props.depth_cue_end = DEFAULTS.structure.depth_cue_end
       scene_props.atom_outline_strength = DEFAULTS.structure.atom_outline_strength
       scene_props.bond_outline_strength = DEFAULTS.structure.bond_outline_strength
+      scene_props.render_style = DEFAULTS.structure.render_style
     }}
   >
     <h5>{t('structure.background')}</h5>
@@ -1547,6 +1549,21 @@
         step={0.05}
         bind:value={scene_props.bond_outline_strength}
       />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.render_style.description })}
+    >
+      {t('structure.render_style')}
+      <select bind:value={scene_props.render_style}>
+        {#each Object.entries(
+            SETTINGS_CONFIG.structure.render_style.enum ?? {},
+          ) as
+          [value, label]
+          (value)
+        }
+          <option {value}>{label}</option>
+        {/each}
+      </select>
     </label>
   </SettingsSection>
 
