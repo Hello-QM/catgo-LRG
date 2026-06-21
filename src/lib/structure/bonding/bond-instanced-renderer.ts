@@ -48,10 +48,20 @@
 import * as THREE from 'three';
 import type { BondManager } from './bond-manager.svelte';
 import type { ImageAtomLayout } from './image-atom-layout';
+import { ib_seq, is_aromatic, nb_from_order } from './bond-orders';
 
 const UP_Y = new THREE.Vector3(0, 1, 0);
 const EMPTY = new Int32Array(0);
 const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+// World-space reference axis for the deterministic (non-aromatic) multi-bond
+// perpendicular. Projecting a FIXED world axis onto the plane ⟂ the bond gives
+// an offset direction that does not swim during camera orbit (matches the
+// projection-switch / atom-rotation lessons). A second axis covers the case
+// where the bond is parallel to the first.
+const PERP_REF_A = new THREE.Vector3(0, 1, 0);
+const PERP_REF_B = new THREE.Vector3(1, 0, 0);
+// ib offset for a single (nb=1) line — centered, no perpendicular shift.
+const ZERO_IB = [0];
 
 /**
  * Incomplete-edge stub mode (Phase 6 / VESTA Mode 1). When `mode` is true,
@@ -141,6 +151,37 @@ export class BondInstancedRenderer {
 	#v_half_mid_b = new THREE.Vector3();
 	#q_rot = new THREE.Quaternion();
 	#v_scale = new THREE.Vector3();
+	// Scratch vectors for the multi-bond perpendicular offset.
+	#v_perp = new THREE.Vector3();
+	#v_off = new THREE.Vector3();
+	#v_ref = new THREE.Vector3();
+
+	// Multi-bond (adsorbate bond-order) rendering. When OFF (#multibond_enabled
+	// === false), every slot owns exactly 2 instances (one per half) and the
+	// layout / capacity / update-range math is byte-identical to the legacy
+	// single-cylinder path. When ON, each slot reserves MAX_LINES·2 = 6
+	// instances and draws 2·nb live half-cylinders (nb ∈ {1,2,3}), collapsing
+	// the rest to ZERO_MATRIX. Picking is unaffected (this mesh has
+	// raycast={null} — bond hit-testing uses its own hitbox geometry).
+	#multibond_enabled = false;
+	#bond_radius = 0.15;
+	static readonly MAX_LINES = 3;
+
+	/** Instances reserved per logical bond: 2 (OFF) or MAX_LINES·2 = 6 (ON). */
+	get #stride(): number {
+		return this.#multibond_enabled ? BondInstancedRenderer.MAX_LINES * 2 : 2;
+	}
+
+	/**
+	 * Enable/disable adsorbate multi-bond rendering. Changing the flag bumps the
+	 * per-slot stride, so the caller MUST follow with `force_full_resync()` (the
+	 * BondManagerInstances $effect does). The base bond radius is needed to size
+	 * the per-line gap and reduced cylinder radius.
+	 */
+	set_multibond(enabled: boolean, bond_radius: number): void {
+		this.#multibond_enabled = enabled;
+		this.#bond_radius = bond_radius;
+	}
 
 	constructor(
 		mesh: THREE.InstancedMesh,
@@ -180,7 +221,8 @@ export class BondInstancedRenderer {
 		const matrix_attr = mesh.instanceMatrix;
 		const capacity = matrix_attr.count;
 		const count = manager.count;
-		const instance_count = count * 2;
+		const stride = this.#stride;
+		const instance_count = count * stride;
 		const layout = this.#get_image_atom_layout ? this.#get_image_atom_layout() : null;
 		const decorator_instance_count = layout !== null ? layout.bonds_csr.length * 2 : 0;
 		const total_instances = instance_count + decorator_instance_count;
@@ -203,6 +245,7 @@ export class BondInstancedRenderer {
 		const jimages = manager.jimages_buffer;
 		const positions = this.#get_positions();
 		const opacity = manager.opacity_buffer;
+		const orders = this.#multibond_enabled ? manager.orders_buffer : null;
 		const lattice = this.#get_lattice ? this.#get_lattice() : null;
 		const stub = this.#get_incomplete_edge ? this.#get_incomplete_edge() : null;
 		// Bond colors are sourced directly from the per-atom color buffer in the
@@ -214,7 +257,7 @@ export class BondInstancedRenderer {
 		if (manager.dirty_all) {
 			if (count > 0) {
 				for (let slot = 0; slot < count; slot++) {
-					this.#write_slot(slot, pairs, kinds, jimages, positions, lattice, stub, atom_colors, opacity);
+					this.#write_slot(slot, pairs, kinds, jimages, positions, lattice, stub, atom_colors, opacity, orders);
 				}
 				matrix_attr.addUpdateRange(0, instance_count * 16);
 				this.#kind_attr.addUpdateRange(0, instance_count);
@@ -235,11 +278,11 @@ export class BondInstancedRenderer {
 						j++;
 					}
 					for (let slot = run_start; slot <= run_end; slot++) {
-						this.#write_slot(slot, pairs, kinds, jimages, positions, lattice, stub, atom_colors, opacity);
+						this.#write_slot(slot, pairs, kinds, jimages, positions, lattice, stub, atom_colors, opacity, orders);
 					}
 					const slot_len = run_end - run_start + 1;
-					const inst_start = run_start * 2;
-					const inst_len = slot_len * 2;
+					const inst_start = run_start * stride;
+					const inst_len = slot_len * stride;
 					matrix_attr.addUpdateRange(inst_start * 16, inst_len * 16);
 					this.#kind_attr.addUpdateRange(inst_start, inst_len);
 					this.#color_start_attr?.addUpdateRange(inst_start * 3, inst_len * 3);
@@ -284,7 +327,8 @@ export class BondInstancedRenderer {
 		const matrix_attr = mesh.instanceMatrix;
 		const capacity = matrix_attr.count;
 		const count = manager.count;
-		const instance_count = count * 2;
+		const stride = this.#stride;
+		const instance_count = count * stride;
 		const layout = this.#get_image_atom_layout ? this.#get_image_atom_layout() : null;
 		const decorator_instance_count = layout !== null ? layout.bonds_csr.length * 2 : 0;
 		const total_instances = instance_count + decorator_instance_count;
@@ -306,13 +350,14 @@ export class BondInstancedRenderer {
 		const jimages = manager.jimages_buffer;
 		const positions = this.#get_positions();
 		const opacity = manager.opacity_buffer;
+		const orders = this.#multibond_enabled ? manager.orders_buffer : null;
 		const lattice = this.#get_lattice ? this.#get_lattice() : null;
 		const stub = this.#get_incomplete_edge ? this.#get_incomplete_edge() : null;
 		const atom_colors = this.#get_atom_colors ? this.#get_atom_colors() : null;
 
 		if (count > 0) {
 			for (let slot = 0; slot < count; slot++) {
-				this.#write_slot(slot, pairs, kinds, jimages, positions, lattice, stub, atom_colors, opacity);
+				this.#write_slot(slot, pairs, kinds, jimages, positions, lattice, stub, atom_colors, opacity, orders);
 			}
 			matrix_attr.addUpdateRange(0, instance_count * 16);
 			this.#kind_attr.addUpdateRange(0, instance_count);
@@ -427,20 +472,22 @@ export class BondInstancedRenderer {
 		stub: IncompleteEdgeOpts | null,
 		atom_colors: Float32Array | null,
 		opacity: Float32Array | null,
+		orders: Float32Array | null,
 	): void {
+		const stride = this.#stride;
+		const base = slot * stride;
 		const a = pairs[slot * 2];
 		const b = pairs[slot * 2 + 1];
 
 		// Render-time safety net: if a bond endpoint index exceeds the current
 		// position-buffer's atom count, the upstream cache hasn't caught up to
 		// the displayed frame (e.g. a multi-config trajectory tick where atom
-		// count just shrank). Collapse both halves to zero-scale instead of
-		// reading past the buffer and emitting a NaN matrix that the GPU draws
-		// as a long stray cylinder.
+		// count just shrank). Collapse all reserved instances to zero-scale
+		// instead of reading past the buffer and emitting a NaN matrix that the
+		// GPU draws as a long stray cylinder.
 		const n_atoms = positions.length / 3;
 		if (a >= n_atoms || b >= n_atoms) {
-			this.#mesh.setMatrixAt(slot * 2, ZERO_MATRIX);
-			this.#mesh.setMatrixAt(slot * 2 + 1, ZERO_MATRIX);
+			for (let s = 0; s < stride; s++) this.#mesh.setMatrixAt(base + s, ZERO_MATRIX);
 			return;
 		}
 
@@ -517,6 +564,45 @@ export class BondInstancedRenderer {
 		const is_periodic = (dx | dy | dz) !== 0;
 		const stub_active = stub !== null && stub.mode && is_periodic;
 
+		// Multi-bond line count. Only intra-cell adsorbate bonds with a perceived
+		// order > 1 expand; everything else (slab sticks, cross-cell bonds, OFF
+		// path) stays a single 2-half line. Aromatic (1.3<bo<1.7) ring bonds
+		// render as a SINGLE solid stick (nb=1) — the aromatic circle is drawn
+		// separately by AromaticRingOverlay; true doubles/triples still expand.
+		const order = orders !== null ? orders[slot] : 1;
+		let nb = 1;
+		if (this.#multibond_enabled && !is_periodic && order > 1 && !is_aromatic(order)) {
+			nb = nb_from_order(order, true);
+			if (nb > BondInstancedRenderer.MAX_LINES) nb = BondInstancedRenderer.MAX_LINES;
+			if (nb < 1) nb = 1;
+		}
+
+		// Per-line reduced radius (relative to the base cylinder radius) and
+		// in-plane gap, mirroring catrender bonds.rs gap()=0.6·bw. Implemented as
+		// XZ scale on the unit-radius cylinder geometry.
+		const radius_scale = nb === 1 ? 1.0 : nb === 2 ? 0.62 : 0.5;
+		const gap = 0.6 * this.#bond_radius;
+
+		// Deterministic world-space perpendicular ⟂ v_dir (view-independent so
+		// the lines don't swim during orbit). Project a fixed axis onto the plane
+		// normal to the bond; fall back to a second axis when nearly parallel.
+		if (nb > 1) {
+			let rdx = PERP_REF_A.x, rdy = PERP_REF_A.y, rdz = PERP_REF_A.z;
+			const dotA = Math.abs(this.#v_dir.x * rdx + this.#v_dir.y * rdy + this.#v_dir.z * rdz);
+			if (dotA > 0.9) { rdx = PERP_REF_B.x; rdy = PERP_REF_B.y; rdz = PERP_REF_B.z; }
+			this.#v_ref.set(rdx, rdy, rdz);
+			// p = normalize(ref - (ref·dir)dir)
+			const proj = this.#v_ref.dot(this.#v_dir);
+			this.#v_perp.set(
+				this.#v_ref.x - proj * this.#v_dir.x,
+				this.#v_ref.y - proj * this.#v_dir.y,
+				this.#v_ref.z - proj * this.#v_dir.z,
+			);
+			if (this.#v_perp.lengthSq() < 1e-12) this.#v_perp.set(1, 0, 0);
+			else this.#v_perp.normalize();
+		}
+
+		const ib_offsets = nb === 1 ? ZERO_IB : ib_seq(nb);
 
 		if (is_periodic) {
 			// When hide_incomplete_bonds is on, the cell-internal pass owns
@@ -535,28 +621,13 @@ export class BondInstancedRenderer {
 			// #write_decorators (~L725): both render paths must agree on the
 			// hide_incomplete contract or we get half-baked visuals.
 			if (stub !== null && stub.hide_incomplete) {
-				this.#mesh.setMatrixAt(slot * 2, ZERO_MATRIX);
-				this.#mesh.setMatrixAt(slot * 2 + 1, ZERO_MATRIX);
+				for (let s = 0; s < stride; s++) this.#mesh.setMatrixAt(base + s, ZERO_MATRIX);
 				return;
 			}
 
 			// Phase 6 outward-stub rendering — only reached when
 			// hide_incomplete_bonds is off (legacy / static-structure use).
-			// Renders TWO independent stubs, one at each atom's CELL-INTERNAL
-			// position, pointing toward the cell boundary along the bond
-			// direction.
-			//   Half A stub: anchored at pos_a, length = half_length·scale,
-			//                pointing +v_dir (toward b_eff outside cell).
-			//   Half B stub: anchored at pos_b (the BASE position, NOT b_eff),
-			//                length = half_length·scale, pointing -v_dir
-			//                (toward a_eff_inverse = pos_a + lattice·-jimage,
-			//                outside the opposite cell boundary). v_dir is the
-			//                a→b_eff direction; pos_b's stub goes opposite
-			//                because pos_b's nearest A-image is in the -jimage
-			//                direction relative to pos_b.
-			// In Phase 6 stub mode, scale is `stub.scale` (default 0.5);
-			// otherwise full half_length so paired stubs meet visually at
-			// the cell edge for a continuous "broken bond" appearance.
+			// Cross-cell bonds stay single-line (nb=1) in v1.
 			const stub_scale = stub_active ? stub.scale : 1.0;
 			const stub_len = half_length * stub_scale;
 			this.#v_scale.set(1, stub_len, 1);
@@ -569,7 +640,7 @@ export class BondInstancedRenderer {
 				az + this.#v_dir.z * half_stub,
 			);
 			this.#tmp_matrix.compose(this.#v_half_mid_a, this.#q_rot, this.#v_scale);
-			this.#mesh.setMatrixAt(slot * 2, this.#tmp_matrix);
+			this.#mesh.setMatrixAt(base, this.#tmp_matrix);
 
 			// Half B stub anchored at the BASE pos_b (cell-internal), pointing
 			// in the -v_dir direction (toward atom A's image across the
@@ -580,46 +651,47 @@ export class BondInstancedRenderer {
 				bz_base - this.#v_dir.z * half_stub,
 			);
 			this.#tmp_matrix.compose(this.#v_half_mid_b, this.#q_rot, this.#v_scale);
-			this.#mesh.setMatrixAt(slot * 2 + 1, this.#tmp_matrix);
+			this.#mesh.setMatrixAt(base + 1, this.#tmp_matrix);
+			// Collapse any reserved multi-bond instances for this slot.
+			for (let s = 2; s < stride; s++) this.#mesh.setMatrixAt(base + s, ZERO_MATRIX);
 		} else {
-			// Intra-cell bond: classic two-half cylinder meeting at midpoint.
-			this.#v_scale.set(1, half_length, 1);
+			// Intra-cell bond: classic two-half cylinder(s) meeting at midpoint.
+			// nb lines, each offset ib·gap along the in-plane perpendicular.
+			for (let line = 0; line < nb; line++) {
+				const off = ib_offsets[line] * gap;
+				const ox = this.#v_perp.x * off;
+				const oy = this.#v_perp.y * off;
+				const oz = this.#v_perp.z * off;
+				this.#v_scale.set(radius_scale, half_length, radius_scale);
 
-			this.#v_half_mid_a.set(
-				(ax + mx) * 0.5,
-				(ay + my) * 0.5,
-				(az + mz) * 0.5,
-			);
-			this.#tmp_matrix.compose(this.#v_half_mid_a, this.#q_rot, this.#v_scale);
-			this.#mesh.setMatrixAt(slot * 2, this.#tmp_matrix);
+				this.#v_half_mid_a.set(
+					(ax + mx) * 0.5 + ox,
+					(ay + my) * 0.5 + oy,
+					(az + mz) * 0.5 + oz,
+				);
+				this.#tmp_matrix.compose(this.#v_half_mid_a, this.#q_rot, this.#v_scale);
+				this.#mesh.setMatrixAt(base + line * 2, this.#tmp_matrix);
 
-			this.#v_half_mid_b.set(
-				(mx + bx) * 0.5,
-				(my + by) * 0.5,
-				(mz + bz) * 0.5,
-			);
-			this.#tmp_matrix.compose(this.#v_half_mid_b, this.#q_rot, this.#v_scale);
-			this.#mesh.setMatrixAt(slot * 2 + 1, this.#tmp_matrix);
+				this.#v_half_mid_b.set(
+					(mx + bx) * 0.5 + ox,
+					(my + by) * 0.5 + oy,
+					(mz + bz) * 0.5 + oz,
+				);
+				this.#tmp_matrix.compose(this.#v_half_mid_b, this.#q_rot, this.#v_scale);
+				this.#mesh.setMatrixAt(base + line * 2 + 1, this.#tmp_matrix);
+			}
+			// Collapse unused reserved instances [2·nb .. stride).
+			for (let s = nb * 2; s < stride; s++) this.#mesh.setMatrixAt(base + s, ZERO_MATRIX);
 		}
 
-		// Both halves share the kind byte (selection state, dashed HBOND, etc).
+		// Kind / color / opacity, mirrored across every live half-instance.
+		const live = is_periodic ? 2 : nb * 2;
 		const kind = kinds[slot];
-		this.#kind_buf[slot * 2] = kind;
-		this.#kind_buf[slot * 2 + 1] = kind;
+		for (let s = 0; s < live; s++) this.#kind_buf[base + s] = kind;
 
-		// Per-half solid color: Half A = atom A's color, Half B = atom B's color.
-		// Both endpoints of each half are set to the same color, so the gradient
-		// shader's `mix(vColorStart, vColorEnd, vYPosition + 0.5)` renders solid.
-		// The hard color step at the midpoint between the two halves matches
-		// crystaltoolkit / VESTA / MP convention — do not blend across halves.
-		//
-		// Colors are sourced directly from `atom_colors[a*3..]` and
-		// `atom_colors[b*3..]` in the same loop as the matrix write, so the
-		// color and matrix snapshots can never diverge for a given slot. If
-		// `atom_colors` is null or an endpoint index is out of range (e.g.
-		// position buffer hasn't caught up to a topology change), skip the
-		// color write — leaves whatever value was last written, matching the
-		// pre-refactor "no manager.colors_start_buffer" behavior.
+		// Per-half solid color: even instances = atom A's color, odd = atom B's.
+		// Both endpoints of each half share the color so the gradient shader
+		// renders solid (hard mid-point color step matches VESTA / MP).
 		if (atom_colors !== null && this.#color_start_attr !== null) {
 			const ac_len = atom_colors.length;
 			const a3 = a * 3;
@@ -627,29 +699,25 @@ export class BondInstancedRenderer {
 			if (a3 + 2 < ac_len && b3 + 2 < ac_len) {
 				const cb_start = this.#color_start_attr.array as Float32Array;
 				const cb_end = this.#color_end_attr!.array as Float32Array;
-				const dst_a = (slot * 2) * 3;
-				const dst_b = (slot * 2 + 1) * 3;
-
-				const ar = atom_colors[a3];
-				const ag = atom_colors[a3 + 1];
-				const ab = atom_colors[a3 + 2];
-				const br = atom_colors[b3];
-				const bg = atom_colors[b3 + 1];
-				const bb = atom_colors[b3 + 2];
-
-				cb_start[dst_a]     = ar; cb_start[dst_a + 1] = ag; cb_start[dst_a + 2] = ab;
-				cb_end[dst_a]       = ar; cb_end[dst_a + 1]   = ag; cb_end[dst_a + 2]   = ab;
-				cb_start[dst_b]     = br; cb_start[dst_b + 1] = bg; cb_start[dst_b + 2] = bb;
-				cb_end[dst_b]       = br; cb_end[dst_b + 1]   = bg; cb_end[dst_b + 2]   = bb;
+				const ar = atom_colors[a3], ag = atom_colors[a3 + 1], ab = atom_colors[a3 + 2];
+				const br = atom_colors[b3], bg = atom_colors[b3 + 1], bb = atom_colors[b3 + 2];
+				for (let s = 0; s < live; s++) {
+					const is_a_half = (s & 1) === 0;
+					const dst = (base + s) * 3;
+					const cr = is_a_half ? ar : br;
+					const cg = is_a_half ? ag : bg;
+					const cbv = is_a_half ? ab : bb;
+					cb_start[dst] = cr; cb_start[dst + 1] = cg; cb_start[dst + 2] = cbv;
+					cb_end[dst] = cr; cb_end[dst + 1] = cg; cb_end[dst + 2] = cbv;
+				}
 			}
 		}
 
-		// Both halves share opacity — selection / fade is slot-level.
+		// All live halves share opacity — selection / fade is slot-level.
 		if (opacity !== null && this.#opacity_attr !== null) {
 			const buf = this.#opacity_attr.array as Float32Array;
 			const op = opacity[slot];
-			buf[slot * 2] = op;
-			buf[slot * 2 + 1] = op;
+			for (let s = 0; s < live; s++) buf[base + s] = op;
 		}
 	}
 

@@ -5,15 +5,43 @@
   import { Canvas } from '@threlte/core'
   import { SvelteMap } from 'svelte/reactivity'
   import StructureScene from './StructureScene.svelte'
+  import ElectronicInfoPanel from './ElectronicInfoPanel.svelte'
+  import type { ElectronicProps, ElectronicLabels } from './electronic_preview'
 
   interface Props {
     structure: PymatgenStructure | null
     onselect?: (index: number) => void
     adsorption_sites?: AdsorptionSite[]
     on_adsorption_site_click?: (site_idx: number) => void
+    // Optional electronic-structure metadata. If omitted, falls back to
+    // `structure._electronic_props` (stashed by import handlers); pass
+    // `null` explicitly to suppress the overlay even when stashed data
+    // would otherwise show.
+    electronic_props?: ElectronicProps | null
+    electronic_labels?: Partial<ElectronicLabels>
+    /** Corner position of the overlay; set to `none` to hide. */
+    electronic_overlay?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'none'
   }
 
-  let { structure, onselect, adsorption_sites = [], on_adsorption_site_click }: Props = $props()
+  let {
+    structure,
+    onselect,
+    adsorption_sites = [],
+    on_adsorption_site_click,
+    electronic_props,
+    electronic_labels = {},
+    electronic_overlay = 'none',
+  }: Props = $props()
+
+  // Prefer explicit prop; fall back to anything stashed on the structure at import.
+  let resolved_electronic = $derived(
+    electronic_props === null
+      ? null
+      : (electronic_props
+        ?? (structure as unknown as { _electronic_props?: ElectronicProps } | null)
+          ?._electronic_props
+        ?? null),
+  )
 
   // Pass the structure through as-is. Previously this called
   // `get_pbc_image_sites()` unconditionally to add PBC image atoms,
@@ -125,6 +153,16 @@
           bind:initial_computed_zoom
         />
       </Canvas>
+      {#if resolved_electronic && electronic_overlay !== 'none'}
+        <div class="electronic-overlay" data-corner={electronic_overlay}>
+          <ElectronicInfoPanel
+            props={resolved_electronic}
+            labels={electronic_labels}
+            heading={null}
+            compact={true}
+          />
+        </div>
+      {/if}
     </div>
   {/if}
 {:else}
@@ -154,6 +192,25 @@
     padding: 0 !important;
     border: none !important;
   }
+
+  .electronic-overlay {
+    position: absolute;
+    z-index: 5;
+    pointer-events: none;
+    max-width: 220px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(20, 20, 20, 0.75);
+    color: #eee;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.75rem;
+  }
+  .electronic-overlay[data-corner='top-left'] { top: 8px; left: 8px; }
+  .electronic-overlay[data-corner='top-right'] { top: 8px; right: 8px; }
+  .electronic-overlay[data-corner='bottom-left'] { bottom: 8px; left: 8px; }
+  .electronic-overlay[data-corner='bottom-right'] { bottom: 8px; right: 8px; }
 
   .no-structure {
     width: 100%;

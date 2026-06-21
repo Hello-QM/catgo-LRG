@@ -50,6 +50,18 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/bin/catgo-cli": "../deploy/cli/catgo-cli"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/bin/catgo-cli": "../deploy/cli/catgo-cli"
+        }
+      }
+    },
     "iOS": {
       "minimumSystemVersion": "17.0",
       "infoPlist": "Info.ios.plist"

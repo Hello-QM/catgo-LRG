@@ -190,12 +190,20 @@ async def get_providers():
 
 
 @router.get("/structure/{provider_id}/{structure_id:path}")
-async def get_structure(provider_id: str, structure_id: str):
+async def get_structure(
+    provider_id: str,
+    structure_id: str,
+    response_fields: Optional[str] = Query(None),
+):
     """Fetch a single structure from an OPTIMADE provider.
 
     Args:
         provider_id: Provider identifier (e.g., 'mp', 'mc3d')
         structure_id: Structure identifier within the provider
+        response_fields: Optional comma-separated OPTIMADE response_fields.
+            MP's OPTIMADE adapter only returns `_mp_*` extras when these are
+            listed explicitly; without it the response carries only standard
+            fields. Forwarded verbatim to the provider.
     """
     # Get provider base URL
     providers_response = await get_providers()
@@ -207,31 +215,49 @@ async def get_structure(provider_id: str, structure_id: str):
 
     base_url = await resolve_provider_url(provider["attributes"]["base_url"])
 
-    # Build query params - don't restrict response_fields so providers
-    # return all available extended fields (providers ignore unknown fields)
     params = {}
+    if response_fields:
+        params["response_fields"] = response_fields
 
     query_string = urlencode(params) if params else ""
 
-    # Try different URL patterns for structure endpoint
-    for endpoint_base in [
-        f"{base_url}/v1/structures/{structure_id}",
-        f"{base_url}/structures/{structure_id}",
-    ]:
-        try:
-            endpoint = f"{endpoint_base}?{query_string}" if query_string else endpoint_base
-            print(f"[OPTIMADE DEBUG] Fetching structure: {endpoint}")
-            data = await fetch_json(endpoint)
-            if "data" in data:
-                return normalize_structure_ids(data)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                continue
-            raise HTTPException(status_code=e.response.status_code, detail=str(e))
-        except Exception as e:
-            print(f"[OPTIMADE DEBUG] Error fetching structure: {e}")
-            continue
+    # Query strings to attempt, in order. If response_fields was requested, add
+    # a bare-query retry: some providers 400 on unknown response_fields, and the
+    # extra electronic metadata is a nice-to-have — the STRUCTURE is not. So we
+    # degrade to fetching it without the extras rather than failing the import.
+    query_attempts = [query_string]
+    if query_string:
+        query_attempts.append("")
 
+    last_error: Optional[HTTPException] = None
+    for query_attempt in query_attempts:
+        for endpoint_base in [
+            f"{base_url}/v1/structures/{structure_id}",
+            f"{base_url}/structures/{structure_id}",
+        ]:
+            try:
+                endpoint = (
+                    f"{endpoint_base}?{query_attempt}" if query_attempt else endpoint_base
+                )
+                print(f"[OPTIMADE DEBUG] Fetching structure: {endpoint}")
+                data = await fetch_json(endpoint)
+                if "data" in data:
+                    return normalize_structure_ids(data)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    continue
+                # Non-404 (e.g. 400 on response_fields): remember it, but keep
+                # trying — the bare-query retry below may still succeed.
+                last_error = HTTPException(
+                    status_code=e.response.status_code, detail=str(e)
+                )
+                continue
+            except Exception as e:
+                print(f"[OPTIMADE DEBUG] Error fetching structure: {e}")
+                continue
+
+    if last_error is not None:
+        raise last_error
     raise HTTPException(status_code=404, detail=f"Structure not found: {structure_id}")
 
 

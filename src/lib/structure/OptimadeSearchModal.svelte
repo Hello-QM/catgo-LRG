@@ -12,6 +12,7 @@
     set_mp_api_key,
     has_mp_api_key,
     search_mp_structures,
+    get_mp_structure_summary,
     validate_mp_api_key,
     type MPSummaryData,
   } from '$lib/api/materials-project'
@@ -51,7 +52,14 @@
     visible: boolean
     onclose: () => void
     onimport: (structure: PymatgenStructure) => void
-    onpreview?: (optimade_struct: OptimadeStructure, pymatgen_struct: PymatgenStructure) => void
+    onpreview?: (
+      optimade_struct: OptimadeStructure,
+      pymatgen_struct: PymatgenStructure,
+      // Optional: MP REST summary when MP is the active provider. Carries
+      // electronic-structure fields (cbm/vbm/efermi/has_props/ordering) that
+      // MP's OPTIMADE adapter doesn't always expose.
+      mp_summary?: MPSummaryData | null,
+    ) => void
     onpubchem_preview?: (
       compound: PubChemCompound,
       search_result: PubChemSearchCompound | null,
@@ -565,6 +573,13 @@
         providers,
       )
       if (full_structure) {
+        // Annotate with the resolved provider name so downstream previews
+        // can show "Materials Project" / "Alexandria" etc. instead of the
+        // generic "OPTIMADE" fallback. (OPTIMADE responses don't carry the
+        // provider id in their attributes by spec.)
+        const prov_obj = providers.find((p) => p.id === selected_provider)
+        ;(full_structure.attributes as Record<string, unknown>).database_provider =
+          prov_obj?.attributes?.name ?? selected_provider
         let pymatgen_structure = optimade_to_pymatgen(full_structure)
         if (pymatgen_structure) {
           // OPTIMADE APIs often return non-standard lattice orientations
@@ -581,7 +596,36 @@
 
           // If onpreview is provided, call it instead of onimport
           if (onpreview) {
-            onpreview(full_structure, pymatgen_structure)
+            // Prefer cached MP REST summary (richer surface than MP's OPTIMADE
+            // adapter). Mirror the result-card lookup pattern: primary lookup
+            // by struct.id, fallback to structure-fingerprint map for MP IDs
+            // that have been renumbered between the OPTIMADE adapter and the
+            // REST API. Last resort: fetch the single-record summary on
+            // demand (handles the race where fetch_mp_summaries hasn't
+            // resolved yet when the user clicks Import).
+            let mp_summary: MPSummaryData | null = null
+            if (selected_provider === `mp` && mp_has_key) {
+              const attrs = struct.attributes ?? {}
+              const prov = extract_provider_details(attrs as Record<string, unknown>)
+              const comp = computed_details.get(struct.id)
+              const fp_key = struct_key(
+                attrs.chemical_formula_reduced,
+                attrs.nsites ?? attrs.n_sites,
+                prov.spacegroup_symbol ?? comp?.spacegroup_symbol,
+              )
+              mp_summary = mp_summaries.get(struct.id)
+                ?? mp_summaries_by_key.get(fp_key)
+                ?? null
+              if (!mp_summary) {
+                try {
+                  mp_summary = await get_mp_structure_summary(struct.id)
+                  if (mp_summary) mp_summaries.set(struct.id, mp_summary)
+                } catch (err) {
+                  console.warn(`[MP ENRICH] on-demand fetch failed for`, struct.id, err)
+                }
+              }
+            }
+            onpreview(full_structure, pymatgen_structure, mp_summary)
             // Keep modal open - don't call onclose()
           } else {
             // Fallback to direct import if no preview callback
@@ -941,6 +985,13 @@
                     {@const e_above_hull = mp_data?.energy_above_hull ?? prov.energy_above_hull}
                     {@const formation_energy = mp_data?.formation_energy_per_atom ?? prov.formation_energy ?? attrs._mp_formation_energy_per_atom}
                     {@const band_gap = mp_data?.band_gap ?? prov.band_gap ?? attrs._mp_band_gap ?? attrs._odbx_band_gap ?? attrs._exmpl_band_gap}
+                    {@const is_metal = mp_data?.is_metal ?? prov.is_metal}
+                    {@const efermi = mp_data?.efermi ?? prov.efermi}
+                    {@const cbm = mp_data?.cbm ?? prov.cbm}
+                    {@const vbm = mp_data?.vbm ?? prov.vbm}
+                    {@const magnetic_ordering = mp_data?.ordering ?? prov.magnetic_ordering}
+                    {@const has_dos = mp_data?.has_props?.dos ?? prov.has_dos}
+                    {@const has_bandstructure = mp_data?.has_props?.bandstructure ?? prov.has_bandstructure}
                     {@const is_stable = mp_data?.is_stable ?? prov.is_stable}
                     {@const volume = comp?.volume}
                     {@const density = comp?.density}
@@ -999,6 +1050,41 @@
                           {#if band_gap !== undefined && band_gap !== null}
                             <span class="result-detail" title={t('structure.band_gap_ev')}>
                               <span class="detail-label">{t('structure.result_gap')}:</span> {band_gap.toFixed(2)} eV
+                            </span>
+                          {/if}
+                          {#if is_metal === true}
+                            <span class="result-detail" title={t('structure.preview_is_metal')}>
+                              <span class="detail-label">{t('structure.preview_metallic')}</span>
+                            </span>
+                          {/if}
+                          {#if typeof efermi === `number`}
+                            <span class="result-detail" title={t('structure.preview_efermi')}>
+                              <span class="detail-label">E<sub>F</sub>:</span> {efermi.toFixed(2)} eV
+                            </span>
+                          {/if}
+                          {#if typeof cbm === `number`}
+                            <span class="result-detail" title={t('structure.preview_cbm')}>
+                              <span class="detail-label">CBM:</span> {cbm.toFixed(2)} eV
+                            </span>
+                          {/if}
+                          {#if typeof vbm === `number`}
+                            <span class="result-detail" title={t('structure.preview_vbm')}>
+                              <span class="detail-label">VBM:</span> {vbm.toFixed(2)} eV
+                            </span>
+                          {/if}
+                          {#if magnetic_ordering}
+                            <span class="result-detail" title={t('structure.preview_magnetic_ordering')}>
+                              <span class="detail-label">{t('structure.result_mag')}:</span> {magnetic_ordering}
+                            </span>
+                          {/if}
+                          {#if has_dos === true}
+                            <span class="result-detail" title={t('structure.preview_dos_available')}>
+                              <span class="detail-label">DOS</span>
+                            </span>
+                          {/if}
+                          {#if has_bandstructure === true}
+                            <span class="result-detail" title={t('structure.preview_bands_available')}>
+                              <span class="detail-label">{t('structure.result_bands')}</span>
                             </span>
                           {/if}
                           {#if !comp && computing_details}

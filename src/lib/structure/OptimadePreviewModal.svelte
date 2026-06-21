@@ -4,6 +4,8 @@
   import { Composition } from '$lib/composition'
   import type { PymatgenStructure } from './index'
   import StructurePreview from './StructurePreview.svelte'
+  import ElectronicInfoPanel from './ElectronicInfoPanel.svelte'
+  import type { ElectronicProps, ElectronicLabels } from './electronic_preview'
 
   export interface PreviewDetailRow {
     label: string
@@ -29,6 +31,11 @@
     title?: string
     formula?: string
     details?: PreviewDetailRow[]
+    // Optional electronic-structure data rendered under its own subheader.
+    // Kept separate from `details` so the section is visually distinct.
+    electronic_props?: ElectronicProps | null
+    electronic_labels?: Partial<ElectronicLabels>
+    electronic_heading?: string
     lattice_params?: PreviewLatticeParams | null
     // Legacy OPTIMADE mode (back-compat): if optimade_structure is provided
     // and `details` is not, the modal computes the rows from it.
@@ -44,6 +51,9 @@
     title = `Preview Structure Import`,
     formula: formula_prop,
     details: details_prop,
+    electronic_props = null,
+    electronic_labels = {},
+    electronic_heading = `Electronic structure`,
     lattice_params: lattice_params_prop,
     optimade_structure = null,
     provider_name = `OPTIMADE`,
@@ -168,6 +178,14 @@
                   <span class="value" class:mono={row.mono}>{row.value}</span>
                 </div>
               {/each}
+
+              {#if electronic_props}
+                <ElectronicInfoPanel
+                  props={electronic_props}
+                  labels={electronic_labels}
+                  heading={electronic_heading}
+                />
+              {/if}
 
               {#if lattice_params}
                 <div class="info-subsection">

@@ -856,6 +856,24 @@ if __name__ == "__main__":
     import argparse
     import uvicorn
 
+    # ── catgo CLI passthrough ──────────────────────────────────────────────
+    # The packaged sidecar bundles the whole `catgo` package, so it can ALSO
+    # serve as the `catgo` CLI without shipping a second ~500 MB PyInstaller
+    # binary. When invoked as `catgo-server <subcommand>` (or via a `catgo-cli`
+    # wrapper/symlink) where <subcommand> is a catgo CLI command, delegate to
+    # `catgo.cli:main`. The desktop app spawns this sidecar with NO arguments
+    # (tauri `shell.sidecar("catgo-server").spawn()`), so the server path below
+    # is unaffected. `serve` is intentionally NOT delegated — server lifecycle
+    # stays here / with the app.
+    _CLI_PASSTHROUGH = {
+        "setup", "status", "stop", "campaign", "freq-inputs", "slab",
+        "supercell", "reticular", "convert", "inspect", "dos", "band",
+        "cohp", "freq", "push", "pull", "submit",
+    }
+    if len(sys.argv) > 1 and sys.argv[1] in _CLI_PASSTHROUGH:
+        from catgo.cli import main as _cli_main
+        raise SystemExit(_cli_main())
+
     parser = argparse.ArgumentParser(description="CatGo Computation Server")
     parser.add_argument("--daemon", action="store_true",
                         help="Run as a background daemon (Unix only)")

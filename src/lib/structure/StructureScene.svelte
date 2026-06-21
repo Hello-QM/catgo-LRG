@@ -45,12 +45,14 @@
     Mesh.prototype.raycast = acceleratedRaycast
   }
   import { type BondingStrategy, compute_bond_transform, get_bond_key } from './bonding'
+  import { type AromaticRing, perceive_adsorbate } from './bonding/bond-orders'
   import { compute_bonds_sync } from './workers/bond-worker-api'
   import { apply_bond_distance_rules } from './bond-distance-rules'
   import type { BondKind } from './bonding/bond-manager.svelte'
   import { BOND_KIND } from './bonding/bond-manager.svelte'
   import { BondManager } from './bonding/bond-manager.svelte'
   import BondManagerInstances from './bonding/BondManagerInstances.svelte'
+  import AromaticRingOverlay from './bonding/AromaticRingOverlay.svelte'
   import {
     build_image_atom_layout,
     empty_image_atom_layout,
@@ -458,6 +460,7 @@
     show_image_atoms = false,
     bonding_strategy = DEFAULTS.structure.bonding_strategy,
     bonding_options = {},
+    bond_order_perception = DEFAULTS.structure.bond_order_perception,
     bond_scale = DEFAULTS.structure.bond_scale,
     show_hydrogen_bonds = DEFAULTS.structure.show_hydrogen_bonds,
     hbond_distance_cutoff = DEFAULTS.structure.hbond_distance_cutoff,
@@ -716,6 +719,7 @@
     bond_color?: string
     bonding_strategy?: BondingStrategy
     bonding_options?: Record<string, unknown>
+    bond_order_perception?: boolean
     bond_scale?: number
     show_hydrogen_bonds?: boolean
     hbond_distance_cutoff?: number
@@ -3261,6 +3265,27 @@
     return result
   })
 
+  // ═══ Adsorbate bond-order perception (default-OFF) ═══
+  // When OFF, return a SHARED empty map and never invoke perceive_* — zero CPU,
+  // and the shadow-sync order pass below is skipped (orders_buffer stays null →
+  // GPU bytes byte-identical to today). When ON, perceive double/triple/aromatic
+  // orders on small organic adsorbate fragments only; the slab stays order 1.
+  // Keyed by get_bond_key(a, b, jimage), matching the shadow-sync diff key.
+  const EMPTY_ORDER_MAP: ReadonlyMap<string, number> = new Map()
+  const EMPTY_RINGS: AromaticRing[] = []
+  // Single perception pass → both the per-bond order map (drives the multi-
+  // cylinder renderer) AND the aromatic rings (drive the dashed-circle
+  // overlay). When OFF, return shared empties; perceive_* never runs (zero
+  // CPU) and the order/overlay paths stay byte-identical to today.
+  let adsorbate_perception = $derived.by(() => {
+    if (!bond_order_perception || !structure) {
+      return { orders: EMPTY_ORDER_MAP, aromatic_rings: EMPTY_RINGS }
+    }
+    return perceive_adsorbate(filtered_bond_pairs, structure)
+  })
+  let adsorbate_bond_orders = $derived(adsorbate_perception.orders)
+  let aromatic_rings = $derived(adsorbate_perception.aromatic_rings)
+
   // Sync filtered_bond_pairs to parent for box selection
   $effect(() => {
     filtered_bond_pairs_out = filtered_bond_pairs
@@ -3416,6 +3441,42 @@
         idx++
       }
       mgr.add_bonds(add_pairs, add_kinds, add_jimages)
+    }
+
+    // ── Adsorbate bond-order pass (default-OFF) ──────────────────────────
+    // When bond_order_perception is OFF, `adsorbate_bond_orders` is a shared
+    // EMPTY_MAP and perceive_* never runs (zero CPU); we also skip the write
+    // pass entirely so ensure_orders() is never called and orders_buffer stays
+    // null — byte-identical GPU bytes to today. When ON, write each live slot's
+    // perceived order (default 1), keyed by the same get_bond_key the diff uses.
+    const order_map = adsorbate_bond_orders
+    // Run the write pass whenever the buffer is (or needs to be) live — not
+    // only when the new map is non-empty. Once orders_buffer exists
+    // (mgr.has_orders), a transition to an EMPTY map (e.g. the only
+    // double/triple bond relaxed to single during a geo-opt/drag/trajectory
+    // tick) must still re-walk every slot and clear stale 2.0/3.0/1.5 back to
+    // 1; otherwise the instanced renderer keeps drawing a phantom multi-bond.
+    if (order_map.size > 0 || mgr.has_orders) {
+      const n_now = mgr.count
+      const pb = mgr.pairs_buffer
+      const jb = mgr.jimages_buffer
+      mgr.begin_orders_batch()
+      // Lazy first allocation stays gated on a non-empty map; once the buffer
+      // exists the has_orders branch keeps it in sync.
+      if (order_map.size > 0) mgr.ensure_orders()
+      try {
+        for (let slot = 0; slot < n_now; slot++) {
+          const a = pb[slot * 2]
+          const b = pb[slot * 2 + 1]
+          const sjx = jb[slot * 3]
+          const sjy = jb[slot * 3 + 1]
+          const sjz = jb[slot * 3 + 2]
+          const ord = order_map.get(get_bond_key(a, b, [sjx, sjy, sjz])) ?? 1
+          mgr.set_order(slot, ord)
+        }
+      } finally {
+        mgr.commit_orders_batch()
+      }
     }
   })
 
@@ -5441,10 +5502,18 @@
           {hide_incomplete_bonds}
           {image_atom_layout}
           {partner_drawn_lookup}
+          multibond_enabled={bond_order_perception}
           {depth_cue_uniforms}
           {light_dir}
           highlight_strength={active_highlight_strength}
         />
+      {/if}
+
+      <!-- Aromatic ring overlay — one dashed circle inside each aromatic ring.
+           Gated by the SAME bond_order_perception toggle: when OFF,
+           `aromatic_rings` is the shared empty array → nothing drawn. -->
+      {#if show_bulk_atoms && bond_order_perception && aromatic_rings.length > 0}
+        <AromaticRingOverlay rings={aromatic_rings} />
       {/if}
 
       <!-- Hydrogen bond rendering (dashed cylinders) -->

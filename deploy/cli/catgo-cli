@@ -1,0 +1,8 @@
+#!/bin/sh
+# CatGo CLI — thin wrapper. The bundled `catgo-server` sidecar contains the full
+# `catgo` Python package and dispatches CLI subcommands (dos/band/cohp/freq/
+# slab/supercell/reticular/convert/inspect/push/pull/submit/campaign/…) to
+# catgo.cli. This exposes them as `catgo-cli <subcommand>` so an app-only
+# install (no pip) still has the CLI. The desktop app binary is `catgo` (GUI),
+# hence the distinct `catgo-cli` name to avoid the collision.
+exec /usr/bin/catgo-server "$@"

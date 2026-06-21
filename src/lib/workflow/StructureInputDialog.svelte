@@ -8,6 +8,13 @@
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
   import PubchemSearchModal from '$lib/structure/PubchemSearchModal.svelte'
+  import {
+    electronic_props_from_mp,
+    electronic_props_from_optimade,
+    type ElectronicProps,
+  } from '$lib/structure/electronic_preview'
+  import { extract_provider_details } from '$lib/api/optimade'
+  import type { MPSummaryData } from '$lib/api/materials-project'
   import { is_trajectory_file, parse_trajectory_async, MAX_BIN_FILE_SIZE, MAX_TEXT_FILE_SIZE } from '$lib/trajectory/parse'
   import type { TrajectoryType } from '$lib/trajectory'
   import type { PymatgenStructure } from '$lib/structure'
@@ -77,6 +84,7 @@
   let db_preview_formula = $state(``)
   let db_preview_details = $state<Array<{ label: string; value: string; mono?: boolean }>>([])
   let db_preview_lattice = $state<{ a: number; b: number; c: number; alpha: number; beta: number; gamma: number } | null>(null)
+  let db_preview_electronic = $state<ElectronicProps | null>(null)
 
   // ─── Trajectory state ───
   // IMPORTANT: trajectory stored as non-reactive to avoid Svelte proxifying
@@ -537,7 +545,11 @@
     }
   }
 
-  function handle_optimade_preview(optimade_struct: any, structure: PymatgenStructure) {
+  function handle_optimade_preview(
+    optimade_struct: any,
+    structure: PymatgenStructure,
+    mp_summary: MPSummaryData | null = null,
+  ) {
     db_preview_pymatgen = structure
     const attrs = optimade_struct?.attributes ?? {}
     const provider = attrs.database_provider ?? `OPTIMADE`
@@ -546,6 +558,15 @@
     const sites =
       attrs.n_sites ??
       (Array.isArray(attrs.cartesian_site_positions) ? attrs.cartesian_site_positions.length : 0)
+
+    let elec: ElectronicProps
+    if (mp_summary) {
+      elec = electronic_props_from_mp(mp_summary)
+    } else {
+      const pd = extract_provider_details(attrs as Record<string, unknown>)
+      elec = electronic_props_from_optimade(pd)
+    }
+    ;(structure as PymatgenStructure)._electronic_props = elec
 
     db_preview_title = `Preview Structure Import`
     db_preview_formula = formula
@@ -556,6 +577,7 @@
       { label: `Sites:`, value: String(sites) },
       { label: `Database:`, value: provider },
     ]
+    db_preview_electronic = elec
     show_db_preview = true
   }
 
@@ -587,6 +609,7 @@
     db_preview_formula = formula
     db_preview_lattice = null
     db_preview_details = rows
+    db_preview_electronic = null // PubChem is molecular — no band/Fermi
     show_db_preview = true
   }
 
@@ -599,6 +622,7 @@
     show_db_preview = false
     db_preview_pymatgen = null
     db_preview_details = []
+    db_preview_electronic = null
     db_preview_formula = ``
     db_preview_lattice = null
     // Close the underlying search modal too
@@ -610,6 +634,7 @@
     show_db_preview = false
     db_preview_pymatgen = null
     db_preview_details = []
+    db_preview_electronic = null
     db_preview_formula = ``
     db_preview_lattice = null
     // Leave the search modal open so the user can pick a different result
@@ -963,6 +988,24 @@
   title={db_preview_title}
   formula={db_preview_formula}
   details={db_preview_details}
+  electronic_props={db_preview_electronic}
+  electronic_labels={{
+    band_gap: t(`structure.preview_band_gap`),
+    is_metal: t(`structure.preview_is_metal`),
+    efermi: t(`structure.preview_efermi`),
+    cbm: t(`structure.preview_cbm`),
+    vbm: t(`structure.preview_vbm`),
+    dos_available: t(`structure.preview_dos_available`),
+    bands_available: t(`structure.preview_bands_available`),
+    magnetic_ordering: t(`structure.preview_magnetic_ordering`),
+    yes: t(`structure.preview_yes`),
+    no: t(`structure.preview_no`),
+    available: t(`structure.preview_available`),
+    not_available: t(`structure.preview_not_available`),
+    metallic: t(`structure.preview_metallic`),
+    missing: t(`structure.preview_missing`),
+  }}
+  electronic_heading={t(`structure.preview_electronic_heading`)}
   lattice_params={db_preview_lattice}
 />
 

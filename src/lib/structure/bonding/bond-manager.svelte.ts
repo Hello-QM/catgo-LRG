@@ -67,6 +67,13 @@ export class BondManager {
 	#opacity_batch_depth = 0;
 	#opacity_batch_changed = false;
 
+	// Optional per-bond order channel (1 float per bond, default 1.0). Lazy:
+	// the buffer stays null until ensure_orders() runs, so the default-OFF
+	// path pays zero memory cost and orders_buffer returns null.
+	#orders_buffer: Float32Array | null = null;
+	#orders_batch_depth = 0;
+	#orders_batch_changed = false;
+
 	constructor(initial_capacity: number = INITIAL_CAPACITY) {
 		const cap = Math.max(1, initial_capacity | 0);
 		this.#capacity = cap;
@@ -174,6 +181,12 @@ export class BondManager {
 			new_opacity.set(this.#opacity_buffer.subarray(0, this.#count));
 			this.#opacity_buffer = new_opacity;
 		}
+		if (this.#orders_buffer !== null) {
+			const new_orders = new Float32Array(new_cap);
+			new_orders.fill(1);
+			new_orders.set(this.#orders_buffer.subarray(0, this.#count));
+			this.#orders_buffer = new_orders;
+		}
 		this.#capacity = new_cap;
 	}
 
@@ -211,6 +224,12 @@ export class BondManager {
 			new_opacity.fill(1);
 			new_opacity.set(this.#opacity_buffer.subarray(0, this.#count));
 			this.#opacity_buffer = new_opacity;
+		}
+		if (this.#orders_buffer !== null) {
+			const new_orders = new Float32Array(target);
+			new_orders.fill(1);
+			new_orders.set(this.#orders_buffer.subarray(0, this.#count));
+			this.#orders_buffer = new_orders;
 		}
 		this.#capacity = target;
 		this.#dirty_all = true;
@@ -434,6 +453,9 @@ export class BondManager {
 			if (this.#opacity_buffer !== null) {
 				this.#opacity_buffer[slot] = this.#opacity_buffer[last];
 			}
+			if (this.#orders_buffer !== null) {
+				this.#orders_buffer[slot] = this.#orders_buffer[last];
+			}
 			this.#touch(slot);
 		}
 		this.#count = last;
@@ -474,6 +496,9 @@ export class BondManager {
 				}
 				if (this.#opacity_buffer !== null) {
 					this.#opacity_buffer[s] = this.#opacity_buffer[last];
+				}
+				if (this.#orders_buffer !== null) {
+					this.#orders_buffer[s] = this.#orders_buffer[last];
 				}
 				this.#touch(s);
 			}
@@ -524,6 +549,9 @@ export class BondManager {
 				}
 				if (this.#opacity_buffer !== null) {
 					this.#opacity_buffer[write] = this.#opacity_buffer[read];
+				}
+				if (this.#orders_buffer !== null) {
+					this.#orders_buffer[write] = this.#orders_buffer[read];
 				}
 				if (first_change === -1) first_change = write;
 				last_change = read;
@@ -592,6 +620,7 @@ export class BondManager {
 		const colors_start = this.#colors_start;
 		const colors_end = this.#colors_end;
 		const opacity = this.#opacity_buffer;
+		const orders = this.#orders_buffer;
 		let write = 0;
 		let first_change = -1;
 		let last_change = -1;
@@ -629,6 +658,9 @@ export class BondManager {
 					}
 					if (opacity !== null) {
 						opacity[write] = opacity[read];
+					}
+					if (orders !== null) {
+						orders[write] = orders[read];
 					}
 					jimages[write * 3] = jimages[read * 3];
 					jimages[write * 3 + 1] = jimages[read * 3 + 1];
@@ -898,6 +930,81 @@ export class BondManager {
 		}
 	}
 
+	// -----------------------------------------------------------------
+	// Optional per-bond order (1 float per bond). Same lazy pattern as
+	// opacity: the buffer stays null until ensure_orders() runs, so the
+	// default-OFF path pays zero memory cost and orders_buffer returns null.
+	// Default value for every allocated slot is 1.0 (single bond).
+	// -----------------------------------------------------------------
+
+	/** True once the order buffer has been allocated. */
+	get has_orders(): boolean {
+		return this.#orders_buffer !== null;
+	}
+
+	/** Backing order buffer; valid range [0, count). Null if never initialized. */
+	get orders_buffer(): Float32Array | null {
+		return this.#orders_buffer;
+	}
+
+	/** Read one bond's order; 1.0 when the buffer is unallocated or out of range. */
+	get_order(slot: number): number {
+		if (this.#orders_buffer === null || slot < 0 || slot >= this.#count) return 1;
+		return this.#orders_buffer[slot];
+	}
+
+	/**
+	 * Allocate the order buffer if not yet allocated. Idempotent.
+	 * Initial value is 1.0 for every slot. When first allocated with live
+	 * bonds, marks all live slots dirty.
+	 */
+	ensure_orders(): void {
+		if (this.#orders_buffer !== null) return;
+		this.#orders_buffer = new Float32Array(this.#capacity);
+		this.#orders_buffer.fill(1);
+		if (this.#count > 0) {
+			this.#touch_range(0, this.#count - 1);
+			if (this.#orders_batch_depth > 0) {
+				this.#orders_batch_changed = true;
+			} else {
+				this.#version++;
+			}
+		}
+	}
+
+	/**
+	 * Write one bond's order. Lazy-allocates the buffer if needed.
+	 * No-op when slot out of range OR value matches stored value.
+	 */
+	set_order(slot: number, value: number): void {
+		if (slot < 0 || slot >= this.#count) return;
+		if (this.#orders_buffer === null) this.ensure_orders();
+		const buf = this.#orders_buffer!;
+		if (buf[slot] === value) return;
+		buf[slot] = value;
+		this.#touch(slot);
+		if (this.#orders_batch_depth > 0) {
+			this.#orders_batch_changed = true;
+		} else {
+			this.#version++;
+		}
+	}
+
+	/** Begin a batched order update (see begin_opacity_batch). */
+	begin_orders_batch(): void {
+		this.#orders_batch_depth++;
+	}
+
+	/** End a batched order update (see commit_opacity_batch). */
+	commit_orders_batch(): void {
+		if (this.#orders_batch_depth === 0) return;
+		this.#orders_batch_depth--;
+		if (this.#orders_batch_depth === 0 && this.#orders_batch_changed) {
+			this.#orders_batch_changed = false;
+			this.#version++;
+		}
+	}
+
 	/**
 	 * Replace all AUTO bonds with a fresh set. `pairs_src` must contain
 	 * at least `2 * n_bonds` entries; new bonds are all tagged AUTO.
@@ -954,6 +1061,9 @@ export class BondManager {
 				}
 				if (this.#opacity_buffer !== null) {
 					this.#opacity_buffer[write] = this.#opacity_buffer[read];
+				}
+				if (this.#orders_buffer !== null) {
+					this.#orders_buffer[write] = this.#orders_buffer[read];
 				}
 				if (first_change === -1) first_change = write;
 				last_change = read;

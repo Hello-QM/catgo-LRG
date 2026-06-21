@@ -150,6 +150,12 @@ export interface OptimadeStructure {
     // Electronic properties
     _mp_band_gap?: number // eV
     _mp_is_metal?: boolean
+    _mp_efermi?: number // eV
+    _mp_cbm?: number // eV
+    _mp_vbm?: number // eV
+    _mp_ordering?: string // 'FM' | 'AFM' | 'NM' | 'FiM' | 'Unknown'
+    _mp_magnetism?: Record<string, unknown> // nested dict { ordering, total_magnetization, ... }
+    _mp_has_props?: Record<string, boolean>
     // Alternative naming conventions
     _exmpl_band_gap?: number
     _odbx_band_gap?: number
@@ -259,6 +265,13 @@ export async function fetch_optimade_structure(
 ): Promise<OptimadeStructure | null> {
   const encoded_id = encode_structure_id(structure_id)
 
+  // Request the same provider-specific extras the list-search asks for —
+  // MP's OPTIMADE adapter (and several others) only return `_<provider>_*`
+  // fields when explicitly listed via response_fields. Without this, the
+  // full-record fetch comes back with standard OPTIMADE fields only, so
+  // band_gap / is_metal / efermi / etc. would never reach the preview.
+  const response_fields = build_response_fields(provider)
+
   const is_static = (typeof __CATGO_STATIC_ONLY__ !== `undefined` && __CATGO_STATIC_ONLY__) || isMobile()
   let url: string
   if (vscode_api || is_static) {
@@ -272,19 +285,36 @@ export async function fetch_optimade_structure(
     if (provider === `mp` || provider === `mpdd`) {
       base_url = `https://optimade.materialsproject.org`
     }
-    // Try common endpoint patterns
     url = `${base_url}/v1/structures/${encoded_id}`
+    if (response_fields) url += `?response_fields=${encodeURIComponent(response_fields)}`
   } else {
     // Backend proxy
     url = `${API_BASE}/optimade/structure/${provider}/${encoded_id}`
+    if (response_fields) url += `?response_fields=${encodeURIComponent(response_fields)}`
   }
 
   try {
-    const data = await fetch_json_smart(url) as { data?: OptimadeStructure }
+    let data = await fetch_json_smart(url) as { data?: OptimadeStructure }
+    // Some providers reject unknown response_fields with 400; retry without
+    // it so the import path still works even if extras are unavailable.
+    if (!data?.data && response_fields) {
+      const fallback_url = url.replace(/[?&]response_fields=[^&]*/, ``)
+      data = await fetch_json_smart(fallback_url) as { data?: OptimadeStructure }
+    }
     return data.data || null
   } catch (error) {
     if (error instanceof Error && error.message.includes(`404`)) {
       return null
+    }
+    // 400 from a provider that rejects response_fields — retry plain
+    if (
+      error instanceof Error
+      && response_fields
+      && (error.message.includes(`400`) || error.message.includes(`Bad Request`))
+    ) {
+      const fallback_url = url.replace(/[?&]response_fields=[^&]*/, ``)
+      const data = await fetch_json_smart(fallback_url) as { data?: OptimadeStructure }
+      return data.data || null
     }
     throw error
   }
@@ -384,6 +414,12 @@ const PROVIDER_EXTRA_FIELDS: Record<string, string[]> = {
     `_mp_band_gap`,
     `_mp_is_stable`,
     `_mp_is_metal`,
+    `_mp_efermi`,
+    `_mp_cbm`,
+    `_mp_vbm`,
+    `_mp_ordering`,
+    `_mp_magnetism`,
+    `_mp_has_props`,
     `_mp_crystal_system`,
     `_mp_spacegroup_symbol`,
     `_mp_spacegroup_number`,
@@ -711,6 +747,12 @@ export interface ProviderDetails {
   formation_energy?: number
   is_stable?: boolean
   is_metal?: boolean
+  efermi?: number
+  cbm?: number
+  vbm?: number
+  magnetic_ordering?: string
+  has_dos?: boolean
+  has_bandstructure?: boolean
   /** Any other interesting extended fields keyed by display label. */
   extra: Record<string, string | number | boolean>
 }
@@ -732,6 +774,11 @@ const DETAIL_PATTERNS: {
   { key: `formation_energy`, regex: /^_\w+_(formation|enthalpy_formation|delta_e)/ },
   { key: `is_stable`, regex: /^_\w+_is_stable$/ },
   { key: `is_metal`, regex: /^_\w+_is_metal$/ },
+  // Electronic-structure scalars (typically MP-only on OPTIMADE today).
+  { key: `efermi`, regex: /^_\w+_(efermi|fermi_energy)$/i },
+  { key: `cbm`, regex: /^_\w+_cbm$/i },
+  { key: `vbm`, regex: /^_\w+_vbm$/i },
+  { key: `magnetic_ordering`, regex: /^_\w+_(ordering|magnetic_ordering)$/i },
 ]
 
 /**
@@ -753,7 +800,7 @@ export function extract_provider_details(
     // the flat _mp_energy_above_hull / _mp_formation_energy_per_atom fields now
     // return null. Prefer gga_gga+u (MP's default mixed thermo — matches the
     // REST summary numbers), falling back to the first entry.
-    if (attr_key === `_mp_stability` && typeof attr_val === `object`) {
+    if (attr_key === `_mp_stability` && typeof attr_val === `object` && attr_val !== null) {
       const thermos = attr_val as Record<string, Record<string, unknown>>
       const entry = thermos[`gga_gga+u`] ?? Object.values(thermos)[0]
       if (entry && typeof entry === `object`) {
@@ -763,6 +810,27 @@ export function extract_provider_details(
         if (typeof entry.formation_energy_per_atom === `number` && details.formation_energy === undefined) {
           details.formation_energy = entry.formation_energy_per_atom
         }
+      }
+      continue
+    }
+
+    // MP nests magnetism data: { ordering: 'FM'|'AFM'|'NM'|..., total_magnetization, ... }.
+    if (attr_key === `_mp_magnetism` && typeof attr_val === `object` && attr_val !== null) {
+      const mag = attr_val as Record<string, unknown>
+      if (typeof mag.ordering === `string` && details.magnetic_ordering === undefined) {
+        details.magnetic_ordering = mag.ordering
+      }
+      continue
+    }
+
+    // MP availability flags: { dos: true, bandstructure: true, ... }.
+    if (attr_key === `_mp_has_props` && typeof attr_val === `object` && attr_val !== null) {
+      const props = attr_val as Record<string, unknown>
+      if (typeof props.dos === `boolean` && details.has_dos === undefined) {
+        details.has_dos = props.dos
+      }
+      if (typeof props.bandstructure === `boolean` && details.has_bandstructure === undefined) {
+        details.has_bandstructure = props.bandstructure
       }
       continue
     }
@@ -777,6 +845,9 @@ export function extract_provider_details(
           `energy_above_hull`,
           `formation_energy`,
           `spacegroup_number`,
+          `efermi`,
+          `cbm`,
+          `vbm`,
         ]
         if (numeric_keys.includes(key) && typeof attr_val !== `number`) continue
         ;(details as unknown as Record<string, unknown>)[key] = attr_val

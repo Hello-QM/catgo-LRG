@@ -53,6 +53,8 @@ import { iter_workflow_slices } from '$lib/workflow/workflow-state.svelte'
 import { VIEWER_TOOLS } from './viewer-tools'
 import { TERMINAL_TOOLS } from './terminal-tools'
 import { CAMPAIGN_TOOLS } from './campaign-tools'
+import { WORKFLOW_TOOL_DEFINITIONS } from './workflow-tools'
+import { execute_workflow_tool } from './workflow-tool-executor'
 import { list_viewers, resolve_viewer } from '$lib/structure/viewer-registry.svelte'
 
 /** Minimal pymatgen-site shape the mutate executors read/write. */
@@ -1611,6 +1613,22 @@ function resolve_workflow_id(arg?: unknown): string {
   return ``
 }
 
+/**
+ * Resolve the tab id whose WorkflowEditor is active. The workflow build/edit
+ * tools dispatch into `execute_workflow_tool(name, input, tab_id)`, which looks
+ * up the per-tab action handler the WorkflowEditor registers under its slice id.
+ * Mirrors resolve_workflow_id but returns the slice/tab KEY (prefer the tab
+ * holding an open workflow; else the first slice).
+ */
+function resolve_workflow_tab_id(): string {
+  let first = ``
+  for (const [tab_id, slice] of iter_workflow_slices()) {
+    if (!first) first = tab_id
+    if (slice.active_workflow.id) return tab_id
+  }
+  return first
+}
+
 // ── run_workflow (mutate — submits real HPC jobs / burns compute) ──
 register(
   {
@@ -1739,6 +1757,38 @@ export async function execute_tool(
 for (const { def, run } of VIEWER_TOOLS) register(def, run)
 for (const { def, run } of TERMINAL_TOOLS) register(def, run)
 for (const { def, run } of CAMPAIGN_TOOLS) register(def, run)
+
+// Workflow build/edit tools (create_workflow / add_node / connect_nodes /
+// set_node_params / validate_workflow / …). These were defined in
+// workflow-tools.ts and fully implemented in workflow-tool-executor.ts, but
+// never registered into the client tool set — so client-direct providers
+// (DeepSeek / Qwen / Kimi) could only run_workflow, not BUILD or MODIFY a
+// workflow. Wire them through execute_workflow_tool here. Skips: run_workflow
+// (registered above with a richer saved-config impl) and plan_and_build_workflow
+// (no executor handler yet — SDK/MCP path only).
+const WORKFLOW_READONLY_TOOLS = new Set([
+  `list_workflows`,
+  `get_workflow_status`,
+  `get_workflow_templates`,
+  `validate_workflow`,
+  `suggest_params`,
+  `get_node_definitions`,
+  `get_calculation_guidelines`,
+  `get_step_error`,
+  `get_batch_status`,
+  `compute_oer_overpotential`,
+  `compute_free_energy`,
+  `list_vasp_presets`,
+])
+for (const def of WORKFLOW_TOOL_DEFINITIONS) {
+  if (def.name === `plan_and_build_workflow`) continue // no executor handler yet
+  if (REGISTRY.has(def.name)) continue // e.g. run_workflow already registered
+  const kind: ToolKind = WORKFLOW_READONLY_TOOLS.has(def.name) ? `read` : `mutate`
+  register(
+    { ...def, kind },
+    (input) => execute_workflow_tool(def.name, input, resolve_workflow_tab_id()),
+  )
+}
 
 // Re-export so later tasks can register mutating tools that write structures back.
 export { register, set_current_structure }

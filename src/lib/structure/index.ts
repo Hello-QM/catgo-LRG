@@ -109,7 +109,18 @@ export type PymatgenLattice = {
   volume: number
 } & LatticeParams
 
-export type PymatgenMolecule = { sites: Site[]; charge?: number; id?: string; properties?: Record<string, unknown> }
+export type PymatgenMolecule = {
+  sites: Site[]
+  charge?: number
+  id?: string
+  properties?: Record<string, unknown>
+  /** Session-local electronic-structure metadata stashed by database-import
+   * handlers (band gap / efermi / cbm / vbm / magnetism / DOS+bands
+   * availability) for the preview overlays. Off the pymatgen schema, so it does
+   * NOT survive a backend round-trip — and must be cleared on structural edits
+   * (it describes the originally-imported material). */
+  _electronic_props?: import('./electronic_preview').ElectronicProps
+}
 export type PymatgenStructure = PymatgenMolecule & { lattice: PymatgenLattice }
 
 export type Edge = { to_jimage: Vec3; id: number; key: number }
@@ -150,6 +161,13 @@ export type BondPair = {
    * if it is the zero vector (molecules, intra-cell bonds, manual bonds).
    */
   jimage: [number, number, number]
+  /**
+   * Perceived bond order for adsorbate fragments: 1 (single, default), 1.5
+   * (aromatic), 2 (double), 3 (triple). Purely additive — only the multi-bond
+   * instanced renderer reads it, and only when `bond_order_perception` is on.
+   * Absent / 1 renders as a plain single stick, byte-identical to today.
+   */
+  order?: number
 }
 
 // Topology-only hydrogen bond data (no positions or transforms).

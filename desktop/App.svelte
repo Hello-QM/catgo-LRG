@@ -38,6 +38,13 @@
   import type { AppTab } from './TabBar.svelte'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
+  import {
+    electronic_props_from_mp,
+    electronic_props_from_optimade,
+    type ElectronicProps,
+  } from '$lib/structure/electronic_preview'
+  import { extract_provider_details } from '$lib/api/optimade'
+  import type { MPSummaryData } from '$lib/api/materials-project'
   import PasteContentModal from '$lib/structure/PasteContentModal.svelte'
   import MonacoEditorPanel from '$lib/structure/MonacoEditorPanel.svelte'
   import type { PymatgenStructure } from '$lib/structure'
@@ -149,7 +156,10 @@
   import CloseAllModal from './components/CloseAllModal.svelte'
   import DownloadManager from './components/DownloadManager.svelte'
 
-  init_i18n().then(() => load_i18n_module(`app`))
+  init_i18n().then(() => {
+    load_i18n_module(`app`)
+    load_i18n_module(`structure`)
+  })
 
   // ========== Tab Management (extracted to ./lib/tab-manager.svelte.ts) ==========
   const tm = create_tab_manager()
@@ -1069,7 +1079,11 @@
     }
   }
 
-  function handle_optimade_preview(optimade_struct: any, structure: PymatgenStructure) {
+  function handle_optimade_preview(
+    optimade_struct: any,
+    structure: PymatgenStructure,
+    mp_summary: MPSummaryData | null = null,
+  ) {
     modal.db_preview_pymatgen = structure
     const attrs = optimade_struct?.attributes ?? {}
     const provider = attrs.database_provider ?? `OPTIMADE`
@@ -1078,6 +1092,20 @@
     const sites =
       attrs.n_sites ??
       (Array.isArray(attrs.cartesian_site_positions) ? attrs.cartesian_site_positions.length : 0)
+
+    // Build electronic-structure props: prefer the MP REST summary (rich
+    // surface — cbm/vbm/efermi/has_props/ordering); otherwise extract whatever
+    // the OPTIMADE adapter exposed under `_<provider>_*`.
+    let elec: ElectronicProps
+    if (mp_summary) {
+      elec = electronic_props_from_mp(mp_summary)
+    } else {
+      const pd = extract_provider_details(attrs as Record<string, unknown>)
+      elec = electronic_props_from_optimade(pd)
+    }
+    // Stash on the pending pymatgen so the metadata rides through Confirm
+    // into the loaded structure (consumed by StructureInfoPane / overlays).
+    ;(structure as AnyStructure)._electronic_props = elec
 
     modal.db_preview_title = t(`app.preview_structure_import`)
     modal.db_preview_formula = formula
@@ -1088,6 +1116,7 @@
       { label: t(`app.field_sites`), value: String(sites) },
       { label: t(`app.field_database`), value: provider },
     ]
+    modal.db_preview_electronic = elec
     modal.db_preview_visible = true
   }
 
@@ -1120,6 +1149,7 @@
     modal.db_preview_formula = formula
     modal.db_preview_lattice = null
     modal.db_preview_details = rows
+    modal.db_preview_electronic = null // PubChem is molecular — no band/Fermi
     modal.db_preview_visible = true
   }
 
@@ -1135,6 +1165,7 @@
     modal.db_preview_visible = false
     modal.db_preview_pymatgen = null
     modal.db_preview_details = []
+    modal.db_preview_electronic = null
     modal.db_preview_formula = ``
     modal.db_preview_lattice = null
   }
@@ -2748,6 +2779,24 @@
   title={modal.db_preview_title}
   formula={modal.db_preview_formula}
   details={modal.db_preview_details}
+  electronic_props={modal.db_preview_electronic}
+  electronic_labels={{
+    band_gap: t(`structure.preview_band_gap`),
+    is_metal: t(`structure.preview_is_metal`),
+    efermi: t(`structure.preview_efermi`),
+    cbm: t(`structure.preview_cbm`),
+    vbm: t(`structure.preview_vbm`),
+    dos_available: t(`structure.preview_dos_available`),
+    bands_available: t(`structure.preview_bands_available`),
+    magnetic_ordering: t(`structure.preview_magnetic_ordering`),
+    yes: t(`structure.preview_yes`),
+    no: t(`structure.preview_no`),
+    available: t(`structure.preview_available`),
+    not_available: t(`structure.preview_not_available`),
+    metallic: t(`structure.preview_metallic`),
+    missing: t(`structure.preview_missing`),
+  }}
+  electronic_heading={t(`structure.preview_electronic_heading`)}
   lattice_params={modal.db_preview_lattice}
 />
 

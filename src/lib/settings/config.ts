@@ -180,6 +180,13 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       value: {},
       description: `Additional parameters for the bonding strategy`,
     },
+    bond_order_perception: {
+      value: false,
+      description:
+        `Perceive double/triple/aromatic bond orders across the whole structure ` +
+        `— adsorbates and carbon-based frameworks (graphene/C3N4/h-BN/COF) alike ` +
+        `(metals stay single sticks)`,
+    },
     bond_scale: {
       value: 1.15,
       description:

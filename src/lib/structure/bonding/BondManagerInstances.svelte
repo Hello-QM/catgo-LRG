@@ -90,6 +90,13 @@
      *  Multiplies the bond glossy spec term; 1.0 = byte-identical legacy look.
      *  Written live into uSpecStrength. */
     highlight_strength?: number
+    /**
+     * Adsorbate bond-order rendering. When true, each logical bond reserves 6
+     * instances (3 lines × 2 halves) and bonds whose perceived order > 1 draw
+     * as multi-cylinder double/triple/aromatic bonds. Default false → the
+     * verbatim single-cylinder (2 instances/bond) path, byte-identical to today.
+     */
+    multibond_enabled?: boolean
   }
 
   let {
@@ -113,6 +120,7 @@
     partner_drawn_lookup = null,
     light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
     highlight_strength = 1.0,
+    multibond_enabled = false,
   }: Props = $props()
 
   let mesh = $state<InstancedMesh | undefined>()
@@ -359,6 +367,9 @@
       // bond_manager.version).
       () => atom_colors ?? null,
     )
+    // Apply the multi-bond flag BEFORE the first resync so the initial mesh
+    // layout uses the correct per-slot stride.
+    r.set_multibond(untrack(() => multibond_enabled), untrack(() => bond_radius))
     renderer = r
     r.force_full_resync()
     mark_dirty()
@@ -385,7 +396,13 @@
     void image_atom_layout
     void partner_drawn_lookup
     void atom_colors
+    // Toggling multi-bond rendering (or changing the base radius used to size
+    // the per-line gap / reduced radius) changes the per-slot instance stride
+    // and geometry, so re-lay-out the whole mesh.
+    const mb = multibond_enabled
+    const br = bond_radius
     if (!renderer) return
+    renderer.set_multibond(mb, br)
     renderer.force_full_resync()
     mark_dirty()
   })
