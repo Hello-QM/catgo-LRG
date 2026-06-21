@@ -391,18 +391,50 @@ TOOLS = [
     Tool(
         name="catgo_view",
         description=(
-            "Read CatGO viewer state. "
+            "Read CatGO viewer state and drive its atom selection. "
             "get_state: structure summary + selection. "
             "selection: selected atom details. "
-            "screenshot: capture 3D view image."
+            "screenshot: capture 3D view image. "
+            "select: highlight atoms in the viewer using a selection DSL query "
+            "(returns the resolved 0-based atom indices). "
+            "Selection DSL — combine selectors with AND/OR/NOT (or & | !) and "
+            "parentheses; AND binds tighter than OR. Selectors:\n"
+            "  *                all atoms\n"
+            "  elem:O           atoms of an element (case-insensitive)\n"
+            "  label:O1         per-element 1-BASED ordinal (O1=first O); O1-5 = range\n"
+            "  label:3          bare number = 1-BASED GLOBAL site number; 3-7 = range\n"
+            "  ids:0,4,5        literal 0-BASED indices (out-of-range dropped)\n"
+            "  id:7             single 0-BASED index\n"
+            "  pos:z>10         cartesian Å on x/y/z; ops > < >= <= = == !=\n"
+            "  frac:c>0.5       fractional on a/b/c (empty if no lattice)\n"
+            "  bonded:@i        bond-neighbours of atom i (PBC-aware; excludes i)\n"
+            "  sphere:@i;R      atoms within R Å of atom i (PBC-aware; includes i)\n"
+            "Examples: 'elem:O AND frac:c>0.9'  '(elem:C OR elem:N) AND pos:z>5'  "
+            "'elem:H AND NOT bonded:@0'. "
+            "NOTE: ids:/id: are 0-based, but label: numbering is 1-based — prefer "
+            "ids: for index work. mode=replace|add|subtract controls how the result "
+            "merges with the current selection."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get_state", "selection", "screenshot"],
-                    "description": "get_state=summary, selection=atoms, screenshot=image",
+                    "enum": ["get_state", "selection", "screenshot", "select"],
+                    "description": "get_state=summary, selection=atoms, screenshot=image, select=apply DSL query",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Selection DSL query (required for action=select), e.g. 'elem:O AND frac:c>0.9'.",
+                },
+                "panel_id": {
+                    "type": "string",
+                    "description": "Target viewer/panel id (default 'default' → backend resolves the populated pane).",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["replace", "add", "subtract"],
+                    "description": "How the resolved indices merge with the current selection (default replace).",
                 },
             },
             "required": ["action"],
@@ -1968,7 +2000,32 @@ async def _handle_view(client: httpx.AsyncClient, args: dict) -> list[TextConten
         data = resp.json()
         return [T(type="text", text=f"Screenshot captured ({data.get('width')}x{data.get('height')}). Base64 image: {data.get('image', '')[:100]}...")]
 
-    return [T(type="text", text=f"Unknown view action '{action}'. Valid: get_state, selection, screenshot")]
+    if action == "select":
+        query = args.get("query")
+        if not query or not str(query).strip():
+            return [T(type="text", text="catgo_view select: 'query' is required (a selection DSL string).")]
+        # Reuse the SAME per-viewer command bus catgo_pane rides — no new bridge
+        # endpoint needed. The frontend parses the DSL against the panel's CURRENT
+        # structure, applies the selection, and posts the resolved indices back.
+        payload = {
+            "viewer_id": str(args.get("panel_id", "default")) or "default",
+            "action": "select_atoms",
+            "arguments": {
+                "query": str(query),
+                "mode": str(args.get("mode", "replace") or "replace"),
+            },
+        }
+        resp = await client.post(f"{API_BASE}/view/command", json=payload)
+        if resp.status_code != 200:
+            return [T(type="text", text=f"catgo_view select failed ({resp.status_code}): {resp.text[:300]}")]
+        data = resp.json()
+        if not data.get("ok", False):
+            # Surface the bridge error verbatim (e.g. "viewer not mounted",
+            # or a DSL parse error from the frontend) rather than swallowing it.
+            return [T(type="text", text=f"catgo_view select failed: {data.get('error', 'unknown error')}")]
+        return [T(type="text", text=json.dumps(data.get("result", {}), ensure_ascii=False))]
+
+    return [T(type="text", text=f"Unknown view action '{action}'. Valid: get_state, selection, screenshot, select")]
 
 
 async def _handle_catalysis(client: httpx.AsyncClient, args: dict) -> list[TextContent]:

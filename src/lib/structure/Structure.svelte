@@ -146,6 +146,7 @@
 
   import { add_atom, delete_atoms, move_atom, move_atoms_by_displacement, concatenate_structures, merge_structures, replace_atom } from './atom-manipulation'
   import { build_atom_graph } from './atom-graph'
+  import { select_atoms } from './select-dsl'
   import { scale_structure_geometry } from '$lib/trajectory/operations'
   import OptimadeSearchModal from './OptimadeSearchModal.svelte'
   import OptimadePreviewModal from './OptimadePreviewModal.svelte'
@@ -2428,6 +2429,26 @@
   function handle_structure_command(action: string, args: Record<string, unknown>) {
     if (action === `inspect`) return { atoms: inspect_viewer_atoms() }
     if (!structure) throw new Error(`No structure loaded.`)
+    if (action === `select_atoms`) {
+      // Pure DSL evaluation against the viewer's CURRENT structure. The parser
+      // is total — a malformed query returns {error}, which we surface as a
+      // thrown Error so the MCP bridge reports it back to the agent verbatim.
+      const query = String(args.query ?? ``)
+      const res = select_atoms(query, structure)
+      if (`error` in res) throw new Error(res.error)
+      const next = [...res.indices].sort((a, b) => a - b)
+      const mode = String(args.mode ?? `replace`)
+      if (mode === `add`) {
+        selected_sites = [...new Set([...selected_sites, ...next])].sort((a, b) => a - b)
+      } else if (mode === `subtract`) {
+        selected_sites = selected_sites.filter((i) => !res.indices.has(i))
+      } else {
+        selected_sites = next
+      }
+      // push_loop mirrors selected_sites to /view/selection so catgo_view
+      // action="selection" reads the same set back.
+      return { scope: `viewer`, query, mode, count: selected_sites.length, indices: selected_sites }
+    }
     if (action === `add_atom`) {
       const element = String(args.element ?? ``) as ElementSymbol
       const position = Array.isArray(args.position) ? args.position.map(Number) : []
