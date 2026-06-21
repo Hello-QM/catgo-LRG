@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { COHPSeries } from './cohp_types'
   import { plot_theme_colors } from './plot-theme.svelte'
+  import { PALETTE_PRESETS } from './palettes'
 
   let {
     energies = [],
@@ -55,11 +56,6 @@
   let container_div: HTMLDivElement | undefined = $state()
   let Plotly: any = $state(null)
   let container_height: number = $state(400)
-
-  const DEFAULT_COLORS = [
-    `#1f77b4`, `#ff7f0e`, `#2ca02c`, `#d62728`, `#9467bd`,
-    `#8c564b`, `#e377c2`, `#7f7f7f`, `#bcbd22`, `#17becf`,
-  ]
 
   const is_horizontal = $derived(orientation === `horizontal`)
 
@@ -140,7 +136,7 @@
     for (let i = 0; i < series.length; i++) {
       const s = series[i]
       const style = line_styles[s.label] ?? {}
-      const color = style.color ?? DEFAULT_COLORS[i % DEFAULT_COLORS.length]
+      const color = style.color ?? PALETTE_PRESETS.default[i % PALETTE_PRESETS.default.length]
       const dash = style.dash ?? `solid`
       const lw = style.width ?? 1.5
       const is_hidden = hidden_set.has(s.label)

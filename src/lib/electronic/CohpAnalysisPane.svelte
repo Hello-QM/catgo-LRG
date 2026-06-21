@@ -11,6 +11,7 @@
   } from '$lib/api/cohp'
   import { register_analysis_session, unregister_analysis_session } from '$lib/chat/analysis-session-store.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
+  import { PALETTE_PRESETS, PALETTE_ORDER, PALETTE_LABEL_KEY, apply_palette } from './palettes'
   import type {
     COHPBondInfo,
     COHPSessionInfo,
@@ -57,11 +58,6 @@
   let include_orbitals = $state(false)
   let aggregate_orbitals = $state(false)
   let orbital_filter = $state<string>(`all`)
-
-  const DEFAULT_COLORS = [
-    `#1f77b4`, `#ff7f0e`, `#2ca02c`, `#d62728`, `#9467bd`,
-    `#8c564b`, `#e377c2`, `#7f7f7f`, `#bcbd22`, `#17becf`,
-  ]
 
   // Display option local state for range inputs
   let x_range_min = $state(``)
@@ -437,13 +433,33 @@
       <details>
         <summary>{t('structure.dos_line_styles')}</summary>
         <div class="line-styles">
+          <div class="line-style-row">
+            <span class="group-label">{t('structure.palette_label')}</span>
+            <select
+              onchange={(e) => {
+                if (!cohp_state.cohp_result) return
+                const preset = (e.target as HTMLSelectElement).value as keyof typeof PALETTE_PRESETS
+                const labels = cohp_state.cohp_result.series.map((s) => s.label)
+                const assigned = apply_palette(labels, preset)
+                const next = { ...cohp_state.line_styles }
+                for (const [label, color] of Object.entries(assigned)) {
+                  next[label] = { ...next[label], color }
+                }
+                cohp_state.line_styles = next
+              }}
+            >
+              {#each PALETTE_ORDER as name}
+                <option value={name}>{t(PALETTE_LABEL_KEY[name])}</option>
+              {/each}
+            </select>
+          </div>
           {#each cohp_state.cohp_result.series as s, idx}
             <div class="line-style-group">
               <span class="group-label">{s.label}</span>
               <div class="line-style-row">
                 <input
                   type="color"
-                  value={cohp_state.line_styles[s.label]?.color ?? DEFAULT_COLORS[idx % DEFAULT_COLORS.length]}
+                  value={cohp_state.line_styles[s.label]?.color ?? PALETTE_PRESETS.default[idx % PALETTE_PRESETS.default.length]}
                   class="color-input"
                   title={t('structure.cohp_line_color')}
                   oninput={(e) => {
@@ -479,7 +495,7 @@
                 {#if cohp_state.show_fill}
                   <input
                     type="color"
-                    value={cohp_state.line_styles[s.label]?.fill_color ?? cohp_state.line_styles[s.label]?.color ?? DEFAULT_COLORS[idx % DEFAULT_COLORS.length]}
+                    value={cohp_state.line_styles[s.label]?.fill_color ?? cohp_state.line_styles[s.label]?.color ?? PALETTE_PRESETS.default[idx % PALETTE_PRESETS.default.length]}
                     class="color-input"
                     title={t('structure.cohp_fill_color')}
                     oninput={(e) => {
