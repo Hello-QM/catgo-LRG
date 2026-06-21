@@ -12,6 +12,7 @@
   } from '$lib/api/bands'
   import { register_analysis_session, unregister_analysis_session } from '$lib/chat/analysis-session-store.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
+  import { PALETTE_PRESETS, PALETTE_ORDER, PALETTE_LABEL_KEY } from './palettes'
   import type {
     BandSessionInfo,
     BandProjectionGroup,
@@ -492,6 +493,55 @@
         </div>
       </div>
     </details>
+
+    <!-- Line colors -->
+    <details>
+      <summary>{t('structure.dos_line_styles')}</summary>
+      <div class="line-styles">
+        <div class="line-style-row">
+          <span class="group-label">{t('structure.band_spin_up')}</span>
+          <input
+            type="color"
+            value={band_state.spin_up_color ?? `#64A0FF`}
+            class="color-input"
+            oninput={(e) => band_state.spin_up_color = (e.target as HTMLInputElement).value}
+          />
+        </div>
+        <div class="line-style-row">
+          <span class="group-label">{t('structure.band_spin_down')}</span>
+          <input
+            type="color"
+            value={band_state.spin_down_color ?? `#64A0FF`}
+            class="color-input"
+            oninput={(e) => band_state.spin_down_color = (e.target as HTMLInputElement).value}
+          />
+        </div>
+        {#if band_state.projections && band_state.projections.length > 0}
+          <div class="line-style-row">
+            <span class="group-label">{t('structure.band_proj_palette')}</span>
+            <select
+              value={band_state.proj_palette ?? `default`}
+              onchange={(e) => band_state.proj_palette = (e.target as HTMLSelectElement).value as keyof typeof PALETTE_PRESETS}
+            >
+              {#each PALETTE_ORDER as name}
+                <option value={name}>{t(PALETTE_LABEL_KEY[name])}</option>
+              {/each}
+            </select>
+          </div>
+          {#each band_state.projections as proj, idx}
+            <div class="line-style-row">
+              <span class="group-label">{proj.label}</span>
+              <input
+                type="color"
+                value={band_state.proj_colors?.[proj.label] ?? PALETTE_PRESETS[band_state.proj_palette ?? `default`][idx % PALETTE_PRESETS[band_state.proj_palette ?? `default`].length]}
+                class="color-input"
+                oninput={(e) => band_state.proj_colors = { ...band_state.proj_colors, [proj.label]: (e.target as HTMLInputElement).value }}
+              />
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </details>
   {/if}
 
   {#if error_msg}
@@ -604,6 +654,9 @@
   .checkbox-label { display: flex; align-items: center; gap: 5px; font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.7)); cursor: pointer; }
   .range-row { display: flex; align-items: center; gap: 4px; font-size: 0.85em; color: var(--text-color-muted, rgba(255, 255, 255, 0.6)); }
   .range-input { width: 55px; padding: 2px 4px; background: light-dark(rgba(0, 0, 0, 0.04), rgba(255, 255, 255, 0.08)); border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; color: var(--text-color, #fff); font-size: 0.9em; }
+  .line-styles { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+  .line-style-row { display: flex; align-items: center; gap: 6px; font-size: 0.85em; }
+  .color-input { width: 28px; height: 22px; padding: 0; border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)); border-radius: 3px; cursor: pointer; background: transparent; }
   .btn-compute { padding: 6px 12px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; display: flex; align-items: center; justify-content: center; gap: 6px; }
   .btn-compute:hover:not(:disabled) { background: #1d4ed8; }
   .btn-compute:disabled { opacity: 0.5; cursor: not-allowed; }

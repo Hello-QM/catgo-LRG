@@ -1464,6 +1464,7 @@
     title_size: 14,
     font_size: 12,
     legend_visible: true,
+    proj_palette: `default`,
   })
   let band_layout = $state<`horizontal` | `vertical`>(`horizontal`)
   let band_plot_ref: BandPlot | undefined = $state()
@@ -5248,6 +5249,10 @@
           title_size={band_state.title_size}
           font_size={band_state.font_size}
           legend_visible={band_state.legend_visible}
+          spin_up_color={band_state.spin_up_color}
+          spin_down_color={band_state.spin_down_color}
+          proj_palette={band_state.proj_palette}
+          proj_colors={band_state.proj_colors}
         />
       </div>
     </div>
