@@ -25,7 +25,7 @@
 
   // Empty means every queryable field is null/undefined; we don't bother
   // taking screen real estate to display 8 em-dashes.
-  let is_empty = $derived(() => {
+  let is_empty = $derived.by(() => {
     if (!props) return true
     const keys: (keyof ElectronicProps)[] = [
       'band_gap', 'is_metal', 'efermi', 'cbm', 'vbm',
@@ -37,7 +37,7 @@
   let rows = $derived(buildElectronicRows(props ?? {}, labels))
 </script>
 
-{#if !(hide_when_empty && is_empty())}
+{#if !(hide_when_empty && is_empty)}
   <div class="electronic-panel" class:compact>
     {#if heading}
       <span class="sublabel">{heading}</span>

@@ -221,25 +221,43 @@ async def get_structure(
 
     query_string = urlencode(params) if params else ""
 
-    # Try different URL patterns for structure endpoint
-    for endpoint_base in [
-        f"{base_url}/v1/structures/{structure_id}",
-        f"{base_url}/structures/{structure_id}",
-    ]:
-        try:
-            endpoint = f"{endpoint_base}?{query_string}" if query_string else endpoint_base
-            print(f"[OPTIMADE DEBUG] Fetching structure: {endpoint}")
-            data = await fetch_json(endpoint)
-            if "data" in data:
-                return normalize_structure_ids(data)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                continue
-            raise HTTPException(status_code=e.response.status_code, detail=str(e))
-        except Exception as e:
-            print(f"[OPTIMADE DEBUG] Error fetching structure: {e}")
-            continue
+    # Query strings to attempt, in order. If response_fields was requested, add
+    # a bare-query retry: some providers 400 on unknown response_fields, and the
+    # extra electronic metadata is a nice-to-have — the STRUCTURE is not. So we
+    # degrade to fetching it without the extras rather than failing the import.
+    query_attempts = [query_string]
+    if query_string:
+        query_attempts.append("")
 
+    last_error: Optional[HTTPException] = None
+    for query_attempt in query_attempts:
+        for endpoint_base in [
+            f"{base_url}/v1/structures/{structure_id}",
+            f"{base_url}/structures/{structure_id}",
+        ]:
+            try:
+                endpoint = (
+                    f"{endpoint_base}?{query_attempt}" if query_attempt else endpoint_base
+                )
+                print(f"[OPTIMADE DEBUG] Fetching structure: {endpoint}")
+                data = await fetch_json(endpoint)
+                if "data" in data:
+                    return normalize_structure_ids(data)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    continue
+                # Non-404 (e.g. 400 on response_fields): remember it, but keep
+                # trying — the bare-query retry below may still succeed.
+                last_error = HTTPException(
+                    status_code=e.response.status_code, detail=str(e)
+                )
+                continue
+            except Exception as e:
+                print(f"[OPTIMADE DEBUG] Error fetching structure: {e}")
+                continue
+
+    if last_error is not None:
+        raise last_error
     raise HTTPException(status_code=404, detail=f"Structure not found: {structure_id}")
 
 

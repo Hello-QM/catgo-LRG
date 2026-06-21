@@ -800,7 +800,7 @@ export function extract_provider_details(
     // the flat _mp_energy_above_hull / _mp_formation_energy_per_atom fields now
     // return null. Prefer gga_gga+u (MP's default mixed thermo — matches the
     // REST summary numbers), falling back to the first entry.
-    if (attr_key === `_mp_stability` && typeof attr_val === `object`) {
+    if (attr_key === `_mp_stability` && typeof attr_val === `object` && attr_val !== null) {
       const thermos = attr_val as Record<string, Record<string, unknown>>
       const entry = thermos[`gga_gga+u`] ?? Object.values(thermos)[0]
       if (entry && typeof entry === `object`) {
@@ -815,7 +815,7 @@ export function extract_provider_details(
     }
 
     // MP nests magnetism data: { ordering: 'FM'|'AFM'|'NM'|..., total_magnetization, ... }.
-    if (attr_key === `_mp_magnetism` && typeof attr_val === `object`) {
+    if (attr_key === `_mp_magnetism` && typeof attr_val === `object` && attr_val !== null) {
       const mag = attr_val as Record<string, unknown>
       if (typeof mag.ordering === `string` && details.magnetic_ordering === undefined) {
         details.magnetic_ordering = mag.ordering

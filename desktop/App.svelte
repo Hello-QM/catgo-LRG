@@ -1105,7 +1105,7 @@
     }
     // Stash on the pending pymatgen so the metadata rides through Confirm
     // into the loaded structure (consumed by StructureInfoPane / overlays).
-    ;(structure as any)._electronic_props = elec
+    ;(structure as AnyStructure)._electronic_props = elec
 
     modal.db_preview_title = t(`app.preview_structure_import`)
     modal.db_preview_formula = formula

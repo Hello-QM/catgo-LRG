@@ -190,7 +190,7 @@
   <!-- 3D Preview -->
   <div class="preview-viewport" style:height="{height}px">
     {#if current_structure}
-      <StructurePreview structure={current_structure} electronic_overlay="top-left" />
+      <StructurePreview structure={current_structure} />
       {#if on_expand}
         <button class="viewport-expand-btn" onclick={on_expand} title={t('workflow.calc_open_full_viewer')}>&#x26F6;</button>
       {/if}

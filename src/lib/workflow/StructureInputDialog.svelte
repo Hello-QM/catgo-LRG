@@ -566,7 +566,7 @@
       const pd = extract_provider_details(attrs as Record<string, unknown>)
       elec = electronic_props_from_optimade(pd)
     }
-    ;(structure as any)._electronic_props = elec
+    ;(structure as PymatgenStructure)._electronic_props = elec
 
     db_preview_title = `Preview Structure Import`
     db_preview_formula = formula

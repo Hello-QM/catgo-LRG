@@ -1384,7 +1384,7 @@
       // (e.g. `_electronic_props` from a database import). `align_to_principal_axes`
       // returns a fresh object that doesn't carry these forward, so the spread
       // would otherwise silently drop them.
-      const prior_elec = (structure as any)?._electronic_props
+      const prior_elec = structure?._electronic_props
       structure = {
         ...aligned,
         _aligned: true,
@@ -2644,6 +2644,10 @@
         next_sites.splice(inv.removed_indices[i], 0, inv.removed_sites[i])
       }
       structure = { ...structure, sites: next_sites }
+      // A structural edit invalidates DB electronic metadata (it described the
+      // originally-imported material); drop it so the info pane can't attribute
+      // an MP band gap / Fermi level to the now-modified structure.
+      delete structure._electronic_props
       // Restore atom_opacity_overrides entries the delete callsite pruned.
       // (site_color_overrides / site_radius_overrides are wholesale-cleared
       // by the site-count-change $effect on both delete and restore, so
@@ -2997,7 +3001,7 @@
     }
     // Stash on the pending pymatgen so the metadata rides through Confirm
     // into the loaded structure (consumed by StructureInfoPane / overlays).
-    ;(pymatgen_struct as any)._electronic_props = elec
+    ;(pymatgen_struct as AnyStructure)._electronic_props = elec
 
     optimade_preview_title = `Preview Structure Import`
     optimade_preview_formula = formula
@@ -4392,6 +4396,8 @@
                 return site
               })
               structure = { ...structure, sites: new_sites }
+              // Editing charges invalidates the imported DB electronic metadata.
+              delete structure._electronic_props
             }}
             on_charge_label_remove={(idx) => {
               charge_state.visible_charge_labels = new Set([...charge_state.visible_charge_labels].filter(i => i !== idx))
