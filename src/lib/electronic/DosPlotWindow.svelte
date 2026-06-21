@@ -2,6 +2,7 @@
   import { DraggablePane } from '$lib'
   import type { PDOSResult, DBandResult } from './types'
   import DosPlot from './DosPlot.svelte'
+  import ExportDpiControl from './ExportDpiControl.svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -29,10 +30,15 @@
     x_range?: [number, number] | null
     y_range?: [number, number] | null
     show_dband_line?: boolean
-    line_styles?: Record<string, { dash?: string; width?: number }>
+    line_styles?: Record<
+      string,
+      { dash?: string; width?: number; color?: string; fill_color?: string }
+    >
   } = $props()
 
   let dos_plot: DosPlot | undefined = $state()
+  let export_dpi = $state(300)
+  let export_width_mm = $state(180)
 
   let dband_center_val = $derived(
     show_dband_line && typeof dband_result?.center_rel === `number` &&
@@ -65,7 +71,8 @@
 
   async function export_image(format: `png` | `svg`) {
     if (!dos_plot) return
-    const url = await dos_plot.export_image(format)
+    const opts = format === `png` ? { dpi: export_dpi, width_mm: export_width_mm } : undefined
+    const url = await dos_plot.export_image(format, opts)
     if (!url) return
     const a = document.createElement(`a`)
     a.href = url
@@ -98,6 +105,7 @@
       {...{height: 420} as any}
     />
     <div class="export-bar">
+      <ExportDpiControl bind:dpi={export_dpi} bind:width_mm={export_width_mm} />
       <button class="btn-small" onclick={() => export_image(`png`)}>PNG</button>
       <button class="btn-small" onclick={() => export_image(`svg`)}>SVG</button>
       <button class="btn-small" onclick={export_csv}>CSV</button>

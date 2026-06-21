@@ -7,6 +7,7 @@
   import { download } from '$lib/io/fetch'
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
+  import ExportDpiControl from '$lib/electronic/ExportDpiControl.svelte'
   import { API_BASE } from '$lib/api/config'
   import { elem_symbols } from '$lib/labels'
 
@@ -1503,6 +1504,10 @@
   let cohp_exporting: string | null = $state(null)
   let show_cohp_panel = $derived(cohp_state.cohp_result !== null)
 
+  // Shared PNG-export DPI / physical width for all three electronic plots.
+  let export_dpi = $state(300)
+  let export_width_mm = $state(180)
+
   // Number of open electronic plots (DOS / COHP / Band) sharing the dos-split grid.
   // They stack beside (or below) the structure; this count drives the grid track count.
   let electronic_plot_count = $derived(
@@ -1527,6 +1532,7 @@
     base_name: string,
     set_status: (value: string | null) => void,
     set_exporting: (value: string | null) => void,
+    export_opts?: { dpi?: number; width_mm?: number },
   ) {
     set_status(null)
     if (!plot_ref) {
@@ -1548,7 +1554,10 @@
         return
       }
 
-      const url = await plot_ref.export_image(format)
+      const url = await (plot_ref.export_image as (
+        f: ExportFormat,
+        o?: { dpi?: number; width_mm?: number },
+      ) => Promise<string | null>)(format, export_opts)
       if (!url) {
         set_status(t(`structure.export_plot_not_ready`))
         return
@@ -5048,7 +5057,8 @@
           >
             {dos_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `png`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `png` ? `...` : `PNG`}</button>
+          <ExportDpiControl bind:dpi={export_dpi} bind:width_mm={export_width_mm} />
+          <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `png`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v, { dpi: export_dpi, width_mm: export_width_mm })}>{dos_exporting === `png` ? `...` : `PNG`}</button>
           <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `svg`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `svg` ? `...` : `SVG`}</button>
           <button class="dos-export-btn" disabled={!!dos_exporting} onclick={() => export_electronic_plot(dos_plot_ref, `csv`, `dos`, (v) => dos_export_status = v, (v) => dos_exporting = v)}>{dos_exporting === `csv` ? `...` : `CSV`}</button>
           <button
@@ -5156,7 +5166,8 @@
           >
             {cohp_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `png`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `png` ? `...` : `PNG`}</button>
+          <ExportDpiControl bind:dpi={export_dpi} bind:width_mm={export_width_mm} />
+          <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `png`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v, { dpi: export_dpi, width_mm: export_width_mm })}>{cohp_exporting === `png` ? `...` : `PNG`}</button>
           <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `svg`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `svg` ? `...` : `SVG`}</button>
           <button class="dos-export-btn" disabled={!!cohp_exporting} onclick={() => export_electronic_plot(cohp_plot_ref, `csv`, `cohp`, (v) => cohp_export_status = v, (v) => cohp_exporting = v)}>{cohp_exporting === `csv` ? `...` : `CSV`}</button>
           <button
@@ -5212,7 +5223,8 @@
           >
             {band_layout === `horizontal` ? `\u2194` : `\u2195`}
           </button>
-          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `png`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `png` ? `...` : `PNG`}</button>
+          <ExportDpiControl bind:dpi={export_dpi} bind:width_mm={export_width_mm} />
+          <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `png`, `band`, (v) => band_export_status = v, (v) => band_exporting = v, { dpi: export_dpi, width_mm: export_width_mm })}>{band_exporting === `png` ? `...` : `PNG`}</button>
           <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `svg`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `svg` ? `...` : `SVG`}</button>
           <button class="dos-export-btn" disabled={!!band_exporting} onclick={() => export_electronic_plot(band_plot_ref, `csv`, `band`, (v) => band_export_status = v, (v) => band_exporting = v)}>{band_exporting === `csv` ? `...` : `CSV`}</button>
           <button
