@@ -137,6 +137,15 @@ export class BondInstancedRenderer {
 	#kind_buf: Uint8Array;
 	#kind_attr: THREE.InstancedBufferAttribute;
 
+	// Per-instance dashed flag (0/1). Set to 1 only for the INNER line of an
+	// aromatic (order 1.5) multi-bond — the half-cylinders offset toward the
+	// ring; the shader stipples them so an aromatic bond (one solid + one
+	// dashed line) is visually distinct from a true double (two solid lines).
+	// Always 0 when multibond is off, so the default render path is byte-
+	// identical to before this attribute existed.
+	#dashed_buf: Uint8Array;
+	#dashed_attr: THREE.InstancedBufferAttribute;
+
 	#color_start_attr: THREE.InstancedBufferAttribute | null = null;
 	#color_end_attr: THREE.InstancedBufferAttribute | null = null;
 
@@ -208,6 +217,12 @@ export class BondInstancedRenderer {
 		attr.setUsage(THREE.DynamicDrawUsage);
 		this.#kind_attr = attr;
 		mesh.geometry.setAttribute('bond_kind', attr);
+
+		this.#dashed_buf = new Uint8Array(cap);
+		const dashed_attr = new THREE.InstancedBufferAttribute(this.#dashed_buf, 1, false);
+		dashed_attr.setUsage(THREE.DynamicDrawUsage);
+		this.#dashed_attr = dashed_attr;
+		mesh.geometry.setAttribute('instance_dashed', dashed_attr);
 	}
 
 	sync(): void {
@@ -235,6 +250,7 @@ export class BondInstancedRenderer {
 
 		matrix_attr.clearUpdateRanges();
 		this.#kind_attr.clearUpdateRanges();
+		this.#dashed_attr.clearUpdateRanges();
 		this.#color_start_attr?.clearUpdateRanges();
 		this.#color_end_attr?.clearUpdateRanges();
 		this.#opacity_attr?.clearUpdateRanges();
@@ -261,6 +277,7 @@ export class BondInstancedRenderer {
 				}
 				matrix_attr.addUpdateRange(0, instance_count * 16);
 				this.#kind_attr.addUpdateRange(0, instance_count);
+				this.#dashed_attr.addUpdateRange(0, instance_count);
 				this.#color_start_attr?.addUpdateRange(0, instance_count * 3);
 				this.#color_end_attr?.addUpdateRange(0, instance_count * 3);
 				this.#opacity_attr?.addUpdateRange(0, instance_count);
@@ -285,6 +302,7 @@ export class BondInstancedRenderer {
 					const inst_len = slot_len * stride;
 					matrix_attr.addUpdateRange(inst_start * 16, inst_len * 16);
 					this.#kind_attr.addUpdateRange(inst_start, inst_len);
+					this.#dashed_attr.addUpdateRange(inst_start, inst_len);
 					this.#color_start_attr?.addUpdateRange(inst_start * 3, inst_len * 3);
 					this.#color_end_attr?.addUpdateRange(inst_start * 3, inst_len * 3);
 					this.#opacity_attr?.addUpdateRange(inst_start, inst_len);
@@ -308,6 +326,7 @@ export class BondInstancedRenderer {
 		mesh.count = total_instances;
 		matrix_attr.needsUpdate = true;
 		this.#kind_attr.needsUpdate = true;
+		this.#dashed_attr.needsUpdate = true;
 		if (this.#color_start_attr !== null) this.#color_start_attr.needsUpdate = true;
 		if (this.#color_end_attr !== null) this.#color_end_attr.needsUpdate = true;
 		if (this.#opacity_attr !== null) this.#opacity_attr.needsUpdate = true;
@@ -341,6 +360,7 @@ export class BondInstancedRenderer {
 
 		matrix_attr.clearUpdateRanges();
 		this.#kind_attr.clearUpdateRanges();
+		this.#dashed_attr.clearUpdateRanges();
 		this.#color_start_attr?.clearUpdateRanges();
 		this.#color_end_attr?.clearUpdateRanges();
 		this.#opacity_attr?.clearUpdateRanges();
@@ -361,6 +381,7 @@ export class BondInstancedRenderer {
 			}
 			matrix_attr.addUpdateRange(0, instance_count * 16);
 			this.#kind_attr.addUpdateRange(0, instance_count);
+			this.#dashed_attr.addUpdateRange(0, instance_count);
 			this.#color_start_attr?.addUpdateRange(0, instance_count * 3);
 			this.#color_end_attr?.addUpdateRange(0, instance_count * 3);
 			this.#opacity_attr?.addUpdateRange(0, instance_count);
@@ -375,6 +396,7 @@ export class BondInstancedRenderer {
 		mesh.count = total_instances;
 		matrix_attr.needsUpdate = true;
 		this.#kind_attr.needsUpdate = true;
+		this.#dashed_attr.needsUpdate = true;
 		if (this.#color_start_attr !== null) this.#color_start_attr.needsUpdate = true;
 		if (this.#color_end_attr !== null) this.#color_end_attr.needsUpdate = true;
 		if (this.#opacity_attr !== null) this.#opacity_attr.needsUpdate = true;
@@ -392,6 +414,7 @@ export class BondInstancedRenderer {
 
 	dispose(): void {
 		this.#mesh.geometry.deleteAttribute('bond_kind');
+		this.#mesh.geometry.deleteAttribute('instance_dashed');
 		if (this.#color_start_attr !== null) this.#mesh.geometry.deleteAttribute('instance_color_start');
 		if (this.#color_end_attr !== null) this.#mesh.geometry.deleteAttribute('instance_color_end');
 		if (this.#opacity_attr !== null) this.#mesh.geometry.deleteAttribute('instance_opacity');
@@ -689,6 +712,17 @@ export class BondInstancedRenderer {
 		const kind = kinds[slot];
 		for (let s = 0; s < live; s++) this.#kind_buf[base + s] = kind;
 
+		// Dashed flag: clear EVERY reserved instance for this slot first (a slot
+		// may have been aromatic on a prior sync and is now a double/single — its
+		// stale dashed bytes must be reset), then mark only the inner line of an
+		// aromatic bond. The inner line is line 0 (ib offset −gap, toward the
+		// ring side); its two halves live at base+0 / base+1.
+		for (let s = 0; s < stride; s++) this.#dashed_buf[base + s] = 0;
+		if (aromatic && !is_periodic) {
+			this.#dashed_buf[base] = 1;
+			this.#dashed_buf[base + 1] = 1;
+		}
+
 		// Per-half solid color: even instances = atom A's color, odd = atom B's.
 		// Both endpoints of each half share the color so the gradient shader
 		// renders solid (hard mid-point color step matches VESTA / MP).
@@ -809,6 +843,7 @@ export class BondInstancedRenderer {
 
 		matrix_attr.addUpdateRange(base_instance * 16, decorator_instance_count * 16);
 		this.#kind_attr.addUpdateRange(base_instance, decorator_instance_count);
+		this.#dashed_attr.addUpdateRange(base_instance, decorator_instance_count);
 		this.#color_start_attr?.addUpdateRange(base_instance * 3, decorator_instance_count * 3);
 		this.#color_end_attr?.addUpdateRange(base_instance * 3, decorator_instance_count * 3);
 		this.#opacity_attr?.addUpdateRange(base_instance, decorator_instance_count);
@@ -966,6 +1001,10 @@ export class BondInstancedRenderer {
 		const kind = kinds[slot];
 		this.#kind_buf[dec_idx] = kind;
 		this.#kind_buf[dec_idx + 1] = kind;
+		// Decorator (image-atom) bonds are always single full/stub lines, never
+		// an aromatic multi-bond inner line — keep them solid.
+		this.#dashed_buf[dec_idx] = 0;
+		this.#dashed_buf[dec_idx + 1] = 0;
 
 		// Decorator colors mirror the cell-internal path: sourced directly
 		// from `atom_colors[a*3..]` / `atom_colors[b*3..]` so a single

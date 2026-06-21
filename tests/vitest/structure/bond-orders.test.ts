@@ -194,6 +194,37 @@ describe(`perceive_adsorbate_orders — gas-phase molecules`, () => {
     expect(co_orders[0]).toBeLessThanOrEqual(1.5)
   })
 
+  test(`CO2 (O=C=O) — two clean C=O doubles, not carboxylate resonance`, () => {
+    // linear CO2, C-O ~1.16 Å each. The carbon has ONLY the two terminal
+    // oxygens as neighbours (no H / other substituent), so the carboxylate
+    // resonance rule must NOT fire — both bonds are full doubles.
+    const sites = [
+      make_site([0, 0, 0], `C`), // 0
+      make_site([1.16, 0, 0], `O`), // 1
+      make_site([-1.16, 0, 0], `O`), // 2
+    ]
+    const pairs = [bond(sites, 0, 1), bond(sites, 0, 2)]
+    const orders = perceive_adsorbate_orders(pairs, as_structure(sites, NO_LATTICE))
+    expect(order_of(orders, 0, 1)).toBe(2.0)
+    expect(order_of(orders, 0, 2)).toBe(2.0)
+  })
+
+  test(`formate HCOO- regression — carboxylate carbon stays resonant 1.5/1.5`, () => {
+    // C bonded to two carbonyl-range O + one H → true carboxylate: the carbon
+    // bears a non-carbonyl neighbour (H), so resonance DOES apply → 1.5/1.5.
+    const sites = [
+      make_site([0, 0, 0], `C`), // 0
+      make_site([1.10, 0, 0], `H`), // 1
+      make_site([-0.70, 1.05, 0], `O`), // 2  ~1.26 Å
+      make_site([-0.70, -1.05, 0], `O`), // 3  ~1.26 Å
+    ]
+    const pairs = [bond(sites, 0, 1), bond(sites, 0, 2), bond(sites, 0, 3)]
+    const orders = perceive_adsorbate_orders(pairs, as_structure(sites, NO_LATTICE))
+    expect(order_of(orders, 0, 1)).toBe(1) // C-H single
+    expect(order_of(orders, 0, 2)).toBe(1.5) // resonant C-O
+    expect(order_of(orders, 0, 3)).toBe(1.5) // resonant C-O
+  })
+
   test(`formic acid HCOOH — carbonyl C=O double, hydroxyl C-O single`, () => {
     // C(0)=O(2) carbonyl ~1.21; C(0)-O(3)-H(4) hydroxyl ~1.34; H(1) on C.
     const sites = [

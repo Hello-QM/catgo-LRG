@@ -136,10 +136,12 @@
     attribute vec3 instance_color_start;
     attribute vec3 instance_color_end;
     attribute float instance_opacity;
+    attribute float instance_dashed;
     varying vec3 vColorStart;
     varying vec3 vColorEnd;
     varying float vYPosition;
     varying float vOpacity;
+    varying float vDashed;
     varying vec3 vNormal;
     varying vec3 vViewPosition;
     varying float vDepthCueZ;
@@ -149,6 +151,7 @@
       vColorEnd = instance_color_end;
       vYPosition = position.y;
       vOpacity = instance_opacity;
+      vDashed = instance_dashed;
 
       // Compute instance normal matrix (inverse-transpose) for correct normals
       // under non-uniform scaling. mat3(instanceMatrix) alone squishes radial
@@ -185,9 +188,15 @@
     varying vec3 vColorEnd;
     varying float vYPosition;
     varying float vOpacity;
+    varying float vDashed;
     varying vec3 vNormal;
     varying vec3 vViewPosition;
     varying float vDepthCueZ;
+
+    // Dash density along the cylinder axis. vYPosition spans the unit cylinder's
+    // -0.5..0.5, so a full bond (two half-cylinders) yields ~DASH_FREQ dash
+    // periods; ~7 reads as a handful of clean dashes per bond.
+    const float DASH_FREQ = 7.0;
 
     vec3 linearTosRGB(vec3 linear) {
       return vec3(
@@ -220,6 +229,11 @@
     }
 
     void main() {
+      // Aromatic inner line: stipple along the cylinder axis so it reads as a
+      // dashed line, visually distinct from a solid double-bond line. vDashed is
+      // 0 for every normal (solid) instance, so this is a no-op off that path.
+      if (vDashed > 0.5 && fract(vYPosition * DASH_FREQ) > 0.5) discard;
+
       vec3 base_color = mix(vColorStart, vColorEnd, vYPosition + 0.5);
 
       // Desaturate and darken for visual distinction from atoms

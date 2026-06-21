@@ -485,7 +485,12 @@ export function perceive_fragment_orders(
     carbonyl_by_c.get(c)!.push(o)
   }
   for (const [c, oxygens] of carbonyl_by_c) {
-    const resonant = oxygens.length >= 2 // carboxylate resonance
+    // Carboxylate resonance (1.5/1.5) applies ONLY to a true carboxylate
+    // (formate / COOH): the carbon carries ≥2 carbonyl-range O AND at least
+    // one OTHER neighbour (H or a different substituent). A bare CO2 carbon
+    // (exactly its two terminal O, nothing else → coordination == #oxygens)
+    // must instead fall through to two independent C=O doubles (2.0/2.0).
+    const resonant = oxygens.length >= 2 && coordination[c] > oxygens.length
     for (const o of oxygens) {
       const key = lkey(c, o)
       if (bond_orders.has(key)) continue
