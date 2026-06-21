@@ -15,6 +15,7 @@
   } from '$lib/api/dos'
   import { register_analysis_session, unregister_analysis_session } from '$lib/chat/analysis-session-store.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
+  import { PALETTE_PRESETS, PALETTE_ORDER, PALETTE_LABEL_KEY, apply_palette } from './palettes'
   import type {
     DOSGroup,
     DOSSessionInfo,
@@ -762,9 +763,36 @@
       <details>
         <summary>{t('structure.dos_line_styles')}</summary>
         <div class="line-styles">
-          {#each groups as g}
+          <div class="line-style-row">
+            <span class="group-label">{t('structure.palette_label')}</span>
+            <select
+              onchange={(e) => {
+                const preset = (e.target as HTMLSelectElement).value as keyof typeof PALETTE_PRESETS
+                const assigned = apply_palette(groups.map((g) => g.label), preset)
+                const next = { ...dos_state.line_styles }
+                for (const [label, color] of Object.entries(assigned)) {
+                  next[label] = { ...next[label], color }
+                }
+                dos_state.line_styles = next
+              }}
+            >
+              {#each PALETTE_ORDER as name}
+                <option value={name}>{t(PALETTE_LABEL_KEY[name])}</option>
+              {/each}
+            </select>
+          </div>
+          {#each groups as g, gi}
             <div class="line-style-row">
               <span class="group-label">{g.label}</span>
+              <input
+                type="color"
+                value={dos_state.line_styles[g.label]?.color ?? PALETTE_PRESETS.default[gi % PALETTE_PRESETS.default.length]}
+                class="color-input"
+                oninput={(e) => {
+                  const target = e.target as HTMLInputElement
+                  dos_state.line_styles = { ...dos_state.line_styles, [g.label]: { ...dos_state.line_styles[g.label], color: target.value } }
+                }}
+              />
               <select
                 value={dos_state.line_styles[g.label]?.dash ?? `solid`}
                 onchange={(e) => {
@@ -789,6 +817,18 @@
                   dos_state.line_styles = { ...dos_state.line_styles, [g.label]: { ...dos_state.line_styles[g.label], width: parseFloat(target.value) } }
                 }}
               />
+              {#if dos_state.show_fill}
+                <input
+                  type="color"
+                  value={dos_state.line_styles[g.label]?.fill_color ?? dos_state.line_styles[g.label]?.color ?? PALETTE_PRESETS.default[gi % PALETTE_PRESETS.default.length]}
+                  class="color-input"
+                  title={t('structure.cohp_fill_color')}
+                  oninput={(e) => {
+                    const target = e.target as HTMLInputElement
+                    dos_state.line_styles = { ...dos_state.line_styles, [g.label]: { ...dos_state.line_styles[g.label], fill_color: target.value } }
+                  }}
+                />
+              {/if}
             </div>
           {/each}
         </div>

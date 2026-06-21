@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PDOSSeries } from './types'
   import { plot_theme_colors } from './plot-theme.svelte'
+  import { PALETTE_PRESETS } from './palettes'
 
   let {
     grid = [],
@@ -36,7 +37,7 @@
     y_range?: [number, number] | null
     dband_center_line?: number | null
     /** Per-series line style overrides: { "label": { dash: "dash", width: 2 } } */
-    line_styles?: Record<string, { dash?: string; width?: number }>
+    line_styles?: Record<string, { dash?: string; width?: number; color?: string; fill_color?: string }>
     show_gridlines?: boolean
     show_axis_lines?: boolean
     axis_line_width?: number
@@ -53,11 +54,6 @@
   let container_div: HTMLDivElement | undefined = $state()
   let Plotly: any = $state(null)
   let container_height: number = $state(400)
-
-  const COLORS = [
-    `#1f77b4`, `#ff7f0e`, `#2ca02c`, `#d62728`, `#9467bd`,
-    `#8c564b`, `#e377c2`, `#7f7f7f`, `#bcbd22`, `#17becf`,
-  ]
 
   const is_horizontal = $derived(orientation === `horizontal`)
 
@@ -112,8 +108,9 @@
     // Track color index per original series position (so colors stay stable)
     for (let i = 0; i < series.length; i++) {
       const s = series[i]
-      const color = COLORS[i % COLORS.length]
       const style = line_styles[s.label] ?? {}
+      const color = style.color ?? PALETTE_PRESETS.default[i % PALETTE_PRESETS.default.length]
+      const fill_base = style.fill_color ?? color
       const dash = style.dash ?? `solid`
       const lw = style.width ?? 1.5
       const is_hidden = hidden_set.has(s.label)
@@ -133,7 +130,7 @@
 
       if (show_fill && !is_hidden) {
         trace_up.fill = is_horizontal ? `tozerox` : `tozeroy`
-        trace_up.fillcolor = `rgba(${parseInt(color.slice(1, 3), 16)}, ${parseInt(color.slice(3, 5), 16)}, ${parseInt(color.slice(5, 7), 16)}, 0.15)`
+        trace_up.fillcolor = `rgba(${parseInt(fill_base.slice(1, 3), 16)}, ${parseInt(fill_base.slice(3, 5), 16)}, ${parseInt(fill_base.slice(5, 7), 16)}, 0.15)`
       }
 
       traces.push(trace_up)
@@ -153,7 +150,7 @@
         }
         if (show_fill && !is_hidden) {
           trace_down.fill = is_horizontal ? `tozerox` : `tozeroy`
-          trace_down.fillcolor = `rgba(${parseInt(color.slice(1, 3), 16)}, ${parseInt(color.slice(3, 5), 16)}, ${parseInt(color.slice(5, 7), 16)}, 0.1)`
+          trace_down.fillcolor = `rgba(${parseInt(fill_base.slice(1, 3), 16)}, ${parseInt(fill_base.slice(3, 5), 16)}, ${parseInt(fill_base.slice(5, 7), 16)}, 0.1)`
         }
         traces.push(trace_down)
       }

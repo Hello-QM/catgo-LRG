@@ -75,7 +75,7 @@ export interface DosViewState {
   x_range: [number, number] | null
   y_range: [number, number] | null
   show_dband_line: boolean
-  line_styles: Record<string, { dash?: string; width?: number }>
+  line_styles: Record<string, { dash?: string; width?: number; color?: string; fill_color?: string }>
   // Plot appearance customization
   show_gridlines: boolean
   show_axis_lines: boolean
