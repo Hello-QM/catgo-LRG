@@ -5,7 +5,14 @@
   import type { InstancedMesh } from 'three'
   import { Color, CylinderGeometry, InstancedBufferAttribute, Matrix4, ShaderMaterial, Vector3 } from 'three'
 
-  let { group, saturation = 1.0, brightness = 1.0, depth_cue_uniforms }: {
+  let {
+    group,
+    saturation = 1.0,
+    brightness = 1.0,
+    depth_cue_uniforms,
+    light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
+    highlight_strength = 1.0,
+  }: {
     group: BondGroupWithGradients
     saturation?: number
     brightness?: number
@@ -16,6 +23,13 @@
       uDepthCueBgColor: { value: Color }
       uOutlineStrength: { value: number }
     }
+    /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
+     *  by the light_azimuth/elevation sliders; written live into uLightDir. */
+    light_dir?: Vector3
+    /** Specular highlight intensity multiplier (highlight_strength setting).
+     *  Multiplies the bond glossy spec term; 1.0 = byte-identical legacy look.
+     *  Written live into uSpecStrength. */
+    highlight_strength?: number
   } = $props()
 
   let mesh: InstancedMesh | undefined = $state()
@@ -89,6 +103,7 @@
     uniform vec3 uDepthCueBgColor;
     uniform float uOutlineStrength;
     uniform vec3 uLightDir;    // directional light in view space (headlamp, normalized)
+    uniform float uSpecStrength;  // glossy specular highlight multiplier (1.0 = default)
     varying vec3 vColorStart;
     varying vec3 vColorEnd;
     varying float vYPosition;
@@ -128,7 +143,7 @@
 
       // Higher brightness floor so shadow side doesn't look like a hollow interior
       float lighting = max(ambientIntensity * 0.3 + (ambientIntensity * 0.7 + directionalIntensity * diffuse) * rim_factor, 0.2);
-      vec3 final_color = base_color * lighting + vec3(1.0) * specular * 0.4;
+      vec3 final_color = base_color * lighting + vec3(1.0) * specular * 0.4 * uSpecStrength;
 
       gl_FragColor = vec4(linearTosRGB(final_color), uOpacity);
 
@@ -160,7 +175,8 @@
       saturation: { value: saturation },
       brightness: { value: brightness },
       uOpacity: { value: 1 },
-      uLightDir: { value: new Vector3(-0.7, -0.5, 1.0).normalize() },
+      uLightDir: { value: light_dir.clone() }, // view-space headlamp (slider-driven); kept live by $effect below
+      uSpecStrength: { value: highlight_strength }, // glossy spec multiplier (slider-driven); kept live by $effect below
       uDepthCueing: depth_cue_uniforms?.uDepthCueing ?? { value: 0 },
       uDepthNear: depth_cue_uniforms?.uDepthNear ?? { value: 0 },
       uDepthFar: depth_cue_uniforms?.uDepthFar ?? { value: 10 },
@@ -188,6 +204,18 @@
       shader_material.polygonOffsetFactor = -1
       shader_material.polygonOffsetUnits = -1
     }
+  })
+
+  // Headlamp direction is a plain view-space uniform — copy the slider-derived
+  // direction into the live material so bonds re-light the instant it changes.
+  $effect(() => {
+    shader_material.uniforms.uLightDir.value.copy(light_dir)
+  })
+
+  // Specular highlight strength is a plain float uniform — copy the slider value
+  // into the live material so bond glossiness changes the instant it moves.
+  $effect(() => {
+    shader_material.uniforms.uSpecStrength.value = highlight_strength
   })
 
   // Reactively rebuild geometry when thickness changes

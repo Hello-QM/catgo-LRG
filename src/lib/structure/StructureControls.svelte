@@ -5,7 +5,14 @@
   import type { ColorSchemeName } from '$lib/colors'
   import { axis_colors, element_color_schemes } from '$lib/colors'
   import { to_degrees, to_radians } from '$lib/math'
-  import { DEFAULTS, SETTINGS_CONFIG, BackendUrlSettings, ConnectWizard } from '$lib/settings'
+  import {
+    DEFAULTS,
+    LIGHTING_PROFILE_DEFAULTS,
+    SETTINGS_CONFIG,
+    BackendUrlSettings,
+    ConnectWizard,
+  } from '$lib/settings'
+  import type { LightingProfile, RenderStyle } from '$lib/settings'
   import { check_tauri } from '$lib/io/tauri'
   import {
     DEFAULT_PANE_FONT_SIZE,
@@ -177,6 +184,57 @@
   $effect(() => {
     scene_props.rotation ??= [...DEFAULTS.structure.rotation]
   })
+
+  // ─── Per-render-style lighting profiles ───
+  // The 5 Lighting-group sliders bind to the ACTIVE render_style's profile, so
+  // each style remembers its own tuned values and switching styles swaps both
+  // the sliders and the live render. Ensure the profile map + the active
+  // style's profile always exist (old persisted scene_props, or tool-pushed
+  // props, may lack them) so the binds below never hit undefined.
+  $effect(() => {
+    if (!scene_props.lighting_profiles) {
+      scene_props.lighting_profiles = structuredClone(LIGHTING_PROFILE_DEFAULTS)
+    }
+    const style = (scene_props.render_style ?? DEFAULTS.structure.render_style) as RenderStyle
+    scene_props.lighting_profiles[style] ??= {
+      ...LIGHTING_PROFILE_DEFAULTS[style],
+    }
+  })
+
+  // The active style's lighting profile — the object the 5 sliders bind into.
+  // Falls back to a per-style default clone before the guard $effect runs (so
+  // the first render never reads undefined).
+  let active_lighting_profile = $derived<LightingProfile>(
+    scene_props.lighting_profiles?.[
+      (scene_props.render_style ?? DEFAULTS.structure.render_style) as RenderStyle
+    ] ?? {
+      ...LIGHTING_PROFILE_DEFAULTS[
+        (scene_props.render_style ?? DEFAULTS.structure.render_style) as RenderStyle
+      ],
+    },
+  )
+
+  // Write one lighting param into the ACTIVE render_style's profile. Reassigns
+  // both the style object AND the lighting_profiles map (new references) so the
+  // controller's shallow-spread debounced-save $effect — which only reads the
+  // top-level scene_props keys — re-runs and persists the change. Editing a
+  // slider therefore writes profile[render_style].<param>, auto-persisted and
+  // auto-remembered per style.
+  function set_lighting_param(param: keyof LightingProfile, value: number) {
+    const style = (scene_props.render_style ?? DEFAULTS.structure.render_style) as RenderStyle
+    const map = scene_props.lighting_profiles ?? structuredClone(LIGHTING_PROFILE_DEFAULTS)
+    const profile = map[style] ?? { ...LIGHTING_PROFILE_DEFAULTS[style] }
+    scene_props.lighting_profiles = { ...map, [style]: { ...profile, [param]: value } }
+  }
+
+  // Reset ONLY the active render_style's lighting profile to its per-style
+  // default (other styles keep their tuned values). Reassigns the map (new
+  // top-level reference) so the debounced-save $effect re-runs.
+  function reset_active_lighting_profile() {
+    const style = (scene_props.render_style ?? DEFAULTS.structure.render_style) as RenderStyle
+    const map = scene_props.lighting_profiles ?? structuredClone(LIGHTING_PROFILE_DEFAULTS)
+    scene_props.lighting_profiles = { ...map, [style]: { ...LIGHTING_PROFILE_DEFAULTS[style] } }
+  }
 
   let rotation_degrees = $derived(
     scene_props.rotation?.map((rad) => {
@@ -1368,25 +1426,32 @@
     current_values={{
       background_color,
       background_opacity,
-      directional_light: scene_props.directional_light,
-      ambient_light: scene_props.ambient_light,
+      // The 5 lighting params are PER render_style — track the ACTIVE profile so
+      // the reset button reflects the active style's tuned-vs-default state.
+      directional_light: active_lighting_profile.directional_light,
+      ambient_light: active_lighting_profile.ambient_light,
       depth_cueing: scene_props.depth_cueing,
       depth_cue_start: scene_props.depth_cue_start,
       depth_cue_end: scene_props.depth_cue_end,
       atom_outline_strength: scene_props.atom_outline_strength,
       bond_outline_strength: scene_props.bond_outline_strength,
       render_style: scene_props.render_style,
+      light_azimuth: active_lighting_profile.light_azimuth,
+      light_elevation: active_lighting_profile.light_elevation,
+      highlight_strength: active_lighting_profile.highlight_strength,
     }}
     on_reset={() => {
       background_color = undefined
       background_opacity = DEFAULTS.background_opacity
-      scene_props.directional_light = DEFAULTS.structure.directional_light
-      scene_props.ambient_light = DEFAULTS.structure.ambient_light
       scene_props.depth_cueing = DEFAULTS.structure.depth_cueing
       scene_props.depth_cue_start = DEFAULTS.structure.depth_cue_start
       scene_props.depth_cue_end = DEFAULTS.structure.depth_cue_end
       scene_props.atom_outline_strength = DEFAULTS.structure.atom_outline_strength
       scene_props.bond_outline_strength = DEFAULTS.structure.bond_outline_strength
+      // Reset ONLY the currently-active render_style's lighting profile to its
+      // per-style default — other styles keep their tuned values. Done BEFORE
+      // resetting render_style so it targets the style the user is on.
+      reset_active_lighting_profile()
       scene_props.render_style = DEFAULTS.structure.render_style
     }}
   >
@@ -1415,45 +1480,6 @@
         <input type="range" min={0} max={1} step={0.02} bind:value={background_opacity} />
       </label>
     </div>
-    <h5>{t('structure.lighting')}</h5>
-    <label>
-      <span title="Intensity of the directional light" {@attach tooltip()}>
-        {t('structure.directional_light')}
-      </span>
-      <input
-        type="number"
-        min={0}
-        max={4}
-        step={0.01}
-        bind:value={scene_props.directional_light}
-      />
-      <input
-        type="range"
-        min={0}
-        max={4}
-        step={0.01}
-        bind:value={scene_props.directional_light}
-      />
-    </label>
-    <label>
-      <span title="Intensity of the ambient light" {@attach tooltip()}>
-        {t('structure.ambient_light')}
-      </span>
-      <input
-        type="number"
-        min={0.5}
-        max={3}
-        step={0.05}
-        bind:value={scene_props.ambient_light}
-      />
-      <input
-        type="range"
-        min={0.5}
-        max={3}
-        step={0.05}
-        bind:value={scene_props.ambient_light}
-      />
-    </label>
     <h5>Depth Cueing</h5>
     <label>
       <span title="Fades distant atoms toward background color to convey depth (0 = off, 1 = maximum)" {@attach tooltip()}>
@@ -1564,6 +1590,112 @@
           <option {value}>{label}</option>
         {/each}
       </select>
+    </label>
+    <h5>{t('structure.lighting')}</h5>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.light_azimuth.description })}
+    >
+      <span>{t('structure.light_azimuth')}</span>
+      <input
+        type="number"
+        min={SETTINGS_CONFIG.structure.light_azimuth.minimum}
+        max={SETTINGS_CONFIG.structure.light_azimuth.maximum}
+        step={SETTINGS_CONFIG.structure.light_azimuth.step}
+        value={active_lighting_profile.light_azimuth}
+        oninput={(e) => set_lighting_param(`light_azimuth`, +e.currentTarget.value)}
+      />
+      <input
+        type="range"
+        min={SETTINGS_CONFIG.structure.light_azimuth.minimum}
+        max={SETTINGS_CONFIG.structure.light_azimuth.maximum}
+        step={SETTINGS_CONFIG.structure.light_azimuth.step}
+        value={active_lighting_profile.light_azimuth}
+        oninput={(e) => set_lighting_param(`light_azimuth`, +e.currentTarget.value)}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.light_elevation.description })}
+    >
+      <span>{t('structure.light_elevation')}</span>
+      <input
+        type="number"
+        min={SETTINGS_CONFIG.structure.light_elevation.minimum}
+        max={SETTINGS_CONFIG.structure.light_elevation.maximum}
+        step={SETTINGS_CONFIG.structure.light_elevation.step}
+        value={active_lighting_profile.light_elevation}
+        oninput={(e) => set_lighting_param(`light_elevation`, +e.currentTarget.value)}
+      />
+      <input
+        type="range"
+        min={SETTINGS_CONFIG.structure.light_elevation.minimum}
+        max={SETTINGS_CONFIG.structure.light_elevation.maximum}
+        step={SETTINGS_CONFIG.structure.light_elevation.step}
+        value={active_lighting_profile.light_elevation}
+        oninput={(e) => set_lighting_param(`light_elevation`, +e.currentTarget.value)}
+      />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.highlight_strength.description })}
+    >
+      <span>{t('structure.highlight_strength')}</span>
+      <input
+        type="number"
+        min={SETTINGS_CONFIG.structure.highlight_strength.minimum}
+        max={SETTINGS_CONFIG.structure.highlight_strength.maximum}
+        step={SETTINGS_CONFIG.structure.highlight_strength.step}
+        value={active_lighting_profile.highlight_strength}
+        oninput={(e) => set_lighting_param(`highlight_strength`, +e.currentTarget.value)}
+      />
+      <input
+        type="range"
+        min={SETTINGS_CONFIG.structure.highlight_strength.minimum}
+        max={SETTINGS_CONFIG.structure.highlight_strength.maximum}
+        step={SETTINGS_CONFIG.structure.highlight_strength.step}
+        value={active_lighting_profile.highlight_strength}
+        oninput={(e) => set_lighting_param(`highlight_strength`, +e.currentTarget.value)}
+      />
+    </label>
+    <label>
+      <span title="Intensity of the directional light" {@attach tooltip()}>
+        {t('structure.directional_light')}
+      </span>
+      <input
+        type="number"
+        min={0}
+        max={4}
+        step={0.01}
+        value={active_lighting_profile.directional_light}
+        oninput={(e) => set_lighting_param(`directional_light`, +e.currentTarget.value)}
+      />
+      <input
+        type="range"
+        min={0}
+        max={4}
+        step={0.01}
+        value={active_lighting_profile.directional_light}
+        oninput={(e) => set_lighting_param(`directional_light`, +e.currentTarget.value)}
+      />
+    </label>
+    <label>
+      <span title="Intensity of the ambient light" {@attach tooltip()}>
+        {t('structure.ambient_light')}
+      </span>
+      <input
+        type="number"
+        min={0.5}
+        max={3}
+        step={0.05}
+        value={active_lighting_profile.ambient_light}
+        oninput={(e) => set_lighting_param(`ambient_light`, +e.currentTarget.value)}
+      />
+      <input
+        type="range"
+        min={0.5}
+        max={3}
+        step={0.05}
+        value={active_lighting_profile.ambient_light}
+        oninput={(e) => set_lighting_param(`ambient_light`, +e.currentTarget.value)}
+      />
     </label>
   </SettingsSection>
 

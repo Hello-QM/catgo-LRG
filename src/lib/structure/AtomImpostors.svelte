@@ -42,6 +42,8 @@
     ambient_light = 0.7,
     directional_light = 0.3,
     render_style = `glossy`,
+    light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
+    highlight_strength = 1.0,
   }: {
     atom_data: AtomDataItem[]
     realtime_position_overrides: Map<number, Vec3> | null
@@ -64,6 +66,13 @@
      *  glossy (studio env + tinted spec), matte (diffuse only, no spec/fresnel),
      *  toon (3-band cel, AtomCanvas ToonHighlightMaterial). */
     render_style?: `glossy` | `matte` | `toon`
+    /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
+     *  by the light_azimuth/elevation sliders; written live into uLightDir. */
+    light_dir?: Vector3
+    /** Specular highlight intensity multiplier (highlight_strength setting).
+     *  Multiplies the glossy tinted-spec term; 1.0 = byte-identical legacy
+     *  look. Written live into uSpecStrength. */
+    highlight_strength?: number
   } = $props()
 
   const threlte = useThrelte()
@@ -133,6 +142,7 @@
     uniform float uShadowThreshold;
     uniform float uHighlightThreshold;
     uniform float uShadowBrightness;
+    uniform float uSpecStrength;  // glossy specular highlight multiplier (1.0 = default)
     // projectionMatrix is only auto-injected into vertex shader, must re-declare for fragment
     uniform mat4 projectionMatrix;
 
@@ -273,7 +283,7 @@
         // Compose: env-shaded base color + tinted specular + subtle fresnel
         float exposure = uAmbientIntensity + uDirectionalIntensity * 0.5;
         color = baseColor * env * exposure
-                 + specColor * specular * uDirectionalIntensity * 0.6
+                 + specColor * specular * uDirectionalIntensity * 0.6 * uSpecStrength
                  + vec3(fresnel * 0.12);
 
         // Filmic tonemap before sRGB encode
@@ -316,7 +326,7 @@
       side: 0, // FrontSide: billboard always faces camera, DoubleSide causes double-blending at same pixels
       uniforms: {
         uIsOrthographic: { value: false },
-        uLightDir: { value: new Vector3(-0.7, -0.5, 1.0).normalize() }, // view-space headlamp: upper-left
+        uLightDir: { value: light_dir.clone() }, // view-space headlamp (slider-driven); kept live by $effect below
         uAmbientIntensity: { value: ambient_light },
         uDirectionalIntensity: { value: directional_light },
         uDepthCueing: depth_cue_uniforms.uDepthCueing,
@@ -325,6 +335,8 @@
         uDepthCueBgColor: depth_cue_uniforms.uDepthCueBgColor,
         uOutlineStrength: depth_cue_uniforms.uOutlineStrength,
         uRenderStyle: { value: render_style_to_int(render_style) },
+        // Glossy specular highlight multiplier (slider-driven); kept live by $effect below.
+        uSpecStrength: { value: highlight_strength },
         // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial defaults.
         uShadowThreshold: { value: 0.3 },
         uHighlightThreshold: { value: 0.97 },
@@ -392,6 +404,24 @@
     const v = render_style_to_int(render_style)
     opaque_material.uniforms.uRenderStyle.value = v
     transparent_material.uniforms.uRenderStyle.value = v
+    // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // Headlamp direction is a plain view-space uniform — copy the slider-derived
+  // direction into both materials live so light moves the instant the slider does.
+  $effect(() => {
+    opaque_material.uniforms.uLightDir.value.copy(light_dir)
+    transparent_material.uniforms.uLightDir.value.copy(light_dir)
+    // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // Specular highlight strength is a plain float uniform — copy the slider value
+  // into both materials live so glossiness changes the instant the slider moves.
+  $effect(() => {
+    opaque_material.uniforms.uSpecStrength.value = highlight_strength
+    transparent_material.uniforms.uSpecStrength.value = highlight_strength
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })

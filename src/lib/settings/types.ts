@@ -14,6 +14,8 @@ export interface SettingType<T = unknown> {
   enum?: Readonly<Record<Extract<T, string>, string>>
   minimum?: number
   maximum?: number
+  /** Suggested UI slider/number-input step (advisory; not enforced). */
+  step?: number
   minItems?: number
   maxItems?: number
   context?: `web` | `editor` | `notebook` | `all`
@@ -26,6 +28,15 @@ export type CameraProjection = `perspective` | `orthographic`
 
 export const render_style_options = [`glossy`, `matte`, `toon`] as const
 export type RenderStyle = (typeof render_style_options)[number]
+
+/** The 5 per-render-style lighting parameters (one profile per render_style). */
+export interface LightingProfile {
+  light_azimuth: number
+  light_elevation: number
+  directional_light: number
+  ambient_light: number
+  highlight_strength: number
+}
 
 export const ATOM_COLOR_MODE_OPTIONS = [
   `element`,
@@ -182,6 +193,20 @@ export interface SettingsConfig {
      *  glossy = current default specular look (byte-identical to legacy);
      *  matte = flat diffuse; toon = 3-band cel/cartoon shading. */
     render_style: SettingType<RenderStyle>
+    /** Headlamp light direction, azimuth in degrees (view-space, around the
+     *  view axis). Drives uLightDir in the atom/bond shaders. */
+    light_azimuth: SettingType<number>
+    /** Headlamp light direction, elevation in degrees above the horizon
+     *  (view-space). Drives uLightDir in the atom/bond shaders. */
+    light_elevation: SettingType<number>
+    /** Specular highlight intensity — multiplies the glossy spec term in the
+     *  atom/bond shaders (uSpecStrength). 1.0 = byte-identical legacy look. */
+    highlight_strength: SettingType<number>
+    /** Per-render-style lighting profiles — the source of truth for the 5
+     *  lighting params fed to the shaders. Switching render_style swaps the
+     *  active profile (sliders + render both reflect it); edits are remembered
+     *  per style. Persisted inside scene_props. */
+    lighting_profiles: SettingType<Record<RenderStyle, LightingProfile>>
 
     // Forces & Lattice
     show_force_vectors: SettingType<boolean>

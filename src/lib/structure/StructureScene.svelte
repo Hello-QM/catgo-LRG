@@ -5,7 +5,7 @@
   import { resolve_css_var } from '$lib/css-utils'
   import { format_num } from '$lib/labels'
   import * as math from '$lib/math'
-  import { type CameraProjection, DEFAULTS, type RenderStyle, type ShowBonds } from '$lib/settings'
+  import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, type ShowBonds } from '$lib/settings'
   import { colors } from '$lib/state.svelte'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
@@ -474,6 +474,10 @@
     atom_outline_strength = DEFAULTS.structure.atom_outline_strength,
     bond_outline_strength = DEFAULTS.structure.bond_outline_strength,
     render_style = DEFAULTS.structure.render_style,
+    light_azimuth = DEFAULTS.structure.light_azimuth,
+    light_elevation = DEFAULTS.structure.light_elevation,
+    highlight_strength = DEFAULTS.structure.highlight_strength,
+    lighting_profiles = DEFAULTS.structure.lighting_profiles,
     background_color = undefined as string | undefined,
     background_opacity = DEFAULTS.background_opacity,
     sphere_segments = DEFAULTS.structure.sphere_segments,
@@ -727,6 +731,13 @@
     atom_outline_strength?: number
     bond_outline_strength?: number
     render_style?: RenderStyle // material/shading style for atoms (glossy | matte | toon)
+    light_azimuth?: number // headlamp azimuth in degrees (view-space) — legacy flat fallback seed
+    light_elevation?: number // headlamp elevation in degrees (view-space) — legacy flat fallback seed
+    highlight_strength?: number // specular highlight multiplier (uSpecStrength) — legacy flat fallback seed
+    // Per-render-style lighting profiles — source of truth for the 5 lighting
+    // params (active profile = lighting_profiles[render_style]). The flat
+    // light_*/…/highlight_strength props above are only the fallback seed.
+    lighting_profiles?: Record<RenderStyle, LightingProfile>
     background_color?: string | undefined
     background_opacity?: number
     sphere_segments?: number
@@ -1985,6 +1996,46 @@
   // determines the material — depth_cue_uniforms are shared by reference and
   // update in place — so the cache stays small (a handful of partial-occupancy
   // atoms × cutting states) and is disposed wholesale on teardown.
+  // ─── Per-render-style lighting profiles ───
+  // The 5 lighting params (light_azimuth/elevation, directional/ambient_light,
+  // highlight_strength) are PER render_style. lighting_profiles[render_style]
+  // is the active profile and the SOURCE OF TRUTH for the values fed to the
+  // shaders. Switching render_style reactively swaps the active profile, so the
+  // render updates with no extra wiring. The flat light_*/…/highlight_strength
+  // props are only a fallback seed (e.g. old persisted settings without a
+  // profile map, or non-Structure callers passing flat props).
+  const active_lighting = $derived(
+    lighting_profiles?.[render_style] ?? {
+      light_azimuth,
+      light_elevation,
+      directional_light,
+      ambient_light,
+      highlight_strength,
+    },
+  )
+  const active_light_azimuth = $derived(active_lighting.light_azimuth)
+  const active_light_elevation = $derived(active_lighting.light_elevation)
+  const active_directional_light = $derived(active_lighting.directional_light)
+  const active_ambient_light = $derived(active_lighting.ambient_light)
+  const active_highlight_strength = $derived(active_lighting.highlight_strength)
+
+  // View-space headlamp direction derived from the ACTIVE profile's azimuth/
+  // elevation. Convention: x=right, y=up, z=toward camera.
+  //   dir = (cos(el)·sin(az), sin(el), cos(el)·cos(az))   (az,el in radians)
+  // Default az=35°, el=45° → ≈ (0.405, 0.707, 0.579), i.e. the legacy fixed
+  // headlamp (Vector3(0.4,0.7,0.6).normalize()). This Vector3 is threaded into
+  // the atom/bond shader components and copied into the live uLightDir uniform
+  // of make_toon_material.
+  const light_dir = $derived.by(() => {
+    const az = (active_light_azimuth * Math.PI) / 180
+    const el = (active_light_elevation * Math.PI) / 180
+    return new Vector3(
+      Math.cos(el) * Math.sin(az),
+      Math.sin(el),
+      Math.cos(el) * Math.cos(az),
+    ).normalize()
+  })
+
   const _toon_tmp_color = new Color()
   const _toon_material_cache = new Map<string, ShaderMaterial>()
   function make_toon_material(
@@ -2005,8 +2056,10 @@
       side: double_sided ? 2 : 0,
       uniforms: {
         uColor: { value: _toon_tmp_color.clone() },
-        // Headlamp direction in view space, matching Bond.svelte's uLightDir.
-        uLightDir: { value: new Vector3(-0.7, -0.5, 1.0).normalize() },
+        // Headlamp in view space, driven by the light_azimuth/elevation
+        // sliders (default reproduces the legacy top-front headlamp). Each
+        // cached material's uLightDir is kept live by the $effect below.
+        uLightDir: { value: light_dir.clone() },
         uShadowThreshold: { value: 0.3 },
         uHighlightThreshold: { value: 0.97 },
         uShadowBrightness: { value: 0.5 },
@@ -2026,6 +2079,20 @@
   $effect(() => () => {
     for (const mat of _toon_material_cache.values()) mat.dispose()
     _toon_material_cache.clear()
+  })
+
+  // LIVE light-direction update for the partial-occupancy toon path. The
+  // cached toon materials are built once per (color|opacity|…) key, so the
+  // creation-time uLightDir would never move when the slider changes — copy
+  // the derived view-space direction into every cached material's uniform
+  // whenever light_dir changes. (Newly-created materials read light_dir at
+  // build time, so they're already correct.)
+  $effect(() => {
+    for (const mat of _toon_material_cache.values()) {
+      mat.uniforms.uLightDir.value.copy(light_dir)
+    }
+    // imperative uniform write bypasses the <T.> prop chain — request a paint
+    mark_dirty()
   })
 
   // Update depth cueing uniforms reactively — pure uniform updates, no recompilation.
@@ -2681,8 +2748,8 @@
     if (instances.length === 0) return []
     return [{
       thickness: hbond_thickness,
-      ambient_light,
-      directional_light,
+      ambient_light: active_ambient_light,
+      directional_light: active_directional_light,
       opacity: 1,
       instances,
     }]
@@ -5148,8 +5215,8 @@
   </T.OrthographicCamera>
 {/if}
 
-<T.DirectionalLight position={[0, 0.3, 1]} intensity={directional_light} />
-<T.AmbientLight intensity={ambient_light} />
+<T.DirectionalLight position={[0, 0.3, 1]} intensity={active_directional_light} />
+<T.AmbientLight intensity={active_ambient_light} />
 
 <!-- Invisible background mesh to catch clicks on empty space -->
 <T.Mesh
@@ -5201,9 +5268,11 @@
             {image_atom_opacity}
             {image_to_original_map}
             {depth_cue_uniforms}
-            {ambient_light}
-            {directional_light}
+            ambient_light={active_ambient_light}
+            directional_light={active_directional_light}
             {render_style}
+            {light_dir}
+            highlight_strength={active_highlight_strength}
           />
         {:else}
           <!-- Impostor-based atom rendering: billboard quads with ray-sphere fragment shader -->
@@ -5217,9 +5286,11 @@
             {image_atom_opacity}
             {image_to_original_map}
             {depth_cue_uniforms}
-            {ambient_light}
-            {directional_light}
+            ambient_light={active_ambient_light}
+            directional_light={active_directional_light}
             {render_style}
+            {light_dir}
+            highlight_strength={active_highlight_strength}
           />
         {/if}
 
@@ -5371,6 +5442,8 @@
           {image_atom_layout}
           {partner_drawn_lookup}
           {depth_cue_uniforms}
+          {light_dir}
+          highlight_strength={active_highlight_strength}
         />
       {/if}
 
@@ -5569,8 +5642,8 @@
           bonding_options={bonding_options_eff}
           {bond_thickness}
           {bond_color}
-          {ambient_light}
-          {directional_light}
+          ambient_light={active_ambient_light}
+          directional_light={active_directional_light}
           {element_radius_overrides}
           {atom_radius}
           {sphere_segments}

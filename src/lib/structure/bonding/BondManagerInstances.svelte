@@ -83,6 +83,13 @@
      * `null` (default) treats every partner as drawn — Phase 7c behavior.
      */
     partner_drawn_lookup?: PartnerDrawnLookup | null
+    /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
+     *  by the light_azimuth/elevation sliders; written live into uLightDir. */
+    light_dir?: Vector3
+    /** Specular highlight intensity multiplier (highlight_strength setting).
+     *  Multiplies the bond glossy spec term; 1.0 = byte-identical legacy look.
+     *  Written live into uSpecStrength. */
+    highlight_strength?: number
   }
 
   let {
@@ -104,6 +111,8 @@
     hide_incomplete_bonds = true,
     image_atom_layout = null,
     partner_drawn_lookup = null,
+    light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
+    highlight_strength = 1.0,
   }: Props = $props()
 
   let mesh = $state<InstancedMesh | undefined>()
@@ -173,6 +182,7 @@
     uniform vec3 uDepthCueBgColor;
     uniform float uBondOutlineStrength;
     uniform vec3 uLightDir;    // directional light in view space (headlamp, normalized)
+    uniform float uSpecStrength;  // glossy specular highlight multiplier (1.0 = default)
     varying vec3 vColorStart;
     varying vec3 vColorEnd;
     varying float vYPosition;
@@ -243,7 +253,7 @@
       // Compose: env-shaded base + tinted specular + fresnel rim, gated by rim_mask
       float exposure = ambientIntensity + directionalIntensity * 0.5;
       vec3 final_color = base_color * env * exposure * floor_lift
-                       + specColor * specular * directionalIntensity * 0.5 * rim_mask
+                       + specColor * specular * directionalIntensity * 0.5 * rim_mask * uSpecStrength
                        + vec3(fresnel * 0.08) * rim_mask;
 
       // Filmic tonemap before sRGB encode — keeps colors saturated, no over-blown highlights
@@ -282,7 +292,8 @@
       saturation: { value: saturation },
       brightness: { value: brightness },
       uOpacity: { value: opacity },
-      uLightDir: { value: new Vector3(-0.7, -0.5, 1.0).normalize() },
+      uLightDir: { value: light_dir.clone() }, // view-space headlamp (slider-driven); kept live by $effect below
+      uSpecStrength: { value: highlight_strength }, // glossy spec multiplier (slider-driven); kept live by $effect below
       uDepthCueing: depth_cue_uniforms?.uDepthCueing ?? { value: 0 },
       uDepthNear: depth_cue_uniforms?.uDepthNear ?? { value: 0 },
       uDepthFar: depth_cue_uniforms?.uDepthFar ?? { value: 10 },
@@ -300,6 +311,22 @@
     shader_material.depthWrite = opacity >= 1
     shader_material.depthTest = opacity >= 1
     shader_material.side = opacity < 1 ? 2 : 0
+    // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // Headlamp direction is a plain view-space uniform — copy the slider-derived
+  // direction into the live material so bonds re-light the instant the slider moves.
+  $effect(() => {
+    shader_material.uniforms.uLightDir.value.copy(light_dir)
+    // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // Specular highlight strength is a plain float uniform — copy the slider value
+  // into the live material so bond glossiness changes the instant it moves.
+  $effect(() => {
+    shader_material.uniforms.uSpecStrength.value = highlight_strength
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })

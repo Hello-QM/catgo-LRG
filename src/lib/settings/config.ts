@@ -2,7 +2,43 @@
 
 import { symbol_names } from '$lib/labels'
 import type { D3SymbolName } from '$lib/labels'
-import type { SettingsConfig, ShowBonds } from './types'
+import type { LightingProfile, RenderStyle, SettingsConfig, ShowBonds } from './types'
+
+/**
+ * Per-render-style default lighting profiles. Each of glossy/matte/toon owns
+ * its own profile of the 5 lighting params. Switching render_style swaps the
+ * active values (sliders + shaders both reflect the new style's profile); user
+ * edits are remembered per style and persisted inside scene_props.
+ *
+ * All three share az35/el45 (the agreed upper-right headlamp direction). Matte
+ * and toon kill specular (highlight_strength 0). dir/amb are inert for toon
+ * (self-lit 3-band) but kept for slider consistency (option A — no hidden
+ * sliders).
+ */
+export const LIGHTING_PROFILE_DEFAULTS: Readonly<Record<RenderStyle, LightingProfile>> = {
+  glossy: {
+    light_azimuth: 35,
+    light_elevation: 45,
+    directional_light: 0.3,
+    ambient_light: 0.7,
+    highlight_strength: 1.0,
+  },
+  matte: {
+    light_azimuth: 35,
+    light_elevation: 45,
+    directional_light: 0.4,
+    ambient_light: 0.85,
+    highlight_strength: 0.0,
+  },
+  toon: {
+    light_azimuth: 35,
+    light_elevation: 45,
+    directional_light: 0.3,
+    ambient_light: 0.7,
+    highlight_strength: 0.0,
+  },
+}
+
 const DISPLAY_CONFIG = {
   x_grid: {
     value: true,
@@ -373,6 +409,42 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description:
         `Material/shading style for atoms. Glossy = default specular look; Matte = flat diffuse (no highlight); Toon = 3-band cel/cartoon shading. Orthogonal to color_scheme (palette).`,
       enum: { glossy: `Glossy`, matte: `Matte`, toon: `Toon` },
+    },
+    light_azimuth: {
+      value: 35,
+      description:
+        `Headlamp light direction — azimuth in degrees around the view axis (0° = behind/back, 90° = right, 180° = front, 270° = left). View-space: x=right, y=up, z=toward camera. Default 35° reproduces the legacy fixed headlamp.`,
+      minimum: 0,
+      maximum: 360,
+      step: 5,
+    },
+    light_elevation: {
+      value: 45,
+      description:
+        `Headlamp light direction — elevation in degrees above the horizon (−90° = lit from below, 0° = level, +90° = lit from straight above). Default 45° reproduces the legacy fixed headlamp.`,
+      minimum: -90,
+      maximum: 90,
+      step: 5,
+    },
+    highlight_strength: {
+      value: 1.0,
+      description:
+        `Specular highlight intensity — multiplies the bright white spec dot on atoms and bonds. 1.0 = default look; 0 = no highlight; 2 = doubled glossiness.`,
+      minimum: 0,
+      maximum: 2,
+      step: 0.05,
+    },
+    lighting_profiles: {
+      // Per-render-style lighting profiles — the SOURCE OF TRUTH for the 5
+      // lighting params fed to the shaders. Switching render_style swaps which
+      // profile is active (sliders + render both reflect it); edits are
+      // remembered per style. Persisted as part of scene_props (catgo-viewer-
+      // settings). The flat directional_light/ambient_light/light_azimuth/
+      // light_elevation/highlight_strength settings above are kept only as a
+      // legacy seed / fallback — the viewer lighting path reads this map.
+      value: structuredClone(LIGHTING_PROFILE_DEFAULTS) as Record<RenderStyle, LightingProfile>,
+      description:
+        `Per-render-style lighting profiles (glossy/matte/toon each own light_azimuth, light_elevation, directional_light, ambient_light, highlight_strength).`,
     },
 
     // Forces & Lattice
