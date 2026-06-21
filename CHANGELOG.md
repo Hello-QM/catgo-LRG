@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-06-21
+
+### Added
+- **Viewer render styles** (`render_style`): a per-material shading mode — **Glossy** (specular), **Matte** (diffuse), **Toon** (3-band cel/cartoon with silhouette outline) — orthogonal to the colour scheme. Lives in the controls pane (中文: 光泽 / 哑光 / 卡通).
+- **Per-material lighting controls**: a Lighting group with light **azimuth + elevation** (direction), **directional + ambient** intensity and **highlight (specular) strength** — all update live. Each render style keeps its own lighting profile (remembered per material). Also corrects the viewer headlamp, which was lit from the lower-left, to light from above.
+- **Bond-order perception in the 3D viewer** (`Bond orders` / 键级, off by default): perceives double / triple / aromatic bond orders across the whole structure — molecular adsorbates **and** carbon-framework catalysts (graphene, C₃N₄, h-BN, COF). Doubles/triples render as offset multi-cylinders; aromatic rings render as a single inscribed ring per hexagon (PBC-aware: cross-cell hexagons are detected, deduped and wrapped into the cell). Metals stay single-bonded.
+- **CatBot atom-selection DSL**: agents can select atoms by query — `elem:O AND frac:c>0.9`, `label:O1`, `bonded:@i`, `sphere:@i;r`, with `AND`/`OR`/`NOT` and parentheses — via the `catgo_view` `select` action (no manual UI; nobody memorises a DSL).
+- **DOS/COHP/BANDS plots**: customizable per-series line colours, Nature-style colour presets, and publication DPI × width PNG export.
+- **CatGo CLI from the bundled app**: the `catgo` command is exposed by the packaged build (no `pip install` needed).
+- **CatBot workflow editing**: client-direct chat providers can now build and edit workflows.
+
+### Fixed
+- **Electronic-structure DB previews** and assorted import/review fixes.
+
 ## [1.3.1] - 2026-06-20
 
 ### Fixed
