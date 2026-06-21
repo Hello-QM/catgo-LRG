@@ -1,17 +1,25 @@
-// Adsorbate molecular-fragment isolation for bond-order perception.
+// Organic connected-component isolation for whole-structure bond-order
+// perception.
 //
-// CatGo structures are typically a METAL SLAB (periodic) + a small ORGANIC
-// ADSORBATE (CO, OH, COOH, formate, CH3, benzene, ...). We want bond orders
-// perceived ONLY on the organic adsorbate; the slab stays single sticks.
+// CatGo structures range from a METAL SLAB + a small ORGANIC ADSORBATE
+// (CO, OH, COOH, formate, CH3, benzene, ...) to extended CARBON-BASED
+// FRAMEWORKS (graphene, C3N4, h-BN, COF). We perceive bond orders EVERYWHERE
+// there is organic conjugation — including periodic sheets that bond to their
+// own PBC image — and never invent orders on metals. The organic-vs-metal
+// distinction lives entirely in PERCEPTION (metals can't be aromatic; the
+// valence heuristic only assigns multiple orders to organic SP2 / carbonyl /
+// etc.), so a Pt slab still gets only single sticks.
 //
 // This module walks the SAME live bond-pair graph the viewer draws (the
 // `filtered_bond_pairs` consumed by the shadow-sync effect) — it does NOT
-// re-detect bonds — so the fragments match exactly what is rendered. Each
-// fragment is a connected component of ORGANIC-ORGANIC edges only:
+// re-detect bonds — so the components match exactly what is rendered. Each
+// component is a connected cluster of ORGANIC-ORGANIC edges only:
 // metal-adsorbate binding bonds (C-Pt, O-Pt, H-Pt) are deliberately cut so
-// the binding bond never pulls slab atoms into the fragment, and the binding
+// the binding bond never pulls slab atoms into the component, and the binding
 // atom keeps its dangling valence (which the propagator reads to drive the
-// correct C≡O / C=O on the free end).
+// correct C≡O / C=O on the free end). Cross-cell organic edges (jimage != 0)
+// are KEPT, so a periodic sheet is one component closing through its own
+// image rather than being split at the cell boundary.
 //
 // Pure, headless, no wasm, no network.
 
@@ -38,11 +46,7 @@ export const ORGANIC_SET: ReadonlySet<string> = new Set([
   `I`,
 ])
 
-// A component bigger than this is treated as an extended framework
-// (graphene / h-BN / COF sheet), not a small adsorbate.
-export const MAX_FRAGMENT_ATOMS = 64
-
-export type FragmentEdge = {
+export type OrganicEdge = {
   a_local: number
   b_local: number
   a_global: number
@@ -50,14 +54,21 @@ export type FragmentEdge = {
   jimage: [number, number, number]
 }
 
-export type Fragment = {
-  // Global site indices that make up this fragment.
+export type OrganicComponent = {
+  // Global site indices that make up this organic component.
   site_indices: number[]
-  // Intra-fragment organic-organic bonds, in a compact [0..n) local index space.
-  local_bonds: FragmentEdge[]
-  // global site index -> local index within this fragment
+  // Intra-component organic-organic bonds, in a compact [0..n) local index space.
+  local_bonds: OrganicEdge[]
+  // global site index -> local index within this component
   global_to_local: Map<number, number>
 }
+
+// Backward-compatible aliases. The perception layer + tests import these
+// names; the concept is now a neutral "organic component" (an extended
+// framework is just a large, periodic-spanning one) rather than an
+// "adsorbate fragment", but renaming the exported types would churn callers.
+export type FragmentEdge = OrganicEdge
+export type Fragment = OrganicComponent
 
 const metal_lookup = new Map(
   element_data.map((el) => [el.symbol as string, el.metal === true]),
@@ -89,27 +100,29 @@ export function is_framework_metal(el: string | undefined): boolean {
   return metal_lookup.get(el) === true
 }
 
-function jimage_is_zero(j: [number, number, number]): boolean {
-  return j[0] === 0 && j[1] === 0 && j[2] === 0
-}
-
 /**
- * Isolate adsorbate molecular fragments from the live bond-pair graph.
+ * Isolate organic connected components from the live bond-pair graph.
+ *
+ * EVERY organic connected component is returned — including extended,
+ * periodic-spanning frameworks (graphene / C3N4 / h-BN / COF). There is NO
+ * exclude-as-slab size/periodicity filter: a graphene sheet that bonds to its
+ * own PBC image is a single component and is perceived in full. Metal atoms
+ * and metal-adsorbate bonds are never in any component (the organic-vs-metal
+ * line lives here; metals never receive multiple orders).
  *
  * @param filtered_bond_pairs the same intra-cell + cross-cell BondPair[] the
  *   viewer's shadow-sync consumes (carries site_idx_1/2 + jimage).
  * @param sites              structure.sites (for element classification).
- * @param lattice            3x3 lattice matrix (rows = a,b,c) or null for a
- *   gas-phase molecule. Only used to recognise periodic-spanning sheets.
- * @returns one Fragment per organic connected component that survives the
- *   exclude-as-slab filter. Metal atoms and metal-adsorbate bonds are never
- *   in any fragment.
+ * @param _lattice           3x3 lattice matrix (rows = a,b,c) or null for a
+ *   gas-phase molecule. Unused here (cross-cell edges carry their own jimage);
+ *   the perception layer uses it for MIC geometry.
+ * @returns one OrganicComponent per organic connected component.
  */
 export function isolate_adsorbate_fragments(
   filtered_bond_pairs: BondPair[],
   sites: Site[],
   _lattice: Matrix3x3 | null,
-): Fragment[] {
+): OrganicComponent[] {
   if (!Array.isArray(filtered_bond_pairs) || filtered_bond_pairs.length === 0) {
     return []
   }
@@ -121,15 +134,15 @@ export function isolate_adsorbate_fragments(
 
   // 2. organic-organic-only adjacency (cuts metal-adsorbate bonds). Keep the
   //    full edge (with jimage) so cross-cell organic bonds stay in-component.
-  const adj = new Map<number, FragmentEdge[]>()
-  const edges: FragmentEdge[] = []
+  const adj = new Map<number, OrganicEdge[]>()
+  const edges: OrganicEdge[] = []
   for (const bp of filtered_bond_pairs) {
     const a = bp.site_idx_1
     const b = bp.site_idx_2
     if (a < 0 || b < 0 || a >= n || b >= n) continue // out-of-range guard
     if (!organic[a] || !organic[b]) continue // an edge is kept iff BOTH ends organic
     const jimage = (bp.jimage ?? [0, 0, 0]) as [number, number, number]
-    const edge: FragmentEdge = {
+    const edge: OrganicEdge = {
       a_local: -1,
       b_local: -1,
       a_global: a,
@@ -166,31 +179,25 @@ export function isolate_adsorbate_fragments(
 
   // group atoms + edges per component
   const comp_atoms: number[][] = Array.from({ length: n_comp }, () => [])
-  const comp_edges: FragmentEdge[][] = Array.from({ length: n_comp }, () => [])
-  const comp_periodic = new Array<boolean>(n_comp).fill(false)
+  const comp_edges: OrganicEdge[][] = Array.from({ length: n_comp }, () => [])
   for (const [atom, cid] of comp_of) comp_atoms[cid].push(atom)
   for (const e of edges) {
     const cid = comp_of.get(e.a_global)!
     comp_edges[cid].push(e)
-    if (!jimage_is_zero(e.jimage)) comp_periodic[cid] = true
   }
 
-  // 4. exclude-as-slab filter + 5. remap to local index space
-  const fragments: Fragment[] = []
+  // 4. remap each component to a local [0..n) index space. NO exclude-as-slab
+  //    filter: every organic component (small adsorbate, large framework,
+  //    periodic-spanning sheet alike) is perceived.
+  const components: OrganicComponent[] = []
   for (let cid = 0; cid < n_comp; cid++) {
     const atoms = comp_atoms[cid]
-    const size = atoms.length
-    // (b) size > MAX regardless → extended framework, drop.
-    if (size > MAX_FRAGMENT_ATOMS) continue
-    // (a) periodic-spanning AND large → infinite sheet, drop.
-    if (comp_periodic[cid] && size > MAX_FRAGMENT_ATOMS) continue
-    // small finite molecules + small clusters pass.
 
     atoms.sort((p, q) => p - q) // deterministic local order
     const global_to_local = new Map<number, number>()
     atoms.forEach((g, i) => global_to_local.set(g, i))
 
-    const local_bonds: FragmentEdge[] = comp_edges[cid].map((e) => ({
+    const local_bonds: OrganicEdge[] = comp_edges[cid].map((e) => ({
       a_local: global_to_local.get(e.a_global)!,
       b_local: global_to_local.get(e.b_global)!,
       a_global: e.a_global,
@@ -198,8 +205,8 @@ export function isolate_adsorbate_fragments(
       jimage: e.jimage,
     }))
 
-    fragments.push({ site_indices: atoms, local_bonds, global_to_local })
+    components.push({ site_indices: atoms, local_bonds, global_to_local })
   }
 
-  return fragments
+  return components
 }

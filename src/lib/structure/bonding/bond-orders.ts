@@ -1,15 +1,22 @@
-// Adsorbate bond-order perception — RDKit-free valence heuristic.
+// Whole-structure bond-order perception — RDKit-free valence heuristic.
 //
 // A 1:1 TS port of atomcanvas' heuristics.py (ValencePropagator +
-// EnhancedAromaticityDetector + SpecialStructureDetector), scoped to ONE
-// adsorbate Fragment at a time. RDKit/xyz2mol is unusable on CatGo systems
-// (metal, periodic, no defined total charge), so we run a lightweight valence
-// heuristic on the extracted molecular fragment instead.
+// EnhancedAromaticityDetector + SpecialStructureDetector), run per ORGANIC
+// CONNECTED COMPONENT. RDKit/xyz2mol is unusable on CatGo systems (metal,
+// periodic, no defined total charge), so we run a lightweight valence
+// heuristic on each extracted organic component instead. Components range
+// from a small adsorbate (CO / formate / benzene) to an extended periodic
+// framework (graphene / C3N4 / h-BN / COF) that bonds to its own PBC image —
+// ALL are perceived. Metals are excluded by the component extraction, so a
+// Pt slab still gets only single sticks (no fake orders).
 //
 // Bond vectors are minimum-image-corrected via lattice·jimage so the
 // carbonyl / length-table distance tests stay correct on a cross-cell
-// fragment. The best-fit-plane normal reuses get_principal_axes (Jacobi)
-// from structure/index.ts — no new linalg dependency.
+// component. Aromatic rings are detected in (atom, accumulated-image) space so
+// every hexagon of a periodic sheet — closing through cross-cell bonds — is
+// found, with its plane geometry computed from MIC-UNWRAPPED image positions.
+// The best-fit-plane normal reuses get_principal_axes (Jacobi) from
+// structure/index.ts — no new linalg dependency.
 //
 // Output orders snap to {1, 1.5, 2, 3}, keyed by the SAME get_bond_key the
 // shadow-sync uses, so the result map is directly indexable by global bond
@@ -18,6 +25,11 @@
 // Pure, headless, no wasm, no network.
 
 import type { Matrix3x3, Vec3 } from '$lib/math'
+import {
+  mat3x3_vec3_multiply,
+  matrix_inverse_3x3,
+  transpose_3x3_matrix,
+} from '$lib/math'
 import type { AnyStructure, BondPair, Site } from '$lib/structure'
 import { get_principal_axes } from '$lib/structure'
 import { get_bond_key } from '$lib/structure/bonding'
@@ -82,6 +94,29 @@ function length_table_key(a: string, b: string): string {
 // Aromatic rings are essentially flat; saturated chair rings pucker well
 // beyond this tolerance (Å).
 const AROMATIC_PLANARITY_TOL = 0.1
+
+// ---------------------------------------------------------------------------
+// Aromatic-ring overlay descriptor
+// ---------------------------------------------------------------------------
+
+/**
+ * One detected aromatic ring, in world (Cartesian) coordinates, ready for the
+ * dashed-circle overlay. `atom_indices` are the ordered GLOBAL site indices
+ * forming the cycle; `centroid` / `normal` / `radius` describe the best-fit
+ * ring plane (normal is unit length, radius is the mean centroid→atom
+ * distance). All positions are MIC-unwrapped so a cross-cell ring is laid out
+ * as a single contiguous loop rather than split across the periodic boundary.
+ * For PERIODIC structures the `centroid` is then translated by an integer
+ * lattice vector back into the unit cell so a boundary-straddling hexagon's
+ * torus sits on the in-cell atoms (no floaters); `normal`/`radius` are
+ * unchanged. Molecules (no lattice) keep their centroid exactly as is.
+ */
+export type AromaticRing = {
+  atom_indices: number[]
+  centroid: [number, number, number]
+  normal: [number, number, number]
+  radius: number
+}
 
 // ---------------------------------------------------------------------------
 // catrender parity helpers (bonds.rs:128-180) — exported for the renderer & tests
@@ -248,11 +283,54 @@ function is_sp2_atom(g: LocalGraph, idx: number, lattice: Matrix3x3 | null): boo
   return angle_sum > 350.0
 }
 
+// One ordered ring as a cyclic walk in (atom, accumulated-image) space. Each
+// member carries the lattice translation (jimage) of that atom RELATIVE to
+// member[0], so a ring is well defined even when it closes through a PBC image
+// (graphene/C3N4 hexagons) — including the degenerate case where the same
+// atom index appears twice at different images (a hexagon in a tiny periodic
+// cell). `atoms[i]` is a local atom index; `images[i]` is its [da,db,dc].
+type Ring = {
+  atoms: number[]
+  images: Array<[number, number, number]>
+}
+
+const j_add = (
+  a: [number, number, number],
+  b: [number, number, number],
+): [number, number, number] => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+
+// Cartesian position of a ring member: raw xyz + lattice·image.
+function ring_member_pos(
+  g: LocalGraph,
+  atom: number,
+  image: [number, number, number],
+  lattice: Matrix3x3 | null,
+): Vec3 {
+  const p = g.positions[atom]
+  if (!lattice || (!image[0] && !image[1] && !image[2])) {
+    return [p[0], p[1], p[2]]
+  }
+  let x = p[0]
+  let y = p[1]
+  let z = p[2]
+  for (let k = 0; k < 3; k++) {
+    x += image[k] * lattice[k][0]
+    y += image[k] * lattice[k][1]
+    z += image[k] * lattice[k][2]
+  }
+  return [x, y, z]
+}
+
 // Max out-of-plane deviation (Å) of ring atoms from their best-fit plane.
 // Plane normal = smallest-eigenvalue eigenvector of the covariance matrix,
 // obtained from get_principal_axes (sorted descending → last row is normal).
-function ring_max_plane_deviation(g: LocalGraph, ring: number[]): number {
-  const pts = ring.map((i) => g.positions[i])
+// Uses MIC-UNWRAPPED member positions so a cross-cell ring is laid flat.
+function ring_max_plane_deviation(
+  g: LocalGraph,
+  ring: Ring,
+  lattice: Matrix3x3 | null,
+): number {
+  const pts = ring.atoms.map((a, i) => ring_member_pos(g, a, ring.images[i], lattice))
   const c: Vec3 = [0, 0, 0]
   for (const p of pts) {
     c[0] += p[0]
@@ -277,35 +355,187 @@ function ring_max_plane_deviation(g: LocalGraph, ring: number[]): number {
   return max_dev
 }
 
-function is_planar_ring(g: LocalGraph, ring: number[]): boolean {
-  if (ring.length < 3) return false
-  return ring_max_plane_deviation(g, ring) <= AROMATIC_PLANARITY_TOL
+function is_planar_ring(g: LocalGraph, ring: Ring, lattice: Matrix3x3 | null): boolean {
+  if (ring.atoms.length < 3) return false
+  return ring_max_plane_deviation(g, ring, lattice) <= AROMATIC_PLANARITY_TOL
+}
+
+// MIC-unwrapped Cartesian positions for an ordered ring. Each member's
+// accumulated image is already known, so a cross-cell ring is laid out as one
+// contiguous loop instead of jumping across the periodic boundary.
+function unwrap_ring_positions(
+  g: LocalGraph,
+  ring: Ring,
+  lattice: Matrix3x3 | null,
+): Vec3[] | null {
+  const n = ring.atoms.length
+  if (n < 3) return null
+  return ring.atoms.map((a, i) => ring_member_pos(g, a, ring.images[i], lattice))
+}
+
+// Wrap a Cartesian point back into the unit cell along every periodic axis.
+// A periodic aromatic hexagon is laid out from MIC-UNWRAPPED image positions,
+// so a hexagon straddling the cell boundary gets a centroid OUTSIDE the drawn
+// cell — the torus would float in empty space while the in-cell copy (same
+// hexagon via PBC) has the bonds but no ring. Translating the centroid by an
+// integer lattice vector is geometrically exact (the hexagon is periodic), so
+// the normal / radius are untouched and planarity is preserved. We go through
+// fractional space using the SAME lattice convention as the MIC code (rows of
+// `lattice` are the lattice vectors a, b, c → cart = Σ_i f_i · lattice[i],
+// i.e. cart = transpose(lattice)·frac), wrap each fractional component into
+// [0, 1) (f -= floor(f)), then map back. Non-periodic structures (lattice ===
+// null) are returned unchanged — molecules like benzene must not move.
+function wrap_centroid_into_cell(c: Vec3, lattice: Matrix3x3 | null): Vec3 {
+  if (!lattice) return c
+  // cart = transpose(lattice)·frac  ⇒  frac = inv(transpose(lattice))·cart
+  const lat_t = transpose_3x3_matrix(lattice)
+  const frac = mat3x3_vec3_multiply(matrix_inverse_3x3(lat_t), c)
+  const wrapped: Vec3 = [
+    frac[0] - Math.floor(frac[0]),
+    frac[1] - Math.floor(frac[1]),
+    frac[2] - Math.floor(frac[2]),
+  ]
+  return mat3x3_vec3_multiply(lat_t, wrapped)
+}
+
+// Compute the best-fit-plane geometry of a set of (already MIC-unwrapped) ring
+// points: centroid, unit normal (smallest-eigenvalue eigenvector of the
+// covariance), and mean centroid→atom radius. Reuses get_principal_axes — no
+// new linalg dependency. For PERIODIC structures the centroid is wrapped back
+// into the unit cell (by an integer lattice vector — orientation/size are
+// unchanged) so a boundary-straddling hexagon's ring lands on the in-cell
+// atoms instead of floating outside the drawn cell.
+function ring_plane_geometry(
+  pts: Vec3[],
+  lattice: Matrix3x3 | null,
+): { centroid: Vec3; normal: Vec3; radius: number } {
+  const c: Vec3 = [0, 0, 0]
+  for (const p of pts) {
+    c[0] += p[0]
+    c[1] += p[1]
+    c[2] += p[2]
+  }
+  c[0] /= pts.length
+  c[1] /= pts.length
+  c[2] /= pts.length
+
+  const centered = pts.map((p) => sub(p, c))
+  const cov = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+  for (const v of centered) {
+    for (let a = 0; a < 3; a++) {
+      for (let b = 0; b < 3; b++) cov[a][b] += v[a] * v[b]
+    }
+  }
+  const axes = get_principal_axes(cov)
+  const nax = axes[axes.length - 1] as unknown as Vec3 // smallest-eigenvalue dir
+  const nl = norm(nax) || 1
+  const normal: Vec3 = [nax[0] / nl, nax[1] / nl, nax[2] / nl]
+
+  let radius = 0
+  for (const v of centered) radius += norm(v)
+  radius /= pts.length
+
+  // Only the centroid is translated into the cell; the normal (translation-
+  // invariant) and the radius (computed from the unwrapped centered points)
+  // are untouched, so the ring keeps its exact plane, orientation and size.
+  return { centroid: wrap_centroid_into_cell(c, lattice), normal, radius }
+}
+
+// Canonical dedup key for a ring, INVARIANT under lattice translation and
+// walk-direction/start rotation. Two hexagons that are the same hexagon modulo
+// a PBC translation (a graphene sheet draws the "same" hexagon at every image)
+// collapse to ONE key → one torus per distinct hexagon. We re-reference all
+// member images to the LEXICOGRAPHICALLY SMALLEST (atom, image) member, sort
+// the resulting (atom, Δimage) tuples, and join. The smallest-member anchor is
+// canonical regardless of which atom the DFS happened to start from.
+function ring_key(ring: Ring): string {
+  const members = ring.atoms.map((a, i) => ({ atom: a, img: ring.images[i] }))
+  // pick the lexicographically smallest (atom, image) member as the anchor
+  let anchor = members[0]
+  for (const m of members) {
+    if (
+      m.atom < anchor.atom ||
+      (m.atom === anchor.atom &&
+        (m.img[0] < anchor.img[0] ||
+          (m.img[0] === anchor.img[0] &&
+            (m.img[1] < anchor.img[1] ||
+              (m.img[1] === anchor.img[1] && m.img[2] < anchor.img[2])))))
+    ) {
+      anchor = m
+    }
+  }
+  const rel = members
+    .map((m) =>
+      [
+        m.atom,
+        m.img[0] - anchor.img[0],
+        m.img[1] - anchor.img[1],
+        m.img[2] - anchor.img[2],
+      ] as [number, number, number, number]
+    )
+    .sort((p, q) =>
+      p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || p[3] - q[3]
+    )
+  return rel.map((r) => r.join(`,`)).join(`|`)
 }
 
 // Detect small rings (size <= max_size) without a graph lib — DFS cycle search
-// on the tiny fragment (≤64 atoms). Returns deduped vertex lists.
-function detect_small_rings(g: LocalGraph, max_size = 6): number[][] {
-  const found = new Map<string, number[]>()
-  const adj_set: number[][] = g.adj.map((nbs) => nbs.map((e) => e.nb))
+// in (atom, accumulated-image) space so rings that close through a PBC image
+// (graphene / C3N4 hexagons in a small periodic cell) are found, even when the
+// same atom index recurs at a different image. A ring closes when the walk
+// returns to the START atom at the ZERO accumulated image (a true polygon, not
+// a strand that merely lands on the same atom in a neighbouring cell).
+// Deduped by ring_key so each distinct hexagon (modulo lattice translation)
+// appears once.
+function detect_small_rings(g: LocalGraph, max_size = 6): Ring[] {
+  const found = new Map<string, Ring>()
+  const ZERO: [number, number, number] = [0, 0, 0]
 
-  function dfs(start: number, current: number, visited: number[], depth: number) {
+  function dfs(
+    start: number,
+    current: number,
+    cur_img: [number, number, number],
+    atoms: number[],
+    images: Array<[number, number, number]>,
+    depth: number,
+  ) {
     if (depth > max_size) return
-    for (const next of adj_set[current]) {
-      if (next === start && visited.length >= 3) {
-        const ring = [...visited]
-        const sorted = [...ring].sort((a, b) => a - b)
-        found.set(sorted.join(`,`), ring)
+    for (const e of g.adj[current]) {
+      const next = e.nb
+      const next_img = j_add(cur_img, e.jimage)
+      const at_zero = next_img[0] === 0 && next_img[1] === 0 && next_img[2] === 0
+      // a ring closes ONLY when we return to the start atom at its ORIGINAL
+      // (zero) image, after ≥3 members → a real polygon.
+      if (next === start && at_zero) {
+        if (atoms.length >= 3) {
+          const ring: Ring = { atoms: [...atoms], images: [...images] }
+          found.set(ring_key(ring), ring)
+        }
         continue
       }
-      if (visited.includes(next)) continue
-      // only walk forward to keep each cycle bounded & avoid trivial backtracks
+      // The start atom at a NON-zero image is a DISTINCT node in (atom, image)
+      // space — a graphene/C3N4 hexagon in a small periodic cell passes THROUGH
+      // the start atom at other images — so we must be able to walk through it.
+      // skip only if this exact (atom, image) node is already on the path.
+      let seen = false
+      for (let k = 0; k < atoms.length; k++) {
+        if (
+          atoms[k] === next && images[k][0] === next_img[0] &&
+          images[k][1] === next_img[1] && images[k][2] === next_img[2]
+        ) {
+          seen = true
+          break
+        }
+      }
+      if (seen) continue
+      // only walk to atoms >= start to bound each cycle & avoid re-discovery
       if (next < start) continue
-      dfs(start, next, [...visited, next], depth + 1)
+      dfs(start, next, next_img, [...atoms, next], [...images, next_img], depth + 1)
     }
   }
 
-  for (let s = 0; s < g.n; s++) dfs(s, s, [s], 1)
-  return [...found.values()].filter((r) => r.length <= max_size)
+  for (let s = 0; s < g.n; s++) dfs(s, s, ZERO, [s], [ZERO], 1)
+  return [...found.values()].filter((r) => r.atoms.length <= max_size)
 }
 
 // sp2-network bonds (graphene/h-BN) → 1.5; benzene fallback for planar pure-C
@@ -323,8 +553,12 @@ function detect_sp2_network(g: LocalGraph, lattice: Matrix3x3 | null): Set<strin
   if (sp2_atoms.size === 0) {
     const rings = detect_small_rings(g, 6)
     for (const ring of rings) {
-      if (ring.length === 6 && ring.every((i) => g.symbols[i] === `C`)) {
-        if (is_planar_ring(g, ring)) { for (const i of ring) sp2_atoms.add(i) }
+      if (
+        ring.atoms.length === 6 && ring.atoms.every((i) => g.symbols[i] === `C`)
+      ) {
+        if (is_planar_ring(g, ring, lattice)) {
+          for (const i of ring.atoms) sp2_atoms.add(i)
+        }
       }
     }
   }
@@ -397,6 +631,14 @@ function guess_order_by_length(
   return best_order
 }
 
+/** A detected aromatic ring in a fragment's LOCAL index space + geometry. */
+type LocalAromaticRing = {
+  local_indices: number[]
+  centroid: Vec3
+  normal: Vec3
+  radius: number
+}
+
 /**
  * Perceive bond orders for one fragment.
  * @returns Map<localBondKey, order> where order ∈ {1, 1.5, 2, 3}.
@@ -406,6 +648,19 @@ export function perceive_fragment_orders(
   sites: Site[],
   lattice: Matrix3x3 | null,
 ): Map<string, number> {
+  return perceive_fragment(fragment, sites, lattice).orders
+}
+
+/**
+ * Internal: perceive both per-bond orders AND aromatic rings for one fragment.
+ * The public `perceive_fragment_orders` keeps its Map-only signature by
+ * projecting `.orders`.
+ */
+function perceive_fragment(
+  fragment: Fragment,
+  sites: Site[],
+  lattice: Matrix3x3 | null,
+): { orders: Map<string, number>; rings: LocalAromaticRing[] } {
   const g = build_local_graph(fragment, sites, lattice)
   const bond_orders = new Map<string, number>()
   const valence_used = new Array<number>(g.n).fill(0)
@@ -539,7 +794,45 @@ export function perceive_fragment_orders(
   // snap orders to {1, 1.5, 2, 3}
   for (const [k, v] of bond_orders) bond_orders.set(k, snap_order(v))
 
-  return bond_orders
+  const rings = detect_aromatic_rings(g, bond_orders, lattice)
+  return { orders: bond_orders, rings }
+}
+
+// Detect aromatic rings for the dashed-circle overlay: a small cycle (3..6
+// atoms) is aromatic iff EVERY consecutive ring bond carries a 1.5 order in
+// the snapped order map AND the ring is planar. Returns each ring with its
+// MIC-unwrapped plane geometry (centroid / unit normal / mean radius), in
+// LOCAL index space. Non-ring 1.5 bonds (e.g. an open carboxylate resonance
+// pair) are deliberately ignored here — only true rings get a circle.
+function detect_aromatic_rings(
+  g: LocalGraph,
+  bond_orders: Map<string, number>,
+  lattice: Matrix3x3 | null,
+): LocalAromaticRing[] {
+  const out: LocalAromaticRing[] = []
+  const rings = detect_small_rings(g, 6)
+  for (const ring of rings) {
+    if (ring.atoms.length < 3) continue
+    // every consecutive ring bond must be aromatic (1.5). The order map is
+    // keyed by the local atom pair (jimage-agnostic), which is correct: a
+    // graphene C-C bond and its cross-cell image share one order entry.
+    let all_aromatic = true
+    for (let i = 0; i < ring.atoms.length; i++) {
+      const u = ring.atoms[i]
+      const v = ring.atoms[(i + 1) % ring.atoms.length]
+      if (bond_orders.get(lkey(u, v)) !== 1.5) {
+        all_aromatic = false
+        break
+      }
+    }
+    if (!all_aromatic) continue
+    if (!is_planar_ring(g, ring, lattice)) continue
+    const pts = unwrap_ring_positions(g, ring, lattice)
+    if (pts === null) continue
+    const { centroid, normal, radius } = ring_plane_geometry(pts, lattice)
+    out.push({ local_indices: [...ring.atoms], centroid, normal, radius })
+  }
+  return out
 }
 
 function snap_order(o: number): number {
@@ -560,27 +853,67 @@ function lattice_of(structure: AnyStructure): Matrix3x3 | null {
 }
 
 /**
- * Perceive double/triple/aromatic orders on every adsorbate fragment of a
- * structure, returning a map keyed by the SAME get_bond_key(a, b, jimage) the
- * shadow-sync uses. Bonds not in the map = order 1 (slab sticks, binding bonds).
+ * Combined perception result for a structure:
+ *  - `orders`: per-bond order map keyed by get_bond_key(a, b, jimage). Bonds
+ *    absent from the map = order 1 (slab sticks, binding bonds, single bonds).
+ *  - `aromatic_rings`: one descriptor per detected aromatic ring (global atom
+ *    indices + world-space plane geometry) for the dashed-circle overlay.
  */
-export function perceive_adsorbate_orders(
+export type AdsorbatePerception = {
+  orders: Map<string, number>
+  aromatic_rings: AromaticRing[]
+}
+
+/**
+ * Perceive double/triple/aromatic orders AND aromatic rings across the WHOLE
+ * structure — every organic connected component (small adsorbate, large or
+ * periodic-spanning framework alike). Metals are excluded by the component
+ * extraction, so a metal slab keeps single sticks. The order map is keyed by
+ * the SAME get_bond_key(a, b, jimage) the shadow-sync uses. Aromatic rings —
+ * including every hexagon of a periodic sheet, deduped to one per distinct
+ * hexagon — carry the GLOBAL site indices + a MIC-unwrapped best-fit plane
+ * (centroid/normal/radius) for the inner solid-torus ring.
+ */
+export function perceive_adsorbate(
   filtered_bond_pairs: BondPair[],
   structure: AnyStructure,
-): Map<string, number> {
-  const result = new Map<string, number>()
-  if (!structure || !Array.isArray(filtered_bond_pairs)) return result
+): AdsorbatePerception {
+  const orders = new Map<string, number>()
+  const aromatic_rings: AromaticRing[] = []
+  if (!structure || !Array.isArray(filtered_bond_pairs)) {
+    return { orders, aromatic_rings }
+  }
   const sites = structure.sites ?? []
   const lattice = lattice_of(structure)
 
   const fragments = isolate_adsorbate_fragments(filtered_bond_pairs, sites, lattice)
   for (const fragment of fragments) {
-    const local_orders = perceive_fragment_orders(fragment, sites, lattice)
+    const { orders: local_orders, rings } = perceive_fragment(fragment, sites, lattice)
     for (const e of fragment.local_bonds) {
       const order = local_orders.get(lkey(e.a_local, e.b_local))
       if (order === undefined || order === 1) continue // order-1 stays implicit
-      result.set(get_bond_key(e.a_global, e.b_global, e.jimage), order)
+      orders.set(get_bond_key(e.a_global, e.b_global, e.jimage), order)
+    }
+    // map each ring's local indices back to global site indices
+    for (const ring of rings) {
+      aromatic_rings.push({
+        atom_indices: ring.local_indices.map((li) => fragment.site_indices[li]),
+        centroid: [ring.centroid[0], ring.centroid[1], ring.centroid[2]],
+        normal: [ring.normal[0], ring.normal[1], ring.normal[2]],
+        radius: ring.radius,
+      })
     }
   }
-  return result
+  return { orders, aromatic_rings }
+}
+
+/**
+ * Backward-compatible thin wrapper: perceive only the per-bond order map.
+ * Prefer `perceive_adsorbate` when the aromatic-ring overlay is also needed.
+ */
+export function perceive_adsorbate_orders(
+  filtered_bond_pairs: BondPair[],
+  structure: AnyStructure,
+): Map<string, number> {
+  return perceive_adsorbate(filtered_bond_pairs, structure).orders
 }

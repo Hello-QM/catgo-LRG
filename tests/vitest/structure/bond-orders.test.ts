@@ -17,6 +17,7 @@ import {
   ib_seq,
   is_aromatic,
   nb_from_order,
+  perceive_adsorbate,
   perceive_adsorbate_orders,
   round_half_even,
 } from '$lib/structure/bonding/bond-orders'
@@ -36,6 +37,36 @@ function make_site(xyz: Vec3, element: string): Site {
 
 function dist(a: Vec3, b: Vec3): number {
   return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
+}
+
+// Minimal 3x3 linalg for asserting a Cartesian centroid lands inside the cell.
+function transpose3(m: Matrix3x3): Matrix3x3 {
+  return [
+    [m[0][0], m[1][0], m[2][0]],
+    [m[0][1], m[1][1], m[2][1]],
+    [m[0][2], m[1][2], m[2][2]],
+  ]
+}
+
+function mat_vec3(m: Matrix3x3, v: Vec3): Vec3 {
+  return [
+    m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
+    m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
+    m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2],
+  ]
+}
+
+function invert3(m: Matrix3x3): Matrix3x3 {
+  const [a, b, c] = m[0]
+  const [d, e, f] = m[1]
+  const [g, h, i] = m[2]
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+  const inv = 1 / det
+  return [
+    [(e * i - f * h) * inv, (c * h - b * i) * inv, (b * f - c * e) * inv],
+    [(f * g - d * i) * inv, (a * i - c * g) * inv, (c * d - a * f) * inv],
+    [(d * h - e * g) * inv, (b * g - a * h) * inv, (a * e - b * d) * inv],
+  ]
 }
 
 // Build a BondPair from two site indices, reading positions from `sites`.
@@ -83,6 +114,30 @@ function as_structure(
       volume: lattice[0][0] * lattice[1][1] * lattice[2][2],
     },
   }
+}
+
+// Primitive 2-atom graphene cell, with the three nearest-neighbour C-C bonds
+// expressed as cross-cell BondPairs (so every C-C bond and every hexagon
+// closes through a PBC image). A=(0,0,0); B=(1.23, 0.7101, 0); a1=(2.46,0,0),
+// a2=(1.23, 2.1304, 0). A's neighbours are B at images [0,0,0], [-1,0,0],
+// [0,-1,0] — all at the graphene bond length ~1.42 Å.
+function graphene_primitive(): {
+  sites: Site[]
+  pairs: BondPair[]
+  lattice: Matrix3x3
+} {
+  const lattice: Matrix3x3 = [[2.46, 0, 0], [1.23, 2.1304, 0], [0, 0, 20]]
+  const sites = [
+    make_site([0, 0, 0], `C`), // 0 = A
+    make_site([1.23, 0.7101, 0], `C`), // 1 = B
+  ]
+  // A(0) bonds to B(1) in cells [0,0,0], [-1,0,0], [0,-1,0]
+  const pairs: BondPair[] = [
+    bond(sites, 0, 1, [0, 0, 0]),
+    bond(sites, 0, 1, [-1, 0, 0]),
+    bond(sites, 0, 1, [0, -1, 0]),
+  ]
+  return { sites, pairs, lattice }
 }
 
 // Order lookup for a bond, keyed exactly like the renderer's shadow-sync.
@@ -265,7 +320,10 @@ describe(`perceive_adsorbate_orders — gas-phase molecules`, () => {
     const pairs: BondPair[] = []
     for (let k = 0; k < 6; k++) pairs.push(bond(sites, k, (k + 1) % 6)) // ring
     for (let k = 0; k < 6; k++) pairs.push(bond(sites, k, 6 + k)) // C-H
-    const orders = perceive_adsorbate_orders(pairs, as_structure(sites, NO_LATTICE))
+    const { orders, aromatic_rings } = perceive_adsorbate(
+      pairs,
+      as_structure(sites, NO_LATTICE),
+    )
     for (let k = 0; k < 6; k++) {
       const o = order_of(orders, k, (k + 1) % 6)
       expect(is_aromatic(o)).toBe(true)
@@ -273,6 +331,54 @@ describe(`perceive_adsorbate_orders — gas-phase molecules`, () => {
     }
     // C-H spokes single
     for (let k = 0; k < 6; k++) expect(order_of(orders, k, 6 + k)).toBe(1)
+
+    // Exactly ONE aromatic ring, the six ring carbons (global indices 0..5).
+    expect(aromatic_rings.length).toBe(1)
+    const aring = aromatic_rings[0]
+    expect(new Set(aring.atom_indices)).toEqual(new Set([0, 1, 2, 3, 4, 5]))
+    expect(aring.atom_indices.length).toBe(6)
+    // Centroid at the hexagon center (origin), within a tight tolerance.
+    expect(aring.centroid[0]).toBeCloseTo(0, 5)
+    expect(aring.centroid[1]).toBeCloseTo(0, 5)
+    expect(aring.centroid[2]).toBeCloseTo(0, 5)
+    // Ring lies in the XY plane → normal is ±Z (unit length).
+    const nlen = Math.hypot(aring.normal[0], aring.normal[1], aring.normal[2])
+    expect(nlen).toBeCloseTo(1, 6)
+    expect(Math.abs(aring.normal[2])).toBeCloseTo(1, 5)
+    expect(Math.abs(aring.normal[0])).toBeLessThan(1e-5)
+    expect(Math.abs(aring.normal[1])).toBeLessThan(1e-5)
+    // Mean centroid→atom radius is the hexagon circumradius R (=1.39 Å).
+    expect(aring.radius).toBeCloseTo(R, 5)
+  })
+
+  test(`CO2 — no aromatic rings (two clean doubles, no cycle)`, () => {
+    const sites = [
+      make_site([0, 0, 0], `C`),
+      make_site([1.16, 0, 0], `O`),
+      make_site([-1.16, 0, 0], `O`),
+    ]
+    const pairs = [bond(sites, 0, 1), bond(sites, 0, 2)]
+    const { orders, aromatic_rings } = perceive_adsorbate(
+      pairs,
+      as_structure(sites, NO_LATTICE),
+    )
+    expect(order_of(orders, 0, 1)).toBe(2.0)
+    expect(order_of(orders, 0, 2)).toBe(2.0)
+    expect(aromatic_rings.length).toBe(0) // no ring → no dashed circle
+  })
+
+  test(`formate — resonant 1.5/1.5 but NO ring (open chain → no circle)`, () => {
+    // The carboxylate resonance gives two 1.5 C-O orders, but there is no
+    // cycle, so the overlay must NOT manufacture a phantom aromatic ring.
+    const sites = [
+      make_site([0, 0, 0], `C`),
+      make_site([1.10, 0, 0], `H`),
+      make_site([-0.70, 1.05, 0], `O`),
+      make_site([-0.70, -1.05, 0], `O`),
+    ]
+    const pairs = [bond(sites, 0, 1), bond(sites, 0, 2), bond(sites, 0, 3)]
+    const { aromatic_rings } = perceive_adsorbate(pairs, as_structure(sites, NO_LATTICE))
+    expect(aromatic_rings.length).toBe(0)
   })
 })
 
@@ -343,21 +449,93 @@ describe(`isolate_adsorbate_fragments`, () => {
     expect(new Set(frags[0].site_indices)).toEqual(new Set([0, 1]))
   })
 
-  test(`graphene flake — periodic-spanning large sheet excluded as slab`, () => {
-    // Build a periodic carbon honeycomb chain that wraps across the cell with
-    // cross-cell (jimage != 0) edges and exceeds MAX_FRAGMENT_ATOMS (64).
-    const small: Matrix3x3 = [[2.46, 0, 0], [0, 2.46, 0], [0, 0, 20]]
-    const sites: Site[] = []
-    const N = 80
-    for (let k = 0; k < N; k++) {
-      sites.push(make_site([(k % 4) * 0.6, (k % 3) * 0.6, 0], `C`))
+  test(`periodic graphene sheet — perceived (NOT excluded), one component`, () => {
+    // Primitive 2-atom graphene cell. Both carbons + every hexagon close
+    // THROUGH cross-cell (jimage != 0) bonds. The exclude-as-slab filter is
+    // gone, so this periodic sheet is a single organic component, not dropped.
+    const { sites, pairs, lattice } = graphene_primitive()
+    const frags = isolate_adsorbate_fragments(pairs, sites, lattice)
+    expect(frags.length).toBe(1) // one connected sheet, perceived
+    expect(new Set(frags[0].site_indices)).toEqual(new Set([0, 1]))
+  })
+})
+
+// --- periodic frameworks (graphene / C3N4 / h-BN / COF) ---------------------
+
+describe(`perceive_adsorbate — periodic carbon frameworks`, () => {
+  test(`graphene — every ring C-C bond aromatic 1.5 (cross-cell perceived)`, () => {
+    const { sites, pairs, lattice } = graphene_primitive()
+    const orders = perceive_adsorbate_orders(pairs, as_structure(sites, lattice))
+    // all three C-C bonds (each a cross-cell image) are sp2-network → 1.5
+    expect(order_of(orders, 0, 1, [0, 0, 0])).toBe(1.5)
+    expect(order_of(orders, 0, 1, [-1, 0, 0])).toBe(1.5)
+    expect(order_of(orders, 0, 1, [0, -1, 0])).toBe(1.5)
+  })
+
+  test(`graphene — hexagonal aromatic ring detected via cross-cell traversal`, () => {
+    const { sites, pairs, lattice } = graphene_primitive()
+    const { aromatic_rings } = perceive_adsorbate(pairs, as_structure(sites, lattice))
+    // at least one hexagon found; periodic duplicates of the SAME hexagon
+    // (modulo a lattice translation) are deduped to a single torus.
+    expect(aromatic_rings.length).toBeGreaterThanOrEqual(1)
+    const hex = aromatic_rings.find((r) => r.atom_indices.length === 6)
+    expect(hex).toBeDefined()
+    // ring lies in the z=0 plane → unit normal is ±Z
+    const n = hex!.normal
+    expect(Math.hypot(n[0], n[1], n[2])).toBeCloseTo(1, 6)
+    expect(Math.abs(n[2])).toBeCloseTo(1, 5)
+    // graphene hexagon circumradius = C-C bond length ~1.42 Å (MIC-unwrapped)
+    expect(hex!.radius).toBeGreaterThan(1.3)
+    expect(hex!.radius).toBeLessThan(1.55)
+  })
+
+  test(`graphene — periodic ring centroids are WRAPPED into the unit cell`, () => {
+    // A graphene hexagon straddles the cell boundary: its MIC-unwrapped
+    // centroid lands OUTSIDE the drawn cell, so the torus would float in empty
+    // space while the in-cell hexagon (same hexagon via PBC) has the bonds but
+    // no ring. The fix translates each periodic ring centroid by an integer
+    // lattice vector so it lands inside the cell. Assert: every aromatic ring's
+    // fractional centroid is within [0, 1) on the in-plane (a, b) axes.
+    const { sites, pairs, lattice } = graphene_primitive()
+    const { aromatic_rings } = perceive_adsorbate(pairs, as_structure(sites, lattice))
+    expect(aromatic_rings.length).toBeGreaterThanOrEqual(1)
+
+    // cart → frac via inv(transpose(lattice)): rows of `lattice` are a, b, c,
+    // so cart = Σ_i f_i·lattice[i] = transpose(lattice)·frac.
+    const inv = invert3(transpose3(lattice))
+    for (const ring of aromatic_rings) {
+      const f = mat_vec3(inv, ring.centroid)
+      // in-plane axes a (f0) and b (f1) must be inside the cell, no floaters
+      expect(f[0]).toBeGreaterThanOrEqual(0)
+      expect(f[0]).toBeLessThan(1)
+      expect(f[1]).toBeGreaterThanOrEqual(0)
+      expect(f[1]).toBeLessThan(1)
     }
-    const pairs: BondPair[] = []
-    for (let k = 0; k < N - 1; k++) pairs.push(bond(sites, k, k + 1))
-    // wrap-around cross-cell edge to close the periodic sheet
-    pairs.push(bond(sites, N - 1, 0, [1, 0, 0]))
-    const frags = isolate_adsorbate_fragments(pairs, sites, small)
-    expect(frags.length).toBe(0) // too big + periodic-spanning → not a molecule
+  })
+
+  test(`graphene — Pt slab atoms in the same cell still get NO orders`, () => {
+    // graphene on a couple of Pt atoms: the metal stays single sticks, the
+    // sheet is fully perceived. Verifies the organic-vs-metal line.
+    const { lattice } = graphene_primitive()
+    const sites = [
+      make_site([0, 0, 0], `C`), // 0
+      make_site([1.23, 0.7101, 0], `C`), // 1
+      make_site([0.6, 0.35, -2.2], `Pt`), // 2 below the sheet
+      make_site([1.85, 1.06, -2.2], `Pt`), // 3
+    ]
+    const pairs = [
+      bond(sites, 0, 1, [0, 0, 0]),
+      bond(sites, 0, 1, [-1, 0, 0]),
+      bond(sites, 0, 1, [0, -1, 0]),
+      bond(sites, 2, 3, [0, 0, 0]), // Pt-Pt
+      bond(sites, 0, 2, [0, 0, 0]), // C-Pt binding (cut on metal side)
+    ]
+    const orders = perceive_adsorbate_orders(pairs, as_structure(sites, lattice))
+    // C-C ring bonds aromatic
+    expect(order_of(orders, 0, 1, [0, 0, 0])).toBe(1.5)
+    // metal bonds never ordered
+    expect(order_of(orders, 2, 3)).toBe(1)
+    expect(order_of(orders, 0, 2)).toBe(1)
   })
 })
 

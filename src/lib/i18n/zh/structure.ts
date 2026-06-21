@@ -50,7 +50,7 @@ const structure: Record<string, string> = {
   thickness: `粗细`,
   bond_scale: `键长系数`,
   cell_edge_stub_bonds: `晶胞边缘短键`,
-  bond_order_perception: `吸附质键级`,
+  bond_order_perception: `键级`,
   stub_length: `短键长度`,
   clipping: `裁剪`,
   sphere_clipping: `球形裁剪`,

@@ -45,13 +45,14 @@
     Mesh.prototype.raycast = acceleratedRaycast
   }
   import { type BondingStrategy, compute_bond_transform, get_bond_key } from './bonding'
-  import { perceive_adsorbate_orders } from './bonding/bond-orders'
+  import { type AromaticRing, perceive_adsorbate } from './bonding/bond-orders'
   import { compute_bonds_sync } from './workers/bond-worker-api'
   import { apply_bond_distance_rules } from './bond-distance-rules'
   import type { BondKind } from './bonding/bond-manager.svelte'
   import { BOND_KIND } from './bonding/bond-manager.svelte'
   import { BondManager } from './bonding/bond-manager.svelte'
   import BondManagerInstances from './bonding/BondManagerInstances.svelte'
+  import AromaticRingOverlay from './bonding/AromaticRingOverlay.svelte'
   import {
     build_image_atom_layout,
     empty_image_atom_layout,
@@ -3065,10 +3066,19 @@
   // orders on small organic adsorbate fragments only; the slab stays order 1.
   // Keyed by get_bond_key(a, b, jimage), matching the shadow-sync diff key.
   const EMPTY_ORDER_MAP: ReadonlyMap<string, number> = new Map()
-  let adsorbate_bond_orders = $derived.by(() => {
-    if (!bond_order_perception || !structure) return EMPTY_ORDER_MAP
-    return perceive_adsorbate_orders(filtered_bond_pairs, structure)
+  const EMPTY_RINGS: AromaticRing[] = []
+  // Single perception pass → both the per-bond order map (drives the multi-
+  // cylinder renderer) AND the aromatic rings (drive the dashed-circle
+  // overlay). When OFF, return shared empties; perceive_* never runs (zero
+  // CPU) and the order/overlay paths stay byte-identical to today.
+  let adsorbate_perception = $derived.by(() => {
+    if (!bond_order_perception || !structure) {
+      return { orders: EMPTY_ORDER_MAP, aromatic_rings: EMPTY_RINGS }
+    }
+    return perceive_adsorbate(filtered_bond_pairs, structure)
   })
+  let adsorbate_bond_orders = $derived(adsorbate_perception.orders)
+  let aromatic_rings = $derived(adsorbate_perception.aromatic_rings)
 
   // Sync filtered_bond_pairs to parent for box selection
   $effect(() => {
@@ -5262,6 +5272,13 @@
           multibond_enabled={bond_order_perception}
           {depth_cue_uniforms}
         />
+      {/if}
+
+      <!-- Aromatic ring overlay — one dashed circle inside each aromatic ring.
+           Gated by the SAME bond_order_perception toggle: when OFF,
+           `aromatic_rings` is the shared empty array → nothing drawn. -->
+      {#if show_bulk_atoms && bond_order_perception && aromatic_rings.length > 0}
+        <AromaticRingOverlay rings={aromatic_rings} />
       {/if}
 
       <!-- Hydrogen bond rendering (dashed cylinders) -->

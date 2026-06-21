@@ -50,7 +50,7 @@ const structure: Record<string, string> = {
   thickness: `Thickness`,
   bond_scale: `Bond scale`,
   cell_edge_stub_bonds: `Cell-edge stub bonds`,
-  bond_order_perception: `Adsorbate bond orders`,
+  bond_order_perception: `Bond orders`,
   stub_length: `Stub Length`,
   clipping: `Clipping`,
   sphere_clipping: `Sphere Clipping`,
