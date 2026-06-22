@@ -1060,6 +1060,10 @@
     min-height: 0;
     overflow: hidden;
     background: var(--page-bg);
+    /* Small left inset so the xterm content isn't flush against the pane edge
+       / the side-by-side divider (the first column read as clipped). FitAddon
+       measures the content box, so this shifts the grid right without overflow. */
+    padding-left: 8px;
   }
   /* Ensure xterm fills the container */
   .terminal-container :global(.xterm),
