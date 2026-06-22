@@ -102,3 +102,20 @@ export async function load_from_remote(
 
   return response.json()
 }
+
+export async function load_icohp_from_remote(
+  hpc_session_id: string,
+  remote_path: string,
+  server_url = SERVER_URL,
+): Promise<ICOHPResult> {
+  const response = await fetch(`${server_url}/api/cohp/icohp-from-remote?session_id=${encodeURIComponent(hpc_session_id)}&remote_path=${encodeURIComponent(remote_path)}`, {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const detail = await response.text()
+    throw new Error(`Remote load failed: ${detail}`)
+  }
+
+  return response.json()
+}

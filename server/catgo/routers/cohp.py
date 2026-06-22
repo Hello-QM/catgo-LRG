@@ -319,6 +319,66 @@ async def upload_icohplist(file: UploadFile) -> ICOHPUploadResponse:
     )
 
 
+@router.post("/icohp-from-remote", response_model=ICOHPUploadResponse)
+async def icohp_from_remote(session_id: str, remote_path: str) -> ICOHPUploadResponse:
+    """Download ICOHPLIST.lobster from HPC and parse it into an ICOHP session.
+
+    Downloads the file via SSH, parses it, and stores a session
+    just like the upload endpoint.
+    """
+    import tempfile
+    from catgo_cohp.io import parse_icohplist
+
+    try:
+        from catgo.utils.hpc_client import pool
+        hpc = pool.get_connection(session_id)
+        if not hpc:
+            raise HTTPException(status_code=503, detail=f"HPC session {session_id} not connected")
+
+        # Download file to temp location
+        with tempfile.NamedTemporaryFile(suffix=".lobster", delete=False, mode="wb") as tmp:
+            tmp_path = tmp.name
+
+        await hpc.download_to_local(remote_path, tmp_path)
+
+        try:
+            entries = parse_icohplist(tmp_path)
+        except Exception as e:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail=f"Failed to parse ICOHPLIST file: {e}")
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+        sid = str(uuid.uuid4())
+
+        entry_models = []
+        for e in entries:
+            entry_models.append(ICOHPEntryModel(
+                cohp_num=e.cohp_num,
+                atom1=e.atom1,
+                atom2=e.atom2,
+                distance=e.distance,
+                spin_up=e.spin_up,
+                spin_down=e.spin_down,
+                total=e.total,
+                orbital1=e.orbital1,
+                orbital2=e.orbital2,
+                is_total=e.is_total,
+                label=e.label,
+            ))
+
+        _icohp_sessions[sid] = (entries, time.time())
+
+        return ICOHPUploadResponse(
+            session_id=sid,
+            entries=entry_models,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download from HPC: {e}")
+
+
 @router.delete("/{session_id}")
 def cleanup_session(session_id: str) -> dict:
     """Clean up cached sessions."""

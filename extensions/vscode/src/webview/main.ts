@@ -522,7 +522,14 @@ const parse_file_content = async (
     try {
       const cube_text = is_cube ? content : await chgcar_to_cube(content)
       const header = parse_cube_header(cube_text)
-      const molecule = cube_atoms_to_molecule(header)
+      // VASP charge densities are always periodic — derive the cell from the
+      // cube grid so the slab renders with its unit-cell box + PBC bonds.
+      // A genuine molecular Gaussian cube stays non-periodic (its grid is a
+      // padded bounding box). A .cube re-emitted from VASP data carries a
+      // VASP-origin name (CHGCAR_diff.cube / *.vasp.cube) → still periodic.
+      const cube_is_periodic = is_chgcar_family ||
+        /chgcar|chgdiff|diffchg|aeccar|locpot|elfcar|parchg|\.vasp/i.test(stripped_basename)
+      const molecule = cube_atoms_to_molecule(header, { periodic: cube_is_periodic })
       if (!molecule.sites.length) {
         throw new Error(`cube header had no atoms`)
       }

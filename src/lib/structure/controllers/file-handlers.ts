@@ -200,9 +200,11 @@ export function create_file_handlers(deps: FileHandlerDeps) {
       const cube_text = await resp.text()
       const cube_filename = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``) + `.cube`
 
-      // Parse cube header to extract structure for the 3D viewer
+      // Parse cube header to extract structure for the 3D viewer.
+      // CHGCAR-family files are always periodic — derive the cell from the
+      // cube grid so the slab renders with its unit-cell box + PBC bonds.
       const header = parse_cube_header(cube_text)
-      const molecule = cube_atoms_to_molecule(header)
+      const molecule = cube_atoms_to_molecule(header, { periodic: true })
       if (molecule.sites.length > 0) {
         deps.set_structure({ ...molecule, _aligned: true } as AnyStructure)
         deps.inc_center_camera()
@@ -229,7 +231,11 @@ export function create_file_handlers(deps: FileHandlerDeps) {
     if (!/\.(cube|cub)$/i.test(filename)) return false
     try {
       const header = parse_cube_header(text)
-      const molecule = cube_atoms_to_molecule(header)
+      // Molecular Gaussian cubes are non-periodic, but VASP-origin cubes
+      // (e.g. CHGCAR_diff.cube / *.vasp.cube) carry a real cell — keep it so
+      // the slab renders with its unit-cell box + PBC bonds.
+      const cube_is_vasp = /CHGCAR|CHGDIFF|DIFFCHG|AECCAR|LOCPOT|ELFCAR|PARCHG|\.vasp/i.test(filename)
+      const molecule = cube_atoms_to_molecule(header, { periodic: cube_is_vasp })
       if (molecule.sites.length > 0) {
         deps.set_structure({ ...molecule, _aligned: true } as AnyStructure)
         deps.inc_center_camera()

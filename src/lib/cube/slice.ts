@@ -308,6 +308,53 @@ export function sample_plane_slice(
 // ── Canvas rendering ─────────────────────────────────────────────────
 
 /**
+ * Crop a slice to a sub-window in plane (u,v) coordinates, returning a new
+ * SliceResult with the sub-grid + adjusted extents. Used to "fit to atoms" so a
+ * slab cross-section fills the figure instead of being a thin band in vacuum.
+ * The colormap range (`min`/`max`) and plane vectors are kept from the full
+ * slice so the colorbar and orientation stay consistent.
+ */
+export function crop_slice(
+  slice: SliceResult,
+  u_lo: number,
+  u_hi: number,
+  v_lo: number,
+  v_hi: number,
+): SliceResult {
+  const { data, width, height, u_min, u_max, v_min, v_max } = slice
+  const du = u_max - u_min || 1
+  const dv = v_max - v_min || 1
+  const to_col = (u: number) => Math.round(((u - u_min) / du) * (width - 1))
+  const to_row = (v: number) => Math.round(((v - v_min) / dv) * (height - 1))
+  let c0 = Math.max(0, Math.min(width - 1, to_col(u_lo)))
+  let c1 = Math.max(0, Math.min(width - 1, to_col(u_hi)))
+  let r0 = Math.max(0, Math.min(height - 1, to_row(v_lo)))
+  let r1 = Math.max(0, Math.min(height - 1, to_row(v_hi)))
+  if (c1 < c0) [c0, c1] = [c1, c0]
+  if (r1 < r0) [r0, r1] = [r1, r0]
+  // Degenerate window → return the full slice untouched.
+  if (c1 - c0 < 1 || r1 - r0 < 1) return slice
+  const new_w = c1 - c0 + 1
+  const new_h = r1 - r0 + 1
+  const new_data = new Float64Array(new_w * new_h)
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) {
+      new_data[(r - r0) * new_w + (c - c0)] = data[r * width + c]
+    }
+  }
+  return {
+    ...slice,
+    data: new_data,
+    width: new_w,
+    height: new_h,
+    u_min: u_min + (c0 / (width - 1)) * du,
+    u_max: u_min + (c1 / (width - 1)) * du,
+    v_min: v_min + (r0 / (height - 1)) * dv,
+    v_max: v_min + (r1 / (height - 1)) * dv,
+  }
+}
+
+/**
  * Render a SliceResult to an HTMLCanvasElement with a selectable colormap.
  * Returns the [min, max] range used for the colorbar.
  */

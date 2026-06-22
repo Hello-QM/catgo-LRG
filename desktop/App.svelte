@@ -1217,7 +1217,9 @@
         const cube_filename = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``) + `.cube`
         let structure: AnyStructure | undefined
         try {
-          const molecule = cube_atoms_to_molecule(parse_cube_header(cube_text))
+          // CHGCAR-family is always periodic — derive the cell from the cube
+          // grid so the slab renders with its unit-cell box + PBC bonds.
+          const molecule = cube_atoms_to_molecule(parse_cube_header(cube_text), { periodic: true })
           if (molecule.sites.length > 0) structure = { ...molecule, _aligned: true } as AnyStructure
         } catch (err) {
           console.error(`Failed to parse converted cube atoms:`, err)
@@ -1232,8 +1234,11 @@
 
     if (/\.(cube|cub)$/i.test(filename)) {
       let structure: AnyStructure | undefined
+      // Molecular Gaussian cubes are non-periodic; VASP-origin cubes
+      // (CHGCAR_diff.cube / *.vasp.cube) carry a real cell — keep it.
+      const cube_is_vasp = /chgcar|chgdiff|diffchg|aeccar|locpot|elfcar|parchg|\.vasp/i.test(filename)
       try {
-        const molecule = cube_atoms_to_molecule(parse_cube_header(text))
+        const molecule = cube_atoms_to_molecule(parse_cube_header(text), { periodic: cube_is_vasp })
         if (molecule.sites.length > 0) structure = { ...molecule, _aligned: true } as AnyStructure
       } catch (err) {
         console.error(`Failed to parse cube file atoms:`, err)

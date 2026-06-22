@@ -37,6 +37,8 @@
     negative_mesh = $bindable(null),
     cube_atoms = $bindable([]),
     selected_sites = [],
+    display_positions = [],
+    display_elements = [],
     cube_state = $bindable({
       filepath: ``,
       header: null,
@@ -75,6 +77,13 @@
     negative_mesh?: CubeMesh | null
     cube_atoms?: CubeAtom[]
     selected_sites?: number[]
+    /** Cartesian positions of ALL displayed atoms (base + PBC images), indexed
+     *  to match selected_sites, so a 3-atom plane works when an image is picked. */
+    display_positions?: number[][]
+    /** Element symbols of ALL displayed atoms (base + PBC images), indexed to
+     *  match selected_sites, for the selected-atom tags (image idx is out of
+     *  range of the base-only header.atoms). */
+    display_elements?: string[]
     cube_state?: CubeState
     onslice_data?: (result: SliceResult, atoms: AtomSliceInfo[]) => void
     toggle_props?: ComponentProps<typeof DraggablePane>[`toggle_props`]
@@ -268,6 +277,25 @@
     slice_debounce_timer = setTimeout(handle_extract_slice, 50)
   }
 
+  // Custom ▲▼ steppers — native number-input spinners are unreliable
+  // (hover-only in Chrome, absent in WebKitGTK), and the user wants always-on
+  // up/down arrows. These mutate the bound value, clamp, and re-extract.
+  function step_offset(delta: number) {
+    const v = Math.round((cube_state.slice_plane.offset + delta) * 10) / 10
+    cube_state.slice_plane.offset = Math.min(10, Math.max(-10, v))
+    debounced_slice()
+  }
+  function step_tilt(i: number, delta: number) {
+    const v = Math.round((cube_state.slice_plane.rotation[i] ?? 0) + delta)
+    cube_state.slice_plane.rotation[i] = Math.min(90, Math.max(-90, v))
+    debounced_slice()
+  }
+  function step_position(delta: number) {
+    const v = Math.round((cube_state.slice_plane.position + delta) * 100) / 100
+    cube_state.slice_plane.position = Math.min(1, Math.max(0, v))
+    debounced_slice()
+  }
+
   // Update normal/center for axis-aligned modes based on position slider and grid info
   $effect(() => {
     const h = cube_state.header
@@ -302,19 +330,43 @@
     }
   })
 
-  // Auto-compute custom slice plane when 3+ atoms are selected
+  // Auto-compute custom slice plane when 3+ atoms are selected.
+  // selected_sites are BASE-site indices into the viewer structure; that
+  // structure is built 1:1 from header.atoms (cube_atoms_to_molecule maps in
+  // order), so the same index addresses the matching cube atom. We read the
+  // RAW cube positions (header.atoms[i].position) on purpose: the slice math
+  // (sample_plane_slice) lives in the cube's origin+voxel frame, so the plane
+  // must be defined there too.
   $effect(() => {
     const atoms = cube_state.header?.atoms
     const sp = cube_state.slice_plane
-    if (!atoms || sp.mode !== `custom` || selected_sites.length < 3) return
-    const indices = selected_sites.slice(0, 3)
-    if (indices.some(i => i >= atoms.length)) return
-    const p1 = atoms[indices[0]].position
-    const p2 = atoms[indices[1]].position
-    const p3 = atoms[indices[2]].position
+    // Track selection length explicitly so the effect re-runs as atoms are
+    // clicked one-by-one (and fires the moment the 3rd atom lands).
+    const sel = selected_sites
+    if (!atoms || sp.mode !== `custom` || sel.length < 3) return
+    const indices = sel.slice(0, 3)
+    // selected_sites can include PBC image-atom indices (>= base atom count) for
+    // periodic structures (the user clicked a periodic image). A base-only
+    // lookup rejected those (and silently did nothing). Resolve each clicked
+    // atom's position from the DISPLAYED positions (base + image, same cube
+    // frame), falling back to the base cube atoms when not supplied.
+    const pos_of = (i: number): Vec3 | null => {
+      if (display_positions.length > i) return display_positions[i] as Vec3
+      return i < atoms.length ? (atoms[i].position as Vec3) : null
+    }
+    const p1 = pos_of(indices[0])
+    const p2 = pos_of(indices[1])
+    const p3 = pos_of(indices[2])
+    if (!p1 || !p2 || !p3) return
     const v1: Vec3 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]]
     const v2: Vec3 = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]]
-    sp.normal = normalize(cross(v1, v2))
+    const raw_normal = cross(v1, v2)
+    // Guard against three collinear atoms (degenerate plane → cross == ~0).
+    if (Math.hypot(...raw_normal) < 1e-8) {
+      cube_state.error = `Selected atoms are collinear — pick 3 non-collinear atoms`
+      return
+    }
+    sp.normal = normalize(raw_normal)
     sp.center = [
       (p1[0] + p2[0] + p3[0]) / 3,
       (p1[1] + p2[1] + p3[1]) / 3,
@@ -323,6 +375,12 @@
     sp.selected_atoms = indices
     sp.rotation = [0, 0, 0]
     sp.show_plane = true
+    // X/Y/Z modes only sample the 2D slice when the Position slider fires
+    // `oninput`; the custom mode has no such trigger, so selecting 3 atoms used
+    // to update only the 3D preview plane (driven reactively from sp.normal/
+    // sp.center) and never produced the 2D slice figure. Kick the extract here
+    // so the figure appears as soon as the plane is defined.
+    debounced_slice()
   })
 
   async function handle_export(format: `glb` | `obj`) {
@@ -494,15 +552,21 @@
         {#if cube_state.slice_plane.mode !== `custom`}
           <label>
             Position
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              bind:value={cube_state.slice_plane.position}
-              oninput={debounced_slice}
-            />
-            <span class="angle">{cube_state.slice_plane.position.toFixed(2)}</span>
+            <span class="spin-wrap">
+              <input
+                type="number"
+                class="spin-input"
+                min="0"
+                max="1"
+                step="0.01"
+                bind:value={cube_state.slice_plane.position}
+                oninput={debounced_slice}
+              />
+              <span class="spin-arrows">
+                <button type="button" class="spin-btn" tabindex="-1" onclick={() => step_position(0.01)}>▲</button>
+                <button type="button" class="spin-btn" tabindex="-1" onclick={() => step_position(-0.01)}>▼</button>
+              </span>
+            </span>
           </label>
         {:else}
           <div class="slice-info">
@@ -510,7 +574,10 @@
               <span class="selected-atoms">
                 {#each cube_state.slice_plane.selected_atoms as idx}
                   <span class="atom-tag">
-                    {atom_symbol(cube_state.header.atoms[idx].atomic_number)}{idx + 1}
+                    {display_elements[idx]
+                      ?? (cube_state.header.atoms[idx]
+                        ? atom_symbol(cube_state.header.atoms[idx].atomic_number)
+                        : `?`)}{idx + 1}
                   </span>
                 {/each}
               </span>
@@ -521,29 +588,43 @@
 
           <label>
             Offset
-            <input
-              type="range"
-              min="-10"
-              max="10"
-              step="0.1"
-              bind:value={cube_state.slice_plane.offset}
-              oninput={debounced_slice}
-            />
-            <span class="angle">{cube_state.slice_plane.offset.toFixed(1)}&Aring;</span>
+            <span class="spin-wrap">
+              <input
+                type="number"
+                class="spin-input"
+                min="-10"
+                max="10"
+                step="0.1"
+                bind:value={cube_state.slice_plane.offset}
+                oninput={debounced_slice}
+              />
+              <span class="spin-arrows">
+                <button type="button" class="spin-btn" tabindex="-1" onclick={() => step_offset(0.1)}>▲</button>
+                <button type="button" class="spin-btn" tabindex="-1" onclick={() => step_offset(-0.1)}>▼</button>
+              </span>
+            </span>
+            <span class="unit">&Aring;</span>
           </label>
 
           {#each [`U`, `V`, `N`] as axis, i}
             <label>
               Tilt {axis}
-              <input
-                type="range"
-                min="-90"
-                max="90"
-                step="1"
-                bind:value={cube_state.slice_plane.rotation[i]}
-                oninput={debounced_slice}
-              />
-              <span class="angle">{cube_state.slice_plane.rotation[i]}&deg;</span>
+              <span class="spin-wrap">
+                <input
+                  type="number"
+                  class="spin-input"
+                  min="-90"
+                  max="90"
+                  step="1"
+                  bind:value={cube_state.slice_plane.rotation[i]}
+                  oninput={debounced_slice}
+                />
+                <span class="spin-arrows">
+                  <button type="button" class="spin-btn" tabindex="-1" onclick={() => step_tilt(i, 1)}>▲</button>
+                  <button type="button" class="spin-btn" tabindex="-1" onclick={() => step_tilt(i, -1)}>▼</button>
+                </span>
+              </span>
+              <span class="unit">&deg;</span>
             </label>
           {/each}
         {/if}
@@ -628,6 +709,58 @@
     width: 55px;
     padding: 1px 3px;
     font-size: 0.75rem;
+  }
+  .spin-wrap {
+    flex: 1;
+    display: flex;
+    align-items: stretch;
+    min-width: 60px;
+  }
+  .spin-input {
+    flex: 1;
+    min-width: 40px;
+    padding: 2px 4px;
+    font-size: 0.75rem;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    border-radius: 3px 0 0 3px;
+    background: rgba(128, 128, 128, 0.1);
+    color: inherit;
+    /* Hide the unreliable native spinner — we provide custom ▲▼ buttons. */
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+  .spin-input::-webkit-outer-spin-button,
+  .spin-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .spin-arrows {
+    display: flex;
+    flex-direction: column;
+  }
+  .spin-btn {
+    flex: 1;
+    width: 16px;
+    padding: 0;
+    font-size: 0.5rem;
+    line-height: 1;
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    border-left: none;
+    background: rgba(128, 128, 128, 0.15);
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .spin-btn:first-child { border-radius: 0 3px 0 0; border-bottom: none; }
+  .spin-btn:last-child { border-radius: 0 0 3px 0; }
+  .spin-btn:hover { background: rgba(128, 128, 128, 0.3); }
+  .unit {
+    min-width: 14px;
+    text-align: left;
+    font-size: 0.65rem;
+    opacity: 0.7;
   }
   .color-row {
     display: flex;

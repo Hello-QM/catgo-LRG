@@ -8,6 +8,7 @@
     upload_icohplist,
     cleanup_cohp_session,
     load_from_remote as cohp_load_remote,
+    load_icohp_from_remote,
   } from '$lib/api/cohp'
   import { register_analysis_session, unregister_analysis_session } from '$lib/chat/analysis-session-store.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
@@ -50,6 +51,7 @@
   let loading_data = $state(false)
   let error_msg = $state(``)
   let show_file_dialog = $state(false)
+  let show_icohp_dialog = $state(false)
 
   // Bond selection
   let selected_bond_indices: number[] = $state([])
@@ -529,10 +531,15 @@
       <summary>{t('structure.cohp_icohp_values')}</summary>
       <div class="icohp-section">
         {#if !cohp_state.icohp_entries}
-          <label class="upload-btn-small">
-            {t('structure.cohp_upload_icohplist')}
-            <input type="file" accept=".lobster,.txt" onchange={handle_icohp_upload} hidden />
-          </label>
+          <div class="source-buttons">
+            <label class="upload-btn-small">
+              {t('structure.cohp_upload_icohplist')}
+              <input type="file" accept=".lobster,.txt" onchange={handle_icohp_upload} hidden />
+            </label>
+            <button class="upload-btn-small remote-btn" onclick={() => show_icohp_dialog = true}>
+              {t('structure.dos_browse_remote_workflow')}
+            </button>
+          </div>
         {:else}
           <table class="icohp-table">
             <thead>
@@ -596,6 +603,32 @@
     }
   }}
   onclose={() => show_file_dialog = false}
+/>
+
+<FileSourceDialog
+  bind:show={show_icohp_dialog}
+  file_types={['.lobster', '.txt']}
+  title={t('structure.cohp_upload_icohplist')}
+  description={t('structure.cohp_load_cohpcar_desc')}
+  onfile={async (file) => {
+    error_msg = ''
+    try {
+      const result = await upload_icohplist(file)
+      cohp_state.icohp_entries = result.entries
+    } catch (e: any) {
+      error_msg = e.message || t('structure.cohp_icohplist_upload_failed')
+    }
+  }}
+  onremote_path={async (session_id, path) => {
+    error_msg = ''
+    try {
+      const result = await load_icohp_from_remote(session_id, path)
+      cohp_state.icohp_entries = result.entries
+    } catch (e: any) {
+      error_msg = e.message || t('structure.dos_remote_load_failed')
+    }
+  }}
+  onclose={() => show_icohp_dialog = false}
 />
 
 <style>

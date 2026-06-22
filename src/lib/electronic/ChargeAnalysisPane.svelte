@@ -1,6 +1,7 @@
 <script lang="ts">
   import FileSourceDialog from './FileSourceDialog.svelte'
   import { API_BASE } from '$lib/api/config'
+  import { getDownloadUrl } from '$lib/api/hpc'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -70,11 +71,10 @@
     loading = true
     error = null
     try {
-      const resp = await fetch(`${API_BASE}/chgcar/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id, file_path: path }),
-      })
+      // Stream the remote file via the existing HPC download endpoint
+      // (GET /api/hpc/download). The old POST /chgcar/download never existed —
+      // it fell through to the SPA GET catch-all → 405 Method Not Allowed.
+      const resp = await fetch(getDownloadUrl(session_id, path))
       if (!resp.ok) throw new Error(await resp.text())
       const blob = await resp.blob()
       const filename = path.split('/').pop() || 'CHGCAR'
@@ -91,11 +91,10 @@
     loading = true
     error = null
     try {
-      const resp = await fetch(`${API_BASE}/chgcar/download`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id, file_path: path }),
-      })
+      // Stream the remote file via the existing HPC download endpoint
+      // (GET /api/hpc/download). The old POST /chgcar/download never existed —
+      // it fell through to the SPA GET catch-all → 405 Method Not Allowed.
+      const resp = await fetch(getDownloadUrl(session_id, path))
       if (!resp.ok) throw new Error(await resp.text())
       const content = await resp.text()
       const filename = path.split('/').pop() || 'ACF.dat'
@@ -247,22 +246,23 @@
   {/if}
 </div>
 
-{#if show_chgcar_dialog}
-  <FileSourceDialog
-    title={t('structure.load_chgcar_locpot')}
-    file_types={['CHGCAR', 'LOCPOT', 'ELFCAR', 'PARCHG', 'AECCAR0', 'AECCAR2']}
-    onremote_path={handle_remote_chgcar}
-    onclose={() => show_chgcar_dialog = false}
-  />
-{/if}
-{#if show_bader_dialog}
-  <FileSourceDialog
-    title={t('structure.load_acf_bader')}
-    file_types={['ACF.dat', '.dat']}
-    onremote_path={handle_remote_bader}
-    onclose={() => show_bader_dialog = false}
-  />
-{/if}
+<!-- Always mounted, visibility driven by bind:show (matches the working
+     DosAnalysisPane pattern). A `{#if cond}<Dialog bind:show={cond}/>{/if}`
+     wrapper is an anti-pattern here and left the dialog never showing. -->
+<FileSourceDialog
+  bind:show={show_chgcar_dialog}
+  title={t('structure.load_chgcar_locpot')}
+  file_types={['CHGCAR', 'LOCPOT', 'ELFCAR', 'PARCHG', 'AECCAR0', 'AECCAR2']}
+  onremote_path={handle_remote_chgcar}
+  onclose={() => show_chgcar_dialog = false}
+/>
+<FileSourceDialog
+  bind:show={show_bader_dialog}
+  title={t('structure.load_acf_bader')}
+  file_types={['ACF.dat', '.dat']}
+  onremote_path={handle_remote_bader}
+  onclose={() => show_bader_dialog = false}
+/>
 
 <style>
   .charge-pane {

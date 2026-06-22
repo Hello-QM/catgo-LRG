@@ -3769,7 +3769,12 @@
                         const cube_filename = file.name + `.cube`
                         const { parse_cube_header, cube_atoms_to_molecule } = await import(`$lib/cube/parse-cube`)
                         const header = parse_cube_header(cube_text)
-                        const molecule = cube_atoms_to_molecule(header)
+                        // VASP charge-density family is always periodic: derive the
+                        // cell from the cube grid so the viewer draws the unit-cell
+                        // box + PBC cross-cell bonds (the CHGCAR→cube conversion
+                        // drops the VASP origin, so we carry periodicity in from
+                        // the original filename, which `is_chgcar` already matched).
+                        const molecule = cube_atoms_to_molecule(header, { periodic: true })
                         if (molecule.sites.length > 0) {
                           structure = { ...molecule, _aligned: true } as any
                           center_camera_trigger++
@@ -3781,12 +3786,19 @@
                         console.error(`CHGCAR conversion failed:`, err)
                       }
                     } else {
-                      // .cube file — parse header to update structure
+                      // .cube file — parse header to update structure.
+                      // A genuine Gaussian/molecular cube is NON-periodic (its
+                      // grid is a padded bounding box, not a cell). But cubes
+                      // we re-emit from VASP charge data (e.g. the difference-
+                      // density "CHGCAR_diff.cube", or a "CHGDIFF.vasp.cube")
+                      // ARE periodic — keep their cell so the slab renders with
+                      // the unit-cell box + PBC bonds.
+                      const cube_is_vasp = /CHGCAR|CHGDIFF|DIFFCHG|AECCAR|LOCPOT|ELFCAR|PARCHG|\.vasp/i.test(file.name)
                       try {
                         const text = await file.text()
                         const { parse_cube_header, cube_atoms_to_molecule } = await import(`$lib/cube/parse-cube`)
                         const header = parse_cube_header(text)
-                        const molecule = cube_atoms_to_molecule(header)
+                        const molecule = cube_atoms_to_molecule(header, { periodic: cube_is_vasp })
                         if (molecule.sites.length > 0) {
                           structure = { ...molecule, _aligned: true } as any
                           center_camera_trigger++
@@ -4178,6 +4190,9 @@
             bind:negative_mesh={cube_negative_mesh}
             bind:cube_atoms={cube_atoms_data}
             {selected_sites}
+            display_positions={(displayed_structure?.sites ?? []).map((s) => s.xyz)}
+            display_elements={(displayed_structure?.sites ?? []).map((s) =>
+              (s as any).species?.[0]?.element ?? (s as any).label ?? `?`)}
             bind:cube_state={cube_state_data}
             onslice_data={(result, atoms) => { slice_result = result; slice_atoms_info = atoms }}
           />
