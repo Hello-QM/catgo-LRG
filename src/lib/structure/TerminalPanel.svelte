@@ -747,8 +747,12 @@
     void theme_state.mode // track theme changes
     if (!term_ref) return
     const s = getComputedStyle(document.documentElement)
-    const bg = s.getPropertyValue(`--page-bg`).trim() || `#080c14`
-    const fg = s.getPropertyValue(`--text-color`).trim() || `#e0e0e0`
+    // Terminal is ALWAYS dark (ANSI colors assume a dark bg). Do NOT derive
+    // bg/fg from the page theme: in light mode --page-bg/--text-color would make
+    // it a white box / unreadable AND mismatch the container inset (the left
+    // "white strip"). Keep the fixed dark theme; only the accent follows.
+    const bg = `#0e1117`
+    const fg = `#e0e0e0`
     const accent = s.getPropertyValue(`--accent-color`).trim() || `#3b82f6`
     term_ref.options.theme = {
       ...term_ref.options.theme,
@@ -758,6 +762,9 @@
       cursorAccent: bg,
       black: bg,
     }
+    // Match the container (incl. the left inset / padding) to the live terminal
+    // bg so the padding never shows as a light strip against the dark terminal.
+    if (container_el) container_el.style.background = bg
   })
 
   // Reactively update terminal font when settings change
@@ -1059,7 +1066,9 @@
     flex: 1;
     min-height: 0;
     overflow: hidden;
-    background: var(--page-bg);
+    /* Terminal is always dark (#0e1117); match it so the left inset/padding
+       below doesn't show as a light strip in light mode. */
+    background: #0e1117;
     /* Small left inset so the xterm content isn't flush against the pane edge
        / the side-by-side divider (the first column read as clipped). FitAddon
        measures the content box, so this shifts the grid right without overflow. */
