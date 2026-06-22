@@ -174,7 +174,11 @@ export async function start_hpc_managed_download(input: HpcManagedDownloadInput)
       translate: t,
       get_download_url: getDownloadUrl,
       save_dialog: async () => null,
-      fetch_impl: fetch,
+      // Bind to globalThis: passing bare `fetch` makes `deps.fetch_impl(...)` call
+    // fetch with `this === deps`, which WebKitGTK (the packaged Linux/Tauri
+    // WKWebView) rejects with "Can only call Window.fetch on instances of
+    // Window". Chromium (dev) is lenient, so this only bit packaged builds.
+    fetch_impl: fetch.bind(globalThis),
       write_file: async () => {},
     })
   }
@@ -188,7 +192,11 @@ export async function start_hpc_managed_download(input: HpcManagedDownloadInput)
     translate: t,
     get_download_url: getDownloadUrl,
     save_dialog: save,
-    fetch_impl: fetch,
+    // Bind to globalThis: passing bare `fetch` makes `deps.fetch_impl(...)` call
+    // fetch with `this === deps`, which WebKitGTK (the packaged Linux/Tauri
+    // WKWebView) rejects with "Can only call Window.fetch on instances of
+    // Window". Chromium (dev) is lenient, so this only bit packaged builds.
+    fetch_impl: fetch.bind(globalThis),
     write_file: writeFile,
   })
 }
