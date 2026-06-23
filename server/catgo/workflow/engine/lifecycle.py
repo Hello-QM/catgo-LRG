@@ -151,7 +151,13 @@ def resume_workflow(db: WorkflowDB, workflow_id: str) -> None:
 
 
 def reset_workflow(db: WorkflowDB, workflow_id: str) -> None:
-    """Reset all tasks to WAITING. Does NOT clear work_dir/hpc_job_id.
+    """Reset all tasks to WAITING and clear their HPC job binding.
+
+    Clears hpc_job_id and work_dir so a re-run submits FRESH jobs. Previously a
+    reset left the old hpc_job_id in place: on the next run the engine polled
+    that (now-finished or cancelled) job, saw it gone, and marked the task
+    FAILED instead of resubmitting — the whole workflow then failed without ever
+    launching a new calculation.
 
     Sets workflow status to 'resetting' so the scanner skips it,
     then resets all task states with retry logic for DB lock contention.
@@ -180,6 +186,8 @@ def reset_workflow(db: WorkflowDB, workflow_id: str) -> None:
                         error_message=None,
                         error_type=None,
                         retry_count=0,
+                        hpc_job_id=None,
+                        work_dir=None,
                     )
                 db.update_workflow(workflow_id, status="draft")
                 logger.info("Workflow %s reset (%d tasks)", workflow_id, len(tasks))
