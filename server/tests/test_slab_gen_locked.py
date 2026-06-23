@@ -58,6 +58,30 @@ def test_locked_slab_is_returned_verbatim_not_regenerated():
     assert [list(map(bool, f)) for f in sd] == [[False, False, False], [True, True, True]]
 
 
+def test_locked_slab_poscar_keeps_atom_count_and_constraints():
+    """End-to-end: locked slab -> the actual VASP POSCAR writer must emit the
+    same atom count and selective-dynamics flags (the bug shipped a wrong-count,
+    all-free POSCAR to HPC)."""
+    import tempfile
+    from pathlib import Path
+
+    from catgo.workflow.engine.engine_builtins import _generate_vasp_inputs_local
+
+    out = run_slab_gen(
+        structure=_bulk_json(), miller=(1, 1, 1), layers=4, vacuum=15.0,
+        slab_locked=True, structure_json=_locked_slab_json(),
+    )
+    geo_params = {"software": "vasp", "ENCUT": 520, "frozen_layers": 2}
+    with tempfile.TemporaryDirectory() as d:
+        _generate_vasp_inputs_local(d, "geo_opt", geo_params, out["structure"])
+        poscar = (Path(d) / "POSCAR").read_text()
+    lines = poscar.splitlines()
+    assert sum(int(x) for x in lines[6].split()) == 2  # atom count preserved
+    assert any("elective" in l for l in lines[:9])      # Selective dynamics header
+    assert sum(1 for l in lines if "F F F" in l) == 1   # the frozen atom
+    assert sum(1 for l in lines if "T T T" in l) == 1   # the free atom
+
+
 def test_unlocked_slab_still_regenerates_from_bulk():
     # Without slab_locked, the generator builds from the bulk (different result),
     # so it must NOT just echo the 2-atom structure_json.
