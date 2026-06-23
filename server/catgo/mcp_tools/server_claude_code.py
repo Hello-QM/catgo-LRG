@@ -2338,7 +2338,11 @@ def _quickbuild_recipes() -> dict[str, dict]:
     build on top of the auto-added `structure_input` node from `create`."""
     vasp_opt = {"software": "vasp", "encut": 520, "ediffg": -0.03,
                 "freeze_mode": "bottom", "freeze_n_layers": 2}
-    vasp_freq = {"software": "vasp", "freeze_mode": "bottom", "freeze_n_layers": 2}
+    # Frequency on an adsorbate/slab system must fix the ENTIRE slab and vibrate
+    # only the adsorbate (harmonic-adsorbate approximation). freeze_mode=adsorbate
+    # freezes every atom not tagged is_adsorbate by adsorbate_place. Bottom-N
+    # freezing (like geo_opt) would wrongly let the top slab layers vibrate.
+    vasp_freq = {"software": "vasp", "freeze_mode": "adsorbate"}
 
     return {
         "HER": {
