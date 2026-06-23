@@ -52,6 +52,16 @@ export function apply_freeze_to_structure(struct_json: string | null, params: Re
           if (!isNaN(v)) frozen.add(v)
         }
       }
+    } else if (mode === `adsorbate`) {
+      // Surface-frequency methodology: fix the whole slab, free only the
+      // adsorbate. Adsorbate atoms carry properties.is_adsorbate=true (set by
+      // adsorbate_place). If nothing is tagged, freeze nothing (mirror backend).
+      const any_tag = struct.sites.some((s: any) => s.properties?.is_adsorbate === true)
+      if (any_tag) {
+        for (let i = 0; i < n; i++) {
+          if (struct.sites[i].properties?.is_adsorbate !== true) frozen.add(i)
+        }
+      }
     } else if (mode === `layers` || mode === `bottom`) {
       const n_layers = n_bottom > 0 ? n_bottom : Number(params.freeze_layers ?? 0)
       if (n_layers > 0) {
