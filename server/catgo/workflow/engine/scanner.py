@@ -633,9 +633,13 @@ class WorkflowEngine:
             task_type = task["task_type"]
             params = json.loads(task.get("params_json", "{}") or "{}")
 
-            # Resolve unified calc types (geo_opt+mlp → mlp_relax)
+            # Resolve unified calc types (geo_opt+mlp → mlp_relax) and the
+            # generic "analysis" node (carries its concrete kind in params.type
+            # → e.g. surface_energy/elastic_analysis). Without including
+            # "analysis" here the resolver never ran and the node fell through
+            # to the HPC submitter ("No HPC connection available").
             resolved_type = task_type
-            if task_type in UNIFIED_CALC_NODES:
+            if task_type in UNIFIED_CALC_NODES or task_type == "analysis":
                 resolved_type, _ = _resolve_software(task_type, params)
 
             # --- MLP local execution (when execution_mode == "local") ---
@@ -814,6 +818,28 @@ class WorkflowEngine:
                 if mlp_result.get("_fan_out") and mlp_result.get("results"):
                     # --- Batch result: multiple structures processed ---
                     batch_results = mlp_result["results"]
+                    # Re-expose the optimized structures as a flat `structures`
+                    # list (with parallel `labels`) so a DOWNSTREAM fan-out
+                    # consumer (e.g. geo_opt → single_point/freq chain) detects
+                    # the fan-out again and re-fans. Without this the batch result
+                    # only carries `results`, which the fan-out detector ignores,
+                    # so the chain silently collapses to the first structure.
+                    fanned_structs: list = []
+                    fanned_labels: list = []
+                    for entry in batch_results:
+                        if entry.get("status") != "completed":
+                            continue
+                        r = entry.get("result", {})
+                        contcar = r.get("contcar")
+                        if contcar:
+                            fanned_structs.append(_poscar_to_json(contcar))
+                            fanned_labels.append(entry.get("label", f"structure_{entry.get('index', len(fanned_structs))}"))
+                    if len(fanned_structs) > 1:
+                        mlp_result = {
+                            **mlp_result,
+                            "structures": fanned_structs,
+                            "labels": fanned_labels,
+                        }
                     # Store ALL results in outputs_json for frontend display
                     db_fields["outputs_json"] = _json_bridge.dumps(mlp_result, default=str)
                     # Use first completed structure as primary structure_json for downstream

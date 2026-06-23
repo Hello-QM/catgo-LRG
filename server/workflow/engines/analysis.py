@@ -259,6 +259,24 @@ async def execute_analysis_node(
                         "(teaching demo). Use catgo-campaign for production runs.",
             })
 
+        elif node_type == "analysis_passthrough":
+            # Generic teaching-demo analysis: collect upstream energies/structures
+            # and complete with a summary. Used for unmapped/blank analysis kinds
+            # so the node produces real (upstream) data instead of erroring.
+            energies = []
+            for pid in parent_ids:
+                pr = step_results.get(pid, {})
+                e = pr.get("energy") or pr.get("final_energy") or pr.get("gibbs")
+                if e is not None:
+                    energies.append(e)
+            analysis_result.update({
+                "analysis_type": str(params.get("type", "") or "generic"),
+                "n_inputs": len(parent_ids),
+                "energies": energies,
+                "note": "Generic analysis passthrough (teaching demo): upstream "
+                        "results collected. Use catgo-campaign for production.",
+            })
+
         else:
             raise RuntimeError(f"Unhandled ANALYSIS node type: {node_type}")
 
