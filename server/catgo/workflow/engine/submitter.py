@@ -148,6 +148,23 @@ def _resolve_cluster_config(wf_config: dict, session_id: str) -> dict:
     return {}
 
 
+def _resolve_potcar_settings(config: dict) -> tuple[str, str]:
+    """Return (potcar_root, potcar_functional) for VASP POTCAR generation.
+
+    Reads from ``config["hpc"]["potcar_root"]`` first, then falls back to
+    ``config["hpc"]["job_defaults"]["potcar_root"]``. The scanner only promotes
+    potcar_root to the hpc root when a per-session cluster_config supplies it;
+    when it comes from default_job_params it lands only in job_defaults. Reading
+    just the root level silently skipped POTCAR generation and the VASP job died
+    with "file not found ... POTCAR".
+    """
+    hpc_cfg = config.get("hpc", {}) or {}
+    jd = hpc_cfg.get("job_defaults", {}) or {}
+    root = hpc_cfg.get("potcar_root") or jd.get("potcar_root") or ""
+    func = hpc_cfg.get("potcar_functional") or jd.get("potcar_functional") or "potpaw_PBE"
+    return root, func
+
+
 async def _submit_one(
     db: WorkflowDB, task: dict, workflow_id: str,
     params: dict, config: dict,
@@ -330,10 +347,14 @@ async def _submit_one(
 
     # 8. Generate POTCAR on remote (for VASP)
     if engine_key == "vasp":
-        potcar_root = config.get("hpc", {}).get("potcar_root", "")
-        potcar_func = config.get("hpc", {}).get("potcar_functional", "potpaw_PBE")
+        potcar_root, potcar_func = _resolve_potcar_settings(config)
         if potcar_root:
             await _generate_potcar(hpc, work_dir, potcar_root, potcar_func)
+        else:
+            logger.warning(
+                "Task %s: VASP node but no potcar_root in config (hpc root or "
+                "job_defaults) — POTCAR NOT generated, the job will fail on a "
+                "missing POTCAR", task_id)
 
     success, message, job_id = await _submit_job(
         hpc, work_dir, resolved_type, job_script, params, config,
