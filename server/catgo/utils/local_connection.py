@@ -36,21 +36,29 @@ class SubprocessSSHRunner:
     def __init__(self, ssh_alias: str) -> None:
         self.ssh_alias = ssh_alias
 
-    async def run_raw(self, cmd: str, check: bool = False, timeout: float = 60) -> SubprocessCompletedProcess:
+    async def run_raw(
+        self, cmd: str, check: bool = False, timeout: float = 60, input: str | None = None
+    ) -> SubprocessCompletedProcess:
         """Run a command through ssh without forcing a login shell.
 
         File operations should not pay for user profile/module startup. Some
         HPC profiles print large oneAPI/module banners from login shells, which
         can both delay simple file commands and pollute stdout parsing.
+
+        `input`, when given, is piped to the remote command's stdin (matches the
+        asyncssh `conn.run(..., input=...)` interface — used to upload file
+        content via `cat > file`).
         """
         proc = await asyncio.create_subprocess_exec(
             "ssh", "-o", "BatchMode=yes", self.ssh_alias, cmd,
+            stdin=asyncio.subprocess.PIPE if input is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+                proc.communicate(input.encode() if input is not None else None),
+                timeout=timeout,
             )
         except (asyncio.TimeoutError, TimeoutError):
             try:
@@ -70,7 +78,9 @@ class SubprocessSSHRunner:
             raise RuntimeError(f"Command failed ({result.exit_status}): {result.stderr}")
         return result
 
-    async def run(self, cmd: str, check: bool = False, timeout: float = 60) -> SubprocessCompletedProcess:
+    async def run(
+        self, cmd: str, check: bool = False, timeout: float = 60, input: str | None = None
+    ) -> SubprocessCompletedProcess:
         # Wrap in login shell so module-managed tools (sbatch, squeue, etc.) are in PATH
         login_cmd = f"bash -l -c {shlex.quote(cmd)}"
         proc = await asyncio.create_subprocess_exec(
@@ -80,12 +90,14 @@ class SubprocessSSHRunner:
             # /usr/bin/ssh-askpass and dies with "Connection closed ... port 65535"
             # instead of a clean "Permission denied / master not active" error.
             "ssh", "-o", "BatchMode=yes", self.ssh_alias, login_cmd,
+            stdin=asyncio.subprocess.PIPE if input is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+                proc.communicate(input.encode() if input is not None else None),
+                timeout=timeout,
             )
         except (asyncio.TimeoutError, TimeoutError):
             try:
@@ -120,14 +132,18 @@ class LocalCommandRunner:
     (conn.run("cat ..."), conn.run("head -c ..."), etc.) work transparently.
     """
 
-    async def run(self, cmd: str, check: bool = False, timeout: float = 60) -> SubprocessCompletedProcess:
+    async def run(
+        self, cmd: str, check: bool = False, timeout: float = 60, input: str | None = None
+    ) -> SubprocessCompletedProcess:
         proc = await asyncio.create_subprocess_shell(
             cmd,
+            stdin=asyncio.subprocess.PIPE if input is not None else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
+            proc.communicate(input.encode() if input is not None else None),
+            timeout=timeout,
         )
         result = SubprocessCompletedProcess(
             exit_status=proc.returncode or 0,
