@@ -304,6 +304,20 @@ def generate_vasp_input_files(
                 if str(site.specie) in elems:
                     frozen_set.add(idx)
 
+        elif freeze_mode == "adsorbate" and struct:
+            # Surface-frequency methodology: fix the entire slab, vibrate only the
+            # adsorbate. Adsorbate atoms are tagged is_adsorbate=True by
+            # run_adsorbate_place; everything else is frozen.
+            tags = struct.site_properties.get("is_adsorbate")
+            if not tags or not any(tags):
+                logger.warning(
+                    "[FREEZE] freeze_mode=adsorbate but structure has no is_adsorbate "
+                    "tag (%d atoms) — freezing nothing", n_atoms)
+            else:
+                for idx, is_ads in enumerate(tags):
+                    if not is_ads:
+                        frozen_set.add(idx)
+
         elif freeze_mode in ("indices", "manual"):
             idx_str = str(params.get("freeze_indices", ""))
             for part in idx_str.split(","):
