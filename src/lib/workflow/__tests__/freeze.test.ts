@@ -15,6 +15,33 @@ import { apply_freeze_to_structure } from '../freeze'
  * node" leak stays fixed.
  */
 
+describe(`freeze_mode adsorbate`, () => {
+  function tagged(): string {
+    return JSON.stringify({
+      lattice: { matrix: [[5, 0, 0], [0, 5, 0], [0, 0, 20]] },
+      sites: [
+        { species: [{ element: `Pt`, occu: 1 }], xyz: [0, 0, 0], label: `Pt`, properties: { is_adsorbate: false } },
+        { species: [{ element: `Pt`, occu: 1 }], xyz: [0, 0, 1], label: `Pt`, properties: { is_adsorbate: false } },
+        { species: [{ element: `O`, occu: 1 }], xyz: [0, 0, 3], label: `O`, properties: { is_adsorbate: true } },
+      ],
+    })
+  }
+
+  it(`fixes non-adsorbate atoms, frees adsorbate`, () => {
+    const out = JSON.parse(apply_freeze_to_structure(tagged(), { freeze_mode: `adsorbate` })!)
+    expect(out.sites[0].properties.selective_dynamics).toEqual([false, false, false])
+    expect(out.sites[1].properties.selective_dynamics).toEqual([false, false, false])
+    expect(out.sites[2].properties.selective_dynamics).toEqual([true, true, true])
+  })
+
+  it(`freezes nothing when no atom is tagged`, () => {
+    const untagged = JSON.parse(tagged())
+    untagged.sites.forEach((s: { properties: Record<string, unknown> }) => { s.properties = {} })
+    const out = JSON.parse(apply_freeze_to_structure(JSON.stringify(untagged), { freeze_mode: `adsorbate` })!)
+    for (const s of out.sites) expect(s.properties.selective_dynamics).toEqual([true, true, true])
+  })
+})
+
 /** A 4-atom slab spread across 4 distinct z-layers (z = 0, 1, 2, 3). */
 function make_slab(): string {
   return JSON.stringify({

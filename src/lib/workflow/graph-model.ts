@@ -594,8 +594,8 @@ export const TEMPLATES: Record<string, { name: string; desc: string; nodes: WfNo
       { id: `t3`, type: `slab_gen`, x: 500, y: 160, params: { miller: `1,1,1`, layers: 4, vacuum: 15 } },
       { id: `t4`, type: `geo_opt`, x: 720, y: 160, params: { software: `vasp`, ENCUT: 520, EDIFF: `1e-5`, ISIF: 2, NSW: 200, LDIPOL: true, frozen_layers: 2, kpoints: `3\u00D73\u00D71` } },
       { id: `t5`, type: `adsorbate_place`, x: 940, y: 160, params: { adsorbate: `N2` } },
-      { id: `t6`, type: `geo_opt`, x: 1160, y: 160, params: { software: `vasp`, ENCUT: 520, EDIFF: `1e-5`, ISIF: 2, NSW: 200, LDIPOL: true, kpoints: `3\u00D73\u00D71` } },
-      { id: `t7`, type: `freq`, x: 1380, y: 160, params: { software: `vasp`, ENCUT: 520, EDIFF: `1e-6`, IBRION: 5, NFREE: 2, kpoints: `3\u00D73\u00D71` } },
+      { id: `t6`, type: `geo_opt`, x: 1160, y: 160, params: { software: `vasp`, ENCUT: 520, EDIFF: `1e-5`, ISIF: 2, NSW: 200, LDIPOL: true, frozen_layers: 2, kpoints: `3\u00D73\u00D71` } },
+      { id: `t7`, type: `freq`, x: 1380, y: 160, params: { software: `vasp`, ENCUT: 520, EDIFF: `1e-6`, IBRION: 5, NFREE: 2, freeze_mode: `adsorbate`, kpoints: `3\u00D73\u00D71` } },
       { id: `t8`, type: `free_energy`, x: 1600, y: 160, params: { temperature: 298.15 } },
     ],
     edges: [

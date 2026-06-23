@@ -135,6 +135,7 @@ const workflow: Record<string, string> = {
   config_incar_preset: `INCAR 预设`,
   config_manual: `手动`,
   config_freeze_warning: `对于表面计算，请冻结体相原子，仅让表面和吸附物参与振动。`,
+  config_freeze_adsorbate_only: `固定 slab，仅吸附物振动`,
   config_freeze_by_layers: `按层冻结`,
   config_freeze_by_height: `按高度冻结`,
   config_select_in_3d: `在 3D 中选择`,

@@ -23,6 +23,15 @@ if sys.stdout is None or sys.stderr is None:
     if sys.stderr is None:
         sys.stderr = _devnull
 
+# The desktop app reuses this sidecar across restarts; if the parent that owns
+# our stdout/stderr pipes dies, any later write raises BrokenPipeError and a
+# bare print() in a request handler would surface as an HTTP 500. Wrap the
+# streams so a dead log pipe can never break request handling. Must run before
+# logging.basicConfig binds a handler to sys.stderr below.
+from catgo.io_safe import install_broken_pipe_guard  # noqa: E402
+
+install_broken_pipe_guard()
+
 # Configure root logger so workflow engine logs are visible
 logging.basicConfig(
     level=logging.INFO,
@@ -533,15 +542,25 @@ class _SSEAwareGZipMiddleware(GZipMiddleware):
 app.add_middleware(_SSEAwareGZipMiddleware, minimum_size=1000)
 
 
-# Global exception handler — ensures unhandled 500s still get CORS headers
-# (ServerErrorMiddleware is outermost and can bypass CORSMiddleware)
+# Global exception handler — ensures unhandled 500s still get CORS headers.
+# ServerErrorMiddleware is outermost, so this response bypasses CORSMiddleware;
+# we must re-attach the CORS headers by hand or the browser drops the body and
+# the frontend only sees a generic "Load failed" with no real error detail.
+from catgo.cors_util import apply_cors_headers  # noqa: E402
+
+_cors_allow_origin_re = re.compile(_cors_allow_origin_regex)
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     import logging
     logging.getLogger(__name__).error("Unhandled error: %s", exc, exc_info=True)
-    return JSONResponse(
+    response = JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {type(exc).__name__}: {exc}"},
+    )
+    return apply_cors_headers(
+        request, response, _cors_allow_origins, _cors_allow_origin_re
     )
 
 

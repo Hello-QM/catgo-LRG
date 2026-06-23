@@ -240,6 +240,25 @@ async def execute_analysis_node(
                 _analyze_coverage(parent_ids, step_results, params)
             )
 
+        elif node_type in ("elastic_analysis", "phonon_analysis"):
+            # Lightweight collect-and-pass-through. The elastic-tensor / phonon
+            # visualization is rendered frontend-side (elastic-analysis.ts,
+            # phonon-analysis.ts) — the workflow editor is for teaching demos.
+            # Production-grade elastic/phonon analysis is done via catgo-campaign,
+            # not here. The node completes and forwards upstream structures +
+            # energies so the editor can plot them.
+            energies = [
+                step_results.get(pid, {}).get("final_energy")
+                for pid in parent_ids
+            ]
+            analysis_result.update({
+                "analysis_type": node_type.replace("_analysis", ""),
+                "n_inputs": len(parent_ids),
+                "energies": [e for e in energies if e is not None],
+                "note": "Upstream results collected; visualized in the editor "
+                        "(teaching demo). Use catgo-campaign for production runs.",
+            })
+
         else:
             raise RuntimeError(f"Unhandled ANALYSIS node type: {node_type}")
 

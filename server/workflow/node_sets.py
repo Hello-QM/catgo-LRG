@@ -42,6 +42,9 @@ LOCAL_NODES = {
     "batch_adsorbate_place",
     "condition", "loop", "merge",
     "free_energy", "gibbs_energy",
+    # export_data is handled by workflow.engines.local (node_type=="export_data")
+    # but was missing from this set, so it routed to "unknown".
+    "export_data",
     # High-throughput screening nodes (local orchestration)
     "batch_generate", "batch_slab_gen", "batch_coverage_gen", "map", "aggregate",
     # Build/transform nodes (local structure operations)
@@ -105,11 +108,38 @@ ANALYSIS_NODES = {
     "phonon_analysis", "eos_analysis", "elastic_analysis",
     "surface_energy", "wulff_construction", "adsorption_energy",
     "coverage_analysis",
+    # Post-processing nodes whose handlers already live in
+    # workflow.engines.analysis.execute_analysis_node but were never listed
+    # here, so the scanner routed them to "unknown" and templates using them
+    # could not run.
+    "convergence_check", "energy_compare", "pick_best", "her_analysis",
 }
 
 # HPC analysis nodes (currently empty — charge_analysis moved to ANALYSIS_NODES
 # because it is post-processing that reads existing HPC output, not a new HPC job)
 HPC_ANALYSIS_NODES: set[str] = set()
+
+
+# A generic "analysis" node carries the concrete kind in params["type"]; map it
+# to the specific analysis node whose handler already exists in
+# workflow.engines.analysis. Without this, templates that use an `analysis` node
+# (elastic / phonon / EOS / trajectory / surface energy) routed to "unknown".
+_ANALYSIS_TYPE_MAP = {
+    "elastic": "elastic_analysis",
+    "phonon": "phonon_analysis",
+    "eos": "eos_analysis",
+    "trajectory_analysis": "md_analysis",
+    "trajectory": "md_analysis",
+    "md": "md_analysis",
+    "dos": "dos_analysis",
+    "cohp": "cohp_analysis",
+    "charge": "charge_analysis",
+    "bader": "charge_analysis",
+    "surface_energy": "surface_energy",
+    "wulff": "wulff_construction",
+    "adsorption_energy": "adsorption_energy",
+    "coverage": "coverage_analysis",
+}
 
 
 def _resolve_software(node_type: str, params: dict[str, object]) -> tuple[str, str]:
@@ -118,6 +148,12 @@ def _resolve_software(node_type: str, params: dict[str, object]) -> tuple[str, s
     Consults declarative engine specs first, then falls back to hardcoded map
     for engines not yet migrated to YAML.
     """
+    if node_type == "analysis":
+        atype = str(params.get("type", "")).lower()
+        mapped = _ANALYSIS_TYPE_MAP.get(atype)
+        if mapped:
+            return mapped, ""
+
     if node_type not in UNIFIED_CALC_NODES:
         return node_type, ""
 

@@ -139,6 +139,17 @@ def run_slab_gen(
     structure \u2014 visible in the 3D viewer and inherited by downstream nodes \u2014
     rather than only materializing in the VASP POSCAR at run time.
     """
+    # Frontend contract (SlabGenPreview.svelte: "When locked, preview shows the
+    # saved structure_json instead of regenerating"): a LOCKED slab_gen node has
+    # already finalized its slab into `structure_json` — possibly hand-edited in
+    # the 3D viewer (atoms removed, bottom layers frozen via selective_dynamics).
+    # Return it verbatim instead of rebuilding from bulk+params, which diverges
+    # in atom count and silently drops the user's selective_dynamics (the slab
+    # the user saw on screen must be exactly what is sent to HPC).
+    if params.get("slab_locked") and params.get("structure_json"):
+        sj = params["structure_json"]
+        return {"structure": sj if isinstance(sj, str) else json.dumps(sj)}
+
     if structure is None:
         raise ValueError("slab_gen requires a structure input")
 
@@ -338,6 +349,12 @@ def run_adsorbate_place(
                 [chosen_3d[0] + off[0], chosen_3d[1] + off[1], chosen_3d[2] + off[2]],
                 coords_are_cartesian=True,
             )
+        # Tag adsorbate atoms so downstream freq can fix the slab and vibrate
+        # only the adsorbate (freeze_mode=adsorbate).
+        n_slab = len(slab)
+        new_slab.add_site_property(
+            "is_adsorbate", [i >= n_slab for i in range(len(new_slab))]
+        )
         return {"structure": json.dumps(new_slab.as_dict())}
 
     import numpy as np
@@ -457,6 +474,9 @@ def run_adsorbate_place(
             props = dict(slab_dict["sites"][i].get("properties") or {})
         else:
             props = {"selective_dynamics": [True, True, True]} if slab_has_sd else {}
+        # Tag adsorbate atoms so downstream freq can fix the slab and vibrate
+        # only the adsorbate (freeze_mode=adsorbate).
+        props["is_adsorbate"] = i >= n_slab
         out_sites.append({
             "species": [{"element": sym, "occu": 1}],
             "abc": abc,

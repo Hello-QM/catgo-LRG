@@ -686,7 +686,7 @@ def api_classify_workflow(workflow_id: str):
 @router.post("/{workflow_id}/test-echo")
 async def api_test_echo(workflow_id: str):
     """Test endpoint to verify routing works."""
-    print(f"[TEST] Echo endpoint called", flush=True)
+    logger.debug("Echo endpoint called for workflow %s", workflow_id)
     return {"test": "ok", "workflow_id": workflow_id}
 
 
@@ -698,7 +698,7 @@ def api_run_workflow(workflow_id: str, config: WorkflowRunConfig):
     2. Apply WorkflowRunConfig to V2 tasks (sessions, job params)
     3. Submit to V2 engine scanner
     """
-    print(f"[DEBUG] api_run_workflow CALLED with workflow_id={workflow_id}", flush=True)
+    logger.debug("api_run_workflow called with workflow_id=%s", workflow_id)
     try:
         logger.error(f"[api_run_workflow] STARTING for workflow {workflow_id}, config keys: {list(config.dict().keys())}")
         try:

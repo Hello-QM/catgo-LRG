@@ -25,7 +25,7 @@ export const FREQ_NODE: NodeDefinition = {
     NPAR: 0, KPAR: 0, NCORE: 0,
     IVDW: 0, LDIPOL: false, IDIPOL: 3,
     NBANDS: 0, NEDOS: 301, ISTART: 0, ICHARG: 0,
-    freeze_mode: `none`,
+    freeze_mode: `adsorbate`,
     freeze_z_below: 0,
     freeze_elements: ``, freeze_indices: ``,
     freeze_layers: 0, freeze_invert: false,
@@ -47,9 +47,10 @@ Combine with E_DFT from upstream geo_opt/single_point: **G = E_DFT + G_corr**
       help: `Name for this system (e.g. "slab+OH"). Propagated to downstream Gibbs Energy node for the free energy diagram.`,
     },
     {
-      key: `freeze_mode`, label: `Freeze Mode`, type: `select`, default: `none`,
+      key: `freeze_mode`, label: `Freeze Mode`, type: `select`, default: `adsorbate`,
       group: `Freeze Atoms`,
       options: [
+        { label: `Adsorbate only (fix slab) — recommended`, value: `adsorbate` },
         { label: `None (all atoms vibrate)`, value: `none` },
         { label: `Manual (select in 3D)`, value: `manual` },
         { label: `By Height (z range)`, value: `z_range` },
@@ -57,7 +58,7 @@ Combine with E_DFT from upstream geo_opt/single_point: **G = E_DFT + G_corr**
         { label: `By Index`, value: `indices` },
         { label: `By Layers (bottom N)`, value: `layers` },
       ],
-      help: `Select which atoms to freeze (F F F in POSCAR). Frozen atoms are excluded from vibrational analysis. For surface calculations, freeze bulk atoms and only vibrate surface + adsorbate.`,
+      help: `Select which atoms to freeze (F F F in POSCAR). Frozen atoms are excluded from vibrational analysis. For an adsorbate on a slab, use "Adsorbate only" — it fixes the entire slab and vibrates only the adsorbate (the standard harmonic-adsorbate approximation). Requires the structure to come through an Adsorbate node (which tags the adsorbate atoms).`,
     },
     {
       key: `freeze_z_below`, label: `Freeze z below (Å)`, type: `number`, default: 0,
