@@ -135,6 +135,7 @@ const workflow: Record<string, string> = {
   config_incar_preset: `INCAR Preset`,
   config_manual: `Manual`,
   config_freeze_warning: `For surface calculations, freeze bulk atoms so only surface + adsorbate vibrate.`,
+  config_freeze_adsorbate_only: `Fix slab, vibrate adsorbate only`,
   config_freeze_by_layers: `Freeze by Layers`,
   config_freeze_by_height: `Freeze by Height`,
   config_select_in_3d: `Select in 3D`,

@@ -402,6 +402,9 @@
           {t('workflow.config_freeze_warning')}
         </span>
         <div class="freeze-quick-actions">
+          <button class="freeze-quick-btn" onclick={() => emit({ ...node.params, freeze_mode: `adsorbate` })}>
+            {t('workflow.config_freeze_adsorbate_only')}
+          </button>
           <button class="freeze-quick-btn" onclick={() => emit({ ...node.params, freeze_mode: `layers`, freeze_layers: node.params.freeze_layers || 4 })}>
             {t('workflow.config_freeze_by_layers')}
           </button>
