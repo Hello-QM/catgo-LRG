@@ -1,537 +1,319 @@
-<h1 align="center">
-  <img src="desktop/logo.png" alt="CatGo Logo" width="120"><br>
-  CatGo
-</h1>
-
 <p align="center">
-  <strong>AI-driven workbench for computational materials science.</strong>
+  <img src="image/64f79bb3-7077-4e7b-a006-30632f0c3849.png" alt="CatGo — AI workbench for computational materials science, with crystal structures and analysis plots" width="100%">
 </p>
 
+# CatGo: an AI workbench for computational materials science
+
 <p align="center">
-  <a href="readme.zh.md">简体中文</a>
+  <a href="readme_new.zh.md">简体中文</a>
+  ·
+  <a href="https://app.catgo-ucsd.org">Try Online</a>
+  ·
+  <a href="https://github.com/Hello-QM/catgo-LRG/releases">Download Desktop</a>
+  ·
+  <a href="https://docs.catgo-ucsd.org">Docs & Tutorials</a>
 </p>
 
 <p align="center">
 
 [![Tests](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml/badge.svg)](https://github.com/Hello-QM/catgo-LRG/actions/workflows/test.yml)
 [![License: AGPL v3+](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](license)
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19709425-blue)](https://doi.org/10.5281/zenodo.19709425)
 
 </p>
 
-CatGo is a desktop application that combines an interactive 3D structure viewer, a natural-language AI assistant (**CatBot**), a visual DAG **workflow engine**, and **HPC integration** into a single tool. It is designed for catalysis and surface-science research — building slabs and adsorbates, generating DFT/MD/ML inputs, submitting and monitoring jobs on remote clusters, and post-processing the results — all from one window.
+CatGo brings the everyday tools of computational materials science into one workspace: an interactive 3D structure editor, **CatBot** for natural-language operations, a visual DAG workflow engine, remote-cluster access, job monitoring, and analysis of structures, trajectories, electronic properties, and catalysis results.
 
-> CatGo draws on **[MatterViz](https://github.com/janosh/matterviz)** by [Janosh Riebesell](https://github.com/janosh) for inspiration: the 3D structure viewer, periodic table, and several core UI components originate from MatterViz, though they have been substantially modified in CatGo. On top of that foundation, CatGo adds the catalysis pipeline, workflow engine, HPC integration, CatBot, and plugin system. We are deeply grateful for the original work.
+It is designed for researchers who currently move between a structure builder, terminal, SSH/SFTP client, scheduler commands, log files, and plotting scripts. CatGo does not replace scientific judgment or provide licensed simulation codes and compute resources; it helps you prepare, inspect, run, and organize work in the environments you already use.
+
+## What CatGo brings together
+
+| Research task                       | What you can do                                                                                                                                                                                     |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **View and edit structures**        | Open crystals, molecules, surfaces, volumetric data, and trajectories; rotate, select, measure, add, move, replace, or remove atoms; edit cells and bonds; undo and redo changes                    |
+| **Build simulation models**         | Create supercells and Miller-index slabs, add vacuum and frozen layers, place adsorbates, and prepare defects, dopants, heterostructures, nanotubes, MOFs, passivated surfaces, and solvated models |
+| **Prepare calculations**            | Generate and review input files, use Quick Build recipes, or connect geometry optimization, single-point, frequency, DOS, NEB, MD, and analysis steps in a visual workflow                          |
+| **Work with CatBot**                | Ask for structure retrieval, model construction, workflow editing, file inspection, or analysis in natural language; tool calls remain visible for review                                           |
+| **Use your own HPC environment**    | Connect by SSH, browse and edit remote files, open remote structures, submit scheduler jobs, follow logs and convergence, and recover results                                                       |
+| **Analyze and communicate results** | Inspect optimization/MD/NEB/IRC trajectories, DOS/PDOS, bands, COHP/ICOHP, charge-density isosurfaces, XRD/RDF, phase diagrams, free-energy diagrams, and volcano plots                             |
+
+---
+
+## CatGo in one minute: From opening a structure to generating ORCA input
+
+This short demo shows the simplest CatGo workflow—no HPC setup or visual workflow required:
+
+1. **Open a structure:** search for a Cu structure and confirm the import.
+2. **Inspect it in 3D:** rotate and zoom the structure directly in the viewer.
+3. **Open Import / Export:** switch to the **ORCA** export panel.
+4. **Prepare the calculation:** choose the run type and electronic-structure settings.
+5. **Generate and copy:** create the ORCA input file and copy the ready-to-edit script.
 
 <p align="center">
-  <img src="static/catgo-viewer.png" alt="CatGo 3D structure viewer — Si40Bi4Te8H292C100 with bonds, lattice axes, and composition badges" width="780">
+  <img src="image/IMG_7831.gif" alt="28-second CatGo demo: open a Cu structure, rotate and zoom it, generate an ORCA input file, and copy the script" width="100%">
 </p>
 
----
+The same interaction pattern also applies to other supported exporters: load or build a structure, inspect it, choose a target code, review the generated input, then copy or download it.
 
-## 🔗 Links
+This clip demonstrates the interface rather than a recommended production calculation. Before running an ORCA job, verify that the molecular model, total charge, spin multiplicity, method, basis set, dispersion treatment, and resource settings are appropriate for your system.
 
-|                                         |                                                  |
-| --------------------------------------- | ------------------------------------------------ |
-| **Web app** — try instantly, no install | <https://app.catgo-ucsd.org>                     |
-| **Tutorial / Docs**                     | <https://docs.catgo-ucsd.org>                    |
-| **Downloads** — prebuilt editions       | <https://github.com/Hello-QM/catgo-LRG/releases> |
-| **Source**                              | <https://github.com/Hello-QM/catgo-LRG>          |
-| **Forum** — questions & discussion      | <https://groups.google.com/g/catgo_official>     |
+### Prompts you can try
 
-### Community
+```text
+Fetch Cu from Materials Project, cut a four-layer (111) slab,
+add 15 Å of vacuum, and place O at a hollow site.
+```
 
-Scan to join the CatGo QQ group:
+```text
+Create a VASP relaxation → static → DOS workflow for the current structure.
+Let me review the inputs first; do not submit it yet.
+```
 
-<img src="static/qr-qq-group.jpg" alt="CatGo QQ group QR code" width="200">
+```text
+Read this OUTCAR, tell me whether it converged by maximum force,
+and open the final structure.
+```
 
----
-
-## ✨ Features
-
-CatGo is far more than a structure viewer. One window spans the whole
-computational-materials loop — **read almost any code's files → build & edit →
-run DFT / ML / MD → submit to HPC → analyse → publish** — with an AI copilot
-(**CatBot**) and a visual workflow engine threaded through all of it.
-
-| Area                       | Capability                                                                                                                                                                                                         |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **3D Viewer**              | Crystals · molecules · surfaces · trajectories · PBC image atoms · bonds rendered **across cell boundaries** · selectable polyhedra · per-element / per-site colour overrides · ortho **&** perspective cameras · interactive lighting (ambient/key/fill/rim) · light, dark, white, black themes · live 3D axis indicator |
-| **Multi-pane workspace**   | Tabs · tiling split-view · pop-out windows · drag-drop panes · each pane an **independent** structure/trajectory with its own state · sidebar structure library bound pane-by-pane                                  |
-| **Open ~30 formats**       | VASP, Quantum ESPRESSO, CP2K, ABACUS, ORCA, Gaussian, CASTEP, SIESTA, OpenMX, LAMMPS, ASE `.traj`, phonopy, HDF5, CIF, XYZ/extXYZ, mol2, PDB, cube/CHGCAR — inputs **and** outputs (see [Supported formats](#-supported-formats)) |
-| **Write ready-to-run decks** | Format-preserving export to VASP, QE, CP2K, ABACUS, ORCA, Gaussian, LAMMPS, GROMACS, AMBER, SPARK — keeps your headers & keywords intact                                                                          |
-| **Edit & build**           | Move/add/delete/copy-paste atoms · manual & auto bonds · lattice editing (with optional atom scaling) · supercells · single/multi/**box** selection · distance/angle/dihedral measurement · selective-dynamics fixed atoms · full undo/redo · right-click menu · element picker |
-| **Structure builders**     | Miller-index slab cutter · adsorbate & dual-adsorbate placement · moiré / twisted bilayers · nanotube roller (CNT/BNNT/chiral) · nanoscroll · heterostructure stacker (lattice-matched) · reticular / MOF · doping & substitution · pseudo-H passivation · water layers |
-| **CatBot (AI)**            | Natural-language structure ops, builders & workflow authoring via Claude, Codex, Gemini, Ollama, DeepSeek/Qwen/Kimi/GLM — ~28 MCP tools + on-demand DFT skill guides                                               |
-| **Workflow**               | DAG editor for chained calculations (opt → SP → DOS / NEB / MD / slow-growth …) with one-click Quick-Build recipes (HER, OER, ORR, NRR, CO₂RR, NEB, slow-growth, DOS)                                              |
-| **HPC**                    | SSH terminal · remote file browser · job submit & monitor · SLURM / PBS / LSF / SGE · OTP + jump-host + SOCKS5                                                                                                     |
-| **DFT inputs**             | Native workflow engine: VASP, Quantum ESPRESSO, LAMMPS, CP2K, ORCA. CatBot-drafted (skill text): GPAW, ABINIT, SIESTA, DFTB+, Gaussian                                                                            |
-| **ML / fast calculators**  | MACE (incl. mace_mp foundation), CHGNet, M3GNet (matgl); EMT; xTB / GFN-xTB — for cheap pre-screening before DFT                                                                                                   |
-| **Analysis**               | DOS / PDOS, band structure, COHP / ICOHP, d-band centre, Brillouin zone, XRD, RDF, MSD/MD analytics, charge-density isosurfaces, volcano plots, Gibbs free-energy diagrams, phase diagrams (2D/3D/4D)              |
-| **Catalysis**              | OER / HER / ORR / CO₂RR / NRR pathways, ICONST slow-growth templates, C–N coupling reaction network                                                                                                               |
-| **Import & databases**     | Drag-drop · paste · OPTIMADE search (Materials Project, MC3D, Alexandria, MaterialsCloud, OMDB, 2DMatPedia) · PubChem molecule search                                                                              |
-| **Export**                 | HD PNG / JPG / TIFF / SVG / PDF renders · GLB / OBJ 3D models · trajectory video (WebM / MP4) & PNG-sequence · DOS/XRD CSV                                                                                          |
-| **More**                   | Document viewer (PDF/DOCX/XLSX/CSV/Markdown/HTML) · Mol\* bio viewer · WebGPU large-system rendering · integrated terminal · voice & gesture control · plugin hub · iOS / Android builds · English / 中文            |
-
----
-
-## 🧩 Editions & scope
-
-> The feature and format tables on this page describe the **CatGo desktop client** — the full workbench. The other editions reuse the same viewer core but ship a different shell around it.
-
-| Edition | What it does |
-| --- | --- |
-| **Desktop client** (Windows · macOS · Linux) | **The full workbench** — viewer, editing, builders, CatBot, workflow engine, HPC submit/monitor, analysis suites, every import/export |
-| **Web app** — <https://app.catgo-ucsd.org> | Runs in the browser with the same interactive viewer; backend-dependent features (workflow *execution*, HPC) depend on a connected server |
-| **VS Code extension** | Embeds the **full single-window viewer** — view, animate **and edit** structures/trajectories, the structure toolbar (builders, analysis, OPTIMADE/PubChem import), save/export, right in the editor (+ remote-SSH file viewing). It does **not** load the desktop shell: no multi-pane tabbed workspace, no standalone workflow editor, no HPC job manager. See its [README](extensions/vscode/readme.md) |
-| **Claude Code / MCP plugin** (`catbot-plugin/`) | An AI tool layer (~60 tools) that drives a **running** CatGo from an agent — it doesn't render anything itself |
-
-So the parts that are **desktop-client (shell) only** are the multi-pane tabbed workspace, the visual workflow DAG editor, and the HPC terminal/job manager. Editing, builders, export and the in-viewer tools come along with the embedded viewer.
-
----
-
-## 📂 Supported formats
-
-CatGo speaks the file languages of most DFT, MD and quantum-chemistry codes —
-not just POSCAR and CIF. **Read** = open/import into the viewer; **Write** =
-export a ready-to-run input or a structure file (headers & keywords preserved).
-
-### By software / code
-
-| Software | Read | Write |
-| --- | --- | --- |
-| **VASP** | POSCAR · CONTCAR · `.vasp` · vasprun.xml · OUTCAR · XDATCAR · CHGCAR/AECCAR/LOCPOT/ELFCAR/PARCHG | POSCAR · INCAR · KPOINTS (full input deck) |
-| **Quantum ESPRESSO** | pw.x input (`.in`, scf/relax/…) | pw.x input |
-| **CP2K** | `.inp` · `.restart` | CP2K input (`&CELL`/`&COORD`/`&KPOINTS`) |
-| **ABACUS** | STRU | INPUT + STRU + KPT |
-| **ORCA** | `.inp` / `.out` (xyz / internal / `%coords`) | ORCA input |
-| **Gaussian** | `.gjf` / `.com` (+ Z-matrix) · `.log` / `.out` · cube | `.gjf` |
-| **CASTEP** | `.cell` | — |
-| **SIESTA** | `.fdf` | — |
-| **OpenMX** | `.dat` | — |
-| **LAMMPS** | `.data` / `.lmp` · dump / `.lammpstrj` | data + run script |
-| **GROMACS** | — | `.mdp` + `.gro` + `.top` |
-| **AMBER** | — | mdin |
-| **ASE** | `.traj` (binary) · extXYZ | extXYZ |
-| **phonopy / phono3py** | YAML | — |
-| **SPARK** (kMC/MKM) | — | kMC / MKM deck |
-
-### Generic & molecular
-
-| Kind | Read | Write |
-| --- | --- | --- |
-| Crystallography | CIF · mCIF · pymatgen JSON · OPTIMADE JSON | CIF · pymatgen JSON |
-| Molecular | XYZ · extXYZ · mol2 · PDB · PubChem JSON | XYZ · extXYZ · mol2 · PDB |
-| Trajectory / MD | XDATCAR · OUTCAR · extXYZ (multi) · ASE `.traj` · LAMMPS dump · HDF5 (torch-sim / vaspout.h5) · vasprun.xml · JSON frames | extXYZ (multi) · video (WebM/MP4) · PNG-sequence |
-| Volumetric | Gaussian cube · VASP CHGCAR family → isosurface | — |
-| Renders & models | — | PNG · JPG · TIFF · SVG · PDF · **GLB** · **OBJ** |
-| Documents (preview) | PDF · DOCX · XLSX/XLS/ODS · CSV/TSV · Markdown/RST · images | — |
-
-> Reading the wide DFT-code range above is handled by CatGo's in-app parsers.
-> A handful of formats are import-only (CASTEP, SIESTA, OpenMX, phonopy, OUTCAR,
-> vasprun.xml, Gaussian output, cube); the rest round-trip read **and** write.
-
----
-
-## ⌨️ Keyboard shortcuts
-
-A dense, mouse-light editing experience. `Ctrl` below means **Ctrl or ⌘**.
-
-### File · tabs · panes
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl`+`O` | Open file into the active pane |
-| `Ctrl`+`T` | New structure tab |
-| `Ctrl`+`W` | Close pane (or tab if last pane) |
-| `Ctrl`+`Tab` / `Ctrl`+`Shift`+`Tab` | Next / previous tab |
-| `1` `2` `3` `4` | Activate the *n*-th pane |
-| `Ctrl`+`Enter` | Load pasted structure text |
-| `Ctrl`+`/` | Toggle CatBot chat |
-
-### Selection · editing
-
-| Shortcut | Action |
-| --- | --- |
-| Click / `Ctrl`-drag | Toggle atom / box-select (⌘-drag on macOS) |
-| `Ctrl`+`C` / `Ctrl`+`V` | Copy / paste atoms |
-| `Delete` / `Backspace` | Delete selected atoms, bonds or measurement |
-| `Shift`+`Alt`+`Arrows` / `W` `S` | Move selected atoms (screen plane / depth) |
-| `Shift`+`Arrows` / `W` `S` | Rotate selected atoms (yaw / pitch / roll) |
-| `Shift`-drag / `Shift`+right-drag | Rotate / roll selected atoms |
-| `X` `Y` `Z` (hold) | Lock move/rotate to one axis |
-| `Shift` = 10× · `Ctrl` = 0.1× | Movement step modifier |
-| `Ctrl`+`Z` · `Ctrl`+`Shift`+`Z` / `Ctrl`+`Y` | Undo / redo |
-
-### View · camera
-
-| Shortcut | Action |
-| --- | --- |
-| Left-drag · middle-drag · scroll | Orbit · pan · zoom-to-cursor |
-| `Arrows` / `W` `S` (nothing selected) | Rotate / roll the camera |
-| right-drag (nothing selected) | Roll camera |
-| double-click empty space | Reset camera |
-| `r` | Re-align scene to lattice |
-| `f` · `i` · `g` | Fullscreen · info pane · gesture mode |
-
-### Trajectory playback
-
-| Shortcut | Action |
-| --- | --- |
-| `Space` | Play / pause |
-| `A` / `D` | Previous / next frame |
-| `Ctrl`+`A` / `Ctrl`+`D` · `Home` / `End` | First / last frame |
-| `J` / `L` · `PageUp` / `PageDown` | Jump ∓10 / ∓25 frames |
-| `0`–`9` | Jump to 0 %…90 % of the trajectory |
-| `+` / `−` (while playing) | Faster / slower playback |
-
-> In-app the full list lives under the viewer's **Info pane → Usage tips**.
-
----
-
-## 🔧 Capabilities in detail
-
-### Build & manipulate structures
-
-- **Interactive editing** — pencil-mode atom drawing (drag from one atom to plant a new one), single-atom add / delete / replace / move via right-click menu, arrow-key / W-S rotation of selected atoms, box selection for multi-atom selection, atom-cluster generation (`add_cluster`) using ASE icosahedral / octahedral / cuboctahedral / FCC / HCP / decahedral geometries plus a small library of metal-oxide clusters (Pt₂O₂, CeO₂ trimer, TiO₂ anatase 8-atom, Al₂O₃ 5-atom)
-- **Slab cutting** — Miller-index slab cutter with primitive-cell reduction, layer count + vacuum control, supercell expansion, frozen-layer presets for adsorbate work
-- **Adsorbates** — alpha-shape adsorption-site finder (top/bridge/hollow/FCC/HCP), single-molecule placement with bond-length-aware offsets, dual-adsorbate placement for C–N / C–C / N–N coupling at a controlled separation, full water-layer addition via Packmol packing
-- **Build tools** (dedicated panes) — lattice transformations (matrix supercell), moiré builder for twisted bilayers, nanotube roller (CNT / BNNT / chiral indices), heterostructure stacker with lattice-matching, substitutional doping (one-off or enumerate-all-configurations), pseudo-hydrogen passivation for dangling bonds, water-layer addition, adsorbate placement
-- **Additional builders via CatBot skills** (text-driven, no dedicated UI pane yet) — point defects, intercalation, systematic element substitution, strain
-
-### Inspect & analyse
-
-- **Symmetry** — moyo-driven space-group + Wyckoff-position detection, primitive / conventional cell conversion, symmetry-equivalent site coloring
-- **Measurement** — point-to-point distance, three-atom angle, persistent measurement overlay
-- **Charge density** — cube-file isosurface rendering (web worker), positive / negative isosurfaces, sliceable orthogonal planes, Bader-charge labels overlaid on atoms
-- **Property colouring** — coordination number, Wyckoff orbit, Bader charge, custom user expression; supports element hiding, prop-value filtering, individual site hiding
-- **Trajectory playback** — MD / NEB / IRC trajectory frames with timeline scrubbing, per-frame bond connectivity, energy / force / per-atom property overlays, frame export
-
-### Calculations & ML potentials
+The demo below shows CatBot acting as an agent: it interprets a slab-and-adsorbate request, calls the required CatGo tools, and updates the structure in the viewer. The recording has been condensed for GIF length; the real run includes additional intermediate tool calls and status updates.
 
 <p align="center">
-  <img src="static/catgo-workflow.png" alt="CatGo visual workflow editor — INPUT / CALCULATION / TOOLS / LOGIC / ANALYSIS palette with a free-energy node on the canvas" width="780">
+  <img src="image/IMG_7840.gif" alt="CatBot agent demo: interpreting a slab and adsorbate request, calling multiple CatGo tools, and updating the structure" width="100%">
 </p>
 
-- **DFT engines** — natively driven by the workflow executor: VASP, Quantum ESPRESSO, LAMMPS, CP2K, ORCA. CatBot-drafted only via skill text (no workflow node executor yet): GPAW, ABINIT, SIESTA, DFTB+, Gaussian. Native engines support geo_opt / single_point / cell_opt / freq / NEB / TS-search / MD / slow-growth nodes with parameter presets
-- **ML potentials** — MACE (incl. mace_mp foundation models), CHGNet, M3GNet (via matgl); geometry optimisation, single-point energy, force evaluation, NEB endpoint refinement, fast pre-screening before DFT
-- **Other fast calculators** — EMT (effective-medium theory, ASE built-in), xTB / GFN-xTB (semi-empirical tight-binding DFT via tblite for GFN2/GFN1/IPEA1, via xtb-CLI for GFN0/GFN-FF). Not machine-learning potentials, but used for the same role: cheap pre-screening before DFT
-- **Workflow engine** — DAG executor with HPC submission, automatic dependency resolution, per-task convergence monitoring, real-time job status, AI-powered error diagnosis on failed tasks
+---
 
-### Post-processing
+## Choose the right way to use CatGo
 
-- **Electronic structure** — DOS / PDOS, d-band centre, projected orbital character, band structure with high-symmetry k-paths, COHP / ICOHP bonding analysis via LOBSTER. Bader-charge values written into site properties (e.g. by an external `bader` run) render as labels on atoms in the viewer; CatGo does not run Bader integration itself
-- **Catalysis** — Gibbs free-energy diagrams with ZPE + thermal corrections, OER / NRR / CO₂RR catalysis modules (`server/workflow/catalysis/`), HER / ORR achievable via the `free_energy` workflow node with target= keyword, volcano plots across descriptor space
-- **Vibrations & thermodynamics** — frequency parsing from VASP / ORCA outputs, ZPE, entropy at user-specified T/P, IR intensities. Phonopy output parsing exists (`src/lib/structure/parsers/phonopy.ts`) but Phonopy itself runs externally — CatBot has a `phonopy` skill that drafts the run, no in-app executor
+CatGo has three established day-to-day entry points—desktop, Web, and VS Code—plus an iOS build that has been verified on physical iPhone/iPad hardware and is being distributed as a test or self-built app. Android and CLI/MCP integrations are available for experimental or advanced workflows.
 
-### HPC integration
-
-- **Connect** — SSH key, password, OTP (KAUST Shaheen-style key+OTP), password+OTP, SOCKS5 proxy, jump host
-- **Browse** — remote file tree, in-place Monaco editor for INCAR / KPOINTS / job-script editing, Threlte-powered viewer preview of CIF / POSCAR / TRAJ / HDF5 directly from the remote tree, scp upload/download without size limits
-- **Submit & monitor** — SLURM / PBS / LSF / SGE adapters, job templates per partition, queue-state polling, log tail, convergence point streaming, AI diagnosis on FAILED / REMOTE_ERROR tasks
-- **Terminal** — full xterm.js PTY session per host, CWD broadcast to the file browser, multi-tab + split panes
-
-### AI agent (CatBot)
+| Entry point                   | Best for                                                                   | Install?                 | Main capabilities                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------- |
+| **Desktop app (recommended)** | Researchers who want the complete workflow                                 | Yes                      | Multi-pane workbench, CatBot, workflows, terminal, HPC, and analysis                        |
+| **Web app**                   | Instant viewing/editing and first-time evaluation                          | No                       | Browser viewing, editing, building, and export in the hosted static app                     |
+| **VS Code extension**         | Users already working in VS Code/Cursor and on remote servers              | Yes                      | View, edit, animate, and export structures/trajectories in the editor                       |
+| **iOS app**                   | Researchers testing cluster access, structures, and jobs on an iPhone/iPad | Test build or self-build | Mobile workspace, SSH/SFTP, terminal, structure/trajectory viewing, CatBot, and voice input |
+| **Android**                   | Users testing mobile workflows on Android                                  | Experimental             | Mobile workspace, SSH/SFTP, terminal, structure viewer, and mobile AI                       |
+| **CLI + MCP/Skills**          | Automation, scripting, and external AI agents                              | Yes                      | Drive CatGo with `catgo`, Claude Code, Codex, or Gemini                                     |
 
 <p align="center">
-  <img src="static/catgo-catbot.png" alt="CatGo CatBot chat pane — Claude Code provider with workflow / structure / analysis quick prompts" width="780">
+  <img src="image/platform.png" alt="CatGo across its main platforms: desktop, Web browser, VS Code, and iPhone/iPad" width="100%">
 </p>
 
-- **Providers** — local Ollama, SDK agents (Claude Code, Gemini CLI, Codex CLI), and API providers (DeepSeek, Qwen, Kimi, Zhipu GLM, Gemini) via OpenAI-compatible streaming
-- **MCP tools** — `catgo_structure`, `catgo_fetch`, `catgo_workflow`, `catgo_quickbuild`, `catgo_analyze`, `catgo_view`, `catgo_catalysis`, `catgo_skills`, `catgo_workflow_engine`, `catgo_diagnose`, `catgo_file`, `catgo_system`
-- **Skills** — server-side reference docs CatBot reads on demand (workflow_builder, atom_ops, cluster_ops, plus ~40 DFT-code skill guides)
-- **Quick-build hook** — UI button strip + HTTP endpoint that builds a complete workflow with zero LLM round-trips (~200 ms)
-- **Session resume** — `record_session` writes a local history index that survives reloads; clicking an entry continues the conversation with the same Claude/Codex/Gemini session id
-
-### Plugin system
-
-- **Plugin Hub** — install / enable / disable plugins from a registry; built-in readers for VASP `vaspout.h5`, `PROCAR`, `vasprun.xml` bands, COHPCAR
-- **Plugin API** — Python `catgo-plugin.json` manifest with backend calculators, structure readers, analyzers, workflow nodes; sample plugins shipped (Lennard-Jones calculator, charge-coloring)
-- **VS Code extension** — preview CIF / POSCAR / XYZ / TRAJ / HDF5 files inside the editor (right-click → *Render with CatGo*, or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>)
-
-### Structure I/O
-
-- **Import** — drag-drop, paste, OPTIMADE search (Materials Project, MC3D, Alexandria, MaterialsCloud, OMDB, 2DMatPedia), PubChem molecule search, file browser, HPC remote file read
-- **Export** — POSCAR, CIF, XYZ, extxyz, mol2, PDB, NEB-image set, full workflow JSON
-
 ---
 
-## 📦 Get CatGo
+## How to use each platform
 
-Prebuilt artifacts are published on [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases):
+### A. Desktop app: the full workbench
 
-- **Desktop app** — Tauri build, bundled backend + agent + shell.
-- **IDE extension** — a cross-platform `.vsix` (Windows / macOS / Linux). Installs in **VS Code, Cursor, and other VS Code-compatible IDEs**, bringing the full CatGo workbench (including the bundled backend and shell) inside your editor.
-- **Linux server binary** — headless backend for remote / HPC hosts.
-- **HPC bundle** — for cluster deployment.
+1. Download the Windows, macOS, or Linux installer from [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases).
+2. Launch CatGo and drop in a structure/output file, or fetch a structure from a database.
+3. Use the structure toolbar, Quick Build, or CatBot to prepare the model and workflow.
+4. For remote calculations, connect your lab's cluster from the HPC panel.
+5. Review generated inputs and scheduler settings before approving submission.
+6. Monitor the workflow, open resulting structures, and continue to analysis.
 
-### Web version — frontend only
+### B. Web app: open and start
 
-<https://app.catgo-ucsd.org> is a hosted static single-page app (SvelteKit `adapter-static`). It runs **frontend features only**: structure viewing, editing, and 3D visualization in the browser, with zero install.
+**Open:** <https://app.catgo-ucsd.org>
 
-It does **not** include the backend: no DFT/MD execution, no HPC job submission, and no AI-agent task execution. Those require the desktop app or the IDE extension, which bundle the backend and an integrated shell. Use the web app to inspect and edit structures; use a full edition to run real work.
+1. Drop a structure file into the browser viewer.
+2. Rotate, select, edit, build, and export without installing CatGo.
 
-### Built-in shell
+The public site is built in static-only mode, so backend workflows, terminals, and HPC are not available there. Developers may build a backend-enabled static frontend and connect it to a user-owned CatGo backend as described in [`deploy/web/README.md`](deploy/web/README.md). Such a backend has no built-in authentication layer: keep it on loopback or a controlled private network, and never expose it directly to the public internet.
 
-The desktop app and the IDE extension ship with an **integrated shell** — drive jobs, inspect outputs, and move files without leaving CatGo. In the shell, **Ctrl + click** a structure file path (POSCAR, CIF, XYZ, extxyz, trajectory, …) opens it directly in the 3D viewer — no manual upload step.
+### C. VS Code extension: view beside your code and data
 
-The rest of this README covers running CatGo **from source** for development.
+1. Search for **CatGo** in the VS Code Extensions marketplace and install it.
+2. Right-click a structure or trajectory and choose **Open with CatGo / Render**.
+3. Or press <kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>.
+4. With VS Code Remote SSH, inspect files directly on a remote server.
 
----
+The extension includes the full single-window viewer and editing tools. It does not include the desktop shell's multi-pane workspace, standalone workflow editor, or complete HPC job manager.
 
-## 🚀 Quick Start
+### D. iOS app: your cluster and structures in your pocket
 
-### Requirements
+**Best for:** checking jobs away from your workstation, browsing remote files, opening structures/trajectories, and handling cluster tasks from a phone.
 
-- **Node.js** ≥ 20 with **pnpm**
-- **Python** ≥ 3.10 (Conda recommended)
-- **Git**
-- [**Rust**](https://rustup.rs/)
-- [**wasm-pack**](https://wasm-bindgen.github.io/wasm-pack/installer/) (requires **Rust** ≥ 1.30.0)
+1. Open CatGo on an iPhone or iPad.
+2. Add your lab's SSH connection using a password, private key, or interactive authentication.
+3. Enter a calculation directory through the mobile terminal or SFTP file browser.
+4. Tap a structure, trajectory, or output file to open it in the mobile viewer.
+5. Inspect and manage SLURM jobs, or use CatBot and voice input for lightweight operations.
 
-### Install & Run
+The iOS app uses a purpose-built mobile interface rather than a compressed desktop layout. SSH/SFTP runs through an on-device native Rust transport and does not require the desktop Python sidecar. Complex workflow editing and full post-processing are still best handled on desktop.
+
+The iOS build has been verified on a physical device. Installation channels and public-release availability should follow the project's latest release notes; developers can also build and sign it with Xcode using the [iOS build guide](deploy/ios/README.md).
+
+### E. Android: experimental mobile app
+
+Android shares the mobile workspace, native SSH/SFTP, terminal access, structure viewing, and mobile AI. It currently suits development testing and specialized mobile use.
+
+- Android: [`deploy/android/README.md`](deploy/android/README.md)
+- Android Termux: [`deploy/termux/README.md`](deploy/termux/README.md)
+
+### F. CLI, MCP, and Skills: automation and external agents
+
+The command line, HTTP/stdio MCP tools, and research skills are interfaces for driving CatGo's backend, workflows, and files—not separate graphical platforms.
 
 ```bash
-# 1. Clone
+catgo setup
+catgo serve
+catgo status
+catgo --help
+```
+
+`catgo setup` currently registers the CatGo MCP server and campaign skills for Claude Code. Codex, Gemini, and other agents can use the same MCP endpoints and skills after manual configuration.
+
+These agents can manipulate structures, create file-first campaigns, generate inputs, submit jobs, and analyze results. Desktop CatBot can work with supported SDK agents as well as API-compatible or local model providers. Mobile builds use API-compatible providers rather than the desktop SDK sidecars.
+
+## The common research workflow
+
+```text
+Acquire structure → inspect/edit → build model → choose a method
+→ review inputs → run locally or connect to HPC → monitor → analyze/export
+```
+
+- **Review before submission:** confirm generated structures, input files, pseudopotential/basis paths, and scheduler scripts.
+- **Local and HPC capabilities differ:** structure operations and many analyses can run locally or in the browser. Execution location depends on the workflow node and your configuration; licensed or cluster-oriented codes such as VASP and CP2K require an installation and compute environment supplied by you or your institution.
+- **CatBot is an interface, not a replacement for scientific judgment:** it calls tools and assembles workflows, while researchers remain responsible for settings and conclusions.
+- **Cluster configuration is never safely guessable:** confirm the cluster identity, scheduler, executable or module commands, Python environment, and POTCAR/pseudopotential locations before the first submission.
+
+<p align="center">
+  <img src="image/workflow.png" alt="CatGo workflow from structure acquisition and model building through human input review, computation, monitoring, and analysis" width="100%">
+</p>
+
+The desktop app and file-first campaign tools can cover this complete path. Web, VS Code, and mobile builds focus on the portions appropriate to their platform, such as viewing, editing, file access, monitoring, or lightweight agent operations.
+
+---
+
+## Typical research use cases
+
+### Structure building
+
+Fetch structures from Materials Project or other databases through their APIs; cut slabs, add vacuum, and build supercells; place adsorbates and generate defects, dopants, heterostructures, and MOFs.
+
+<p align="center">
+  <img src="image/屏幕截图 2026-06-23 175921.png" alt="Interactive structure building and atom editing in CatGo" width="100%">
+</p>
+
+### Computational workflows
+
+Use Quick Build or a visual DAG to connect optimization, single-point, frequency, DOS, NEB, and MD; pre-screen with fast potentials before DFT.
+
+<p align="center">
+  <img src="image/微信图片_20260623160855_509_756.png" alt="A visual catalysis workflow in CatGo with an explicit human review gate before HPC submission" width="100%">
+</p>
+
+### Catalysis and free energy
+
+Build and compare OER, HER, ORR, CO₂RR, and NRR pathways; organize adsorption energies, zero-point-energy and thermal corrections, Gibbs free energies, overpotentials, free-energy diagrams, and descriptor-based volcano plots. Free-energy studies require thermochemical data: for each relevant species, use an appropriate geometry optimization and frequency/thermodynamics calculation rather than treating raw electronic energies as Gibbs free energies.
+
+### Trajectories, electronic structure, and publication output
+
+Replay geometry-optimization, MD, NEB, and IRC trajectories; analyze DOS/PDOS, bands, COHP/ICOHP, d-band centers, XRD, RDF, and volumetric charge-density data; export figures, videos, CSV tables, structures, and 3D models. Bader charges produced by an external Bader calculation can be displayed as site properties, but CatGo does not perform the Bader partitioning itself.
+
+<p align="center">
+  <img src="image/微信图片_20260623085420_497_756.png" alt="Charge-density isosurfaces and slice-plane analysis for an adsorbate on a catalyst surface" width="100%">
+</p>
+
+<p align="center">
+  <img src="image/微信图片_20260623085420_498_756.png" alt="Electronic band-structure analysis in CatGo" width="100%">
+</p>
+<p align="center">
+  <img src="image/微信图片_20260623085418_495_756.png" alt="Spin-resolved DOS and projected density-of-states analysis in CatGo" width="100%">
+</p>
+
+---
+
+## Supported software and files
+
+“Supported” can mean several different things. In the tables below, **Read** means that CatGo can import the file into its viewer or data model; **Write** means that it can export a structure or input deck. Neither automatically means that the corresponding simulation program is bundled or licensed.
+
+| Software                     | Read                                                                                       | Write                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| **VASP**                     | POSCAR, CONTCAR, `.vasp`, vasprun.xml, OUTCAR, XDATCAR, CHGCAR/AECCAR/LOCPOT/ELFCAR/PARCHG | POSCAR, INCAR, KPOINTS                              |
+| **Quantum ESPRESSO**         | pw.x input (`.in`; scf/relax/…)                                                            | pw.x input                                          |
+| **CP2K**                     | `.inp`, `.restart`                                                                         | CP2K input with cell, coordinates, and k-points     |
+| **ABACUS**                   | STRU                                                                                       | INPUT, STRU, KPT                                    |
+| **ORCA**                     | `.inp`, `.out` with Cartesian/internal/`%coords` geometries                                | ORCA input                                          |
+| **Gaussian**                 | `.gjf`, `.com`, Z-matrix, `.log`, `.out`, cube                                             | `.gjf`                                              |
+| **CASTEP / SIESTA / OpenMX** | `.cell` / `.fdf` / `.dat`                                                                  | Import only                                         |
+| **LAMMPS**                   | `.data`, `.lmp`, dump, `.lammpstrj`                                                        | Data file and run script                            |
+| **GROMACS / AMBER / SPARK**  | —                                                                                          | GROMACS input set / AMBER mdin / SPARK kMC-MKM deck |
+| **ASE / phonopy / phono3py** | ASE `.traj`, extXYZ / phonopy-family YAML                                                  | extXYZ / import only                                |
+
+| Data type                 | Read                                                                                          | Write                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| **Crystallographic**      | CIF, mCIF, pymatgen JSON, OPTIMADE JSON                                                       | CIF, pymatgen JSON                               |
+| **Molecular**             | XYZ, extXYZ, mol2, PDB, PubChem JSON                                                          | XYZ, extXYZ, mol2, PDB                           |
+| **Trajectory / MD**       | XDATCAR, OUTCAR, multi-frame extXYZ, ASE `.traj`, LAMMPS dump, HDF5, vasprun.xml, JSON frames | Multi-frame extXYZ, WebM/MP4 video, PNG sequence |
+| **Volumetric**            | Gaussian cube and the VASP CHGCAR family                                                      | —                                                |
+| **Figures and 3D models** | —                                                                                             | PNG, JPG, TIFF, SVG, PDF, GLB, OBJ               |
+| **Documents for preview** | PDF, DOCX, XLSX/XLS/ODS, CSV/TSV, Markdown/RST, images                                        | —                                                |
+
+### Calculation and workflow support
+
+- **Production local paths:** structure-building and analysis nodes, ORCA calculations, local LAMMPS modes, and local MLP modes.
+- **Functional transitional HPC paths:** VASP, CP2K, xTB, LAMMPS, and MLP workflows through the Python HPC adapter. These paths require SSH plus a configured scheduler and currently have simpler retry/resume behavior than the local DAG engine.
+- **Input export without an executable workflow engine:** Quantum ESPRESSO, ABACUS, Gaussian, GROMACS, AMBER, SPARK, and other exporters listed above. Gaussian and GROMACS workflow nodes are not yet executable; the Quantum ESPRESSO workflow engine definition is also not implemented.
+- **Skill-assisted guidance:** GPAW, ABINIT, SIESTA, DFTB+, Gaussian, and additional task-specific skills can provide agent-readable procedures or draft inputs. A skill is guidance, not proof that CatGo can execute the code end to end.
+- **Fast screening:** MACE, CHGNet, M3GNet, EMT, and xTB/GFN-xTB when their optional packages or executables are installed.
+- **Post-processing:** DOS/PDOS, bands, COHP/ICOHP, d-band center, Brillouin-zone tools, XRD, RDF and MD statistics, charge-density visualization, thermochemistry, free-energy diagrams, volcano plots, and phase diagrams.
+
+Feature availability depends on the CatGo edition, installed optional dependencies, and the programs available on your workstation or cluster. CatGo does not redistribute commercial simulation packages, proprietary potentials, pseudopotentials, or cluster allocations.
+
+---
+
+## Install and start
+
+- **Fastest trial:** open the [Web app](https://app.catgo-ucsd.org) to view, edit, build, and export structures.
+- **Complete experience:** install a Windows, macOS, or Linux build from [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases). Release installers bundle the backend and agent bridge; end users do not need a separate Python or Node.js installation.
+- **Inside your editor:** search for **CatGo** in the VS Code Extensions marketplace.
+
+### Run from source (developers)
+
+Install Node.js 20 or newer, pnpm, Python 3.11, and the stable Rust toolchain. The WASM build also requires `wasm-pack`. Then use the following sequence:
+
+```bash
 git clone https://github.com/Hello-QM/catgo-LRG.git
 cd catgo-LRG
 
-# 2. Frontend dependencies
-pnpm install
-
-# 3. Python environment
 conda create -n catgo python=3.11
 conda activate catgo
 pip install -r server/requirements.txt
+
+pnpm install
+pnpm build:wasm
+pnpm desktop:serve
 ```
 
-Then pick one of three ways to run:
+All three pnpm commands are required for a clean source checkout: install workspace dependencies, build the Rust/WASM modules, and start the frontend, Python backend, and agent bridge. If `desktop:serve` launches the wrong Python interpreter, activate the `catgo` environment again or set `PYTHON` to its absolute executable path.
 
-**Option A — Browser dev (fastest iteration)**
-
-```bash
-pnpm build:wasm               # Compile Rust to WebAssembly
-pnpm desktop:serve            # vite on :3100, FastAPI on :8000
-```
-
-Open <http://localhost:3100> in any browser. Hot-reload on every save.
-
-**Option B — Tauri native shell (recommended for daily use)**
-
-```bash
-# One-time: install Rust toolchain + Tauri prerequisites
-# (https://tauri.app/start/prerequisites/)
-pnpm tauri:dev                # builds vite then opens a native window
-```
-
-`tauri:dev` runs the same backend on :8000 but renders the frontend in
-a native WebKit / WebView2 window. ~40 % smoother than the browser
-build because the production frontend skips Svelte 5's dev-mode
-reactivity tracking + HMR client overhead. The Tauri shell also keeps
-the Python backend alive as a sidecar so closing the window stops
-everything cleanly.
-
-**Option C — Build an installer (.dmg / .msi / .deb / .AppImage)**
-
-```bash
-pnpm tauri:build              # desktop app only — server runs separately
-pnpm bundle                   # app + Python backend (PyInstaller sidecar)
-pnpm bundle:windows           # cross-platform variants
-pnpm bundle:mac-arm
-```
-
-The bundled artefact lands under `src-tauri/target/release/bundle/` —
-double-click to run; the backend auto-starts as a packaged sidecar.
-
-Once running (any of the three), drop a CIF / POSCAR / XYZ / extxyz / mol2 / pdb / traj file onto the viewer, or ask CatBot: *"fetch Cu from Materials Project and cut a (100) slab."*
+See the [installation guide](https://docs.catgo-ucsd.org/guide/installation) for complete build instructions.
 
 ---
 
-## 🤖 CatBot Examples
+## Docs, community, and contributing
 
-```text
-"Fetch TiO2 anatase from Materials Project, make a 2×2×2 supercell,
- cut a (101) slab with 3 layers and 15 Å vacuum."
+| Need                                        | Go to                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------- |
+| Import, edit, and export a first structure  | [Getting Started](https://docs.catgo-ucsd.org/tutorials/basics/getting-started) |
+| Slabs, optimization, trajectories, and more | [Tutorials](https://docs.catgo-ucsd.org/tutorials/)                             |
+| CatBot                                      | [CatBot Guide](https://docs.catgo-ucsd.org/guide/catbot)                        |
+| Backend, HPC, and MCP                       | [Server & MCP Docs](https://docs.catgo-ucsd.org/modules/server/)                |
+| Report a problem                            | [GitHub Issues](https://github.com/Hello-QM/catgo-LRG/issues)                   |
+| Ask questions                               | [CatGo Forum](https://groups.google.com/g/catgo_official)                       |
 
-"Find adsorption sites and place CO on the most stable hollow site."
-
-"Generate VASP input for relaxation with PBE+D3, ENCUT=520, ISMEAR=0."
-
-"Create a workflow: geo_opt → single_point → DOS analysis,
- then submit it to Shaheen partition workq with 64 cores."
-
-"Place CO and NH2 on Cu(111) at 3.5 Å for a C-N coupling slow-growth
- run, set up the ICONST and propose ENCUT/k-mesh."
-```
-
-### How chat-driven workflow generation works
-
-CatGo has two workflow-authoring paths:
-
-1. **Visual editor** — drag nodes from the left palette (Input /
-   Calculation / Tools / Logic / Analysis), wire them on the canvas,
-   then run the graph.
-2. **CatBot pane** — type a request such as "set up a HER free-energy
-   workflow on Pt(111) with three intermediates"; CatBot builds the DAG
-   through CatGo's MCP-backed workflow APIs.
-
-The in-app CatBot path uses the running backend's HTTP MCP endpoint. It
-does not register the same stdio MCP server used by the standalone
-terminal plugin.
-
-```text
-You ─ chat ─▶ CatBot pane                         (src/lib/chat/*)
-              │
-              ▼
-        agent bridge                              (vite-plugin-agent-bridge.ts in dev;
-              │                                   desktop bridge in packaged builds)
-              │
-              ▼
-        provider adapter                          (for Claude: @anthropic-ai/claude-agent-sdk query())
-              │
-              │  MCP server URL: http://localhost:<port>/api/mcp/
-              │  plus X-CatGo-Tab-Id so tool results return to the active viewer tab
-              ▼
-        server/catgo/routers/mcp_http.py
-              │
-              │  imports the consolidated tool schema/handlers from
-              ▼
-        server/catgo/mcp_tools/server_claude_code.py
-              │
-              ├── catgo_structure   — build/edit/inspect the viewer structure
-              ├── catgo_fetch       — Materials Project / OPTIMADE / PubChem
-              ├── catgo_workflow    — create / batch-edit DAG nodes + edges
-              ├── catgo_quickbuild  — one-call recipe builders
-              ├── catgo_analyze     — DOS / band / COHP / adsorption-site analysis
-              ├── catgo_view        — viewer state and screenshots
-              ├── catgo_catalysis   — free-energy diagrams and volcano plots
-              ├── catgo_file        — local + remote file I/O
-              └── catgo_system      — environment, sessions, settings
-```
-
-The MCP tool mutates backend state (workflow DAGs, viewer-panel state,
-or HPC job records). The frontend then sees those backend updates through
-the normal app state and streaming response path, so from the user's
-perspective a sentence in CatBot turns into a visible workflow graph.
-
-There is also a separate **terminal plugin** path:
-
-```text
-Claude Code terminal
-  └── catbot-plugin/.mcp.json
-        └── ${CLAUDE_PLUGIN_ROOT}/server/mcp_server.py
-              └── symlink to server/mcp_server.py
-                    └── catgo.mcp_tools.server
-```
-
-That standalone stdio server exposes the broader fine-grained MCP tool
-set plus dynamic tool lifecycle commands such as `catgo_create_tool` and
-`catgo_save_tool`. It is useful for terminal agents, but it is not the
-same MCP surface as the in-app CatBot pane.
-
-The browser UI does not call model APIs directly. Model traffic is owned
-by the local agent bridge/provider adapter, while CatGo operations flow
-through the backend MCP endpoint.
-
-### AI Provider Setup
-
-Pick any available provider in CatBot settings:
-
-| Provider group    | Options                                 | Notes                                                                                                                                                                                                     |
-| ----------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Local**         | Ollama                                  | Runs against `http://127.0.0.1:11434`; no API key required.                                                                                                                                               |
-| **SDK agents**    | Claude Code, Gemini CLI, Codex CLI      | Install the matching CLI. Claude can also use `ANTHROPIC_API_KEY`; Gemini can use CLI OAuth or `GEMINI_API_KEY`; Codex uses the Codex SDK/CLI auth flow.                                                  |
-| **API providers** | DeepSeek, Qwen, Kimi, Zhipu GLM, Gemini | Use an API key from settings or server env (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`, `MOONSHOT_API_KEY`, `ZHIPUAI_API_KEY`, `GEMINI_API_KEY`). These go through CatGo's OpenAI-compatible streaming path. |
-
-For API providers, the Base URL field is editable, so the same path can be
-pointed at another OpenAI-compatible endpoint when needed.
+Contributions can be research pain points, example structures, workflows, screenshots, parsers, compute engines, skills, or cluster tests. Read [`contributing.md`](contributing.md).
 
 ---
 
-## 🗂️ Project Layout
+## Acknowledgements, citation, and license
 
-```
-catgo-LRG/
-├── src/                      # SvelteKit + Svelte 5 frontend
-│   └── lib/
-│       ├── structure/        # 3D viewer (Threlte / Three.js)
-│       ├── workflow/         # DAG editor and node definitions
-│       ├── chat/             # CatBot (in-app AI loop)
-│       └── api/              # Tauri / desktop / browser routing
-├── server/                   # FastAPI Python backend
-│   ├── routers/              # REST endpoints
-│   ├── workflow/engines/     # VASP / QE / LAMMPS / CP2K / ORCA …
-│   ├── mcp_tools/            # MCP definitions for AI agents
-│   └── catgo/                # Workflow engine and HPC submitter
-├── src-tauri/                # Rust + Tauri desktop shell
-├── desktop/                  # Standalone Vite dev frontend
-├── extensions/
-│   ├── rust/                 # Rust → WASM (bonding, supercell, slab)
-│   └── vscode/               # VS Code extension
-├── catbot-plugin/            # CatBot agent prompts and tools
-└── plugins/                  # User plugins (analysis, viewers, …)
-```
+CatGo's structure viewer, periodic table, and parts of its core UI originate from and were inspired by [MatterViz](https://github.com/janosh/matterviz). CatGo extends that foundation with computational workflows, HPC integration, CatBot, catalysis analysis, and cross-platform applications.
 
----
+**CatRender** is CatGo's Rust/WASM molecular SVG renderer. It is implemented as a fidelity-oriented port of [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender), whose lineage includes [xyz2svg](https://github.com/briling/xyz2svg), with CatGo-specific interactive controls and export integration.
 
-## 🛠️ Development
-
-| Command               | Description                                                          |
-| --------------------- | -------------------------------------------------------------------- |
-| `pnpm desktop:serve`  | Frontend on port 3100 plus Python backend on port 8000 (recommended) |
-| `pnpm desktop:dev`    | Frontend only                                                        |
-| `pnpm tauri:dev`      | Full Tauri desktop app                                               |
-| `pnpm check`          | Svelte / TypeScript check                                            |
-| `pnpm test`           | Vitest unit tests                                                    |
-| `cd server && pytest` | Python backend tests                                                 |
-
----
-
-## 🧩 VS Code Extension
-
-A separate VS Code extension under [`extensions/vscode/`](extensions/vscode/) previews CIF / POSCAR / XYZ / TRAJ / HDF5 files directly inside the editor (right-click → *Render with CatGo*, or <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd>).
-
----
-
-## 🙏 Acknowledgements
-
-CatGo would not exist without a tremendous amount of open-source work. We are particularly indebted to:
-
-### Foundation
-
-- [**MatterViz**](https://github.com/janosh/matterviz) by [Janosh Riebesell](https://github.com/janosh) — the 3D structure viewer, periodic-table widgets, element data, color schemes, and several UI patterns originate from MatterViz. CatGo has reworked many of them significantly, but the foundation remains MatterViz.
-
-### Frontend stack
-
-[Svelte 5](https://svelte.dev) · [SvelteKit](https://kit.svelte.dev) · [Tauri](https://tauri.app) · [Vite](https://vitejs.dev) · [pnpm](https://pnpm.io) · [three.js](https://threejs.org) · [threlte](https://threlte.xyz) · [d3](https://d3js.org) · [Monaco Editor](https://microsoft.github.io/monaco-editor/) · [xterm.js](https://xtermjs.org) · [moyo](https://github.com/spglib/moyo) (symmetry).
-
-### Python backend
-
-[FastAPI](https://fastapi.tiangolo.com) · [pymatgen](https://pymatgen.org) · [ASE](https://wiki.fysik.dtu.dk/ase/) · [Open Babel](https://openbabel.org) · [Packmol](https://m3g.github.io/packmol/) · [Phonopy](https://phonopy.github.io/phonopy/) · [Phonopy + Spglib](https://spglib.readthedocs.io) · [RDKit](https://www.rdkit.org).
-
-### Machine-learning potentials
-
-[MACE](https://github.com/ACEsuit/mace) · [CHGNet](https://github.com/CederGroupHub/chgnet) · [M3GNet / MatGL](https://github.com/materialsvirtuallab/matgl) · [ORB](https://github.com/orbital-materials/orb-models) · [FAIR-Chem / UMA](https://github.com/facebookresearch/fairchem) · [DeePMD-kit](https://github.com/deepmodeling/deepmd-kit) · [xTB](https://xtb-docs.readthedocs.io).
-
-### DFT / MD engines (input + post-processing)
-
-[VASP](https://www.vasp.at) · [Quantum ESPRESSO](https://www.quantum-espresso.org) · [LAMMPS](https://lammps.org) · [CP2K](https://www.cp2k.org) · [ORCA](https://www.faccts.de/orca/) · [GPAW](https://wiki.fysik.dtu.dk/gpaw/) · [ABINIT](https://www.abinit.org) · [SIESTA](https://siesta-project.org) · [DFTB+](https://dftbplus.org) · [Gaussian](https://gaussian.com).
-
-### AI agents
-
-[Anthropic Claude](https://www.anthropic.com) / [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) · [OpenAI Codex CLI](https://github.com/openai/codex) · [Google Gemini CLI](https://github.com/google-gemini/gemini-cli) · [Ollama](https://ollama.com) · [DeepSeek](https://www.deepseek.com) · [Qwen](https://help.aliyun.com/zh/model-studio/) · [Kimi](https://platform.moonshot.ai) · [Zhipu GLM](https://open.bigmodel.cn) · [Gemini API](https://ai.google.dev).
-
-### Testing & tooling
-
-[Vitest](https://vitest.dev) · [Playwright](https://playwright.dev) · [pytest](https://pytest.org) · [Deno](https://deno.land) (lint/format).
-
-Thank you to every maintainer of these projects — the science work CatGo enables stands entirely on your shoulders.
-
----
-
-## 📚 Citation
-
-If you use CatGo in a publication, please cite the ChemRxiv preprint:
+If CatGo contributes to a publication, cite the ChemRxiv preprint:
 
 ```bibtex
 @misc{liu2026catgo,
@@ -541,18 +323,10 @@ If you use CatGo in a publication, please cite the ChemRxiv preprint:
   doi       = {10.26434/chemrxiv.15002984/v1},
   url       = {https://doi.org/10.26434/chemrxiv.15002984/v1},
   publisher = {ChemRxiv},
-  note      = {Preprint},
+  note      = {Preprint}
 }
 ```
 
----
-
-## 📄 License
-
-CatGo is distributed under the [**GNU Affero General Public License v3.0 or later**](license) (AGPL-3.0-or-later). You are free to use, modify, and redistribute the software under the terms of that license. If you run a modified version of CatGo as a network service, you must make the corresponding source code available to your users under the same license.
+For the software release, see [`citation.cff`](citation.cff) and the Zenodo archive [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425). CatGo is licensed under [GNU AGPL-3.0-or-later](license).
 
 ---
-
-<p align="center">
-  Developed at <a href="https://wanlulilab.ucsd.edu/">Dr. Wanlu Li Lab @ UCSD</a>.
-</p>
