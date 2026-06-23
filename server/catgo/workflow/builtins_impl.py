@@ -349,6 +349,12 @@ def run_adsorbate_place(
                 [chosen_3d[0] + off[0], chosen_3d[1] + off[1], chosen_3d[2] + off[2]],
                 coords_are_cartesian=True,
             )
+        # Tag adsorbate atoms so downstream freq can fix the slab and vibrate
+        # only the adsorbate (freeze_mode=adsorbate).
+        n_slab = len(slab)
+        new_slab.add_site_property(
+            "is_adsorbate", [i >= n_slab for i in range(len(new_slab))]
+        )
         return {"structure": json.dumps(new_slab.as_dict())}
 
     import numpy as np
@@ -468,6 +474,9 @@ def run_adsorbate_place(
             props = dict(slab_dict["sites"][i].get("properties") or {})
         else:
             props = {"selective_dynamics": [True, True, True]} if slab_has_sd else {}
+        # Tag adsorbate atoms so downstream freq can fix the slab and vibrate
+        # only the adsorbate (freeze_mode=adsorbate).
+        props["is_adsorbate"] = i >= n_slab
         out_sites.append({
             "species": [{"element": sym, "occu": 1}],
             "abc": abc,
