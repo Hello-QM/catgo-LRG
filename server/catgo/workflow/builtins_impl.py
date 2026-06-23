@@ -139,6 +139,17 @@ def run_slab_gen(
     structure \u2014 visible in the 3D viewer and inherited by downstream nodes \u2014
     rather than only materializing in the VASP POSCAR at run time.
     """
+    # Frontend contract (SlabGenPreview.svelte: "When locked, preview shows the
+    # saved structure_json instead of regenerating"): a LOCKED slab_gen node has
+    # already finalized its slab into `structure_json` — possibly hand-edited in
+    # the 3D viewer (atoms removed, bottom layers frozen via selective_dynamics).
+    # Return it verbatim instead of rebuilding from bulk+params, which diverges
+    # in atom count and silently drops the user's selective_dynamics (the slab
+    # the user saw on screen must be exactly what is sent to HPC).
+    if params.get("slab_locked") and params.get("structure_json"):
+        sj = params["structure_json"]
+        return {"structure": sj if isinstance(sj, str) else json.dumps(sj)}
+
     if structure is None:
         raise ValueError("slab_gen requires a structure input")
 
