@@ -14,6 +14,13 @@ class JobScriptParams(BaseModel):
     partition: Optional[str] = "workq"
     memory: Optional[str] = None
     account: Optional[str] = None
+    # POTCAR location for VASP. Kept here (not only on ClusterConfig) so a
+    # workflow run that sets potcar_root in default_job_params is not silently
+    # dropped by validation — the scanner copies default_job_params into
+    # hpc.job_defaults, where the submitter reads it. Without this, VASP jobs
+    # die on a missing POTCAR.
+    potcar_root: Optional[str] = None
+    potcar_functional: Optional[str] = None
 
 
 class ClusterConfig(BaseModel):
