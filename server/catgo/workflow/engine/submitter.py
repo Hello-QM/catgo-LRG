@@ -219,6 +219,13 @@ async def _submit_one(
     elif inputs.get("product_structure"):
         # Legacy fallback — older workflows may use "product_structure" as key
         params["_resolved_product_structure"] = inputs["product_structure"]
+    elif resolved_type in ("neb", "mlp_neb", "orca_neb_ts"):
+        # NEB endpoints wired to the same `structure` port (two parents:
+        # reactant_opt + product_opt) rather than structure/structure_product.
+        # Take the second structure as the product endpoint.
+        structs = inputs.get("structure")
+        if isinstance(structs, list) and len(structs) > 1:
+            params["_resolved_product_structure"] = structs[1]
 
     # Stash parent .gbw wavefunction path for ORCA SCF restart.
     # The wavefunction_file is not a linked handle — scan all parent results.
