@@ -633,9 +633,12 @@ class WorkflowEngine:
             task_type = task["task_type"]
             params = json.loads(task.get("params_json", "{}") or "{}")
 
-            # Resolve unified calc types (geo_opt+mlp → mlp_relax)
+            # Resolve unified calc types (geo_opt+mlp → mlp_relax) and the
+            # generic `analysis` node (analysis+type=elastic → elastic_analysis).
+            # _resolve_software returns the type unchanged for everything else,
+            # so calling it for both keeps a single resolution point.
             resolved_type = task_type
-            if task_type in UNIFIED_CALC_NODES:
+            if task_type in UNIFIED_CALC_NODES or task_type == "analysis":
                 resolved_type, _ = _resolve_software(task_type, params)
 
             # --- MLP local execution (when execution_mode == "local") ---
