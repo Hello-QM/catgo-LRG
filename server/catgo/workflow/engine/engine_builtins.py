@@ -185,12 +185,129 @@ def _generate_inputs_local(work_dir: str, node_type: str, engine_key: str, param
         _generate_orca_inputs_local(work_dir, node_type, params, structure_str)
 
 
+def _parse_structure_any(s):
+    """Coerce a structure input (JSON dict / dict / list-of / POSCAR text) into a
+    pymatgen Structure. Returns None on failure."""
+    import json as _json
+    from pymatgen.core import Structure
+    if s is None:
+        return None
+    if isinstance(s, list):
+        s = s[0] if s else None
+        if s is None:
+            return None
+    if isinstance(s, dict):
+        return Structure.from_dict(s)
+    if isinstance(s, str):
+        try:
+            return Structure.from_dict(_json.loads(s))
+        except Exception:
+            return Structure.from_str(s, fmt="poscar")
+    return None
+
+
+def _write_vasp_neb_inputs(wd, params: dict, structure_str, product_str) -> None:
+    """Write a VASP NEB job: image subdirectories 00/POSCAR ... 0(N+1)/POSCAR
+    (initial → interpolated images → final) plus a root INCAR (IMAGES/SPRING/
+    LCLIMB) and KPOINTS. Initial is structure_str, final is product_str; the
+    N intermediate images are IDPP-free linear interpolations (pymatgen)."""
+    initial = _parse_structure_any(structure_str)
+    final = _parse_structure_any(product_str)
+    n_images = int(params.get("nimages", params.get("n_images", 5)) or 5)
+    climbing = params.get("climbing", params.get("climb", True))
+    spring_k = float(params.get("spring_k", 5.0) or 5.0)
+
+    if initial is None or final is None:
+        init_state = "ok" if initial is not None else "MISSING"
+        final_state = "ok" if final is not None else (
+            "MISSING — connect a structure to the 'structure_product' input port")
+        (wd / "NEB_README.txt").write_text(
+            "VASP NEB needs TWO endpoint structures (initial + final). "
+            f"initial={init_state}, final={final_state}.\n"
+        )
+        if initial is not None:
+            (wd / "POSCAR").write_text(initial.to(fmt="poscar"))
+        return
+
+    # Interpolate: nimages=n_images+1 yields n_images+2 frames (initial..final).
+    try:
+        frames = initial.interpolate(final, nimages=n_images + 1,
+                                     interpolate_lattices=False, autosort_tol=0.5)
+    except Exception as e:
+        (wd / "NEB_README.txt").write_text(
+            f"NEB interpolation failed (initial/final must have the same atom "
+            f"count and ordering): {e}\n"
+        )
+        return
+
+    # One subdir per frame: 00 (initial, fixed), 01..0N (images), 0(N+1) (final).
+    for i, frame in enumerate(frames):
+        sub = wd / f"{i:02d}"
+        sub.mkdir(parents=True, exist_ok=True)
+        (sub / "POSCAR").write_text(frame.to(fmt="poscar"))
+
+    # NEB INCAR (root). IMAGES = intermediate count; endpoints are 00 and last.
+    incar = _build_vasp_incar_lines(params, "neb")
+    incar_keys = {ln.split("=")[0].strip().upper() for ln in incar}
+    neb_defaults = [
+        ("IMAGES", n_images),
+        ("IBRION", 3),
+        ("POTIM", 0),
+        ("SPRING", -abs(spring_k)),
+        ("LCLIMB", ".TRUE." if climbing else ".FALSE."),
+        ("EDIFFG", -0.05),
+        ("NSW", 200),
+    ]
+    for k, v in neb_defaults:
+        if k not in incar_keys:
+            incar.append(f"{k} = {v}")
+    (wd / "INCAR").write_text("\n".join(sorted(incar)) + "\n")
+    _write_vasp_kpoints(wd, params)
+
+
+def _build_vasp_incar_lines(params: dict, node_type: str) -> list:
+    """Build INCAR lines from params (filtered to known VASP keys)."""
+    incar_lines: list = []
+    for k, v in params.items():
+        if k.upper() in _VASP_INCAR_KEYS:
+            val = '.TRUE.' if v is True else '.FALSE.' if v is False else str(v)
+            incar_lines.append(f"{k.upper()} = {val}")
+    return incar_lines
+
+
+def _write_vasp_kpoints(wd, params: dict) -> None:
+    kpoints = params.get("KPOINTS", params.get("kpoints", [1, 1, 1]))
+    if isinstance(kpoints, list) and len(kpoints) == 3:
+        kpt_str = f"Automatic\n0\nGamma\n{kpoints[0]} {kpoints[1]} {kpoints[2]}\n0 0 0\n"
+    else:
+        kpt_str = "Automatic\n0\nGamma\n1 1 1\n0 0 0\n"
+    (wd / "KPOINTS").write_text(kpt_str)
+
+
+_VASP_INCAR_KEYS = {
+    'ENCUT', 'EDIFF', 'EDIFFG', 'NSW', 'IBRION', 'ISIF', 'ISMEAR', 'SIGMA',
+    'PREC', 'ALGO', 'LREAL', 'LWAVE', 'LCHARG', 'NELM', 'NELMIN', 'NCORE',
+    'KPAR', 'ISPIN', 'MAGMOM', 'LDAU', 'LDAUU', 'LDAUJ', 'LDAUL', 'IVDW',
+    'GGA', 'METAGGA', 'LASPH', 'LORBIT', 'NEDOS', 'EMIN', 'EMAX',
+    'NFREE', 'POTIM',
+    # NEB tags (else silently dropped by the filter)
+    'IMAGES', 'SPRING', 'LCLIMB', 'LCLIMBING', 'LDNEB', 'ICHAIN', 'IOPT',
+}
+
+
 def _generate_vasp_inputs_local(work_dir: str, node_type: str, params: dict, structure_str: str | None) -> None:
     """Generate INCAR, POSCAR, KPOINTS locally."""
     import json as _json
     from pathlib import Path
 
     wd = Path(work_dir)
+
+    # --- NEB: multi-image directory layout (00/POSCAR ... 0(N+1)/POSCAR) ---
+    if node_type == "neb":
+        product_str = params.pop("_resolved_product_structure", None) \
+            or params.pop("product_structure", None)
+        _write_vasp_neb_inputs(wd, params, structure_str, product_str)
+        return
 
     # POSCAR from structure
     if structure_str:

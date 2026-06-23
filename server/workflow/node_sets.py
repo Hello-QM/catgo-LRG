@@ -200,6 +200,7 @@ def _resolve_software(node_type: str, params: dict[str, object]) -> tuple[str, s
         ("freq", "mlp"): "mlp_vibrations",
         ("neb", "vasp"): "neb",
         ("neb", "mlp"): "mlp_neb",
+        ("ts_search", "mlp"): "mlp_neb",
         ("cell_opt", "vasp"): "bulk_opt",
         ("cell_opt", "cp2k"): "cp2k_cellopt",
         ("cell_opt", "mlp"): "mlp_relax",

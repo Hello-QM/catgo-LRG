@@ -549,6 +549,47 @@ def generate_vasp_input_files(
         "POSCAR": poscar_str,
     }
 
+    # ── NEB: image subdirectories + NEB INCAR tags ──
+    # VASP NEB reads one POSCAR per image directory 00/ (initial) .. 0(N+1)/
+    # (final) and a shared root INCAR/KPOINTS/POTCAR. write_remote_files writes
+    # any "subdir/file" key under work_dir, so we just add subdir-keyed POSCARs.
+    if node_type == "neb":
+        product_str = params.get("_resolved_product_structure") or params.get("product_structure")
+        final = None
+        if product_str:
+            try:
+                final = Structure.from_str(product_str, fmt="poscar") if isinstance(product_str, str) and not product_str.lstrip().startswith("{") else Structure.from_dict(json.loads(product_str) if isinstance(product_str, str) else product_str)
+            except Exception as exc:
+                logger.warning("NEB: could not parse product structure: %s", exc)
+        if final is not None:
+            n_images = int(params.get("nimages", params.get("n_images", 5)) or 5)
+            spring_k = float(params.get("spring_k", 5.0) or 5.0)
+            climbing = params.get("climbing", params.get("climb", True))
+            try:
+                frames = struct.interpolate(final, nimages=n_images + 1,
+                                            interpolate_lattices=False, autosort_tol=0.5)
+                # Per-image POSCARs (00=initial .. 0(N+1)=final)
+                for i, frame in enumerate(frames):
+                    input_files[f"{i:02d}/POSCAR"] = str(Poscar(frame, sort_structure=False))
+                # Root POSCAR is unused by NEB; keep it for POTCAR generation only.
+                neb_tags = [
+                    f"IMAGES = {n_images}", "IBRION = 3", "POTIM = 0",
+                    f"SPRING = {-abs(spring_k)}",
+                    f"LCLIMB = {'.TRUE.' if climbing else '.FALSE.'}",
+                ]
+                # NEB must override any preset IBRION/POTIM (e.g. relax IBRION=2),
+                # so strip those keys from the generated INCAR before appending.
+                _neb_keys = {"IMAGES", "IBRION", "POTIM", "SPRING", "LCLIMB"}
+                kept = [ln for ln in incar_str.splitlines()
+                        if not ("=" in ln and ln.split("=")[0].strip().upper() in _neb_keys)]
+                input_files["INCAR"] = "\n".join(kept).rstrip() + "\n" + "\n".join(neb_tags) + "\n"
+            except Exception as exc:
+                logger.warning("NEB: interpolation failed (initial/final atom "
+                               "count/order must match): %s", exc)
+        else:
+            logger.warning("NEB: no product structure resolved — connect a "
+                           "structure to the 'structure_product' input port.")
+
     if params.get("double_relax") and node_type in ("vasp_relax", "bulk_opt"):
         input_files["run_vasp.sh"] = (
             "#!/bin/bash\n"
