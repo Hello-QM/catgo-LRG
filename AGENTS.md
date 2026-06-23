@@ -46,3 +46,11 @@ each user's own memory, not here.
 ## Review gates (default human-in-the-loop)
 - Don't auto-submit a freshly built workflow/campaign; show inputs, confirm, then submit.
   Skip only on explicit user opt-in ("go as you set" / "yolo" / "always skip").
+
+## Agent Bridge Notes
+
+### [2026-06-23] Claude settings env fallback
+**Category**: bug
+**Context**: Desktop CatBot Claude Code provider returned blank replies when users configured proxy env only in `~/.claude/settings.json`.
+**Discovery**: The sidecar disabled Claude global setting sources and inherited only OS env, so `ANTHROPIC_BASE_URL` / auth env in Claude settings were invisible.
+**Solution/Note**: Claude adapter now loads only the `env` map from `settings.json` / `settings.local.json` as fallback, without enabling global MCP/settings loading.
