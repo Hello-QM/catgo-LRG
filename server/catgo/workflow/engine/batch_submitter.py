@@ -61,8 +61,18 @@ async def submit_batch_tasks(
         logger.error("No HPC connection for batch submission")
         return None
 
-    # Batch directory: base_dir/workflow_id/batch_<task_type>
-    base_dir = config.get("paths", {}).get("base_dir", "~/catgo")
+    # Batch directory: base_dir/workflow_id/batch_<task_type>.
+    # Resolve base_dir the same way resolve_work_dir does — the run config sets
+    # base_work_dir (promoted to hpc.base_work_dir by the scanner), NOT
+    # paths.base_dir. Reading only paths.base_dir left base_dir empty, so the
+    # batch dir became "/<workflow_id>/..." and mkdir failed with permission
+    # denied at the filesystem root.
+    base_dir = (
+        config.get("paths", {}).get("base_dir")
+        or config.get("hpc", {}).get("base_work_dir")
+        or config.get("base_work_dir")
+        or "~/calculations"
+    )
     batch_dir = f"{base_dir}/{workflow_id}/batch_{first_task['task_type']}"
 
     # ── Phase 1: Generate inputs into numbered subdirectories ──
