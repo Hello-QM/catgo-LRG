@@ -1590,12 +1590,16 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
                     input={pb.input}
                     suggestions={pb.suggestions}
                     decisionReason={pb.decisionReason}
-                    onResolve={(approved, session) => {
-                      // "Allow for session": flip the session-scoped bypass so
-                      // subsequent mutating tools auto-approve (no re-prompt).
-                      if (session) slice.skip_permission.value = true
-                      pb.resolve?.(approved)
-                    }}
+                    onResolve={pb.resolve
+                      ? (approved, session) => {
+                        // Client-direct permissions are local promises. SDK
+                        // permissions have no pb.resolve and must use the
+                        // backend /api/agent/permission path inside
+                        // PermissionCard.
+                        if (session) slice.skip_permission.value = true
+                        pb.resolve?.(approved)
+                      }
+                      : undefined}
                   />
                 {/each}
                 <ThinkingSummary tools={slice.active_tool_blocks.entries}>

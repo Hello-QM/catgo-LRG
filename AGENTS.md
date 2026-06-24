@@ -46,3 +46,11 @@ each user's own memory, not here.
 ## Review gates (default human-in-the-loop)
 - Don't auto-submit a freshly built workflow/campaign; show inputs, confirm, then submit.
   Skip only on explicit user opt-in ("go as you set" / "yolo" / "always skip").
+
+## Agent Bridge Notes
+
+### [2026-06-24] SDK permission cards must resolve through backend
+**Category**: bug
+**Context**: CatBot Claude/SDK tool permission cards appeared allowed but the stream stayed stuck on Thinking.
+**Discovery**: Passing `onResolve` to SDK PermissionCards short-circuits `/api/agent/permission`; only client-direct entries have `pb.resolve`.
+**Solution/Note**: Pass `onResolve` only when `pb.resolve` exists; SDK permissions must use PermissionCard's backend `resolve_permission()` path.
