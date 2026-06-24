@@ -58,18 +58,39 @@ const HIDDEN_PARAM_KEYS = new Set([
   `frame_selection`,
 ])
 
-export function get_display_params(params: Record<string, unknown> | undefined): [string, unknown][] {
+/** Params relevant to display for a node: drops hidden keys, oversized values,
+ *  and (when node_type is given) params whose schema `show_if` doesn't match the
+ *  current params — e.g. a VASP-only `kpoints`/`ENCUT` baked into an MLP node by
+ *  default_params. Not sliced. */
+export function get_relevant_params(
+  params: Record<string, unknown> | undefined,
+  node_type?: string,
+): [string, unknown][] {
   if (!params) return []
+  const schema = (node_type ? NODE_DEFINITIONS[node_type]?.param_schema : undefined) ?? []
+  const hidden_by_software = new Set<string>()
+  for (const p of schema) {
+    if (!p.show_if) continue
+    const conds = Array.isArray(p.show_if) ? p.show_if : [p.show_if]
+    const visible = conds.every(c => c.values.map(v => String(v)).includes(String(params[c.key] ?? ``)))
+    if (!visible) hidden_by_software.add(p.key)
+  }
   return Object.entries(params)
-    .filter(([k, v]) => !HIDDEN_PARAM_KEYS.has(k) && String(v).length <= 80)
-    .slice(0, 3)
+    .filter(([k, v]) => !HIDDEN_PARAM_KEYS.has(k) && !hidden_by_software.has(k) && String(v).length <= 80)
+}
+
+export function get_display_params(
+  params: Record<string, unknown> | undefined,
+  node_type?: string,
+): [string, unknown][] {
+  return get_relevant_params(params, node_type).slice(0, 3)
 }
 
 // ─── Geometry helpers ───
 export function get_nh(node: WfNode): number {
   const cfg = NODE_DEFINITIONS[node.type]
   if (!cfg) return NH
-  const pc = get_display_params(node.params).length
+  const pc = get_display_params(node.params, node.type).length
   if (cfg.is_condition) return 95
   if (cfg.is_loop || cfg.is_merge) return 80
   return pc > 0 ? NH + Math.min(pc, 3) * 14 + 4 : NH
