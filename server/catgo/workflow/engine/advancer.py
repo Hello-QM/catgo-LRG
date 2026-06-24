@@ -194,6 +194,14 @@ def _generate_local_preview(db: WorkflowDB, task: dict, workflow_id: str) -> Non
     elif inputs.get("product_structure"):
         # Legacy fallback
         params["_resolved_product_structure"] = inputs["product_structure"]
+    elif task_type in ("neb", "ts_search"):
+        # NEB endpoints wired to the same `structure` port (two parents, e.g.
+        # reactant_opt + product_opt → neb) instead of structure/structure_product.
+        # Use the first structure as initial (already structure_str) and the
+        # second as the product endpoint. Mirrors orca._resolve_neb_product.
+        structs = inputs.get("structure")
+        if isinstance(structs, list) and len(structs) > 1:
+            params["_resolved_product_structure"] = structs[1]
 
     # Create local preview directory keyed on the bare graph node_id (not the
     # namespaced task id) so the path stays stable and matches submitter.py.

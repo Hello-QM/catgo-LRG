@@ -146,10 +146,22 @@ async def execute_local_node(
                     structures = [parent["structure"]]
                 if not structures and parent.get("structure_json"):
                     structures = [parent["structure_json"]]
+                # Always bridge a scalar structure_json (first structure) so a
+                # downstream single-structure consumer (e.g. geo_opt with only one
+                # iteration) can find an input. The _fan_out batch path uses the
+                # `structures` list; the single path uses structure_json. Without
+                # this, a loop over 1 structure produced only `structures` (which
+                # the single MLP consumer never reads) → "No input structure".
+                first_struct = structures[0] if structures else None
+                if isinstance(first_struct, dict):
+                    first_json = json.dumps(first_struct)
+                else:
+                    first_json = first_struct
                 step_results[step_id] = {
                     "structures": structures,
                     "_fan_out": True,
                     "n_iterations": len(structures),
+                    **({"structure_json": first_json} if first_json else {}),
                 }
             elif loop_type == "parameters":
                 step_results[step_id] = {
@@ -646,12 +658,17 @@ async def execute_local_node(
                         "label": labels[0] if labels else f"{host_element}->{dopant}",
                     }
                 else:
-                    # Multiple structures: set _fan_out for downstream batch/loop
+                    # Multiple structures: set _fan_out for downstream batch/loop.
+                    # Also bridge a scalar structure_json (first config) so a
+                    # single-structure downstream consumer still has an input.
+                    _first = structures[0] if structures else None
+                    _first_json = json.dumps(_first) if isinstance(_first, dict) else _first
                     step_results[step_id] = {
                         "structures": structures,
                         "labels": labels,
                         "_fan_out": True,
                         "n_configs": len(structures),
+                        **({"structure_json": _first_json} if _first_json else {}),
                     }
 
                 update_step(workflow_id, step_id, {
@@ -1066,3 +1083,9 @@ async def execute_local_node(
             "type": "step_status", "step_id": step_id,
             "status": "failed", "error": str(e),
         })
+        # Re-raise so the V2 task engine (scanner._execute_v1_local_task) marks
+        # the task FAILED too. Without this the exception is swallowed here and
+        # the V2 task is marked COMPLETED with no result — a silent false pass
+        # (e.g. doping_gen API error reported as "completed", downstream then
+        # dies with "No input structure"). Mirrors the mlp.py re-raise fix.
+        raise

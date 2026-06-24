@@ -29,6 +29,7 @@
   import NEBPathPlot from './NEBPathPlot.svelte'
   import { lazy_load_plotly, base_layout, base_config } from './plotly-utils'
   import { pending_open_structure } from './workflow-state.svelte'
+  import { NODE_DEFINITIONS } from './node-definitions'
   import type { TaskRef } from '$lib/api/task-adapter'
   import * as adapter from '$lib/api/task-adapter'
   import { normalize_status, is_valid_task_id } from '$lib/api/task-adapter'
@@ -260,10 +261,37 @@
     'GGA', 'METAGGA', 'LASPH', 'LORBIT', 'NEDOS', 'EMIN', 'EMAX',
   ])
 
+  // Params whose node-def `show_if` does NOT match the current params (e.g. a
+  // VASP-only `kpoints`/`ENCUT` on an MLP node) are baked in by default_params
+  // but irrelevant to the chosen software, so hide them from the readout. Keys
+  // not present in the schema (custom params) are always kept.
+  // Keys whose node-def show_if fails for the given params (e.g. VASP-only
+  // kpoints/ENCUT on an MLP node). Shared by the params readout and the
+  // pending-review gate so both hide the same irrelevant params.
+  function compute_hidden_param_keys(
+    node_type: string,
+    node_params: Record<string, unknown>,
+  ): Set<string> {
+    const schema = NODE_DEFINITIONS[node_type]?.param_schema ?? []
+    const hidden = new Set<string>()
+    for (const param of schema) {
+      if (!param.show_if) continue
+      const conditions = Array.isArray(param.show_if) ? param.show_if : [param.show_if]
+      const visible = conditions.every(cond =>
+        cond.values.map(v => String(v)).includes(String(node_params[cond.key] ?? ``)))
+      if (!visible) hidden.add(param.key)
+    }
+    return hidden
+  }
+
+  const _irrelevant_param_keys = $derived.by(() =>
+    compute_hidden_param_keys(effective_node_type, effective_node_params))
+
   const vasp_param_entries = $derived.by(() => {
     const entries: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(effective_node_params)) {
       if (k === 'structure' || k === 'structure_json') continue
+      if (_irrelevant_param_keys.has(k)) continue
       if (VASP_KEYS.has(k.toUpperCase())) entries[k] = v
     }
     return entries
@@ -273,6 +301,7 @@
     const entries: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(effective_node_params)) {
       if (k === 'structure' || k === 'structure_json') continue
+      if (_irrelevant_param_keys.has(k)) continue
       if (!VASP_KEYS.has(k.toUpperCase())) entries[k] = v
     }
     return entries
@@ -1029,9 +1058,10 @@
             try { return JSON.parse(engine_task.params_json) }
             catch { return {} }
           })()}
+          {@const review_hidden = compute_hidden_param_keys(effective_node_type, params)}
           <div style="font-size:11px;color:#aaa;">
             {#each Object.entries(params) as [key, value]}
-              {#if key !== 'structure' && key !== 'structure_json'}
+              {#if key !== 'structure' && key !== 'structure_json' && !review_hidden.has(key)}
                 <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
                   <span>{key}:</span>
                   <span style="color:#fff;font-weight:500;">

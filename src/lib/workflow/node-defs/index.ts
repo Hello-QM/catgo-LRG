@@ -59,6 +59,10 @@ export const NODE_TYPE_MIGRATION: Record<string, { type: string; defaults: Recor
 
   sella_ts:     { type: `ts_search`,    defaults: { software: `sella` } },
   orca_neb_ts:  { type: `ts_search`,    defaults: { software: `orca` } },
+  // Backend recipes / engine emit a raw `neb` node; the frontend models NEB as
+  // the TS Search calc node (software=MLP NEB / ORCA NEB-TS), so migrate it so
+  // those workflows render instead of showing edges into an unrendered node.
+  neb:          { type: `ts_search`,    defaults: { software: `mlp` } },
 
   orca_irc:     { type: `irc`,          defaults: { software: `orca` } },
 }

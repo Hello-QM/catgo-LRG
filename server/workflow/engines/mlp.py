@@ -582,6 +582,14 @@ async def execute_mlp_local(
             if parent_result.get("structure"):
                 input_structure_str = parent_result["structure"]
                 break
+            # Fan-out parent (loop / doping_gen / batch_slab_gen) that produced
+            # only a `structures` list and no scalar: fall back to the first
+            # structure so a single-structure step still runs instead of raising.
+            structs = parent_result.get("structures")
+            if structs:
+                first = structs[0]
+                input_structure_str = json.dumps(first) if isinstance(first, dict) else first
+                break
         if not input_structure_str:
             config_str = params.get("structure_json") or params.get("poscar")
             if config_str:

@@ -57,7 +57,7 @@
   import {
     type WfNode, type WfEdge,
     NW, NH, GRID, HANDLE_R, MM_W, MM_H,
-    snap, uid, get_display_params, get_nh, get_handle_pos,
+    snap, uid, get_display_params, get_relevant_params, get_nh, get_handle_pos,
     bezier, point_on_bezier,
     dist_to_edge as _dist_to_edge,
     has_cycle as _has_cycle,
@@ -2587,12 +2587,14 @@
                 {#if formula_sub}
                   <text x={NW / 2} y={44} fill="var(--text-color-dim, #8a9aba)" font-size="10" text-anchor="middle" class="mono" font-style="italic">{node_formula}</text>
                 {/if}
-                {#each get_display_params(node.params) as [k, v], i}
+                {@const shown_params = get_display_params(node.params, node.type)}
+                {@const relevant_count = get_relevant_params(node.params, node.type).length}
+                {#each shown_params as [k, v], i}
                   {@const ptext = `${k}=${String(v)}`}
                   <text x={NW / 2} y={44 + y_offset + i * 14} fill="var(--text-color-dim, #5a7a9a)" font-size="9.5" text-anchor="middle" class="mono">{ptext.length > 32 ? ptext.slice(0, 30) + `\u2026` : ptext}</text>
                 {/each}
-                {#if Object.keys(node.params || {}).length > get_display_params(node.params).length}
-                  <text x={NW / 2} y={44 + y_offset + get_display_params(node.params).length * 14} fill="var(--text-color-dim, #3a5a7a)" font-size="9" text-anchor="middle" class="mono">{t('workflow.we_more_params', { n: Object.keys(node.params).length - get_display_params(node.params).length }) || `+${Object.keys(node.params).length - get_display_params(node.params).length} more`}</text>
+                {#if relevant_count > shown_params.length}
+                  <text x={NW / 2} y={44 + y_offset + shown_params.length * 14} fill="var(--text-color-dim, #3a5a7a)" font-size="9" text-anchor="middle" class="mono">{t('workflow.we_more_params', { n: relevant_count - shown_params.length }) || `+${relevant_count - shown_params.length} more`}</text>
                 {/if}
               {/if}
               {#each { length: Math.max(inputs.length, 1) } as _, i}

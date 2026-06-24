@@ -30,18 +30,22 @@ __all__ = [
 # Node types that produce VASP calculations
 VASP_CALC_NODES = {
     "vasp_relax", "vasp_static", "vasp_md", "bulk_opt", "slab_relax",
-    "frequency", "electronic", "reference_mol", "slow_growth",
+    "frequency", "electronic", "reference_mol", "slow_growth", "neb",
 }
 
 # Unified node types (software chosen by params.software)
-UNIFIED_CALC_NODES = {"geo_opt", "single_point", "cell_opt", "md", "md_minimize", "freq", "ts_search", "irc", "uvvis"}
+UNIFIED_CALC_NODES = {"geo_opt", "single_point", "cell_opt", "md", "md_minimize", "freq", "ts_search", "irc", "uvvis", "neb"}
 
 # Node types that are handled locally (no HPC submission)
 LOCAL_NODES = {
     "structure_input", "structure_list_input", "slab_gen", "adsorbate_place",
     "batch_adsorbate_place",
     "condition", "loop", "merge",
-    "free_energy", "gibbs_energy",
+    # NOTE: free_energy is routed via ANALYSIS_NODES (its handler lives in
+    # workflow.engines.analysis.execute_analysis_node, not local.py). Keeping it
+    # out of LOCAL_NODES avoids the no-op path that marked it COMPLETED with no
+    # result (which silently broke every recipe ending in free_energy).
+    "gibbs_energy",
     # export_data is handled by workflow.engines.local (node_type=="export_data")
     # but was missing from this set, so it routed to "unknown".
     "export_data",
@@ -55,7 +59,7 @@ LOCAL_NODES = {
 }
 
 # Node types that use ML potentials (submitted as HPC jobs too)
-MLP_NODES = {"mlp_relax", "mlp_md"}
+MLP_NODES = {"mlp_relax", "mlp_md", "mlp_single_point", "mlp_vibrations", "mlp_neb"}
 
 # Node types that use xTB (semi-empirical, submitted as HPC jobs)
 XTB_NODES = {"xtb_relax", "xtb_static"}
@@ -113,6 +117,13 @@ ANALYSIS_NODES = {
     # here, so the scanner routed them to "unknown" and templates using them
     # could not run.
     "convergence_check", "energy_compare", "pick_best", "her_analysis",
+    # free_energy builds the reaction free-energy diagram from upstream
+    # freq/energy results; its handler is in execute_analysis_node. It used to
+    # sit in LOCAL_NODES (→ no-op COMPLETED, empty result), breaking every
+    # recipe (HER/OER/ORR/NRR/CO2RR) whose final node is free_energy.
+    "free_energy",
+    # Generic passthrough for unmapped/blank analysis kinds (see _resolve_software).
+    "analysis_passthrough",
 }
 
 # HPC analysis nodes (currently empty — charge_analysis moved to ANALYSIS_NODES
@@ -153,6 +164,11 @@ def _resolve_software(node_type: str, params: dict[str, object]) -> tuple[str, s
         mapped = _ANALYSIS_TYPE_MAP.get(atype)
         if mapped:
             return mapped, ""
+        # Unmapped analysis kind (e.g. a teaching template with type="re-optimize"
+        # or a blank type) → generic passthrough that echoes upstream results,
+        # so the node completes locally with real data instead of falling through
+        # to the HPC submitter ("No HPC connection available").
+        return "analysis_passthrough", ""
 
     if node_type not in UNIFIED_CALC_NODES:
         return node_type, ""
@@ -180,8 +196,14 @@ def _resolve_software(node_type: str, params: dict[str, object]) -> tuple[str, s
         ("single_point", "cp2k"): "cp2k_static",
         ("single_point", "orca"): "orca_sp",
         ("single_point", "xtb"): "xtb_static",
+        ("single_point", "mlp"): "mlp_single_point",
+        ("freq", "mlp"): "mlp_vibrations",
+        ("neb", "vasp"): "neb",
+        ("neb", "mlp"): "mlp_neb",
+        ("ts_search", "mlp"): "mlp_neb",
         ("cell_opt", "vasp"): "bulk_opt",
         ("cell_opt", "cp2k"): "cp2k_cellopt",
+        ("cell_opt", "mlp"): "mlp_relax",
         ("md", "vasp"): "vasp_md",
         ("md", "cp2k"): "cp2k_md",
         ("md", "lammps"): "lammps_md",

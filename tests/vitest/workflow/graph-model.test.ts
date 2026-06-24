@@ -97,8 +97,10 @@ describe(`get_nh`, () => {
   })
 
   it(`increases height when node has display params`, () => {
-    // geo_opt with visible params like ENCUT
-    const node = make_node(`n1`, `geo_opt`, 0, 0, { ENCUT: 520, EDIFF: `1e-5`, ISIF: 3 })
+    // geo_opt with visible params like ENCUT. software=vasp so the VASP-only
+    // params pass the node-def show_if filter (get_display_params now hides
+    // params irrelevant to the chosen software, e.g. ENCUT on an MLP node).
+    const node = make_node(`n1`, `geo_opt`, 0, 0, { software: `vasp`, ENCUT: 520, EDIFF: `1e-5`, ISIF: 3 })
     const h = get_nh(node)
     expect(h).toBeGreaterThan(NH)
   })
