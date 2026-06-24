@@ -141,7 +141,7 @@ The extension includes the full single-window viewer and editing tools. It does 
 
 The iOS app uses a purpose-built mobile interface rather than a compressed desktop layout. SSH/SFTP runs through an on-device native Rust transport and does not require the desktop Python sidecar. Complex workflow editing and full post-processing are still best handled on desktop.
 
-The iOS build has been verified on a physical device. Installation channels and public-release availability should follow the project's latest release notes; developers can also build and sign it with Xcode using the [iOS build guide](deploy/ios/README.md).
+The iOS build has been verified on a physical device. You can join the public **TestFlight beta** at [testflight.apple.com/join/FdHup5Hz](https://testflight.apple.com/join/FdHup5Hz). Other installation channels and public-release availability should follow the project's latest release notes; developers can also build and sign it with Xcode using the [iOS build guide](deploy/ios/README.md).
 
 ### E. Android: experimental mobile app
 
@@ -323,10 +323,18 @@ If CatGo contributes to a publication, cite the ChemRxiv preprint:
   doi       = {10.26434/chemrxiv.15002984/v1},
   url       = {https://doi.org/10.26434/chemrxiv.15002984/v1},
   publisher = {ChemRxiv},
-  note      = {Preprint}
+  note      = {Preprint},
 }
 ```
 
 For the software release, see [`citation.cff`](citation.cff) and the Zenodo archive [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425). CatGo is licensed under [GNU AGPL-3.0-or-later](license).
+
+---
+
+## Community
+
+Scan to join the CatGo QQ group:
+
+<img src="static/qr-qq-group.jpg" alt="CatGo QQ group QR code" width="200">
 
 ---

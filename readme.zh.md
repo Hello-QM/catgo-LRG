@@ -140,7 +140,7 @@ CatGo 有三个适合日常使用的成熟入口：桌面版、Web 版和 VS Cod
 
 iOS 使用专门设计的移动界面，而不是简单缩小桌面窗口。SSH/SFTP 由设备上的原生 Rust 通道处理，不依赖桌面端 Python sidecar。复杂的工作流编辑和完整后处理仍建议在桌面端完成。
 
-当前 iOS 构建已经通过真机运行验证。安装渠道与公开发布状态以项目最新发布说明为准；开发者也可以按照 [iOS 构建指南](deploy/ios/README.md) 使用 Xcode 构建和签名。
+当前 iOS 构建已经通过真机运行验证。可通过 **TestFlight 公测**加入：[testflight.apple.com/join/FdHup5Hz](https://testflight.apple.com/join/FdHup5Hz)。其他安装渠道与公开发布状态以项目最新发布说明为准；开发者也可以按照 [iOS 构建指南](deploy/ios/README.md) 使用 Xcode 构建和签名。
 
 ### E. Android：实验性移动端
 
@@ -324,10 +324,18 @@ CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [Ma
   doi       = {10.26434/chemrxiv.15002984/v1},
   url       = {https://doi.org/10.26434/chemrxiv.15002984/v1},
   publisher = {ChemRxiv},
-  note      = {Preprint}
+  note      = {Preprint},
 }
 ```
 
 软件版本的引用信息见 [`citation.cff`](citation.cff) 和 Zenodo 存档 [10.5281/zenodo.19709425](https://doi.org/10.5281/zenodo.19709425)。项目采用 [GNU AGPL-3.0-or-later](license)。
+
+---
+
+## 社区
+
+扫码加入 CatGo QQ 群：
+
+<img src="static/qr-qq-group.jpg" alt="CatGo QQ 群二维码" width="200">
 
 ---
