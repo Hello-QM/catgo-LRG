@@ -1,6 +1,6 @@
 import { query, listSessions as sdkListSessions } from '@anthropic-ai/claude-agent-sdk'
 import { execSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { AgentAdapter } from '../adapter.js'
@@ -31,6 +31,9 @@ import type { AgentEvent, PermissionRequest, SessionInfo, StreamParams } from '.
 // ---------------------------------------------------------------------------
 
 let _claudePath: string | null | undefined
+let _claudeEnvLoaded = false
+
+type ClaudeEnvMap = Record<string, string>
 
 // Given any resolved `claude` path (possibly an npm `.cmd`/`.ps1`/sh shim),
 // prefer the real vendored native binary the shim ultimately execs.
@@ -104,6 +107,57 @@ function resolveClaudeExecutable(): string | undefined {
 
   _claudePath = null
   return undefined
+}
+
+function readJsonEnv(file: string): ClaudeEnvMap {
+  if (!existsSync(file)) return {}
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const env = (parsed as { env?: unknown }).env
+    if (!env || typeof env !== 'object' || Array.isArray(env)) return {}
+    const out: ClaudeEnvMap = {}
+    for (const [key, value] of Object.entries(env)) {
+      if (!key || typeof value !== 'string') continue
+      out[key] = value
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+export function read_claude_settings_env(home: string = homedir()): ClaudeEnvMap {
+  return {
+    ...readJsonEnv(join(home, '.claude', 'settings.json')),
+    ...readJsonEnv(join(home, '.claude', 'settings.local.json')),
+  }
+}
+
+export function apply_claude_settings_env(
+  target: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string[] {
+  const env = read_claude_settings_env(home)
+  const applied: string[] = []
+  for (const [key, value] of Object.entries(env)) {
+    // Keep explicit system/user environment variables authoritative. The
+    // settings.json fallback only fills gaps for desktop sidecars launched
+    // outside an interactive shell.
+    if (target[key]) continue
+    target[key] = value
+    applied.push(key)
+  }
+  return applied
+}
+
+function ensureClaudeSettingsEnv(): void {
+  if (_claudeEnvLoaded) return
+  _claudeEnvLoaded = true
+  const applied = apply_claude_settings_env()
+  if (applied.length > 0) {
+    console.info(`[agent-bridge] loaded Claude settings env: ${applied.join(', ')}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +397,7 @@ export function createClaudeAdapter(): AgentAdapter {
         }
       }
 
+      ensureClaudeSettingsEnv()
       const claudeExe = resolveClaudeExecutable()
 
       const q = query({

@@ -49,6 +49,12 @@ each user's own memory, not here.
 
 ## Agent Bridge Notes
 
+### [2026-06-23] Claude settings env fallback
+**Category**: bug
+**Context**: Desktop CatBot Claude Code provider returned blank replies when users configured proxy env only in `~/.claude/settings.json`.
+**Discovery**: The sidecar disabled Claude global setting sources and inherited only OS env, so `ANTHROPIC_BASE_URL` / auth env in Claude settings were invisible.
+**Solution/Note**: Claude adapter now loads only the `env` map from `settings.json` / `settings.local.json` as fallback, without enabling global MCP/settings loading.
+
 ### [2026-06-24] SDK permission cards must resolve through backend
 **Category**: bug
 **Context**: CatBot Claude/SDK tool permission cards appeared allowed but the stream stayed stuck on Thinking.
