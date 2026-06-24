@@ -267,8 +267,57 @@ catgo --help
 ## 安装与开始
 
 - **最快体验**：打开 [Web 版](https://app.catgo-ucsd.org)，直接查看、编辑、搭建和导出结构。
-- **完整功能**：从 [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases) 安装 Windows、macOS 或 Linux 版本。发布安装包已经捆绑后端和 Agent bridge，普通用户无需另装 Python 或 Node.js。
+- **完整功能**：从下表下载预编译安装包。发布安装包已经捆绑后端和 Agent bridge，普通用户无需另装 Python 或 Node.js。
 - **编辑器内使用**：在 VS Code 扩展市场搜索 **CatGo**。
+
+### 下载
+
+下表所有链接都指向**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest)。在发布页选择对应平台的文件（见 **文件** 列）。历史版本与校验和见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
+
+| 系统 | 获取最新版 | 发布页上的文件 |
+| --- | --- | --- |
+| **Windows** | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
+| **macOS**（Apple Silicon） | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg` |
+| **Linux** | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm` |
+| **Android** | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk` |
+| **iOS** | [TestFlight 公测](https://testflight.apple.com/join/FdHup5Hz) | 或发布页的 `CatGo-v<ver>-ios-arm64.ipa` |
+| **VS Code** | 在扩展市场搜索 **CatGo** | 或发布页的 `catgo-<ver>.vsix` |
+| **Web**（免安装） | [app.catgo-ucsd.org](https://app.catgo-ucsd.org) | — |
+
+### 推荐：用 AI 编码 Agent 从源码构建
+
+想要最新版和完全可控，可以让 CLI 编码 Agent 帮你安装并部署 CatGo —— 它会处理依赖、Rust/WASM 构建并启动整个栈：
+
+1. 安装一个 CLI 编码 Agent：[Codex CLI](https://github.com/openai/codex) 或 [Claude Code](https://www.anthropic.com/claude-code)。
+2. 在一个空目录里打开它，运行 **`/goal`** 命令并粘贴下面的 prompt。
+
+<details>
+<summary><b>/goal prompt —— 复制粘贴</b></summary>
+
+```text
+Install and deploy CatGo from source on this machine, end to end, and leave it running.
+
+1. Prerequisites: detect the OS, then install whatever is missing — git, Node.js 20+, pnpm,
+   Python 3.11 (prefer a fresh conda or uv environment), the stable Rust toolchain, and
+   wasm-pack. Use the system package manager / conda / rustup as appropriate; do not assume
+   anything is preinstalled.
+2. Source: clone https://github.com/Hello-QM/catgo-LRG.git and cd into it.
+3. Python backend: create and activate a Python 3.11 environment named `catgo`, then
+   `pip install -r server/requirements.txt`.
+4. Frontend + native: run `pnpm install`, then `pnpm build:wasm` to build the Rust/WASM
+   modules (ferrox, chgdiff, catrender).
+5. Run: `pnpm desktop:serve` to start the frontend, Python backend, and agent bridge together.
+   If it launches the wrong Python, re-activate the `catgo` env or set PYTHON to its absolute path.
+6. Verify: confirm the backend /health endpoint responds and the frontend loads in a browser,
+   then print the local URL.
+
+Rules: explain each step before running it; stop and ask me before any credential prompt or
+destructive action; never overwrite an existing `catgo` environment without confirming. Fix
+errors as they come up (missing build deps, wrong interpreter, WASM build failures) until the
+app is actually serving.
+```
+
+</details>
 
 ### 从源码运行（开发者）
 

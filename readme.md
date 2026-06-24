@@ -266,8 +266,57 @@ Feature availability depends on the CatGo edition, installed optional dependenci
 ## Install and start
 
 - **Fastest trial:** open the [Web app](https://app.catgo-ucsd.org) to view, edit, build, and export structures.
-- **Complete experience:** install a Windows, macOS, or Linux build from [GitHub Releases](https://github.com/Hello-QM/catgo-LRG/releases). Release installers bundle the backend and agent bridge; end users do not need a separate Python or Node.js installation.
+- **Complete experience:** install a prebuilt build from the table below. Release installers bundle the backend and agent bridge; end users do not need a separate Python or Node.js installation.
 - **Inside your editor:** search for **CatGo** in the VS Code Extensions marketplace.
+
+### Download
+
+Every link points at the **latest release**, so it stays current as new versions ship — current version: [![Latest release](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest). On the release page, pick the file for your platform (shown in the **File** column). For older versions and checksums, see [all Releases](https://github.com/Hello-QM/catgo-LRG/releases).
+
+| System | Get the latest | File on the release page |
+| --- | --- | --- |
+| **Windows** | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` or `CatGo_<ver>_x64_en-US.msi` |
+| **macOS** (Apple Silicon) | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg` |
+| **Linux** | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` or `CatGo-<ver>-1.x86_64.rpm` |
+| **Android** | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk` |
+| **iOS** | [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz) | or `CatGo-v<ver>-ios-arm64.ipa` on the release page |
+| **VS Code** | Search **CatGo** in Extensions | or `catgo-<ver>.vsix` on the release page |
+| **Web** (no install) | [app.catgo-ucsd.org](https://app.catgo-ucsd.org) | — |
+
+### Recommended: build from source with an AI coding agent
+
+For the most up-to-date build and full control, let a CLI coding agent install and deploy CatGo for you — it handles prerequisites, the Rust/WASM build, and starting the stack:
+
+1. Install a CLI coding agent: [Codex CLI](https://github.com/openai/codex) or [Claude Code](https://www.anthropic.com/claude-code).
+2. Open it in an empty working directory and run its **`/goal`** command with the prompt below.
+
+<details>
+<summary><b>/goal prompt — copy &amp; paste</b></summary>
+
+```text
+Install and deploy CatGo from source on this machine, end to end, and leave it running.
+
+1. Prerequisites: detect the OS, then install whatever is missing — git, Node.js 20+, pnpm,
+   Python 3.11 (prefer a fresh conda or uv environment), the stable Rust toolchain, and
+   wasm-pack. Use the system package manager / conda / rustup as appropriate; do not assume
+   anything is preinstalled.
+2. Source: clone https://github.com/Hello-QM/catgo-LRG.git and cd into it.
+3. Python backend: create and activate a Python 3.11 environment named `catgo`, then
+   `pip install -r server/requirements.txt`.
+4. Frontend + native: run `pnpm install`, then `pnpm build:wasm` to build the Rust/WASM
+   modules (ferrox, chgdiff, catrender).
+5. Run: `pnpm desktop:serve` to start the frontend, Python backend, and agent bridge together.
+   If it launches the wrong Python, re-activate the `catgo` env or set PYTHON to its absolute path.
+6. Verify: confirm the backend /health endpoint responds and the frontend loads in a browser,
+   then print the local URL.
+
+Rules: explain each step before running it; stop and ask me before any credential prompt or
+destructive action; never overwrite an existing `catgo` environment without confirming. Fix
+errors as they come up (missing build deps, wrong interpreter, WASM build failures) until the
+app is actually serving.
+```
+
+</details>
 
 ### Run from source (developers)
 
