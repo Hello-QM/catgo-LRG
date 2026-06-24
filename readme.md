@@ -25,6 +25,8 @@ CatGo brings the everyday tools of computational materials science into one work
 
 It is designed for researchers who currently move between a structure builder, terminal, SSH/SFTP client, scheduler commands, log files, and plotting scripts. CatGo does not replace scientific judgment or provide licensed simulation codes and compute resources; it helps you prepare, inspect, run, and organize work in the environments you already use.
 
+> CatGo draws on **[MatterViz](https://github.com/janosh/matterviz)** by [Janosh Riebesell](https://github.com/janosh): the 3D structure viewer, periodic table, and several core UI components originate from MatterViz, though they have been substantially modified in CatGo. On top of that foundation, CatGo adds the catalysis pipeline, workflow engine, HPC integration, CatBot, and plugin system. We are deeply grateful for the original work.
+
 ## What CatGo brings together
 
 | Research task                       | What you can do                                                                                                                                                                                     |
@@ -358,7 +360,7 @@ Contributions can be research pain points, example structures, workflows, screen
 
 ## Acknowledgements, citation, and license
 
-CatGo's structure viewer, periodic table, and parts of its core UI originate from and were inspired by [MatterViz](https://github.com/janosh/matterviz). CatGo extends that foundation with computational workflows, HPC integration, CatBot, catalysis analysis, and cross-platform applications.
+CatGo's structure viewer, periodic table, and parts of its core UI originate from and were inspired by [MatterViz](https://github.com/janosh/matterviz) by [Janosh Riebesell](https://github.com/janosh) — including the 3D structure viewer, periodic-table widgets, element data, color schemes, and several UI patterns. CatGo has reworked many of them significantly, but the foundation remains MatterViz, and we are deeply grateful for the original work. On top of it CatGo adds computational workflows, HPC integration, CatBot, catalysis analysis, and cross-platform applications.
 
 **CatRender** is CatGo's Rust/WASM molecular SVG renderer. It is implemented as a fidelity-oriented port of [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender), whose lineage includes [xyz2svg](https://github.com/briling/xyz2svg), with CatGo-specific interactive controls and export integration.
 

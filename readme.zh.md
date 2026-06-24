@@ -25,6 +25,8 @@ CatGo 将计算材料研究中的常用工具整合进同一个工作空间：�
 
 它面向那些经常在结构搭建软件、终端、SSH/SFTP 客户端、调度器命令、计算日志和绘图脚本之间切换的研究者。CatGo 不替代科学判断，也不提供商业计算软件许可证或计算资源；它帮助你在已有环境中准备、检查、运行和管理计算任务。
 
+> CatGo 借鉴了 **[MatterViz](https://github.com/janosh/matterviz)**（作者 [Janosh Riebesell](https://github.com/janosh)）：3D 结构查看器、元素周期表以及大量核心 UI 组件都源自 MatterViz，CatGo 在此基础上做了大量修改。在此之上 CatGo 新增了催化计算管线、工作流引擎、超算集成、CatBot 与插件系统。在此向 MatterViz 致以最深的谢意。
+
 ## CatGo 把哪些工作放到了一起
 
 | 研究任务             | 可以完成的工作                                                               |
@@ -359,7 +361,7 @@ pnpm desktop:serve
 
 ## 致谢、引用与许可证
 
-CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [MatterViz](https://github.com/janosh/matterviz) 启发；CatGo 在此基础上扩展了计算工作流、HPC、CatBot、催化分析与跨平台应用。
+CatGo 的结构查看器、元素周期表和部分核心 UI 源自并受到 [MatterViz](https://github.com/janosh/matterviz)（作者 [Janosh Riebesell](https://github.com/janosh)）的启发 —— 包括 3D 结构查看器、元素周期表组件、元素数据、配色方案以及大量 UI 模式。CatGo 在此基础上做了大量修改，但根基仍来自 MatterViz，在此向原作者致以最深的谢意。在此之上 CatGo 扩展了计算工作流、HPC、CatBot、催化分析与跨平台应用。
 
 **CatRender** 是 CatGo 的 Rust/WASM 分子 SVG 渲染器。它以忠实复现为目标移植自 [aligfellow/xyzrender](https://github.com/aligfellow/xyzrender)；后者的技术脉络还包括 [xyz2svg](https://github.com/briling/xyz2svg)。CatRender 在此基础上增加了 CatGo 的交互控制和导出集成。
 
