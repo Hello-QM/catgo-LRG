@@ -29,6 +29,7 @@
   import NEBPathPlot from './NEBPathPlot.svelte'
   import { lazy_load_plotly, base_layout, base_config } from './plotly-utils'
   import { pending_open_structure } from './workflow-state.svelte'
+  import { NODE_DEFINITIONS } from './node-definitions'
   import type { TaskRef } from '$lib/api/task-adapter'
   import * as adapter from '$lib/api/task-adapter'
   import { normalize_status, is_valid_task_id } from '$lib/api/task-adapter'
@@ -260,10 +261,30 @@
     'GGA', 'METAGGA', 'LASPH', 'LORBIT', 'NEDOS', 'EMIN', 'EMAX',
   ])
 
+  // Params whose node-def `show_if` does NOT match the current params (e.g. a
+  // VASP-only `kpoints`/`ENCUT` on an MLP node) are baked in by default_params
+  // but irrelevant to the chosen software, so hide them from the readout. Keys
+  // not present in the schema (custom params) are always kept.
+  const _irrelevant_param_keys = $derived.by(() => {
+    const schema = NODE_DEFINITIONS[effective_node_type]?.param_schema ?? []
+    const hidden = new Set<string>()
+    for (const param of schema) {
+      if (!param.show_if) continue
+      const conditions = Array.isArray(param.show_if) ? param.show_if : [param.show_if]
+      const visible = conditions.every(cond => {
+        const val = effective_node_params[cond.key]
+        return cond.values.map(v => String(v)).includes(String(val ?? ``))
+      })
+      if (!visible) hidden.add(param.key)
+    }
+    return hidden
+  })
+
   const vasp_param_entries = $derived.by(() => {
     const entries: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(effective_node_params)) {
       if (k === 'structure' || k === 'structure_json') continue
+      if (_irrelevant_param_keys.has(k)) continue
       if (VASP_KEYS.has(k.toUpperCase())) entries[k] = v
     }
     return entries
@@ -273,6 +294,7 @@
     const entries: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(effective_node_params)) {
       if (k === 'structure' || k === 'structure_json') continue
+      if (_irrelevant_param_keys.has(k)) continue
       if (!VASP_KEYS.has(k.toUpperCase())) entries[k] = v
     }
     return entries
