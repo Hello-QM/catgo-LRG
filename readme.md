@@ -5,7 +5,7 @@
 # CatGo: an AI workbench for computational materials science
 
 <p align="center">
-  <a href="readme_new.zh.md">简体中文</a>
+  <a href="readme.zh.md">简体中文</a>
   ·
   <a href="https://app.catgo-ucsd.org">Try Online</a>
   ·
@@ -275,15 +275,15 @@ Feature availability depends on the CatGo edition, installed optional dependenci
 
 Every link points at the **latest release**, so it stays current as new versions ship — current version: [![Latest release](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest). On the release page, pick the file for your platform (shown in the **File** column). For older versions and checksums, see [all Releases](https://github.com/Hello-QM/catgo-LRG/releases).
 
-| System | Get the latest | File on the release page |
-| --- | --- | --- |
-| **Windows** | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` or `CatGo_<ver>_x64_en-US.msi` |
-| **macOS** (Apple Silicon) | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg` |
-| **Linux** | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` or `CatGo-<ver>-1.x86_64.rpm` |
-| **Android** | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk` |
-| **iOS** | [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz) | or `CatGo-v<ver>-ios-arm64.ipa` on the release page |
-| **VS Code** | Search **CatGo** in Extensions | or `catgo-<ver>.vsix` on the release page |
-| **Web** (no install) | [app.catgo-ucsd.org](https://app.catgo-ucsd.org) | — |
+| System                    | Get the latest                                                      | File on the release page                                   |
+| ------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **Windows**               | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` or `CatGo_<ver>_x64_en-US.msi` |
+| **macOS** (Apple Silicon) | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg`                                  |
+| **Linux**                 | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` or `CatGo-<ver>-1.x86_64.rpm`      |
+| **Android**               | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk`                       |
+| **iOS**                   | [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)       | or `CatGo-v<ver>-ios-arm64.ipa` on the release page        |
+| **VS Code**               | Search **CatGo** in Extensions                                      | or `catgo-<ver>.vsix` on the release page                  |
+| **Web** (no install)      | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)                    | —                                                          |
 
 ### Recommended: build from source with an AI coding agent
 
@@ -293,7 +293,7 @@ For the most up-to-date build and full control, let a CLI coding agent install a
 2. Open it in an empty working directory and run its **`/goal`** command with the prompt below.
 
 <details>
-<summary><b>/goal prompt — copy &amp; paste</b></summary>
+<summary><b>/goal prompt — copy & paste</b></summary>
 
 ```text
 Install and deploy CatGo from source on this machine, end to end, and leave it running.

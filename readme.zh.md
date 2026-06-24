@@ -5,7 +5,7 @@
 # CatGo：AI 驱动的计算材料科学工作台
 
 <p align="center">
-  <a href="readme_new.md">English</a>
+  <a href="readme.md">English</a>
   ·
   <a href="https://app.catgo-ucsd.org">在线体验</a>
   ·
@@ -276,15 +276,15 @@ catgo --help
 
 下表所有链接都指向**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest)。在发布页选择对应平台的文件（见 **文件** 列）。历史版本与校验和见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
 
-| 系统 | 获取最新版 | 发布页上的文件 |
-| --- | --- | --- |
-| **Windows** | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
-| **macOS**（Apple Silicon） | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg` |
-| **Linux** | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm` |
-| **Android** | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk` |
-| **iOS** | [TestFlight 公测](https://testflight.apple.com/join/FdHup5Hz) | 或发布页的 `CatGo-v<ver>-ios-arm64.ipa` |
-| **VS Code** | 在扩展市场搜索 **CatGo** | 或发布页的 `catgo-<ver>.vsix` |
-| **Web**（免安装） | [app.catgo-ucsd.org](https://app.catgo-ucsd.org) | — |
+| 系统                       | 获取最新版                                                         | 发布页上的文件                                                   |
+| ------------------------ | ------------------------------------------------------------- | --------------------------------------------------------- |
+| **Windows**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
+| **macOS**（Apple Silicon） | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_aarch64.dmg`                                 |
+| **Linux**                | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_amd64.deb` 或 `CatGo-<ver>-1.x86_64.rpm`      |
+| **Android**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo-v<ver>-android-universal.apk`                      |
+| **iOS**                  | [TestFlight 公测](https://testflight.apple.com/join/FdHup5Hz)   | 或发布页的 `CatGo-v<ver>-ios-arm64.ipa`                        |
+| **VS Code**              | 在扩展市场搜索 **CatGo**                                             | 或发布页的 `catgo-<ver>.vsix`                                  |
+| **Web**（免安装）             | [app.catgo-ucsd.org](https://app.catgo-ucsd.org)              | —                                                         |
 
 ### 推荐：用 AI 编码 Agent 从源码构建
 
