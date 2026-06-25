@@ -414,3 +414,72 @@ def combinatorial_substitution(req: SubstitutionRequest):
         labels.append(f"[{i+1}] " + " + ".join(label_parts))
 
     return BuildResult(structures=results, labels=labels, count=len(results))
+
+
+class NanoparticleRequest(BaseModel):
+    """Build a finite metal nanoparticle / cluster via ase.cluster."""
+
+    element: str
+    shape: str = "wulff"             # wulff | octahedron | icosahedron | decahedron
+    structure: str = "fcc"           # lattice for wulff: fcc | bcc | sc | hcp
+    size: int = 100                  # target atom count (wulff)
+    surfaces: Optional[list[list[int]]] = None   # wulff Miller facets
+    energies: Optional[list[float]] = None        # wulff per-facet surface energies
+    rounding: str = "closest"        # closest | above | below
+    length: int = 5                  # octahedron edge length
+    cutoff: int = 0                  # octahedron truncation
+    shells: int = 3                  # icosahedron shells
+    p: int = 3                       # decahedron p
+    q: int = 3                       # decahedron q
+    r: int = 0                       # decahedron r
+    lattice_constant: float = 0.0    # 0 = ASE default
+    vacuum: float = 10.0             # vacuum padding (Å)
+
+
+@router.post("/nanoparticle")
+def build_nanoparticle_route(req: NanoparticleRequest):
+    """Build a nanoparticle and return it as a single structure (+ metadata).
+
+    Wraps :func:`catgo.models.nanoparticle.build_nanoparticle`. The same route
+    backs the CLI (``catgo nanoparticle``), the in-app builder pane, and the
+    ``catgo_nanoparticle`` MCP tool.
+    """
+    from catgo.models.nanoparticle import (
+        NanoparticleParams,
+        build_nanoparticle,
+    )
+
+    kw: dict = {
+        "element": req.element,
+        "shape": req.shape,
+        "structure": req.structure,
+        "size": req.size,
+        "rounding": req.rounding,
+        "length": req.length,
+        "cutoff": req.cutoff,
+        "shells": req.shells,
+        "p": req.p,
+        "q": req.q,
+        "r": req.r,
+        "lattice_constant": req.lattice_constant,
+        "vacuum": req.vacuum,
+    }
+    if req.surfaces is not None:
+        kw["surfaces"] = [tuple(s) for s in req.surfaces]
+    if req.energies is not None:
+        kw["energies"] = list(req.energies)
+
+    try:
+        new = build_nanoparticle(NanoparticleParams(**kw))
+    except (ValueError, ImportError) as exc:
+        raise HTTPException(400, f"Nanoparticle build failed: {exc}")
+
+    return {
+        "structure": new.as_dict(),
+        "n_atoms": new.num_sites,
+        "formula": new.composition.reduced_formula,
+        "message": (
+            f"Nanoparticle {req.element} ({req.shape}) "
+            f"-> {new.num_sites} atoms"
+        ),
+    }

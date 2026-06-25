@@ -63,6 +63,60 @@ def _parse_assignment(spec: str | None) -> dict:
     return out
 
 
+def _parse_surfaces(raw: str) -> list:
+    """'111;100;1,1,-1' -> [(1,1,1),(1,0,0),(1,1,-1)]."""
+    out = []
+    for tok in (raw or "").split(";"):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "," in tok:
+            idx = tuple(int(x) for x in tok.split(","))
+        else:  # compact '111' / '1-10' style: each char a digit (no negatives)
+            idx = tuple(int(c) for c in tok)
+        if len(idx) != 3:
+            raise OpError(f"surface '{tok}' must have 3 Miller indices")
+        out.append(idx)
+    return out
+
+
+def nanoparticle(session, params: dict) -> OpResult:
+    # Builds FROM SCRATCH — no active structure required.
+    from catgo.models.nanoparticle import NanoparticleParams, build_nanoparticle
+
+    element = (params.get("element") or "").strip()
+    if not element:
+        raise OpError("nanoparticle requires --element")
+
+    kw: dict = {"element": element, "shape": params.get("shape", "wulff")}
+    if params.get("structure"):
+        kw["structure"] = params["structure"]
+    for key in ("size", "length", "cutoff", "shells", "p", "q", "r"):
+        if params.get(key) is not None:
+            kw[key] = int(params[key])
+    if params.get("lattice") is not None:
+        kw["lattice_constant"] = float(params["lattice"])
+    if params.get("vacuum") is not None:
+        kw["vacuum"] = float(params["vacuum"])
+    if params.get("rounding"):
+        kw["rounding"] = params["rounding"]
+    if params.get("surfaces"):
+        kw["surfaces"] = _parse_surfaces(params["surfaces"])
+    if params.get("energies"):
+        kw["energies"] = [float(x) for x in str(params["energies"]).split(",") if x]
+
+    try:
+        new = build_nanoparticle(NanoparticleParams(**kw))
+    except (ValueError, ImportError) as exc:
+        raise OpError(f"nanoparticle build failed: {exc}") from exc
+
+    return OpResult(
+        ok=True,
+        message=f"nanoparticle {element} {kw['shape']} -> {new.num_sites} atoms",
+        structure=new,
+    )
+
+
 def reticular(session, params: dict) -> OpResult:
     # Builds FROM SCRATCH — no active structure required.
     mode = params.get("mode", "preset")

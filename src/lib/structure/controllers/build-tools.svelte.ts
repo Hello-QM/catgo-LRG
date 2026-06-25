@@ -18,7 +18,7 @@
 
 import type { AnyStructure, Vec3 } from '$lib'
 import type { PymatgenStructure } from '$lib/structure'
-type BuildTab = 'lattice' | 'slab_cutter' | 'adsorption' | 'adsorbate' | 'water_layer' | 'pseudo_h' | 'moire' | 'nanotube' | 'nanoscroll' | 'heterostructure' | 'doping' | 'pathway' | 'reticular'
+type BuildTab = 'lattice' | 'slab_cutter' | 'adsorption' | 'adsorbate' | 'water_layer' | 'pseudo_h' | 'moire' | 'nanotube' | 'nanoparticle' | 'nanoscroll' | 'heterostructure' | 'doping' | 'pathway' | 'reticular'
 import type { AtomVisibility, SlabPreviewStructure } from '../miller-slab'
 import type { AdsorptionSite } from '../ferrox-wasm-types'
 import { matrix_inverse_3x3 } from '$lib/math'
