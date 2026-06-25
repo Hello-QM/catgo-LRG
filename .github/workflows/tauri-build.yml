@@ -196,13 +196,13 @@ jobs:
           #   APPLE_CERTIFICATE_PASSWORD .p12 password
           #   APPLE_SIGNING_IDENTITY     "Developer ID Application: NAME (TEAMID)"
           #   APPLE_ID / APPLE_PASSWORD  Apple ID + app-specific password
-          #   APPLE_TEAM_ID              10-char team id
+          #   APPLE_DEVELOPMENT_TEAM     10-char team id (same secret iOS uses)
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
