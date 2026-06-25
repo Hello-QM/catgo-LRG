@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-06-25
+
+### Added
+- **`catgo view` / `catgo gui` CLI** — open structure & trajectory files like `ase gui`. `catgo view */POSCAR` stacks single-frame files into one trajectory (natural-sorted); per-file `filename@SLICE` and global `-n/--image-number` frame selection; `--interpolate N` between two endpoints (IDPP, linear fallback); headless `-g/--graph` + `-t/--terminal` per-frame convergence dump/plot. Reuses the existing viewer push channel.
+- **Nanoparticle / cluster builder** — finite metal clusters via `ase.cluster` (Wulff equilibrium shape, octahedron, icosahedron, decahedron), centred in a vacuum box. Exposed in the Build panel, the CLI (`catgo nanoparticle`), and the `catgo_nanoparticle` MCP tool — all backed by one `/api/build/nanoparticle` route.
+- **Random concentration-based doping** — randomly substitute N of a host element with a dopant mix at random sites, with optional seed and dedup.
+- **Web "Get the App" download flow** — the static web build surfaces an OS-picker download (Windows/macOS/Linux/Android via the GitHub releases API, iOS via TestFlight) inline at the "desktop required" notice and as a persistent badge, instead of a raw GitHub URL.
+
+### Fixed
+- **`catgo view` works after a packaged install** — the frozen `catgo-server` now dispatches `view`/`gui`/`nanoparticle` subcommands; the server records `~/.catgo/server.port` so the CLI attaches to the running app backend on any port; the Windows `-setup.exe` installer puts a `catgo` CLI shim on PATH; and `catgo view` with no app open launches the desktop app.
+
 ## [1.3.2] - 2026-06-21
 
 ### Added

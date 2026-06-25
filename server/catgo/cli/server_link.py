@@ -54,7 +54,17 @@ class ServerLink:
             if base.endswith("/api"):
                 base = base[: -len("/api")]
             return cls(base_url=base) if _ping(f"{base}/health") else None
-        for port in (8000, 33413):
+        # The desktop app's sidecar can bind a non-default / auto-assigned port,
+        # which it records in ~/.catgo/server.port. Try that first so the CLI
+        # attaches to the running app backend, then fall back to well-known ports.
+        candidates: list[int] = []
+        try:
+            from pathlib import Path
+            port_txt = (Path.home() / ".catgo" / "server.port").read_text().strip()
+            candidates.append(int(port_txt))
+        except (OSError, ValueError):
+            pass
+        for port in candidates + [8000, 33413]:
             url = f"http://localhost:{port}"
             if _ping(f"{url}/health"):
                 return cls(base_url=url)

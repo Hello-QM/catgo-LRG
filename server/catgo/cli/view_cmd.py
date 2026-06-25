@@ -305,6 +305,49 @@ def _is_local(base_url: str) -> bool:
     return "localhost" in base_url or "127.0.0.1" in base_url
 
 
+def _find_gui_app() -> "Path | None":
+    """Locate the installed CatGo desktop GUI executable.
+
+    Only meaningful in a packaged build: the frozen ``catgo-server`` backend
+    sits next to the GUI binary (``CatGo.exe`` / ``CatGo`` / the .app's MacOS
+    dir). Returns None for a dev / pip install (no bundled GUI to launch).
+    """
+    if not getattr(sys, "frozen", False):
+        return None
+    exe = Path(sys.executable)
+    me = exe.name.lower()
+    for name in ("CatGo.exe", "CatGo", "catgo.exe", "catgo"):
+        cand = exe.parent / name
+        if cand.exists() and cand.name.lower() != me:
+            return cand
+    # macOS .app: backend in CatGo.app/Contents/MacOS next to the GUI binary,
+    # or one level up in the bundle.
+    for up in (exe.parent, exe.parent.parent):
+        for name in ("CatGo", "catgo"):
+            cand = up / name
+            if cand.exists() and cand.is_file() and cand.name.lower() != me:
+                return cand
+    return None
+
+
+def _wait_for_backend(timeout: float = 40.0):
+    """Poll ServerLink.discover() until a backend answers, or timeout → None."""
+    import time
+
+    from catgo.cli.server_link import ServerLink
+
+    delay = 0.3
+    waited = 0.0
+    while waited < timeout:
+        link = ServerLink.discover()
+        if link is not None:
+            return link
+        time.sleep(delay)
+        waited += delay
+        delay = min(delay * 1.5, 2.0)
+    return None
+
+
 def cmd_view(args) -> int:
     from catgo.cli.adapter import OpError
     from catgo.cli.server_link import ServerLink
@@ -369,9 +412,12 @@ def cmd_view(args) -> int:
             print(f"wrote {out}")
         return 0
 
-    # Discover a running server; otherwise auto-start the backend daemon.
+    # Discover a running server; otherwise bring one up. Prefer launching the
+    # full desktop app (so the structure shows in the real GUI) when packaged;
+    # fall back to a headless backend + browser for a dev / pip install.
     link = ServerLink.discover()
-    started = False
+    started_headless = False
+    launched_gui = False
     if link is None:
         if getattr(args, "no_autostart", False):
             print(
@@ -380,14 +426,32 @@ def cmd_view(args) -> int:
                 file=sys.stderr,
             )
             return 2
-        try:
-            from catgo.cli._autostart import spawn_daemon_and_wait
+        gui = _find_gui_app()
+        if gui is not None:
+            import subprocess
+            try:
+                subprocess.Popen([str(gui)], start_new_session=True)
+            except OSError as exc:
+                print(f"error: failed to launch CatGo: {exc}", file=sys.stderr)
+                return 2
+            print("Launching CatGo…")
+            link = _wait_for_backend()
+            launched_gui = True
+            if link is None:
+                print(
+                    "error: launched CatGo but its backend didn't come up in time",
+                    file=sys.stderr,
+                )
+                return 2
+        else:
+            try:
+                from catgo.cli._autostart import spawn_daemon_and_wait
 
-            link = spawn_daemon_and_wait()
-            started = True
-        except OpError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
+                link = spawn_daemon_and_wait()
+                started_headless = True
+            except OpError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
 
     panel = getattr(args, "panel", "") or None
 
@@ -415,11 +479,13 @@ def cmd_view(args) -> int:
             except OSError:
                 pass
 
-    # If we just started the backend there is no window yet — open the served
-    # web UI (the prebuilt SPA at the server root) so the push is actually seen.
-    if started and _is_local(link.base_url):
+    # Headless backend we spawned → no window; open the served web UI so the
+    # push is visible. GUI we launched → it IS the window, don't open a browser.
+    if started_headless and _is_local(link.base_url):
         webbrowser.open(link.base_url + "/")
         print(f"opened {summary} -> {link.base_url}/")
+    elif launched_gui:
+        print(f"launched CatGo — opened {summary}")
     else:
         print(f"opened {summary} -> CatGo viewer ({link.base_url})")
     return 0

@@ -189,6 +189,20 @@ jobs:
           # which GitHub runners lack → "failed to run linuxdeploy". Make all
           # AppImage tooling extract-and-run instead of FUSE-mounting.
           APPIMAGE_EXTRACT_AND_RUN: 1
+          # macOS code-signing + notarization. tauri-action signs & notarizes the
+          # .app/.dmg only when these are set; if the secrets are absent the build
+          # still succeeds (unsigned). Add them in repo Settings → Secrets:
+          #   APPLE_CERTIFICATE          base64 of the Developer ID .p12
+          #   APPLE_CERTIFICATE_PASSWORD .p12 password
+          #   APPLE_SIGNING_IDENTITY     "Developer ID Application: NAME (TEAMID)"
+          #   APPLE_ID / APPLE_PASSWORD  Apple ID + app-specific password
+          #   APPLE_TEAM_ID              10-char team id
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
@@ -203,9 +217,12 @@ jobs:
             - **Linux** — `.deb` (and `.rpm`)
 
             ### Installation
-            - **Windows** — run the `.msi` installer
+            - **Windows** — run the **`-setup.exe`** installer (recommended; it puts the `catgo` CLI on your PATH so `catgo view` works). The `.msi` installs the app but not the CLI.
+              - Unsigned this release: if Windows SmartScreen warns, click **More info → Run anyway**. (Code signing is coming in a later build.)
             - **macOS** — open the `.dmg` and drag CatGo to Applications
             - **Linux** — `sudo dpkg -i CatGo_*_amd64.deb` (or `sudo rpm -i`)
+            - **Android** — install `CatGo-v*-android-universal.apk`
+            - **iOS** — join the [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)
 
             ### Highlights
             - **Reads ~30 formats** — VASP, Quantum ESPRESSO, CP2K, ABACUS, ORCA, Gaussian, CASTEP, SIESTA, OpenMX, LAMMPS, ASE `.traj`, phonopy, HDF5, CIF, XYZ/extXYZ, mol2, PDB, cube/CHGCAR — inputs **and** outputs
@@ -216,7 +233,12 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
-            ### What's New
+            ### New in 1.4.0
+            - **`catgo view` / `catgo gui` CLI** — open structures & trajectories like `ase gui`: `catgo view */POSCAR` stacks files into one trajectory, per-file `@SLICE` frame selection, `--interpolate` (IDPP), and headless `-g/-t` convergence plots. On a packaged install, running `catgo view` with no app open **launches CatGo** and shows the structure.
+            - **Nanoparticle / cluster builder** — Wulff, octahedron, icosahedron, decahedron (via `ase.cluster`), in the Build panel, the CLI (`catgo nanoparticle`), and the `catgo_nanoparticle` MCP tool.
+            - **Random concentration doping** — substitute N of a host element with a dopant mix at random sites, with seed & dedup.
+            - **Web "Get the App"** — the browser build now surfaces a one-click download (Windows/macOS/Linux/Android + iOS TestFlight) instead of a bare GitHub link.
+
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
           prerelease: false
