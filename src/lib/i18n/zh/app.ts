@@ -192,5 +192,14 @@ const app: Record<string, string> = {
   open_mode_new: `新建`,
   open_mode_overwrite: `覆盖`,
   open_mode_hint: `按 Shift 临时翻转`,
+  // -- 桌面版下载弹窗 --
+  desktop_required_title: `获取 CatGo 桌面版`,
+  desktop_required_msg: `此功能需要本地后端，只有桌面版才提供。选择你的系统，下载最新版本。`,
+  desktop_download_for: `下载 {os} 版`,
+  desktop_fetching: `正在获取最新版本…`,
+  desktop_all_downloads: `全部下载 / 其他平台`,
+  desktop_download_btn: `下载桌面版`,
+  desktop_get_app: `下载客户端`,
+  desktop_ios_testflight: `加入 TestFlight 公测`,
 }
 export default app

@@ -192,5 +192,14 @@ const app: Record<string, string> = {
   open_mode_new: `New`,
   open_mode_overwrite: `Overwrite`,
   open_mode_hint: `Shift to flip`,
+  // -- Desktop-download modal --
+  desktop_required_title: `Get the CatGo desktop app`,
+  desktop_required_msg: `This feature needs the local backend, which only the desktop app provides. Pick your system and download the latest version.`,
+  desktop_download_for: `Download for {os}`,
+  desktop_fetching: `Finding latest release…`,
+  desktop_all_downloads: `All downloads / other platforms`,
+  desktop_download_btn: `Download desktop app`,
+  desktop_get_app: `Get the App`,
+  desktop_ios_testflight: `Join TestFlight beta`,
 }
 export default app
