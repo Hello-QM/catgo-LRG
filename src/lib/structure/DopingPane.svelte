@@ -93,7 +93,7 @@
   let rnd_input_style = $state<`count` | `percent`>(`count`)
   let rnd_n_samples = $state(10)
   let rnd_dedup = $state(true)
-  let rnd_seed = $state(``) // empty = fresh random each run
+  let rnd_seed = $state<number | null>(null) // null = fresh random each run
   let rnd_next_id = $state(1)
 
   // Candidate site pool for random mode (by host element or captured indices)
@@ -303,7 +303,7 @@
           .map((d) => ({ element: d.element, count: d.count })),
         n_samples: rnd_n_samples,
         deduplicate: rnd_dedup,
-        seed: rnd_seed.trim() === `` ? null : Number(rnd_seed),
+        seed: rnd_seed == null || Number.isNaN(rnd_seed) ? null : rnd_seed,
       }
       if (rnd_target_mode === `by_element`) params.host_element = rnd_host_element
       else params.target_indices = [...rnd_captured_indices]
