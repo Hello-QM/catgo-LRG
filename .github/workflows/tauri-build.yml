@@ -189,20 +189,14 @@ jobs:
           # which GitHub runners lack → "failed to run linuxdeploy". Make all
           # AppImage tooling extract-and-run instead of FUSE-mounting.
           APPIMAGE_EXTRACT_AND_RUN: 1
-          # macOS code-signing + notarization. tauri-action signs & notarizes the
-          # .app/.dmg only when these are set; if the secrets are absent the build
-          # still succeeds (unsigned). Add them in repo Settings → Secrets:
-          #   APPLE_CERTIFICATE          base64 of the Developer ID .p12
-          #   APPLE_CERTIFICATE_PASSWORD .p12 password
-          #   APPLE_SIGNING_IDENTITY     "Developer ID Application: NAME (TEAMID)"
-          #   APPLE_ID / APPLE_PASSWORD  Apple ID + app-specific password
-          #   APPLE_DEVELOPMENT_TEAM     10-char team id (same secret iOS uses)
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          # NOTE: macOS code-signing + notarization is intentionally NOT wired
+          # here yet. The repo's Apple credentials are App Store Connect API-key
+          # based (used by the iOS workflow: APPLE_API_KEY_ID / APPLE_API_ISSUER_ID
+          # / APPLE_API_KEY_P8); the Apple-ID + app-specific-password method this
+          # action's signing path expects isn't configured, so enabling it failed
+          # notarization (401). Ship unsigned this release (right-click → Open),
+          # and wire API-key notarization (write the .p8 to a file →
+          # APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_PATH) in a follow-up.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
@@ -219,7 +213,7 @@ jobs:
             ### Installation
             - **Windows** — run the **`-setup.exe`** installer (recommended; it puts the `catgo` CLI on your PATH so `catgo view` works). The `.msi` installs the app but not the CLI.
               - Unsigned this release: if Windows SmartScreen warns, click **More info → Run anyway**. (Code signing is coming in a later build.)
-            - **macOS** — open the `.dmg` and drag CatGo to Applications
+            - **macOS** — open the `.dmg` and drag CatGo to Applications. Unsigned this release: the first launch needs **right-click → Open → Open** (signing/notarization is coming next).
             - **Linux** — `sudo dpkg -i CatGo_*_amd64.deb` (or `sudo rpm -i`)
             - **Android** — install `CatGo-v*-android-universal.apk`
             - **iOS** — join the [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)
