@@ -2,7 +2,8 @@
   import type { PymatgenStructure } from '$lib/structure'
   import type { ElementSymbol } from '$lib'
   import { PeriodicTable } from '$lib/periodic-table'
-  import { combinatorial_substitution } from '$lib/api/build'
+  import { combinatorial_substitution, random_substitution } from '$lib/api/build'
+  import type { RandomSubstitutionParams } from '$lib/api/build'
   import type { TrajectoryType } from '$lib/trajectory'
   import { normalize_pymatgen_frame_structure } from '$lib/trajectory/parsers/json'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
@@ -34,6 +35,10 @@
 
   // --- Exported functions for PT panel interaction ---
   export function toggle_element(sym: string) {
+    if (pane_mode === `random`) {
+      toggle_random_dopant(sym)
+      return
+    }
     const g = groups[active_group_idx]
     if (!g) return
     if (g.replacement_elements.includes(sym)) {
@@ -45,6 +50,10 @@
   }
 
   export function add_element(sym: string) {
+    if (pane_mode === `random`) {
+      if (!rnd_dopants.some((d) => d.element === sym)) toggle_random_dopant(sym)
+      return
+    }
     const g = groups[active_group_idx]
     if (!g || g.replacement_elements.includes(sym)) return
     g.replacement_elements = [...g.replacement_elements, sym]
@@ -70,6 +79,92 @@
 
   // --- Generation settings ---
   let max_structures = $state(500)
+
+  // --- Pane mode: combinatorial product vs. concentration-based random doping ---
+  type PaneMode = `combinatorial` | `random`
+  let pane_mode = $state<PaneMode>(`combinatorial`)
+
+  // --- Random doping state ---
+  type RandomDopantRow = { id: number; element: string; count: number; percent: number }
+  let rnd_target_mode = $state<SelectionMode>(`by_element`)
+  let rnd_host_element = $state(``)
+  let rnd_captured_indices = $state<number[]>([])
+  let rnd_dopants = $state<RandomDopantRow[]>([])
+  let rnd_input_style = $state<`count` | `percent`>(`count`)
+  let rnd_n_samples = $state(10)
+  let rnd_dedup = $state(true)
+  let rnd_seed = $state<number | null>(null) // null = fresh random each run
+  let rnd_next_id = $state(1)
+
+  // Candidate site pool for random mode (by host element or captured indices)
+  let rnd_pool = $derived.by(() => {
+    if (!structure?.sites) return [] as number[]
+    if (rnd_target_mode === `by_element` && rnd_host_element) {
+      return structure.sites
+        .map((s, i) => (s.species[0]?.element === rnd_host_element ? i : -1))
+        .filter((i) => i >= 0)
+    }
+    return rnd_captured_indices
+  })
+  let rnd_pool_size = $derived(rnd_pool.length)
+  let rnd_total_replace = $derived(rnd_dopants.reduce((a, d) => a + (d.count || 0), 0))
+  let rnd_valid = $derived(
+    rnd_pool_size > 0 && rnd_total_replace > 0 && rnd_total_replace <= rnd_pool_size,
+  )
+
+  // Default the random host element to the first element present
+  $effect(() => {
+    if (structure_elements.length > 0 && !rnd_host_element) {
+      rnd_host_element = structure_elements[0]
+    }
+  })
+
+  // Keep count/percent columns consistent when the pool size changes (e.g. host
+  // element switched). The active input style is authoritative for re-derivation.
+  $effect(() => {
+    const size = rnd_pool_size
+    if (size <= 0) return
+    let changed = false
+    const next = rnd_dopants.map((d) => {
+      if (rnd_input_style === `percent`) {
+        const count = Math.round((d.percent / 100) * size)
+        if (count !== d.count) { changed = true; return { ...d, count } }
+      } else {
+        const percent = +((d.count / size) * 100).toFixed(1)
+        if (percent !== d.percent) { changed = true; return { ...d, percent } }
+      }
+      return d
+    })
+    if (changed) rnd_dopants = next
+  })
+
+  function toggle_random_dopant(sym: string) {
+    if (rnd_dopants.some((d) => d.element === sym)) {
+      rnd_dopants = rnd_dopants.filter((d) => d.element !== sym)
+    } else {
+      const percent = rnd_pool_size > 0 ? +((1 / rnd_pool_size) * 100).toFixed(1) : 0
+      rnd_dopants = [...rnd_dopants, { id: rnd_next_id++, element: sym, count: 1, percent }]
+    }
+  }
+
+  function set_dopant_count(id: number, value: number) {
+    const count = Math.max(0, Math.floor(value || 0))
+    rnd_dopants = rnd_dopants.map((d) =>
+      d.id === id
+        ? { ...d, count, percent: rnd_pool_size > 0 ? +((count / rnd_pool_size) * 100).toFixed(1) : 0 }
+        : d,
+    )
+  }
+
+  function set_dopant_percent(id: number, value: number) {
+    const percent = Math.max(0, value || 0)
+    const count = rnd_pool_size > 0 ? Math.round((percent / 100) * rnd_pool_size) : 0
+    rnd_dopants = rnd_dopants.map((d) => (d.id === id ? { ...d, percent, count } : d))
+  }
+
+  function remove_dopant(id: number) {
+    rnd_dopants = rnd_dopants.filter((d) => d.id !== id)
+  }
 
   // --- Status ---
   let status = $state<`idle` | `running` | `complete` | `error`>(`idle`)
@@ -100,6 +195,11 @@
 
   // Update PT state for parent split-view panel
   $effect(() => {
+    if (pane_mode === `random`) {
+      pt_highlight_symbols = rnd_dopants.map((d) => d.element)
+      pt_group_label = t('structure.random_dopants_label')
+      return
+    }
     const g = groups[active_group_idx]
     pt_highlight_symbols = g?.replacement_elements ?? []
     pt_group_label = t('structure.group_n', { n: active_group_idx + 1 })
@@ -185,6 +285,41 @@
     }
   }
 
+  // --- Generate (random concentration mode) ---
+  async function generate_random() {
+    if (!structure || !rnd_valid) {
+      error_message = t('structure.random_err_invalid')
+      return
+    }
+    on_push_undo?.()
+    status = `running`
+    error_message = null
+
+    try {
+      const params: RandomSubstitutionParams = {
+        structure: structure as unknown as Record<string, unknown>,
+        dopants: rnd_dopants
+          .filter((d) => d.count > 0)
+          .map((d) => ({ element: d.element, count: d.count })),
+        n_samples: rnd_n_samples,
+        deduplicate: rnd_dedup,
+        seed: rnd_seed == null || Number.isNaN(rnd_seed) ? null : rnd_seed,
+      }
+      if (rnd_target_mode === `by_element`) params.host_element = rnd_host_element
+      else params.target_indices = [...rnd_captured_indices]
+
+      const result = await random_substitution(params)
+      result_structures = result.structures
+      result_labels = result.labels
+      result_total = result.count
+      result_capped = false
+      status = `complete`
+    } catch (err) {
+      status = `error`
+      error_message = err instanceof Error ? err.message : String(err)
+    }
+  }
+
   function open_as_trajectory() {
     if (result_structures.length === 0) return
     // `combinatorial_substitution` returns raw `pymatgen.Structure.as_dict()`
@@ -220,12 +355,26 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="doping-pane">
   <div class="dp-title-row">
+    <div class="dp-mode-toggle">
+      <button
+        class="dp-mode-tab"
+        class:active={pane_mode === `combinatorial`}
+        onclick={() => (pane_mode = `combinatorial`)}
+      >{t('structure.mode_combinatorial')}</button>
+      <button
+        class="dp-mode-tab"
+        class:active={pane_mode === `random`}
+        onclick={() => (pane_mode = `random`)}
+      >{t('structure.mode_random')}</button>
+    </div>
     <button class="dp-help-btn" onclick={() => show_help = !show_help} title={t('structure.how_to_use')}>?</button>
   </div>
 
-  <!-- Inline periodic table -->
-  {#if groups[active_group_idx]}
-    {@const ag = groups[active_group_idx]}
+  <!-- Inline periodic table (shared by both modes) -->
+  {#if structure}
+    {@const pt_active = pane_mode === `random`
+      ? rnd_dopants.map((d) => d.element)
+      : (groups[active_group_idx]?.replacement_elements ?? [])}
     <div class="dp-pt-container" role="presentation" onclick={(event) => {
       const tile = (event.target as HTMLElement).closest(`.element-tile`)
       if (tile) {
@@ -236,7 +385,7 @@
     }}>
       <PeriodicTable
         active_element={null}
-        active_elements={ag.replacement_elements as ElementSymbol[]}
+        active_elements={pt_active as ElementSymbol[]}
         tile_props={{ show_symbol: true, show_number: false, show_name: false }}
         gap="0.5cqw"
         show_color_bar={false}
@@ -246,18 +395,28 @@
 
   {#if show_help}
     <div class="dp-help-box">
-      <strong>{t('structure.combinatorial_doping')}</strong>
-      <ol>
-        <li>{@html t('structure.doping_help_1')}</li>
-        <li>{@html t('structure.doping_help_2')}</li>
-        <li>{@html t('structure.doping_help_3')}</li>
-        <li>{@html t('structure.doping_help_4')}</li>
-      </ol>
+      {#if pane_mode === `random`}
+        <strong>{t('structure.mode_random')}</strong>
+        <ol>
+          <li>{@html t('structure.random_help_1')}</li>
+          <li>{@html t('structure.random_help_2')}</li>
+          <li>{@html t('structure.random_help_3')}</li>
+        </ol>
+      {:else}
+        <strong>{t('structure.combinatorial_doping')}</strong>
+        <ol>
+          <li>{@html t('structure.doping_help_1')}</li>
+          <li>{@html t('structure.doping_help_2')}</li>
+          <li>{@html t('structure.doping_help_3')}</li>
+          <li>{@html t('structure.doping_help_4')}</li>
+        </ol>
+      {/if}
       <button class="dp-help-close" onclick={() => show_help = false}>{t('structure.got_it')}</button>
     </div>
   {/if}
 
-  <!-- Groups -->
+  <!-- Groups (combinatorial mode) -->
+  {#if pane_mode === `combinatorial`}
   {#each groups as group, gi (group.id)}
     {@const targets = resolve_targets(group)}
     <section
@@ -344,9 +503,116 @@
   {/each}
 
   <button class="dp-add-group-btn" onclick={add_group}>{t('structure.add_group')}</button>
+  {/if}
+
+  <!-- Random concentration mode -->
+  {#if pane_mode === `random`}
+    <section class="dp-group active">
+      <!-- Host pool selection -->
+      <div class="dp-mode-row">
+        <label class="dp-radio">
+          <input
+            type="radio"
+            checked={rnd_target_mode === `by_element`}
+            onchange={() => (rnd_target_mode = `by_element`)}
+          />
+          {t('structure.by_element')}
+        </label>
+        <label class="dp-radio">
+          <input
+            type="radio"
+            checked={rnd_target_mode === `by_indices`}
+            onchange={() => (rnd_target_mode = `by_indices`)}
+          />
+          {t('structure.by_selection')}
+        </label>
+      </div>
+
+      {#if rnd_target_mode === `by_element`}
+        <select
+          class="dp-select"
+          value={rnd_host_element}
+          onchange={(e) => (rnd_host_element = e.currentTarget.value)}
+        >
+          {#each structure_elements as el}
+            <option value={el}>{el}</option>
+          {/each}
+        </select>
+        <div class="dp-hint">
+          {t('structure.random_pool', { n: rnd_pool_size, el: rnd_host_element })}
+        </div>
+      {:else}
+        {#if rnd_captured_indices.length > 0}
+          <div class="dp-hint">
+            {t('structure.n_captured', { n: rnd_captured_indices.length })} {rnd_captured_indices.slice(0, 8).join(`, `)}{rnd_captured_indices.length > 8 ? `...` : ``}
+          </div>
+          <button class="dp-capture-btn" onclick={() => (rnd_captured_indices = [])}>{t('common.clear')}</button>
+        {:else}
+          <div class="dp-hint">
+            {selected_sites.length > 0
+              ? `${t('structure.n_in_viewer', { n: selected_sites.length })} ${selected_sites.slice(0, 6).join(`, `)}${selected_sites.length > 6 ? `...` : ``}`
+              : t('structure.click_atoms_in_viewer')}
+          </div>
+          <button
+            class="dp-capture-btn"
+            disabled={selected_sites.length === 0}
+            onclick={() => (rnd_captured_indices = [...selected_sites])}
+          >{t('structure.capture_selection', { n: selected_sites.length })}</button>
+        {/if}
+      {/if}
+
+      <!-- Dopant rows: element + count/percent -->
+      <div class="dp-input-style-row">
+        <span class="dp-hint">{t('structure.amount_by')}</span>
+        <button class="dp-style-tab" class:active={rnd_input_style === `count`} onclick={() => (rnd_input_style = `count`)}>{t('structure.by_count')}</button>
+        <button class="dp-style-tab" class:active={rnd_input_style === `percent`} onclick={() => (rnd_input_style = `percent`)}>{t('structure.by_percent')}</button>
+      </div>
+
+      {#if rnd_dopants.length === 0}
+        <span class="dp-hint">{t('structure.random_pick_dopants')}</span>
+      {/if}
+      {#each rnd_dopants as d (d.id)}
+        <div class="dp-dopant-row">
+          <span class="dp-chip">{d.element}</span>
+          {#if rnd_input_style === `count`}
+            <input
+              type="number" class="dp-input-num" min={0} max={rnd_pool_size}
+              value={d.count}
+              oninput={(e) => set_dopant_count(d.id, e.currentTarget.valueAsNumber)}
+            />
+            <span class="dp-hint">{t('structure.atoms_unit')} ({rnd_pool_size > 0 ? d.percent : 0}%)</span>
+          {:else}
+            <input
+              type="number" class="dp-input-num" min={0} max={100} step={0.1}
+              value={d.percent}
+              oninput={(e) => set_dopant_percent(d.id, e.currentTarget.valueAsNumber)}
+            />
+            <span class="dp-hint">% (= {d.count} {t('structure.atoms_unit')})</span>
+          {/if}
+          <button class="dp-chip-x dp-dopant-remove" onclick={() => remove_dopant(d.id)}>&times;</button>
+        </div>
+      {/each}
+
+      <!-- Sample settings -->
+      <div class="dp-max-row">
+        <span class="dp-hint">{t('structure.random_n_samples')}</span>
+        <input type="number" class="dp-input-num" bind:value={rnd_n_samples} min={1} max={500} />
+      </div>
+      <div class="dp-max-row">
+        <label class="dp-radio">
+          <input type="checkbox" bind:checked={rnd_dedup} />
+          {t('structure.random_dedup')}
+        </label>
+      </div>
+      <div class="dp-max-row">
+        <span class="dp-hint">{t('structure.random_seed')}</span>
+        <input type="number" class="dp-input-num" bind:value={rnd_seed} placeholder={t('structure.random_seed_ph')} />
+      </div>
+    </section>
+  {/if}
 
   <!-- Preview -->
-  {#if combo_count > 0}
+  {#if pane_mode === `combinatorial` && combo_count > 0}
     <section class="dp-section">
       <h5 class="dp-label">{t('common.preview')}</h5>
       <div class="dp-preview">
@@ -363,6 +629,23 @@
     </section>
   {/if}
 
+  {#if pane_mode === `random` && rnd_total_replace > 0}
+    <section class="dp-section">
+      <h5 class="dp-label">{t('common.preview')}</h5>
+      <div class="dp-preview">
+        {@html t('structure.random_preview', {
+          replace: rnd_total_replace,
+          pool: rnd_pool_size,
+          remain: Math.max(0, rnd_pool_size - rnd_total_replace),
+          el: rnd_target_mode === `by_element` ? rnd_host_element : t('structure.random_pool_generic'),
+        })}
+      </div>
+      {#if rnd_total_replace > rnd_pool_size}
+        <div class="dp-warning">{t('structure.random_over_pool', { replace: rnd_total_replace, pool: rnd_pool_size })}</div>
+      {/if}
+    </section>
+  {/if}
+
   <!-- Actions -->
   <section class="dp-section">
     {#if error_message}
@@ -371,8 +654,8 @@
 
     <button
       class="dp-btn-generate"
-      onclick={generate}
-      disabled={status === `running` || valid_groups.length === 0}
+      onclick={pane_mode === `random` ? generate_random : generate}
+      disabled={status === `running` || (pane_mode === `random` ? !rnd_valid : valid_groups.length === 0)}
     >
       {status === `running` ? t('structure.generating') : t('structure.generate_structures')}
     </button>
@@ -401,6 +684,63 @@
     display: flex;
     align-items: center;
     gap: 6px;
+  }
+
+  /* ─── Mode toggle (Combinatorial / Random) ─── */
+  .dp-mode-toggle {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--input-bg, rgba(0, 0, 0, 0.15));
+  }
+  .dp-mode-tab {
+    padding: 3px 10px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--text-color-muted, #94a3b8);
+    font-size: 0.8em;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .dp-mode-tab.active {
+    background: var(--accent-color, #3b82f6);
+    color: white;
+  }
+
+  /* ─── Random mode: count/percent toggle + dopant rows ─── */
+  .dp-input-style-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .dp-style-tab {
+    padding: 2px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: none;
+    color: var(--text-color-muted, #94a3b8);
+    font-size: 0.75em;
+    cursor: pointer;
+  }
+  .dp-style-tab.active {
+    border-color: var(--accent-color, #3b82f6);
+    color: var(--accent-color, #3b82f6);
+  }
+  .dp-dopant-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dp-dopant-remove {
+    color: var(--text-color-dim, #64748b);
+    margin-left: auto;
+  }
+  .dp-dopant-remove:hover {
+    color: var(--error-color, #ef4444);
   }
 
   /* ─── Inline periodic table container ─── */
