@@ -94,6 +94,30 @@ class SubstitutionRequest(StructureInput):
     max_structures: int = 500  # Safety cap
 
 
+class RandomDopantModel(BaseModel):
+    """A dopant element and how many sites it should occupy."""
+
+    element: str
+    count: int = 0
+
+
+class RandomSubstitutionRequest(StructureInput):
+    """Random concentration-based substitution.
+
+    Picks a pool of candidate sites (by host element or explicit indices),
+    then randomly assigns the requested number of each dopant to distinct
+    sites. Generates up to ``n_samples`` independent random arrangements.
+    """
+
+    host_element: Optional[str] = None
+    target_indices: Optional[list[int]] = None
+    dopants: list[RandomDopantModel]
+    n_samples: int = 10
+    deduplicate: bool = True
+    seed: Optional[int] = None
+    max_structures: int = 500  # Safety cap
+
+
 class BuildResult(BaseModel):
     structures: list[dict]  # List of pymatgen Structure.as_dict()
     labels: list[str]  # Description labels for each structure
@@ -412,5 +436,91 @@ def combinatorial_substitution(req: SubstitutionRequest):
             label_parts.append(f"{element}({len(group.target_indices)} sites)")
         results.append(s.as_dict())
         labels.append(f"[{i+1}] " + " + ".join(label_parts))
+
+    return BuildResult(structures=results, labels=labels, count=len(results))
+
+
+@router.post("/random-substitution", response_model=BuildResult)
+def random_substitution(req: RandomSubstitutionRequest):
+    """Randomly substitute a fixed count of each dopant into a host pool.
+
+    Example: replace 8 of 25 Mo atoms with 5 Nb + 3 Ta at random positions,
+    generating up to ``n_samples`` distinct random arrangements.
+    """
+    import random as _random
+
+    structure = _parse_structure(req.structure)
+
+    # Resolve the candidate site pool: explicit indices win over host element.
+    if req.target_indices:
+        invalid = [i for i in req.target_indices if i < 0 or i >= len(structure)]
+        if invalid:
+            raise HTTPException(
+                400,
+                f"Invalid site indices: {invalid} "
+                f"(structure has {len(structure)} atoms)",
+            )
+        pool = list(dict.fromkeys(req.target_indices))  # de-dup, keep order
+    elif req.host_element:
+        pool = [
+            i
+            for i, site in enumerate(structure)
+            if str(site.specie) == req.host_element
+            or (hasattr(site.specie, "element") and str(site.specie.element) == req.host_element)
+            or (hasattr(site.specie, "symbol") and site.specie.symbol == req.host_element)
+        ]
+        if not pool:
+            raise HTTPException(400, f"No {req.host_element} atoms found in structure")
+    else:
+        raise HTTPException(400, "Either host_element or target_indices must be provided")
+
+    # Validate dopant counts.
+    dopants = [(d.element, int(d.count)) for d in req.dopants if int(d.count) > 0]
+    if not dopants:
+        raise HTTPException(400, "At least one dopant with count > 0 is required")
+    total_replace = sum(c for _, c in dopants)
+    if total_replace > len(pool):
+        raise HTTPException(
+            400,
+            f"Requested {total_replace} substitutions but the pool only has "
+            f"{len(pool)} sites",
+        )
+
+    n_samples = max(1, min(req.n_samples, req.max_structures))
+    rng = _random.Random(req.seed)
+
+    results: list[dict] = []
+    labels: list[str] = []
+    seen: set[tuple] = set()
+    dopant_summary = " + ".join(f"{el}×{c}" for el, c in dopants)
+
+    # Draw enough attempts to reach n_samples unique arrangements; cap attempts
+    # so a tiny pool (few possible arrangements) can't spin forever.
+    max_attempts = n_samples * 50 if req.deduplicate else n_samples
+    attempts = 0
+    while len(results) < n_samples and attempts < max_attempts:
+        attempts += 1
+        chosen = rng.sample(pool, total_replace)
+        assignment: list[tuple[int, str]] = []
+        cursor = 0
+        for el, c in dopants:
+            for site_idx in chosen[cursor : cursor + c]:
+                assignment.append((site_idx, el))
+            cursor += c
+
+        if req.deduplicate:
+            key = tuple(sorted(assignment))
+            if key in seen:
+                continue
+            seen.add(key)
+
+        s = structure.copy()
+        for site_idx, el in assignment:
+            s.replace(site_idx, el)
+        results.append(s.as_dict())
+        labels.append(f"[{len(results)}] random: {dopant_summary}")
+
+    if not results:
+        raise HTTPException(400, "Failed to generate any substitution samples")
 
     return BuildResult(structures=results, labels=labels, count=len(results))
