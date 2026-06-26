@@ -32,7 +32,7 @@
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
   import DesktopDownloadModal from '$lib/DesktopDownloadModal.svelte'
-  import GetAppButton from '$lib/GetAppButton.svelte'
+  import { desktop_download } from '$lib/desktop-download.svelte'
   import { show_toast } from '$lib/toast-state.svelte'
   import TabBar from './TabBar.svelte'
   import Sidebar from './Sidebar.svelte'
@@ -2487,6 +2487,23 @@
                 >
                   Dr. Wanlu Li @UCSD
                 </a>
+                {#if STATIC_ONLY}
+                  <!-- Landing-only "Get the App" pill — same mode as the GitHub
+                       star above (absolutely-positioned in the landing block,
+                       bottom-right), not a fixed badge floating over the editor. -->
+                  <button
+                    class="get-app-pill"
+                    onclick={() => desktop_download.open()}
+                    title={t('app.desktop_get_app')}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                      <polyline points="7 10 12 15 17 10" />
+                      <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    <span>{t('app.desktop_get_app')}</span>
+                  </button>
+                {/if}
                 <div class="samples-grid">
                   {#each sample_structures as sample}
                     <button
@@ -2910,7 +2927,6 @@
 
 <Toast />
 <DownloadManager />
-<GetAppButton />
 <DesktopDownloadModal />
 
 <style>
@@ -3720,6 +3736,41 @@
     background: var(--surface-bg-hover, rgba(255, 255, 255, 0.1));
     border-color: var(--accent-color, cornflowerblue);
     transform: translateY(-1px);
+  }
+
+  /* Same mode as .github-star / .lab-link: an absolutely-positioned pill in the
+     landing corner (bottom-right) — not a fixed badge over the editor. */
+  .get-app-pill {
+    position: absolute;
+    bottom: 14px;
+    right: 16px;
+    z-index: 5;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    text-decoration: none;
+    color: var(--text-color-muted, #9ca3af);
+    background: var(--surface-bg, rgba(255, 255, 255, 0.05));
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+    border-radius: 8px;
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s, border-color 0.15s, transform 0.15s;
+  }
+
+  .get-app-pill:hover {
+    color: var(--text-color, #f3f4f6);
+    background: var(--surface-bg-hover, rgba(255, 255, 255, 0.1));
+    border-color: var(--accent-color, cornflowerblue);
+    transform: translateY(-1px);
+  }
+
+  .get-app-pill svg {
+    flex-shrink: 0;
+    color: var(--accent-color, cornflowerblue);
   }
 
   .loading {
