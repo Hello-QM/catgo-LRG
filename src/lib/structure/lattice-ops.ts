@@ -884,3 +884,80 @@ export function wrap_molecule_in_box(
     sites: new_sites,
   }
 }
+
+/**
+ * Wrap a molecule in a user-specified periodic lattice while preserving its
+ * Cartesian geometry. The molecule is translated so its Cartesian centroid
+ * sits at the center of the new cell, and each site's fractional coordinates
+ * are recomputed from the shifted Cartesian coordinates.
+ */
+export function wrap_molecule_with_lattice_params(
+  molecule: PymatgenMolecule,
+  params: LatticeParams,
+): PymatgenStructure {
+  const matrix = params_to_matrix(params)
+  const extracted = matrix_to_params(matrix)
+
+  const [va, vb, vc] = matrix
+  const volume = Math.abs(
+    va[0] * (vb[1] * vc[2] - vb[2] * vc[1]) -
+    va[1] * (vb[0] * vc[2] - vb[2] * vc[0]) +
+    va[2] * (vb[0] * vc[1] - vb[1] * vc[0]),
+  )
+
+  const lattice = {
+    matrix,
+    a: extracted.a,
+    b: extracted.b,
+    c: extracted.c,
+    alpha: extracted.alpha,
+    beta: extracted.beta,
+    gamma: extracted.gamma,
+    volume,
+    pbc: [true, true, true] as [boolean, boolean, boolean],
+  }
+
+  const sites = molecule.sites ?? []
+  if (sites.length === 0) {
+    return {
+      ...molecule,
+      lattice,
+      sites: [],
+    }
+  }
+
+  let cx = 0, cy = 0, cz = 0
+  const coords = sites.map((site) => {
+    const xyz = site.xyz ?? site.abc ?? [0, 0, 0]
+    cx += xyz[0]; cy += xyz[1]; cz += xyz[2]
+    return xyz as Vec3
+  })
+  cx /= sites.length; cy /= sites.length; cz /= sites.length
+
+  const cell_center = fractional_to_cartesian([0.5, 0.5, 0.5], matrix)
+  const shift: Vec3 = [
+    cell_center[0] - cx,
+    cell_center[1] - cy,
+    cell_center[2] - cz,
+  ]
+
+  const new_sites = sites.map((site, idx) => {
+    const xyz = coords[idx]
+    const new_xyz: Vec3 = [
+      xyz[0] + shift[0],
+      xyz[1] + shift[1],
+      xyz[2] + shift[2],
+    ]
+    return {
+      ...site,
+      xyz: new_xyz,
+      abc: cartesian_to_fractional(new_xyz, matrix),
+    }
+  })
+
+  return {
+    ...molecule,
+    lattice,
+    sites: new_sites,
+  }
+}

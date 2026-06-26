@@ -5,9 +5,9 @@
     add_vacuum_layer,
     apply_transform_matrix,
     matrix_to_params,
-    params_to_matrix,
     reorient_lattice,
     update_lattice_params,
+    wrap_molecule_with_lattice_params,
     type LatticeParams
   } from './lattice-ops'
   import { create_supercell_matrix, wasm_reorient_lattice, is_ok } from './ferrox-wasm'
@@ -317,44 +317,7 @@
   function create_lattice() {
     if (!structure?.sites) return
     on_push_undo?.()
-    const matrix = params_to_matrix(new_lattice_params)
-
-    // Compute molecule center to recenter into the new cell
-    let cx = 0, cy = 0, cz = 0
-    for (const site of structure.sites) {
-      const xyz = site.xyz ?? site.abc ?? [0, 0, 0]
-      cx += xyz[0]; cy += xyz[1]; cz += xyz[2]
-    }
-    const n = structure.sites.length
-    cx /= n; cy /= n; cz /= n
-
-    // Cell center in Cartesian
-    const cell_cx = (matrix[0][0] + matrix[1][0] + matrix[2][0]) / 2
-    const cell_cy = (matrix[0][1] + matrix[1][1] + matrix[2][1]) / 2
-    const cell_cz = (matrix[0][2] + matrix[1][2] + matrix[2][2]) / 2
-
-    // Shift = cell_center - molecule_center
-    const dx = cell_cx - cx, dy = cell_cy - cy, dz = cell_cz - cz
-
-    const new_sites = structure.sites.map((site) => {
-      const xyz = site.xyz ?? site.abc ?? [0, 0, 0]
-      const new_xyz: Vec3 = [xyz[0] + dx, xyz[1] + dy, xyz[2] + dz]
-      return { ...site, xyz: new_xyz, abc: new_xyz }
-    })
-
-    const lattice = {
-      matrix,
-      a: new_lattice_params.a,
-      b: new_lattice_params.b,
-      c: new_lattice_params.c,
-      alpha: new_lattice_params.alpha,
-      beta: new_lattice_params.beta,
-      gamma: new_lattice_params.gamma,
-      volume: new_lattice_params.a * new_lattice_params.b * new_lattice_params.c,
-      pbc: [true, true, true] as [boolean, boolean, boolean],
-    }
-
-    const new_structure = { ...structure, lattice, sites: new_sites } as PymatgenStructure
+    const new_structure = wrap_molecule_with_lattice_params(structure, new_lattice_params)
     structure = new_structure
     on_structure_change?.(new_structure)
     center_camera_trigger++
