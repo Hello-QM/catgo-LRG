@@ -587,10 +587,22 @@ async def read_many_file_content(request: FileReadManyRequest) -> FileReadManyRe
                     "printf '0\\n{m}_CONTENT_{i}\\n\\n{m}_END_{i}\\n'; "
                     "fi".format(m=marker, i=idx, p=safe, n=max_bytes)
                 )
-            result = await hpc.conn.run(" ; ".join(parts), check=False)
+            # encoding=None -> asyncssh returns raw bytes instead of UTF-8-decoding
+            # the channel. A dotfile with non-UTF-8 bytes (e.g. a binary .pid /
+            # VESTA lock / a .bak) otherwise makes asyncssh fail to decode the
+            # channel and DISCONNECT the whole SSH connection mid-read - which
+            # surfaced as "session expired" the instant a home with such a file
+            # was browsed. Decode defensively here instead.
+            result = await hpc.conn.run(" ; ".join(parts), check=False, encoding=None)
             if result.exit_status not in (0, None):
-                raise RuntimeError(result.stderr or f"read-many failed ({result.exit_status})")
-            return result.stdout or ""
+                stderr = result.stderr
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode("utf-8", errors="replace")
+                raise RuntimeError(stderr or f"read-many failed ({result.exit_status})")
+            stdout = result.stdout or b""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            return stdout
 
         raw = await hpc.run_on_owner(_read_many_remote)
         items = []

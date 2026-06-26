@@ -61,6 +61,22 @@ export interface SubstitutionParams {
   max_structures?: number
 }
 
+export interface RandomDopant {
+  element: string
+  count: number
+}
+
+export interface RandomSubstitutionParams {
+  structure: Record<string, unknown>
+  host_element?: string        // pool = all sites of this element
+  target_indices?: number[]    // OR explicit candidate pool (overrides host_element)
+  dopants: RandomDopant[]
+  n_samples?: number
+  deduplicate?: boolean
+  seed?: number | null
+  max_structures?: number
+}
+
 // === Helper ===
 
 async function handle_response<T>(response: Response): Promise<T> {
@@ -120,6 +136,15 @@ export async function create_intercalation(params: IntercalationParams): Promise
 
 export async function combinatorial_substitution(params: SubstitutionParams): Promise<BuildResult> {
   const response = await fetch(`${API_BASE}/build/substitution`, {
+    method: `POST`,
+    headers: { 'Content-Type': `application/json` },
+    body: JSON.stringify(params),
+  })
+  return handle_response(response)
+}
+
+export async function random_substitution(params: RandomSubstitutionParams): Promise<BuildResult> {
+  const response = await fetch(`${API_BASE}/build/random-substitution`, {
     method: `POST`,
     headers: { 'Content-Type': `application/json` },
     body: JSON.stringify(params),

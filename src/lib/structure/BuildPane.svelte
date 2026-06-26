@@ -6,7 +6,7 @@
   // Lazy-load structure translations
   load_i18n_module('structure')
 
-  export type BuildTab = 'lattice' | 'slab_cutter' | 'adsorption' | 'adsorbate' | 'water_layer' | 'pseudo_h' | 'moire' | 'nanotube' | 'nanoscroll' | 'heterostructure' | 'doping' | 'pathway' | 'reticular'
+  export type BuildTab = 'lattice' | 'slab_cutter' | 'adsorption' | 'adsorbate' | 'water_layer' | 'pseudo_h' | 'moire' | 'nanotube' | 'nanoparticle' | 'nanoscroll' | 'heterostructure' | 'doping' | 'pathway' | 'reticular'
 
   const tab_defs: { id: BuildTab; label: () => string }[] = [
     { id: 'lattice', label: () => t('structure.lattice_tab') },
@@ -17,6 +17,7 @@
     { id: 'pseudo_h', label: () => t('structure.passivate') },
     { id: 'moire', label: () => t('structure.moire') },
     { id: 'nanotube', label: () => t('structure.nanotube') },
+    { id: 'nanoparticle', label: () => t('structure.nanoparticle') },
     { id: 'nanoscroll', label: () => t('structure.nanoscroll') },
     { id: 'heterostructure', label: () => t('structure.hetero') },
     { id: 'doping', label: () => t('structure.doping') },

@@ -887,7 +887,8 @@ if __name__ == "__main__":
     _CLI_PASSTHROUGH = {
         "setup", "status", "stop", "campaign", "freq-inputs", "slab",
         "supercell", "reticular", "convert", "inspect", "dos", "band",
-        "cohp", "freq", "push", "pull", "submit",
+        "cohp", "freq", "push", "pull", "submit", "nanoparticle",
+        "view", "gui",
     }
     if len(sys.argv) > 1 and sys.argv[1] in _CLI_PASSTHROUGH:
         from catgo.cli import main as _cli_main
@@ -926,6 +927,14 @@ if __name__ == "__main__":
         print(_json.dumps({"port": run_port}), flush=True)
 
         print(f"Starting CatGo server on port {run_port}")
+        # Advertise the live port so the `catgo`/`catgo-cli` CLI (e.g.
+        # `catgo view`) can attach to this already-running backend even when it
+        # picked a non-default / auto-assigned port. ServerLink.discover() reads
+        # this file. (Previously only the --daemon path wrote it.)
+        try:
+            _write_pid_port(os.getpid(), run_port)
+        except OSError:
+            pass
         uvicorn.run(
             "main:app",
             host="0.0.0.0",

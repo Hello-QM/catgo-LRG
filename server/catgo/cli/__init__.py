@@ -59,6 +59,50 @@ def _build_legacy_parser():
         help="--structure <CONTCAR> --out <dir> [--gas | --free-elements O,H] [--kpoints ...]")
     p_freq.set_defaults(func=cmd_freq_inputs)
 
+    from catgo.cli.view_cmd import cmd_view
+    p_view = sub.add_parser(
+        "view", aliases=["gui"],
+        help="open structure/trajectory file(s) in the CatGo viewer "
+             "(like `ase gui`; multiple files stack into one trajectory)")
+    p_view.add_argument(
+        "files", nargs="+",
+        help="structure/trajectory file(s); a glob like */POSCAR stacks "
+             "into one trajectory (one frame per file)")
+    p_view.add_argument(
+        "-n", "--image-number", metavar="SLICE", default=":", dest="image_number",
+        help="pick frame(s) from each file: a number or START:STOP:STEP "
+             "(negatives count from the end). Per-file filename@SLICE overrides "
+             "this. Default ':' = all frames.")
+    p_view.add_argument(
+        "--panel", default="", help="viewer panel id (empty = server default)")
+    p_view.add_argument(
+        "--traj", action="store_true",
+        help="force trajectory mode even for a single file")
+    p_view.add_argument(
+        "--sort", choices=["natural", "none"], default="natural",
+        help="frame order for multi-file mode (default: natural sort)")
+    p_view.add_argument(
+        "--interpolate", metavar="N", type=int,
+        help="insert N frames between 2 endpoint structures (NEB-style initial "
+             "path preview); IDPP by default")
+    p_view.add_argument(
+        "--interp-method", choices=["idpp", "linear"], default="idpp",
+        dest="interp_method",
+        help="interpolation method for --interpolate (default: idpp)")
+    p_view.add_argument(
+        "-g", "--graph", metavar="EXPR",
+        help="plot/dump per-frame quantities vs frame (ase-gui syntax): "
+             "comma-separated of i,e,epot,ekin,fmax,fave,s,T (first = x-axis). "
+             "e.g. -g i,e,fmax")
+    p_view.add_argument(
+        "-t", "--terminal", action="store_true",
+        help="headless: compute --graph / write -o without opening the viewer")
+    p_view.add_argument(
+        "-o", "--out", metavar="FILE",
+        help="write output: a plot (.png/.pdf/.svg) or data (.dat/.csv) for "
+             "--graph, else a converted structure/trajectory file")
+    p_view.set_defaults(func=cmd_view)
+
     return parser, sub
 
 
@@ -205,7 +249,7 @@ def main(argv: list[str] | None = None) -> None:
         return
     if hasattr(args, "_op"):
         raise SystemExit(_run_op(args))
-    args.func(args)
+    raise SystemExit(args.func(args) or 0)
 
 
 if __name__ == "__main__":
