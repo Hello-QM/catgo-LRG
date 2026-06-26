@@ -57,6 +57,7 @@
     PseudoHydrogenPane,
     MoirePane,
     NanotubePane,
+    NanoparticlePane,
     NanoscrollPane,
     HeterostructurePane,
     DopingPane,
@@ -3571,6 +3572,14 @@
               pane_open={true}
               on_push_undo={push_to_undo}
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
+            />
+          {:else if build.active_build_tab === `nanoparticle`}
+            <NanoparticlePane
+              embedded={true}
+              bind:structure={structure as PymatgenStructure}
+              pane_open={true}
+              on_push_undo={push_to_undo}
+              on_structure_change={(new_struct) => build.handle_structure_replace_and_fit(new_struct)}
             />
           {:else if build.active_build_tab === `reticular`}
             <ReticularPane

@@ -1095,6 +1095,76 @@ TOOLS = [
         },
     ),
     Tool(
+        name="catgo_nanoparticle",
+        description=(
+            "Build a finite metal nanoparticle / cluster (no periodic bulk) and "
+            "drop it in the viewer. ONE call — no bash + Python + ase.cluster.\n"
+            "\n"
+            "USE THIS WHEN the user asks to: build/make a nanoparticle / "
+            "nanocluster / 纳米颗粒 / 纳米团簇 / NP, a Wulff construction / "
+            "equilibrium shape, or a named cluster shape (octahedron / "
+            "icosahedron / decahedron / cuboctahedron) of a metal "
+            "(e.g. '做一个 100 原子的 Au 纳米颗粒', 'build a Pt icosahedron', "
+            "'Wulff shape of Cu').\n"
+            "\n"
+            "Shapes:\n"
+            "  wulff       — (default) equilibrium shape from per-facet surface "
+            "energies. Set `size` (target atom count), `surfaces` + `energies`.\n"
+            "  octahedron  — set `length` (edge), `cutoff` (truncation).\n"
+            "  icosahedron — set `shells`.\n"
+            "  decahedron  — set `p`, `q`, `r`.\n"
+            "\n"
+            "The cluster is centred in a vacuum box (`vacuum` Å padding) so it is "
+            "ready for a molecular/cluster DFT calculation.\n"
+            "\n"
+            "EXAMPLES:\n"
+            "  '100-atom Au Wulff nanoparticle' → {element:'Au', size:100}\n"
+            "  'Pt icosahedron, 3 shells' → {element:'Pt', shape:'icosahedron', shells:3}\n"
+            "  'truncated Cu octahedron' → {element:'Cu', shape:'octahedron', length:6, cutoff:2}"
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "element": {"type": "string", "description": "Metal element symbol, e.g. Au."},
+                "shape": {
+                    "type": "string",
+                    "enum": ["wulff", "octahedron", "icosahedron", "decahedron"],
+                    "default": "wulff",
+                    "description": "Cluster shape.",
+                },
+                "structure": {
+                    "type": "string",
+                    "enum": ["fcc", "bcc", "sc", "hcp"],
+                    "default": "fcc",
+                    "description": "Lattice for the wulff construction.",
+                },
+                "size": {
+                    "type": "integer",
+                    "default": 100,
+                    "description": "Target atom count (wulff).",
+                },
+                "surfaces": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "integer"}},
+                    "description": "Wulff Miller facets, e.g. [[1,1,1],[1,0,0]]. Default {111,100,110}.",
+                },
+                "energies": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "Wulff per-facet surface energies (same length as surfaces).",
+                },
+                "length": {"type": "integer", "default": 5, "description": "Octahedron edge length."},
+                "cutoff": {"type": "integer", "default": 0, "description": "Octahedron truncation."},
+                "shells": {"type": "integer", "default": 3, "description": "Icosahedron shells."},
+                "p": {"type": "integer", "default": 3, "description": "Decahedron p."},
+                "q": {"type": "integer", "default": 3, "description": "Decahedron q."},
+                "r": {"type": "integer", "default": 0, "description": "Decahedron r."},
+                "vacuum": {"type": "number", "default": 10.0, "description": "Vacuum padding around the cluster (Å)."},
+            },
+            "required": ["element"],
+        },
+    ),
+    Tool(
         name="catgo_moire",
         description=(
             "Build a twisted / moiré bilayer (twisted bilayer graphene, magic "
@@ -3141,6 +3211,38 @@ async def _handle_nanotube(client: httpx.AsyncClient, args: dict) -> list[TextCo
         return [T(type="text", text=f"Nanotube build returned no structure. Response: {json.dumps(data)[:400]}")]
     push_err = await _push_structure(client, new_struct, intent="load")
     msg = data.get("message") or f"Nanotube built: {data.get('n_atoms', '?')} atoms."
+    msg += " Viewer updated."
+    if push_err:
+        msg += f"\n⚠️ Viewer push failed: {push_err}"
+    return [T(type="text", text=msg)]
+
+
+async def _handle_nanoparticle(client: httpx.AsyncClient, args: dict) -> list[TextContent]:
+    """Build a finite metal nanoparticle/cluster and push it to the viewer.
+
+    Routes to /build/nanoparticle (wraps ase.cluster). `element` is required;
+    `shape` defaults to wulff.
+    """
+    T = TextContent
+    element = (args.get("element") or "").strip()
+    if not element:
+        return [T(type="text", text="catgo_nanoparticle needs an `element` (e.g. {element:'Au'}).")]
+
+    payload: dict = {"element": element}
+    for key in ("shape", "structure", "size", "surfaces", "energies",
+                "length", "cutoff", "shells", "p", "q", "r", "vacuum"):
+        if args.get(key) is not None:
+            payload[key] = args[key]
+
+    resp = await client.post(f"{API_BASE}/build/nanoparticle", json=payload)
+    if resp.status_code != 200:
+        return [T(type="text", text=f"Nanoparticle build failed ({resp.status_code}): {resp.text[:400]}")]
+    data = resp.json()
+    new_struct = data.get("structure")
+    if not new_struct:
+        return [T(type="text", text=f"Nanoparticle build returned no structure. Response: {json.dumps(data)[:400]}")]
+    push_err = await _push_structure(client, new_struct, intent="load")
+    msg = data.get("message") or f"Nanoparticle built: {data.get('n_atoms', '?')} atoms."
     msg += " Viewer updated."
     if push_err:
         msg += f"\n⚠️ Viewer push failed: {push_err}"

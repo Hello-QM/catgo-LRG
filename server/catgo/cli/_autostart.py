@@ -15,9 +15,16 @@ def spawn_daemon_and_wait(timeout: float = 20.0) -> ServerLink:
     Raises OpError on spawn failure or timeout. Does NOT kill the spawned
     process on timeout (port may already be in use by another service).
     """
+    # In a PyInstaller build `sys.executable` is the frozen `catgo-server`
+    # binary, which does NOT honor `-m catgo`; launching it bare starts the
+    # server directly (and records ~/.catgo/server.port for discovery).
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable]
+    else:
+        cmd = [sys.executable, "-m", "catgo", "serve", "--daemon"]
     try:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "catgo", "serve", "--daemon"],
+            cmd,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             start_new_session=True,
         )
