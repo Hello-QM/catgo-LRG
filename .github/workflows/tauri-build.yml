@@ -206,15 +206,19 @@ jobs:
           # which GitHub runners lack → "failed to run linuxdeploy". Make all
           # AppImage tooling extract-and-run instead of FUSE-mounting.
           APPIMAGE_EXTRACT_AND_RUN: 1
-          # macOS code-signing + notarization. Signing uses the Developer-ID cert
-          # (APPLE_CERTIFICATE/_PASSWORD/_SIGNING_IDENTITY + team); notarization
-          # uses the App Store Connect API key (the repo's existing secrets, also
-          # used by ios-build.yml). APPLE_API_KEY_PATH is written by the step
-          # above. NOT the Apple-ID/app-specific-password method (those secrets
-          # don't exist → would 401). All empty on win/linux → no-op there.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # macOS code-signing + notarization. Signing uses a **Developer ID
+          # Application** cert; notarization uses the App Store Connect API key.
+          # IMPORTANT: the cert secrets are MACOS_*, NOT the APPLE_* names — those
+          # are owned by ios-build.yml and hold the *iOS Apple Distribution* cert,
+          # a different certificate type. Sharing one secret across both would
+          # force the wrong cert on one of the two pipelines. Only the team id and
+          # the notarization API key (APPLE_DEVELOPMENT_TEAM / APPLE_API_*) are
+          # genuinely shared. tauri-action's own env-var names stay APPLE_* (its
+          # contract); we just feed them from the MACOS_* secrets.
+          # All empty on win/linux → no-op there.
+          APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
