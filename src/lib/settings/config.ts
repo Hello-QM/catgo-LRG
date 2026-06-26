@@ -31,8 +31,8 @@ export const LIGHTING_PROFILE_DEFAULTS: Readonly<Record<RenderStyle, LightingPro
     highlight_strength: 0.0,
   },
   toon: {
-    light_azimuth: 35,
-    light_elevation: 45,
+    light_azimuth: 25,
+    light_elevation: 20,
     directional_light: 0.3,
     ambient_light: 0.7,
     highlight_strength: 0.0,
