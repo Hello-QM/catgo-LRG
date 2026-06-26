@@ -74,7 +74,7 @@ importers:
         specifier: ^2.3.4
         version: 2.3.4
       '@tauri-apps/plugin-updater':
-        specifier: ^2.9.0
+        specifier: ~2.9.0
         version: 2.9.0
       '@threlte/core':
         specifier: ^8.1.8
