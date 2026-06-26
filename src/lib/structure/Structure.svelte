@@ -8,7 +8,7 @@
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import ExportDpiControl from '$lib/electronic/ExportDpiControl.svelte'
-  import { API_BASE } from '$lib/api/config'
+  import { API_BASE, STATIC_ONLY } from '$lib/api/config'
   import { elem_symbols } from '$lib/labels'
 
   import { DEFAULTS, type ShowBonds } from '$lib/settings'
@@ -3607,7 +3607,7 @@
               {on_save_to_database}
               {on_export_to_hpc}
             />
-          {:else if build.active_build_tab === `doping` && structure && `lattice` in structure}
+          {:else if build.active_build_tab === `doping` && !STATIC_ONLY && structure && `lattice` in structure}
             <DopingPane
               bind:this={build.doping_pane_ref}
               bind:structure={structure as PymatgenStructure}

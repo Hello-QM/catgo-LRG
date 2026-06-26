@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
+  import { STATIC_ONLY } from '$lib/api/config'
   import type { Snippet } from 'svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
@@ -8,7 +9,14 @@
 
   export type BuildTab = 'lattice' | 'slab_cutter' | 'adsorption' | 'adsorbate' | 'water_layer' | 'pseudo_h' | 'moire' | 'nanotube' | 'nanoparticle' | 'nanoscroll' | 'heterostructure' | 'doping' | 'pathway' | 'reticular'
 
-  const tab_defs: { id: BuildTab; label: () => string }[] = [
+  // Build tabs that have NO client-side (WASM/TS) path and only work via the
+  // Python backend. On STATIC_ONLY (web + the iOS build) they'd 503, so they are
+  // hidden entirely rather than shown-then-broken (App Store completeness). Every
+  // other build tab runs offline; doping (combinatorial/random substitution) is
+  // the lone backend-only one.
+  const STATIC_HIDDEN_TABS: ReadonlySet<BuildTab> = new Set<BuildTab>(['doping'])
+
+  const all_tab_defs: { id: BuildTab; label: () => string }[] = [
     { id: 'lattice', label: () => t('structure.lattice_tab') },
     { id: 'slab_cutter', label: () => t('structure.slab') },
     { id: 'adsorption', label: () => t('structure.sites') },
@@ -24,6 +32,10 @@
     { id: 'pathway', label: () => t('structure.pathway') },
     { id: 'reticular', label: () => t('structure.reticular') },
   ]
+
+  const tab_defs = STATIC_ONLY
+    ? all_tab_defs.filter((tab) => !STATIC_HIDDEN_TABS.has(tab.id))
+    : all_tab_defs
 
   let {
     show = $bindable(false),
