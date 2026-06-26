@@ -32,6 +32,7 @@
   import { import_paper, get_chat_slice } from '$lib/chat/chat-state.svelte'
   import Toast from '$lib/Toast.svelte'
   import DesktopDownloadModal from '$lib/DesktopDownloadModal.svelte'
+  import UpdateBanner from '$lib/update/UpdateBanner.svelte'
   import { desktop_download } from '$lib/desktop-download.svelte'
   import { show_toast } from '$lib/toast-state.svelte'
   import TabBar from './TabBar.svelte'
@@ -2928,6 +2929,7 @@
 <Toast />
 <DownloadManager />
 <DesktopDownloadModal />
+<UpdateBanner />
 
 <style>
   .bio-pane-wrap {

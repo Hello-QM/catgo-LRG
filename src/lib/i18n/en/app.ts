@@ -201,5 +201,14 @@ const app: Record<string, string> = {
   desktop_download_btn: `Download desktop app`,
   desktop_get_app: `Get the App`,
   desktop_ios_testflight: `Join TestFlight beta`,
+
+  // -- Auto-update banner --
+  update_available_title: `Version {version} is available`,
+  update_install_btn: `Update now`,
+  update_open_download_btn: `Open download page`,
+  update_downloading: `Downloading update… {pct}%`,
+  update_ready: `Installed — restarting…`,
+  update_error: `Update failed: {error}`,
+  update_later_btn: `Later`,
 }
 export default app

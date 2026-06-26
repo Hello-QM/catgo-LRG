@@ -91,6 +91,12 @@ webkit2gtk = "2.0"
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 portable-pty = "0.9"
 tauri-plugin-single-instance = "2"
+# In-app auto-update (Windows/macOS one-click; Linux ships .deb/.rpm which the
+# updater can't self-install, so the frontend falls back to a download-page
+# notice there). Desktop-only: the updater plugin doesn't support mobile.
+# tauri-plugin-process backs the post-install relaunch.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(target_os = "ios")'.dependencies]
 tauri-plugin-bg-grace = { path = "plugins/tauri-plugin-bg-grace" }

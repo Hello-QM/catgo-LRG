@@ -201,5 +201,14 @@ const app: Record<string, string> = {
   desktop_download_btn: `下载桌面版`,
   desktop_get_app: `下载客户端`,
   desktop_ios_testflight: `加入 TestFlight 公测`,
+
+  // -- Auto-update banner --
+  update_available_title: `新版本 {version} 已发布`,
+  update_install_btn: `立即更新`,
+  update_open_download_btn: `打开下载页`,
+  update_downloading: `正在下载更新… {pct}%`,
+  update_ready: `已安装 — 正在重启…`,
+  update_error: `更新失败：{error}`,
+  update_later_btn: `稍后`,
 }
 export default app

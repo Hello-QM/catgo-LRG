@@ -191,6 +191,14 @@ pub fn run() {
             let _ = w.set_focus();
         }
     }));
+
+    // Desktop-only in-app auto-update. The updater plugin self-installs on
+    // Windows/macOS; tauri-plugin-process backs the post-install relaunch.
+    // Neither supports mobile, so both are gated to desktop.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
     let builder = builder
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())

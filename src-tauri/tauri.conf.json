@@ -28,10 +28,25 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Hello-QM/catgo-LRG/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDQjM4OTlEMjRGREVGNkUKUldSdTcvMGtuWW16SE80M2ZMdVZqT1FqbjJPbnU2S3RNZGxEMnBrMTZ5NGRiSlo2akNFQjZ3SVAK",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/catgo-server", "binaries/catgo-agent"],
+    "createUpdaterArtifacts": true,
+    "externalBin": [
+      "binaries/catgo-server",
+      "binaries/catgo-agent"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -74,35 +89,48 @@
     },
     "fileAssociations": [
       {
-        "ext": ["cif"],
+        "ext": [
+          "cif"
+        ],
         "name": "CIF Structure",
         "description": "Crystallographic Information File",
         "role": "Viewer",
         "rank": "Owner"
       },
       {
-        "ext": ["poscar", "vasp", "contcar"],
+        "ext": [
+          "poscar",
+          "vasp",
+          "contcar"
+        ],
         "name": "VASP Structure",
         "description": "VASP POSCAR/CONTCAR file",
         "role": "Viewer",
         "rank": "Owner"
       },
       {
-        "ext": ["xyz", "extxyz"],
+        "ext": [
+          "xyz",
+          "extxyz"
+        ],
         "name": "XYZ Structure",
         "description": "XYZ molecular structure file",
         "role": "Viewer",
         "rank": "Owner"
       },
       {
-        "ext": ["traj"],
+        "ext": [
+          "traj"
+        ],
         "name": "ASE Trajectory",
         "description": "ASE trajectory file",
         "role": "Viewer",
         "rank": "Owner"
       },
       {
-        "ext": ["json"],
+        "ext": [
+          "json"
+        ],
         "name": "JSON Structure",
         "description": "JSON structure data",
         "role": "Viewer",
