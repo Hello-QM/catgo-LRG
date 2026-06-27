@@ -238,7 +238,7 @@ jobs:
             ### Installation
             - **Windows** — run the **`-setup.exe`** installer (recommended; it puts the `catgo` CLI on your PATH so `catgo view` works). The `.msi` installs the app but not the CLI.
               - Unsigned this release: if Windows SmartScreen warns, click **More info → Run anyway**. (Code signing is coming in a later build.)
-            - **macOS** — open the `.dmg` and drag CatGo to Applications. Unsigned this release: the first launch needs **right-click → Open → Open** (signing/notarization is coming next).
+            - **macOS** — open the `.dmg` and drag CatGo to Applications. **Signed & notarized** (Apple Silicon) — it opens normally, no right-click workaround.
             - **Linux** — `sudo dpkg -i CatGo_*_amd64.deb` (or `sudo rpm -i`)
             - **Android** — install `CatGo-v*-android-universal.apk`
             - **iOS** — join the [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)
@@ -251,6 +251,16 @@ jobs:
             - **Builders** — slabs, adsorbates, moiré, nanotubes, heterostructures, MOFs, doping, passivation
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
+
+            ### New in 1.4.1
+            - **In-app auto-update** — Windows & macOS notice new releases and update with one click (download the signed bundle → relaunch); Linux gets a "new version" banner linking to the download page. The banner only shows when a newer release exists.
+            - **Signed & notarized macOS** — the `.dmg`/`.app` now open without the Gatekeeper right-click workaround.
+            - **Bonds preserved when adding a lattice** — adding a periodic box to a molecule (Build → Lattice) no longer drops the bonds (correct fractional coords, incl. non-orthogonal cells).
+            - **Search Database fixed** — OPTIMADE providers retry on cold start, so it's no longer PubChem-only.
+            - **VS Code extension** — trajectory playback no longer janks (off-thread bond recompute); **plots** — axis titles no longer overlap tick labels at large fonts.
+            - **iOS** — CatGo is now on the App Store (static viewer build); the web "Get the App" button is embedded in the landing page.
+
+            See the [CHANGELOG](https://github.com/Hello-QM/catgo-LRG/blob/main/CHANGELOG.md) for the full list.
 
             ### New in 1.4.0
             - **`catgo view` / `catgo gui` CLI** — open structures & trajectories like `ase gui`: `catgo view */POSCAR` stacks files into one trajectory, per-file `@SLICE` frame selection, `--interpolate` (IDPP), and headless `-g/-t` convergence plots. On a packaged install, running `catgo view` with no app open **launches CatGo** and shows the structure.
