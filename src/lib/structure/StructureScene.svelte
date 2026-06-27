@@ -527,6 +527,12 @@
     atom_rotation_angle_deg = 0,
     // Realtime position overrides for drag/rotate - bypasses structure updates for performance
     realtime_position_overrides = null as Map<number, Vec3> | null,
+    // Active trajectory frame index (>= 0 when a trajectory is loaded; -1
+    // otherwise). Used as the "we are rendering a trajectory frame" signal for
+    // the slow-path bond effect — variable-N trajectories have no
+    // `trajectory_frame_positions` fast-path, so this is the only reliable
+    // trajectory indicator there.
+    trajectory_step_idx = -1,
     // Trajectory fast-path: flat Float32Array of positions for current frame
     trajectory_frame_positions = null as Float32Array | null,
     // Trajectory fast-path: flat Float32Array of forces (fx,fy,fz) for current frame
@@ -802,6 +808,10 @@
     atom_rotation_angle_deg?: number // Current cumulative rotation angle in degrees
     // Realtime position overrides for drag/rotate - bypasses structure updates for performance
     realtime_position_overrides?: Map<number, Vec3> | null
+    // Active trajectory frame index (>= 0 when a trajectory is loaded; -1
+    // otherwise). The "rendering a trajectory frame" signal for the slow-path
+    // bond effect — variable-N trajectories have no `trajectory_frame_positions`.
+    trajectory_step_idx?: number
     // Trajectory fast-path: flat Float32Array of positions (x,y,z triples) for current frame
     // When set, only position buffers are updated in AtomImpostors and bonds
     trajectory_frame_positions?: Float32Array | null
@@ -2294,10 +2304,14 @@
     scale: bond_scale,
   })
   $effect.pre(() => {
+    // `trajectory_step_idx >= 0` is the trajectory-active signal: variable-N
+    // trajectories drive this slow path per frame (no fast-path positions), so
+    // it triggers the extension-only solid_angle -> atom_radii downgrade inside
+    // compute_bond_connectivity. Static structures keep step_idx === -1 → false.
     compute_bond_connectivity(
       bond_state, (pairs) => { bond_pairs = pairs },
       bond_input, show_bonds, lattice, bonding_strategy,
-      bonding_options_eff, external_dragging,
+      bonding_options_eff, external_dragging, trajectory_step_idx >= 0,
     )
   })
 

@@ -223,6 +223,11 @@ export function wire_trajectory_bond_cache(
      *  false re-fires the effect and re-primes the current frame's bonds
      *  (cache may be stale: frames advanced under suspension were skipped). */
     get_suspended?: () => boolean
+    /** Optional. The current show_bonds setting. When 'never', no covalent
+     *  bond connectivity is rendered and trajectory_bond_connectivity_for_frame
+     *  is unused downstream, so the per-frame compute_bonds_async dispatch is
+     *  pure wasted work — the driver treats 'never' like the WebGPU suspend. */
+    get_show_bonds?: () => string
   },
 ): void {
   // Reset cache on actual value changes (not parent-render proxy churn).
@@ -307,7 +312,13 @@ export function wire_trajectory_bond_cache(
     const idx = deps.get_step_idx()
     const pv = deps.get_positions_version?.() ?? 0
     // Read suspend reactively so toggle-OFF (true→false) re-fires this effect.
-    const suspended = deps.get_suspended?.() ?? false
+    // Fold show_bonds==='never' into the suspend path: when bonds are hidden the
+    // per-frame compute_bonds_async + build_frame_structure clones are pure waste
+    // (trajectory_bond_connectivity_for_frame is not rendered while never). Reusing
+    // the suspend branch keeps trackers synced AND re-primes the landing frame via
+    // the existing was_suspended resume logic if bonds are later un-hidden.
+    const bonds_hidden = (deps.get_show_bonds?.() ?? `always`) === `never`
+    const suspended = (deps.get_suspended?.() ?? false) || bonds_hidden
     if (idx < 0) {
       was_suspended = suspended
       return

@@ -184,6 +184,18 @@ let cached_providers: OptimadeProvider[] | null = null
 let providers_cache_time = 0
 const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
+// Cold-start retry budget. On the desktop build the Python sidecar (which
+// serves /api/optimade/providers) is spawned by Tauri and takes a few seconds
+// to boot — PyInstaller unpack + heavy eager imports. If the user opens the
+// Search-Database dialog before it is listening, the very first providers fetch
+// is refused at the socket level. PubChem still appears (the modal injects it
+// client-side, no backend needed), so the dialog degrades to "only PubChem".
+// Retry with backoff so the first open self-heals instead of sticking.
+const PROVIDERS_FETCH_RETRIES = 3 // total attempts
+const PROVIDERS_RETRY_BASE_MS = 400 // backoff: 0ms, 400ms, 800ms
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
 // URL encode/decode utilities for structure IDs with special characters
 export const encode_structure_id = (id: string) =>
   encodeURIComponent(id).replace(/\./g, `%2E`).replace(/\//g, `%2F`)
@@ -233,26 +245,39 @@ export async function fetch_optimade_providers(): Promise<OptimadeProvider[]> {
     return cached_providers
   }
 
-  try {
-    // Always go through the catgo-server backend when one is available
-    // (the VSCode extension bundles a sidecar at API_BASE = http://127.0.0.1:<port>/api).
-    // Extension host's undici fetch occasionally fails on providers.optimade.org
-    // with a bare "fetch failed" — routing through the Python backend's
-    // /optimade/providers endpoint sidesteps that entire failure mode and also
-    // gives us the same provider filtering that the desktop app gets.
-    const url = `${API_BASE}/optimade/providers`
+  // Always go through the catgo-server backend when one is available
+  // (the VSCode extension bundles a sidecar at API_BASE = http://127.0.0.1:<port>/api).
+  // Extension host's undici fetch occasionally fails on providers.optimade.org
+  // with a bare "fetch failed" — routing through the Python backend's
+  // /optimade/providers endpoint sidesteps that entire failure mode and also
+  // gives us the same provider filtering that the desktop app gets.
+  //
+  // The backend always answers with at least a fallback list once its router is
+  // mounted (and the router mounts before uvicorn binds), so an empty/failed
+  // result here means the backend itself was unreachable — i.e. a cold-start
+  // race. Retry with backoff before giving up.
+  const url = `${API_BASE}/optimade/providers`
+  let last_error: unknown = null
+  for (let attempt = 0; attempt < PROVIDERS_FETCH_RETRIES; attempt++) {
+    if (attempt > 0) await sleep(PROVIDERS_RETRY_BASE_MS * attempt)
+    try {
+      const data = await fetch_json_smart(url) as { data?: OptimadeProvider[] }
+      const providers = data.data || []
+      // A reachable backend returns a non-empty list; an empty one means it is
+      // still booting (or wedged) — keep retrying rather than caching nothing.
+      if (providers.length === 0) continue
 
-    const data = await fetch_json_smart(url) as { data?: OptimadeProvider[] }
-    const providers = data.data || []
-
-    cached_providers = providers
-    providers_cache_time = now
-    return cached_providers ?? []
-  } catch (error) {
-    console.warn(`Failed to fetch OPTIMADE providers from backend:`, error)
-    // Return cached providers if available, otherwise empty array
-    return cached_providers ?? []
+      cached_providers = providers
+      providers_cache_time = now
+      return providers
+    } catch (error) {
+      last_error = error
+    }
   }
+
+  console.warn(`Failed to fetch OPTIMADE providers from backend:`, last_error)
+  // Never cache an empty/failed result — the next dialog open must retry.
+  return cached_providers ?? []
 }
 
 /**

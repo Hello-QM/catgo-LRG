@@ -254,6 +254,7 @@
         ticktext: tick_labels,
         range: [distance[0] ?? 0, distance[distance.length - 1] ?? 1],
         zeroline: false,
+        automargin: true,
         ...grid_props,
         showgrid: false,  // No horizontal grid for band plots
         ...line_props,
@@ -263,6 +264,7 @@
         title: { text: `E \u2013 E<sub>f</sub> (eV)`, font: { size: title_size } },
         range: [emin, emax],
         zeroline: false,
+        automargin: true,
         ...grid_props,
         ...line_props,
         ...tick_props_obj,

@@ -90,6 +90,10 @@
   // Elements selected via the periodic table (used for 'only' and 'at_least' modes)
   let selected_elements = $state<string[]>([])
   let loading_providers = $state(false)
+  // Whether the OPTIMADE provider list (not just the client-side PubChem entry)
+  // has actually loaded. A cold-start backend race can leave us with PubChem
+  // only; this flag drives a retry on every reopen until the real list arrives.
+  let optimade_loaded = $state(false)
   let providers_error = $state<string | null>(null)
   let loading_search = $state(false)
   let loading_import = $state(false)
@@ -131,9 +135,13 @@
   let computed_details = $state<Map<string, ComputedDetails>>(new Map())
   let computing_details = $state(false)
 
-  // Load providers on mount
+  // Load providers on mount, and retry on every reopen until the real OPTIMADE
+  // list has loaded. Guarding on `optimade_loaded` (not `providers.length`) is
+  // deliberate: a cold-start backend race degrades the list to PubChem-only
+  // (length 1), and the old `providers.length === 0` guard would never retry
+  // that state — the user was stuck until a full reload.
   $effect(() => {
-    if (visible && providers.length === 0) {
+    if (visible && !optimade_loaded) {
       load_providers()
     }
   })
@@ -194,6 +202,9 @@
   })
 
   async function load_providers() {
+    // The reload effect can fire while a load is already in flight (visible
+    // toggling, reactive deps changing). Guard so we don't issue parallel fetches.
+    if (loading_providers) return
     loading_providers = true
     providers_error = null
     try {
@@ -213,7 +224,12 @@
         selected_provider = mp?.id ?? providers[0].id
       }
       if (fetched.length === 0) {
+        // Only PubChem made it in — the OPTIMADE list is still missing (cold-start
+        // race, backend not ready). Leave `optimade_loaded` false so reopening the
+        // dialog retries instead of sticking on PubChem-only.
         providers_error = t('structure.optimade_no_providers')
+      } else {
+        optimade_loaded = true
       }
     } catch (err) {
       console.error(`Failed to load OPTIMADE providers:`, err)

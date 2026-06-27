@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-06-26
+
+### Added
+- **In-app auto-update** — installed desktop builds now notice new releases and update from inside the app. Windows/macOS download the signed bundle and relaunch with one click; Linux (`.deb`/`.rpm`) shows a "new version" banner that opens the download page. A bottom-centre banner appears only when a newer version exists. Web and mobile builds are unaffected.
+- **Signed & notarized macOS builds** — the `.dmg`/`.app` are now code-signed with a Developer ID certificate and notarized via the App Store Connect API key, so macOS no longer needs the right-click → Open Gatekeeper workaround.
+
+### Changed
+- **Web "Get the App" button** is now embedded in the landing page (next to *Star on GitHub*) instead of floating over the editor after a structure loads.
+- **Toon render style** default headlamp lowered to azimuth 25° / elevation 20°.
+
+### Fixed
+- **Bonds no longer disappear** after adding a periodic lattice to a molecule (Build Tools → Lattice): fractional coordinates are now recomputed correctly, including non-orthogonal boxes.
+- **Search Database is no longer PubChem-only** — OPTIMADE providers are retried on cold start so the full provider list loads.
+- **VS Code extension trajectory playback** no longer recomputes `solid_angle` bonds on the main thread every frame (jank fixed).
+- **Electronic-structure plots** — axis titles no longer overlap tick labels at large font sizes.
+- **iOS (App Store) build** hides backend-only surfaces (Analysis tools, Doping builder) that would otherwise show a "requires the desktop app" error in the static build.
+
 ## [1.4.0] - 2026-06-25
 
 ### Added

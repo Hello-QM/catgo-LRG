@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "updater",
+  "description": "Desktop-only in-app auto-update: check for / download / install updates and relaunch. Scoped to desktop because the updater + process plugins are not compiled on mobile (Android/iOS).",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": [
+    "updater:default",
+    "process:default",
+    "process:allow-restart"
+  ]
+}

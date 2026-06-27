@@ -263,6 +263,7 @@
     const energy_axis = {
       title: { text: `E \u2013 E<sub>f</sub> (eV)`, font: { size: title_size } },
       zeroline: false,
+      automargin: true,
       range: is_horizontal ? (y_range ?? undefined) : (x_range ?? undefined),
       ...grid_props,
       ...line_props,
@@ -271,6 +272,7 @@
     const cohp_axis = {
       title: { text: cohp_label, font: { size: title_size } },
       zeroline: true,
+      automargin: true,
       range: is_horizontal ? (x_range ?? undefined) : (y_range ?? undefined),
       ...grid_props,
       ...line_props,

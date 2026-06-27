@@ -455,7 +455,12 @@
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.build_tools')}</span>
       </span>
 
+      {#if !hidden_toolbar_items.includes('analysis') && !STATIC_ONLY}
       <!-- === Analysis Tools === -->
+      <!-- Gated like workflow/server below: AnalysisPane's DOS/band/COHP/freq/charge
+           sub-tabs are backend-only (no WASM fallback), so on STATIC_ONLY (web + the
+           iOS build) they'd 503. MobileWorkspace also lists 'analysis' in
+           HIDDEN_TOOLBAR — this is the check that actually honours it. -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -467,6 +472,7 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.analysis_tools')}</span>
       </span>
+      {/if}
 
       {#if on_open_in_molstar}
       <!-- === Open current structure in the Mol* bio viewer === -->

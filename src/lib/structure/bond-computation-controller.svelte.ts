@@ -20,8 +20,11 @@ import type { Crystal } from './index'
 const TRAJ_SYNC_THRESHOLD = 1000
 
 /** Maximum number of trajectory frames retained in the frame-keyed cache.
- *  LRU-evicted; revisits within the window are O(1). */
-const TRAJ_FRAME_CACHE_MAX = 32
+ *  LRU-evicted; revisits within the window are O(1). Sized to comfortably
+ *  hold a full typical trajectory (e.g. 316 frames) so that after one pass
+ *  every loop/scrub is a cache hit and triggers no bond recompute. Larger
+ *  trajectories keep their most-recently-used 512 frames. */
+const TRAJ_FRAME_CACHE_MAX = 512
 
 /**
  * Per-bond stale-distance pre-filter (Layer 3 of trajectory bond fix).
@@ -33,6 +36,11 @@ const TRAJ_FRAME_CACHE_MAX = 32
  */
 const STALE_DISTANCE_FACTOR = 1.5
 const DEFAULT_BOND_TOLERANCE = 1.1
+
+/** FIX #E: dev-only one-shot guard so the extension's trajectory
+ *  solid_angle -> atom_radii downgrade logs once per session, not per
+ *  frame. */
+let ext_traj_solid_angle_downgrade_logged = false
 
 /**
  * Per-frame bond connectivity cache for variable-topology trajectories.
@@ -235,6 +243,13 @@ export function invalidate_bonds_for_recompute(
  * Called inside `$effect.pre` in the component.
  *
  * This updates bond_state in-place and dispatches async computation for large structures.
+ *
+ * @param is_trajectory_frame When true, the caller is rendering a trajectory
+ *   frame (variable-N trajectories drive this slow path per frame because they
+ *   have no `trajectory_frame_positions` fast-path). Only then does the
+ *   extension-only solid_angle -> atom_radii downgrade apply — static
+ *   structures in the extension keep the user's saved solid_angle. Desktop/web
+ *   ignore this flag entirely (the build-time token short-circuits the gate).
  */
 export function compute_bond_connectivity(
   bond_state: ReturnType<typeof create_bond_state>,
@@ -245,6 +260,7 @@ export function compute_bond_connectivity(
   bonding_strategy: BondingStrategy,
   bonding_options: Record<string, unknown>,
   external_dragging: boolean,
+  is_trajectory_frame: boolean = false,
 ): void {
   if (!structure?.sites) {
     bond_state.bond_connectivity = []
@@ -267,6 +283,31 @@ export function compute_bond_connectivity(
     bond_state.last_bond_fingerprint = ``
     bond_state.last_elem_fingerprint = ``
     return
+  }
+
+  // FIX #E (extension-only, trajectory-only): the VS Code webview WASM runtime
+  // runs solid_angle too slowly for smooth playback. Variable-N trajectories
+  // have no `trajectory_frame_positions` fast-path, so they reach THIS slow
+  // path once per frame (current_structure changes each frame) — running
+  // compute_bonds_sync(solid_angle) on the main thread for ~650 atoms is the
+  // actual jank. Mirror the for-frame downgrade here, but only when the caller
+  // signals a trajectory frame (static structures must keep the user's saved
+  // solid_angle). Gated on the build-time token so desktop/web are
+  // byte-identical; only local params are reassigned, never the saved setting.
+  if (
+    is_trajectory_frame
+    && typeof __CATGO_VSCODE_EXTENSION__ !== `undefined`
+    && __CATGO_VSCODE_EXTENSION__
+    && bonding_strategy === `solid_angle`
+  ) {
+    bonding_strategy = `atom_radii`
+    bonding_options = {}
+    if (import.meta.env?.DEV && !ext_traj_solid_angle_downgrade_logged) {
+      ext_traj_solid_angle_downgrade_logged = true
+      console.log(
+        `[bonds-traj] VS Code extension: solid_angle -> atom_radii for trajectory frames`,
+      )
+    }
   }
 
   const sites = structure.sites
@@ -454,6 +495,28 @@ export function compute_bond_connectivity_for_frame(
   const bonds_visible = should_show_bonds(show_bonds, lattice)
   if (!bonds_visible || (show_bonds as string) === `never`) {
     return bond_state.bond_connectivity
+  }
+
+  // FIX #E (extension-only, trajectory-only): the VS Code webview WASM
+  // runtime runs solid_angle too slowly for smooth playback. Transparently
+  // downgrade trajectory-frame bonding to the cheap atom_radii strategy
+  // (its own defaults via {}). Gated on the build-time token so desktop/web
+  // are byte-identical, and confined to this trajectory-only function so
+  // static-structure bonds still honor the user's saved solid_angle. Only
+  // local params are reassigned; the saved setting is never mutated.
+  if (
+    typeof __CATGO_VSCODE_EXTENSION__ !== `undefined`
+    && __CATGO_VSCODE_EXTENSION__
+    && bonding_strategy === `solid_angle`
+  ) {
+    bonding_strategy = `atom_radii`
+    bonding_options = {}
+    if (import.meta.env?.DEV && !ext_traj_solid_angle_downgrade_logged) {
+      ext_traj_solid_angle_downgrade_logged = true
+      console.log(
+        `[bonds-traj] VS Code extension: solid_angle -> atom_radii for trajectory frames`,
+      )
+    }
   }
 
   const sites = structure.sites

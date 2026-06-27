@@ -181,22 +181,47 @@ jobs:
       - name: Build agent sidecar (Bun-compiled Node binary)
         run: pnpm build:agent
 
+      - name: Prepare Apple API key for notarization (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$KEY_PATH"
+          echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # In-app updater signing. tauri-action signs the Windows (NSIS .exe) and
+          # macOS (.app.tar.gz) updater bundles with this minisign key and uploads
+          # a latest.json to the release, which the installed app polls. If the
+          # secret is empty the build still succeeds but emits no signed updater
+          # artifacts (so no auto-update). Linux ships .deb/.rpm, which the updater
+          # can't self-install — the app falls back to a download-page notice there.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # linuxdeploy (AppImage bundling) is itself an AppImage and needs FUSE,
           # which GitHub runners lack → "failed to run linuxdeploy". Make all
           # AppImage tooling extract-and-run instead of FUSE-mounting.
           APPIMAGE_EXTRACT_AND_RUN: 1
-          # NOTE: macOS code-signing + notarization is intentionally NOT wired
-          # here yet. The repo's Apple credentials are App Store Connect API-key
-          # based (used by the iOS workflow: APPLE_API_KEY_ID / APPLE_API_ISSUER_ID
-          # / APPLE_API_KEY_P8); the Apple-ID + app-specific-password method this
-          # action's signing path expects isn't configured, so enabling it failed
-          # notarization (401). Ship unsigned this release (right-click → Open),
-          # and wire API-key notarization (write the .p8 to a file →
-          # APPLE_API_ISSUER / APPLE_API_KEY / APPLE_API_KEY_PATH) in a follow-up.
+          # macOS code-signing + notarization. Signing uses a **Developer ID
+          # Application** cert; notarization uses the App Store Connect API key.
+          # IMPORTANT: the cert secrets are MACOS_*, NOT the APPLE_* names — those
+          # are owned by ios-build.yml and hold the *iOS Apple Distribution* cert,
+          # a different certificate type. Sharing one secret across both would
+          # force the wrong cert on one of the two pipelines. Only the team id and
+          # the notarization API key (APPLE_DEVELOPMENT_TEAM / APPLE_API_*) are
+          # genuinely shared. tauri-action's own env-var names stay APPLE_* (its
+          # contract); we just feed them from the MACOS_* secrets.
+          # All empty on win/linux → no-op there.
+          APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
@@ -213,7 +238,7 @@ jobs:
             ### Installation
             - **Windows** — run the **`-setup.exe`** installer (recommended; it puts the `catgo` CLI on your PATH so `catgo view` works). The `.msi` installs the app but not the CLI.
               - Unsigned this release: if Windows SmartScreen warns, click **More info → Run anyway**. (Code signing is coming in a later build.)
-            - **macOS** — open the `.dmg` and drag CatGo to Applications. Unsigned this release: the first launch needs **right-click → Open → Open** (signing/notarization is coming next).
+            - **macOS** — open the `.dmg` and drag CatGo to Applications. **Signed & notarized** (Apple Silicon) — it opens normally, no right-click workaround.
             - **Linux** — `sudo dpkg -i CatGo_*_amd64.deb` (or `sudo rpm -i`)
             - **Android** — install `CatGo-v*-android-universal.apk`
             - **iOS** — join the [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)
@@ -226,6 +251,16 @@ jobs:
             - **Builders** — slabs, adsorbates, moiré, nanotubes, heterostructures, MOFs, doping, passivation
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
+
+            ### New in 1.4.1
+            - **In-app auto-update** — Windows & macOS notice new releases and update with one click (download the signed bundle → relaunch); Linux gets a "new version" banner linking to the download page. The banner only shows when a newer release exists.
+            - **Signed & notarized macOS** — the `.dmg`/`.app` now open without the Gatekeeper right-click workaround.
+            - **Bonds preserved when adding a lattice** — adding a periodic box to a molecule (Build → Lattice) no longer drops the bonds (correct fractional coords, incl. non-orthogonal cells).
+            - **Search Database fixed** — OPTIMADE providers retry on cold start, so it's no longer PubChem-only.
+            - **VS Code extension** — trajectory playback no longer janks (off-thread bond recompute); **plots** — axis titles no longer overlap tick labels at large fonts.
+            - **iOS** — CatGo is now on the App Store (static viewer build); the web "Get the App" button is embedded in the landing page.
+
+            See the [CHANGELOG](https://github.com/Hello-QM/catgo-LRG/blob/main/CHANGELOG.md) for the full list.
 
             ### New in 1.4.0
             - **`catgo view` / `catgo gui` CLI** — open structures & trajectories like `ase gui`: `catgo view */POSCAR` stacks files into one trajectory, per-file `@SLICE` frame selection, `--interpolate` (IDPP), and headless `-g/-t` convergence plots. On a packaged install, running `catgo view` with no app open **launches CatGo** and shows the structure.
