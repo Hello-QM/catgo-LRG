@@ -1977,6 +1977,7 @@
     get_trajectory_active: () => trajectory_active,
     get_positions: () => get_trajectory_frame_positions,
     get_strategy: () => (scene_props?.bonding_strategy ?? `electroneg_ratio`) as BondingStrategy,
+    get_show_bonds: () => (scene_props?.show_bonds ?? `always`) as string,
     get_options: () => (scene_props?.bonding_options ?? {}) as Record<string, number>,
     set_connectivity: (v) => { trajectory_bond_connectivity_for_frame = v },
     get_connectivity: () => trajectory_bond_connectivity_for_frame,
@@ -4316,6 +4317,7 @@
             {webgl_suspended}
             {trajectory_frame_positions}
             {trajectory_frame_forces}
+            {trajectory_step_idx}
             trajectory_bond_connectivity={trajectory_bond_connectivity_for_frame}
             {...scene_props}
             {show_image_atoms}
