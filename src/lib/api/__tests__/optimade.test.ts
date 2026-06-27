@@ -141,3 +141,71 @@ describe(`MP nested _mp_stability extraction + stability sort`, () => {
     ])
   })
 })
+
+// Cold-start race: on desktop the Python sidecar that serves
+// /api/optimade/providers boots a few seconds after the webview. If the user
+// opens Search-Database immediately, the first providers fetch is refused at
+// the socket level — the dialog then degrades to PubChem-only (the modal injects
+// PubChem client-side; the OPTIMADE list needs the backend). fetch_optimade_providers
+// must retry the backend instead of giving up on the first failure, and must
+// never cache an empty result (so a later open still recovers).
+describe(`fetch_optimade_providers cold-start retry`, () => {
+  let mod: typeof import('../optimade')
+
+  beforeEach(async () => {
+    delete (globalThis as Record<string, unknown>).__CATGO_STATIC_ONLY__
+    vi.resetModules()
+    vi.useFakeTimers()
+    mod = await import(`../optimade`)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  const providers_response = (ids: string[]) =>
+    new Response(
+      JSON.stringify({ data: ids.map((id) => ({ id, type: `links`, attributes: { name: id, base_url: `https://x/${id}` } })) }),
+      { status: 200, headers: { 'Content-Type': `application/vnd.api+json` } },
+    )
+
+  it(`retries the backend and succeeds when the sidecar comes up late`, async () => {
+    let calls = 0
+    vi.spyOn(globalThis, `fetch`).mockImplementation(() => {
+      calls++
+      // First two attempts: sidecar not listening yet (connection refused).
+      if (calls < 3) return Promise.reject(new TypeError(`Failed to fetch`))
+      return Promise.resolve(providers_response([`mp`, `alexandria`]))
+    })
+
+    const promise = mod.fetch_optimade_providers()
+    await vi.runAllTimersAsync()
+    const result = await promise
+
+    expect(calls).toBe(3)
+    expect(result.map((p) => p.id)).toEqual([`mp`, `alexandria`])
+  })
+
+  it(`returns an empty, UN-cached list when the backend never comes up`, async () => {
+    vi.spyOn(globalThis, `fetch`).mockImplementation(() =>
+      Promise.reject(new TypeError(`Failed to fetch`)),
+    )
+
+    const promise = mod.fetch_optimade_providers()
+    await vi.runAllTimersAsync()
+    const first = await promise
+    expect(first).toEqual([])
+
+    // Not cached as empty: a subsequent open re-attempts the backend, and now
+    // the sidecar is up, so the real list loads (no stale empty cache wins).
+    vi.restoreAllMocks()
+    vi.spyOn(globalThis, `fetch`).mockImplementation(() =>
+      Promise.resolve(providers_response([`mp`])),
+    )
+    const promise2 = mod.fetch_optimade_providers()
+    await vi.runAllTimersAsync()
+    const second = await promise2
+    expect(second.map((p) => p.id)).toEqual([`mp`])
+  })
+})
