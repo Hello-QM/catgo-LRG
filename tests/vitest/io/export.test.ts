@@ -1,4 +1,6 @@
 import {
+  add_png_dpi_metadata,
+  compute_export_render_plan,
   export_canvas_as_png,
   export_svg_as_png,
   export_svg_as_svg,
@@ -38,9 +40,143 @@ function create_mock_image(): HTMLImageElement {
   } as unknown as HTMLImageElement
 }
 
+function u32_be(value: number): Uint8Array {
+  const out = new Uint8Array(4)
+  new DataView(out.buffer).setUint32(0, value, false)
+  return out
+}
+
+function make_png_chunk(type: string, data = new Uint8Array()): Uint8Array {
+  const type_bytes = new TextEncoder().encode(type)
+  const out = new Uint8Array(12 + data.length)
+  out.set(u32_be(data.length), 0)
+  out.set(type_bytes, 4)
+  out.set(data, 8)
+  // CRC is not relevant for metadata insertion tests; the production code
+  // writes a valid CRC for the pHYs chunk it creates.
+  return out
+}
+
+function make_minimal_png(extra_chunks: Uint8Array[] = []): Uint8Array {
+  const signature = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  const ihdr = new Uint8Array(13)
+  new DataView(ihdr.buffer).setUint32(0, 1, false)
+  new DataView(ihdr.buffer).setUint32(4, 1, false)
+  ihdr[8] = 8
+  ihdr[9] = 6
+  return new Uint8Array([
+    ...signature,
+    ...make_png_chunk(`IHDR`, ihdr),
+    ...extra_chunks.flatMap((chunk) => [...chunk]),
+    ...make_png_chunk(`IEND`),
+  ])
+}
+
+function find_png_chunk(png: Uint8Array, type: string): Uint8Array | null {
+  let offset = 8
+  while (offset + 8 <= png.length) {
+    const length = new DataView(png.buffer, png.byteOffset + offset, 4).getUint32(0, false)
+    const type_start = offset + 4
+    const data_start = offset + 8
+    const chunk_end = data_start + length + 4
+    if (chunk_end > png.length) return null
+    const chunk_type = String.fromCharCode(...png.slice(type_start, type_start + 4))
+    if (chunk_type === type) return png.slice(data_start, data_start + length)
+    offset = chunk_end
+  }
+  return null
+}
+
+function count_png_chunks(png: Uint8Array, type: string): number {
+  let count = 0
+  let offset = 8
+  while (offset + 8 <= png.length) {
+    const length = new DataView(png.buffer, png.byteOffset + offset, 4).getUint32(0, false)
+    const type_start = offset + 4
+    const chunk_end = offset + 8 + length + 4
+    if (chunk_end > png.length) return count
+    const chunk_type = String.fromCharCode(...png.slice(type_start, type_start + 4))
+    if (chunk_type === type) count++
+    offset = chunk_end
+  }
+  return count
+}
+
 describe(`Export functionality`, () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  describe(`high-DPI crop render planning`, () => {
+    it(`renders a crop directly instead of clamping the full high-DPI viewport`, () => {
+      const multiplier = 600 / 72
+      const plan = compute_export_render_plan(
+        1280,
+        720,
+        1280 * multiplier,
+        720 * multiplier,
+        8192,
+        { x: 460, y: 180, width: 365, height: 365 },
+      )
+
+      expect(plan.render_width).toBe(Math.round(365 * multiplier))
+      expect(plan.render_height).toBe(Math.round(365 * multiplier))
+      expect(plan.render_width).toBeLessThan(8192)
+      expect(plan.view_offset).toMatchObject({
+        full_width: Math.round(1280 * multiplier),
+        full_height: Math.round(720 * multiplier),
+        x: Math.round(460 * multiplier),
+        y: Math.round(180 * multiplier),
+      })
+    })
+
+    it(`still clamps uncropped full-canvas exports to the WebGL max size`, () => {
+      const multiplier = 600 / 72
+      const plan = compute_export_render_plan(
+        1280,
+        720,
+        1280 * multiplier,
+        720 * multiplier,
+        8192,
+        null,
+      )
+
+      expect(Math.max(plan.render_width, plan.render_height)).toBeLessThanOrEqual(8192)
+      expect(Math.max(plan.render_width, plan.render_height)).toBeGreaterThan(8000)
+      expect(plan.view_offset).toBeUndefined()
+    })
+  })
+
+  describe(`PNG DPI metadata`, () => {
+    it(`writes a pHYs chunk matching the requested DPI`, () => {
+      const patched = add_png_dpi_metadata(make_minimal_png(), 600)
+      const phys = find_png_chunk(patched, `pHYs`)
+      expect(phys).not.toBeNull()
+
+      const view = new DataView(phys!.buffer, phys!.byteOffset, phys!.byteLength)
+      const expected_ppm = Math.round(600 / 0.0254)
+      expect(view.getUint32(0, false)).toBe(expected_ppm)
+      expect(view.getUint32(4, false)).toBe(expected_ppm)
+      expect(phys![8]).toBe(1)
+    })
+
+    it(`leaves non-PNG bytes unchanged`, () => {
+      const bytes = new Uint8Array([1, 2, 3])
+      expect(add_png_dpi_metadata(bytes, 600)).toBe(bytes)
+    })
+
+    it(`replaces an existing pHYs chunk`, () => {
+      const old_phys = new Uint8Array(9)
+      new DataView(old_phys.buffer).setUint32(0, 1, false)
+      new DataView(old_phys.buffer).setUint32(4, 1, false)
+      old_phys[8] = 1
+      const patched = add_png_dpi_metadata(make_minimal_png([make_png_chunk(`pHYs`, old_phys)]), 300)
+      const phys = find_png_chunk(patched, `pHYs`)
+
+      expect(count_png_chunks(patched, `pHYs`)).toBe(1)
+      expect(new DataView(phys!.buffer, phys!.byteOffset, phys!.byteLength).getUint32(0, false))
+        .toBe(Math.round(300 / 0.0254))
+    })
   })
 
   describe(`Canvas PNG export`, () => {

@@ -12,6 +12,269 @@ export type CropRegion = { x: number; y: number; width: number; height: number }
 // Supported image export formats
 export type ImageExportFormat = `png` | `jpg` | `tiff` | `svg` | `pdf`
 
+type ExportViewOffset = {
+  full_width: number
+  full_height: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type ExportRenderPlan = {
+  full_width: number
+  full_height: number
+  render_width: number
+  render_height: number
+  view_offset?: ExportViewOffset
+}
+
+const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+let crc32_table: Uint32Array | undefined
+
+function clamp_num(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max))
+}
+
+function get_crc32_table(): Uint32Array {
+  if (crc32_table) return crc32_table
+  crc32_table = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1)
+    }
+    crc32_table[n] = c >>> 0
+  }
+  return crc32_table
+}
+
+function crc32(bytes: Uint8Array): number {
+  const table = get_crc32_table()
+  let c = 0xffffffff
+  for (const byte of bytes) c = table[(c ^ byte) & 0xff] ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+function read_u32_be(bytes: Uint8Array, offset: number): number {
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, false)
+}
+
+function write_u32_be(bytes: Uint8Array, offset: number, value: number): void {
+  new DataView(bytes.buffer, bytes.byteOffset + offset, 4).setUint32(0, value >>> 0, false)
+}
+
+function is_png(bytes: Uint8Array): boolean {
+  if (bytes.length < PNG_SIGNATURE.length) return false
+  return PNG_SIGNATURE.every((byte, idx) => bytes[idx] === byte)
+}
+
+function make_png_chunk(type: string, data: Uint8Array): Uint8Array {
+  const type_bytes = new TextEncoder().encode(type)
+  const chunk = new Uint8Array(12 + data.length)
+  write_u32_be(chunk, 0, data.length)
+  chunk.set(type_bytes, 4)
+  chunk.set(data, 8)
+  const crc_input = new Uint8Array(type_bytes.length + data.length)
+  crc_input.set(type_bytes, 0)
+  crc_input.set(data, type_bytes.length)
+  write_u32_be(chunk, 8 + data.length, crc32(crc_input))
+  return chunk
+}
+
+function concat_bytes(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, part) => sum + part.length, 0)
+  const out = new Uint8Array(total)
+  let offset = 0
+  for (const part of parts) {
+    out.set(part, offset)
+    offset += part.length
+  }
+  return out
+}
+
+// PNG stores physical resolution as pixels per meter in a pHYs chunk. Windows
+// image properties read this chunk for horizontal/vertical DPI.
+export function add_png_dpi_metadata(png: Uint8Array, dpi: number): Uint8Array {
+  if (!is_png(png)) return png
+
+  const ppm = Math.max(1, Math.round(dpi / 0.0254))
+  const phys_data = new Uint8Array(9)
+  write_u32_be(phys_data, 0, ppm)
+  write_u32_be(phys_data, 4, ppm)
+  phys_data[8] = 1 // unit: meter
+  const phys_chunk = make_png_chunk(`pHYs`, phys_data)
+
+  let offset = PNG_SIGNATURE.length
+  let insert_after_ihdr: number | null = null
+  while (offset + 8 <= png.length) {
+    const length = read_u32_be(png, offset)
+    const type_start = offset + 4
+    const data_start = offset + 8
+    const chunk_end = data_start + length + 4
+    if (chunk_end > png.length) return png
+
+    const type = String.fromCharCode(...png.slice(type_start, type_start + 4))
+    if (type === `pHYs`) {
+      return concat_bytes([png.slice(0, offset), phys_chunk, png.slice(chunk_end)])
+    }
+    if (type === `IHDR`) {
+      insert_after_ihdr = chunk_end
+    }
+    offset = chunk_end
+  }
+  if (insert_after_ihdr !== null) {
+    return concat_bytes([
+      png.slice(0, insert_after_ihdr),
+      phys_chunk,
+      png.slice(insert_after_ihdr),
+    ])
+  }
+  return png
+}
+
+async function blob_with_png_dpi(blob: Blob, dpi?: number): Promise<Blob> {
+  if (!dpi || blob.type !== `image/png`) return blob
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  const patched = add_png_dpi_metadata(bytes, dpi)
+  return new Blob([patched], { type: blob.type })
+}
+
+// Decide the actual off-screen render size. With a crop, render only that
+// selected sub-view via camera.setViewOffset instead of rendering a giant
+// full-canvas image and then reading a rectangle from it. This keeps high-DPI
+// crops aligned with the on-screen selection and avoids full-viewport WebGL
+// max-size downscaling.
+export function compute_export_render_plan(
+  source_width: number,
+  source_height: number,
+  target_width: number,
+  target_height: number,
+  max_size: number,
+  crop_region?: CropRegion | null,
+): ExportRenderPlan {
+  const safe_source_w = Math.max(1, source_width)
+  const safe_source_h = Math.max(1, source_height)
+  const safe_max = Math.max(1, Math.floor(max_size))
+
+  if (crop_region) {
+    const x0 = clamp_num(crop_region.x, 0, safe_source_w)
+    const y0 = clamp_num(crop_region.y, 0, safe_source_h)
+    const x1 = clamp_num(crop_region.x + crop_region.width, 0, safe_source_w)
+    const y1 = clamp_num(crop_region.y + crop_region.height, 0, safe_source_h)
+    const crop_w = Math.max(1, x1 - x0)
+    const crop_h = Math.max(1, y1 - y0)
+
+    const scale_x = target_width / safe_source_w
+    const scale_y = target_height / safe_source_h
+    let full_w = Math.max(1, Math.round(target_width))
+    let full_h = Math.max(1, Math.round(target_height))
+    let view_x = Math.round(x0 * scale_x)
+    let view_y = Math.round(y0 * scale_y)
+    let view_w = Math.max(1, Math.round(crop_w * scale_x))
+    let view_h = Math.max(1, Math.round(crop_h * scale_y))
+
+    if (view_w > safe_max || view_h > safe_max) {
+      const scale = safe_max / Math.max(view_w, view_h)
+      full_w = Math.max(1, Math.floor(full_w * scale))
+      full_h = Math.max(1, Math.floor(full_h * scale))
+      view_x = Math.round(view_x * scale)
+      view_y = Math.round(view_y * scale)
+      view_w = Math.max(1, Math.floor(view_w * scale))
+      view_h = Math.max(1, Math.floor(view_h * scale))
+    }
+
+    view_x = clamp_num(view_x, 0, Math.max(0, full_w - 1))
+    view_y = clamp_num(view_y, 0, Math.max(0, full_h - 1))
+    view_w = Math.max(1, Math.min(view_w, full_w - view_x))
+    view_h = Math.max(1, Math.min(view_h, full_h - view_y))
+
+    return {
+      full_width: full_w,
+      full_height: full_h,
+      render_width: view_w,
+      render_height: view_h,
+      view_offset: {
+        full_width: full_w,
+        full_height: full_h,
+        x: view_x,
+        y: view_y,
+        width: view_w,
+        height: view_h,
+      },
+    }
+  }
+
+  let w = Math.max(1, Math.round(target_width))
+  let h = Math.max(1, Math.round(target_height))
+  if (w > safe_max || h > safe_max) {
+    const scale = safe_max / Math.max(w, h)
+    w = Math.max(1, Math.floor(w * scale))
+    h = Math.max(1, Math.floor(h * scale))
+  }
+  return {
+    full_width: w,
+    full_height: h,
+    render_width: w,
+    render_height: h,
+  }
+}
+
+function prepare_camera_for_export(
+  camera: THREE.Camera,
+  full_width: number,
+  full_height: number,
+  view_offset?: ExportViewOffset,
+): () => void {
+  const cam = camera as any
+  const state = {
+    aspect: cam.aspect,
+    left: cam.left,
+    right: cam.right,
+    top: cam.top,
+    bottom: cam.bottom,
+    view: cam.view ? { ...cam.view } : null,
+  }
+
+  const aspect = full_width / Math.max(1, full_height)
+  if (cam.isPerspectiveCamera) {
+    cam.aspect = aspect
+  } else if (cam.isOrthographicCamera) {
+    const center_x = (cam.left + cam.right) / 2
+    const view_height = cam.top - cam.bottom
+    if (Number.isFinite(center_x) && Number.isFinite(view_height) && view_height > 0) {
+      const view_width = view_height * aspect
+      cam.left = center_x - view_width / 2
+      cam.right = center_x + view_width / 2
+    }
+  }
+
+  if (view_offset && typeof cam.setViewOffset === `function`) {
+    cam.setViewOffset(
+      view_offset.full_width,
+      view_offset.full_height,
+      view_offset.x,
+      view_offset.y,
+      view_offset.width,
+      view_offset.height,
+    )
+  } else if (typeof cam.clearViewOffset === `function`) {
+    cam.clearViewOffset()
+  }
+  cam.updateProjectionMatrix?.()
+
+  return () => {
+    if (state.aspect !== undefined) cam.aspect = state.aspect
+    if (state.left !== undefined) cam.left = state.left
+    if (state.right !== undefined) cam.right = state.right
+    if (state.top !== undefined) cam.top = state.top
+    if (state.bottom !== undefined) cam.bottom = state.bottom
+    if (state.view) cam.view = { ...state.view }
+    else if (typeof cam.clearViewOffset === `function`) cam.clearViewOffset()
+    cam.updateProjectionMatrix?.()
+  }
+}
+
 // Render scene at specified resolution and read pixels synchronously via gl.readPixels.
 // This avoids preserveDrawingBuffer issues that cause blank exports on WebGL canvases.
 // Returns RGBA pixel data (top-to-bottom row order) and actual dimensions.
@@ -26,46 +289,36 @@ function render_and_read_pixels(
   const gl = renderer.getContext()
   const max_size = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number
 
-  // Clamp to GL max renderbuffer size to prevent silent render failure
-  let w = Math.round(target_width)
-  let h = Math.round(target_height)
-  if (w > max_size || h > max_size) {
-    const scale = max_size / Math.max(w, h)
-    w = Math.floor(w * scale)
-    h = Math.floor(h * scale)
-  }
-
   // Save original state
   const orig_pixel_ratio = renderer.getPixelRatio()
   const orig_size = renderer.getSize(new Vector2())
+  const plan = compute_export_render_plan(
+    orig_size.width,
+    orig_size.height,
+    target_width,
+    target_height,
+    max_size,
+    crop_region,
+  )
+  let restore_camera: (() => void) | undefined
 
   try {
     // Render at target resolution (pixelRatio=1, exact pixel dimensions)
     renderer.setPixelRatio(1)
-    renderer.setSize(w, h, false)
+    renderer.setSize(plan.render_width, plan.render_height, false)
+    restore_camera = prepare_camera_for_export(
+      camera,
+      plan.full_width,
+      plan.full_height,
+      plan.view_offset,
+    )
     renderer.render(scene, camera)
 
     // Read pixels synchronously — works regardless of preserveDrawingBuffer
-    let read_x = 0
-    let read_y = 0
-    let read_w = w
-    let read_h = h
-
-    if (crop_region) {
-      // Scale crop region from CSS pixels to render pixels
-      const scale_x = w / orig_size.width
-      const scale_y = h / orig_size.height
-      read_x = Math.round(crop_region.x * scale_x)
-      // OpenGL origin is bottom-left, so flip y
-      read_y = Math.round(h - (crop_region.y + crop_region.height) * scale_y)
-      read_w = Math.round(crop_region.width * scale_x)
-      read_h = Math.round(crop_region.height * scale_y)
-      // Clamp to buffer bounds
-      read_x = Math.max(0, Math.min(read_x, w - 1))
-      read_y = Math.max(0, Math.min(read_y, h - 1))
-      read_w = Math.min(read_w, w - read_x)
-      read_h = Math.min(read_h, h - read_y)
-    }
+    const read_x = 0
+    const read_y = 0
+    const read_w = plan.render_width
+    const read_h = plan.render_height
 
     const pixels = new Uint8Array(read_w * read_h * 4)
     gl.readPixels(read_x, read_y, read_w, read_h, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
@@ -84,6 +337,7 @@ function render_and_read_pixels(
     return { pixels, width: read_w, height: read_h }
   } finally {
     // Always restore original renderer state
+    restore_camera?.()
     renderer.setPixelRatio(orig_pixel_ratio)
     renderer.setSize(orig_size.width, orig_size.height, false)
   }
@@ -96,6 +350,7 @@ function pixels_to_image_blob(
   height: number,
   mime: `image/png` | `image/jpeg`,
   quality = 1.0,
+  dpi?: number,
 ): Promise<Blob> {
   const canvas = document.createElement(`canvas`)
   canvas.width = width
@@ -108,7 +363,13 @@ function pixels_to_image_blob(
   ctx.putImageData(image_data, 0, 0)
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
-      (blob) => (blob ? resolve(blob) : reject(new Error(`Failed to create ${mime} blob`))),
+      (blob) => {
+        if (!blob) {
+          reject(new Error(`Failed to create ${mime} blob`))
+          return
+        }
+        blob_with_png_dpi(blob, dpi).then(resolve, reject)
+      },
       mime,
       quality,
     )
@@ -195,7 +456,7 @@ function encode_tiff(pixels: Uint8Array, width: number, height: number, dpi = 15
 // making it resolution-independent for scaling and printing.
 async function encode_svg(pixels: Uint8Array, width: number, height: number, dpi: number): Promise<Blob> {
   // Get base64-encoded PNG data for embedding
-  const png_blob = await pixels_to_image_blob(pixels, width, height, `image/png`)
+  const png_blob = await pixels_to_image_blob(pixels, width, height, `image/png`, 1.0, dpi)
   const png_base64 = await blob_to_base64(png_blob)
 
   // Physical dimensions: pixel size / DPI → inches → points (1 pt = 1/72 inch)
@@ -334,6 +595,7 @@ export async function capture_canvas_as_png_blob(
   canvas: HTMLCanvasElement,
   crop_region?: CropRegion | null,
   pixel_ratio?: number,
+  dpi?: number,
 ): Promise<Blob> {
   const ratio = pixel_ratio ?? (
     (canvas as { __renderer?: WebGLRenderer }).__renderer?.getPixelRatio() ??
@@ -356,16 +618,22 @@ export async function capture_canvas_as_png_blob(
 
     return new Promise<Blob>((resolve, reject) => {
       tmp.toBlob((blob) => {
-        if (blob) resolve(blob)
-        else reject(new Error(`Failed to generate cropped PNG blob`))
+        if (!blob) {
+          reject(new Error(`Failed to generate cropped PNG blob`))
+          return
+        }
+        blob_with_png_dpi(blob, dpi).then(resolve, reject)
       }, `image/png`)
     })
   }
 
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
-      if (blob) resolve(blob)
-      else reject(new Error(`Failed to generate PNG blob`))
+      if (!blob) {
+        reject(new Error(`Failed to generate PNG blob`))
+        return
+      }
+      blob_with_png_dpi(blob, dpi).then(resolve, reject)
     }, `image/png`)
   })
 }
@@ -413,7 +681,7 @@ export function export_canvas_as_image(
 
     if (!renderer || !scene || !camera) {
       // Fallback: direct canvas capture (only works for PNG at current resolution)
-      capture_canvas_as_png_blob(canvas, crop_region)
+      capture_canvas_as_png_blob(canvas, crop_region, undefined, Math.round(png_dpi))
         .then((blob) => download(blob, filename, `image/png`))
         .catch((error) => console.error(`Error during image export:`, error))
       return
@@ -460,7 +728,14 @@ export function export_canvas_as_image(
         .then((blob) => download(blob, filename, mime))
         .catch((error) => console.error(`Error during PDF export:`, error))
     } else {
-      pixels_to_image_blob(pixels, width, height, format === `jpg` ? `image/jpeg` : `image/png`)
+      pixels_to_image_blob(
+        pixels,
+        width,
+        height,
+        format === `jpg` ? `image/jpeg` : `image/png`,
+        1.0,
+        Math.round(png_dpi),
+      )
         .then((blob) => download(blob, filename, mime))
         .catch((error) => console.error(`Error during ${format.toUpperCase()} export:`, error))
     }
@@ -871,12 +1146,24 @@ export async function export_trajectory_png_sequence(
         const { pixels, width, height } = render_and_read_pixels(
           renderer!, scene!, camera!, target_w, target_h, crop_region,
         )
-        blob = await pixels_to_image_blob(pixels, width, height, `image/png`)
+        blob = await pixels_to_image_blob(
+          pixels,
+          width,
+          height,
+          `image/png`,
+          1.0,
+          Math.round(png_dpi),
+        )
       } else {
         // Fallback: render + toBlob
         if (renderer && scene && camera) renderer.render(scene, camera)
         const pixel_ratio = renderer?.getPixelRatio() ?? window.devicePixelRatio ?? 1
-        blob = await capture_canvas_as_png_blob(canvas, crop_region, pixel_ratio)
+        blob = await capture_canvas_as_png_blob(
+          canvas,
+          crop_region,
+          pixel_ratio,
+          Math.round(png_dpi),
+        )
       }
 
       const arr = new Uint8Array(await blob.arrayBuffer())
