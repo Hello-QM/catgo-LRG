@@ -77,6 +77,10 @@
       "rpm": {
         "files": {
           "/usr/bin/catgo-cli": "../deploy/cli/catgo-cli"
+        },
+        "compression": {
+          "type": "zstd",
+          "level": 3
         }
       }
     },
