@@ -220,8 +220,14 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+          # Notarization (APPLE_API_ISSUER / APPLE_API_KEY) is DISABLED: Apple's
+          # notary service repeatedly hung for 2-3h on this runner (huge ~240MB
+          # bundled Python backend → hundreds of nested binaries to scan, plus
+          # flaky long-poll → NSURLErrorDomain -1009). The .dmg/.app are still
+          # Developer-ID **signed**, so the first launch needs right-click → Open.
+          # Re-enable once notarization is reliable (or the backend is slimmed).
+          # APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          # APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'CatGo ${{ github.ref_name }}'
@@ -238,7 +244,7 @@ jobs:
             ### Installation
             - **Windows** — run the **`-setup.exe`** installer (recommended; it puts the `catgo` CLI on your PATH so `catgo view` works). The `.msi` installs the app but not the CLI.
               - Unsigned this release: if Windows SmartScreen warns, click **More info → Run anyway**. (Code signing is coming in a later build.)
-            - **macOS** — open the `.dmg` and drag CatGo to Applications. **Signed & notarized** (Apple Silicon) — it opens normally, no right-click workaround.
+            - **macOS** — open the `.dmg` and drag CatGo to Applications. **Developer-ID signed** (Apple Silicon); the first launch needs **right-click → Open → Open** (notarization is coming in a follow-up).
             - **Linux** — `sudo dpkg -i CatGo_*_amd64.deb` (or `sudo rpm -i`)
             - **Android** — install `CatGo-v*-android-universal.apk`
             - **iOS** — join the [TestFlight beta](https://testflight.apple.com/join/FdHup5Hz)
@@ -254,7 +260,7 @@ jobs:
 
             ### New in 1.4.1
             - **In-app auto-update** — Windows & macOS notice new releases and update with one click (download the signed bundle → relaunch); Linux gets a "new version" banner linking to the download page. The banner only shows when a newer release exists.
-            - **Signed & notarized macOS** — the `.dmg`/`.app` now open without the Gatekeeper right-click workaround.
+            - **Developer-ID signed macOS** — the `.dmg`/`.app` are code-signed (first launch: right-click → Open; notarization lands in a follow-up).
             - **Bonds preserved when adding a lattice** — adding a periodic box to a molecule (Build → Lattice) no longer drops the bonds (correct fractional coords, incl. non-orthogonal cells).
             - **Search Database fixed** — OPTIMADE providers retry on cold start, so it's no longer PubChem-only.
             - **VS Code extension** — trajectory playback no longer janks (off-thread bond recompute); **plots** — axis titles no longer overlap tick labels at large fonts.

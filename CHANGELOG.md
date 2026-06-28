@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **In-app auto-update** — installed desktop builds now notice new releases and update from inside the app. Windows/macOS download the signed bundle and relaunch with one click; Linux (`.deb`/`.rpm`) shows a "new version" banner that opens the download page. A bottom-centre banner appears only when a newer version exists. Web and mobile builds are unaffected.
-- **Signed & notarized macOS builds** — the `.dmg`/`.app` are now code-signed with a Developer ID certificate and notarized via the App Store Connect API key, so macOS no longer needs the right-click → Open Gatekeeper workaround.
+- **Developer-ID signed macOS builds** — the `.dmg`/`.app` are now code-signed with a Developer ID certificate (first launch still needs right-click → Open; full notarization is a follow-up).
 
 ### Changed
 - **Web "Get the App" button** is now embedded in the landing page (next to *Star on GitHub*) instead of floating over the editor after a structure loads.
