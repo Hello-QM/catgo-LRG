@@ -340,8 +340,20 @@ def remove_profile(name: str) -> dict[str, str]:
 
 
 def _get_hpc(session_id: str):
-    """Get connection or raise 404."""
-    hpc = pool.get_connection(session_id)
+    """Get connection or raise 404.
+
+    An empty/blank ``session_id`` means the local filesystem: the desktop
+    "Local Files" tree and a local terminal leaf send `''` (no remote session),
+    so map it to the always-present ``LocalFileConnection`` (registered under
+    ``LOCAL_SESSION_ID``). Without this, Ctrl+clicking a file in a LOCAL
+    terminal hit `/hpc/files/read-content` with `''` → 404 → the file silently
+    never opened.
+    """
+    from catgo.utils.hpc_client import LOCAL_SESSION_ID
+    sid = session_id.strip() if isinstance(session_id, str) else session_id
+    if not sid:
+        sid = LOCAL_SESSION_ID
+    hpc = pool.get_connection(sid)
     if not hpc:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     return hpc
