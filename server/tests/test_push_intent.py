@@ -154,3 +154,32 @@ def test_upload_and_load_route_tags_intent_load(monkeypatch):
     assert res["status"] == "ok"
     assert captured["intent"] == "load"
     assert captured["pid"] == "default"
+
+
+def test_upload_and_load_route_intent_param_overrides(monkeypatch):
+    """`catgo view` / lab CLI pass `intent=edit` so REPEATED pushes to the
+    External pane always apply (ase-gui semantics) instead of being held by
+    the frontend load-gate after the first push. Default stays "load" so the
+    CatBot load-into-occupied-tab prompt is unchanged."""
+    import asyncio
+    import io
+
+    from starlette.datastructures import UploadFile
+
+    from catgo.routers import view_capture
+
+    captured = {}
+    monkeypatch.setattr(
+        view_capture.view_state, "push_structure",
+        lambda sd, pid, intent="edit", **kw: captured.update(intent=intent, pid=pid),
+    )
+
+    xyz = b"2\n\nH 0.0 0.0 0.0\nH 0.0 0.0 0.74\n"
+    uf = UploadFile(filename="mol.xyz", file=io.BytesIO(xyz))
+    res = asyncio.run(
+        view_capture.upload_and_load(file=uf, panel_id="default", intent="edit")
+    )
+
+    assert res["status"] == "ok"
+    assert captured["intent"] == "edit"
+    assert captured["pid"] == "default"

@@ -10,7 +10,7 @@ import json
 import logging
 import uuid
 from collections import deque
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
@@ -596,6 +596,16 @@ def _is_trajectory(content: str, filename: str) -> bool:
 async def upload_and_load(
     file: UploadFile = File(...),
     panel_id: str = Query("default", description="Target panel; 'default' = External pane"),
+    intent: Annotated[
+        str,
+        Query(
+            description="'load' (default — fresh load; frontend may prompt "
+            "before overwriting an occupied pane) or 'edit' (apply in place, "
+            "always — used by the `catgo view`/`catgo push` CLI so REPEATED "
+            "pushes to the External pane keep showing the latest, ase-gui "
+            "style).",
+        ),
+    ] = "load",
 ):
     """Upload a structure file (multipart/form-data) and push it to the viewer.
 
@@ -659,7 +669,7 @@ async def upload_and_load(
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Parse failed: {exc}")
 
-    view_state.push_structure(struct_dict, panel_id, intent="load")
+    view_state.push_structure(struct_dict, panel_id, intent=intent)
     n = len(struct_dict.get("sites", []))
     logger.info("upload-and-load: %s → panel '%s', %d sites", filename or "<unnamed>", panel_id, n)
     return {

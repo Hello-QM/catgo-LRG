@@ -70,8 +70,15 @@ class ServerLink:
                 return cls(base_url=url)
         return None
 
-    def push_structure(self, path, panel_id) -> dict:
-        """POST /api/view/upload-and-load (multipart). Returns server JSON."""
+    def push_structure(self, path, panel_id, intent="edit") -> dict:
+        """POST /api/view/upload-and-load (multipart). Returns server JSON.
+
+        `intent` defaults to "edit" so a CLI push (`catgo view`/`catgo push`)
+        ALWAYS applies in place — repeated pushes to the External pane keep
+        showing the latest structure, ase-gui style. (The route's own default
+        is "load", which the frontend HOLDS once the pane is occupied; that is
+        for CatBot loading into a user's working tab, not an explicit CLI push.)
+        """
         import os
         from pathlib import Path
         p = Path(path)
@@ -84,8 +91,13 @@ class ServerLink:
         ).encode() + p.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
 
         url = f"{self.base_url}/api/view/upload-and-load"
+        params = []
         if panel_id:
-            url += f"?panel_id={panel_id}"
+            params.append(f"panel_id={panel_id}")
+        if intent:
+            params.append(f"intent={intent}")
+        if params:
+            url += "?" + "&".join(params)
         req = urllib.request.Request(
             url, data=body, method="POST",
             headers={"Content-Type":

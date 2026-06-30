@@ -205,3 +205,20 @@ def test_pull_structure_panel_omitted(monkeypatch):
     link.pull_structure(fmt="cif", panel_id=None)
     assert "panel_id=" not in calls["url"]
     assert "format=cif" in calls["url"]
+
+
+def test_push_structure_sends_intent_edit(monkeypatch, tmp_path):
+    """`catgo view` pushes with intent=edit so the External pane always
+    replaces (ase-gui), not held after the first push (regression: catgo
+    view只生效一次)."""
+    from catgo.cli import server_link
+    calls = {}
+    def _urlopen(req, timeout=None):
+        calls["url"] = req.full_url
+        return _FakeResponse(b'{"panel_id": "default", "num_sites": 2}')
+    monkeypatch.setattr(server_link.urllib.request, "urlopen", _urlopen)
+    p = tmp_path / "x.vasp"; p.write_bytes(b"POSCAR\n1.0\n")
+    link = server_link.ServerLink(base_url="http://localhost:8000")
+    link.push_structure(p, panel_id="default")
+    assert "intent=edit" in calls["url"]
+    assert "panel_id=default" in calls["url"]
