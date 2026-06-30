@@ -1503,14 +1503,21 @@
           onclick={() => set_open_kind('window')}
         >{t('app.open_in_window')}</button>
       </div>
-      <button
-        class="open-mode-toggle"
-        class:overwrite={open_target_state.value.mode === 'overwrite'}
-        title={t('app.open_mode_hint')}
-        onclick={() => set_open_mode(open_target_state.value.mode === 'new' ? 'overwrite' : 'new')}
-      >{open_target_state.value.mode === 'new'
-          ? t('app.open_mode_new')
-          : t('app.open_mode_overwrite')}</button>
+      <div class="open-target-btns open-mode-btns">
+        <button
+          class="open-target-btn"
+          class:active={open_target_state.value.mode === 'new'}
+          title={t('app.open_mode_hint')}
+          onclick={() => set_open_mode('new')}
+        >{t('app.open_mode_new')}</button>
+        <button
+          class="open-target-btn"
+          class:active={open_target_state.value.mode === 'overwrite'}
+          class:overwrite={open_target_state.value.mode === 'overwrite'}
+          title={t('app.open_mode_hint')}
+          onclick={() => set_open_mode('overwrite')}
+        >{t('app.open_mode_overwrite')}</button>
+      </div>
     </div>
 
     <!-- System diagnostics toggle -->
@@ -2235,6 +2242,20 @@
     background: var(--accent, #4d9ee5);
     color: #fff;
     border-color: var(--accent, #4d9ee5);
+  }
+  /* Overwrite is destructive (replaces the current pane) — when selected it
+     reads as a warning instead of the neutral accent, so the two modes are
+     unmistakable at a glance. */
+  .open-target-btn.overwrite.active {
+    background: var(--danger, #e5534d);
+    border-color: var(--danger, #e5534d);
+  }
+  /* Visually separate the new/overwrite mode group from the tab/split/window
+     destination group. */
+  .open-mode-btns {
+    margin-left: 4px;
+    padding-left: 8px;
+    border-left: 1px solid var(--border, #444);
   }
 
   .fs-toggle-btn .chevron {
