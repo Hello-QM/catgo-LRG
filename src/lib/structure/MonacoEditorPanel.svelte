@@ -152,6 +152,12 @@
         cursorBlinking: `smooth`,
         cursorSmoothCaretAnimation: `on`,
         stickyScroll: { enabled: false },
+        // Inlay hints route through the base editor worker's foreign-module
+        // (`EditorWorker.$fmr`), which doesn't implement `provideInlayHints` in
+        // monaco 0.55 → every TS/JS open flooded the console with
+        // `Missing requestHandler or method: provideInlayHints`. This is a file
+        // viewer/editor, not an IDE, so inlay hints add nothing — turn them off.
+        inlayHints: { enabled: `off` },
       })
       editor_instance = editor
 
