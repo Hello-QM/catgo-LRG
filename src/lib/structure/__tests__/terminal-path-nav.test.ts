@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { open_terminal_click } from '../terminal-path-nav'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { open_terminal_click, path_is_directory } from '../terminal-path-nav'
 
 describe('open_terminal_click', () => {
   it('navigates the Files panel when the path is a directory', async () => {
@@ -51,5 +51,32 @@ describe('open_terminal_click', () => {
     )
     expect(open_file).toHaveBeenCalledWith('/maybe/gone')
     expect(navigate_dir).not.toHaveBeenCalled()
+  })
+})
+
+describe('path_is_directory (local browse shape-check)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const stub_fetch = (res: Partial<Response> & { json?: () => Promise<unknown> }) =>
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(res))
+
+  it('is true only for a real directory-listing JSON (has items array)', async () => {
+    stub_fetch({ ok: true, json: async () => ({ dir: '/d', parent: '/', items: [] }) })
+    expect(await path_is_directory('/d', '')).toBe(true)
+  })
+
+  it('is false for an SPA-fallback 200 text/html (json parse throws)', async () => {
+    stub_fetch({ ok: true, json: async () => { throw new Error('not json') } })
+    expect(await path_is_directory('/some/file.cif', '')).toBe(false)
+  })
+
+  it('is false for the STATIC_ONLY 200 stub ({detail}, no items)', async () => {
+    stub_fetch({ ok: true, json: async () => ({ detail: 'requires desktop app' }) })
+    expect(await path_is_directory('/some/file.cif', '')).toBe(false)
+  })
+
+  it('is false on a 404 (backend: not a directory)', async () => {
+    stub_fetch({ ok: false, json: async () => ({ detail: 'Not a directory' }) })
+    expect(await path_is_directory('/some/file.cif', '')).toBe(false)
   })
 })

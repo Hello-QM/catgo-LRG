@@ -11,9 +11,17 @@ import { API_BASE } from '$lib/api/config'
 import { listFiles } from '$lib/api/hpc'
 
 /** True if `path` is a directory. Local terminal (empty session_id) → the local
- * `/workflow/files/browse` endpoint (200 = dir, 404 = not). Remote terminal →
- * `listFiles` over that session's SSH (success = dir). Any error → false, so the
- * caller safely falls back to treating it as a file (the prior behaviour). */
+ * `/workflow/files/browse` endpoint; remote terminal → `listFiles` over that
+ * session's SSH (success = dir). Any error → false, so the caller safely falls
+ * back to treating it as a file (the prior behaviour).
+ *
+ * The local check requires the response to be the real directory-listing JSON
+ * (an `items` array) rather than just HTTP 200: when the SPA is served same-origin
+ * (browser dev, static build) an unmatched `/api/...` path falls through to the
+ * index.html SPA fallback — a `200 text/html` — and the STATIC_ONLY fetch-stub
+ * returns a `200 {detail}` error. Trusting `res.ok` alone would classify EVERY
+ * file as a directory, so a Ctrl+clicked file would only navigate the Files panel
+ * and never open. */
 export async function path_is_directory(path: string, session_id: string): Promise<boolean> {
   try {
     if (session_id) {
@@ -21,7 +29,9 @@ export async function path_is_directory(path: string, session_id: string): Promi
       return res.success
     }
     const res = await fetch(`${API_BASE}/workflow/files/browse?dir=${encodeURIComponent(path)}`)
-    return res.ok
+    if (!res.ok) return false
+    const data = await res.json().catch(() => null)
+    return Array.isArray((data as { items?: unknown } | null)?.items)
   } catch {
     return false
   }
