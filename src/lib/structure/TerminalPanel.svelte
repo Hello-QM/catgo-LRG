@@ -7,6 +7,7 @@
   import { theme_state, terminal_font_state, save_terminal_font_state, TERMINAL_FONT_FAMILIES } from '$lib/state.svelte'
   import { register_terminal, unregister_terminal, mark_terminal_active } from './terminal-registry.svelte'
   import { next_marker, wrap_command, extract_result, strip_ansi } from './terminal-capture'
+  import { open_terminal_click } from './terminal-path-nav'
 
   let {
     layout = `horizontal`,
@@ -320,7 +321,20 @@
                     if (!_event.ctrlKey && !_event.metaKey) return
                     // Resolve relative paths using tracked CWD
                     const resolved = text.startsWith(`/`) || text.startsWith(`~/`) ? text : (current_cwd ? `${current_cwd}/${text}` : text)
-                    on_open_file!(resolved)
+                    // Directory → move the Files panel there (reuse the same
+                    // `catgo-terminal-cwd` bus the Directory-Sync feature listens
+                    // on, regardless of the sync_cwd toggle — a Ctrl+click is an
+                    // explicit jump); file → open it. dir-detection is async so it
+                    // can't run inside xterm's synchronous activate().
+                    void open_terminal_click(resolved, session_id ?? ``, {
+                      open_file: (p) => on_open_file?.(p),
+                      navigate_dir: (p, sid) => {
+                        const seq = ++_cwd_seq
+                        window.dispatchEvent(
+                          new CustomEvent(`catgo-terminal-cwd`, { detail: { path: p, session_id: sid, seq } }),
+                        )
+                      },
+                    })
                   },
                 })
               }
