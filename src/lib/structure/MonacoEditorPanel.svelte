@@ -95,9 +95,32 @@
       // @ts-ignore
       self.MonacoEnvironment = {
         getWorker(_: string, label: string) {
+          // Each language needs its OWN worker — the base editor.worker lacks
+          // language-service methods, so opening e.g. a .ts file with only the
+          // base worker floods the console with
+          // `Missing requestHandler or method: provideInlayHints`. Route every
+          // language Monaco bundles a worker for to that worker.
           if (label === `json`) {
             return new Worker(
               new URL(`monaco-editor/esm/vs/language/json/json.worker.js`, import.meta.url),
+              { type: `module` },
+            )
+          }
+          if (label === `css` || label === `scss` || label === `less`) {
+            return new Worker(
+              new URL(`monaco-editor/esm/vs/language/css/css.worker.js`, import.meta.url),
+              { type: `module` },
+            )
+          }
+          if (label === `html` || label === `handlebars` || label === `razor`) {
+            return new Worker(
+              new URL(`monaco-editor/esm/vs/language/html/html.worker.js`, import.meta.url),
+              { type: `module` },
+            )
+          }
+          if (label === `typescript` || label === `javascript`) {
+            return new Worker(
+              new URL(`monaco-editor/esm/vs/language/typescript/ts.worker.js`, import.meta.url),
               { type: `module` },
             )
           }
