@@ -1803,10 +1803,52 @@
       return true
     }
 
+    // Dedupe the "no External tab → open one" toast: a `snapshot` replays on
+    // every SSE (re)connect, so without this a network blip would re-toast the
+    // same pending push. Keyed by a cheap structure signature.
+    let last_toast_sig = ``
+    function _struct_sig(struct: AnyStructure): string {
+      const sites = (struct.sites ?? []) as Array<{ species?: unknown }>
+      const els = sites.map((s) => Array.isArray(s.species) ? (s.species[0] as { element?: string })?.element : s.species).join(``)
+      return `${sites.length}|${els}|${JSON.stringify((struct as { lattice?: { matrix?: unknown } }).lattice?.matrix ?? ``)}`
+    }
+    // Surface a structure pushed to panel "default" when no External tab is open
+    // to receive it (e.g. `catgo view` just launched a fresh window — the push
+    // landed before any External tab existed). A 12s toast offers a one-click
+    // open that seeds the EXACT pushed structure (bypassing the catch-up fetch,
+    // which can race sample-card / heartbeat overwrites of the panel cache).
+    function toast_external_push(struct: AnyStructure | null | undefined): void {
+      if (!struct) return
+      const sig = _struct_sig(struct)
+      if (sig === last_toast_sig) return
+      last_toast_sig = sig
+      const n = struct.sites?.length ?? 0
+      const elems: Record<string, number> = {}
+      for (const s of (struct.sites ?? [])) {
+        const el = Array.isArray(s.species) ? s.species[0]?.element : s.species
+        if (el) elems[el] = (elems[el] || 0) + 1
+      }
+      const formula = Object.entries(elems).map(([el, k]) => k > 1 ? `${el}${k}` : el).join(``) || `?`
+      const captured = struct
+      show_toast({
+        message: t(`app.external_structure_pushed`, {
+          formula,
+          count: String(n),
+          s: n === 1 ? `` : `s`,
+        }),
+        variant: `info`,
+        action: { label: t(`app.open_external_viewer`), onclick: () => open_external_tab(captured) },
+        duration: 12000,
+      })
+    }
+
     es.addEventListener(`snapshot`, (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data)
-        inject_into_external(data.structure)
+        // Replay-on-connect: inject if an External tab is already open;
+        // otherwise (fresh `catgo view` window) fall back to the toast so the
+        // push isn't silently lost. Deduped so reconnects don't re-bug.
+        if (!inject_into_external(data.structure)) toast_external_push(data.structure)
       } catch (err) {
         console.warn(`[CatGo] global SSE snapshot parse error:`, err)
       }
@@ -1819,28 +1861,7 @@
         if (!struct) return
         if (inject_into_external(struct)) return
         // No External tab → toast prompts the user to open one.
-        const n = struct.sites?.length ?? 0
-        const elems: Record<string, number> = {}
-        for (const s of (struct.sites ?? [])) {
-          const el = Array.isArray(s.species) ? s.species[0]?.element : s.species
-          if (el) elems[el] = (elems[el] || 0) + 1
-        }
-        const formula = Object.entries(elems).map(([el, k]) => k > 1 ? `${el}${k}` : el).join(``) || `?`
-        // Pass `struct` into the onclick closure so opening External shows
-        // EXACTLY the structure the toast referred to — bypassing the
-        // catch-up fetch (which can race against sample-card / heartbeat
-        // overwrites of the panel cache).
-        const captured = struct
-        show_toast({
-          message: t(`app.external_structure_pushed`, {
-            formula,
-            count: String(n),
-            s: n === 1 ? `` : `s`,
-          }),
-          variant: `info`,
-          action: { label: t(`app.open_external_viewer`), onclick: () => open_external_tab(captured) },
-          duration: 12000,
-        })
+        toast_external_push(struct)
       } catch (err) {
         console.warn(`[CatGo] global SSE structure parse error:`, err)
       }
