@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { markdown_to_html } from '$lib/chat/markdown'
+  import { render_doc_markdown } from '$lib/viewer/doc-markdown'
   import { check_tauri } from '$lib/io/tauri'
   import { download as unified_download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
@@ -66,7 +66,7 @@
   let rendered_markdown = $state(``)
   $effect(() => {
     if (mode !== `markdown`) { rendered_markdown = ``; return }
-    const html = markdown_to_html(content)
+    const html = render_doc_markdown(content)
     rendered_markdown = html
     if (!file_path) return
 
