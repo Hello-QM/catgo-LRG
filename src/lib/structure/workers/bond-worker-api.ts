@@ -80,21 +80,40 @@ async function init_worker(): Promise<void> {
 
       // 4. Send compiled WebAssembly.Module to Worker for initSync
       const init_id = next_id++
+      const original_onmessage = w.onmessage
+      const original_onerror = w.onerror
       await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timeout)
+          w.onmessage = original_onmessage
+          w.onerror = original_onerror
+        }
         const timeout = setTimeout(() => {
-          reject(new Error(`Worker init timeout`))
+          cleanup()
+          reject(new Error(
+            `Worker init timeout — no 'ready' within 10s. The worker script ` +
+            `loaded but never replied (slow first-time bundle/WASM init, or a ` +
+            `blocked message).`,
+          ))
         }, 10_000)
 
-        const original_onmessage = w.onmessage
         w.onmessage = (e: MessageEvent) => {
           if (e.data.id === init_id && e.data.type === `ready`) {
-            clearTimeout(timeout)
-            w.onmessage = original_onmessage
+            cleanup()
             resolve()
           } else if (e.data.id === init_id && e.data.error) {
-            clearTimeout(timeout)
-            reject(new Error(e.data.error))
+            cleanup()
+            reject(new Error(`Worker init error: ${e.data.error}`))
           }
+        }
+
+        // A worker that fails to LOAD/eval (import failure, COI-blocked, syntax
+        // error) fires `error` and never processes `init` — surface THAT as the
+        // real cause instead of a generic 10s timeout.
+        w.onerror = (ev: ErrorEvent) => {
+          cleanup()
+          const where = ev?.filename ? ` (${ev.filename}:${ev.lineno}:${ev.colno})` : ``
+          reject(new Error(`Worker load/eval error: ${ev?.message || `unknown`}${where}`))
         }
 
         w.postMessage({ type: `init`, id: init_id, module: wasm_module })
