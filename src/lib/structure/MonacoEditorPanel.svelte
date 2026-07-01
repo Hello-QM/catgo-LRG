@@ -131,19 +131,30 @@
         },
       }
 
-      // The TS/JS language service registers an inlay-hints provider whose
-      // worker request lands on the base editor worker (`EditorWorker.$fmr`),
-      // which can't handle `provideInlayHints` in monaco 0.55 → a console flood
-      // on every .ts/.js open. The editor's own `inlayHints.enabled: off` is a
-      // separate, insufficient lever — kill it at the language level so the
-      // provider is never registered.
+      // The TS/JS language service registers worker-backed providers (inlay
+      // hints, completions, diagnostics, …). One of them — inlay hints — routes
+      // its request through the base editor worker's foreign-module
+      // (`EditorWorker.$fmr`), which can't handle `provideInlayHints` in monaco
+      // 0.55, so every .ts/.js open floods the console. This is a file
+      // viewer/editor, not an IDE, so it needs NONE of those language services —
+      // only main-thread syntax highlighting (Monarch), which is unaffected.
+      // Disable the whole worker-backed feature set so no `$fmr` request is ever
+      // issued. (The editor's `inlayHints.enabled` option is a separate,
+      // insufficient lever — the provider still registers.)
       const ts_langs = (monaco.languages as { typescript?: {
-        typescriptDefaults?: { modeConfiguration: Record<string, boolean>; setModeConfiguration: (c: Record<string, boolean>) => void }
-        javascriptDefaults?: { modeConfiguration: Record<string, boolean>; setModeConfiguration: (c: Record<string, boolean>) => void }
+        typescriptDefaults?: { setModeConfiguration: (c: Record<string, boolean>) => void }
+        javascriptDefaults?: { setModeConfiguration: (c: Record<string, boolean>) => void }
       } }).typescript
+      const NO_LANG_FEATURES: Record<string, boolean> = {
+        completionItems: false, hovers: false, documentSymbols: false,
+        definitions: false, references: false, documentHighlights: false,
+        rename: false, diagnostics: false, documentRangeFormattingEdits: false,
+        signatureHelp: false, onTypeFormattingEdits: false, codeActions: false,
+        inlayHints: false,
+      }
       for (const d of [ts_langs?.typescriptDefaults, ts_langs?.javascriptDefaults]) {
         try {
-          if (d) d.setModeConfiguration({ ...d.modeConfiguration, inlayHints: false })
+          d?.setModeConfiguration(NO_LANG_FEATURES)
         } catch { /* older monaco without modeConfiguration — editor option covers it */ }
       }
 
