@@ -86,6 +86,21 @@
     let editor: any = null
 
     async function init() {
+      // Monaco cancels in-flight async work (delayers, worker requests) when an
+      // editor/model is disposed — on close or an HMR/reload remount — surfacing
+      // as a benign `Unhandled rejection: Canceled`. Unlike the worker-thrown
+      // inlay-hints error, this one rejects on the MAIN thread, so a scoped
+      // handler can swallow it. Drop ONLY `Canceled` (by name/message), once,
+      // globally; every other rejection propagates untouched.
+      const g = self as unknown as { __catgo_monaco_canceled_guard?: boolean }
+      if (!g.__catgo_monaco_canceled_guard) {
+        g.__catgo_monaco_canceled_guard = true
+        self.addEventListener(`unhandledrejection`, (e: PromiseRejectionEvent) => {
+          const r = e.reason as { name?: string; message?: string } | undefined
+          if (r && (r.name === `Canceled` || r.message === `Canceled`)) e.preventDefault()
+        })
+      }
+
       // Dynamic import for SSR safety
       const monaco = await import(`monaco-editor`)
 
