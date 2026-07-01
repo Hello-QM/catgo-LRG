@@ -45,6 +45,7 @@ _ROUTERS: dict[str, str] = {
     "hpc_router": "hpc",
     "workflow_router": "workflow",
     "dos_router": "dos",
+    "adsorption_router": "adsorption",
     "cohp_router": "cohp",
     "bands_router": "bands",
     "pseudo_hydrogen_router": "pseudo_hydrogen",

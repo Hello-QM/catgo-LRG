@@ -1316,19 +1316,22 @@ def _summarize(data: dict) -> str:
     """Build concise summary from a structure-modifying response."""
     from collections import Counter
 
-    struct = data.get("structure", {})
-    sites = struct.get("sites", [])
+    # `or {}` / `or []`: a response may carry `structure: null` (e.g. an optimize
+    # that produced no structure) — plain `.get(k, default)` returns None then,
+    # and the chained `.get` crashes with 'NoneType' object has no attribute 'get'.
+    struct = data.get("structure") or {}
+    sites = struct.get("sites") or []
     num = data.get("num_sites", len(sites))
 
     counts = Counter()
     for s in sites:
-        el = s.get("label", s.get("species", [{}])[0].get("element", "?"))
+        el = s.get("label", (s.get("species") or [{}])[0].get("element", "?"))
         counts[el] += 1
     formula = " ".join(f"{el}{n}" for el, n in sorted(counts.items()))
 
     parts = [f"Done. {num} atoms ({formula})."]
 
-    lat = struct.get("lattice", {})
+    lat = struct.get("lattice") or {}
     if lat:
         parts.append(f"Cell: a={lat.get('a', 0):.2f} b={lat.get('b', 0):.2f} c={lat.get('c', 0):.2f} Å.")
 
@@ -2046,8 +2049,8 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
 
     data = resp.json()
 
-    # If it returned a structure, push to viewer
-    if isinstance(data, dict) and "structure" in data:
+    # If it returned a (non-null) structure, push to viewer
+    if isinstance(data, dict) and data.get("structure"):
         push_err = await _push_structure(client, data["structure"])
         summary = _summarize(data)
         if push_err:

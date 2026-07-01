@@ -147,6 +147,7 @@ if not CATGO_THIN:
         nanotube_router,
         reticular_router,
         dos_router,
+        adsorption_router,
         cohp_router,
         bands_router,
         pseudo_hydrogen_router,
@@ -600,6 +601,7 @@ if not CATGO_THIN:
     app.include_router(nanotube_router, prefix="/api")
     app.include_router(reticular_router, prefix="/api")
     app.include_router(dos_router, prefix="/api")
+    app.include_router(adsorption_router, prefix="/api")
     app.include_router(cohp_router, prefix="/api")
     app.include_router(bands_router, prefix="/api")
     app.include_router(pseudo_hydrogen_router, prefix="/api")
