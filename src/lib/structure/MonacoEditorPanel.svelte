@@ -131,6 +131,22 @@
         },
       }
 
+      // The TS/JS language service registers an inlay-hints provider whose
+      // worker request lands on the base editor worker (`EditorWorker.$fmr`),
+      // which can't handle `provideInlayHints` in monaco 0.55 → a console flood
+      // on every .ts/.js open. The editor's own `inlayHints.enabled: off` is a
+      // separate, insufficient lever — kill it at the language level so the
+      // provider is never registered.
+      const ts_langs = (monaco.languages as { typescript?: {
+        typescriptDefaults?: { modeConfiguration: Record<string, boolean>; setModeConfiguration: (c: Record<string, boolean>) => void }
+        javascriptDefaults?: { modeConfiguration: Record<string, boolean>; setModeConfiguration: (c: Record<string, boolean>) => void }
+      } }).typescript
+      for (const d of [ts_langs?.typescriptDefaults, ts_langs?.javascriptDefaults]) {
+        try {
+          if (d) d.setModeConfiguration({ ...d.modeConfiguration, inlayHints: false })
+        } catch { /* older monaco without modeConfiguration — editor option covers it */ }
+      }
+
       editor = monaco.editor.create(container_el!, {
         value: content,
         language: get_language(filename),
