@@ -86,30 +86,6 @@
     let editor: any = null
 
     async function init() {
-      // Backstop: monaco 0.55 registers an inlay-hints provider whose request is
-      // routed to the base editor worker's foreign-module (`EditorWorker.$fmr`),
-      // which doesn't implement `provideInlayHints`. The worker rejects and
-      // monaco `console.error`s the rejection — a harmless flood (no inlay hints
-      // is fine for a file viewer) that no public config lever reliably stops in
-      // this bundle. Filter that ONE message out of console.error, once,
-      // globally; every other error passes through untouched.
-      const g = self as unknown as { __catgo_monaco_err_filter?: boolean }
-      if (!g.__catgo_monaco_err_filter) {
-        g.__catgo_monaco_err_filter = true
-        const _orig_error = console.error.bind(console)
-        console.error = (...args: unknown[]) => {
-          const hit = args.some((a) => {
-            const m = typeof a === `string` ? a : (a as { message?: string })?.message
-            return typeof m === `string` && m.includes(`provideInlayHints`)
-          })
-          if (!hit) _orig_error(...args)
-        }
-        self.addEventListener(`unhandledrejection`, (e: PromiseRejectionEvent) => {
-          const m = (e.reason as { message?: string } | undefined)?.message
-          if (typeof m === `string` && m.includes(`provideInlayHints`)) e.preventDefault()
-        })
-      }
-
       // Dynamic import for SSR safety
       const monaco = await import(`monaco-editor`)
 
