@@ -1996,15 +1996,25 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
         return [T(type="text", text=json.dumps(resp.json(), indent=2, ensure_ascii=False))]
 
     # --- Analysis actions ---
+    # Paths verified against the live backend (see /api/openapi.json). The old
+    # table pointed several actions at endpoints that never existed
+    # (/symmetry/analyze, /analysis/rdf, /analysis/coordination, …) → 404/405.
     ROUTES: dict[str, tuple[str, str]] = {
-        "symmetry":         ("POST", "/symmetry/analyze"),
+        "symmetry":         ("POST", "/structure-ops/symmetry"),
         "dos":              ("POST", "/dos/compute"),
-        "rdf":              ("POST", "/analysis/rdf"),
+        "rdf":              ("POST", "/md/distances/rdf"),
         "optimize":         ("POST", "/optimize/structure"),
-        "dft_input":        ("POST", "/dft-input/generate"),
-        "adsorption_sites": ("GET",  "/adsorption/sites"),
-        "coordination":     ("POST", "/analysis/coordination"),
+        "adsorption_sites": ("POST", "/adsorption/sites"),
+        "coordination":     ("POST", "/md/distances/neighbors"),
     }
+
+    # dft_input has no single endpoint — it routes by target software.
+    if action == "dft_input":
+        software = str(args.get("software", "vasp")).lower()
+        dft_ep = {"vasp": "/vasp/generate", "qe": "/qe/input", "cp2k": "/cp2k/input"}.get(software)
+        if not dft_ep:
+            return [T(type="text", text=f"dft_input: unsupported software '{software}'. Use vasp, qe, or cp2k.")]
+        ROUTES["dft_input"] = ("POST", dft_ep)
 
     route = ROUTES.get(action)
     if not route:
@@ -2012,7 +2022,8 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
         return [T(type="text", text=f"Unknown analyze action '{action}'. Valid: {valid}")]
 
     method, endpoint = route
-    payload = {k: v for k, v in args.items() if k != "action"}
+    # `software` is a routing hint for dft_input, not a request-body field.
+    payload = {k: v for k, v in args.items() if k not in ("action", "software")}
 
     # Normalize optimize params: MCP uses "model", backend uses "calculator"
     if action == "optimize":

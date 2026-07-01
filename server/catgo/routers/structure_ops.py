@@ -699,6 +699,37 @@ def conventional_cell(req: ConventionalCellRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/symmetry")
+def analyze_symmetry(req: ConventionalCellRequest):
+    """Space-group / symmetry summary via spglib (SpacegroupAnalyzer).
+
+    Standalone symmetry endpoint (the `catgo_analyze action='symmetry'` MCP tool
+    targets this). Needs a periodic structure — a molecule (no lattice) raises
+    400 with a clear message.
+    """
+    try:
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        struct, _ = _load_structure(req.structure)
+        if not getattr(struct, "lattice", None):
+            raise HTTPException(
+                status_code=400,
+                detail="Symmetry analysis needs a periodic structure (this is a molecule with no lattice).",
+            )
+        sga = SpacegroupAnalyzer(struct, symprec=0.01)
+        return {
+            "space_group_symbol": sga.get_space_group_symbol(),
+            "space_group_number": sga.get_space_group_number(),
+            "crystal_system": sga.get_crystal_system(),
+            "point_group": sga.get_point_group_symbol(),
+            "hall": sga.get_hall(),
+            "n_symmetry_operations": len(sga.get_symmetry_operations()),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/set-lattice", response_model=StructureResult)
 def set_lattice(req: SetLatticeRequest) -> StructureResult:
     """Set or replace the lattice of a structure.
