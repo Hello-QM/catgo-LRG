@@ -730,6 +730,81 @@ def analyze_symmetry(req: ConventionalCellRequest):
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+class RdfRequest(BaseModel):
+    structure: dict
+    r_max: float = Field(8.0, gt=0, le=30, description="Max radius (Å)")
+    n_bins: int = Field(100, ge=10, le=1000, description="Number of histogram bins")
+
+
+@router.post("/rdf")
+def structure_rdf(req: RdfRequest):
+    """Radial distribution function g(r) for ONE periodic structure (static pair
+    correlation — the single-structure counterpart of the trajectory RDF)."""
+    try:
+        import numpy as np
+        struct, _ = _load_structure(req.structure)
+        if not getattr(struct, "lattice", None):
+            raise HTTPException(status_code=400, detail="RDF needs a periodic structure (this is a molecule with no lattice).")
+        rmax = float(req.r_max)
+        nb = int(req.n_bins)
+        counts = np.zeros(nb)
+        for site_neighbors in struct.get_all_neighbors(rmax):
+            for nbr in site_neighbors:
+                d = float(getattr(nbr, "nn_distance", 0.0))
+                if 0.0 < d <= rmax:
+                    b = int(d / rmax * nb)
+                    if b < nb:
+                        counts[b] += 1.0
+        n = len(struct)
+        rho = n / float(struct.volume)
+        edges = np.linspace(0.0, rmax, nb + 1)
+        r = 0.5 * (edges[:-1] + edges[1:])
+        shell = 4.0 * np.pi * r ** 2 * (rmax / nb)
+        g = np.divide(counts, n * rho * shell, out=np.zeros_like(counts), where=shell > 0)
+        return {"r": r.round(4).tolist(), "g_r": g.round(4).tolist(),
+                "r_max": rmax, "n_bins": nb, "number_density": round(rho, 5)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class CoordinationRequest(BaseModel):
+    structure: dict
+    cutoff: float | None = Field(None, gt=0, le=10,
+                                 description="Distance cutoff (Å). Omit → cutoff-free CrystalNN.")
+
+
+@router.post("/coordination")
+def structure_coordination(req: CoordinationRequest):
+    """Per-site and per-element coordination numbers for ONE structure. A `cutoff`
+    counts neighbours within that distance; otherwise cutoff-free CrystalNN."""
+    try:
+        from collections import defaultdict
+        struct, _ = _load_structure(req.structure)
+        if req.cutoff:
+            cns = [len(n) for n in struct.get_all_neighbors(float(req.cutoff))]
+            method = f"cutoff={req.cutoff}Å"
+        else:
+            from pymatgen.analysis.local_env import CrystalNN
+            cnn = CrystalNN()
+            cns = [cnn.get_cn(struct, i) for i in range(len(struct))]
+            method = "CrystalNN"
+        per_el: dict[str, list] = defaultdict(list)
+        for i, site in enumerate(struct):
+            try:
+                el = site.specie.symbol
+            except Exception:
+                el = str(getattr(site, "species", "?"))
+            per_el[el].append(cns[i])
+        avg = {el: round(sum(v) / len(v), 3) for el, v in per_el.items()}
+        return {"coordination_numbers": cns, "average_by_element": avg, "method": method}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @router.post("/set-lattice", response_model=StructureResult)
 def set_lattice(req: SetLatticeRequest) -> StructureResult:
     """Set or replace the lattice of a structure.

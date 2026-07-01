@@ -38,12 +38,18 @@ The MCP server wraps CatGo's Python server endpoints as MCP-compatible tools, ex
 ## Setup
 
 ```bash
-python server/main.py --mcp
+python server/main.py
 ```
 
 ## Client Configuration
 
 Add CatGo as an MCP server in your AI client's settings.
+
+Point the client at the URL (no `--mcp`, no Python on the client):
+
+```
+http://localhost:8000/api/mcp/
+```
 
 ## Related
 

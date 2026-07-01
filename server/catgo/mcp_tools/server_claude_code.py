@@ -2002,13 +2002,21 @@ async def _handle_analyze(client: httpx.AsyncClient, args: dict) -> list[TextCon
     # Paths verified against the live backend (see /api/openapi.json). The old
     # table pointed several actions at endpoints that never existed
     # (/symmetry/analyze, /analysis/rdf, /analysis/coordination, …) → 404/405.
+    # DOS is not a single-structure analysis — it needs an electronic-structure
+    # (DFT) calculation. Point the user at the workflow path instead of a 422.
+    if action == "dos":
+        return [T(type="text", text=(
+            "DOS needs an electronic-structure (DFT) calculation, not a bare "
+            "structure. Run a DOS workflow via catgo_quickbuild(recipe='DOS') or "
+            "catgo_workflow, then read the results."
+        ))]
+
     ROUTES: dict[str, tuple[str, str]] = {
         "symmetry":         ("POST", "/structure-ops/symmetry"),
-        "dos":              ("POST", "/dos/compute"),
-        "rdf":              ("POST", "/md/distances/rdf"),
+        "rdf":              ("POST", "/structure-ops/rdf"),
         "optimize":         ("POST", "/optimize/structure"),
         "adsorption_sites": ("POST", "/adsorption/sites"),
-        "coordination":     ("POST", "/md/distances/neighbors"),
+        "coordination":     ("POST", "/structure-ops/coordination"),
     }
 
     # dft_input has no single endpoint — it routes by target software.

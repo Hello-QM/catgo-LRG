@@ -15,13 +15,20 @@ CatGo implements the Model Context Protocol, allowing AI assistants to interact 
 ## Step 1: Start the Server
 
 ```bash
-# Start the CatGo server with MCP support
-python server/main.py --mcp
+# MCP is exposed automatically at /api/mcp/ — no flag needed.
+# Run the backend (or just launch the CatGo desktop app, which bundles it):
+python server/main.py
 ```
 
 ## Step 2: Configure Your AI Client
 
 Add CatGo as an MCP server in your AI client's configuration (e.g., Claude Desktop).
+
+Point the client at the URL (no `--mcp`, no Python on the client):
+
+```
+http://localhost:8000/api/mcp/
+```
 
 ## Step 3: Available Tools
 
