@@ -586,6 +586,24 @@
           })
         } else if (hash.startsWith(`#structure`)) {
           load_popout_structure(hash, get_active_ts, tm.active_tab_id, update_tab_label)
+          // Window + Overwrite reuses this popout: the opener writes a fresh
+          // localStorage payload and emits this event (popout-manager). Without
+          // a listener the reused window only got focused and kept showing the
+          // FIRST structure. Listener lives for the popout window's lifetime.
+          if (is_tauri) {
+            void import(`@tauri-apps/api/event`).then(({ listen }) =>
+              listen<{ key: string }>(`catgo-reload-structure`, (e) => {
+                const k = e.payload?.key
+                if (!k) return
+                load_popout_structure(
+                  `#structure?key=${encodeURIComponent(k)}`,
+                  get_active_ts,
+                  tm.active_tab_id,
+                  update_tab_label,
+                )
+              })
+            ).catch(() => {})
+          }
         } else if (hash.startsWith(`#openpath`)) {
           // A "New window" file open: stream the path into THIS new window's tree.
           // force_local=true so it loads here instead of opening yet another window.
