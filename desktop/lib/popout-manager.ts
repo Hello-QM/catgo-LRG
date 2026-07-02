@@ -8,6 +8,7 @@
 import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
 import { findLeafById, leaves, isTerminalLeaf, structurePane } from '../pane-tree'
+import { pending_open_structure } from '$lib/workflow/workflow-state.svelte'
 
 /**
  * Open a FILE PATH in a new app window that loads/streams it there. Used for
@@ -132,17 +133,24 @@ export function load_popout_structure(
     if (!raw) return
     const { structure, filename } = JSON.parse(raw) as { structure: AnyStructure; filename: string }
     if (!structure) return
-    // Ensure a structure tab exists and load the data
+    // Popouts share localStorage with the main window, so the restored active
+    // tab may be a terminal clone whose leaves have no structure pane. Load
+    // into the active leaf if it can host a structure, else into the tab's
+    // first structure pane, else signal the app to create a structure tab
+    // (pending_open_structure) — the payload must never be dropped silently.
     const ts = get_active_ts()
-    if (ts) {
-      const leaf = findLeafById(ts.root, ts.active_leaf_id) ?? leaves(ts.root)[0]
-      if (!leaf) return
-      const pane = structurePane(leaf)
-      if (!pane) return
+    const active_leaf = ts ? findLeafById(ts.root, ts.active_leaf_id) ?? leaves(ts.root)[0] : null
+    const pane = (active_leaf && structurePane(active_leaf)) ??
+      (ts ? leaves(ts.root).map(structurePane).find(Boolean) ?? null : null)
+    if (pane) {
       pane.structure = structure
       pane.source_filename = filename
       pane.modified = false
       update_tab_label(active_tab_id)
+    } else {
+      pending_open_structure.structure = structure
+      pending_open_structure.label = filename
+      pending_open_structure.seq++
     }
   } catch (e) {
     console.error(`Failed to load popout structure:`, e)
