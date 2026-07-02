@@ -586,31 +586,37 @@
           })
         } else if (hash.startsWith(`#structure`)) {
           load_popout_structure(hash, get_active_ts, tm.active_tab_id, update_tab_label)
-          // Window + Overwrite reuses this popout: the opener rewrites the
-          // reuse payload key. Two delivery channels, because each can fail
-          // alone: the DOM storage event (fires in every OTHER same-origin
-          // window; the browser named-window path can't rely on re-navigation —
-          // the reuse URL is identical so window.open skips it) and the Tauri
-          // event from popout-manager. Whichever fires first consumes the
-          // payload via removeItem; the other reads null and no-ops. Listeners
-          // live for the popout window's lifetime.
-          const reload_from_key = (k: string) =>
-            load_popout_structure(
-              `#structure?key=${encodeURIComponent(k)}`,
-              get_active_ts,
-              tm.active_tab_id,
-              update_tab_label,
-            )
-          window.addEventListener(`storage`, (e) => {
-            if (e.key === `catgo-popout-reuse` && e.newValue) reload_from_key(e.key)
-          })
-          if (is_tauri) {
-            void import(`@tauri-apps/api/event`).then(({ listen }) =>
-              listen<{ key: string }>(`catgo-reload-structure`, (e) => {
-                const k = e.payload?.key
-                if (k) reload_from_key(k)
-              })
-            ).catch(() => {})
+          // Window + Overwrite reuses ONE popout (key catgo-popout-reuse): the
+          // opener rewrites that payload key. Two delivery channels, because
+          // each can fail alone: the DOM storage event (fires in every OTHER
+          // same-origin window; the browser named-window path can't rely on
+          // re-navigation — the reuse URL is identical so window.open skips it)
+          // and the Tauri event from popout-manager. Whichever fires first
+          // consumes the payload via removeItem; the other reads null and
+          // no-ops. ONLY the reuse popout itself may register these listeners:
+          // consuming the payload from any other #structure window (e.g. a
+          // Window+New popout) steals it before the freshly created reuse
+          // window boots — it then reads null and shows the landing page.
+          const own_key = new URLSearchParams(hash.slice(hash.indexOf(`?`) + 1)).get(`key`)
+          if (own_key === `catgo-popout-reuse`) {
+            const reload_from_key = (k: string) =>
+              load_popout_structure(
+                `#structure?key=${encodeURIComponent(k)}`,
+                get_active_ts,
+                tm.active_tab_id,
+                update_tab_label,
+              )
+            window.addEventListener(`storage`, (e) => {
+              if (e.key === `catgo-popout-reuse` && e.newValue) reload_from_key(e.key)
+            })
+            if (is_tauri) {
+              void import(`@tauri-apps/api/event`).then(({ listen }) =>
+                listen<{ key: string }>(`catgo-reload-structure`, (e) => {
+                  const k = e.payload?.key
+                  if (k) reload_from_key(k)
+                })
+              ).catch(() => {})
+            }
           }
         } else if (hash.startsWith(`#openpath`)) {
           // A "New window" file open: stream the path into THIS new window's tree.
