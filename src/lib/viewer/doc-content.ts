@@ -29,11 +29,12 @@ export async function load_doc_content(tab: DocTab): Promise<DocContent> {
 
   if (tab.local_path) {
     if (want_binary) {
-      // Local binary base64 endpoint is a deferred backend follow-up (v1 has no
-      // local binary read API — read_file returns text, not base64). Degrade
-      // gracefully so the renderer shows an empty/no-content state instead of
-      // trying to decode text as base64.
-      return { text: null, binary: null, mime: null }
+      // A blank session_id maps to the backend's local-filesystem connection
+      // (_get_hpc, PR #451), so the same read-binary route serves local
+      // PDFs/images — the old "no local binary API" limitation is gone.
+      const { readRemoteBinaryFile } = await import(`$lib/api/hpc`)
+      const r = await readRemoteBinaryFile(``, tab.local_path)
+      return { text: null, binary: r.success ? r.data : null, mime: r.mime_type ?? null }
     }
     const { read_file } = await import(`$lib/api/project`)
     const r = await read_file(tab.local_path)

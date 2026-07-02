@@ -38,8 +38,13 @@ describe('load_doc_content', () => {
     const r = await load_doc_content(tab({ local_path: null, inline: { text: null, binary: 'B64', mime: 'image/png' } }))
     expect(r).toEqual({ text: null, binary: 'B64', mime: 'image/png' })
   })
-  it('degrades gracefully for local-path binary (no base64 endpoint in v1)', async () => {
+  it('reads local-path binary via the blank-session read-binary route', async () => {
+    // Regression: this used to return {binary: null} ("no local binary API"),
+    // so a local PDF rendered as an empty pane. A blank session_id maps to the
+    // backend's local-filesystem connection since #451.
+    const { readRemoteBinaryFile } = await import('$lib/api/hpc')
     const r = await load_doc_content(tab({ kind: 'pdf', filename: 'd.pdf', local_path: '/tmp/d.pdf', origin: null, inline: null }))
-    expect(r).toEqual({ text: null, binary: null, mime: null })
+    expect(readRemoteBinaryFile).toHaveBeenCalledWith('', '/tmp/d.pdf')
+    expect(r).toEqual({ text: null, binary: 'BASE64', mime: 'application/pdf' })
   })
 })
