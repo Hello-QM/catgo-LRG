@@ -309,7 +309,7 @@
     </div>
     <div class="editor-controls">
       {#if edit_action}
-        <button class="editor-btn" onclick={edit_action.onclick}>
+        <button class="editor-btn action-btn" onclick={edit_action.onclick}>
           {edit_action.label}
         </button>
       {/if}
@@ -409,7 +409,8 @@
     opacity: 0.5;
     cursor: default;
   }
-  .visualize-btn {
+  .visualize-btn,
+  .action-btn {
     color: var(--accent-color, #4dabf7);
     border-color: color-mix(in srgb, var(--accent-color, #4dabf7) 30%, transparent);
   }
