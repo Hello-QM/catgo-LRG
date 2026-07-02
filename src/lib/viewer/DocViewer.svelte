@@ -82,7 +82,11 @@
     {:else if !loaded[active.id]}
       <div class="doc-empty">{t('viewer.loading')}</div>
     {:else}
-      {#if active.kind === 'markdown' || active.kind === 'html'}
+      <!-- The floating toggle stays only for renderers WITHOUT their own header
+           row (Monaco / HtmlView). Markdown preview renders FilePreviewPanel,
+           which has a header — there the toggle is passed in as a header action
+           so it doesn't float over the PDF/Download buttons. -->
+      {#if (active.kind === 'markdown' || active.kind === 'html') && kind_for(active) !== 'mdpreview'}
         <div class="doc-view-toggle">
           <button
             class="view-toggle-btn"
@@ -114,6 +118,7 @@
             filename={active.filename}
             file_path={active.origin?.file_path ?? active.local_path ?? ''}
             session_id={active.origin?.session_id ?? ''}
+            edit_action={{ label: t('viewer.edit'), onclick: () => toggle_view(active) }}
           />
         {/key}
       {:else if kind_for(active) === 'htmlview'}
@@ -142,7 +147,11 @@
 </div>
 
 <style>
-  .doc-viewer { display: flex; flex-direction: column; height: 100vh; background: var(--bg-color, #1c1d21); }
+  /* --page-bg is the app's THEMED background var (--bg-color exists nowhere):
+     with the old var this shell was always dark, so in light theme the strip
+     showed light-theme text colors on a dark surface — the ACTIVE tab (themed
+     --text-color #374151) looked dimmer than inactive ones. */
+  .doc-viewer { display: flex; flex-direction: column; height: 100vh; background: var(--page-bg, #1c1d21); }
   .doc-tabstrip { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; border-bottom: 1px solid var(--border-color, rgba(128,128,128,0.2)); }
   .doc-tab { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 5px 5px 0 0; font-size: 12px; cursor: pointer; border: none; background: transparent; color: var(--text-muted, #94a3b8); }
   .doc-tab.active { background: var(--btn-bg, rgba(128,128,128,0.18)); color: var(--text-color, #e2e8f0); }

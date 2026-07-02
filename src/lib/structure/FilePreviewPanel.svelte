@@ -18,6 +18,7 @@
     session_id = ``,
     readonly = true,
     onclose,
+    edit_action = null,
   }: {
     mode: 'image' | 'pdf' | 'markdown' | 'csv' | 'excel' | 'text'
     content?: string
@@ -28,6 +29,9 @@
     session_id?: string
     readonly?: boolean
     onclose?: () => void
+    /** Optional extra header button (e.g. the doc viewer's Edit toggle),
+     *  rendered with the same styling as PDF/Download. */
+    edit_action?: { label: string; onclick: () => void } | null
   } = $props()
 
   // --- Image zoom state ---
@@ -47,18 +51,61 @@
     img_natural_height = img.naturalHeight
   }
 
-  // --- PDF blob URL ---
-  let pdf_blob_url = $state(``)
+  // --- PDF rendering (pdf.js) ---
+  // An <iframe src=blob> relies on the webview's NATIVE PDF renderer.
+  // WebKitGTK (the Tauri webview on Linux) has none — the frame stays blank —
+  // so render pages to canvases with pdf.js instead (consistent everywhere).
+  let pdf_container = $state<HTMLDivElement | null>(null)
+  let pdf_error = $state(``)
+  let pdf_loading = $state(false)
 
   $effect(() => {
-    if (mode !== `pdf` || !binary_data) return
-    const bytes = Uint8Array.from(atob(binary_data), (c) => c.charCodeAt(0))
-    const blob = new Blob([bytes], { type: mime_type || `application/pdf` })
-    const url = URL.createObjectURL(blob)
-    pdf_blob_url = url
+    if (mode !== `pdf` || !binary_data || !pdf_container) return
+    const container = pdf_container
+    let cancelled = false
+    pdf_error = ``
+    pdf_loading = true
+    ;(async () => {
+      try {
+        const pdfjs = await import(`pdfjs-dist`)
+        const worker_url = (await import(`pdfjs-dist/build/pdf.worker.min.mjs?url`)).default
+        pdfjs.GlobalWorkerOptions.workerSrc = worker_url
+        const bytes = Uint8Array.from(atob(binary_data), (c) => c.charCodeAt(0))
+        const doc = await pdfjs.getDocument({ data: bytes }).promise
+        if (cancelled) return
+        container.replaceChildren()
+        // Fit page width to the container once, at open time.
+        const avail = (container.clientWidth || 800) - 24
+        const dpr = window.devicePixelRatio || 1
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i)
+          if (cancelled) return
+          const base = page.getViewport({ scale: 1 })
+          const scale = Math.min(Math.max(avail / base.width, 0.5), 2.5)
+          const viewport = page.getViewport({ scale })
+          const canvas = document.createElement(`canvas`)
+          canvas.width = Math.floor(viewport.width * dpr)
+          canvas.height = Math.floor(viewport.height * dpr)
+          canvas.style.width = `${Math.floor(viewport.width)}px`
+          canvas.className = `pdf-page`
+          const ctx = canvas.getContext(`2d`)
+          if (!ctx) throw new Error(`canvas 2d context unavailable`)
+          await page.render({
+            canvasContext: ctx,
+            viewport,
+            transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+          }).promise
+          if (cancelled) return
+          container.appendChild(canvas)
+        }
+      } catch (e) {
+        if (!cancelled) pdf_error = e instanceof Error ? e.message : String(e)
+      } finally {
+        if (!cancelled) pdf_loading = false
+      }
+    })()
     return () => {
-      URL.revokeObjectURL(url)
-      pdf_blob_url = ``
+      cancelled = true
     }
   })
 
@@ -375,6 +422,11 @@
       {mode_info}
     </div>
     <div class="preview-controls">
+      {#if edit_action}
+        <button class="preview-btn download-btn" onclick={edit_action.onclick}>
+          {edit_action.label}
+        </button>
+      {/if}
       {#if mode === `markdown`}
         <button class="preview-btn download-btn" onclick={export_pdf} title={t('structure.export_as_pdf')}>
           PDF
@@ -403,13 +455,14 @@
       </div>
 
     {:else if mode === `pdf`}
-      {#if pdf_blob_url}
-        <iframe
-          src={pdf_blob_url}
-          title={filename || t('structure.pdf_preview')}
-          class="pdf-frame"
-        ></iframe>
+      {#if pdf_loading}
+        <div class="pdf-status">{t('common.loading')}</div>
+      {:else if pdf_error}
+        <div class="pdf-status pdf-error">{pdf_error}</div>
       {/if}
+      <!-- pdf.js owns this element's children (canvases) — keep it free of
+           Svelte-managed content so replaceChildren can't clobber anything. -->
+      <div class="pdf-container" bind:this={pdf_container}></div>
 
     {:else if mode === `markdown`}
       <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -597,11 +650,28 @@
   }
 
   /* --- PDF mode --- */
-  .pdf-frame {
+  .pdf-container {
     flex: 1;
-    width: 100%;
-    border: none;
-    background: light-dark(#fff, #1e1e2e);
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: light-dark(#e8eaed, #1e1e2e);
+  }
+  .pdf-container :global(canvas.pdf-page) {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    background: #fff;
+  }
+  .pdf-status {
+    padding: 16px;
+    text-align: center;
+    color: var(--text-muted, #94a3b8);
+  }
+  .pdf-error {
+    color: #e44;
+    white-space: pre-wrap;
   }
 
   /* --- Markdown mode --- */

@@ -24,8 +24,14 @@ function render_status(html: string, color = `#888`) {
 
 function is_ignorable_runtime_error(err: unknown) {
   const message = err instanceof Error ? err.message : String(err)
+  const name = err instanceof Error ? err.name : ``
   return message === `ResizeObserver loop completed with undelivered notifications.` ||
     message === `ResizeObserver loop limit exceeded` ||
+    // Monaco cancels in-flight delayers/worker requests when an editor or
+    // model is disposed (doc tab closed, HMR remount) — the rejection reaches
+    // this listener BEFORE MonacoEditorPanel's own guard can preventDefault
+    // (listeners fire in registration order), so filter it here too. Benign.
+    name === `Canceled` || message === `Canceled` ||
     // On mobile there is no Python/Node sidecar, so any code path that tries to
     // spawn one fails with the shell plugin's "Scoped shell IO error: No such
     // file or directory". That feature is simply unavailable on mobile — log it,
