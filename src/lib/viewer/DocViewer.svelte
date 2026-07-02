@@ -82,11 +82,11 @@
     {:else if !loaded[active.id]}
       <div class="doc-empty">{t('viewer.loading')}</div>
     {:else}
-      <!-- The floating toggle stays only for renderers WITHOUT their own header
-           row (Monaco / HtmlView). Markdown preview renders FilePreviewPanel,
-           which has a header — there the toggle is passed in as a header action
-           so it doesn't float over the PDF/Download buttons. -->
-      {#if (active.kind === 'markdown' || active.kind === 'html') && kind_for(active) !== 'mdpreview'}
+      <!-- The floating toggle stays only for HtmlView, which has no header row.
+           Markdown preview (FilePreviewPanel) and edit view (MonacoEditorPanel)
+           both have headers — the toggle rides in them as edit_action so it
+           can't float over Download / the Save status. -->
+      {#if (active.kind === 'markdown' || active.kind === 'html') && kind_for(active) === 'htmlview'}
         <div class="doc-view-toggle">
           <button
             class="view-toggle-btn"
@@ -108,6 +108,9 @@
             readonly={!active.editable}
             onchange={() => set_dirty(active.id, true)}
             onsave={async (text) => { await save_doc_content(active, text); set_dirty(active.id, false) }}
+            edit_action={active.kind === 'markdown' || active.kind === 'html'
+              ? { label: t('viewer.render'), onclick: () => toggle_view(active) }
+              : null}
           />
         {/key}
       {:else if kind_for(active) === 'mdpreview'}

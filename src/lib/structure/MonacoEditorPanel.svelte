@@ -13,6 +13,7 @@
     onsave,
     onchange,
     onvisualize,
+    edit_action = null,
   }: {
     content?: string
     filename?: string
@@ -29,6 +30,9 @@
     onchange?: (content: string) => void
     /** Callback to visualize the file content as structure/trajectory. */
     onvisualize?: (content: string, filename: string) => void
+    /** Optional extra header button (e.g. the doc viewer's Render toggle),
+     *  rendered with the same styling as Visualize/Save. */
+    edit_action?: { label: string; onclick: () => void } | null
   } = $props()
 
   let container_el: HTMLDivElement | undefined = $state()
@@ -304,6 +308,11 @@
       {/if}
     </div>
     <div class="editor-controls">
+      {#if edit_action}
+        <button class="editor-btn" onclick={edit_action.onclick}>
+          {edit_action.label}
+        </button>
+      {/if}
       {#if can_visualize}
         <button
           class="editor-btn visualize-btn"
