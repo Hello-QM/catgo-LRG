@@ -14,10 +14,18 @@
   load_i18n_module('app')
 
   // Check shortly after launch (desktop only). The delay lets the window settle
-  // and the backend come up before we hit the network.
+  // and the backend come up before we hit the network. Only the MAIN window
+  // checks: popouts (structure-*, terminal-*, …) load this same app root, and
+  // each would otherwise fire its own duplicate check 4s after opening.
   $effect(() => {
     if (!is_desktop_tauri()) return
-    const id = setTimeout(() => {
+    const id = setTimeout(async () => {
+      try {
+        const { getCurrentWindow } = await import(`@tauri-apps/api/window`)
+        if (getCurrentWindow().label !== `main`) return
+      } catch {
+        return
+      }
       check_for_updates()
     }, 4000)
     return () => clearTimeout(id)

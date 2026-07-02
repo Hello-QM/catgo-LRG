@@ -8,6 +8,7 @@
     "terminal",
     "terminal-*",
     "doping-pt-*",
+    "structure-*",
     "catgo-docs"
   ],
   "permissions": [
