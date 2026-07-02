@@ -26,8 +26,10 @@ export type OpenPlan =
  *                       else (at CAP) fall back to a new tab.
  * - split + overwrite → load into the active leaf in place — unless that leaf
  *                       is a terminal (it can't host a structure, so an
- *                       in-place overwrite silently shows nothing); escalate
- *                       like `new` instead.
+ *                       in-place overwrite silently shows nothing). Overwrite
+ *                       means "replace what's showing": reuse the tab's first
+ *                       structure pane (empty or not); only a tab with no
+ *                       structure pane at all escalates like `new`.
  */
 export function plan_open(root: PaneNode, activeLeafId: string, target: OpenTarget): OpenPlan {
   if (target.kind === 'window') return { action: 'window' }
@@ -42,7 +44,12 @@ export function plan_open(root: PaneNode, activeLeafId: string, target: OpenTarg
   if (target.mode === 'overwrite') {
     const active = leaves(root).find((l) => l.id === activeLeafId)
     if (!active || !isTerminalLeaf(active)) return { action: 'pane', root, leafId: activeLeafId }
-    // fall through: overwrite aimed at a terminal leaf escalates like `new`
+    // Overwrite aimed at a terminal leaf (clicking a terminal link focuses the
+    // terminal, so this is the common case): overwrite the tab's first
+    // structure pane instead of splitting a fresh one on every open.
+    const structLeaf = leaves(root).find((l) => !isTerminalLeaf(l))
+    if (structLeaf) return { action: 'pane', root, leafId: structLeaf.id }
+    // fall through: no structure pane in the tab — escalate like `new`
   }
 
   const esc = escalateForImport(root, activeLeafId)

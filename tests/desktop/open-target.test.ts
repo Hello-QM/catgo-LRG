@@ -3,6 +3,7 @@ import { resolve_open_target, type OpenTarget } from '../../src/lib/state.svelte
 import { plan_open } from '../../desktop/lib/open-dispatch'
 import {
   buildPreset,
+  create_empty_leaf,
   create_terminal_leaf,
   findFirstEmptyLeaf,
   leaves,
@@ -93,6 +94,25 @@ describe('plan_open', () => {
     const root = buildPreset('single')
     const plan = plan_open(root, root.id, t('split', 'overwrite'))
     expect(plan).toEqual({ action: 'pane', root, leafId: root.id })
+  })
+
+  // Regression: after the first escalate created a structure pane beside the
+  // terminal, every later Ctrl+click (which re-focuses the terminal) split yet
+  // ANOTHER pane. Overwrite means "replace what's showing" — reuse the
+  // existing structure pane even when it already has content.
+  it('split + overwrite over a terminal overwrites an existing full structure pane', () => {
+    const full = create_empty_leaf()
+    ;(full.content as { pane: { structure?: unknown } }).pane.structure = { sites: [] }
+    const term = create_terminal_leaf()
+    const root = {
+      kind: 'split',
+      id: 's-mixed',
+      direction: 'h',
+      ratio: 0.5,
+      children: [term, full],
+    } as unknown as ReturnType<typeof buildPreset>
+    const plan = plan_open(root, term.id, t('split', 'overwrite'))
+    expect(plan).toEqual({ action: 'pane', root, leafId: full.id })
   })
 
   it('split + overwrite over a terminal at the pane cap falls back to a new tab', () => {
