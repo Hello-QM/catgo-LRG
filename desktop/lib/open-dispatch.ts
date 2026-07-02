@@ -9,7 +9,7 @@
 
 import type { OpenTarget } from '$lib/state.svelte'
 import type { PaneNode } from '../pane-tree'
-import { buildPreset, escalateForImport } from '../pane-tree'
+import { buildPreset, escalateForImport, isTerminalLeaf, leaves } from '../pane-tree'
 
 export type OpenPlan =
   | { action: 'window' }
@@ -24,7 +24,10 @@ export type OpenPlan =
  * - tab + overwrite   → collapse the whole tab to one fresh leaf, load there.
  * - split + new       → reuse first empty leaf, else split the active leaf,
  *                       else (at CAP) fall back to a new tab.
- * - split + overwrite → load into the active leaf in place.
+ * - split + overwrite → load into the active leaf in place — unless that leaf
+ *                       is a terminal (it can't host a structure, so an
+ *                       in-place overwrite silently shows nothing); escalate
+ *                       like `new` instead.
  */
 export function plan_open(root: PaneNode, activeLeafId: string, target: OpenTarget): OpenPlan {
   if (target.kind === 'window') return { action: 'window' }
@@ -36,7 +39,11 @@ export function plan_open(root: PaneNode, activeLeafId: string, target: OpenTarg
   }
 
   // kind === 'split'
-  if (target.mode === 'overwrite') return { action: 'pane', root, leafId: activeLeafId }
+  if (target.mode === 'overwrite') {
+    const active = leaves(root).find((l) => l.id === activeLeafId)
+    if (!active || !isTerminalLeaf(active)) return { action: 'pane', root, leafId: activeLeafId }
+    // fall through: overwrite aimed at a terminal leaf escalates like `new`
+  }
 
   const esc = escalateForImport(root, activeLeafId)
   if (!esc) return { action: 'new-tab' }
