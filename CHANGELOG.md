@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-07-02
+
+### Added
+- **Terminal Ctrl+click a directory** navigates the Files sidebar to it (local shells and HPC sessions).
+- **Doc viewer renders PDFs everywhere** — pages are drawn with pdf.js (fit-to-width, high-DPI), so PDFs display on Linux too, where the system webview has no native PDF renderer. Local PDFs/images now load through the backend's local-file binary route.
+- **GitHub-grade markdown preview** — README-style files render with full GFM + safe raw HTML (badges, centered headers, tables) instead of the chat renderer.
+
+### Fixed
+- **Terminal Ctrl+click a file opens it again** — a local shell sent an empty session id the backend rejected (404) and the dir-check misclassified every path as a directory; both ends fixed.
+- **"Open files in" targets are honored from a full-pane terminal** — Split/Tab create or reuse a structure pane beside the terminal instead of silently doing nothing; Overwrite replaces the tab's existing structure pane instead of splitting a new one on every open.
+- **Window + Overwrite reuses one popout and actually updates it** — the reuse popout now receives every subsequent structure (storage-event + Tauri-event delivery, restored-terminal-tab fallback, no more payload theft by other popouts).
+- **Popout structure windows work again on desktop** — they had no Tauri ACL capability, so every IPC from them was denied (the "Update failed: Command plugin:app|version not allowed by ACL" toast, dead reuse reloads). Update checks now run only in the main window.
+- **`catgo view` pushes reach the External tab reliably** — SSE events were delivered to a registry key nobody subscribed to once a pane had been touched: the tab label froze on the first structure and multi-file trajectory pushes were dropped outright. Both fixed by alias-aware fan-out.
+- **Doc viewer polish** — the markdown Edit toggle sits in the header row (it used to float over Download); the docs window follows the app theme (the active tab no longer looks dimmer than inactive ones in light theme); Monaco's benign "Canceled" rejection no longer whites out the window.
+- **iOS: Chinese dictation into the terminal** no longer re-appends the whole transcript on every recognizer refinement — Chinese now takes the same reconcile path as English.
+- **MCP `catgo_analyze` routes** — symmetry / dft_input / optimize / rdf / coordination now hit real endpoints (new standalone symmetry, single-structure RDF and CrystalNN coordination); the adsorption router is mounted.
+
+### Changed
+- Linux `.rpm` packages use zstd compression (smaller, faster CI).
+
 ## [1.4.1] - 2026-06-26
 
 ### Added
