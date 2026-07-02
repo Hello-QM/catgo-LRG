@@ -73,21 +73,39 @@ def unsubscribe(panel_id: str, q: asyncio.Queue) -> None:
         subs.remove(q)
 
 
+def _subscriber_keys(panel_id: str) -> set[str]:
+    """The registry keys whose subscribers should see events for `panel_id`.
+
+    Subscribers register under the RAW id they asked for (e.g. `default`),
+    but writers notify with the RESOLVED id (resolve_panel_id maps a tab id
+    to its active viewer once the user touches a pane). Without the reverse
+    mapping, a `catgo view` push to `default` lands in a key nobody
+    subscribed to and the event silently vanishes — the External tab's label
+    froze and trajectory pushes (SSE-only, no poll fallback) were dropped.
+    """
+    keys = {panel_id}
+    for tab_id, viewer_id in active_viewer_by_tab.items():
+        if viewer_id == panel_id:
+            keys.add(tab_id)
+    return keys
+
+
 def has_subscribers(panel_id: str) -> bool:
-    """Whether any SSE subscriber is currently listening on this panel."""
-    return bool(panel_subscribers.get(panel_id))
+    """Whether any SSE subscriber is listening on this panel (tab aliases included)."""
+    return any(panel_subscribers.get(k) for k in _subscriber_keys(panel_id))
 
 
 def _notify(panel_id: str, event: str, data: dict) -> None:
     msg = {"event": event, "data": data}
-    for q in list(panel_subscribers.get(panel_id, [])):
-        try:
-            q.put_nowait(msg)
-        except asyncio.QueueFull:
-            logger.warning(
-                "SSE subscriber queue full for panel '%s' (event=%s) — dropping",
-                panel_id, event,
-            )
+    for key in _subscriber_keys(panel_id):
+        for q in list(panel_subscribers.get(key, [])):
+            try:
+                q.put_nowait(msg)
+            except asyncio.QueueFull:
+                logger.warning(
+                    "SSE subscriber queue full for panel '%s' (event=%s) — dropping",
+                    key, event,
+                )
 
 
 def notify_structure(
