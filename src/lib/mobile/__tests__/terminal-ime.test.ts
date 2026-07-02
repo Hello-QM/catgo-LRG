@@ -154,4 +154,46 @@ describe(`createImeGuard`, () => {
     // No trailing keydown/compositionend needed — both already written.
     expect(write).toHaveBeenCalledTimes(2)
   })
+
+  describe(`bypass_cjk_insert_text (iOS dictation)`, () => {
+    it(`does not consume Chinese insertText — the caller reconciles it`, () => {
+      // iOS dictation streams Chinese as insertText events that REPLACE the
+      // previous partial. Write-on-arrival (the Android path above) would re-send
+      // the full partial on every refinement ("你"+"你好"+"你好世界"), so with the
+      // bypass the guard must hand these to the caller's reconcile path.
+      const write = vi.fn()
+      const g = createImeGuard({ write, now: () => 0, bypass_cjk_insert_text: true })
+      expect(g.on_before_input(`insertText`, `你好`)).toBe(false)
+      expect(g.on_before_input(`insertText`, `你好世界`)).toBe(false)
+      expect(write).not.toHaveBeenCalled()
+      // Nothing buffered — xterm's echo of the reconciled text must not be eaten.
+      expect(g.should_suppress(`你好`)).toBe(false)
+    })
+
+    it(`still buffers Hangul insertText (typed jamo may be rebuilt)`, () => {
+      const write = vi.fn()
+      const g = createImeGuard({ write, now: () => 0, bypass_cjk_insert_text: true })
+      expect(g.on_before_input(`insertText`, `가`)).toBe(true)
+      expect(write).not.toHaveBeenCalled()
+      g.on_keydown(13)
+      expect(write).toHaveBeenCalledWith(`가`)
+    })
+
+    it(`flushes a pending Hangul buffer before handing Chinese to the caller`, () => {
+      // Ordering: text buffered from Korean typing must land on the PTY before
+      // the caller writes the Chinese dictation that followed it.
+      const write = vi.fn()
+      const g = createImeGuard({ write, now: () => 0, bypass_cjk_insert_text: true })
+      expect(g.on_before_input(`insertReplacementText`, `한`)).toBe(true)
+      expect(g.on_before_input(`insertText`, `你好`)).toBe(false)
+      expect(write).toHaveBeenCalledExactlyOnceWith(`한`)
+    })
+
+    it(`leaves Chinese Pinyin composition and Latin input unchanged`, () => {
+      const g = createImeGuard({ write: vi.fn(), now: () => 0, bypass_cjk_insert_text: true })
+      expect(g.on_before_input(`insertFromComposition`, `中`)).toBe(true)
+      expect(g.on_before_input(`insertText`, `h`)).toBe(false)
+      expect(g.on_before_input(`insertReplacementText`, `hello`)).toBe(false)
+    })
+  })
 })

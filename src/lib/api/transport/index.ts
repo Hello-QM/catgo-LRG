@@ -232,6 +232,16 @@ export function isMobile(): boolean {
   return /macintosh/i.test(ua) && navigator.maxTouchPoints > 1
 }
 
+/** iOS/iPadOS specifically (vs Android) — some WKWebView input quirks (e.g.
+ *  dictation delivering CJK as replacing `insertText` events) are iOS-only. */
+export function isIOS(): boolean {
+  if (typeof navigator === `undefined`) return false
+  const ua = navigator.userAgent
+  if (/iphone|ipod|ipad/i.test(ua)) return true
+  // iPadOS desktop-class UA (see isMobile above).
+  return /macintosh/i.test(ua) && navigator.maxTouchPoints > 1
+}
+
 import { httpTransport } from './http'
 import { tauriSshTransport } from './tauri-ssh'
 

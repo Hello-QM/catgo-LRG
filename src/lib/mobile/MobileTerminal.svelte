@@ -20,8 +20,8 @@
 <script lang="ts">
   import { to_control } from '$lib/mobile/control-chars'
   import { createInputDedup, reconcileReplacement } from '$lib/mobile/terminal-input-dedup'
-  import { createImeGuard } from '$lib/mobile/terminal-ime'
-  import { transport } from '$lib/api/transport'
+  import { createImeGuard, isCJK } from '$lib/mobile/terminal-ime'
+  import { isIOS, transport } from '$lib/api/transport'
   import Icon from '$lib/Icon.svelte'
   import MobileTerminalKeyBar from '$lib/structure/MobileTerminalKeyBar.svelte'
   import { screen_wake, set_keep_awake } from '$lib/mobile/screen-wake.svelte'
@@ -309,6 +309,11 @@
             transport.ptyWrite(session_id, channel_id, encoder.encode(text))
               .then(() => note_write(true), () => note_write(false))
           },
+          // iOS dictation streams Chinese as replacing insertText events (same
+          // shape as Latin dictation) — those must reach the reconcile path
+          // below, not be written-on-arrival (that path is for Android IME
+          // commits, which are final). See terminal-ime.ts.
+          bypass_cjk_insert_text: isIOS(),
         })
         ime_ac = new AbortController()
         const xt = term.textarea
@@ -338,11 +343,16 @@
             // typing always has a collapsed caret, so it skips this and stays on
             // the dedup path. We do NOT preventDefault: the textarea must keep the
             // running value so the next dictation event diffs against it.
+            // CJK dictation partials take this path even with a collapsed caret
+            // (the FIRST partial is a plain insert): the reconcile degenerates to
+            // an append, and the textarea keeps the running transcript so the
+            // next refinement diffs correctly. (Only reachable on iOS — on
+            // Android the guard consumes CJK insertText above.)
             const ss = xt.selectionStart
             const se = xt.selectionEnd
             if (
               ie.inputType === `insertText` && ie.data != null &&
-              ss != null && se != null && ss !== se
+              ss != null && se != null && (ss !== se || isCJK(ie.data))
             ) {
               const { backspaces, send } = reconcileReplacement(xt.value, ss, se, ie.data)
               const out = `\x7f`.repeat(backspaces) + send

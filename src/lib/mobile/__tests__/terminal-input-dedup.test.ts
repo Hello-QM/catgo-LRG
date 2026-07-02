@@ -33,6 +33,30 @@ describe(`reconcileReplacement (iOS dictation)`, () => {
     })
   })
 
+  it(`appends a Chinese first partial (collapsed caret, empty textarea)`, () => {
+    // iOS Chinese dictation: the FIRST partial is a plain insert at a collapsed
+    // caret — the reconcile must degenerate to a pure append.
+    expect(reconcileReplacement(``, 0, 0, `你好`)).toEqual({
+      backspaces: 0,
+      send: `你好`,
+    })
+  })
+
+  it(`sends only the new tail when a Chinese partial is refined ("你好" -> "你好世界")`, () => {
+    expect(reconcileReplacement(`你好`, 0, 2, `你好世界`)).toEqual({
+      backspaces: 0,
+      send: `世界`,
+    })
+  })
+
+  it(`backspaces a corrected Chinese partial ("你号" -> "你好世界")`, () => {
+    // The recognizer revises a mis-heard character: erase the diverged tail, retype.
+    expect(reconcileReplacement(`你号`, 0, 2, `你好世界`)).toEqual({
+      backspaces: 1,
+      send: `好世界`,
+    })
+  })
+
   it(`handles text after the replaced range`, () => {
     // val "helloX", replace 0..5 ("hello") with "help"; X stays put.
     expect(reconcileReplacement(`helloX`, 0, 5, `help`)).toEqual({

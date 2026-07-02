@@ -74,6 +74,15 @@ export function createImeGuard(opts: {
   write: (text: string) => void
   /** Injectable clock for tests; defaults to performance.now. */
   now?: () => number
+  /** iOS: dictation streams Chinese/Japanese as `insertText` events that REPLACE
+   *  the previous partial transcript (same shape as Latin dictation), so the
+   *  write-on-arrival below would re-send the full partial on every refinement
+   *  ("你"+"你好"+"你好世界") and preventDefault would starve the textarea the
+   *  caller diffs against. With this flag the guard flushes any pending buffer
+   *  and returns false for non-Hangul CJK insertText, letting the caller run its
+   *  dictation reconcile path instead. Hangul insertText is still buffered — a
+   *  typed jamo/syllable may be REBUILT by a following insertReplacementText. */
+  bypass_cjk_insert_text?: boolean
 }): ImeGuard {
   const now = opts.now ?? (() => performance.now())
   let wk_composing = false // true while a WK synthetic composition is buffering
@@ -111,6 +120,10 @@ export function createImeGuard(opts: {
           // rebuild replaces rather than appends.
           wk_composing = true
           wk_pending = data
+        } else if (opts.bypass_cjk_insert_text) {
+          // iOS dictation partial — not consumed; the caller reconciles it
+          // against the textarea (see MobileTerminal's beforeinput handler).
+          return false
         } else {
           // Chinese / Japanese: the committed word arrives as a collapsed
           // insertText with NO composition events on this WebView (observed on
