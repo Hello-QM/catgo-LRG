@@ -27,6 +27,8 @@ export interface SidebarHandlerDeps {
   tab_states: Record<string, StructureTabState>
   tabs: { id: string; type: string }[]
   set_active_tab_id: (id: string) => void
+  /** Create a fresh structure tab and return its ids (App owns the side effect). */
+  open_new_structure_tab: () => { tab_id: string; leaf_id: string }
 }
 
 export function handle_sidebar_load(deps: SidebarHandlerDeps, content: string | ArrayBuffer, filename: string, file_path?: string, session_id?: string) {
@@ -89,13 +91,31 @@ export async function handle_terminal_open_file(deps: SidebarHandlerDeps, file_p
       const { readRemoteFile } = await import(`$lib/api/hpc`)
       const result = await readRemoteFile(session_id, file_path)
       if (result.success && result.content !== undefined) {
-        // Switch to first structure tab, or open new window if none exists
+        // Switch to the first structure tab and route by the open target.
         const struct_tab = deps.tabs.find(t => t.type === `structure`)
         if (struct_tab) {
           deps.set_active_tab_id(struct_tab.id)
           handle_sidebar_load(deps, result.content, filename, file_path, session_id)
         } else {
-          await parse_and_open_structure_window(result.content, filename, deps.is_tauri)
+          // No structure tab exists (e.g. a terminal-only tab is active).
+          // Honor the user's open target: only an explicit Window choice pops
+          // out; Tab/Split get a fresh structure tab (there is nothing to
+          // split, so both collapse to "new tab").
+          const target = resolve_open_target(deps.get_open_target(), false)
+          if (target.kind === `window`) {
+            await parse_and_open_structure_window(result.content, filename, deps.is_tauri, target.mode === `overwrite`)
+            return
+          }
+          const n = deps.open_new_structure_tab()
+          const made = deps.tabs.find(t => t.id === n.tab_id)
+          if (n.leaf_id && made?.type === `structure`) {
+            const origin = session_id ? { session_id, file_path } : null
+            const local_path = session_id ? null : file_path
+            await deps.process_file_content(n.tab_id, result.content, filename, n.leaf_id, origin, local_path)
+          } else {
+            // Tab cap reached (create_tab no-oped) — popout as a last resort.
+            await parse_and_open_structure_window(result.content, filename, deps.is_tauri)
+          }
         }
       }
       return

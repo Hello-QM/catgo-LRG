@@ -206,6 +206,7 @@
     tab_states,
     get tabs() { return tm.tabs },
     set_active_tab_id: (id) => { tm.active_tab_id = id },
+    open_new_structure_tab,
   }
   const pane_deps: PaneManagerDeps = {
     tab_states,
