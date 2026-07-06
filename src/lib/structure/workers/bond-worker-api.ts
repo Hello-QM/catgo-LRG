@@ -133,11 +133,51 @@ async function init_worker(): Promise<void> {
   return worker_init_promise
 }
 
-function worker_request(data: Record<string, unknown>): Promise<{ result: string; dt: string }> {
+/** Terminate a wedged worker and reset state so a later request can re-init.
+ *  Does NOT set worker_failed — a timeout on one huge request must not
+ *  permanently disable the worker for small structures. */
+function reset_worker(reason: string): void {
+  try {
+    worker?.terminate()
+  } catch { /* already dead */ }
+  worker = null
+  worker_ready = false
+  worker_init_promise = null
+  for (const [, p] of pending) p.reject(new Error(reason))
+  pending.clear()
+}
+
+function worker_request(
+  data: Record<string, unknown>,
+  timeout_ms = 20_000,
+): Promise<{ result: string; dt: string }> {
   return new Promise((resolve, reject) => {
     if (!worker || !worker_ready) { reject(new Error(`Worker unavailable`)); return }
     const id = next_id++
-    pending.set(id, { resolve, reject })
+    // Without a deadline, a wedged worker (e.g. solid_angle on 10k+ atoms in
+    // WebKitGTK, whose WASM tier is far slower than Chrome's) hangs this
+    // promise FOREVER — the async chain then never falls back to main-thread
+    // WASM and the structure simply never gets bonds. Kill the worker on
+    // timeout so the caller's fallback chain runs; it re-initializes on the
+    // next request.
+    const timer = setTimeout(() => {
+      if (!pending.has(id)) return
+      pending.delete(id)
+      const msg = `Worker request timed out after ${timeout_ms}ms — terminating worker, falling back`
+      console.warn(`[bonds] ${msg}`)
+      reset_worker(msg)
+      reject(new Error(msg))
+    }, timeout_ms)
+    pending.set(id, {
+      resolve: (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      reject: (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    })
     worker.postMessage({ ...data, id })
   })
 }
@@ -271,18 +311,22 @@ async function try_worker_bonds(
 
     const structure_json = JSON.stringify(structure)
     const options_json = JSON.stringify(options)
+    const n_sites = structure?.sites?.length ?? 0
+    // Generous size-scaled deadline: big systems are legitimately slower, but
+    // past this the worker is treated as wedged and the fallback chain runs.
+    const timeout_ms = Math.max(20_000, n_sites * 4)
     const { result, dt } = await worker_request({
       type: `bonds`,
       structure_json,
       strategy,
       options_json,
-    })
+    }, timeout_ms)
     const wasm_bonds: WasmBond[] = JSON.parse(result)
-    const n_sites = structure?.sites?.length ?? 0
     const pairs = wasm_bonds_to_pairs(wasm_bonds, structure)
     console.log(`[bonds] Worker WASM | ${strategy} | ${n_sites} atoms | ${pairs.length} bonds | ${dt}ms`)
     return pairs
-  } catch {
+  } catch (err) {
+    console.warn(`[bonds] worker path failed — falling back to main-thread WASM:`, err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -326,11 +370,35 @@ async function try_main_thread_wasm(
 }
 
 /** Compute bonds asynchronously. Priority: Worker WASM → Main WASM → JS fallback. */
+// solid_angle is O(neighborhood³)-ish and grinds for minutes on 10k+ atom
+// systems (worst on WebKitGTK, whose WASM tier is far slower than Chrome) —
+// the user sees "no bonds, ever". Above this size, silently compute with
+// atom_radii instead: on force-field-scale systems the two agree closely
+// (kerogen 11k: atom_radii found 12,668 bonds vs 12,648 in the file's own
+// topology). Same precedent as the VS Code extension's trajectory downgrade.
+const SOLID_ANGLE_MAX_ATOMS = 8000
+let solid_angle_downgrade_logged = false
+
+function effective_strategy(strategy: BondingStrategy, n_sites: number): BondingStrategy {
+  if (strategy === `solid_angle` && n_sites > SOLID_ANGLE_MAX_ATOMS) {
+    if (!solid_angle_downgrade_logged) {
+      solid_angle_downgrade_logged = true
+      console.warn(
+        `[bonds] solid_angle downgraded to atom_radii for ${n_sites} atoms ` +
+          `(> ${SOLID_ANGLE_MAX_ATOMS}) — solid_angle is too slow at this size`,
+      )
+    }
+    return `atom_radii`
+  }
+  return strategy
+}
+
 export function compute_bonds_async(
   structure: AnyStructure,
   strategy: BondingStrategy,
   options: Record<string, number>,
 ): Promise<BondPair[]> {
+  strategy = effective_strategy(strategy, structure?.sites?.length ?? 0)
   // 1. Try Web Worker (non-blocking)
   return try_worker_bonds(structure, strategy, options).then(worker_result => {
     if (worker_result) return worker_result
