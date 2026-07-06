@@ -261,6 +261,7 @@ jobs:
             ### New in 1.4.3
             - **LAMMPS `.data` files open correctly** — force-field data files (`Atoms # full` from `write_data`) no longer freeze the viewer for minutes or show absurd elements: the style annotation wins over column guessing (image flags were read as coordinates), atoms are shifted by the box origin, and `Pair Coeffs` no longer bleeds into the Masses table. An 11k-atom kerogen renders in seconds as C/H/O/N.
             - **Large systems no longer freeze on PBC boundary images** — the image search dropped its reactive-proxy overhead (190 s → 0.1 s for 11k atoms) and a successful zero-image WASM result no longer re-runs the search in JS.
+            - **Large systems get bonds again** — worker bond requests carry a deadline (a wedged worker left big structures bondless forever) and `solid_angle` auto-downgrades to `atom_radii` above 8,000 atoms.
             - **Terminal Chinese input no longer swallows characters** — committing a pinyin candidate could emit synthetic backspaces that erased the tail of the just-typed text (timing-dependent). Fixed on desktop and mobile.
             - **Doc viewer polish** — the Render toggle sits in the editor header next to Visualize/Save with proper accent styling.
 
