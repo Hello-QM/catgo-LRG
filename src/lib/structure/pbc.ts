@@ -124,6 +124,42 @@ export function find_image_atoms(
   return image_sites
 }
 
+// Plain copies of the per-site geometry, extracted in ONE pass.
+//
+// The structures handed to these functions are usually Svelte `$state`
+// proxies: every `sites[i].xyz[k]` access inside a hot loop is a proxy trap.
+// The image search touches coordinates billions of times for ~10k-atom
+// systems, which turned an O(n) algorithm into a multi-minute UI freeze
+// (profiled: 104s self-time in get_pbc_image_sites + 84s in proxy `get` for
+// an 11k-atom LAMMPS data file). Extract once, loop over typed arrays.
+interface PlainGeometry {
+  n: number
+  xyz: Float64Array
+  abc: Float64Array
+  elem: (string | undefined)[]
+}
+
+function extract_plain_geometry(structure: ParsedStructure): PlainGeometry {
+  const sites = structure.sites
+  const n = sites.length
+  const xyz = new Float64Array(3 * n)
+  const abc = new Float64Array(3 * n)
+  const elem = new Array<string | undefined>(n)
+  for (let i = 0; i < n; i++) {
+    const s = sites[i]
+    const p = s.xyz
+    const q = s.abc
+    xyz[3 * i] = p[0]
+    xyz[3 * i + 1] = p[1]
+    xyz[3 * i + 2] = p[2]
+    abc[3 * i] = q[0]
+    abc[3 * i + 1] = q[1]
+    abc[3 * i + 2] = q[2]
+    elem[i] = s.species[0]?.element
+  }
+  return { n, xyz, abc, elem }
+}
+
 // Translational image generation (VESTA/Avogadro approach):
 // For each atom, check all 26 neighboring cell translations.
 // Keep the image if its fractional coordinates fall within the display range.
@@ -135,14 +171,22 @@ export function find_image_atoms(
 export function find_translational_images(
   structure: ParsedStructure,
   { range_min = -0.01, range_max = 1.01 }: { range_min?: number; range_max?: number } = {},
+  geom?: PlainGeometry,
 ): [number, Vec3, Vec3][] {
   if (!structure.lattice || !structure.sites || structure.sites.length === 0) return []
 
+  const g = geom ?? extract_plain_geometry(structure)
+  const n = g.n
+  const gabc = g.abc
+  const gxyz = g.xyz
+
   // Skip trajectory data (>10% atoms outside cell)
-  const atoms_outside = structure.sites.filter(({ abc }) =>
-    abc.some((coord) => coord < -0.1 || coord > 1.1)
-  )
-  if (atoms_outside.length > structure.sites.length * 0.1) return []
+  let atoms_outside = 0
+  for (let i = 0; i < n; i++) {
+    const a = gabc[3 * i], b = gabc[3 * i + 1], c = gabc[3 * i + 2]
+    if (a < -0.1 || a > 1.1 || b < -0.1 || b > 1.1 || c < -0.1 || c > 1.1) atoms_outside++
+  }
+  if (atoms_outside > n * 0.1) return []
 
   const rawPbc = (structure.lattice as { pbc?: Pbc }).pbc
   const pbc: Pbc = rawPbc ? [rawPbc[0], rawPbc[1], rawPbc[2]] : [true, true, true]
@@ -201,16 +245,19 @@ export function find_translational_images(
     return false
   }
 
-  // Seed grid with all original atoms
-  for (const s of structure.sites) dedup_add(s.xyz)
+  // Seed grid with all original atoms (plain copies, not proxy-backed arrays —
+  // dedup_has re-reads stored entries on every collision check)
+  for (let i = 0; i < n; i++) {
+    dedup_add([gxyz[3 * i], gxyz[3 * i + 1], gxyz[3 * i + 2]])
+  }
 
   const result: [number, Vec3, Vec3][] = []
 
-  for (let idx = 0; idx < structure.sites.length; idx++) {
-    const site = structure.sites[idx]
+  for (let idx = 0; idx < n; idx++) {
+    const sa = gabc[3 * idx], sb = gabc[3 * idx + 1], sc = gabc[3 * idx + 2]
 
     for (const [dx, dy, dz] of offsets) {
-      const img_abc: Vec3 = [site.abc[0] + dx, site.abc[1] + dy, site.abc[2] + dz]
+      const img_abc: Vec3 = [sa + dx, sb + dy, sc + dz]
 
       if (img_abc[0] < range_min || img_abc[0] > range_max) continue
       if (img_abc[1] < range_min || img_abc[1] > range_max) continue
@@ -236,13 +283,18 @@ export function get_pbc_image_sites(
     return structure
   }
 
+  // One proxy-free pass over the sites; every loop below reads from this.
+  const geom = extract_plain_geometry(structure)
+
   // Check for trajectory data
-  const atoms_outside_cell = structure.sites.filter((site) =>
-    site.abc.some((coord) => coord < -0.1 || coord > 1.1)
-  )
+  let atoms_outside_cell = 0
+  for (let i = 0; i < geom.n; i++) {
+    const a = geom.abc[3 * i], b = geom.abc[3 * i + 1], c = geom.abc[3 * i + 2]
+    if (a < -0.1 || a > 1.1 || b < -0.1 || b > 1.1 || c < -0.1 || c > 1.1) atoms_outside_cell++
+  }
 
   // Return trajectory data unchanged
-  if (atoms_outside_cell.length > structure.sites.length * 0.1) {
+  if (atoms_outside_cell > geom.n * 0.1) {
     return structure
   }
 
@@ -258,7 +310,7 @@ export function get_pbc_image_sites(
   const initial_images = find_translational_images(structure, {
     range_min: -0.05,
     range_max: 1.05,
-  })
+  }, geom)
 
   // Phase 2: bond-complete the image set.
   // For each image atom, ensure all its bonded neighbors also have images
@@ -267,8 +319,9 @@ export function get_pbc_image_sites(
   // Uses spatial grid (cell list) with adaptive cutoff based on covalent radii.
   // Grid cell size = max possible bond length so each atom only checks 27 cells.
   // Complexity: O(n) average for uniform atom distributions.
-  const sites = structure.sites
-  const n = sites.length
+  const n = geom.n
+  const gxyz = geom.xyz
+  const gabc = geom.abc
   const BOND_TOLERANCE = 1.25 // bond if dist < (r_i + r_j) * tolerance
   const BOND_MIN_SQ = 0.01   // 0.1² — skip near-zero distances
 
@@ -276,7 +329,7 @@ export function get_pbc_image_sites(
   const radii = new Float64Array(n)
   let max_radius = 0
   for (let i = 0; i < n; i++) {
-    const r = covalent_radii.get(sites[i].species[0]?.element) ?? 1.5 // already in Å
+    const r = covalent_radii.get(geom.elem[i]) ?? 1.5 // already in Å
     radii[i] = r
     if (r > max_radius) max_radius = r
   }
@@ -289,7 +342,7 @@ export function get_pbc_image_sites(
     let bx0 = Infinity, by0 = Infinity, bz0 = Infinity
     let bx1 = -Infinity, by1 = -Infinity, bz1 = -Infinity
     for (let i = 0; i < n; i++) {
-      const [x, y, z] = sites[i].xyz
+      const x = gxyz[3 * i], y = gxyz[3 * i + 1], z = gxyz[3 * i + 2]
       if (x < bx0) bx0 = x; if (x > bx1) bx1 = x
       if (y < by0) by0 = y; if (y > by1) by1 = y
       if (z < bz0) bz0 = z; if (z > bz1) bz1 = z
@@ -303,7 +356,7 @@ export function get_pbc_image_sites(
     const grid = new Map<number, number[]>()
 
     for (let i = 0; i < n; i++) {
-      const [x, y, z] = sites[i].xyz
+      const x = gxyz[3 * i], y = gxyz[3 * i + 1], z = gxyz[3 * i + 2]
       const key = Math.floor((x - bx0) * inv) * ny * nz
                + Math.floor((y - by0) * inv) * nz
                + Math.floor((z - bz0) * inv)
@@ -326,13 +379,13 @@ export function get_pbc_image_sites(
             const ncell = grid.get(ni * ny * nz + nj * nz + nk)
             if (!ncell) continue
             for (const i of cell) {
-              const xi = sites[i].xyz[0], yi = sites[i].xyz[1], zi = sites[i].xyz[2]
+              const xi = gxyz[3 * i], yi = gxyz[3 * i + 1], zi = gxyz[3 * i + 2]
               const ri = radii[i]
               for (const j of ncell) {
                 if (j <= i) continue
-                const dx = xi - sites[j].xyz[0]
-                const dy = yi - sites[j].xyz[1]
-                const dz = zi - sites[j].xyz[2]
+                const dx = xi - gxyz[3 * j]
+                const dy = yi - gxyz[3 * j + 1]
+                const dz = zi - gxyz[3 * j + 2]
                 const d2 = dx * dx + dy * dy + dz * dz
                 if (d2 < BOND_MIN_SQ) continue
                 const bond_max = (ri + radii[j]) * BOND_TOLERANCE
@@ -352,20 +405,24 @@ export function get_pbc_image_sites(
   const lattice_T = math.transpose_3x3_matrix(structure.lattice!.matrix)
   const image_set = new Set<string>()
   for (const [idx, , abc] of initial_images) {
-    const offset = abc.map((c, d) => Math.round(c - structure.sites[idx].abc[d]))
-    image_set.add(`${idx}|${offset.join(',')}`)
+    const o0 = Math.round(abc[0] - gabc[3 * idx])
+    const o1 = Math.round(abc[1] - gabc[3 * idx + 1])
+    const o2 = Math.round(abc[2] - gabc[3 * idx + 2])
+    image_set.add(`${idx}|${o0},${o1},${o2}`)
   }
 
   const extra_images: [number, Vec3, Vec3][] = []
   for (const [idx, , abc] of initial_images) {
-    const offset = abc.map((c, d) => Math.round(c - structure.sites[idx].abc[d]))
+    const o0 = Math.round(abc[0] - gabc[3 * idx])
+    const o1 = Math.round(abc[1] - gabc[3 * idx + 1])
+    const o2 = Math.round(abc[2] - gabc[3 * idx + 2])
     for (const nb of adj[idx]) {
-      const nb_key = `${nb}|${offset.join(',')}`
+      const nb_key = `${nb}|${o0},${o1},${o2}`
       if (image_set.has(nb_key)) continue
       const nb_abc: Vec3 = [
-        structure.sites[nb].abc[0] + offset[0],
-        structure.sites[nb].abc[1] + offset[1],
-        structure.sites[nb].abc[2] + offset[2],
+        gabc[3 * nb] + o0,
+        gabc[3 * nb + 1] + o1,
+        gabc[3 * nb + 2] + o2,
       ]
       const nb_xyz = math.mat3x3_vec3_multiply(lattice_T, nb_abc)
       image_set.add(nb_key)
@@ -593,6 +650,14 @@ export async function find_pbc_images_fast(
     options ?? { range_min: -0.05, range_max: 1.05, bond_completion: false, bond_tolerance: 1.25 },
   )
 
+  // wasm_result === null means the WASM path FAILED (module unavailable or
+  // errored) — only then is the JS fallback justified. A successful run with
+  // zero images is a real answer; falling through to the JS path re-did the
+  // whole search on the main thread (and through the Svelte proxy, which
+  // freezes the UI for minutes on ~10k-atom systems).
+  if (wasm_result && wasm_result.parent_indices.length === 0) {
+    return structure
+  }
   if (wasm_result && wasm_result.parent_indices.length > 0) {
     const num_original_sites = structure.sites.length
     const image_to_original_map: number[] = [...wasm_result.parent_indices]
