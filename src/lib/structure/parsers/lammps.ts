@@ -250,6 +250,14 @@ export function parse_lammps_data(content: string): ParsedStructure | null {
         break
       } else if (line === `Impropers` || line.startsWith(`Impropers`)) {
         break
+      } else if (/^[A-Z][A-Za-z]*( [A-Za-z]+)*( #.*)?$/.test(line)) {
+        // Any OTHER section header (Pair Coeffs, Bond Coeffs, Velocities, …)
+        // ends the current section. Without this, `Pair Coeffs` lines kept
+        // feeding the Masses parser: the LJ sigma column overwrote every
+        // atom mass (σ ≈ 3.5 → He), so an 11k-atom kerogen rendered as
+        // He₁₀₄₆₄Te₂₁₆Sb₂₁₆… instead of C/H/O/N.
+        current_section = ``
+        continue
       }
 
       // Parse atom count

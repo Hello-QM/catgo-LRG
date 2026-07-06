@@ -21,6 +21,11 @@ Masses
 1 15.9994
 2 12.0112
 
+Pair Coeffs # lj/cut/coul/long
+
+1 0.066 3.5
+2 0.07 3.55
+
 Atoms # full
 
 1 1 1 -0.2 -17.36 6.16 -13.12 0 0 0
@@ -55,7 +60,9 @@ describe(`parse_lammps_data atom_style handling`, () => {
     // xyz shifted by the box origin (xlo=-20, ylo=0, zlo=-16)
     expect(s.sites[0].xyz[0]).toBeCloseTo(-17.36 + 20, 6)
     expect(s.sites[0].xyz[2]).toBeCloseTo(-13.12 + 16, 6)
-    // element from mass table via type column (col 3, NOT col 2 = molecule id)
+    // element from mass table via type column (col 3, NOT col 2 = molecule id).
+    // The Pair Coeffs section above must NOT bleed into the Masses parse —
+    // its sigma column (3.5) once overwrote the masses and mapped types to He.
     expect(s.sites[0].species[0].element).toBe(`O`)
     expect(s.sites[1].species[0].element).toBe(`C`)
     // abc in [0,1] for in-box atoms — the old bug left every abc at 0
