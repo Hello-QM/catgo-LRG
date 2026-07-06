@@ -377,8 +377,12 @@
             ime.on_composition_end(ce.data)
             // Clear the textarea synchronously so xterm's deferred
             // _finalizeComposition can't re-read the composed text and re-send it.
-            // The resulting DEL is swallowed by the residue window in onData.
-            if (xt.value) xt.value = ``
+            // The clear makes xterm emit synthetic DELs (length decrease) — arm
+            // the guard's debt so exactly those are eaten, not real backspaces.
+            if (xt.value) {
+              ime.note_textarea_clear(xt.value.length)
+              xt.value = ``
+            }
           }, sig)
           xt.addEventListener(`keydown`, (e) => {
             ime.on_keydown((e as KeyboardEvent).keyCode)

@@ -458,6 +458,13 @@
         let wk_pending = ``            // buffered composed text waiting to flush
         let std_composing = false      // true during standard compositionstart..end
         let post_compose_until = 0     // suppress confirmation-key residue until this time
+        // Synthetic-DEL debt: clearing the textarea after a commit makes
+        // xterm's bookkeeping see a length decrease and emit one DEL per
+        // vanished char. Those are NOT user backspaces — forwarding them
+        // erases the tail of the text we just committed (the intermittent
+        // "Chinese loses characters" bug). Arm a debt at clear time; onData
+        // eats \x7f against it within the residue window only.
+        let del_debt = 0
 
         const POST_COMPOSE_MS = 80
         // DEL (`\x7f`, Backspace) is deliberately NOT here \u2014 it is never IME
@@ -525,11 +532,12 @@
             }
             // Clear textarea synchronously to prevent xterm's _finalizeComposition
             // (setTimeout(0)) from reading stale content and sending it to PTY.
-            // This causes xterm's _handleAnyTextareaChanges to see a length
-            // decrease and emit DEL (0x7F), but we suppress that via
-            // IME_CONFIRM_KEYS in the post-composition window.
+            // The clear makes xterm's _handleAnyTextareaChanges see a length
+            // decrease and emit synthetic DEL (0x7F) — arm a matching debt so
+            // onData can eat exactly those without touching real backspaces.
             if (xt_textarea.value) {
               ime_log(`textarea clear`, { was: xt_textarea.value })
+              del_debt = xt_textarea.value.length
               xt_textarea.value = ``
             }
           })
@@ -602,14 +610,28 @@
         // Suppress onData during any form of IME composition, and suppress
         // confirmation-key residue (space/enter) briefly after composition ends.
         term.onData((data: string) => {
-          // A Backspace/DEL is always a real edit intent — never swallow it.
-          // WebKit fires compositionend unreliably for CJK, so std_composing can
-          // stick `true` and would otherwise eat every backspace, leaving the
-          // user unable to delete Chinese they just typed.
-          if (data === `\x7f`) {
+          // DEL handling needs to distinguish two sources:
+          //  - SYNTHETIC DELs from our post-commit textarea clear (xterm sees
+          //    the length decrease) — eat those against del_debt, else they
+          //    backspace over the text we just committed.
+          //  - REAL user backspaces — never swallow (WebKit's unreliable
+          //    compositionend can leave std_composing stuck true, which once
+          //    ate every backspace after typing Chinese).
+          if (/^\x7f+$/.test(data)) {
+            if (del_debt > 0 && performance.now() < post_compose_until) {
+              const eat = Math.min(data.length, del_debt)
+              del_debt -= eat
+              const rest = data.length - eat
+              ime_log(`onData DEL debt`, { got: data.length, ate: eat, rest })
+              if (rest > 0) pty_session?.write(`\x7f`.repeat(rest)).catch(() => {})
+              return
+            }
+            del_debt = 0
             pty_session?.write(data).catch(() => {})
             return
           }
+          // Any non-DEL input means the synthetic DELs are no longer coming.
+          del_debt = 0
           if (std_composing || wk_composing) {
             ime_log(`onData SUPPRESS (composing)`, { data, hex: [...data].map(c => c.codePointAt(0)!.toString(16)) })
             return

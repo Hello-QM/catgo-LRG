@@ -155,6 +155,47 @@ describe(`createImeGuard`, () => {
     expect(write).toHaveBeenCalledTimes(2)
   })
 
+  describe(`synthetic DEL debt (post-commit textarea clear)`, () => {
+    it(`eats exactly the armed synthetic DELs, then honors real backspaces`, () => {
+      // Committing "你好" clears a 2-char textarea → xterm emits 2 synthetic
+      // DELs. Forwarding them backspaced over the freshly committed text —
+      // the intermittent "candidate-stage swallowing" bug.
+      const t = 1000
+      const write = vi.fn()
+      const g = createImeGuard({ write, now: () => t })
+      g.on_composition_end(`你好`) // arms the residue window
+      g.note_textarea_clear(2)
+      expect(g.should_suppress(`\x7f`)).toBe(true) // synthetic #1
+      expect(g.should_suppress(`\x7f`)).toBe(true) // synthetic #2
+      expect(g.should_suppress(`\x7f`)).toBe(false) // debt spent → real backspace
+    })
+
+    it(`eats a batched DEL chunk covered by the debt`, () => {
+      const g = createImeGuard({ write: vi.fn(), now: () => 1000 })
+      g.on_composition_end(`字`)
+      g.note_textarea_clear(3)
+      expect(g.should_suppress(`\x7f\x7f\x7f`)).toBe(true)
+      expect(g.should_suppress(`\x7f`)).toBe(false)
+    })
+
+    it(`expires the debt outside the residue window (late backspace is real)`, () => {
+      let t = 1000
+      const g = createImeGuard({ write: vi.fn(), now: () => t })
+      g.on_composition_end(`字`)
+      g.note_textarea_clear(1)
+      t = 1200 // past POST_COMPOSE_MS
+      expect(g.should_suppress(`\x7f`)).toBe(false)
+    })
+
+    it(`clears the debt when any non-DEL input arrives`, () => {
+      const g = createImeGuard({ write: vi.fn(), now: () => 1000 })
+      g.on_composition_end(`字`)
+      g.note_textarea_clear(2)
+      expect(g.should_suppress(`a`)).toBe(false) // typed char — debt cancelled
+      expect(g.should_suppress(`\x7f`)).toBe(false) // now a real backspace
+    })
+  })
+
   describe(`bypass_cjk_insert_text (iOS dictation)`, () => {
     it(`does not consume Chinese insertText — the caller reconciles it`, () => {
       // iOS dictation streams Chinese as insertText events that REPLACE the

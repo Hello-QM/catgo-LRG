@@ -65,8 +65,13 @@ export interface ImeGuard {
   on_composition_end(committed: string | null): void
   /** From `keydown` — flushes a pending WK buffer on a real (non-IME) key. */
   on_keydown(key_code: number): void
+  /** Call when the caller clears the textarea after a commit: xterm's
+   *  bookkeeping sees the length decrease and emits one synthetic DEL per
+   *  vanished char. Arms a debt so should_suppress can eat exactly those. */
+  note_textarea_clear(chars: number): void
   /** From the top of `onData`. Returns true if `data` should be SUPPRESSED:
-   *  we're mid-composition, or it's confirmation-key residue just after one. */
+   *  we're mid-composition, it's confirmation-key residue just after one, or
+   *  it's a synthetic DEL covered by the textarea-clear debt. */
   should_suppress(data: string): boolean
 }
 
@@ -89,6 +94,7 @@ export function createImeGuard(opts: {
   let wk_pending = `` //       the buffered composed text awaiting flush
   let std_composing = false // true during a standard compositionstart..end
   let post_compose_until = 0 // suppress confirmation-key residue until this time
+  let del_debt = 0 //          synthetic DELs still expected from a textarea clear
 
   const flush = (): void => {
     if (!wk_composing) return
@@ -158,12 +164,33 @@ export function createImeGuard(opts: {
       // keyCode 229 = "IME is processing" — don't flush mid-composition.
       if (wk_composing && key_code !== 229) flush()
     },
+    note_textarea_clear(chars) {
+      del_debt = Math.max(0, chars)
+    },
     should_suppress(data) {
-      // A Backspace/DEL reaching onData is always a real edit intent — never
-      // swallow it. WKWebView fires compositionend unreliably for CJK, so
-      // std_composing can stick `true` and would otherwise eat every backspace,
-      // leaving the user unable to delete Chinese they just typed.
-      if (data === `\x7f`) return false
+      // DELs need source discrimination:
+      //  - SYNTHETIC: after the caller clears the textarea post-commit, xterm
+      //    emits one DEL per vanished char — eat those against the armed debt
+      //    (within the residue window) or they backspace over the freshly
+      //    committed text ("吞字": committed Chinese loses its tail).
+      //  - REAL user backspace: never swallow (unreliable compositionend can
+      //    leave std_composing stuck true, which once ate every backspace).
+      if (/^\x7f+$/.test(data)) {
+        if (del_debt > 0 && now() < post_compose_until) {
+          const eat = Math.min(data.length, del_debt)
+          del_debt -= eat
+          // Partial chunks beyond the debt are real — let the caller send the
+          // remainder itself is not expressible here, so only suppress when
+          // the WHOLE chunk is covered; otherwise treat it all as real.
+          if (eat === data.length) return true
+          del_debt = 0
+          return false
+        }
+        del_debt = 0
+        return false
+      }
+      // Any non-DEL input means the synthetic DELs are no longer coming.
+      del_debt = 0
       if (std_composing || wk_composing) return true
       if (post_compose_until > 0) {
         if (now() < post_compose_until && IME_CONFIRM_KEYS.has(data)) return true
