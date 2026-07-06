@@ -258,6 +258,12 @@ jobs:
             - **Analysis** — DOS / band / COHP, Brillouin zone, XRD, phase diagrams, Gibbs & volcano plots
             - Built-in xTB / EMT calculators · OPTIMADE & PubChem search · HD render & trajectory video export
 
+            ### New in 1.4.3
+            - **LAMMPS `.data` files open correctly** — force-field data files (`Atoms # full` from `write_data`) no longer freeze the viewer for minutes or show absurd elements: the style annotation wins over column guessing (image flags were read as coordinates), atoms are shifted by the box origin, and `Pair Coeffs` no longer bleeds into the Masses table. An 11k-atom kerogen renders in seconds as C/H/O/N.
+            - **Large systems no longer freeze on PBC boundary images** — the image search dropped its reactive-proxy overhead (190 s → 0.1 s for 11k atoms) and a successful zero-image WASM result no longer re-runs the search in JS.
+            - **Terminal Chinese input no longer swallows characters** — committing a pinyin candidate could emit synthetic backspaces that erased the tail of the just-typed text (timing-dependent). Fixed on desktop and mobile.
+            - **Doc viewer polish** — the Render toggle sits in the editor header next to Visualize/Save with proper accent styling.
+
             ### New in 1.4.2
             - **Terminal file opening works end-to-end** — Ctrl+click a file in a local shell opens it again (empty-session reads were rejected by the backend), and Ctrl+click a **directory** now navigates the Files sidebar to it.
             - **"Open files in" targets are honored everywhere** — with a full-pane terminal, Split/Tab place the structure beside the terminal instead of silently doing nothing; **Overwrite replaces** the existing pane instead of splitting a new one each time; **Window + Overwrite** reuses a single popout and live-updates it on every open.
@@ -266,14 +272,6 @@ jobs:
             - **Desktop popout windows fixed** — structure popouts had no Tauri ACL capability, so every call from them failed (the "Update failed: … not allowed by ACL" toast). Update checks now run only in the main window.
             - **iOS: Chinese dictation into the terminal** — the transcript no longer re-appends on every recognizer refinement; Chinese takes the same reconcile path as English.
             - **MCP `catgo_analyze` repaired** — symmetry / dft_input / optimize / rdf / coordination hit real endpoints (new standalone symmetry, single-structure RDF, CrystalNN coordination).
-
-            ### New in 1.4.1
-            - **In-app auto-update** — Windows & macOS notice new releases and update with one click (download the signed bundle → relaunch); Linux gets a "new version" banner linking to the download page. The banner only shows when a newer release exists.
-            - **Developer-ID signed macOS** — the `.dmg`/`.app` are code-signed (first launch: right-click → Open; notarization lands in a follow-up).
-            - **Bonds preserved when adding a lattice** — adding a periodic box to a molecule (Build → Lattice) no longer drops the bonds (correct fractional coords, incl. non-orthogonal cells).
-            - **Search Database fixed** — OPTIMADE providers retry on cold start, so it's no longer PubChem-only.
-            - **VS Code extension** — trajectory playback no longer janks (off-thread bond recompute); **plots** — axis titles no longer overlap tick labels at large fonts.
-            - **iOS** — CatGo is now on the App Store (static viewer build); the web "Get the App" button is embedded in the landing page.
 
             See the [CHANGELOG](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for the full list.
           releaseDraft: true
