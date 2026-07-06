@@ -316,20 +316,52 @@ export function parse_lammps_data(content: string): ParsedStructure | null {
 
     // Parse atoms section
     if (atom_start_idx >= 0) {
-      // First, detect the column format by sampling the first few valid lines
+      // Column layout per documented atom_style (`write_data` always annotates
+      // the section header, e.g. "Atoms # full"). Trust the annotation before
+      // any heuristics — guessing mis-detected 10-column `full` lines
+      // (id mol type q x y z nx ny nz) and read the trailing image flags as
+      // coordinates, collapsing every atom onto the origin.
+      const STYLE_COLUMNS: Record<
+        string,
+        { type_idx: number; x_idx: number; y_idx: number; z_idx: number }
+      > = {
+        atomic: { type_idx: 1, x_idx: 2, y_idx: 3, z_idx: 4 },
+        charge: { type_idx: 1, x_idx: 3, y_idx: 4, z_idx: 5 },
+        molecular: { type_idx: 2, x_idx: 3, y_idx: 4, z_idx: 5 },
+        angle: { type_idx: 2, x_idx: 3, y_idx: 4, z_idx: 5 },
+        bond: { type_idx: 2, x_idx: 3, y_idx: 4, z_idx: 5 },
+        full: { type_idx: 2, x_idx: 4, y_idx: 5, z_idx: 6 },
+        sphere: { type_idx: 1, x_idx: 4, y_idx: 5, z_idx: 6 },
+      }
+      const style_match = atom_section_name.match(/#\s*([a-z]+)/i)
+      const style_format = style_match ? STYLE_COLUMNS[style_match[1].toLowerCase()] ?? null : null
+
+      // Trailing per-atom image flags (nx ny nz) are three pure integers after
+      // the coordinates — strip them before HEURISTIC detection so they can't
+      // be mistaken for the coordinate columns. (The style table above indexes
+      // from the front, so it is unaffected either way.)
+      const strip_image_flags = (parts: string[]): string[] => {
+        if (parts.length >= 8 && parts.slice(-3).every((p) => /^-?\d+$/.test(p))) {
+          return parts.slice(0, -3)
+        }
+        return parts
+      }
+
+      // Fall back to sampling-based detection only when the header carries no
+      // (recognized) style annotation.
       let detected_format: {
         type_idx: number
         x_idx: number
         y_idx: number
         z_idx: number
-      } | null = null
+      } | null = style_format
 
       for (let i = atom_start_idx; i < lines.length && !detected_format; i++) {
         const line = lines[i].trim()
         if (!line || line.startsWith(`#`)) continue
         if (line.match(/^[A-Za-z]/)) break
 
-        const parts = line.split(/\s+/)
+        const parts = strip_image_flags(line.split(/\s+/))
         if (parts.length < 5) continue
 
         detected_format = detect_lammps_atom_format(parts)
@@ -344,7 +376,7 @@ export function parse_lammps_data(content: string): ParsedStructure | null {
         const parts = line.split(/\s+/)
         if (parts.length < 5) continue
 
-        const format = detected_format || detect_lammps_atom_format(parts)
+        const format = detected_format || detect_lammps_atom_format(strip_image_flags(parts))
         if (!format) continue
 
         const atom_type = parseInt(parts[format.type_idx])
@@ -400,11 +432,16 @@ export function parse_lammps_data(content: string): ParsedStructure | null {
 
       const { a, b, c, alpha, beta, gamma, volume } = math.calc_lattice_params(matrix)
 
-      // Convert Cartesian xyz to fractional abc coordinates
+      // Convert Cartesian xyz to fractional abc coordinates. LAMMPS boxes
+      // need not start at the origin (xlo/ylo/zlo can be negative — e.g. a
+      // box spanning [-19.9, 239.4]); CatGo draws the cell at the origin, so
+      // shift the atoms by the box origin first. Without this, abc is offset
+      // by origin/length and atoms render outside the drawn cell.
       const inv_lattice = math.matrix_inverse_3x3(
         math.transpose_3x3_matrix(matrix),
       )
       for (const site of sites) {
+        site.xyz = [site.xyz[0] - xlo, site.xyz[1] - ylo, site.xyz[2] - zlo]
         site.abc = math.mat3x3_vec3_multiply(inv_lattice, site.xyz)
       }
 
