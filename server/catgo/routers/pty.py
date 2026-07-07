@@ -166,37 +166,90 @@ async def _run_remote_pty(
         await _run_remote_asyncssh_pty(ws, pty_id, cols, rows, hpc)
 
 
+# --- asyncssh PTY ops, each awaited on the connection's OWNER loop ---
+# asyncssh's SSHClientProcess and its stdin/stdout streams are bound to the loop
+# that created the connection (see hpc_connection.py rule #4). These tiny
+# coroutines let the WebSocket handler — which may run on a different loop —
+# drive the process via ``hpc.run_on_owner(...)`` instead of mutating
+# loop-private channel state directly (the cross-loop misuse that corrupts the
+# session under the heavy, interleaved I/O a full-screen program produces).
+
+async def _pty_write(process, data: bytes) -> None:
+    process.stdin.write(data)
+
+
+async def _pty_resize(process, cols: int, rows: int) -> None:
+    process.change_terminal_size(cols, rows)
+
+
+async def _pty_close(process) -> None:
+    try:
+        process.stdin.write_eof()
+    except Exception:
+        pass
+    try:
+        process.close()
+    except Exception:
+        pass
+
+
 async def _run_remote_asyncssh_pty(
     ws: WebSocket, pty_id: int, cols: int, rows: int, hpc
 ) -> None:
-    """Remote PTY via asyncssh interactive session."""
+    """Remote PTY via asyncssh interactive session.
+
+    Two invariants make full-screen programs (vi/vim/less/top/tmux) survive:
+
+    1. BINARY transport (``encoding=None``). A PTY carries arbitrary terminal
+       bytes — escape sequences, box-drawing, non-UTF-8 payloads. In asyncssh's
+       default UTF-8 text mode ``stdout.read()`` raises ``UnicodeDecodeError`` on
+       the first non-UTF-8 byte; the read loop treats that as channel death and
+       tears down the WebSocket — which is exactly why ``cat`` of a UTF-8 file
+       worked while ``vi`` dropped the connection. Binary mode base64-forwards
+       raw bytes untouched (matching the local/subprocess ``os.read`` paths).
+
+    2. OWNER-LOOP affinity. The asyncssh process and its streams belong to the
+       connection's owner loop (hpc_connection.py rule #4). create / read /
+       write / resize / close are dispatched through ``hpc.run_on_owner`` /
+       ``hpc.stream_on_owner`` so loop-private channel state is never mutated
+       from a foreign loop. Both are a zero-cost passthrough when the handler is
+       already on the owner loop, so the common single-loop path is unchanged.
+    """
     read_task: Optional[asyncio.Task] = None
     monitor_task: Optional[asyncio.Task] = None
     process = None
     channel_closed = asyncio.Event()
 
     try:
-        # Create an interactive process with PTY allocation
-        process = await hpc.conn.create_process(
-            term_type="xterm-256color",
-            term_size=(cols, rows),
+        # Create the interactive PTY process on the owner loop, in binary mode.
+        process = await hpc.run_on_owner(
+            lambda: hpc.conn.create_process(
+                term_type="xterm-256color",
+                term_size=(cols, rows),
+                encoding=None,
+            )
         )
 
         await ws.send_json({"type": "opened", "id": pty_id})
         logger.info(
             f"[PTY {pty_id}] Remote asyncssh session opened "
-            f"({hpc.username}@{hpc.host}, {cols}x{rows})"
+            f"({hpc.username}@{hpc.host}, {cols}x{rows}, binary)"
         )
 
-        # Background task: read remote process stdout → WebSocket
+        # Read remote stdout on the owner loop; stream_on_owner bridges the raw
+        # bytes back to this (FastAPI) loop, then base64 → WebSocket.
+        async def stdout_chunks():
+            while True:
+                data = await process.stdout.read(8192)
+                if not data:
+                    break
+                if isinstance(data, str):  # defensive: only if a text stream slips through
+                    data = data.encode("utf-8", "surrogatepass")
+                yield data
+
         async def read_loop() -> None:
             try:
-                while True:
-                    data = await process.stdout.read(8192)
-                    if not data:
-                        break
-                    if isinstance(data, str):
-                        data = data.encode("utf-8")
+                async for data in hpc.stream_on_owner(stdout_chunks):
                     encoded = base64.b64encode(data).decode("ascii")
                     await ws.send_json({"type": "output", "data": encoded})
             except asyncio.CancelledError:
@@ -229,8 +282,9 @@ async def _run_remote_asyncssh_pty(
 
             if action == "input":
                 raw = msg.get("data", "")
+                data = raw.encode("utf-8", "surrogatepass") if isinstance(raw, str) else bytes(raw)
                 try:
-                    process.stdin.write(raw)
+                    await hpc.run_on_owner(lambda: _pty_write(process, data))
                 except Exception as exc:
                     logger.debug(f"[PTY {pty_id}] Write error (channel closed?): {exc}")
                     break
@@ -238,7 +292,7 @@ async def _run_remote_asyncssh_pty(
                 new_cols = msg.get("cols", cols)
                 new_rows = msg.get("rows", rows)
                 try:
-                    process.change_terminal_size(new_cols, new_rows)
+                    await hpc.run_on_owner(lambda: _pty_resize(process, new_cols, new_rows))
                 except Exception:
                     pass
             elif action == "close":
@@ -257,13 +311,9 @@ async def _run_remote_asyncssh_pty(
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
-        if process:
+        if process is not None:
             try:
-                process.stdin.write_eof()
-            except Exception:
-                pass
-            try:
-                process.close()
+                await hpc.run_on_owner(lambda: _pty_close(process))
             except Exception:
                 pass
 
