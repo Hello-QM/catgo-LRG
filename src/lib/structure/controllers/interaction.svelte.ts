@@ -44,6 +44,7 @@ import {
   pick_locked_axis,
   rotate_points,
   drag_delta_for_axis,
+  world_axis_to_local,
   type LockAxis,
 } from '$lib/structure/rotation-math'
 import type { ElementSymbol } from '$lib'
@@ -789,7 +790,10 @@ export function create_interaction_controller(deps: InteractionDeps) {
     else if (direction === 'Forward') { rotation_axis = frame.x; angle = KEYBOARD_ROTATION_STEP }
     else { rotation_axis = frame.x; angle = -KEYBOARD_ROTATION_STEP }
 
-    const rotation_quat = new Quaternion().setFromAxisAngle(rotation_axis, angle)
+    // Undo the scene group rotation so the pitch/yaw/roll axes track the screen,
+    // not the cell, when the structure has been reoriented.
+    const local_axis = world_axis_to_local(rotation_axis, deps.get_scene_props().rotation || [0, 0, 0])
+    const rotation_quat = new Quaternion().setFromAxisAngle(local_axis, angle)
     const new_overrides = new Map(realtime_position_overrides)
     const center_vec = new Vector3(keyboard_rotation_center[0], keyboard_rotation_center[1], keyboard_rotation_center[2])
 
@@ -1510,7 +1514,10 @@ export function create_interaction_controller(deps: InteractionDeps) {
       const cam_quat = atom_rotation_camera_quat
         || (deps.get_camera() ? deps.get_camera().quaternion : new Quaternion())
       const frame = screen_frame_from_camera(cam_quat)
-      const axis_vec = frame[axis]
+      // Map the world-space screen axis into the structure's local (cell) frame,
+      // undoing the scene group rotation — otherwise atoms rotate about the cell
+      // axes instead of the on-screen axes when the structure is reoriented.
+      const axis_vec = world_axis_to_local(frame[axis], deps.get_scene_props().rotation || [0, 0, 0])
 
       const angle = drag_delta_for_axis(axis, total_dx, total_dy) * sensitivity
 

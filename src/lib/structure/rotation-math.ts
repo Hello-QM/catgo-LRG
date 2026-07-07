@@ -1,4 +1,4 @@
-import { Quaternion, Vector3 } from 'three'
+import { Euler, Quaternion, Vector3 } from 'three'
 import type { Vec3 } from '$lib/math'
 
 /** Screen-aligned orthonormal frame. Origin is the selection centroid
@@ -29,6 +29,24 @@ export function screen_frame_from_camera(cam_quat: Quaternion): ScreenFrame {
     new Vector3(0, 0, 1).applyQuaternion(cam_quat).normalize(),
   )
   return { x: toward_viewer, y: right, z: up }
+}
+
+/** Map a world-space axis into the structure's LOCAL (cell) frame, undoing the
+ *  scene group rotation that `<T.Group {rotation}>` applies to atom coordinates.
+ *
+ *  Atoms are stored/rotated in local coords, but rendered as
+ *  `world = R_group · local` where `R_group = Euler(group_rotation_rad, 'XYZ')`.
+ *  The screen frame comes from the camera in WORLD space, so to make atoms
+ *  rotate about the on-screen axis we must express that axis in the local frame:
+ *  `axis_local = R_group⁻¹ · axis_world` (rotation conjugation). Without this the
+ *  atoms rotate about the cell axes instead of the screen axes whenever the
+ *  structure has been reoriented via the group rotation (axis-lock drag, the
+ *  numeric rotation controls, or lattice alignment on load). */
+export function world_axis_to_local(axis: Vector3, group_rotation_rad: Vec3): Vector3 {
+  const [rx, ry, rz] = group_rotation_rad
+  if (rx === 0 && ry === 0 && rz === 0) return axis.clone()
+  const inv = new Quaternion().setFromEuler(new Euler(rx, ry, rz, 'XYZ')).invert()
+  return axis.clone().applyQuaternion(inv)
 }
 
 export type LockAxis = 'x' | 'y' | 'z'

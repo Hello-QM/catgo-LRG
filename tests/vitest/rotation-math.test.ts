@@ -1,10 +1,12 @@
 import { Quaternion, Vector3 } from 'three'
 import { describe, expect, it } from 'vitest'
+import { Euler } from 'three'
 import {
   screen_frame_from_camera,
   pick_locked_axis,
   rotate_points,
   drag_delta_for_axis,
+  world_axis_to_local,
 } from '$lib/structure/rotation-math'
 
 describe('screen_frame_from_camera', () => {
@@ -62,6 +64,36 @@ describe('rotate_points', () => {
     expect(out[0][0]).toBeCloseTo(1, 6)
     expect(out[0][1]).toBeCloseTo(2, 6)
     expect(out[0][2]).toBeCloseTo(3, 6)
+  })
+})
+
+describe('world_axis_to_local', () => {
+  it('identity group rotation leaves the axis unchanged', () => {
+    const out = world_axis_to_local(new Vector3(0, 0, 1), [0, 0, 0])
+    expect(out.toArray()).toEqual([0, 0, 1])
+  })
+  it('undoes a +90° z group rotation (world +x → local -y)', () => {
+    // Group applies Rz(+90°) to local coords: local +x renders as world +y.
+    // So the inverse maps world +x back to local -y.
+    const out = world_axis_to_local(new Vector3(1, 0, 0), [0, 0, Math.PI / 2])
+    expect(out.x).toBeCloseTo(0, 6)
+    expect(out.y).toBeCloseTo(-1, 6)
+    expect(out.z).toBeCloseTo(0, 6)
+  })
+  it('round-trips: re-applying the group rotation recovers the world axis', () => {
+    const rot: [number, number, number] = [0.3, -0.7, 1.1]
+    const world = new Vector3(0.2, 0.9, -0.4).normalize()
+    const local = world_axis_to_local(world, rot)
+    const back = local
+      .clone()
+      .applyQuaternion(new Quaternion().setFromEuler(new Euler(rot[0], rot[1], rot[2], 'XYZ')))
+    expect(back.x).toBeCloseTo(world.x, 6)
+    expect(back.y).toBeCloseTo(world.y, 6)
+    expect(back.z).toBeCloseTo(world.z, 6)
+  })
+  it('preserves unit length', () => {
+    const out = world_axis_to_local(new Vector3(1, 0, 0), [0.5, 1.2, -0.3])
+    expect(out.length()).toBeCloseTo(1, 6)
   })
 })
 
