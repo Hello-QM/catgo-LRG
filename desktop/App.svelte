@@ -1387,32 +1387,47 @@
     // OUTCAR/XDATCAR carry no fixed-atom info — pull selective dynamics from a
     // sibling CONTCAR/POSCAR in the same dir and stamp it on the trajectory
     // (async, mutates the reactive trajectory in place).
-    if (e.is_trajectory && remote_origin) {
-      void attach_vasp_constraints(p, remote_origin, e.filename)
+    if (e.is_trajectory && (remote_origin || local_file_path)) {
+      void attach_vasp_constraints(p, e.filename, remote_origin, local_file_path)
     }
   }
 
-  /** For a remote OUTCAR/XDATCAR (no inline constraints), fetch the sibling
-   *  CONTCAR/POSCAR and stamp its selective dynamics onto the trajectory. */
+  /** For an OUTCAR/XDATCAR (no inline constraints), fetch a sibling
+   *  CONTCAR/POSCAR — remote via the SSH session, local via the filesystem —
+   *  and stamp its selective dynamics onto the trajectory. */
   async function attach_vasp_constraints(
     p: PaneState,
-    origin: { session_id: string; file_path: string },
     filename: string,
+    origin: { session_id: string; file_path: string } | null,
+    local_file_path: string | null,
   ) {
     const traj = p.trajectory as TrajectoryType | null
     if (!traj?.frames?.length) return
     if (!/outcar|xdatcar/i.test(filename)) return
+    const base = origin?.file_path ?? local_file_path
+    if (!base) return
     const { has_constraints, move_mask_from_poscar, apply_move_mask } = await import(
       `$lib/trajectory/vasp-constraints`
     )
     if (has_constraints(traj)) return // vasprun already carries them
-    const dir = origin.file_path.replace(/[/\\][^/\\]*$/, ``)
-    const { readRemoteFile } = await import(`$lib/api/hpc`)
+    const sep = base.includes(`\\`) ? `\\` : `/`
+    const dir = base.replace(/[/\\][^/\\]*$/, ``)
+    const read: (name: string) => Promise<string | null> = origin
+      ? async (name) => {
+        const { readRemoteFile } = await import(`$lib/api/hpc`)
+        const r = await readRemoteFile(origin.session_id, `${dir}${sep}${name}`, 0)
+        return r?.success ? r.content ?? null : null
+      }
+      : async (name) => {
+        const { read_file } = await import(`$lib/api/project`)
+        const r = await read_file(`${dir}${sep}${name}`)
+        return r?.content ?? null
+      }
     for (const name of [`CONTCAR`, `POSCAR`]) {
       try {
-        const r = await readRemoteFile(origin.session_id, `${dir}/${name}`, 0)
-        if (r?.success && r.content) {
-          const mask = move_mask_from_poscar(r.content)
+        const content = await read(name)
+        if (content) {
+          const mask = move_mask_from_poscar(content)
           if (mask && apply_move_mask(traj, mask)) return
         }
       } catch { /* try next sibling */ }
