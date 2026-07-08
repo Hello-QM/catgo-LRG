@@ -618,11 +618,11 @@
     top: calc(100% + 8px);
     transform: translateX(-50%) translateY(-4px);
     padding: 7px 12px;
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(17, 17, 17, 0.96);
     color: #f5f5f5;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--shadow-lg);
     font-size: 13px;
     font-weight: 600;
     line-height: 1.25;
@@ -656,7 +656,7 @@
     display: flex;
     place-items: center;
     padding: var(--pane-toggle-padding, 2pt);
-    border-radius: var(--pane-toggle-border-radius, 3pt);
+    border-radius: var(--pane-toggle-border-radius, var(--radius-sm));
     background-color: transparent;
     transition: var(--pane-toggle-transition, background-color 0.15s);
     font-size: var(--pane-toggle-font-size, clamp(0.9em, 2cqmin, 1.4em));
@@ -672,10 +672,10 @@
     position: fixed;
     background: var(--pane-bg, var(--page-bg, light-dark(white, black)));
     border: var(--pane-border, 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)));
-    border-radius: var(--pane-border-radius, 10px);
+    border-radius: var(--pane-border-radius, var(--radius-lg));
     padding: var(--pane-padding, 1ex);
     box-sizing: border-box;
-    box-shadow: var(--pane-shadow, 0 4px 16px rgba(0, 0, 0, 0.1));
+    box-shadow: var(--pane-shadow, var(--shadow-lg));
     z-index: var(--pane-z-index, 10);
     display: grid;
     gap: var(--pane-gap, 4pt);
@@ -750,7 +750,7 @@
     margin: var(--pane-input-margin, 0 0 0 5pt);
     background: var(--pane-input-bg, rgba(0, 0, 0, 0.03));
     border: 1px solid var(--pane-input-border, rgba(0, 0, 0, 0.1));
-    border-radius: 6px;
+    border-radius: var(--radius-md);
   }
   .draggable-pane :global(input[type='text'].invalid) {
     border-color: var(--error-color, #ff6b6b);
@@ -780,7 +780,7 @@
     flex-shrink: 0;
     background: var(--pane-input-bg, rgba(0, 0, 0, 0.03));
     border: 1px solid var(--pane-input-border, rgba(0, 0, 0, 0.1));
-    border-radius: 6px;
+    border-radius: var(--radius-md);
   }
   .draggable-pane :global(input::-webkit-inner-spin-button) {
     display: none;
@@ -791,7 +791,7 @@
      overrides, instead of this global rule winning and graying them out. */
   :where(.draggable-pane) :global(:where(button)) {
     width: max-content;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background-color: var(--pane-btn-bg, var(--btn-bg));
   }
   :where(.draggable-pane) :global(:where(button:hover)) {
@@ -800,7 +800,7 @@
   .draggable-pane :global(select) {
     margin: 0 0 0 5pt;
     flex: 1;
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     padding: 4px 6px;
     font-size: 0.95em;
     background: var(--pane-input-bg, rgba(0, 0, 0, 0.03));
@@ -815,7 +815,7 @@
   .draggable-pane :global(section) {
     background: var(--pane-card-bg, rgba(0, 0, 0, 0.03));
     border: 1px solid var(--pane-card-border, rgba(0, 0, 0, 0.08));
-    border-radius: var(--pane-card-radius, 8px);
+    border-radius: var(--pane-card-radius, var(--radius-md));
     padding: var(--pane-card-padding, 10px 12px);
     margin-bottom: var(--pane-card-gap, 6px);
   }
@@ -890,7 +890,7 @@
     width: 1.3em;
     height: 1.3em;
     cursor: grab;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     padding: 2px;
     box-sizing: border-box;
     opacity: 0.6;
@@ -910,7 +910,7 @@
     background: none;
     border: none;
     padding: 2px;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     box-sizing: border-box;
     display: flex;
     align-items: center;

@@ -281,7 +281,7 @@
   nav {
     position: relative;
     margin: -0.75em auto 1.25em;
-    --nav-border-radius: 6pt;
+    --nav-border-radius: var(--radius-md);
   }
   .menu-content {
     display: flex;
@@ -362,8 +362,8 @@
     background-color: var(--nav-dropdown-bg, var(--surface-bg, var(--bg-color, #ffffff)));
     border: 1px solid
       var(--nav-dropdown-border-color, var(--border-color, rgba(128, 128, 128, 0.25)));
-    border-radius: var(--nav-border-radius, 6pt);
-    box-shadow: var(--nav-dropdown-shadow, 0 2px 8px rgba(0, 0, 0, 0.15));
+    border-radius: var(--nav-border-radius, var(--radius-md));
+    box-shadow: var(--nav-dropdown-shadow, var(--shadow-md));
     padding: var(--nav-dropdown-padding, 2pt 3pt);
     display: none;
     flex-direction: column;
@@ -408,7 +408,7 @@
   .burger-line {
     height: 0.18rem;
     background-color: var(--text-color);
-    border-radius: 8px;
+    border-radius: var(--radius-full);
     transition: all 0.2s linear;
     transform-origin: 1px;
   }
@@ -441,8 +441,8 @@
       gap: 0.2em;
       max-width: 90vw;
       border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
-      border-radius: 6px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
     }
     .menu-content.open {
       opacity: 1;

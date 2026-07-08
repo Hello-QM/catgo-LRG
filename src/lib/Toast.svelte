@@ -39,8 +39,8 @@
     background: rgba(40, 40, 44, 0.96);
     color: #e8e8ea;
     padding: 10px 14px;
-    border-radius: 8px;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
     display: flex;
     align-items: center;
     gap: 12px;
@@ -60,7 +60,7 @@
     color: #1a1a1a;
     border: none;
     padding: 5px 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     font-weight: 500;
     font-size: 13px;

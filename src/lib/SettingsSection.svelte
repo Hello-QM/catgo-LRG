@@ -118,7 +118,7 @@
     margin-left: auto;
     padding: var(--reset-btn-padding, 1pt 4pt);
     font-size: 0.65em;
-    border-radius: var(--reset-btn-border-radius, 2pt);
+    border-radius: var(--reset-btn-border-radius, var(--radius-sm));
     background: var(--btn-bg, rgba(0, 0, 0, 0.1));
     color: var(--text-color-muted, #6b7280);
     border: 1px solid var(--border-color, #d1d5db);
@@ -132,6 +132,10 @@
     background: var(--btn-bg-hover, rgba(0, 0, 0, 0.2));
     color: var(--text-color, #374151);
     opacity: 1;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+    box-shadow: var(--shadow-sm);
+  }
+  .reset-button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
   }
 </style>
