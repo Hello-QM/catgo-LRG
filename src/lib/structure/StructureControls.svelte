@@ -1491,7 +1491,7 @@
         <input type="range" min={0} max={1} step={0.02} bind:value={background_opacity} />
       </label>
     </div>
-    <h5>Depth Cueing</h5>
+    <h5>{t('structure.depth_cueing')}</h5>
     <label>
       <span title="Fades distant atoms toward background color to convey depth (0 = off, 1 = maximum)" {@attach tooltip()}>
         {t('structure.intensity')}
