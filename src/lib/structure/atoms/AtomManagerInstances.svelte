@@ -367,7 +367,10 @@
         uShadowThreshold: { value: 0.3 },
         uHighlightThreshold: { value: 0.97 },
         uShadowBrightness: { value: 0.5 },
-        uMatcap: { value: get_atom_matcap() },
+        // Null until MatCap is selected (see the render-style $effect). Three
+        // binds its default 1×1 texture for an unset sampler, so the declared
+        // uMatcap sampler is safe to leave empty on non-matcap paths.
+        uMatcap: { value: null },
       },
     })
   }
@@ -546,12 +549,16 @@
   // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
   $effect(() => {
     opaque_material.uniforms.uRenderStyle.value = render_style_to_int(render_style)
-    // Swap the baked matcap texture when the preset changes (cached per preset).
-    // mark_dirty as onReady repaints once the async metal photo finishes loading.
-    opaque_material.uniforms.uMatcap.value = get_atom_matcap(
-      matcap_preset as MatcapPreset,
-      mark_dirty,
-    )
+    // Generate/swap the baked matcap texture ONLY while MatCap is the active
+    // style. Building it eagerly on the default (toon) path meant every scene —
+    // including headless CI — paid a canvas-texture bake it never sampled; gate
+    // it so non-matcap renders never touch matcap code. Cached per preset.
+    if (render_style === `matcap`) {
+      opaque_material.uniforms.uMatcap.value = get_atom_matcap(
+        matcap_preset as MatcapPreset,
+        mark_dirty, // repaint once (async presets, if any) finish loading
+      )
+    }
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })
