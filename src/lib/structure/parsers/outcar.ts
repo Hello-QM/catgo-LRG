@@ -81,6 +81,56 @@ function last_positions(lines: string[], n_atoms: number): Vec3[] | null {
   return out.length > 0 ? out : null
 }
 
+// Per-atom magnetic moments from the LAST "magnetization (axis)" table.
+// Layout:  magnetization (x) \n \n # of ion  s  p  d  tot \n ---- \n
+//          <ion> <s> <p> <d> <tot> ... \n ---- \n tot  ...
+// The per-ion `tot` column (last number) is that atom's moment along `axis`.
+function magnetization_block(
+  lines: string[],
+  axis: `x` | `y` | `z`,
+  n_atoms: number,
+): number[] | null {
+  const marker = `magnetization (${axis})`
+  let found = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(marker)) found = i
+  }
+  if (found < 0) return null
+  const vals: number[] = []
+  let in_rows = false
+  for (let i = found + 1; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (line.startsWith(`# of ion`)) continue
+    if (line.startsWith(`---`)) {
+      if (!in_rows) { in_rows = true; continue } // header separator → rows begin
+      break // trailing separator → block ends
+    }
+    if (!in_rows || line === ``) continue
+    const nums = line.split(/\s+/).map(Number)
+    // Stop at the trailing "tot" summary row (non-numeric first column).
+    if (nums.length < 2 || Number.isNaN(nums[0])) break
+    vals.push(nums[nums.length - 1])
+    if (n_atoms > 0 && vals.length === n_atoms) break
+  }
+  return vals.length > 0 ? vals : null
+}
+
+/** Per-atom magmom: scalar (collinear, only the x table) or [mx,my,mz]
+ *  (non-collinear, all three tables present). */
+function last_magnetization(
+  lines: string[],
+  n_atoms: number,
+): (number | Vec3)[] | null {
+  const mx = magnetization_block(lines, `x`, n_atoms)
+  if (!mx) return null
+  const my = magnetization_block(lines, `y`, n_atoms)
+  const mz = magnetization_block(lines, `z`, n_atoms)
+  if (my && mz && my.length === mx.length && mz.length === mx.length) {
+    return mx.map((x, i) => [x, my[i], mz[i]] as Vec3)
+  }
+  return mx
+}
+
 export function parse_outcar(content: string): ParsedStructure | null {
   try {
     const lines = content.split(/\r?\n/)
@@ -102,6 +152,16 @@ export function parse_outcar(content: string): ParsedStructure | null {
     }
 
     if (sites.length === 0) return null
+
+    // Attach per-atom magnetic moments (spin-polarised runs only) so the viewer
+    // can draw magmom arrows without any extra setup.
+    const magmoms = last_magnetization(lines, sites.length)
+    if (magmoms && magmoms.length === sites.length) {
+      for (let i = 0; i < sites.length; i++) {
+        sites[i].properties = { ...(sites[i].properties ?? {}), magmom: magmoms[i] }
+      }
+    }
+
     return { sites, lattice: periodic_lattice(matrix) }
   } catch (error) {
     console.error(`Error parsing OUTCAR file:`, error)
