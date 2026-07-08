@@ -29,19 +29,26 @@ interface PresetParams {
   specExp: number // specular tightness (higher = smaller/harder highlight)
   rim: number // fresnel darkening at grazing angles
   vGrad: number // top-vs-bottom brightness (fakes a sky-above environment)
+  metal?: boolean // use the chrome reflection model instead of Lambert
 }
 
 const PARAMS: Record<MatcapPreset, PresetParams> = {
   // Soft, evenly-lit glazed sphere.
   ceramic: { ambient: 0.34, diffuse: 0.66, spec: 0.35, specExp: 48, rim: 0.14, vGrad: 0 },
-  // Dark body, hot compact highlight, bright top (reflected sky) — reads metal.
-  metallic: { ambient: 0.1, diffuse: 0.35, spec: 0.95, specExp: 160, rim: 0.3, vGrad: 0.45 },
+  // Chrome model: no diffuse — a sky/horizon/ground reflection gradient with a
+  // hot spec and a bright fresnel rim. Reads as polished metal.
+  metallic: { ambient: 0, diffuse: 0, spec: 1, specExp: 220, rim: 0, vGrad: 0, metal: true },
   // Flat matte, no specular.
   clay: { ambient: 0.42, diffuse: 0.6, spec: 0, specExp: 1, rim: 0.1, vGrad: 0 },
   // Brighter with a tighter, glossier highlight.
   glossy: { ambient: 0.28, diffuse: 0.6, spec: 0.6, specExp: 90, rim: 0.12, vGrad: 0.12 },
   // Luminous, low-contrast, soft highlight — pearlescent.
   pearl: { ambient: 0.46, diffuse: 0.48, spec: 0.5, specExp: 60, rim: 0.06, vGrad: 0.18 },
+}
+
+const smoothstep = (a: number, b: number, x: number): number => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
 }
 
 const cache = new Map<MatcapPreset, Texture>()
@@ -100,11 +107,21 @@ export function get_atom_matcap(preset: MatcapPreset = `ceramic`): Texture {
       const nz = Math.sqrt(1 - r2)
       const diffuse = Math.max(nx * Lx + ny * Ly + nz * Lz, 0)
       const specular = Math.pow(Math.max(nx * Hx + ny * Hy + nz * Hz, 0), p.specExp)
-      const rim = Math.pow(1 - nz, 3)
-      const topGrad = ny * 0.5 + 0.5 // 0 bottom .. 1 top (fake sky reflection)
 
-      let v = p.ambient + p.diffuse * diffuse + p.spec * specular
-        - p.rim * rim + p.vGrad * topGrad
+      let v: number
+      if (p.metal) {
+        // Polished metal: a smooth dark-bottom → bright-top reflection gradient
+        // (no harsh horizon band), a hot compact specular, and a bright fresnel
+        // rim where the metal catches the edge light.
+        const env = 0.22 + 0.62 * smoothstep(-0.65, 0.95, ny)
+        const fres = Math.pow(1 - nz, 2.2) * 0.42 // bright edge
+        v = env + p.spec * specular + fres
+      } else {
+        const rim = Math.pow(1 - nz, 3)
+        const topGrad = ny * 0.5 + 0.5 // 0 bottom .. 1 top (fake sky reflection)
+        v = p.ambient + p.diffuse * diffuse + p.spec * specular
+          - p.rim * rim + p.vGrad * topGrad
+      }
       v = Math.max(0, Math.min(1, v))
       const c = Math.round(v * 255)
       data[i] = data[i + 1] = data[i + 2] = c
