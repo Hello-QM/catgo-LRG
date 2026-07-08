@@ -42,6 +42,7 @@
   import { Color, PlaneGeometry, ShaderMaterial, Vector3 } from 'three'
   import type { AtomManager } from './atom-manager.svelte'
   import { AtomInstancedRenderer, type CuttingVisibilityEntry } from './atom-instanced-renderer'
+  import { get_atom_matcap } from './matcap-texture'
 
   interface Props {
     atom_manager: AtomManager
@@ -83,7 +84,7 @@
     /** Atom shading style. Branches the fragment lighting on uRenderStyle:
      *  glossy (Blinn-Phong, default), matte (diffuse only, no spec), toon
      *  (3-band cel, AtomCanvas ToonHighlightMaterial). */
-    render_style?: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon`
+    render_style?: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`
     /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
      *  by the light_azimuth/elevation sliders; written live into uLightDir. */
     light_dir?: Vector3
@@ -120,13 +121,14 @@
 
   // glossy = 0, matte = 1, toon = 2 (matches the uRenderStyle branch order).
   function render_style_to_int(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon`,
+    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
   ): number {
-    // Map onto the three shader branches (0 glossy/Blinn-Phong, 1 matte diffuse,
-    // 2 toon). Metallic reuses the specular branch; 2.5D-soft and 2D-flat reuse
-    // the matte branch — their distinct look comes from the per-style lighting
-    // profile (directional/ambient/highlight), not a new GLSL branch.
+    // Map onto the shader branches (0 glossy/Blinn-Phong, 1 matte diffuse,
+    // 2 toon, 3 matcap). Metallic reuses the specular branch; 2.5D-soft and
+    // 2D-flat reuse the matte branch — their distinct look comes from the
+    // per-style lighting profile, not a new GLSL branch.
     if (style === `toon`) return 2
+    if (style === `matcap`) return 3
     if (style === `matte` || style === `soft` || style === `flat`) return 1
     return 0
   }
@@ -192,12 +194,13 @@
     uniform float uDepthFar;
     uniform vec3 uDepthCueBgColor;
     uniform float uOutlineStrength;
-    uniform int uRenderStyle;  // 0 = glossy, 1 = matte, 2 = toon
+    uniform int uRenderStyle;  // 0 = glossy, 1 = matte, 2 = toon, 3 = matcap
     // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial parity.
     uniform float uShadowThreshold;
     uniform float uHighlightThreshold;
     uniform float uShadowBrightness;
     uniform float uSpecStrength;  // glossy specular highlight multiplier (1.0 = default)
+    uniform sampler2D uMatcap;    // baked studio-sphere lighting (render style 3)
     // projectionMatrix is only auto-injected into vertex shader, must re-declare for fragment
     uniform mat4 projectionMatrix;
 
@@ -298,6 +301,11 @@
         // ── Matte: diffuse-only Lambert, no specular highlight ──
         float diffuse = max(dot(normal, lightDirView), 0.0);
         color = baseColor * (uAmbientIntensity + uDirectionalIntensity * diffuse);
+      } else if (uRenderStyle == 3) {
+        // ── MatCap: sample a baked studio-sphere by the view-space normal and
+        //    tint by the element colour (grayscale matcap → keeps element ID). ──
+        vec2 muv = normal.xy * 0.5 + 0.5;
+        color = baseColor * texture2D(uMatcap, muv).rgb;
       } else {
         // ── Glossy (default): Blinn-Phong diffuse + specular ──
         float diffuse = max(dot(normal, lightDirView), 0.0);
@@ -357,6 +365,7 @@
         uShadowThreshold: { value: 0.3 },
         uHighlightThreshold: { value: 0.97 },
         uShadowBrightness: { value: 0.5 },
+        uMatcap: { value: get_atom_matcap() },
       },
     })
   }

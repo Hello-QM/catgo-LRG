@@ -28,6 +28,7 @@ const structure: Record<string, string> = {
   render_style: `Material`,
   render_style_glossy: `Glossy`,
   render_style_metallic: `Metallic`,
+  render_style_matcap: `MatCap`,
   render_style_matte: `Matte`,
   render_style_soft: `2.5D`,
   render_style_flat: `2D Flat`,

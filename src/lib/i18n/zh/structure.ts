@@ -28,6 +28,7 @@ const structure: Record<string, string> = {
   render_style: `材质`,
   render_style_glossy: `光泽`,
   render_style_metallic: `金属`,
+  render_style_matcap: `材质球`,
   render_style_matte: `哑光`,
   render_style_soft: `2.5D`,
   render_style_flat: `2D 平面`,

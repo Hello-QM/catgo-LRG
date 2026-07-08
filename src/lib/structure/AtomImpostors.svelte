@@ -65,7 +65,7 @@
     /** Atom shading style. Branches the fragment lighting on uRenderStyle:
      *  glossy (studio env + tinted spec), matte (diffuse only, no spec/fresnel),
      *  toon (3-band cel, AtomCanvas ToonHighlightMaterial). */
-    render_style?: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon`
+    render_style?: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`
     /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
      *  by the light_azimuth/elevation sliders; written live into uLightDir. */
     light_dir?: Vector3
@@ -349,10 +349,12 @@
   // Metallic reuses the glossy branch; 2.5D-soft and 2D-flat reuse the matte
   // branch — their distinct look comes from the per-style lighting profile.
   function render_style_to_int(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon`,
+    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
   ): number {
     if (style === `toon`) return 2
     if (style === `matte` || style === `soft` || style === `flat`) return 1
+    // MatCap has no branch in this legacy impostor shader — fall back to glossy.
+    // The default path (AtomManagerInstances) implements the real matcap.
     return 0
   }
 

@@ -29,6 +29,7 @@ export type CameraProjection = `perspective` | `orthographic`
 export const render_style_options = [
   `glossy`,
   `metallic`,
+  `matcap`,
   `matte`,
   `soft`,
   `flat`,
