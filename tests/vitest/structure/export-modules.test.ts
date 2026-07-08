@@ -232,20 +232,15 @@ describe(`common-export`, () => {
   })
 
   describe(`download_file`, () => {
-    it(`creates blob and triggers download`, () => {
-      const createObjectURL = vi.fn(() => `blob:test`)
-      const revokeObjectURL = vi.fn()
-      const click = vi.fn()
-      const createElement = vi.spyOn(document, `createElement`).mockReturnValue({ click, set href(_: string) {}, set download(_: string) {} } as any)
-      globalThis.URL.createObjectURL = createObjectURL
-      globalThis.URL.revokeObjectURL = revokeObjectURL
-
+    it(`routes through the shared download() helper (Tauri-aware native save)`, () => {
+      // download_file delegates to io/fetch download(), which uses the native
+      // save override (globalThis.download) in the desktop app — a raw
+      // <a download> click is a no-op in WebKitGTK.
+      const dl = vi.fn()
+      ;(globalThis as Record<string, unknown>).download = dl
       download_file(`test content`, `test.txt`)
-
-      expect(createObjectURL).toHaveBeenCalledOnce()
-      expect(click).toHaveBeenCalledOnce()
-      expect(revokeObjectURL).toHaveBeenCalledOnce()
-      createElement.mockRestore()
+      expect(dl).toHaveBeenCalledWith(`test content`, `test.txt`, `text/plain`)
+      delete (globalThis as Record<string, unknown>).download
     })
   })
 })
