@@ -6,9 +6,21 @@ declare const __CATGO_SERVER_URL__: string
 declare const __CATGO_DESKTOP__: boolean
 declare const __CATGO_STATIC_ONLY__: boolean
 
-export let SERVER_URL: string = typeof __CATGO_SERVER_URL__ !== `undefined`
-  ? __CATGO_SERVER_URL__
-  : `http://localhost:8000`
+function _default_server_url(): string {
+  // Runtime override the backend injects into the served index.html
+  // (`globalThis.__CATGO_RUNTIME_SERVER__ = location.origin`), so a
+  // backend-served SPA is same-origin and `catgo` / `catgo app` works on ANY
+  // port. Read as a DYNAMIC global-property access so the bundler can't fold it
+  // away — a `typeof window` guard tree-shakes to the fallback in the SSR build.
+  const runtime = (globalThis as Record<string, unknown>).__CATGO_RUNTIME_SERVER__
+  if (typeof runtime === `string` && runtime.length > 0) return runtime
+  if (typeof __CATGO_SERVER_URL__ !== `undefined` && __CATGO_SERVER_URL__) {
+    return __CATGO_SERVER_URL__
+  }
+  return `http://localhost:8000`
+}
+
+export let SERVER_URL: string = _default_server_url()
 
 export let API_BASE = `${SERVER_URL}/api`
 export let WS_BASE = SERVER_URL.replace(/^http/, `ws`) + `/api`

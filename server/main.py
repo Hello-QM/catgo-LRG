@@ -677,12 +677,28 @@ _frontend_dir = Path(
     os.environ.get("CATGO_FRONTEND_DIR") or (_repo_root / "build-desktop")
 )
 if _frontend_dir.is_dir():
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, HTMLResponse
     from fastapi.staticfiles import StaticFiles
     from starlette.responses import Response
 
     _index_html = _frontend_dir / "index.html"
     _frontend_base = _frontend_dir.resolve()
+
+    # Tell the SPA to talk to whatever origin served it, so `catgo`/`catgo app`
+    # works on ANY port (the bundle's compiled default is localhost:8000). The
+    # frontend reads `globalThis.__CATGO_RUNTIME_SERVER__` (see api/config.ts);
+    # inject it into <head> so it runs before the app bundle. Built once.
+    _RUNTIME_SERVER_TAG = (
+        "<script>globalThis.__CATGO_RUNTIME_SERVER__=location.origin</script>"
+    )
+
+    def _index_document() -> str:
+        html = _index_html.read_text(encoding="utf-8")
+        if "__CATGO_RUNTIME_SERVER__" in html:
+            return html
+        if "<head>" in html:
+            return html.replace("<head>", "<head>" + _RUNTIME_SERVER_TAG, 1)
+        return _RUNTIME_SERVER_TAG + html
     _assets_dir = _frontend_dir / "assets"
     if _assets_dir.is_dir():
         app.mount(
@@ -709,7 +725,7 @@ if _frontend_dir.is_dir():
                 candidate = None
             if candidate is not None and candidate.is_file():
                 return FileResponse(str(candidate))
-        return FileResponse(str(_index_html))
+        return HTMLResponse(_index_document())
 
     print(f"[Server] Serving prebuilt SPA from {_frontend_dir}")
 
