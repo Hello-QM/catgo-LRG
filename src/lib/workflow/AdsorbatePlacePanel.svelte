@@ -13,6 +13,7 @@
   import StructureScene from '$lib/structure/StructureScene.svelte'
   import { DEFAULTS } from '$lib/settings'
   import { Canvas } from '@threlte/core'
+  import { ACESFilmicToneMapping } from 'three'
   import type { Vec3 } from '$lib/structure'
 
   load_i18n_module(`workflow`)
@@ -1232,7 +1233,7 @@
     {#if mol_preview && mol_preview.sites.length > 0}
       <div class="mol-preview" bind:clientWidth={mol_pw} bind:clientHeight={mol_ph}>
         {#if typeof WebGLRenderingContext !== 'undefined'}
-            <Canvas {...{rendererParameters: { alpha: true }} as any}>
+            <Canvas toneMapping={ACESFilmicToneMapping} {...{rendererParameters: { alpha: true }} as any}>
               <StructureScene
                 structure={mol_preview}
                 {...mol_scene_props}

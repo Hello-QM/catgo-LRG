@@ -20,10 +20,11 @@
   interface Props {
     // Enable GTAO ambient occlusion.
     ao?: boolean
-    // GTAO strength (0..1-ish blend over the beauty pass).
+    // GTAO strength (0..1 blend over the beauty pass). Kept modest so the effect
+    // reads as subtle contact shading, never a harsh darkening.
     ao_intensity?: number
   }
-  let { ao = true, ao_intensity = 1.0 }: Props = $props()
+  let { ao = true, ao_intensity = 0.7 }: Props = $props()
 
   const threlte = useThrelte()
 

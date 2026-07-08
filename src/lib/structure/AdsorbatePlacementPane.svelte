@@ -25,6 +25,7 @@
   // PymatgenMolecule no longer needed — preview uses PymatgenStructure with fake lattice
   import { DEFAULTS } from '$lib/settings'
   import { Canvas } from '@threlte/core'
+  import { ACESFilmicToneMapping } from 'three'
   import { SvelteMap } from 'svelte/reactivity'
   import StructureScene from './StructureScene.svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
@@ -508,7 +509,7 @@
         bind:clientHeight={preview_height}
       >
         {#if typeof WebGLRenderingContext !== 'undefined'}
-          <Canvas {...{rendererParameters: { alpha: true }} as any}>
+          <Canvas toneMapping={ACESFilmicToneMapping} {...{rendererParameters: { alpha: true }} as any}>
             <StructureScene
               structure={preview_molecule}
               {...preview_scene_props}
