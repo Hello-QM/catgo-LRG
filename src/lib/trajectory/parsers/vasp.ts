@@ -241,13 +241,36 @@ export const parse_vasp_outcar = (content: string, filename?: string): Trajector
         if (nums.length >= 6) forces.push([nums[3], nums[4], nums[5]])
       }
       if (positions.length === n_atoms && lattice) {
+        // Ionic-step energy: the "FREE ENERGIE OF THE ION-ELECTRON SYSTEM"
+        // summary block follows the TOTAL-FORCE block. Prefer energy(sigma->0)
+        // (the extrapolated E0, matching ASE / OSZICAR); fall back to the
+        // free-energy TOTEN on the same block. Stop at the next step's forces.
+        let energy: number | undefined
+        let toten: number | undefined
+        for (let k = i + 1; k < lines.length; k++) {
+          if (lines[k].includes(`TOTAL-FORCE`)) break
+          const es = lines[k].match(/energy\(sigma->0\)\s*=\s*([-\d.eE+]+)/)
+          if (es) { energy = Number(es[1]); break }
+          if (toten === undefined) {
+            const ft = lines[k].match(/free\s+energy\s+TOTEN\s*=\s*([-\d.eE+]+)/)
+            if (ft) toten = Number(ft[1])
+          }
+        }
+        if (energy === undefined) energy = toten
+        const meta: Record<string, unknown> = {
+          volume: math.calc_lattice_params(lattice).volume,
+        }
+        if (energy !== undefined && Number.isFinite(energy)) meta.energy = energy
+        // Expose forces on metadata too (not just site.properties) so the
+        // F_max/F_norm convergence curve has data, matching the extxyz path.
+        if (forces.length === n_atoms) meta.forces = forces
         frames.push(create_trajectory_frame(
           positions,
           elements,
           lattice,
           pbc,
           step++,
-          { volume: math.calc_lattice_params(lattice).volume },
+          meta,
           forces.length === n_atoms ? forces : undefined,
         ))
       }

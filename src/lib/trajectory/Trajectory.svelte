@@ -709,14 +709,16 @@
   })
   // Generate axis labels based on first visible series on each axis
   let y_axis_labels = $derived(generate_axis_labels(plot_series))
+  // Plain decimal (not SI-prefix `~s`): scientific quantities read as "0.8" /
+  // "-213.5", not "800m" / "-210". `~` trims trailing zeros.
   let y_axis = $derived({
     label: y_axis_labels.y1,
-    format: `.2~s`,
+    format: `.3~f`,
     label_shift: { y: 20 },
   })
   let y2_axis = $derived({
     label: y_axis_labels.y2,
-    format: `.2~s`,
+    format: `.3~f`,
     label_shift: { y: 80 },
   })
 
