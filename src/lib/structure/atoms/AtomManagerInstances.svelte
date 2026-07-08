@@ -547,7 +547,11 @@
   $effect(() => {
     opaque_material.uniforms.uRenderStyle.value = render_style_to_int(render_style)
     // Swap the baked matcap texture when the preset changes (cached per preset).
-    opaque_material.uniforms.uMatcap.value = get_atom_matcap(matcap_preset as MatcapPreset)
+    // mark_dirty as onReady repaints once the async metal photo finishes loading.
+    opaque_material.uniforms.uMatcap.value = get_atom_matcap(
+      matcap_preset as MatcapPreset,
+      mark_dirty,
+    )
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })
