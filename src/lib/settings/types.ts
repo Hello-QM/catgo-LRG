@@ -206,6 +206,9 @@ export interface SettingsConfig {
      *  glossy = current default specular look (byte-identical to legacy);
      *  matte = flat diffuse; toon = 3-band cel/cartoon shading. */
     render_style: SettingType<RenderStyle>
+    /** MatCap material preset (only used when render_style === 'matcap').
+     *  Selects which procedural studio-sphere texture the atom shader samples. */
+    matcap_preset: SettingType<string>
     /** Headlamp light direction, azimuth in degrees (view-space, around the
      *  view axis). Drives uLightDir in the atom/bond shaders. */
     light_azimuth: SettingType<number>

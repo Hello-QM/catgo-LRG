@@ -478,6 +478,7 @@
     atom_outline_strength = DEFAULTS.structure.atom_outline_strength,
     bond_outline_strength = DEFAULTS.structure.bond_outline_strength,
     render_style = DEFAULTS.structure.render_style,
+    matcap_preset = DEFAULTS.structure.matcap_preset,
     light_azimuth = DEFAULTS.structure.light_azimuth,
     light_elevation = DEFAULTS.structure.light_elevation,
     highlight_strength = DEFAULTS.structure.highlight_strength,
@@ -742,6 +743,7 @@
     atom_outline_strength?: number
     bond_outline_strength?: number
     render_style?: RenderStyle // material/shading style for atoms (glossy | matte | toon)
+    matcap_preset?: string // matcap variant (only used when render_style === 'matcap')
     light_azimuth?: number // headlamp azimuth in degrees (view-space) — legacy flat fallback seed
     light_elevation?: number // headlamp elevation in degrees (view-space) — legacy flat fallback seed
     highlight_strength?: number // specular highlight multiplier (uSpecStrength) — legacy flat fallback seed
@@ -5346,6 +5348,7 @@
             ambient_light={active_ambient_light}
             directional_light={active_directional_light}
             {render_style}
+            {matcap_preset}
             {light_dir}
             highlight_strength={active_highlight_strength}
           />

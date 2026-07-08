@@ -42,7 +42,7 @@
   import { Color, PlaneGeometry, ShaderMaterial, Vector3 } from 'three'
   import type { AtomManager } from './atom-manager.svelte'
   import { AtomInstancedRenderer, type CuttingVisibilityEntry } from './atom-instanced-renderer'
-  import { get_atom_matcap } from './matcap-texture'
+  import { get_atom_matcap, type MatcapPreset } from './matcap-texture'
 
   interface Props {
     atom_manager: AtomManager
@@ -85,6 +85,7 @@
      *  glossy (Blinn-Phong, default), matte (diffuse only, no spec), toon
      *  (3-band cel, AtomCanvas ToonHighlightMaterial). */
     render_style?: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`
+    matcap_preset?: string
     /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
      *  by the light_azimuth/elevation sliders; written live into uLightDir. */
     light_dir?: Vector3
@@ -114,6 +115,7 @@
     ambient_light = 0.7,
     directional_light = 0.3,
     render_style = `glossy`,
+    matcap_preset = `ceramic`,
     light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
     highlight_strength = 1.0,
     max_capacity = 200_000,
@@ -544,6 +546,8 @@
   // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
   $effect(() => {
     opaque_material.uniforms.uRenderStyle.value = render_style_to_int(render_style)
+    // Swap the baked matcap texture when the preset changes (cached per preset).
+    opaque_material.uniforms.uMatcap.value = get_atom_matcap(matcap_preset as MatcapPreset)
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
   })

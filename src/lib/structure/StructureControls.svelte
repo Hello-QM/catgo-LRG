@@ -1625,6 +1625,25 @@
         {/each}
       </select>
     </label>
+    {#if scene_props.render_style === `matcap`}
+      <label
+        {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.matcap_preset.description,
+        })}
+      >
+        {t('structure.matcap_preset')}
+        <select bind:value={scene_props.matcap_preset}>
+          {#each Object.entries(
+              SETTINGS_CONFIG.structure.matcap_preset.enum ?? {},
+            ) as
+            [value, label]
+            (value)
+          }
+            <option {value}>{label}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
     <h5>{t('structure.lighting')}</h5>
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.light_azimuth.description })}

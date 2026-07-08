@@ -1,22 +1,55 @@
-// Procedural MatCap (material-capture) texture for the atom impostor shader.
+// Procedural MatCap (material-capture) textures for the atom impostor shader.
 //
 // A MatCap bakes a fully-lit sphere into a texture that is sampled by the
 // view-space surface normal (uv = normal.xy * 0.5 + 0.5). One texture lookup
 // replaces all per-fragment lighting — very cheap and gives a rich, stable
 // "studio sphere" material feel that doesn't swing as the camera orbits.
 //
-// This one is generated procedurally (zero asset, offline / Tauri-safe) and is
-// GRAYSCALE on purpose: the atom shader multiplies it by the per-element colour,
-// so every atom keeps its element identity while gaining the matcap shading.
-// Values are treated as LINEAR (the shader sRGB-encodes at the end), so the
-// texture is tagged LinearSRGBColorSpace to avoid a double sRGB decode.
+// These are generated procedurally (zero asset, offline / Tauri-safe) and are
+// GRAYSCALE on purpose: the atom shader multiplies the sample by the per-element
+// colour, so every atom keeps its element identity while gaining the matcap
+// shading. Values are treated as LINEAR (the shader sRGB-encodes at the end), so
+// the texture is tagged LinearSRGBColorSpace to avoid a double sRGB decode.
 
 import { CanvasTexture, LinearSRGBColorSpace, type Texture } from 'three'
 
-let cached: Texture | null = null
+export const MATCAP_PRESETS = [
+  `ceramic`,
+  `metallic`,
+  `clay`,
+  `glossy`,
+  `pearl`,
+] as const
+export type MatcapPreset = (typeof MATCAP_PRESETS)[number]
 
-export function get_atom_matcap(): Texture {
-  if (cached) return cached
+interface PresetParams {
+  ambient: number // flat fill floor
+  diffuse: number // broad Lambert term
+  spec: number // specular strength
+  specExp: number // specular tightness (higher = smaller/harder highlight)
+  rim: number // fresnel darkening at grazing angles
+  vGrad: number // top-vs-bottom brightness (fakes a sky-above environment)
+}
+
+const PARAMS: Record<MatcapPreset, PresetParams> = {
+  // Soft, evenly-lit glazed sphere.
+  ceramic: { ambient: 0.34, diffuse: 0.66, spec: 0.35, specExp: 48, rim: 0.14, vGrad: 0 },
+  // Dark body, hot compact highlight, bright top (reflected sky) — reads metal.
+  metallic: { ambient: 0.1, diffuse: 0.35, spec: 0.95, specExp: 160, rim: 0.3, vGrad: 0.45 },
+  // Flat matte, no specular.
+  clay: { ambient: 0.42, diffuse: 0.6, spec: 0, specExp: 1, rim: 0.1, vGrad: 0 },
+  // Brighter with a tighter, glossier highlight.
+  glossy: { ambient: 0.28, diffuse: 0.6, spec: 0.6, specExp: 90, rim: 0.12, vGrad: 0.12 },
+  // Luminous, low-contrast, soft highlight — pearlescent.
+  pearl: { ambient: 0.46, diffuse: 0.48, spec: 0.5, specExp: 60, rim: 0.06, vGrad: 0.18 },
+}
+
+const cache = new Map<MatcapPreset, Texture>()
+
+export function get_atom_matcap(preset: MatcapPreset = `ceramic`): Texture {
+  const key: MatcapPreset = MATCAP_PRESETS.includes(preset) ? preset : `ceramic`
+  const hit = cache.get(key)
+  if (hit) return hit
 
   const size = 256
   // SSR / non-DOM fallback: a 1x1 white texture makes the shader multiply a
@@ -26,7 +59,7 @@ export function get_atom_matcap(): Texture {
       { width: 1, height: 1, data: new Uint8ClampedArray([255, 255, 255, 255]) } as unknown as HTMLCanvasElement,
     )
     fallback.colorSpace = LinearSRGBColorSpace
-    cached = fallback
+    cache.set(key, fallback)
     return fallback
   }
 
@@ -36,10 +69,11 @@ export function get_atom_matcap(): Texture {
   if (!ctx) {
     const t = new CanvasTexture(canvas)
     t.colorSpace = LinearSRGBColorSpace
-    cached = t
+    cache.set(key, t)
     return t
   }
 
+  const p = PARAMS[key]
   const img = ctx.createImageData(size, size)
   const data = img.data
 
@@ -48,7 +82,6 @@ export function get_atom_matcap(): Texture {
   const lx = -0.35, ly = 0.5, lz = 0.78
   const ll = Math.hypot(lx, ly, lz)
   const Lx = lx / ll, Ly = ly / ll, Lz = lz / ll
-  // Half-vector between the key light and the view direction (0,0,1).
   const hx = Lx, hy = Ly, hz = Lz + 1
   const hl = Math.hypot(hx, hy, hz)
   const Hx = hx / hl, Hy = hy / hl, Hz = hz / hl
@@ -56,25 +89,22 @@ export function get_atom_matcap(): Texture {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4
-      // Reconstruct the unit-sphere normal for this texel.
       const nx = (x / (size - 1)) * 2 - 1
       const ny = -((y / (size - 1)) * 2 - 1) // flip: canvas y grows downward
       const r2 = nx * nx + ny * ny
       if (r2 > 1) {
-        // Outside the sphere disk — never sampled (uv stays inside the disk),
-        // fill with the rim tone for safety.
-        data[i] = data[i + 1] = data[i + 2] = 20
+        data[i] = data[i + 1] = data[i + 2] = 12
         data[i + 3] = 255
         continue
       }
       const nz = Math.sqrt(1 - r2)
       const diffuse = Math.max(nx * Lx + ny * Ly + nz * Lz, 0)
-      const specular = Math.pow(Math.max(nx * Hx + ny * Hy + nz * Hz, 0), 48)
-      const rim = Math.pow(1 - nz, 3) // subtle fresnel darkening at grazing angles
+      const specular = Math.pow(Math.max(nx * Hx + ny * Hy + nz * Hz, 0), p.specExp)
+      const rim = Math.pow(1 - nz, 3)
+      const topGrad = ny * 0.5 + 0.5 // 0 bottom .. 1 top (fake sky reflection)
 
-      // Soft ceramic response: ambient floor + broad diffuse + a gentle
-      // specular pop, minus a touch of rim so spheres read as rounded volumes.
-      let v = 0.34 + 0.66 * diffuse + 0.35 * specular - 0.14 * rim
+      let v = p.ambient + p.diffuse * diffuse + p.spec * specular
+        - p.rim * rim + p.vGrad * topGrad
       v = Math.max(0, Math.min(1, v))
       const c = Math.round(v * 255)
       data[i] = data[i + 1] = data[i + 2] = c
@@ -86,6 +116,6 @@ export function get_atom_matcap(): Texture {
   const tex = new CanvasTexture(canvas)
   tex.colorSpace = LinearSRGBColorSpace
   tex.needsUpdate = true
-  cached = tex
+  cache.set(key, tex)
   return tex
 }

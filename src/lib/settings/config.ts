@@ -466,6 +466,18 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         toon: `Toon`,
       },
     },
+    matcap_preset: {
+      value: `ceramic`,
+      description:
+        `MatCap material preset (only applies when Material = MatCap). Ceramic = soft glazed; Metallic = dark body + hot highlight; Clay = flat matte; Glossy = tighter shine; Pearl = luminous soft.`,
+      enum: {
+        ceramic: `Ceramic`,
+        metallic: `Metallic`,
+        clay: `Clay`,
+        glossy: `Glossy`,
+        pearl: `Pearl`,
+      },
+    },
     light_azimuth: {
       value: 35,
       description:
