@@ -21,6 +21,7 @@
     type Vec3,
   } from '$lib/cube/slice'
   import { extract_isosurface_client, dispose_worker } from '$lib/cube/client'
+  import { download } from '$lib/io/fetch'
   import { atomic_radii } from '$lib/structure'
   import { element_data } from '$lib/element'
   import { onDestroy } from 'svelte'
@@ -399,12 +400,11 @@
         },
         format,
       )
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = `isosurface.${format}`
-      a.click()
-      URL.revokeObjectURL(url)
+      download(
+        blob,
+        `isosurface.${format}`,
+        format === `glb` ? `model/gltf-binary` : `model/obj`,
+      )
     } catch (err) {
       cube_state.error = `Export failed: ${(err as Error).message}`
     } finally {

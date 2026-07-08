@@ -9,6 +9,7 @@
     type ColormapName,
   } from './slice'
   import { colors } from '$lib/state.svelte'
+  import { download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -109,12 +110,7 @@
     if (!canvas) return
     canvas.toBlob((blob) => {
       if (!blob) return
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
+      download(blob, filename, `image/png`)
     }, `image/png`)
   }
 </script>

@@ -6,6 +6,7 @@
   import type { ConvergencePoint } from '$lib/api/workflow'
   import BatchStatusSection from './BatchStatusSection.svelte'
   import * as api from '$lib/api/workflow'
+  import { download } from '$lib/io/fetch'
   import { API_BASE } from '$lib/api/config'
   import UvVisPlot from './UvVisPlot.svelte'
   import ConvergencePlot from './ConvergencePlot.svelte'
@@ -2092,11 +2093,7 @@
             <div class="sp-file-list">
               {#if mlp_contcar}
                 <button class="sp-file-btn" onclick={() => {
-                  const blob = new Blob([mlp_contcar!], { type: 'text/plain' })
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a')
-                  a.href = url; a.download = mlp_contcar_filename; a.click()
-                  URL.revokeObjectURL(url)
+                  download(mlp_contcar!, mlp_contcar_filename, 'text/plain')
                 }}>
                   <span class="sp-file-icon">📄</span>
                   <span class="sp-file-name">{mlp_contcar_filename}</span>
@@ -2105,11 +2102,7 @@
               {/if}
               {#if cached_summary.stdout}
                 <button class="sp-file-btn" onclick={() => {
-                  const blob = new Blob([cached_summary.stdout!], { type: 'text/plain' })
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a')
-                  a.href = url; a.download = 'output.log'; a.click()
-                  URL.revokeObjectURL(url)
+                  download(cached_summary.stdout!, 'output.log', 'text/plain')
                 }}>
                   <span class="sp-file-icon">📋</span>
                   <span class="sp-file-name">output.log</span>

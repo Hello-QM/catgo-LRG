@@ -7,6 +7,7 @@
    * Each panel titled with facet name and gamma value.
    */
   import { lazy_load_plotly, make_target_writable, base_layout, base_config, observe_resize } from './plotly-utils'
+  import { download } from '$lib/io/fetch'
 
   let {
     per_facet = {},
@@ -174,10 +175,8 @@
   export async function export_plot(format: 'png' | 'svg') {
     if (!Plotly || !plot_div) return
     const url = await Plotly.toImage(plot_div, { format, width: 1200, height: 900, scale: 2 })
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `surface_energy_fits.${format}`
-    a.click()
+    const blob = await (await fetch(url)).blob()
+    download(blob, `surface_energy_fits.${format}`, format === 'png' ? 'image/png' : 'image/svg+xml')
   }
 </script>
 

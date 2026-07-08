@@ -2,6 +2,7 @@
  * Shared validation helpers and constants used across export targets.
  */
 import type { AnyStructure, PymatgenStructure } from '$lib'
+import { download } from '$lib/io/fetch'
 
 // ====== MAGMOM Database ======
 export const MAGMOM_DATABASE: Record<string, number> = {
@@ -118,12 +119,13 @@ export function generate_magmom_string(
   return magmom_parts.join(' ')
 }
 
-/** Download a text file */
+/** Download a text file. Delegates to the shared `download()` helper so the
+ *  Tauri desktop app's native save dialog (installed by `init_tauri`) is used.
+ *  A raw `<a download>` click is silently ignored by WebKitGTK, so the export
+ *  panels' download buttons did nothing in the desktop app. `download()` still
+ *  falls back to `showSaveFilePicker` / `<a>` in a plain browser. */
 export function download_file(content: string, filename: string): void {
-  const blob = new Blob([content], { type: 'text/plain' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a'); a.href = url; a.download = filename; a.click()
-  URL.revokeObjectURL(url)
+  download(content, filename, 'text/plain')
 }
 
 /** Common fix mode / selective dynamics parameters */

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
   import { export_canvas_as_png } from '$lib/io/export'
+  import { download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
@@ -44,15 +45,11 @@
     const json_data = get_json_data()
     if (!json_data || !bz_data) return
 
-    const blob = new Blob([JSON.stringify(json_data, null, 2)], {
-      type: `application/json`,
-    })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement(`a`)
-    link.href = url
-    link.download = `${filename}-bz-order-${bz_data.order}.json`
-    link.click()
-    URL.revokeObjectURL(url)
+    download(
+      JSON.stringify(json_data, null, 2),
+      `${filename}-bz-order-${bz_data.order}.json`,
+      `application/json`,
+    )
   }
 
   function get_json_data() {

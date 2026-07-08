@@ -20,6 +20,7 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { download } from '$lib/io/fetch'
 
   load_i18n_module('common')
   load_i18n_module('workflow')
@@ -273,13 +274,7 @@
 
   /** Helper to trigger a download from a string blob */
   function download_blob(content: string, mime: string, filename: string) {
-    const blob = new Blob([content], { type: mime })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(url)
+    download(content, filename, mime)
   }
 
   /** Open top N structures in the viewer */

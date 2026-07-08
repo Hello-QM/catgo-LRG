@@ -4,6 +4,7 @@
   import CubeControls from './CubeControls.svelte'
   import type { CubeState, IsosurfaceResult, CubeMesh, CubeAtom } from './api'
   import { uploadCubeFile, extractIsosurface } from './api'
+  import { download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -94,12 +95,7 @@
 
   function download_slice() {
     if (!slice_blob) return
-    const url = URL.createObjectURL(slice_blob)
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `slice.png`
-    a.click()
-    URL.revokeObjectURL(url)
+    download(slice_blob, `slice.png`, `image/png`)
   }
 
   function handle_atom_click(index: number) {

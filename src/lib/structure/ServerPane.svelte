@@ -1,6 +1,7 @@
 <script lang="ts">
   import { DraggablePane } from '$lib'
   import FileTree from './FileTree.svelte'
+  import { download } from '$lib/io/fetch'
   import type { Snippet } from 'svelte'
   import {
     hpc_session_store,
@@ -903,17 +904,17 @@
           navigator.clipboard.writeText(file.path).catch(() => {})
         }
       } else if (!file.is_dir) {
-        // Web/dev mode: stream the local file via /__files/raw and trigger a
-        // browser download (Tauri shell open is unavailable, so the button was
-        // a silent no-op before).
-        const link = document.createElement(`a`)
-        link.href = `/__files/raw?path=${encodeURIComponent(file.path)}`
-        link.download = file.name
-        link.rel = `noopener`
-        link.style.display = `none`
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
+        // Web/dev mode: stream the local file via /__files/raw and save it
+        // through the shared download helper (raw anchor downloads are ignored
+        // in the Tauri WKWebView; Tauri shell open is unavailable in web/dev, so
+        // the button was a silent no-op before).
+        try {
+          const resp = await fetch(`/__files/raw?path=${encodeURIComponent(file.path)}`)
+          const blob = await resp.blob()
+          download(blob, file.name, `application/octet-stream`)
+        } catch {
+          navigator.clipboard.writeText(file.path).catch(() => {})
+        }
       } else {
         // Local directory in web mode: no raw stream for dirs — copy the path.
         navigator.clipboard.writeText(file.path).catch(() => {})
@@ -936,14 +937,10 @@
 
       const global_download = (globalThis as Record<string, unknown>).download
       if (typeof document !== `undefined` && typeof global_download !== `function`) {
-        const link = document.createElement(`a`)
-        link.href = getDownloadUrl(session_id, file.path, { is_dir: file.is_dir, skip_stat: true })
-        link.download = filename
-        link.rel = `noopener`
-        link.style.display = `none`
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
+        const url = getDownloadUrl(session_id, file.path, { is_dir: file.is_dir, skip_stat: true })
+        const resp = await fetch(url)
+        const blob = await resp.blob()
+        download(blob, filename, `application/octet-stream`)
         return
       }
     } catch (e: any) {

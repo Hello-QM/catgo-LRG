@@ -4,6 +4,7 @@
   import DosPlot from './DosPlot.svelte'
   import ExportDpiControl from './ExportDpiControl.svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { download } from '$lib/io/fetch'
 
   load_i18n_module('structure')
 
@@ -48,13 +49,9 @@
   )
 
   function download_blob(content: string, filename: string, mime: string) {
-    const blob = new Blob([content], { type: mime })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(url)
+    // Route through the shared helper so the Tauri desktop native save dialog is
+    // used — a raw <a download> click is silently ignored by WebKitGTK.
+    download(content, filename, mime)
   }
 
   async function export_csv() {
@@ -74,10 +71,10 @@
     const opts = format === `png` ? { dpi: export_dpi, width_mm: export_width_mm } : undefined
     const url = await dos_plot.export_image(format, opts)
     if (!url) return
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `dos_plot.${format}`
-    a.click()
+    // `url` is a data:/blob: URL — fetch it back to bytes so the shared helper
+    // saves the image, not the URL text (raw <a download> is a no-op in WebKitGTK).
+    const blob = await (await fetch(url)).blob()
+    download(blob, `dos_plot.${format}`, format === `png` ? `image/png` : `image/svg+xml`)
   }
 </script>
 

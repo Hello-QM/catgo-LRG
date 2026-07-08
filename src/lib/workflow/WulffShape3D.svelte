@@ -15,6 +15,7 @@
    *   Plotly 3D scene sizing issues with responsive mode.
    */
   import { lazy_load_plotly, make_target_writable, base_config, observe_resize } from './plotly-utils'
+  import { download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { untrack } from 'svelte'
 
@@ -255,10 +256,8 @@
   export async function export_plot(format: 'png' | 'svg') {
     if (!_Plotly || !plot_div) return
     const url = await _Plotly.toImage(plot_div, { format, width: 800, height: 800, scale: 2 })
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `wulff_3d.${format}`
-    a.click()
+    const blob = await (await fetch(url)).blob()
+    download(blob, `wulff_3d.${format}`, format === 'png' ? 'image/png' : 'image/svg+xml')
   }
 </script>
 

@@ -14,6 +14,7 @@
   import { extent } from 'd3-array'
   import { onMount, onDestroy } from 'svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { download } from '$lib/io/fetch'
 
   load_i18n_module(`structure`)
 
@@ -304,14 +305,8 @@
       }
 
       const csv_text = [header, ...rows].join(`\n`)
-      const blob = new Blob([csv_text], { type: `text/csv;charset=utf-8` })
-      const url = URL.createObjectURL(blob)
       const filename = `slow_growth_b${active_constraint}.csv`
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
+      download(csv_text, filename, `text/csv`)
       export_status = t(`structure.export_started`, { filename })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

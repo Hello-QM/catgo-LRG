@@ -2,6 +2,7 @@
   import type { ProjectDetail } from '$lib/api/project'
   import type { StepInfo } from './workflow-types'
   import * as workflow_api from '$lib/api/workflow'
+  import { download } from '$lib/io/fetch'
 
   let {
     project,
@@ -284,13 +285,7 @@
         lines.push([csv_quote(`# ${k}`), csv_quote(typeof v === `string` ? v : JSON.stringify(v))].join(`,`))
       }
     }
-    const blob = new Blob([lines.join(`\n`)], { type: `text/csv` })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `mace-ni-benchmark.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    download(lines.join(`\n`), `mace-ni-benchmark.csv`, `text/csv`)
   }
 </script>
 

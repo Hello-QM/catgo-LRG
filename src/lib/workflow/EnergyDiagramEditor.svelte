@@ -2,6 +2,7 @@
   import { API_BASE } from '$lib/api/config'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { lazy_load_plotly, base_layout, base_config, make_target_writable } from './plotly-utils'
+  import { download } from '$lib/io/fetch'
 
   load_i18n_module('common')
   load_i18n_module('workflow')
@@ -163,14 +164,11 @@
     }
   }
 
-  function export_diagram(format: 'png' | 'svg') {
+  async function export_diagram(format: 'png' | 'svg') {
     if (!Plotly || !plot_div) return
-    Plotly.toImage(plot_div, { format, width: 1200, height: 600, scale: 2 }).then((url: string) => {
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = `energy_diagram.${format}`
-      a.click()
-    })
+    const url = await Plotly.toImage(plot_div, { format, width: 1200, height: 600, scale: 2 })
+    const blob = await (await fetch(url)).blob()
+    download(blob, `energy_diagram.${format}`, format === 'png' ? 'image/png' : 'image/svg+xml')
   }
 </script>
 

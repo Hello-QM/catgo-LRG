@@ -9,6 +9,7 @@ import { readRemoteFile, uploadFile, getDownloadUrl, mergeStructuresFromDir, hpc
 import { read_file } from '$lib/api/project'
 import { LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
 import { start_hpc_managed_download } from '$lib/downloads/hpc-download'
+import { download } from '$lib/io/fetch'
 import type { RemoteFile } from '$lib/api/hpc'
 
 export interface HpcBrowserCallbacks {
@@ -223,16 +224,11 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
         }
       } else if (!file.is_dir) {
         // Web/dev mode: Tauri shell is unavailable (the button was a silent
-        // no-op), so stream the file via /__files/raw and trigger a browser
-        // download.
-        const link = document.createElement(`a`)
-        link.href = `/__files/raw?path=${encodeURIComponent(file.path)}`
-        link.download = file.name
-        link.rel = `noopener`
-        link.style.display = `none`
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
+        // no-op), so fetch the file via /__files/raw and route through the
+        // shared download() helper (native save dialog on desktop).
+        const url = `/__files/raw?path=${encodeURIComponent(file.path)}`
+        const blob = await (await fetch(url)).blob()
+        download(blob, file.name, `application/octet-stream`)
       } else {
         navigator.clipboard.writeText(file.path).catch(() => {})
       }
@@ -254,14 +250,9 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
 
       const global_download = (globalThis as Record<string, unknown>).download
       if (typeof document !== `undefined` && typeof global_download !== `function`) {
-        const link = document.createElement(`a`)
-        link.href = getDownloadUrl(source, file.path, { is_dir: file.is_dir, skip_stat: true })
-        link.download = filename
-        link.rel = `noopener`
-        link.style.display = `none`
-        document.body.appendChild(link)
-        link.click()
-        link.remove()
+        const url = getDownloadUrl(source, file.path, { is_dir: file.is_dir, skip_stat: true })
+        const blob = await (await fetch(url)).blob()
+        download(blob, filename, `application/octet-stream`)
         return
       }
     } catch (err) {

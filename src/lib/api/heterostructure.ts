@@ -1,4 +1,5 @@
 import type { AnyStructure, PymatgenStructure } from '$lib/structure'
+import { download } from '$lib/io/fetch'
 import {
   structure_to_cif_str,
   structure_to_extxyz_str,
@@ -374,16 +375,9 @@ function serialize_structure(structure: PymatgenStructure, fmt: string): string 
   }
 }
 
-/** Trigger a browser download of a Blob under the given filename. */
+/** Trigger a download of the registry-candidates Blob under the given filename. */
 function trigger_download(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement(`a`)
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  download(blob, filename, `application/zip`)
 }
 
 export async function downloadRegistryCandidates(
@@ -482,14 +476,7 @@ export async function downloadRegistryCandidates(
   // Download the zip blob
   const candidate_count = response.headers.get(`X-Candidate-Count`) ?? `?`
   const blob = await response.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement(`a`)
-  a.href = url
-  a.download = `registry_candidates_${candidate_count}.zip`
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  download(blob, `registry_candidates_${candidate_count}.zip`, `application/zip`)
 }
 
 // ---------------------------------------------------------------------------

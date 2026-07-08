@@ -3994,11 +3994,7 @@
                             <button class="sym-analyze-btn" style="margin-top: 4px" onclick={() => {
                               if (!rac_result) return
                               const csv = [`name,value`, ...rac_result.descriptors.map(d => `${d.name},${d.value}`)].join(`\n`)
-                              const blob = new Blob([csv], { type: `text/csv` })
-                              const url = URL.createObjectURL(blob)
-                              const a = document.createElement(`a`)
-                              a.href = url; a.download = `rac_descriptors.csv`; a.click()
-                              URL.revokeObjectURL(url)
+                              download(csv, `rac_descriptors.csv`, `text/csv`)
                             }}>{t(`structure.export_csv`)}</button>
                           </div>
                         {/if}

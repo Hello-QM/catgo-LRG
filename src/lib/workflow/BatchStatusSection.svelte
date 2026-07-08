@@ -9,6 +9,7 @@
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import { get_convergence, type ConvergencePoint } from '$lib/api/workflow'
   import { pending_open_structure } from './workflow-state.svelte'
+  import { download } from '$lib/io/fetch'
 
   interface SubStep {
     index: number
@@ -213,11 +214,7 @@
                   {t('workflow.batch_status_open_structure_in_tab')}
                 </button>
                 <button class="bs-files-btn" onclick={() => {
-                  const blob = new Blob([step.contcar!], { type: 'chemical/x-vasp' })
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a')
-                  a.href = url; a.download = `${(step.label ?? `branch_${step.index}`).replace(/[^a-zA-Z0-9()-]/g, '_')}_CONTCAR`; a.click()
-                  URL.revokeObjectURL(url)
+                  download(step.contcar!, `${(step.label ?? `branch_${step.index}`).replace(/[^a-zA-Z0-9()-]/g, '_')}_CONTCAR`, 'text/plain')
                 }}>
                   {t('workflow.batch_status_download_contcar')}
                 </button>

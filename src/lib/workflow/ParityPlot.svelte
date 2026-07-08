@@ -8,6 +8,7 @@
    * stats annotation, and per-point coloring.
    */
   import { lazy_load_plotly, make_target_writable, base_layout, base_config, observe_resize } from './plotly-utils'
+  import { download } from '$lib/io/fetch'
 
   let {
     points = [],
@@ -167,10 +168,8 @@
   export async function export_plot(format: 'png' | 'svg') {
     if (!Plotly || !plot_div) return
     const url = await Plotly.toImage(plot_div, { format, width: 800, height: 500, scale: 2 })
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `parity_plot.${format}`
-    a.click()
+    const blob = await (await fetch(url)).blob()
+    download(blob, `parity_plot.${format}`, format === 'png' ? 'image/png' : 'image/svg+xml')
   }
 </script>
 

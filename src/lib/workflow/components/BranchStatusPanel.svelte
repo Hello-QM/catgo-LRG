@@ -21,6 +21,7 @@
 <script lang="ts">
   import '$lib/dialog-shared.css'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { download } from '$lib/io/fetch'
 
   load_i18n_module('common')
   load_i18n_module('workflow')
@@ -203,13 +204,7 @@
       b.error ?? '',
     ])
     const csv = [header, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `branches_${workflow_id}_${map_node_id}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    download(csv, `branches_${workflow_id}_${map_node_id}.csv`, 'text/csv')
   }
 
   /** Format a numeric result value for display */

@@ -7,6 +7,7 @@
    * forward / reverse barriers, and initial / final reference lines.
    */
   import { lazy_load_plotly, make_target_writable, base_layout, base_config, observe_resize } from './plotly-utils'
+  import { download } from '$lib/io/fetch'
 
   let {
     energies_ev = [],
@@ -149,10 +150,8 @@
   export async function export_plot(format: 'png' | 'svg') {
     if (!Plotly || !plot_div) return
     const url = await Plotly.toImage(plot_div, { format, width: 1200, height: 800, scale: 2 })
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = `neb_pathway.${format}`
-    a.click()
+    const blob = await (await fetch(url)).blob()
+    download(blob, `neb_pathway.${format}`, format === 'png' ? 'image/png' : 'image/svg+xml')
   }
 </script>
 

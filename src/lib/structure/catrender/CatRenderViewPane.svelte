@@ -15,6 +15,7 @@
   import { prune_atom_overrides } from './atom-merge'
   import { catrender_state as S, AXIS_COLORS } from './catrender-state.svelte'
   import { drag_rotate, type DragRotateHandlers } from './drag-rotate-action'
+  import { download } from '$lib/io/fetch'
 
   let {
     show = $bindable(false),
@@ -330,17 +331,8 @@
     }
   })
 
-  function download(name: string, blob: Blob) {
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement(`a`)
-    a.href = url
-    a.download = name
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   function export_svg() {
-    download(`catrender.svg`, new Blob([svg], { type: `image/svg+xml` }))
+    download(svg, `catrender.svg`, `image/svg+xml`)
   }
 
   async function export_png() {
@@ -362,7 +354,7 @@
     c.height = h
     const ctx = c.getContext(`2d`)!
     ctx.drawImage(img, 0, 0, w, h)
-    c.toBlob((b) => b && download(`catrender.png`, b), `image/png`)
+    c.toBlob((b) => b && download(b, `catrender.png`, `image/png`), `image/png`)
   }
 
   // Visible base bonds (after current overrides) for the per-row delete list.

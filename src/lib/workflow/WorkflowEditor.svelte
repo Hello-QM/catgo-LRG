@@ -5,6 +5,7 @@
   import { load_dynamic_engines, all_engine_specs } from './node-defs/dynamic'
   import { STATUS_COLORS } from './workflow-types'
   import type { WorkflowRunConfig } from './workflow-types'
+  import { download } from '$lib/io/fetch'
   import {
     sync_workflow_state,
     clear_workflow_state,
@@ -1579,14 +1580,8 @@
       nodes,
       edges,
     }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: `application/json` })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement(`a`)
-    a.href = url
     const safe_name = (workflow_name || `workflow`).replace(/[^a-z0-9_-]+/gi, `_`)
-    a.download = `${safe_name}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    download(JSON.stringify(payload, null, 2), `${safe_name}.json`, `application/json`)
   }
 
   /** Download a file from step output via browser download. */
@@ -1594,13 +1589,7 @@
     try {
       const data = await api.get_step_output(workflow_id, node_id, filename)
       if (!data?.content) return
-      const blob = new Blob([data.content], { type: `text/plain` })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = filename
-      a.click()
-      URL.revokeObjectURL(url)
+      download(data.content, filename, `text/plain`)
     } catch (err: any) {
       cycle_warning = `Failed to download ${filename}: ${err?.message}`
       setTimeout(() => cycle_warning = null, 5000)

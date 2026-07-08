@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CubeState, IsosurfaceResult, CubeAtom } from './api'
+  import { download } from '$lib/io/fetch'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     extractIsosurface,
@@ -193,12 +194,11 @@
         },
         format,
       )
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = `isosurface.${format}`
-      a.click()
-      URL.revokeObjectURL(url)
+      download(
+        blob,
+        `isosurface.${format}`,
+        format === `glb` ? `model/gltf-binary` : `model/obj`,
+      )
     } catch (err) {
       cube_state.error = t('structure.cube_export_failed', { error: (err as Error).message })
     } finally {

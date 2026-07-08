@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { PymatgenStructure } from '$lib'
+  import { download } from '$lib/io/fetch'
   import NodeStatusPanel from './NodeStatusPanel.svelte'
   import NodeConfigPanel from './NodeConfigPanel.svelte'
   import StructureInputPanel from './StructureInputPanel.svelte'
@@ -108,13 +109,7 @@
   function handle_download(node_id: string, filename: string) {
     if (!ctx.workflow_id) return
     api.get_step_output(ctx.workflow_id, node_id, filename).then((data) => {
-      const blob = new Blob([data.content], { type: `application/octet-stream` })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement(`a`)
-      a.href = url
-      a.download = filename
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      download(data.content, filename, `application/octet-stream`)
     }).catch((err) => console.error(`Failed to download file:`, err))
   }
 </script>
