@@ -444,7 +444,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maximum: 1,
     },
     render_style: {
-      value: `glossy` as const,
+      value: `toon` as const,
       description:
         `Material/shading style for atoms. Glossy = default specular look; Metallic = harder compact highlight; Matte = flat diffuse (no highlight); 2.5D = softly shaded diagram; 2D Flat = pure diffuse fill; Toon = 3-band cel/cartoon shading. Orthogonal to color_scheme (palette).`,
       enum: {

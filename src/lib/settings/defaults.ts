@@ -22,17 +22,6 @@ const extract_values = (
 // Runtime defaults - extracted values for use in components
 export const DEFAULTS = extract_values(SETTINGS_CONFIG)
 
-// Web build (browser, not the Tauri desktop/mobile shell) defaults the atom
-// material to the cel-shaded "toon" look. Tauri injects __TAURI__/__TAURI_INTERNALS__
-// into window before app scripts run, so its absence reliably marks the web build.
-if (
-  typeof window !== `undefined` &&
-  !(`__TAURI__` in window) &&
-  !(`__TAURI_INTERNALS__` in window)
-) {
-  DEFAULTS.structure.render_style = `toon`
-}
-
 // Helper to merge with defaults - handles nested structure
 export const merge = (user?: Partial<DefaultSettings>): DefaultSettings => ({
   ...DEFAULTS,
