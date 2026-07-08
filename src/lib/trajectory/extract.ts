@@ -49,12 +49,20 @@ export const force_stress_data_extractor: TrajectoryDataExtractor = (
     if (frame.metadata.forces && Array.isArray(frame.metadata.forces)) {
       const forces = frame.metadata.forces as number[][]
       if (forces.length > 0) {
-        const force_magnitudes = forces.map((force) => Math.hypot(...force))
-        data.force_max = Math.max(...force_magnitudes)
+        // Exclude fully-fixed atoms (move_mask=false) from the F_max / F_norm
+        // convergence curve — a frozen atom's large constraint reaction is not a
+        // relaxation force and must not mask the actual convergence of the free
+        // atoms. Falls back to all atoms when no constraint info is present.
+        const sites = frame.structure?.sites
+        const all_mags = forces.map((force) => Math.hypot(...force))
+        const free_mags = all_mags.filter(
+          (_, i) => sites?.[i]?.properties?.move_mask !== false,
+        )
+        const mags = free_mags.length > 0 ? free_mags : all_mags
+        data.force_max = Math.max(...mags)
         // Calculate RMS (root mean square) of force magnitudes
         data.force_norm = Math.sqrt(
-          force_magnitudes.reduce((sum, f) => sum + f ** 2, 0) /
-            force_magnitudes.length,
+          mags.reduce((sum, f) => sum + f ** 2, 0) / mags.length,
         )
       }
     } else {
