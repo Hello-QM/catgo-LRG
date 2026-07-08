@@ -43,7 +43,7 @@
     onpopout?: () => void
     on_ask_catbot?: () => void
     /** Callback when user Ctrl+clicks a file path in the terminal output. */
-    on_open_file?: (file_path: string) => void
+    on_open_file?: (file_path: string, session_id?: string) => void
   } = $props()
 
   // ====== Server list ======

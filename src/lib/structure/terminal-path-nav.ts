@@ -39,7 +39,7 @@ export async function path_is_directory(path: string, session_id: string): Promi
 
 export interface TerminalClickHandlers {
   /** Open a file path (structure/editor/preview) — the pre-existing behaviour. */
-  open_file: (path: string) => void
+  open_file: (path: string, session_id: string) => void
   /** Navigate the Files panel for this session to `path` (a directory). */
   navigate_dir: (path: string, session_id: string) => void
 }
@@ -55,6 +55,6 @@ export async function open_terminal_click(
   if (await is_directory(path, session_id)) {
     handlers.navigate_dir(path, session_id)
   } else {
-    handlers.open_file(path)
+    handlers.open_file(path, session_id)
   }
 }

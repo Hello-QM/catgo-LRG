@@ -50,7 +50,7 @@
     onpopout?: () => void
     on_cwd_change?: (path: string) => void
     /** Callback when user Ctrl+clicks a file path in the terminal output. */
-    on_open_file?: (file_path: string) => void
+    on_open_file?: (file_path: string, session_id?: string) => void
   } = $props()
 
   let container_el: HTMLDivElement | undefined = $state()
@@ -327,7 +327,7 @@
                     // explicit jump); file → open it. dir-detection is async so it
                     // can't run inside xterm's synchronous activate().
                     void open_terminal_click(resolved, session_id ?? ``, {
-                      open_file: (p) => on_open_file?.(p),
+                      open_file: (p, sid) => on_open_file?.(p, sid),
                       navigate_dir: (p, sid) => {
                         const seq = ++_cwd_seq
                         window.dispatchEvent(

@@ -339,11 +339,12 @@
     return false
   }
   function handle_terminal_open_file(file_path: string, filename: string, session_id: string) { return _handle_terminal_open_file(sidebar_deps, file_path, filename, session_id) }
-  // Ctrl+click file-open from a terminal *leaf* — derive filename from the path and
-  // use the leaf's own session_id (reuses the same handler the side-panel terminal used).
-  function handle_terminal_leaf_open_file(file_path: string, term: TerminalLeafState) {
+  // Ctrl+click file-open from a terminal *leaf* — derive filename from the path and use
+  // the session the click resolved against (threaded through from open_terminal_click,
+  // the same session the directory-check used), falling back to the leaf's own session.
+  function handle_terminal_leaf_open_file(file_path: string, term: TerminalLeafState, session_id?: string) {
     const name = file_path.split(`/`).pop() || file_path
-    return handle_terminal_open_file(file_path, name, term.session_id || ``)
+    return handle_terminal_open_file(file_path, name, session_id || term.session_id || ``)
   }
   // Header label for a terminal leaf: remote host > shell > CWD basename > 'Terminal'.
   function terminalLabel(term: TerminalLeafState): string {
@@ -2793,7 +2794,7 @@
               initial_sync_cwd={term.sync_cwd}
               onpopout={() => popout_terminal_leaf(tab.id, leaf.id)}
               onclose={() => close_terminal_leaf(tab.id, leaf.id)}
-              on_open_file={(p) => handle_terminal_leaf_open_file(p, term)}
+              on_open_file={(p, sid) => handle_terminal_leaf_open_file(p, term, sid)}
               on_ask_catbot={() => open_chat_beside(leaf)}
             />
           {/if}

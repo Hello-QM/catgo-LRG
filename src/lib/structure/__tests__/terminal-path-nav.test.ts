@@ -24,7 +24,7 @@ describe('open_terminal_click', () => {
       { open_file, navigate_dir },
       async () => false, // is_directory
     )
-    expect(open_file).toHaveBeenCalledWith('/home/u/proj/ir20_bare_distinct.extxyz')
+    expect(open_file).toHaveBeenCalledWith('/home/u/proj/ir20_bare_distinct.extxyz', '')
     expect(navigate_dir).not.toHaveBeenCalled()
   })
 
@@ -40,6 +40,22 @@ describe('open_terminal_click', () => {
     expect(navigate_dir).toHaveBeenCalledWith('/scratch/run42', 'sess-abc')
   })
 
+  it('forwards the remote session_id to open_file for a remote file (regression)', async () => {
+    const open_file = vi.fn()
+    const navigate_dir = vi.fn()
+    await open_terminal_click(
+      '/home/jzhang89/build_prod500.py',
+      'sess-abc',
+      { open_file, navigate_dir },
+      async () => false, // it's a file
+    )
+    // Bug: open_file was called with only the path, dropping session_id — so the
+    // file-open handler read the LOCAL fs instead of the remote SSH session, and an
+    // existing remote file came back "Not found".
+    expect(open_file).toHaveBeenCalledWith('/home/jzhang89/build_prod500.py', 'sess-abc')
+    expect(navigate_dir).not.toHaveBeenCalled()
+  })
+
   it('treats a detection failure as a file (safe fallback)', async () => {
     const open_file = vi.fn()
     const navigate_dir = vi.fn()
@@ -49,7 +65,7 @@ describe('open_terminal_click', () => {
       { open_file, navigate_dir },
       async () => false, // path_is_directory swallows errors → false
     )
-    expect(open_file).toHaveBeenCalledWith('/maybe/gone')
+    expect(open_file).toHaveBeenCalledWith('/maybe/gone', '')
     expect(navigate_dir).not.toHaveBeenCalled()
   })
 })
