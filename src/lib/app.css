@@ -45,11 +45,33 @@
   src: url('./fonts/CascadiaCode-Bold.woff2') format('woff2');
 }
 
+/* Geist Sans — deliberate UI typeface (Vercel, OFL, see fonts/Geist-OFL.txt).
+   Bundled variable font (one file, weights 100-900) so the whole desktop shell
+   renders with a consistent modern sans instead of the per-platform system
+   default. Latin only — CJK falls through the --font-sans stack below to the
+   platform CJK face, so Chinese UI never tofus. Terminal/mono fonts above are
+   untouched. */
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/Geist-Variable.woff2') format('woff2');
+}
+
 :root {
   --theme-transition-duration: 0.3s;
   --text-color: #eee;
   --page-bg: #090019;
   --max-text-width: 50em;
+
+  /* Global UI font stack. Geist for Latin, then platform CJK faces so Chinese
+     glyphs render, then system-ui as last resort. Consumed by body below and
+     available to any component that wants the app sans. */
+  --font-sans:
+    'Geist', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC',
+    'Source Han Sans SC', -apple-system, BlinkMacSystemFont, system-ui, Roboto,
+    sans-serif;
 
   --sms-max-width: 20em;
   --sms-text-color: var(--text-color);
@@ -76,7 +98,7 @@
 body {
   background: var(--page-bg);
   padding: 6vh 3vw;
-  font-family: -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  font-family: var(--font-sans);
   margin: auto;
   color: var(--text-color);
   line-height: 1.5;
