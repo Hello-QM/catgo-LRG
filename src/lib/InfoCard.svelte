@@ -72,7 +72,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
     box-sizing: border-box;
-    border-radius: var(--ic-radius, 3pt);
+    border-radius: var(--ic-radius, var(--radius-md));
     padding: var(--ic-padding, 10pt 12pt);
     margin: var(--ic-margin, 1em 0);
     gap: var(--ic-gap, 10pt 5%);
@@ -101,7 +101,7 @@
     margin: var(--ic-value-margin);
     background-color: var(--ic-value-bg, rgba(255, 255, 255, 0.1));
     padding: var(--ic-value-padding, 0 4pt);
-    border-radius: var(--ic-value-radius, 3pt);
+    border-radius: var(--ic-value-radius, var(--radius-sm));
   }
   strong small {
     font-weight: normal;

@@ -182,8 +182,8 @@
   .context-menu {
     background: var(--surface-bg, #1e1e1e);
     border: 1px solid var(--border-color, #444);
-    border-radius: var(--border-radius, 4px);
-    box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.1);
+    border-radius: var(--border-radius, var(--radius-md));
+    box-shadow: var(--shadow-lg);
     backdrop-filter: blur(4px);
     min-width: var(--context-menu-min-width, 160px);
     overflow-x: hidden;
@@ -250,6 +250,6 @@
     justify-content: center;
     padding: 4px 2px;
     gap: 3px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
   }
 </style>

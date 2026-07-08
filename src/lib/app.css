@@ -1,3 +1,9 @@
+/* Geometry design tokens (radius / shadow / spacing / focus). Imported first so
+   the :root vars are defined before any rule below consumes them. Kept in a
+   separate file to minimize merge conflicts. NB: CSS requires @import to precede
+   all other at-rules (incl. @font-face), so it lives at the very top. */
+@import './design-tokens.css';
+
 /* Bundled monospace fonts for the terminal/editor font picker. Without these,
    a machine lacking the chosen system font falls through the font stack to a
    proportional CJK font (e.g. Noto Sans CJK SC) for Latin glyphs, which breaks
@@ -119,12 +125,24 @@ button, a.btn {
   color: var(--text-color);
   cursor: pointer;
   border: none;
-  border-radius: 3pt;
+  border-radius: var(--radius-md);
   padding: 2pt 4pt;
+  transition:
+    background-color var(--transition-base),
+    border-color var(--transition-base),
+    color var(--transition-base),
+    box-shadow var(--transition-base);
 }
 button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Consistent keyboard-focus affordance for all buttons. `:focus-visible` keeps
+   the ring off mouse clicks. Component rules with their own focus styling win
+   on specificity, so this only fills the (many) buttons that had none. */
+:where(button, a.btn):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 a:hover {
   color: var(--accent-hover-color, orange);
@@ -132,7 +150,7 @@ a:hover {
 code, kbd {
   overflow-wrap: break-word;
   padding: 1pt 3pt;
-  border-radius: 3pt;
+  border-radius: var(--radius-sm);
   background-color: var(--code-bg);
 }
 kbd {
@@ -146,7 +164,7 @@ pre code {
 }
 pre {
   position: relative;
-  border-radius: 4pt;
+  border-radius: var(--radius-md);
   font-size: 0.95em;
   background-color: var(--pre-bg);
   padding: 1ex 1em;
@@ -201,7 +219,13 @@ select option {
 /* Modern flat input styling */
 input {
   border: none;
-  border-radius: 3pt;
+  border-radius: var(--radius-md);
+}
+/* Keyboard-focus ring for bare inputs. Pane/dialog inputs style their own
+   `:focus` (higher specificity) so this only reaches un-themed inputs. */
+input:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring-soft);
 }
 input[type='number'] {
   min-width: 40px;
@@ -211,7 +235,7 @@ input[type='color'] {
   border: none;
   padding: 0;
   outline: none;
-  border-radius: 3pt;
+  border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
 }

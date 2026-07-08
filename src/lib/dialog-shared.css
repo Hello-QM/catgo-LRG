@@ -19,8 +19,8 @@
   background: var(--dialog-bg, light-dark(#fff, #1c1d21));
   border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
   color: var(--text-color, light-dark(#374151, #eee));
-  border-radius: 12px;
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
   font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 13px;
   max-width: calc(100vw - 32px);
@@ -62,8 +62,8 @@
   cursor: pointer;
   font-size: 18px;
   padding: 4px 8px;
-  border-radius: 4px;
-  transition: all 0.15s;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-base);
   line-height: 1;
   flex-shrink: 0;
 }
@@ -132,11 +132,11 @@
 .dialog-modal .field-select {
   background: var(--input-bg, light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05)));
   border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-color, light-dark(#374151, #eee));
   font-size: 13px;
   padding: 8px 10px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -149,7 +149,7 @@
 .dialog-modal .input:focus,
 .dialog-modal .field-input:focus {
   border-color: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, cornflowerblue) 15%, transparent);
+  box-shadow: var(--focus-ring-soft);
   outline: none;
 }
 
@@ -179,13 +179,14 @@
 .dialog-modal .btn-run {
   background: var(--accent-color, light-dark(#4f46e5, cornflowerblue));
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: #fff;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  padding: 8px 16px;
-  transition: background 0.15s, opacity 0.15s;
+  padding: 8px var(--space-4);
+  transition: background var(--transition-base), opacity var(--transition-base),
+    box-shadow var(--transition-base);
 }
 
 .dialog-modal .btn-primary:hover,
@@ -205,16 +206,22 @@
 .dialog-modal .btn-cancel {
   background: var(--btn-bg, light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.1)));
   border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-color, light-dark(#374151, #eee));
   cursor: pointer;
   font-size: 13px;
-  padding: 8px 16px;
-  transition: background 0.15s;
+  padding: 8px var(--space-4);
+  transition: background var(--transition-base), box-shadow var(--transition-base);
 }
 
 .dialog-modal .btn-cancel:hover {
   background: var(--btn-bg-hover, light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.2)));
+}
+
+/* Keyboard-focus ring shared by dialog action buttons. */
+.dialog-modal :is(.btn-primary, .btn-confirm, .btn-run, .btn-cancel):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* Error messages */
@@ -230,7 +237,7 @@
   color: var(--text-color-dim, light-dark(#9ca3af, #484f58));
   background: light-dark(rgba(0, 0, 0, 0.02), rgba(255, 255, 255, 0.03));
   border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 20px;
   text-align: center;
 }
@@ -248,7 +255,7 @@
 .dialog-modal .drop-zone {
   border: 2px dashed var(--dialog-border, light-dark(#d1d5db, #404040));
   background: var(--input-bg, light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05)));
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   transition: all 0.2s;
 }
 
@@ -288,9 +295,9 @@
 .dialog-modal .file-row {
   background: var(--input-bg, light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05)));
   border: 1px solid var(--dialog-border, light-dark(#d1d5db, #404040));
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: var(--text-color, light-dark(#374151, #eee));
-  transition: border-color 0.15s;
+  transition: border-color var(--transition-base);
 }
 
 .dialog-modal .list-item:hover,
