@@ -127,10 +127,15 @@ export const parse_xyz_trajectory = (content: string): TrajectoryType => {
     if (forces.length > 0) {
       metadata.forces = forces
       const magnitudes = forces.map((force) => Math.hypot(...force))
-      metadata.force_max = Math.max(...magnitudes)
+      // Exclude fully-fixed atoms (move_mask=false) from the reported max/RMS so the
+      // force curve tracks the free atoms actually being relaxed, not a large
+      // constraint reaction on a frozen atom.
+      const free = magnitudes.filter((_, i) => move_mask.length === 0 || move_mask[i] !== false)
+      const mags = free.length > 0 ? free : magnitudes
+      metadata.force_max = Math.max(...mags)
       // Calculate RMS (root mean square) of force magnitudes
       metadata.force_norm = Math.sqrt(
-        magnitudes.reduce((sum, mag) => sum + mag ** 2, 0) / magnitudes.length,
+        mags.reduce((sum, mag) => sum + mag ** 2, 0) / mags.length,
       )
     }
     frames.push(

@@ -121,6 +121,14 @@ export function compute_force_data(
   const all_forces = structure_sites
     .map((site) => {
       if (!site.properties?.force || !Array.isArray(site.properties.force)) return null
+      // Skip fully-constrained atoms. VASP still prints a (often large) force on
+      // fixed atoms, but it's a constraint reaction, not a relaxation force — it
+      // must not dominate the max/range/arrow display. Fixed atoms arrive either as
+      // selective_dynamics [F,F,F] (POSCAR/CONTCAR) or move_mask=false (trajectory
+      // frames from extxyz / vasprun.xml).
+      const sd = site.properties?.selective_dynamics as [boolean, boolean, boolean] | undefined
+      if (sd && sd[0] === false && sd[1] === false && sd[2] === false) return null
+      if (site.properties?.move_mask === false) return null
       const force = site.properties.force as Vec3
       const magnitude = Math.sqrt(force[0] ** 2 + force[1] ** 2 + force[2] ** 2)
       const majority_element = site.species.reduce((max, spec) =>

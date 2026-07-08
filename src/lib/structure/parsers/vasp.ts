@@ -371,7 +371,26 @@ export function count_vasprun_ionic_steps(content: string): number {
   return count
 }
 
-// Parse all frames from vasprun.xml as multi-frame XYZ string (for trajectory player)
+/** Direct children of `el` with the given lowercase tag name (XML is case-sensitive). */
+function direct_children(el: Element, tag: string): Element[] {
+  return Array.from(el.children).filter((c) => c.tagName === tag)
+}
+
+/** First direct child matching tag (+ optional name="…"), or null. */
+function direct_child(el: Element, tag: string, name?: string): Element | null {
+  for (const c of direct_children(el, tag)) {
+    if (name === undefined || c.getAttribute(`name`) === name) return c
+  }
+  return null
+}
+
+// Parse all frames from vasprun.xml as a multi-frame extended-XYZ string for the
+// trajectory player. Unlike a bare position dump, each frame carries the ionic
+// energy (`energy=` in the comment → energy curve), per-atom forces
+// (`forces:R:3` columns → force curve + arrows), and — when the run used
+// selective dynamics — a `move_mask:L:1` column (T=free, F=fully fixed) so the
+// viewer can exclude constrained atoms from the max-force display. vasprun.xml is
+// the one file that carries positions + forces + constraints + energy together.
 export function parse_vasprun_trajectory(content: string): string | null {
   try {
     const parser = new DOMParser()
@@ -389,41 +408,86 @@ export function parse_vasprun_trajectory(content: string): string | null {
       }
     }
     if (elements.length === 0) return null
+    const n = elements.length
 
-    // Collect all structures from <calculation> blocks
-    const structures = doc.querySelectorAll(`calculation > structure`)
-    if (structures.length < 2) return null
+    // Selective dynamics (constant across frames) lives on the initial structure.
+    // move_mask token: T when the atom can move in ANY direction (not fully fixed),
+    // F when constrained in all three — matching the "exclude only F F F" rule.
+    let move_mask: string[] | null = null
+    const init_struct = doc.querySelector(`structure[name="initialpos"]`)
+      ?? doc.querySelector(`structure[name="initial_positions"]`)
+    const sel_varray = init_struct
+      ? direct_child(init_struct, `varray`, `selective`)
+      : null
+    if (sel_varray) {
+      const flags = direct_children(sel_varray, `v`)
+      if (flags.length === n) {
+        move_mask = flags.map((v) => {
+          const toks = (v.textContent ?? ``).trim().split(/\s+/)
+          return toks.some((tkn) => tkn.toUpperCase().startsWith(`T`)) ? `T` : `F`
+        })
+      }
+    }
 
+    const calcs = Array.from(doc.querySelectorAll(`calculation`))
+    if (calcs.length < 2) return null
+
+    const props = `species:S:1:pos:R:3:forces:R:3` + (move_mask ? `:move_mask:L:1` : ``)
     const frames: string[] = []
-    for (const struct_el of structures) {
-      const crystal = struct_el.querySelector(`crystal`)
-      if (!crystal) continue
-      const basis_varray = crystal.querySelector(`varray[name="basis"]`)
+
+    for (const calc of calcs) {
+      const struct_el = direct_child(calc, `structure`)
+      if (!struct_el) continue
+      const crystal = direct_child(struct_el, `crystal`)
+      const basis_varray = crystal ? direct_child(crystal, `varray`, `basis`) : null
       if (!basis_varray) continue
-      const basis_vs = basis_varray.querySelectorAll(`v`)
+      const basis_vs = direct_children(basis_varray, `v`)
       if (basis_vs.length < 3) continue
-      const matrix: number[][] = []
-      for (let i = 0; i < 3; i++) {
-        matrix.push(basis_vs[i].textContent!.trim().split(/\s+/).map(Number))
+      const matrix = basis_vs.slice(0, 3).map((v) =>
+        (v.textContent ?? ``).trim().split(/\s+/).map(Number)
+      )
+
+      const pos_varray = direct_child(struct_el, `varray`, `positions`)
+      const pos_vs = pos_varray ? direct_children(pos_varray, `v`) : []
+      if (pos_vs.length !== n) continue
+
+      // Forces (Cartesian, eV/Å) for this ionic step.
+      const force_varray = direct_child(calc, `varray`, `forces`)
+      const force_vs = force_varray ? direct_children(force_varray, `v`) : []
+      const forces = force_vs.length === n
+        ? force_vs.map((v) => (v.textContent ?? ``).trim().split(/\s+/).map(Number))
+        : null
+
+      // Ionic energy: prefer free energy (matches OSZICAR F / TOTEN), then E(sigma→0).
+      const energy_el = direct_child(calc, `energy`)
+      let energy: number | null = null
+      if (energy_el) {
+        for (const key of [`e_fr_energy`, `e_0_energy`, `e_wo_entrp`]) {
+          const i_el = direct_child(energy_el, `i`, key)
+          const val = i_el ? Number((i_el.textContent ?? ``).trim()) : NaN
+          if (Number.isFinite(val)) { energy = val; break }
+        }
       }
 
-      const pos_varray = struct_el.querySelector(`varray[name="positions"]`)
-      if (!pos_varray) continue
-      const pos_vs = pos_varray.querySelectorAll(`v`)
-      if (pos_vs.length !== elements.length) continue
-
-      // Build extended XYZ frame
-      const frame_lines: string[] = []
-      frame_lines.push(String(elements.length))
-      // Lattice line for extxyz
       const lat = matrix.flat().map((v) => v.toFixed(8)).join(` `)
-      frame_lines.push(`Lattice="${lat}" Properties=species:S:1:pos:R:3 pbc="T T T"`)
-      for (let i = 0; i < elements.length; i++) {
-        const abc = pos_vs[i].textContent!.trim().split(/\s+/).map(Number)
+      const energy_tag = energy !== null ? ` energy=${energy}` : ``
+      const frame_lines: string[] = [
+        String(n),
+        `Lattice="${lat}" Properties=${props}${energy_tag} pbc="T T T"`,
+      ]
+      for (let i = 0; i < n; i++) {
+        const abc = (pos_vs[i].textContent ?? ``).trim().split(/\s+/).map(Number)
         const x = abc[0] * matrix[0][0] + abc[1] * matrix[1][0] + abc[2] * matrix[2][0]
         const y = abc[0] * matrix[0][1] + abc[1] * matrix[1][1] + abc[2] * matrix[2][1]
         const z = abc[0] * matrix[0][2] + abc[1] * matrix[1][2] + abc[2] * matrix[2][2]
-        frame_lines.push(`${elements[i]}  ${x.toFixed(8)}  ${y.toFixed(8)}  ${z.toFixed(8)}`)
+        const f = forces?.[i] ?? [0, 0, 0]
+        const cols = [
+          elements[i],
+          x.toFixed(8), y.toFixed(8), z.toFixed(8),
+          f[0].toFixed(8), f[1].toFixed(8), f[2].toFixed(8),
+        ]
+        if (move_mask) cols.push(move_mask[i])
+        frame_lines.push(cols.join(`  `))
       }
       frames.push(frame_lines.join(`\n`))
     }
