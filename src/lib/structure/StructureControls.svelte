@@ -891,6 +891,7 @@
       current_values={{
         cell_edge_color: lattice_props.cell_edge_color,
         cell_edge_opacity: lattice_props.cell_edge_opacity,
+        cell_edge_width: lattice_props.cell_edge_width,
         cell_surface_color: lattice_props.cell_surface_color,
         cell_surface_opacity: lattice_props.cell_surface_opacity,
         supercell_scaling,
@@ -898,6 +899,7 @@
       on_reset={() => {
         lattice_props.cell_edge_color = DEFAULTS.structure.cell_edge_color
         lattice_props.cell_edge_opacity = DEFAULTS.structure.cell_edge_opacity
+        lattice_props.cell_edge_width = DEFAULTS.structure.cell_edge_width
         lattice_props.cell_surface_color = DEFAULTS.structure.cell_surface_color
         lattice_props.cell_surface_opacity = DEFAULTS.structure.cell_surface_opacity
         supercell_scaling = `1x1x1`
@@ -991,6 +993,27 @@
           </label>
         </div>
       {/each}
+      <div class="pane-row">
+        <label {@attach tooltip({
+          content: SETTINGS_CONFIG.structure.cell_edge_width.description,
+        })}>
+          {t('structure.edge_width')}
+          <input
+            type="number"
+            min={SETTINGS_CONFIG.structure.cell_edge_width.minimum}
+            max={SETTINGS_CONFIG.structure.cell_edge_width.maximum}
+            step={0.1}
+            bind:value={lattice_props.cell_edge_width}
+          />
+          <input
+            type="range"
+            min={SETTINGS_CONFIG.structure.cell_edge_width.minimum}
+            max={SETTINGS_CONFIG.structure.cell_edge_width.maximum}
+            step={0.1}
+            bind:value={lattice_props.cell_edge_width}
+          />
+        </label>
+      </div>
     </SettingsSection>
   {/if}
 

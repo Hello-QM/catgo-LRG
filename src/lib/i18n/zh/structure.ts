@@ -48,6 +48,7 @@ const structure: Record<string, string> = {
   supercell_scaling: `超胞缩放`,
   generating_supercell: `正在生成超胞...`,
   edge_color: `边缘颜色`,
+  edge_width: `边线宽度`,
   surface_color: `表面颜色`,
   surface: `表面`,
   edges: `边`,

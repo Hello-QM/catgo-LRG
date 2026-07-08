@@ -48,6 +48,7 @@ const structure: Record<string, string> = {
   supercell_scaling: `Supercell Scaling`,
   generating_supercell: `Generating supercell...`,
   edge_color: `Edge color`,
+  edge_width: `Edge width`,
   surface_color: `Surface color`,
   surface: `Surface`,
   edges: `Edges`,
