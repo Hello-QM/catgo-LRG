@@ -479,7 +479,6 @@
     atom_outline_strength = DEFAULTS.structure.atom_outline_strength,
     bond_outline_strength = DEFAULTS.structure.bond_outline_strength,
     ambient_occlusion = DEFAULTS.structure.ambient_occlusion,
-    depth_of_field = DEFAULTS.structure.depth_of_field,
     // Master gate for the composer (parent ANDs the setting with
     // !large_system_mode / !trajectory playback and flips <Canvas autoRender>).
     postprocessing_active = false,
@@ -748,7 +747,6 @@
     atom_outline_strength?: number
     bond_outline_strength?: number
     ambient_occlusion?: boolean // GTAO screen-space AO (composer)
-    depth_of_field?: boolean // bokeh DoF (composer, opt-in)
     postprocessing_active?: boolean // master gate: composer takes over rendering
     render_style?: RenderStyle // material/shading style for atoms (glossy | matte | toon)
     light_azimuth?: number // headlamp azimuth in degrees (view-space) — legacy flat fallback seed
@@ -5302,7 +5300,7 @@
 
 <SceneLighting directional={active_directional_light} ambient={active_ambient_light} />
 {#if postprocessing_active}
-  <PostProcessing ao={ambient_occlusion} dof={depth_of_field} />
+  <PostProcessing ao={ambient_occlusion} />
 {/if}
 
 <!-- Invisible background mesh to catch clicks on empty space -->

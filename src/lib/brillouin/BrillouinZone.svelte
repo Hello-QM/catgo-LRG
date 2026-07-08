@@ -7,6 +7,7 @@
   import type { PymatgenStructure } from '$lib/structure'
   import { parse_any_structure } from '$lib/structure/parse'
   import { Canvas } from '@threlte/core'
+  import { ACESFilmicToneMapping } from 'three'
   import type { ComponentProps, Snippet } from 'svelte'
   import { untrack } from 'svelte'
   import { tooltip } from 'svelte-multiselect/attachments'
@@ -345,7 +346,7 @@
 
     {#if typeof WebGLRenderingContext !== `undefined`}
       <div style="overflow: hidden; height: 100%">
-        <Canvas>
+        <Canvas toneMapping={ACESFilmicToneMapping}>
           <BrillouinZoneScene
             {bz_data}
             {surface_color}

@@ -15,24 +15,20 @@
   import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
   import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
   import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js'
-  import { BokehPass } from 'three/examples/jsm/postprocessing/BokehPass.js'
   import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 
   interface Props {
     // Enable GTAO ambient occlusion.
     ao?: boolean
-    // Enable bokeh depth-of-field (requires the composer, so ao || dof mounts it).
-    dof?: boolean
     // GTAO strength (0..1-ish blend over the beauty pass).
     ao_intensity?: number
   }
-  let { ao = true, dof = false, ao_intensity = 1.0 }: Props = $props()
+  let { ao = true, ao_intensity = 1.0 }: Props = $props()
 
   const threlte = useThrelte()
 
   let composer: EffectComposer | undefined
   let gtao_pass: GTAOPass | undefined
-  let bokeh_pass: BokehPass | undefined
 
   function viewport_size(): [number, number] {
     const el = threlte.renderer?.domElement
@@ -49,7 +45,6 @@
     const camera = threlte.camera.current
     const [width, height] = viewport_size()
     void ao
-    void dof
     void ao_intensity
     if (!renderer || !scene || !camera) return
 
@@ -69,16 +64,6 @@
       gtao_pass = gtao
     }
 
-    if (dof) {
-      const bokeh = new BokehPass(scene, camera, {
-        focus: 40,
-        aperture: 0.00025,
-        maxblur: 0.01,
-      })
-      next.addPass(bokeh)
-      bokeh_pass = bokeh
-    }
-
     // OutputPass must be last: it applies the renderer's tone mapping (ACES) and
     // sRGB conversion that Threlte would otherwise do on a direct render.
     next.addPass(new OutputPass())
@@ -90,7 +75,6 @@
       next.dispose()
       composer = undefined
       gtao_pass = undefined
-      bokeh_pass = undefined
     }
   })
 
@@ -100,7 +84,6 @@
     if (!composer) return
     composer.setSize(width, height)
     gtao_pass?.setSize(width, height)
-    bokeh_pass?.setSize(width, height)
     threlte.invalidate()
   })
 

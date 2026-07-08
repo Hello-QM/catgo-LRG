@@ -451,11 +451,6 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description:
         `Screen-space ambient occlusion — darkens crevices between packed atoms for extra depth. Higher GPU cost; auto-disabled for very large systems and trajectory playback.`,
     },
-    depth_of_field: {
-      value: false,
-      description:
-        `Depth-of-field (bokeh) blur. Off by default — blurs atoms (bad for analysis), useful for presentation / hero renders. Requires ambient occlusion (shares the post-processing pass).`,
-    },
     render_style: {
       value: `glossy` as const,
       description:

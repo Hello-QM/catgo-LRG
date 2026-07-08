@@ -2177,14 +2177,12 @@
   // Task 9: experimental WebGPU large-system render path. Default OFF — when
   // off the overlay renders nothing and the WebGL viewer is unchanged.
   let large_system_mode = $state(false)
-  // Post-processing (GTAO / bokeh) takes over rendering via an EffectComposer.
+  // Post-processing (GTAO ambient occlusion) takes over rendering via an EffectComposer.
   // Gate it on the settings AND off for large systems, where the extra passes
   // would hurt performance. When active the <Canvas> stops auto-rendering so the
   // composer is the sole renderer.
   let postprocessing_active = $derived(
-    ((scene_props?.ambient_occlusion ?? false) ||
-      (scene_props?.depth_of_field ?? false)) &&
-      !large_system_mode,
+    (scene_props?.ambient_occlusion ?? false) && !large_system_mode,
   )
   // Whether WebGPU can actually run here (a real adapter is obtainable, not just
   // navigator.gpu existing). Optimistic until the async probe resolves; gates the

@@ -205,9 +205,6 @@ export interface SettingsConfig {
      *  crevices between packed atoms for depth flat lighting can't fake.
      *  Auto-disabled for very large systems / trajectory playback. */
     ambient_occlusion: SettingType<boolean>
-    /** Depth-of-field (bokeh) post-processing. Off by default — it blurs atoms,
-     *  which hurts analysis; useful for presentation / hero renders. */
-    depth_of_field: SettingType<boolean>
     /** Material/shading style for atoms (orthogonal to color_scheme palette).
      *  glossy = current default specular look (byte-identical to legacy);
      *  matte = flat diffuse; toon = 3-band cel/cartoon shading. */

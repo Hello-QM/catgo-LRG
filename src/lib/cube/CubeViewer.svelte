@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Canvas } from '@threlte/core'
+  import { ACESFilmicToneMapping } from 'three'
   import CubeScene from './CubeScene.svelte'
   import CubeControls from './CubeControls.svelte'
   import type { CubeState, IsosurfaceResult, CubeMesh, CubeAtom } from './api'
@@ -155,7 +156,7 @@
 
 <div class="cube-viewer">
   <div class="scene-container">
-    <Canvas>
+    <Canvas toneMapping={ACESFilmicToneMapping}>
       <CubeScene
         {positive_mesh}
         {negative_mesh}

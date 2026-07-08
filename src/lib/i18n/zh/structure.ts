@@ -33,7 +33,6 @@ const structure: Record<string, string> = {
   render_style_flat: `2D 平面`,
   render_style_toon: `卡通`,
   ambient_occlusion: `环境光遮蔽`,
-  depth_of_field: `景深虚化`,
   labels: `标签`,
   color: `颜色`,
   size: `大小`,
