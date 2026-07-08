@@ -1,0 +1,96 @@
+name: pypi-publish
+
+# Build the frontend, bundle it into the `catgo` wheel, and publish to PyPI.
+# Triggers on a published GitHub Release, or manually via workflow_dispatch.
+#
+# Auth: set the `PYPI_API_TOKEN` repo secret (a PyPI project/API token). Or drop
+# the `password:` line and configure Trusted Publishing (OIDC) on the PyPI
+# project — the `id-token: write` permission below already enables it.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build the wheel but do not publish'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write   # required for PyPI Trusted Publishing (OIDC)
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'pnpm'
+
+      - name: Setup Rust (+ wasm target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install JS deps
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Build WASM crates
+        run: |
+          if ! command -v wasm-pack &> /dev/null; then
+            curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+          fi
+          cd extensions/rust
+          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
+          cd ../chgdiff-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
+          cd ../catrender-wasm
+          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+
+      - name: Build doc chunks
+        run: pnpm run build:doc-chunks
+
+      - name: Build static SPA
+        run: pnpm desktop:build
+
+      - name: Bundle SPA into the Python package
+        run: node scripts/bundle-web.mjs
+
+      - name: Build wheel
+        # Wheel only — the bundled SPA (catgo/web) is a git-ignored artifact that
+        # an sdist would omit, and the wheel is universal (py3-none-any) anyway.
+        run: |
+          python -m pip install --upgrade build
+          cd server
+          python -m build --wheel
+
+      - name: Check artifacts
+        run: |
+          ls -lh server/dist/
+          python -m pip install --upgrade twine
+          twine check server/dist/*
+
+      - name: Publish to PyPI
+        if: ${{ github.event_name == 'release' || !inputs.dry_run }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: server/dist/
+          # Remove `password:` to use Trusted Publishing (OIDC) instead.
+          password: ${{ secrets.PYPI_API_TOKEN }}
