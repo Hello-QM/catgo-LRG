@@ -1,1 +1,0 @@
-nidorx/matcaps — MIT/CC0 (https://github.com/nidorx/matcaps). metal.png = 2A2A2A_DBDBDB_6A6A6A_949494 chrome matcap.

@@ -11,16 +11,10 @@
 // shading. Values are treated as LINEAR (the shader sRGB-encodes at the end), so
 // the texture is tagged LinearSRGBColorSpace to avoid a double sRGB decode.
 
-import { CanvasTexture, LinearSRGBColorSpace, TextureLoader, type Texture } from 'three'
-// Real chrome/steel MatCap photo (nidorx/matcaps, MIT/CC0) — a procedural
-// grayscale sphere can only ever read as plastic; a baked studio reflection is
-// what makes metal look like metal. Bundled (Vite inlines/copies it) so it stays
-// offline-safe. Grayscale, so it still tints by the per-element colour.
-import metalMatcapUrl from './matcaps/metal.png'
+import { CanvasTexture, LinearSRGBColorSpace, type Texture } from 'three'
 
 export const MATCAP_PRESETS = [
   `ceramic`,
-  `metallic`,
   `clay`,
   `glossy`,
   `pearl`,
@@ -36,9 +30,7 @@ interface PresetParams {
   vGrad: number // top-vs-bottom brightness (fakes a sky-above environment)
 }
 
-// Procedural presets. Metallic is NOT here — it uses the bundled chrome photo
-// (see get_atom_matcap); procedural grayscale spheres only ever read as plastic.
-const PARAMS: Record<Exclude<MatcapPreset, `metallic`>, PresetParams> = {
+const PARAMS: Record<MatcapPreset, PresetParams> = {
   // Soft, evenly-lit glazed sphere.
   ceramic: { ambient: 0.34, diffuse: 0.66, spec: 0.35, specExp: 48, rim: 0.14, vGrad: 0 },
   // Flat matte, no specular.
@@ -61,16 +53,6 @@ export function get_atom_matcap(
 
   // Metallic uses the bundled chrome photo, not a procedural sphere. Loads async;
   // onReady fires when the image arrives so the scene can repaint (on-demand).
-  if (key === `metallic`) {
-    const tex = new TextureLoader().load(metalMatcapUrl, () => {
-      tex.needsUpdate = true
-      onReady?.()
-    })
-    tex.colorSpace = LinearSRGBColorSpace
-    cache.set(key, tex)
-    return tex
-  }
-
   const size = 256
   // SSR / non-DOM fallback: a 1x1 white texture makes the shader multiply a
   // no-op (atom keeps its flat colour) rather than crashing.
@@ -93,7 +75,7 @@ export function get_atom_matcap(
     return t
   }
 
-  const p = PARAMS[key as Exclude<MatcapPreset, `metallic`>]
+  const p = PARAMS[key]
   const img = ctx.createImageData(size, size)
   const data = img.data
 
