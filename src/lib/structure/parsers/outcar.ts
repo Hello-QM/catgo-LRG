@@ -116,8 +116,9 @@ function magnetization_block(
 }
 
 /** Per-atom magmom: scalar (collinear, only the x table) or [mx,my,mz]
- *  (non-collinear, all three tables present). */
-function last_magnetization(
+ *  (non-collinear, all three tables present). Exported so the trajectory OUTCAR
+ *  parser can attach magmom to a relaxation's final frame too. */
+export function last_magnetization(
   lines: string[],
   n_atoms: number,
 ): (number | Vec3)[] | null {

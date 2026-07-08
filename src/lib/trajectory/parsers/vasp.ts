@@ -4,6 +4,7 @@ import type { Matrix3x3 } from '$lib/math'
 import * as math from '$lib/math'
 import type { TrajectoryFrame, TrajectoryType } from '../index'
 import { create_trajectory_frame } from './common'
+import { last_magnetization } from '$lib/structure/parsers/outcar'
 
 // A parsed XDATCAR header block: scale, lattice (already scaled), element
 // names + counts. NPT runs repeat this block before every frame; constant-cell
@@ -278,6 +279,18 @@ export const parse_vasp_outcar = (content: string, filename?: string): Trajector
   }
 
   if (frames.length === 0) throw new Error(`OUTCAR: no ionic steps found`)
+
+  // Attach per-atom magnetic moments (final converged "magnetization (x)" block,
+  // + (y)/(z) for non-collinear) to the last frame so magmom arrows show on the
+  // relaxed structure — the single-structure OUTCAR path (#481) only fires for a
+  // 1-step OUTCAR; a relaxation loads here as a trajectory.
+  const magmoms = last_magnetization(lines, n_atoms)
+  if (magmoms) {
+    const sites = frames[frames.length - 1].structure.sites
+    for (let i = 0; i < sites.length && i < magmoms.length; i++) {
+      sites[i].properties = { ...sites[i].properties, magmom: magmoms[i] }
+    }
+  }
   return {
     frames,
     metadata: {
