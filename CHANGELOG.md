@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.4] - 2026-07-08
+
+### Added
+- **Full VASP trajectory support** — `vasprun.xml`, `OUTCAR`, and `XDATCAR` open with energy and force-convergence (F<sub>max</sub>/F<sub>norm</sub>) curves. The reported max force is on the **free** atoms, not a frozen atom's constraint reaction, and fixed atoms show their selective-dynamics rings. `OUTCAR`/`XDATCAR` carry no constraint info, so it's pulled from a sibling `CONTCAR`/`POSCAR` (remote via the SSH session, local via the filesystem). `vasprun.xml` now also parses reliably on Linux/WebKitGTK and is read in full instead of truncated.
+
+### Fixed
+- **Selected-atom rotation follows the screen** — rotating selected atoms turns about the on-screen axes, not the (possibly reoriented) cell axes.
+- **Remote terminal survives full-screen programs** — `vi`/`vim`/`less`/`top`/`tmux` no longer drop the SSH connection instantly; the asyncssh PTY is binary-safe and driven on its owner loop.
+- **Terminal Ctrl+click opens remote files** — the session id is threaded through the file-open path, so an existing remote file no longer comes back "Not found".
+- **Download buttons work in the desktop app** — every export / plot / structure download now routes through the native save dialog; WebKitGTK silently ignored the old `<a download>` clicks.
+- Trajectory plot axes read as plain decimals (`0.8`, not `800m`).
+
 ## [1.4.3] - 2026-07-06
 
 ### Fixed
