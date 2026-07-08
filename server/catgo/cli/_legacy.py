@@ -26,6 +26,67 @@ def _get_port() -> int:
     return int(os.environ.get("SERVER_PORT", 0)) or 8000
 
 
+def _bundled_frontend() -> Path | None:
+    """Return the built SPA shipped inside the installed package (catgo/web),
+    if present. This is what makes `pip install catgo` show a UI."""
+    web = Path(__file__).resolve().parent.parent / "web"
+    return web if (web / "index.html").is_file() else None
+
+
+def _ensure_frontend_dir() -> Path | None:
+    """Point CATGO_FRONTEND_DIR at the bundled SPA (unless already set), so
+    main.py mounts it. Returns the resolved dir (or None if no UI is bundled)."""
+    existing = os.environ.get("CATGO_FRONTEND_DIR")
+    if existing:
+        return Path(existing) if Path(existing, "index.html").is_file() else None
+    web = _bundled_frontend()
+    if web:
+        os.environ["CATGO_FRONTEND_DIR"] = str(web)
+    return web
+
+
+# ──────────────────────────────────────────────
+# catgo (bare) / catgo app — launch the UI
+# ──────────────────────────────────────────────
+
+def cmd_app(args) -> int:
+    """Launch CatGo: start the backend and open the web UI in a browser.
+
+    This is what bare `catgo` runs. The SPA is served same-origin by the
+    FastAPI backend (default port 8000, matching the built bundle's API URL)."""
+    import threading
+    import time
+    import webbrowser
+
+    _ensure_sys_path()
+    web = _ensure_frontend_dir()
+    port = getattr(args, "port", 0) or _get_port()
+    host = getattr(args, "host", None) or "127.0.0.1"
+    url = f"http://localhost:{port}"
+
+    if web is None:
+        print("⚠  No bundled web UI found (catgo/web/index.html missing).")
+        print("   Serving the API only — run a dev frontend, or reinstall a")
+        print("   release wheel that bundles the UI. Continuing with API at")
+        print(f"   {url}/api")
+    else:
+        print(f"CatGo — starting at {url}")
+
+    if web is not None and not getattr(args, "no_browser", False):
+        def _open() -> None:
+            time.sleep(1.8)  # give uvicorn a moment to bind
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        threading.Thread(target=_open, daemon=True).start()
+
+    import uvicorn
+    print(f"  (Ctrl-C to stop)")
+    uvicorn.run("main:app", host=host, port=port)
+    return 0
+
+
 # ──────────────────────────────────────────────
 # catgo serve
 # ──────────────────────────────────────────────
@@ -33,6 +94,7 @@ def _get_port() -> int:
 def cmd_serve(args):
     """Start the CatGo backend server."""
     _ensure_sys_path()
+    _ensure_frontend_dir()
     port = args.port or _get_port()
 
     if args.daemon:

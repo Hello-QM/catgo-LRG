@@ -7,8 +7,16 @@ from __future__ import annotations
 import sys
 
 from catgo.cli._legacy import (
-    cmd_serve, cmd_setup, cmd_status, cmd_stop,
+    cmd_app, cmd_serve, cmd_setup, cmd_status, cmd_stop,
 )
+
+
+def cmd_shell(args):
+    """Interactive CatGo REPL (was the bare-`catgo` behaviour before the app
+    launcher took that slot)."""
+    from catgo.cli.shell import InteractiveShell
+    InteractiveShell(no_autostart=getattr(args, "no_autostart", False)).run()
+    return 0
 
 
 def _build_legacy_parser():
@@ -29,6 +37,20 @@ def _build_legacy_parser():
     p_serve.add_argument("--daemon", action="store_true", help="Run as background daemon (Unix only)")
     p_serve.add_argument("--reload", action="store_true", help="Enable auto-reload (dev mode)")
     p_serve.set_defaults(func=cmd_serve)
+
+    p_app = sub.add_parser(
+        "app", aliases=["web"],
+        help="Launch the CatGo web UI (start the backend + open a browser)")
+    p_app.add_argument("--port", type=int, default=0, help="Port (default: 8000)")
+    p_app.add_argument("--host", default=None, help="Host (default: 127.0.0.1)")
+    p_app.add_argument(
+        "--no-browser", action="store_true", dest="no_browser",
+        help="Start the server but don't open a browser")
+    p_app.set_defaults(func=cmd_app)
+
+    p_shell = sub.add_parser(
+        "shell", help="Interactive CatGo REPL (the old bare-`catgo` shell)")
+    p_shell.set_defaults(func=cmd_shell)
 
     p_setup = sub.add_parser("setup", help="Configure MCP for Claude Code")
     p_setup.add_argument("--port", type=int, default=0, help="API port (default: 8000)")
@@ -230,9 +252,11 @@ def main(argv: list[str] | None = None) -> None:
     parser, sub = _build_legacy_parser()
     _add_op_subparsers(sub)
     if not effective:
-        from catgo.cli.shell import InteractiveShell
-        InteractiveShell(no_autostart=no_auto).run()
-        return
+        # Bare `catgo` launches the app (backend + browser). The interactive
+        # REPL moved to `catgo shell`.
+        import argparse as _argparse
+        raise SystemExit(
+            cmd_app(_argparse.Namespace(port=0, host=None, no_browser=False)))
     # Passthrough subcommands: their tail is forwarded verbatim to a launcher and may
     # LEAD with an option (e.g. `catgo freq-inputs --structure ...`), which argparse
     # REMAINDER mishandles. Dispatch them directly, before the top-level parser.

@@ -3,9 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "catgo-engine"
+name = "catgo"
 version = "0.1.0"
-description = "CatGo — Computational Chemistry Workflow Engine with MCP integration"
+description = "CatGo — AI-driven workbench for computational materials science (3D viewer + workflow engine + MCP)"
+readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
 authors = [
@@ -63,3 +64,9 @@ catgo = "catgo.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["catgo"]
+# The built SPA (catgo/web/**) is a generated, git-ignored artifact copied in by
+# scripts/bundle-web.mjs before `python -m build`. Whitelist it so the wheel ships
+# a working UI — without this, `pip install catgo` would have no frontend.
+artifacts = [
+    "catgo/web/**/*",
+]

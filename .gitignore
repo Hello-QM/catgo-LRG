@@ -92,3 +92,4 @@ repro-*.jpeg
 repro-*.png
 server/catgo/data/
 .understand-anything/
+server/catgo/web/
