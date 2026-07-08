@@ -228,6 +228,13 @@ export async function parse_trajectory_data(
       const { parse_vasprun_trajectory } = await import(`$lib/structure/parse`)
       const extxyz = parse_vasprun_trajectory(content)
       if (extxyz) return parse_xyz_trajectory(extxyz)
+      // Detected a vasprun but produced no frames — surface WHY (truncated read
+      // vs parse failure) instead of the generic "Unsupported text format".
+      const calcs = (content.match(/<calculation/g) || []).length
+      const tail = content.slice(-30).replace(/\s+/g, ` `)
+      throw new Error(
+        `vasprun parse produced no frames: bytes=${content.length}, calcs=${calcs}, tail="${tail}"`,
+      )
     }
 
     // Single XYZ fallback

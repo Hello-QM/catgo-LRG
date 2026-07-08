@@ -393,8 +393,13 @@ function direct_child(el: Element, tag: string, name?: string): Element | null {
 // the one file that carries positions + forces + constraints + energy together.
 export function parse_vasprun_trajectory(content: string): string | null {
   try {
+    // Strip the `<?xml … encoding="ISO-8859-1"?>` prolog + any BOM before parsing.
+    // The JS string is already Unicode, so WebKitGTK's DOMParser can reject the
+    // (now-false) byte-encoding declaration with a parsererror — jsdom ignores it.
+    // We only need the element tree, so the prolog is safe to drop.
+    const xml = content.replace(/^﻿?\s*<\?xml[^>]*\?>\s*/i, ``)
     const parser = new DOMParser()
-    const doc = parser.parseFromString(content, `text/xml`)
+    const doc = parser.parseFromString(xml, `text/xml`)
     if (doc.querySelector(`parsererror`)) return null
     if (doc.documentElement.tagName !== `modeling`) return null
 
