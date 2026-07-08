@@ -3675,7 +3675,10 @@
   .sample-preview {
     flex: 1;
     min-height: 0;
-    background: var(--surface-bg, rgba(15, 23, 42, 0.8));
+    /* Match the app page background (theme-aware) rather than the lighter
+       surface colour, so the 3D preview blends with the theme instead of
+       reading as a pale box — noticeable in dark themes. */
+    background: var(--page-bg, rgba(15, 23, 42, 0.8));
     border-radius: 11px 11px 0 0;
     overflow: hidden;
   }
