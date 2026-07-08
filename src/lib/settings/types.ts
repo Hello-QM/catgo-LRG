@@ -201,10 +201,6 @@ export interface SettingsConfig {
     depth_cue_end: SettingType<number>
     atom_outline_strength: SettingType<number>
     bond_outline_strength: SettingType<number>
-    /** Screen-space ambient occlusion (GTAO) via an EffectComposer pass. Darkens
-     *  crevices between packed atoms for depth flat lighting can't fake.
-     *  Auto-disabled for very large systems / trajectory playback. */
-    ambient_occlusion: SettingType<boolean>
     /** Material/shading style for atoms (orthogonal to color_scheme palette).
      *  glossy = current default specular look (byte-identical to legacy);
      *  matte = flat diffuse; toon = 3-band cel/cartoon shading. */

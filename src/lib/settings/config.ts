@@ -443,14 +443,6 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 0,
       maximum: 1,
     },
-    ambient_occlusion: {
-      // Screen-space ambient occlusion (GTAO). Off by default until validated
-      // live on the target GPU; it routes rendering through an EffectComposer,
-      // and auto-disables for large systems / trajectory playback.
-      value: false,
-      description:
-        `Screen-space ambient occlusion — darkens crevices between packed atoms for extra depth. Higher GPU cost; auto-disabled for very large systems and trajectory playback.`,
-    },
     render_style: {
       value: `glossy` as const,
       description:

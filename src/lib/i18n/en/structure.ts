@@ -32,7 +32,6 @@ const structure: Record<string, string> = {
   render_style_soft: `2.5D`,
   render_style_flat: `2D Flat`,
   render_style_toon: `Toon`,
-  ambient_occlusion: `Ambient occlusion`,
   labels: `Labels`,
   color: `Color`,
   size: `Size`,
