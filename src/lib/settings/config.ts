@@ -106,14 +106,15 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     },
   },
   background_color: {
-    // Off-white publication-figure default. A light, opaque viewport (dark app
-    // chrome around a bright figure) reads as premium and makes atom colors
-    // pop; users who want the old transparent/dark viewport can set opacity 0.
-    value: `#f5f6f8`,
+    // Transparent by default (opacity 0 below) so the viewport follows the app
+    // theme instead of being locked to one colour. An off-white like #f5f6f8 at
+    // opacity 1 gives the light publication-figure look, but that is opt-in via
+    // the Background controls — not forced.
+    value: `#000000`,
     description: `Background color of the 3D viewport`,
   },
   background_opacity: {
-    value: 1,
+    value: 0,
     description: `Opacity of the background (0.0 = transparent, 1.0 = opaque)`,
     minimum: 0,
     maximum: 1,
