@@ -109,6 +109,17 @@ body {
   color: var(--text-color);
   line-height: 1.5;
 }
+
+/* svelte-multiselect's `@attach tooltip` appends `.custom-tooltip` to <body>
+   with an inline `z-index: 9999`, which loses to the structure viewer's panes
+   and overlays (z-index ~1e8, see DraggablePane / Structure.svelte). That traps
+   tooltips *behind* the controls pane. Raise them above the pane stack so they
+   always read on top. `!important` is required to beat the library's inline
+   style. */
+.custom-tooltip,
+.custom-tooltip-arrow {
+  z-index: 2000000000 !important;
+}
 main {
   margin: auto;
   margin-bottom: 3em;
