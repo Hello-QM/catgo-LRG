@@ -1384,6 +1384,39 @@
     p.bio_format = e.bio_format
     ts.active_leaf_id = leaf_id
     update_tab_label(tab_id)
+    // OUTCAR/XDATCAR carry no fixed-atom info — pull selective dynamics from a
+    // sibling CONTCAR/POSCAR in the same dir and stamp it on the trajectory
+    // (async, mutates the reactive trajectory in place).
+    if (e.is_trajectory && remote_origin) {
+      void attach_vasp_constraints(p, remote_origin, e.filename)
+    }
+  }
+
+  /** For a remote OUTCAR/XDATCAR (no inline constraints), fetch the sibling
+   *  CONTCAR/POSCAR and stamp its selective dynamics onto the trajectory. */
+  async function attach_vasp_constraints(
+    p: PaneState,
+    origin: { session_id: string; file_path: string },
+    filename: string,
+  ) {
+    const traj = p.trajectory as TrajectoryType | null
+    if (!traj?.frames?.length) return
+    if (!/outcar|xdatcar/i.test(filename)) return
+    const { has_constraints, move_mask_from_poscar, apply_move_mask } = await import(
+      `$lib/trajectory/vasp-constraints`
+    )
+    if (has_constraints(traj)) return // vasprun already carries them
+    const dir = origin.file_path.replace(/[/\\][^/\\]*$/, ``)
+    const { readRemoteFile } = await import(`$lib/api/hpc`)
+    for (const name of [`CONTCAR`, `POSCAR`]) {
+      try {
+        const r = await readRemoteFile(origin.session_id, `${dir}/${name}`, 0)
+        if (r?.success && r.content) {
+          const mask = move_mask_from_poscar(r.content)
+          if (mask && apply_move_mask(traj, mask)) return
+        }
+      } catch { /* try next sibling */ }
+    }
   }
 
   /**
