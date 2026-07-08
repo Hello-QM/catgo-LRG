@@ -128,7 +128,15 @@ export const create_structure = (
     const properties: Record<string, unknown> = force_data?.[idx]
       ? { force: force_data[idx] as Vec3 }
       : {}
-    if (move_mask) properties.move_mask = move_mask[idx]
+    if (move_mask) {
+      properties.move_mask = move_mask[idx]
+      // Also expose as selective dynamics so the frozen-atom indicators (rings),
+      // exporters, and every consumer that reads selective_dynamics (not just
+      // move_mask) see the constraint. move_mask=false → fully fixed [F,F,F].
+      properties.selective_dynamics = move_mask[idx]
+        ? [true, true, true]
+        : [false, false, false]
+    }
     return {
       species: [{ element: elements[idx], occu: 1, oxidation_state: 0 }],
       abc,
