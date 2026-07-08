@@ -245,8 +245,10 @@
         vec2 offset = vQuadCoord * vRadius * 1.05;
         float d2 = dot(offset, offset);
         float r2 = vRadius * vRadius;
-        float aa = fwidth(d2);
-        coverage = 1.0 - smoothstep(r2 - aa, r2 + aa, d2);
+        // Analytic 1px-wide edge coverage on the RADIAL distance (not d², whose
+        // fast edge derivative gave a ~4px band that read as a white halo).
+        float d = length(offset);
+        coverage = clamp((vRadius - d) / fwidth(d) + 0.5, 0.0, 1.0);
         if (coverage <= 0.0) discard;
         float thc = sqrt(max(r2 - min(d2, r2), 0.0));
         // Hit point: fragment XY, sphere front Z
@@ -260,8 +262,9 @@
         vec3 cr = cross(vCenter, rayDir);
         float d2 = dot(cr, cr);
         float r2 = vRadius * vRadius;
-        float aa = fwidth(d2);
-        coverage = 1.0 - smoothstep(r2 - aa, r2 + aa, d2);
+        // Analytic 1px-wide edge coverage on the RADIAL distance (see ortho).
+        float d = sqrt(d2);
+        coverage = clamp((vRadius - d) / fwidth(d) + 0.5, 0.0, 1.0);
         if (coverage <= 0.0) discard;
 
         float tca = dot(vCenter, rayDir);
