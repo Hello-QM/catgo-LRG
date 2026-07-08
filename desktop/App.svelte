@@ -3099,7 +3099,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-family: var(--font-sans);
   }
 
   :global(body) {

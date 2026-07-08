@@ -319,7 +319,7 @@
     background: rgba(13, 17, 23, 0.96);
     backdrop-filter: blur(16px);
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 255, 247, 0.08);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: var(--font-sans);
     color: var(--text-color, #ccc);
     pointer-events: auto;
   }

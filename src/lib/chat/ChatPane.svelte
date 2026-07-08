@@ -1985,7 +1985,7 @@ import { is_client_direct, normalize_provider_base_url, relay_fetch } from './pr
     background: var(--pane-bg, light-dark(rgb(229, 231, 235), rgb(28, 29, 33)));
     border-left: 1px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-family: var(--font-sans);
     font-size: 14px;
   }
 
