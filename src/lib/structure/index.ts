@@ -614,6 +614,17 @@ export function align_to_principal_axes(structure: AnyStructure): AnyStructure {
     [axes[0][2], axes[1][2], axes[2][2]],
   ]
 
+  // Principal axes are sign-ambiguous — the eigenvector signs can turn the
+  // molecule upside-down. If the original +z direction ends up pointing down,
+  // rotate 180° about the new x-axis (still principal-axes aligned) so the
+  // molecule keeps its input vertical orientation.
+  if (R[2][2] < 0) {
+    for (let j = 0; j < 3; j++) {
+      R[1][j] = -R[1][j]
+      R[2][j] = -R[2][j]
+    }
+  }
+
   // Transform each site (molecules only - no lattice)
   const new_sites = structure.sites.map((site) => {
     // Translate to center of mass

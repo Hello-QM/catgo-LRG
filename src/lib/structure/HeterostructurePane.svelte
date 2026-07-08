@@ -139,9 +139,27 @@
   // Saved from build result: original film + how many substrate atoms
   let gs_film_snapshot = $state<PymatgenStructure | null>(null)
   let gs_n_atoms_substrate = $state(0)
+  // The built heterostructure the scan shifts — scans stay relative to the
+  // build even after an entry is applied or the viewer structure changes
+  let gs_hetero_snapshot = $state<PymatgenStructure | null>(null)
 
   // -- Shared state --
   let original_substrate = $state<PymatgenStructure | undefined>(undefined)
+
+  // Structures produced by builds / grid-scan shifts. Rebuilding must not feed
+  // one of these back in as the substrate (interface-on-interface garbage).
+  const built_outputs = new WeakSet<object>()
+
+  function substrate_for_build(): PymatgenStructure | undefined {
+    if (structure && built_outputs.has(structure) && original_substrate) return original_substrate
+    return structure
+  }
+
+  function mark_built(raw: PymatgenStructure) {
+    built_outputs.add(raw)
+    // $state reads may hand back a proxy of the assigned object — track both
+    if (structure) built_outputs.add(structure)
+  }
   let search_status = $state<`idle` | `searching` | `done` | `error`>(`idle`)
   let build_status = $state<`idle` | `building` | `done` | `error`>(`idle`)
   let error_message = $state<string | null>(null)
@@ -206,14 +224,15 @@
 
   // -- Slab mode: ZSL search --
   async function do_search() {
-    if (!structure || !film_structure) return
+    const substrate = substrate_for_build()
+    if (!substrate || !film_structure) return
 
     error_message = null
     result_message = null
     matches = []
     terminations = []
     selected_match_idx = null
-    original_substrate = structure
+    original_substrate = substrate
     search_status = `searching`
     build_status = `idle`
 
@@ -227,7 +246,7 @@
       }
 
       const result = await searchHeterostructureMatches(
-        structure,
+        substrate,
         film_structure,
         params,
         server_url,
@@ -245,7 +264,10 @@
 
   // -- Slab mode: build from selected ZSL match --
   async function do_build_slab() {
-    if (!structure || !film_structure || !selected_match) return
+    // Build from the same substrate the search ran on, not the current viewer
+    // structure (which is the built interface after the first build)
+    const substrate = original_substrate ?? substrate_for_build()
+    if (!substrate || !film_structure || !selected_match) return
 
     on_push_undo?.()
     error_message = null
@@ -270,7 +292,7 @@
       gs_film_snapshot = film_structure
 
       const result = await buildHeterostructure(
-        structure,
+        substrate,
         film_structure,
         selected_match,
         0,
@@ -280,7 +302,11 @@
       )
 
       gs_n_atoms_substrate = result.n_atoms_substrate
+      gs_hetero_snapshot = result.structure
+      gs_result = null
+      gs_selected_idx = null
       structure = result.structure
+      mark_built(result.structure)
       on_structure_change?.(result.structure)
       build_status = `done`
       result_message = result.message
@@ -333,18 +359,20 @@
 
   // -- Slab mode: manual transform build --
   async function do_build_manual() {
-    if (!structure || !film_structure) return
+    const substrate = substrate_for_build()
+    if (!substrate || !film_structure) return
 
     on_push_undo?.()
     error_message = null
     build_status = `building`
+    original_substrate = substrate
 
     try {
       // Save film snapshot for grid scan symmetry analysis
       gs_film_snapshot = film_structure
 
       const result = await buildHeterostructureManual(
-        structure,
+        substrate,
         film_structure,
         [[sub_t00, sub_t01], [sub_t10, sub_t11]],
         [[film_t00, film_t01], [film_t10, film_t11]],
@@ -356,7 +384,11 @@
       )
 
       gs_n_atoms_substrate = result.n_atoms_substrate
+      gs_hetero_snapshot = result.structure
+      gs_result = null
+      gs_selected_idx = null
       structure = result.structure
+      mark_built(result.structure)
       on_structure_change?.(result.structure)
       build_status = `done`
       result_message = result.message
@@ -368,12 +400,14 @@
 
   // -- Bulk mode: intermat one-step generate --
   async function do_build_bulk() {
-    if (!structure || !film_structure) return
+    const substrate = substrate_for_build()
+    if (!substrate || !film_structure) return
 
     on_push_undo?.()
     error_message = null
     im_result = null
     build_status = `building`
+    original_substrate = substrate
 
     try {
       const params: IntermatBuildParams = {
@@ -392,14 +426,25 @@
       }
 
       const result = await buildHeterostructureIntermat(
-        structure,
+        substrate,
         film_structure,
         params,
         server_url,
       )
 
       im_result = result
+      // Grid scan setup: the film slab as placed in the interface (film input
+      // here is a bulk crystal, so slice the film atoms out of the result)
+      gs_n_atoms_substrate = result.n_atoms_substrate
+      gs_film_snapshot = {
+        ...result.structure,
+        sites: result.structure.sites.slice(result.n_atoms_substrate),
+      }
+      gs_hetero_snapshot = result.structure
+      gs_result = null
+      gs_selected_idx = null
       structure = result.structure
+      mark_built(result.structure)
       on_structure_change?.(result.structure)
       build_status = `done`
       result_message = result.message
@@ -411,7 +456,8 @@
 
   // -- Lateral mode handlers --
   async function do_search_lateral() {
-    if (!structure || !film_structure) return
+    const slab_A = substrate_for_build()
+    if (!slab_A || !film_structure) return
 
     search_status = `searching`
     error_message = null
@@ -419,6 +465,7 @@
     lat_matches = []
     lat_selected_idx = null
     lat_result = null
+    original_substrate = slab_A
 
     try {
       const params: LateralSearchParams = {
@@ -426,7 +473,7 @@
         max_length: lat_max_length,
         max_strain: lat_max_strain,
       }
-      const result = await searchLateralMatches(structure, film_structure, params, server_url)
+      const result = await searchLateralMatches(slab_A, film_structure, params, server_url)
       lat_matches = result.matches
       result_message = result.message
       search_status = `done`
@@ -437,7 +484,8 @@
   }
 
   async function do_build_lateral() {
-    if (!structure || !film_structure || !lat_selected) return
+    const slab_A = original_substrate ?? substrate_for_build()
+    if (!slab_A || !film_structure || !lat_selected) return
 
     on_push_undo?.()
     build_status = `building`
@@ -457,10 +505,11 @@
         max_strain: lat_max_strain,
       }
       const result = await buildLateralInterface(
-        structure, film_structure, lat_selected, params, search_params, server_url,
+        slab_A, film_structure, lat_selected, params, search_params, server_url,
       )
       lat_result = result
       structure = result.structure
+      mark_built(result.structure)
       on_structure_change?.(result.structure)
       result_message = result.message
       build_status = `done`
@@ -471,7 +520,10 @@
   }
 
   async function do_grid_scan() {
-    if (!structure || !gs_film_snapshot || !gs_n_atoms_substrate) return
+    // Scan the built heterostructure, not the viewer structure — applying a
+    // shift entry and re-scanning must not compound shifts
+    const hetero = gs_hetero_snapshot ?? structure
+    if (!hetero || !gs_film_snapshot || !gs_n_atoms_substrate) return
 
     error_message = null
     result_message = null
@@ -486,7 +538,7 @@
         symprec: gs_symprec,
       }
       const result = await gridScanHeterostructure(
-        structure, gs_film_snapshot, gs_n_atoms_substrate, params, server_url,
+        hetero, gs_film_snapshot, gs_n_atoms_substrate, params, server_url,
       )
       gs_result = result
       result_message = result.message
@@ -501,6 +553,7 @@
     if (!gs_result || idx >= gs_result.entries.length) return
     on_push_undo?.()
     structure = gs_result.entries[idx].structure
+    mark_built(gs_result.entries[idx].structure)
     on_structure_change?.(gs_result.entries[idx].structure)
     gs_selected_idx = idx
   }
@@ -904,89 +957,6 @@
       </fieldset>
     {/if}
 
-    <!-- Grid Scan: available after build (shifts film atoms in the built heterostructure) -->
-    {#if build_status === 'done' && structure && gs_film_snapshot && gs_n_atoms_substrate > 0}
-      <details class="grid-scan-section">
-        <summary>Stacking Grid Scan</summary>
-        <div class="build-params">
-          <label>
-            <span>Grid N<sub>x</sub></span>
-            <input type="number" bind:value={gs_n_grid_x} min={2} max={30} step={1} />
-          </label>
-          <label>
-            <span>Grid N<sub>y</sub></span>
-            <input type="number" bind:value={gs_n_grid_y} min={2} max={30} step={1} />
-          </label>
-          <label>
-            <span>Sym. tol. (Å)</span>
-            <input type="number" bind:value={gs_symprec} min={0.001} max={1} step={0.01} />
-          </label>
-        </div>
-        <div class="controls" style="margin-top: 6pt">
-          <button
-            type="button"
-            onclick={do_grid_scan}
-            disabled={gs_scanning}
-            class="primary"
-          >
-            {gs_scanning ? `Scanning...` : `Run Grid Scan`}
-          </button>
-          <span class="hint" style="margin-left: 6pt">
-            {gs_n_grid_x * gs_n_grid_y} points
-          </span>
-        </div>
-
-        {#if gs_result}
-          <div class="im-results" style="margin-top: 6pt">
-            <div class="im-results-grid">
-              <span class="im-label">Sym. ops:</span>
-              <span class="im-value">{gs_result.n_symmetry_ops} ({gs_result.reduction_ratio.toFixed(0)}× zone reduction)</span>
-              <span class="im-label">Structures:</span>
-              <span class="im-value">{gs_result.n_irreducible}</span>
-            </div>
-            <div class="hint" style="margin-top: 2pt">{gs_result.message}</div>
-          </div>
-
-          <div class="results-table-wrapper" style="margin-top: 4pt">
-            <table class="results-table">
-              <thead>
-                <tr><th></th><th>f<sub>x</sub></th><th>f<sub>y</sub></th><th>Atoms</th></tr>
-              </thead>
-              <tbody>
-                {#each gs_result.entries as entry, idx}
-                  <tr
-                    class:selected={gs_selected_idx === idx}
-                    onclick={() => apply_grid_scan_entry(idx)}
-                  >
-                    <td><input type="radio" checked={gs_selected_idx === idx} /></td>
-                    <td>{entry.shift_frac[0].toFixed(3)}</td>
-                    <td>{entry.shift_frac[1].toFixed(3)}</td>
-                    <td>{entry.n_atoms}</td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="controls" style="margin-top: 6pt; flex-wrap: wrap; gap: 4pt">
-            <button type="button" onclick={gs_export_file}>
-              Export .extxyz
-            </button>
-            {#if on_save_to_database}
-              <button type="button" onclick={gs_save_to_database}>
-                Save to Database
-              </button>
-            {/if}
-            {#if on_export_to_hpc}
-              <button type="button" onclick={gs_export_to_hpc}>
-                Export to HPC
-              </button>
-            {/if}
-          </div>
-        {/if}
-      </details>
-    {/if}
-
   {:else if mode === 'bulk'}
     <!-- ==================== BULK MODE (intermat) ==================== -->
     <fieldset class="search-fieldset">
@@ -1198,6 +1168,89 @@
         </div>
       </div>
     {/if}
+  {/if}
+
+  <!-- Grid Scan: shifts film atoms of the built heterostructure (slab + bulk modes) -->
+  {#if (mode === 'slab' || mode === 'bulk') && build_status === 'done' && gs_hetero_snapshot && gs_film_snapshot && gs_n_atoms_substrate > 0}
+    <details class="grid-scan-section">
+      <summary>Stacking Grid Scan</summary>
+      <div class="build-params">
+        <label>
+          <span>Grid N<sub>x</sub></span>
+          <input type="number" bind:value={gs_n_grid_x} min={2} max={30} step={1} />
+        </label>
+        <label>
+          <span>Grid N<sub>y</sub></span>
+          <input type="number" bind:value={gs_n_grid_y} min={2} max={30} step={1} />
+        </label>
+        <label>
+          <span>Sym. tol. (Å)</span>
+          <input type="number" bind:value={gs_symprec} min={0.001} max={1} step={0.01} />
+        </label>
+      </div>
+      <div class="controls" style="margin-top: 6pt">
+        <button
+          type="button"
+          onclick={do_grid_scan}
+          disabled={gs_scanning}
+          class="primary"
+        >
+          {gs_scanning ? `Scanning...` : `Run Grid Scan`}
+        </button>
+        <span class="hint" style="margin-left: 6pt">
+          {gs_n_grid_x * gs_n_grid_y} points
+        </span>
+      </div>
+
+      {#if gs_result}
+        <div class="im-results" style="margin-top: 6pt">
+          <div class="im-results-grid">
+            <span class="im-label">Sym. ops:</span>
+            <span class="im-value">{gs_result.n_symmetry_ops} ({gs_result.reduction_ratio.toFixed(0)}× zone reduction)</span>
+            <span class="im-label">Structures:</span>
+            <span class="im-value">{gs_result.n_irreducible}</span>
+          </div>
+          <div class="hint" style="margin-top: 2pt">{gs_result.message}</div>
+        </div>
+
+        <div class="results-table-wrapper" style="margin-top: 4pt">
+          <table class="results-table">
+            <thead>
+              <tr><th></th><th>f<sub>x</sub></th><th>f<sub>y</sub></th><th>Atoms</th></tr>
+            </thead>
+            <tbody>
+              {#each gs_result.entries as entry, idx}
+                <tr
+                  class:selected={gs_selected_idx === idx}
+                  onclick={() => apply_grid_scan_entry(idx)}
+                >
+                  <td><input type="radio" checked={gs_selected_idx === idx} /></td>
+                  <td>{entry.shift_frac[0].toFixed(3)}</td>
+                  <td>{entry.shift_frac[1].toFixed(3)}</td>
+                  <td>{entry.n_atoms}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="controls" style="margin-top: 6pt; flex-wrap: wrap; gap: 4pt">
+          <button type="button" onclick={gs_export_file}>
+            Export .extxyz
+          </button>
+          {#if on_save_to_database}
+            <button type="button" onclick={gs_save_to_database}>
+              Save to Database
+            </button>
+          {/if}
+          {#if on_export_to_hpc}
+            <button type="button" onclick={gs_export_to_hpc}>
+              Export to HPC
+            </button>
+          {/if}
+        </div>
+      {/if}
+    </details>
   {/if}
 
   {#if error_message}

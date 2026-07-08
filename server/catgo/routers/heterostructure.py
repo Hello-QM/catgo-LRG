@@ -52,6 +52,7 @@ from catgo.utils.heterostructure_algorithm import (
     search_lateral_matches,
     search_matches,
     search_matches_slab,
+    _normalize_interface_orientation,
     _strip_vacuum,
 )
 
@@ -551,7 +552,12 @@ def grid_scan_heterostructure(request: GridScanRequest) -> GridScanResult:
     try:
         params = request.params or GridScanParams()
 
-        hetero = _model_to_native(request.heterostructure)
+        # Fix orientation of heterostructures built before normalization
+        # existed (c-down / left-handed cells) — atom order is preserved,
+        # so n_atoms_substrate stays valid.
+        hetero = _normalize_interface_orientation(
+            _model_to_native(request.heterostructure)
+        )
         film = _model_to_native(request.film)
 
         # Strip vacuum from film for correct symmetry analysis

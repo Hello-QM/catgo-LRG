@@ -84,7 +84,7 @@ fn slab_build_match1_matches_backend() {
     let film = square_slab(3.15, 25.0, "Au", &[10.0, 12.0]);
 
     // match_id 1 = generation-order index of the clean ~9.18% strain match.
-    let res = build_interface_slab(&sub, &film, 1, 2.0, 20.0, 200.0, 0.09, 0.06, 0.02).unwrap();
+    let res = build_interface_slab(&sub, &film, 1, 2.0, 20.0, 0.0, 200.0, 0.09, 0.06, 0.02).unwrap();
 
     // Backend: n_atoms=38 (20 sub + 18 film), area=90.0, strain=9.1796,
     // lattice a=3.0 b=30.0 c=26.5, angles 90/90/90.
@@ -184,7 +184,9 @@ fn slab_pair2_hex_matches_backend() {
     // Pair 2: graphene-like substrate (a=2.46, hex) + BN-like film (a=2.50, hex),
     // ~1.6% mismatch. Search params: max_area=120, ratio_tol=0.09,
     // length_tol=0.04, angle_tol=0.02.
-    let sub = hex_slab(2.46, 20.0, &[("C", 8.0), ("C", 8.0)]);
+    // Distinct z per C atom — coincident atoms would be dropped by the
+    // build's duplicate-atom filter.
+    let sub = hex_slab(2.46, 20.0, &[("C", 8.0), ("C", 9.0)]);
     let film = hex_slab(2.50, 20.0, &[("B", 8.0), ("N", 8.0)]);
 
     let matches = search_matches_slab(&sub, &film, 120.0, 0.09, 0.04, 0.02, 50);
@@ -199,9 +201,10 @@ fn slab_pair2_hex_matches_backend() {
     assert_eq!(m0.film_transformation, [[1, 0], [0, 1]]);
 
     // Build the 1x1 match (generation-order id 0).
-    let res = build_interface_slab(&sub, &film, 0, 2.0, 20.0, 120.0, 0.09, 0.04, 0.02).unwrap();
+    let res = build_interface_slab(&sub, &film, 0, 2.0, 20.0, 0.0, 120.0, 0.09, 0.04, 0.02).unwrap();
     // Backend: n=4 (2 sub + 2 film), area 5.24, strain 1.6,
-    // lattice a=b=2.46, c=22.5, gamma=60 (reduced hex).
+    // lattice a=b=2.46, c=23.5, gamma=120 (the ZSL-reduced hex cell is
+    // left-handed; orientation normalization flips b, so gamma 60 -> 120).
     assert_eq!(res.n_atoms, 4);
     assert_eq!(res.n_atoms_substrate, 2);
     assert_eq!(res.n_atoms_film, 2);
@@ -211,12 +214,12 @@ fn slab_pair2_hex_matches_backend() {
     let lengths = res.structure.lattice.lengths();
     assert!((lengths[0] - 2.46).abs() < 1e-3, "a {}", lengths[0]);
     assert!((lengths[1] - 2.46).abs() < 1e-3, "b {}", lengths[1]);
-    assert!((lengths[2] - 22.5).abs() < 1e-3, "c {}", lengths[2]);
+    assert!((lengths[2] - 23.5).abs() < 1e-3, "c {}", lengths[2]);
     let gamma = res.structure.lattice.angles()[2];
-    assert!((gamma - 60.0).abs() < 1e-2, "gamma {}", gamma);
+    assert!((gamma - 120.0).abs() < 1e-2, "gamma {}", gamma);
 
-    // All four atoms sit on the c-axis at origin; substrate C at z=0.5,
-    // film B/N at z=2.5 (gap=2.0 above the 0.5 substrate top -> 2.5).
+    // All four atoms sit on the c-axis at origin; substrate C at z=0.5 and
+    // 1.5, film B/N at z=3.5 (gap=2.0 above the 1.5 substrate top -> 3.5).
     let zs: Vec<(String, f64)> = res
         .structure
         .cart_coords()
@@ -224,11 +227,14 @@ fn slab_pair2_hex_matches_backend() {
         .zip(res.structure.species())
         .map(|(p, sp)| (sp.element.symbol().to_string(), (p.z * 1e4).round() / 1e4))
         .collect();
-    let n_sub_z05 = zs.iter().filter(|(s, z)| s == "C" && (z - 0.5).abs() < 1e-2).count();
-    assert_eq!(n_sub_z05, 2, "two C at z=0.5");
-    let n_film_z25 = zs
+    let n_sub_c = zs
         .iter()
-        .filter(|(s, z)| (s == "B" || s == "N") && (z - 2.5).abs() < 1e-2)
+        .filter(|(s, z)| s == "C" && ((z - 0.5).abs() < 1e-2 || (z - 1.5).abs() < 1e-2))
         .count();
-    assert_eq!(n_film_z25, 2, "B and N at z=2.5");
+    assert_eq!(n_sub_c, 2, "two C at z=0.5 and 1.5");
+    let n_film_z35 = zs
+        .iter()
+        .filter(|(s, z)| (s == "B" || s == "N") && (z - 3.5).abs() < 1e-2)
+        .count();
+    assert_eq!(n_film_z35, 2, "B and N at z=3.5");
 }

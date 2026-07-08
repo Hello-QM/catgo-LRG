@@ -210,6 +210,51 @@ def _wrap_inplane_fracs(structure: Structure) -> Structure:
     return Structure(structure.lattice, structure.species, fracs)
 
 
+def _normalize_interface_orientation(structure: Structure) -> Structure:
+    """Normalize a stacked interface to the conventional orientation.
+
+    Two defects can reach the final interface cell:
+
+    - **c pointing down** (negative z): inherited from a substrate slab whose
+      c-axis points down (e.g. pasted from an external tool); the interface
+      then renders upside-down against the world axes. Fixed by a rigid 180°
+      rotation of the whole assembly about the a-axis — a proper rotation, so
+      chirality and the substrate/film stacking order are preserved.
+
+    - **Left-handed cell** (negative determinant): `_align_sl_vectors` may
+      swap the matched superlattice vectors to align a with the input
+      substrate, flipping the in-plane determinant. VASP rejects a negative
+      triple product. Fixed by relabelling b -> -b (the same Bravais lattice;
+      Cartesian positions are unchanged, in-plane fracs re-wrap).
+
+    Site order is preserved, so substrate/film index ranges stay valid.
+    Site properties are dropped (callers count film/substrate atoms before
+    this, matching `_wrap_inplane_fracs`).
+    """
+    matrix = np.array(structure.lattice.matrix, dtype=float)
+    frac = structure.frac_coords.copy()
+    changed = False
+
+    if matrix[2][2] < 0:
+        a_hat = matrix[0] / np.linalg.norm(matrix[0])
+        rot = 2.0 * np.outer(a_hat, a_hat) - np.eye(3)
+        rotated = matrix @ rot.T
+        # Only helps when a lies (near) the xy-plane — true for slabs; skip
+        # rather than worsen an already-odd cell.
+        if rotated[2][2] > matrix[2][2] + 1e-9:
+            matrix = rotated
+            changed = True
+
+    if np.linalg.det(matrix) < 0:
+        matrix[1] = -matrix[1]
+        frac[:, 1] = (-frac[:, 1]) % 1.0
+        changed = True
+
+    if not changed:
+        return structure
+    return Structure(PmgLattice(matrix), structure.species, frac)
+
+
 def _stack_slabs(
     substrate: Structure,
     film: Structure,
@@ -326,7 +371,9 @@ def _stack_slabs(
         new_lattice, all_species, all_cart, coords_are_cartesian=True
     )
     frac_wrapped = interface.frac_coords % 1.0
-    return Structure(new_lattice, all_species, frac_wrapped)
+    return _normalize_interface_orientation(
+        Structure(new_lattice, all_species, frac_wrapped)
+    )
 
 
 def search_matches_slab(
@@ -1134,6 +1181,14 @@ def build_interface_intermat(
     if n_film == 0 and n_substrate == 0:
         n_substrate = len(interface) // 2
         n_film = len(interface) - n_substrate
+
+    # Downstream tools (grid scan) treat indices >= n_atoms_substrate as film
+    # atoms, so reorder substrate ("bottom") atoms first when props map them.
+    if props and len(props) == len(interface) and n_film > 0 and n_substrate > 0:
+        order = [i for i, p in enumerate(props) if p == "bottom"]
+        order += [i for i, p in enumerate(props) if p != "bottom"]
+        if order != list(range(len(interface))):
+            interface = Structure.from_sites([interface[i] for i in order])
 
     # Mismatch info
     mismatch_u = float(res.get("mismatch_u", 0.0))

@@ -1232,7 +1232,7 @@
           <section class="action-section">
             <h5>{t('structure.two_factor_auth')}</h5>
             <p class="description">{active_session?.otp_prompt}</p>
-            <div class="form-row">
+            <div class="form-row otp-row">
               <input
                 type="text"
                 bind:value={active_session.otp_code}
@@ -2079,6 +2079,13 @@
     letter-spacing: 4px;
     font-family: monospace;
     flex: 1;
+    min-width: 8ch;
+  }
+  /* pane-shared.css stretches .apply-btn to width:100%; in this flex row that
+     full-width flex-basis squeezes the flex:1 (basis 0) input to nothing */
+  .otp-row .apply-btn {
+    width: auto;
+    flex: 0 0 auto;
   }
   .checkbox-row {
     display: flex;

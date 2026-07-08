@@ -344,7 +344,57 @@ fn stack_slabs(
         keep_species.push(species[i].clone());
     }
 
-    Structure::new(new_lattice, keep_species, keep_frac)
+    normalize_interface_orientation(&Structure::new(new_lattice, keep_species, keep_frac))
+}
+
+/// Normalize a stacked interface to the conventional orientation. Faithful
+/// port of Python `_normalize_interface_orientation`:
+///
+/// - **c pointing down** (negative z), inherited from a c-down substrate
+///   slab: rigid 180° rotation of the whole assembly about the a-axis — a
+///   proper rotation, so chirality and stacking order are preserved.
+/// - **Left-handed cell** (negative determinant), from a/b-swapped
+///   sl_vectors: relabel b -> -b (same Bravais lattice; Cartesian positions
+///   unchanged, in-plane fracs re-wrap).
+///
+/// Site order is preserved, so substrate/film index ranges stay valid.
+fn normalize_interface_orientation(structure: &Structure) -> Structure {
+    let mut matrix = *structure.lattice.matrix();
+    let mut frac = structure.frac_coords.clone();
+    let mut changed = false;
+
+    if matrix[(2, 2)] < 0.0 {
+        let a = Vector3::new(matrix[(0, 0)], matrix[(0, 1)], matrix[(0, 2)]);
+        let a_hat = a / a.norm();
+        let rot = 2.0 * a_hat * a_hat.transpose() - Matrix3::identity();
+        let rotated = matrix * rot.transpose();
+        // Only helps when a lies (near) the xy-plane — true for slabs; skip
+        // rather than worsen an already-odd cell.
+        if rotated[(2, 2)] > matrix[(2, 2)] + 1e-9 {
+            matrix = rotated;
+            changed = true;
+        }
+    }
+
+    if matrix.determinant() < 0.0 {
+        for j in 0..3 {
+            matrix[(1, j)] = -matrix[(1, j)];
+        }
+        for f in frac.iter_mut() {
+            f.y = wrap01(-f.y);
+        }
+        changed = true;
+    }
+
+    if !changed {
+        return structure.clone();
+    }
+    let mut lattice = Lattice::new(matrix);
+    lattice.pbc = structure.lattice.pbc;
+    let mut normalized =
+        Structure::new_from_occupancies(lattice, structure.site_occupancies.clone(), frac);
+    normalized.properties = structure.properties.clone();
+    normalized
 }
 
 /// Rotate the in-plane (x, y) components of `cart` by `twist_angle` degrees
@@ -1430,7 +1480,7 @@ fn stack_slabs_target_z(
         keep_species.push(species[i].clone());
     }
 
-    Structure::new(new_lattice, keep_species, keep_frac)
+    normalize_interface_orientation(&Structure::new(new_lattice, keep_species, keep_frac))
 }
 
 /// A single grid-scan entry: an in-plane shift applied to the film atoms of an
@@ -1612,12 +1662,15 @@ pub fn grid_scan(
     n_grid_y: usize,
     symprec: f64,
 ) -> GridScanResult {
+    // Fix orientation of heterostructures built before normalization existed
+    // (c-down / left-handed cells) — atom order is preserved, so
+    // n_atoms_substrate stays valid. Mirrors the Python /grid-scan route.
+    let hetero = normalize_interface_orientation(heterostructure);
     let film_stripped = strip_vacuum(film_slab, 0.5);
     let sym_ops_2d = get_2d_symmetry_operations(&film_stripped, symprec);
     let (irr_points, zone_extent) =
         get_irreducible_grid_points(&sym_ops_2d, n_grid_x, n_grid_y);
-    let entries =
-        generate_grid_scan_structures(heterostructure, n_atoms_substrate, &irr_points);
+    let entries = generate_grid_scan_structures(&hetero, n_atoms_substrate, &irr_points);
 
     GridScanResult {
         entries,
