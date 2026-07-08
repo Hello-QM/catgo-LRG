@@ -1,4 +1,4 @@
-import { rgb } from 'd3-color'
+import { hsl, rgb } from 'd3-color'
 import * as d3_sc from 'd3-scale-chromatic'
 import type { elem_symbols } from '../labels'
 import alloy_colors from './alloy-colors.json' with { type: 'json' }
@@ -61,8 +61,26 @@ export const pastel_hex = rgb_scheme_to_hex(pastel_colors)
 export const muted_hex = rgb_scheme_to_hex(muted_colors)
 export const dark_mode_hex = rgb_scheme_to_hex(dark_mode_colors)
 
+// Soften a hex palette toward a pastel, "publication-figure" look: pull
+// saturation down and lift lightness so default renders read as tastefully
+// muted rather than the harsh primaries of raw VESTA. Mirrors the vesta-soft
+// palettes shipped by figure-first viewers; derived (not hand-tabulated) so it
+// stays in sync with vesta-colors.json.
+const soften_scheme = (scheme: Record<string, string>): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(scheme).map(([sym, hex]) => {
+      const c = hsl(hex)
+      c.s *= 0.72
+      c.l = Math.min(0.82, c.l * 0.82 + 0.2)
+      return [sym, c.formatHex()]
+    }),
+  )
+
+export const vesta_soft_hex = soften_scheme(vesta_hex)
+
 export const element_color_schemes = {
   Vesta: vesta_hex,
+  'Vesta Soft': vesta_soft_hex,
   Jmol: jmol_hex,
   Alloy: alloy_hex,
   Pastel: pastel_hex,

@@ -174,7 +174,7 @@
   import { PeriodicTable } from '$lib/periodic-table'
   import { element_data } from '$lib/element'
   import { parse_structure_file } from './parse'
-  import { Euler, Quaternion, Spherical, Vector3 } from 'three'
+  import { ACESFilmicToneMapping, Euler, Quaternion, Spherical, Vector3 } from 'three'
   import { format_value } from '$lib/labels'
   import type { BarHandlerProps } from '$lib/plot'
   import { BarPlot } from '$lib/plot'
@@ -4299,7 +4299,11 @@
           restores autoRender=true and an $effect below nudges a one-shot repaint
           so the WebGL view isn't left on a stale/blank frame.
         -->
-        <Canvas autoRender={!large_system_mode} {...{ rendererParameters: { antialias: true, powerPreference: `high-performance` } } as any}>
+        <Canvas
+          autoRender={!large_system_mode}
+          toneMapping={ACESFilmicToneMapping}
+          {...{ rendererParameters: { antialias: true, powerPreference: `high-performance` } } as any}
+        >
           <!--
             show_image_atoms is a separate bindable from scene_props.show_image_atoms
             (the UI checkbox binds to the local one). It must be passed AFTER the

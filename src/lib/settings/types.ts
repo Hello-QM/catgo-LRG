@@ -26,7 +26,14 @@ export type ShowBonds = (typeof show_bonds_options)[number]
 
 export type CameraProjection = `perspective` | `orthographic`
 
-export const render_style_options = [`glossy`, `matte`, `toon`] as const
+export const render_style_options = [
+  `glossy`,
+  `metallic`,
+  `matte`,
+  `soft`,
+  `flat`,
+  `toon`,
+] as const
 export type RenderStyle = (typeof render_style_options)[number]
 
 /** The 5 per-render-style lighting parameters (one profile per render_style). */

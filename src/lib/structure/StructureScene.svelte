@@ -18,6 +18,7 @@
   import { BufferGeometry, Color, CylinderGeometry, Euler, InstancedBufferAttribute, MeshBasicMaterial, Matrix4, Mesh, MeshStandardMaterial, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
   import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh'
   import AdsorptionSiteMarkers from './AdsorptionSiteMarkers.svelte'
+  import SceneLighting from './SceneLighting.svelte'
   import DashedBond from './DashedBond.svelte'
   import BondEditingIndicators from './BondEditingIndicators.svelte'
   import CubeIsosurface from './CubeIsosurface.svelte'
@@ -5290,8 +5291,7 @@
   </T.OrthographicCamera>
 {/if}
 
-<T.DirectionalLight position={[0, 0.3, 1]} intensity={active_directional_light} />
-<T.AmbientLight intensity={active_ambient_light} />
+<SceneLighting directional={active_directional_light} ambient={active_ambient_light} />
 
 <!-- Invisible background mesh to catch clicks on empty space -->
 <T.Mesh
@@ -5407,7 +5407,7 @@
         {#snippet atom_material(color: string, double_sided: boolean, is_cut: boolean, cut_op: number)}
           {#if render_style === `toon`}
             <T is={make_toon_material(color, is_cut ? cut_op : 1, is_cut, double_sided)} />
-          {:else if render_style === `matte`}
+          {:else if render_style === `matte` || render_style === `soft` || render_style === `flat`}
             {#if is_cut}
               <T.MeshStandardMaterial
                 color={color}

@@ -23,11 +23,38 @@ export const LIGHTING_PROFILE_DEFAULTS: Readonly<Record<RenderStyle, LightingPro
     ambient_light: 0.7,
     highlight_strength: 1.0,
   },
+  // Metallic reuses the glossy (specular) shader branch but with a stronger,
+  // lower-angle key light for a harder, compact highlight — reads as shinier.
+  metallic: {
+    light_azimuth: 35,
+    light_elevation: 30,
+    directional_light: 0.55,
+    ambient_light: 0.5,
+    highlight_strength: 1.0,
+  },
   matte: {
     light_azimuth: 35,
     light_elevation: 45,
     directional_light: 0.4,
     ambient_light: 0.85,
+    highlight_strength: 0.0,
+  },
+  // 2.5D: softly shaded diagram between flat color and matte 3D (matte branch,
+  // gentle key light, no specular).
+  soft: {
+    light_azimuth: 35,
+    light_elevation: 55,
+    directional_light: 0.35,
+    ambient_light: 0.8,
+    highlight_strength: 0.0,
+  },
+  // 2D flat: pure diffuse fill, no directional shading or specular — clean
+  // schematic look for figures/legends.
+  flat: {
+    light_azimuth: 35,
+    light_elevation: 45,
+    directional_light: 0.0,
+    ambient_light: 1.0,
     highlight_strength: 0.0,
   },
   toon: {
@@ -66,10 +93,11 @@ const DISPLAY_CONFIG = {
 export const SETTINGS_CONFIG: SettingsConfig = {
   // General display settings
   color_scheme: {
-    value: `Vesta`,
+    value: `Vesta Soft`,
     description: `Color scheme for atoms and bonds`,
     enum: {
       Vesta: `Vesta`,
+      'Vesta Soft': `Vesta Soft`,
       Jmol: `Jmol`,
       Alloy: `Alloy`,
       Pastel: `Pastel`,
@@ -78,11 +106,14 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     },
   },
   background_color: {
-    value: `#000000`,
+    // Off-white publication-figure default. A light, opaque viewport (dark app
+    // chrome around a bright figure) reads as premium and makes atom colors
+    // pop; users who want the old transparent/dark viewport can set opacity 0.
+    value: `#f5f6f8`,
     description: `Background color of the 3D viewport`,
   },
   background_opacity: {
-    value: 0,
+    value: 1,
     description: `Opacity of the background (0.0 = transparent, 1.0 = opaque)`,
     minimum: 0,
     maximum: 1,
@@ -414,8 +445,15 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     render_style: {
       value: `glossy` as const,
       description:
-        `Material/shading style for atoms. Glossy = default specular look; Matte = flat diffuse (no highlight); Toon = 3-band cel/cartoon shading. Orthogonal to color_scheme (palette).`,
-      enum: { glossy: `Glossy`, matte: `Matte`, toon: `Toon` },
+        `Material/shading style for atoms. Glossy = default specular look; Metallic = harder compact highlight; Matte = flat diffuse (no highlight); 2.5D = softly shaded diagram; 2D Flat = pure diffuse fill; Toon = 3-band cel/cartoon shading. Orthogonal to color_scheme (palette).`,
+      enum: {
+        glossy: `Glossy`,
+        metallic: `Metallic`,
+        matte: `Matte`,
+        soft: `2.5D`,
+        flat: `2D Flat`,
+        toon: `Toon`,
+      },
     },
     light_azimuth: {
       value: 35,

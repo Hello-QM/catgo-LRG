@@ -65,7 +65,7 @@
     /** Atom shading style. Branches the fragment lighting on uRenderStyle:
      *  glossy (studio env + tinted spec), matte (diffuse only, no spec/fresnel),
      *  toon (3-band cel, AtomCanvas ToonHighlightMaterial). */
-    render_style?: `glossy` | `matte` | `toon`
+    render_style?: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon`
     /** View-space headlamp direction (x=right, y=up, z=toward camera). Driven
      *  by the light_azimuth/elevation sliders; written live into uLightDir. */
     light_dir?: Vector3
@@ -345,9 +345,15 @@
     })
   }
 
-  // glossy = 0, matte = 1, toon = 2 (matches the uRenderStyle branch order).
-  function render_style_to_int(style: `glossy` | `matte` | `toon`): number {
-    return style === `toon` ? 2 : style === `matte` ? 1 : 0
+  // Map onto the three uRenderStyle shader branches (0 glossy, 1 matte, 2 toon).
+  // Metallic reuses the glossy branch; 2.5D-soft and 2D-flat reuse the matte
+  // branch — their distinct look comes from the per-style lighting profile.
+  function render_style_to_int(
+    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon`,
+  ): number {
+    if (style === `toon`) return 2
+    if (style === `matte` || style === `soft` || style === `flat`) return 1
+    return 0
   }
 
   let opaque_material = create_material(false)

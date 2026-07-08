@@ -3,6 +3,7 @@
   import type { AdsorptionSite } from './ferrox-wasm-types'
   import { DEFAULTS } from '$lib/settings'
   import { Canvas } from '@threlte/core'
+  import { ACESFilmicToneMapping } from 'three'
   import { SvelteMap } from 'svelte/reactivity'
   import StructureScene from './StructureScene.svelte'
   import ElectronicInfoPanel from './ElectronicInfoPanel.svelte'
@@ -127,7 +128,7 @@
       bind:clientHeight={height}
       class="structure-canvas-container"
     >
-      <Canvas {...{rendererParameters: { alpha: true, antialias: true }} as any}>
+      <Canvas toneMapping={ACESFilmicToneMapping} {...{rendererParameters: { alpha: true, antialias: true }} as any}>
         <StructureScene
           structure={display_structure}
           {...scene_props}
