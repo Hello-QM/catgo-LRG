@@ -1602,6 +1602,22 @@
         {/each}
       </select>
     </label>
+    <label
+      {@attach tooltip({
+        content: SETTINGS_CONFIG.structure.ambient_occlusion.description,
+      })}
+    >
+      <input type="checkbox" bind:checked={scene_props.ambient_occlusion} />
+      {t('structure.ambient_occlusion')}
+    </label>
+    <label
+      {@attach tooltip({
+        content: SETTINGS_CONFIG.structure.depth_of_field.description,
+      })}
+    >
+      <input type="checkbox" bind:checked={scene_props.depth_of_field} />
+      {t('structure.depth_of_field')}
+    </label>
     <h5>{t('structure.lighting')}</h5>
     <label
       {@attach tooltip({ content: SETTINGS_CONFIG.structure.light_azimuth.description })}
