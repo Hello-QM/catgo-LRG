@@ -10,6 +10,8 @@ const structure: Record<string, string> = {
   label_offset: `Label offset`,
   force_vectors: `Force Vectors`,
   magmom_vectors: `Magnetic Moments`,
+  magmom_up: `Up`,
+  magmom_down: `Down`,
   unit_cell: `Unit Cell`,
   lattice_vectors: `Lattice Vectors`,
   bonds: `Bonds`,

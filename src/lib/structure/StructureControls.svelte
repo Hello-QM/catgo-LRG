@@ -904,6 +904,50 @@
     </SettingsSection>
   {/if}
 
+  {#if has_magmom && scene_props.show_magmom_vectors}
+    <SettingsSection
+      title={t('structure.magmom_vectors')}
+      current_values={{
+        magmom_scale: scene_props.magmom_scale,
+        magmom_up_color: scene_props.magmom_up_color,
+        magmom_down_color: scene_props.magmom_down_color,
+      }}
+      on_reset={() => {
+        scene_props.magmom_scale = DEFAULTS.structure.magmom_scale
+        scene_props.magmom_up_color = DEFAULTS.structure.magmom_up_color
+        scene_props.magmom_down_color = DEFAULTS.structure.magmom_down_color
+      }}
+    >
+      <label>
+        {t('structure.scale')}
+        <input
+          type="number"
+          min={0.05}
+          max={10}
+          step={0.05}
+          bind:value={scene_props.magmom_scale}
+        />
+        <input
+          type="range"
+          min={0.05}
+          max={10}
+          step={0.05}
+          bind:value={scene_props.magmom_scale}
+        />
+      </label>
+      <div class="pane-row">
+        <label>
+          {t('structure.magmom_up')}
+          <input type="color" bind:value={scene_props.magmom_up_color} />
+        </label>
+        <label>
+          {t('structure.magmom_down')}
+          <input type="color" bind:value={scene_props.magmom_down_color} />
+        </label>
+      </div>
+    </SettingsSection>
+  {/if}
+
   {#if has_lattice}
     <SettingsSection
       title={t('structure.cell')}
