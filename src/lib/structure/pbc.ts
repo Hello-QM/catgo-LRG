@@ -329,7 +329,7 @@ export function get_pbc_image_sites(
   const radii = new Float64Array(n)
   let max_radius = 0
   for (let i = 0; i < n; i++) {
-    const r = covalent_radii.get(geom.elem[i]) ?? 1.5 // already in Å
+    const r = covalent_radii.get(geom.elem[i]!) ?? 1.5 // already in Å
     radii[i] = r
     if (r > max_radius) max_radius = r
   }

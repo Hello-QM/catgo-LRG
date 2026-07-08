@@ -137,7 +137,7 @@ async function blob_with_png_dpi(blob: Blob, dpi?: number): Promise<Blob> {
   if (!dpi || blob.type !== `image/png`) return blob
   const bytes = new Uint8Array(await blob.arrayBuffer())
   const patched = add_png_dpi_metadata(bytes, dpi)
-  return new Blob([patched], { type: blob.type })
+  return new Blob([patched as unknown as BlobPart], { type: blob.type })
 }
 
 // Decide the actual off-screen render size. With a crop, render only that

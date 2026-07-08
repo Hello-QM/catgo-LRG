@@ -29,25 +29,25 @@ describe('stt-accel client', () => {
   })
 
   it('accel_install POSTs', async () => {
-    const f = vi.fn(async () => ({ ok: true, json: async () => ({ started: true }) }))
+    const f = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, json: async () => ({ started: true }) }))
     vi.stubGlobal('fetch', f)
     expect(await accel_install()).toBe(true)
     expect(f.mock.calls[0][0]).toContain('/stt/accel/install')
-    expect(f.mock.calls[0][1].method).toBe('POST')
+    expect(f.mock.calls[0][1]!.method).toBe('POST')
   })
 
   it('accel_download_model passes the size', async () => {
-    const f = vi.fn(async () => ({ ok: true, json: async () => ({}) }))
+    const f = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, json: async () => ({}) }))
     vi.stubGlobal('fetch', f)
     await accel_download_model('small')
     expect(f.mock.calls[0][0]).toContain('size=small')
   })
 
   it('accel_set_engine sends the engine in the body', async () => {
-    const f = vi.fn(async () => ({ ok: true, json: async () => ({}) }))
+    const f = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, json: async () => ({}) }))
     vi.stubGlobal('fetch', f)
     await accel_set_engine('whispercpp')
-    expect(JSON.parse(f.mock.calls[0][1].body)).toEqual({ engine: 'whispercpp' })
+    expect(JSON.parse(f.mock.calls[0][1]!.body as string)).toEqual({ engine: 'whispercpp' })
   })
 
   it('poll_accel_progress loops until download inactive', async () => {

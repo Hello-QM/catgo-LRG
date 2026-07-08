@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const pipeline_spy = vi.fn(async () => async () => ({ text: `` }))
+const pipeline_spy = vi.fn(async (..._a: any[]) => async () => ({ text: `` }))
 
 vi.mock('@huggingface/transformers', () => ({
   pipeline: (...args: any[]) => pipeline_spy(...args),

@@ -92,8 +92,11 @@
           if (!ctx) throw new Error(`canvas 2d context unavailable`)
           await page.render({
             canvasContext: ctx,
+            canvas,
             viewport,
-            transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
+            // Omit (not set to undefined) when unscaled — RenderParameters uses
+            // exactOptionalPropertyTypes, so `transform: undefined` is a type error.
+            ...(dpr !== 1 ? { transform: [dpr, 0, 0, dpr, 0, 0] } : {}),
           }).promise
           if (cancelled) return
           container.appendChild(canvas)

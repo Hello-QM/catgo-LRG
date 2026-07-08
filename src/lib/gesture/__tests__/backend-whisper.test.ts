@@ -47,7 +47,7 @@ describe('BackendWhisperEngine', () => {
     await flush()
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toContain('/stt/transcribe')
     expect(url).toContain('language=en')
     expect(url).toContain('model=whisper-base')
