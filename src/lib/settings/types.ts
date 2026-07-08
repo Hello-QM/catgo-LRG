@@ -231,6 +231,10 @@ export interface SettingsConfig {
     force_range_min: SettingType<number>
     force_range_max: SettingType<number>
     force_color_mode: SettingType<`element` | `custom`>
+    show_magmom_vectors: SettingType<boolean>
+    magmom_scale: SettingType<number>
+    magmom_up_color: SettingType<string>
+    magmom_down_color: SettingType<string>
     show_cell: SettingType<boolean>
     show_cell_vectors: SettingType<boolean>
     show_scale_bar: SettingType<boolean>

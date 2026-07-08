@@ -34,6 +34,7 @@
     get_frozen_info,
     desaturate_color,
     compute_force_data,
+    compute_magmom_data,
     get_majority_color,
     toggle_site_selection,
     clean_measured_sites,
@@ -443,6 +444,10 @@
     site_label_padding = 3,
     show_force_vectors = DEFAULTS.structure.show_force_vectors,
     force_scale = DEFAULTS.structure.force_scale,
+    show_magmom_vectors = DEFAULTS.structure.show_magmom_vectors,
+    magmom_scale = DEFAULTS.structure.magmom_scale,
+    magmom_up_color = DEFAULTS.structure.magmom_up_color,
+    magmom_down_color = DEFAULTS.structure.magmom_down_color,
     force_color = DEFAULTS.structure.force_color,
     force_display_mode = DEFAULTS.structure.force_display_mode,
     force_color_mode = DEFAULTS.structure.force_color_mode,
@@ -707,6 +712,10 @@
     show_site_indices?: boolean
     show_force_vectors?: boolean
     force_scale?: number
+    show_magmom_vectors?: boolean
+    magmom_scale?: number
+    magmom_up_color?: string
+    magmom_down_color?: string
     force_color?: string
     force_display_mode?: `all` | `max_only` | `range`
     force_color_mode?: `element` | `custom`
@@ -4699,6 +4708,16 @@
     )
   })
 
+  let magmom_data = $derived.by(() => {
+    if (webgl_suspended) return []
+    if (!show_magmom_vectors || !structure?.sites) return []
+    // Magnetic moments come from the per-site `magmom` property (scalar collinear
+    // or 3-vector non-collinear) — see compute_magmom_data.
+    return compute_magmom_data(
+      structure.sites, magmom_scale, magmom_up_color, magmom_down_color,
+    )
+  })
+
   // Build a set for fast selected_sites lookup
   let selected_sites_set = $derived.by(() => new Set(selected_sites))
 
@@ -5498,6 +5517,12 @@
       {#if force_data.length > 0}
         {#each force_data as force (force.position.join(`,`) + force.vector.join(`,`))}
           <Arrow {...force} />
+        {/each}
+      {/if}
+
+      {#if magmom_data.length > 0}
+        {#each magmom_data as magmom (magmom.position.join(`,`) + magmom.vector.join(`,`))}
+          <Arrow {...magmom} />
         {/each}
       {/if}
 

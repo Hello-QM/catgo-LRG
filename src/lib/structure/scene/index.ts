@@ -15,6 +15,7 @@ export {
   get_position_hash,
   get_structure_fingerprint,
   compute_force_data,
+  compute_magmom_data,
   get_majority_element,
   get_majority_color,
 } from './render-data'

@@ -162,6 +162,51 @@ export function compute_force_data(
   return all_forces
 }
 
+/** Compute magnetic-moment arrow data from structure sites.
+ *
+ * Reads `site.properties.magmom`, which pymatgen carries either as a scalar
+ * (collinear / ISPIN=2 — the moment is along the spin quantization axis, drawn
+ * along +z, sign = up/down) or as a 3-vector [mx,my,mz] (non-collinear — a true
+ * direction). Arrows are coloured by the sign of the z-component so spin-up and
+ * spin-down read at a glance (red up / blue down). */
+export function compute_magmom_data(
+  structure_sites: Site[],
+  magmom_scale: number,
+  up_color: string,
+  down_color: string,
+): {
+  position: Vec3
+  vector: Vec3
+  scale: number
+  color: string
+  magnitude: number
+}[] {
+  return structure_sites
+    .map((site) => {
+      const raw = site.properties?.magmom as number | number[] | undefined
+      if (raw === undefined || raw === null) return null
+      let vector: Vec3
+      if (typeof raw === `number`) {
+        vector = [0, 0, raw]
+      } else if (Array.isArray(raw) && raw.length === 3) {
+        vector = [raw[0], raw[1], raw[2]] as Vec3
+      } else {
+        return null
+      }
+      const magnitude = Math.sqrt(vector[0] ** 2 + vector[1] ** 2 + vector[2] ** 2)
+      // Skip effectively-zero moments (non-magnetic atoms) — no arrow clutter.
+      if (magnitude < 1e-3) return null
+      return {
+        position: site.xyz,
+        vector,
+        scale: magmom_scale,
+        color: vector[2] >= 0 ? up_color : down_color,
+        magnitude,
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+}
+
 /**
  * Get the majority element of a site (the species with highest occupancy).
  */

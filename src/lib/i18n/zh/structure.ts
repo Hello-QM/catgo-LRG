@@ -9,6 +9,7 @@ const structure: Record<string, string> = {
   site_indices: `位点序号`,
   label_offset: `标签偏移`,
   force_vectors: `受力向量`,
+  magmom_vectors: `磁矩`,
   unit_cell: `晶胞`,
   lattice_vectors: `晶格向量`,
   bonds: `成键`,

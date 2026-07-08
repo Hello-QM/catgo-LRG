@@ -151,6 +151,15 @@
     ) ?? false,
   )
 
+  // Detect per-atom magnetic moments (scalar collinear or 3-vector non-collinear).
+  let has_magmom = $derived(
+    structure?.sites?.some((site) => {
+      const m = site.properties?.magmom
+      return typeof m === `number` ? Math.abs(m) > 1e-3
+        : Array.isArray(m) && m.length === 3
+    }) ?? false,
+  )
+
   // Detect if structure has lattice (can create supercells)
   let has_lattice = $derived(
     structure && `lattice` in structure && structure.lattice !== undefined,
@@ -398,6 +407,16 @@
         >
           <input type="checkbox" bind:checked={scene_props.show_force_vectors} />
           {t('structure.force_vectors')}
+        </label>
+      {/if}
+      {#if has_magmom}
+        <label
+          {@attach tooltip({
+            content: SETTINGS_CONFIG.structure.show_magmom_vectors.description,
+          })}
+        >
+          <input type="checkbox" bind:checked={scene_props.show_magmom_vectors} />
+          {t('structure.magmom_vectors')}
         </label>
       {/if}
       <label

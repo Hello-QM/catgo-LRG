@@ -9,6 +9,7 @@ const structure: Record<string, string> = {
   site_indices: `Site Indices`,
   label_offset: `Label offset`,
   force_vectors: `Force Vectors`,
+  magmom_vectors: `Magnetic Moments`,
   unit_cell: `Unit Cell`,
   lattice_vectors: `Lattice Vectors`,
   bonds: `Bonds`,

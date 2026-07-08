@@ -548,6 +548,28 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description:
         `Force color mode: element (match atom color) or custom (use force_color setting)`,
     },
+    // Magnetic moments
+    show_magmom_vectors: {
+      value: false,
+      description:
+        `Display per-atom magnetic moment vectors as arrows (from site magmom — ` +
+        `scalar collinear moments point along z, non-collinear use their 3-vector; ` +
+        `red = spin up, blue = spin down)`,
+    },
+    magmom_scale: {
+      value: 1.0,
+      description: `Scale factor for magnetic moment arrows (Å per µB)`,
+      minimum: 0.05,
+      maximum: 10,
+    },
+    magmom_up_color: {
+      value: `#e0524a`,
+      description: `Colour for spin-up magnetic moment arrows`,
+    },
+    magmom_down_color: {
+      value: `#4a6fe0`,
+      description: `Colour for spin-down magnetic moment arrows`,
+    },
     show_cell: {
       value: true,
       description: `Display system cell`,

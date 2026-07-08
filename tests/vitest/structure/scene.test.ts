@@ -31,6 +31,7 @@ import {
   get_position_hash,
   get_structure_fingerprint,
   compute_force_data,
+  compute_magmom_data,
   get_majority_element,
   get_majority_color,
 } from '$lib/structure/scene/render-data'
@@ -627,5 +628,45 @@ describe(`get_majority_color`, () => {
 
   test(`returns fallback for undefined site`, () => {
     expect(get_majority_color(undefined, { Si: `#aabb00` }, `#123456`)).toBe(`#123456`)
+  })
+})
+
+describe(`compute_magmom_data`, () => {
+  const UP = `#e0524a`, DOWN = `#4a6fe0`
+
+  test(`returns empty for sites without magmom`, () => {
+    expect(compute_magmom_data([make_site([0, 0, 0])], 1, UP, DOWN)).toHaveLength(0)
+  })
+
+  test(`scalar collinear magmom → z arrow, coloured by sign`, () => {
+    const sites = [
+      make_site([0, 0, 0], `Fe`, { magmom: 2.5 }),
+      make_site([1, 0, 0], `Fe`, { magmom: -2.5 }),
+    ]
+    const r = compute_magmom_data(sites, 1.5, UP, DOWN)
+    expect(r).toHaveLength(2)
+    expect(r[0].vector).toEqual([0, 0, 2.5])
+    expect(r[0].color).toBe(UP)
+    expect(r[0].scale).toBe(1.5)
+    expect(r[1].vector).toEqual([0, 0, -2.5])
+    expect(r[1].color).toBe(DOWN)
+  })
+
+  test(`non-collinear 3-vector magmom passes through with magnitude`, () => {
+    const sites = [make_site([0, 0, 0], `Ni`, { magmom: [0, 3, 4] })]
+    const r = compute_magmom_data(sites, 1, UP, DOWN)
+    expect(r).toHaveLength(1)
+    expect(r[0].vector).toEqual([0, 3, 4])
+    expect(r[0].magnitude).toBeCloseTo(5)
+    expect(r[0].color).toBe(UP) // z-component >= 0
+  })
+
+  test(`skips effectively-zero moments`, () => {
+    const sites = [
+      make_site([0, 0, 0], `O`, { magmom: 0 }),
+      make_site([1, 0, 0], `O`, { magmom: 0.0001 }),
+      make_site([2, 0, 0], `Fe`, { magmom: 1.2 }),
+    ]
+    expect(compute_magmom_data(sites, 1, UP, DOWN)).toHaveLength(1)
   })
 })
