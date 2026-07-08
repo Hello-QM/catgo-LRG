@@ -60,16 +60,25 @@
     const renderer = threlte.renderer
     const scene = threlte.scene
     if (!renderer || !scene) return
-    const pmrem = new PMREMGenerator(renderer)
-    const room = new RoomEnvironment()
-    env_texture = pmrem.fromScene(room, 0.04).texture
-    scene.environment = env_texture
-    ;(scene as unknown as { environmentIntensity: number }).environmentIntensity =
-      env_intensity
-    pmrem.dispose()
-    threlte.invalidate()
+    // IBL is a nice-to-have: baking RoomEnvironment through PMREM needs float
+    // render-target support that some headless/software WebGL backends (CI's
+    // SwiftShader) lack. Never let it throw — a failed bake must not take down
+    // the whole scene; fall back to just the key + ambient lights.
+    try {
+      const pmrem = new PMREMGenerator(renderer)
+      const room = new RoomEnvironment()
+      env_texture = pmrem.fromScene(room, 0.04).texture
+      scene.environment = env_texture
+      ;(scene as unknown as { environmentIntensity: number }).environmentIntensity =
+        env_intensity
+      pmrem.dispose()
+      threlte.invalidate()
+    } catch (err) {
+      console.warn(`[SceneLighting] IBL environment unavailable; skipping`, err)
+      env_texture = undefined
+    }
     return () => {
-      if (scene.environment === env_texture) scene.environment = null
+      if (env_texture && scene.environment === env_texture) scene.environment = null
       env_texture?.dispose()
       env_texture = undefined
     }
