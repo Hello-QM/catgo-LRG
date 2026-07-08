@@ -9,6 +9,7 @@ import type { AnyStructure } from '$lib'
 import type { StructureTabState } from '../pane-utils'
 import { findLeafById, leaves, isTerminalLeaf, structurePane } from '../pane-tree'
 import { pending_open_structure } from '$lib/workflow/workflow-state.svelte'
+import { parse_molfile } from './molfile'
 
 /**
  * Open a FILE PATH in a new app window that loads/streams it there. Used for
@@ -106,7 +107,13 @@ export async function parse_and_open_structure_window(content: string, filename:
       }
     }
     const { parse_structure_file } = await import(`$lib/structure/parse`)
-    const parsed = parse_structure_file(content, filename)
+    let parsed: AnyStructure | null | undefined = null
+    try {
+      parsed = parse_structure_file(content, filename) as AnyStructure | null | undefined
+    } catch (err) {
+      if (!/\.(mol|sdf)$/i.test(filename)) throw err
+    }
+    parsed ??= /\.(mol|sdf)$/i.test(filename) ? parse_molfile(content) as AnyStructure | null : null
     if (parsed) {
       await open_structure_in_new_window(parsed as AnyStructure, filename, is_tauri, reuse)
     }

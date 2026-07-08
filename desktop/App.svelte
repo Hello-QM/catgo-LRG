@@ -93,6 +93,7 @@
   import { create_tab_manager } from './lib/tab-manager.svelte'
   // Extracted close-all helpers (pure functions)
   import { build_close_all_entries, execute_close_all_saves, close_all_structure_tabs } from './lib/close-all-helper'
+  import { parse_molfile } from './lib/molfile'
   // Extracted keyboard shortcuts (pure function factory)
   import { create_handle_keydown } from './lib/keyboard-shortcuts'
   // Extracted popout manager
@@ -652,6 +653,18 @@
     { name: `Water`, description: `H₂O molecule`, formula: `H₂O`, data: water as unknown as AnyStructure },
   ]
 
+  function parse_structure_text(text: string, filename: string): AnyStructure | null {
+    let parsed: AnyStructure | null | undefined = null
+    try {
+      parsed = parse_structure_file(text, filename) as AnyStructure | null | undefined
+    } catch (err) {
+      if (!/\.(mol|sdf)$/i.test(filename)) throw err
+    }
+    if (parsed?.sites?.length) return parsed as AnyStructure
+    if (/\.(mol|sdf)$/i.test(filename)) return parse_molfile(text) as AnyStructure | null
+    return null
+  }
+
   $effect(() => {
     sidebar.persist()
   })
@@ -712,7 +725,7 @@
     sidebar.editor_on_save = (new_content: string) => {
       // Parse text back into structure and update the pane
       try {
-        const parsed = parse_structure_file(new_content, filename)
+        const parsed = parse_structure_text(new_content, filename)
         if (parsed?.sites?.length) {
           const target_ts = tab_states[target_tab_id]
           const leaf = target_ts ? findLeafById(target_ts.root, target_leaf_id) : null
@@ -1319,7 +1332,7 @@
       }
     }
 
-    const parsed = parse_structure_file(text, filename)
+    const parsed = parse_structure_text(text, filename)
     if (parsed?.sites?.length) {
       return { kind: `entry`, entry: { filename, source_path: null, format: ext, structure: parsed, trajectory: undefined, is_trajectory: false, cube_file: null } }
     }
@@ -1445,7 +1458,7 @@
     if (p.viewer_kind === `molstar`) {
       // → native: parse the raw text on demand (lazy; only when overridden).
       if (p.bio_raw_content) {
-        const parsed = parse_structure_file(p.bio_raw_content, p.source_filename || `bio`)
+        const parsed = parse_structure_text(p.bio_raw_content, p.source_filename || `bio`)
         if (parsed?.sites?.length) {
           p.structure = parsed
           p.initial_site_count = parsed.sites.length
@@ -2111,7 +2124,7 @@
   bind:this={file_input_ref}
   type="file"
   multiple
-  accept=".cif,.poscar,.vasp,.xyz,.json,.extxyz,.traj,.h5,.hdf5,.gz,.bz2,.xz,.zst,.cube,.cub,.xml,.data,.lammps,*"
+  accept=".cif,.poscar,.vasp,.xyz,.json,.extxyz,.mol,.sdf,.mol2,.traj,.h5,.hdf5,.gz,.bz2,.xz,.zst,.cube,.cub,.xml,.data,.lammps,*"
   onchange={handle_file_input}
   hidden
 />
