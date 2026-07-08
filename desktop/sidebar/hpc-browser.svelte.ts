@@ -42,14 +42,19 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
     if (hpc_merge_timer) clearTimeout(hpc_merge_timer)
   }
 
-  /** Read file content — local filesystem (read_file) or remote (readRemoteFile) */
-  async function read_file_content(file: RemoteFile): Promise<string | null> {
+  /** Read file content — local filesystem (read_file) or remote (readRemoteFile).
+   *  `full` reads without the default byte cap (max_bytes=0) — required for
+   *  multi-frame files (vasprun.xml/OUTCAR): a truncated read yields malformed XML
+   *  or a partial trajectory, which fails to parse ("Unsupported text format").
+   *  Streamable huge files (XDATCAR/xyz) are intercepted earlier and never reach
+   *  here, so an unlimited read of what remains is safe. */
+  async function read_file_content(file: RemoteFile, full = false): Promise<string | null> {
     const source = callbacks.get_source()
     if (source === LOCAL_SESSION_ID) {
       const result = await read_file(file.path)
       return result.content || null
     }
-    const result = await readRemoteFile(source, file.path)
+    const result = await readRemoteFile(source, file.path, full ? 0 : undefined)
     if (!result.success) {
       set_hpc_merge_status(`error`, `Failed to read ${file.name}: ${result.message || `unknown error`}`)
       return null
@@ -105,7 +110,7 @@ export function create_hpc_browser_state(callbacks: HpcBrowserCallbacks) {
           return
         }
       }
-      const content = await read_file_content(file)
+      const content = await read_file_content(file, true) // full read — no byte cap
       if (!content) return
       const filename = file.path.split(/[/\\]/).pop() || file.name
       // Auto-detect trajectory files
