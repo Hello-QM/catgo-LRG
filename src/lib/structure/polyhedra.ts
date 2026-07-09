@@ -540,3 +540,10 @@ export function get_metals_in_structure(structure: AnyStructure | undefined): st
   }
   return [...metals].sort()
 }
+
+/** Map a polyhedra render style to the face shader's u_style int. */
+export function polyhedra_style_to_int(
+  style: import('$lib/settings').PolyhedraStyle,
+): 0 | 1 | 2 {
+  return style === `glass` ? 2 : style === `matte` ? 1 : 0
+}

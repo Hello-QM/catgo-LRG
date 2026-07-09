@@ -696,6 +696,16 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       description:
         `Only show polyhedra around metal atoms (uncheck to include non-metals)`,
     },
+    polyhedra_style: {
+      value: `flat` as const,
+      description:
+        `Polyhedra face rendering: classic flat facets, smooth matte, or frosted glass`,
+      enum: {
+        flat: `Flat`,
+        matte: `Smooth Matte`,
+        glass: `Glass`,
+      },
+    },
     polyhedra_color_mode: {
       value: `vertex` as const,
       description:
@@ -747,7 +757,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maximum: 1,
     },
     polyhedra_edge_color: {
-      value: `#cfd6e2`,
+      value: `#333333`,
       description: `Color of polyhedra edges`,
     },
     polyhedra_edge_width: {

@@ -62,6 +62,9 @@ export type PolyhedraOpacityMode = (typeof polyhedra_opacity_modes)[number]
 export const polyhedra_color_modes = [`vertex`, `center`, `uniform`] as const
 export type PolyhedraColorMode = (typeof polyhedra_color_modes)[number]
 
+export const polyhedra_styles = [`flat`, `matte`, `glass`] as const
+export type PolyhedraStyle = (typeof polyhedra_styles)[number]
+
 // Reusable type definitions for common setting patterns
 type DisplayConfigType = {
   x_grid: SettingType<boolean>
@@ -260,6 +263,7 @@ export interface SettingsConfig {
     polyhedra_max_neighbors: SettingType<number>
     polyhedra_bond_scale: SettingType<number>
     polyhedra_metals_only: SettingType<boolean>
+    polyhedra_style: SettingType<PolyhedraStyle>
     polyhedra_color_mode: SettingType<PolyhedraColorMode>
     polyhedra_color: SettingType<string>
     polyhedra_show_edges: SettingType<boolean>
