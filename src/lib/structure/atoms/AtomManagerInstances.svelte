@@ -221,6 +221,12 @@
       );
     }
 
+    // ACES filmic tonemap — rolls off bright specular so glossy highlights read
+    // soft/desaturated (publication-figure look) instead of hard clipped dots.
+    vec3 aces_tonemap(vec3 x) {
+      return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    }
+
     void main() {
       // PoC hidden-atom discard: hidden_site_ids is implemented by forcing
       // opacity = 0 in the CPU side, so discard here saves all fragment work.
@@ -323,12 +329,36 @@
         vec2 muv = normal.xy * 0.5 + 0.5;
         color = baseColor * texture2D(uMatcap, muv).rgb;
       } else {
-        // ── Glossy (default): Blinn-Phong diffuse + specular ──
-        float diffuse = max(dot(normal, lightDirView), 0.0);
+        // ── Glossy: Cook-Torrance GGX PBR (equivalent to a MeshStandardMaterial
+        //    at roughness 0.2, metalness 0) lit by ambient + a near-head-on key.
+        //    GGX(rough=0.2) is what gives the SMALL, bright, centred hot spot;
+        //    ACES rolls the HDR key light back to display range. ──
+        float rough = 0.2;
+        float a = rough * rough;
+        float a2 = a * a;
+        float NdotL = max(dot(normal, lightDirView), 0.0);
+        float NdotV = max(dot(normal, viewDir), 1e-4);
         vec3 halfDir = normalize(lightDirView + viewDir);
-        float specular = pow(max(dot(normal, halfDir), 0.0), 60.0);
-        color = baseColor * (uAmbientIntensity + uDirectionalIntensity * diffuse)
-                 + vec3(1.0) * specular * 0.6 * uSpecStrength;
+        float NdotH = max(dot(normal, halfDir), 0.0);
+        float VdotH = max(dot(viewDir, halfDir), 0.0);
+        // GGX normal distribution (tight lobe for low roughness).
+        float dn = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+        float D = a2 / (3.14159265 * dn * dn);
+        // Smith-Schlick geometry.
+        float k = a * 0.5;
+        float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
+        // Schlick Fresnel, dielectric F0 = 0.04.
+        float F = 0.04 + 0.96 * pow(1.0 - VdotH, 5.0);
+        float specular = (D * G * F) / (4.0 * NdotV * NdotL + 1e-4);
+        // Energy-conserving Lambert (÷π) on the key, like MeshStandardMaterial —
+        // without it the base*key diffuse blew out (too bright, over-saturated).
+        // uDirectionalIntensity = HDR key strength, uAmbientIntensity = fill.
+        vec3 color2 = baseColor * (uAmbientIntensity + uDirectionalIntensity * NdotL * 0.31831)
+                 + vec3(1.0) * specular * uDirectionalIntensity * NdotL * uSpecStrength;
+        // Soft rim shadow: darken the grazing silhouette a touch (NdotV→0 at the
+        // edge) for a little volume / ambient-occlusion feel, like VESTA spheres.
+        color2 *= mix(0.6, 1.0, smoothstep(0.0, 0.5, NdotV));
+        color = aces_tonemap(color2);
       }
 
       gl_FragColor = vec4(linearTosRGB(color), vOpacity * coverage);

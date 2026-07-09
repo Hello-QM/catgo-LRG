@@ -1262,6 +1262,7 @@
       polyhedra_max_neighbors: scene_props.polyhedra_max_neighbors,
       polyhedra_bond_scale: scene_props.polyhedra_bond_scale,
       polyhedra_edge_color: scene_props.polyhedra_edge_color,
+      polyhedra_edge_width: scene_props.polyhedra_edge_width,
       hide_polyhedra_center_atoms: scene_props.hide_polyhedra_center_atoms,
       hide_polyhedra_internal_bonds: scene_props.hide_polyhedra_internal_bonds,
     }}
@@ -1280,6 +1281,7 @@
       scene_props.polyhedra_opacity_far = DEFAULTS.structure.polyhedra_opacity_far
       scene_props.polyhedra_edge_opacity = DEFAULTS.structure.polyhedra_edge_opacity
       scene_props.polyhedra_edge_color = DEFAULTS.structure.polyhedra_edge_color
+      scene_props.polyhedra_edge_width = DEFAULTS.structure.polyhedra_edge_width
       scene_props.polyhedra_color_overrides = DEFAULTS.structure.polyhedra_color_overrides
       scene_props.hide_polyhedra_center_atoms = DEFAULTS.structure.hide_polyhedra_center_atoms
       scene_props.hide_polyhedra_internal_bonds = DEFAULTS.structure.hide_polyhedra_internal_bonds
@@ -1430,6 +1432,16 @@
             max="1"
             step="0.05"
             bind:value={scene_props.polyhedra_edge_opacity}
+          />
+        </label>
+        <label>
+          {t('structure.edge_width')}
+          <input
+            type="range"
+            min="0.5"
+            max="5"
+            step="0.1"
+            bind:value={scene_props.polyhedra_edge_width}
           />
         </label>
       {/if}

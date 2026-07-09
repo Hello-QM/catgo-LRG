@@ -787,7 +787,7 @@
     width = $bindable(0),
     height = $bindable(0),
     reset_text = `Reset camera (or double-click)`,
-    color_scheme = $bindable(`Vesta`),
+    color_scheme = $bindable(`Vesta Soft`),
     hovered = $bindable(false),
     dragover = $bindable(false),
     allow_file_drop = true,

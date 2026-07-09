@@ -269,6 +269,7 @@ export interface SettingsConfig {
     polyhedra_opacity_far: SettingType<number>
     polyhedra_edge_opacity: SettingType<number>
     polyhedra_edge_color: SettingType<string>
+    polyhedra_edge_width: SettingType<number>
     polyhedra_color_overrides: SettingType<Record<string, string>>
     hide_polyhedra_center_atoms: SettingType<boolean>
     hide_polyhedra_internal_bonds: SettingType<boolean>

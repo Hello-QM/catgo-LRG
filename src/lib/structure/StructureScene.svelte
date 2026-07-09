@@ -273,7 +273,10 @@
   function __hex_to_linear_rgb(hex: string): [number, number, number] {
     const cached = __bond_color_cache.get(hex)
     if (cached !== undefined) return cached
-    __bond_color_tmp.set(hex).convertSRGBToLinear()
+    // Color.set(hex) already converts sRGB→linear (three ColorManagement is on
+    // by default), so .r/.g/.b are LINEAR. An extra .convertSRGBToLinear() here
+    // double-darkened every colour — mid-tones like Fe gold turned muddy brown.
+    __bond_color_tmp.set(hex)
     const out: [number, number, number] = [__bond_color_tmp.r, __bond_color_tmp.g, __bond_color_tmp.b]
     __bond_color_cache.set(hex, out)
     return out
@@ -649,7 +652,8 @@
     polyhedra_opacity_near = 0.6,
     polyhedra_opacity_far = 0.1,
     polyhedra_edge_opacity = 0.8,
-    polyhedra_edge_color = `#333333`,
+    polyhedra_edge_color = `#cfd6e2`,
+    polyhedra_edge_width = 1.5,
     polyhedra_color_overrides = {} as Record<string, string>,
     hide_polyhedra_center_atoms = true,
     hide_polyhedra_internal_bonds = true,
@@ -922,6 +926,7 @@
     polyhedra_opacity_far?: number
     polyhedra_edge_opacity?: number
     polyhedra_edge_color?: string
+    polyhedra_edge_width?: number
     polyhedra_color_overrides?: Record<string, string>
     hide_polyhedra_center_atoms?: boolean
     hide_polyhedra_internal_bonds?: boolean
@@ -2073,7 +2078,7 @@
     const key = `${color_hex}|${opacity}|${transparent ? 1 : 0}|${double_sided ? 1 : 0}`
     const cached = _toon_material_cache.get(key)
     if (cached) return cached
-    _toon_tmp_color.set(color_hex).convertSRGBToLinear()
+    _toon_tmp_color.set(color_hex) // .set already sRGB→linear (ColorManagement on)
     const mat = new ShaderMaterial({
       vertexShader: toon_vertex_shader,
       fragmentShader: toon_fragment_shader,
@@ -2949,7 +2954,8 @@
   })
 
   const EMPTY_POLYHEDRA_GEOM: MergedPolyhedraGeometry = {
-    face_positions: new Float32Array(0), face_colors: new Float32Array(0),
+    face_positions: new Float32Array(0), face_normals: new Float32Array(0),
+    face_colors: new Float32Array(0),
     face_polyhedron_ids: new Float32Array(0), face_count: 0,
     edge_positions: new Float32Array(0), edge_count: 0,
   }
@@ -5400,6 +5406,7 @@
             opacity_far={polyhedra_opacity_far}
             edge_color={polyhedra_edge_color}
             edge_opacity={polyhedra_edge_opacity}
+            edge_width={polyhedra_edge_width}
             show_edges={polyhedra_show_edges}
             camera_position={_polyhedra_camera_pos}
             depth_range={_polyhedra_depth_range}

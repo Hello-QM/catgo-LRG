@@ -23,6 +23,9 @@ export interface PolyhedronData {
 
 export interface MergedPolyhedraGeometry {
   face_positions: Float32Array
+  /** Per-vertex smooth normal (radial from the polyhedron centroid) — gives the
+   *  faces a soft glassy gradient instead of hard flat facets. */
+  face_normals: Float32Array
   face_colors: Float32Array
   face_polyhedron_ids: Float32Array
   face_count: number
@@ -346,6 +349,7 @@ export function merge_polyhedra_geometry(
   if (polyhedra.length === 0) {
     return {
       face_positions: new Float32Array(0),
+      face_normals: new Float32Array(0),
       face_colors: new Float32Array(0),
       face_polyhedron_ids: new Float32Array(0),
       face_count: 0,
@@ -366,6 +370,7 @@ export function merge_polyhedra_geometry(
   }
 
   const face_positions = new Float32Array(total_tris * 9)
+  const face_normals = new Float32Array(total_tris * 9)
   const face_colors = new Float32Array(total_tris * 9)
   const face_polyhedron_ids = new Float32Array(total_tris * 3)
   const edge_positions = new Float32Array(max_edges * 6)
@@ -388,6 +393,20 @@ export function merge_polyhedra_geometry(
   for (let p = 0; p < polyhedra.length; p++) {
     const poly = polyhedra[p]
     const hull = hulls[p]
+
+    // Vertex centroid — the radial direction (vertex − centroid) is a good smooth
+    // outward normal for a convex coordination polyhedron, giving faces a soft
+    // glassy gradient instead of hard flat facets.
+    let cx = 0, cy = 0, cz = 0
+    for (const vtx of poly.vertices) {
+      cx += vtx[0]
+      cy += vtx[1]
+      cz += vtx[2]
+    }
+    const nv = poly.vertices.length || 1
+    cx /= nv
+    cy /= nv
+    cz /= nv
 
     // Resolve per-hull-vertex colors once (closure indexes local vertex order)
     const vert_rgb = new Float32Array(poly.vertices.length * 3)
@@ -417,6 +436,17 @@ export function merge_polyhedra_geometry(
         face_positions[base] = vert[0]
         face_positions[base + 1] = vert[1]
         face_positions[base + 2] = vert[2]
+        // Smooth outward normal: radial from the polyhedron centroid.
+        let snx = vert[0] - cx
+        let sny = vert[1] - cy
+        let snz = vert[2] - cz
+        const slen = Math.hypot(snx, sny, snz) || 1
+        snx /= slen
+        sny /= slen
+        snz /= slen
+        face_normals[base] = snx
+        face_normals[base + 1] = sny
+        face_normals[base + 2] = snz
         face_colors[base] = vert_rgb[local * 3]
         face_colors[base + 1] = vert_rgb[local * 3 + 1]
         face_colors[base + 2] = vert_rgb[local * 3 + 2]
@@ -458,6 +488,7 @@ export function merge_polyhedra_geometry(
 
   return {
     face_positions,
+    face_normals,
     face_colors,
     face_polyhedron_ids,
     face_count: total_tris,

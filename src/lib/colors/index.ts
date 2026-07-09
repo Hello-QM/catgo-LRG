@@ -4,9 +4,11 @@ import type { elem_symbols } from '../labels'
 import alloy_colors from './alloy-colors.json' with { type: 'json' }
 import dark_mode_colors from './dark-mode-colors.json' with { type: 'json' }
 import jmol_colors from './jmol-colors.json' with { type: 'json' }
+import jmol_soft_colors from './jmol-soft-colors.json' with { type: 'json' }
 import muted_colors from './muted-colors.json' with { type: 'json' }
 import pastel_colors from './pastel-colors.json' with { type: 'json' }
 import vesta_colors from './vesta-colors.json' with { type: 'json' }
+import vesta_soft_colors from './vesta-soft-colors.json' with { type: 'json' }
 
 // Extract color scheme interpolate function names from d3-scale-chromatic
 export type D3InterpolateName = keyof typeof d3_sc & `interpolate${string}`
@@ -61,27 +63,41 @@ export const pastel_hex = rgb_scheme_to_hex(pastel_colors)
 export const muted_hex = rgb_scheme_to_hex(muted_colors)
 export const dark_mode_hex = rgb_scheme_to_hex(dark_mode_colors)
 
-// Soften a hex palette toward a pastel, "publication-figure" look: pull
-// saturation down and lift lightness so default renders read as tastefully
-// muted rather than the harsh primaries of raw VESTA. Mirrors the vesta-soft
-// palettes shipped by figure-first viewers; derived (not hand-tabulated) so it
-// stays in sync with vesta-colors.json.
+// Soften a palette toward a muted, publication-figure look: drop saturation +
+// lift lightness. Used only to FILL elements the hand-tabulated soft tables don't
+// cover, so every scheme keeps identical (full) element coverage.
 const soften_scheme = (scheme: Record<string, string>): Record<string, string> =>
   Object.fromEntries(
     Object.entries(scheme).map(([sym, hex]) => {
       const c = hsl(hex)
-      c.s *= 0.72
-      c.l = Math.min(0.82, c.l * 0.82 + 0.2)
+      c.s *= 0.6
+      c.l = Math.min(0.8, c.l * 0.72 + 0.24)
       return [sym, c.formatHex()]
     }),
   )
 
-export const vesta_soft_hex = soften_scheme(vesta_hex)
+// Soft palette = the hand-tabulated table's exact value where present, else a
+// derived soften of the base. Built over the BASE palette's key set so the soft
+// scheme has identical element coverage to its base (a test invariant + no gaps).
+const build_soft = (
+  base_hex: Record<string, string>,
+  table_colors: Record<string, number[]>,
+): Record<string, string> => {
+  const table = rgb_scheme_to_hex(table_colors)
+  const soft = soften_scheme(base_hex)
+  return Object.fromEntries(
+    Object.keys(base_hex).map((sym) => [sym, table[sym] ?? soft[sym]]),
+  )
+}
+
+export const vesta_soft_hex = build_soft(vesta_hex, vesta_soft_colors)
+export const jmol_soft_hex = build_soft(jmol_hex, jmol_soft_colors)
 
 export const element_color_schemes = {
   Vesta: vesta_hex,
   'Vesta Soft': vesta_soft_hex,
   Jmol: jmol_hex,
+  'Jmol Soft': jmol_soft_hex,
   Alloy: alloy_hex,
   Pastel: pastel_hex,
   Muted: muted_hex,
@@ -89,7 +105,10 @@ export const element_color_schemes = {
 } as const
 
 export type ColorSchemeName = keyof typeof element_color_schemes
-export const default_element_colors = { ...vesta_hex }
+// Default to the SOFT palette so first renders are the muted, publication-figure
+// look (matches the config default color_scheme = 'Vesta Soft'). Pick 'Vesta'
+// explicitly for the raw high-saturation primaries.
+export const default_element_colors = { ...vesta_soft_hex }
 
 // Helper function to detect if a value is a color string
 export const is_color = (val: unknown): val is string => {
