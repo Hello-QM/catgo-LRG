@@ -156,7 +156,19 @@ Android shares the mobile workspace, native SSH/SFTP, terminal access, structure
 
 The command line, HTTP/stdio MCP tools, and research skills are interfaces for driving CatGo's backend, workflows, and files—not separate graphical platforms.
 
+**Install the `catgo` Python package.** It ships the full app (the web UI is bundled in the wheel) plus the CLI, MCP server, and skills. A bare `catgo` launches the app.
+
 ```bash
+pip install catgo                       # pip
+uv tool install catgo                   # uv (isolated tool); or: uv pip install catgo
+# conda / mamba users: install into an environment, then pip install
+mamba create -n catgo "python>=3.10" -y && mamba activate catgo && pip install catgo
+```
+
+Then:
+
+```bash
+catgo            # launch the app
 catgo setup
 catgo serve
 catgo status
