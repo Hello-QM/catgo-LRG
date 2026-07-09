@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { polyhedra_style_to_int } from './polyhedra'
   import type { MergedPolyhedraGeometry } from './polyhedra'
-  import type { PolyhedraOpacityMode } from '$lib/settings'
+  import type { PolyhedraOpacityMode, PolyhedraStyle } from '$lib/settings'
   import { T, useThrelte } from '@threlte/core'
   import {
     BufferGeometry,
@@ -21,8 +22,9 @@
     opacity = 0.4,
     opacity_near = 0.6,
     opacity_far = 0.1,
+    render_style = `flat` as PolyhedraStyle,
     whiteness = 0.35,
-    edge_color = `#cfd6e2`,
+    edge_color = `#333333`,
     edge_opacity = 0.8,
     edge_width = 1.5,
     show_edges = true,
@@ -34,6 +36,7 @@
     opacity?: number
     opacity_near?: number
     opacity_far?: number
+    render_style?: PolyhedraStyle
     whiteness?: number
     edge_color?: string
     edge_opacity?: number
@@ -88,28 +91,43 @@
     uniform float u_depth_max;
     uniform float u_whiteness;
     uniform vec3 u_camera_pos;
+    uniform int u_style; // 0 = flat facets, 1 = smooth matte, 2 = frosted glass
 
     varying vec3 vColor;
     varying vec3 vWorldPosition;
     varying vec3 vNormal;
 
     void main() {
-      // Smooth radial normal (soft glassy gradient, not hard facets).
-      vec3 N = normalize(vNormal);
       vec3 V = normalize(u_camera_pos - vWorldPosition);
+
+      // flat: hard facet normal from screen-space derivatives (classic look);
+      // matte/glass: smooth radial normal (soft gradient).
+      vec3 N;
+      if (u_style == 0) {
+        N = normalize(cross(dFdx(vWorldPosition), dFdy(vWorldPosition)));
+      } else {
+        N = normalize(vNormal);
+      }
       float NdotV = abs(dot(N, V));
 
-      // Frosted tint: lift the element hue toward white for a glass look while
-      // keeping it identifiable.
-      vec3 tint = mix(vColor, vec3(1.0), u_whiteness);
-
-      // Soft diffuse + Fresnel rim glow (bright at grazing silhouette — reads as
-      // a glass edge) + a subtle head-lit specular sheen. This is the extra
-      // polish over a plain semi-transparent PBR face.
-      float diffuse = 0.62 + 0.38 * NdotV;
-      float fresnel = pow(1.0 - NdotV, 2.5);
-      float spec = pow(NdotV, 26.0) * 0.35;
-      vec3 color = tint * diffuse + vec3(1.0) * (fresnel * 0.45 + spec);
+      vec3 color;
+      float fresnel = 0.0;
+      if (u_style == 0) {
+        // Classic headlamp lambert on raw element color.
+        color = vColor * (0.3 + 0.7 * NdotV);
+      } else if (u_style == 1) {
+        // Smooth matte: soft diffuse, raw color, no tint/rim/spec.
+        color = vColor * (0.62 + 0.38 * NdotV);
+      } else {
+        // Frosted glass: lift the element hue toward white, add a Fresnel rim
+        // glow (bright at grazing silhouette — reads as a glass edge) and a
+        // subtle head-lit specular sheen.
+        vec3 tint = mix(vColor, vec3(1.0), u_whiteness);
+        float diffuse = 0.62 + 0.38 * NdotV;
+        fresnel = pow(1.0 - NdotV, 2.5);
+        float spec = pow(NdotV, 26.0) * 0.35;
+        color = tint * diffuse + vec3(1.0) * (fresnel * 0.45 + spec);
+      }
 
       // Base opacity (uniform or depth-graded).
       float alpha;
@@ -120,7 +138,8 @@
         float t = clamp((dist - u_depth_min) / (u_depth_max - u_depth_min + 0.001), 0.0, 1.0);
         alpha = mix(u_opacity_near, u_opacity_far, t);
       }
-      // Densify the rim a touch so silhouettes read as glass edges.
+      // Glass only: densify the rim so silhouettes read as glass edges
+      // (fresnel stays 0.0 in flat/matte, so this is a no-op there).
       alpha = mix(alpha, min(1.0, alpha + 0.3), fresnel);
 
       gl_FragColor = vec4(color, alpha);
@@ -139,6 +158,7 @@
       u_depth_max: { value: 100 },
       u_whiteness: { value: 0.35 },
       u_camera_pos: { value: [0, 0, 50] },
+      u_style: { value: 0 },
     },
     transparent: true,
     depthWrite: false,
@@ -153,6 +173,7 @@
     face_material.uniforms.u_opacity_mode.value = opacity_mode === `depth_gradient` ? 1 : 0
     face_material.uniforms.u_whiteness.value = whiteness
     face_material.uniforms.u_camera_pos.value = camera_position
+    face_material.uniforms.u_style.value = polyhedra_style_to_int(render_style)
     face_material.uniforms.u_depth_min.value = depth_range[0]
     face_material.uniforms.u_depth_max.value = depth_range[1]
     face_material.needsUpdate = true

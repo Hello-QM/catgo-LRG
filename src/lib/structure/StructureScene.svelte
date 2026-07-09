@@ -644,6 +644,7 @@
     polyhedra_max_neighbors = 8,
     polyhedra_bond_scale = DEFAULTS.structure.polyhedra_bond_scale,
     polyhedra_metals_only = true,
+    polyhedra_style = `flat` as import('$lib/settings').PolyhedraStyle,
     polyhedra_color_mode = `vertex` as import('$lib/settings').PolyhedraColorMode,
     polyhedra_color = `#4a90d9`,
     polyhedra_show_edges = true,
@@ -652,7 +653,7 @@
     polyhedra_opacity_near = 0.6,
     polyhedra_opacity_far = 0.1,
     polyhedra_edge_opacity = 0.8,
-    polyhedra_edge_color = `#cfd6e2`,
+    polyhedra_edge_color = `#333333`,
     polyhedra_edge_width = 1.5,
     polyhedra_color_overrides = {} as Record<string, string>,
     hide_polyhedra_center_atoms = true,
@@ -917,6 +918,7 @@
     polyhedra_max_neighbors?: number
     polyhedra_bond_scale?: number
     polyhedra_metals_only?: boolean
+    polyhedra_style?: import('$lib/settings').PolyhedraStyle
     polyhedra_color_mode?: import('$lib/settings').PolyhedraColorMode
     polyhedra_color?: string
     polyhedra_show_edges?: boolean
@@ -5400,6 +5402,7 @@
         {#if show_polyhedra && polyhedra_geometry.face_count > 0}
           <CoordinationPolyhedra
             geometry={polyhedra_geometry}
+            render_style={polyhedra_style}
             opacity_mode={polyhedra_opacity_mode}
             opacity={polyhedra_opacity}
             opacity_near={polyhedra_opacity_near}
