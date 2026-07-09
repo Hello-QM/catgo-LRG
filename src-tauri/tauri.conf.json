@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "CatGo",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "identifier": "com.catgo.app",
   "build": {
     "frontendDist": "../build-desktop",
