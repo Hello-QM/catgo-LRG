@@ -1257,6 +1257,7 @@
       show_polyhedra: scene_props.show_polyhedra,
       polyhedra_opacity: scene_props.polyhedra_opacity,
       polyhedra_opacity_mode: scene_props.polyhedra_opacity_mode,
+      polyhedra_style: scene_props.polyhedra_style,
       polyhedra_color_mode: scene_props.polyhedra_color_mode,
       polyhedra_show_edges: scene_props.polyhedra_show_edges,
       polyhedra_max_neighbors: scene_props.polyhedra_max_neighbors,
@@ -1272,6 +1273,7 @@
       scene_props.polyhedra_min_coordination = DEFAULTS.structure.polyhedra_min_coordination
       scene_props.polyhedra_max_neighbors = DEFAULTS.structure.polyhedra_max_neighbors
       scene_props.polyhedra_bond_scale = DEFAULTS.structure.polyhedra_bond_scale
+      scene_props.polyhedra_style = DEFAULTS.structure.polyhedra_style
       scene_props.polyhedra_color_mode = DEFAULTS.structure.polyhedra_color_mode
       scene_props.polyhedra_color = DEFAULTS.structure.polyhedra_color
       scene_props.polyhedra_show_edges = DEFAULTS.structure.polyhedra_show_edges
@@ -1317,6 +1319,14 @@
           {/each}
         </div>
       {/if}
+      <label>
+        {t(`structure.polyhedra_style_label`)}
+        <select bind:value={scene_props.polyhedra_style}>
+          <option value="flat">{t(`structure.style_flat`)}</option>
+          <option value="matte">{t(`structure.style_matte`)}</option>
+          <option value="glass">{t(`structure.style_glass`)}</option>
+        </select>
+      </label>
       <label>
         {t('structure.min_coordination')}
         <input
