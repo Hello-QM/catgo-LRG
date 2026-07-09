@@ -12,6 +12,7 @@ import { expect, test } from '@playwright/test'
 // Avoid `networkidle` (HMR websocket keeps the connection pool busy).
 
 test(`launcher renders the sample structure preview`, async ({ page }) => {
+  test.setTimeout(120_000) // must outlast the 60s canvas expect below
   const errors: string[] = []
   page.on(`console`, (msg) => {
     if (msg.type() === `error` || msg.type() === `warning`) {
