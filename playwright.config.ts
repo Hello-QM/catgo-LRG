@@ -18,6 +18,12 @@ export default {
     timeout: 180_000,
   },
   workers: CI ? 4 : 8,
+  // The launcher smoke test renders a live WebGL canvas; the FIRST test on a
+  // cold CI worker (SwiftShader + WASM + dev-server warm-up) intermittently
+  // exceeds the 20s canvas-visible wait, while later tests pass warm. Retry in
+  // CI so a cold-start flake self-heals on a warm re-run. A genuine breakage
+  // still fails all attempts, so this narrows flakiness without masking bugs.
+  retries: CI ? 2 : 0,
   timeout: 30_000, // Global timeout per test
   // Cap whole-run wall time so a hung navigation can't run to the job ceiling.
   globalTimeout: CI ? 15 * 60_000 : undefined,
