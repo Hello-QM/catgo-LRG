@@ -197,7 +197,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       ) as Readonly<Record<ShowBonds, string>>,
     },
     bond_color: {
-      value: `#666666`,
+      value: `#727272`,
       description: `Color for bonds (hex color code)`,
     },
     incomplete_periodic_edge_mode: {
@@ -535,7 +535,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maximum: 50.0,
     },
     force_color: {
-      value: `#ff0000`,
+      value: `#e15b4c`,
       description: `Color for force vectors`,
     },
     force_shaft_radius: {
@@ -593,11 +593,11 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maximum: 10,
     },
     magmom_up_color: {
-      value: `#e0524a`,
+      value: `#d7645b`,
       description: `Colour for spin-up magnetic moment arrows`,
     },
     magmom_down_color: {
-      value: `#4a6fe0`,
+      value: `#5a7bd7`,
       description: `Colour for spin-down magnetic moment arrows`,
     },
     show_cell: {
@@ -722,7 +722,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       },
     },
     polyhedra_color: {
-      value: `#4a90d9`,
+      value: `#5593d6`,
       description: `Custom polyhedra face color (used when color mode is Custom Color)`,
     },
     polyhedra_show_edges: {
@@ -773,7 +773,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     },
     polyhedra_color_overrides: {
       value: {} as Record<string, string>,
-      description: `Per-element color overrides for polyhedra (e.g. {"Zr": "#00aaff"})`,
+      description: `Per-element color overrides for polyhedra (e.g. {"Zr": "#3ca7ee"})`,
     },
     hide_polyhedra_center_atoms: {
       value: true,
@@ -1002,7 +1002,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     },
     bar: {
       color: {
-        value: `#4A9EFF`,
+        value: `#599eef`,
         description: `Histogram bar fill color`,
       },
       opacity: {
@@ -1035,7 +1035,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
   bar: {
     bar: {
       color: {
-        value: `#4A9EFF`,
+        value: `#599eef`,
         description: `Bar plot fill color`,
       },
       opacity: {
@@ -1053,7 +1053,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         maximum: 10,
       },
       color: {
-        value: `#4A9EFF`,
+        value: `#599eef`,
         description: `Bar plot line color`,
       },
     },
@@ -1115,7 +1115,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         maximum: 20,
       },
       color: {
-        value: `#4A9EFF`,
+        value: `#599eef`,
         description: `Default color for scatter plot points`,
       },
       opacity: {
@@ -1149,7 +1149,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         maximum: 10,
       },
       color: {
-        value: `#4A9EFF`,
+        value: `#599eef`,
         description: `Default color for scatter plot lines`,
       },
       opacity: {
@@ -1426,7 +1426,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         description: `Render lower hull faces in 3D PD`,
       },
       hull_face_color: {
-        value: `#4caf50`,
+        value: `#5cac5d`,
         description: `Color for lower hull faces in 3D PD`,
       },
       hull_face_opacity: {
@@ -1508,7 +1508,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
         description: `Show convex hull faces in 4D PD`,
       },
       hull_face_color: {
-        value: `#4caf50`,
+        value: `#5cac5d`,
         description: `Color for hull faces in 4D PD`,
       },
       hull_face_opacity: {
@@ -1611,7 +1611,7 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       maximum: 10.0,
     },
     neon_color: {
-      value: `#00fff7`,
+      value: `#3ce8e1`,
       description: `Primary neon color for gesture overlay`,
     },
     tts_enabled: {

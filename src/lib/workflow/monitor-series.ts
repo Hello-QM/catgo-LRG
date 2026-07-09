@@ -19,11 +19,11 @@ export interface MonitorSeries {
 
 /** Default series for VASP monitoring (5 traces). */
 export const VASP_SERIES: MonitorSeries[] = [
-  { key: `energy`,        label: `Energy`,   unit: `eV`,    color: `#3b82f6`, yaxis: `y`,  visible: true },
-  { key: `energy_sigma0`, label: `E₀ (σ→0)`, unit: `eV`,    color: `#06b6d4`, dash: `dash`, yaxis: `y`,  visible: `legendonly` },
-  { key: `max_force`,     label: `Max Force`, unit: `eV/Å`,  color: `#ef4444`, yaxis: `y2`, visible: true },
-  { key: `rms_force`,     label: `RMS Force`, unit: `eV/Å`,  color: `#f97316`, dash: `dash`, yaxis: `y2`, visible: `legendonly` },
-  { key: `dE`,            label: `dE`,        unit: `eV`,    color: `#22c55e`, dash: `dot`,  yaxis: `y2`, visible: `legendonly` },
+  { key: `energy`,        label: `Energy`,   unit: `eV`,    color: `#528ae5`, yaxis: `y`,  visible: true },
+  { key: `energy_sigma0`, label: `E₀ (σ→0)`, unit: `eV`,    color: `#2bb2cd`, dash: `dash`, yaxis: `y`,  visible: `legendonly` },
+  { key: `max_force`,     label: `Max Force`, unit: `eV/Å`,  color: `#de615b`, yaxis: `y2`, visible: true },
+  { key: `rms_force`,     label: `RMS Force`, unit: `eV/Å`,  color: `#e77d43`, dash: `dash`, yaxis: `y2`, visible: `legendonly` },
+  { key: `dE`,            label: `dE`,        unit: `eV`,    color: `#50bc6c`, dash: `dot`,  yaxis: `y2`, visible: `legendonly` },
 ]
 
 /** Default series for CP2K monitoring (4 traces, single-axis).
@@ -34,10 +34,10 @@ export const VASP_SERIES: MonitorSeries[] = [
  * CP2K_FORCE_SERIES, CP2K_TEMPERATURE_SERIES below).
  */
 export const CP2K_SERIES: MonitorSeries[] = [
-  { key: `energy`,    label: `Energy`,    unit: `eV`,    color: `#3b82f6`, yaxis: `y`,  visible: true },
-  { key: `max_force`, label: `Max Force`, unit: `eV/Å`,  color: `#ef4444`, yaxis: `y2`, visible: true },
-  { key: `rms_force`, label: `RMS Force`, unit: `eV/Å`,  color: `#f97316`, dash: `dash`, yaxis: `y2`, visible: `legendonly` },
-  { key: `dE`,        label: `dE`,        unit: `eV`,    color: `#22c55e`, dash: `dot`,  yaxis: `y2`, visible: `legendonly` },
+  { key: `energy`,    label: `Energy`,    unit: `eV`,    color: `#528ae5`, yaxis: `y`,  visible: true },
+  { key: `max_force`, label: `Max Force`, unit: `eV/Å`,  color: `#de615b`, yaxis: `y2`, visible: true },
+  { key: `rms_force`, label: `RMS Force`, unit: `eV/Å`,  color: `#e77d43`, dash: `dash`, yaxis: `y2`, visible: `legendonly` },
+  { key: `dE`,        label: `dE`,        unit: `eV`,    color: `#50bc6c`, dash: `dot`,  yaxis: `y2`, visible: `legendonly` },
 ]
 
 /* Per-panel single-axis series — used by the new stacked-chart CP2K UI.
@@ -48,16 +48,16 @@ export const CP2K_SERIES: MonitorSeries[] = [
 export const CP2K_ENERGY_SERIES: MonitorSeries[] = [
   // For OPT this is the SCF total energy. For MD it's potential + kinetic
   // (parse_cp2k_convergence sums them in the MD branch).
-  { key: `energy`, label: `Total Energy`, unit: `eV`, color: `#3b82f6`, yaxis: `y`, visible: true },
+  { key: `energy`, label: `Total Energy`, unit: `eV`, color: `#528ae5`, yaxis: `y`, visible: true },
 ]
 
 export const CP2K_FORCE_SERIES: MonitorSeries[] = [
-  { key: `max_force`, label: `Max Force`, unit: `eV/Å`, color: `#ef4444`, yaxis: `y`, visible: true },
-  { key: `rms_force`, label: `RMS Force`, unit: `eV/Å`, color: `#f97316`, dash: `dash`, yaxis: `y`, visible: true },
+  { key: `max_force`, label: `Max Force`, unit: `eV/Å`, color: `#de615b`, yaxis: `y`, visible: true },
+  { key: `rms_force`, label: `RMS Force`, unit: `eV/Å`, color: `#e77d43`, dash: `dash`, yaxis: `y`, visible: true },
 ]
 
 export const CP2K_TEMPERATURE_SERIES: MonitorSeries[] = [
-  { key: `temperature` as keyof ConvergencePoint, label: `Temperature`, unit: `K`, color: `#a855f7`, yaxis: `y`, visible: true },
+  { key: `temperature` as keyof ConvergencePoint, label: `Temperature`, unit: `K`, color: `#a26fdc`, yaxis: `y`, visible: true },
 ]
 
 /* MD energies — three separate single-trace series, picked one at a time
@@ -67,15 +67,15 @@ export const CP2K_TEMPERATURE_SERIES: MonitorSeries[] = [
  * to a flat line at the bottom — the user couldn't tell the curves
  * apart. Switching views gives each quantity its own autoscaled y-axis. */
 export const CP2K_MD_POTENTIAL_SERIES: MonitorSeries[] = [
-  { key: `potential_energy` as keyof ConvergencePoint, label: `Potential`, unit: `eV`, color: `#3b82f6`, yaxis: `y`, visible: true },
+  { key: `potential_energy` as keyof ConvergencePoint, label: `Potential`, unit: `eV`, color: `#528ae5`, yaxis: `y`, visible: true },
 ]
 
 export const CP2K_MD_KINETIC_SERIES: MonitorSeries[] = [
-  { key: `kinetic_energy` as keyof ConvergencePoint, label: `Kinetic`, unit: `eV`, color: `#22c55e`, yaxis: `y`, visible: true },
+  { key: `kinetic_energy` as keyof ConvergencePoint, label: `Kinetic`, unit: `eV`, color: `#50bc6c`, yaxis: `y`, visible: true },
 ]
 
 export const CP2K_MD_CONSERVED_SERIES: MonitorSeries[] = [
-  { key: `conserved_energy` as keyof ConvergencePoint, label: `Conserved`, unit: `eV`, color: `#ef4444`, yaxis: `y`, visible: true },
+  { key: `conserved_energy` as keyof ConvergencePoint, label: `Conserved`, unit: `eV`, color: `#de615b`, yaxis: `y`, visible: true },
 ]
 
 /* Backward-compat alias for any old import path. New code should use the
@@ -101,7 +101,7 @@ export function build_single_axis_layout(opts: {
    *  where new data should always re-autoscale. */
   uirevision?: number | string
 }): Record<string, unknown> {
-  const axis_color = `var(--text-color, #374151)`
+  const axis_color = `var(--text-color, #4b5667)`
   const layout: Record<string, unknown> = {
     height: opts.height ?? 200,
     xaxis: {
@@ -153,7 +153,7 @@ export function build_ediffg_shape(ediffg: number): Record<string, unknown> {
     yref: `y2`,
     x0: 0, x1: 1,
     y0: target, y1: target,
-    line: { color: `#ef4444`, width: 1, dash: `dot` },
+    line: { color: `#de615b`, width: 1, dash: `dot` },
   }
 }
 
@@ -164,7 +164,7 @@ export function build_ediffg_annotation(ediffg: number): Record<string, unknown>
     xref: `paper`, yref: `y2`,
     x: 1, y: Math.abs(ediffg),
     xanchor: `right`, yanchor: `bottom`,
-    font: { size: 9, color: `#ef4444` },
+    font: { size: 9, color: `#de615b` },
     showarrow: false,
   }
 }
@@ -174,7 +174,7 @@ export function build_monitor_layout(opts: {
   height?: number
   ediffg?: number
 } = {}): Record<string, unknown> {
-  const axis_color = `var(--text-color, #374151)`
+  const axis_color = `var(--text-color, #4b5667)`
   const shapes: Record<string, unknown>[] = []
   const annotations: Record<string, unknown>[] = []
 

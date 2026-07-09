@@ -16,7 +16,7 @@ export const CALCULATION_NODES: Record<string, NodeDefinition> = {
   geo_opt: {
     type: `geo_opt`,
     label: `Geometry Optimization`,
-    color: `#3b82f6`,
+    color: `#528ae5`,
     icon: `\u26A1`,
     category: `Calculation`,
     description: `Optimize atomic positions (ions only)`,
@@ -194,7 +194,7 @@ Choose system type first — periodic (crystal/slab) or molecular (cluster/molec
   single_point: {
     type: `single_point`,
     label: `Single Point`,
-    color: `#6366f1`,
+    color: `#6d76de`,
     icon: `\u{1F52C}`,
     category: `Calculation`,
     description: `Single-point energy calculation`,
@@ -249,7 +249,7 @@ Use after geometry optimization for accurate energies, or as input for DOS/band 
   cell_opt: {
     type: `cell_opt`,
     label: `Cell Optimization`,
-    color: `#0f766e`,
+    color: `#29827a`,
     icon: `\u{1F4D0}`,
     category: `Calculation`,
     description: `Optimize cell parameters and atomic positions`,
@@ -321,7 +321,7 @@ Use for bulk crystal optimization.`,
   md: {
     type: `md`,
     label: `Molecular Dynamics`,
-    color: `#8b5cf6`,
+    color: `#8c71de`,
     icon: `\u{1F321}\uFE0F`,
     category: `Calculation`,
     description: `Molecular dynamics simulation`,
@@ -712,7 +712,7 @@ Choose system type first, then select a compatible MD engine.
   freq: {
     type: `freq`,
     label: `Frequency`,
-    color: `#c026d3`,
+    color: `#b35bbe`,
     icon: `\u3030\uFE0F`,
     category: `Calculation`,
     description: `Vibrational frequency calculation`,
@@ -798,7 +798,7 @@ Used for ZPE corrections, thermodynamics, and TS verification.
   uvvis: {
     type: `uvvis`,
     label: `UV/Vis Spectroscopy`,
-    color: `#7c3aed`,
+    color: `#7f60d1`,
     icon: `🌈`,
     category: `Calculation`,
     subcategory: `Spectroscopy`,
@@ -946,7 +946,7 @@ Outputs include transition energies (eV, nm), oscillator strengths, and optional
   ts_search: {
     type: `ts_search`,
     label: `TS Search`,
-    color: `#dc2626`,
+    color: `#cf5349`,
     icon: `\u{26F0}\uFE0F`,
     category: `Calculation`,
     description: `Transition state search`,
@@ -1167,7 +1167,7 @@ Outputs include transition energies (eV, nm), oscillator strengths, and optional
   irc: {
     type: `irc`,
     label: `IRC`,
-    color: `#d946ef`,
+    color: `#c56dd2`,
     icon: `\u{1F6E4}\uFE0F`,
     category: `Calculation`,
     description: `Intrinsic reaction coordinate`,

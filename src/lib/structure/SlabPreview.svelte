@@ -19,7 +19,7 @@
     bonding_strategy = 'max_dist' as BondingStrategy,
     bonding_options = {},
     bond_thickness = 0.15,
-    bond_color = `#ffffff`,
+    bond_color = `#e4e4e4`,
     ambient_light = 0.5,
     directional_light = 0.5,
     element_radius_overrides = {} as Partial<Record<ElementSymbol, number>>,

@@ -36,9 +36,9 @@
 
   // Get element color of the first selected atom for ghost bond
   let first_atom_color = $derived.by(() => {
-    if (bond_first_atom === null || !structure_sites?.[bond_first_atom]) return `#888888`
+    if (bond_first_atom === null || !structure_sites?.[bond_first_atom]) return `#8c8c8c`
     const element = structure_sites[bond_first_atom].species?.[0]?.element
-    return (element && colors.element?.[element]) || `#888888`
+    return (element && colors.element?.[element]) || `#8c8c8c`
   })
 
   // Compute highlight groups for selected bonds (safe $derived - never throws)
