@@ -124,15 +124,17 @@ export const SETTINGS_CONFIG: SettingsConfig = {
     },
   },
   background_color: {
-    // Transparent by default (opacity 0 below) so the viewport follows the app
-    // theme instead of being locked to one colour. An off-white like #f5f6f8 at
-    // opacity 1 gives the light publication-figure look, but that is opt-in via
-    // the Background controls — not forced.
-    value: `#000000`,
+    // Deep, opaque by default: the theme-follow (transparent) path resolves the
+    // clear color from ancestor DOM backgrounds, which lands on a mid gray that
+    // sits too close to the softened atom palette in lightness — atoms wash out.
+    // An explicit near-black keeps the structure high-contrast; the light
+    // publication-figure look (#f5f6f8) or transparency stays opt-in via the
+    // Background controls.
+    value: `#161920`,
     description: `Background color of the 3D viewport`,
   },
   background_opacity: {
-    value: 0,
+    value: 1,
     description: `Opacity of the background (0.0 = transparent, 1.0 = opaque)`,
     minimum: 0,
     maximum: 1,
