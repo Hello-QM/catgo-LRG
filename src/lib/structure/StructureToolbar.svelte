@@ -233,7 +233,7 @@
     {#if !toolbar_state.collapsed}
     <!-- === View / Navigation === -->
     {#if camera_has_moved}
-      <button class="reset-camera" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
+      <button class="reset-camera tb-left" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
         <Icon icon="Reset" />
       </button>
     {/if}
@@ -243,7 +243,7 @@
         onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
         title={fullscreen ? t('structure.exit_fullscreen') : t('structure.enter_fullscreen')}
         aria-pressed={fullscreen}
-        class="fullscreen-toggle"
+        class="fullscreen-toggle tb-left"
         style="padding: 0"
         {@attach tooltip()}
       >
@@ -257,7 +257,7 @@
 
     <!-- === Gesture Control === -->
     {#if !tool_hidden(`gesture`)}
-    <span class="struct-toolbar-tooltip-wrap">
+    <span class="struct-toolbar-tooltip-wrap tb-left">
       <button
         type="button"
         onclick={() => {
@@ -278,7 +278,7 @@
       <span class="struct-toolbar-tooltip" role="tooltip">{gesture_active ? t('structure.disable_gesture') : t('structure.enable_gesture')}</span>
     </span>
     {#if gesture_active}
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => { gesture_art_mode = !gesture_art_mode }}
@@ -295,7 +295,7 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{gesture_art_mode ? t('structure.exit_art_mode') : t('structure.enter_art_mode')}</span>
       </span>
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => { show_gesture_settings = !show_gesture_settings }}
@@ -314,7 +314,7 @@
 
     <!-- === Touch interaction modes (no modifier keys on touch devices) === -->
     {#if has_touch}
-      <div class="touch-mode-container">
+      <div class="touch-mode-container tb-left">
         <span class="struct-toolbar-tooltip-wrap">
           <button
             type="button"
@@ -491,7 +491,7 @@
 
     <!-- === Large-system performance mode (always visible — also in trajectory/large views) === -->
     {#if !tool_hidden(`gauge`)}
-    <span class="struct-toolbar-tooltip-wrap">
+    <span class="struct-toolbar-tooltip-wrap tb-left">
       <button
         type="button"
         disabled={!webgpu_available}
@@ -543,7 +543,7 @@
 
       {#if on_open_in_molstar && !tool_hidden(`molstar`)}
       <!-- === Open current structure in the Mol* bio viewer === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => on_open_in_molstar?.()}
@@ -557,7 +557,7 @@
 
       {#if !tool_hidden(`workflow`) && !STATIC_ONLY}
       <!-- === Workflow === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => { workflow_pane_open = !workflow_pane_open }}
@@ -572,7 +572,7 @@
 
       <!-- === IO (Import/Export) === -->
       {#if !tool_hidden(`io`)}
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => { io_pane_open = !io_pane_open }}
@@ -588,7 +588,7 @@
       {#if !hidden_toolbar_items.includes('server') && !STATIC_ONLY}
       <!-- === Server (HPC) === -->
       {#if !tool_hidden(`server`)}
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => { server_pane_open = !server_pane_open }}
@@ -602,7 +602,7 @@
       {/if}
       <!-- === Upload current structure to HPC === -->
       {#if !tool_hidden(`upload_hpc`)}
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => on_upload_to_hpc?.()}
@@ -617,7 +617,7 @@
 
       {#if !tool_hidden(`plugin_hub`) && !STATIC_ONLY}
       <!-- === Plugin Hub === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => { plugin_hub_open = !plugin_hub_open }}
@@ -635,7 +635,7 @@
       <!-- Shown in STATIC_ONLY too: CatBot runs the client-direct tool-calling
            loop in-browser (no backend) under static deploys. See is_client_direct. -->
 
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => {
@@ -654,7 +654,7 @@
       {#if !tool_hidden(`terminal`) && !STATIC_ONLY}
       <!-- === Terminal === — opens a terminal pane-tree leaf (no longer a
            side-panel toggle). -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left">
         <button
           type="button"
           onclick={() => on_open_terminal?.()}
@@ -683,7 +683,7 @@
             }
           }}
           title={t('structure.save_back_to', { path: remote_origin.file_path })}
-          class="build-tools-toggle push-back-btn"
+          class="build-tools-toggle push-back-btn tb-left"
           {@attach tooltip()}
         >
           &#x21E7;
@@ -846,6 +846,8 @@
     <!-- 面板组件通过 children snippet 从 Structure.svelte 传入 -->
     {@render children?.()}
 
+    <div class="toolbar-flex-spacer" aria-hidden="true"></div>
+
     <!-- === 工具栏自定义: 勾选哪些按钮显示 (分组) === -->
     <div
       class="toolbar-edit-container"
@@ -895,7 +897,7 @@
     {/if}
 
     <!-- === 收起 / 展开 === -->
-    <span class="struct-toolbar-tooltip-wrap">
+    <span class="struct-toolbar-tooltip-wrap toolbar-collapse-toggle-wrap">
       <button
         type="button"
         class="toolbar-collapse-toggle"
@@ -1352,6 +1354,25 @@
       max-width: calc(100vw - 24px);
       z-index: 100000020;
     }
+  }
+
+  /* === 左右分簇: 常用靠右, 其余靠左 (flex order, DOM 不动) === */
+  section.control-buttons > :global(*) {
+    order: 1; /* 默认右簇 (含 children 里的 pane-toggle) */
+  }
+  section.control-buttons > :global(.tb-left) {
+    order: -1; /* 左簇: 低频工具 */
+  }
+  section.control-buttons > :global(.toolbar-flex-spacer) {
+    order: 0;
+    flex: 1 1 0;
+    pointer-events: none;
+  }
+  section.control-buttons > :global(.toolbar-edit-container) {
+    order: 2;
+  }
+  section.control-buttons > :global(.toolbar-collapse-toggle-wrap) {
+    order: 3;
   }
 
   /* === 工具栏收起 + 自定义 === */
