@@ -138,6 +138,7 @@
   } from './controllers/viewer-controller'
   // tool-controller.svelte.ts exists but is not yet wired (template bind: compatibility)
   import StructureToolbar from './StructureToolbar.svelte'
+  import { toolbar_tool_hidden } from './toolbar-state.svelte'
   import { MdAnalysisPane, MdPlot } from '$lib/md'
   import SlowGrowthPane from '$lib/structure/SlowGrowthPane.svelte'
   import ScaleBar from '$lib/structure/ScaleBar.svelte'
@@ -3637,7 +3638,7 @@
         </BuildPane>
         {/if}
 
-        {#if structure}
+        {#if structure && !toolbar_tool_hidden(`optimize`)}
           <OptimizationPane
             bind:structure
             bind:pane_open={optimization_pane_open}
@@ -4205,7 +4206,7 @@
         {/if}
 
         <!-- === Info / Export / Settings === -->
-        {#if enable_info_pane && structure}
+        {#if enable_info_pane && structure && !toolbar_tool_hidden(`info`)}
           <StructureInfoPane
             {structure}
             bind:pane_open={info_pane_open}
@@ -4217,6 +4218,7 @@
 
         <!-- ExportPane is now embedded inside IOPane -->
 
+        {#if !toolbar_tool_hidden(`controls`)}
         <StructureControls
           bind:controls_open
           bind:scene_props
@@ -4240,6 +4242,7 @@
           {supercell_loading}
           closed_icon="Sliders"
         />
+        {/if}
     </StructureToolbar>
 
     <AtomLegend

@@ -1752,5 +1752,21 @@ const structure: Record<string, string> = {
   preview_missing: `—`,
   result_mag: `Mag`,
   result_bands: `Bands`,
+  // Toolbar collapse + per-tool customization
+  toolbar_customize: `Customize toolbar buttons`,
+  toolbar_collapse: `Collapse toolbar`,
+  toolbar_expand: `Expand toolbar`,
+  toolbar_group_view: `View`,
+  toolbar_group_editing: `Editing`,
+  toolbar_group_analysis: `Analysis`,
+  toolbar_group_compute: `Compute & Files`,
+  toolbar_group_assistant: `Assistant & Plugins`,
+  toolbar_tool_fullscreen: `Fullscreen`,
+  toolbar_tool_gesture: `Gesture control`,
+  toolbar_tool_draw: `Draw mode`,
+  toolbar_tool_measure: `Measurement`,
+  toolbar_tool_optimize: `Quick optimize`,
+  toolbar_tool_info: `Structure info`,
+  toolbar_tool_controls: `Display settings`,
 }
 export default structure

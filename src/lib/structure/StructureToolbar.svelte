@@ -24,6 +24,7 @@
   import { chat_position, set_chat_position } from '$lib/chat/chat-state.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { toolbar_state, set_toolbar_collapsed, toggle_toolbar_tool } from './toolbar-state.svelte'
 
   // Lazy-load structure translations
   load_i18n_module('structure')
@@ -166,17 +167,77 @@
     coarse?.addEventListener?.(`change`, update)
     return () => coarse?.removeEventListener?.(`change`, update)
   })
+
+  // ── 工具栏收起 + 按钮自定义 ──
+  // 状态在 toolbar-state.svelte.ts (localStorage 持久化),与 Structure.svelte 共享 ——
+  // children 里自带 toggle 的面板 (optimize/info/controls) 也受同一列表控制。
+  const TOOL_GROUPS = [
+    { id: `view`, key: `structure.toolbar_group_view` },
+    { id: `editing`, key: `structure.toolbar_group_editing` },
+    { id: `analysis`, key: `structure.toolbar_group_analysis` },
+    { id: `compute`, key: `structure.toolbar_group_compute` },
+    { id: `assistant`, key: `structure.toolbar_group_assistant` },
+  ] as const
+  const TOOL_DEFS: { id: string; key: string; group: string }[] = [
+    { id: `fullscreen`, key: `structure.toolbar_tool_fullscreen`, group: `view` },
+    { id: `info`, key: `structure.toolbar_tool_info`, group: `view` },
+    { id: `controls`, key: `structure.toolbar_tool_controls`, group: `view` },
+    { id: `gauge`, key: `structure.large_system_mode`, group: `view` },
+    { id: `molstar`, key: `structure.bio_open_in_molstar`, group: `view` },
+    { id: `gesture`, key: `structure.toolbar_tool_gesture`, group: `editing` },
+    { id: `pencil`, key: `structure.toolbar_tool_draw`, group: `editing` },
+    { id: `build`, key: `structure.build_tools`, group: `editing` },
+    { id: `optimize`, key: `structure.toolbar_tool_optimize`, group: `editing` },
+    { id: `analysis`, key: `structure.analysis_tools`, group: `analysis` },
+    { id: `measure`, key: `structure.toolbar_tool_measure`, group: `analysis` },
+    { id: `workflow`, key: `common.workflow`, group: `compute` },
+    { id: `server`, key: `structure.server_hpc`, group: `compute` },
+    { id: `upload_hpc`, key: `structure.upload_to_hpc`, group: `compute` },
+    { id: `terminal`, key: `structure.open_terminal`, group: `compute` },
+    { id: `io`, key: `structure.import_export`, group: `compute` },
+    { id: `chat`, key: `structure.ai_assistant`, group: `assistant` },
+    { id: `plugin_hub`, key: `structure.plugin_hub`, group: `assistant` },
+  ]
+  let toolbar_edit_open = $state(false)
+  // 父组件强制隐藏 (hidden_toolbar_items prop) 优先于用户选择
+  const tool_hidden = (id: string): boolean =>
+    hidden_toolbar_items.includes(id) || toolbar_state.hidden.includes(id)
+  // 该工具在当前实例是否真实存在 —— 不存在的不进自定义菜单
+  const tool_available = (id: string): boolean => {
+    switch (id) {
+      case `fullscreen`:
+        return Boolean(fullscreen_toggle)
+      case `measure`:
+        return enable_measure_mode
+      case `molstar`:
+        return !hide_extra_tools && Boolean(on_open_in_molstar)
+      case `build`:
+      case `io`:
+      case `chat`:
+        return !hide_extra_tools
+      case `analysis`:
+      case `workflow`:
+      case `server`:
+      case `upload_hpc`:
+      case `plugin_hub`:
+      case `terminal`:
+        return !hide_extra_tools && !STATIC_ONLY
+      default:
+        return true
+    }
+  }
 </script>
 
 <section class:visible={visible_buttons} class="control-buttons">
   {#if visible_buttons}
+    {#if !toolbar_state.collapsed}
     <!-- === View / Navigation === -->
     {#if camera_has_moved}
       <button class="reset-camera" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
         <Icon icon="Reset" />
       </button>
     {/if}
-    {#if fullscreen_toggle}
+    {#if fullscreen_toggle && !tool_hidden(`fullscreen`)}
       <button
         type="button"
         onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
@@ -195,7 +256,7 @@
     {/if}
 
     <!-- === Gesture Control === -->
-    {#if !hidden_toolbar_items.includes('gesture')}
+    {#if !tool_hidden(`gesture`)}
     <span class="struct-toolbar-tooltip-wrap">
       <button
         type="button"
@@ -298,6 +359,7 @@
     {/if}
 
     <!-- === Structure Editing (Pencil Mode) === -->
+    {#if !tool_hidden(`pencil`)}
     <div class="pencil-mode-container">
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -425,8 +487,10 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <!-- === Large-system performance mode (always visible — also in trajectory/large views) === -->
+    {#if !tool_hidden(`gauge`)}
     <span class="struct-toolbar-tooltip-wrap">
       <button
         type="button"
@@ -440,9 +504,11 @@
       </button>
       <span class="struct-toolbar-tooltip" role="tooltip">{webgpu_available ? t('structure.large_system_mode') : t('structure.large_system_mode_unavailable')}</span>
     </span>
+    {/if}
 
     {#if !hide_extra_tools}
       <!-- === Build Tools === -->
+      {#if !tool_hidden(`build`)}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -454,8 +520,9 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.build_tools')}</span>
       </span>
+      {/if}
 
-      {#if !hidden_toolbar_items.includes('analysis') && !STATIC_ONLY}
+      {#if !tool_hidden(`analysis`) && !STATIC_ONLY}
       <!-- === Analysis Tools === -->
       <!-- Gated like workflow/server below: AnalysisPane's DOS/band/COHP/freq/charge
            sub-tabs are backend-only (no WASM fallback), so on STATIC_ONLY (web + the
@@ -474,7 +541,7 @@
       </span>
       {/if}
 
-      {#if on_open_in_molstar}
+      {#if on_open_in_molstar && !tool_hidden(`molstar`)}
       <!-- === Open current structure in the Mol* bio viewer === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -488,7 +555,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('workflow') && !STATIC_ONLY}
+      {#if !tool_hidden(`workflow`) && !STATIC_ONLY}
       <!-- === Workflow === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -504,6 +571,7 @@
       {/if}
 
       <!-- === IO (Import/Export) === -->
+      {#if !tool_hidden(`io`)}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -515,9 +583,11 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.import_export')}</span>
       </span>
+      {/if}
 
       {#if !hidden_toolbar_items.includes('server') && !STATIC_ONLY}
       <!-- === Server (HPC) === -->
+      {#if !tool_hidden(`server`)}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -529,7 +599,9 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.server_hpc')}</span>
       </span>
+      {/if}
       <!-- === Upload current structure to HPC === -->
+      {#if !tool_hidden(`upload_hpc`)}
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -541,8 +613,9 @@
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.upload_to_hpc')}</span>
       </span>
       {/if}
+      {/if}
 
-      {#if !hidden_toolbar_items.includes('plugin_hub') && !STATIC_ONLY}
+      {#if !tool_hidden(`plugin_hub`) && !STATIC_ONLY}
       <!-- === Plugin Hub === -->
       <span class="struct-toolbar-tooltip-wrap">
         <button
@@ -557,7 +630,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('chat')}
+      {#if !tool_hidden(`chat`)}
       <!-- === AI Chat === -->
       <!-- Shown in STATIC_ONLY too: CatBot runs the client-direct tool-calling
            loop in-browser (no backend) under static deploys. See is_client_direct. -->
@@ -578,7 +651,7 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('terminal') && !STATIC_ONLY}
+      {#if !tool_hidden(`terminal`) && !STATIC_ONLY}
       <!-- === Terminal === — opens a terminal pane-tree leaf (no longer a
            side-panel toggle). -->
       <span class="struct-toolbar-tooltip-wrap">
@@ -622,7 +695,7 @@
     {/if}
 
     <!-- === Analysis & Computation: Measurement Mode === -->
-    {#if enable_measure_mode}
+    {#if enable_measure_mode && !tool_hidden(`measure`)}
       <div
         class="measure-mode-dropdown"
         {@attach click_outside({ callback: () => measure_menu_open = false })}
@@ -772,6 +845,76 @@
 
     <!-- 面板组件通过 children snippet 从 Structure.svelte 传入 -->
     {@render children?.()}
+
+    <!-- === 工具栏自定义: 勾选哪些按钮显示 (分组) === -->
+    <div
+      class="toolbar-edit-container"
+      {@attach click_outside({ callback: () => toolbar_edit_open = false })}
+    >
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          class="toolbar-edit-toggle"
+          class:active={toolbar_edit_open}
+          aria-expanded={toolbar_edit_open}
+          onclick={() => toolbar_edit_open = !toolbar_edit_open}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="4" y1="6" x2="20" y2="6" /><circle cx="9" cy="6" r="2.2" />
+            <line x1="4" y1="12" x2="20" y2="12" /><circle cx="15" cy="12" r="2.2" />
+            <line x1="4" y1="18" x2="20" y2="18" /><circle cx="7" cy="18" r="2.2" />
+          </svg>
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.toolbar_customize')}</span>
+      </span>
+      {#if toolbar_edit_open}
+        <div class="view-mode-dropdown toolbar-edit-menu">
+          {#each TOOL_GROUPS as group (group.id)}
+            {@const items = TOOL_DEFS.filter((d) =>
+              d.group === group.id &&
+              !hidden_toolbar_items.includes(d.id) &&
+              tool_available(d.id)
+            )}
+            {#if items.length > 0}
+              <div class="toolbar-edit-group">{t(group.key)}</div>
+              {#each items as { id, key } (id)}
+                <label class="toolbar-edit-option">
+                  <input
+                    type="checkbox"
+                    checked={!toolbar_state.hidden.includes(id)}
+                    onchange={() => toggle_toolbar_tool(id)}
+                  />
+                  <span>{t(key)}</span>
+                </label>
+              {/each}
+            {/if}
+          {/each}
+        </div>
+      {/if}
+    </div>
+    {/if}
+
+    <!-- === 收起 / 展开 === -->
+    <span class="struct-toolbar-tooltip-wrap">
+      <button
+        type="button"
+        class="toolbar-collapse-toggle"
+        aria-expanded={!toolbar_state.collapsed}
+        onclick={() => {
+          set_toolbar_collapsed(!toolbar_state.collapsed)
+          toolbar_edit_open = false
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          {#if toolbar_state.collapsed}
+            <path d="m17 17-5-5 5-5" /><path d="m10 17-5-5 5-5" />
+          {:else}
+            <path d="m7 7 5 5-5 5" /><path d="m14 7 5 5-5 5" />
+          {/if}
+        </svg>
+      </button>
+      <span class="struct-toolbar-tooltip" role="tooltip">{toolbar_state.collapsed ? t('structure.toolbar_expand') : t('structure.toolbar_collapse')}</span>
+    </span>
   {/if}
 </section>
 
@@ -1209,5 +1352,66 @@
       max-width: calc(100vw - 24px);
       z-index: 100000020;
     }
+  }
+
+  /* === 工具栏收起 + 自定义 === */
+  .toolbar-edit-container {
+    display: flex;
+    position: relative;
+  }
+  .toolbar-edit-toggle,
+  .toolbar-collapse-toggle {
+    background-color: transparent;
+    display: flex;
+    align-items: center;
+    padding: 4pt;
+    border-radius: 3pt;
+    transition: background-color 0.2s;
+  }
+  .toolbar-edit-toggle:hover,
+  .toolbar-collapse-toggle:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .toolbar-edit-toggle.active {
+    color: var(--accent-color, #007acc);
+    background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
+  }
+  .toolbar-edit-menu {
+    z-index: 10;
+    padding: 4px;
+    min-width: max-content;
+  }
+  .toolbar-edit-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: 0.9em;
+    transition: background-color 0.15s ease;
+  }
+  .toolbar-edit-option:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .toolbar-edit-option input {
+    accent-color: var(--accent-color, #007acc);
+    margin: 0;
+  }
+  .toolbar-edit-group {
+    font-size: 0.62em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-color-muted, #8c8c8c);
+    padding: 6px 8px 2px;
+    margin-top: 2px;
+    border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  }
+  .toolbar-edit-group:first-child {
+    margin-top: 0;
+    border-top: none;
+    padding-top: 4px;
   }
 </style>

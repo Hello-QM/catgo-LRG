@@ -1752,5 +1752,21 @@ const structure: Record<string, string> = {
   preview_missing: `—`,
   result_mag: `磁`,
   result_bands: `能带`,
+  // 工具栏收起 + 按钮自定义
+  toolbar_customize: `自定义工具栏按钮`,
+  toolbar_collapse: `收起工具栏`,
+  toolbar_expand: `展开工具栏`,
+  toolbar_group_view: `视图`,
+  toolbar_group_editing: `编辑`,
+  toolbar_group_analysis: `分析`,
+  toolbar_group_compute: `计算与文件`,
+  toolbar_group_assistant: `助手与插件`,
+  toolbar_tool_fullscreen: `全屏`,
+  toolbar_tool_gesture: `手势控制`,
+  toolbar_tool_draw: `绘制模式`,
+  toolbar_tool_measure: `测量`,
+  toolbar_tool_optimize: `快速优化`,
+  toolbar_tool_info: `结构信息`,
+  toolbar_tool_controls: `显示设置`,
 }
 export default structure
