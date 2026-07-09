@@ -12,10 +12,28 @@ import { expect, test } from '@playwright/test'
 // Avoid `networkidle` (HMR websocket keeps the connection pool busy).
 
 test(`launcher renders the sample structure preview`, async ({ page }) => {
+  const errors: string[] = []
+  page.on(`console`, (msg) => {
+    if (msg.type() === `error` || msg.type() === `warning`) {
+      errors.push(`[${msg.type()}] ${msg.text()}`)
+    }
+  })
+  page.on(`pageerror`, (err) => errors.push(`[pageerror] ${err.message}`))
   await page.goto(`/`, { waitUntil: `load` })
   await expect(page.getByText(`Water`, { exact: true })).toBeVisible({ timeout: 20_000 })
   const canvas = page.locator(`canvas`).first()
-  await expect(canvas).toBeVisible({ timeout: 60_000 })
+  try {
+    await expect(canvas).toBeVisible({ timeout: 60_000 })
+  } catch (err) {
+    // CI-only failure diagnostics: what did the page actually do?
+    console.log(`=== canvas count: ${await page.locator(`canvas`).count()}`)
+    console.log(`=== console/page errors (${errors.length}):`)
+    for (const line of errors.slice(0, 40)) console.log(line)
+    const preview = await page.locator(`.sample-preview`).first().innerHTML()
+      .catch(() => `<no .sample-preview>`)
+    console.log(`=== first .sample-preview innerHTML: ${preview.slice(0, 1500)}`)
+    throw err
+  }
 })
 
 test(`opening the sample structure mounts the editor with a live canvas`, async ({ page }) => {
