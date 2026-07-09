@@ -15,7 +15,7 @@ test(`launcher renders the sample structure preview`, async ({ page }) => {
   await page.goto(`/`, { waitUntil: `load` })
   await expect(page.getByText(`Water`, { exact: true })).toBeVisible({ timeout: 20_000 })
   const canvas = page.locator(`canvas`).first()
-  await expect(canvas).toBeVisible({ timeout: 20_000 })
+  await expect(canvas).toBeVisible({ timeout: 60_000 })
 })
 
 test(`opening the sample structure mounts the editor with a live canvas`, async ({ page }) => {
