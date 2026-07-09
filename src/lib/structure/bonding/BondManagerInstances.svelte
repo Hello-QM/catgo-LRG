@@ -207,20 +207,21 @@
       );
     }
 
-    // 3-point procedural studio env (key + fill + sky/ground gradient).
-    // n is view-space normal. Returns linear-RGB env response for that normal.
+    // Procedural env for the bond cylinders. The old version summed a key lobe
+    // and a near-opposite fill lobe — for a cylinder that left a dark VALLEY
+    // along the axis (the strip whose normal is perpendicular to BOTH lights got
+    // neither), read as a dark line down the middle of every bond. Replace with
+    // a flat ambient floor + a single soft key so the shading is a gentle
+    // one-sided gradient with no dark seam. n is the view-space normal.
     vec3 studio_env(vec3 n, vec3 keyDir) {
-      vec3 col = vec3(0.0);
-      // Key: warm white from primary direction. Quadratic falloff (cheap, no pow).
+      // Flat ambient floor — the cylinder never goes dark on its shaded side.
+      vec3 col = vec3(0.72);
+      // Soft key highlight on the lit side (quadratic falloff, cheap).
       float k = max(dot(n, keyDir), 0.0);
-      col += vec3(1.00, 0.97, 0.92) * (k * k) * 0.55;
-      // Fill: cool white opposite-ish.
-      vec3 fillDir = normalize(vec3(-keyDir.x * 0.9, keyDir.y * 0.4, keyDir.z * 0.6));
-      float f = max(dot(n, fillDir), 0.0);
-      col += vec3(0.88, 0.93, 1.00) * (f * f) * 0.30;
-      // Sky-to-ground gradient driven by vertical view-space normal
+      col += vec3(1.00, 0.97, 0.92) * (k * k) * 0.35;
+      // Faint vertical sky lift for a touch of volume.
       float sky = n.y * 0.5 + 0.5;
-      col += mix(vec3(0.42, 0.43, 0.50), vec3(0.95, 0.97, 1.00), sky) * 0.22;
+      col += vec3(0.06, 0.06, 0.07) * sky;
       return col;
     }
 
@@ -295,7 +296,11 @@
     transparent: true,
     depthWrite: true,
     uniforms: {
-      ambientIntensity: { value: 0.7 },
+      // Bonds are lit by their own fixed studio env (not the atom render-style
+      // profile). With the flattened env (ambient floor ~0.72) exposure ~0.95
+      // lands the cylinders at roughly their base colour — matching the atoms
+      // they connect, no dark seam. ACES rolls off any over-bright key.
+      ambientIntensity: { value: 0.8 },
       directionalIntensity: { value: 0.3 },
       saturation: { value: saturation },
       brightness: { value: brightness },
