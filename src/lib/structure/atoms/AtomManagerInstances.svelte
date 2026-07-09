@@ -135,6 +135,17 @@
     return 0
   }
 
+  // Per-render-style PBR (roughness, metalness) for the GGX specular branch,
+  // ported from pretty-lattice's material presets: glossy = crisp dielectric
+  // hot spot, metallic = a bigger/softer, element-colour-tinted highlight.
+  function style_pbr(
+    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
+  ): { roughness: number; metalness: number } {
+    return style === `metallic`
+      ? { roughness: 0.4, metalness: 0.4 }
+      : { roughness: 0.2, metalness: 0.0 }
+  }
+
   const threlte = useThrelte()
 
   // Render-loop refactor (R4c): all canvas-paint requests in this component
@@ -202,6 +213,8 @@
     uniform float uHighlightThreshold;
     uniform float uShadowBrightness;
     uniform float uSpecStrength;  // glossy specular highlight multiplier (1.0 = default)
+    uniform float uRoughness;     // GGX roughness (glossy 0.2, metallic 0.4 → bigger hot spot)
+    uniform float uMetalness;     // 0 dielectric (glossy), 0.4 metallic (colour-tinted spec)
     uniform sampler2D uMatcap;    // baked studio-sphere lighting (render style 3)
     // projectionMatrix is only auto-injected into vertex shader, must re-declare for fragment
     uniform mat4 projectionMatrix;
@@ -333,7 +346,11 @@
         //    at roughness 0.2, metalness 0) lit by ambient + a near-head-on key.
         //    GGX(rough=0.2) is what gives the SMALL, bright, centred hot spot;
         //    ACES rolls the HDR key light back to display range. ──
-        float rough = 0.2;
+        //    uRoughness/uMetalness are per-render-style (glossy 0.2/0.0,
+        //    metallic 0.4/0.4) — a bigger roughness widens/softens the hot spot,
+        //    metalness tints the highlight by the element colour and dims the
+        //    diffuse (MeshStandardMaterial metal workflow), matching pretty-lattice.
+        float rough = uRoughness;
         float a = rough * rough;
         float a2 = a * a;
         float NdotL = max(dot(normal, lightDirView), 0.0);
@@ -347,14 +364,18 @@
         // Smith-Schlick geometry.
         float k = a * 0.5;
         float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
-        // Schlick Fresnel, dielectric F0 = 0.04.
-        float F = 0.04 + 0.96 * pow(1.0 - VdotH, 5.0);
-        float specular = (D * G * F) / (4.0 * NdotV * NdotL + 1e-4);
+        // Schlick Fresnel with a metalness-tinted F0: dielectric 0.04, metals
+        // reflect their own (element) colour. glossy (metalness 0) stays 0.04.
+        vec3 F0 = mix(vec3(0.04), baseColor, uMetalness);
+        vec3 F = F0 + (vec3(1.0) - F0) * pow(1.0 - VdotH, 5.0);
+        vec3 specular = (D * G) * F / (4.0 * NdotV * NdotL + 1e-4);
+        // Metals have little/no diffuse — attenuate it by (1 - metalness).
+        vec3 diffuseColor = baseColor * (1.0 - uMetalness);
         // Energy-conserving Lambert (÷π) on the key, like MeshStandardMaterial —
         // without it the base*key diffuse blew out (too bright, over-saturated).
         // uDirectionalIntensity = HDR key strength, uAmbientIntensity = fill.
-        vec3 color2 = baseColor * (uAmbientIntensity + uDirectionalIntensity * NdotL * 0.31831)
-                 + vec3(1.0) * specular * uDirectionalIntensity * NdotL * uSpecStrength;
+        vec3 color2 = diffuseColor * (uAmbientIntensity + uDirectionalIntensity * NdotL * 0.31831)
+                 + specular * uDirectionalIntensity * NdotL * uSpecStrength;
         // Soft rim shadow: darken the grazing silhouette a touch (NdotV→0 at the
         // edge) for a little volume / ambient-occlusion feel, like VESTA spheres.
         color2 *= mix(0.6, 1.0, smoothstep(0.0, 0.5, NdotV));
@@ -412,6 +433,9 @@
         uRenderStyle: { value: render_style_to_int(render_style) },
         // Glossy specular highlight multiplier (slider-driven); kept live by $effect below.
         uSpecStrength: { value: highlight_strength },
+        // Per-style PBR (glossy vs metallic); kept live by the render-style $effect.
+        uRoughness: { value: style_pbr(render_style).roughness },
+        uMetalness: { value: style_pbr(render_style).metalness },
         // Toon (cel) thresholds — AtomCanvas ToonHighlightMaterial defaults.
         uShadowThreshold: { value: 0.3 },
         uHighlightThreshold: { value: 0.97 },
@@ -598,6 +622,9 @@
   // no material swap, so glossy/matte/toon toggle live with zero GPU churn.
   $effect(() => {
     opaque_material.uniforms.uRenderStyle.value = render_style_to_int(render_style)
+    const pbr = style_pbr(render_style)
+    opaque_material.uniforms.uRoughness.value = pbr.roughness
+    opaque_material.uniforms.uMetalness.value = pbr.metalness
     // Generate/swap the baked matcap texture ONLY while MatCap is the active
     // style. Building it eagerly on the default (toon) path meant every scene —
     // including headless CI — paid a canvas-texture bake it never sampled; gate

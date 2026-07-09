@@ -26,13 +26,18 @@ export const LIGHTING_PROFILE_DEFAULTS: Readonly<Record<RenderStyle, LightingPro
     ambient_light: 0.6,
     highlight_strength: 1.0,
   },
-  // Metallic reuses the glossy (specular) shader branch but with a stronger,
-  // lower-angle key light for a harder, compact highlight — reads as shinier.
+  // Metallic reuses the glossy (specular) shader branch but at higher roughness
+  // + metalness, for a bigger, softer, element-tinted highlight (not a compact
+  // hot spot). The shader reads roughness/metalness per style; these are lights.
   metallic: {
-    light_azimuth: 35,
-    light_elevation: 30,
-    directional_light: 0.55,
-    ambient_light: 0.5,
+    // pretty-lattice "metallic": shader roughness 0.4 / metalness 0.4 gives a
+    // bigger, softer, element-tinted highlight than glossy; pair it with a bright
+    // near-head-on key (2.5) and a high ambient fill (1.0) so the metal-dimmed
+    // diffuse stays legible.
+    light_azimuth: 0,
+    light_elevation: 5,
+    directional_light: 2.5,
+    ambient_light: 1.0,
     highlight_strength: 1.0,
   },
   // MatCap samples a baked studio-sphere texture instead of the scene lights, so
