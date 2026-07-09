@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "catgo"
-version = "1.4.5"
+version = "1.4.5.post1"
 description = "CatGo — AI-driven workbench for computational materials science (3D viewer + workflow engine + MCP)"
 readme = "README-pypi.md"
 license = "AGPL-3.0-or-later"
@@ -70,3 +70,16 @@ packages = ["catgo"]
 artifacts = [
     "catgo/web/**/*",
 ]
+
+# The server imports a few top-level modules by BARE name (`main`, the full
+# `workflow` engine, `plugin_loader`, `mcp_server`). They sit outside the
+# `catgo` package, so `packages=["catgo"]` cannot ship them and `pip install`ed
+# `catgo app`/`serve` crashed with `ModuleNotFoundError`. Bundle them under
+# `catgo/_bundled/`; `_ensure_sys_path()` puts that dir on sys.path at runtime
+# so the bare imports resolve (and `workflow` here is the full engine, kept
+# distinct from the smaller `catgo.workflow`).
+[tool.hatch.build.targets.wheel.force-include]
+"main.py" = "catgo/_bundled/main.py"
+"workflow" = "catgo/_bundled/workflow"
+"plugin_loader.py" = "catgo/_bundled/plugin_loader.py"
+"mcp_server.py" = "catgo/_bundled/mcp_server.py"

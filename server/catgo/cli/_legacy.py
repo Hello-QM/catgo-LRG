@@ -20,6 +20,18 @@ def _ensure_sys_path():
     sd = str(_server_dir())
     if sd not in sys.path:
         sys.path.insert(0, sd)
+    # In a pip wheel, the top-level server modules that the code imports by bare
+    # name (`main`, the full `workflow` engine, `plugin_loader`, `mcp_server`)
+    # live outside the `catgo` package, so `packages=["catgo"]` can't ship them.
+    # The wheel force-includes them under `catgo/_bundled/`; put that first on
+    # the path so those bare imports resolve (and `import workflow` picks the
+    # full engine here, not the smaller `catgo.workflow`). In a source/editable
+    # checkout this directory doesn't exist, so this is a no-op there.
+    bundled = _server_dir() / "_bundled"
+    if bundled.is_dir():
+        bs = str(bundled)
+        if bs not in sys.path:
+            sys.path.insert(0, bs)
 
 
 def _get_port() -> int:
