@@ -10,6 +10,7 @@ import {
   filter_bonds_during_drag,
   filter_bond_pairs,
   build_cutting_visibility_map,
+  compute_atom_span_radius,
   compute_show_bulk_atoms,
   get_lattice,
   compute_structure_size,
@@ -304,6 +305,33 @@ describe(`compute_structure_size`, () => {
   test(`returns 10 when lattice has no params or matrix`, () => {
     const lattice = { pbc: [true, true, true] } as unknown as PymatgenLattice
     expect(compute_structure_size(lattice)).toBe(10)
+  })
+})
+
+describe(`compute_atom_span_radius`, () => {
+  test(`returns null for undefined / empty structure`, () => {
+    expect(compute_atom_span_radius(undefined)).toBeNull()
+    expect(compute_atom_span_radius({ sites: [] } as unknown as PymatgenStructure))
+      .toBeNull()
+  })
+
+  test(`half of the largest atom bbox axis, ignoring the lattice/vacuum box`, () => {
+    // Molecule-like: atoms span 2 Å in x, 1 Å in y, 0 in z. Even if dropped in a
+    // huge vacuum lattice, the span radius reflects the ATOMS, not the box.
+    const sites = [
+      make_site([0, 0, 0], `O`),
+      make_site([2, 1, 0], `H`),
+      make_site([1, 0, 0], `H`),
+    ]
+    const structure = { sites, lattice: make_lattice(20, 20, 20) } as
+      unknown as PymatgenStructure
+    // max axis span = x: 2 → radius 1
+    expect(compute_atom_span_radius(structure)).toBeCloseTo(1)
+  })
+
+  test(`single atom → 0 span`, () => {
+    const structure = { sites: [make_site([5, 5, 5])] } as unknown as PymatgenStructure
+    expect(compute_atom_span_radius(structure)).toBe(0)
   })
 })
 

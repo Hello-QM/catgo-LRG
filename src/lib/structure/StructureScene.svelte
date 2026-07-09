@@ -31,6 +31,7 @@
     compute_show_bulk_atoms,
     get_lattice as get_lattice_pure,
     compute_structure_size,
+    compute_atom_span_radius,
     get_frozen_info,
     desaturate_color,
     compute_force_data,
@@ -2143,7 +2144,14 @@
       if (cam) {
         const center = new Vector3(...(rotation_target ?? [0, 0, 0]))
         const cam_dist = cam.position.distanceTo(center)
-        const half_range = Math.max(structure_size, 2) * 0.5
+        // Fog range must track the ACTUAL drawn atoms, not the lattice: a molecule
+        // sits in a large vacuum box, so a lattice-based range (compute_structure_size)
+        // puts the whole molecule inside the fog interval and washes it uniformly
+        // toward the background. Use the atom bounding-box radius; fall back to the
+        // lattice size only when there are no atoms. Floor at 0.1 Å so the fog
+        // interval never collapses to zero width.
+        const atom_span = compute_atom_span_radius(structure)
+        const half_range = Math.max(atom_span ?? structure_size * 0.5, 0.1)
         const front = cam_dist - half_range
         const back = cam_dist + half_range
         const full_depth = back - front

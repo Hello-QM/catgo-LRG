@@ -159,6 +159,34 @@ export function compute_structure_size(lattice: PymatgenLattice | null): number 
 }
 
 /**
+ * Half of the largest atom bounding-box axis (world Å) — the REAL extent of the
+ * drawn atoms, independent of any vacuum padding in the lattice. `compute_
+ * structure_size` measures the cell, so a molecule dropped in a big vacuum box
+ * reports a large size even though the atoms occupy a tiny region; using that
+ * for depth-cue fog puts the whole molecule inside the fog interval and washes
+ * it uniformly toward the background. Fog range should use THIS instead.
+ * Returns null when there are no atoms.
+ */
+export function compute_atom_span_radius(
+  structure: AnyStructure | undefined,
+): number | null {
+  if (!structure?.sites?.length) return null
+  let min_x = Infinity, max_x = -Infinity
+  let min_y = Infinity, max_y = -Infinity
+  let min_z = Infinity, max_z = -Infinity
+  for (const site of structure.sites) {
+    const [x, y, z] = site.xyz
+    if (x < min_x) min_x = x
+    if (x > max_x) max_x = x
+    if (y < min_y) min_y = y
+    if (y > max_y) max_y = y
+    if (z < min_z) min_z = z
+    if (z > max_z) max_z = z
+  }
+  return Math.max(max_x - min_x, max_y - min_y, max_z - min_z) / 2
+}
+
+/**
  * Get frozen atom info from a site's selective_dynamics property.
  * Returns null if no selective_dynamics, or an object describing the frozen state.
  */

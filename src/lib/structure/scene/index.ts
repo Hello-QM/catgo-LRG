@@ -6,6 +6,7 @@ export {
   compute_show_bulk_atoms,
   get_lattice,
   compute_structure_size,
+  compute_atom_span_radius,
   get_frozen_info,
 } from './visibility'
 
