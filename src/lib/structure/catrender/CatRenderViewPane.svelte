@@ -160,7 +160,7 @@
   // store the pane can subscribe to); the app default is the honest,
   // non-hardcoded source available to a prop-only pane.
   const BOND_STRATEGY =
-    (DEFAULTS.structure.bonding_strategy ?? `electroneg_ratio`) as BondingStrategy
+    (DEFAULTS.structure.bonding_strategy ?? `atom_radii`) as BondingStrategy
   const BOND_OPTIONS =
     (DEFAULTS.structure.bonding_options ?? {}) as Record<string, number>
 

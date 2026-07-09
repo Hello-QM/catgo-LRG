@@ -200,12 +200,12 @@
         },
         "catgo.structure.bonding_strategy": {
           "type": "string",
-          "default": "electroneg_ratio",
+          "default": "atom_radii",
           "description": "Method for determining bonds between atoms",
           "enum": [
+            "atom_radii",
             "electroneg_ratio",
-            "solid_angle",
-            "atom_radii"
+            "solid_angle"
           ]
         },
         "catgo.structure.show_gizmo": {
