@@ -186,6 +186,12 @@
   // Detect macOS for platform-specific keybindings
   const is_mac = typeof navigator !== `undefined` && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent)
 
+  // __CATGO_VSCODE_EXTENSION__ is a vite `define` token (unset in the main app
+  // build → `typeof` is `undefined` → flag false); its type lives in src/app.d.ts.
+  // In VS Code's sandboxed webview iframe requestFullscreen() is blocked, so the
+  // Full Screen button silently does nothing — hide it there.
+  const is_vscode_extension = typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` && __CATGO_VSCODE_EXTENSION__
+
   // Check if box selection modifier is pressed (Cmd on Mac, Ctrl on Windows/Linux)
   function is_box_select_modifier(event: MouseEvent | KeyboardEvent): boolean {
     return is_mac ? event.metaKey : event.ctrlKey
@@ -3434,7 +3440,7 @@
       {visible_buttons}
       {hide_extra_tools}
       {enable_measure_mode}
-      {fullscreen_toggle}
+      fullscreen_toggle={is_vscode_extension ? false : fullscreen_toggle}
       {hidden_toolbar_items}
       {remote_origin}
       {structure}
