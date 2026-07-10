@@ -201,41 +201,54 @@
   let toolbar_edit_open = $state(false)
   let toolbar_edit_btn_el = $state<HTMLButtonElement | null>(null)
   let toolbar_edit_menu_el = $state<HTMLDivElement | null>(null)
-  // 菜单开在屏幕内: 按 dock 方向锚定到按钮旁, 四向判断可用空间后钳位进视口,
-  // 小屏时限高/限宽走内部滚动 (直接写 DOM, 不回写 $state)
-  function reposition_edit_menu() {
-    const btn = toolbar_edit_btn_el
-    const menu = toolbar_edit_menu_el
-    if (!btn || !menu) return
-    const rect = btn.getBoundingClientRect()
-    const gap = 8
-    const vw = window.innerWidth
-    const vh = window.innerHeight
-    menu.style.maxHeight = `${vh - 2 * gap}px`
-    menu.style.maxWidth = `${vw - 2 * gap}px`
-    const mw = menu.offsetWidth
-    const mh = menu.offsetHeight
-    // 首选方向: 避开侧栏所在缘; 空间不足时翻向另一侧
-    let left = toolbar_state.dock === `left` ? rect.right + gap : rect.left - mw - gap
-    if (toolbar_state.dock === `top`) left = rect.right - mw
-    if (left < gap && toolbar_state.dock !== `left`) left = rect.right + gap
-    if (left + mw > vw - gap && toolbar_state.dock === `left`) left = rect.left - mw - gap
-    let top = toolbar_state.dock === `top` ? rect.bottom + gap : rect.top
-    if (toolbar_state.dock === `top` && top + mh > vh - gap) top = rect.top - mh - gap
-    left = Math.max(gap, Math.min(left, vw - mw - gap))
-    top = Math.max(gap, Math.min(top, vh - mh - gap))
-    menu.style.left = `${left}px`
-    menu.style.top = `${top}px`
-    menu.style.right = `auto`
+  // 通用自适应浮层引擎 (自定义菜单 / 铅笔宫格 / 测量菜单共用):
+  // fixed 定位, 按 dock 方向锚定 → 空间不足翻向对侧 → 两侧都不够则居中 →
+  // 视口钳位 + 动态 max 尺寸 (内部滚动); resize 与内容尺寸变化实时重算。
+  // 直接写 DOM, 不回写 $state; 传入 dock 使 attachment 随模式切换重建。
+  function fit_popover(get_anchor: () => HTMLElement | null, _dock?: string) {
+    return (node: HTMLElement) => {
+      const place = () => {
+        const anchor = get_anchor()
+        if (!anchor) return
+        const rect = anchor.getBoundingClientRect()
+        const gap = 8
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        node.style.maxWidth = `${vw - 2 * gap}px`
+        node.style.maxHeight = `${vh - 2 * gap}px`
+        const mw = node.offsetWidth
+        const mh = node.offsetHeight
+        let left: number
+        if (toolbar_state.dock === `left`) {
+          left = rect.right + gap
+          if (left + mw > vw - gap) left = rect.left - mw - gap // 翻向左
+        } else if (toolbar_state.dock === `top`) {
+          left = rect.right - mw
+        } else {
+          left = rect.left - mw - gap
+          if (left < gap) left = rect.right + gap // 翻向右
+        }
+        if (left < gap || left + mw > vw - gap) left = (vw - mw) / 2 // 窄屏: 居中回退
+        let top = toolbar_state.dock === `top` ? rect.bottom + gap : rect.top
+        if (toolbar_state.dock === `top` && top + mh > vh - gap) top = rect.top - mh - gap
+        left = Math.max(gap, Math.min(left, vw - mw - gap))
+        top = Math.max(gap, Math.min(top, vh - mh - gap))
+        node.style.left = `${left}px`
+        node.style.top = `${top}px`
+        node.style.right = `auto`
+      }
+      place()
+      const ro = new ResizeObserver(place) // 宫格数量/内容变化 → 重算列数后重定位
+      ro.observe(node)
+      window.addEventListener(`resize`, place)
+      return () => {
+        ro.disconnect()
+        window.removeEventListener(`resize`, place)
+      }
+    }
   }
-  $effect(() => {
-    if (!toolbar_edit_open) return
-    void toolbar_state.dock
-    void toolbar_state.collapsed
-    reposition_edit_menu()
-    window.addEventListener(`resize`, reposition_edit_menu)
-    return () => window.removeEventListener(`resize`, reposition_edit_menu)
-  })
+  let pencil_btn_el = $state<HTMLButtonElement | null>(null)
+  let measure_btn_el = $state<HTMLButtonElement | null>(null)
   // 父组件强制隐藏 (hidden_toolbar_items prop) 优先于用户选择
   const tool_hidden = (id: string): boolean =>
     hidden_toolbar_items.includes(id) || toolbar_tool_hidden(id)
@@ -422,6 +435,7 @@
             }
           }}
           class="pencil-toggle"
+          bind:this={pencil_btn_el}
           class:active={pencil.pencil_mode_active}
           aria-pressed={pencil.pencil_mode_active}
         >
@@ -447,7 +461,10 @@
       {/if}
       <!-- Pencil mode selector (atoms vs fragments) — dropdown below button -->
       {#if pencil.pencil_mode_active}
-        <div class="pencil-mode-selector">
+        <div
+          class="pencil-mode-selector"
+          {@attach fit_popover(() => pencil_btn_el, toolbar_state.dock)}
+        >
           <div class="mode-toggle">
             <button
               type="button"
@@ -752,6 +769,7 @@
       >
         <span class="struct-toolbar-tooltip-wrap">
           <button
+            bind:this={measure_btn_el}
             onclick={() => (measure_menu_open = !measure_menu_open)}
             class="view-mode-button"
             class:active={measure_menu_open || measure_mode_active}
@@ -823,7 +841,10 @@
             { mode: `angle` as const, icon: `Angle` as const, label: t('structure.angle'), scale: 1.3, min_atoms: 3 },
             { mode: `dihedral` as const, icon: `Angle` as const, label: t('structure.dihedral'), scale: 1.3, min_atoms: 4 },
           ]}
-          <div class="view-mode-dropdown">
+          <div
+            class="view-mode-dropdown measure-menu-popover"
+            {@attach fit_popover(() => measure_btn_el, toolbar_state.dock)}
+          >
             {#each measure_options as { mode, icon, label, scale, min_atoms } (mode)}
               <button
                 class="view-mode-option"
@@ -922,7 +943,11 @@
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.toolbar_customize')}</span>
       </span>
       {#if toolbar_edit_open}
-        <div class="view-mode-dropdown toolbar-edit-menu" bind:this={toolbar_edit_menu_el}>
+        <div
+          class="view-mode-dropdown toolbar-edit-menu"
+          bind:this={toolbar_edit_menu_el}
+          {@attach fit_popover(() => toolbar_edit_btn_el, toolbar_state.dock)}
+        >
           <div class="toolbar-edit-group">{t(`structure.toolbar_dock`)}</div>
           <div class="toolbar-dock-row">
             {#each [[`top`, `structure.toolbar_dock_top`], [`left`, `structure.toolbar_dock_left`], [`right`, `structure.toolbar_dock_right`]] as const as [dock, key] (dock)}
@@ -1300,7 +1325,12 @@
 
   /* === 元素快速选择器 === */
   .element-quick-selector {
-    display: flex;
+    display: grid;
+    /* 列数随可用宽度 4/3/2/1 档滑动; 单格 34-56px, 不拉伸不压瘪 */
+    grid-template-columns: repeat(auto-fit, minmax(34px, 56px));
+    justify-content: center;
+    width: min(300px, calc(100vw - 48px));
+    box-sizing: border-box;
     gap: 2px;
     background: var(--surface-bg, #1e1e1e);
     border: 1px solid var(--border-color, #444);
@@ -1308,7 +1338,8 @@
     padding: 2px 4px;
   }
   .element-btn {
-    width: 28px;
+    width: 100%;
+    min-width: 28px;
     height: 28px;
     padding: 0;
     display: flex;
@@ -1333,11 +1364,13 @@
 
   /* === 铅笔模式选择器 (atoms vs fragments vs bonds) === */
   .pencil-mode-selector {
-    position: absolute;
-    top: 0;
-    right: calc(100% + 8px);
-    margin-top: 0;
+    position: fixed; /* fit_popover 锚定+钳位 */
     z-index: 10;
+    box-sizing: border-box;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -1391,13 +1424,18 @@
 
   /* === 片段选择器 === */
   .fragment-selector {
-    max-width: min(400px, calc(100vw - 36px));
+    width: min(400px, calc(100vw - 48px));
+    max-width: 100%;
+    box-sizing: border-box;
   }
   .fragment-categories {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
     gap: 3px;
     align-items: center;
+  }
+  .fragment-categories .category-label {
+    grid-column: 1 / -1; /* 分类标题独占一行 */
   }
   .category-label {
     font-size: 0.65em;
@@ -1414,6 +1452,10 @@
     padding: 3px 8px;
     font-size: 0.75em;
     font-weight: 500;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     background: transparent;
     border: 1px solid var(--border-color, #444);
     border-radius: 4px;
@@ -1520,6 +1562,16 @@
     padding-top: 4px;
   }
 
+  .measure-menu-popover {
+    position: fixed; /* fit_popover 锚定+钳位 */
+    right: auto;
+    box-sizing: border-box;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
   /* === 停靠位置切换 (自定义菜单顶部) === */
   .toolbar-dock-row {
     display: flex;
@@ -1563,14 +1615,7 @@
   .dock-left .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip {
     transform: translateY(-50%) translateX(0);
   }
-  .dock-left .view-mode-dropdown {
-    right: auto;
-    left: calc(100% + 8px);
-  }
-  .dock-left .pencil-mode-selector {
-    right: auto;
-    left: calc(100% + 8px);
-  }
+  /* 浮层已 fixed + JS 定位, dock 变体无需再改锚向 */
   .dock-left .selected-measurement-indicator {
     right: auto;
     left: calc(100% + 8px);
@@ -1616,17 +1661,6 @@
   }
   .dock-top .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip {
     transform: translateX(-50%) translateY(0);
-  }
-  .dock-top .view-mode-dropdown {
-    top: 115%;
-    left: auto;
-    right: 0;
-  }
-  .dock-top .pencil-mode-selector {
-    top: 100%;
-    left: auto;
-    right: 0;
-    margin-top: 4px;
   }
   .dock-top .pencil-mode-container,
   .dock-top .measure-mode-dropdown {
