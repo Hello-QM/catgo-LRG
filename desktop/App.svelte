@@ -2400,7 +2400,15 @@
               on_file_load={create_on_file_load(tab.id, leaf.id)}
               fullscreen_toggle={false}
               allow_file_drop={false}
-              structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format }}
+              structure_props={{
+                fullscreen_toggle: false,
+                hide_extra_tools: false,
+                initial_traj_b64: pane.raw_traj_b64,
+                initial_traj_format: pane.raw_traj_format,
+                on_open_terminal: (term?: Partial<TerminalLeafState>) => {
+                  open_terminal_leaf(tab.id, leaf.id, term)
+                },
+              }}
               style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
             >
               {#snippet trajectory_controls({ trajectory: traj, current_step_idx: step, on_step_change })}
