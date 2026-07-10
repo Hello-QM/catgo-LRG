@@ -1137,6 +1137,20 @@ export const activate = (context: vscode.ExtensionContext) => {
         supportsMultipleEditorsPerDocument: false,
       },
     ),
+    // Opt-in ("Reopen Editor With…") twin whose selector is ONLY the broad
+    // name-substring glob (*trajectory/relax/npt/nvt/nve*). Kept at priority
+    // `option` so it never claims arbitrary text files by default, while
+    // extension-less trajectory-ish names (XDATCAR_npt2, md_nvt_300K) stay
+    // reachable in the CatGo viewer. The Provider is uri-based and ignores the
+    // viewType, so behaviour is identical to `catgo.viewer`.
+    vscode.window.registerCustomEditorProvider(
+      `catgo.viewerAuto`,
+      new Provider(context),
+      {
+        webviewOptions: { retainContextWhenHidden: true },
+        supportsMultipleEditorsPerDocument: false,
+      },
+    ),
     vscode.workspace.onDidOpenTextDocument((document: vscode.TextDocument) => {
       // Update context on any document open
       update_supported_resource_context(document.uri)
