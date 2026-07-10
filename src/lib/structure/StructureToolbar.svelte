@@ -272,23 +272,41 @@
   let measure_btn_el = $state<HTMLButtonElement | null>(null)
   let toolbar_el = $state<HTMLElement | null>(null)
   let rail_overflowing = $state(false)
-  // Tooltip 自适应定位 (事件委托, 覆盖栏内全部 .struct-toolbar-tooltip-wrap):
-  // 右→左→上→下按剩余空间选向, 与按钮中心对齐, 8px 间距, 视口钳位;
-  // 钳位平移后箭头仍指按钮中心 (--arrow-off)。fixed + 顶级 z-index, 不受栏滚动裁切。
+  // Tooltip: 单例 Portal 到 document.body (逃出 .structure 的 containment 堆叠上下文,
+  // 分隔线/邻居面板永远盖不住)。树内 .struct-toolbar-tooltip 仅作 i18n 文案源 (display:none)。
+  // 主体+箭头同一浮层根节点; 右→左→上→下探测, 整窗为界, 钳位后箭头仍指按钮中心。
   $effect(() => {
-    const root = toolbar_el
-    if (!root) return
+    const root_el = toolbar_el
+    if (!root_el || typeof document === `undefined`) return
+    const tip = document.createElement(`div`)
+    tip.className = `struct-tip-root`
+    const body = document.createElement(`div`)
+    body.className = `struct-tip-body`
+    const arrow = document.createElement(`div`)
+    arrow.className = `struct-tip-arrow`
+    tip.append(body, arrow)
+    document.body.appendChild(tip)
     let cur: HTMLElement | null = null
+    const hide = () => {
+      cur = null
+      tip.classList.remove(`visible`)
+    }
     const place = () => {
-      if (!cur || !cur.isConnected) return
-      const tip = cur.querySelector<HTMLElement>(`.struct-toolbar-tooltip`)
+      if (!cur || !cur.isConnected) return hide()
+      const src = cur.querySelector<HTMLElement>(`.struct-toolbar-tooltip`)
       const btn = cur.querySelector<HTMLElement>(`button`) ?? cur
-      if (!tip) return
+      if (!src || !src.textContent?.trim()) return hide()
+      // 按钮激活/展开时不打扰 (原 :has() 规则的 JS 等价)
+      if (cur.querySelector(`.active, [aria-expanded='true'], [aria-pressed='true']`)) {
+        return hide()
+      }
+      body.textContent = src.textContent
       const r = btn.getBoundingClientRect()
       const gap = 8
       const pad = 8
       const vw = window.innerWidth
       const vh = window.innerHeight
+      tip.classList.add(`visible`)
       const tw = tip.offsetWidth
       const th = tip.offsetHeight
       const fits = {
@@ -320,23 +338,46 @@
       const off = side === `left` || side === `right`
         ? Math.max(10, Math.min(th - 10, r.top + r.height / 2 - top))
         : Math.max(10, Math.min(tw - 10, r.left + r.width / 2 - left))
-      tip.style.setProperty(`--arrow-off`, `${off}px`)
+      if (side === `left`) {
+        arrow.style.left = `${tw}px`
+        arrow.style.top = `${off}px`
+      } else if (side === `right`) {
+        arrow.style.left = `0px`
+        arrow.style.top = `${off}px`
+      } else if (side === `top`) {
+        arrow.style.top = `${th}px`
+        arrow.style.left = `${off}px`
+      } else {
+        arrow.style.top = `0px`
+        arrow.style.left = `${off}px`
+      }
     }
     const over = (e: Event) => {
       const wrap = (e.target as HTMLElement).closest?.(`.struct-toolbar-tooltip-wrap`)
-      if (!wrap || !root.contains(wrap)) return
+      if (!wrap || !root_el.contains(wrap)) return
       cur = wrap as HTMLElement
       place()
     }
-    root.addEventListener(`pointerover`, over)
-    root.addEventListener(`focusin`, over)
-    root.addEventListener(`scroll`, place, true) // 栏内滚动时跟随
+    const out = (e: Event) => {
+      if (!cur) return
+      const to = (e as PointerEvent).relatedTarget as HTMLElement | null
+      if (!to || !cur.contains(to)) hide()
+    }
+    root_el.addEventListener(`pointerover`, over)
+    root_el.addEventListener(`pointerout`, out)
+    root_el.addEventListener(`focusin`, over)
+    root_el.addEventListener(`focusout`, out)
+    root_el.addEventListener(`click`, () => queueMicrotask(place), true)
+    root_el.addEventListener(`scroll`, place, true)
     window.addEventListener(`resize`, place)
     return () => {
-      root.removeEventListener(`pointerover`, over)
-      root.removeEventListener(`focusin`, over)
-      root.removeEventListener(`scroll`, place, true)
+      root_el.removeEventListener(`pointerover`, over)
+      root_el.removeEventListener(`pointerout`, out)
+      root_el.removeEventListener(`focusin`, over)
+      root_el.removeEventListener(`focusout`, out)
+      root_el.removeEventListener(`scroll`, place, true)
       window.removeEventListener(`resize`, place)
+      tip.remove()
     }
   })
   // 小面板 (多宫格分屏) 里工具比面板高时: 栏内滚动; 放得下时保持 visible,
@@ -1250,10 +1291,31 @@
     align-items: center;
     flex-shrink: 0;
   }
+  /* 树内 tooltip span = 纯 i18n 文案源; 展示走 body 下的 Portal 单例 (见 $effect) */
   .struct-toolbar-tooltip {
-    position: fixed; /* 委托定位: 右→左→上→下探测 + 视口钳位 (见 tooltip $effect) */
+    display: none;
+  }
+  /* Portal 浮层: 主体+箭头同一根节点, 同一堆叠上下文, 永不被面板/分隔线盖住 */
+  :global(.struct-tip-root) {
+    position: fixed;
     left: -9999px;
     top: -9999px;
+    z-index: 2147483000; /* 全局最顶层 tooltip 档 */
+    pointer-events: none;
+    box-sizing: border-box;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease, visibility 0.12s ease;
+  }
+  :global(.struct-tip-root.visible) {
+    opacity: 1;
+    visibility: visible;
+  }
+  :global(.struct-tip-body) {
+    width: max-content;
+    max-width: min(320px, calc(100vw - 16px));
+    white-space: normal;
+    overflow-wrap: break-word;
     padding: 7px 12px;
     border-radius: 7px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1263,54 +1325,27 @@
     font-size: 13px;
     font-weight: 600;
     line-height: 1.25;
-    white-space: nowrap;
-    pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    z-index: 100000010;
-    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
   }
-  .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip,
-  .struct-toolbar-tooltip-wrap:focus-within .struct-toolbar-tooltip {
-    opacity: 1;
-    visibility: visible;
-  }
-  .struct-toolbar-tooltip-wrap:has(.active) .struct-toolbar-tooltip,
-  .struct-toolbar-tooltip-wrap:has([aria-expanded='true']) .struct-toolbar-tooltip,
-  .struct-toolbar-tooltip-wrap:has([aria-pressed='true']) .struct-toolbar-tooltip {
-    opacity: 0;
-    visibility: hidden;
-  }
-  .struct-toolbar-tooltip::before {
-    content: '';
+  :global(.struct-tip-arrow) {
     position: absolute;
     width: 9px;
     height: 9px;
-    background: inherit;
+    background: rgba(17, 17, 17, 0.96);
     transform: translate(-50%, -50%) rotate(45deg);
   }
-  /* 箭头永远指向触发按钮: 随 data-side 换边, --arrow-off 跟随按钮中心 */
-  :global(.struct-toolbar-tooltip[data-side='left'])::before {
-    left: 100%;
-    top: var(--arrow-off, 50%);
+  :global(.struct-tip-root[data-side='left'] .struct-tip-arrow) {
     border-right: 1px solid rgba(255, 255, 255, 0.12);
     border-top: 1px solid rgba(255, 255, 255, 0.12);
   }
-  :global(.struct-toolbar-tooltip[data-side='right'])::before {
-    left: 0;
-    top: var(--arrow-off, 50%);
+  :global(.struct-tip-root[data-side='right'] .struct-tip-arrow) {
     border-left: 1px solid rgba(255, 255, 255, 0.12);
     border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   }
-  :global(.struct-toolbar-tooltip[data-side='top'])::before {
-    top: 100%;
-    left: var(--arrow-off, 50%);
+  :global(.struct-tip-root[data-side='top'] .struct-tip-arrow) {
     border-right: 1px solid rgba(255, 255, 255, 0.12);
     border-bottom: 1px solid rgba(255, 255, 255, 0.12);
   }
-  :global(.struct-toolbar-tooltip[data-side='bottom'])::before {
-    top: 0;
-    left: var(--arrow-off, 50%);
+  :global(.struct-tip-root[data-side='bottom'] .struct-tip-arrow) {
     border-left: 1px solid rgba(255, 255, 255, 0.12);
     border-top: 1px solid rgba(255, 255, 255, 0.12);
   }
