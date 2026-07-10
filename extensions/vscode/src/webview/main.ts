@@ -344,6 +344,10 @@ export const setup_vscode_download = (): void => {
 // when there is no structure (trajectory view) or the source format has no
 // frontend serializer (OUTCAR, cube/CHGCAR, LAMMPS data, …) — the extension
 // must treat an empty `content` reply as "cannot save".
+// DRIFT NOTE: the desktop app shares this format→serializer dispatch as
+// `save_format_from_path` in `src/lib/structure/save-format.ts`. This webview
+// copy stays separate for bundle isolation — keep the two in lockstep (both
+// cover xyz/extxyz/cif/mol2/pdb/json/POSCAR-family and refuse everything else).
 export const serialize_current = (): {
   content: string
   is_binary: boolean

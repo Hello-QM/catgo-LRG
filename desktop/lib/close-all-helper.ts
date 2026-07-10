@@ -16,6 +16,13 @@ import {
 import { leaves, structurePane } from '../pane-tree'
 import { save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
+import { save_format_from_path } from '$lib/structure/save-format'
+
+/** Error shown when a checked entry's source format has no faithful serializer. */
+function unserializable_message(path: string): string {
+  const base = path.split(/[/\\]/).pop() || path
+  return `Cannot save "${base}": its format has no serializer. Uncheck it or use Save As to export it in a supported format.`
+}
 
 /**
  * Build the list of entries for the close-all dialog.
@@ -77,19 +84,16 @@ export async function execute_close_all_saves(
     if (!structure) continue
 
     if (entry.save_target === `local` && entry.save_path) {
-      const ext = entry.save_path.split(`.`).pop()?.toLowerCase() || `cif`
-      let format = `cif`
-      if ([`poscar`, `vasp`, `contcar`].includes(ext) || /^(POSCAR|CONTCAR)$/i.test(entry.save_path.split(/[/\\]/).pop() || ``)) format = `poscar`
-      else if (ext === `xyz`) format = `xyz`
-      else if (ext === `extxyz`) format = `extxyz`
+      // Preserve the source's on-disk format. No faithful serializer → refuse:
+      // throw so the caller surfaces the error and keeps every tab open (this
+      // batch has no per-entry Save-As dialog), never CIF-ify the source.
+      const format = save_format_from_path(entry.save_path)
+      if (!format) throw new Error(unserializable_message(entry.save_path))
       const content = await serialize_structure_content(structure, format)
       await write_file(entry.save_path, content)
     } else if (entry.save_target === `hpc` && pane.remote_origin) {
-      const ext = pane.remote_origin.file_path.split(`.`).pop()?.toLowerCase() || `cif`
-      let format = `cif`
-      if ([`poscar`, `vasp`, `contcar`].includes(ext)) format = `poscar`
-      else if (ext === `xyz`) format = `xyz`
-      else if (ext === `extxyz`) format = `extxyz`
+      const format = save_format_from_path(pane.remote_origin.file_path)
+      if (!format) throw new Error(unserializable_message(pane.remote_origin.file_path))
       const content = await serialize_structure_content(structure, format)
       await writeRemoteFile(pane.remote_origin.session_id, pane.remote_origin.file_path, content)
     } else if (entry.save_target === `database`) {

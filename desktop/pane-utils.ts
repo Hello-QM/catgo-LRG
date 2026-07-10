@@ -238,12 +238,14 @@ import { serialize_structure } from '$lib/api/project'
  *  backend fallback for unsupported formats. */
 export async function serialize_structure_content(structure: Record<string, unknown>, format: string): Promise<string> {
   try {
-    const { structure_to_cif_str, structure_to_poscar_str, structure_to_xyz_str, structure_to_extxyz_str, structure_to_json_str } = await import(`$lib/structure/export`)
+    const { structure_to_cif_str, structure_to_poscar_str, structure_to_xyz_str, structure_to_extxyz_str, structure_to_json_str, structure_to_mol2_str, structure_to_pdb_str } = await import(`$lib/structure/export`)
     const s = structure as AnyStructureType
     if (format === `poscar`) return structure_to_poscar_str(s)
     if (format === `xyz`) return structure_to_xyz_str(s)
     if (format === `extxyz`) return structure_to_extxyz_str(s)
     if (format === `json`) return structure_to_json_str(s)
+    if (format === `mol2`) return structure_to_mol2_str(s)
+    if (format === `pdb`) return structure_to_pdb_str(s)
     return structure_to_cif_str(s)
   } catch {
     const result = await serialize_structure(structure, format)
