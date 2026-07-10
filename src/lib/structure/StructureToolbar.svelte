@@ -204,10 +204,10 @@
     TOOL_DEFS.every((d) => !tool_available(d.id) || tool_hidden(d.id)),
   )
   let toolbar_edit_btn_el = $state<HTMLButtonElement | null>(null)
-  let toolbar_edit_menu_el = $state<HTMLDivElement | null>(null)
   // 通用自适应浮层引擎 (自定义菜单 / 铅笔宫格 / 测量菜单共用):
   // fixed 定位, 按 dock 方向锚定 → 空间不足翻向对侧 → 两侧都不够则居中 →
-  // 视口钳位 + 动态 max 尺寸 (内部滚动); resize 与内容尺寸变化实时重算。
+  // 以 pane 可见矩形 ∩ 窗口为碰撞边界钳位 + 动态 max 尺寸 (内部滚动);
+  // resize / 内容尺寸变化 / 锚点平移 (rAF 对账) 实时重算。
   // 直接写 DOM, 不回写 $state; 传入 dock 使 attachment 随模式切换重建。
   function fit_popover(get_anchor: () => HTMLElement | null, _dock?: string) {
     return (node: HTMLElement) => {
@@ -215,65 +215,115 @@
         const anchor = get_anchor()
         if (!anchor) return
         const rect = anchor.getBoundingClientRect()
+        // 间隙/开向基准 = 栏外壳外缘 (按钮在栏内还有 4px padding, 用按钮缘会
+        // 少留空隙甚至压住栏壳); 主轴对齐仍以触发按钮为准
+        const rail_rect = (node.closest(`section.control-buttons`) ?? anchor)
+          .getBoundingClientRect()
         const gap = 8
         const vw = window.innerWidth
         const vh = window.innerHeight
-        // 极窄窗口: 不再贴栏浮出, 整体切换为居中模态 (类 Command Palette)
+        // 碰撞边界 = pane 可见矩形 ∩ 窗口, 各向内缩 gap。.structure 一路到 body 全是
+        // overflow:hidden, fixed 后代被物理裁切在 pane 内 — "在窗口内"不等于可见,
+        // 越出 pane 的部分会被裁掉或钻进应用顶栏/状态栏底下。
+        const pane_rect = node.closest(`.structure`)?.getBoundingClientRect()
+        const bd = {
+          left: Math.max(0, pane_rect?.left ?? 0) + gap,
+          right: Math.min(vw, pane_rect?.right ?? vw) - gap,
+          top: Math.max(0, pane_rect?.top ?? 0) + gap,
+          bottom: Math.min(vh, pane_rect?.bottom ?? vh) - gap,
+        }
+        const bw = Math.max(0, bd.right - bd.left)
+        const bh = Math.max(0, bd.bottom - bd.top)
+        // .structure 的 container-type 劫持了 fixed 的包含块: style.left/top 是
+        // pane 坐标, 不是视口坐标。置 (0,0) 探测包含块原点, 最后统一换算 —
+        // 包含块是视口时原点恰为 (0,0), 两种情况同一条路径。
+        node.style.left = `0px`
+        node.style.top = `0px`
+        const origin = node.getBoundingClientRect()
+        // 极窄窗口: 不再贴栏浮出, 整体切换为边界内居中模态 (类 Command Palette)
         const modal_mode = vw < 900
-        node.style.maxWidth = modal_mode
-          ? `${Math.min(520, vw - 2 * gap)}px`
-          : `${vw - 2 * gap}px`
-        node.style.maxHeight = `${vh - 2 * gap}px`
+        node.style.maxWidth = `${modal_mode ? Math.min(520, bw) : bw}px`
+        node.style.maxHeight = `${bh}px` // 先量自然尺寸, 选边后再按可用空间收缩
+        let mh = node.offsetHeight
         const mw = node.offsetWidth
-        const mh = node.offsetHeight
         let left: number
         let top: number
         let centered = false
         if (modal_mode) {
-          left = (vw - mw) / 2
-          top = Math.max(gap, (vh - mh) / 2)
+          left = bd.left + (bw - mw) / 2
+          top = bd.top + Math.max(0, (bh - mh) / 2)
           centered = true
         } else {
           if (toolbar_state.dock === `left`) {
-            left = rect.right + gap
-            if (left + mw > vw - gap) left = rect.left - mw - gap // 翻向左
+            left = rail_rect.right + gap
+            if (left + mw > bd.right) left = rail_rect.left - mw - gap // 翻向左
           } else if (toolbar_state.dock === `top` || toolbar_state.dock === `bottom`) {
             left = rect.right - mw
           } else {
-            left = rect.left - mw - gap
-            if (left < gap) left = rect.right + gap // 翻向右
+            left = rail_rect.left - mw - gap
+            if (left < bd.left) left = rail_rect.right + gap // 翻向右
           }
-          if (left < gap || left + mw > vw - gap) {
-            left = (vw - mw) / 2 // 两侧都不够: 居中回退
+          if (left < bd.left || left + mw > bd.right) {
+            left = bd.left + (bw - mw) / 2 // 两侧都不够: 边界内居中回退
             centered = true
           }
-          // 侧向展开: 面板顶对齐按钮中心; 高度不足时向上偏移 (下方 clamp 兜底)
-          top = toolbar_state.dock === `top`
-            ? rect.bottom + gap
-            : toolbar_state.dock === `bottom`
-            ? rect.top - mh - gap
-            : rect.top + rect.height / 2
-          if (toolbar_state.dock === `top` && top + mh > vh - gap) {
-            top = rect.top - mh - gap
-          }
-          if (toolbar_state.dock === `bottom` && top < gap) {
-            top = rect.bottom + gap
+          if (toolbar_state.dock === `top` || toolbar_state.dock === `bottom`) {
+            // 横排: 开向条的对侧; 首选边放不下且另一边更大才翻转 (flip)。
+            // max-height = 所选边真实可用高度 → 内部滚动; 锚点严格贴 rail 边缘,
+            // mh ≤ avail 保证末段 clamp 不会把面板回推到条上
+            const below_top = rail_rect.bottom + gap
+            const above_bottom = rail_rect.top - gap
+            const below_avail = bd.bottom - below_top
+            const above_avail = above_bottom - bd.top
+            let side: `below` | `above` = toolbar_state.dock === `top` ? `below` : `above`
+            const preferred = side === `below` ? below_avail : above_avail
+            if (mh > preferred && (side === `below` ? above_avail : below_avail) > preferred) {
+              side = side === `below` ? `above` : `below`
+            }
+            const avail = Math.max(0, side === `below` ? below_avail : above_avail)
+            node.style.maxHeight = `${avail}px`
+            mh = node.offsetHeight
+            top = side === `below` ? below_top : above_bottom - mh
+          } else {
+            // 侧栏: 面板贴栏侧开, 顶对齐按钮中心 (边界 clamp 兜底)
+            top = rect.top + rect.height / 2
           }
         }
-        left = Math.max(gap, Math.min(left, vw - mw - gap))
-        top = Math.max(gap, Math.min(top, vh - mh - gap))
-        node.style.left = `${left}px`
-        node.style.top = `${top}px`
-        node.style.right = `auto`
+        left = Math.max(bd.left, Math.min(left, bd.right - mw))
+        top = Math.max(bd.top, Math.min(top, bd.bottom - mh))
+        node.style.left = `${left - origin.left}px`
+        node.style.top = `${top - origin.top}px`
         node.classList.toggle(`popover-modal`, centered)
       }
       place()
       const ro = new ResizeObserver(place) // 宫格数量/内容变化 → 重算列数后重定位
       ro.observe(node)
+      // 分隔线拖动只改 pane 不触发 window resize — 观察 pane 才能实时跟随
+      const pane = node.closest(`.structure`)
+      if (pane) ro.observe(pane)
       window.addEventListener(`resize`, place)
+      // 锚点会平移而不改尺寸 (字体加载改 1ex 栏偏移、pane 被推移) — RO/resize 都
+      // 抓不到, 浮层存活期间逐帧对账锚点矩形 (Floating UI autoUpdate 的
+      // animationFrame 策略); 矩形不变时零开销, 变了才重放。
+      let raf = 0
+      let last_anchor = ``
+      const track = () => {
+        const a = get_anchor()
+        if (a) {
+          const r = a.getBoundingClientRect()
+          const key = `${r.left},${r.top},${r.width},${r.height}`
+          if (key !== last_anchor) {
+            last_anchor = key
+            place()
+          }
+        }
+        raf = requestAnimationFrame(track)
+      }
+      raf = requestAnimationFrame(track)
       return () => {
         ro.disconnect()
         window.removeEventListener(`resize`, place)
+        cancelAnimationFrame(raf)
       }
     }
   }
@@ -1128,7 +1178,6 @@
       {#if toolbar_edit_open}
         <div
           class="view-mode-dropdown toolbar-edit-menu"
-          bind:this={toolbar_edit_menu_el}
           {@attach fit_popover(() => toolbar_edit_btn_el, toolbar_state.dock)}
         >
           <div class="toolbar-edit-group">{t(`structure.toolbar_dock`)}</div>
@@ -1387,9 +1436,6 @@
 
   /* === 下拉菜单样式 (匹配 Trajectory dropdown UI) === */
   .view-mode-dropdown {
-    position: absolute;
-    top: 0;
-    right: calc(100% + 8px);
     max-width: calc(100vw - 24px);
     overflow-x: auto;
     background: var(--surface-bg);
@@ -1601,10 +1647,6 @@
     position: fixed; /* fit_popover 锚定+钳位 */
     z-index: 10;
     box-sizing: border-box;
-    max-width: calc(100vw - 16px);
-    max-height: calc(100vh - 16px);
-    overflow-y: auto;
-    overflow-x: hidden;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -1617,6 +1659,7 @@
     max-height: calc(100vh - 96px);
     overflow-x: auto;
     overflow-y: auto;
+    overscroll-behavior: contain;
     box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.1);
     font-size: 0.9rem;
   }
@@ -1741,13 +1784,14 @@
     background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
   }
   .toolbar-edit-menu {
-    position: fixed; /* JS 按 dock 方向锚定并钳位进视口 */
-    right: auto;
+    position: fixed; /* JS 按 dock 方向锚定并钳位进边界 */
     z-index: 10;
+    box-sizing: border-box; /* JS 写入的 max-height 含 padding, 否则实高超出 8px */
     padding: 4px;
-    min-width: max-content;
     max-height: calc(100vh - 24px);
     overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
   }
   .toolbar-edit-option {
     display: flex;
@@ -1792,12 +1836,12 @@
 
   .measure-menu-popover {
     position: fixed; /* fit_popover 锚定+钳位 */
-    right: auto;
     box-sizing: border-box;
     max-width: calc(100vw - 16px);
     max-height: calc(100vh - 16px);
     overflow-y: auto;
     overflow-x: hidden;
+    overscroll-behavior: contain;
   }
 
   /* === 停靠位置切换 (自定义菜单顶部) === */
