@@ -1756,6 +1756,7 @@ const structure: Record<string, string> = {
   toolbar_dock: `停靠位置`,
   toolbar_dock_top: `顶部`,
   toolbar_dock_left: `左侧`,
+  toolbar_dock_bottom: `底部`,
   toolbar_dock_right: `右侧`,
   toolbar_customize: `自定义工具栏按钮`,
   toolbar_collapse: `收起工具栏`,

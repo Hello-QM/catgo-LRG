@@ -9,12 +9,12 @@ const COLLAPSED_KEY = `catgo:toolbar:collapsed`
 const HIDDEN_KEY = `catgo:toolbar:hidden-tools`
 const DOCK_KEY = `catgo:toolbar:dock`
 
-export type ToolbarDock = `top` | `left` | `right`
+export type ToolbarDock = `top` | `bottom` | `left` | `right`
 
 function load_dock(): ToolbarDock {
   if (typeof localStorage === `undefined`) return `right`
   const v = localStorage.getItem(DOCK_KEY)
-  return v === `top` || v === `left` || v === `right` ? v : `right`
+  return v === `top` || v === `bottom` || v === `left` || v === `right` ? v : `right`
 }
 
 function load_hidden(): string[] {
@@ -32,6 +32,7 @@ const HIDDEN_BY_DOCK_KEY = `catgo:toolbar:hidden-by-dock`
 // 侧边栏默认全量; 用户在某模式下的勾选只改该模式的集合。
 const DEFAULT_HIDDEN_BY_DOCK: Record<ToolbarDock, string[]> = {
   top: [`gauge`, `molstar`, `plugin_hub`, `upload_hpc`, `fullscreen`],
+  bottom: [`gauge`, `molstar`, `plugin_hub`, `upload_hpc`, `fullscreen`],
   left: [],
   right: [],
 }
@@ -39,6 +40,7 @@ const DEFAULT_HIDDEN_BY_DOCK: Record<ToolbarDock, string[]> = {
 function load_hidden_by_dock(): Record<ToolbarDock, string[]> {
   const dflt = {
     top: [...DEFAULT_HIDDEN_BY_DOCK.top],
+    bottom: [...DEFAULT_HIDDEN_BY_DOCK.bottom],
     left: [...DEFAULT_HIDDEN_BY_DOCK.left],
     right: [...DEFAULT_HIDDEN_BY_DOCK.right],
   }
@@ -47,7 +49,7 @@ function load_hidden_by_dock(): Record<ToolbarDock, string[]> {
     const raw = localStorage.getItem(HIDDEN_BY_DOCK_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      for (const dock of [`top`, `left`, `right`] as ToolbarDock[]) {
+      for (const dock of [`top`, `bottom`, `left`, `right`] as ToolbarDock[]) {
         if (Array.isArray(parsed?.[dock])) {
           dflt[dock] = parsed[dock].filter((t: unknown) => typeof t === `string`)
         }
@@ -58,7 +60,7 @@ function load_hidden_by_dock(): Record<ToolbarDock, string[]> {
   // 迁移: 旧的扁平列表 (catgo:toolbar:hidden-tools) 应用到所有模式
   const legacy = load_hidden()
   if (legacy.length > 0) {
-    return { top: [...legacy], left: [...legacy], right: [...legacy] }
+    return { top: [...legacy], bottom: [...legacy], left: [...legacy], right: [...legacy] }
   }
   return dflt
 }

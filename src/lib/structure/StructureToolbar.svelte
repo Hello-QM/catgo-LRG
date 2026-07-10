@@ -233,7 +233,7 @@
           if (toolbar_state.dock === `left`) {
             left = rect.right + gap
             if (left + mw > vw - gap) left = rect.left - mw - gap // 翻向左
-          } else if (toolbar_state.dock === `top`) {
+          } else if (toolbar_state.dock === `top` || toolbar_state.dock === `bottom`) {
             left = rect.right - mw
           } else {
             left = rect.left - mw - gap
@@ -246,9 +246,14 @@
           // 侧向展开: 面板顶对齐按钮中心; 高度不足时向上偏移 (下方 clamp 兜底)
           top = toolbar_state.dock === `top`
             ? rect.bottom + gap
+            : toolbar_state.dock === `bottom`
+            ? rect.top - mh - gap
             : rect.top + rect.height / 2
           if (toolbar_state.dock === `top` && top + mh > vh - gap) {
             top = rect.top - mh - gap
+          }
+          if (toolbar_state.dock === `bottom` && top < gap) {
+            top = rect.bottom + gap
           }
         }
         left = Math.max(gap, Math.min(left, vw - mw - gap))
@@ -313,8 +318,17 @@
         right: r.right + gap + tw <= vw - pad,
         left: r.left - gap - tw >= pad,
         top: r.top - gap - th >= pad,
+        bottom: r.bottom + gap + th <= vh - pad,
       }
-      const side = fits.right ? `right` : fits.left ? `left` : fits.top ? `top` : `bottom`
+      // 默认方向随停靠位置; 放不下按 对侧→交叉轴 降级 (flip 不覆盖默认)
+      const pref: Record<string, (keyof typeof fits)[]> = {
+        top: [`bottom`, `top`, `right`, `left`],
+        bottom: [`top`, `bottom`, `right`, `left`],
+        left: [`right`, `left`, `top`, `bottom`],
+        right: [`left`, `right`, `top`, `bottom`],
+      }
+      const order = pref[toolbar_state.dock] ?? pref.right
+      const side = order.find((s) => fits[s]) ?? order[0]
       let left: number
       let top: number
       if (side === `right`) {
@@ -389,7 +403,8 @@
     const el = toolbar_el
     if (!el) return
     const update = () => {
-      rail_overflowing = el.scrollHeight > el.clientHeight + 1
+      rail_overflowing = el.scrollHeight > el.clientHeight + 1 ||
+        el.scrollWidth > el.clientWidth + 1
     }
     requestAnimationFrame(update)
     const ro = new ResizeObserver(update)
@@ -440,11 +455,13 @@
 
 <section
   bind:this={toolbar_el}
+  data-placement={toolbar_state.dock}
   class:visible={visible_buttons}
   class:collapsed={toolbar_state.collapsed}
   class:overflowing={rail_overflowing}
   class:dock-left={toolbar_state.dock === `left`}
   class:dock-top={toolbar_state.dock === `top`}
+  class:dock-bottom={toolbar_state.dock === `bottom`}
   class="control-buttons"
 >
   {#if visible_buttons}
@@ -1106,7 +1123,7 @@
         >
           <div class="toolbar-edit-group">{t(`structure.toolbar_dock`)}</div>
           <div class="toolbar-dock-row">
-            {#each [[`top`, `structure.toolbar_dock_top`], [`left`, `structure.toolbar_dock_left`], [`right`, `structure.toolbar_dock_right`]] as const as [dock, key] (dock)}
+            {#each [[`top`, `structure.toolbar_dock_top`], [`bottom`, `structure.toolbar_dock_bottom`], [`left`, `structure.toolbar_dock_left`], [`right`, `structure.toolbar_dock_right`]] as const as [dock, key] (dock)}
               <button
                 type="button"
                 class="toolbar-dock-btn"
@@ -1220,9 +1237,15 @@
     }
   }
 
-  section.control-buttons.overflowing {
+  section.control-buttons.overflowing:not(.dock-top):not(.dock-bottom) {
     overflow-y: auto;
     overflow-x: hidden;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom).overflowing {
+    overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: thin;
     overscroll-behavior: contain;
   }
@@ -1822,49 +1845,98 @@
   }
 
   /* === dock-top: 顶部横排 (原布局: 低频在左, 常用在右) === */
-  section.control-buttons.dock-top {
+  section.control-buttons.dock-top,
+  section.control-buttons.dock-bottom {
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap; /* 永不折行/变假竖栏; 溢出走横向滚动 */
     left: var(--struct-buttons-left, 1ex);
     right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
-    bottom: auto;
     width: auto;
-    align-items: flex-start;
-    gap: clamp(6pt, 1cqmin, 9pt);
-    padding: 4px 6px;
+    min-width: 0;
+    max-width: none; /* 显式解除竖排 36px 约束的继承 */
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    box-sizing: border-box;
   }
-  section.control-buttons.dock-top > :global(*) {
+  section.control-buttons.dock-top {
+    top: var(--struct-buttons-top, var(--ctrl-btn-top, 1ex));
+    bottom: auto;
+  }
+  section.control-buttons.dock-bottom {
+    top: auto;
+    bottom: var(--struct-buttons-bottom, 1ex);
+  }
+  section.control-buttons.dock-bottom.collapsed {
+    top: auto;
+    bottom: var(--struct-buttons-bottom, 1ex);
+  }
+  /* 横排按钮与竖排同规格: 32px 定格, 不压缩 */
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) :global(:is(
+    button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+    button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+    button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+  )) {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    flex: 0 0 32px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    border-radius: 5px;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) :global(:is(
+    button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+    button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+    button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+  ) svg) {
+    width: 20px;
+    height: 20px;
+    display: block;
+    flex: 0 0 20px;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(*) {
     order: 2;
   }
-  section.control-buttons.dock-top > :global(.tb-left) {
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.tb-left) {
     order: 0;
   }
-  section.control-buttons.dock-top > :global(.toolbar-flex-spacer) {
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.toolbar-flex-spacer) {
     order: 1;
     display: block; /* 横排保留左右分簇的弹性间隔 */
     flex: 1 1 0;
   }
-  section.control-buttons.dock-top > :global(.toolbar-edit-container) {
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.toolbar-edit-container) {
     order: 3;
   }
-  section.control-buttons.dock-top > :global(.toolbar-collapse-toggle-wrap) {
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.toolbar-collapse-toggle-wrap) {
     order: 4;
   }
-  section.control-buttons.dock-top :global(button.active) {
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) :global(button.active) {
     box-shadow: inset 0 -2px 0 var(--accent-color, #007acc);
   }
-  .dock-top .pencil-mode-container,
-  .dock-top .measure-mode-dropdown {
+  :is(.dock-top, .dock-bottom) .pencil-mode-container,
+  :is(.dock-top, .dock-bottom) .measure-mode-dropdown {
     flex-direction: row;
     align-items: flex-start;
   }
-  .dock-top .selected-measurement-indicator {
+  :is(.dock-top, .dock-bottom) .selected-measurement-indicator {
     position: static;
     white-space: nowrap;
   }
 
   /* === 栏内按钮几何统一: 同一中心线, 悬停/激活零位移 (popover 内部按钮不在此列) === */
-  section.control-buttons:not(.dock-top) :global(:is(
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
     button.gesture-toggle,
     button.pencil-toggle,
     button.build-tools-toggle,
@@ -1890,7 +1962,7 @@
     font-size: 16px; /* 文字型图标 (如 ⇧) 也走整数尺寸 */
     border-radius: 5px;
   }
-  section.control-buttons:not(.dock-top) :global(:is(
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
     button.gesture-toggle,
     button.pencil-toggle,
     button.build-tools-toggle,
@@ -1907,20 +1979,20 @@
     flex: 0 0 20px;
   }
   /* wrap 只当按钮的透明壳: 不引入自身盒模型 */
-  section.control-buttons:not(.dock-top) > :global(.struct-toolbar-tooltip-wrap) {
+  section.control-buttons:not(.dock-top):not(.dock-bottom) > :global(.struct-toolbar-tooltip-wrap) {
     display: flex;
     justify-content: center;
     padding: 0;
     margin: 0;
     width: 32px;
   }
-  section.control-buttons:not(.dock-top) :global(.pencil-mode-container),
-  section.control-buttons:not(.dock-top) :global(.measure-mode-dropdown) {
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.pencil-mode-container),
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
     width: 32px;
     align-items: center;
   }
   /* 附属小按钮 (激活态的 ×/清除) 同轨居中 */
-  section.control-buttons:not(.dock-top) :global(:is(.pencil-mode-container, .measure-mode-dropdown) > button) {
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(.pencil-mode-container, .measure-mode-dropdown) > button) {
     width: 32px;
     height: 26px;
     padding: 0;
@@ -1932,14 +2004,14 @@
 
   /* 紧凑档整数化覆盖 (32/28/18, 28/24/16) */
   @container (max-height: 560px) {
-    section.control-buttons:not(.dock-top) {
+    section.control-buttons:not(.dock-top):not(.dock-bottom) {
       width: 32px;
       min-width: 32px;
       max-width: 32px;
       gap: 2px;
       padding: 3px 0;
     }
-    section.control-buttons:not(.dock-top) :global(:is(
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
       button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
       button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
       button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
@@ -1950,7 +2022,7 @@
       min-height: 28px;
       font-size: 14px;
     }
-    section.control-buttons:not(.dock-top) :global(:is(
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
       button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
       button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
       button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
@@ -1959,21 +2031,21 @@
       height: 18px;
       flex-basis: 18px;
     }
-    section.control-buttons:not(.dock-top) > :global(.struct-toolbar-tooltip-wrap),
-    section.control-buttons:not(.dock-top) :global(.pencil-mode-container),
-    section.control-buttons:not(.dock-top) :global(.measure-mode-dropdown) {
+    section.control-buttons:not(.dock-top):not(.dock-bottom) > :global(.struct-toolbar-tooltip-wrap),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.pencil-mode-container),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
       width: 28px;
     }
   }
   @container (max-height: 400px) {
-    section.control-buttons:not(.dock-top) {
+    section.control-buttons:not(.dock-top):not(.dock-bottom) {
       width: 28px;
       min-width: 28px;
       max-width: 28px;
       gap: 1px;
       padding: 2px 0;
     }
-    section.control-buttons:not(.dock-top) :global(:is(
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
       button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
       button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
       button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
@@ -1984,7 +2056,7 @@
       min-height: 24px;
       font-size: 12px;
     }
-    section.control-buttons:not(.dock-top) :global(:is(
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
       button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
       button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
       button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
@@ -1993,9 +2065,9 @@
       height: 16px;
       flex-basis: 16px;
     }
-    section.control-buttons:not(.dock-top) > :global(.struct-toolbar-tooltip-wrap),
-    section.control-buttons:not(.dock-top) :global(.pencil-mode-container),
-    section.control-buttons:not(.dock-top) :global(.measure-mode-dropdown) {
+    section.control-buttons:not(.dock-top):not(.dock-bottom) > :global(.struct-toolbar-tooltip-wrap),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.pencil-mode-container),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
       width: 24px;
     }
   }

@@ -1756,6 +1756,7 @@ const structure: Record<string, string> = {
   toolbar_dock: `Dock position`,
   toolbar_dock_top: `Top`,
   toolbar_dock_left: `Left`,
+  toolbar_dock_bottom: `Bottom`,
   toolbar_dock_right: `Right`,
   toolbar_customize: `Customize toolbar buttons`,
   toolbar_collapse: `Collapse toolbar`,
