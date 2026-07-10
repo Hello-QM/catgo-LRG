@@ -1175,11 +1175,13 @@
     right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
     max-height: calc(100% - 2 * var(--struct-buttons-top, 1ex));
     left: auto;
-    width: max-content;
-    gap: 2pt;
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+    gap: 2px;
     justify-content: flex-start;
-    align-items: stretch;
-    padding: 5px 3px;
+    align-items: center;
+    padding: 4px 0;
     background: color-mix(in srgb, var(--pane-bg, #0f1012) 88%, transparent);
     border: 1px solid rgba(255, 255, 255, 0.07);
     border-radius: 9px;
@@ -1516,10 +1518,10 @@
     box-shadow: 0 0 8px rgba(255, 0, 255, 0.3);
   }
   .gesture-toggle.settings {
-    border: 1px solid rgba(0, 255, 247, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 247, 0.2);
   }
   .gesture-toggle.settings.active {
-    border-color: rgba(0, 255, 247, 0.5);
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 247, 0.5);
   }
 
   /* === 元素快速选择器 === */
@@ -1859,5 +1861,142 @@
   .dock-top .selected-measurement-indicator {
     position: static;
     white-space: nowrap;
+  }
+
+  /* === 栏内按钮几何统一: 同一中心线, 悬停/激活零位移 (popover 内部按钮不在此列) === */
+  section.control-buttons:not(.dock-top) :global(:is(
+    button.gesture-toggle,
+    button.pencil-toggle,
+    button.build-tools-toggle,
+    button.view-mode-button,
+    button.reset-camera,
+    button.fullscreen-toggle,
+    button.toolbar-edit-toggle,
+    button.toolbar-collapse-toggle,
+    .pane-toggle
+  )) {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    flex: 0 0 auto;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px; /* 文字型图标 (如 ⇧) 也走整数尺寸 */
+    border-radius: 5px;
+  }
+  section.control-buttons:not(.dock-top) :global(:is(
+    button.gesture-toggle,
+    button.pencil-toggle,
+    button.build-tools-toggle,
+    button.view-mode-button,
+    button.reset-camera,
+    button.fullscreen-toggle,
+    button.toolbar-edit-toggle,
+    button.toolbar-collapse-toggle,
+    .pane-toggle
+  ) svg) {
+    width: 20px;
+    height: 20px;
+    display: block;
+    flex: 0 0 20px;
+  }
+  /* wrap 只当按钮的透明壳: 不引入自身盒模型 */
+  section.control-buttons:not(.dock-top) > :global(.struct-toolbar-tooltip-wrap) {
+    display: flex;
+    justify-content: center;
+    padding: 0;
+    margin: 0;
+    width: 32px;
+  }
+  section.control-buttons:not(.dock-top) :global(.pencil-mode-container),
+  section.control-buttons:not(.dock-top) :global(.measure-mode-dropdown) {
+    width: 32px;
+    align-items: center;
+  }
+  /* 附属小按钮 (激活态的 ×/清除) 同轨居中 */
+  section.control-buttons:not(.dock-top) :global(:is(.pencil-mode-container, .measure-mode-dropdown) > button) {
+    width: 32px;
+    height: 26px;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 紧凑档整数化覆盖 (32/28/18, 28/24/16) */
+  @container (max-height: 560px) {
+    section.control-buttons:not(.dock-top) {
+      width: 32px;
+      min-width: 32px;
+      max-width: 32px;
+      gap: 2px;
+      padding: 3px 0;
+    }
+    section.control-buttons:not(.dock-top) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    )) {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      font-size: 14px;
+    }
+    section.control-buttons:not(.dock-top) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    ) svg) {
+      width: 18px;
+      height: 18px;
+      flex-basis: 18px;
+    }
+    section.control-buttons:not(.dock-top) > :global(.struct-toolbar-tooltip-wrap),
+    section.control-buttons:not(.dock-top) :global(.pencil-mode-container),
+    section.control-buttons:not(.dock-top) :global(.measure-mode-dropdown) {
+      width: 28px;
+    }
+  }
+  @container (max-height: 400px) {
+    section.control-buttons:not(.dock-top) {
+      width: 28px;
+      min-width: 28px;
+      max-width: 28px;
+      gap: 1px;
+      padding: 2px 0;
+    }
+    section.control-buttons:not(.dock-top) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    )) {
+      width: 24px;
+      height: 24px;
+      min-width: 24px;
+      min-height: 24px;
+      font-size: 12px;
+    }
+    section.control-buttons:not(.dock-top) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    ) svg) {
+      width: 16px;
+      height: 16px;
+      flex-basis: 16px;
+    }
+    section.control-buttons:not(.dock-top) > :global(.struct-toolbar-tooltip-wrap),
+    section.control-buttons:not(.dock-top) :global(.pencil-mode-container),
+    section.control-buttons:not(.dock-top) :global(.measure-mode-dropdown) {
+      width: 24px;
+    }
   }
 </style>
