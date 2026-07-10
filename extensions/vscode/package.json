@@ -81,9 +81,15 @@
           },
           {
             "filenamePattern": "*{trajectory,relax,npt,nvt,nve}*"
+          },
+          {
+            "filenamePattern": "*.{xyz,extxyz,cif,poscar,mol2,pdb}"
+          },
+          {
+            "filenamePattern": "*poscar*"
           }
         ],
-        "priority": "option"
+        "priority": "default"
       }
     ],
     "configuration": {
