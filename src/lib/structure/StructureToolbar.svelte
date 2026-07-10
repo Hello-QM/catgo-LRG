@@ -228,7 +228,7 @@
   }
 </script>
 
-<section class:visible={visible_buttons} class="control-buttons">
+<section class:visible={visible_buttons} class:collapsed={toolbar_state.collapsed} class="control-buttons">
   {#if visible_buttons}
     {#if !toolbar_state.collapsed}
     <!-- === View / Navigation === -->
@@ -925,13 +925,20 @@
   section.control-buttons {
     position: absolute;
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    flex-wrap: nowrap;
     top: var(--struct-buttons-top, var(--ctrl-btn-top, 1ex));
     right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
-    left: var(--struct-buttons-left, 1ex);
-    gap: clamp(6pt, 1cqmin, 9pt);
-    justify-content: flex-end;
-    align-items: flex-start;
+    bottom: var(--struct-buttons-bottom, 1ex);
+    left: auto;
+    width: max-content;
+    gap: 2pt;
+    justify-content: flex-start;
+    align-items: stretch;
+    padding: 5px 3px;
+    background: color-mix(in srgb, var(--pane-bg, #0f1012) 88%, transparent);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 9px;
     /* buttons need higher z-index than StructureLegend to make info/controls panes occlude legend */
     /* we also need crazy high z-index to make info/control pane occlude threlte/extras' <HTML> elements for site labels */
     z-index: var(--struct-buttons-z-index, 100000000);
@@ -942,6 +949,16 @@
   section.control-buttons.visible {
     opacity: 1;
     pointer-events: auto;
+  }
+  section.control-buttons.collapsed {
+    bottom: auto;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+  }
+  /* VSCode-style active indicator on the bar's inner edge */
+  section.control-buttons :global(button.active) {
+    box-shadow: inset -2px 0 0 var(--accent-color, #007acc);
   }
 
   /* === 按钮基础样式 === */
@@ -1002,9 +1019,9 @@
   }
   .struct-toolbar-tooltip {
     position: absolute;
-    left: 50%;
-    top: calc(100% + 8px);
-    transform: translateX(-50%) translateY(-4px);
+    right: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%) translateX(4px);
     padding: 7px 12px;
     border-radius: 7px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1025,7 +1042,7 @@
   .struct-toolbar-tooltip-wrap:focus-within .struct-toolbar-tooltip {
     opacity: 1;
     visibility: visible;
-    transform: translateX(-50%) translateY(0);
+    transform: translateY(-50%) translateX(0);
   }
   .struct-toolbar-tooltip-wrap:has(.active) .struct-toolbar-tooltip,
   .struct-toolbar-tooltip-wrap:has([aria-expanded='true']) .struct-toolbar-tooltip,
@@ -1049,8 +1066,8 @@
   /* === 下拉菜单样式 (匹配 Trajectory dropdown UI) === */
   .view-mode-dropdown {
     position: absolute;
-    top: 115%;
-    right: 0;
+    top: 0;
+    right: calc(100% + 8px);
     max-width: calc(100vw - 24px);
     overflow-x: auto;
     background: var(--surface-bg);
@@ -1090,10 +1107,16 @@
   /* === 测量模式 === */
   .measure-mode-dropdown {
     display: flex;
+    flex-direction: column;
+    align-items: center;
     position: relative;
     gap: 4pt;
   }
   .selected-measurement-indicator {
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 8px;
+    white-space: nowrap;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -1128,6 +1151,8 @@
   /* === 铅笔/画模式样式 === */
   .pencil-mode-container {
     display: flex;
+    flex-direction: column;
+    align-items: center;
     position: relative;
     gap: 4pt;
   }
@@ -1148,6 +1173,7 @@
     background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
   }
   .touch-mode-container {
+    flex-direction: column;
     display: flex;
     position: relative;
     gap: 4pt;
@@ -1245,9 +1271,9 @@
   /* === 铅笔模式选择器 (atoms vs fragments vs bonds) === */
   .pencil-mode-selector {
     position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
+    top: 0;
+    right: calc(100% + 8px);
+    margin-top: 0;
     z-index: 10;
     display: flex;
     flex-direction: column;
@@ -1349,30 +1375,30 @@
       left: 50%;
       right: auto;
       top: 72px;
-      transform: translateX(-50%);
+      transform: translateY(-50%) translateX(4px);
       width: max-content;
       max-width: calc(100vw - 24px);
       z-index: 100000020;
     }
   }
 
-  /* === 左右分簇: 常用靠右, 其余靠左 (flex order, DOM 不动) === */
+  /* === 竖排分簇: 常用在顶, 其余在底, 自定义/收起钉底 (flex order, DOM 不动) === */
   section.control-buttons > :global(*) {
-    order: 1; /* 默认右簇 (含 children 里的 pane-toggle) */
+    order: 1; /* 默认顶部簇 (含 children 里的 pane-toggle) */
   }
   section.control-buttons > :global(.tb-left) {
-    order: -1; /* 左簇: 低频工具 */
+    order: 3; /* 底部簇: 低频工具 */
   }
   section.control-buttons > :global(.toolbar-flex-spacer) {
-    order: 0;
+    order: 2;
     flex: 1 1 0;
     pointer-events: none;
   }
   section.control-buttons > :global(.toolbar-edit-container) {
-    order: 2;
+    order: 4;
   }
   section.control-buttons > :global(.toolbar-collapse-toggle-wrap) {
-    order: 3;
+    order: 5;
   }
 
   /* === 工具栏收起 + 自定义 === */
