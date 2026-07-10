@@ -66,7 +66,7 @@
     get_pane_label, create_empty_pane, pane_has_content,
     content_to_base64, create_tab_state, auto_name as _auto_name,
     is_chgcar_file, NON_STRUCTURE_EXTS, update_export_format, format_from_ext,
-    serialize_structure_content,
+    serialize_structure_content, clear_modified_if_sole_pane,
   } from './pane-utils'
   // Recursive pane tree (replaces the fixed single/splitH/splitV/quad grid)
   import PaneTree from './PaneTree.svelte'
@@ -243,6 +243,9 @@
   const export_deps: ExportHandlerDeps = {
     close_panel: (tab_id, leaf_id) => close_panel(tab_id, leaf_id),
     load_close_save_projects,
+    // Deferred Save-As-and-close completed: pane-scoped clear (sole-pane rule).
+    on_pane_saved: (tab_id, leaf_id) =>
+      clear_modified_if_sole_pane(modified, tab_states[tab_id]?.root, tab_id, leaf_id),
   }
   const drag_deps: DragDropDeps = {
     get_active_ts,
@@ -554,6 +557,37 @@
     modal.close_all_visible = false
   }
 
+  // ===== Per-tab close prompt: Save option (Task B3 close-guard) =====
+  // The tab-close confirm modal (tab ×, Ctrl+W on a single-pane tab) must offer
+  // Save / Don't Save / Cancel like every other close entry point. Save routes
+  // through the same seams as Close-All: local source file → silent overwrite
+  // in its original format (write_file), HPC origin → writeRemoteFile,
+  // otherwise → project DB. Any failure keeps the tab open and shows the error.
+  let tab_close_saving = $state(false)
+  let tab_close_save_error = $state(``)
+
+  async function save_and_close_tab(tab_id: string) {
+    tab_close_saving = true
+    tab_close_save_error = ``
+    try {
+      const entries = build_close_all_entries(tm.tabs.filter((tb) => tb.id === tab_id), tab_states)
+      await execute_close_all_saves(entries, tab_states)
+      sidebar.refresh_counter++
+      modified.clear(tab_id)
+      close_tab(tab_id)
+    } catch (e) {
+      tab_close_save_error = e instanceof Error ? e.message : t(`app.save_failed`)
+    } finally {
+      tab_close_saving = false
+    }
+  }
+
+  function cancel_tab_close() {
+    if (tab_close_saving) return
+    tm.tab_close_confirm_id = null
+    tab_close_save_error = ``
+  }
+
   // Build project tree for save dialogs
   let save_project_children = $derived.by(() => {
     const map: Record<string, ProjectSummary[]> = { __root__: [] }
@@ -748,7 +782,7 @@
             p.initial_structure_ref = parsed
             p.initial_site_count = parsed.sites.length
             p.modified = false
-            modified.clear(target_tab_id)
+            clear_modified_if_sole_pane(modified, target_ts.root, target_tab_id, target_leaf_id)
             update_tab_label(target_tab_id)
           }
         }
@@ -1114,7 +1148,7 @@
     pane.initial_site_count = imported.sites.length
     pane.initial_structure_ref = imported as AnyStructure
     pane.modified = false
-    modified.clear(modal.import_target_tab)
+    clear_modified_if_sole_pane(modified, ts.root, modal.import_target_tab, modal.import_target_leaf)
     pane.is_trajectory_mode = false
     pane.trajectory = null
 
@@ -1404,7 +1438,7 @@
     p.selected_sites = []
     p.current_step_idx = 0
     p.modified = false
-    modified.clear(tab_id)
+    clear_modified_if_sole_pane(modified, ts.root, tab_id, leaf_id)
     p.remote_origin = remote_origin
     p.local_file_path = local_file_path
     p.source_filename = e.filename
@@ -1712,7 +1746,7 @@
         p.initial_site_count = data.structure.sites?.length ?? 0
         p.initial_structure_ref = data.structure
         p.modified = false
-        modified.clear(tab_id)
+        clear_modified_if_sole_pane(modified, ts.root, tab_id, target_id)
       }
       if (data.trajectory) {
         const traj = data.trajectory as { frames?: unknown[]; metadata?: { source_format?: string } }
@@ -1725,7 +1759,7 @@
             p.initial_site_count = frame.structure.sites?.length ?? 0
             p.initial_structure_ref = frame.structure
             p.modified = false
-            modified.clear(tab_id)
+            clear_modified_if_sole_pane(modified, ts.root, tab_id, target_id)
             p.selected_sites = []
             p.current_step_idx = 0
             ts.active_leaf_id = target_id
@@ -1738,7 +1772,7 @@
         p.structure = undefined
         p.initial_site_count = 0
         p.modified = false
-        modified.clear(tab_id)
+        clear_modified_if_sole_pane(modified, ts.root, tab_id, target_id)
       }
       p.selected_sites = []
       p.current_step_idx = 0
@@ -1913,9 +1947,9 @@
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
       const pane = first ? structurePane(first) : null
-      if (!ts || !pane) return false
+      if (!ts || !first || !pane) return false
       pane.structure = clone_structure(struct)
-      modified.clear(`default`)
+      clear_modified_if_sole_pane(modified, ts.root, `default`, first.id)
       update_tab_label(`default`)
       return true
     }
@@ -1988,14 +2022,14 @@
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
       const pane = first ? structurePane(first) : null
-      if (!ts || !pane) return false
+      if (!ts || !first || !pane) return false
       pane.trajectory = clone_trajectory_for_pane(traj)
       pane.structure = undefined  // mutually exclusive
       pane.is_trajectory_mode = true
       pane.source_filename = filename || null
       pane.raw_traj_b64 = btoa(unescape(encodeURIComponent(raw)))
       pane.raw_traj_format = (filename.toLowerCase().split(`.`).pop() || ``)
-      modified.clear(`default`)
+      clear_modified_if_sole_pane(modified, ts.root, `default`, first.id)
       update_tab_label(`default`)
       return true
     }
@@ -2568,7 +2602,7 @@
                       lp.initial_site_count = struct.sites.length
                       lp.initial_structure_ref = struct
                       lp.modified = false
-                      modified.clear(tab.id)
+                      clear_modified_if_sole_pane(modified, ts.root, tab.id, leaf.id)
                     }
                   }
                   const right = findLeafById(ts.root, res.newLeafId)
@@ -2594,7 +2628,11 @@
                   if (!struct?.sites?.length) return
                   const target = leaves(ts.root).find(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })
                   const tp = target ? structurePane(target) : null
-                  if (tp) { tp.structure = clone_structure(struct); tp.modified = false; modified.clear(tab.id) }
+                  if (target && tp) {
+                    tp.structure = clone_structure(struct)
+                    tp.modified = false
+                    clear_modified_if_sole_pane(modified, ts.root, tab.id, target.id)
+                  }
                 }}
               />
             </div>
@@ -2656,7 +2694,7 @@
                         pane.initial_site_count = sample.data.sites?.length ?? 0
                         pane.initial_structure_ref = sample.data
                         pane.modified = false
-                        modified.clear(tab.id)
+                        clear_modified_if_sole_pane(modified, ts.root, tab.id, leaf.id)
                         ts.active_leaf_id = leaf.id
                         update_tab_label(tab.id)
                       }}
@@ -2762,7 +2800,7 @@
                   pane.initial_site_count = 2
                   pane.initial_structure_ref = pane.structure
                   pane.modified = false
-                  modified.clear(tab.id)
+                  clear_modified_if_sole_pane(modified, ts.root, tab.id, leaf.id)
                   ts.active_leaf_id = leaf.id
                 }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -2984,14 +3022,20 @@
   {#if confirm_tab && confirm_ts}
     {@const structure_count = leaves(confirm_ts.root).filter(l => { const p = structurePane(l); return !!p && pane_has_content(p) }).length}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
+    <div class="modal-overlay" onclick={cancel_tab_close}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
         <h3>{t(`app.confirm_close_tab`, { label: confirm_tab.label })}</h3>
         <p>{t(`app.structures_will_be_removed`, { count: structure_count })}</p>
+        {#if tab_close_save_error}
+          <p class="tab-close-error">{tab_close_save_error}</p>
+        {/if}
         <div class="modal-actions">
-          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>{t(`common.cancel`)}</button>
-          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t(`app.close_tab`)}</button>
+          <button class="modal-btn cancel" disabled={tab_close_saving} onclick={cancel_tab_close}>{t(`common.cancel`)}</button>
+          <button class="modal-btn save" disabled={tab_close_saving} onclick={() => save_and_close_tab(tm.tab_close_confirm_id!)}>
+            {tab_close_saving ? t(`common.saving`) : t(`common.save_and_close`)}
+          </button>
+          <button class="modal-btn danger" disabled={tab_close_saving} onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t(`app.close_tab`)}</button>
         </div>
       </div>
     </div>
@@ -3586,6 +3630,11 @@
   .modal-btn.save:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .tab-close-error {
+    color: #ef4444;
+    font-size: 0.85em;
   }
 
   /* Close-all and export dialog styles are now in their sub-components */

@@ -14,6 +14,10 @@ import { writeRemoteFile } from '$lib/api/hpc'
 export interface ExportHandlerDeps {
   close_panel: (tab_id: string, leaf_id: string) => void
   load_close_save_projects: () => void
+  /** Close-guard hook: a deferred save-and-close (Save As dialog) completed for
+   *  this pane — clear the tab's modified flag if the pane-scoped rule allows
+   *  (see clear_modified_if_sole_pane in pane-utils). */
+  on_pane_saved?: (tab_id: string, leaf_id: string) => void
 }
 
 export async function export_fs_browse(dir: string) {
@@ -84,6 +88,9 @@ export async function do_export(deps: ExportHandlerDeps) {
     }
     exp.dialog = null
     if (exp.close_after) {
+      // Must run before close_panel — the close empties the pane, which would
+      // make the sole-content-pane check in the hook see stale/empty state.
+      deps.on_pane_saved?.(exp.close_after.tab_id, exp.close_after.leaf_id)
       deps.close_panel(exp.close_after.tab_id, exp.close_after.leaf_id)
       exp.close_after = null
     }

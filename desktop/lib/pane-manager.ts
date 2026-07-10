@@ -7,7 +7,12 @@
 
 import type { PaneState, StructureTabState } from '../pane-utils'
 import type { create_modified_registry } from '$lib/structure/close-guard.svelte'
-import { create_empty_pane, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
+import {
+  create_empty_pane,
+  auto_name as _auto_name,
+  serialize_structure_content,
+  clear_modified_if_sole_pane,
+} from '../pane-utils'
 import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
@@ -160,7 +165,9 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
     } else {
       await save_structure_to_db(structure, _auto_name(structure), exp.close_save_project_id || undefined)
     }
-    deps.modified.clear(tab_id)
+    // Pane-scoped save success: only clear the tab flag when this pane is the
+    // tab's sole content-bearing pane — a dirty sibling must keep it set.
+    clear_modified_if_sole_pane(deps.modified, ts.root, tab_id, leaf_id)
     sidebar.refresh_counter++
     close_panel(deps, tab_id, leaf_id)
   } catch (e) {
