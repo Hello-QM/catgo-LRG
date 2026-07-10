@@ -249,6 +249,30 @@
   }
   let pencil_btn_el = $state<HTMLButtonElement | null>(null)
   let measure_btn_el = $state<HTMLButtonElement | null>(null)
+  let toolbar_el = $state<HTMLElement | null>(null)
+  // 小面板 (多宫格分屏) 里工具比面板高时: 栏内滚动; 放得下时保持 visible,
+  // 侧向 tooltip 不被裁。直接 toggle class, 不回写 $state。
+  $effect(() => {
+    void toolbar_state.hidden_by_dock
+    void toolbar_state.dock
+    void toolbar_state.collapsed
+    const el = toolbar_el
+    if (!el) return
+    const update = () => {
+      el.classList.toggle(`overflowing`, el.scrollHeight > el.clientHeight + 1)
+    }
+    requestAnimationFrame(update)
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    const mo = new MutationObserver(update) // 手势/铅笔激活等追加按钮 → 内容变高
+    mo.observe(el, { childList: true, subtree: true })
+    window.addEventListener(`resize`, update)
+    return () => {
+      ro.disconnect()
+      mo.disconnect()
+      window.removeEventListener(`resize`, update)
+    }
+  })
   // 父组件强制隐藏 (hidden_toolbar_items prop) 优先于用户选择
   const tool_hidden = (id: string): boolean =>
     hidden_toolbar_items.includes(id) || toolbar_tool_hidden(id)
@@ -285,6 +309,7 @@
 />
 
 <section
+  bind:this={toolbar_el}
   class:visible={visible_buttons}
   class:collapsed={toolbar_state.collapsed}
   class:dock-left={toolbar_state.dock === `left`}
@@ -1017,7 +1042,7 @@
     flex-wrap: nowrap;
     top: var(--struct-buttons-top, var(--ctrl-btn-top, 1ex));
     right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
-    max-height: calc(100cqh - 3ex);
+    max-height: calc(100% - 2 * var(--struct-buttons-top, 1ex));
     left: auto;
     width: max-content;
     gap: 2pt;
@@ -1037,6 +1062,12 @@
   section.control-buttons.visible {
     opacity: 1;
     pointer-events: auto;
+  }
+  section.control-buttons.overflowing {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
   }
   section.control-buttons.collapsed {
     bottom: auto;
