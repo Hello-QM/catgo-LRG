@@ -271,6 +271,7 @@
   let pencil_btn_el = $state<HTMLButtonElement | null>(null)
   let measure_btn_el = $state<HTMLButtonElement | null>(null)
   let toolbar_el = $state<HTMLElement | null>(null)
+  let rail_overflowing = $state(false)
   // 小面板 (多宫格分屏) 里工具比面板高时: 栏内滚动; 放得下时保持 visible,
   // 侧向 tooltip 不被裁。直接 toggle class, 不回写 $state。
   $effect(() => {
@@ -280,7 +281,7 @@
     const el = toolbar_el
     if (!el) return
     const update = () => {
-      el.classList.toggle(`overflowing`, el.scrollHeight > el.clientHeight + 1)
+      rail_overflowing = el.scrollHeight > el.clientHeight + 1
     }
     requestAnimationFrame(update)
     const ro = new ResizeObserver(update)
@@ -333,6 +334,7 @@
   bind:this={toolbar_el}
   class:visible={visible_buttons}
   class:collapsed={toolbar_state.collapsed}
+  class:overflowing={rail_overflowing}
   class:dock-left={toolbar_state.dock === `left`}
   class:dock-top={toolbar_state.dock === `top`}
   class="control-buttons"
@@ -1084,6 +1086,30 @@
     opacity: 1;
     pointer-events: auto;
   }
+  /* === 子视口紧凑档 (@container: 每个宫格独立计算, 拖分隔线实时生效) === */
+  @container (max-height: 560px) {
+    section.control-buttons {
+      gap: 1pt;
+      padding: 3px 2px;
+      border-radius: 7px;
+    }
+    section.control-buttons :global(button) {
+      padding: 2.5pt;
+      font-size: clamp(0.82em, 1.6cqmin, 1.1em);
+    }
+  }
+  @container (max-height: 400px) {
+    section.control-buttons {
+      gap: 0.5pt;
+      padding: 2px 1px;
+      border-radius: 6px;
+    }
+    section.control-buttons :global(button) {
+      padding: 2pt;
+      font-size: 0.8em;
+    }
+  }
+
   section.control-buttons.overflowing {
     overflow-y: auto;
     overflow-x: hidden;
