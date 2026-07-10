@@ -311,6 +311,13 @@
   let file_size = $state<number | undefined>(undefined)
   let file_object = $state<File | null>(null)
   let wrapper = $state<HTMLDivElement | undefined>(undefined)
+  // __CATGO_VSCODE_EXTENSION__ is a vite `define` token (unset in the main app
+  // build → `typeof` is `undefined` → flag false); its type lives in src/app.d.ts.
+  // VS Code's sandboxed webview blocks requestFullscreen(), so the Full Screen
+  // button + `f` shortcut are dead there — gate them off (matches Structure.svelte C2).
+  const is_vscode_extension = typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` &&
+    __CATGO_VSCODE_EXTENSION__
+  const fullscreen_toggle_gated = $derived(is_vscode_extension ? false : fullscreen_toggle)
   let info_pane_open = $state(false)
   let parsing_progress = $state<ParseProgress | null>(null)
   let viewport = $state({ width: 0, height: 0 })
@@ -1210,7 +1217,7 @@
       total_frames,
       current_step_idx,
       is_playing,
-      has_fullscreen_toggle: !!fullscreen_toggle,
+      has_fullscreen_toggle: !!fullscreen_toggle_gated,
       view_mode_dropdown_open,
       fps_range,
       fps,
@@ -2109,17 +2116,17 @@
               </div>
             {/if}
             <!-- Fullscreen button - rightmost position -->
-            {#if fullscreen_toggle}
+            {#if fullscreen_toggle_gated}
               <button
                 type="button"
-                onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
+                onclick={() => fullscreen_toggle_gated && toggle_fullscreen(wrapper)}
                 title="{fullscreen ? `Exit` : `Enter`} fullscreen"
                 aria-label="{fullscreen ? `Exit` : `Enter`} fullscreen"
                 aria-pressed={fullscreen}
                 class="fullscreen-button"
               >
-                {#if typeof fullscreen_toggle === `function`}
-                  {@render fullscreen_toggle()}
+                {#if typeof fullscreen_toggle_gated === `function`}
+                  {@render fullscreen_toggle_gated()}
                 {:else}
                   <Icon icon="{fullscreen ? `Exit` : ``}Fullscreen" />
                 {/if}

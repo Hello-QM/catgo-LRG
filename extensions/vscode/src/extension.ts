@@ -1086,11 +1086,21 @@ class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
     return document.save(dest)
   }
 
-  revertCustomDocument(document: CatgoDocument): Thenable<void> {
-    this.panels
-      .get(document.uri.toString())
-      ?.webview.postMessage({ command: `revert` })
-    return Promise.resolve()
+  // File → Revert: reload the webview from the on-disk content so the viewer
+  // drops its edited state (VS Code marks the doc clean once this resolves).
+  // Reuse the file-watcher `fileUpdated` message shape — the webview remounts
+  // from it and re-seeds its save-content cache, so no stale edit survives.
+  async revertCustomDocument(document: CatgoDocument): Promise<void> {
+    const panel = this.panels.get(document.uri.toString())
+    if (!panel) return
+    const updated_file = await read_file(document.uri.fsPath)
+    panel.webview.postMessage({
+      command: `fileUpdated`,
+      file_path: document.uri.fsPath,
+      data: updated_file,
+      type: infer_view_type(updated_file),
+      theme: get_theme(),
+    })
   }
 
   async backupCustomDocument(

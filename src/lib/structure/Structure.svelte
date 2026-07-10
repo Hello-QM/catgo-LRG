@@ -2850,7 +2850,9 @@
     get_hovered: () => hovered,
     get_fullscreen_toggle: () => fullscreen_toggle,
     get_enable_info_pane: () => enable_info_pane,
-    toggle_fullscreen_fn: () => toggle_fullscreen(wrapper),
+    // VS Code's sandboxed webview blocks requestFullscreen(); the `f` shortcut
+    // would otherwise flip internal state for nothing, so make it inert there.
+    toggle_fullscreen_fn: () => { if (!is_vscode_extension) toggle_fullscreen(wrapper) },
     get_lattice_alignment_rotation: () => lattice_alignment_rotation,
     get_pencil_mode_active: () => pencil.pencil_mode_active,
     set_pencil_mode_active: (v) => { pencil.pencil_mode_active = v },

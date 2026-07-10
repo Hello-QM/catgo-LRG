@@ -81,7 +81,8 @@
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
   import { create_modified_registry } from '$lib/structure/close-guard.svelte'
-  import { apply_beforeunload_guard } from '$lib/structure/save-on-close'
+  import { apply_beforeunload_guard, guard_close } from '$lib/structure/save-on-close'
+  import { save_format_from_path } from '$lib/structure/save-format'
   import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
   import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
   // SDK-agent visible-terminal bridge: global poller + approval card
@@ -594,17 +595,28 @@
   async function save_and_close_tab(tab_id: string) {
     tab_close_saving = true
     tab_close_save_error = ``
-    try {
-      const entries = build_close_all_entries(tm.tabs.filter((tb) => tb.id === tab_id), tab_states)
-      await execute_close_all_saves(entries, tab_states)
-      sidebar.refresh_counter++
-      modified.clear(tab_id)
-      close_tab(tab_id)
-    } catch (e) {
-      tab_close_save_error = e instanceof Error ? e.message : t(`app.save_failed`)
-    } finally {
-      tab_close_saving = false
-    }
+    // The modal has already collected the user's choice (Save), so route the
+    // decision through the tested `guard_close` helper: confirm() resolves to
+    // 'save' and we close only if on_save() reports success — a failed save
+    // keeps the tab open with the error shown.
+    const may_close = await guard_close({
+      modified: true,
+      confirm: async () => `save`,
+      on_save: async () => {
+        try {
+          const entries = build_close_all_entries(tm.tabs.filter((tb) => tb.id === tab_id), tab_states)
+          await execute_close_all_saves(entries, tab_states)
+          sidebar.refresh_counter++
+          modified.clear(tab_id)
+          return true
+        } catch (e) {
+          tab_close_save_error = e instanceof Error ? e.message : t(`app.save_failed`)
+          return false
+        }
+      },
+    })
+    tab_close_saving = false
+    if (may_close) close_tab(tab_id)
   }
 
   function cancel_tab_close() {
@@ -612,6 +624,13 @@
     tm.tab_close_confirm_id = null
     tab_close_save_error = ``
   }
+
+  // A tab-close save error is modal-scoped: once the modal closes by ANY path
+  // (Cancel, Escape, the danger Close Tab button, overlay click) drop the error
+  // so the next tab-close modal never opens showing a stale error from before.
+  $effect(() => {
+    if (!tm.tab_close_confirm_id) tab_close_save_error = ``
+  })
 
   // Build project tree for save dialogs
   let save_project_children = $derived.by(() => {
@@ -761,13 +780,12 @@
     if (!pane) return
     const filename = pane.source_filename || `structure.cif`
 
-    // Determine format from filename
-    const ext = filename.split(`.`).pop()?.toLowerCase() || ``
-    let format = `cif`
-    if ([`poscar`, `vasp`, `contcar`].includes(ext) || /^(POSCAR|CONTCAR)$/i.test(filename)) format = `poscar`
-    else if (ext === `xyz`) format = `xyz`
-    else if (ext === `extxyz`) format = `extxyz`
-    else if (ext === `json`) format = `json`
+    // Fill the text-editor buffer in the source file's format. `cif` is the
+    // deliberate fallback when the path maps to no faithful serializer: this
+    // only seeds an editable buffer and NEVER writes back to the source file
+    // (the on-save handler re-parses and updates the pane in memory), so an
+    // unknown source can safely default to CIF here.
+    const format = save_format_from_path(filename) ?? `cif`
 
     // Serialize: try Python backend first, fallback to frontend serializers
     let content = ``
@@ -1998,6 +2016,7 @@
     request_close_tab,
     get_tab_close_confirm_id: () => tm.tab_close_confirm_id,
     set_tab_close_confirm_id: (v) => { tm.tab_close_confirm_id = v },
+    get_tab_close_saving: () => tab_close_saving,
     get_pending_layout_change: () => tm.pending_layout_change,
     set_pending_layout_change: (_v) => { tm.pending_layout_change = null },
   })

@@ -21,6 +21,7 @@ export interface KeyboardShortcutDeps {
   request_close_tab: (id: string) => void
   get_tab_close_confirm_id: () => string | null
   set_tab_close_confirm_id: (id: string | null) => void
+  get_tab_close_saving: () => boolean
   get_pending_layout_change: () => { tab_id: string; new_layout: PresetId; lost_count: number } | null
   set_pending_layout_change: (v: null) => void
 }
@@ -88,7 +89,9 @@ export function create_handle_keydown(deps: KeyboardShortcutDeps) {
         return
       }
       if (deps.get_tab_close_confirm_id()) {
-        deps.set_tab_close_confirm_id(null)
+        // While a save-and-close is in flight, Escape is inert — don't tear the
+        // modal down mid-save (it would hide the spinner / pending error state).
+        if (!deps.get_tab_close_saving()) deps.set_tab_close_confirm_id(null)
         return
       }
       if (deps.get_pending_layout_change()) {
