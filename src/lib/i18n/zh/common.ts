@@ -223,6 +223,13 @@ const common: Record<string, string> = {
   overlay_pick_target_first: `请先选择目标窗口`,
   overlay_capture_last_loaded: `使用最近加载的结构(来源窗口已关闭)`,
   overlay_from_window: `来自窗口 {n}`,
+
+  // ── 双模式面板 ──
+  panel_dock_to_sidebar: `停靠到侧边栏`,
+  panel_float: `设为悬浮窗`,
+  panel_close: `关闭面板`,
+  panel_more: `面板菜单`,
+  panel_resize: `调整面板宽度`,
 }
 
 export default common

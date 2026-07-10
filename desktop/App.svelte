@@ -1,6 +1,12 @@
 <script lang="ts">
   import { untrack, tick } from 'svelte'
   import { init_i18n, t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import ActivityBar from './components/ActivityBar.svelte'
+  import DockedPanelHost from './components/DockedPanelHost.svelte'
+  import FloatingPanelHost from './components/FloatingPanelHost.svelte'
+  import WorkflowPanelContent from '$lib/structure/WorkflowPanelContent.svelte'
+  import { set_panel_target, type PanelInstance } from '$lib/panel/panel-state.svelte'
+  import { create_viewport_target_context } from '$lib/overlay/overlay-target.svelte'
   import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import { Structure, Trajectory } from '$lib'
   import MolstarViewer from '$lib/structure/bio/MolstarViewer.svelte'
@@ -2141,8 +2147,10 @@
   hidden
 />
 
-<!-- Workspace: sidebar + divider + views -->
+<!-- Workspace: activity bar + docked panel + sidebar + divider + views -->
 <div class="workspace" class:sidebar-resizing={sidebar.is_resizing}>
+  <ActivityBar />
+  <DockedPanelHost />
   <Sidebar
     bind:collapsed={sidebar.collapsed}
     bind:width={sidebar.width}
@@ -3050,6 +3058,22 @@
     {/if}
   </div>
 {/if}
+
+<FloatingPanelHost
+  title_of={(p: PanelInstance) => p.panel_type === `workflow` ? t(`common.workflow`) : p.panel_type}
+  on_switch_target={(p: PanelInstance, viewport_id: string) =>
+    set_panel_target(p.id, create_viewport_target_context(viewport_id, `PanelFrame`))}
+>
+  {#snippet panel_content(p: PanelInstance)}
+    {#if p.panel_type === `workflow`}
+      <WorkflowPanelContent
+        target={p.target}
+        active={p.is_open}
+        on_open_workflow_editor={(id: string) => handle_sidebar_open_workflow(id)}
+      />
+    {/if}
+  {/snippet}
+</FloatingPanelHost>
 
 </div><!-- End app-container -->
 {/if}

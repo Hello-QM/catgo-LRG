@@ -224,6 +224,13 @@ const common: Record<string, string> = {
   overlay_pick_target_first: `Choose a target window first`,
   overlay_capture_last_loaded: `Use last loaded structure (source pane closed)`,
   overlay_from_window: `From window {n}`,
+
+  // ── Dual-mode panels ──
+  panel_dock_to_sidebar: `Dock to sidebar`,
+  panel_float: `Float panel`,
+  panel_close: `Close panel`,
+  panel_more: `Panel menu`,
+  panel_resize: `Resize panel`,
 }
 
 export default common
