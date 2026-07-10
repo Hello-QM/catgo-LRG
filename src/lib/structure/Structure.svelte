@@ -139,7 +139,7 @@
   } from './controllers/viewer-controller'
   // tool-controller.svelte.ts exists but is not yet wired (template bind: compatibility)
   import StructureToolbar from './StructureToolbar.svelte'
-  import { toolbar_tool_hidden } from './toolbar-state.svelte'
+  import { pane_toolbar, toolbar_tool_hidden } from './toolbar-state.svelte'
   import { MdAnalysisPane, MdPlot } from '$lib/md'
   import SlowGrowthPane from '$lib/structure/SlowGrowthPane.svelte'
   import ScaleBar from '$lib/structure/ScaleBar.svelte'
@@ -1956,6 +1956,22 @@
     meas_state.delete_measurement(id, (sites) => { measured_sites = sites })
   }
 
+  // 工具栏 overlay 安全区: HUD (图例/倍率等) 按本 pane 工具栏停靠边扣除
+  // 占位 — canvas 几何不动 (picking/WebGL/截图无需同步), 每 pane 独立,
+  // 收起/无栏时归零。厚度由工具栏体系统一供给 (rail 36/条 40 + 边距与间隙)。
+  const tbs = pane_toolbar(viewer_id ?? tab_id ?? `default`)
+  const toolbar_safe = $derived.by(() => {
+    if (!visible_buttons || tbs.collapsed) return { l: 0, r: 0, t: 0, b: 0 }
+    const v = 52 // 竖排 rail 36 + 边缘 8 + 间隙 8
+    const h = 56 // 横条 40 + 8 + 8
+    return {
+      l: tbs.dock === `left` ? v : 0,
+      r: tbs.dock === `right` ? v : 0,
+      t: tbs.dock === `top` ? h : 0,
+      b: tbs.dock === `bottom` ? h : 0,
+    }
+  })
+
   let visible_buttons = $derived(
     show_controls === true ||
       (typeof show_controls === `number` && width > show_controls),
@@ -3290,6 +3306,12 @@
   {...rest}
   class="structure {rest.class ?? ``}"
   class:overlay-target-flash={overlay_flash}
+  style:--toolbar-safe-left={`${toolbar_safe.l}px`}
+  style:--toolbar-safe-right={`${toolbar_safe.r}px`}
+  style:--toolbar-safe-top={`${toolbar_safe.t}px`}
+  style:--toolbar-safe-bottom={`${toolbar_safe.b}px`}
+  style:--struct-legend-right={`calc(clamp(4pt, 3cqmin, 8pt) + ${toolbar_safe.r}px)`}
+  style:--struct-legend-bottom={`calc(clamp(4pt, 3cqmin, 8pt) + ${toolbar_safe.b}px)`}
   class:pencil-mode-active={pencil.pencil_mode_active}
   class:crop-mode-active={interaction.crop_mode_active}
   class:md-split={show_md_panel}
