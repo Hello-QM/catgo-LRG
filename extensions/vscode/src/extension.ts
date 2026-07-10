@@ -17,6 +17,13 @@ import { start_server, stop_server, get_server_port } from './server'
 import { stream_file_to_buffer } from './node-io'
 import { search_optimade_structures_backend, type OptimadeSearchOptions } from './optimade-backend'
 import { search_pubchem_compounds_backend } from './pubchem-backend'
+import { CatgoDocument } from './catgo-document'
+
+// CatgoDocument is a VS-Code-free core (its own module so unit tests can import
+// it without pulling the full extension/webview graph); re-exported here so it
+// stays part of the extension's public surface.
+export { CatgoDocument } from './catgo-document'
+export type { DocDeps } from './catgo-document'
 
 interface FrameLoaderData {
   loader: FrameLoader
@@ -86,6 +93,10 @@ export type IncomingCommand =
   | `pubchem_search`
   | `api_request`
   | `api_ws`
+  // Editable custom-editor messages (see Provider): the webview marks the
+  // document dirty on each edit and answers a content request on save.
+  | `dirty`
+  | `content`
 
 export interface MessageData {
   command: IncomingCommand
@@ -881,28 +892,58 @@ export const render = async (
   }
 }
 
-// Custom editor provider for CatGo files
-class Provider implements vscode.CustomReadonlyEditorProvider<vscode.CustomDocument> {
+// Custom editor provider for CatGo files. Editable: structural edits happen in
+// the webview, which flags the document dirty and answers a content request on
+// save. Saves write back to the source file in its original format.
+class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
   constructor(private context: vscode.ExtensionContext) {}
+
+  private readonly _onDidChangeCustomDocument = new vscode.EventEmitter<
+    vscode.CustomDocumentEditEvent<CatgoDocument>
+  >()
+  readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event
+
+  // Live webview panels keyed by uri.toString(), so save() can round-trip the
+  // current content back from the right webview.
+  private panels = new Map<string, vscode.WebviewPanel>()
+  // In-flight save content requests keyed by request_id; resolved by the
+  // webview's matching `content` reply.
+  private pending_content = new Map<
+    string,
+    (payload: { content: string; is_binary: boolean }) => void
+  >()
 
   openCustomDocument(
     uri: vscode.Uri,
     _open_context: vscode.CustomDocumentOpenContext,
     _token: vscode.CancellationToken,
-  ): vscode.CustomDocument {
-    return {
-      uri,
-      dispose: () => {},
-    }
+  ): CatgoDocument {
+    const doc = new CatgoDocument(uri, {
+      requestContent: () => this.requestContentFor(uri),
+      writeFile: (u, data) => Promise.resolve(vscode.workspace.fs.writeFile(u, data)),
+      showError: (message) => {
+        vscode.window.showErrorMessage(message)
+      },
+    })
+    doc.onDidChange(() =>
+      this._onDidChangeCustomDocument.fire({
+        document: doc,
+        undo: async () => {},
+        redo: async () => {}, // structural undo/redo lives in the webview
+        label: `Edit`,
+      })
+    )
+    return doc
   }
 
   async resolveCustomEditor(
-    document: vscode.CustomDocument,
+    document: CatgoDocument,
     webview_panel: vscode.WebviewPanel,
     _token: vscode.CancellationToken,
   ): Promise<void> {
     try {
       const file_path = document.uri.fsPath
+      this.panels.set(document.uri.toString(), webview_panel)
 
       webview_panel.webview.options = {
         enableScripts: true,
@@ -923,7 +964,23 @@ class Provider implements vscode.CustomReadonlyEditorProvider<vscode.CustomDocum
         },
       )
       webview_panel.webview.onDidReceiveMessage(
-        (msg: MessageData) => handle_msg(msg, webview_panel.webview),
+        (msg: MessageData) => {
+          // The webview flags every structure edit; mark the document dirty.
+          if (msg.command === `dirty`) {
+            document.signalEdit()
+            return
+          }
+          // Answer an in-flight save content request (keyed by request_id).
+          if (msg.command === `content` && typeof msg.request_id === `string`) {
+            const resolve = this.pending_content.get(msg.request_id)
+            if (resolve) {
+              this.pending_content.delete(msg.request_id)
+              resolve({ content: msg.content ?? ``, is_binary: !!msg.is_binary })
+            }
+            return
+          }
+          handle_msg(msg, webview_panel.webview)
+        },
         undefined,
         this.context.subscriptions,
       )
@@ -963,11 +1020,61 @@ class Provider implements vscode.CustomReadonlyEditorProvider<vscode.CustomDocum
         config_change_listener.dispose()
 
         stop_watching_file(file_path) // Clean up file watcher
+        this.panels.delete(document.uri.toString())
       })
       // Note: webview_panel disposal is managed by VSCode for custom editors
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error)
       vscode.window.showErrorMessage(`Failed: ${message}`)
+    }
+  }
+
+  // Ask the webview bound to `uri` for its current content: post a content
+  // request and resolve on the matching `content` reply (keyed by request_id).
+  private requestContentFor(
+    uri: vscode.Uri,
+  ): Promise<{ content: string; is_binary: boolean }> {
+    const panel = this.panels.get(uri.toString())
+    if (!panel) {
+      return Promise.reject(new Error(`No active CatGo editor for ${uri.fsPath}`))
+    }
+    const request_id = `save-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    return new Promise((resolve) => {
+      this.pending_content.set(request_id, resolve)
+      panel.webview.postMessage({ command: `requestContent`, request_id })
+    })
+  }
+
+  // A rejection from save() keeps the tab open & dirty and surfaces the failure
+  // (the desired behaviour for empty/unserializable sources) — VS Code never
+  // marks the document clean on a rejected save.
+  saveCustomDocument(document: CatgoDocument): Thenable<void> {
+    return document.save()
+  }
+
+  saveCustomDocumentAs(
+    document: CatgoDocument,
+    dest: vscode.Uri,
+  ): Thenable<void> {
+    return document.save(dest)
+  }
+
+  revertCustomDocument(document: CatgoDocument): Thenable<void> {
+    this.panels
+      .get(document.uri.toString())
+      ?.webview.postMessage({ command: `revert` })
+    return Promise.resolve()
+  }
+
+  async backupCustomDocument(
+    document: CatgoDocument,
+    ctx: vscode.CustomDocumentBackupContext,
+  ): Promise<vscode.CustomDocumentBackup> {
+    await document.save(ctx.destination)
+    return {
+      id: ctx.destination.toString(),
+      delete: () =>
+        vscode.workspace.fs.delete(ctx.destination).then(() => {}, () => {}),
     }
   }
 }
@@ -998,7 +1105,10 @@ export const activate = (context: vscode.ExtensionContext) => {
     vscode.window.registerCustomEditorProvider(
       `catgo.viewer`,
       new Provider(context),
-      { webviewOptions: { retainContextWhenHidden: true } },
+      {
+        webviewOptions: { retainContextWhenHidden: true },
+        supportsMultipleEditorsPerDocument: false,
+      },
     ),
     vscode.workspace.onDidOpenTextDocument((document: vscode.TextDocument) => {
       // Update context on any document open
