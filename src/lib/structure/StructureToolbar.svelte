@@ -214,28 +214,49 @@
         const gap = 8
         const vw = window.innerWidth
         const vh = window.innerHeight
-        node.style.maxWidth = `${vw - 2 * gap}px`
+        // 极窄窗口: 不再贴栏浮出, 整体切换为居中模态 (类 Command Palette)
+        const modal_mode = vw < 900
+        node.style.maxWidth = modal_mode
+          ? `${Math.min(520, vw - 2 * gap)}px`
+          : `${vw - 2 * gap}px`
         node.style.maxHeight = `${vh - 2 * gap}px`
         const mw = node.offsetWidth
         const mh = node.offsetHeight
         let left: number
-        if (toolbar_state.dock === `left`) {
-          left = rect.right + gap
-          if (left + mw > vw - gap) left = rect.left - mw - gap // 翻向左
-        } else if (toolbar_state.dock === `top`) {
-          left = rect.right - mw
+        let top: number
+        let centered = false
+        if (modal_mode) {
+          left = (vw - mw) / 2
+          top = Math.max(gap, (vh - mh) / 2)
+          centered = true
         } else {
-          left = rect.left - mw - gap
-          if (left < gap) left = rect.right + gap // 翻向右
+          if (toolbar_state.dock === `left`) {
+            left = rect.right + gap
+            if (left + mw > vw - gap) left = rect.left - mw - gap // 翻向左
+          } else if (toolbar_state.dock === `top`) {
+            left = rect.right - mw
+          } else {
+            left = rect.left - mw - gap
+            if (left < gap) left = rect.right + gap // 翻向右
+          }
+          if (left < gap || left + mw > vw - gap) {
+            left = (vw - mw) / 2 // 两侧都不够: 居中回退
+            centered = true
+          }
+          // 侧向展开: 面板顶对齐按钮中心; 高度不足时向上偏移 (下方 clamp 兜底)
+          top = toolbar_state.dock === `top`
+            ? rect.bottom + gap
+            : rect.top + rect.height / 2
+          if (toolbar_state.dock === `top` && top + mh > vh - gap) {
+            top = rect.top - mh - gap
+          }
         }
-        if (left < gap || left + mw > vw - gap) left = (vw - mw) / 2 // 窄屏: 居中回退
-        let top = toolbar_state.dock === `top` ? rect.bottom + gap : rect.top
-        if (toolbar_state.dock === `top` && top + mh > vh - gap) top = rect.top - mh - gap
         left = Math.max(gap, Math.min(left, vw - mw - gap))
         top = Math.max(gap, Math.min(top, vh - mh - gap))
         node.style.left = `${left}px`
         node.style.top = `${top}px`
         node.style.right = `auto`
+        node.classList.toggle(`popover-modal`, centered)
       }
       place()
       const ro = new ResizeObserver(place) // 宫格数量/内容变化 → 重算列数后重定位
@@ -1591,6 +1612,13 @@
     margin-top: 0;
     border-top: none;
     padding-top: 4px;
+  }
+
+  :global(.popover-modal) {
+    box-shadow:
+      0 18px 48px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
   }
 
   .measure-menu-popover {
