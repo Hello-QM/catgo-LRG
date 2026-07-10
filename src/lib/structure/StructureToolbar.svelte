@@ -272,6 +272,73 @@
   let measure_btn_el = $state<HTMLButtonElement | null>(null)
   let toolbar_el = $state<HTMLElement | null>(null)
   let rail_overflowing = $state(false)
+  // Tooltip 自适应定位 (事件委托, 覆盖栏内全部 .struct-toolbar-tooltip-wrap):
+  // 右→左→上→下按剩余空间选向, 与按钮中心对齐, 8px 间距, 视口钳位;
+  // 钳位平移后箭头仍指按钮中心 (--arrow-off)。fixed + 顶级 z-index, 不受栏滚动裁切。
+  $effect(() => {
+    const root = toolbar_el
+    if (!root) return
+    let cur: HTMLElement | null = null
+    const place = () => {
+      if (!cur || !cur.isConnected) return
+      const tip = cur.querySelector<HTMLElement>(`.struct-toolbar-tooltip`)
+      const btn = cur.querySelector<HTMLElement>(`button`) ?? cur
+      if (!tip) return
+      const r = btn.getBoundingClientRect()
+      const gap = 8
+      const pad = 8
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const tw = tip.offsetWidth
+      const th = tip.offsetHeight
+      const fits = {
+        right: r.right + gap + tw <= vw - pad,
+        left: r.left - gap - tw >= pad,
+        top: r.top - gap - th >= pad,
+      }
+      const side = fits.right ? `right` : fits.left ? `left` : fits.top ? `top` : `bottom`
+      let left: number
+      let top: number
+      if (side === `right`) {
+        left = r.right + gap
+        top = r.top + r.height / 2 - th / 2
+      } else if (side === `left`) {
+        left = r.left - gap - tw
+        top = r.top + r.height / 2 - th / 2
+      } else if (side === `top`) {
+        left = r.left + r.width / 2 - tw / 2
+        top = r.top - gap - th
+      } else {
+        left = r.left + r.width / 2 - tw / 2
+        top = r.bottom + gap
+      }
+      left = Math.max(pad, Math.min(left, vw - tw - pad))
+      top = Math.max(pad, Math.min(top, vh - th - pad))
+      tip.style.left = `${left}px`
+      tip.style.top = `${top}px`
+      tip.dataset.side = side
+      const off = side === `left` || side === `right`
+        ? Math.max(10, Math.min(th - 10, r.top + r.height / 2 - top))
+        : Math.max(10, Math.min(tw - 10, r.left + r.width / 2 - left))
+      tip.style.setProperty(`--arrow-off`, `${off}px`)
+    }
+    const over = (e: Event) => {
+      const wrap = (e.target as HTMLElement).closest?.(`.struct-toolbar-tooltip-wrap`)
+      if (!wrap || !root.contains(wrap)) return
+      cur = wrap as HTMLElement
+      place()
+    }
+    root.addEventListener(`pointerover`, over)
+    root.addEventListener(`focusin`, over)
+    root.addEventListener(`scroll`, place, true) // 栏内滚动时跟随
+    window.addEventListener(`resize`, place)
+    return () => {
+      root.removeEventListener(`pointerover`, over)
+      root.removeEventListener(`focusin`, over)
+      root.removeEventListener(`scroll`, place, true)
+      window.removeEventListener(`resize`, place)
+    }
+  })
   // 小面板 (多宫格分屏) 里工具比面板高时: 栏内滚动; 放得下时保持 visible,
   // 侧向 tooltip 不被裁。直接 toggle class, 不回写 $state。
   $effect(() => {
@@ -1184,10 +1251,9 @@
     flex-shrink: 0;
   }
   .struct-toolbar-tooltip {
-    position: absolute;
-    right: calc(100% + 10px);
-    top: 50%;
-    transform: translateY(-50%) translateX(4px);
+    position: fixed; /* 委托定位: 右→左→上→下探测 + 视口钳位 (见 tooltip $effect) */
+    left: -9999px;
+    top: -9999px;
     padding: 7px 12px;
     border-radius: 7px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1208,7 +1274,6 @@
   .struct-toolbar-tooltip-wrap:focus-within .struct-toolbar-tooltip {
     opacity: 1;
     visibility: visible;
-    transform: translateY(-50%) translateX(0);
   }
   .struct-toolbar-tooltip-wrap:has(.active) .struct-toolbar-tooltip,
   .struct-toolbar-tooltip-wrap:has([aria-expanded='true']) .struct-toolbar-tooltip,
@@ -1219,14 +1284,35 @@
   .struct-toolbar-tooltip::before {
     content: '';
     position: absolute;
-    left: 50%;
-    bottom: 100%;
     width: 9px;
     height: 9px;
     background: inherit;
+    transform: translate(-50%, -50%) rotate(45deg);
+  }
+  /* 箭头永远指向触发按钮: 随 data-side 换边, --arrow-off 跟随按钮中心 */
+  :global(.struct-toolbar-tooltip[data-side='left'])::before {
+    left: 100%;
+    top: var(--arrow-off, 50%);
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  :global(.struct-toolbar-tooltip[data-side='right'])::before {
+    left: 0;
+    top: var(--arrow-off, 50%);
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  :global(.struct-toolbar-tooltip[data-side='top'])::before {
+    top: 100%;
+    left: var(--arrow-off, 50%);
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  :global(.struct-toolbar-tooltip[data-side='bottom'])::before {
+    top: 0;
+    left: var(--arrow-off, 50%);
     border-left: 1px solid rgba(255, 255, 255, 0.12);
     border-top: 1px solid rgba(255, 255, 255, 0.12);
-    transform: translate(-50%, 50%) rotate(45deg);
   }
 
   /* === 下拉菜单样式 (匹配 Trajectory dropdown UI) === */
@@ -1692,14 +1778,6 @@
   section.control-buttons.dock-left :global(button.active) {
     box-shadow: inset 2px 0 0 var(--accent-color, #007acc);
   }
-  .dock-left .struct-toolbar-tooltip {
-    right: auto;
-    left: calc(100% + 10px);
-    transform: translateY(-50%) translateX(-4px);
-  }
-  .dock-left .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip {
-    transform: translateY(-50%) translateX(0);
-  }
   /* 浮层已 fixed + JS 定位, dock 变体无需再改锚向 */
   .dock-left .selected-measurement-indicator {
     right: auto;
@@ -1737,15 +1815,6 @@
   }
   section.control-buttons.dock-top :global(button.active) {
     box-shadow: inset 0 -2px 0 var(--accent-color, #007acc);
-  }
-  .dock-top .struct-toolbar-tooltip {
-    right: auto;
-    left: 50%;
-    top: calc(100% + 8px);
-    transform: translateX(-50%) translateY(-4px);
-  }
-  .dock-top .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip {
-    transform: translateX(-50%) translateY(0);
   }
   .dock-top .pencil-mode-container,
   .dock-top .measure-mode-dropdown {
