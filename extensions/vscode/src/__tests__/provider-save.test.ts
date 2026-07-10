@@ -49,4 +49,19 @@ describe('CatgoDocument', () => {
     // Bytes on disk must be a valid gzip stream that decompresses to the text.
     expect(new TextDecoder().decode(gunzipSync(writes[0][1]))).toBe('XYZ...')
   })
+
+  it('propagates a requestContent rejection (e.g. webview timeout) without writing', async () => {
+    // The Provider's requestContentFor rejects on timeout / panel dispose; a
+    // rejected save must reach VS Code (tab stays open & dirty) and not write.
+    const uri = { fsPath: '/tmp/IS_raw.xyz' } as any
+    const writes: Array<[string, Uint8Array]> = []
+    const doc = new CatgoDocument(uri, {
+      requestContent: async () => {
+        throw new Error('CatGo viewer did not return the file content (timeout)')
+      },
+      writeFile: async (u: any, data: Uint8Array) => { writes.push([u.fsPath, data]) },
+    })
+    await expect(doc.save()).rejects.toThrow(/timeout/)
+    expect(writes.length).toBe(0)
+  })
 })

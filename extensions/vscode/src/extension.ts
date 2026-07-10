@@ -892,6 +892,10 @@ export const render = async (
   }
 }
 
+// How long a save waits for the webview's `content` reply before failing the
+// save (error surfaced, document stays dirty) instead of hanging forever.
+const CONTENT_REQUEST_TIMEOUT_MS = 15_000
+
 // Custom editor provider for CatGo files. Editable: structural edits happen in
 // the webview, which flags the document dirty and answers a content request on
 // save. Saves write back to the source file in its original format.
@@ -907,11 +911,13 @@ class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
   // current content back from the right webview.
   private panels = new Map<string, vscode.WebviewPanel>()
   // In-flight save content requests keyed by request_id; resolved by the
-  // webview's matching `content` reply.
-  private pending_content = new Map<
-    string,
-    (payload: { content: string; is_binary: boolean }) => void
-  >()
+  // webview's matching `content` reply, rejected on timeout or panel dispose.
+  private pending_content = new Map<string, {
+    uri_key: string
+    resolve: (payload: { content: string; is_binary: boolean }) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>()
 
   openCustomDocument(
     uri: vscode.Uri,
@@ -972,10 +978,14 @@ class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
           }
           // Answer an in-flight save content request (keyed by request_id).
           if (msg.command === `content` && typeof msg.request_id === `string`) {
-            const resolve = this.pending_content.get(msg.request_id)
-            if (resolve) {
+            const pending = this.pending_content.get(msg.request_id)
+            if (pending) {
+              clearTimeout(pending.timer)
               this.pending_content.delete(msg.request_id)
-              resolve({ content: msg.content ?? ``, is_binary: !!msg.is_binary })
+              pending.resolve({
+                content: msg.content ?? ``,
+                is_binary: !!msg.is_binary,
+              })
             }
             return
           }
@@ -1021,6 +1031,16 @@ class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
 
         stop_watching_file(file_path) // Clean up file watcher
         this.panels.delete(document.uri.toString())
+        // Fail any in-flight content requests for this panel right away —
+        // don't leave a save/backup hanging until the timeout fires.
+        for (const [request_id, pending] of this.pending_content) {
+          if (pending.uri_key !== document.uri.toString()) continue
+          clearTimeout(pending.timer)
+          this.pending_content.delete(request_id)
+          pending.reject(
+            new Error(`CatGo editor was closed before returning the file content`),
+          )
+        }
       })
       // Note: webview_panel disposal is managed by VSCode for custom editors
     } catch (error: unknown) {
@@ -1031,16 +1051,23 @@ class Provider implements vscode.CustomEditorProvider<CatgoDocument> {
 
   // Ask the webview bound to `uri` for its current content: post a content
   // request and resolve on the matching `content` reply (keyed by request_id).
+  // Rejects after CONTENT_REQUEST_TIMEOUT_MS so a broken/unresponsive webview
+  // fails the save (error surfaced, document stays dirty) instead of hanging it.
   private requestContentFor(
     uri: vscode.Uri,
   ): Promise<{ content: string; is_binary: boolean }> {
-    const panel = this.panels.get(uri.toString())
+    const uri_key = uri.toString()
+    const panel = this.panels.get(uri_key)
     if (!panel) {
       return Promise.reject(new Error(`No active CatGo editor for ${uri.fsPath}`))
     }
     const request_id = `save-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    return new Promise((resolve) => {
-      this.pending_content.set(request_id, resolve)
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending_content.delete(request_id)
+        reject(new Error(`CatGo viewer did not return the file content (timeout)`))
+      }, CONTENT_REQUEST_TIMEOUT_MS)
+      this.pending_content.set(request_id, { uri_key, resolve, reject, timer })
       panel.webview.postMessage({ command: `requestContent`, request_id })
     })
   }
