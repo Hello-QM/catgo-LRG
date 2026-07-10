@@ -1,56 +1,60 @@
 <script lang="ts">
-  /** 统一面板外框 — 双模式渲染同一实例。
+  /** 统一面板外框 — pane 作用域双模式, 同一实例同一节点。
    *
-   * 标题栏 = OverlayTargetHeader (窗口号/文件名/失效/目标切换) + 关闭 + 更多菜单
-   * (停靠到侧边栏 / 设为悬浮窗, aria-checked)。floating: 标题栏拖拽、右/下/角
-   * 缩放、pointerdown 置顶、bounds 由 store 钳位; docked: 填满槽位, 无阴影。
-   * 根节点由 attachment 依 mode 搬进停靠槽位或悬浮层 (panel-hosts), 不销毁。 */
+   * docked: 填满所在 pane 的侧栏槽位; floating: absolute 于 pane 内
+   * (绝不 fixed / 窗口坐标 — pane 即碰撞边界)。根节点由 attachment 依
+   * mode 在槽位/悬浮层间搬移, 组件永不销毁重建。
+   * 拖拽/缩放用 pointer capture (事件不冒泡进 3D 视口), rAF 节流,
+   * 释放才持久化模板。菜单: 停靠左侧/停靠右侧/设为悬浮窗 (radio)。 */
   import type { Snippet } from 'svelte'
   import { load_i18n_module, t } from '$lib/i18n/index.svelte'
   import OverlayTargetHeader from '$lib/overlay/OverlayTargetHeader.svelte'
   import {
     bring_to_front,
     close_panel,
+    type HostSize,
     panel_state,
+    set_dock_side,
     set_floating_bounds,
     set_panel_mode,
   } from './panel-state.svelte'
-  import { panel_hosts } from './panel-hosts.svelte'
 
   load_i18n_module(`common`)
 
-  let { panel_id, title, on_switch_target, children }: {
+  let { panel_id, title, docked_slot_el = null, floating_el = null, get_host_size, children }: {
     panel_id: string
     title: string
-    on_switch_target?: (viewport_id: string) => void
+    docked_slot_el?: HTMLElement | null
+    floating_el?: HTMLElement | null
+    get_host_size: () => HostSize
     children?: Snippet
   } = $props()
 
   const store = panel_state()
-  const hosts = panel_hosts()
   const inst = $derived(store.panels[panel_id])
   const floating = $derived(inst?.mode === `floating`)
 
   let menu_open = $state(false)
 
-  // ── reparent: 同一节点在停靠槽位 / 悬浮层之间搬移 ──
+  // reparent: 同一节点在本 pane 的停靠槽位 / 悬浮层之间搬移
   function reparent(node: HTMLElement) {
-    const target = inst?.mode === `docked` && hosts.docked_slot?.panel_id === panel_id
-      ? hosts.docked_slot.el
-      : hosts.floating_el
+    const target = inst?.mode === `docked` && docked_slot_el ? docked_slot_el : floating_el
     if (target && node.parentElement !== target) target.appendChild(node)
   }
 
-  // ── floating 拖拽 (标题栏) 与缩放 (右/下/角), rAF 节流, 释放才落盘 ──
-  let raf = 0
+  // pointer-capture 拖拽跟踪: 事件留在把手元素上, 不进画布 (§事件隔离)
   function track_pointer(
     e: PointerEvent,
     apply: (dx: number, dy: number) => void,
     done: () => void,
   ) {
     e.preventDefault()
+    e.stopPropagation()
+    const el = e.currentTarget as HTMLElement
+    el.setPointerCapture(e.pointerId)
     const sx = e.clientX
     const sy = e.clientY
+    let raf = 0
     const move = (ev: PointerEvent) => {
       if (raf) return
       raf = requestAnimationFrame(() => {
@@ -58,15 +62,16 @@
         apply(ev.clientX - sx, ev.clientY - sy)
       })
     }
-    const up = () => {
-      window.removeEventListener(`pointermove`, move)
-      window.removeEventListener(`pointerup`, up)
+    const up = (ev: PointerEvent) => {
+      el.removeEventListener(`pointermove`, move)
+      el.removeEventListener(`pointerup`, up)
+      if (el.hasPointerCapture?.(ev.pointerId)) el.releasePointerCapture(ev.pointerId)
       if (raf) cancelAnimationFrame(raf)
       raf = 0
       done()
     }
-    window.addEventListener(`pointermove`, move)
-    window.addEventListener(`pointerup`, up)
+    el.addEventListener(`pointermove`, move)
+    el.addEventListener(`pointerup`, up)
   }
 
   function start_drag(e: PointerEvent) {
@@ -75,14 +80,13 @@
     const { x, y } = inst.floating_bounds
     track_pointer(
       e,
-      (dx, dy) => set_floating_bounds(panel_id, { x: x + dx, y: y + dy }, false),
-      () => set_floating_bounds(panel_id, {}, true),
+      (dx, dy) => set_floating_bounds(panel_id, { x: x + dx, y: y + dy }, get_host_size(), false),
+      () => set_floating_bounds(panel_id, {}, get_host_size(), true),
     )
   }
 
   function start_resize(e: PointerEvent, edge: `e` | `s` | `se`) {
     if (!floating || !inst) return
-    e.stopPropagation()
     const { width, height } = inst.floating_bounds
     track_pointer(
       e,
@@ -90,19 +94,26 @@
         set_floating_bounds(panel_id, {
           width: edge !== `s` ? width + dx : width,
           height: edge !== `e` ? height + dy : height,
-        }, false),
-      () => set_floating_bounds(panel_id, {}, true),
+        }, get_host_size(), false),
+      () => set_floating_bounds(panel_id, {}, get_host_size(), true),
     )
   }
 
-  function set_mode(mode: `docked` | `floating`) {
+  function choose_dock(side: `left` | `right`) {
     menu_open = false
-    set_panel_mode(panel_id, mode)
+    set_dock_side(panel_id, side)
+    set_panel_mode(panel_id, `docked`)
+  }
+
+  function choose_float() {
+    menu_open = false
+    set_panel_mode(panel_id, `floating`, get_host_size())
   }
 </script>
 
 {#if inst?.is_open}
   <div
+    id={`panel-${panel_id}`}
     class="panel-frame"
     class:floating
     class:docked={!floating}
@@ -116,18 +127,18 @@
     style:width={floating ? `${inst.floating_bounds.width}px` : undefined}
     style:height={floating ? `${inst.floating_bounds.height}px` : undefined}
     style:z-index={floating ? inst.z_index : undefined}
-    onpointerdowncapture={() => floating && bring_to_front(panel_id)}
+    onpointerdown={(e) => {
+      if (floating) {
+        bring_to_front(panel_id)
+        e.stopPropagation() // 不让画布手势收到面板内指针事件
+      }
+    }}
     {@attach reparent}
   >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="panel-titlebar" class:draggable={floating} onpointerdown={start_drag}>
       <div class="panel-titlebar-main">
-        <OverlayTargetHeader
-          {title}
-          context={inst.target}
-          policy={inst.target_policy}
-          on_switch={on_switch_target}
-        />
+        <OverlayTargetHeader {title} context={inst.target} policy={inst.target_policy} />
       </div>
       <div class="panel-titlebar-actions">
         <div class="panel-menu-wrap">
@@ -142,22 +153,33 @@
             <div
               class="panel-mode-menu"
               role="menu"
-              onkeydown={(e) => { if (e.key === `Escape`) menu_open = false }}
+              onkeydown={(e) => {
+                if (e.key === `Escape`) menu_open = false
+              }}
             >
               <button
                 type="button"
                 role="menuitemradio"
-                aria-checked={!floating}
-                onclick={() => set_mode(`docked`)}
+                aria-checked={!floating && inst.dock_side === `left`}
+                onclick={() => choose_dock(`left`)}
               >
-                <span class="pm-check">{!floating ? `✓` : ``}</span>
-                {t(`common.panel_dock_to_sidebar`)}
+                <span class="pm-check">{!floating && inst.dock_side === `left` ? `✓` : ``}</span>
+                {t(`common.panel_dock_left`)}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={!floating && inst.dock_side === `right`}
+                onclick={() => choose_dock(`right`)}
+              >
+                <span class="pm-check">{!floating && inst.dock_side === `right` ? `✓` : ``}</span>
+                {t(`common.panel_dock_right`)}
               </button>
               <button
                 type="button"
                 role="menuitemradio"
                 aria-checked={floating}
-                onclick={() => set_mode(`floating`)}
+                onclick={choose_float}
               >
                 <span class="pm-check">{floating ? `✓` : ``}</span>
                 {t(`common.panel_float`)}
@@ -169,6 +191,8 @@
           type="button"
           class="panel-icon-btn"
           aria-label={t(`common.panel_close`)}
+          aria-expanded="true"
+          aria-controls={`panel-${panel_id}`}
           onclick={() => close_panel(panel_id)}
         >×</button>
       </div>
@@ -200,13 +224,13 @@
   .panel-frame.docked {
     width: 100%;
     height: 100%;
-    border-right: 1px solid var(--border-color, rgba(128, 128, 128, 0.18));
+    box-shadow: none;
   }
   .panel-frame.floating {
-    position: fixed;
+    position: absolute; /* pane 内坐标 — 绝不 fixed/窗口坐标 */
     border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
     border-radius: 8px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.18);
     pointer-events: auto;
   }
   .panel-titlebar {
@@ -265,7 +289,7 @@
     top: calc(100% + 4px);
     right: 0;
     z-index: 20;
-    min-width: 160px;
+    min-width: 150px;
     padding: 4px;
     display: flex;
     flex-direction: column;

@@ -1,58 +1,54 @@
 <script lang="ts">
-  /** 左缘 Activity Bar — 工具面板入口图标栏。
-   *
-   * 点击: 未开 → 按上次模式打开 (首次 docked, 初始目标 = 明确 active 视口
-   * 或唯一视口, 否则留空由标题切换器选择 — 绝不默认数组第一个);
-   * docked → 折叠/展开; floating → 激活置顶。 */
+  /** 左缘 Activity Bar — 操作"当前 active pane"的面板, 但底层 API 显式携带
+   * pane_id (不依赖隐式全局)。点击: 该 pane 无实例/已收起 → 打开 (模板模式,
+   * 目标 = 本 pane 冻结上下文); docked 展开中 → 收起; floating → 置顶。 */
   import Icon from '$lib/Icon.svelte'
   import { load_i18n_module, t } from '$lib/i18n/index.svelte'
   import {
     create_viewport_target_context,
     flash_viewport,
   } from '$lib/overlay/overlay-target.svelte'
-  import { get_active_viewer_id, list_viewers } from '$lib/structure/viewer-registry.svelte'
   import {
     bring_to_front,
-    get_panel_by_type,
+    get_pane_panel,
     open_panel,
     panel_state,
-    toggle_panel_collapsed,
+    toggle_panel,
   } from '$lib/panel/panel-state.svelte'
 
   load_i18n_module(`common`)
 
+  let { active_pane_id = null }: { active_pane_id?: string | null } = $props()
+
   const store = panel_state()
   const wf = $derived(
-    Object.values(store.panels).find((p) => p.panel_type === `workflow`) ?? null,
+    active_pane_id
+      ? Object.values(store.panels)
+        .find((p) => p.panel_type === `workflow` && p.pane_id === active_pane_id) ?? null
+      : null,
   )
 
-  function initial_target() {
-    const viewers = list_viewers().filter((m) => m.kind !== `empty`)
-    const active = get_active_viewer_id()
-    if (active && viewers.some((v) => v.viewer_id === active)) {
-      return create_viewport_target_context(active, `ActivityBar`)
-    }
-    if (viewers.length === 1) {
-      return create_viewport_target_context(viewers[0].viewer_id, `ActivityBar`)
-    }
-    return null // 多视口且无明确激活: 交给标题目标选择器, 不默认第一个
-  }
-
   function click_workflow() {
-    const p = get_panel_by_type(`workflow`)
-    if (!p || !p.is_open) {
-      const target = initial_target()
-      const inst = open_panel({
-        panel_type: `workflow`,
-        target_policy: `user-selectable`,
-        target,
-        preferred_mode: `docked`,
-      })
-      if (inst.target?.viewport_id) flash_viewport(inst.target.viewport_id)
-    } else if (p.mode === `docked`) {
-      toggle_panel_collapsed(p.id)
+    const pane_id = active_pane_id
+    if (!pane_id) return
+    const existing = get_pane_panel(`workflow`, pane_id)
+    if (!existing || !existing.is_open) {
+      if (existing) {
+        toggle_panel(existing.id) // 重新展开, 保留原实例状态
+      } else {
+        open_panel({
+          panel_type: `workflow`,
+          pane_id,
+          target: create_viewport_target_context(pane_id, `ActivityBar`),
+          target_policy: `fixed`,
+          preferred_mode: `docked`,
+        })
+      }
+      flash_viewport(pane_id)
+    } else if (existing.mode === `docked`) {
+      toggle_panel(existing.id) // 收起 (完全退出布局, 留 reveal 按钮)
     } else {
-      bring_to_front(p.id)
+      bring_to_front(existing.id)
     }
   }
 </script>
@@ -61,8 +57,9 @@
   <button
     type="button"
     class="ab-item"
-    class:active={!!wf && wf.is_open && wf.mode === `docked` && !wf.is_collapsed}
+    class:active={!!wf && wf.is_open && wf.mode === `docked`}
     class:open={!!wf && wf.is_open}
+    disabled={!active_pane_id}
     aria-label={t(`common.workflow`)}
     title={t(`common.workflow`)}
     onclick={click_workflow}
@@ -97,7 +94,11 @@
     color: var(--text-color-muted, #8b8b94);
     font-size: 17px;
   }
-  .ab-item:hover {
+  .ab-item:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .ab-item:not(:disabled):hover {
     background: color-mix(in srgb, currentColor 10%, transparent);
     color: var(--text-color, #ddd);
   }

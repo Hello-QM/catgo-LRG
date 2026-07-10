@@ -230,6 +230,9 @@ const common: Record<string, string> = {
   panel_close: `关闭面板`,
   panel_more: `面板菜单`,
   panel_resize: `调整面板宽度`,
+  panel_dock_left: `停靠左侧`,
+  panel_dock_right: `停靠右侧`,
+  panel_expand: `展开面板`,
 }
 
 export default common

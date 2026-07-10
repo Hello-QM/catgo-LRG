@@ -231,6 +231,9 @@ const common: Record<string, string> = {
   panel_close: `Close panel`,
   panel_more: `Panel menu`,
   panel_resize: `Resize panel`,
+  panel_dock_left: `Dock left`,
+  panel_dock_right: `Dock right`,
+  panel_expand: `Expand panel`,
 }
 
 export default common
