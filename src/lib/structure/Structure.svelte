@@ -467,6 +467,7 @@
             removed_atom_opacity_entries,
           })
           pencil.push_bond_undo()
+          notify_structure_change()
           if (removed_atom_opacity_entries.length > 0) {
             const next = new Map(prev_overrides)
             for (const idx of sorted_indices) next.delete(idx)
@@ -853,6 +854,7 @@
     on_camera_move,
     on_camera_reset,
     on_structure_imported,
+    on_structure_change,
     on_atoms_manipulated,
     on_atom_added,
     on_atoms_deleted,
@@ -984,6 +986,13 @@
       // multi-pane host can refresh the tab label). Notification only — the structure itself
       // is already applied via the bound `structure` prop.
       on_structure_imported?: () => void
+      // Fires after every user edit that changes the structure (atom add/delete/
+      // move/replace/rotate, build-pane apply, paste/import merge, undo/redo).
+      // NOT fired on initial mount or programmatic loads (data_url /
+      // structure_string / bridge pushes). Optional — strict no-op when absent.
+      // Used for dirty tracking by embedding hosts (VS Code webview custom
+      // editor; desktop tab owner).
+      on_structure_change?: (structure: AnyStructure) => void
       // Callback fired after atoms are committed from manipulation (drag, keyboard move, rotation).
       // Reports per-atom displacement vectors for cross-frame editing in trajectories.
       on_atoms_manipulated?: (event: import('./index').AtomManipulationEvent) => void
@@ -2659,6 +2668,7 @@
     // Capture the state we're undoing FROM (the forward state) so redo() can
     // restore it. Snapshot-based redo — see selection-state redo_history.
     sel_state.push_redo(structure)
+    notify_structure_change()
     if (entry.kind === `structure`) {
       structure = entry.structure
       pencil.pop_bond_undo()
@@ -2713,6 +2723,7 @@
     // undo entry, WITHOUT clearing the redo stack (so chained redo still works).
     sel_state.push_structure_entry($state.snapshot(structure) as AnyStructure, false)
     structure = snap as typeof structure
+    notify_structure_change()
   }
 
   // Populate the bindable editor_api handle so parents (e.g. mobile toolbar) can
@@ -2725,11 +2736,28 @@
     can_redo: () => sel_state.can_redo,
   }
 
+  // Notify the embedding host that the user edited the structure (dirty
+  // tracking, e.g. the VS Code custom editor / desktop tab owner). Deferred to
+  // a microtask so call-sites that snapshot undo state *before* applying their
+  // mutation (the standard pattern) deliver the post-edit structure; multiple
+  // pushes in one tick coalesce into a single emission. Strict no-op unless
+  // the parent passed on_structure_change — no cost for other builds.
+  let structure_change_queued = false
+  function notify_structure_change() {
+    if (!on_structure_change || structure_change_queued) return
+    structure_change_queued = true
+    queueMicrotask(() => {
+      structure_change_queued = false
+      if (structure) on_structure_change?.(structure)
+    })
+  }
+
   // Push current state to undo stack (used by slab cutter and other tools)
   function push_to_undo() {
     if (structure) {
       sel_state.push_structure_entry(structure)
       pencil.push_bond_undo()
+      notify_structure_change()
     }
   }
 
@@ -2780,7 +2808,11 @@
     set_scene_props_rotation: (r) => { settings.scene_props.rotation = r },
     get_rotation_target_ref: () => rotation_target_ref,
     push_to_undo,
-    push_atom_entry: (inv) => { sel_state.push_atom_entry(inv); pencil.push_bond_undo() },
+    push_atom_entry: (inv) => {
+      sel_state.push_atom_entry(inv)
+      pencil.push_bond_undo()
+      notify_structure_change()
+    },
     undo,
     redo,
     get_redo_length: () => (sel_state.can_redo ? 1 : 0),
@@ -2840,7 +2872,13 @@
     set_context_menu_3d_position: (pos) => { context_menu_3d_position = pos },
     set_context_menu_target_site: (idx) => { context_menu_target_site = idx },
     set_context_menu_visible: (v) => { context_menu_visible = v },
-    get_on_atoms_manipulated: () => on_atoms_manipulated,
+    // Wrapped so drag / keyboard-move / rotation COMMITS (which push their undo
+    // entry at gesture START, then set_structure at pointerup) re-emit
+    // on_structure_change with the post-commit structure.
+    get_on_atoms_manipulated: () => (event) => {
+      on_atoms_manipulated?.(event)
+      notify_structure_change()
+    },
     get_on_atoms_deleted: () => on_atoms_deleted,
     reindex_edits_after_delete: (deleted) => reindex_edits_on_delete(deleted),
     get_original_atoms_only,
@@ -2916,7 +2954,11 @@
     get_ghost_atom_indices: () => ghost_atom_indices,
     set_ghost_atom_indices: (s) => { ghost_atom_indices = s },
     push_to_undo,
-    push_atom_entry: (inv) => { sel_state.push_atom_entry(inv); pencil.push_bond_undo() },
+    push_atom_entry: (inv) => {
+      sel_state.push_atom_entry(inv)
+      pencil.push_bond_undo()
+      notify_structure_change()
+    },
     get_atom_opacity_overrides: () => sel_state.atom_opacity_overrides,
     set_atom_opacity_overrides: (m) => { sel_state.atom_opacity_overrides = m },
     push_selection_to_undo,
