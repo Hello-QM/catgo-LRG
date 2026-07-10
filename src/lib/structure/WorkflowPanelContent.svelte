@@ -163,6 +163,10 @@
 
   async function create_workflow_with_structure() {
     if (creating) return
+    if (target && !target_ok) { // 失效目标: 按钮已禁用, 此处双保险阻断提交
+      error_msg = t('structure.workflow_no_target_structure')
+      return
+    }
     creating = true
     error_msg = ``
     try {
@@ -432,7 +436,20 @@
     border-color: rgba(59, 130, 246, 0.2);
     background: rgba(59, 130, 246, 0.04);
   }
+  .new-workflow-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wf-target-hint {
+    margin-top: 4px;
+    font-size: 0.75em;
+    color: var(--text-color-muted, #999);
+  }
   .new-workflow-btn {
+    min-width: 0;
+    max-width: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
