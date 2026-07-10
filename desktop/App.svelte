@@ -852,7 +852,7 @@
         // Show visual hint that it will collapse
         sidebar.width = 160
       } else {
-        sidebar.width = Math.max(160, Math.min(400, raw_w))
+        sidebar.width = Math.max(160, raw_w)
       }
     }
     function on_up(ev: MouseEvent) {
