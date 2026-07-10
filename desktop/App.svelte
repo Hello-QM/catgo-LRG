@@ -176,6 +176,9 @@
   // `modified.is_modified(tab_id)` at the tab-/pane-close sites (reachable via
   // `pane_deps.modified`) and `modified.clear(tab_id)` after a successful save.
   const modified = create_modified_registry()
+  // Task B3 close-guard: wire the tab manager's per-tab close prompt to the
+  // modified registry so a clean tab closes with no confirmation dialog.
+  tm.is_tab_modified = (id) => modified.is_modified(id)
   // Destructure stable function references from the tab manager
   const { tab_states, get_active_ts, create_tab: open_tab, close_tab, request_close_tab, activate_tab, update_tab_label, switch_to_structure } = tm
 

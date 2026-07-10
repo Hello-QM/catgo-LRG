@@ -11,7 +11,7 @@ import { create_empty_pane, auto_name as _auto_name, serialize_structure_content
 import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
-import { list_projects, save_structure_to_db } from '$lib/api/project'
+import { list_projects, save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 import {
   cancel_pending_library_removal,
@@ -28,6 +28,17 @@ export interface PaneManagerDeps {
   modified: ReturnType<typeof create_modified_registry>
   export_fs_browse: (dir: string) => void
   reset_viewer?: (tab_id: string, leaf_id: string) => void
+}
+
+/** Pick the export serializer format that matches a source file's extension so
+ *  a save preserves the original on-disk format (POSCAR/CONTCAR by name too). */
+function format_from_path(path: string): string {
+  const base = path.split(/[/\\]/).pop() || ``
+  const ext = base.split(`.`).pop()?.toLowerCase() || `cif`
+  if ([`poscar`, `vasp`, `contcar`].includes(ext) || /^(POSCAR|CONTCAR)$/i.test(base)) return `poscar`
+  if (ext === `xyz`) return `xyz`
+  if (ext === `extxyz`) return `extxyz`
+  return `cif`
 }
 
 export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
@@ -57,9 +68,14 @@ export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: st
     close_panel(deps, tab_id, leaf_id)
     return
   }
-  // Structure panes: prompt if has content
+  // Structure panes: prompt only when the tab has unsaved edits (Task B3
+  // close-guard). A clean tab — content loaded/built but never edited — closes
+  // with no prompt, per the plan's "close while clean → no prompt" rule. This
+  // is the same decision `guard_close` ($lib/structure/save-on-close) encodes;
+  // the modified branch is realised by the app's inline save/discard/cancel
+  // banner (App.svelte), which saves to the source in its original format.
   const has_content = !!(pane.structure || pane.trajectory || pane.cube_file)
-  if (has_content) {
+  if (has_content && deps.modified.is_modified(tab_id)) {
     ts.close_confirm_leaf_id = leaf_id
     init_close_save_target(pane)
     if (pane.structure) load_close_save_projects()
@@ -120,39 +136,31 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
   }
   exp.close_saving = true
   try {
-    if (exp.close_save_target === `local`) {
-      // Open export dialog with folder browser, close panel after save
+    if (exp.close_save_target === `local` && pane.local_file_path) {
+      // Known source file → silently overwrite it in its original format.
+      // Plan constraint: the close-prompt "Save" never opens a dialog (that's
+      // "Save As", a separate explicit action) and never changes the format.
+      // Uses the same write seam as the close-all flow.
+      await write_file(pane.local_file_path, await serialize_structure_content(structure, format_from_path(pane.local_file_path)))
+    } else if (exp.close_save_target === `local`) {
+      // No known source path → fall back to the export dialog (Save As); the
+      // close is deferred until the dialog completes (exp.close_after).
       exp.close_after = { tab_id, leaf_id }
       ts.close_confirm_leaf_id = null
       const name = _auto_name(structure)
       exp.pending_structure = structure
       exp.error = ``
-      if (pane.local_file_path) {
-        // Pre-populate with original file's directory and name
-        const parts = pane.local_file_path.replace(/\\/g, `/`).split(`/`)
-        const fname = parts.pop() || `${name}.cif`
-        const dir = parts.join(`/`) || `~`
-        const ext = fname.split(`.`).pop()?.toLowerCase() || `cif`
-        const format = [`poscar`, `vasp`, `contcar`].includes(ext) ? `poscar` : ext === `extxyz` ? `extxyz` : ext === `xyz` ? `xyz` : `cif`
-        exp.dialog = { mode: `file`, filename: fname, format }
-        deps.export_fs_browse(dir)
-      } else {
-        exp.dialog = { mode: `file`, filename: `${name}.cif`, format: `cif` }
-        deps.export_fs_browse(sidebar.fs_path || `~`)
-      }
+      exp.dialog = { mode: `file`, filename: `${name}.cif`, format: `cif` }
+      deps.export_fs_browse(sidebar.fs_path || `~`)
       exp.close_saving = false
       return
     } else if (exp.close_save_target === `hpc` && pane.remote_origin) {
-      const ext = pane.remote_origin.file_path.split(`.`).pop()?.toLowerCase() || `cif`
-      let format = `cif`
-      if ([`poscar`, `vasp`, `contcar`].includes(ext)) format = `poscar`
-      else if (ext === `xyz`) format = `xyz`
-      else if (ext === `extxyz`) format = `extxyz`
-      const content = await serialize_structure_content(structure, format)
+      const content = await serialize_structure_content(structure, format_from_path(pane.remote_origin.file_path))
       await writeRemoteFile(pane.remote_origin.session_id, pane.remote_origin.file_path, content)
     } else {
       await save_structure_to_db(structure, _auto_name(structure), exp.close_save_project_id || undefined)
     }
+    deps.modified.clear(tab_id)
     sidebar.refresh_counter++
     close_panel(deps, tab_id, leaf_id)
   } catch (e) {

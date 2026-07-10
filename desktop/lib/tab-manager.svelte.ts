@@ -69,6 +69,12 @@ export function create_tab_manager() {
   let tab_close_confirm_id = $state<string | null>(null)
   let pending_layout_change = $state<{ tab_id: string, new_layout: PresetId, lost_count: number } | null>(null)
 
+  // Task B3 close-guard: predicate telling whether a tab has unsaved edits.
+  // App.svelte injects the per-tab `modified` registry here so a clean tab
+  // closes with no confirm prompt. Defaults to always-modified so, if left
+  // uninjected, the pre-B3 "confirm when the tab has content" behaviour holds.
+  let is_tab_modified: (id: string) => boolean = () => true
+
   function create_tab(type: `structure` | `workflow` | `terminal`) {
     if (type === `workflow`) {
       const existing = tabs.find(t => t.type === `workflow`)
@@ -173,7 +179,7 @@ export function create_tab_manager() {
           const pane = structurePane(l)
           return !!pane && pane_has_content(pane)
         }).length
-        if (loaded > 0) {
+        if (loaded > 0 && is_tab_modified(id)) {
           tab_close_confirm_id = id
           return
         }
@@ -294,6 +300,8 @@ export function create_tab_manager() {
     set tab_close_confirm_id(v: string | null) { tab_close_confirm_id = v },
     get pending_layout_change() { return pending_layout_change },
     set pending_layout_change(v: { tab_id: string, new_layout: PresetId, lost_count: number } | null) { pending_layout_change = v },
+    // Task B3: inject the unsaved-edit predicate (see is_tab_modified above).
+    set is_tab_modified(fn: (id: string) => boolean) { is_tab_modified = fn },
     create_tab,
     create_terminal_popout_tab,
     create_remote_tab,
