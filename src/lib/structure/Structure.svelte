@@ -4352,6 +4352,7 @@
             and orphan cross-cell bond stubs render with image atoms off.
           -->
           <StructureScene
+            hud_safe={toolbar_safe}
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
             {webgl_suspended}
@@ -5532,6 +5533,12 @@
     outline: 2px solid var(--accent-color, #4a9eff);
     outline-offset: -2px;
     overflow: hidden;
+  }
+  /* 坐标轴 gizmo 避让停靠工具栏: threlte 的 offset 仅挂载时生效, 用同源
+     CSS 变量覆盖其内联定位 (收起/换向即时生效, 每 pane 独立) */
+  .structure :global(.responsive-gizmo) {
+    left: calc(5px + var(--toolbar-safe-left, 0px)) !important;
+    bottom: calc(5px + var(--toolbar-safe-bottom, 0px)) !important;
   }
 
   /* DOS split-view grid layout (like Trajectory) */

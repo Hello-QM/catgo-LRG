@@ -458,6 +458,7 @@
     force_range_min = DEFAULTS.structure.force_range_min,
     force_range_max = DEFAULTS.structure.force_range_max,
     gizmo = DEFAULTS.structure.show_gizmo,
+    hud_safe = { l: 0, r: 0, t: 0, b: 0 },
     hovered_idx = $bindable(null),
     hovered_site = $bindable(null),
     float_fmt = `.3~f`,
@@ -729,6 +730,8 @@
     force_range_min?: number
     force_range_max?: number
     gizmo?: boolean | ComponentProps<typeof extras.Gizmo>
+    /** 本 pane 工具栏安全区 (px) — gizmo 等 HUD 避让停靠栏 */
+    hud_safe?: { l: number; r: number; t: number; b: number }
     hovered_idx?: number | null
     hovered_site?: Site | null
     float_fmt?: string
@@ -4926,7 +4929,7 @@
       className: `responsive-gizmo`,
       ...axis_options,
       ...(typeof gizmo === `boolean` ? {} : gizmo),
-      offset: { left: 5, bottom: 5 },
+      offset: { left: 5 + hud_safe.l, bottom: 5 + hud_safe.b }, // 避让停靠工具栏
       onend: handle_gizmo_end,
     }
   })
