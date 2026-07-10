@@ -1753,6 +1753,10 @@ const structure: Record<string, string> = {
   result_mag: `磁`,
   result_bands: `能带`,
   // 工具栏收起 + 按钮自定义
+  toolbar_dock: `停靠位置`,
+  toolbar_dock_top: `顶部`,
+  toolbar_dock_left: `左侧`,
+  toolbar_dock_right: `右侧`,
   toolbar_customize: `自定义工具栏按钮`,
   toolbar_collapse: `收起工具栏`,
   toolbar_expand: `展开工具栏`,

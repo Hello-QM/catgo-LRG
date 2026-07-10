@@ -7,6 +7,15 @@
 
 const COLLAPSED_KEY = `catgo:toolbar:collapsed`
 const HIDDEN_KEY = `catgo:toolbar:hidden-tools`
+const DOCK_KEY = `catgo:toolbar:dock`
+
+export type ToolbarDock = `top` | `left` | `right`
+
+function load_dock(): ToolbarDock {
+  if (typeof localStorage === `undefined`) return `right`
+  const v = localStorage.getItem(DOCK_KEY)
+  return v === `top` || v === `left` || v === `right` ? v : `right`
+}
 
 function load_hidden(): string[] {
   if (typeof localStorage === `undefined`) return []
@@ -22,12 +31,14 @@ export const toolbar_state = $state({
   collapsed: typeof localStorage !== `undefined` &&
     localStorage.getItem(COLLAPSED_KEY) === `1`,
   hidden: load_hidden(),
+  dock: load_dock(),
 })
 
 function persist() {
   try {
     localStorage.setItem(COLLAPSED_KEY, toolbar_state.collapsed ? `1` : `0`)
     localStorage.setItem(HIDDEN_KEY, JSON.stringify(toolbar_state.hidden))
+    localStorage.setItem(DOCK_KEY, toolbar_state.dock)
   } catch { /* localStorage unavailable — non-fatal */ }
 }
 
@@ -40,6 +51,11 @@ export function toggle_toolbar_tool(id: string) {
   toolbar_state.hidden = toolbar_state.hidden.includes(id)
     ? toolbar_state.hidden.filter((t) => t !== id)
     : [...toolbar_state.hidden, id]
+  persist()
+}
+
+export function set_toolbar_dock(dock: ToolbarDock) {
+  toolbar_state.dock = dock
   persist()
 }
 

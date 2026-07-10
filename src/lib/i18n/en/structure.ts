@@ -1753,6 +1753,10 @@ const structure: Record<string, string> = {
   result_mag: `Mag`,
   result_bands: `Bands`,
   // Toolbar collapse + per-tool customization
+  toolbar_dock: `Dock position`,
+  toolbar_dock_top: `Top`,
+  toolbar_dock_left: `Left`,
+  toolbar_dock_right: `Right`,
   toolbar_customize: `Customize toolbar buttons`,
   toolbar_collapse: `Collapse toolbar`,
   toolbar_expand: `Expand toolbar`,

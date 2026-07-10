@@ -24,7 +24,7 @@
   import { chat_position, set_chat_position } from '$lib/chat/chat-state.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
-  import { toolbar_state, set_toolbar_collapsed, toggle_toolbar_tool } from './toolbar-state.svelte'
+  import { toolbar_state, set_toolbar_collapsed, set_toolbar_dock, toggle_toolbar_tool } from './toolbar-state.svelte'
 
   // Lazy-load structure translations
   load_i18n_module('structure')
@@ -228,7 +228,13 @@
   }
 </script>
 
-<section class:visible={visible_buttons} class:collapsed={toolbar_state.collapsed} class="control-buttons">
+<section
+  class:visible={visible_buttons}
+  class:collapsed={toolbar_state.collapsed}
+  class:dock-left={toolbar_state.dock === `left`}
+  class:dock-top={toolbar_state.dock === `top`}
+  class="control-buttons"
+>
   {#if visible_buttons}
     {#if !toolbar_state.collapsed}
     <!-- === View / Navigation === -->
@@ -871,6 +877,17 @@
       </span>
       {#if toolbar_edit_open}
         <div class="view-mode-dropdown toolbar-edit-menu">
+          <div class="toolbar-edit-group">{t(`structure.toolbar_dock`)}</div>
+          <div class="toolbar-dock-row">
+            {#each [[`top`, `structure.toolbar_dock_top`], [`left`, `structure.toolbar_dock_left`], [`right`, `structure.toolbar_dock_right`]] as const as [dock, key] (dock)}
+              <button
+                type="button"
+                class="toolbar-dock-btn"
+                class:active={toolbar_state.dock === dock}
+                onclick={() => set_toolbar_dock(dock)}
+              >{t(key)}</button>
+            {/each}
+          </div>
           {#each TOOL_GROUPS as group (group.id)}
             {@const items = TOOL_DEFS.filter((d) =>
               d.group === group.id &&
@@ -908,7 +925,7 @@
         }}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          {#if toolbar_state.collapsed}
+          {#if toolbar_state.collapsed !== (toolbar_state.dock === `left`)}
             <path d="m17 17-5-5 5-5" /><path d="m10 17-5-5 5-5" />
           {:else}
             <path d="m7 7 5 5-5 5" /><path d="m14 7 5 5-5 5" />
@@ -1460,5 +1477,121 @@
     margin-top: 0;
     border-top: none;
     padding-top: 4px;
+  }
+
+  /* === 停靠位置切换 (自定义菜单顶部) === */
+  .toolbar-dock-row {
+    display: flex;
+    gap: 2px;
+    padding: 2px 6px 4px;
+  }
+  .toolbar-dock-btn {
+    flex: 1;
+    padding: 3px 8px;
+    font-size: 0.8em;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    color: var(--text-color-muted, #888);
+  }
+  .toolbar-dock-btn:hover {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .toolbar-dock-btn.active {
+    background: var(--accent-color, #007acc);
+    color: white;
+    border-color: var(--accent-color, #007acc);
+  }
+
+  /* === dock-left: 左缘竖栏 (镜像右缘) === */
+  section.control-buttons.dock-left {
+    left: var(--struct-buttons-left, 1ex);
+    right: auto;
+  }
+  section.control-buttons.dock-left :global(button.active) {
+    box-shadow: inset 2px 0 0 var(--accent-color, #007acc);
+  }
+  .dock-left .struct-toolbar-tooltip {
+    right: auto;
+    left: calc(100% + 10px);
+    transform: translateY(-50%) translateX(-4px);
+  }
+  .dock-left .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip {
+    transform: translateY(-50%) translateX(0);
+  }
+  .dock-left .view-mode-dropdown {
+    right: auto;
+    left: calc(100% + 8px);
+  }
+  .dock-left .pencil-mode-selector {
+    right: auto;
+    left: calc(100% + 8px);
+  }
+  .dock-left .selected-measurement-indicator {
+    right: auto;
+    left: calc(100% + 8px);
+  }
+
+  /* === dock-top: 顶部横排 (原布局: 低频在左, 常用在右) === */
+  section.control-buttons.dock-top {
+    flex-direction: row;
+    flex-wrap: wrap;
+    left: var(--struct-buttons-left, 1ex);
+    right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
+    bottom: auto;
+    width: auto;
+    align-items: flex-start;
+    gap: clamp(6pt, 1cqmin, 9pt);
+    padding: 4px 6px;
+  }
+  section.control-buttons.dock-top > :global(*) {
+    order: 2;
+  }
+  section.control-buttons.dock-top > :global(.tb-left) {
+    order: 0;
+  }
+  section.control-buttons.dock-top > :global(.toolbar-flex-spacer) {
+    order: 1;
+  }
+  section.control-buttons.dock-top > :global(.toolbar-edit-container) {
+    order: 3;
+  }
+  section.control-buttons.dock-top > :global(.toolbar-collapse-toggle-wrap) {
+    order: 4;
+  }
+  section.control-buttons.dock-top :global(button.active) {
+    box-shadow: inset 0 -2px 0 var(--accent-color, #007acc);
+  }
+  .dock-top .struct-toolbar-tooltip {
+    right: auto;
+    left: 50%;
+    top: calc(100% + 8px);
+    transform: translateX(-50%) translateY(-4px);
+  }
+  .dock-top .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip {
+    transform: translateX(-50%) translateY(0);
+  }
+  .dock-top .view-mode-dropdown {
+    top: 115%;
+    left: auto;
+    right: 0;
+  }
+  .dock-top .pencil-mode-selector {
+    top: 100%;
+    left: auto;
+    right: 0;
+    margin-top: 4px;
+  }
+  .dock-top .pencil-mode-container,
+  .dock-top .measure-mode-dropdown {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  .dock-top .selected-measurement-indicator {
+    position: static;
+    white-space: nowrap;
   }
 </style>
