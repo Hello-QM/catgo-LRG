@@ -14,6 +14,17 @@ describe('modified registry', () => {
     expect(r.is_modified('t1')).toBe(false)
     expect(r.any_modified()).toBe(false)
   })
+
+  it('clear_all wipes every dirty tab (Close-All completion)', () => {
+    const r = create_modified_registry()
+    r.mark('t1')
+    r.mark('t2')
+    expect(r.any_modified()).toBe(true)
+    r.clear_all()
+    expect(r.is_modified('t1')).toBe(false)
+    expect(r.is_modified('t2')).toBe(false)
+    expect(r.any_modified()).toBe(false)
+  })
 })
 
 describe('clear_modified_if_sole_pane', () => {

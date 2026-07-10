@@ -671,7 +671,17 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            // Teardown runs on Destroyed, NOT CloseRequested. The unsaved-changes
+            // guard (desktop/App.svelte setup_close_guard) registers a JS
+            // onCloseRequested listener; tauri then auto-prevents every close
+            // request and delegates the decision to JS — but user handlers here
+            // still receive CloseRequested on that same (possibly cancelled)
+            // request, so tearing down there would kill the backend + exit(0)
+            // underneath the confirm dialog. Destroyed fires exactly once when
+            // the window is really going away: after JS lets the close through
+            // (the api auto-calls destroy()), or directly when no JS listener
+            // exists — so backend/agent/PTY teardown is never skipped.
+            if let tauri::WindowEvent::Destroyed = event {
                 // Only exit the app when the main window is closed;
                 // secondary windows (chat popout, workflow, terminal) just close themselves.
                 if window.label() != "main" {

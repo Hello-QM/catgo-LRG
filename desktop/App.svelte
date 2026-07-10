@@ -543,7 +543,7 @@
   function open_close_all_dialog() {
     // Opening via the normal menu is never a window-close request. Reset the
     // flag so a cancel left over from an earlier window-close attempt can't make
-    // a later Close-All destroy the window (see setup_close_guard).
+    // a later Close-All close the window (see setup_close_guard).
     window_close_pending = false
     modal.close_all_entries = build_close_all_entries(tm.tabs, tab_states)
     modal.close_all_error = ``
@@ -557,10 +557,15 @@
       await execute_close_all_saves(modal.close_all_entries, tab_states)
       sidebar.refresh_counter++
       close_all_structure_tabs(tm.tabs, tab_states, close_tab)
+      // Every structure tab is now closed (or reset to empty), so all modified
+      // flags are stale — clear them regardless of how the dialog was opened.
+      // On the window-close path this is also what lets the re-issued close()
+      // pass the onCloseRequested guard.
+      modified.clear_all()
       modal.close_all_visible = false
       // If this dialog came from a window-close request, everything is now saved
       // → proceed to actually close the window.
-      destroy_main_window_after_close_guard()
+      close_main_window_after_close_guard()
     } catch (e) {
       modal.close_all_error = e instanceof Error ? e.message : t(`app.save_failed`)
     } finally {
@@ -570,9 +575,11 @@
 
   function close_all_without_saving() {
     close_all_structure_tabs(tm.tabs, tab_states, close_tab)
+    // All tabs closed/reset → flags are stale (see execute_close_all).
+    modified.clear_all()
     modal.close_all_visible = false
     // Window-close path: user chose to discard → close the window.
-    destroy_main_window_after_close_guard()
+    close_main_window_after_close_guard()
   }
 
   // ===== Per-tab close prompt: Save option (Task B3 close-guard) =====
@@ -1008,8 +1015,12 @@
   // Desktop (Tauri): WebKitGTK does not reliably fire `beforeunload` on window
   // close, so guard the main window via `onCloseRequested`. When tabs are dirty
   // we cancel the close and surface the existing Close-All dialog; finishing it
-  // (save all / close without saving) then destroys the window (see
-  // execute_close_all / close_all_without_saving). Clean state closes silently.
+  // (save all / close without saving) clears the modified registry and re-issues
+  // close() so the guard passes and the window is destroyed → Rust Destroyed
+  // teardown runs (see execute_close_all / close_all_without_saving). Clean
+  // state closes silently. NOTE: registering this listener makes tauri route
+  // EVERY close request through JS, which is why the Rust teardown lives on
+  // WindowEvent::Destroyed, not CloseRequested (src-tauri/src/lib.rs).
   // Popout windows (chat/structure/docs/workflow) are ephemeral mirrors with
   // their own registry and are intentionally NOT guarded here.
   async function setup_close_guard() {
@@ -1030,15 +1041,19 @@
     }
   }
 
-  // Force-close the window after the user resolves the Close-All dialog from the
-  // window-close path. `destroy()` (not `close()`) bypasses onCloseRequested so
-  // we don't re-enter the guard.
-  async function destroy_main_window_after_close_guard() {
+  // Close the window after the user resolves the Close-All dialog from the
+  // window-close path. `close()` re-fires the close-requested guard; callers
+  // clear the modified registry first, so it reads any_modified() === false,
+  // does not preventDefault, and the Tauri JS api then destroys the window —
+  // which fires the Rust WindowEvent::Destroyed handler (src-tauri/src/lib.rs),
+  // the ONLY place the Python backend sidecar / agent bridge / PTY sessions are
+  // torn down and exit(0) runs. Never bypass that teardown.
+  async function close_main_window_after_close_guard() {
     if (!window_close_pending) return
     window_close_pending = false
     try {
       const { getCurrentWindow } = await import(`@tauri-apps/api/window`)
-      await getCurrentWindow().destroy()
+      await getCurrentWindow().close()
     } catch (err) {
       console.error(`[Tauri] Failed to close window after save guard:`, err)
     }

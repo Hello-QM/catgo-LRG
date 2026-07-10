@@ -5,6 +5,7 @@ export function create_modified_registry() {
   return {
     mark: (tab_id: string) => dirty.add(tab_id),
     clear: (tab_id: string) => dirty.delete(tab_id),
+    clear_all: () => dirty.clear(),
     is_modified: (tab_id: string) => dirty.has(tab_id),
     any_modified: () => dirty.size > 0,
   }
