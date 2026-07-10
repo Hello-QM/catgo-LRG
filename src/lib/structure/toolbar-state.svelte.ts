@@ -60,7 +60,13 @@ function load_hidden_by_dock(): Record<ToolbarDock, string[]> {
   // 迁移: 旧的扁平列表 (catgo:toolbar:hidden-tools) 应用到所有模式
   const legacy = load_hidden()
   if (legacy.length > 0) {
-    return { top: [...legacy], bottom: [...legacy], left: [...legacy], right: [...legacy] }
+    // 迁移取并集: 保留 top/bottom 的紧凑默认隐藏集, 不被旧全局清单覆盖
+    return {
+      top: [...new Set([...DEFAULT_HIDDEN_BY_DOCK.top, ...legacy])],
+      bottom: [...new Set([...DEFAULT_HIDDEN_BY_DOCK.bottom, ...legacy])],
+      left: [...legacy],
+      right: [...legacy],
+    }
   }
   return dflt
 }
@@ -77,8 +83,12 @@ function persist() {
     localStorage.setItem(COLLAPSED_KEY, toolbar_state.collapsed ? `1` : `0`)
     localStorage.setItem(HIDDEN_BY_DOCK_KEY, JSON.stringify(toolbar_state.hidden_by_dock))
     localStorage.setItem(DOCK_KEY, toolbar_state.dock)
+    localStorage.removeItem(HIDDEN_KEY) // 迁移后清掉旧键, 防止 hidden-by-dock 被清空时借尸还魂
   } catch { /* localStorage unavailable — non-fatal */ }
 }
+
+// 初始化即落盘: 迁移结果立即写入, 不等首次交互 (否则旧键一直悬着)
+if (typeof localStorage !== `undefined`) persist()
 
 export function set_toolbar_collapsed(collapsed: boolean) {
   toolbar_state.collapsed = collapsed

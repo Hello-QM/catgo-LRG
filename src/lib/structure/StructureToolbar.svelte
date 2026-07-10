@@ -199,6 +199,10 @@
     { id: `plugin_hub`, key: `structure.plugin_hub`, group: `assistant` },
   ]
   let toolbar_edit_open = $state(false)
+  // 当前模式下所有工具都被隐藏/不可用时, 条不再横贯整宽 (只剩右侧元按钮小签)
+  const all_tools_hidden = $derived(
+    TOOL_DEFS.every((d) => !tool_available(d.id) || tool_hidden(d.id)),
+  )
   let toolbar_edit_btn_el = $state<HTMLButtonElement | null>(null)
   let toolbar_edit_menu_el = $state<HTMLDivElement | null>(null)
   // 通用自适应浮层引擎 (自定义菜单 / 铅笔宫格 / 测量菜单共用):
@@ -298,7 +302,7 @@
     }
     const place = () => {
       if (!cur || !cur.isConnected) return hide()
-      const src = cur.querySelector<HTMLElement>(`.struct-toolbar-tooltip`)
+      const src = cur.querySelector<HTMLElement>(`.struct-toolbar-tooltip, .pane-toggle-tooltip`)
       const btn = cur.querySelector<HTMLElement>(`button`) ?? cur
       if (!src || !src.textContent?.trim()) return hide()
       // 按钮激活/展开时不打扰 (原 :has() 规则的 JS 等价)
@@ -367,7 +371,9 @@
       }
     }
     const over = (e: Event) => {
-      const wrap = (e.target as HTMLElement).closest?.(`.struct-toolbar-tooltip-wrap`)
+      const wrap = (e.target as HTMLElement).closest?.(
+        `.struct-toolbar-tooltip-wrap, .pane-toggle-tooltip-wrap`,
+      )
       if (!wrap || !root_el.contains(wrap)) return
       cur = wrap as HTMLElement
       place()
@@ -381,7 +387,7 @@
     root_el.addEventListener(`pointerout`, out)
     root_el.addEventListener(`focusin`, over)
     root_el.addEventListener(`focusout`, out)
-    root_el.addEventListener(`click`, () => queueMicrotask(place), true)
+    root_el.addEventListener(`click`, () => requestAnimationFrame(() => place()), true)
     root_el.addEventListener(`scroll`, place, true)
     window.addEventListener(`resize`, place)
     return () => {
@@ -403,8 +409,11 @@
     const el = toolbar_el
     if (!el) return
     const update = () => {
-      rail_overflowing = el.scrollHeight > el.clientHeight + 1 ||
-        el.scrollWidth > el.clientWidth + 1
+      // 只测停靠方向的主轴; 交叉轴的绝对定位悬挂物不算溢出
+      const horizontal = toolbar_state.dock === `top` || toolbar_state.dock === `bottom`
+      rail_overflowing = horizontal
+        ? el.scrollWidth > el.clientWidth + 1
+        : el.scrollHeight > el.clientHeight + 1
     }
     requestAnimationFrame(update)
     const ro = new ResizeObserver(update)
@@ -462,6 +471,7 @@
   class:dock-left={toolbar_state.dock === `left`}
   class:dock-top={toolbar_state.dock === `top`}
   class:dock-bottom={toolbar_state.dock === `bottom`}
+  class:empty-tools={all_tools_hidden}
   class="control-buttons"
 >
   {#if visible_buttons}
@@ -1697,19 +1707,6 @@
     border-color: var(--accent-color, #007acc);
   }
 
-  @media (max-width: 560px) {
-    .pencil-mode-selector,
-    .view-mode-dropdown {
-      position: fixed;
-      left: 50%;
-      right: auto;
-      top: 72px;
-      transform: translateY(-50%) translateX(4px);
-      width: max-content;
-      max-width: calc(100vw - 24px);
-      z-index: 100000020;
-    }
-  }
 
   /* === 竖排: 单列连续, 按使用频率从上到下 (--tb-order 逐工具排位) ===
      children 里的 pane-toggle (optimize/info/controls) 无内联变量 → 默认 40, 紧随核心工具 */
@@ -2070,5 +2067,18 @@
     section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
       width: 24px;
     }
+  }
+
+  /* 面板开关自带的 CSS tooltip 在栏内一律隐藏 (改走 body Portal 单例),
+     同时消除它们对 scrollHeight/Width 的悬挂充气 */
+  section.control-buttons :global(.pane-toggle-tooltip) {
+    display: none;
+  }
+  /* 收起或全工具隐藏时, 横条收缩为右侧小签: 不再留整宽吃输入的空带 */
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom).collapsed,
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom).empty-tools {
+    left: auto;
+    width: auto;
+    min-width: 0;
   }
 </style>

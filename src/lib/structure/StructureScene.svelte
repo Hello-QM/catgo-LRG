@@ -1045,7 +1045,8 @@
       if (m) {
         const a = m[4] !== undefined ? parseFloat(m[4]) : 1
         if (a >= 0.5) {
-          return new Color(+m[1] / 255, +m[2] / 255, +m[3] / 255)
+          // CSS 色是 sRGB; 数值构造器按线性解读会被输出级再编码一次 (~2.3x 变亮)
+          return new Color(+m[1] / 255, +m[2] / 255, +m[3] / 255).convertSRGBToLinear()
         }
       }
       el = el.parentElement
