@@ -3402,6 +3402,7 @@
     </div>
   {:else if (structure?.sites?.length ?? 0) > 0}
     <StructureToolbar
+  pane_key={viewer_id ?? tab_id ?? `default`}
       {camera_has_moved}
       {visible_buttons}
       {hide_extra_tools}
@@ -3651,7 +3652,7 @@
         </BuildPane>
         {/if}
 
-        {#if structure && !toolbar_tool_hidden(`optimize`)}
+        {#if structure && !toolbar_tool_hidden(viewer_id ?? tab_id ?? `default`, `optimize`)}
           <OptimizationPane
             bind:structure
             bind:pane_open={optimization_pane_open}
@@ -4220,7 +4221,7 @@
         {/if}
 
         <!-- === Info / Export / Settings === -->
-        {#if enable_info_pane && structure && !toolbar_tool_hidden(`info`)}
+        {#if enable_info_pane && structure && !toolbar_tool_hidden(viewer_id ?? tab_id ?? `default`, `info`)}
           <StructureInfoPane
             {structure}
             bind:pane_open={info_pane_open}
@@ -4232,7 +4233,7 @@
 
         <!-- ExportPane is now embedded inside IOPane -->
 
-        {#if !toolbar_tool_hidden(`controls`)}
+        {#if !toolbar_tool_hidden(viewer_id ?? tab_id ?? `default`, `controls`)}
         <StructureControls
           bind:controls_open
           bind:scene_props

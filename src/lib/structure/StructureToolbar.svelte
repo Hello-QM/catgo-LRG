@@ -24,7 +24,7 @@
   import { chat_position, set_chat_position } from '$lib/chat/chat-state.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
-  import { toolbar_state, set_toolbar_collapsed, set_toolbar_dock, toggle_toolbar_tool, toolbar_tool_hidden } from './toolbar-state.svelte'
+  import { pane_toolbar, set_toolbar_collapsed, set_toolbar_dock, toggle_toolbar_tool, toolbar_tool_hidden } from './toolbar-state.svelte'
 
   // Lazy-load structure translations
   load_i18n_module('structure')
@@ -33,6 +33,7 @@
     // ── 只读状态 ──
     camera_has_moved = false,
     visible_buttons = false,
+    pane_key = `default`,
     hide_extra_tools = false,
     enable_measure_mode = false,
     fullscreen_toggle = undefined,
@@ -94,6 +95,8 @@
     // 只读
     camera_has_moved?: boolean
     visible_buttons?: boolean
+    /** 本 pane 的稳定标识 — 工具栏配置按 pane 独立 */
+    pane_key?: string
     hide_extra_tools?: boolean
     enable_measure_mode?: boolean
     fullscreen_toggle?: Snippet<[]> | boolean
@@ -198,6 +201,7 @@
     { id: `chat`, key: `structure.ai_assistant`, group: `assistant` },
     { id: `plugin_hub`, key: `structure.plugin_hub`, group: `assistant` },
   ]
+  const tb = pane_toolbar(pane_key)
   let toolbar_edit_open = $state(false)
   // 当前模式下所有工具都被隐藏/不可用时, 条不再横贯整宽 (只剩右侧元按钮小签)
   const all_tools_hidden = $derived(
@@ -254,10 +258,10 @@
           top = bd.top + Math.max(0, (bh - mh) / 2)
           centered = true
         } else {
-          if (toolbar_state.dock === `left`) {
+          if (tb.dock === `left`) {
             left = rail_rect.right + gap
             if (left + mw > bd.right) left = rail_rect.left - mw - gap // 翻向左
-          } else if (toolbar_state.dock === `top` || toolbar_state.dock === `bottom`) {
+          } else if (tb.dock === `top` || tb.dock === `bottom`) {
             left = rect.right - mw
           } else {
             left = rail_rect.left - mw - gap
@@ -267,7 +271,7 @@
             left = bd.left + (bw - mw) / 2 // 两侧都不够: 边界内居中回退
             centered = true
           }
-          if (toolbar_state.dock === `top` || toolbar_state.dock === `bottom`) {
+          if (tb.dock === `top` || tb.dock === `bottom`) {
             // 横排: 开向条的对侧; 首选边放不下且另一边更大才翻转 (flip)。
             // max-height = 所选边真实可用高度 → 内部滚动; 锚点严格贴 rail 边缘,
             // mh ≤ avail 保证末段 clamp 不会把面板回推到条上
@@ -275,7 +279,7 @@
             const above_bottom = rail_rect.top - gap
             const below_avail = bd.bottom - below_top
             const above_avail = above_bottom - bd.top
-            let side: `below` | `above` = toolbar_state.dock === `top` ? `below` : `above`
+            let side: `below` | `above` = tb.dock === `top` ? `below` : `above`
             const preferred = side === `below` ? below_avail : above_avail
             if (mh > preferred && (side === `below` ? above_avail : below_avail) > preferred) {
               side = side === `below` ? `above` : `below`
@@ -381,7 +385,7 @@
         left: [`right`, `left`, `top`, `bottom`],
         right: [`left`, `right`, `top`, `bottom`],
       }
-      const order = pref[toolbar_state.dock] ?? pref.right
+      const order = pref[tb.dock] ?? pref.right
       const side = order.find((s) => fits[s]) ?? order[0]
       let left: number
       let top: number
@@ -453,14 +457,14 @@
   // 小面板 (多宫格分屏) 里工具比面板高时: 栏内滚动; 放得下时保持 visible,
   // 侧向 tooltip 不被裁。直接 toggle class, 不回写 $state。
   $effect(() => {
-    void toolbar_state.hidden_by_dock
-    void toolbar_state.dock
-    void toolbar_state.collapsed
+    void tb.hidden_by_dock
+    void tb.dock
+    void tb.collapsed
     const el = toolbar_el
     if (!el) return
     const update = () => {
       // 只测停靠方向的主轴; 交叉轴的绝对定位悬挂物不算溢出
-      const horizontal = toolbar_state.dock === `top` || toolbar_state.dock === `bottom`
+      const horizontal = tb.dock === `top` || tb.dock === `bottom`
       rail_overflowing = horizontal
         ? el.scrollWidth > el.clientWidth + 1
         : el.scrollHeight > el.clientHeight + 1
@@ -479,7 +483,7 @@
   })
   // 父组件强制隐藏 (hidden_toolbar_items prop) 优先于用户选择
   const tool_hidden = (id: string): boolean =>
-    hidden_toolbar_items.includes(id) || toolbar_tool_hidden(id)
+    hidden_toolbar_items.includes(id) || toolbar_tool_hidden(pane_key, id)
   // 该工具在当前实例是否真实存在 —— 不存在的不进自定义菜单
   const tool_available = (id: string): boolean => {
     switch (id) {
@@ -514,18 +518,18 @@
 
 <section
   bind:this={toolbar_el}
-  data-placement={toolbar_state.dock}
+  data-placement={tb.dock}
   class:visible={visible_buttons}
-  class:collapsed={toolbar_state.collapsed}
+  class:collapsed={tb.collapsed}
   class:overflowing={rail_overflowing}
-  class:dock-left={toolbar_state.dock === `left`}
-  class:dock-top={toolbar_state.dock === `top`}
-  class:dock-bottom={toolbar_state.dock === `bottom`}
+  class:dock-left={tb.dock === `left`}
+  class:dock-top={tb.dock === `top`}
+  class:dock-bottom={tb.dock === `bottom`}
   class:empty-tools={all_tools_hidden}
   class="control-buttons"
 >
   {#if visible_buttons}
-    {#if !toolbar_state.collapsed}
+    {#if !tb.collapsed}
     <!-- === View / Navigation === -->
     {#if camera_has_moved}
       <button class="reset-camera tb-left" style="--tb-order: 5" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
@@ -696,7 +700,7 @@
       {#if pencil.pencil_mode_active}
         <div
           class="pencil-mode-selector"
-          {@attach fit_popover(() => pencil_btn_el, toolbar_state.dock)}
+          {@attach fit_popover(() => pencil_btn_el, tb.dock)}
         >
           <div class="mode-toggle">
             <button
@@ -1076,7 +1080,7 @@
           ]}
           <div
             class="view-mode-dropdown measure-menu-popover"
-            {@attach fit_popover(() => measure_btn_el, toolbar_state.dock)}
+            {@attach fit_popover(() => measure_btn_el, tb.dock)}
           >
             {#each measure_options as { mode, icon, label, scale, min_atoms } (mode)}
               <button
@@ -1178,7 +1182,7 @@
       {#if toolbar_edit_open}
         <div
           class="view-mode-dropdown toolbar-edit-menu"
-          {@attach fit_popover(() => toolbar_edit_btn_el, toolbar_state.dock)}
+          {@attach fit_popover(() => toolbar_edit_btn_el, tb.dock)}
         >
           <div class="toolbar-edit-group">{t(`structure.toolbar_dock`)}</div>
           <div class="toolbar-dock-row">
@@ -1186,8 +1190,8 @@
               <button
                 type="button"
                 class="toolbar-dock-btn"
-                class:active={toolbar_state.dock === dock}
-                onclick={() => set_toolbar_dock(dock)}
+                class:active={tb.dock === dock}
+                onclick={() => set_toolbar_dock(pane_key, dock)}
               >{t(key)}</button>
             {/each}
           </div>
@@ -1203,8 +1207,8 @@
                 <label class="toolbar-edit-option">
                   <input
                     type="checkbox"
-                    checked={!toolbar_tool_hidden(id)}
-                    onchange={() => toggle_toolbar_tool(id)}
+                    checked={!toolbar_tool_hidden(pane_key, id)}
+                    onchange={() => toggle_toolbar_tool(pane_key, id)}
                   />
                   <span>{t(key)}</span>
                 </label>
@@ -1221,21 +1225,21 @@
       <button
         type="button"
         class="toolbar-collapse-toggle"
-        aria-expanded={!toolbar_state.collapsed}
+        aria-expanded={!tb.collapsed}
         onclick={() => {
-          set_toolbar_collapsed(!toolbar_state.collapsed)
+          set_toolbar_collapsed(pane_key, !tb.collapsed)
           toolbar_edit_open = false
         }}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          {#if toolbar_state.collapsed !== (toolbar_state.dock === `left`)}
+          {#if tb.collapsed !== (tb.dock === `left`)}
             <path d="m17 17-5-5 5-5" /><path d="m10 17-5-5 5-5" />
           {:else}
             <path d="m7 7 5 5-5 5" /><path d="m14 7 5 5-5 5" />
           {/if}
         </svg>
       </button>
-      <span class="struct-toolbar-tooltip" role="tooltip">{toolbar_state.collapsed ? t('structure.toolbar_expand') : t('structure.toolbar_collapse')}</span>
+      <span class="struct-toolbar-tooltip" role="tooltip">{tb.collapsed ? t('structure.toolbar_expand') : t('structure.toolbar_collapse')}</span>
     </span>
   {/if}
 </section>
