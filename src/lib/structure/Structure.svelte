@@ -95,6 +95,7 @@
     set_active_viewer,
     type ViewerPosition,
   } from './viewer-registry.svelte'
+  import { viewport_highlight_state } from '$lib/overlay/overlay-target.svelte'
   import { isMobile } from '$lib/api/transport'
   import { set_current_structure, current_structure_state } from './current-structure.svelte'
   import { molecular_fragments, type MolecularFragment } from './controllers/fragments'
@@ -2615,6 +2616,17 @@
     if (is_active) set_active_viewer(viewer_id)
   })
 
+  // 对象级弹层打开/切换目标时的视口联动高亮 (800ms, 不动相机/选择/焦点)
+  const _overlay_hl = viewport_highlight_state()
+  let overlay_flash = $state(false)
+  $effect(() => {
+    const tick = viewer_id ? _overlay_hl.highlights[viewer_id] : undefined
+    if (!tick) return
+    overlay_flash = true
+    const timer = setTimeout(() => (overlay_flash = false), 800)
+    return () => clearTimeout(timer)
+  })
+
   // Push-on-edit: any structure mutation (add/delete/replace/drag/lattice)
   // triggers an immediate push so lab claude sees the new state within
   // ~30ms instead of waiting up to 5s for the heartbeat. JSON.stringify
@@ -3277,6 +3289,7 @@
   }}
   {...rest}
   class="structure {rest.class ?? ``}"
+  class:overlay-target-flash={overlay_flash}
   class:pencil-mode-active={pencil.pencil_mode_active}
   class:crop-mode-active={interaction.crop_mode_active}
   class:md-split={show_md_panel}
@@ -4066,6 +4079,7 @@
           <WorkflowPane
             bind:show={workflow_pane_open}
             structure={saveable_structure ?? structure}
+            {viewer_id}
             {on_open_workflow_editor}
           />
 
@@ -5490,6 +5504,10 @@
     color: var(--struct-text-color);
     /* Isolate stacking context to prevent z-index bleed to other panes */
     isolation: isolate;
+  }
+  .structure.overlay-target-flash {
+    outline: 2px solid var(--accent-color, #4a9eff);
+    outline-offset: -2px;
     overflow: hidden;
   }
 

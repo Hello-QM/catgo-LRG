@@ -746,10 +746,12 @@
   }
 
   // [2025-02] Open workflow editor from sidebar file tree
-  function handle_sidebar_open_workflow(workflow_id: string, compact = false, target_tab_id?: string) {
+  function handle_sidebar_open_workflow(workflow_id: string, compact = false, target_tab_id?: string, target_leaf_id?: string) {
     // Prefer opening into the tab that originated the MCP navigation, not
     // whichever tab happens to be active when the signal arrives. Falls back
     // to the active tab for sidebar clicks and other UI-initiated opens.
+    // target_leaf_id: 发起弹层的 leaf (WorkflowPane 传入) — 编辑器占用发起源
+    // 而不是劫持 active leaf (多视口下两者常常不同)。
     const ts_tab_id = target_tab_id ?? tm.active_tab_id
     const ts = tm.tab_states[ts_tab_id]
     if (!ts) return
@@ -762,7 +764,8 @@
       get_workflow_slice(ts_tab_id).workflow_reload_seq.seq++
       return
     }
-    const target = findFirstEmptyLeaf(ts.root) ?? findLeafById(ts.root, ts.active_leaf_id)
+    const target = findFirstEmptyLeaf(ts.root) ??
+      findLeafById(ts.root, target_leaf_id ?? ts.active_leaf_id)
     const target_pane = target ? structurePane(target) : null
     if (!target || !target_pane) return
     Object.assign(target_pane, { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact })
@@ -2466,7 +2469,8 @@
                 open_terminal_leaf(tab.id, leaf.id, term)
               }}
               on_open_workflow_editor={(workflow_id: string) => {
-                handle_sidebar_open_workflow(workflow_id)
+                // 编辑器开进本 leaf (弹层的冻结目标), 不劫持 active leaf
+                handle_sidebar_open_workflow(workflow_id, false, tab.id, leaf.id)
               }}
               on_open_in_molstar={() => toggle_pane_viewer(pane)}
               on_view_split_request={(struct) => {

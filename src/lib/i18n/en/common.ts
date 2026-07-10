@@ -213,6 +213,17 @@ const common: Record<string, string> = {
   preview: `Preview`,
   show: `Show`,
   total: `total`,
+
+  // ── Overlay target context (multi-viewport) ─────────────────────────
+  overlay_window_n: `Window {n}`,
+  overlay_document: `Document`,
+  overlay_selected_atoms: `{n} atoms selected`,
+  overlay_no_structure_in_window: `Window {n} has no structure available.`,
+  overlay_target_closed: `The target window was closed — this action can no longer proceed.`,
+  overlay_switch_target: `Switch target`,
+  overlay_pick_target_first: `Choose a target window first`,
+  overlay_capture_last_loaded: `Use last loaded structure (source pane closed)`,
+  overlay_from_window: `From window {n}`,
 }
 
 export default common

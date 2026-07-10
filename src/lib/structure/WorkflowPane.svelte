@@ -4,6 +4,16 @@
   import type { AnyStructure } from '$lib/structure'
   import type { Snippet } from 'svelte'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { resolve_viewer } from '$lib/structure/viewer-registry.svelte'
+  import OverlayTargetHeader from '$lib/overlay/OverlayTargetHeader.svelte'
+  import {
+    close_overlay_instance,
+    create_viewport_target_context,
+    flash_viewport,
+    overlay_log,
+    register_overlay_instance,
+    type OverlayTargetContext,
+  } from '$lib/overlay/overlay-target.svelte'
 
   load_i18n_module('structure')
   load_i18n_module('common')
@@ -13,15 +23,42 @@
     max_height = '',
     children,
     structure,
+    viewer_id,
     on_open_workflow_editor,
   }: {
     show?: boolean
     max_height?: string
     children?: Snippet
     structure?: AnyStructure
+    /** 宿主视口的稳定标识 (`tab:leaf`) — 本弹层的冻结目标 */
+    viewer_id?: string
     /** Called to open a workflow in the full editor. Receives workflow_id. */
     on_open_workflow_editor?: (workflow_id: string) => void
   } = $props()
+
+  // 对象级弹层 (fixed policy): 打开时冻结目标上下文, 关闭时注销
+  let target = $state<OverlayTargetContext | null>(null)
+  let overlay_instance_id: string | null = null
+  $effect(() => {
+    if (show && viewer_id && !target) {
+      target = create_viewport_target_context(viewer_id, `WorkflowPane`)
+      overlay_instance_id = register_overlay_instance({
+        type: `workflow-pane`,
+        target,
+        policy: `fixed`,
+      }).id
+      flash_viewport(viewer_id)
+    } else if (!show && overlay_instance_id) {
+      close_overlay_instance(overlay_instance_id)
+      overlay_instance_id = null
+      target = null
+    }
+  })
+  $effect(() => {
+    return () => {
+      if (overlay_instance_id) close_overlay_instance(overlay_instance_id)
+    }
+  })
 
   // Live workflow status polling
   interface WorkflowStep {
@@ -147,15 +184,16 @@
     show = false
   }
 
-  /** Fetch structure from viewer backend (authoritative) or fall back to prop */
-  async function get_current_structure(): Promise<AnyStructure | null> {
-    try {
-      const resp = await fetch(`${API_BASE}/view/structure/current`)
-      if (resp.ok) {
-        const data: AnyStructure = await resp.json()
-        if (data?.sites?.length) return data
-      }
-    } catch { /* fall through */ }
+  /** fixed 目标解析: 永远取本弹层所属视口的活结构, 不读全局 current。
+   * (旧实现 fetch /view/structure/current 不带 panel_id, 后端兜底返回
+   * 最先加载结构的 pane — 多视口下即"显示窗口 2、实际操作窗口 1"。) */
+  function get_target_structure(): AnyStructure | null {
+    if (viewer_id) {
+      const live = resolve_viewer(viewer_id).handle?.get_structure() as
+        | AnyStructure
+        | undefined
+      if (live?.sites?.length) return live
+    }
     return structure ?? null
   }
 
@@ -164,7 +202,8 @@
     creating = true
     error_msg = ``
     try {
-      const current = await get_current_structure()
+      const current = get_target_structure()
+      overlay_log(`workflow_create`, target, { atoms: current?.sites?.length ?? 0 })
       // Build initial graph with structure_input node pre-loaded with current structure
       const ts = Date.now()
       const si_id = `n${ts}-si`
@@ -210,11 +249,15 @@
     sending = true
     error_msg = ``
     try {
-      const current = await get_current_structure()
+      const current = get_target_structure()
       if (!current?.sites?.length) {
         error_msg = t('structure.no_structure_loaded_in_viewer')
         return
       }
+      overlay_log(`workflow_send_structure`, target, {
+        workflow_id: wf_id,
+        atoms: current.sites.length,
+      })
 
       // Fetch the workflow graph
       const resp = await fetch(`${API_BASE}/workflow/${wf_id}`)
@@ -288,7 +331,11 @@
   max_height={max_height || ``}
   pane_props={{ class: 'workflow-pane' }}
 >
-  <h4 class="pane-title">{t('common.workflow')}</h4>
+  {#if target}
+    <OverlayTargetHeader title={t('common.workflow')} context={target} />
+  {:else}
+    <h4 class="pane-title">{t('common.workflow')}</h4>
+  {/if}
   <div class="pane-content">
     {#if children}
       {@render children()}

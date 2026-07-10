@@ -212,6 +212,17 @@ const common: Record<string, string> = {
   preview: `预览`,
   show: `显示`,
   total: `共`,
+
+  // ── Overlay 目标上下文 (多视口) ──────────────────────────────────────
+  overlay_window_n: `窗口 {n}`,
+  overlay_document: `文档`,
+  overlay_selected_atoms: `已选择 {n} 个原子`,
+  overlay_no_structure_in_window: `窗口 {n} 当前没有可用结构。`,
+  overlay_target_closed: `原目标窗口已关闭,无法继续操作。`,
+  overlay_switch_target: `切换目标`,
+  overlay_pick_target_first: `请先选择目标窗口`,
+  overlay_capture_last_loaded: `使用最近加载的结构(来源窗口已关闭)`,
+  overlay_from_window: `来自窗口 {n}`,
 }
 
 export default common
