@@ -99,7 +99,7 @@
     )
   }
 
-  function choose_dock(side: `left` | `right`) {
+  function choose_dock(side: `left` | `right` | `top` | `bottom`) {
     menu_open = false
     set_dock_side(panel_id, side)
     set_panel_mode(panel_id, `docked`)
@@ -174,6 +174,24 @@
               >
                 <span class="pm-check">{!floating && inst.dock_side === `right` ? `✓` : ``}</span>
                 {t(`common.panel_dock_right`)}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={!floating && inst.dock_side === `top`}
+                onclick={() => choose_dock(`top`)}
+              >
+                <span class="pm-check">{!floating && inst.dock_side === `top` ? `✓` : ``}</span>
+                {t(`common.panel_dock_top`)}
+              </button>
+              <button
+                type="button"
+                role="menuitemradio"
+                aria-checked={!floating && inst.dock_side === `bottom`}
+                onclick={() => choose_dock(`bottom`)}
+              >
+                <span class="pm-check">{!floating && inst.dock_side === `bottom` ? `✓` : ``}</span>
+                {t(`common.panel_dock_bottom`)}
               </button>
               <button
                 type="button"

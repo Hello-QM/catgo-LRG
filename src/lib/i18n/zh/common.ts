@@ -232,6 +232,8 @@ const common: Record<string, string> = {
   panel_resize: `调整面板宽度`,
   panel_dock_left: `停靠左侧`,
   panel_dock_right: `停靠右侧`,
+  panel_dock_top: `停靠顶部`,
+  panel_dock_bottom: `停靠底部`,
   panel_expand: `展开面板`,
 }
 

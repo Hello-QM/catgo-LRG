@@ -233,6 +233,8 @@ const common: Record<string, string> = {
   panel_resize: `Resize panel`,
   panel_dock_left: `Dock left`,
   panel_dock_right: `Dock right`,
+  panel_dock_top: `Dock top`,
+  panel_dock_bottom: `Dock bottom`,
   panel_expand: `Expand panel`,
 }
 

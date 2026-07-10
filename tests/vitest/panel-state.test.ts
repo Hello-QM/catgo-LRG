@@ -1,5 +1,6 @@
 import {
   bring_to_front,
+  clamp_docked_height,
   clamp_docked_width,
   clamp_floating_bounds,
   DOCKED_DEFAULT_WIDTH,
@@ -14,6 +15,7 @@ import {
   remove_pane_panels,
   remove_tab_panels,
   set_dock_side,
+  set_docked_height,
   set_docked_width,
   set_floating_bounds,
   set_panel_mode,
@@ -153,6 +155,56 @@ describe(`pane-scoped geometry clamps`, () => {
     expect(z1).toBeGreaterThan(panel_state().panels[p2.id].z_index)
     bring_to_front(p2.id)
     expect(panel_state().panels[p2.id].z_index).toBeGreaterThan(z1)
+  })
+})
+
+describe(`four-side dock independence (补充验收)`, () => {
+  test(`four different sides coexist, changing one leaves others`, () => {
+    const [p1, p2, p3, p4] = quad()
+    set_dock_side(p1.id, `left`)
+    set_dock_side(p2.id, `right`)
+    set_dock_side(p3.id, `bottom`)
+    set_dock_side(p4.id, `top`)
+    const st = panel_state().panels
+    expect(st[p1.id].dock_side).toBe(`left`)
+    expect(st[p2.id].dock_side).toBe(`right`)
+    expect(st[p3.id].dock_side).toBe(`bottom`)
+    expect(st[p4.id].dock_side).toBe(`top`)
+    set_dock_side(p2.id, `left`) // 仅 p2 改变
+    expect(st[p1.id].dock_side).toBe(`left`)
+    expect(st[p2.id].dock_side).toBe(`left`)
+    expect(st[p3.id].dock_side).toBe(`bottom`)
+    expect(st[p4.id].dock_side).toBe(`top`)
+  })
+
+  test(`width and height are separate memories — 切向不串值`, () => {
+    const [p1] = quad()
+    set_docked_width(p1.id, 280, 800)
+    set_dock_side(p1.id, `bottom`)
+    set_docked_height(p1.id, 180, 600)
+    const st = panel_state().panels
+    expect(st[p1.id].docked_width).toBe(280) // bottom 不吃掉 width
+    expect(st[p1.id].docked_height).toBe(180)
+    set_dock_side(p1.id, `left`)
+    expect(st[p1.id].docked_width).toBe(280) // 切回恢复原 width
+    expect(st[p1.id].docked_height).toBe(180)
+  })
+
+  test(`floating round-trip preserves the pane's own dock_side`, () => {
+    const [p1, p2] = quad()
+    set_dock_side(p2.id, `right`)
+    set_panel_mode(p2.id, `floating`, HOST)
+    expect(panel_state().panels[p2.id].dock_side).toBe(`right`)
+    set_panel_mode(p2.id, `docked`)
+    expect(panel_state().panels[p2.id].dock_side).toBe(`right`)
+    expect(panel_state().panels[p1.id].dock_side).toBe(`left`)
+  })
+
+  test(`docked height clamps to pane scope`, () => {
+    expect(clamp_docked_height(9999, 1000)).toBe(360)
+    expect(clamp_docked_height(9999, 500)).toBe(300) // 60% of 500
+    expect(clamp_docked_height(9999, 250)).toBe(120) // 250−160 < min → min 兜底
+    expect(clamp_docked_height(0, 1000)).toBe(120)
   })
 })
 

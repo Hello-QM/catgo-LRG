@@ -18,7 +18,7 @@ import type {
 } from '$lib/overlay/overlay-target.svelte'
 
 export type PanelMode = `docked` | `floating`
-export type PanelDockSide = `left` | `right`
+export type PanelDockSide = `left` | `right` | `top` | `bottom`
 
 export interface FloatingBounds {
   /** pane 内坐标 (px, 相对 pane 左上角) */
@@ -43,18 +43,26 @@ export interface PanelInstance {
   target: OverlayTargetContext | null
   target_policy: OverlayTargetPolicy
   is_open: boolean
+  /** 左右停靠的宽度 */
   docked_width: number
+  /** 上下停靠的高度 — 与 width 独立记忆 */
+  docked_height: number
   floating_bounds: FloatingBounds
   z_index: number
   created_at: number
 }
 
-/** 停靠宽度界限 (pane 作用域): 最小 180, 上限 min(420, 60% pane, pane−160)
- * — 3D 视口永远保住 MIN_VIEWPORT_WIDTH, 不被挤没 */
+/** 停靠尺寸界限 (pane 作用域): 上限受 60% pane 与视口保底双重约束
+ * — 3D 视口永远保住 MIN_VIEWPORT_*, 不被挤没。左右停靠用 width,
+ * 上下停靠用 height — 两维独立记忆, 切向不串值 */
 export const DOCKED_MIN_WIDTH = 180
 export const DOCKED_DEFAULT_WIDTH = 260
 export const DOCKED_MAX_WIDTH = 420
 export const MIN_VIEWPORT_WIDTH = 160
+export const DOCKED_MIN_HEIGHT = 120
+export const DOCKED_DEFAULT_HEIGHT = 200
+export const DOCKED_MAX_HEIGHT = 360
+export const MIN_VIEWPORT_HEIGHT = 160
 export const FLOATING_DEFAULT = { width: 340, height: 380 }
 export const FLOATING_MIN = { width: 240, height: 200 }
 const PAD = 8
@@ -66,6 +74,7 @@ interface PanelTemplate {
   mode?: PanelMode
   dock_side?: PanelDockSide
   docked_width?: number
+  docked_height?: number
   floating_bounds?: Partial<FloatingBounds>
 }
 
@@ -78,6 +87,15 @@ export function clamp_docked_width(w: number, host_w: number): number {
     Math.min(DOCKED_MAX_WIDTH, host_w * 0.6, host_w - MIN_VIEWPORT_WIDTH),
   )
   return Math.round(clamp(w, DOCKED_MIN_WIDTH, hi))
+}
+
+/** 停靠高度钳位 (top/bottom) — host_h 为所在 pane 高度 */
+export function clamp_docked_height(h: number, host_h: number): number {
+  const hi = Math.max(
+    DOCKED_MIN_HEIGHT,
+    Math.min(DOCKED_MAX_HEIGHT, host_h * 0.6, host_h - MIN_VIEWPORT_HEIGHT),
+  )
+  return Math.round(clamp(h, DOCKED_MIN_HEIGHT, hi))
 }
 
 /** 悬浮边界钳位 — host 为所在 pane 尺寸; 面板不得跨出 pane */
@@ -112,10 +130,18 @@ export function parse_persisted(raw: string | null): Record<string, PanelTemplat
       if (!p || typeof p !== `object`) continue
       const entry: PanelTemplate = {}
       if (p.mode === `docked` || p.mode === `floating`) entry.mode = p.mode
-      if (p.dock_side === `left` || p.dock_side === `right`) entry.dock_side = p.dock_side
+      if (
+        p.dock_side === `left` || p.dock_side === `right` ||
+        p.dock_side === `top` || p.dock_side === `bottom`
+      ) entry.dock_side = p.dock_side
       if (typeof p.docked_width === `number` && Number.isFinite(p.docked_width)) {
         entry.docked_width = Math.round(
           clamp(p.docked_width, DOCKED_MIN_WIDTH, DOCKED_MAX_WIDTH),
+        )
+      }
+      if (typeof p.docked_height === `number` && Number.isFinite(p.docked_height)) {
+        entry.docked_height = Math.round(
+          clamp(p.docked_height, DOCKED_MIN_HEIGHT, DOCKED_MAX_HEIGHT),
         )
       }
       const fb = p.floating_bounds
@@ -151,6 +177,7 @@ function persist_template(p: PanelInstance): void {
       mode: p.mode,
       dock_side: p.dock_side,
       docked_width: p.docked_width,
+      docked_height: p.docked_height,
       floating_bounds: {
         width: p.floating_bounds.width,
         height: p.floating_bounds.height,
@@ -208,6 +235,7 @@ export function open_panel(args: {
     target_policy: args.target_policy ?? `fixed`,
     is_open: true,
     docked_width: tpl.docked_width ?? DOCKED_DEFAULT_WIDTH,
+    docked_height: tpl.docked_height ?? DOCKED_DEFAULT_HEIGHT,
     floating_bounds: {
       x: PAD,
       y: PAD,
@@ -276,6 +304,14 @@ export function set_floating_bounds(
   if (commit) persist_template(p)
 }
 
+/** 停靠高度 (top/bottom; host_h = 本 pane 高度); 释放时 commit=true */
+export function set_docked_height(id: string, height: number, host_h: number, commit = true): void {
+  const p = panels[id]
+  if (!p) return
+  p.docked_height = clamp_docked_height(height, host_h)
+  if (commit) persist_template(p)
+}
+
 export function bring_to_front(id: string): void {
   const p = panels[id]
   if (!p) return
@@ -293,6 +329,7 @@ export function ensure_pane_panels_within(pane_id: string, host: HostSize): void
   for (const p of panels_for_pane(pane_id)) {
     p.floating_bounds = clamp_floating_bounds(p.floating_bounds, host)
     p.docked_width = clamp_docked_width(p.docked_width, host.w)
+    p.docked_height = clamp_docked_height(p.docked_height, host.h)
   }
 }
 
