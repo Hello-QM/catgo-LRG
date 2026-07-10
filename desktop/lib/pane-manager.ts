@@ -115,7 +115,14 @@ export async function load_close_save_projects() {
 export function init_close_save_target(pane: PaneState) {
   if (pane.local_file_path) exp.close_save_target = `local`
   else if (pane.remote_origin?.session_id) exp.close_save_target = `hpc`
-  else exp.close_save_target = `project`
+  // Path-less panes (e.g. a structure imported from the project DB — no
+  // local_file_path, no remote_origin) default to a Save-As FILE dialog so
+  // "Save & Close" ASKS where to save instead of silently writing back to the
+  // DB. The `local` target with no local_file_path routes through the export
+  // dialog (see save_and_close_panel's `local` branch). Saving to the CatGO DB
+  // stays available as an explicit, conscious choice via the banner's target
+  // select — it is just no longer the silent default.
+  else exp.close_save_target = `local`
 }
 
 export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
@@ -169,6 +176,12 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
       const content = await serialize_structure_content(structure, remote_fmt)
       await writeRemoteFile(pane.remote_origin.session_id, pane.remote_origin.file_path, content)
     } else {
+      // Reached only when the user CONSCIOUSLY picks "CatGO DB" in the close
+      // banner's target select. Path-less panes no longer land here by default
+      // (init_close_save_target defaults them to `local` → the Save-As dialog
+      // above), so there is no silent DB write on close. The silent-DB batch
+      // save lives on in the Close-All flow (execute_close_all_saves), whose
+      // per-entry checklist makes the DB target an explicit opt-in.
       await save_structure_to_db(structure, _auto_name(structure), exp.close_save_project_id || undefined)
     }
     // Pane-scoped save success: only clear the tab flag when this pane is the
