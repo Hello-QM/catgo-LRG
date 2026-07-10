@@ -81,6 +81,7 @@
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
   import { create_modified_registry } from '$lib/structure/close-guard.svelte'
+  import { apply_beforeunload_guard } from '$lib/structure/save-on-close'
   import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
   import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
   // SDK-agent visible-terminal bridge: global poller + approval card
@@ -184,6 +185,14 @@
 
   // ========== Popout / Sidebar / Pane / Layout / Export / DragDrop / Resize deps ==========
   let is_tauri = $state(false)
+  // Task B4 window-close guard. When the OS/user closes the whole window while
+  // any tab has unsaved edits, we intercept it — web via `beforeunload` (native
+  // browser prompt), desktop via Tauri `onCloseRequested`. On desktop we reuse
+  // the Close-All dialog; `window_close_pending` remembers that finishing that
+  // dialog (save all / close without saving) should then destroy the window.
+  // Plain `let` (not $state) — it gates async callbacks, never drives the UI.
+  let window_close_pending = false
+  let close_guard_registered = false
   let popout_chat_mode = $state(false)
   // Mobile (iOS/Android Tauri) gate. On mobile we render the purpose-built
   // MobileWorkspace (terminal-first; structure editor + russh SSH terminal +
@@ -532,6 +541,10 @@
   // ========== Close All Tabs (extracted to ./lib/close-all-helper.ts) ==========
 
   function open_close_all_dialog() {
+    // Opening via the normal menu is never a window-close request. Reset the
+    // flag so a cancel left over from an earlier window-close attempt can't make
+    // a later Close-All destroy the window (see setup_close_guard).
+    window_close_pending = false
     modal.close_all_entries = build_close_all_entries(tm.tabs, tab_states)
     modal.close_all_error = ``
     modal.close_all_visible = true
@@ -545,6 +558,9 @@
       sidebar.refresh_counter++
       close_all_structure_tabs(tm.tabs, tab_states, close_tab)
       modal.close_all_visible = false
+      // If this dialog came from a window-close request, everything is now saved
+      // → proceed to actually close the window.
+      destroy_main_window_after_close_guard()
     } catch (e) {
       modal.close_all_error = e instanceof Error ? e.message : t(`app.save_failed`)
     } finally {
@@ -555,6 +571,8 @@
   function close_all_without_saving() {
     close_all_structure_tabs(tm.tabs, tab_states, close_tab)
     modal.close_all_visible = false
+    // Window-close path: user chose to discard → close the window.
+    destroy_main_window_after_close_guard()
   }
 
   // ===== Per-tab close prompt: Save option (Task B3 close-guard) =====
@@ -981,6 +999,51 @@
     }
   }
 
+  // Web build: block the browser's unload (native "Leave site?" prompt) when any
+  // tab has unsaved edits. Named fn so re-adding on effect re-run is a no-op.
+  function handle_beforeunload(event: BeforeUnloadEvent) {
+    apply_beforeunload_guard(event, modified.any_modified())
+  }
+
+  // Desktop (Tauri): WebKitGTK does not reliably fire `beforeunload` on window
+  // close, so guard the main window via `onCloseRequested`. When tabs are dirty
+  // we cancel the close and surface the existing Close-All dialog; finishing it
+  // (save all / close without saving) then destroys the window (see
+  // execute_close_all / close_all_without_saving). Clean state closes silently.
+  // Popout windows (chat/structure/docs/workflow) are ephemeral mirrors with
+  // their own registry and are intentionally NOT guarded here.
+  async function setup_close_guard() {
+    if (close_guard_registered) return
+    try {
+      const { getCurrentWindow } = await import(`@tauri-apps/api/window`)
+      const win = getCurrentWindow()
+      if (win.label !== `main`) return
+      close_guard_registered = true
+      await win.onCloseRequested((event) => {
+        if (!modified.any_modified()) return // clean → allow the window to close
+        event.preventDefault()
+        open_close_all_dialog()
+        window_close_pending = true
+      })
+    } catch (err) {
+      console.error(`[Tauri] Failed to register window-close guard:`, err)
+    }
+  }
+
+  // Force-close the window after the user resolves the Close-All dialog from the
+  // window-close path. `destroy()` (not `close()`) bypasses onCloseRequested so
+  // we don't re-enter the guard.
+  async function destroy_main_window_after_close_guard() {
+    if (!window_close_pending) return
+    window_close_pending = false
+    try {
+      const { getCurrentWindow } = await import(`@tauri-apps/api/window`)
+      await getCurrentWindow().destroy()
+    } catch (err) {
+      console.error(`[Tauri] Failed to close window after save guard:`, err)
+    }
+  }
+
   $effect(() => {
     if (typeof window !== `undefined`) {
       apply_theme_to_dom(get_theme_preference())
@@ -990,6 +1053,11 @@
         setup_file_open_listener()
         drain_opened_files()
         setup_tauri_file_drop()
+        setup_close_guard()
+      } else {
+        // Web build: native beforeunload guard. Same fn ref → addEventListener
+        // dedupes if the effect re-runs.
+        window.addEventListener(`beforeunload`, handle_beforeunload)
       }
     }
   })

@@ -16,3 +16,18 @@ export async function guard_close(opts: {
   // tab open so the user does not lose their edits.
   return opts.on_save()
 }
+
+// Window-close guard for the WEB build. Given a `beforeunload` event and whether
+// any tab is modified, block the unload (native browser "Leave site?" prompt)
+// when there are unsaved edits. Returns true if the unload was blocked. Browsers
+// ignore any custom UI here, so the native confirmation is all we can surface.
+export function apply_beforeunload_guard(
+  event: { preventDefault(): void; returnValue: unknown },
+  any_modified: boolean,
+): boolean {
+  if (!any_modified) return false
+  event.preventDefault()
+  // Chrome/legacy browsers only raise the confirmation when returnValue is set.
+  event.returnValue = ``
+  return true
+}
