@@ -370,7 +370,14 @@ git commit -m "feat(viewer): mark tab modified on edit, clear on load"
 - Test: `tests/vitest/structure/save-on-close.test.ts` (new)
 
 **Interfaces:**
-- Consumes: `modified.is_modified(tab_id)`, `save_with_dialog` (io/fetch), the structure's `file_path`, `export`-format serializer.
+- Consumes: `modified.is_modified(tab_id)`, `save_with_dialog` (io/fetch),
+  `writeRemoteFile` (`$lib/api/hpc`), the structure's `file_path` and
+  `remote_origin` (`{ session_id, file_path }`, set when loaded from HPC —
+  Structure.svelte ~847/4107), `export`-format serializer.
+- **Local vs remote save:** if the structure has `remote_origin`, Save writes
+  back to the HPC via `writeRemoteFile(session_id, file_path, content)`
+  (SFTP / `POST /api/hpc/files/write-content`); otherwise it uses the local
+  `save_with_dialog`. Save As is local-only (download to a chosen local path).
 - Produces: `async function guard_close(opts: { modified: boolean; on_save: () => Promise<boolean>; confirm: () => Promise<'save'|'discard'|'cancel'> }): Promise<boolean>` — returns `true` if the caller should proceed to close, `false` to abort.
 
 - [ ] **Step 1: Write the failing test**
@@ -450,9 +457,14 @@ const proceed = await guard_close({
   },
   on_save: async () => {
     try {
-      await save_with_dialog(serialize_structure(structure, file_path), {
-        defaultPath: file_path, filename,
-      })
+      const content = serialize_structure(structure, file_path)
+      if (remote_origin) {
+        // Opened from the HPC over SFTP → write back to the same remote path.
+        await writeRemoteFile(remote_origin.session_id, remote_origin.file_path, content)
+      } else {
+        // Local file → native save dialog defaulting to the original path.
+        await save_with_dialog(content, { defaultPath: file_path, filename })
+      }
       modified.clear(tab_id)
       return true
     } catch (e) {
@@ -492,3 +504,201 @@ In the app root, add a `beforeunload` handler (web) / Tauri `onCloseRequested` (
 Load a structure from a file, edit it, close the tab → confirm dialog; Save → `save_with_dialog` defaults to the original path; overwrite works, rename works; Don't Save closes; Cancel aborts. Clean tab closes silently. Screenshot each for the user.
 
 - [ ] **Step 3: Report** — show the user the results.
+
+---
+
+# Part C — VS Code extension fixes (batched)
+
+Two independent VS Code-only bugs, foldable into the same ext build as Part A.
+
+## Task C1: Cross-window atom copy/paste via the system clipboard
+
+**Problem:** `atom_clipboard` (`src/lib/state.svelte.ts:181`, a module-level
+`$state` singleton) is per-JS-context. Same window (desktop tabs/panes) shares
+it and works; two separate webviews (two VS Code editors, or popout windows)
+each get their own empty copy → paste finds nothing.
+
+**Fix:** keep the in-memory path for same-context (fast, exact); on copy ALSO
+write a serialized form to the system clipboard; on paste, when the in-memory
+clipboard is empty, fall back to reading + parsing the system clipboard.
+
+**Files:**
+- Create: `src/lib/structure/atom-clipboard-serial.ts`
+- Modify: `src/lib/structure/controllers/interaction.svelte.ts` (copy ~line 896-970; paste ~line 975-995)
+- Test: `tests/vitest/structure/atom-clipboard-serial.test.ts` (new)
+
+**Interfaces:**
+- Consumes: `ClipboardSite` (`$lib/state.svelte`), `atom_clipboard` (same).
+- Produces: `serialize_atoms(sites: ClipboardSite[]): string` and
+  `parse_atoms(text: string): ClipboardSite[] | null` — round-trip via a marked
+  JSON envelope so foreign clipboard text is ignored.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/vitest/structure/atom-clipboard-serial.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest'
+import { serialize_atoms, parse_atoms } from '$lib/structure/atom-clipboard-serial'
+
+describe('atom clipboard serial', () => {
+  const sites = [{ species: [{ element: 'O', occu: 1 }], xyz: [1, 2, 3], abc: [0, 0, 0] }] as any
+  it('round-trips sites through a marked envelope', () => {
+    const text = serialize_atoms(sites)
+    expect(text.startsWith('CATGO_ATOMS_V1')).toBe(true)
+    expect(parse_atoms(text)).toEqual(sites)
+  })
+  it('returns null for foreign / non-atom clipboard text', () => {
+    expect(parse_atoms('just some copied text')).toBeNull()
+    expect(parse_atoms('')).toBeNull()
+  })
+})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/atom-clipboard-serial.test.ts`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Implement the serializer**
+
+Create `src/lib/structure/atom-clipboard-serial.ts`:
+
+```ts
+import type { ClipboardSite } from '$lib/state.svelte'
+
+const MARKER = `CATGO_ATOMS_V1`
+
+export function serialize_atoms(sites: ClipboardSite[]): string {
+  return `${MARKER}\n${JSON.stringify(sites)}`
+}
+
+export function parse_atoms(text: string): ClipboardSite[] | null {
+  if (!text || !text.startsWith(MARKER)) return null
+  try {
+    const body = text.slice(text.indexOf(`\n`) + 1)
+    const parsed = JSON.parse(body)
+    return Array.isArray(parsed) ? (parsed as ClipboardSite[]) : null
+  } catch {
+    return null
+  }
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `rtk proxy pnpm exec vitest run tests/vitest/structure/atom-clipboard-serial.test.ts`
+Expected: PASS (2 tests).
+
+- [ ] **Step 5: Copy also writes the system clipboard**
+
+In `interaction.svelte.ts`, import `serialize_atoms, parse_atoms` from
+`'../atom-clipboard-serial'`. In the Ctrl/Cmd+C branch, right after
+`atom_clipboard.sites = extract_clipboard_sites(structure, original_indices)`:
+
+```ts
+if (atom_clipboard.sites) {
+  void navigator.clipboard?.writeText?.(serialize_atoms(atom_clipboard.sites))
+    ?.catch(() => {})   // clipboard may be denied outside a gesture — best effort
+}
+```
+
+- [ ] **Step 6: Paste falls back to the system clipboard when in-memory is empty**
+
+In the Ctrl/Cmd+V branch, before the `if (atom_clipboard.sites) {` block, insert a
+fallback that fills `atom_clipboard.sites` from the system clipboard. Because the
+read is async, `preventDefault()` first, then read, then paste:
+
+```ts
+if (!atom_clipboard.sites) {
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  const text = await navigator.clipboard?.readText?.().catch(() => ``)
+  const foreign = parse_atoms(text ?? ``)
+  if (foreign && foreign.length) {
+    atom_clipboard.sites = foreign
+    atom_clipboard.paste_count = 0
+  } else {
+    return  // nothing to paste
+  }
+}
+```
+
+Make the `onkeydown` handler `async` (it already `return`s early in each branch;
+awaiting is safe). The existing `if (atom_clipboard.sites) { … insert … }` block
+then runs unchanged.
+
+- [ ] **Step 7: Type-check + tests**
+
+Run: `pnpm check` (0 errors), then `rtk proxy pnpm exec vitest run` (all green).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/lib/structure/atom-clipboard-serial.ts tests/vitest/structure/atom-clipboard-serial.test.ts src/lib/structure/controllers/interaction.svelte.ts
+git commit -m "feat(viewer): cross-window atom copy/paste via system-clipboard fallback"
+```
+
+## Task C2: Hide the Full Screen button inside the VS Code extension
+
+**Problem:** the ⛶ Full Screen control calls `wrapper.requestFullscreen()`
+(`src/lib/structure/Structure.svelte:3209`). VS Code webviews are sandboxed
+iframes without `allow="fullscreen"`, so the call is blocked and the button
+silently does nothing.
+
+**Fix:** gate the button off in the VS Code ext build using the existing
+`__CATGO_VSCODE_EXTENSION__` define (declared in `src/app.d.ts:46`; the safe-read
+pattern is in `WaterLayerPane.svelte:12`).
+
+**Files:**
+- Modify: `src/lib/structure/Structure.svelte` (fullscreen button render, ~line 3395 `{fullscreen_toggle}`; also check the viewer overlay toolbar where the ⛶ actually lives — grep `fullscreen_toggle` / `toggle_fullscreen` to find the exact render site the screenshot shows)
+
+**Interfaces:**
+- Consumes: build define `__CATGO_VSCODE_EXTENSION__`.
+
+- [ ] **Step 1: Add a reactive `is_vscode_extension` flag**
+
+In `Structure.svelte`'s `<script>`, near the top (matching WaterLayerPane's
+pattern):
+
+```ts
+const is_vscode_extension =
+  typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` && __CATGO_VSCODE_EXTENSION__
+```
+
+(`__CATGO_VSCODE_EXTENSION__` is already typed in `src/app.d.ts`; in the main app
+build the define is unset so `typeof` is `undefined` → flag is `false` → button
+shown as today.)
+
+- [ ] **Step 2: Gate the fullscreen button render**
+
+Wrap the fullscreen control (the `{fullscreen_toggle}` render at ~line 3395, and
+any other ⛶ button in the viewer toolbar found via grep) so it only renders when
+NOT in the extension:
+
+```svelte
+{#if !is_vscode_extension}
+  {fullscreen_toggle}
+{/if}
+```
+
+If the ⛶ button is a plain `<button onclick={() => toggle_fullscreen(wrapper)}>`
+in a toolbar snippet rather than the `fullscreen_toggle` prop, add the same
+`{#if !is_vscode_extension}` guard around that button.
+
+- [ ] **Step 3: Type-check + ext build**
+
+Run: `pnpm check` (0 errors). Then `cd extensions/vscode && pnpm run build` — the
+ext bundle sets `__CATGO_VSCODE_EXTENSION__: 'true'`, so the button is compiled
+out there; the desktop/web builds keep it.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/lib/structure/Structure.svelte
+git commit -m "fix(vscode): hide the non-functional Full Screen button in the extension"
+```
+
+- [ ] **Step 5: Live-verify** — rebuild the ext, open a structure/trajectory:
+the ⛶ button is gone in VS Code; confirm it still shows (and works) in
+`pnpm desktop:dev` and the web build.

@@ -59,10 +59,14 @@ Pieces already present: `file_path`/`filename` on the loaded structure,
   `false` after a successful save or a fresh load.
 - Intercept tab/pane close (`close_pane` + the tab-bar close): if `is_modified`,
   show a confirm dialog **Save / Don't Save / Cancel**.
-  - **Save** → `save_with_dialog` with `defaultPath = file_path`, content from
-    `io/export` in the source format. Overwrites if the path is unchanged, saves
-    a new file if changed. On success clear `is_modified` and close; on failure
-    keep the tab.
+  - **Save** → branch on origin:
+    - **Local** structure → `save_with_dialog` with `defaultPath = file_path`,
+      content from `io/export` in the source format (overwrite if unchanged,
+      new file if renamed).
+    - **Remote (HPC)** structure — one carrying `remote_origin
+      { session_id, file_path }` from an SFTP open → `writeRemoteFile(...)`
+      (`POST /api/hpc/files/write-content`) writes back to the same remote path.
+    On success clear `is_modified` and close; on failure keep the tab.
   - **Don't Save** → close. **Cancel** → abort.
 - Window close (`beforeunload`) → if any tab is `is_modified`, warn before exit.
 
