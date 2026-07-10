@@ -6,6 +6,7 @@
  */
 
 import type { PaneState, StructureTabState } from '../pane-utils'
+import type { create_modified_registry } from '$lib/structure/close-guard.svelte'
 import { create_empty_pane, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
 import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
@@ -21,6 +22,10 @@ import {
 export interface PaneManagerDeps {
   tab_states: Record<string, StructureTabState>
   update_tab_label: (tab_id: string) => void
+  // Per-tab unsaved-edit registry (close/save guard). Exposed here so Task B3
+  // can gate pane close on `modified.is_modified(tab_id)` and call
+  // `modified.clear(tab_id)` after a successful save-and-close.
+  modified: ReturnType<typeof create_modified_registry>
   export_fs_browse: (dir: string) => void
   reset_viewer?: (tab_id: string, leaf_id: string) => void
 }

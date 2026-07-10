@@ -80,6 +80,7 @@
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
+  import { create_modified_registry } from '$lib/structure/close-guard.svelte'
   import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
   import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
   // SDK-agent visible-terminal bridge: global poller + approval card
@@ -167,6 +168,14 @@
 
   // ========== Tab Management (extracted to ./lib/tab-manager.svelte.ts) ==========
   const tm = create_tab_manager()
+
+  // Per-tab unsaved-edit tracking for the close/save guard. Keyed by tab id:
+  // each viewer's `on_structure_change` marks its tab modified, and every fresh
+  // load/replace (file open, DB import, MCP push, sample/build card, editor
+  // save-back, chat split/overwrite) clears it. Task B3 reads
+  // `modified.is_modified(tab_id)` at the tab-/pane-close sites (reachable via
+  // `pane_deps.modified`) and `modified.clear(tab_id)` after a successful save.
+  const modified = create_modified_registry()
   // Destructure stable function references from the tab manager
   const { tab_states, get_active_ts, create_tab: open_tab, close_tab, request_close_tab, activate_tab, update_tab_label, switch_to_structure } = tm
 
@@ -212,6 +221,7 @@
   const pane_deps: PaneManagerDeps = {
     tab_states,
     update_tab_label,
+    modified,
     export_fs_browse: (dir) => export_fs_browse(dir),
     reset_viewer: (tab_id, leaf_id) => {
       if (!STATIC_ONLY) {
@@ -735,6 +745,7 @@
             p.initial_structure_ref = parsed
             p.initial_site_count = parsed.sites.length
             p.modified = false
+            modified.clear(target_tab_id)
             update_tab_label(target_tab_id)
           }
         }
@@ -824,6 +835,7 @@
     pane.initial_structure_ref = struct
     pane.initial_site_count = struct.sites?.length ?? 0
     pane.modified = false
+    modified.clear(tab_id)
     // Set tab label — use tm.tabs (raw $state), not tabs_with_badges ($derived copy)
     const tab = tm.tabs.find(t => t.id === tab_id)
     if (tab && label) tab.label = label
@@ -1099,6 +1111,7 @@
     pane.initial_site_count = imported.sites.length
     pane.initial_structure_ref = imported as AnyStructure
     pane.modified = false
+    modified.clear(modal.import_target_tab)
     pane.is_trajectory_mode = false
     pane.trajectory = null
 
@@ -1388,6 +1401,7 @@
     p.selected_sites = []
     p.current_step_idx = 0
     p.modified = false
+    modified.clear(tab_id)
     p.remote_origin = remote_origin
     p.local_file_path = local_file_path
     p.source_filename = e.filename
@@ -1676,6 +1690,7 @@
           p.initial_site_count = data.structure.sites?.length ?? 0
           p.initial_structure_ref = data.structure
           p.modified = false
+          modified.clear(tm.active_tab_id)
           new_ts.active_leaf_id = new_leaf.id
           update_tab_label(tm.active_tab_id)
         }
@@ -1694,6 +1709,7 @@
         p.initial_site_count = data.structure.sites?.length ?? 0
         p.initial_structure_ref = data.structure
         p.modified = false
+        modified.clear(tab_id)
       }
       if (data.trajectory) {
         const traj = data.trajectory as { frames?: unknown[]; metadata?: { source_format?: string } }
@@ -1706,6 +1722,7 @@
             p.initial_site_count = frame.structure.sites?.length ?? 0
             p.initial_structure_ref = frame.structure
             p.modified = false
+            modified.clear(tab_id)
             p.selected_sites = []
             p.current_step_idx = 0
             ts.active_leaf_id = target_id
@@ -1718,6 +1735,7 @@
         p.structure = undefined
         p.initial_site_count = 0
         p.modified = false
+        modified.clear(tab_id)
       }
       p.selected_sites = []
       p.current_step_idx = 0
@@ -1894,6 +1912,7 @@
       const pane = first ? structurePane(first) : null
       if (!ts || !pane) return false
       pane.structure = clone_structure(struct)
+      modified.clear(`default`)
       update_tab_label(`default`)
       return true
     }
@@ -1973,6 +1992,7 @@
       pane.source_filename = filename || null
       pane.raw_traj_b64 = btoa(unescape(encodeURIComponent(raw)))
       pane.raw_traj_format = (filename.toLowerCase().split(`.`).pop() || ``)
+      modified.clear(`default`)
       update_tab_label(`default`)
       return true
     }
@@ -2441,6 +2461,7 @@
               initial_panel={pane.initial_panel}
               on_file_load={create_on_file_load(tab.id, leaf.id)}
               on_file_drop={create_on_file_drop(tab.id, leaf.id)}
+              on_structure_change={() => modified.mark(tab.id)}
               on_structure_imported={() => update_tab_label(tab.id)}
               on_save_to_project={open_save_dialog}
               on_save_to_database={open_save_dialog}
@@ -2487,6 +2508,7 @@
                 np.initial_site_count = struct.sites.length
                 np.initial_structure_ref = struct
                 np.modified = false
+                modified.clear(new_tab_id)
                 const ntab = tm.tabs.find(t => t.id === new_tab_id)
                 if (ntab) ntab.label = `CatBot structure`
                 tm.update_tab_label(new_tab_id)
@@ -2543,6 +2565,7 @@
                       lp.initial_site_count = struct.sites.length
                       lp.initial_structure_ref = struct
                       lp.modified = false
+                      modified.clear(tab.id)
                     }
                   }
                   const right = findLeafById(ts.root, res.newLeafId)
@@ -2568,7 +2591,7 @@
                   if (!struct?.sites?.length) return
                   const target = leaves(ts.root).find(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })
                   const tp = target ? structurePane(target) : null
-                  if (tp) { tp.structure = clone_structure(struct); tp.modified = false }
+                  if (tp) { tp.structure = clone_structure(struct); tp.modified = false; modified.clear(tab.id) }
                 }}
               />
             </div>
@@ -2630,6 +2653,7 @@
                         pane.initial_site_count = sample.data.sites?.length ?? 0
                         pane.initial_structure_ref = sample.data
                         pane.modified = false
+                        modified.clear(tab.id)
                         ts.active_leaf_id = leaf.id
                         update_tab_label(tab.id)
                       }}
@@ -2735,6 +2759,7 @@
                   pane.initial_site_count = 2
                   pane.initial_structure_ref = pane.structure
                   pane.modified = false
+                  modified.clear(tab.id)
                   ts.active_leaf_id = leaf.id
                 }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
