@@ -136,14 +136,33 @@ def _parse_outcar_content(text: str) -> dict:
 
 
 @router.post("/upload")
-async def upload_outcar(file: UploadFile):
-    """Upload OUTCAR file and parse frequency data."""
+async def upload_freq_file(file: UploadFile):
+    """Upload a frequency output (VASP OUTCAR, CP2K Molden .mol or .out)."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
     content = await file.read()
     text = content.decode("utf-8", errors="replace")
-    return _parse_outcar_content(text)
+    from catgo.services.cp2k_freq import parse_freq_content
+    return parse_freq_content(text)
+
+
+class ParsePathRequest(BaseModel):
+    path: str
+
+
+@router.post("/parse-path")
+def parse_freq_path(req: ParsePathRequest):
+    """Parse a server-local frequency output file (MCP/CLI entry point)."""
+    from pathlib import Path as _Path
+
+    p = _Path(req.path).expanduser()
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {req.path}")
+    if p.stat().st_size > 50 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (>50 MB)")
+    from catgo.services.cp2k_freq import parse_freq_content
+    return parse_freq_content(p.read_text(errors="replace"))
 
 
 class RemoteParseRequest(BaseModel):

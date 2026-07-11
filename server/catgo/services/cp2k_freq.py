@@ -198,3 +198,19 @@ def parse_cp2k_out_vibrations(text: str) -> dict:
         "intensities_km_mol": ordered_int or None,
         "source_format": "cp2k-out",
     }
+
+
+def parse_freq_content(text: str) -> dict:
+    """Sniff the format of a vibrational output and dispatch to its parser.
+
+    Order matters: Molden marker is a head signature; VIB| can appear
+    anywhere in a large CP2K log; everything else falls through to the
+    VASP OUTCAR parser (which reports its own not-found message).
+    """
+    if "[Molden Format]" in text[:200]:
+        return parse_molden_vibrations(text)
+    if "VIB|" in text:
+        return parse_cp2k_out_vibrations(text)
+    from catgo.routers.freq_analysis import _parse_outcar_content
+
+    return _parse_outcar_content(text)

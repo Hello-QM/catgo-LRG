@@ -130,3 +130,25 @@ def test_cp2k_out_intensity_count_mismatch_drops_intensities():
     res = parse_cp2k_out_vibrations(text)
     assert res["success"] is True
     assert res["intensities_km_mol"] is None
+
+
+from catgo.services.cp2k_freq import parse_freq_content
+
+OUTCAR_SAMPLE = """ POMASS =   12.011; ZVAL   =     4.000
+   ions per type =               1
+   1 f  =   50.000000 THz   314.159265 2PiTHz 1667.850457 cm-1   206.786314 meV
+"""
+
+
+def test_sniff_molden():
+    assert parse_freq_content(MOLDEN_SAMPLE)["source_format"] == "cp2k-molden"
+
+
+def test_sniff_cp2k_out():
+    assert parse_freq_content(CP2K_OUT_SAMPLE)["source_format"] == "cp2k-out"
+
+
+def test_sniff_outcar_fallthrough():
+    res = parse_freq_content(OUTCAR_SAMPLE)
+    assert res["success"] is True
+    assert res["real_freqs"][0]["frequency_cm"] == 1667.850457
