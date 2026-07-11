@@ -88,3 +88,45 @@ def test_molden_no_freq_section_fails():
     res = parse_molden_vibrations("[Molden Format]\n[Atoms] AU\n")
     assert res["success"] is False
     assert "FREQ" in res["message"]
+
+
+from catgo.services.cp2k_freq import parse_cp2k_out_vibrations
+
+# Trimmed from a real CP2K .out: 3-per-row VIB| summary lines, one row with
+# Fortran overflow stars, one negative (imaginary) frequency added.
+CP2K_OUT_SAMPLE = """
+ GLOBAL| Run type                                           VIBRATIONAL_ANALYSIS
+ VIB|Frequency (cm^-1)  -347.256704           353.503943           542.181388
+ VIB|IR int (KM/Mole)  ************         ************          1935.829219
+ VIB|Frequency (cm^-1)   692.540224           779.864096          1504.859758
+ VIB|IR int (KM/Mole)  40017.567601          4362.977226           554.745415
+"""
+
+
+def test_cp2k_out_frequencies_and_overflow_intensities():
+    res = parse_cp2k_out_vibrations(CP2K_OUT_SAMPLE)
+    assert res["success"] is True
+    assert res["source_format"] == "cp2k-out"
+    assert res["num_imaginary"] == 1
+    assert res["imag_freqs"][0]["frequency_cm"] == 347.256704
+    assert len(res["real_freqs"]) == 5
+    # imag-first alignment: first intensity belongs to the imaginary mode
+    assert res["intensities_km_mol"][0] is None
+    assert res["intensities_km_mol"][2] == 1935.829219
+    assert res["intensities_km_mol"][3] == 40017.567601
+    # no animation data from .out
+    assert res["eigenvectors"] == []
+    assert res["positions"] == []
+
+
+def test_cp2k_out_without_vib_section_fails():
+    res = parse_cp2k_out_vibrations("GLOBAL| Run type ENERGY\n")
+    assert res["success"] is False
+    assert "VIB|" in res["message"]
+
+
+def test_cp2k_out_intensity_count_mismatch_drops_intensities():
+    text = " VIB|Frequency (cm^-1)   100.0  200.0  300.0\n VIB|IR int (KM/Mole)  1.0  2.0\n"
+    res = parse_cp2k_out_vibrations(text)
+    assert res["success"] is True
+    assert res["intensities_km_mol"] is None

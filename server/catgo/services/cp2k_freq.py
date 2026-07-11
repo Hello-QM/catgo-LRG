@@ -12,6 +12,8 @@ as routers.freq_analysis._parse_outcar_content so the frontend
 
 from __future__ import annotations
 
+import re
+
 BOHR_TO_ANG = 0.52917721067
 
 
@@ -127,4 +129,72 @@ def parse_molden_vibrations(text: str) -> dict:
         "free_indices": None,
         "intensities_km_mol": ordered_int or None,
         "source_format": "cp2k-molden",
+    }
+
+
+_VIB_FREQ_RE = re.compile(r"VIB\|Frequency \(cm\^-1\)\s+(.+)")
+_VIB_INT_RE = re.compile(r"VIB\|IR int \(KM/Mole\)\s+(.+)")
+
+
+def parse_cp2k_out_vibrations(text: str) -> dict:
+    """Parse the VIB| frequency summary of a CP2K main output.
+
+    Fallback path: frequency table (+ best-effort IR intensities) only —
+    the .out has no parseable eigenvectors/coordinates for our purposes.
+    """
+    freqs: list[float] = []
+    intensities: list[float | None] = []
+    for line in text.splitlines():
+        m = _VIB_FREQ_RE.search(line)
+        if m:
+            for tok in m.group(1).split():
+                try:
+                    freqs.append(float(tok))
+                except ValueError:
+                    pass
+            continue
+        m = _VIB_INT_RE.search(line)
+        if m:
+            for tok in m.group(1).split():
+                if "*" in tok:
+                    intensities.append(None)  # Fortran field overflow
+                else:
+                    try:
+                        intensities.append(float(tok))
+                    except ValueError:
+                        intensities.append(None)
+
+    if not freqs:
+        return {
+            "success": False,
+            "message": "No VIB| frequency data found — not a CP2K vibrational analysis output?",
+        }
+
+    if len(intensities) != len(freqs):
+        intensities = []
+
+    order = sorted(range(len(freqs)), key=lambda i: freqs[i] >= 0)
+    imag_freqs = []
+    real_freqs = []
+    ordered_int: list[float | None] = []
+    for i in order:
+        entry = {"index": i + 1, "frequency_cm": abs(freqs[i])}
+        (real_freqs if freqs[i] >= 0 else imag_freqs).append(entry)
+        if intensities:
+            ordered_int.append(intensities[i])
+
+    return {
+        "success": True,
+        "real_freqs": real_freqs,
+        "imag_freqs": imag_freqs,
+        "eigenvectors": [],
+        "positions": [],
+        "elements": [],
+        "masses": [],
+        "atom_types": [],
+        "total_atoms": 0,
+        "num_imaginary": len(imag_freqs),
+        "free_indices": None,
+        "intensities_km_mol": ordered_int or None,
+        "source_format": "cp2k-out",
     }
