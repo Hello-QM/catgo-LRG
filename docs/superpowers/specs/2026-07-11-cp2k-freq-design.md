@@ -81,14 +81,21 @@ Two pure functions, no FastAPI imports:
 - Upload accept list gains `.mol`, `.out` (and keeps OUTCAR). No data-shape
   changes — table/flags/animation/Gibbs work as-is.
 - When `intensities_km_mol` has any non-null values, show an "IR spectrum"
-  section: FWHM input + line plot (reuse the existing DOS-pane line-plot
-  component + PNG/DPI export), data from `/freq-analysis/ir-spectrum`.
+  section: FWHM input + a small dedicated SVG line plot (the DOS plot
+  component is DOS-specific; IR gets its own ~40-line SVG), PNG export via
+  the same svg→canvas→`download()` flow DosPlotWindow uses. Data from
+  `/freq-analysis/ir-spectrum`. `intensities_km_mol` is ordered
+  `[imag..., real...]` matching `eigenvectors`; the pane slices off the
+  imaginary prefix before requesting the spectrum.
 
 ### MCP
 
-The existing freq-analysis action in the consolidated registry accepts the
-same files; format sniffing happens in the shared router/service code, so MCP
-gets CP2K support with no new tool surface.
+The consolidated registry has no freq-parse tool today (only
+frequencies→Gibbs). Add one declarative entry `catgo_freq_parse` in
+`server/catgo/mcp_tools/tools/analysis.py` mapping to a new JSON endpoint
+`POST /freq-analysis/parse-path` (`{path}` → read server-local file → same
+sniffing dispatcher). Format sniffing lives in shared service code, so upload,
+remote and MCP all use identical parsers.
 
 ## Error handling
 
