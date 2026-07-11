@@ -20,6 +20,16 @@ import { setMPApiBase } from '$lib/api/materials-project'
 // chain reported in issue #14.
 import { decompress_data, detect_compression_format } from '$lib/io/decompress'
 import { parse_structure_file } from '$lib/structure/parse'
+import type { AnyStructure } from '$lib'
+import {
+  structure_to_cif_str,
+  structure_to_extxyz_str,
+  structure_to_json_str,
+  structure_to_mol2_str,
+  structure_to_pdb_str,
+  structure_to_poscar_str,
+  structure_to_xyz_str,
+} from '$lib/structure/export'
 import { parse_cube_header, cube_atoms_to_molecule } from '$lib/cube/parse-cube'
 import { chgcar_to_cube } from '$lib/electronic/chgdiff-wasm'
 import Structure from '$lib/structure/Structure.svelte'
@@ -162,6 +172,14 @@ declare global {
 // Store VSCode API instance to avoid multiple acquisitions
 let vscode_api: VSCodeAPI | null = null
 let current_app: CatGoApp | null = null
+
+// Live structure for save round-trips: seeded with the parsed source file when
+// a (non-trajectory) Structure is mounted, refreshed by every
+// `on_structure_change` emission from the Structure component. `requestContent`
+// serializes this in the SOURCE file's format (xyz→xyz, POSCAR→POSCAR, …) —
+// never the last export format the user may have picked in the UI.
+let current_structure: AnyStructure | null = null
+let source_filename = ``
 
 // Global backend port — set once server is ready, read by fetch/WebSocket interceptors.
 // Backend-bound fetch/WebSocket calls made before the port is known are parked in
@@ -316,6 +334,63 @@ export const setup_vscode_download = (): void => {
       })
     }
   }
+}
+
+// Serialize the current (edited) structure in the SOURCE file's format —
+// xyz→xyz, POSCAR→POSCAR, … — using the same `$lib/structure/export`
+// serializers the in-app export/download path uses on the same base
+// `structure`. Reads the live structure kept fresh by `on_structure_change`,
+// so content reflects all edits at the moment of the request. Returns null
+// when there is no structure (trajectory view) or the source format has no
+// frontend serializer (OUTCAR, cube/CHGCAR, LAMMPS data, …) — the extension
+// must treat an empty `content` reply as "cannot save".
+// DRIFT NOTE: the desktop app shares this format→serializer dispatch as
+// `save_format_from_path` in `src/lib/structure/save-format.ts`. This webview
+// copy stays separate for bundle isolation — keep the two in lockstep (both
+// cover xyz/extxyz/cif/mol2/pdb/json/POSCAR-family and refuse everything else).
+export const serialize_current = (): {
+  content: string
+  is_binary: boolean
+  filename: string
+} | null => {
+  if (!current_structure || !source_filename) return null
+  // Mirror parse dispatch: strip compression extensions before reading the ext.
+  let base = source_filename.toLowerCase()
+  while (COMPRESSION_EXTENSIONS_REGEX.test(base)) {
+    base = base.replace(COMPRESSION_EXTENSIONS_REGEX, ``)
+  }
+  const ext = base.split(`.`).pop() ?? ``
+  try {
+    let content: string | null = null
+    if (ext === `xyz`) content = structure_to_xyz_str(current_structure)
+    else if (ext === `extxyz`) content = structure_to_extxyz_str(current_structure)
+    else if (ext === `cif`) content = structure_to_cif_str(current_structure)
+    else if (ext === `mol2`) content = structure_to_mol2_str(current_structure)
+    else if (ext === `pdb`) content = structure_to_pdb_str(current_structure)
+    else if (ext === `json`) content = structure_to_json_str(current_structure)
+    else if (
+      ext === `poscar` || ext === `vasp` || /poscar|contcar/.test(base)
+    ) content = structure_to_poscar_str(current_structure)
+    if (content === null) return null
+    return { content, is_binary: false, filename: source_filename }
+  } catch (error) {
+    // e.g. POSCAR serializer throws when the structure has no lattice
+    console.error(`[CatGO Webview] Failed to serialize ${source_filename}:`, error)
+    return null
+  }
+}
+
+// Answer an extension-host content request (save round-trip). Always replies —
+// an empty `content` signals "nothing serializable" to the extension.
+const handle_content_request = (request_id: string): void => {
+  const payload = serialize_current()
+  vscode_api?.postMessage({
+    command: `content`,
+    request_id,
+    content: payload?.content ?? ``,
+    is_binary: payload?.is_binary ?? false,
+    filename: payload?.filename ?? ``,
+  })
 }
 
 // Handle file change events from extension
@@ -611,6 +686,15 @@ const create_display = (
   const is_trajectory = result.type === `trajectory`
   const Component = is_trajectory ? Trajectory : Structure
 
+  // Seed the save-content cache from the freshly parsed source file; every
+  // subsequent user edit refreshes it via `on_structure_change` below. A
+  // remount from `fileUpdated` re-seeds here, so external reloads never
+  // resurrect stale edits.
+  if (!is_trajectory) {
+    current_structure = result.data as AnyStructure
+    source_filename = filename
+  }
+
   // Get defaults and create props
   const catgo_data = get_catgo_data()
   const defaults = merge(catgo_data?.defaults)
@@ -684,6 +768,13 @@ const create_display = (
         hidden_toolbar_items: ['terminal', 'chat', 'plugin_hub', 'gesture', 'workflow'],
         ...(result.cube_file ? { cube_file: result.cube_file } : {}),
         on_file_load,
+        // Fired by Structure.svelte after every user edit (never on mount or
+        // programmatic load): mark the VS Code document dirty and keep the
+        // save-content cache pointing at the live edited structure.
+        on_structure_change: (structure: AnyStructure) => {
+          current_structure = structure
+          vscode_api?.postMessage({ command: `dirty` })
+        },
       }),
     allow_file_drop: false,
     style: `height: 100%; border-radius: 0`,
@@ -888,10 +979,12 @@ async function initialize() {
 
   // Set up file change monitoring
   if (vscode_api) {
-    // Listen for file change messages from extension
+    // Listen for file change + content request messages from extension
     globalThis.addEventListener(`message`, (event) => {
       if ([`fileUpdated`, `fileDeleted`].includes(event.data.command)) {
         handle_file_change(event.data)
+      } else if (event.data.command === `requestContent`) {
+        handle_content_request(event.data.request_id)
       }
     })
   }

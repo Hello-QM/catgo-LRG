@@ -6,11 +6,18 @@
  */
 
 import type { PaneState, StructureTabState } from '../pane-utils'
-import { create_empty_pane, auto_name as _auto_name, serialize_structure_content } from '../pane-utils'
+import type { create_modified_registry } from '$lib/structure/close-guard.svelte'
+import {
+  create_empty_pane,
+  auto_name as _auto_name,
+  serialize_structure_content,
+  clear_modified_if_sole_pane,
+} from '../pane-utils'
+import { save_format_from_path } from '$lib/structure/save-format'
 import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
-import { list_projects, save_structure_to_db } from '$lib/api/project'
+import { list_projects, save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
 import {
   cancel_pending_library_removal,
@@ -21,6 +28,10 @@ import {
 export interface PaneManagerDeps {
   tab_states: Record<string, StructureTabState>
   update_tab_label: (tab_id: string) => void
+  // Per-tab unsaved-edit registry (close/save guard). Exposed here so Task B3
+  // can gate pane close on `modified.is_modified(tab_id)` and call
+  // `modified.clear(tab_id)` after a successful save-and-close.
+  modified: ReturnType<typeof create_modified_registry>
   export_fs_browse: (dir: string) => void
   reset_viewer?: (tab_id: string, leaf_id: string) => void
 }
@@ -52,9 +63,14 @@ export function handle_unload(deps: PaneManagerDeps, tab_id: string, leaf_id: st
     close_panel(deps, tab_id, leaf_id)
     return
   }
-  // Structure panes: prompt if has content
+  // Structure panes: prompt only when the tab has unsaved edits (Task B3
+  // close-guard). A clean tab — content loaded/built but never edited — closes
+  // with no prompt, per the plan's "close while clean → no prompt" rule. This
+  // is the same decision `guard_close` ($lib/structure/save-on-close) encodes;
+  // the modified branch is realised by the app's inline save/discard/cancel
+  // banner (App.svelte), which saves to the source in its original format.
   const has_content = !!(pane.structure || pane.trajectory || pane.cube_file)
-  if (has_content) {
+  if (has_content && deps.modified.is_modified(tab_id)) {
     ts.close_confirm_leaf_id = leaf_id
     init_close_save_target(pane)
     if (pane.structure) load_close_save_projects()
@@ -99,7 +115,14 @@ export async function load_close_save_projects() {
 export function init_close_save_target(pane: PaneState) {
   if (pane.local_file_path) exp.close_save_target = `local`
   else if (pane.remote_origin?.session_id) exp.close_save_target = `hpc`
-  else exp.close_save_target = `project`
+  // Path-less panes (e.g. a structure imported from the project DB — no
+  // local_file_path, no remote_origin) default to a Save-As FILE dialog so
+  // "Save & Close" ASKS where to save instead of silently writing back to the
+  // DB. The `local` target with no local_file_path routes through the export
+  // dialog (see save_and_close_panel's `local` branch). Saving to the CatGO DB
+  // stays available as an explicit, conscious choice via the banner's target
+  // select — it is just no longer the silent default.
+  else exp.close_save_target = `local`
 }
 
 export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: string) {
@@ -113,41 +136,57 @@ export async function save_and_close_panel(deps: PaneManagerDeps, tab_id: string
     close_panel(deps, tab_id, leaf_id)
     return
   }
+  // Only silently overwrite a local source when we can serialize it back in its
+  // ORIGINAL format (plan constraint: "never change format on save"). A source
+  // with no faithful serializer (unknown ext, extension-less non-POSCAR, .gz)
+  // maps to null and must fall through to Save-As instead of being CIF-ified.
+  const local_fmt = pane.local_file_path ? save_format_from_path(pane.local_file_path) : null
   exp.close_saving = true
   try {
-    if (exp.close_save_target === `local`) {
-      // Open export dialog with folder browser, close panel after save
+    if (exp.close_save_target === `local` && pane.local_file_path && local_fmt) {
+      // Known source file with a faithful serializer → silently overwrite it in
+      // its original format. Plan constraint: the close-prompt "Save" never
+      // opens a dialog (that's "Save As", a separate explicit action) and never
+      // changes the format. Uses the same write seam as the close-all flow.
+      await write_file(pane.local_file_path, await serialize_structure_content(structure, local_fmt))
+    } else if (exp.close_save_target === `local`) {
+      // No known source path, OR a source format with no faithful serializer →
+      // fall back to the export dialog (Save As), where the user explicitly
+      // picks a supported format; the close is deferred until the dialog
+      // completes (exp.close_after). Never silently rewrite as CIF.
       exp.close_after = { tab_id, leaf_id }
       ts.close_confirm_leaf_id = null
       const name = _auto_name(structure)
       exp.pending_structure = structure
       exp.error = ``
-      if (pane.local_file_path) {
-        // Pre-populate with original file's directory and name
-        const parts = pane.local_file_path.replace(/\\/g, `/`).split(`/`)
-        const fname = parts.pop() || `${name}.cif`
-        const dir = parts.join(`/`) || `~`
-        const ext = fname.split(`.`).pop()?.toLowerCase() || `cif`
-        const format = [`poscar`, `vasp`, `contcar`].includes(ext) ? `poscar` : ext === `extxyz` ? `extxyz` : ext === `xyz` ? `xyz` : `cif`
-        exp.dialog = { mode: `file`, filename: fname, format }
-        deps.export_fs_browse(dir)
-      } else {
-        exp.dialog = { mode: `file`, filename: `${name}.cif`, format: `cif` }
-        deps.export_fs_browse(sidebar.fs_path || `~`)
-      }
+      exp.dialog = { mode: `file`, filename: `${name}.cif`, format: `cif` }
+      deps.export_fs_browse(sidebar.fs_path || `~`)
       exp.close_saving = false
       return
     } else if (exp.close_save_target === `hpc` && pane.remote_origin) {
-      const ext = pane.remote_origin.file_path.split(`.`).pop()?.toLowerCase() || `cif`
-      let format = `cif`
-      if ([`poscar`, `vasp`, `contcar`].includes(ext)) format = `poscar`
-      else if (ext === `xyz`) format = `xyz`
-      else if (ext === `extxyz`) format = `extxyz`
-      const content = await serialize_structure_content(structure, format)
+      // Remote overwrite is a headless seam — no Save-As dialog to fall back to.
+      // If the source format has no faithful serializer, refuse: throw so the
+      // catch surfaces the error and keeps the tab open (mirrors the VS Code
+      // extension's refuse-and-stay-dirty), never CIF-ify the remote file.
+      const remote_fmt = save_format_from_path(pane.remote_origin.file_path)
+      if (!remote_fmt) {
+        const base = pane.remote_origin.file_path.split(/[/\\]/).pop() || pane.remote_origin.file_path
+        throw new Error(`Cannot save "${base}" in place: its format has no serializer. Use Save As to export it in a supported format.`)
+      }
+      const content = await serialize_structure_content(structure, remote_fmt)
       await writeRemoteFile(pane.remote_origin.session_id, pane.remote_origin.file_path, content)
     } else {
+      // Reached only when the user CONSCIOUSLY picks "CatGO DB" in the close
+      // banner's target select. Path-less panes no longer land here by default
+      // (init_close_save_target defaults them to `local` → the Save-As dialog
+      // above), so there is no silent DB write on close. The silent-DB batch
+      // save lives on in the Close-All flow (execute_close_all_saves), whose
+      // per-entry checklist makes the DB target an explicit opt-in.
       await save_structure_to_db(structure, _auto_name(structure), exp.close_save_project_id || undefined)
     }
+    // Pane-scoped save success: only clear the tab flag when this pane is the
+    // tab's sole content-bearing pane — a dirty sibling must keep it set.
+    clear_modified_if_sole_pane(deps.modified, ts.root, tab_id, leaf_id)
     sidebar.refresh_counter++
     close_panel(deps, tab_id, leaf_id)
   } catch (e) {

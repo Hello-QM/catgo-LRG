@@ -66,7 +66,7 @@
     get_pane_label, create_empty_pane, pane_has_content,
     content_to_base64, create_tab_state, auto_name as _auto_name,
     is_chgcar_file, NON_STRUCTURE_EXTS, update_export_format, format_from_ext,
-    serialize_structure_content,
+    serialize_structure_content, clear_modified_if_sole_pane,
   } from './pane-utils'
   // Recursive pane tree (replaces the fixed single/splitH/splitV/quad grid)
   import PaneTree from './PaneTree.svelte'
@@ -80,6 +80,9 @@
   // Deep-clone structures on assignment into a pane so panes/tabs never alias
   // the same object (module-level samples, library entries, reused DB imports).
   import { clone_structure } from '$lib/structure/clone'
+  import { create_modified_registry } from '$lib/structure/close-guard.svelte'
+  import { apply_beforeunload_guard, guard_close } from '$lib/structure/save-on-close'
+  import { save_format_from_path } from '$lib/structure/save-format'
   import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
   import { set_terminal_opener, get_active_terminal, type TerminalHandle } from '$lib/structure/terminal-registry.svelte'
   // SDK-agent visible-terminal bridge: global poller + approval card
@@ -167,11 +170,30 @@
 
   // ========== Tab Management (extracted to ./lib/tab-manager.svelte.ts) ==========
   const tm = create_tab_manager()
+
+  // Per-tab unsaved-edit tracking for the close/save guard. Keyed by tab id:
+  // each viewer's `on_structure_change` marks its tab modified, and every fresh
+  // load/replace (file open, DB import, MCP push, sample/build card, editor
+  // save-back, chat split/overwrite) clears it. Task B3 reads
+  // `modified.is_modified(tab_id)` at the tab-/pane-close sites (reachable via
+  // `pane_deps.modified`) and `modified.clear(tab_id)` after a successful save.
+  const modified = create_modified_registry()
+  // Task B3 close-guard: wire the tab manager's per-tab close prompt to the
+  // modified registry so a clean tab closes with no confirmation dialog.
+  tm.is_tab_modified = (id) => modified.is_modified(id)
   // Destructure stable function references from the tab manager
   const { tab_states, get_active_ts, create_tab: open_tab, close_tab, request_close_tab, activate_tab, update_tab_label, switch_to_structure } = tm
 
   // ========== Popout / Sidebar / Pane / Layout / Export / DragDrop / Resize deps ==========
   let is_tauri = $state(false)
+  // Task B4 window-close guard. When the OS/user closes the whole window while
+  // any tab has unsaved edits, we intercept it — web via `beforeunload` (native
+  // browser prompt), desktop via Tauri `onCloseRequested`. On desktop we reuse
+  // the Close-All dialog; `window_close_pending` remembers that finishing that
+  // dialog (save all / close without saving) should then destroy the window.
+  // Plain `let` (not $state) — it gates async callbacks, never drives the UI.
+  let window_close_pending = false
+  let close_guard_registered = false
   let popout_chat_mode = $state(false)
   // Mobile (iOS/Android Tauri) gate. On mobile we render the purpose-built
   // MobileWorkspace (terminal-first; structure editor + russh SSH terminal +
@@ -212,6 +234,7 @@
   const pane_deps: PaneManagerDeps = {
     tab_states,
     update_tab_label,
+    modified,
     export_fs_browse: (dir) => export_fs_browse(dir),
     reset_viewer: (tab_id, leaf_id) => {
       if (!STATIC_ONLY) {
@@ -230,6 +253,9 @@
   const export_deps: ExportHandlerDeps = {
     close_panel: (tab_id, leaf_id) => close_panel(tab_id, leaf_id),
     load_close_save_projects,
+    // Deferred Save-As-and-close completed: pane-scoped clear (sole-pane rule).
+    on_pane_saved: (tab_id, leaf_id) =>
+      clear_modified_if_sole_pane(modified, tab_states[tab_id]?.root, tab_id, leaf_id),
   }
   const drag_deps: DragDropDeps = {
     get_active_ts,
@@ -516,6 +542,10 @@
   // ========== Close All Tabs (extracted to ./lib/close-all-helper.ts) ==========
 
   function open_close_all_dialog() {
+    // Opening via the normal menu is never a window-close request. Reset the
+    // flag so a cancel left over from an earlier window-close attempt can't make
+    // a later Close-All close the window (see setup_close_guard).
+    window_close_pending = false
     modal.close_all_entries = build_close_all_entries(tm.tabs, tab_states)
     modal.close_all_error = ``
     modal.close_all_visible = true
@@ -528,7 +558,15 @@
       await execute_close_all_saves(modal.close_all_entries, tab_states)
       sidebar.refresh_counter++
       close_all_structure_tabs(tm.tabs, tab_states, close_tab)
+      // Every structure tab is now closed (or reset to empty), so all modified
+      // flags are stale — clear them regardless of how the dialog was opened.
+      // On the window-close path this is also what lets the re-issued close()
+      // pass the onCloseRequested guard.
+      modified.clear_all()
       modal.close_all_visible = false
+      // If this dialog came from a window-close request, everything is now saved
+      // → proceed to actually close the window.
+      close_main_window_after_close_guard()
     } catch (e) {
       modal.close_all_error = e instanceof Error ? e.message : t(`app.save_failed`)
     } finally {
@@ -538,8 +576,61 @@
 
   function close_all_without_saving() {
     close_all_structure_tabs(tm.tabs, tab_states, close_tab)
+    // All tabs closed/reset → flags are stale (see execute_close_all).
+    modified.clear_all()
     modal.close_all_visible = false
+    // Window-close path: user chose to discard → close the window.
+    close_main_window_after_close_guard()
   }
+
+  // ===== Per-tab close prompt: Save option (Task B3 close-guard) =====
+  // The tab-close confirm modal (tab ×, Ctrl+W on a single-pane tab) must offer
+  // Save / Don't Save / Cancel like every other close entry point. Save routes
+  // through the same seams as Close-All: local source file → silent overwrite
+  // in its original format (write_file), HPC origin → writeRemoteFile,
+  // otherwise → project DB. Any failure keeps the tab open and shows the error.
+  let tab_close_saving = $state(false)
+  let tab_close_save_error = $state(``)
+
+  async function save_and_close_tab(tab_id: string) {
+    tab_close_saving = true
+    tab_close_save_error = ``
+    // The modal has already collected the user's choice (Save), so route the
+    // decision through the tested `guard_close` helper: confirm() resolves to
+    // 'save' and we close only if on_save() reports success — a failed save
+    // keeps the tab open with the error shown.
+    const may_close = await guard_close({
+      modified: true,
+      confirm: async () => `save`,
+      on_save: async () => {
+        try {
+          const entries = build_close_all_entries(tm.tabs.filter((tb) => tb.id === tab_id), tab_states)
+          await execute_close_all_saves(entries, tab_states)
+          sidebar.refresh_counter++
+          modified.clear(tab_id)
+          return true
+        } catch (e) {
+          tab_close_save_error = e instanceof Error ? e.message : t(`app.save_failed`)
+          return false
+        }
+      },
+    })
+    tab_close_saving = false
+    if (may_close) close_tab(tab_id)
+  }
+
+  function cancel_tab_close() {
+    if (tab_close_saving) return
+    tm.tab_close_confirm_id = null
+    tab_close_save_error = ``
+  }
+
+  // A tab-close save error is modal-scoped: once the modal closes by ANY path
+  // (Cancel, Escape, the danger Close Tab button, overlay click) drop the error
+  // so the next tab-close modal never opens showing a stale error from before.
+  $effect(() => {
+    if (!tm.tab_close_confirm_id) tab_close_save_error = ``
+  })
 
   // Build project tree for save dialogs
   let save_project_children = $derived.by(() => {
@@ -689,13 +780,12 @@
     if (!pane) return
     const filename = pane.source_filename || `structure.cif`
 
-    // Determine format from filename
-    const ext = filename.split(`.`).pop()?.toLowerCase() || ``
-    let format = `cif`
-    if ([`poscar`, `vasp`, `contcar`].includes(ext) || /^(POSCAR|CONTCAR)$/i.test(filename)) format = `poscar`
-    else if (ext === `xyz`) format = `xyz`
-    else if (ext === `extxyz`) format = `extxyz`
-    else if (ext === `json`) format = `json`
+    // Fill the text-editor buffer in the source file's format. `cif` is the
+    // deliberate fallback when the path maps to no faithful serializer: this
+    // only seeds an editable buffer and NEVER writes back to the source file
+    // (the on-save handler re-parses and updates the pane in memory), so an
+    // unknown source can safely default to CIF here.
+    const format = save_format_from_path(filename) ?? `cif`
 
     // Serialize: try Python backend first, fallback to frontend serializers
     let content = ``
@@ -735,6 +825,7 @@
             p.initial_structure_ref = parsed
             p.initial_site_count = parsed.sites.length
             p.modified = false
+            clear_modified_if_sole_pane(modified, target_ts.root, target_tab_id, target_leaf_id)
             update_tab_label(target_tab_id)
           }
         }
@@ -824,6 +915,7 @@
     pane.initial_structure_ref = struct
     pane.initial_site_count = struct.sites?.length ?? 0
     pane.modified = false
+    modified.clear(tab_id)
     // Set tab label — use tm.tabs (raw $state), not tabs_with_badges ($derived copy)
     const tab = tm.tabs.find(t => t.id === tab_id)
     if (tab && label) tab.label = label
@@ -932,6 +1024,59 @@
     }
   }
 
+  // Web build: block the browser's unload (native "Leave site?" prompt) when any
+  // tab has unsaved edits. Named fn so re-adding on effect re-run is a no-op.
+  function handle_beforeunload(event: BeforeUnloadEvent) {
+    apply_beforeunload_guard(event, modified.any_modified())
+  }
+
+  // Desktop (Tauri): WebKitGTK does not reliably fire `beforeunload` on window
+  // close, so guard the main window via `onCloseRequested`. When tabs are dirty
+  // we cancel the close and surface the existing Close-All dialog; finishing it
+  // (save all / close without saving) clears the modified registry and re-issues
+  // close() so the guard passes and the window is destroyed → Rust Destroyed
+  // teardown runs (see execute_close_all / close_all_without_saving). Clean
+  // state closes silently. NOTE: registering this listener makes tauri route
+  // EVERY close request through JS, which is why the Rust teardown lives on
+  // WindowEvent::Destroyed, not CloseRequested (src-tauri/src/lib.rs).
+  // Popout windows (chat/structure/docs/workflow) are ephemeral mirrors with
+  // their own registry and are intentionally NOT guarded here.
+  async function setup_close_guard() {
+    if (close_guard_registered) return
+    try {
+      const { getCurrentWindow } = await import(`@tauri-apps/api/window`)
+      const win = getCurrentWindow()
+      if (win.label !== `main`) return
+      close_guard_registered = true
+      await win.onCloseRequested((event) => {
+        if (!modified.any_modified()) return // clean → allow the window to close
+        event.preventDefault()
+        open_close_all_dialog()
+        window_close_pending = true
+      })
+    } catch (err) {
+      console.error(`[Tauri] Failed to register window-close guard:`, err)
+    }
+  }
+
+  // Close the window after the user resolves the Close-All dialog from the
+  // window-close path. `close()` re-fires the close-requested guard; callers
+  // clear the modified registry first, so it reads any_modified() === false,
+  // does not preventDefault, and the Tauri JS api then destroys the window —
+  // which fires the Rust WindowEvent::Destroyed handler (src-tauri/src/lib.rs),
+  // the ONLY place the Python backend sidecar / agent bridge / PTY sessions are
+  // torn down and exit(0) runs. Never bypass that teardown.
+  async function close_main_window_after_close_guard() {
+    if (!window_close_pending) return
+    window_close_pending = false
+    try {
+      const { getCurrentWindow } = await import(`@tauri-apps/api/window`)
+      await getCurrentWindow().close()
+    } catch (err) {
+      console.error(`[Tauri] Failed to close window after save guard:`, err)
+    }
+  }
+
   $effect(() => {
     if (typeof window !== `undefined`) {
       apply_theme_to_dom(get_theme_preference())
@@ -941,6 +1086,11 @@
         setup_file_open_listener()
         drain_opened_files()
         setup_tauri_file_drop()
+        setup_close_guard()
+      } else {
+        // Web build: native beforeunload guard. Same fn ref → addEventListener
+        // dedupes if the effect re-runs.
+        window.addEventListener(`beforeunload`, handle_beforeunload)
       }
     }
   })
@@ -1099,6 +1249,7 @@
     pane.initial_site_count = imported.sites.length
     pane.initial_structure_ref = imported as AnyStructure
     pane.modified = false
+    clear_modified_if_sole_pane(modified, ts.root, modal.import_target_tab, modal.import_target_leaf)
     pane.is_trajectory_mode = false
     pane.trajectory = null
 
@@ -1388,6 +1539,7 @@
     p.selected_sites = []
     p.current_step_idx = 0
     p.modified = false
+    clear_modified_if_sole_pane(modified, ts.root, tab_id, leaf_id)
     p.remote_origin = remote_origin
     p.local_file_path = local_file_path
     p.source_filename = e.filename
@@ -1676,6 +1828,7 @@
           p.initial_site_count = data.structure.sites?.length ?? 0
           p.initial_structure_ref = data.structure
           p.modified = false
+          modified.clear(tm.active_tab_id)
           new_ts.active_leaf_id = new_leaf.id
           update_tab_label(tm.active_tab_id)
         }
@@ -1694,6 +1847,7 @@
         p.initial_site_count = data.structure.sites?.length ?? 0
         p.initial_structure_ref = data.structure
         p.modified = false
+        clear_modified_if_sole_pane(modified, ts.root, tab_id, target_id)
       }
       if (data.trajectory) {
         const traj = data.trajectory as { frames?: unknown[]; metadata?: { source_format?: string } }
@@ -1706,6 +1860,7 @@
             p.initial_site_count = frame.structure.sites?.length ?? 0
             p.initial_structure_ref = frame.structure
             p.modified = false
+            clear_modified_if_sole_pane(modified, ts.root, tab_id, target_id)
             p.selected_sites = []
             p.current_step_idx = 0
             ts.active_leaf_id = target_id
@@ -1718,6 +1873,7 @@
         p.structure = undefined
         p.initial_site_count = 0
         p.modified = false
+        clear_modified_if_sole_pane(modified, ts.root, tab_id, target_id)
       }
       p.selected_sites = []
       p.current_step_idx = 0
@@ -1860,6 +2016,7 @@
     request_close_tab,
     get_tab_close_confirm_id: () => tm.tab_close_confirm_id,
     set_tab_close_confirm_id: (v) => { tm.tab_close_confirm_id = v },
+    get_tab_close_saving: () => tab_close_saving,
     get_pending_layout_change: () => tm.pending_layout_change,
     set_pending_layout_change: (_v) => { tm.pending_layout_change = null },
   })
@@ -1892,8 +2049,9 @@
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
       const pane = first ? structurePane(first) : null
-      if (!ts || !pane) return false
+      if (!ts || !first || !pane) return false
       pane.structure = clone_structure(struct)
+      clear_modified_if_sole_pane(modified, ts.root, `default`, first.id)
       update_tab_label(`default`)
       return true
     }
@@ -1966,13 +2124,14 @@
       const ts = tab_states[`default`]
       const first = ts ? leaves(ts.root)[0] : null
       const pane = first ? structurePane(first) : null
-      if (!ts || !pane) return false
+      if (!ts || !first || !pane) return false
       pane.trajectory = clone_trajectory_for_pane(traj)
       pane.structure = undefined  // mutually exclusive
       pane.is_trajectory_mode = true
       pane.source_filename = filename || null
       pane.raw_traj_b64 = btoa(unescape(encodeURIComponent(raw)))
       pane.raw_traj_format = (filename.toLowerCase().split(`.`).pop() || ``)
+      clear_modified_if_sole_pane(modified, ts.root, `default`, first.id)
       update_tab_label(`default`)
       return true
     }
@@ -2441,6 +2600,7 @@
               initial_panel={pane.initial_panel}
               on_file_load={create_on_file_load(tab.id, leaf.id)}
               on_file_drop={create_on_file_drop(tab.id, leaf.id)}
+              on_structure_change={() => modified.mark(tab.id)}
               on_structure_imported={() => update_tab_label(tab.id)}
               on_save_to_project={open_save_dialog}
               on_save_to_database={open_save_dialog}
@@ -2487,6 +2647,7 @@
                 np.initial_site_count = struct.sites.length
                 np.initial_structure_ref = struct
                 np.modified = false
+                modified.clear(new_tab_id)
                 const ntab = tm.tabs.find(t => t.id === new_tab_id)
                 if (ntab) ntab.label = `CatBot structure`
                 tm.update_tab_label(new_tab_id)
@@ -2543,6 +2704,7 @@
                       lp.initial_site_count = struct.sites.length
                       lp.initial_structure_ref = struct
                       lp.modified = false
+                      clear_modified_if_sole_pane(modified, ts.root, tab.id, leaf.id)
                     }
                   }
                   const right = findLeafById(ts.root, res.newLeafId)
@@ -2568,7 +2730,11 @@
                   if (!struct?.sites?.length) return
                   const target = leaves(ts.root).find(l => { if (l.id === leaf.id) return false; const p = structurePane(l); return !!p && pane_has_content(p) })
                   const tp = target ? structurePane(target) : null
-                  if (tp) { tp.structure = clone_structure(struct); tp.modified = false }
+                  if (target && tp) {
+                    tp.structure = clone_structure(struct)
+                    tp.modified = false
+                    clear_modified_if_sole_pane(modified, ts.root, tab.id, target.id)
+                  }
                 }}
               />
             </div>
@@ -2630,6 +2796,7 @@
                         pane.initial_site_count = sample.data.sites?.length ?? 0
                         pane.initial_structure_ref = sample.data
                         pane.modified = false
+                        clear_modified_if_sole_pane(modified, ts.root, tab.id, leaf.id)
                         ts.active_leaf_id = leaf.id
                         update_tab_label(tab.id)
                       }}
@@ -2735,6 +2902,7 @@
                   pane.initial_site_count = 2
                   pane.initial_structure_ref = pane.structure
                   pane.modified = false
+                  clear_modified_if_sole_pane(modified, ts.root, tab.id, leaf.id)
                   ts.active_leaf_id = leaf.id
                 }}>
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -2956,14 +3124,20 @@
   {#if confirm_tab && confirm_ts}
     {@const structure_count = leaves(confirm_ts.root).filter(l => { const p = structurePane(l); return !!p && pane_has_content(p) }).length}
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="modal-overlay" onclick={() => tm.tab_close_confirm_id = null}>
+    <div class="modal-overlay" onclick={cancel_tab_close}>
       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
       <div class="modal-dialog" onclick={(e) => e.stopPropagation()}>
         <h3>{t(`app.confirm_close_tab`, { label: confirm_tab.label })}</h3>
         <p>{t(`app.structures_will_be_removed`, { count: structure_count })}</p>
+        {#if tab_close_save_error}
+          <p class="tab-close-error">{tab_close_save_error}</p>
+        {/if}
         <div class="modal-actions">
-          <button class="modal-btn cancel" onclick={() => tm.tab_close_confirm_id = null}>{t(`common.cancel`)}</button>
-          <button class="modal-btn danger" onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t(`app.close_tab`)}</button>
+          <button class="modal-btn cancel" disabled={tab_close_saving} onclick={cancel_tab_close}>{t(`common.cancel`)}</button>
+          <button class="modal-btn save" disabled={tab_close_saving} onclick={() => save_and_close_tab(tm.tab_close_confirm_id!)}>
+            {tab_close_saving ? t(`common.saving`) : t(`common.save_and_close`)}
+          </button>
+          <button class="modal-btn danger" disabled={tab_close_saving} onclick={() => close_tab(tm.tab_close_confirm_id!)}>{t(`app.close_tab`)}</button>
         </div>
       </div>
     </div>
@@ -3558,6 +3732,11 @@
   .modal-btn.save:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .tab-close-error {
+    color: #ef4444;
+    font-size: 0.85em;
   }
 
   /* Close-all and export dialog styles are now in their sub-components */

@@ -6,7 +6,7 @@
 
 import type { AnyStructure } from '$lib'
 import type { PaneNode, TerminalLeafState } from './pane-tree'
-import { create_empty_leaf, create_terminal_leaf } from './pane-tree'
+import { create_empty_leaf, create_terminal_leaf, leaves, structurePane } from './pane-tree'
 
 // ========== Types ==========
 
@@ -106,6 +106,32 @@ export function create_empty_pane(): PaneState {
 
 export function pane_has_content(p: PaneState): boolean {
   return p.mode === 'workflow' || !!(p.structure || p.trajectory || p.cube_file)
+}
+
+/** Close-guard clear rule for PANE-scoped successes (a pane save, a pane
+ *  overwrite, a pane-targeted load): the tab-keyed modified flag may be cleared
+ *  ONLY when the pane is the tab's sole content-bearing pane — otherwise a
+ *  dirty sibling pane would silently lose its edits at the next close. When a
+ *  sibling with content exists the flag stays set (worst case a spurious
+ *  prompt — the safe direction). TAB-scoped operations (fresh tab load, tab
+ *  reset-to-empty) should keep calling `modified.clear` unconditionally.
+ *  Call AFTER the pane's new content has been assigned. Returns whether the
+ *  flag was cleared. */
+export function clear_modified_if_sole_pane(
+  modified: { clear: (tab_id: string) => void },
+  root: PaneNode | null | undefined,
+  tab_id: string,
+  leaf_id: string,
+): boolean {
+  if (!root) return false
+  const content_leaves = leaves(root).filter((l) => {
+    const p = structurePane(l)
+    return !!p && pane_has_content(p)
+  })
+  if (content_leaves.length > 1) return false
+  if (content_leaves.length === 1 && content_leaves[0].id !== leaf_id) return false
+  modified.clear(tab_id)
+  return true
 }
 
 export function content_to_base64(content: string | ArrayBuffer): string {
@@ -212,12 +238,14 @@ import { serialize_structure } from '$lib/api/project'
  *  backend fallback for unsupported formats. */
 export async function serialize_structure_content(structure: Record<string, unknown>, format: string): Promise<string> {
   try {
-    const { structure_to_cif_str, structure_to_poscar_str, structure_to_xyz_str, structure_to_extxyz_str, structure_to_json_str } = await import(`$lib/structure/export`)
+    const { structure_to_cif_str, structure_to_poscar_str, structure_to_xyz_str, structure_to_extxyz_str, structure_to_json_str, structure_to_mol2_str, structure_to_pdb_str } = await import(`$lib/structure/export`)
     const s = structure as AnyStructureType
     if (format === `poscar`) return structure_to_poscar_str(s)
     if (format === `xyz`) return structure_to_xyz_str(s)
     if (format === `extxyz`) return structure_to_extxyz_str(s)
     if (format === `json`) return structure_to_json_str(s)
+    if (format === `mol2`) return structure_to_mol2_str(s)
+    if (format === `pdb`) return structure_to_pdb_str(s)
     return structure_to_cif_str(s)
   } catch {
     const result = await serialize_structure(structure, format)

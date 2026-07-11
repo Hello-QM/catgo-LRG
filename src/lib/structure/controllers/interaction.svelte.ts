@@ -38,6 +38,7 @@ import { get_bond_key } from '../bonding'
 import { get_movement_step } from '../manipulation'
 import { get_center_of_mass, get_rotation_center } from '$lib/structure'
 import { atom_clipboard } from '$lib/state.svelte'
+import { serialize_atoms, parse_atoms } from '../atom-clipboard-serial'
 import { Euler, Plane, Quaternion, Raycaster, Vector2, Vector3 } from 'three'
 import {
   screen_frame_from_camera,
@@ -890,7 +891,7 @@ export function create_interaction_controller(deps: InteractionDeps) {
   // 事件处理器
   // ═══════════════════════════════════════════════════════════════════
 
-  function onkeydown(event: KeyboardEvent) {
+  async function onkeydown(event: KeyboardEvent) {
     if (!event.key) return
     const target = event.target as HTMLElement
     // Don't hijack edit/clipboard keys when typing inside an embedded editor.
@@ -967,6 +968,10 @@ export function create_interaction_controller(deps: InteractionDeps) {
         if (original_indices.length > 0) {
           atom_clipboard.sites = extract_clipboard_sites(structure, original_indices)
           atom_clipboard.paste_count = 0
+          if (atom_clipboard.sites) {
+            void navigator.clipboard?.writeText?.(serialize_atoms(atom_clipboard.sites))
+              ?.catch(() => {}) // clipboard may be denied outside a gesture — best effort
+          }
         }
       }
       return
@@ -978,6 +983,20 @@ export function create_interaction_controller(deps: InteractionDeps) {
       // 跳过隐藏/inert 或非活跃 pane — 只让用户最后点击的 pane 处理
       if (wrapper?.closest(`[inert]`)) return
       if (_active_interaction_wrapper && _active_interaction_wrapper !== wrapper && document.contains(_active_interaction_wrapper)) return
+      // Cross-window fallback: no in-memory sites (a different webview did the
+      // copy) — read + parse the marked envelope off the system clipboard.
+      if (!atom_clipboard.sites) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        const text = await navigator.clipboard?.readText?.().catch(() => ``)
+        const foreign = parse_atoms(text ?? ``)
+        if (foreign && foreign.length) {
+          atom_clipboard.sites = foreign
+          atom_clipboard.paste_count = 0
+        } else {
+          return // nothing to paste
+        }
+      }
       if (atom_clipboard.sites) {
         event.preventDefault()
         event.stopImmediatePropagation()

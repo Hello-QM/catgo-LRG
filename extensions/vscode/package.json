@@ -80,6 +80,19 @@
             "filenamePattern": "*{xdatcar,contcar,outcar}"
           },
           {
+            "filenamePattern": "*.{xyz,extxyz,cif,poscar,mol2,pdb}"
+          },
+          {
+            "filenamePattern": "*poscar*"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "catgo.viewerAuto",
+        "displayName": "CatGo Viewer (name match)",
+        "selector": [
+          {
             "filenamePattern": "*{trajectory,relax,npt,nvt,nve}*"
           }
         ],
