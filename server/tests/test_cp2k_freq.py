@@ -190,3 +190,21 @@ def test_ir_spectrum_endpoint_uniform_when_no_intensities():
     res = ir_spectrum(IrSpectrumRequest(freqs_cm=[500.0], sigma=10.0))
     assert res["n_modes"] == 1
     assert max(res["intensity"]) > 0.9  # uniform I=1 peak
+
+
+from catgo.services.cp2k_freq import pick_freq_source
+
+
+def test_pick_prefers_molden_over_outcar():
+    kind, name = pick_freq_source(["OUTCAR", "CO-NH2-VIBRATIONS-1.mol", "run.out"])
+    assert (kind, name) == ("molden", "CO-NH2-VIBRATIONS-1.mol")
+
+
+def test_pick_outcar_over_out():
+    kind, name = pick_freq_source(["slurm.out", "OUTCAR", "INCAR"])
+    assert (kind, name) == ("outcar", "OUTCAR")
+
+
+def test_pick_cp2k_out_last_resort_and_none():
+    assert pick_freq_source(["proj.out", "proj.inp"]) == ("cp2k_out", None)
+    assert pick_freq_source(["INCAR", "POSCAR"]) == ("none", None)

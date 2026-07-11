@@ -214,3 +214,21 @@ def parse_freq_content(text: str) -> dict:
     from catgo.routers.freq_analysis import _parse_outcar_content
 
     return _parse_outcar_content(text)
+
+
+def pick_freq_source(names: list[str]) -> tuple[str, str | None]:
+    """Choose the best frequency source in a directory listing.
+
+    Priority: CP2K Molden vibrations file > VASP OUTCAR > any .out
+    (CP2K main output candidate — caller must still confirm it contains
+    VIB| lines).
+    """
+    for n in names:
+        base = n.rsplit("/", 1)[-1]
+        if "VIBRATIONS" in base.upper() and base.lower().endswith(".mol"):
+            return ("molden", base)
+    if any(n.rsplit("/", 1)[-1] == "OUTCAR" for n in names):
+        return ("outcar", "OUTCAR")
+    if any(n.lower().endswith(".out") for n in names):
+        return ("cp2k_out", None)
+    return ("none", None)

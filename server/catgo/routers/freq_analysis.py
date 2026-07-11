@@ -172,14 +172,51 @@ class RemoteParseRequest(BaseModel):
 
 @router.post("/from-directory")
 async def parse_from_directory(req: RemoteParseRequest):
-    """Parse OUTCAR from remote HPC directory via SSH."""
+    """Parse frequency output from a remote HPC directory via SSH.
+
+    Priority: CP2K Molden vibrations file > VASP OUTCAR (awk remote parse,
+    no download) > CP2K .out containing VIB| lines.
+    """
+    import shlex
+
     from catgo.utils.hpc_client import pool
     hpc = pool.get_connection(req.session_id)
     if not hpc or not hpc.conn:
         raise HTTPException(status_code=503, detail="HPC session not connected")
 
-    from catgo.utils.vasp_freq_parser import parse_vasp_frequencies
-    return await parse_vasp_frequencies(hpc.conn, req.directory)
+    from catgo.services.cp2k_freq import (
+        parse_cp2k_out_vibrations,
+        parse_molden_vibrations,
+        pick_freq_source,
+    )
+
+    safe_dir = shlex.quote(req.directory)
+    listing = await hpc.conn.run(f"ls -1 {safe_dir} 2>/dev/null", check=False)
+    names = (listing.stdout or "").split()
+    kind, fname = pick_freq_source(names)
+
+    if kind == "molden":
+        cat = await hpc.conn.run(f"cat {safe_dir}/{shlex.quote(fname)}", check=False)
+        if not cat.stdout:
+            return {"success": False, "message": f"Could not read {fname}"}
+        return parse_molden_vibrations(cat.stdout)
+
+    if kind == "outcar":
+        from catgo.utils.vasp_freq_parser import parse_vasp_frequencies
+        return await parse_vasp_frequencies(hpc.conn, req.directory)
+
+    if kind == "cp2k_out":
+        # Find the first .out that actually contains VIB| lines (cheap grep -l).
+        hit = await hpc.conn.run(
+            f"grep -l 'VIB|' {safe_dir}/*.out 2>/dev/null | head -1", check=False
+        )
+        target = (hit.stdout or "").strip()
+        if not target:
+            return {"success": False, "message": "No OUTCAR, Molden vibrations file, or CP2K VIB| output found in directory"}
+        cat = await hpc.conn.run(f"cat {shlex.quote(target)}", check=False)
+        return parse_cp2k_out_vibrations(cat.stdout or "")
+
+    return {"success": False, "message": "No OUTCAR, Molden vibrations file, or CP2K VIB| output found in directory"}
 
 
 class FreqGibbsRequest(BaseModel):
