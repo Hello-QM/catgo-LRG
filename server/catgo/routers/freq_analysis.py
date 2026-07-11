@@ -214,3 +214,33 @@ def calculate_gibbs(req: FreqGibbsRequest):
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unknown mode: {req.mode}")
+
+
+class IrSpectrumRequest(BaseModel):
+    freqs_cm: list[float]
+    intensities: list[float | None] | None = None
+    sigma: float = 10.0
+    emin: float | None = None
+    emax: float | None = None
+
+
+@router.post("/ir-spectrum")
+def ir_spectrum(req: IrSpectrumRequest):
+    """Gaussian-broadened IR spectrum from explicit per-mode intensities."""
+    from catgo.cli.ir import compute_ir_spectrum
+
+    if req.intensities is not None:
+        if len(req.intensities) != len(req.freqs_cm):
+            raise HTTPException(status_code=400, detail="freqs_cm and intensities length mismatch")
+        pairs = [(f, i) for f, i in zip(req.freqs_cm, req.intensities) if i is not None]
+        freqs = [f for f, _ in pairs]
+        intens = [i for _, i in pairs]
+    else:
+        freqs = req.freqs_cm
+        intens = None
+
+    spec = compute_ir_spectrum(
+        freqs, None, None, emin=req.emin, emax=req.emax, sigma=req.sigma,
+        intensities=intens,
+    )
+    return {"grid_cm": spec.grid_cm, "intensity": spec.intensity, "n_modes": spec.n_modes}

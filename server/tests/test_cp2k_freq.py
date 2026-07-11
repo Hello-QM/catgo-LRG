@@ -152,3 +152,41 @@ def test_sniff_outcar_fallthrough():
     res = parse_freq_content(OUTCAR_SAMPLE)
     assert res["success"] is True
     assert res["real_freqs"][0]["frequency_cm"] == 1667.850457
+
+
+import math
+
+from catgo.cli.ir import compute_ir_spectrum
+
+
+def test_compute_ir_spectrum_explicit_intensities():
+    spec = compute_ir_spectrum(
+        [1000.0], None, None, emin=900.0, emax=1100.0, sigma=10.0,
+        intensities=[5.0],
+    )
+    peak = max(spec.intensity)
+    idx = spec.intensity.index(peak)
+    assert abs(spec.grid_cm[idx] - 1000.0) < 1.0
+    assert abs(peak - 5.0) < 1e-6  # Gaussian max = I_k at line center
+    assert spec.n_modes == 1
+
+
+def test_ir_spectrum_endpoint_skips_none_intensities():
+    from catgo.routers.freq_analysis import ir_spectrum, IrSpectrumRequest
+
+    res = ir_spectrum(IrSpectrumRequest(
+        freqs_cm=[500.0, 1000.0],
+        intensities=[None, 2.0],
+        sigma=10.0, emin=400.0, emax=1100.0,
+    ))
+    assert res["n_modes"] == 1  # the None mode was dropped
+    peak_x = res["grid_cm"][res["intensity"].index(max(res["intensity"]))]
+    assert abs(peak_x - 1000.0) < 1.0
+
+
+def test_ir_spectrum_endpoint_uniform_when_no_intensities():
+    from catgo.routers.freq_analysis import ir_spectrum, IrSpectrumRequest
+
+    res = ir_spectrum(IrSpectrumRequest(freqs_cm=[500.0], sigma=10.0))
+    assert res["n_modes"] == 1
+    assert max(res["intensity"]) > 0.9  # uniform I=1 peak

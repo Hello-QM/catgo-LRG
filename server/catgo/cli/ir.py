@@ -40,6 +40,7 @@ def compute_ir_spectrum(
     emax: Optional[float],
     sigma: float = 10.0,
     step_cm: float = 1.0,
+    intensities: Optional[list] = None,
 ) -> IrSpectrum:
     """Broadened IR spectrum.
 
@@ -49,6 +50,7 @@ def compute_ir_spectrum(
     Cartesian j → scalar per mode, summed over the three E-field
     directions).
     Without BEC: I_k = 1.0 for every real mode (mode-count histogram).
+    Explicit per-mode intensities (CP2K KM/mol) override both regimes.
 
     ω-grid is `[emin, emin+step, …, emax]` (step=1 cm⁻¹). When emin/emax
     are None the grid auto-spans `[min(ω)-4σ, max(ω)+4σ]` clamped to
@@ -56,10 +58,13 @@ def compute_ir_spectrum(
     """
     if not freqs_cm:
         return IrSpectrum(grid_cm=[], intensity=[],
-                          used_bec=born is not None, n_modes=0)
+                          used_bec=born is not None and intensities is None,
+                          n_modes=0)
 
-    used_bec = born is not None
-    if used_bec:
+    used_bec = born is not None and intensities is None
+    if intensities is not None:
+        intensities = list(intensities)
+    elif used_bec:
         intensities = _bec_intensities(eigenvectors, born)
     else:
         intensities = [1.0] * len(freqs_cm)
