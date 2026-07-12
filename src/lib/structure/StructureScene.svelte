@@ -408,8 +408,14 @@
   // immediately and defer bond (and polyhedra) computation until the user asks.
   // `user_requested_bonds` un-defers when the banner button is clicked.
   let user_requested_bonds = $state(false)
-  // @ts-ignore - structure is declared later via $props() but $derived is reactive
-  let deferred_atom_count = $derived(structure?.sites?.length ?? 0)
+  // Canonical (non-image) atom count. `structure.sites` here is PBC-image-
+  // expanded for rendering, so `.length` overcounts (e.g. 10976 → 14895);
+  // `num_original_sites` is the real structure size when images are present.
+  // Gate on the canonical count so a small structure whose boundary images
+  // push the scene over the threshold isn't falsely deferred, and the banner
+  // shows the number the user recognises.
+  // @ts-ignore - structure/num_original_sites are declared later via $props() but $derived is reactive
+  let deferred_atom_count = $derived(num_original_sites ?? (structure?.sites?.length ?? 0))
   const bonds_deferred = $derived(should_defer_bonds(deferred_atom_count, user_requested_bonds))
   // Re-defer whenever a new structure is loaded. We key off sites.length (not
   // object identity) so that in-place position edits — which reuse the same atom
