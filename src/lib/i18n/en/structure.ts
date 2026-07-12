@@ -16,6 +16,8 @@ const structure: Record<string, string> = {
   lattice_vectors: `Lattice Vectors`,
   bonds: `Bonds`,
   add_bond_rule: `+ Bond rule`,
+  bonds_deferred: `Bonds hidden for performance ({n} atoms)`,
+  compute_bonds: `Compute bonds`,
   camera: `Camera`,
   projection: `Projection`,
   auto_rotate_speed: `Auto-rotate speed`,
@@ -153,9 +155,11 @@ const structure: Record<string, string> = {
   failed_upgrade_trust: `Failed to upgrade trust level`,
   failed_update_plugin: `Failed to update plugin`,
   loading_installed_plugins: `Loading installed plugins...`,
-  no_plugins_installed: `No plugins installed yet. Browse the Hub to discover and install plugins.`,
+  no_plugins_installed:
+    `No plugins installed yet. Browse the Hub to discover and install plugins.`,
   plugins_none_installed_title: `No plugins installed`,
-  plugins_install_desc: `Install plugins to extend CatGo with new views, panels, and functionality.`,
+  plugins_install_desc:
+    `Install plugins to extend CatGo with new views, panels, and functionality.`,
   install_plugin: `Install Plugin`,
   plugins_installed_count: `{n} plugin(s) installed`,
   plugins_enabled_count: `{n} enabled`,
@@ -167,7 +171,8 @@ const structure: Record<string, string> = {
   plugin_drag_drop_zip: `Drag & drop plugin ZIP file here`,
   plugin_url: `Plugin URL`,
   plugin_fetch: `Fetch`,
-  plugin_url_hint: `Enter a URL to a plugin ZIP file or a plugin directory containing catgo-plugin.json`,
+  plugin_url_hint:
+    `Enter a URL to a plugin ZIP file or a plugin directory containing catgo-plugin.json`,
   plugin_loading: `Loading plugin...`,
   plugin_uninstall_confirm: `Are you sure you want to uninstall "{name}"?`,
   plugin_author_by: `By {author}`,
@@ -177,19 +182,24 @@ const structure: Record<string, string> = {
   plugin_requested_permissions: `Requested Permissions`,
   plugin_no_special_permissions: `This plugin requires no special permissions.`,
   plugin_error_rendering_panel: `Error rendering panel`,
-  plugin_no_active_for_panel: `No active plugins for this panel. Enable a plugin in the Plugins view.`,
+  plugin_no_active_for_panel:
+    `No active plugins for this panel. Enable a plugin in the Plugins view.`,
   plugin_panel_component_missing: `Panel component not found: {id}`,
   update_to_version: `Update to v{version}`,
-  promote_trust_title: `Promote from sandboxed to user trust level for in-process execution`,
+  promote_trust_title:
+    `Promote from sandboxed to user trust level for in-process execution`,
   upgrade_trust: `Upgrade Trust`,
   create_plugins_with_catbot: `Create Plugins with CatBot`,
-  create_plugins_desc: `CatBot can generate custom plugins for you. Open the AI Assistant and describe what you need.`,
+  create_plugins_desc:
+    `CatBot can generate custom plugins for you. Open the AI Assistant and describe what you need.`,
   example_prompts: `Example prompts:`,
   plugin_format: `Plugin format:`,
-  plugin_format_desc: `Every plugin is a Python file with a TOOL dict and an execute(context) function. CatBot handles the boilerplate -- just describe what computation you need.`,
+  plugin_format_desc:
+    `Every plugin is a Python file with a TOOL dict and an execute(context) function. CatBot handles the boilerplate -- just describe what computation you need.`,
   ui_extensions: `UI Extensions`,
   install_zip: `Install ZIP`,
-  no_ui_extensions: `No UI extensions installed. UI extensions add custom views, panels, and visualization hooks.`,
+  no_ui_extensions:
+    `No UI extensions installed. UI extensions add custom views, panels, and visualization hooks.`,
   failed_toggle_extension: `Failed to toggle extension`,
   failed_uninstall_extension: `Failed to uninstall extension`,
   install: `Install`,
@@ -212,11 +222,13 @@ const structure: Record<string, string> = {
   password: `Password`,
   key_file: `Key File`,
   key_file_hint: `(optional — specify if server needs a specific key)`,
-  key_file_imported: `Selected private key: {name}. It will be used for this connection only and will not be saved.`,
+  key_file_imported:
+    `Selected private key: {name}. It will be used for this connection only and will not be saved.`,
   scheduler: `Scheduler`,
   work_root: `Work root`,
   work_root_placeholder: `e.g. ~/projects/my-work or /work/home/user/project`,
-  work_root_hint: `Optional. When set, file browsing, upload/download, editing, and job work directories stay inside this root.`,
+  work_root_hint:
+    `Optional. When set, file browsing, upload/download, editing, and job work directories stay inside this root.`,
   work_root_boundary: `Work root boundary`,
   work_root_blocked: `This path is outside the configured work root.`,
   use_jump_host: `Use jump host (bastion)`,
@@ -285,12 +297,14 @@ const structure: Record<string, string> = {
   on_node: `on {node}`,
   open_catgo_localhost: `Open CatGO (localhost:{port})`,
   stop_disconnect: `Stop & Disconnect`,
-  install_remote_compute_desc: `Installs ML potentials (MACE, CHGNet, M3GNet) and generates a job script.`,
+  install_remote_compute_desc:
+    `Installs ML potentials (MACE, CHGNet, M3GNet) and generates a job script.`,
   installation_complete: `Installation complete!`,
   install_remote_compute: `Install Remote Compute`,
   re_check: `Re-check`,
   check_remote_setup: `Check Remote Setup`,
-  claude_code_remote_desc: `Configure Claude Code on this server to control CatGO remotely.`,
+  claude_code_remote_desc:
+    `Configure Claude Code on this server to control CatGO remotely.`,
   configuring: `Configuring...`,
   setup_claude_code: `Setup Claude Code`,
   establishing_ssh_connection: `Establishing SSH connection to {host}...`,
@@ -302,10 +316,12 @@ const structure: Record<string, string> = {
   active_count: `{n} active`,
   connection_status: `Connection status`,
   connecting_to_server: `Connecting to server...`,
-  keep_dialog_open_connecting: `Please keep this dialog open while the secure session is being established.`,
+  keep_dialog_open_connecting:
+    `Please keep this dialog open while the secure session is being established.`,
   verification_required: `Verification required`,
   connected_to_user_host: `Connected to {user}@{host}`,
-  connected_dialog_desc: `You can proceed with workflow execution or open another connection.`,
+  connected_dialog_desc:
+    `You can proceed with workflow execution or open another connection.`,
   connect_another: `Connect Another`,
   connection_failed: `Connection failed`,
   check_connection_details: `Check the connection details and try again.`,
@@ -319,7 +335,8 @@ const structure: Record<string, string> = {
   ssh_key_otp: `SSH Key + OTP`,
   ssh_config: `SSH Config`,
   ssh_config_controlmaster: `SSH Config (ControlMaster)`,
-  ssh_config_windows_hint: `Requires ControlMaster — not supported on Windows (no ControlPath/ControlPersist). Use SSH Key or SSH Key + OTP instead.`,
+  ssh_config_windows_hint:
+    `Requires ControlMaster — not supported on Windows (no ControlPath/ControlPersist). Use SSH Key or SSH Key + OTP instead.`,
   ssh_alias: `SSH Alias`,
   ssh_alias_hint: `(from ~/.ssh/config)`,
   ssh_alias_placeholder: `e.g. Shaheen`,
@@ -346,7 +363,8 @@ const structure: Record<string, string> = {
   failed_load_file: `Failed to load {name}: {error}`,
   unknown_error: `Unknown error`,
   file_empty_or_unreadable: `File {name} is empty or could not be read`,
-  loaded_trajectory_from_dir: `Loaded {pattern} trajectory from {dir}/ — view in Structure panel`,
+  loaded_trajectory_from_dir:
+    `Loaded {pattern} trajectory from {dir}/ — view in Structure panel`,
   no_pattern_files_in_dir: `No {pattern} files found in subdirectories of {dir}/`,
   merge_failed: `Merge failed: {error}`,
   workflow_new_with_structure: `New Workflow with Structure`,
@@ -366,7 +384,8 @@ const structure: Record<string, string> = {
   send_structure: `Send Structure`,
   sending: `Sending...`,
   no_steps_yet: `No steps yet`,
-  import_trajectory_hint: `Import a trajectory file (.xyz, .pdb, .gro, etc.) to enable MD analysis.`,
+  import_trajectory_hint:
+    `Import a trajectory file (.xyz, .pdb, .gro, etc.) to enable MD analysis.`,
   import_trajectory: `Import Trajectory`,
   load_trajectory: `Load Trajectory`,
   select_trajectory_md: `Select a trajectory file for MD analysis.`,
@@ -410,7 +429,8 @@ const structure: Record<string, string> = {
   clear_clipping: `Clear clipping`,
   save_export: `Save / Export`,
   select_element: `Select Element:`,
-  load_periodic_for_symmetry: `Load a periodic crystal structure to run symmetry analysis.`,
+  load_periodic_for_symmetry:
+    `Load a periodic crystal structure to run symmetry analysis.`,
   symmetry: `Symmetry`,
   precision: `Precision`,
   algorithm: `Algorithm`,
@@ -445,13 +465,17 @@ const structure: Record<string, string> = {
   selected_elem: `Selected: {elem}`,
   text: `Text`,
   background_label: `Background`,
-  ml_potentials_need_server: `ML potentials (MACE, CHGNet, xTB, etc.) require a running compute server.`,
+  ml_potentials_need_server:
+    `ML potentials (MACE, CHGNet, xTB, etc.) require a running compute server.`,
   atoms_frozen: `{n} atoms frozen`,
   atoms_selected: `{n} atoms selected`,
   extract_as_isolated_molecule: `Extract as isolated molecule`,
-  selected_atoms_extract_hint: `Selected atoms will be extracted and optimized without periodic boundary conditions, then placed back.`,
-  selected_atoms_fixed_hint: `Unselected atoms will be fixed in place during optimization.`,
-  requires_periodic_lattice: `This tool requires a periodic lattice. Use the {tab} tab to add one first.`,
+  selected_atoms_extract_hint:
+    `Selected atoms will be extracted and optimized without periodic boundary conditions, then placed back.`,
+  selected_atoms_fixed_hint:
+    `Unselected atoms will be fixed in place during optimization.`,
+  requires_periodic_lattice:
+    `This tool requires a periodic lattice. Use the {tab} tab to add one first.`,
   slow_growth_post_processing: `Slow-Growth Post-Processing`,
   upload_report: `Upload REPORT`,
   paste_report: `Paste REPORT`,
@@ -497,9 +521,11 @@ const structure: Record<string, string> = {
   export_xyz_hint: `Export frames {start}-{end} as multi-frame XYZ`,
   export_png_sequence_hint: `Export frames as numbered PNGs in a ZIP`,
   export_webm_hint: `Export as WebM video`,
-  export_mp4_hint: `Browsers can't record MP4 -- downloads a WebM and copies an ffmpeg command to your clipboard to convert it to MP4`,
+  export_mp4_hint:
+    `Browsers can't record MP4 -- downloads a WebM and copies an ffmpeg command to your clipboard to convert it to MP4`,
   export_info: `{seconds}s ({frames} frames: {start}-{end})`,
-  export_started: `Export started: {filename}. Check your browser downloads or the system default Downloads folder.`,
+  export_started:
+    `Export started: {filename}. Check your browser downloads or the system default Downloads folder.`,
   export_failed: `Failed to export {what}: {message}`,
   export_no_plot_data: `No exportable data is available for this plot.`,
   export_plot_loading: `Plot is still loading. Please try again in a moment.`,
@@ -529,7 +555,8 @@ const structure: Record<string, string> = {
   mace_model: `MACE Model`,
   model_path: `Model Path`,
   device: `Device`,
-  server_not_connected_hint: `Server not connected. Start the compute server or use Local (UFF) mode.`,
+  server_not_connected_hint:
+    `Server not connected. Start the compute server or use Local (UFF) mode.`,
   check_server: `Check Server`,
   vsepr_settings: `VSEPR Settings`,
   iterations: `Iterations`,
@@ -645,19 +672,22 @@ const structure: Record<string, string> = {
   md_dihedral_failed: `Dihedral computation failed`,
   md_reference_frame: `Reference frame`,
   md_atom_indices_optional: `Atom indices (optional)`,
-  md_atom_indices_all_hint: `Comma-separated 0-indexed atom indices. Leave blank for all atoms.`,
+  md_atom_indices_all_hint:
+    `Comma-separated 0-indexed atom indices. Leave blank for all atoms.`,
   md_precentered: `Precentered`,
   md_compute_rmsd: `Compute RMSD`,
   md_frames_label_count: `Frames: {n}`,
   md_atoms_used_count: `Atoms used: {n}`,
   md_reference_frame_optional: `Reference frame (optional)`,
-  md_reference_frame_hint: `Frame index for reference. Leave blank to use average structure.`,
+  md_reference_frame_hint:
+    `Frame index for reference. Leave blank to use average structure.`,
   md_compute_rmsf: `Compute RMSF`,
   md_atoms_label_count: `Atoms: {n}`,
   md_ref_label: `Ref: {ref}`,
   md_bond_angles: `Bond Angles`,
   md_atom_triplets_semicolon: `Atom triplets (semicolon-separated)`,
-  md_atom_triplets_hint: `Semicolon-separated atom triplets. Middle atom is the vertex. e.g. 0,1,2 ; 3,4,5`,
+  md_atom_triplets_hint:
+    `Semicolon-separated atom triplets. Middle atom is the vertex. e.g. 0,1,2 ; 3,4,5`,
   md_compute_angles: `Compute Angles`,
   md_angles_label_count: `Angles: {n}`,
   md_atom_quartets_semicolon: `Atom quartets (semicolon-separated)`,
@@ -698,7 +728,8 @@ const structure: Record<string, string> = {
   md_hbond_lifetime: `H-bond Lifetime`,
   md_time_step_ps: `Time step (ps)`,
   md_max_lag_frames: `Max lag (frames)`,
-  md_hbond_lifetime_note: `Uses detection parameters above (method, cutoffs, periodicity).`,
+  md_hbond_lifetime_note:
+    `Uses detection parameters above (method, cutoffs, periodicity).`,
   md_compute_lifetime: `Compute Lifetime`,
   md_average_lifetime_ps: `Average lifetime: {value} ps`,
   md_hbonds_tracked: `{n} H-bonds tracked`,
@@ -716,7 +747,8 @@ const structure: Record<string, string> = {
   md_cavity_volume_ang3: `Cavity volume V (Å³)`,
   md_lcw_cav_vs_volume: `LCW: ΔG_cav vs cavity volume`,
   md_cav_free_energy_profile: `Cavitation free energy profile`,
-  md_probe_radii_invalid: `Probe radii must be a comma-separated list of positive numbers`,
+  md_probe_radii_invalid:
+    `Probe radii must be a comma-separated list of positive numbers`,
   md_lcw_cav_free_energy: `LCW cavitation free energy ΔG_cav(R, z)`,
   md_solvent_element: `Solvent element`,
   md_probe_radii_comma: `Probe radii (Å, comma-separated)`,
@@ -817,7 +849,8 @@ const structure: Record<string, string> = {
   gesture_in_browser_no_key: `In-browser, no API key`,
   gesture_cloud: `Cloud`,
   gesture_openai_needs_key: `OpenAI API, needs key`,
-  gesture_web_speech_unavailable: `Web Speech API not available. Use Chrome/Edge or switch to Whisper.`,
+  gesture_web_speech_unavailable:
+    `Web Speech API not available. Use Chrome/Edge or switch to Whisper.`,
   gesture_backend: `Backend`,
   gesture_model: `Model`,
   gesture_loading_model: `Loading model...`,
@@ -888,7 +921,8 @@ const structure: Record<string, string> = {
   cube_slice_orientation: `Plane orientation`,
   cube_slice_center: `center`,
   cube_slice_extent: `extent`,
-  cube_slice_fit: `Fit the 2D view to the atoms (crop away vacuum); click to toggle full cell`,
+  cube_slice_fit:
+    `Fit the 2D view to the atoms (crop away vacuum); click to toggle full cell`,
   nanotube_use_loaded_structure: `Use loaded structure`,
   nanotube_manual_input: `Manual input`,
   nanotube_2d_material: `2D Material`,
@@ -925,19 +959,28 @@ const structure: Record<string, string> = {
   nanoscroll_thickness: `Monolayer thickness`,
   nanoscroll_strain: `Max bending strain`,
   // Tooltips (practical, physically-informed guidance)
-  nanoscroll_tip_monolayer: `Roll the structure currently in the viewer. It must be a single 2D layer (one monolayer) — rolling a 3D bulk is meaningless. Cut/extract a monolayer first if needed.`,
-  nanoscroll_tip_inner_radius: `Radius of the innermost winding. Larger = less bending strain at the core; too small overlaps or breaks bonds. Keep it ≥ ~10–15 Å for typical 2D layers, and raise it if you see the strain warning.`,
-  nanoscroll_tip_turns: `Number of spiral windings. More turns = larger outer radius and more atoms (atom count grows roughly linearly with turns), so increase gradually.`,
-  nanoscroll_tip_interlayer_gap: `Van-der-Waals spacing between adjacent windings. Set per material: graphene ~3.35, hBN ~3.33, MoS₂ ~6.15 Å (default ~3.3).`,
-  nanoscroll_tip_length: `Scroll height along the axis (z). Independent of the spiral — controls how tall the scroll is, not how tightly it rolls.`,
-  nanoscroll_tip_roll_dir: `Which in-plane lattice vector is rolled into the spiral (a1 or a2). The other vector stays straight along the axis.`,
+  nanoscroll_tip_monolayer:
+    `Roll the structure currently in the viewer. It must be a single 2D layer (one monolayer) — rolling a 3D bulk is meaningless. Cut/extract a monolayer first if needed.`,
+  nanoscroll_tip_inner_radius:
+    `Radius of the innermost winding. Larger = less bending strain at the core; too small overlaps or breaks bonds. Keep it ≥ ~10–15 Å for typical 2D layers, and raise it if you see the strain warning.`,
+  nanoscroll_tip_turns:
+    `Number of spiral windings. More turns = larger outer radius and more atoms (atom count grows roughly linearly with turns), so increase gradually.`,
+  nanoscroll_tip_interlayer_gap:
+    `Van-der-Waals spacing between adjacent windings. Set per material: graphene ~3.35, hBN ~3.33, MoS₂ ~6.15 Å (default ~3.3).`,
+  nanoscroll_tip_length:
+    `Scroll height along the axis (z). Independent of the spiral — controls how tall the scroll is, not how tightly it rolls.`,
+  nanoscroll_tip_roll_dir:
+    `Which in-plane lattice vector is rolled into the spiral (a1 or a2). The other vector stays straight along the axis.`,
   heterostructure: `Heterostructure`,
   heterostructure_mode_slab: `Slab (pre-cut)`,
   heterostructure_mode_bulk: `Bulk + Miller`,
   heterostructure_mode_lateral: `Lateral (in-plane)`,
-  heterostructure_hint_slab: `Provide two pre-cut slabs. Vacuum is auto-stripped before matching.`,
-  heterostructure_hint_bulk: `Provide two bulk crystals. Slabs are cut automatically via intermat.`,
-  heterostructure_hint_lateral: `Join two 2D slabs side by side. Only one edge direction is matched.`,
+  heterostructure_hint_slab:
+    `Provide two pre-cut slabs. Vacuum is auto-stripped before matching.`,
+  heterostructure_hint_bulk:
+    `Provide two bulk crystals. Slabs are cut automatically via intermat.`,
+  heterostructure_hint_lateral:
+    `Join two 2D slabs side by side. Only one edge direction is matched.`,
   heterostructure_substrate_loaded: `Substrate (loaded structure)`,
   heterostructure_film: `Film`,
   heterostructure_upload: `Upload`,
@@ -946,16 +989,19 @@ const structure: Record<string, string> = {
   reticular_mode_preset: `Preset`,
   reticular_mode_advanced: `Advanced`,
   reticular_hint_preset: `Pick a curated MOF/COF recipe and build in one click.`,
-  reticular_hint_advanced: `Choose an RCSR topology, then assign a building block to each node/edge type.`,
+  reticular_hint_advanced:
+    `Choose an RCSR topology, then assign a building block to each node/edge type.`,
   reticular_preset: `Preset`,
   reticular_topology: `Topology (net)`,
   reticular_node_bb: `Node building block`,
   reticular_edge_bb: `Edge building block`,
   reticular_build: `Build framework`,
   reticular_mode_search: `Search`,
-  reticular_hint_search: `Search the MOFX-DB database and load an existing MOF structure.`,
+  reticular_hint_search:
+    `Search the MOFX-DB database and load an existing MOF structure.`,
   reticular_search_name: `Name`,
-  reticular_search_name_hint: `MOFX-DB has no common names — leave empty to browse the database, or use a CSD refcode (CoREMOF/CSD) or hMOF-N id. For named MOFs (MOF-5, UiO-66…) use the Preset tab.`,
+  reticular_search_name_hint:
+    `MOFX-DB has no common names — leave empty to browse the database, or use a CSD refcode (CoREMOF/CSD) or hMOF-N id. For named MOFs (MOF-5, UiO-66…) use the Preset tab.`,
   reticular_search_database: `Database`,
   reticular_search_button: `Search`,
   reticular_search_load: `Load`,
@@ -968,8 +1014,10 @@ const structure: Record<string, string> = {
   touch_move_atoms: `Move`,
   touch_rotate_atoms: `Rotate`,
   touch_box_select_hint: `Box-select mode: drag to select atoms (replaces Ctrl/Cmd-drag)`,
-  touch_move_atoms_hint: `Move mode: drag to move selected atoms (replaces Shift+Alt-drag)`,
-  touch_rotate_atoms_hint: `Rotate mode: drag to rotate selected atoms (replaces Shift-drag)`,
+  touch_move_atoms_hint:
+    `Move mode: drag to move selected atoms (replaces Shift+Alt-drag)`,
+  touch_rotate_atoms_hint:
+    `Rotate mode: drag to rotate selected atoms (replaces Shift-drag)`,
   touch_delete_atoms: `Delete`,
   touch_delete_atoms_hint: `Delete the selected atoms (replaces the Delete key)`,
   add_atoms: `Add single atoms`,
@@ -1005,7 +1053,8 @@ const structure: Record<string, string> = {
   go: `Go`,
   plugin_hub: `Plugin Hub`,
   large_system_mode: `Large-system performance mode`,
-  large_system_mode_unavailable: `Large-system mode — WebGPU unavailable in this browser (enable Unsafe WebGPU / Vulkan flags)`,
+  large_system_mode_unavailable:
+    `Large-system mode — WebGPU unavailable in this browser (enable Unsafe WebGPU / Vulkan flags)`,
   ai_assistant: `AI Assistant`,
   restore_terminal: `Restore terminal`,
   minimize_terminal: `Minimize terminal`,
@@ -1149,17 +1198,21 @@ const structure: Record<string, string> = {
   tip_camera: `Camera`,
   tip_camera_desc: `Left-drag to rotate, middle-drag to pan, scroll to zoom`,
   tip_camera_reset: `Camera Reset`,
-  tip_camera_reset_desc: `Use the toolbar reset button to reset the camera; double-click empty space clears the selection`,
+  tip_camera_reset_desc:
+    `Use the toolbar reset button to reset the camera; double-click empty space clears the selection`,
   tip_selection: `Selection`,
-  tip_selection_desc: `Click an atom to toggle its selection; use the right-click menu to select all`,
+  tip_selection_desc:
+    `Click an atom to toggle its selection; use the right-click menu to select all`,
   tip_rotate_atoms: `Rotate Atoms`,
-  tip_rotate_atoms_desc: `Shift+drag to rotate selected atoms — drag horizontally for yaw, vertically for pitch (one axis locks per drag); right-drag for roll`,
+  tip_rotate_atoms_desc:
+    `Shift+drag to rotate selected atoms — drag horizontally for yaw, vertically for pitch (one axis locks per drag); right-drag for roll`,
   tip_move_atoms: `Move Atoms`,
   tip_move_atoms_desc: `Shift+Alt+Arrow (or Ctrl+Arrow) to move selected atoms`,
   tip_trajectory: `Trajectory`,
   tip_trajectory_desc: `A/D to prev/next frame, Space to play/pause`,
   tip_undo_redo: `Undo/Redo`,
-  tip_undo_redo_desc: `Ctrl+Z to undo, Ctrl+Shift+Z (or Ctrl+Y) to redo structure changes`,
+  tip_undo_redo_desc:
+    `Ctrl+Z to undo, Ctrl+Shift+Z (or Ctrl+Y) to redo structure changes`,
   tip_measure: `Measure`,
   tip_measure_desc: `Click atoms then pick distance/angle mode to measure`,
   tip_colors: `Colors`,
@@ -1169,13 +1222,16 @@ const structure: Record<string, string> = {
 
   // Search Modal
   search_limitations: `Search Limitations`,
-  search_limitations_desc: `Online database searching is limited in the browser due to security (CORS) restrictions. For full access to Materials Project, PubChem, and all OPTIMADE providers, use the CatGo desktop app.`,
+  search_limitations_desc:
+    `Online database searching is limited in the browser due to security (CORS) restrictions. For full access to Materials Project, PubChem, and all OPTIMADE providers, use the CatGo desktop app.`,
   search_database: `Search Database`,
   only_elements: `Only Elements`,
   at_least_elements: `At Least Elements`,
   formula_label: `Formula`,
-  select_only_elements: `Select elements to search for materials with only these elements`,
-  select_at_least_elements: `Select elements to search for materials containing at least these elements`,
+  select_only_elements:
+    `Select elements to search for materials with only these elements`,
+  select_at_least_elements:
+    `Select elements to search for materials containing at least these elements`,
   selected_elements: `selected:`,
   database: `Database:`,
   loading_providers: `Loading providers...`,
@@ -1205,10 +1261,14 @@ const structure: Record<string, string> = {
   api_key_invalid: `Invalid API key. Please check and try again.`,
   providers_not_loaded: `Providers not loaded yet. Please wait...`,
   search_failed: `Search failed: {error}`,
-  structure_parse_failed: `Failed to parse structure data. The structure format may be unsupported.`,
-  structure_fetch_failed: `Could not fetch structure from {provider}. The server may be temporarily unavailable. Try a different database or try again later.`,
-  provider_unavailable_503: `The {provider} server is temporarily unavailable (503). Please try again later or select a different database.`,
-  provider_network_error: `Network error connecting to {provider}. The server may be down or blocking requests.`,
+  structure_parse_failed:
+    `Failed to parse structure data. The structure format may be unsupported.`,
+  structure_fetch_failed:
+    `Could not fetch structure from {provider}. The server may be temporarily unavailable. Try a different database or try again later.`,
+  provider_unavailable_503:
+    `The {provider} server is temporarily unavailable (503). Please try again later or select a different database.`,
+  provider_network_error:
+    `Network error connecting to {provider}. The server may be down or blocking requests.`,
   structure_import_failed: `Failed to import structure: {error}`,
   structure_conversion_failed: `Failed to convert compound structure`,
   compound_fetch_failed: `Failed to fetch compound data`,
@@ -1266,7 +1326,8 @@ const structure: Record<string, string> = {
   format: `Format:`,
   custom_filename: `Or custom filename:`,
   paste_content_desc: `Paste POSCAR/CONTCAR or other structure file content:`,
-  paste_hint: `Supports POSCAR/CONTCAR, CIF, XYZ, Extended XYZ formats. Press Ctrl+Enter to import.`,
+  paste_hint:
+    `Supports POSCAR/CONTCAR, CIF, XYZ, Extended XYZ formats. Press Ctrl+Enter to import.`,
 
   // Lattice Editor
   lattice_editor: `Lattice Editor`,
@@ -1296,10 +1357,13 @@ const structure: Record<string, string> = {
 
   // Doping Pane
   combinatorial_doping: `Combinatorial Doping`,
-  doping_help_1: `Each <b>Group</b> defines one substitution site. Choose target atoms by element or by selecting atoms in the 3D viewer.`,
-  doping_help_2: `In the <b>Periodic Table</b> window, click elements to add replacement candidates (shown as green chips). Drag across elements for quick multi-select.`,
+  doping_help_1:
+    `Each <b>Group</b> defines one substitution site. Choose target atoms by element or by selecting atoms in the 3D viewer.`,
+  doping_help_2:
+    `In the <b>Periodic Table</b> window, click elements to add replacement candidates (shown as green chips). Drag across elements for quick multi-select.`,
   doping_help_3: `Add more groups to substitute multiple sites simultaneously.`,
-  doping_help_4: `Click <b>Generate Structures</b> to create all combinatorial substitutions, then <b>Open as Trajectory</b> to browse them.`,
+  doping_help_4:
+    `Click <b>Generate Structures</b> to create all combinatorial substitutions, then <b>Open as Trajectory</b> to browse them.`,
   group_n: `Group {n}`,
   by_element: `By Element`,
   by_selection: `By Selection`,
@@ -1324,9 +1388,12 @@ const structure: Record<string, string> = {
   mode_combinatorial: `Combinatorial`,
   mode_random: `Random`,
   random_dopants_label: `Random dopants`,
-  random_help_1: `Pick the <b>host pool</b> — all atoms of an element, or capture a selection from the 3D viewer.`,
-  random_help_2: `Click elements in the <b>Periodic Table</b> to add dopants, then set how many of each (by count or percent).`,
-  random_help_3: `Generate <b>N</b> random arrangements (deduplicated), then <b>Open as Trajectory</b> to browse them.`,
+  random_help_1:
+    `Pick the <b>host pool</b> — all atoms of an element, or capture a selection from the 3D viewer.`,
+  random_help_2:
+    `Click elements in the <b>Periodic Table</b> to add dopants, then set how many of each (by count or percent).`,
+  random_help_3:
+    `Generate <b>N</b> random arrangements (deduplicated), then <b>Open as Trajectory</b> to browse them.`,
   random_pool: `Pool: {n} {el} atoms`,
   random_pool_generic: `pool`,
   amount_by: `Amount by:`,
@@ -1338,9 +1405,11 @@ const structure: Record<string, string> = {
   random_dedup: `Deduplicate identical arrangements`,
   random_seed: `Seed:`,
   random_seed_ph: `random`,
-  random_preview: `Replace <strong>{replace}</strong> of {pool} {el} at random → {remain} remain`,
+  random_preview:
+    `Replace <strong>{replace}</strong> of {pool} {el} at random → {remain} remain`,
   random_over_pool: `{replace} substitutions exceed the pool of {pool} sites`,
-  random_err_invalid: `Pick a host pool and at least one dopant (total must not exceed the pool)`,
+  random_err_invalid:
+    `Pick a host pool and at least one dopant (total must not exceed the pool)`,
   // -- Moiré Bilayer pane --
   moire_bilayer: `Moiré Bilayer`,
   moire_builder_title: `Moiré Bilayer Builder`,
@@ -1384,7 +1453,8 @@ const structure: Record<string, string> = {
   moire_vacuum: `Vacuum (Å)`,
   moire_building: `Building...`,
   moire_build_bilayer: `Build Bilayer`,
-  moire_err_needs_periodic: `Moiré construction requires a periodic structure with a lattice. Use Manual input mode with presets instead.`,
+  moire_err_needs_periodic:
+    `Moiré construction requires a periodic structure with a lattice. Use Manual input mode with presets instead.`,
 
   // Electronic analysis panes
   browse_local: `Browse Local`,
@@ -1415,7 +1485,8 @@ const structure: Record<string, string> = {
   charge_compute_diff_failed: `Compute diff failed: {reason}`,
   charge_drop_file: `Drag & drop charge file`,
   charge_density_isosurface: `Charge Density Isosurface`,
-  charge_density_desc: `Load CHGCAR, LOCPOT, ELFCAR, PARCHG, or .cube for 3D isosurface visualization`,
+  charge_density_desc:
+    `Load CHGCAR, LOCPOT, ELFCAR, PARCHG, or .cube for 3D isosurface visualization`,
   difference_charge_density: `Difference Charge Density`,
   difference_charge_density_desc: `Compute ρ(AB) − ρ(A) − ρ(B) from three CHGCAR files`,
   select_chgcar_ab: `Select CHGCAR_AB`,
@@ -1516,7 +1587,8 @@ const structure: Record<string, string> = {
   dos_kurtosis: `Kurtosis`,
   dos_band_edges: `Band edges`,
   dos_load_data: `Load DOS Data`,
-  dos_load_data_desc: `Select a vaspout.h5 or PROCAR file, or provide a remote directory containing PROCAR + OUTCAR + CONTCAR.`,
+  dos_load_data_desc:
+    `Select a vaspout.h5 or PROCAR file, or provide a remote directory containing PROCAR + OUTCAR + CONTCAR.`,
   dos_upload_procar: `Upload PROCAR`,
   dos_drop_or_browse: `Drop or browse`,
   dos_without_outcar: `Without OUTCAR, Fermi energy defaults to 0`,
@@ -1527,8 +1599,10 @@ const structure: Record<string, string> = {
   band_projection_failed: `Projection failed`,
   band_parsing: `Parsing...`,
   band_kpoints_optional: `KPOINTS (optional):`,
-  band_kpoints_required: `This band run needs a line-mode KPOINTS file. Pick it in the KPOINTS field above first, then re-select vasprun.xml.`,
-  band_kpoints_hint: `Tip: a band structure along symmetry lines also needs its line-mode KPOINTS file. Set it below BEFORE choosing vasprun.xml.`,
+  band_kpoints_required:
+    `This band run needs a line-mode KPOINTS file. Pick it in the KPOINTS field above first, then re-select vasprun.xml.`,
+  band_kpoints_hint:
+    `Tip: a band structure along symmetry lines also needs its line-mode KPOINTS file. Set it below BEFORE choosing vasprun.xml.`,
   band_metal_status: `Metal?`,
   band_metal: `metal`,
   band_semicond: `semicond`,
@@ -1541,7 +1615,8 @@ const structure: Record<string, string> = {
   band_e_max_ev: `E max (eV):`,
   band_fat_scale: `Fat band scale:`,
   band_load_structure: `Load Band Structure`,
-  band_load_structure_desc: `Select a vasprun.xml file or provide a remote directory containing vasprun.xml (+ optional KPOINTS).`,
+  band_load_structure_desc:
+    `Select a vasprun.xml file or provide a remote directory containing vasprun.xml (+ optional KPOINTS).`,
   cohp_session_label: `COHP ({n} bonds)`,
   cohp_icohplist_upload_failed: `ICOHPLIST upload failed`,
   cohp_load_failed: `Failed to load COHP data`,
@@ -1571,7 +1646,8 @@ const structure: Record<string, string> = {
   cohp_upload_icohplist: `Upload ICOHPLIST.lobster`,
   cohp_bond: `Bond`,
   cohp_load_cohpcar: `Load COHPCAR.lobster`,
-  cohp_load_cohpcar_desc: `Select a COHPCAR.lobster file from local, remote HPC, or workflow output.`,
+  cohp_load_cohpcar_desc:
+    `Select a COHPCAR.lobster file from local, remote HPC, or workflow output.`,
   ads_site_no_structure_loaded: `No structure loaded`,
   ads_site_finder: `Adsorption Site Finder`,
   ads_site_find_sites: `Find Sites`,
@@ -1624,7 +1700,8 @@ const structure: Record<string, string> = {
   ads_place_click_site: `Click a site to place (ESC to cancel)`,
   ads_place_enable_mode: `Enable placement mode`,
   ads_place_post_placement: `Post-placement`,
-  ads_place_placed_hint: `{n} adsorbate atom(s) placed (indices {indices}) — only adsorbate moves`,
+  ads_place_placed_hint:
+    `{n} adsorbate atom(s) placed (indices {indices}) — only adsorbate moves`,
 
   // Phase diagram controls and stats
   phase_diagram_controls: `Phase Diagram Controls`,
@@ -1633,7 +1710,8 @@ const structure: Record<string, string> = {
   phase_energy_source: `Energy source`,
   phase_use_precomputed_energy: `Use precomputed formation energies (E<sub>form</sub>)`,
   phase_precomputed: `Precomputed`,
-  phase_compute_on_the_fly_hint: `Compute formation energies and hull distances on the fly`,
+  phase_compute_on_the_fly_hint:
+    `Compute formation energies and hull distances on the fly`,
   phase_on_the_fly: `On the fly`,
   phase_color_mode: `Color mode`,
   phase_color_by_stability: `Color points by stable/unstable`,
@@ -1663,7 +1741,8 @@ const structure: Record<string, string> = {
   phase_hull_face_opacity: `Hull face opacity`,
   phase_hull_face_opacity_hint: `Hull face opacity (0 = transparent, 1 = opaque)`,
   phase_camera: `Camera`,
-  phase_elevation_hint: `Elevation angle (0° = look down z-axis, 90° = side view, 180° = look up z-axis)`,
+  phase_elevation_hint:
+    `Elevation angle (0° = look down z-axis, 90° = side view, 180° = look up z-axis)`,
   phase_elev: `Elev`,
   phase_azimuth_hint: `Azimuth rotation around z-axis`,
   phase_azim: `Azim`,
@@ -1727,7 +1806,8 @@ const structure: Record<string, string> = {
   // Trajectory loader
   trajectory_load_title: `Load Trajectory`,
   trajectory_load_hint: `Drop a trajectory file here or use the buttons below`,
-  trajectory_load_description: `Select an XDATCAR, vaspout.h5, .xyz, or other trajectory file from a local file, remote HPC server, or workflow.`,
+  trajectory_load_description:
+    `Select an XDATCAR, vaspout.h5, .xyz, or other trajectory file from a local file, remote HPC server, or workflow.`,
   trajectory_supported_formats: `Supported formats`,
   trajectory_format_xdatcar: `VASP XDATCAR files`,
   trajectory_format_xyz: `Multi-frame XYZ (.xyz, .extxyz)`,

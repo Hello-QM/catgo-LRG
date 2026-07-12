@@ -117,7 +117,10 @@
     apply_atom_add_incremental,
     apply_atom_replace_incremental,
     apply_atom_move_incremental,
+    DEFER_BONDS_ABOVE_ATOMS,
+    should_defer_bonds,
   } from './bond-computation-controller.svelte'
+  import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import {
     compute_charge_label_entries,
     setup_charge_label_drag,
@@ -398,6 +401,38 @@
 
   // @ts-ignore - structure is declared later via $props() but $derived is reactive
   let is_large_structure = $derived((structure?.sites?.length ?? 0) > LARGE_STRUCTURE_THRESHOLD)
+
+  // i18n for the "bonds deferred" banner. The parent (Structure.svelte) already
+  // loads this module; the call is a no-op if it's already cached.
+  load_i18n_module(`structure`)
+
+  // ─── Defer bonds for very large structures ───
+  // Bonds default to `show_bonds = always`, so a huge structure (e.g. an 11k-atom
+  // LAMMPS model) computes bond connectivity eagerly on load — the jank source.
+  // For structures above DEFER_BONDS_ABOVE_ATOMS we render atoms + the unit cell
+  // immediately and defer bond (and polyhedra) computation until the user asks.
+  // `user_requested_bonds` un-defers when the banner button is clicked.
+  let user_requested_bonds = $state(false)
+  // Canonical (non-image) atom count. `structure.sites` here is PBC-image-
+  // expanded for rendering, so `.length` overcounts (e.g. 10976 → 14895);
+  // `num_original_sites` is the real structure size when images are present.
+  // Gate on the canonical count so a small structure whose boundary images
+  // push the scene over the threshold isn't falsely deferred, and the banner
+  // shows the number the user recognises.
+  // @ts-ignore - structure/num_original_sites are declared later via $props() but $derived is reactive
+  let deferred_atom_count = $derived(num_original_sites ?? (structure?.sites?.length ?? 0))
+  const bonds_deferred = $derived(should_defer_bonds(deferred_atom_count, user_requested_bonds))
+  // Re-defer whenever a new structure is loaded. We key off sites.length (not
+  // object identity) so that in-place position edits — which reuse the same atom
+  // count via `structure = { ...structure, sites }` — do NOT re-hide bonds the
+  // user asked to compute. Self-guarded write mirrors last_align_trigger below.
+  let last_bonds_defer_count = $state(-1)
+  $effect(() => {
+    const n = deferred_atom_count
+    if (n === last_bonds_defer_count) return
+    last_bonds_defer_count = n
+    user_requested_bonds = false
+  })
 
   // Global pointerdown listener to handle measurement label selection.
   // Uses pointerdown instead of click because Threlte's interactivity system
@@ -2357,10 +2392,14 @@
     // trajectories drive this slow path per frame (no fast-path positions), so
     // it triggers the extension-only solid_angle -> atom_radii downgrade inside
     // compute_bond_connectivity. Static structures keep step_idx === -1 → false.
+    // `bonds_deferred` (last arg) short-circuits the compute for huge structures
+    // — the function clears bonds and returns like the `never` branch. Reading it
+    // here makes this $effect.pre re-fire when the user clicks "Compute bonds".
     compute_bond_connectivity(
       bond_state, (pairs) => { bond_pairs = pairs },
       bond_input, show_bonds, lattice, bonding_strategy,
       bonding_options_eff, external_dragging, trajectory_step_idx >= 0,
+      bonds_deferred,
     )
   })
 
@@ -2372,10 +2411,13 @@
   // with the reactive bond effect above (that would loop on bond_state writes).
   $effect(() => on_ferrox_wasm_ready(() => untrack(() => {
     invalidate_bonds_for_recompute(bond_state, bond_input)
+    // Honour the huge-structure defer gate here too (read untracked — current
+    // value at wasm-ready time): a deferred structure stays bond-free until the
+    // user asks, rather than recomputing the moment WASM loads.
     compute_bond_connectivity(
       bond_state, (pairs) => { bond_pairs = pairs },
       bond_input, show_bonds, lattice, bonding_strategy,
-      bonding_options_eff, external_dragging,
+      bonding_options_eff, external_dragging, false, bonds_deferred,
     )
   })))
 
@@ -2917,7 +2959,11 @@
 
   // --- Polyhedra computation (bond-graph: uses filtered_bond_pairs) ---
   let polyhedra_data = $derived.by(() => {
-    if (!show_polyhedra || !structure?.sites) return []
+    // Polyhedra depend on a synchronous atom_radii bond compute (compute_bonds_sync
+    // below), which is exactly the main-thread cost we defer for huge structures.
+    // When bonds are deferred, polyhedra wait too — they recompute once the user
+    // clicks "Compute bonds" (bonds_deferred flips false → this re-derives).
+    if (!show_polyhedra || !structure?.sites || bonds_deferred) return []
     try {
       // Compute on the UNIT-CELL structure only. When image atoms are shown,
       // `structure.sites` is expanded with boundary image copies appended after
@@ -6126,6 +6172,26 @@
   </div>
 {/if}
 
+<!-- ═══ Bonds-deferred banner ═══ -->
+<!-- Shown only for genuinely huge structures whose bonds were deferred on load.
+     Portaled into the Threlte DOM container (same as site labels); the button
+     overrides the container's pointer-events:none so it stays clickable. -->
+{#if bonds_deferred && show_bonds !== `never`}
+  <div
+    use:site_label_portal
+    class="bonds-deferred-banner"
+    style:position="absolute"
+    style:bottom="12px"
+    style:left="50%"
+    style:transform="translateX(-50%)"
+  >
+    <span>{t(`structure.bonds_deferred`, { n: deferred_atom_count })}</span>
+    <button type="button" onclick={() => (user_requested_bonds = true)}>
+      {t(`structure.compute_bonds`)}
+    </button>
+  </div>
+{/if}
+
 <style>
   :global(.structure .responsive-gizmo) {
     width: clamp(70px, 18cqmin, 100px) !important;
@@ -6180,6 +6246,36 @@
     font-size: 0.75em;
     white-space: nowrap;
     pointer-events: none;
+  }
+  .bonds-deferred-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px 4px 10px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #f1f1f1;
+    font-size: 0.75em;
+    white-space: nowrap;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    z-index: 5;
+  }
+  .bonds-deferred-banner button {
+    font: inherit;
+    cursor: pointer;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 8px;
+    background: #3b82f6;
+    color: #fff;
+  }
+  .bonds-deferred-banner button:hover {
+    background: #2563eb;
+  }
+  /* The Threlte HTML wrapper forces pointer-events:none on all descendants
+     (see `.structure canvas + div *` below). Re-enable clicks on the button. */
+  :global(.structure .bonds-deferred-banner button) {
+    pointer-events: auto !important;
   }
   .elements {
     margin-bottom: var(--canvas-tooltip-elements-margin);
