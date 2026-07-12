@@ -220,6 +220,41 @@ export function compute_export_render_plan(
   }
 }
 
+// Scale an export render plan down so its render size fits inside the actual
+// WebGL drawing buffer. Browsers (notably WebKitGTK/Tauri) clamp the drawing
+// buffer below the requested canvas size at a limit separate from — and often
+// far smaller than — MAX_RENDERBUFFER_SIZE; without this, readPixels reads past
+// the real buffer and the export gets black margins + a shifted, cropped image.
+// Returns the plan unchanged when it already fits; aspect is preserved.
+export function fit_plan_to_drawing_buffer(
+  plan: ExportRenderPlan,
+  buffer_width: number,
+  buffer_height: number,
+): ExportRenderPlan {
+  const bw = Math.max(1, Math.floor(buffer_width))
+  const bh = Math.max(1, Math.floor(buffer_height))
+  if (bw >= plan.render_width && bh >= plan.render_height) return plan
+
+  const scale = Math.min(bw / plan.render_width, bh / plan.render_height)
+  const view_offset = plan.view_offset
+    ? {
+      full_width: Math.max(1, Math.round(plan.view_offset.full_width * scale)),
+      full_height: Math.max(1, Math.round(plan.view_offset.full_height * scale)),
+      x: Math.round(plan.view_offset.x * scale),
+      y: Math.round(plan.view_offset.y * scale),
+      width: Math.max(1, Math.round(plan.view_offset.width * scale)),
+      height: Math.max(1, Math.round(plan.view_offset.height * scale)),
+    }
+    : undefined
+  return {
+    full_width: Math.max(1, Math.round(plan.full_width * scale)),
+    full_height: Math.max(1, Math.round(plan.full_height * scale)),
+    render_width: Math.max(1, Math.floor(plan.render_width * scale)),
+    render_height: Math.max(1, Math.floor(plan.render_height * scale)),
+    view_offset,
+  }
+}
+
 function prepare_camera_for_export(
   camera: THREE.Camera,
   full_width: number,
@@ -306,19 +341,40 @@ function render_and_read_pixels(
     // Render at target resolution (pixelRatio=1, exact pixel dimensions)
     renderer.setPixelRatio(1)
     renderer.setSize(plan.render_width, plan.render_height, false)
+
+    // The browser can clamp the WebGL drawing buffer BELOW the requested canvas
+    // size — a max-viewport / max-drawing-buffer-area limit that is separate from
+    // (and often much smaller than) MAX_RENDERBUFFER_SIZE, and is especially low
+    // on WebKitGTK/Tauri. When that happens `canvas.width` no longer matches the
+    // real buffer: three renders into an oversized viewport while readPixels reads
+    // past the actual buffer, producing black margins plus a shifted, cropped
+    // export. Re-sync the whole plan to the ACTUAL drawing-buffer size so the
+    // render viewport, camera aspect and readPixels rectangle all agree. The
+    // clamp preserves aspect, so a high-DPI export just caps at the largest the
+    // GPU/browser can produce instead of corrupting the image.
+    const fitted = fit_plan_to_drawing_buffer(
+      plan,
+      gl.drawingBufferWidth,
+      gl.drawingBufferHeight,
+    )
+    const read_w = fitted.render_width
+    const read_h = fitted.render_height
+    if (read_w !== plan.render_width || read_h !== plan.render_height) {
+      renderer.setSize(read_w, read_h, false)
+    }
+
     restore_camera = prepare_camera_for_export(
       camera,
-      plan.full_width,
-      plan.full_height,
-      plan.view_offset,
+      fitted.full_width,
+      fitted.full_height,
+      fitted.view_offset,
     )
     renderer.render(scene, camera)
 
-    // Read pixels synchronously — works regardless of preserveDrawingBuffer
+    // Read pixels synchronously — works regardless of preserveDrawingBuffer.
+    // read_w/read_h now match the real drawing buffer (see clamp above).
     const read_x = 0
     const read_y = 0
-    const read_w = plan.render_width
-    const read_h = plan.render_height
 
     const pixels = new Uint8Array(read_w * read_h * 4)
     gl.readPixels(read_x, read_y, read_w, read_h, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
