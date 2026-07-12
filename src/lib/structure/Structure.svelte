@@ -4112,7 +4112,13 @@
                 on_load_structure={(data) => {
                   const xyz = freq_data_to_xyz(data.elements, data.positions)
                   const parsed = parse_any_structure(xyz, `cp2k-vibrations.xyz`)
-                  if (parsed) structure = parsed as typeof structure
+                  if (parsed) {
+                    structure = parsed as typeof structure
+                    // Re-lock the orbit pivot onto the new structure — the pivot is
+                    // deliberately sticky across regular edits, so a bare structure
+                    // assignment keeps the previous structure's rotation center.
+                    center_camera_trigger++
+                  }
                 }}
               />
             {/if}
