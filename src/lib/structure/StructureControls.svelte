@@ -1142,16 +1142,16 @@
         {t('structure.thickness')}
         <input
           type="number"
-          min={0.05}
-          max={0.5}
-          step={0.05}
+          min={SETTINGS_CONFIG.structure.bond_thickness.minimum}
+          max={SETTINGS_CONFIG.structure.bond_thickness.maximum}
+          step={0.01}
           bind:value={scene_props.bond_thickness}
         />
         <input
           type="range"
-          min={0.05}
-          max={0.5}
-          step={0.05}
+          min={SETTINGS_CONFIG.structure.bond_thickness.minimum}
+          max={SETTINGS_CONFIG.structure.bond_thickness.maximum}
+          step={0.01}
           bind:value={scene_props.bond_thickness}
         />
       </label>

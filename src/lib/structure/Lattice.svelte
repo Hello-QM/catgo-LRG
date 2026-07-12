@@ -40,6 +40,12 @@
   } = $props()
 
   let hovered_idx = $state<number | null>(null) // track hovered vector
+  // Scale the a/b/c axis-arrow thickness with the cell line-width control so it
+  // tracks the cell edges. Divisor is the config default, so scale === 1 (today's
+  // look) at cell_edge_width = 1.5.
+  let axis_width_scale = $derived(
+    cell_edge_width / DEFAULTS.structure.cell_edge_width,
+  )
   let lattice_center = $derived(
     matrix
       ? (math.scale(math.add(...matrix), 0.5) satisfies Vec3)
@@ -170,7 +176,9 @@
             onpointerenter={() => hovered_idx = idx}
             onpointerleave={() => hovered_idx = null}
           >
-            <T.CylinderGeometry args={[0.05, 0.05, shaft_length, 16]} />
+            <T.CylinderGeometry
+              args={[0.05 * axis_width_scale, 0.05 * axis_width_scale, shaft_length, 16]}
+            />
             <T.MeshBasicMaterial color={vector_colors[idx]} />
           </T.Mesh>
 
@@ -181,7 +189,7 @@
             onpointerenter={() => hovered_idx = idx}
             onpointerleave={() => hovered_idx = null}
           >
-            <T.ConeGeometry args={[0.175, 0.5, 16]} />
+            <T.ConeGeometry args={[0.175 * axis_width_scale, 0.5, 16]} />
             <T.MeshBasicMaterial color={vector_colors[idx]} />
           </T.Mesh>
         {/each}
