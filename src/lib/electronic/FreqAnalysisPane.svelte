@@ -4,6 +4,7 @@
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
   import { polyline_points } from './ir-utils'
+  import { export_svg_as_png } from '$lib/io/export'
 
   load_i18n_module('structure')
   load_i18n_module('common')
@@ -41,6 +42,7 @@
   let ir_loading = $state(false)
   let ir_error = $state<string | null>(null)
   let ir_spectrum = $state<{ grid_cm: number[]; intensity: number[] } | null>(null)
+  let ir_svg_el = $state<SVGSVGElement | undefined>()
 
   const ir_available = $derived.by(() => {
     const ints = freq_data?.intensities_km_mol
@@ -69,6 +71,12 @@
     } finally {
       ir_loading = false
     }
+  }
+
+  function export_ir_png() {
+    // Reuse the shared svg→canvas→toBlob→download() flow (via $lib/io/fetch's
+    // download). png_dpi 144 = 144/72 = fixed 2x scale.
+    if (ir_svg_el) export_svg_as_png(ir_svg_el, 'ir-spectrum.png', 144)
   }
 
   async function handle_file_upload(file: File) {
@@ -240,7 +248,7 @@
             <div class="freq-row freq-imag">
               <span>{f.index}:</span>
               <span class="mono">{f.frequency_cm.toFixed(1)} i</span>
-              <span class="mono dim">{f.mev?.toFixed(2) ?? ''} meV</span>
+              {#if f.mev != null}<span class="mono dim">{f.mev.toFixed(2)} meV</span>{/if}
             </div>
           {/each}
         </div>
@@ -251,7 +259,7 @@
           <div class="freq-row">
             <span>{f.index}:</span>
             <span class="mono">{f.frequency_cm.toFixed(1)}</span>
-            <span class="mono dim">{f.mev?.toFixed(2) ?? ''} meV</span>
+            {#if f.mev != null}<span class="mono dim">{f.mev.toFixed(2)} meV</span>{/if}
           </div>
         {/each}
       </div>
@@ -351,7 +359,7 @@
           <div class="freq-error">{ir_error}</div>
         {/if}
         {#if ir_spectrum && ir_spectrum.grid_cm.length}
-          <svg class="freq-ir-plot" viewBox="0 0 320 130" role="img" aria-label={t('structure.ir_spectrum')}>
+          <svg bind:this={ir_svg_el} class="freq-ir-plot" viewBox="0 0 320 130" role="img" aria-label={t('structure.ir_spectrum')}>
             <polyline
               points={polyline_points(ir_spectrum.grid_cm, ir_spectrum.intensity, 320, 120, 8)}
               fill="none"
@@ -360,6 +368,9 @@
             />
             <text x="160" y="128" text-anchor="middle" class="freq-ir-axis">cm⁻¹ →</text>
           </svg>
+          <div class="freq-form-row freq-ir-export-row">
+            <button class="freq-browse-btn" onclick={export_ir_png}>PNG</button>
+          </div>
         {/if}
       </div>
     {/if}
@@ -573,5 +584,9 @@
   .freq-ir-axis {
     font-size: 8px;
     fill: var(--text-color-dim, light-dark(#6b7280, #9ca3af));
+  }
+  .freq-ir-export-row {
+    justify-content: flex-end;
+    margin-top: 4px;
   }
 </style>

@@ -1,8 +1,9 @@
 """CP2K vibrational-analysis output parsers.
 
-Pure functions, no FastAPI imports. Both parsers return the same dict shape
-as routers.freq_analysis._parse_outcar_content so the frontend
-(FreqAnalysisPane) works unchanged:
+Pure functions, no FastAPI imports. Both parsers return the same contract
+consumed by FreqAnalysisPane (a superset/subset per source: CP2K adds
+elements/intensities_km_mol/source_format and omits ions_per_type) so the
+frontend works unchanged:
 
 - eigenvectors / intensities_km_mol are ordered IMAGINARY MODES FIRST, then
   real modes — FreqAnalysisPane indexes eigenvectors as

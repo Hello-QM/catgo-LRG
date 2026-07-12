@@ -162,7 +162,7 @@ def parse_freq_path(req: ParsePathRequest):
     if p.stat().st_size > 50 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large (>50 MB)")
     from catgo.services.cp2k_freq import parse_freq_content
-    return parse_freq_content(p.read_text(errors="replace"))
+    return parse_freq_content(p.read_text(encoding="utf-8", errors="replace"))
 
 
 class RemoteParseRequest(BaseModel):
