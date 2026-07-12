@@ -1180,8 +1180,14 @@
               : content
             const parsed_structure = parse_any_structure(text_content, filename)
             if (parsed_structure) {
-              center_camera_trigger++ // Trigger camera centering on new structure
               structure = parsed_structure
+              // Recenter one tick later so the transform pipeline has pushed the
+              // new structure to StructureScene — a synchronous trigger locks the
+              // pivot onto the outgoing structure (masked for molecules by the
+              // auto-align pass, exposed on periodic overwrite-imports).
+              void tick().then(() => {
+                center_camera_trigger++
+              })
               // Capture for MD analysis
               imported_traj_b64 = content_to_base64(content instanceof ArrayBuffer ? content : content)
               imported_traj_format = filename.split(`.`).pop()?.toLowerCase() || ``
@@ -1221,8 +1227,12 @@
     try {
       const parsed = parse_any_structure(structure_string, `string`)
       if (parsed) {
-        center_camera_trigger++ // Trigger camera centering on new structure
         structure = parsed
+        // Recenter one tick later — see the file-import path above; a
+        // synchronous trigger locks the pivot onto the outgoing structure.
+        void tick().then(() => {
+          center_camera_trigger++
+        })
         // Capture for MD analysis
         imported_traj_b64 = content_to_base64(structure_string)
         imported_traj_format = `xyz`
