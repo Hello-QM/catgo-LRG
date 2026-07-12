@@ -13,7 +13,7 @@ provides IR intensities; VASP OUTCAR does not).
 
 ## Inputs (decided)
 
-Sample data: `/home/james0001/Downloads/freq` — a 169-atom La-Cu-oxide surface
+Sample data: `/home/james0001/Downloads/freq` — a 173-atom La-Cu-oxide surface
 with a CO-NH₂ adsorbate, partial Hessian (only the 5 adsorbate atoms displaced,
 15 modes). Representative of the target use case (electrocatalysis adsorbate
 frequencies).
@@ -119,5 +119,5 @@ remote and MCP all use identical parsers.
   dispatch (Molden vs `.out` vs OUTCAR), ir-spectrum endpoint values.
 - **vitest**: none required (pane logic unchanged except conditional IR
   section; covered by existing pane tests).
-- **Manual E2E**: full 169-atom sample through upload → animation → Gibbs at
+- **Manual E2E**: full 173-atom sample through upload → animation → Gibbs at
   298.15 K → IR spectrum; remote from-directory against an HPC dir; MCP call.
