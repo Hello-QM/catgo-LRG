@@ -16,6 +16,8 @@ const structure: Record<string, string> = {
   lattice_vectors: `晶格向量`,
   bonds: `成键`,
   add_bond_rule: `+ 成键规则`,
+  bonds_deferred: `为性能已隐藏成键（{n} 个原子）`,
+  compute_bonds: `计算成键`,
   camera: `相机`,
   projection: `投影`,
   auto_rotate_speed: `自动旋转速度`,
@@ -185,7 +187,8 @@ const structure: Record<string, string> = {
   create_plugins_desc: `CatBot 可以为你生成自定义插件。打开 AI 助手并描述你的需求。`,
   example_prompts: `示例提示：`,
   plugin_format: `插件格式：`,
-  plugin_format_desc: `每个插件都是一个 Python 文件，包含 TOOL 字典和 execute(context) 函数。CatBot 会处理样板代码——只需描述你需要的计算。`,
+  plugin_format_desc:
+    `每个插件都是一个 Python 文件，包含 TOOL 字典和 execute(context) 函数。CatBot 会处理样板代码——只需描述你需要的计算。`,
   ui_extensions: `UI 扩展`,
   install_zip: `安装 ZIP`,
   no_ui_extensions: `尚未安装 UI 扩展。UI 扩展可以添加自定义视图、面板和可视化钩子。`,
@@ -215,7 +218,8 @@ const structure: Record<string, string> = {
   scheduler: `调度器`,
   work_root: `工作根目录`,
   work_root_placeholder: `例如 ~/projects/my-work 或 /work/home/user/project`,
-  work_root_hint: `可选。填写后，文件浏览、上传下载、编辑和作业工作目录都会限制在这里面。`,
+  work_root_hint:
+    `可选。填写后，文件浏览、上传下载、编辑和作业工作目录都会限制在这里面。`,
   work_root_boundary: `工作根目录边界`,
   work_root_blocked: `这个路径不在已配置的工作根目录内。`,
   use_jump_host: `使用跳板机（堡垒机）`,
@@ -318,7 +322,8 @@ const structure: Record<string, string> = {
   ssh_key_otp: `SSH 密钥 + OTP`,
   ssh_config: `SSH 配置`,
   ssh_config_controlmaster: `SSH 配置 (ControlMaster)`,
-  ssh_config_windows_hint: `需要 ControlMaster——Windows 不支持（无 ControlPath/ControlPersist）。请改用 SSH 密钥或 SSH 密钥 + OTP。`,
+  ssh_config_windows_hint:
+    `需要 ControlMaster——Windows 不支持（无 ControlPath/ControlPersist）。请改用 SSH 密钥或 SSH 密钥 + OTP。`,
   ssh_alias: `SSH 别名`,
   ssh_alias_hint: `（来自 ~/.ssh/config）`,
   ssh_alias_placeholder: `例如 Shaheen`,
@@ -444,11 +449,13 @@ const structure: Record<string, string> = {
   selected_elem: `已选择：{elem}`,
   text: `文本`,
   background_label: `背景`,
-  ml_potentials_need_server: `机器学习势（MACE、CHGNet、xTB 等）需要正在运行的计算服务器。`,
+  ml_potentials_need_server:
+    `机器学习势（MACE、CHGNet、xTB 等）需要正在运行的计算服务器。`,
   atoms_frozen: `已冻结 {n} 个原子`,
   atoms_selected: `已选择 {n} 个原子`,
   extract_as_isolated_molecule: `提取为孤立分子`,
-  selected_atoms_extract_hint: `选中的原子会被提取并在非周期边界条件下优化，然后放回原结构。`,
+  selected_atoms_extract_hint:
+    `选中的原子会被提取并在非周期边界条件下优化，然后放回原结构。`,
   selected_atoms_fixed_hint: `未选中的原子会在优化过程中固定。`,
   requires_periodic_lattice: `此工具需要周期性晶格。请先使用 {tab} 标签页添加晶格。`,
   slow_growth_post_processing: `Slow-Growth 后处理`,
@@ -816,7 +823,8 @@ const structure: Record<string, string> = {
   gesture_in_browser_no_key: `浏览器内运行，无需 API Key`,
   gesture_cloud: `云端`,
   gesture_openai_needs_key: `OpenAI API，需要 Key`,
-  gesture_web_speech_unavailable: `Web Speech API 不可用。请使用 Chrome/Edge，或切换到 Whisper。`,
+  gesture_web_speech_unavailable:
+    `Web Speech API 不可用。请使用 Chrome/Edge，或切换到 Whisper。`,
   gesture_backend: `后端`,
   gesture_model: `模型`,
   gesture_loading_model: `正在加载模型...`,
@@ -924,12 +932,18 @@ const structure: Record<string, string> = {
   nanoscroll_thickness: `单层厚度`,
   nanoscroll_strain: `最大弯曲应变`,
   // 提示（结合物理意义的实用建议）
-  nanoscroll_tip_monolayer: `卷曲当前视图中的结构。它必须是单层二维材料（单原子层）——卷曲三维体相没有物理意义。如有需要请先切出单层。`,
-  nanoscroll_tip_inner_radius: `最内圈的半径。越大则核心处弯曲应变越小；过小会导致键重叠或断裂。典型二维层应保持 ≥ 约 10–15 Å，若出现应变警告请调大。`,
-  nanoscroll_tip_turns: `螺旋圈数。圈数越多外半径越大、原子越多（原子数随圈数近似线性增长），请逐步增加。`,
-  nanoscroll_tip_interlayer_gap: `相邻卷层之间的范德华间距。按材料设置：石墨烯约 3.35，hBN 约 3.33，MoS₂ 约 6.15 Å（默认约 3.3）。`,
-  nanoscroll_tip_length: `沿轴向 (z) 的卷高。与螺旋无关——只控制卷的高度，不影响卷曲松紧。`,
-  nanoscroll_tip_roll_dir: `选择卷曲哪个面内晶格矢量（a1 或 a2）。另一个矢量沿轴向保持平直。`,
+  nanoscroll_tip_monolayer:
+    `卷曲当前视图中的结构。它必须是单层二维材料（单原子层）——卷曲三维体相没有物理意义。如有需要请先切出单层。`,
+  nanoscroll_tip_inner_radius:
+    `最内圈的半径。越大则核心处弯曲应变越小；过小会导致键重叠或断裂。典型二维层应保持 ≥ 约 10–15 Å，若出现应变警告请调大。`,
+  nanoscroll_tip_turns:
+    `螺旋圈数。圈数越多外半径越大、原子越多（原子数随圈数近似线性增长），请逐步增加。`,
+  nanoscroll_tip_interlayer_gap:
+    `相邻卷层之间的范德华间距。按材料设置：石墨烯约 3.35，hBN 约 3.33，MoS₂ 约 6.15 Å（默认约 3.3）。`,
+  nanoscroll_tip_length:
+    `沿轴向 (z) 的卷高。与螺旋无关——只控制卷的高度，不影响卷曲松紧。`,
+  nanoscroll_tip_roll_dir:
+    `选择卷曲哪个面内晶格矢量（a1 或 a2）。另一个矢量沿轴向保持平直。`,
   heterostructure: `异质结构`,
   heterostructure_mode_slab: `表面模型（预切）`,
   heterostructure_mode_bulk: `体相 + Miller`,
@@ -954,7 +968,8 @@ const structure: Record<string, string> = {
   reticular_mode_search: `搜索`,
   reticular_hint_search: `搜索 MOFX-DB 数据库，加载已有 MOF 结构。`,
   reticular_search_name: `名称`,
-  reticular_search_name_hint: `MOFX-DB 没有俗名 —— 留空可浏览全库，或用 CSD refcode（CoREMOF/CSD）、hMOF-编号。要 MOF-5、UiO-66 这类命名 MOF 请用 Preset 标签页。`,
+  reticular_search_name_hint:
+    `MOFX-DB 没有俗名 —— 留空可浏览全库，或用 CSD refcode（CoREMOF/CSD）、hMOF-编号。要 MOF-5、UiO-66 这类命名 MOF 请用 Preset 标签页。`,
   reticular_search_database: `数据库`,
   reticular_search_button: `搜索`,
   reticular_search_load: `加载`,
@@ -1004,7 +1019,8 @@ const structure: Record<string, string> = {
   go: `前往`,
   plugin_hub: `插件中心`,
   large_system_mode: `大体系性能模式`,
-  large_system_mode_unavailable: `大体系性能模式 —— 此浏览器不支持 WebGPU（需开启 Unsafe WebGPU / Vulkan 标志）`,
+  large_system_mode_unavailable:
+    `大体系性能模式 —— 此浏览器不支持 WebGPU（需开启 Unsafe WebGPU / Vulkan 标志）`,
   ai_assistant: `AI 助手`,
   restore_terminal: `还原终端`,
   minimize_terminal: `最小化终端`,
@@ -1152,7 +1168,8 @@ const structure: Record<string, string> = {
   tip_selection: `原子选择`,
   tip_selection_desc: `点击原子切换选中状态；右键菜单可全选`,
   tip_rotate_atoms: `旋转原子`,
-  tip_rotate_atoms_desc: `Shift+拖拽旋转选中原子 — 水平拖拽偏航、垂直拖拽俯仰（每次拖拽锁定一个轴），右键拖拽滚动`,
+  tip_rotate_atoms_desc:
+    `Shift+拖拽旋转选中原子 — 水平拖拽偏航、垂直拖拽俯仰（每次拖拽锁定一个轴），右键拖拽滚动`,
   tip_move_atoms: `移动原子`,
   tip_move_atoms_desc: `Shift+Alt+方向键 (或 Ctrl+方向键) 移动选中的原子`,
   tip_trajectory: `轨迹播放`,
@@ -1168,7 +1185,8 @@ const structure: Record<string, string> = {
 
   // Search Modal
   search_limitations: `搜索限制`,
-  search_limitations_desc: `由于浏览器安全限制 (CORS)，在线数据库搜索受到限制。若要完整访问 Materials Project、PubChem 以及所有 OPTIMADE 提供商，请使用 CatGo 桌面应用。`,
+  search_limitations_desc:
+    `由于浏览器安全限制 (CORS)，在线数据库搜索受到限制。若要完整访问 Materials Project、PubChem 以及所有 OPTIMADE 提供商，请使用 CatGo 桌面应用。`,
   search_database: `搜索数据库`,
   only_elements: `仅包含所选元素`,
   at_least_elements: `至少包含所选元素`,
@@ -1205,9 +1223,12 @@ const structure: Record<string, string> = {
   providers_not_loaded: `提供商尚未加载完成，请稍候...`,
   search_failed: `搜索失败：{error}`,
   structure_parse_failed: `解析结构数据失败，可能是不支持的结构格式。`,
-  structure_fetch_failed: `无法从 {provider} 获取结构。服务器可能暂时不可用，请稍后重试或切换到其他数据库。`,
-  provider_unavailable_503: `{provider} 服务器暂时不可用（503）。请稍后重试或选择其他数据库。`,
-  provider_network_error: `连接 {provider} 时出现网络错误。服务器可能不可用或阻止了请求。`,
+  structure_fetch_failed:
+    `无法从 {provider} 获取结构。服务器可能暂时不可用，请稍后重试或切换到其他数据库。`,
+  provider_unavailable_503:
+    `{provider} 服务器暂时不可用（503）。请稍后重试或选择其他数据库。`,
+  provider_network_error:
+    `连接 {provider} 时出现网络错误。服务器可能不可用或阻止了请求。`,
   structure_import_failed: `导入结构失败：{error}`,
   structure_conversion_failed: `转换化合物结构失败`,
   compound_fetch_failed: `获取化合物数据失败`,
@@ -1295,10 +1316,13 @@ const structure: Record<string, string> = {
 
   // Doping Pane
   combinatorial_doping: `组合掺杂`,
-  doping_help_1: `每个<b>组 (Group)</b> 定义一个取代位点。通过元素或在 3D 查看器中选择目标原子。`,
-  doping_help_2: `在<b>元素周期表</b>窗口中，点击元素以添加替换候选者（显示为绿色标签）。拖拽可选多个元素。`,
+  doping_help_1:
+    `每个<b>组 (Group)</b> 定义一个取代位点。通过元素或在 3D 查看器中选择目标原子。`,
+  doping_help_2:
+    `在<b>元素周期表</b>窗口中，点击元素以添加替换候选者（显示为绿色标签）。拖拽可选多个元素。`,
   doping_help_3: `添加更多组以同时取代多个位点。`,
-  doping_help_4: `点击<b>生成结构</b>来创建所有组合取代结果，然后点击<b>作为轨迹打开</b>来浏览它们。`,
+  doping_help_4:
+    `点击<b>生成结构</b>来创建所有组合取代结果，然后点击<b>作为轨迹打开</b>来浏览它们。`,
   group_n: `组 {n}`,
   by_element: `按元素`,
   by_selection: `按选择`,
@@ -1324,8 +1348,10 @@ const structure: Record<string, string> = {
   mode_random: `随机`,
   random_dopants_label: `随机掺杂元素`,
   random_help_1: `选择<b>替换池</b>——某个元素的全部原子，或在 3D 查看器中捕获选区。`,
-  random_help_2: `在<b>元素周期表</b>中点击元素以添加掺杂元素，再设定各自数量（按个数或百分比）。`,
-  random_help_3: `生成 <b>N</b> 个随机排布（自动去重），然后<b>作为轨迹打开</b>逐一浏览。`,
+  random_help_2:
+    `在<b>元素周期表</b>中点击元素以添加掺杂元素，再设定各自数量（按个数或百分比）。`,
+  random_help_3:
+    `生成 <b>N</b> 个随机排布（自动去重），然后<b>作为轨迹打开</b>逐一浏览。`,
   random_pool: `替换池：{n} 个 {el} 原子`,
   random_pool_generic: `替换池`,
   amount_by: `数量按：`,
@@ -1337,7 +1363,8 @@ const structure: Record<string, string> = {
   random_dedup: `去除重复排布`,
   random_seed: `随机种子：`,
   random_seed_ph: `随机`,
-  random_preview: `从 {pool} 个 {el} 中随机替换 <strong>{replace}</strong> 个 → 剩余 {remain} 个`,
+  random_preview:
+    `从 {pool} 个 {el} 中随机替换 <strong>{replace}</strong> 个 → 剩余 {remain} 个`,
   random_over_pool: `替换数 {replace} 超过了替换池的 {pool} 个位点`,
   random_err_invalid: `请选择替换池并至少添加一个掺杂元素（总数不能超过替换池）`,
   // -- 莫尔超晶格面板 --
@@ -1383,7 +1410,8 @@ const structure: Record<string, string> = {
   moire_vacuum: `真空层 (Å)`,
   moire_building: `构建中...`,
   moire_build_bilayer: `构建双层`,
-  moire_err_needs_periodic: `莫尔构建需要带晶格的周期性结构。请改用手动输入模式并使用预设。`,
+  moire_err_needs_periodic:
+    `莫尔构建需要带晶格的周期性结构。请改用手动输入模式并使用预设。`,
 
   // 电子结构分析面板
   browse_local: `浏览本地`,
@@ -1411,7 +1439,8 @@ const structure: Record<string, string> = {
   charge_compute_diff_failed: `差分电荷计算失败：{reason}`,
   charge_drop_file: `将电荷文件拖放到这里`,
   charge_density_isosurface: `电荷密度等值面`,
-  charge_density_desc: `加载 CHGCAR、LOCPOT、ELFCAR、PARCHG 或 .cube 进行三维等值面可视化`,
+  charge_density_desc:
+    `加载 CHGCAR、LOCPOT、ELFCAR、PARCHG 或 .cube 进行三维等值面可视化`,
   difference_charge_density: `差分电荷密度`,
   difference_charge_density_desc: `由三个 CHGCAR 文件计算 ρ(AB) − ρ(A) − ρ(B)`,
   select_chgcar_ab: `选择 CHGCAR_AB`,
@@ -1512,7 +1541,8 @@ const structure: Record<string, string> = {
   dos_kurtosis: `峰度`,
   dos_band_edges: `能带边缘`,
   dos_load_data: `加载 DOS 数据`,
-  dos_load_data_desc: `选择 vaspout.h5 或 PROCAR 文件，或提供包含 PROCAR + OUTCAR + CONTCAR 的远程目录。`,
+  dos_load_data_desc:
+    `选择 vaspout.h5 或 PROCAR 文件，或提供包含 PROCAR + OUTCAR + CONTCAR 的远程目录。`,
   dos_upload_procar: `上传 PROCAR`,
   dos_drop_or_browse: `拖放或浏览`,
   dos_without_outcar: `未提供 OUTCAR 时，费米能级默认设为 0`,
@@ -1523,8 +1553,10 @@ const structure: Record<string, string> = {
   band_projection_failed: `投影计算失败`,
   band_parsing: `正在解析...`,
   band_kpoints_optional: `KPOINTS（可选）：`,
-  band_kpoints_required: `该能带需要 line-mode 的 KPOINTS 文件。请先在上方 KPOINTS 栏选择，再重新选 vasprun.xml。`,
-  band_kpoints_hint: `提示：沿对称线的能带还需要 line-mode 的 KPOINTS 文件。请在下方设置，并在选 vasprun.xml 之前先设好。`,
+  band_kpoints_required:
+    `该能带需要 line-mode 的 KPOINTS 文件。请先在上方 KPOINTS 栏选择，再重新选 vasprun.xml。`,
+  band_kpoints_hint:
+    `提示：沿对称线的能带还需要 line-mode 的 KPOINTS 文件。请在下方设置，并在选 vasprun.xml 之前先设好。`,
   band_metal_status: `金属性？`,
   band_metal: `金属`,
   band_semicond: `半导体`,
@@ -1537,7 +1569,8 @@ const structure: Record<string, string> = {
   band_e_max_ev: `能量最大值 (eV)：`,
   band_fat_scale: `胖能带缩放：`,
   band_load_structure: `加载能带结构`,
-  band_load_structure_desc: `选择 vasprun.xml 文件，或提供包含 vasprun.xml（可选 KPOINTS）的远程目录。`,
+  band_load_structure_desc:
+    `选择 vasprun.xml 文件，或提供包含 vasprun.xml（可选 KPOINTS）的远程目录。`,
   cohp_session_label: `COHP（{n} 个键）`,
   cohp_icohplist_upload_failed: `ICOHPLIST 上传失败`,
   cohp_load_failed: `加载 COHP 数据失败`,
@@ -1723,7 +1756,8 @@ const structure: Record<string, string> = {
   // 轨迹加载入口
   trajectory_load_title: `加载轨迹`,
   trajectory_load_hint: `将轨迹文件拖放到这里，或使用下方按钮加载`,
-  trajectory_load_description: `从本地文件、远程 HPC 服务器或工作流中选择 XDATCAR、vaspout.h5、.xyz 或其他轨迹文件。`,
+  trajectory_load_description:
+    `从本地文件、远程 HPC 服务器或工作流中选择 XDATCAR、vaspout.h5、.xyz 或其他轨迹文件。`,
   trajectory_supported_formats: `支持的格式`,
   trajectory_format_xdatcar: `VASP XDATCAR 文件`,
   trajectory_format_xyz: `多帧 XYZ (.xyz, .extxyz)`,

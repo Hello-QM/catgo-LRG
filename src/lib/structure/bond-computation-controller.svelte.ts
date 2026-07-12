@@ -7,8 +7,12 @@ import type { ShowBonds } from '$lib/settings'
 import type { BondingStrategy } from './bonding'
 import { compute_bond_transform, detect_hydrogen_bonds } from './bonding'
 import { BOND_KIND, type BondManager } from './bonding/bond-manager.svelte'
-import { compute_bonds_async, compute_bonds_sync, compute_hbonds_worker } from './workers/bond-worker-api'
-import { should_show_bonds, filter_bonds_during_drag } from './scene'
+import {
+  compute_bonds_async,
+  compute_bonds_sync,
+  compute_hbonds_worker,
+} from './workers/bond-worker-api'
+import { filter_bonds_during_drag, should_show_bonds } from './scene'
 import { get_element_fingerprint, get_position_hash } from './scene'
 import * as math from '$lib/math'
 import covalent_radii_data from '$lib/element/single_bond_covalent_radii.json'
@@ -18,6 +22,31 @@ import type { Crystal } from './index'
  *  sync path directly (avoids worker round-trip). Trajectories where the
  *  base atom count fits this budget never need the async path. */
 const TRAJ_SYNC_THRESHOLD = 1000
+
+/**
+ * Atom-count threshold above which bond (and polyhedra) connectivity is
+ * DEFERRED on structure load: atoms + the unit cell render immediately and
+ * bonds are only computed once the user explicitly asks for them.
+ *
+ * Deliberately set well above the 1000-atom sync threshold and the 2000-atom
+ * GPU-picking threshold (`LARGE_STRUCTURE_THRESHOLD`) so only genuinely huge
+ * structures defer — e.g. the 11k-atom LAMMPS kerogen case where computing
+ * bonds on load is the jank source. Below this, behaviour is unchanged. */
+export const DEFER_BONDS_ABOVE_ATOMS = 8000
+
+/**
+ * Pure decision helper: should bond connectivity be deferred for a structure
+ * of `atom_count` atoms? True only when the structure exceeds
+ * `DEFER_BONDS_ABOVE_ATOMS` AND the user has not yet requested bonds. Extracted
+ * as a pure function for unit testing; the runtime wiring (state + banner)
+ * lives in StructureScene.
+ */
+export function should_defer_bonds(
+  atom_count: number,
+  user_requested: boolean,
+): boolean {
+  return atom_count > DEFER_BONDS_ABOVE_ATOMS && !user_requested
+}
 
 /** Maximum number of trajectory frames retained in the frame-keyed cache.
  *  LRU-evicted; revisits within the window are O(1). Sized to comfortably
@@ -58,7 +87,14 @@ let ext_traj_solid_angle_downgrade_logged = false
  * entry per visited frame; revisits are O(1).
  */
 type BondConnEntry = {
-  bond_connectivity: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }>
+  bond_connectivity: Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }
+  >
   fingerprint: string
   elem_fingerprint: string
   strategy_key: string
@@ -132,7 +168,8 @@ function build_trajectory_overlay_structure(
   const sites = structure.sites
   const traj_max = Math.floor(traj.length / 3)
   const new_sites: Site[] = new Array(sites.length)
-  const lattice_matrix = (structure as { lattice?: { matrix?: number[][] } }).lattice?.matrix
+  const lattice_matrix = (structure as { lattice?: { matrix?: number[][] } })
+    .lattice?.matrix
   const inv = lattice_matrix ? invert_3x3(lattice_matrix) : null
   for (let i = 0; i < sites.length; i++) {
     const orig = sites[i]
@@ -168,9 +205,21 @@ function invert_3x3(m: number[][]): number[][] | null {
   if (Math.abs(det) < 1e-12) return null
   const inv_det = 1 / det
   return [
-    [(e * i - f * h) * inv_det, (c * h - b * i) * inv_det, (b * f - c * e) * inv_det],
-    [(f * g - d * i) * inv_det, (a * i - c * g) * inv_det, (c * d - a * f) * inv_det],
-    [(d * h - e * g) * inv_det, (b * g - a * h) * inv_det, (a * e - b * d) * inv_det],
+    [
+      (e * i - f * h) * inv_det,
+      (c * h - b * i) * inv_det,
+      (b * f - c * e) * inv_det,
+    ],
+    [
+      (f * g - d * i) * inv_det,
+      (a * i - c * g) * inv_det,
+      (c * d - a * f) * inv_det,
+    ],
+    [
+      (d * h - e * g) * inv_det,
+      (b * g - a * h) * inv_det,
+      (a * e - b * d) * inv_det,
+    ],
   ]
 }
 
@@ -179,7 +228,16 @@ function invert_3x3(m: number[][]): number[][] | null {
  * Must be called from component `<script>` context (Svelte 5 $state).
  */
 export function create_bond_state() {
-  let bond_connectivity = $state<Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }>>([])
+  let bond_connectivity = $state<
+    Array<
+      {
+        site_idx_1: number
+        site_idx_2: number
+        strength: number
+        jimage: [number, number, number]
+      }
+    >
+  >([])
   let last_bond_structure = $state<AnyStructure | null>(null)
   let last_bond_strategy = $state(``)
   let last_bond_fingerprint = $state(``)
@@ -195,26 +253,66 @@ export function create_bond_state() {
   let traj_pending_frame: Float32Array | null = null
 
   return {
-    get bond_connectivity() { return bond_connectivity },
-    set bond_connectivity(v) { bond_connectivity = v },
-    get last_bond_structure() { return last_bond_structure },
-    set last_bond_structure(v) { last_bond_structure = v },
-    get last_bond_strategy() { return last_bond_strategy },
-    set last_bond_strategy(v) { last_bond_strategy = v },
-    get last_bond_fingerprint() { return last_bond_fingerprint },
-    set last_bond_fingerprint(v) { last_bond_fingerprint = v },
-    get last_elem_fingerprint() { return last_elem_fingerprint },
-    set last_elem_fingerprint(v) { last_elem_fingerprint = v },
-    get bond_worker_pending() { return bond_worker_pending },
-    set bond_worker_pending(v) { bond_worker_pending = v },
-    get bond_computation_gen() { return bond_computation_gen },
-    set bond_computation_gen(v) { bond_computation_gen = v },
-    get traj_computation_gen() { return traj_computation_gen },
-    set traj_computation_gen(v) { traj_computation_gen = v },
-    get traj_in_flight_frame() { return traj_in_flight_frame },
-    set traj_in_flight_frame(v) { traj_in_flight_frame = v },
-    get traj_pending_frame() { return traj_pending_frame },
-    set traj_pending_frame(v) { traj_pending_frame = v },
+    get bond_connectivity() {
+      return bond_connectivity
+    },
+    set bond_connectivity(v) {
+      bond_connectivity = v
+    },
+    get last_bond_structure() {
+      return last_bond_structure
+    },
+    set last_bond_structure(v) {
+      last_bond_structure = v
+    },
+    get last_bond_strategy() {
+      return last_bond_strategy
+    },
+    set last_bond_strategy(v) {
+      last_bond_strategy = v
+    },
+    get last_bond_fingerprint() {
+      return last_bond_fingerprint
+    },
+    set last_bond_fingerprint(v) {
+      last_bond_fingerprint = v
+    },
+    get last_elem_fingerprint() {
+      return last_elem_fingerprint
+    },
+    set last_elem_fingerprint(v) {
+      last_elem_fingerprint = v
+    },
+    get bond_worker_pending() {
+      return bond_worker_pending
+    },
+    set bond_worker_pending(v) {
+      bond_worker_pending = v
+    },
+    get bond_computation_gen() {
+      return bond_computation_gen
+    },
+    set bond_computation_gen(v) {
+      bond_computation_gen = v
+    },
+    get traj_computation_gen() {
+      return traj_computation_gen
+    },
+    set traj_computation_gen(v) {
+      traj_computation_gen = v
+    },
+    get traj_in_flight_frame() {
+      return traj_in_flight_frame
+    },
+    set traj_in_flight_frame(v) {
+      traj_in_flight_frame = v
+    },
+    get traj_pending_frame() {
+      return traj_pending_frame
+    },
+    set traj_pending_frame(v) {
+      traj_pending_frame = v
+    },
   }
 }
 
@@ -261,6 +359,7 @@ export function compute_bond_connectivity(
   bonding_options: Record<string, unknown>,
   external_dragging: boolean,
   is_trajectory_frame: boolean = false,
+  skip_compute: boolean = false,
 ): void {
   if (!structure?.sites) {
     bond_state.bond_connectivity = []
@@ -273,7 +372,12 @@ export function compute_bond_connectivity(
 
   const bonds_visible = should_show_bonds(show_bonds, lattice)
 
-  if (!bonds_visible || (show_bonds as string) === `never`) {
+  // `skip_compute` is the "defer bonds for huge structures" gate (set by
+  // StructureScene via should_defer_bonds when the atom count exceeds
+  // DEFER_BONDS_ABOVE_ATOMS and the user has not yet asked for bonds). Handled
+  // exactly like the `never` branch: clear any bonds, bump the generation to
+  // kill in-flight async workers, and return so atoms + cell render immediately.
+  if (skip_compute || !bonds_visible || (show_bonds as string) === `never`) {
     bond_state.bond_computation_gen++ // invalidate any in-flight async workers
     bond_state.bond_worker_pending = false
     bond_pairs_setter([])
@@ -295,10 +399,10 @@ export function compute_bond_connectivity(
   // solid_angle). Gated on the build-time token so desktop/web are
   // byte-identical; only local params are reassigned, never the saved setting.
   if (
-    is_trajectory_frame
-    && typeof __CATGO_VSCODE_EXTENSION__ !== `undefined`
-    && __CATGO_VSCODE_EXTENSION__
-    && bonding_strategy === `solid_angle`
+    is_trajectory_frame &&
+    typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` &&
+    __CATGO_VSCODE_EXTENSION__ &&
+    bonding_strategy === `solid_angle`
   ) {
     bonding_strategy = `atom_radii`
     bonding_options = {}
@@ -333,7 +437,10 @@ export function compute_bond_connectivity(
   // every frame after the first, matching Phase 6's old behavior.
   if (structure_changed && !strategy_changed && !external_dragging) {
     const cached = bond_conn_cache.get(structure as unknown as object)
-    if (cached && cached.elem_fingerprint === elem_fp && cached.strategy_key === strategy_key) {
+    if (
+      cached && cached.elem_fingerprint === elem_fp &&
+      cached.strategy_key === strategy_key
+    ) {
       bond_state.bond_connectivity = cached.bond_connectivity
       bond_state.last_bond_structure = structure
       bond_state.last_bond_strategy = cached.strategy_key
@@ -354,18 +461,23 @@ export function compute_bond_connectivity(
 
     // Synchronous path (small structures, <=200 atoms)
     const sync_bonds = compute_bonds_sync(
-      bond_structure, bonding_strategy, bonding_options as Record<string, number>,
+      bond_structure,
+      bonding_strategy,
+      bonding_options as Record<string, number>,
     )
     if (sync_bonds) {
-      const lattice_pbc = (bond_structure as { lattice?: { pbc?: boolean[] } }).lattice?.pbc
-      bond_state.bond_connectivity = sync_bonds.map(b => {
+      const lattice_pbc = (bond_structure as { lattice?: { pbc?: boolean[] } })
+        .lattice?.pbc
+      bond_state.bond_connectivity = sync_bonds.map((b) => {
         const ji = (b.jimage ?? [0, 0, 0]) as [number, number, number]
         // Dev-only invariant: when an axis is non-periodic, jimage must be 0.
         if (import.meta.env.DEV && lattice_pbc) {
           for (let i = 0; i < 3; i++) {
             if (lattice_pbc[i] === false && ji[i] !== 0) {
               console.warn(
-                `[bonds] jimage[${i}]=${ji[i]} on non-periodic axis (pbc=${JSON.stringify(lattice_pbc)})`,
+                `[bonds] jimage[${i}]=${ji[i]} on non-periodic axis (pbc=${
+                  JSON.stringify(lattice_pbc)
+                })`,
                 b,
               )
             }
@@ -406,20 +518,27 @@ export function compute_bond_connectivity(
 
     bond_state.bond_worker_pending = true
     const gen = ++bond_state.bond_computation_gen
-    const lattice_pbc_async = (captured_structure as { lattice?: { pbc?: boolean[] } }).lattice?.pbc
-    compute_bonds_async(captured_structure, captured_strategy, captured_options as Record<string, number>)
+    const lattice_pbc_async = (captured_structure as { lattice?: { pbc?: boolean[] } })
+      .lattice?.pbc
+    compute_bonds_async(
+      captured_structure,
+      captured_strategy,
+      captured_options as Record<string, number>,
+    )
       .then((new_bonds) => {
         if (gen !== bond_state.bond_computation_gen) {
           bond_state.bond_worker_pending = false
           return
         }
-        bond_state.bond_connectivity = new_bonds.map(b => {
+        bond_state.bond_connectivity = new_bonds.map((b) => {
           const ji = (b.jimage ?? [0, 0, 0]) as [number, number, number]
           if (import.meta.env.DEV && lattice_pbc_async) {
             for (let i = 0; i < 3; i++) {
               if (lattice_pbc_async[i] === false && ji[i] !== 0) {
                 console.warn(
-                  `[bonds] jimage[${i}]=${ji[i]} on non-periodic axis (pbc=${JSON.stringify(lattice_pbc_async)})`,
+                  `[bonds] jimage[${i}]=${ji[i]} on non-periodic axis (pbc=${
+                    JSON.stringify(lattice_pbc_async)
+                  })`,
                   b,
                 )
               }
@@ -446,7 +565,9 @@ export function compute_bond_connectivity(
       })
       .catch((e) => {
         console.debug(`[StructureScene] Bond computation failed:`, e)
-        if (gen === bond_state.bond_computation_gen) bond_state.bond_worker_pending = false
+        if (gen === bond_state.bond_computation_gen) {
+          bond_state.bond_worker_pending = false
+        }
       })
   }
 }
@@ -505,9 +626,9 @@ export function compute_bond_connectivity_for_frame(
   // static-structure bonds still honor the user's saved solid_angle. Only
   // local params are reassigned; the saved setting is never mutated.
   if (
-    typeof __CATGO_VSCODE_EXTENSION__ !== `undefined`
-    && __CATGO_VSCODE_EXTENSION__
-    && bonding_strategy === `solid_angle`
+    typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` &&
+    __CATGO_VSCODE_EXTENSION__ &&
+    bonding_strategy === `solid_angle`
   ) {
     bonding_strategy = `atom_radii`
     bonding_options = {}
@@ -526,28 +647,33 @@ export function compute_bond_connectivity_for_frame(
   // 1. Frame cache hit (O(1)).
   const cached = frame_conn_cache.get(traj_positions)
   if (
-    cached
-    && cached.strategy_key === strategy_key
-    && cached.elem_fingerprint === elem_fp
+    cached &&
+    cached.strategy_key === strategy_key &&
+    cached.elem_fingerprint === elem_fp
   ) {
     frame_cache_touch(traj_positions, cached)
     return cached.bond_connectivity
   }
 
   const n_sites = sites.length
-  const overlay_structure = build_trajectory_overlay_structure(structure, traj_positions)
+  const overlay_structure = build_trajectory_overlay_structure(
+    structure,
+    traj_positions,
+  )
 
   // 2. Sync path for small structures — fastest, no scheduling overhead.
   if (n_sites <= TRAJ_SYNC_THRESHOLD) {
     const sync_bonds = compute_bonds_sync(
-      overlay_structure, bonding_strategy, bonding_options as Record<string, number>,
+      overlay_structure,
+      bonding_strategy,
+      bonding_options as Record<string, number>,
     )
     if (sync_bonds) {
-      const new_conn = sync_bonds.map(b => ({
+      const new_conn = sync_bonds.map((b) => ({
         site_idx_1: b.site_idx_1,
         site_idx_2: b.site_idx_2,
         strength: b.strength,
-        jimage: ((b.jimage ?? [0, 0, 0]) as [number, number, number]),
+        jimage: (b.jimage ?? [0, 0, 0]) as [number, number, number],
       }))
       frame_cache_set(traj_positions, {
         bond_connectivity: new_conn,
@@ -556,7 +682,9 @@ export function compute_bond_connectivity_for_frame(
         strategy_key,
       })
       if (import.meta.env?.DEV) {
-        console.log(`[bonds-traj] sync compute | ${n_sites} sites | ${new_conn.length} bonds`)
+        console.log(
+          `[bonds-traj] sync compute | ${n_sites} sites | ${new_conn.length} bonds`,
+        )
       }
       return new_conn
     }
@@ -567,8 +695,14 @@ export function compute_bond_connectivity_for_frame(
   if (bond_state.traj_in_flight_frame === null) {
     bond_state.traj_in_flight_frame = traj_positions
     dispatch_traj_async(
-      bond_state, traj_positions, overlay_structure, structure,
-      strategy_key, elem_fp, bonding_strategy, bonding_options,
+      bond_state,
+      traj_positions,
+      overlay_structure,
+      structure,
+      strategy_key,
+      elem_fp,
+      bonding_strategy,
+      bonding_options,
     )
   } else if (bond_state.traj_in_flight_frame !== traj_positions) {
     // Latest-wins: just remember which frame the user is currently on.
@@ -598,7 +732,9 @@ function dispatch_traj_async(
 ): void {
   const gen = ++bond_state.traj_computation_gen
   if (import.meta.env?.DEV) {
-    console.log(`[bonds-traj] dispatch async | ${overlay_structure.sites.length} sites | gen=${gen}`)
+    console.log(
+      `[bonds-traj] dispatch async | ${overlay_structure.sites.length} sites | gen=${gen}`,
+    )
   }
   // Helper: clear throttle slots that still reference this dispatch's
   // frame_key. Safe to call from any exit path — only nulls slots we own.
@@ -610,7 +746,11 @@ function dispatch_traj_async(
       bond_state.traj_pending_frame = null
     }
   }
-  compute_bonds_async(overlay_structure, bonding_strategy, bonding_options as Record<string, number>)
+  compute_bonds_async(
+    overlay_structure,
+    bonding_strategy,
+    bonding_options as Record<string, number>,
+  )
     .then((new_bonds) => {
       // Stale generation — trajectory torn down, strategy changed, or another
       // traj dispatch superseded this one. Drop the result and release slots
@@ -620,11 +760,11 @@ function dispatch_traj_async(
         return
       }
 
-      const new_conn = new_bonds.map(b => ({
+      const new_conn = new_bonds.map((b) => ({
         site_idx_1: b.site_idx_1,
         site_idx_2: b.site_idx_2,
         strength: b.strength,
-        jimage: ((b.jimage ?? [0, 0, 0]) as [number, number, number]),
+        jimage: (b.jimage ?? [0, 0, 0]) as [number, number, number],
       }))
       // Always cache — even if the user has moved on, the entry will be
       // useful on revisit (and bounded by the LRU cap).
@@ -652,10 +792,19 @@ function dispatch_traj_async(
         // already cached so a future revisit will hit O(1).
         bond_state.traj_in_flight_frame = pending
         bond_state.traj_pending_frame = null
-        const next_overlay = build_trajectory_overlay_structure(base_structure, pending)
+        const next_overlay = build_trajectory_overlay_structure(
+          base_structure,
+          pending,
+        )
         dispatch_traj_async(
-          bond_state, pending, next_overlay, base_structure,
-          strategy_key, elem_fp, bonding_strategy, bonding_options,
+          bond_state,
+          pending,
+          next_overlay,
+          base_structure,
+          strategy_key,
+          elem_fp,
+          bonding_strategy,
+          bonding_options,
         )
       }
     })
@@ -675,7 +824,9 @@ function apply_jimage(
   lattice_matrix: number[][] | undefined,
 ): Vec3 {
   const [dx, dy, dz] = jimage
-  if ((dx | dy | dz) === 0 || !lattice_matrix || lattice_matrix.length !== 3) return base
+  if ((dx | dy | dz) === 0 || !lattice_matrix || lattice_matrix.length !== 3) {
+    return base
+  }
   const [ax, ay, az] = lattice_matrix[0] as Vec3
   const [bx, by, bz] = lattice_matrix[1] as Vec3
   const [cx, cy, cz] = lattice_matrix[2] as Vec3
@@ -697,15 +848,26 @@ function apply_jimage(
  * position per plan §2.1 to keep the drag-recompute dependency explicit.
  */
 export function build_bond_pairs(
-  bond_connectivity: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage?: [number, number, number] }>,
+  bond_connectivity: Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage?: [number, number, number]
+    }
+  >,
   last_bond_structure: AnyStructure | null,
   structure: AnyStructure | undefined,
   realtime_position_overrides: Map<number, Vec3> | null,
   external_dragging: boolean,
   selected_sites: number[],
 ): BondPair[] {
-  const has_overrides = realtime_position_overrides && realtime_position_overrides.size > 0
-  const bond_struct = (has_overrides ? last_bond_structure : last_bond_structure ?? structure) as typeof structure
+  const has_overrides = realtime_position_overrides &&
+    realtime_position_overrides.size > 0
+  const bond_struct =
+    (has_overrides
+      ? last_bond_structure
+      : last_bond_structure ?? structure) as typeof structure
 
   if (!bond_struct?.sites || bond_connectivity.length === 0) {
     return []
@@ -714,18 +876,24 @@ export function build_bond_pairs(
   // During dragging: hide cross-bonds (one atom selected, one not)
   let bonds_to_render = bond_connectivity
   if (external_dragging && selected_sites.length > 0) {
-    bonds_to_render = filter_bonds_during_drag(bond_connectivity, selected_sites)
+    bonds_to_render = filter_bonds_during_drag(
+      bond_connectivity,
+      selected_sites,
+    )
   }
 
   const pos_struct = has_overrides ? bond_struct : (structure ?? bond_struct)
-  const lattice_matrix = (bond_struct as { lattice?: { matrix?: number[][] } }).lattice?.matrix
-  return bonds_to_render.map(conn => {
+  const lattice_matrix = (bond_struct as { lattice?: { matrix?: number[][] } })
+    .lattice?.matrix
+  return bonds_to_render.map((conn) => {
     const base_pos_1 = pos_struct.sites[conn.site_idx_1]?.xyz
     const base_pos_2 = pos_struct.sites[conn.site_idx_2]?.xyz
     if (!base_pos_1 || !base_pos_2) return null
 
-    const pos_1 = realtime_position_overrides?.get(conn.site_idx_1) ?? base_pos_1
-    const pos_2 = realtime_position_overrides?.get(conn.site_idx_2) ?? base_pos_2
+    const pos_1 = realtime_position_overrides?.get(conn.site_idx_1) ??
+      base_pos_1
+    const pos_2 = realtime_position_overrides?.get(conn.site_idx_2) ??
+      base_pos_2
 
     const jimage = conn.jimage ?? [0, 0, 0]
     const b_eff = apply_jimage(pos_2, jimage, lattice_matrix)
@@ -764,7 +932,14 @@ export function build_bond_pairs(
  *   4. null endpoint → bond filtered out
  */
 export function build_trajectory_bond_pairs(
-  bond_connectivity: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage?: [number, number, number] }>,
+  bond_connectivity: Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage?: [number, number, number]
+    }
+  >,
   trajectory_frame_positions: Float32Array,
   overrides?: Map<number, Vec3> | null,
   atom_manager?: {
@@ -817,7 +992,10 @@ export function build_trajectory_bond_pairs(
     }
     const elem = majority.element
     if (!elem) return null
-    const entry = (covalent_radii_data as Record<string, { covalent_radius_pm?: number } | undefined>)[elem]
+    const entry = (covalent_radii_data as Record<
+      string,
+      { covalent_radius_pm?: number } | undefined
+    >)[elem]
     const pm = entry?.covalent_radius_pm
     if (typeof pm !== `number` || pm <= 0) return null
     return pm / 100 // pm → Å
@@ -827,7 +1005,7 @@ export function build_trajectory_bond_pairs(
     : DEFAULT_BOND_TOLERANCE
   const lat = lattice_matrix ?? undefined
   let filtered_count = 0
-  const out = bond_connectivity.map(conn => {
+  const out = bond_connectivity.map((conn) => {
     const pos_1 = lookup_pos(conn.site_idx_1)
     const pos_2 = lookup_pos(conn.site_idx_2)
     if (pos_1 === null || pos_2 === null) return null
@@ -860,7 +1038,9 @@ export function build_trajectory_bond_pairs(
     return pair
   }).filter((b): b is BondPair => b !== null)
   if (import.meta.env?.DEV && filtered_count > 0) {
-    console.log(`[bond-stale-filter] dropped ${filtered_count} stale bonds out of ${bond_connectivity.length}`)
+    console.log(
+      `[bond-stale-filter] dropped ${filtered_count} stale bonds out of ${bond_connectivity.length}`,
+    )
   }
   return out
 }
@@ -875,10 +1055,18 @@ export function create_hbond_state() {
   let hbond_computation_gen = 0
 
   return {
-    get h_bond_connectivity() { return h_bond_connectivity },
-    set h_bond_connectivity(v) { h_bond_connectivity = v },
-    get hbond_computation_gen() { return hbond_computation_gen },
-    set hbond_computation_gen(v) { hbond_computation_gen = v },
+    get h_bond_connectivity() {
+      return h_bond_connectivity
+    },
+    set h_bond_connectivity(v) {
+      h_bond_connectivity = v
+    },
+    get hbond_computation_gen() {
+      return hbond_computation_gen
+    },
+    set hbond_computation_gen(v) {
+      hbond_computation_gen = v
+    },
   }
 }
 
@@ -913,7 +1101,11 @@ export function compute_hbond_connectivity(
 
   try {
     if (current_bond_pairs.length === 0) {
-      const sync = compute_bonds_sync(current_structure, bonding_strategy, bonding_options as Record<string, number>)
+      const sync = compute_bonds_sync(
+        current_structure,
+        bonding_strategy,
+        bonding_options as Record<string, number>,
+      )
       if (sync) {
         current_bond_pairs = sync
       } else {
@@ -924,7 +1116,11 @@ export function compute_hbond_connectivity(
     }
 
     // JS computation first for immediate rendering (no flash)
-    const js_hbonds = detect_hydrogen_bonds(current_structure, current_bond_pairs, hbond_options)
+    const js_hbonds = detect_hydrogen_bonds(
+      current_structure,
+      current_bond_pairs,
+      hbond_options,
+    )
     // Extract topology from JS BondPair results.
     hbond_state.h_bond_connectivity = js_hbonds.map((b): HBondConnectivity => ({
       site_idx_1: b.site_idx_1,
@@ -954,7 +1150,9 @@ export function compute_hbond_connectivity(
       const connectivity: HBondConnectivity[] = []
       for (const hb of result) {
         const h_or_donor_idx = hb.h_idx ?? hb.donor_idx
-        if (!sites[h_or_donor_idx]?.xyz || !sites[hb.acceptor_idx]?.xyz) continue
+        if (!sites[h_or_donor_idx]?.xyz || !sites[hb.acceptor_idx]?.xyz) {
+          continue
+        }
         connectivity.push({
           site_idx_1: h_or_donor_idx,
           site_idx_2: hb.acceptor_idx,
@@ -984,14 +1182,19 @@ export function build_hbond_pairs(
   try {
     if (h_bond_connectivity.length === 0) return []
 
-    const has_overrides = realtime_position_overrides && realtime_position_overrides.size > 0
-    const bond_struct = (has_overrides ? last_bond_structure : last_bond_structure ?? structure) as typeof structure
-    if (!bond_struct?.sites) return []
+    const has_overrides = realtime_position_overrides &&
+      realtime_position_overrides.size > 0
+    const bond_struct = (has_overrides
+      ? last_bond_structure
+      : last_bond_structure ?? structure) as typeof structure
+    if (!bond_struct?.sites) {
+      return []
+    }
 
     let conns_to_render = h_bond_connectivity
     if (external_dragging && selected_sites.length > 0) {
       const selected_set = new Set(selected_sites)
-      conns_to_render = h_bond_connectivity.filter(conn => {
+      conns_to_render = h_bond_connectivity.filter((conn) => {
         const a_sel = selected_set.has(conn.site_idx_1)
         const b_sel = selected_set.has(conn.site_idx_2)
         return a_sel === b_sel
@@ -999,15 +1202,23 @@ export function build_hbond_pairs(
     }
 
     const pos_struct = has_overrides ? bond_struct : (structure ?? bond_struct)
-    return conns_to_render.map(conn => {
+    return conns_to_render.map((conn) => {
       const base_pos_1 = pos_struct.sites[conn.site_idx_1]?.xyz
       const base_pos_2 = pos_struct.sites[conn.site_idx_2]?.xyz
-      if (!base_pos_1 || !base_pos_2) return null
+      if (!base_pos_1 || !base_pos_2) {
+        return null
+      }
 
-      const pos_1 = realtime_position_overrides?.get(conn.site_idx_1) ?? base_pos_1
-      const pos_2 = realtime_position_overrides?.get(conn.site_idx_2) ?? base_pos_2
+      const pos_1 = realtime_position_overrides?.get(conn.site_idx_1) ??
+        base_pos_1
+      const pos_2 = realtime_position_overrides?.get(conn.site_idx_2) ??
+        base_pos_2
 
-      const bond_length = Math.hypot(pos_2[0] - pos_1[0], pos_2[1] - pos_1[1], pos_2[2] - pos_1[2])
+      const bond_length = Math.hypot(
+        pos_2[0] - pos_1[0],
+        pos_2[1] - pos_1[1],
+        pos_2[2] - pos_1[2],
+      )
       return {
         pos_1,
         pos_2,
@@ -1019,7 +1230,9 @@ export function build_hbond_pairs(
         bond_type: `hydrogen` as const,
         jimage: [0, 0, 0] as [number, number, number],
       }
-    }).filter(b => b !== null) as BondPair[]
+    }).filter((b) =>
+      b !== null
+    ) as BondPair[]
   } catch {
     return []
   }
@@ -1061,7 +1274,11 @@ export function apply_atom_delete_incremental(
   if (deleted_set.size === 0) {
     if (import.meta.env?.DEV) {
       // eslint-disable-next-line no-console
-      console.log(`[atoms-X4] apply_atom_delete_incremental: 0 atom(s), ${(performance.now() - t0).toFixed(2)}ms`)
+      console.log(
+        `[atoms-X4] apply_atom_delete_incremental: 0 atom(s), ${
+          (performance.now() - t0).toFixed(2)
+        }ms`,
+      )
     }
     return
   }
@@ -1083,10 +1300,19 @@ export function apply_atom_delete_incremental(
 
   // Filter + reindex bond_connectivity.
   const prev = bond_state.bond_connectivity
-  const next: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> = []
+  const next: Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }
+  > = []
   for (let i = 0; i < prev.length; i++) {
     const c = prev[i]
-    if (deleted_set.has(c.site_idx_1) || deleted_set.has(c.site_idx_2)) continue
+    if (deleted_set.has(c.site_idx_1) || deleted_set.has(c.site_idx_2)) {
+      continue
+    }
     next.push({
       site_idx_1: c.site_idx_1 - count_less_than(c.site_idx_1),
       site_idx_2: c.site_idx_2 - count_less_than(c.site_idx_2),
@@ -1105,7 +1331,9 @@ export function apply_atom_delete_incremental(
   // treats our state as already up-to-date. Strategy is unchanged.
   const elem_fp = get_element_fingerprint(current_sites)
   bond_state.last_elem_fingerprint = elem_fp
-  bond_state.last_bond_fingerprint = `${elem_fp}|${get_position_hash(current_sites).toFixed(4)}`
+  bond_state.last_bond_fingerprint = `${elem_fp}|${
+    get_position_hash(current_sites).toFixed(4)
+  }`
 
   // `last_bond_structure` is consulted by build_bond_pairs as the position
   // source when `realtime_position_overrides` is active. Its sites were
@@ -1129,7 +1357,11 @@ export function apply_atom_delete_incremental(
 
   if (import.meta.env?.DEV) {
     // eslint-disable-next-line no-console
-    console.log(`[atoms-X4] apply_atom_delete_incremental: ${deleted_set.size} atom(s), ${(performance.now() - t0).toFixed(2)}ms`)
+    console.log(
+      `[atoms-X4] apply_atom_delete_incremental: ${deleted_set.size} atom(s), ${
+        (performance.now() - t0).toFixed(2)
+      }ms`,
+    )
   }
 }
 
@@ -1179,13 +1411,26 @@ function __recompute_bonds_sync(
   structure_with_sites: AnyStructure,
   bonding_strategy: BondingStrategy,
   bonding_options: Record<string, unknown>,
-): Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> | null {
+):
+  | Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }
+  >
+  | null {
   // Phase 5: caller passes the pre-ghost structure. PBC stays enabled so
   // the detector emits cross-cell bonds with `image` populated; the
   // renderer handles half-cylinder placement against the lattice.
-  const result = compute_bonds_sync(structure_with_sites, bonding_strategy, bonding_options as Record<string, number>)
+  const result = compute_bonds_sync(
+    structure_with_sites,
+    bonding_strategy,
+    bonding_options as Record<string, number>,
+  )
   if (!result) return null
-  return result.map(b => ({
+  return result.map((b) => ({
     site_idx_1: b.site_idx_1,
     site_idx_2: b.site_idx_2,
     strength: b.strength,
@@ -1226,8 +1471,15 @@ export function apply_atom_add_incremental(
   if (current_sites.length > X6_SMALL_THRESHOLD) return false
 
   // Fresh bond set for the post-add structure.
-  const structure_with_next_sites = { ...current_structure, sites: current_sites } as AnyStructure
-  const fresh = __recompute_bonds_sync(structure_with_next_sites, bonding_strategy, bonding_options)
+  const structure_with_next_sites = {
+    ...current_structure,
+    sites: current_sites,
+  } as AnyStructure
+  const fresh = __recompute_bonds_sync(
+    structure_with_next_sites,
+    bonding_strategy,
+    bonding_options,
+  )
   if (fresh === null) return false
 
   // Index existing bonds by canonical key so we can identify new ones.
@@ -1241,7 +1493,14 @@ export function apply_atom_add_incremental(
   // all new bonds must involve at least one of the added site_ids — we
   // could filter by that, but `prev_keys` is already tight and saves us
   // from having to materialize the added-sid set for the check.
-  const added_bonds: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> = []
+  const added_bonds: Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }
+  > = []
   for (let i = 0; i < fresh.length; i++) {
     const c = fresh[i]
     if (!prev_keys.has(__bond_key(c.site_idx_1, c.site_idx_2))) {
@@ -1271,7 +1530,9 @@ export function apply_atom_add_incremental(
   // Bump fingerprints + shallow-merge last_bond_structure (see X4 comment).
   const elem_fp = get_element_fingerprint(current_sites)
   bond_state.last_elem_fingerprint = elem_fp
-  bond_state.last_bond_fingerprint = `${elem_fp}|${get_position_hash(current_sites).toFixed(4)}`
+  bond_state.last_bond_fingerprint = `${elem_fp}|${
+    get_position_hash(current_sites).toFixed(4)
+  }`
   if (bond_state.last_bond_structure !== null) {
     bond_state.last_bond_structure = {
       ...bond_state.last_bond_structure,
@@ -1285,7 +1546,11 @@ export function apply_atom_add_incremental(
 
   if (import.meta.env?.DEV) {
     // eslint-disable-next-line no-console
-    console.log(`[atoms-X6] apply_atom_add_incremental: ${added.length} atom(s), +${added_bonds.length} bond(s), ${(performance.now() - t0).toFixed(2)}ms`)
+    console.log(
+      `[atoms-X6] apply_atom_add_incremental: ${added.length} atom(s), +${added_bonds.length} bond(s), ${
+        (performance.now() - t0).toFixed(2)
+      }ms`,
+    )
   }
   return true
 }
@@ -1316,15 +1581,32 @@ export function apply_atom_replace_incremental(
   if (replacements.length === 0) return true
   if (current_sites.length > X6_SMALL_THRESHOLD) return false
 
-  const structure_with_next_sites = { ...current_structure, sites: current_sites } as AnyStructure
-  const fresh = __recompute_bonds_sync(structure_with_next_sites, bonding_strategy, bonding_options)
+  const structure_with_next_sites = {
+    ...current_structure,
+    sites: current_sites,
+  } as AnyStructure
+  const fresh = __recompute_bonds_sync(
+    structure_with_next_sites,
+    bonding_strategy,
+    bonding_options,
+  )
   if (fresh === null) return false
 
-  __apply_full_bond_diff(bond_state, fresh, bond_manager, current_sites, structure_with_next_sites)
+  __apply_full_bond_diff(
+    bond_state,
+    fresh,
+    bond_manager,
+    current_sites,
+    structure_with_next_sites,
+  )
 
   if (import.meta.env?.DEV) {
     // eslint-disable-next-line no-console
-    console.log(`[atoms-X6] apply_atom_replace_incremental: ${replacements.length} atom(s), ${(performance.now() - t0).toFixed(2)}ms`)
+    console.log(
+      `[atoms-X6] apply_atom_replace_incremental: ${replacements.length} atom(s), ${
+        (performance.now() - t0).toFixed(2)
+      }ms`,
+    )
   }
   return true
 }
@@ -1356,15 +1638,32 @@ export function apply_atom_move_incremental(
   if (moved.length === 0) return true
   if (current_sites.length > X6_SMALL_THRESHOLD) return false
 
-  const structure_with_next_sites = { ...current_structure, sites: current_sites } as AnyStructure
-  const fresh = __recompute_bonds_sync(structure_with_next_sites, bonding_strategy, bonding_options)
+  const structure_with_next_sites = {
+    ...current_structure,
+    sites: current_sites,
+  } as AnyStructure
+  const fresh = __recompute_bonds_sync(
+    structure_with_next_sites,
+    bonding_strategy,
+    bonding_options,
+  )
   if (fresh === null) return false
 
-  __apply_full_bond_diff(bond_state, fresh, bond_manager, current_sites, structure_with_next_sites)
+  __apply_full_bond_diff(
+    bond_state,
+    fresh,
+    bond_manager,
+    current_sites,
+    structure_with_next_sites,
+  )
 
   if (import.meta.env?.DEV) {
     // eslint-disable-next-line no-console
-    console.log(`[atoms-X6] apply_atom_move_incremental: ${moved.length} atom(s), ${(performance.now() - t0).toFixed(2)}ms`)
+    console.log(
+      `[atoms-X6] apply_atom_move_incremental: ${moved.length} atom(s), ${
+        (performance.now() - t0).toFixed(2)
+      }ms`,
+    )
   }
   return true
 }
@@ -1382,7 +1681,14 @@ export function apply_atom_move_incremental(
  */
 function __apply_full_bond_diff(
   bond_state: ReturnType<typeof create_bond_state>,
-  fresh: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }>,
+  fresh: Array<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }
+  >,
   bond_manager: BondManager | null,
   current_sites: Site[],
   structure_with_next_sites: AnyStructure,
@@ -1419,7 +1725,9 @@ function __apply_full_bond_diff(
     // Brand-new bonds → append.
     const add_list: Array<{ site_idx_1: number; site_idx_2: number }> = []
     for (let i = 0; i < fresh.length; i++) {
-      if (!prev_keys.has(__bond_key(fresh[i].site_idx_1, fresh[i].site_idx_2))) {
+      if (
+        !prev_keys.has(__bond_key(fresh[i].site_idx_1, fresh[i].site_idx_2))
+      ) {
         add_list.push(fresh[i])
       }
     }
@@ -1439,7 +1747,9 @@ function __apply_full_bond_diff(
   // Fingerprints + last_bond_structure (same pattern as X4).
   const elem_fp = get_element_fingerprint(current_sites)
   bond_state.last_elem_fingerprint = elem_fp
-  bond_state.last_bond_fingerprint = `${elem_fp}|${get_position_hash(current_sites).toFixed(4)}`
+  bond_state.last_bond_fingerprint = `${elem_fp}|${
+    get_position_hash(current_sites).toFixed(4)
+  }`
   if (bond_state.last_bond_structure !== null) {
     bond_state.last_bond_structure = {
       ...bond_state.last_bond_structure,
