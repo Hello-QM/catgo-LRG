@@ -12,9 +12,11 @@
   let {
     on_play_vibration,
     on_stop_vibration,
+    on_load_structure,
   }: {
     on_play_vibration?: (data: { eigenvector: number[][]; base_positions: number[][]; amplitude: number }) => void
     on_stop_vibration?: () => void
+    on_load_structure?: (data: { elements: string[]; positions: number[][] }) => void
   } = $props()
 
   let freq_data = $state<VaspFrequencyData | null>(null)
@@ -91,6 +93,10 @@
       const data = await resp.json()
       if (!data.success) throw new Error(data.message || t('structure.freq_parse_failed'))
       freq_data = data
+      const els = data.elements as string[] | undefined
+      if (els?.length && data.positions?.length === els.length) {
+        on_load_structure?.({ elements: els, positions: data.positions })
+      }
     } catch (err: any) {
       error = err.message || String(err)
     } finally {
@@ -113,6 +119,10 @@
       const data = await resp.json()
       if (!data.success) throw new Error(data.message || t('structure.freq_parse_failed'))
       freq_data = data
+      const els = data.elements as string[] | undefined
+      if (els?.length && data.positions?.length === els.length) {
+        on_load_structure?.({ elements: els, positions: data.positions })
+      }
     } catch (err: any) {
       error = err.message || String(err)
     } finally {

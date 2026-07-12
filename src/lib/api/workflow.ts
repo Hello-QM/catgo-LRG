@@ -487,6 +487,7 @@ export interface VaspFrequencyData {
   num_imaginary?: number
   free_indices?: number[] | null
   intensities_km_mol?: (number | null)[] | null
+  elements?: string[]
   source_format?: string
 }
 

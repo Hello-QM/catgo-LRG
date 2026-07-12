@@ -8,6 +8,7 @@
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import ExportDpiControl from '$lib/electronic/ExportDpiControl.svelte'
+  import { freq_data_to_xyz } from '$lib/electronic/freq-structure'
   import { API_BASE, STATIC_ONLY } from '$lib/api/config'
   import { elem_symbols } from '$lib/labels'
 
@@ -4107,6 +4108,11 @@
                 }}
                 on_stop_vibration={() => {
                   vibration_data = null
+                }}
+                on_load_structure={(data) => {
+                  const xyz = freq_data_to_xyz(data.elements, data.positions)
+                  const parsed = parse_any_structure(xyz, `cp2k-vibrations.xyz`)
+                  if (parsed) structure = parsed as typeof structure
                 }}
               />
             {/if}
