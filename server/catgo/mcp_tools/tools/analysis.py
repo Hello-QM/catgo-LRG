@@ -436,4 +436,26 @@ TOOLS: list[dict] = [
             "required": ["trajectory_b64", "format", "plane"],
         },
     },
+
+    # ─── Vibrational Frequency Analysis ───
+    {
+        "name": "catgo_freq_parse",
+        "description": "Parse a vibrational-frequency output file into frequencies "
+        "(real + imaginary, cm^-1), normal-mode eigenvectors, atomic positions and "
+        "IR intensities (CP2K). Supports VASP OUTCAR, CP2K Molden vibrations file "
+        "(*-VIBRATIONS-*.mol) and CP2K main output (.out). Feed the returned "
+        "frequencies to catgo_gibbs_energy for ZPE/thermal corrections.",
+        "endpoint": "/freq-analysis/parse-path",
+        "method": "POST",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Server-local path to OUTCAR, *-VIBRATIONS-*.mol, or CP2K .out",
+                },
+            },
+            "required": ["path"],
+        },
+    },
 ]

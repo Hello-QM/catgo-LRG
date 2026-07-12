@@ -3,6 +3,8 @@
   import type { VaspFrequencyData } from '$lib/api/workflow'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
   import FileSourceDialog from './FileSourceDialog.svelte'
+  import { polyline_points } from './ir-utils'
+  import { export_svg_as_png } from '$lib/io/export'
 
   load_i18n_module('structure')
   load_i18n_module('common')
@@ -10,9 +12,11 @@
   let {
     on_play_vibration,
     on_stop_vibration,
+    on_load_structure,
   }: {
     on_play_vibration?: (data: { eigenvector: number[][]; base_positions: number[][]; amplitude: number }) => void
     on_stop_vibration?: () => void
+    on_load_structure?: (data: { elements: string[]; positions: number[][] }) => void
   } = $props()
 
   let freq_data = $state<VaspFrequencyData | null>(null)
@@ -35,6 +39,48 @@
   let vib_amplitude = $state(0.5)
   let vib_playing = $state(false)
 
+  // IR spectrum state
+  let ir_sigma = $state(10.0)
+  let ir_loading = $state(false)
+  let ir_error = $state<string | null>(null)
+  let ir_spectrum = $state<{ grid_cm: number[]; intensity: number[] } | null>(null)
+  let ir_svg_el = $state<SVGSVGElement | undefined>()
+
+  const ir_available = $derived.by(() => {
+    const ints = freq_data?.intensities_km_mol
+    return !!ints && ints.some((v) => v !== null && v !== undefined)
+  })
+
+  async function compute_ir() {
+    if (!freq_data?.intensities_km_mol) return
+    ir_loading = true
+    ir_error = null
+    try {
+      const imag_len = freq_data.imag_freqs?.length ?? 0
+      const real_cm = (freq_data.real_freqs ?? []).map((f) =>
+        typeof f === 'object' ? f.frequency_cm : f,
+      )
+      const real_ints = freq_data.intensities_km_mol.slice(imag_len)
+      const resp = await fetch(`${API_BASE}/freq-analysis/ir-spectrum`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ freqs_cm: real_cm, intensities: real_ints, sigma: ir_sigma }),
+      })
+      if (!resp.ok) throw new Error(await resp.text())
+      ir_spectrum = await resp.json()
+    } catch (err: any) {
+      ir_error = err.message || String(err)
+    } finally {
+      ir_loading = false
+    }
+  }
+
+  function export_ir_png() {
+    // Reuse the shared svg→canvas→toBlob→download() flow (via $lib/io/fetch's
+    // download). png_dpi 144 = 144/72 = fixed 2x scale.
+    if (ir_svg_el) export_svg_as_png(ir_svg_el, 'ir-spectrum.png', 144)
+  }
+
   async function handle_file_upload(file: File) {
     loading = true
     error = null
@@ -47,6 +93,10 @@
       const data = await resp.json()
       if (!data.success) throw new Error(data.message || t('structure.freq_parse_failed'))
       freq_data = data
+      const els = data.elements as string[] | undefined
+      if (els?.length && data.positions?.length === els.length) {
+        on_load_structure?.({ elements: els, positions: data.positions })
+      }
     } catch (err: any) {
       error = err.message || String(err)
     } finally {
@@ -69,6 +119,10 @@
       const data = await resp.json()
       if (!data.success) throw new Error(data.message || t('structure.freq_parse_failed'))
       freq_data = data
+      const els = data.elements as string[] | undefined
+      if (els?.length && data.positions?.length === els.length) {
+        on_load_structure?.({ elements: els, positions: data.positions })
+      }
     } catch (err: any) {
       error = err.message || String(err)
     } finally {
@@ -190,7 +244,7 @@
       <span class="freq-summary">
         {t('structure.freq_summary', { imaginary: freq_data.num_imaginary ?? 0, real: freq_data.real_freqs?.length ?? 0 })}
       </span>
-      <button class="freq-reset-btn" onclick={() => { freq_data = null; gibbs_result = null; vib_playing = false; on_stop_vibration?.() }}>
+      <button class="freq-reset-btn" onclick={() => { freq_data = null; gibbs_result = null; vib_playing = false; ir_spectrum = null; ir_error = null; on_stop_vibration?.() }}>
         {t('structure.load_new')}
       </button>
     </div>
@@ -204,7 +258,7 @@
             <div class="freq-row freq-imag">
               <span>{f.index}:</span>
               <span class="mono">{f.frequency_cm.toFixed(1)} i</span>
-              <span class="mono dim">{f.mev?.toFixed(2) ?? ''} meV</span>
+              {#if f.mev != null}<span class="mono dim">{f.mev.toFixed(2)} meV</span>{/if}
             </div>
           {/each}
         </div>
@@ -215,7 +269,7 @@
           <div class="freq-row">
             <span>{f.index}:</span>
             <span class="mono">{f.frequency_cm.toFixed(1)}</span>
-            <span class="mono dim">{f.mev?.toFixed(2) ?? ''} meV</span>
+            {#if f.mev != null}<span class="mono dim">{f.mev.toFixed(2)} meV</span>{/if}
           </div>
         {/each}
       </div>
@@ -299,13 +353,44 @@
         </button>
       </div>
     {/if}
+
+    <!-- IR spectrum (CP2K intensities) -->
+    {#if ir_available}
+      <div class="freq-ir-section">
+        <div class="freq-section-title">{t('structure.ir_spectrum')}</div>
+        <div class="freq-form-row">
+          <label>{t('structure.ir_fwhm')}</label>
+          <input type="number" bind:value={ir_sigma} step="1" min="1" />
+          <button class="freq-calc-btn" onclick={compute_ir} disabled={ir_loading}>
+            {ir_loading ? t('structure.calculating') : t('structure.ir_compute')}
+          </button>
+        </div>
+        {#if ir_error}
+          <div class="freq-error">{ir_error}</div>
+        {/if}
+        {#if ir_spectrum && ir_spectrum.grid_cm.length}
+          <svg bind:this={ir_svg_el} class="freq-ir-plot" viewBox="0 0 320 130" role="img" aria-label={t('structure.ir_spectrum')}>
+            <polyline
+              points={polyline_points(ir_spectrum.grid_cm, ir_spectrum.intensity, 320, 120, 8)}
+              fill="none"
+              stroke="var(--accent-color, #3b82f6)"
+              stroke-width="1.2"
+            />
+            <text x="160" y="128" text-anchor="middle" class="freq-ir-axis">cm⁻¹ →</text>
+          </svg>
+          <div class="freq-form-row freq-ir-export-row">
+            <button class="freq-browse-btn" onclick={export_ir_png}>PNG</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </div>
 
 {#if show_source_dialog}
   <FileSourceDialog
     title={t('structure.load_outcar')}
-    file_types={['.OUTCAR', 'OUTCAR']}
+    file_types={['.OUTCAR', 'OUTCAR', '.mol', '.out']}
     onremote_path={handle_remote}
     onclose={() => show_source_dialog = false}
   />
@@ -498,4 +583,20 @@
   }
   .mono { font-family: 'SF Mono', 'Monaco', monospace; }
   .dim { opacity: 0.7; }
+  .freq-ir-section { margin-top: 4px; }
+  .freq-ir-plot {
+    width: 100%;
+    margin-top: 4px;
+    background: var(--input-bg, light-dark(#fff, #2a2b30));
+    border: 1px solid var(--dialog-border, light-dark(#e5e7eb, #333));
+    border-radius: 4px;
+  }
+  .freq-ir-axis {
+    font-size: 8px;
+    fill: var(--text-color-dim, light-dark(#6b7280, #9ca3af));
+  }
+  .freq-ir-export-row {
+    justify-content: flex-end;
+    margin-top: 4px;
+  }
 </style>

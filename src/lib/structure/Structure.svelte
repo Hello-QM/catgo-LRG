@@ -8,6 +8,7 @@
   import { DosAnalysisPane, DosPlot, CohpAnalysisPane, CohpPlot, BandAnalysisPane, BandPlot, FreqAnalysisPane, ChargeAnalysisPane } from '$lib/electronic'
   import type { DOSSessionInfo, DosViewState, CohpViewState, BandViewState } from '$lib/electronic'
   import ExportDpiControl from '$lib/electronic/ExportDpiControl.svelte'
+  import { freq_data_to_xyz } from '$lib/electronic/freq-structure'
   import { API_BASE, STATIC_ONLY } from '$lib/api/config'
   import { elem_symbols } from '$lib/labels'
 
@@ -1179,8 +1180,14 @@
               : content
             const parsed_structure = parse_any_structure(text_content, filename)
             if (parsed_structure) {
-              center_camera_trigger++ // Trigger camera centering on new structure
               structure = parsed_structure
+              // Recenter one tick later so the transform pipeline has pushed the
+              // new structure to StructureScene — a synchronous trigger locks the
+              // pivot onto the outgoing structure (masked for molecules by the
+              // auto-align pass, exposed on periodic overwrite-imports).
+              void tick().then(() => {
+                center_camera_trigger++
+              })
               // Capture for MD analysis
               imported_traj_b64 = content_to_base64(content instanceof ArrayBuffer ? content : content)
               imported_traj_format = filename.split(`.`).pop()?.toLowerCase() || ``
@@ -1220,8 +1227,12 @@
     try {
       const parsed = parse_any_structure(structure_string, `string`)
       if (parsed) {
-        center_camera_trigger++ // Trigger camera centering on new structure
         structure = parsed
+        // Recenter one tick later — see the file-import path above; a
+        // synchronous trigger locks the pivot onto the outgoing structure.
+        void tick().then(() => {
+          center_camera_trigger++
+        })
         // Capture for MD analysis
         imported_traj_b64 = content_to_base64(structure_string)
         imported_traj_format = `xyz`
@@ -4107,6 +4118,29 @@
                 }}
                 on_stop_vibration={() => {
                   vibration_data = null
+                }}
+                on_load_structure={(data) => {
+                  const xyz = freq_data_to_xyz(data.elements, data.positions)
+                  const parsed = parse_any_structure(xyz, `cp2k-vibrations.xyz`)
+                  if (parsed) {
+                    // Suppress auto principal-axes alignment: mode animation drives
+                    // atoms with eigenvectors + base positions in the file's raw
+                    // frame, so the displayed structure must stay in that frame
+                    // (an aligned copy would rotate/translate out from under the
+                    // vibration overrides — atoms jump and bonds detach on Play).
+                    ;(parsed as { _aligned?: boolean })._aligned = true
+                    structure = parsed as typeof structure
+                    // Re-lock the orbit pivot onto the new structure — the pivot is
+                    // deliberately sticky across regular edits, so a bare structure
+                    // assignment keeps the previous structure's rotation center.
+                    // Wait one tick so the transform pipeline has pushed the new
+                    // structure to StructureScene (same latency the auto-align
+                    // path compensates for), else the recenter locks onto the
+                    // outgoing structure's center.
+                    void tick().then(() => {
+                      center_camera_trigger++
+                    })
+                  }
                 }}
               />
             {/if}
