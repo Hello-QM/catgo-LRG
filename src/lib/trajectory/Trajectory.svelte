@@ -18,7 +18,7 @@
   import { format_num, trajectory_property_config } from '$lib/labels'
   import type { ControlsConfig, DataSeries, Orientation, Point } from '$lib/plot'
   import { Histogram, ScatterPlot } from '$lib/plot'
-  import { DEFAULTS } from '$lib/settings'
+  import { DEFAULTS, should_reduce_motion } from '$lib/settings'
   import { scaleLinear } from 'd3-scale'
   import type { ComponentProps, Snippet } from 'svelte'
   import { untrack } from 'svelte'
@@ -100,6 +100,7 @@
     show_controls = true,
     fullscreen_toggle = DEFAULTS.trajectory.fullscreen_toggle,
     auto_play = false,
+    reduced_motion = false,
     display_mode = $bindable(`structure+scatter`),
     step_labels = 5,
     on_play,
@@ -172,6 +173,9 @@
     fullscreen_toggle?: Snippet<[]> | boolean
     // automatically start playing when trajectory data is loaded
     auto_play?: boolean
+    // When true (or when the OS prefers-reduced-motion matches), don't
+    // auto-start playback. Manual play (▶) still works.
+    reduced_motion?: boolean
     // display mode: 'structure+scatter' (default), 'structure' (only structure), 'scatter' (only scatter), 'histogram' (only histogram), 'structure+histogram' (structure with histogram)
     display_mode?:
       | `structure+scatter`
@@ -432,9 +436,19 @@
     !!remote_origin && !!current_frame_source && !!current_frame?.structure,
   )
 
-  // Auto-play when trajectory changes (handles both props and file loading)
+  // Auto-play when trajectory changes (handles both props and file loading).
+  // Reduced motion (explicit setting or OS prefers-reduced-motion) suppresses
+  // the auto-start; the user can still press ▶ manually.
   $effect(() => {
-    if (auto_play && trajectory && !untrack(() => is_playing) && total_frames > 1) {
+    const reduce = should_reduce_motion(
+      reduced_motion,
+      typeof matchMedia !== `undefined` &&
+        matchMedia(`(prefers-reduced-motion: reduce)`).matches,
+    )
+    if (
+      !reduce && auto_play && trajectory && !untrack(() => is_playing) &&
+      total_frames > 1
+    ) {
       start_playback()
     }
   })
