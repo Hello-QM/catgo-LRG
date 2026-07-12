@@ -371,6 +371,11 @@ export const SETTINGS_CONFIG: SettingsConfig = {
       minimum: 0,
       maximum: 10,
     },
+    reduced_motion: {
+      value: false,
+      description:
+        `Reduce or disable viewer animations (also honors the OS reduced-motion setting)`,
+    },
     rotation: {
       value: [0, 0, 0] as const,
       description:

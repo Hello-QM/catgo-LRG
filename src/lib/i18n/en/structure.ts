@@ -24,6 +24,7 @@ const structure: Record<string, string> = {
   pan_speed: `Pan speed`,
   zoom_to_cursor: `Zoom to cursor`,
   rotation_damping: `Rotation damping`,
+  reduced_motion: `Reduce motion`,
   rotation: `Rotation`,
   radius: `Radius (Å)`,
   same_size_atoms: `Same size atoms`,

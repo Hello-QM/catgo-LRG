@@ -187,6 +187,7 @@ export interface SettingsConfig {
     max_zoom: SettingType<number | undefined>
     min_zoom: SettingType<number | undefined>
     auto_rotate: SettingType<number>
+    reduced_motion: SettingType<boolean>
     // Manual rotation controls [x, y, z] in radians
     rotation: SettingType<Vec3>
 

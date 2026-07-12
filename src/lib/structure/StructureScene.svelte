@@ -5,7 +5,7 @@
   import { resolve_css_var } from '$lib/css-utils'
   import { format_num } from '$lib/labels'
   import * as math from '$lib/math'
-  import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, type ShowBonds } from '$lib/settings'
+  import { type CameraProjection, DEFAULTS, type LightingProfile, type RenderStyle, should_reduce_motion, type ShowBonds } from '$lib/settings'
   import { colors } from '$lib/state.svelte'
   import { Arrow, Cylinder, get_rotation_center, Lattice } from '$lib/structure'
   import * as measure from '$lib/structure/measure'
@@ -159,6 +159,11 @@
     const has_selection = (selected_sites?.length ?? 0) + (active_sites?.length ?? 0) > 0
     if (!has_selection) {
       __pulse_opacity = 1
+      return
+    }
+    // Reduced motion: hold the highlight at a steady (non-pulsing) opacity.
+    if (reduce_motion) {
+      __pulse_opacity = 0.9
       return
     }
     let raf_id = 0
@@ -462,6 +467,7 @@
     hovered_site = $bindable(null),
     float_fmt = `.3~f`,
     auto_rotate = DEFAULTS.structure.auto_rotate,
+    reduced_motion = DEFAULTS.structure.reduced_motion,
     bond_thickness = DEFAULTS.structure.bond_thickness,
     bond_color = DEFAULTS.structure.bond_color,
     incomplete_periodic_edge_mode = DEFAULTS.structure.incomplete_periodic_edge_mode,
@@ -733,6 +739,10 @@
     hovered_site?: Site | null
     float_fmt?: string
     auto_rotate?: number
+    // When true (or when the OS prefers-reduced-motion matches), suppress
+    // continuous viewer animations (selection pulse / vibration auto-play /
+    // camera auto-rotate / trackball inertia). Byte-identical when false + no OS pref.
+    reduced_motion?: boolean
     initial_zoom?: number
     bond_thickness?: number
     incomplete_periodic_edge_mode?: boolean
@@ -961,6 +971,18 @@
     // Vibration mode animation
     vibration_data?: { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null
   } = $props()
+
+  // Reduced-motion: honor the explicit user setting OR the OS-level
+  // `prefers-reduced-motion: reduce` media query. Gates every continuous rAF
+  // animation below (pulse / vibration / auto-rotate) plus trackball inertia.
+  // When false + no OS pref, the viewer's animation behavior is byte-identical.
+  const reduce_motion = $derived(
+    should_reduce_motion(
+      reduced_motion,
+      typeof matchMedia !== `undefined` &&
+        matchMedia(`(prefers-reduced-motion: reduce)`).matches,
+    ),
+  )
 
   const threlte = useThrelte()
 
@@ -2726,6 +2748,15 @@
     }
     const { eigenvector, base_positions, amplitude } = vib
     if (!eigenvector?.length || !base_positions?.length) return
+
+    // Reduced motion: don't oscillate. Show the un-displaced (base) structure
+    // by clearing the per-frame overrides instead of scheduling the rAF loop.
+    if (reduce_motion) {
+      if (untrack(() => realtime_position_overrides)) {
+        realtime_position_overrides = null
+      }
+      return
+    }
 
     let frame_id: number
     function tick() {
@@ -4958,7 +4989,8 @@
     // Disable pan when atom operations are in progress
     noPan: pan_speed === 0 || axis_lock_active || external_dragging ||
       is_box_selecting || is_rotating_atoms,
-    staticMoving: !Boolean(rotation_damping), // Opposite of damping
+    // Reduced motion forces staticMoving (no inertia/damping glide after release).
+    staticMoving: reduce_motion || !Boolean(rotation_damping), // Opposite of damping
     dynamicDampingFactor: rotation_damping || 0.2,
     minDistance: min_zoom,
     maxDistance: max_zoom,
@@ -5097,6 +5129,8 @@
   // Auto-rotation effect - continuously rotate camera around structure
   $effect(() => {
     if (!auto_rotate || auto_rotate <= 0) return
+    // Reduced motion: skip the continuous camera auto-rotation.
+    if (reduce_motion) return
     if (!orbit_controls || !camera) return
 
     let frame_id = 0

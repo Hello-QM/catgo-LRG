@@ -486,6 +486,7 @@
       pan_speed: scene_props.pan_speed,
       zoom_to_cursor: scene_props.zoom_to_cursor,
       rotation_damping: scene_props.rotation_damping,
+      reduced_motion: scene_props.reduced_motion,
     }}
     on_reset={() => {
       scene_props.camera_projection = DEFAULTS.structure.camera_projection
@@ -495,6 +496,7 @@
       scene_props.pan_speed = DEFAULTS.structure.pan_speed
       scene_props.zoom_to_cursor = DEFAULTS.structure.zoom_to_cursor
       scene_props.rotation_damping = DEFAULTS.structure.rotation_damping
+      scene_props.reduced_motion = DEFAULTS.structure.reduced_motion
     }}
   >
     <label>
@@ -616,6 +618,12 @@
         step={0.01}
         bind:value={scene_props.rotation_damping}
       />
+    </label>
+    <label
+      {@attach tooltip({ content: SETTINGS_CONFIG.structure.reduced_motion.description })}
+    >
+      <input type="checkbox" bind:checked={scene_props.reduced_motion} />
+      <span>{t('structure.reduced_motion')}</span>
     </label>
   </SettingsSection>
 

@@ -4,6 +4,7 @@
 export * from './types'
 export * from './config'
 export * from './defaults'
+export * from './reduced-motion'
 
 // Runtime backend-URL control (Model C) + its store/persistence helpers.
 export { default as BackendUrlSettings } from './BackendUrlSettings.svelte'

@@ -24,6 +24,7 @@ const structure: Record<string, string> = {
   pan_speed: `平移速度`,
   zoom_to_cursor: `缩放至光标`,
   rotation_damping: `旋转阻尼`,
+  reduced_motion: `减少动效`,
   rotation: `旋转`,
   radius: `半径 (Å)`,
   same_size_atoms: `原子等大`,
