@@ -4113,11 +4113,23 @@
                   const xyz = freq_data_to_xyz(data.elements, data.positions)
                   const parsed = parse_any_structure(xyz, `cp2k-vibrations.xyz`)
                   if (parsed) {
+                    // Suppress auto principal-axes alignment: mode animation drives
+                    // atoms with eigenvectors + base positions in the file's raw
+                    // frame, so the displayed structure must stay in that frame
+                    // (an aligned copy would rotate/translate out from under the
+                    // vibration overrides — atoms jump and bonds detach on Play).
+                    ;(parsed as { _aligned?: boolean })._aligned = true
                     structure = parsed as typeof structure
                     // Re-lock the orbit pivot onto the new structure — the pivot is
                     // deliberately sticky across regular edits, so a bare structure
                     // assignment keeps the previous structure's rotation center.
-                    center_camera_trigger++
+                    // Wait one tick so the transform pipeline has pushed the new
+                    // structure to StructureScene (same latency the auto-align
+                    // path compensates for), else the recenter locks onto the
+                    // outgoing structure's center.
+                    void tick().then(() => {
+                      center_camera_trigger++
+                    })
                   }
                 }}
               />
