@@ -56,7 +56,7 @@ async function init_worker(): Promise<void> {
 
       // 3. Set up message handler for ongoing communication
       w.onmessage = (e: MessageEvent) => {
-        const { id, type: msg_type, result, error, dt } = e.data
+        const { id, type: msg_type, error } = e.data
         if (msg_type === `ready`) {
           return
         }
@@ -66,7 +66,9 @@ async function init_worker(): Promise<void> {
         if (error) {
           p.reject(new Error(error))
         } else {
-          p.resolve({ result, dt })
+          // Resolve the whole payload — JSON replies carry {result, dt},
+          // typed replies carry {pairs, images, lengths, strengths, dt}.
+          p.resolve(e.data)
         }
       }
 
@@ -147,10 +149,11 @@ function reset_worker(reason: string): void {
   pending.clear()
 }
 
-function worker_request(
+function worker_request<T = { result: string; dt: string }>(
   data: Record<string, unknown>,
   timeout_ms = 20_000,
-): Promise<{ result: string; dt: string }> {
+  transfer?: Transferable[],
+): Promise<T> {
   return new Promise((resolve, reject) => {
     if (!worker || !worker_ready) { reject(new Error(`Worker unavailable`)); return }
     const id = next_id++
@@ -178,7 +181,7 @@ function worker_request(
         reject(e)
       },
     })
-    worker.postMessage({ ...data, id })
+    worker.postMessage({ ...data, id }, transfer ?? [])
   })
 }
 
@@ -379,7 +382,7 @@ async function try_main_thread_wasm(
 const SOLID_ANGLE_MAX_ATOMS = 8000
 let solid_angle_downgrade_logged = false
 
-function effective_strategy(strategy: BondingStrategy, n_sites: number): BondingStrategy {
+export function effective_strategy(strategy: BondingStrategy, n_sites: number): BondingStrategy {
   if (strategy === `solid_angle` && n_sites > SOLID_ANGLE_MAX_ATOMS) {
     if (!solid_angle_downgrade_logged) {
       solid_angle_downgrade_logged = true
@@ -445,6 +448,82 @@ export function compute_bonds_async(
       })
     })
   })
+}
+
+/** Flat typed-array bond table returned by the typed worker path. Layouts:
+ *  pairs [i0,j0, i1,j1, ...], images [x0,y0,z0, x1,...] (periodic image
+ *  offsets), lengths/strengths one per bond. */
+export interface TypedBondTable {
+  pairs: Uint32Array
+  images: Int8Array
+  lengths: Float32Array
+  strengths: Float32Array
+}
+
+/** Typed-array bond computation via Web Worker (atom_radii strategy only) —
+ *  no JSON, no structure objects, transfer lists both directions. Built for
+ *  per-frame trajectory bonding at 10k+ atoms where JSON serialization of a
+ *  20k-site structure costs more than the detection itself.
+ *
+ *  `positions` and `atomic_numbers` are copied before transfer — the caller
+ *  keeps ownership (frame positions are also the render source).
+ *  Returns null when the worker is unavailable or errors; callers fall back
+ *  to the JSON path. */
+export async function compute_bonds_typed_worker(
+  positions: Float32Array,
+  atomic_numbers: Uint8Array,
+  lattice_matrix: number[][] | null,
+  pbc: [boolean, boolean, boolean] | null,
+  options: Record<string, number>,
+): Promise<TypedBondTable | null> {
+  if (worker_failed) return null
+  try {
+    await init_worker()
+
+    const pos_copy = positions.slice()
+    const z_copy = atomic_numbers.slice()
+    const lattice = lattice_matrix && lattice_matrix.length === 3
+      ? new Float64Array([...lattice_matrix[0], ...lattice_matrix[1], ...lattice_matrix[2]])
+      : new Float64Array(0)
+    const pbc_arr = pbc
+      ? new Uint8Array([pbc[0] ? 1 : 0, pbc[1] ? 1 : 0, pbc[2] ? 1 : 0])
+      : new Uint8Array(0)
+    const n_sites = atomic_numbers.length
+    const timeout_ms = Math.max(20_000, n_sites * 4)
+    const t0 = performance.now()
+    const resp = await worker_request<TypedBondTable & { dt: string }>(
+      {
+        type: `bonds_typed`,
+        positions: pos_copy,
+        atomic_numbers: z_copy,
+        lattice,
+        pbc: pbc_arr,
+        options_json: JSON.stringify(options),
+      },
+      timeout_ms,
+      [pos_copy.buffer, z_copy.buffer, lattice.buffer, pbc_arr.buffer],
+    )
+    if (import.meta.env?.DEV) {
+      const total = (performance.now() - t0).toFixed(1)
+      console.log(
+        `[bonds] Worker typed | atom_radii | ${n_sites} atoms | ${
+          resp.pairs.length / 2
+        } bonds | wasm ${resp.dt}ms / total ${total}ms`,
+      )
+    }
+    return {
+      pairs: resp.pairs,
+      images: resp.images,
+      lengths: resp.lengths,
+      strengths: resp.strengths,
+    }
+  } catch (err) {
+    console.warn(
+      `[bonds] typed worker path failed — falling back to JSON path:`,
+      err instanceof Error ? err.message : err,
+    )
+    return null
+  }
 }
 
 /** Compute hydrogen bonds via Web Worker.

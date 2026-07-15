@@ -1,7 +1,11 @@
 // Behavior guard for build_trajectory_bond_pairs — the per-frame trajectory
 // fast path. Locks in stale-bond filtering + jimage semantics so the
 // radius-precompute optimization can't change observable output.
-import { build_trajectory_bond_pairs } from '$lib/structure/bond-computation-controller.svelte'
+import {
+  build_trajectory_bond_pairs,
+  get_traj_atomic_numbers,
+  typed_table_to_conn,
+} from '$lib/structure/bond-computation-controller.svelte'
 import type { Site } from '$lib'
 import { describe, expect, test } from 'vitest'
 
@@ -153,6 +157,40 @@ describe(`build_trajectory_bond_pairs`, () => {
     expect(pairs).toHaveLength(1)
     expect(pairs[0].bond_length).toBeCloseTo(1.4, 4)
     expect(pairs[0].jimage).toEqual([-1, 0, 0])
+  })
+
+  test(`typed_table_to_conn converts flat arrays and drops self-image bonds`, () => {
+    const table = {
+      // bond 0: normal 0-1; bond 1: self-image starburst 2-2@[1,0,0] (drop);
+      // bond 2: cross-cell 0-2@[0,-1,0] (keep); bond 3: degenerate 3-3@[0,0,0] (keep)
+      pairs: new Uint32Array([0, 1, 2, 2, 0, 2, 3, 3]),
+      images: new Int8Array([0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0, 0]),
+      lengths: new Float32Array([1.4, 2.8, 1.5, 0]),
+      strengths: new Float32Array([1, 0.5, 0.8, 0.1]),
+    }
+    const conn = typed_table_to_conn(table)
+    expect(conn).toHaveLength(3)
+    expect(conn[0]).toEqual({
+      site_idx_1: 0,
+      site_idx_2: 1,
+      strength: 1,
+      jimage: [0, 0, 0],
+    })
+    expect(conn[1].jimage).toEqual([0, -1, 0])
+    expect(conn[1].strength).toBeCloseTo(0.8, 5)
+    expect(conn[2].site_idx_1).toBe(3)
+  })
+
+  test(`get_traj_atomic_numbers maps elements and memoizes on sites identity`, () => {
+    const sites = [carbon_site([0, 0, 0]), carbon_site([1, 0, 0])]
+    const zs = get_traj_atomic_numbers(sites)
+    expect(zs).toBeInstanceOf(Uint8Array)
+    expect([...zs!]).toEqual([6, 6])
+    // memoized: same identity → same array back
+    expect(get_traj_atomic_numbers(sites)).toBe(zs)
+    // unknown element → null (typed path unusable)
+    const bad = [carbon_site([0, 0, 0]), unknown_site([1, 0, 0])]
+    expect(get_traj_atomic_numbers(bad)).toBeNull()
   })
 
   test(`overrides take precedence over trajectory positions`, () => {

@@ -10,7 +10,10 @@ import { BOND_KIND, type BondManager } from './bonding/bond-manager.svelte'
 import {
   compute_bonds_async,
   compute_bonds_sync,
+  compute_bonds_typed_worker,
   compute_hbonds_worker,
+  effective_strategy,
+  type TypedBondTable,
 } from './workers/bond-worker-api'
 import { filter_bonds_during_drag, should_show_bonds } from './scene'
 import { get_element_fingerprint, get_position_hash } from './scene'
@@ -660,13 +663,13 @@ export function compute_bond_connectivity_for_frame(
   }
 
   const n_sites = sites.length
-  const overlay_structure = build_trajectory_overlay_structure(
-    structure,
-    traj_positions,
-  )
 
   // 2. Sync path for small structures — fastest, no scheduling overhead.
   if (n_sites <= TRAJ_SYNC_THRESHOLD) {
+    const overlay_structure = build_trajectory_overlay_structure(
+      structure,
+      traj_positions,
+    )
     const sync_bonds = compute_bonds_sync(
       overlay_structure,
       bonding_strategy,
@@ -701,7 +704,6 @@ export function compute_bond_connectivity_for_frame(
     dispatch_traj_async(
       bond_state,
       traj_positions,
-      overlay_structure,
       structure,
       strategy_key,
       elem_fp,
@@ -720,14 +722,92 @@ export function compute_bond_connectivity_for_frame(
   return bond_state.bond_connectivity
 }
 
+/** Per-site atomic numbers for the typed worker path, memoized on the sites
+ *  array identity (stable across trajectory frames). `null` (also cached)
+ *  means at least one site's majority element has no table entry — the typed
+ *  path can't represent it, so callers use the JSON path. */
+const traj_z_cache = new WeakMap<object, Uint8Array | null>()
+
+/** Exported for tests. */
+export function get_traj_atomic_numbers(
+  sites: ReadonlyArray<Site>,
+): Uint8Array | null {
+  const cached = traj_z_cache.get(sites)
+  if (cached !== undefined) return cached
+  const zs = new Uint8Array(sites.length)
+  let ok = true
+  for (let idx = 0; idx < sites.length; idx++) {
+    const species = sites[idx]?.species
+    if (!species || species.length === 0) {
+      ok = false
+      break
+    }
+    let majority = species[0]
+    for (let sp = 1; sp < species.length; sp++) {
+      if (species[sp].occu > majority.occu) majority = species[sp]
+    }
+    const z = (covalent_radii_data as Record<
+      string,
+      { atomic_number?: number } | undefined
+    >)[majority.element]?.atomic_number
+    if (typeof z !== `number` || z < 1 || z > 255) {
+      ok = false
+      break
+    }
+    zs[idx] = z
+  }
+  const result = ok ? zs : null
+  traj_z_cache.set(sites, result)
+  return result
+}
+
+/** Convert a typed bond table to connectivity objects, applying the same
+ *  cross-cell self-image filter as `wasm_bonds_to_pairs` (drop a==b bonds
+ *  with a non-zero image — the "starburst" stubs around cell-face atoms).
+ *  Exported for tests. */
+export function typed_table_to_conn(
+  table: TypedBondTable,
+): Array<
+  {
+    site_idx_1: number
+    site_idx_2: number
+    strength: number
+    jimage: [number, number, number]
+  }
+> {
+  const n_bonds = table.pairs.length / 2
+  const conn = []
+  for (let idx = 0; idx < n_bonds; idx++) {
+    const site_a = table.pairs[idx * 2]
+    const site_b = table.pairs[idx * 2 + 1]
+    const jx = table.images[idx * 3]
+    const jy = table.images[idx * 3 + 1]
+    const jz = table.images[idx * 3 + 2]
+    if (site_a === site_b && (jx | jy | jz) !== 0) continue
+    conn.push({
+      site_idx_1: site_a,
+      site_idx_2: site_b,
+      strength: table.strengths[idx],
+      jimage: [jx, jy, jz] as [number, number, number],
+    })
+  }
+  return conn
+}
+
 /** Async bond detection for a trajectory frame. Race-protected via
  *  `traj_computation_gen`. On resolve, caches the result; if the frame is
  *  still current, also writes to `bond_state.bond_connectivity` to trigger
- *  a fresh render. Throttle slots are released on every exit path. */
+ *  a fresh render. Throttle slots are released on every exit path.
+ *
+ *  Route selection: when the effective strategy is atom_radii (always the
+ *  case for large trajectories — solid_angle downgrades above 8k atoms) and
+ *  every element maps to an atomic number, positions go to the worker as a
+ *  transferred Float32Array and bonds come back as flat typed arrays — no
+ *  overlay-structure build, no JSON. Anything else (exotic species, other
+ *  strategies, worker failure) falls back to the JSON path. */
 function dispatch_traj_async(
   bond_state: ReturnType<typeof create_bond_state>,
   frame_key: Float32Array,
-  overlay_structure: AnyStructure,
   base_structure: AnyStructure,
   strategy_key: string,
   elem_fp: string,
@@ -735,9 +815,10 @@ function dispatch_traj_async(
   bonding_options: Record<string, unknown>,
 ): void {
   const gen = ++bond_state.traj_computation_gen
+  const n_sites = base_structure.sites.length
   if (import.meta.env?.DEV) {
     console.log(
-      `[bonds-traj] dispatch async | ${overlay_structure.sites.length} sites | gen=${gen}`,
+      `[bonds-traj] dispatch async | ${n_sites} sites | gen=${gen}`,
     )
   }
   // Helper: clear throttle slots that still reference this dispatch's
@@ -750,72 +831,120 @@ function dispatch_traj_async(
       bond_state.traj_pending_frame = null
     }
   }
-  compute_bonds_async(
-    overlay_structure,
-    bonding_strategy,
-    bonding_options as Record<string, number>,
-  )
-    .then((new_bonds) => {
-      // Stale generation — trajectory torn down, strategy changed, or another
-      // traj dispatch superseded this one. Drop the result and release slots
-      // so the next dispatch can proceed.
-      if (gen !== bond_state.traj_computation_gen) {
-        release_slots()
-        return
-      }
 
-      const new_conn = new_bonds.map((b) => ({
-        site_idx_1: b.site_idx_1,
-        site_idx_2: b.site_idx_2,
-        strength: b.strength,
-        jimage: (b.jimage ?? [0, 0, 0]) as [number, number, number],
-      }))
-      // Always cache — even if the user has moved on, the entry will be
-      // useful on revisit (and bounded by the LRU cap).
-      frame_cache_set(frame_key, {
-        bond_connectivity: new_conn,
-        fingerprint: `${elem_fp}|frame`,
-        elem_fingerprint: elem_fp,
-        strategy_key,
-      })
-
-      const pending = bond_state.traj_pending_frame
-      if (pending === null) {
-        // No newer frame queued → the resolved frame is the latest visible.
-        // Reassigning bond_connectivity here is safe because we're in the
-        // promise resolve callback, NOT inside the trajectory $effect.pre body.
-        bond_state.bond_connectivity = new_conn
-        bond_state.last_bond_structure = base_structure
-        bond_state.last_bond_strategy = strategy_key
-        bond_state.last_elem_fingerprint = elem_fp
-        bond_state.last_bond_fingerprint = `${elem_fp}|frame`
-        bond_state.traj_in_flight_frame = null
-      } else {
-        // User moved on while async was running. Drain the latest-wins queue:
-        // dispatch detection for the pending frame. The resolved frame is
-        // already cached so a future revisit will hit O(1).
-        bond_state.traj_in_flight_frame = pending
-        bond_state.traj_pending_frame = null
-        const next_overlay = build_trajectory_overlay_structure(
-          base_structure,
-          pending,
-        )
-        dispatch_traj_async(
-          bond_state,
-          pending,
-          next_overlay,
-          base_structure,
-          strategy_key,
-          elem_fp,
-          bonding_strategy,
-          bonding_options,
-        )
+  // Shared resolve flow for both routes. Conversion to connectivity objects
+  // happens before this call; everything after (gen check, frame cache,
+  // latest-wins drain) is route-independent.
+  const handle_conn = (
+    new_conn: Array<
+      {
+        site_idx_1: number
+        site_idx_2: number
+        strength: number
+        jimage: [number, number, number]
       }
-    })
-    .catch((e) => {
-      console.debug(`[bonds-traj] async failed:`, e)
+    >,
+  ) => {
+    // Stale generation — trajectory torn down, strategy changed, or another
+    // traj dispatch superseded this one. Drop the result and release slots
+    // so the next dispatch can proceed.
+    if (gen !== bond_state.traj_computation_gen) {
       release_slots()
+      return
+    }
+
+    // Always cache — even if the user has moved on, the entry will be
+    // useful on revisit (and bounded by the LRU cap).
+    frame_cache_set(frame_key, {
+      bond_connectivity: new_conn,
+      fingerprint: `${elem_fp}|frame`,
+      elem_fingerprint: elem_fp,
+      strategy_key,
     })
+
+    const pending = bond_state.traj_pending_frame
+    if (pending === null) {
+      // No newer frame queued → the resolved frame is the latest visible.
+      // Reassigning bond_connectivity here is safe because we're in the
+      // promise resolve callback, NOT inside the trajectory $effect.pre body.
+      bond_state.bond_connectivity = new_conn
+      bond_state.last_bond_structure = base_structure
+      bond_state.last_bond_strategy = strategy_key
+      bond_state.last_elem_fingerprint = elem_fp
+      bond_state.last_bond_fingerprint = `${elem_fp}|frame`
+      bond_state.traj_in_flight_frame = null
+    } else {
+      // User moved on while async was running. Drain the latest-wins queue:
+      // dispatch detection for the pending frame. The resolved frame is
+      // already cached so a future revisit will hit O(1).
+      bond_state.traj_in_flight_frame = pending
+      bond_state.traj_pending_frame = null
+      dispatch_traj_async(
+        bond_state,
+        pending,
+        base_structure,
+        strategy_key,
+        elem_fp,
+        bonding_strategy,
+        bonding_options,
+      )
+    }
+  }
+
+  const run_json = () => {
+    const overlay_structure = build_trajectory_overlay_structure(
+      base_structure,
+      frame_key,
+    )
+    compute_bonds_async(
+      overlay_structure,
+      bonding_strategy,
+      bonding_options as Record<string, number>,
+    )
+      .then((new_bonds) =>
+        handle_conn(new_bonds.map((b) => ({
+          site_idx_1: b.site_idx_1,
+          site_idx_2: b.site_idx_2,
+          strength: b.strength,
+          jimage: (b.jimage ?? [0, 0, 0]) as [number, number, number],
+        })))
+      )
+      .catch((e) => {
+        console.debug(`[bonds-traj] async failed:`, e)
+        release_slots()
+      })
+  }
+
+  const zs = effective_strategy(bonding_strategy, n_sites) === `atom_radii`
+    ? get_traj_atomic_numbers(base_structure.sites)
+    : null
+  if (zs && frame_key.length === n_sites * 3) {
+    const crystal = base_structure as Crystal
+    const pbc_raw = crystal.lattice?.pbc
+    const pbc = Array.isArray(pbc_raw) && pbc_raw.length === 3
+      ? [!!pbc_raw[0], !!pbc_raw[1], !!pbc_raw[2]] as [boolean, boolean, boolean]
+      : null
+    compute_bonds_typed_worker(
+      frame_key,
+      zs,
+      crystal.lattice?.matrix ?? null,
+      pbc,
+      bonding_options as Record<string, number>,
+    )
+      .then((table) => {
+        if (table === null) {
+          run_json()
+          return
+        }
+        handle_conn(typed_table_to_conn(table))
+      })
+      .catch((e) => {
+        console.debug(`[bonds-traj] typed path failed, falling back:`, e)
+        run_json()
+      })
+  } else {
+    run_json()
+  }
 }
 
 /**
