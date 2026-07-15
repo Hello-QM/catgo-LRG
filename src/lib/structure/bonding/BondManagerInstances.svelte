@@ -61,6 +61,15 @@
      */
     lattice_matrix?: Float64Array | null
     /**
+     * Variable-cell trajectory override: the DISPLAYED frame's lattice in the
+     * same row-major Float64Array(9) layout as `lattice_matrix`. Fed ONLY to
+     * the uLattice uniform and the renderer's per-slot lattice getter — the
+     * full-resync config effect keeps tracking the static `lattice_matrix`,
+     * so a per-frame identity change here costs one mat3 uniform write, not
+     * a full buffer rebuild. `null` = fixed cell (use `lattice_matrix`).
+     */
+    frame_lattice_matrix?: Float64Array | null
+    /**
      * VESTA-Mode-1 cell-edge style: when true, cross-cell bonds (jimage ≠ 0)
      * render as a single stub on atom A's side of the boundary instead of
      * paired stubs on both sides. Default false (paired stubs).
@@ -142,6 +151,7 @@
     bond_opacity_overrides,
     periodic_bond_opacity = 1,
     lattice_matrix = null,
+    frame_lattice_matrix = null,
     incomplete_periodic_edge_mode = false,
     incomplete_edge_length_scale = 0.5,
     hide_incomplete_bonds = true,
@@ -644,9 +654,12 @@
 
   // GPU-path scalar/matrix uniforms. lattice_matrix identity is stable
   // during playback (the per-frame structure cascade is cut), so this fires
-  // on load / lattice edits, not per frame.
+  // on load / lattice edits, not per frame. frame_lattice_matrix is the
+  // variable-cell exception: identity changes per frame there, and this
+  // effect's whole body is cheap uniform writes — that per-frame cost is
+  // exactly the point (cross-cell bonds must use the displayed frame's cell).
   $effect(() => {
-    const lat = lattice_matrix
+    const lat = frame_lattice_matrix ?? lattice_matrix
     const m = shader_material.uniforms.uLattice.value as Matrix3
     if (lat) m.fromArray(lat as unknown as number[])
     else m.fromArray(ZERO_LATTICE)
@@ -724,7 +737,10 @@
         mesh_ref,
         mgr,
         () => atom_positions,
-        () => lattice_matrix ?? null,
+        // Variable-cell playback: per-slot CPU matrix writes must use the
+        // displayed frame's cell. Read at call time inside the renderer's
+        // (untracked) sync bodies, so this adds no reactive subscription.
+        () => frame_lattice_matrix ?? lattice_matrix ?? null,
         () => ({
           mode: incomplete_periodic_edge_mode,
           scale: incomplete_edge_length_scale,

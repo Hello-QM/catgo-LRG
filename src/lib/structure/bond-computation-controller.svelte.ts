@@ -152,6 +152,7 @@ export function clear_trajectory_bond_frame_cache(
     bond_state.traj_computation_gen++
     bond_state.traj_in_flight_frame = null
     bond_state.traj_pending_frame = null
+    bond_state.traj_pending_lattice = null
   }
 }
 
@@ -167,16 +168,26 @@ export function clear_trajectory_bond_frame_cache(
  *  finds neighbors at frame-0 fractional positions while the user sees
  *  frame-N Cartesian positions. Convention: `xyz = abc @ lattice` (rows
  *  of lattice.matrix are vectors a,b,c — pymatgen style), so
- *  `abc = xyz @ inv(lattice)`. */
-function build_trajectory_overlay_structure(
+ *  `abc = xyz @ inv(lattice)`.
+ *
+ *  `frame_lattice` (variable-cell trajectories): the displayed frame's
+ *  lattice matrix. When given, it replaces the base structure's (frozen
+ *  frame-0) lattice for BOTH the abc recompute and the overlay's own
+ *  `lattice.matrix` — the detector's PBC image search must use the cell
+ *  the positions actually live in. Exported for tests. */
+export function build_trajectory_overlay_structure(
   structure: AnyStructure,
   traj: Float32Array,
+  frame_lattice?: number[][] | null,
 ): AnyStructure {
   const sites = structure.sites
   const traj_max = Math.floor(traj.length / 3)
   const new_sites: Site[] = new Array(sites.length)
-  const lattice_matrix = (structure as { lattice?: { matrix?: number[][] } })
-    .lattice?.matrix
+  const base_lattice = (structure as { lattice?: { matrix?: number[][] } })
+    .lattice
+  const lattice_matrix =
+    (frame_lattice && frame_lattice.length === 3 ? frame_lattice : null) ??
+      base_lattice?.matrix
   const inv = lattice_matrix ? invert_3x3(lattice_matrix) : null
   for (let i = 0; i < sites.length; i++) {
     const orig = sites[i]
@@ -197,6 +208,20 @@ function build_trajectory_overlay_structure(
     } else {
       new_sites[i] = orig
     }
+  }
+  // Variable-cell: the overlay must carry the frame's lattice so the WASM
+  // detector enumerates PBC images in the right cell. Derived lattice params
+  // (a/b/c/angles/volume) go stale in the copy — detection only reads
+  // `matrix`, and the overlay never escapes this module.
+  if (
+    frame_lattice && frame_lattice.length === 3 && base_lattice &&
+    frame_lattice !== base_lattice.matrix
+  ) {
+    return {
+      ...structure,
+      sites: new_sites,
+      lattice: { ...base_lattice, matrix: frame_lattice },
+    } as AnyStructure
   }
   return { ...structure, sites: new_sites } as AnyStructure
 }
@@ -265,6 +290,10 @@ export function create_bond_state() {
   // Latest-wins throttle slots for trajectory async dispatches.
   let traj_in_flight_frame: Float32Array | null = null
   let traj_pending_frame: Float32Array | null = null
+  // Frame lattice paired with traj_pending_frame (variable-cell trajectories;
+  // null = frozen base lattice). The drain re-dispatch must use the PENDING
+  // frame's cell, not the cell of the dispatch that happens to drain it.
+  let traj_pending_lattice: number[][] | null = null
 
   return {
     get bond_connectivity() {
@@ -326,6 +355,12 @@ export function create_bond_state() {
     },
     set traj_pending_frame(v) {
       traj_pending_frame = v
+    },
+    get traj_pending_lattice() {
+      return traj_pending_lattice
+    },
+    set traj_pending_lattice(v) {
+      traj_pending_lattice = v
     },
   }
 }
@@ -624,6 +659,9 @@ export function compute_bond_connectivity_for_frame(
   lattice: Crystal['lattice'] | null,
   bonding_strategy: BondingStrategy,
   bonding_options: Record<string, unknown>,
+  // Variable-cell trajectories: the displayed frame's lattice matrix (rows =
+  // a,b,c). null/undefined = fixed cell, detect in the base structure's cell.
+  frame_lattice?: number[][] | null,
 ): typeof bond_state.bond_connectivity {
   if (!structure?.sites) return bond_state.bond_connectivity
 
@@ -676,6 +714,7 @@ export function compute_bond_connectivity_for_frame(
     const overlay_structure = build_trajectory_overlay_structure(
       structure,
       traj_positions,
+      frame_lattice,
     )
     const sync_bonds = compute_bonds_sync(
       overlay_structure,
@@ -716,10 +755,13 @@ export function compute_bond_connectivity_for_frame(
       elem_fp,
       bonding_strategy,
       bonding_options,
+      frame_lattice ?? null,
     )
   } else if (bond_state.traj_in_flight_frame !== traj_positions) {
-    // Latest-wins: just remember which frame the user is currently on.
+    // Latest-wins: just remember which frame the user is currently on
+    // (positions + the cell they live in).
     bond_state.traj_pending_frame = traj_positions
+    bond_state.traj_pending_lattice = frame_lattice ?? null
   }
 
   // While async is in flight, render with previous frame's connectivity.
@@ -820,6 +862,7 @@ function dispatch_traj_async(
   elem_fp: string,
   bonding_strategy: BondingStrategy,
   bonding_options: Record<string, unknown>,
+  frame_lattice: number[][] | null = null,
 ): void {
   const gen = ++bond_state.traj_computation_gen
   const n_sites = base_structure.sites.length
@@ -892,6 +935,8 @@ function dispatch_traj_async(
       // already cached so a future revisit will hit O(1).
       bond_state.traj_in_flight_frame = pending
       bond_state.traj_pending_frame = null
+      const pending_lattice = bond_state.traj_pending_lattice
+      bond_state.traj_pending_lattice = null
       dispatch_traj_async(
         bond_state,
         pending,
@@ -900,6 +945,7 @@ function dispatch_traj_async(
         elem_fp,
         bonding_strategy,
         bonding_options,
+        pending_lattice,
       )
     }
   }
@@ -908,6 +954,7 @@ function dispatch_traj_async(
     const overlay_structure = build_trajectory_overlay_structure(
       base_structure,
       frame_key,
+      frame_lattice,
     )
     compute_bonds_async(
       overlay_structure,
@@ -940,7 +987,7 @@ function dispatch_traj_async(
     compute_bonds_typed_worker(
       frame_key,
       zs,
-      crystal.lattice?.matrix ?? null,
+      frame_lattice ?? crystal.lattice?.matrix ?? null,
       pbc,
       bonding_options as Record<string, number>,
     )

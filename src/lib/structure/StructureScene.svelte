@@ -591,6 +591,12 @@
     trajectory_frame_positions = null as Float32Array | null,
     // Trajectory fast-path: flat Float32Array of forces (fx,fy,fz) for current frame
     trajectory_frame_forces = null as Float32Array | null,
+    // Variable-cell trajectory fast-path: the DISPLAYED frame's lattice matrix
+    // (rows = a,b,c, pymatgen convention). Identity-stable for fixed-cell
+    // trajectories (the supplier reuses the same reference while the nine
+    // numbers are unchanged), so every consumer below only re-fires per frame
+    // when the cell actually varies. null = use the (frozen) structure lattice.
+    trajectory_frame_lattice = null as number[][] | null,
     // Per-frame bond connectivity from the async trajectory bond cache. When
     // null (cache miss), we fall back to `bond_state.bond_connectivity`
     // (frame-0 static).
@@ -881,6 +887,9 @@
     trajectory_frame_positions?: Float32Array | null
     // Trajectory fast-path: flat Float32Array of forces (fx,fy,fz) per atom
     trajectory_frame_forces?: Float32Array | null
+    // Variable-cell trajectory fast-path: displayed frame's lattice matrix
+    // (rows = a,b,c). Identity-stable across frames when the cell is fixed.
+    trajectory_frame_lattice?: number[][] | null
     // Per-frame bond connectivity (from trajectory bond cache). Null = fall back to static.
     /** WebGPU large-system overlay active. When true the WebGL scene is fully
      *  covered by the overlay and `autoRender` is off, so this scene must do
@@ -2748,6 +2757,10 @@
     const sel = selected_sites
     const overrides_size = overrides?.size ?? 0
     const traj_positions = trajectory_frame_positions
+    // Variable-cell: identity changes only when the cell actually varies, and
+    // always alongside a traj_positions identity change — so the memo guards
+    // below need no extra lattice term.
+    const frame_lat = trajectory_frame_lattice
 
     // Plan v3 Phase 3 trajectory fast-path: when a trajectory is active,
     // bypass the slow build_bond_pairs path and use position-indexed
@@ -2764,6 +2777,7 @@
       const traj_conn = compute_bond_connectivity_for_frame(
         bond_state, traj_positions, bond_input,
         show_bonds, lattice, bonding_strategy, bonding_options,
+        frame_lat,
       )
       const __traj_tol_v = (() => {
         const raw = (bonding_options as Record<string, unknown> | undefined)?.tolerance
@@ -2792,7 +2806,7 @@
           traj_conn === __td_prev_conn &&
           traj_positions === __td_prev_pos
         ) return
-        const td_lat =
+        const td_lat = frame_lat ??
           (bond_input as { lattice?: { matrix?: number[][] } } | undefined)
             ?.lattice?.matrix ?? null
         const td_sites =
@@ -2858,7 +2872,9 @@
         traj_positions,
         overrides as unknown as Map<number, Vec3> | null,
         atom_manager,
-        (bond_input as { lattice?: { matrix?: number[][] } } | undefined)?.lattice?.matrix ?? null,
+        frame_lat ??
+          (bond_input as { lattice?: { matrix?: number[][] } } | undefined)?.lattice?.matrix ??
+          null,
         (bond_input as { sites?: ReadonlyArray<Site> } | undefined)?.sites ?? null,
         __traj_tol_v,
       )
@@ -4514,6 +4530,20 @@
     return out
   })
 
+  // Variable-cell trajectory frame lattice, flattened for BondManagerInstances
+  // (same row-major layout as bond_lattice_matrix). Re-derives only when the
+  // frame lattice identity changes — i.e. per frame ONLY when the cell truly
+  // varies (the supplier keeps the reference stable for fixed cells).
+  let bond_frame_lattice_matrix = $derived.by((): Float64Array | null => {
+    const m = trajectory_frame_lattice
+    if (!m || m.length !== 3) return null
+    const out = new Float64Array(9)
+    out[0] = m[0][0]; out[1] = m[0][1]; out[2] = m[0][2]
+    out[3] = m[1][0]; out[4] = m[1][1]; out[5] = m[1][2]
+    out[6] = m[2][0]; out[7] = m[2][1]; out[8] = m[2][2]
+    return out
+  })
+
   // Flat linear-RGB buffer for BondManagerInstances' gradient shader.
   // One xyz triple per site; bonds look up colors by site_idx at render time.
   // Per-site color overrides (from the right-click "Set Color" picker)
@@ -5961,6 +5991,7 @@
           {bond_opacity_overrides}
           periodic_bond_opacity={image_atom_opacity}
           lattice_matrix={bond_lattice_matrix}
+          frame_lattice_matrix={bond_frame_lattice_matrix}
           {incomplete_periodic_edge_mode}
           {incomplete_edge_length_scale}
           {hide_incomplete_bonds}
@@ -6165,7 +6196,13 @@
       {/if}
 
       {#if lattice && show_cell && show_bulk_atoms}
-        <Lattice matrix={lattice.matrix} {...lattice_props} />
+        <!-- Variable-cell playback: draw the displayed frame's cell, not the
+             frozen frame-0 lattice. Single wireframe box — per-frame rebuild
+             is negligible, and fixed-cell identity stability skips it. -->
+        <Lattice
+          matrix={(trajectory_frame_lattice as [Vec3, Vec3, Vec3] | null) ?? lattice.matrix}
+          {...lattice_props}
+        />
       {/if}
 
       <!-- Miller Slab Cutting - WYSIWYG Slab Preview -->

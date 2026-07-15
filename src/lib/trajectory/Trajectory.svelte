@@ -52,6 +52,7 @@
     compute_step_label_positions,
     get_view_mode_label,
     read_file_content,
+    stable_frame_lattice,
   } from './trajectory-utils'
   import {
     clamp_fps,
@@ -628,6 +629,12 @@
   let trajectory_frame_positions = $state<Float32Array | null>(null)
   // Trajectory frame forces for fast path (Float32Array of fx,fy,fz triples, null if no forces)
   let trajectory_frame_forces = $state<Float32Array | null>(null)
+  // Variable-cell fast path: displayed frame's lattice matrix (rows = a,b,c).
+  // $state.raw + the plain shadow below keep this identity-stable for fixed
+  // cells — the shadow is compared/updated without reading the signal, so the
+  // publishing effect never subscribes to its own output.
+  let trajectory_frame_lattice = $state.raw<number[][] | null>(null)
+  let last_frame_lattice: number[][] | null = null
 
   // Plan v3 Phase 4 (per plans/phase4-current-structure-investigation.md):
   // Gate `current_structure = frame.structure` behind a topology_initialized
@@ -657,8 +664,23 @@
       current_structure = undefined
       trajectory_frame_positions = null
       trajectory_frame_forces = null
+      last_frame_lattice = null
+      trajectory_frame_lattice = null
       topology_initialized = false
       return
+    }
+    // Variable-cell trajectories (NPT / cell relaxation): publish the frame's
+    // lattice so bond detection, cross-cell rendering (CPU + GPU uLattice) and
+    // the cell wireframe track the displayed cell. Identity-stable when the
+    // nine numbers don't change, so fixed-cell playback costs 9 compares/frame
+    // and fires no downstream effects.
+    const frame_lat = stable_frame_lattice(
+      last_frame_lattice,
+      (frame.structure as { lattice?: { matrix?: number[][] } }).lattice?.matrix,
+    )
+    if (frame_lat !== last_frame_lattice) {
+      last_frame_lattice = frame_lat
+      trajectory_frame_lattice = frame_lat
     }
     // Doping / substitution trajectories swap element identity per frame
     // while keeping positions constant; the position_cache fast-path freezes
@@ -966,9 +988,24 @@
       }
       return { ...site, xyz: [x, y, z] as [number, number, number] }
     })
-    // Bail if every site was passthrough (no actual change)
-    if (new_sites.every((s, i) => s === sites[i])) return
-    current_structure = { ...cur, sites: new_sites }
+    // Variable-cell: the paused frame's lattice must land in current_structure
+    // too — exports, the info pane and post-pause edits read structure.lattice.
+    // Take the frame's FULL lattice object (params a/b/c/angles included, from
+    // parse time) rather than patching only the matrix. Fixed-cell trajectories
+    // short-circuit on the identity-stable trajectory_frame_lattice being in
+    // sync with the current matrix already.
+    const cur_lattice = (cur as { lattice?: { matrix?: number[][] } }).lattice
+    const frame_lattice_obj =
+      (current_frame?.structure as { lattice?: { matrix?: number[][] } } | undefined)
+        ?.lattice
+    const lattice_changed = cur_lattice && frame_lattice_obj &&
+      stable_frame_lattice(cur_lattice.matrix ?? null, frame_lattice_obj.matrix) !==
+        (cur_lattice.matrix ?? null)
+    // Bail if every site was passthrough and the cell is unchanged
+    if (!lattice_changed && new_sites.every((s, i) => s === sites[i])) return
+    current_structure = lattice_changed
+      ? { ...cur, sites: new_sites, lattice: frame_lattice_obj } as typeof cur
+      : { ...cur, sites: new_sites }
   }
 
   // Play/pause functionality
@@ -2295,6 +2332,7 @@
           handle_viewer_command={handle_trajectory_command}
           {trajectory_frame_positions}
           {trajectory_frame_forces}
+          {trajectory_frame_lattice}
           trajectory_step_idx={current_step_idx}
           trajectory_positions_version={trajectory_positions_version}
           get_trajectory_frame_positions={(i: number) => {

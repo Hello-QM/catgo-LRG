@@ -19,6 +19,39 @@ export function structures_compatible(a: AnyStructure, b: AnyStructure): boolean
 }
 
 /**
+ * Identity-stable per-frame lattice selector for variable-cell trajectories.
+ *
+ * Every materialized frame structure carries its own `lattice.matrix` array,
+ * so the reference changes each frame even when the cell is fixed. Downstream
+ * consumers (bond detection, GPU uLattice uniform, cell wireframe) key their
+ * re-work off the lattice IDENTITY — so fixed-cell playback must keep handing
+ * out the same reference. Returns `prev` when the nine numbers are unchanged,
+ * a plain-array SNAPSHOT of the frame's matrix otherwise (frame structures
+ * live behind Svelte's deep proxy — hot per-bond consumers must not pay proxy
+ * traps on every lat[r][c] read), and `null` when the frame has no 3×3 lattice.
+ */
+export function stable_frame_lattice(
+  prev: number[][] | null,
+  matrix: number[][] | null | undefined,
+): number[][] | null {
+  if (!matrix || matrix.length !== 3) return null
+  if (prev && prev.length === 3) {
+    let same = true
+    for (let row = 0; row < 3 && same; row++) {
+      const pr = prev[row]
+      const mr = matrix[row]
+      if (pr[0] !== mr[0] || pr[1] !== mr[1] || pr[2] !== mr[2]) same = false
+    }
+    if (same) return prev
+  }
+  return [
+    [matrix[0][0], matrix[0][1], matrix[0][2]],
+    [matrix[1][0], matrix[1][1], matrix[1][2]],
+    [matrix[2][0], matrix[2][1], matrix[2][2]],
+  ]
+}
+
+/**
  * Compute step label positions for the trajectory slider.
  * @param step_labels - positive number (ticks count), negative number (spacing), or array of exact indices
  * @param total_frames - total number of trajectory frames
