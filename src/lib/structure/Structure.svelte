@@ -1366,11 +1366,18 @@
         `Supercell-extra atoms frozen at topology-load positions.`,
       )
     }
-    for (let slot = 0; slot < max_slot; slot++) {
-      const sid = mgr.site_ids_buffer[slot]
-      if (overrides?.has(sid)) continue // drag wins
-      const base = sid * 3
-      mgr.set_position(slot, traj[base], traj[base + 1], traj[base + 2])
+    // Batched: one reactive `version` bump for the whole frame instead of
+    // one $state write per atom (20k/frame).
+    mgr.begin_positions_batch()
+    try {
+      for (let slot = 0; slot < max_slot; slot++) {
+        const sid = mgr.site_ids_buffer[slot]
+        if (overrides?.has(sid)) continue // drag wins
+        const base = sid * 3
+        mgr.set_position(slot, traj[base], traj[base + 1], traj[base + 2])
+      }
+    } finally {
+      mgr.commit_positions_batch()
     }
   })
 
@@ -2630,6 +2637,14 @@
   // throttle inside push_loop coalesces rapid edits (e.g. atom drag at
   // 60fps) into ≤20 pushes/sec.
   $effect(() => {
+    // Trajectory playback: bridge_structure (= the current frame's structure)
+    // changes identity EVERY frame, and deep-stringifying a 20k-site $state
+    // proxy per frame (~300k proxy traps + a multi-MB throwaway string) was
+    // the single largest main-thread cost of large-trajectory playback. No
+    // edits happen mid-playback, so pushes pause; reading the gate reactively
+    // means teardown/pause (positions → null) re-fires this effect and
+    // pushes the final state. The 5s MCP heartbeat still covers listeners.
+    if (trajectory_frame_positions != null) return
     const published = bridge_structure ?? structure
     if (!published) return
     void JSON.stringify(published)

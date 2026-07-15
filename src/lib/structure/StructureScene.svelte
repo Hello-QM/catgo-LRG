@@ -3327,39 +3327,57 @@
       return has_visible_element && prop_visible
     }
 
+    // Fast-path guards. This $derived re-runs twice per trajectory frame
+    // (bond_pairs churns), and with nothing hidden/deleted the old
+    // unconditional path still paid ~52k is_site_visible proxy reads plus
+    // 26k bond-key strings per pass at 20k atoms.
+    const nothing_hidden = _hidden_size === 0 && _hs_size === 0 && _hpv_size === 0
+    const check_deleted = _deleted_size > 0
+
     // Start from the rule-aware bonds; filter out deleted, hidden, and invalid transforms
     let result = ruled_bonds.filter((bond) => {
-      if (!bond.transform_matrix || bond.transform_matrix.some((v) => !Number.isFinite(v))) return false
+      const tm = bond.transform_matrix
+      if (!tm) return false
+      for (let idx = 0; idx < tm.length; idx++) {
+        if (!Number.isFinite(tm[idx])) return false
+      }
       // Hard cap on rendered bond length. No real covalent bond exceeds this;
       // anything longer is a PBC/image rendering artifact (e.g. a bond drawn
       // straight across the cell instead of via the minimum image), so drop it.
       if (bond.bond_length > MAX_BOND_LENGTH) return false
-      const key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
-      if (_deleted_bond_keys.has(key)) return false
-      if (!is_site_visible(bond.site_idx_1) || !is_site_visible(bond.site_idx_2)) return false
+      if (check_deleted) {
+        const key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+        if (_deleted_bond_keys.has(key)) return false
+      }
+      if (
+        !nothing_hidden &&
+        (!is_site_visible(bond.site_idx_1) || !is_site_visible(bond.site_idx_2))
+      ) return false
       return true
     })
 
     // Append manual bonds (that aren't already in auto-detected set)
-    const auto_keys = new Set(result.map(b => get_bond_key(b.site_idx_1, b.site_idx_2)))
-    for (const mb of manual_bonds) {
-      const key = get_bond_key(mb.site_idx_1, mb.site_idx_2)
-      if (auto_keys.has(key)) continue // Already present via auto-detection
-      const pos_1 = bond_struct.sites[mb.site_idx_1]?.xyz
-      const pos_2 = bond_struct.sites[mb.site_idx_2]?.xyz
-      if (!pos_1 || !pos_2) continue
-      const diff = math.subtract(pos_2, pos_1)
-      const bond_length = Math.hypot(diff[0], diff[1], diff[2])
-      result.push({
-        pos_1,
-        pos_2,
-        site_idx_1: mb.site_idx_1,
-        site_idx_2: mb.site_idx_2,
-        bond_length,
-        strength: 1.0,
-        transform_matrix: compute_bond_transform(pos_1, pos_2),
-        jimage: [0, 0, 0],
-      })
+    if (manual_bonds.length > 0) {
+      const auto_keys = new Set(result.map(b => get_bond_key(b.site_idx_1, b.site_idx_2)))
+      for (const mb of manual_bonds) {
+        const key = get_bond_key(mb.site_idx_1, mb.site_idx_2)
+        if (auto_keys.has(key)) continue // Already present via auto-detection
+        const pos_1 = bond_struct.sites[mb.site_idx_1]?.xyz
+        const pos_2 = bond_struct.sites[mb.site_idx_2]?.xyz
+        if (!pos_1 || !pos_2) continue
+        const diff = math.subtract(pos_2, pos_1)
+        const bond_length = Math.hypot(diff[0], diff[1], diff[2])
+        result.push({
+          pos_1,
+          pos_2,
+          site_idx_1: mb.site_idx_1,
+          site_idx_2: mb.site_idx_2,
+          bond_length,
+          strength: 1.0,
+          transform_matrix: compute_bond_transform(pos_1, pos_2),
+          jimage: [0, 0, 0],
+        })
+      }
     }
 
     return result
@@ -3427,6 +3445,34 @@
   // cell-internal hits use, so selection / hover code paths converge.
   // Built in O(count + N) per derive: single pass over BondManager seeds a
   // content-keyed table, then each filtered pair looks up its slot.
+  // Numeric bond keys for the per-frame hot maps (slot_to_filtered_idx and
+  // the bond_manager shadow-sync diff below). String keys allocated ~100k
+  // short-lived strings per trajectory frame at 26k bonds — a large share of
+  // playback GC pressure. Packs (a, b, jimage) into one float64-exact
+  // integer (< 2^51); falls back to strings for out-of-range inputs
+  // (>262k atoms or |jimage| > 15), which may share one Map with the
+  // numeric keys.
+  const BOND_KEY_MAX_IDX = 1 << 18
+  const BOND_KEY_JLIM = 15
+  function pack_bond_key(
+    site_a: number,
+    site_b: number,
+    jx: number,
+    jy: number,
+    jz: number,
+  ): number | string {
+    if (
+      site_a < BOND_KEY_MAX_IDX && site_b < BOND_KEY_MAX_IDX &&
+      jx >= -BOND_KEY_JLIM && jx <= BOND_KEY_JLIM &&
+      jy >= -BOND_KEY_JLIM && jy <= BOND_KEY_JLIM &&
+      jz >= -BOND_KEY_JLIM && jz <= BOND_KEY_JLIM
+    ) {
+      return (site_a * BOND_KEY_MAX_IDX + site_b) * 32768 +
+        ((jx + 16) * 1024 + (jy + 16) * 32 + (jz + 16))
+    }
+    return `${site_a}-${site_b}-${jx},${jy},${jz}`
+  }
+
   // Orphans (entry not yet shadow-synced) leave the slot at -1 — decorator
   // hits on those return null (degraded but harmless).
   let slot_to_filtered_idx = $derived.by((): Int32Array => {
@@ -3437,25 +3483,27 @@
     if (count === 0 || filtered_bond_pairs.length === 0) return out
     const pairs = bond_manager.pairs_buffer
     const jimg = bond_manager.jimages_buffer
-    const key_to_slot = new Map<string, number>()
+    const key_to_slot = new Map<number | string, number>()
     for (let s = 0; s < count; s++) {
       const a = pairs[s * 2]
       const b = pairs[s * 2 + 1]
       const jx = jimg[s * 3]
       const jy = jimg[s * 3 + 1]
       const jz = jimg[s * 3 + 2]
-      key_to_slot.set(`${a},${b},${jx},${jy},${jz}`, s)
+      key_to_slot.set(pack_bond_key(a, b, jx, jy, jz), s)
     }
     for (let i = 0; i < filtered_bond_pairs.length; i++) {
       const bp = filtered_bond_pairs[i]
       const ji = bp.jimage ?? [0, 0, 0]
-      const direct = `${bp.site_idx_1},${bp.site_idx_2},${ji[0]},${ji[1]},${ji[2]}`
-      let slot = key_to_slot.get(direct)
+      let slot = key_to_slot.get(
+        pack_bond_key(bp.site_idx_1, bp.site_idx_2, ji[0], ji[1], ji[2]),
+      )
       if (slot === undefined) {
         // Stored as (b, a, -jimage) — direction-aware swap mirrors
         // BondManager.find_slot_by_pair semantics.
-        const swapped = `${bp.site_idx_2},${bp.site_idx_1},${-ji[0]},${-ji[1]},${-ji[2]}`
-        slot = key_to_slot.get(swapped)
+        slot = key_to_slot.get(
+          pack_bond_key(bp.site_idx_2, bp.site_idx_1, -ji[0], -ji[1], -ji[2]),
+        )
       }
       if (slot !== undefined) out[slot] = i
     }
@@ -3484,7 +3532,10 @@
     // different lattice translations (e.g. (3, 7, [0,0,0]) vs (3, 7, [1,0,0]))
     // are kept as separate slots — failing to disambiguate would let the
     // shadow sync collapse them into one and silently drop the other.
-    const desired = new Map<string, {
+    // Keys are packed numbers (pack_bond_key) — this diff runs twice per
+    // trajectory frame over ~26k bonds and string keys dominated playback GC.
+    const has_manual = manual_keys.size > 0
+    const desired = new Map<number | string, {
       a: number
       b: number
       k: BondKind
@@ -3506,11 +3557,14 @@
       const cdx = swap ? -jx : jx
       const cdy = swap ? -jy : jy
       const cdz = swap ? -jz : jz
-      const key = `${lo}-${hi}-${cdx},${cdy},${cdz}`
+      const key = pack_bond_key(lo, hi, cdx, cdy, cdz)
       desired.set(key, {
         a: bp.site_idx_1,
         b: bp.site_idx_2,
-        k: manual_keys.has(get_bond_key(bp.site_idx_1, bp.site_idx_2)) ? BOND_KIND.MANUAL : BOND_KIND.AUTO,
+        k: has_manual &&
+            manual_keys.has(get_bond_key(bp.site_idx_1, bp.site_idx_2))
+          ? BOND_KIND.MANUAL
+          : BOND_KIND.AUTO,
         jx,
         jy,
         jz,
@@ -3541,7 +3595,7 @@
       const cdx = swap ? -sjx : sjx
       const cdy = swap ? -sjy : sjy
       const cdz = swap ? -sjz : sjz
-      const key = `${lo}-${hi}-${cdx},${cdy},${cdz}`
+      const key = pack_bond_key(lo, hi, cdx, cdy, cdz)
       const want = desired.get(key)
       if (want !== undefined) {
         // Bond is in both sets. If kind drifted, patch it.
@@ -4196,13 +4250,20 @@
     if (import.meta.env?.DEV) __probe_apb_meaningful++
     // Buffer is indexed by site_idx (bond_connectivity uses site_idx).
     // Initial fill from sites covers the mount window before X2 shadow sync
-    // populates the manager.
+    // populates the manager. During trajectory playback the manager covers
+    // every base site (same invariant as the Phase 5.5 X2 gate) and the
+    // overlay below overwrites every slot — skip the ~N proxied sites[i].xyz
+    // reads per frame.
     const buf = new Float32Array(sites.length * 3)
-    for (let i = 0; i < sites.length; i++) {
-      const xyz = sites[i].xyz
-      buf[i * 3]     = xyz[0]
-      buf[i * 3 + 1] = xyz[1]
-      buf[i * 3 + 2] = xyz[2]
+    const overlay_covers_all = trajectory_frame_positions != null &&
+      mgr.count >= sites.length
+    if (!overlay_covers_all) {
+      for (let i = 0; i < sites.length; i++) {
+        const xyz = sites[i].xyz
+        buf[i * 3]     = xyz[0]
+        buf[i * 3 + 1] = xyz[1]
+        buf[i * 3 + 2] = xyz[2]
+      }
     }
     // Overlay manager positions (slot → site_idx via site_ids_buffer). After
     // Phase 4 this is the only path that updates per-frame.
@@ -4400,12 +4461,37 @@
   //
   // handle_bond_hitbox_click decodes `instanceId >>> 1` to bond index, so
   // clicking either stub resolves to the same logical bond.
+  //
+  // Playback throttle state: rebuilding 2×26k hitbox matrices per trajectory
+  // frame costs ~100ms+/frame for picking accuracy nobody can exploit while
+  // atoms are moving. During playback the rebuild runs at most every 500ms,
+  // with a trailing rebuild (via the retrigger tick) so picking settles
+  // correct within 500ms of the last frame — including after pause.
+  let __hitbox_retrigger = $state(0)
+  let __hitbox_last_ms = 0
+  let __hitbox_trailing: ReturnType<typeof setTimeout> | null = null
   $effect(() => {
     if (!bond_hitbox_mesh) return
     const bonds = filtered_bond_pairs
     const layout = image_atom_layout
     const partner_drawn = partner_drawn_lookup
     const slot_lookup = slot_to_filtered_idx
+    void __hitbox_retrigger // trailing-rebuild tick (see throttle below)
+    if (trajectory_frame_positions != null) {
+      const now = performance.now()
+      if (now - __hitbox_last_ms < 500) {
+        if (__hitbox_trailing === null) {
+          __hitbox_trailing = setTimeout(() => {
+            __hitbox_trailing = null
+            __hitbox_retrigger++
+          }, 500)
+        }
+        return
+      }
+      __hitbox_last_ms = now
+    } else {
+      __hitbox_last_ms = 0
+    }
     const cell_inst = bonds.length * 2
     const decorator_inst =
       layout !== null && bond_manager.count > 0 ? layout.bonds_csr.length * 2 : 0

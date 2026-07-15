@@ -862,16 +862,22 @@ function dispatch_traj_async(
       strategy_key,
     })
 
+    // ALWAYS publish the resolved connectivity — it is the freshest result
+    // available. Reassigning bond_connectivity here is safe because we're in
+    // the promise resolve callback, NOT inside the trajectory $effect.pre
+    // body. The previous code published only when no newer frame was queued;
+    // during continuous playback a newer frame is ALWAYS queued, so the
+    // visible connectivity stayed frozen at the pre-playback detection for
+    // the whole run (the stale-bond filter then dropped hundreds of bonds
+    // per frame against moved atoms).
+    bond_state.bond_connectivity = new_conn
+    bond_state.last_bond_structure = base_structure
+    bond_state.last_bond_strategy = strategy_key
+    bond_state.last_elem_fingerprint = elem_fp
+    bond_state.last_bond_fingerprint = `${elem_fp}|frame`
+
     const pending = bond_state.traj_pending_frame
     if (pending === null) {
-      // No newer frame queued → the resolved frame is the latest visible.
-      // Reassigning bond_connectivity here is safe because we're in the
-      // promise resolve callback, NOT inside the trajectory $effect.pre body.
-      bond_state.bond_connectivity = new_conn
-      bond_state.last_bond_structure = base_structure
-      bond_state.last_bond_strategy = strategy_key
-      bond_state.last_elem_fingerprint = elem_fp
-      bond_state.last_bond_fingerprint = `${elem_fp}|frame`
       bond_state.traj_in_flight_frame = null
     } else {
       // User moved on while async was running. Drain the latest-wins queue:
