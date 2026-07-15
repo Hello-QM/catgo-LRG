@@ -1,6 +1,30 @@
 // Pure TypeScript helpers for trajectory frame computation and analysis
 import type { AnyStructure } from '$lib/structure'
 
+// Svelte 5 deep-proxies only plain objects and arrays (proxy.js checks the
+// prototype against Object.prototype / Array.prototype and returns anything
+// else untouched). Re-prototyping the trajectory container onto this marker
+// therefore exempts the ENTIRE tree — frames → structure → sites — from
+// proxying even when the object sits in a deep `$state` / `$bindable`:
+// nested values are only proxied when read through an already-proxied
+// parent. At 20k atoms the proxy was ~6% scripting (get traps) plus GC churn
+// per playback frame, while every intentional trajectory mutation already
+// flows through an explicit top-level reassignment (`trajectory =
+// mark_raw_trajectory({ ...trajectory })`), which is all the reactivity the
+// consumers track. Spreads produce fresh POJOs, so every creation/spread
+// site must re-mark — grep `trajectory = ` in Trajectory.svelte when adding
+// one.
+const RAW_TRAJECTORY_PROTO = Object.create(Object.prototype)
+
+/** Exempt a trajectory container from Svelte's deep `$state` proxy (see
+ *  RAW_TRAJECTORY_PROTO above). Idempotent; returns its argument. */
+export function mark_raw_trajectory<T extends object>(traj: T): T {
+  if (Object.getPrototypeOf(traj) !== RAW_TRAJECTORY_PROTO) {
+    Object.setPrototypeOf(traj, RAW_TRAJECTORY_PROTO)
+  }
+  return traj
+}
+
 /**
  * Check if two structures are compatible for cross-frame editing:
  * same atom count and same element sequence (same species in same order)

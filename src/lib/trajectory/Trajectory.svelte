@@ -51,6 +51,7 @@
   import {
     compute_step_label_positions,
     get_view_mode_label,
+    mark_raw_trajectory,
     read_file_content,
     stable_frame_lattice,
   } from './trajectory-utils'
@@ -826,7 +827,12 @@
 
   // Streamed loads defer the whole-file plot-metadata scan so first render
   // isn't blocked on it (see load_remote_trajectory) — adopt the result when
-  // it lands. The deep write through the $state proxy re-derives plot_series.
+  // it lands. Top-level reassignment (NOT a deep `traj.plot_metadata =`
+  // write): the trajectory container is exempt from the deep $state proxy
+  // (mark_raw_trajectory), so a nested write would never wake plot_series.
+  // `frames` keeps its identity through the spread, so the position caches
+  // survive (B3 effect) — the cost is one topology re-init cascade, once
+  // per streamed load.
   $effect(() => {
     const traj = trajectory
     const pending = traj?.plot_metadata_promise
@@ -834,7 +840,9 @@
     let cancelled = false
     void pending.then((md) => {
       if (cancelled || !md?.length) return
-      if (trajectory === traj) traj.plot_metadata = md
+      if (trajectory === traj) {
+        trajectory = mark_raw_trajectory({ ...traj, plot_metadata: md })
+      }
     })
     return () => {
       cancelled = true
@@ -1271,9 +1279,11 @@
         await load_with_indexing(data, filename)
       } else {
         // Small files: Use regular loading
-        trajectory = await parse_trajectory_async(data, filename, (progress) => {
-          parsing_progress = progress
-        })
+        trajectory = mark_raw_trajectory(
+          await parse_trajectory_async(data, filename, (progress) => {
+            parsing_progress = progress
+          }),
+        )
       }
 
       // New trajectory loaded — synchronously reset the pending-ops queue.
@@ -1322,9 +1332,18 @@
   // Load using indexed parsing for large files
   async function load_with_indexing(data: string | ArrayBuffer, filename: string) {
     try { // Use indexed parsing for efficient large file handling
-      trajectory = await parse_trajectory_async(data, filename, (progress) => {
+      const parsed = await parse_trajectory_async(data, filename, (progress) => {
         parsing_progress = progress
       }, { use_indexing: true, ...loading_options })
+      // Attach the frame loader BEFORE publishing: with the trajectory
+      // container exempt from the deep proxy (mark_raw_trajectory), a
+      // post-assignment property write emits no notification of its own —
+      // and consumers must never observe a loader-less indexed trajectory
+      // anyway.
+      // @ts-expect-error - dynamically adding frame_loader for indexed trajectories
+      parsed.frame_loader = create_frame_loader(filename)
+      orig_data = data
+      trajectory = mark_raw_trajectory(parsed)
 
       // New trajectory — synchronously reset pending-ops queue.
       pending_ops = []
@@ -1332,11 +1351,6 @@
       position_cache = null
       force_cache = null
       traj_load_seq += 1
-
-      // Attach frame loader and original data directly to trajectory for unified access
-      orig_data = data
-      // @ts-expect-error - dynamically adding frame_loader for indexed trajectories
-      trajectory.frame_loader = create_frame_loader(filename)
     } catch (error) {
       console.error(`Indexed loading failed:`, error)
       throw error
@@ -1534,7 +1548,7 @@
     frame_op_cursor = new Array(trajectory.frames.length).fill(0)
     // Notify consumers that a bulk update happened (matches the pattern used
     // by `_chunked_cross_frame_edit` when it completes).
-    trajectory = { ...trajectory }
+    trajectory = mark_raw_trajectory({ ...trajectory })
   }
 
   /** Record a cross-frame op without touching any frames. O(1). */
@@ -1569,7 +1583,7 @@
       // Indexed/streaming: positions live in frame.structure already (slow
       // path writes current_structure = frame.structure each frame). Just
       // refresh so the change is observed.
-      trajectory = { ...trajectory }
+      trajectory = mark_raw_trajectory({ ...trajectory })
       return
     }
 
@@ -1613,7 +1627,7 @@
       // Signal bond pipeline THIS frame changed (drop only idx's cache).
       trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: false }
       // Other frames stay independent (use-case 2).
-      trajectory = { ...trajectory }
+      trajectory = mark_raw_trajectory({ ...trajectory })
       return
     }
 
@@ -1628,7 +1642,7 @@
     // Drop EVERY frame's bond cache (lazy recompute via keyframe/prefetch
     // scheduler keeps long trajectories smooth).
     trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
-    trajectory = { ...trajectory }
+    trajectory = mark_raw_trajectory({ ...trajectory })
   }
 
   /**
@@ -1651,7 +1665,7 @@
       // Indexed/streaming slow path already renders frame.structure each
       // frame; the editing UI mutated the current structure via bind. Just
       // refresh so the change is observed.
-      trajectory = { ...trajectory }
+      trajectory = mark_raw_trajectory({ ...trajectory })
       return
     }
 
@@ -1680,7 +1694,7 @@
 
     if (edit_mode === `edit-current`) {
       // Other frames stay independent (use-case 2).
-      trajectory = { ...trajectory }
+      trajectory = mark_raw_trajectory({ ...trajectory })
       return
     }
 
@@ -1690,7 +1704,7 @@
     // pre-advance its cursor so materialize_frame won't re-apply it.
     enqueue_pending_op(op)
     frame_op_cursor[idx] = pending_ops.length
-    trajectory = { ...trajectory }
+    trajectory = mark_raw_trajectory({ ...trajectory })
   }
 
   function handle_atom_added(event: { element: ElementSymbol; position: Vec3 }) {
@@ -1772,7 +1786,7 @@
     topology_initialized = false
     current_frame = trajectory?.frames?.[current_step_idx] ?? null
     trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
-    trajectory = trajectory ? { ...trajectory } : trajectory
+    trajectory = trajectory ? mark_raw_trajectory({ ...trajectory }) : trajectory
   }
 
   function handle_trajectory_command(action: string, args: Record<string, unknown>) {

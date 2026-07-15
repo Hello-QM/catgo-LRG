@@ -64,7 +64,9 @@
 
   type Tab = 'structure' | 'generated'
   let active_tab = $state<Tab>(`structure`)
-  let generated_trajectory = $state<TrajectoryType | undefined>(undefined)
+  // $state.raw: assigned wholesale from initial_generated; a deep proxy would
+  // wrap every frame structure the embedded Trajectory viewer then reads.
+  let generated_trajectory = $state.raw<TrajectoryType | undefined>(undefined)
 
   // Reset state when modal opens
   $effect(() => {
