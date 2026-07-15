@@ -37,6 +37,9 @@
   import SparkExport from '$lib/structure/export/SparkExport.svelte'
   import CatRenderParamsPane from '$lib/structure/catrender/CatRenderParamsPane.svelte'
   import CatRenderViewPane from '$lib/structure/catrender/CatRenderViewPane.svelte'
+  import RenderStillDialog from '$lib/render-still/RenderStillDialog.svelte'
+  import { detect_render_still_capability } from '$lib/render-still/capability'
+  import type { RenderStillCapability } from '$lib/render-still/capability'
 
   let {
     export_pane_open = $bindable(false),
@@ -303,6 +306,23 @@
 
   // Canvas check
   let has_canvas = $state(false)
+
+  // "Render Still" (offline path-traced export). Capability is probed once
+  // when the figure section is first shown — needs WebGL2 + float buffers,
+  // which Tauri's WebKitGTK may lack (button degrades to disabled + hint).
+  let render_still_open = $state(false)
+  let render_still_cap = $state<RenderStillCapability | null>(null)
+  $effect(() => {
+    if (active_section === `figure` && !render_still_cap) {
+      render_still_cap = detect_render_still_capability()
+    }
+  })
+  let render_still_name = $derived(
+    typeof structure === `object` && structure && `formula` in structure &&
+      (structure as { formula?: string }).formula
+      ? String((structure as { formula?: string }).formula).replace(/\s+/g, ``)
+      : `structure`,
+  )
   $effect(() => {
     if (!wrapper) { has_canvas = false; return }
     const check = () => (has_canvas = Boolean(wrapper.querySelector(`canvas`)))
@@ -504,6 +524,23 @@
           <span class="crop-hint">{t('structure.crop_hint')}</span>
         {/if}
       </div>
+
+      <!-- Offline path-traced still render -->
+      <label class="section-label" style="margin-top: 0.8em">{t('structure.render_still')}</label>
+      <div class="export-buttons">
+        <button
+          class="quick-export-btn"
+          disabled={!has_canvas || (render_still_cap !== null && !render_still_cap.supported)}
+          onclick={() => render_still_open = true}
+        >
+          {t('structure.render_still_open')}
+        </button>
+      </div>
+      {#if render_still_cap && !render_still_cap.supported}
+        <div class="quick-export-hint">{t('structure.render_still_unavailable')}</div>
+      {:else}
+        <div class="quick-export-hint">{t('structure.render_still_blurb')}</div>
+      {/if}
 
       {#if trajectory_context && trajectory_context.total_frames > 1}
         <label class="section-label" style="margin-top: 0.8em">{t('structure.multi_frame_export')}</label>
@@ -758,6 +795,10 @@
      tab — the established DraggablePane open pattern (cf. AnalysisPane). -->
 <CatRenderParamsPane bind:show={catrender_params_open} />
 <CatRenderViewPane bind:show={catrender_view_open} {structure} />
+
+<!-- Offline path-traced still render dialog. Mounted at the component root
+     (fixed-position overlay) so it is independent of the pane's stacking. -->
+<RenderStillDialog bind:show={render_still_open} {wrapper} structure_name={render_still_name} />
 
 <style>
   .export-embedded {

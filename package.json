@@ -68,6 +68,7 @@
     "svelte": "^5.43.2",
     "svelte-multiselect": "11.2.4",
     "three": "^0.181.0",
+    "three-gpu-pathtracer": "^0.0.24",
     "three-mesh-bvh": "^0.9.7",
     "xlsx": "^0.18.5"
   },

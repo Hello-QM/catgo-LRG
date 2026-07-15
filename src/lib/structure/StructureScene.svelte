@@ -16,6 +16,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import type { Camera, Scene, InstancedMesh as ThreeInstancedMesh } from 'three'
   import { BufferGeometry, Color, CylinderGeometry, Euler, InstancedBufferAttribute, MeshBasicMaterial, Matrix4, Mesh, MeshStandardMaterial, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
+  import type { RenderStillSource } from '$lib/render-still/bake'
   import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh'
   import AdsorptionSiteMarkers from './AdsorptionSiteMarkers.svelte'
   import SceneLighting from './SceneLighting.svelte'
@@ -1051,6 +1052,43 @@
     g.__reset_invalidate_count = () => { g.__invalidate_count = 0 }
   }
 
+  // "Render Still" backdoor: snapshot the DISPLAYED structure's SoA buffers
+  // (site-indexed, same conventions the instanced renderers consume) so the
+  // offline path tracer can bake real meshes from what the viewer shows.
+  // Installed on the canvas next to __renderer/__scene/__camera; called
+  // lazily so it always reads the live $derived values.
+  function read_render_still_source(): RenderStillSource | null {
+    const mgr = atom_manager
+    const positions = atom_positions_buffer
+    const site_count = (positions.length / 3) | 0
+    if (site_count === 0 || mgr.count === 0) return null
+    // Per-site display radius from the manager's slots (slot → site via
+    // site_ids). Sites without a live slot keep radius 0 → skipped by the
+    // baker, as are fully transparent (hidden) sites.
+    const radii = new Float32Array(site_count)
+    const site_ids = mgr.site_ids_buffer
+    const slot_radii = mgr.radii_buffer
+    const opacities = mgr.opacities_buffer
+    for (let slot = 0; slot < mgr.count; slot++) {
+      const site = site_ids[slot]
+      if (site >= site_count) continue
+      const hidden = opacities !== null && opacities[slot] <= 0.05
+      radii[site] = hidden ? 0 : slot_radii[slot]
+    }
+    return {
+      positions,
+      colors: atom_colors_buffer,
+      radii,
+      site_count,
+      bond_pairs: bond_manager.pairs_buffer,
+      bond_jimages: bond_manager.jimages_buffer,
+      bond_kinds: bond_manager.kinds_buffer,
+      bond_count: bond_manager.count,
+      lattice: bond_lattice_matrix,
+      bond_radius: bond_thickness,
+    }
+  }
+
   $effect(() => {
     scene = threlte.scene
     camera = threlte.camera.current
@@ -1068,6 +1106,7 @@
         __renderer: threlte.renderer,
         __scene: threlte.scene,
         __camera: threlte.camera.current,
+        __render_still_source: read_render_still_source,
       })
     }
   })
