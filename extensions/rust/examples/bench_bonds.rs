@@ -40,17 +40,33 @@ fn build_synthetic(n_side: usize, spacing: f64, pbc: [bool; 3]) -> Structure {
     Structure::new(lattice, species, frac)
 }
 
+/// Time `f` with one warmup + `iters` timed runs; returns (min, median) in seconds.
+fn time_it<T>(iters: usize, mut f: impl FnMut() -> T) -> (f64, f64) {
+    let _ = f(); // warmup
+    let mut times: Vec<f64> = (0..iters)
+        .map(|_| {
+            let t0 = Instant::now();
+            let out = f();
+            let dt = t0.elapsed().as_secs_f64();
+            std::hint::black_box(out);
+            dt
+        })
+        .collect();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (times[0], times[times.len() / 2])
+}
+
 fn bench(label: &str, s: &Structure) {
     let opts = AtomRadiiOptions::default();
-    let t0 = Instant::now();
     let bonds = detect_bonds_atom_radii(s, &opts);
-    let dt = t0.elapsed();
+    let (min, med) = time_it(5, || detect_bonds_atom_radii(s, &opts));
     println!(
-        "{label}: {} atoms, pbc={:?} -> {} bonds in {:.1?}",
+        "{label}: {} atoms, pbc={:?} -> {} bonds | min {:.2}ms / median {:.2}ms (5 iters)",
         s.num_sites(),
         s.lattice.pbc,
         bonds.len(),
-        dt
+        min * 1e3,
+        med * 1e3,
     );
 }
 
@@ -73,20 +89,21 @@ fn main() {
     // frame; splits the per-call cost into boundary vs compute.
     let json = ferrox::io::structure_to_pymatgen_json(&s_ppp);
     println!("structure JSON size: {:.1} MB", json.len() as f64 / 1e6);
-    let t0 = std::time::Instant::now();
+    let (p_min, p_med) = time_it(5, || ferrox::io::parse_structure_json(&json).expect("parse"));
     let parsed = ferrox::io::parse_structure_json(&json).expect("parse");
-    let t_parse = t0.elapsed();
-    let t1 = std::time::Instant::now();
+    let (d_min, d_med) =
+        time_it(5, || detect_bonds_atom_radii(&parsed, &AtomRadiiOptions::default()));
     let bonds = detect_bonds_atom_radii(&parsed, &AtomRadiiOptions::default());
-    let t_detect = t1.elapsed();
-    let t2 = std::time::Instant::now();
+    let (s_min, s_med) = time_it(5, || serde_json::to_string(&bonds).expect("serialize"));
     let out = serde_json::to_string(&bonds).expect("serialize");
-    let t_ser = t2.elapsed();
     println!(
-        "wasm-entry replica: parse {:.1?} + detect {:.1?} + serialize {:.1?} ({} bonds, out {:.2} MB)",
-        t_parse,
-        t_detect,
-        t_ser,
+        "wasm-entry replica (min/median of 5): parse {:.2}/{:.2}ms + detect {:.2}/{:.2}ms + serialize {:.2}/{:.2}ms ({} bonds, out {:.2} MB)",
+        p_min * 1e3,
+        p_med * 1e3,
+        d_min * 1e3,
+        d_med * 1e3,
+        s_min * 1e3,
+        s_med * 1e3,
         bonds.len(),
         out.len() as f64 / 1e6
     );
