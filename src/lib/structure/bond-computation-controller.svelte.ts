@@ -917,6 +917,63 @@ export function build_bond_pairs(
   }).filter((b): b is BondPair => b !== null)
 }
 
+/** Per-bond stale-distance thresholds, memoized on connectivity identity.
+ *
+ * The per-frame fast path used to resolve each endpoint's majority species
+ * and covalent radius from the JSON table twice per bond per frame — ~52k
+ * dictionary lookups per frame for a 26k-bond trajectory, the dominant cost
+ * of `build_trajectory_bond_pairs` (~120ms/frame at 20k atoms). Connectivity
+ * and sites are stable across playback frames, so the thresholds are
+ * computed once per connectivity refresh and reused every frame.
+ *
+ * Entries where either radius is unavailable hold NaN — the caller's
+ * `bond_length > max_dist` check is then always false, preserving the
+ * skip-when-unavailable behavior of the old per-bond lookup. Out-of-range
+ * site indices (supercell extras beyond `sites`) also yield NaN. */
+const traj_max_dist_cache = new WeakMap<object, {
+  sites: ReadonlyArray<Site>
+  tol: number
+  max_dists: Float64Array
+}>()
+
+function get_traj_max_dists(
+  bond_connectivity: ReadonlyArray<{ site_idx_1: number; site_idx_2: number }>,
+  sites: ReadonlyArray<Site>,
+  tol: number,
+): Float64Array {
+  const cached = traj_max_dist_cache.get(bond_connectivity)
+  if (cached && cached.sites === sites && cached.tol === tol) return cached.max_dists
+
+  const n_sites = sites.length
+  const radii = new Float64Array(n_sites).fill(NaN)
+  for (let idx = 0; idx < n_sites; idx++) {
+    const species = sites[idx]?.species
+    if (!species || species.length === 0) continue
+    let majority = species[0]
+    for (let sp = 1; sp < species.length; sp++) {
+      if (species[sp].occu > majority.occu) majority = species[sp]
+    }
+    if (!majority.element) continue
+    const entry = (covalent_radii_data as Record<
+      string,
+      { covalent_radius_pm?: number } | undefined
+    >)[majority.element]
+    const pm = entry?.covalent_radius_pm
+    if (typeof pm === `number` && pm > 0) radii[idx] = pm / 100 // pm → Å
+  }
+
+  const max_dists = new Float64Array(bond_connectivity.length)
+  for (let bond = 0; bond < bond_connectivity.length; bond++) {
+    const conn = bond_connectivity[bond]
+    // Float64Array OOB reads give undefined → NaN after arithmetic, matching
+    // the radius-unavailable skip semantics.
+    max_dists[bond] = (radii[conn.site_idx_1] + radii[conn.site_idx_2]) * tol *
+      STALE_DISTANCE_FACTOR
+  }
+  traj_max_dist_cache.set(bond_connectivity, { sites, tol, max_dists })
+  return max_dists
+}
+
 /**
  * Build bond_pairs from trajectory frame positions (flat Float32Array).
  * Used for trajectory fast-path playback.
@@ -982,34 +1039,13 @@ export function build_trajectory_bond_pairs(
     }
     return null
   }
-  // Stale-bond pre-filter: resolve majority-species element for site_idx and
-  // look up its single-bond covalent radius (Å). Returns null if the species
-  // is missing or the element isn't in the radii table — in that case the
-  // distance check is skipped for the bond (preserves prior behavior).
-  function covalent_radius_for(site_idx: number): number | null {
-    if (!sites) return null
-    const site = sites[site_idx]
-    if (!site || !site.species || site.species.length === 0) return null
-    let majority = site.species[0]
-    for (let i = 1; i < site.species.length; i++) {
-      if (site.species[i].occu > majority.occu) majority = site.species[i]
-    }
-    const elem = majority.element
-    if (!elem) return null
-    const entry = (covalent_radii_data as Record<
-      string,
-      { covalent_radius_pm?: number } | undefined
-    >)[elem]
-    const pm = entry?.covalent_radius_pm
-    if (typeof pm !== `number` || pm <= 0) return null
-    return pm / 100 // pm → Å
-  }
   const tol = typeof bond_tolerance === `number` && bond_tolerance > 0
     ? bond_tolerance
     : DEFAULT_BOND_TOLERANCE
+  const max_dists = sites ? get_traj_max_dists(bond_connectivity, sites, tol) : null
   const lat = lattice_matrix ?? undefined
   let filtered_count = 0
-  const out = bond_connectivity.map((conn) => {
+  const out = bond_connectivity.map((conn, bond_idx) => {
     const pos_1 = lookup_pos(conn.site_idx_1)
     const pos_2 = lookup_pos(conn.site_idx_2)
     if (pos_1 === null || pos_2 === null) return null
@@ -1019,15 +1055,11 @@ export function build_trajectory_bond_pairs(
     const dy = b_eff[1] - pos_1[1]
     const dz = b_eff[2] - pos_1[2]
     const bond_length = Math.hypot(dx, dy, dz)
-    // Stale-distance pre-filter (skipped silently when radii unavailable).
-    const r_a = covalent_radius_for(conn.site_idx_1)
-    const r_b = covalent_radius_for(conn.site_idx_2)
-    if (r_a !== null && r_b !== null) {
-      const max_dist = (r_a + r_b) * tol * STALE_DISTANCE_FACTOR
-      if (bond_length > max_dist) {
-        filtered_count++
-        return null
-      }
+    // Stale-distance pre-filter. NaN max_dist (radius unavailable) makes the
+    // comparison false, silently skipping the check for that bond.
+    if (max_dists && bond_length > max_dists[bond_idx]) {
+      filtered_count++
+      return null
     }
     const pair: BondPair = {
       pos_1,

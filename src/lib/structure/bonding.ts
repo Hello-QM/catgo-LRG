@@ -50,61 +50,72 @@ function get_majority_species(site: Site) {
 
 // Compute 4x4 transformation matrix for bond cylinder between two positions.
 // Uses Y-up, right-handed coordinate system convention for Three.js compatibility.
+// Runs once per bond per trajectory frame (26k calls/frame at 20k atoms) —
+// written allocation-free apart from the returned matrix; no intermediate
+// arrays or destructuring tuples.
 export function compute_bond_transform(pos_1: Vec3, pos_2: Vec3): Float32Array {
-  const [dx, dy, dz] = math.subtract(pos_2, pos_1)
+  const dx = pos_2[0] - pos_1[0]
+  const dy = pos_2[1] - pos_1[1]
+  const dz = pos_2[2] - pos_1[2]
   const height = Math.hypot(dx, dy, dz)
 
+  const out = new Float32Array(16) // flattened column-major 4x4 for Three.js
+  out[15] = 1
   if (height < 1e-10) {
-    return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+    out[0] = 1
+    out[5] = 1
+    out[10] = 1
+    return out
   }
 
-  const [dir_x, dir_y, dir_z] = [dx / height, dy / height, dz / height]
-  let [m00, m01, m02, m10, m11, m12, m20, m21, m22] = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+  const dir_x = dx / height
+  const dir_y = dy / height
+  const dir_z = dz / height
+  let m00 = 0, m01 = 0, m02 = 0, m10 = 0, m11 = 0, m12 = 0, m20 = 0, m21 = 0, m22 = 0
 
   // Special case: bond pointing straight up (+Y)
   if (Math.abs(dir_y - 1.0) < 1e-10) {
-    ;[m00, m01, m02, m10, m11, m12, m20, m21, m22] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    m00 = 1
+    m11 = 1
+    m22 = 1
   } else if (Math.abs(dir_y + 1.0) < 1e-10) {
     // Special case: bond pointing straight down (-Y)
-    ;[m00, m01, m02, m10, m11, m12, m20, m21, m22] = [1, 0, 0, 0, -1, 0, 0, 0, 1]
+    m00 = 1
+    m11 = -1
+    m22 = 1
   } else {
     // General case: construct orthonormal basis (right, dir, up)
     // Right vector: perpendicular to dir in XZ plane
-    const [rx, rz] = [-dir_z, dir_x]
+    const rx = -dir_z
+    const rz = dir_x
     const r_len = Math.hypot(rx, rz)
-    const [right_x, right_z] = [rx / r_len, rz / r_len]
+    const right_x = rx / r_len
+    const right_z = rz / r_len
     // Up vector: cross product of dir and right
-    const [up_x, up_y, up_z] = [
-      dir_y * right_z,
-      dir_z * right_x - dir_x * right_z,
-      -dir_y * right_x,
-    ]
-    ;[m00, m01, m02, m10, m11, m12, m20, m21, m22] = [
-      right_x,
-      dir_x,
-      up_x,
-      0,
-      dir_y,
-      up_y,
-      right_z,
-      dir_z,
-      up_z,
-    ]
+    m00 = right_x
+    m01 = dir_x
+    m02 = dir_y * right_z
+    m11 = dir_y
+    m12 = dir_z * right_x - dir_x * right_z
+    m20 = right_z
+    m21 = dir_z
+    m22 = -dir_y * right_x
   }
 
+  out[0] = m00
+  out[1] = m10
+  out[2] = m20
+  out[4] = m01 * height
+  out[5] = m11 * height
+  out[6] = m21 * height
+  out[8] = m02
+  out[9] = m12
+  out[10] = m22
   // Position at midpoint between the two atoms
-  const [px, py, pz] = [
-    (pos_1[0] + pos_2[0]) / 2,
-    (pos_1[1] + pos_2[1]) / 2,
-    (pos_1[2] + pos_2[2]) / 2,
-  ]
-
-  return new Float32Array([ // Return flattened column-major 4x4 matrix for Three.js
-    ...[m00, m10, m20, 0],
-    ...[m01 * height, m11 * height, m21 * height, 0],
-    ...[m02, m12, m22, 0],
-    ...[px, py, pz, 1],
-  ])
+  out[12] = (pos_1[0] + pos_2[0]) / 2
+  out[13] = (pos_1[1] + pos_2[1]) / 2
+  out[14] = (pos_1[2] + pos_2[2]) / 2
+  return out
 }
 
 // Update bond positions based on current atom positions without recalculating connectivity.
