@@ -746,10 +746,10 @@
             >
               <div class="drop-icon">&#128196;</div>
               <div class="drop-text">{t('workflow.si_drop_here')}</div>
-              <div class="drop-formats">.cif, .xyz, POSCAR, .json, .vasp, .mol2, .pdb, .traj, .h5, XDATCAR, .data, .lammps, .lmp</div>
+              <div class="drop-formats">POSCAR, CONTCAR, .cif, .xyz, .extxyz, .json, .vasp, .mol2, .pdb, .traj, .h5, XDATCAR, .data, .lammps, .lmp</div>
               <label class="file-btn">
                 {t('workflow.si_browse_files')}
-                <input type="file" accept=".cif,.xyz,.json,.vasp,.poscar,.mol2,.pdb,.traj,.h5,.hdf5,.xdatcar,.data,.lammps,.lmp" onchange={on_file_input} hidden />
+                <input type="file" onchange={on_file_input} hidden />
               </label>
             </div>
           </section>
