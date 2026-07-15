@@ -43,6 +43,11 @@ export interface TrajectoryType {
   total_frames?: number
   indexed_frames?: FrameIndex[]
   plot_metadata?: TrajectoryMetadata[]
+  /** Deferred plot-metadata scan for streamed loads — extracting it walks
+   *  every frame server-side (seconds for large files), so loaders may ship
+   *  the trajectory immediately and attach the in-flight scan here.
+   *  `Trajectory.svelte` adopts the result into `plot_metadata` on arrival. */
+  plot_metadata_promise?: Promise<TrajectoryMetadata[]>
   is_indexed?: boolean
 }
 

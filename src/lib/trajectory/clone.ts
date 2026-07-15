@@ -175,9 +175,14 @@ function fork_loader(
       base.build_frame_index(data, sample_rate, on_progress),
     load_frame: async (data, frame_number) => {
       const frame = await base.load_frame(data, frame_number)
-      return frame
-        ? apply_trajectory_transformations(clone_frame(frame), transformations)
-        : null
+      if (!frame) return null
+      // With no pane transformations the clone is pure overhead — deep-copying
+      // a 20k-site structure costs ~70 ms + GC pressure per streamed frame.
+      // Loader-cached frames are treated as immutable by the playback path:
+      // edits target `current_structure` (the topology-init clone), never the
+      // fetched frame objects, and per-frame data flows via typed positions.
+      if (transformations.length === 0) return frame
+      return apply_trajectory_transformations(clone_frame(frame), transformations)
     },
     extract_plot_metadata: (data, options, on_progress) =>
       base.extract_plot_metadata(data, options, on_progress),
