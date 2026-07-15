@@ -67,6 +67,7 @@
   } from '$lib/structure/viewer-registry.svelte'
   import { scale_structure_geometry, validate_uniform_topology } from './operations'
   import type { PaneTrajectory } from './clone'
+  import { clone_structure } from '$lib/structure/clone'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -720,7 +721,15 @@
         trajectory_frame_positions = entry.positions
         trajectory_frame_forces = entry.forces
       } else {
-        current_structure = frame.structure
+        // Streamed loaders no longer deep-clone every fetched frame (see
+        // fork_loader in ./clone.ts), so the loader-cached frame object must
+        // not become `current_structure` directly — the T5 pause writeback
+        // mutates current_structure.sites in place and would corrupt the
+        // cached frame for later revisits. Clone once per topology init
+        // (NOT per frame; the fast path above never re-enters here).
+        current_structure = (trajectory as PaneTrajectory | undefined)?.frame_loader
+          ? clone_structure(frame.structure)
+          : frame.structure
         topology_initialized = !force_slow_path && pending_ops.length === 0
         trajectory_frame_positions = null
         trajectory_frame_forces = null
@@ -734,6 +743,23 @@
   let step_label_positions = $derived(
     compute_step_label_positions(step_labels, total_frames, scaleLinear as any),
   )
+
+  // Streamed loads defer the whole-file plot-metadata scan so first render
+  // isn't blocked on it (see load_remote_trajectory) — adopt the result when
+  // it lands. The deep write through the $state proxy re-derives plot_series.
+  $effect(() => {
+    const traj = trajectory
+    const pending = traj?.plot_metadata_promise
+    if (!traj || !pending || traj.plot_metadata) return
+    let cancelled = false
+    void pending.then((md) => {
+      if (cancelled || !md?.length) return
+      if (trajectory === traj) traj.plot_metadata = md
+    })
+    return () => {
+      cancelled = true
+    }
+  })
 
   // Generate plot data - use pre-extracted metadata for indexed trajectories
   let plot_series = $derived.by(() => {

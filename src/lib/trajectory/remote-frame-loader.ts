@@ -280,7 +280,7 @@ export class RemoteFrameLoader implements FrameLoader {
 export async function load_remote_trajectory(
   path: string,
   filename: string,
-  initial = 10,
+  initial = 4,
 ): Promise<TrajectoryType> {
   const idx_resp = await fetch(
     `${API_BASE}/trajectory/index?path=${encodeURIComponent(path)}`,
@@ -300,14 +300,18 @@ export async function load_remote_trajectory(
   const frames: TrajectoryFrame[] = (fr_data.frames ?? [])
     .map(backend_frame_to_trajectory_frame)
 
+  // The plot-metadata scan walks every frame server-side (~2 s for a 48 MB
+  // file) — never block first render on it. Ship the trajectory now with the
+  // in-flight scan attached; Trajectory.svelte adopts it on arrival and the
+  // plot upgrades from the initial-frames series to the full sampled one.
   const stride = Math.max(1, Math.ceil(total / MAX_PLOT_POINTS))
-  const plot_metadata = await loader.extract_plot_metadata(``, { sample_rate: stride })
+  const plot_metadata_promise = loader.extract_plot_metadata(``, { sample_rate: stride })
 
   const trajectory: TrajectoryType = {
     frames,
     total_frames: total,
     is_indexed: true,
-    plot_metadata,
+    plot_metadata_promise,
     metadata: {
       filename,
       source: `remote-stream`,
