@@ -287,6 +287,8 @@ Feature availability depends on the CatGo edition, installed optional dependenci
 
 Every link points at the **latest release**, so it stays current as new versions ship — current version: [![Latest release](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest). On the release page, pick the file for your platform (shown in the **File** column). For older versions and checksums, see [all Releases](https://github.com/Hello-QM/catgo-LRG/releases).
 
+> **China mirror / 中国大陆镜像:** if GitHub is unreachable, download the latest release from [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) — same full installers as GitHub Releases. As a fallback, a browser-based subset (no CatBot chat or desktop integration) installs via a PyPI mirror: `pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`, then run `catgo`.
+
 | System                    | Get the latest                                                      | File on the release page                                   |
 | ------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **Windows**               | [⬇ Download](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` or `CatGo_<ver>_x64_en-US.msi` |
