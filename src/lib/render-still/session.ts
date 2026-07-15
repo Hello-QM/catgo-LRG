@@ -208,11 +208,16 @@ export class RenderStillSession {
       path_tracer.tiles.set(2, 2)
       // CENTER split + leaf size 8: ~7× faster BVH build than the SAH
       // default at a negligible per-sample cost (spike-measured).
+      // maxLeafTris must be explicitly undefined: the generator merges its
+      // own default `maxLeafTris: 1` under our options, and three-mesh-bvh's
+      // deprecation shim copies any truthy maxLeafTris OVER maxLeafSize —
+      // without this override the effective leaf size silently becomes 1.
       ;(path_tracer as unknown as {
         _generator: { bvhOptions: Record<string, unknown> }
       })._generator.bvhOptions = {
         strategy: CENTER,
         maxLeafSize: 8,
+        maxLeafTris: undefined,
         indirect: true,
       }
       path_tracer.setScene(this.#scene, camera)
