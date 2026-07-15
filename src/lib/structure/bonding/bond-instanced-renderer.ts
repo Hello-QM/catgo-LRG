@@ -62,6 +62,14 @@ const PERP_REF_A = new THREE.Vector3(0, 1, 0);
 const PERP_REF_B = new THREE.Vector3(1, 0, 0);
 // ib offset for a single (nb=1) line — centered, no perpendicular shift.
 const ZERO_IB = [0];
+// GPU-topology attribute (a_site / a_jimage / a_half) allocation policy:
+// right-sized to the live instance count with GROWTH× headroom instead of
+// eagerly sizing to mesh capacity — the default 1M-instance mesh would cost
+// ~12MB (CPU + GPU) across the three attrs even for a ~50k-instance system.
+// Growth factor mirrors BondManager's GROWTH_FACTOR; the floor keeps tiny
+// systems from re-growing through the first few playback frames (~8KB total).
+const GPU_TOPO_GROWTH = 2;
+const GPU_TOPO_MIN_INSTANCES = 1024;
 
 /**
  * Incomplete-edge stub mode (Phase 6 / VESTA Mode 1). When `mode` is true,
@@ -145,10 +153,14 @@ export class BondInstancedRenderer {
 	// GPU-transform playback path (see sync_gpu_topology): static per-instance
 	// topology attributes consumed by the vertex shader's texture-fetch branch.
 	// Lazy-allocated on first GPU sync so the default (CPU-matrix) path pays
-	// zero memory cost.
+	// zero memory cost, and right-sized to the live instance count (with
+	// GPU_TOPO_GROWTH× headroom) rather than mesh capacity — see
+	// #ensure_gpu_attrs.
 	#site_attr: THREE.InstancedBufferAttribute | null = null; // vec2 (a, b) as f32
 	#gpu_jimage_attr: THREE.InstancedBufferAttribute | null = null; // ivec3 as i8, non-normalized
 	#half_attr: THREE.InstancedBufferAttribute | null = null; // 0 = half A, 1 = half B
+	/** Instances currently allocated across the three GPU topology attrs. */
+	#gpu_topo_capacity = 0;
 
 	#last_synced_version = -1;
 	#last_synced_count = 0;
@@ -434,7 +446,6 @@ export class BondInstancedRenderer {
 
 		this.#ensure_color_attrs();
 		this.#ensure_opacity_attr();
-		this.#ensure_gpu_attrs();
 
 		const mesh = this.#mesh;
 		const capacity = mesh.instanceMatrix.count;
@@ -446,6 +457,9 @@ export class BondInstancedRenderer {
 				`BondInstancedRenderer: instance count (${instance_count}) exceeds mesh capacity (${capacity}). Caller must reconstruct the mesh at a larger capacity.`,
 			);
 		}
+
+		// After the capacity throw, so the grow target is always <= mesh capacity.
+		this.#ensure_gpu_attrs(instance_count);
 
 		const site_attr = this.#site_attr!;
 		const jimage_attr = this.#gpu_jimage_attr!;
@@ -552,10 +566,37 @@ export class BondInstancedRenderer {
 		this.#last_synced_count = count;
 	}
 
-	#ensure_gpu_attrs(): void {
-		if (this.#site_attr !== null) return;
-		const cap = this.#mesh.instanceMatrix.count;
+	/**
+	 * Lazily allocate — or grow — the three GPU topology attributes to hold at
+	 * least `needed` instances. Unlike the mesh-capacity-sized kind/color/
+	 * opacity attrs (shared with the CPU matrix path, which scatters writes at
+	 * arbitrary dirty slots and decorator ranges), these are only ever
+	 * full-rewritten by `sync_gpu_topology`, so they can stay right-sized to
+	 * the live instance count.
+	 *
+	 * Growth = fresh typed arrays + fresh InstancedBufferAttributes swapped in
+	 * via `geometry.setAttribute` — a WebGL instanced attribute cannot grow in
+	 * place (the renderer keys its GL buffer on the attribute object; mutating
+	 * `.array` to a larger buffer would desync the GL-side bufferData size).
+	 * No data copy on growth: the caller full-rewrites [0, needed) right
+	 * after, and the fresh attribute uploads its whole array on first render
+	 * regardless of update ranges. Capacity only grows (never shrinks) and is
+	 * clamped to mesh capacity, so trajectory playback re-syncs hit the
+	 * two-compare early return every frame — at most O(log n) reallocations
+	 * over a renderer's lifetime.
+	 */
+	#ensure_gpu_attrs(needed: number): void {
+		if (this.#site_attr !== null && needed <= this.#gpu_topo_capacity) return;
 		const geometry = this.#mesh.geometry;
+		const cap = Math.min(
+			this.#mesh.instanceMatrix.count,
+			Math.max(
+				this.#gpu_topo_capacity * GPU_TOPO_GROWTH,
+				needed * GPU_TOPO_GROWTH,
+				GPU_TOPO_MIN_INSTANCES,
+			),
+		);
+		this.#gpu_topo_capacity = cap;
 
 		// f32 holds site indices exactly up to 2^24 — far above any atom count
 		// the viewer handles.
@@ -574,8 +615,8 @@ export class BondInstancedRenderer {
 		geometry.setAttribute('a_jimage', jimage_attr);
 
 		// Which half of the bond this instance is. Purely a function of the
-		// instance index parity (stride is 2 in GPU mode), so fill once and
-		// never rewrite.
+		// instance index parity (stride is 2 in GPU mode), so fill on
+		// (re)allocation and never rewrite.
 		const half_buf = new Uint8Array(cap);
 		for (let i = 1; i < cap; i += 2) half_buf[i] = 1;
 		const half_attr = new THREE.InstancedBufferAttribute(half_buf, 1, false);

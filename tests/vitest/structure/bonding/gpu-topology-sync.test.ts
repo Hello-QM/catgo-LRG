@@ -143,3 +143,102 @@ describe(`sync_gpu_topology`, () => {
 		expect(mesh.geometry.getAttribute(`a_half`)).toBeUndefined()
 	})
 })
+
+describe(`GPU topology attr capacity`, () => {
+	// A mesh at the production default scale (1M in the app; 100k here keeps
+	// the test light) — the topology attrs must NOT be allocated at this size.
+	const BIG = 100_000
+
+	function make_big() {
+		const big_mesh = new THREE.InstancedMesh(
+			new THREE.CylinderGeometry(0.15, 0.15, 1, 8),
+			new THREE.MeshBasicMaterial(),
+			BIG,
+		)
+		const mgr = new BondManager()
+		const r = new BondInstancedRenderer(
+			big_mesh,
+			mgr,
+			() => positions,
+			() => lattice,
+			() => ({ mode: false, scale: 0.5, hide_incomplete: true }),
+			() => null,
+			() => null,
+			() => atom_colors,
+		)
+		return { big_mesh, mgr, r }
+	}
+
+	function topo_attr(mesh_ref: THREE.InstancedMesh, name: string) {
+		return mesh_ref.geometry.getAttribute(name) as THREE.InstancedBufferAttribute
+	}
+
+	test(`initial allocation is right-sized, not mesh capacity`, () => {
+		const { big_mesh, mgr, r } = make_big()
+		mgr.add_bond(0, 1, BOND_KIND.AUTO)
+		mgr.add_bond(1, 2, BOND_KIND.AUTO)
+		r.sync_gpu_topology()
+
+		// 2 bonds → 4 instances. Capacity carries growth headroom + a small
+		// floor, but must stay orders of magnitude below the 100k-instance
+		// mesh capacity the old code allocated at (~12MB at the 1M default).
+		for (const name of [`a_site`, `a_jimage`, `a_half`]) {
+			const a = topo_attr(big_mesh, name)
+			expect(a.count).toBeGreaterThanOrEqual(4)
+			expect(a.count).toBeLessThanOrEqual(4096)
+		}
+	})
+
+	test(`grows past initial capacity with data intact; steady-state re-sync reuses attrs`, () => {
+		const { big_mesh, mgr, r } = make_big()
+		mgr.add_bond(0, 1, BOND_KIND.AUTO)
+		r.sync_gpu_topology()
+		const site_initial = topo_attr(big_mesh, `a_site`)
+		const initial_cap = site_initial.count
+
+		// n bonds → 2n instances, guaranteed to exceed the initial capacity.
+		const n = initial_cap
+		const pairs = new Uint32Array(n * 2)
+		const jimages = new Int8Array(n * 3)
+		for (let i = 0; i < n; i++) {
+			pairs[i * 2] = i % 3
+			pairs[i * 2 + 1] = (i + 1) % 3
+			jimages[i * 3 + 2] = i % 2
+		}
+		mgr.replace_auto_bonds(pairs, n, jimages)
+		r.sync_gpu_topology()
+
+		// Growth swaps in NEW attribute objects (a WebGL instanced attribute
+		// cannot grow in place) at >= the needed instance count.
+		const site = topo_attr(big_mesh, `a_site`)
+		const jimage = topo_attr(big_mesh, `a_jimage`)
+		const half = topo_attr(big_mesh, `a_half`)
+		expect(site).not.toBe(site_initial)
+		for (const a of [site, jimage, half]) {
+			expect(a.count).toBeGreaterThanOrEqual(n * 2)
+			expect(a.count).toBeLessThanOrEqual(BIG)
+		}
+		expect(big_mesh.count).toBe(n * 2)
+		// needsUpdate is setter-only in three; the version bump proves it fired.
+		expect(site.version).toBeGreaterThan(0)
+
+		// Per-instance data survives the reallocation: spot-check the first
+		// and last slot plus half parity at the top of the live range.
+		const sb = site.array as Float32Array
+		const jb = jimage.array as Int8Array
+		const hb = half.array as Uint8Array
+		const last = n - 1
+		expect([sb[0], sb[1], sb[2], sb[3]]).toEqual([0, 1, 0, 1])
+		expect([sb[last * 2 * 2], sb[last * 2 * 2 + 1]]).toEqual([last % 3, (last + 1) % 3])
+		expect(jb[last * 2 * 3 + 2]).toBe(last % 2)
+		expect(jb[(last * 2 + 1) * 3 + 2]).toBe(last % 2)
+		expect([hb[n * 2 - 2], hb[n * 2 - 1]]).toEqual([0, 1])
+
+		// Hot path: a re-sync at the same size must write in place — same
+		// attribute objects, no reallocation.
+		r.sync_gpu_topology()
+		expect(topo_attr(big_mesh, `a_site`)).toBe(site)
+		expect(topo_attr(big_mesh, `a_jimage`)).toBe(jimage)
+		expect(topo_attr(big_mesh, `a_half`)).toBe(half)
+	})
+})
