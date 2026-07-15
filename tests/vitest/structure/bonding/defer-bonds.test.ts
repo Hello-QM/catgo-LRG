@@ -16,7 +16,7 @@ describe(`should_defer_bonds`, () => {
   it(`is conservative: threshold sits well above the sync/GPU thresholds`, () => {
     // Must be far above the 1000-atom sync threshold and 2000-atom GPU threshold
     // so normal structures never defer.
-    expect(DEFER_BONDS_ABOVE_ATOMS).toBe(8000)
+    expect(DEFER_BONDS_ABOVE_ATOMS).toBe(30000)
     expect(DEFER_BONDS_ABOVE_ATOMS).toBeGreaterThan(2000)
   })
 
@@ -29,7 +29,10 @@ describe(`should_defer_bonds`, () => {
 
   it(`defers a genuinely huge structure that the user has not acted on`, () => {
     expect(should_defer_bonds(DEFER_BONDS_ABOVE_ATOMS + 1, false)).toBe(true)
-    expect(should_defer_bonds(11000, false)).toBe(true) // the kerogen case
+    // Mid-size systems compute on load since the threshold raise to 30000:
+    // 11k kerogen and 20k zeolite+Pt no longer demand a click on every open.
+    expect(should_defer_bonds(11000, false)).toBe(false)
+    expect(should_defer_bonds(19968, false)).toBe(false)
   })
 
   it(`un-defers once the user requests bonds, regardless of size`, () => {

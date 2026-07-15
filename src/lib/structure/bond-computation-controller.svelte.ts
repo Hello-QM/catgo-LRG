@@ -30,9 +30,13 @@ const TRAJ_SYNC_THRESHOLD = 1000
  *
  * Deliberately set well above the 1000-atom sync threshold and the 2000-atom
  * GPU-picking threshold (`LARGE_STRUCTURE_THRESHOLD`) so only genuinely huge
- * structures defer — e.g. the 11k-atom LAMMPS kerogen case where computing
- * bonds on load is the jank source. Below this, behaviour is unchanged. */
-export const DEFER_BONDS_ABOVE_ATOMS = 8000
+ * structures defer. Originally 8000 (calibrated on the 11k-atom LAMMPS
+ * kerogen case), but that made routine 20k-atom systems (e.g. a zeolite +
+ * Pt-cluster trajectory, O13568 Si6144 Pt256) demand an extra click on every
+ * open; the one-time on-load pair build at that size is sub-second and the
+ * detection itself already runs async in the worker. Raised so only
+ * truly massive structures defer. Below this, behaviour is unchanged. */
+export const DEFER_BONDS_ABOVE_ATOMS = 30000
 
 /**
  * Pure decision helper: should bond connectivity be deferred for a structure
