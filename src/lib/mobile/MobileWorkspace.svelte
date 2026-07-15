@@ -82,8 +82,11 @@
   let saveable_structure = $state<any>(undefined)
   // Multi-frame files (extxyz/traj/vasprun…) load as a trajectory with playback
   // instead of a single static structure.
+  // $state.raw: assigned/cleared wholesale only, and a deep proxy here would
+  // re-wrap the entire frames tree the viewer's playback hot path reads
+  // (Trajectory.svelte keeps the container proxy-exempt for the same reason).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let trajectory = $state<any>(undefined)
+  let trajectory = $state.raw<any>(undefined)
   // Where the open structure came from, so Save knows to write it back.
   let remote_origin = $state<{ path: string; filename: string } | null>(null)
   let local_filename = $state(`structure.vasp`)
