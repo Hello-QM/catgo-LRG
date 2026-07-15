@@ -2,7 +2,17 @@
   import { untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
   import type { InstancedMesh } from 'three'
-  import { Color, CylinderGeometry, ShaderMaterial, Vector3 } from 'three'
+  import {
+    Color,
+    CylinderGeometry,
+    DataTexture,
+    FloatType,
+    Matrix3,
+    NearestFilter,
+    RGBAFormat,
+    ShaderMaterial,
+    Vector3,
+  } from 'three'
   import { get_bond_key } from '../bonding'
   import { BondInstancedRenderer, type PartnerDrawnLookup } from './bond-instanced-renderer'
   import type { BondManager } from './bond-manager.svelte'
@@ -97,6 +107,24 @@
      * verbatim single-cylinder (2 instances/bond) path, byte-identical to today.
      */
     multibond_enabled?: boolean
+    /**
+     * GPU vertex-transform playback mode (trajectory typed-direct). When true
+     * AND the current config is GPU-eligible (no multibond, no decorator
+     * image atoms), per-instance mat4
+     * composition + upload is replaced by: static topology attributes
+     * (a_site / a_jimage / a_half, written once per topology change) + a
+     * per-atom RGBA32F position texture (one ~16·N-byte upload per frame).
+     * The vertex shader reconstructs each half-cylinder transform in-shader.
+     * Ineligible configs silently stay on the CPU instanceMatrix path.
+     */
+    gpu_transform_active?: boolean
+    /**
+     * Hard cap for in-shader bond length in the GPU path. Bonds whose
+     * current-frame length exceeds this collapse to zero scale — mirrors the
+     * typed-topology conversion filter (MAX_BOND_LENGTH) and guards against
+     * stale-topology / fresh-positions races during async detection.
+     */
+    max_bond_length?: number
   }
 
   let {
@@ -121,7 +149,28 @@
     light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
     highlight_strength = 1.0,
     multibond_enabled = false,
+    gpu_transform_active = false,
+    max_bond_length = 4.0,
   }: Props = $props()
+
+  // GPU-transform eligibility. v1 exclusions (all fall back to the CPU
+  // instanceMatrix path, zero regression surface):
+  //   - multibond (per-slot stride 6 + order-dependent line counts);
+  //   - non-empty decorator range (image atoms drawn — the decorator pass
+  //     writes CPU matrices past the cell-internal range).
+  // Cross-cell bonds are handled in-shader for BOTH hide_incomplete modes:
+  // collapse (hide ON) and Phase-6 paired stubs (hide OFF, uStubMode /
+  // uStubScale) — exact parity with #write_slot's periodic branch.
+  // DEV escape hatch: `globalThis.__catgo_disable_gpu_bonds = true` forces
+  // the CPU path for in-session A/B benchmarking.
+  const gpu_active = $derived(
+    gpu_transform_active &&
+      !multibond_enabled &&
+      (image_atom_layout === null || image_atom_layout.n_image_atoms === 0) &&
+      !(import.meta.env?.DEV &&
+        (globalThis as { __catgo_disable_gpu_bonds?: boolean })
+          .__catgo_disable_gpu_bonds),
+  )
 
   let mesh = $state<InstancedMesh | undefined>()
   let renderer: BondInstancedRenderer | undefined
@@ -141,10 +190,47 @@
     }
   }
 
+  // Per-atom position texture geometry for the GPU-transform path. Fixed
+  // power-of-two width keeps the shader's index→texel math to two bit ops;
+  // height grows with atom count (1024 × 2048 texels = 2M atoms headroom,
+  // way past MAX_TEXTURE_SIZE concerns at realistic sizes).
+  const POS_TEX_WIDTH = 1024
+  const POS_TEX_SHIFT = 10 // log2(POS_TEX_WIDTH)
+  // Zero lattice ≡ "no lattice": uLattice·jimage adds nothing, so a bond
+  // with a non-zero jimage but no lattice renders from the base position —
+  // exact parity with #write_slot's null-lattice fallback.
+  const ZERO_LATTICE = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  // Vertex shader has two transform paths selected by the uGpuXform uniform
+  // (uniform branch — no recompile / material swap on playback start):
+  //   0 (default): per-instance mat4 from instanceMatrix (CPU-composed).
+  //   1 (typed-direct trajectory playback): the transform is reconstructed
+  //     in-shader from static topology attributes (a_site / a_jimage /
+  //     a_half) + a per-atom RGBA32F position texture. Per frame only the
+  //     position texture (16 bytes/atom) is uploaded — the 64-byte/instance
+  //     matrix rewrite and its CPU compose loop are skipped entirely.
+  // Position texture layout: fixed width ${POS_TEX_WIDTH}; atom i sits at
+  // texel (i % width, i / width); xyz in rgb, alpha unused. texelFetch is
+  // available because three r163+ is WebGL2-only (GLSL is compiled as
+  // "#version 300 es" with compatibility defines).
   const vertex_shader = `
     attribute vec3 instance_color_start;
     attribute vec3 instance_color_end;
     attribute float instance_opacity;
+    // GPU-transform (playback) topology attributes. Absent from the geometry
+    // until the first GPU sync -- WebGL then feeds constant 0s, and the
+    // uGpuXform=0 branch never reads them.
+    attribute vec2 a_site;    // endpoint site indices (a, b)
+    attribute vec3 a_jimage;  // lattice image of atom B (Int8, non-normalized)
+    attribute float a_half;   // 0 = half A (anchored at a), 1 = half B
+    uniform float uGpuXform;
+    uniform sampler2D uPosTex;      // RGBA32F, 1 texel per atom
+    uniform float uNAtoms;          // live atom count in uPosTex
+    uniform mat3 uLattice;          // columns = lattice vectors a, b, c; zero when no lattice
+    uniform float uHideIncomplete;  // collapse cross-cell bonds (parity with #write_slot)
+    uniform float uMaxBondLength;   // hard cap; longer bonds collapse (stale-topology guard)
+    uniform float uStubMode;        // incomplete_periodic_edge_mode (VESTA Mode 1)
+    uniform float uStubScale;       // stub length multiplier when uStubMode is on
     varying vec3 vColorStart;
     varying vec3 vColorEnd;
     varying float vYPosition;
@@ -159,19 +245,84 @@
       vYPosition = position.y;
       vOpacity = instance_opacity;
 
-      // Compute instance normal matrix (inverse-transpose) for correct normals
-      // under non-uniform scaling. mat3(instanceMatrix) alone squishes radial
-      // normals toward the cylinder axis, producing flat shading.
-      // WebGL 1 lacks inverse(), so we use the cofactor (cross-product) trick:
-      // cofactor columns are proportional to inverse-transpose columns.
-      mat3 m = mat3(instanceMatrix);
-      mat3 instanceNormalMat;
-      instanceNormalMat[0] = cross(m[1], m[2]);
-      instanceNormalMat[1] = cross(m[2], m[0]);
-      instanceNormalMat[2] = cross(m[0], m[1]);
-      vNormal = normalize(normalMatrix * instanceNormalMat * normal);
+      vec3 transformed;
+      vec3 objectNormal;
 
-      vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+      if (uGpuXform > 0.5) {
+        int ia = int(a_site.x + 0.5);
+        int ib = int(a_site.y + 0.5);
+        vec3 pa = texelFetch(uPosTex, ivec2(ia & ${POS_TEX_WIDTH - 1}, ia >> ${POS_TEX_SHIFT}), 0).xyz;
+        vec3 pb_base = texelFetch(uPosTex, ivec2(ib & ${POS_TEX_WIDTH - 1}, ib >> ${POS_TEX_SHIFT}), 0).xyz;
+        bool periodic = dot(abs(a_jimage), vec3(1.0)) > 0.5;
+        // b_eff = pos_b + lattice * jimage (uLattice columns are the lattice
+        // rows a,b,c, so the mat*vec product matches pbc.rs / #write_slot).
+        vec3 pb = periodic ? pb_base + uLattice * a_jimage : pb_base;
+        vec3 d = pb - pa;
+        float len = length(d);
+        // Collapse to zero scale (ZERO_MATRIX parity) when: endpoint index
+        // is past the live position buffer (stale-frame safety net), length
+        // is degenerate / non-finite (!(len > eps) also catches NaN), the
+        // bond exceeds the hard cap, or it is a cross-cell bond under
+        // hide_incomplete_bonds.
+        bool collapse = a_site.x >= uNAtoms || a_site.y >= uNAtoms ||
+          !(len > 1e-6) || len > uMaxBondLength ||
+          (periodic && uHideIncomplete > 0.5);
+        if (collapse) {
+          transformed = vec3(0.0);
+          objectNormal = vec3(0.0, 0.0, 1.0);
+        } else {
+          vec3 dir = d / len;
+          // Deterministic orthonormal basis with dir as the cylinder's Y
+          // axis. Roll around the axis is arbitrary -- the cylinder is
+          // rotationally symmetric, so this matches the CPU quaternion path
+          // visually.
+          vec3 ref = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+          vec3 xb = normalize(cross(ref, dir));
+          vec3 zb = cross(xb, dir);
+          float half_len = 0.5 * len;
+          vec3 mid;
+          float y_len;
+          if (periodic) {
+            // Phase 6 outward paired stubs (hide_incomplete OFF; the ON case
+            // collapsed above). Half A anchored at pa pointing toward b_eff;
+            // half B anchored at the BASE pos_b pointing -dir. Full
+            // half-length unless VESTA Mode 1 shortens it (uStubScale).
+            float stub_len = half_len * (uStubMode > 0.5 ? uStubScale : 1.0);
+            y_len = stub_len;
+            mid = a_half < 0.5
+              ? pa + dir * (0.5 * stub_len)
+              : pb_base - dir * (0.5 * stub_len);
+          } else {
+            // Intra-cell: half A center = 0.75*pa + 0.25*pb; half B =
+            // 0.25*pa + 0.75*pb; unit-height cylinder scales to half_length
+            // along the axis. Radius is baked into the geometry
+            // (radius_scale = 1 on the single-line path).
+            y_len = half_len;
+            mid = mix(pa, pb, 0.25 + 0.5 * a_half);
+          }
+          transformed = xb * position.x + dir * (position.y * y_len) +
+            zb * position.z + mid;
+          // Basis is orthonormal and radial/cap normals are invariant under
+          // the axis-only scale, so no inverse-transpose is needed.
+          objectNormal = xb * normal.x + dir * normal.y + zb * normal.z;
+        }
+      } else {
+        // Compute instance normal matrix (inverse-transpose) for correct normals
+        // under non-uniform scaling. mat3(instanceMatrix) alone squishes radial
+        // normals toward the cylinder axis, producing flat shading.
+        // We use the cofactor (cross-product) trick: cofactor columns are
+        // proportional to inverse-transpose columns.
+        mat3 m = mat3(instanceMatrix);
+        mat3 instanceNormalMat;
+        instanceNormalMat[0] = cross(m[1], m[2]);
+        instanceNormalMat[1] = cross(m[2], m[0]);
+        instanceNormalMat[2] = cross(m[0], m[1]);
+        objectNormal = instanceNormalMat * normal;
+        transformed = (instanceMatrix * vec4(position, 1.0)).xyz;
+      }
+
+      vNormal = normalize(normalMatrix * objectNormal);
+      vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
       vViewPosition = mvPosition.xyz;
       gl_Position = projectionMatrix * mvPosition;
       vDepthCueZ = -mvPosition.z;
@@ -312,8 +463,154 @@
       uDepthFar: depth_cue_uniforms?.uDepthFar ?? { value: 10 },
       uDepthCueBgColor: depth_cue_uniforms?.uDepthCueBgColor ?? { value: new Color(0xffffff) },
       uBondOutlineStrength: depth_cue_uniforms?.uBondOutlineStrength ?? { value: 0 },
+      // GPU-transform playback path (kept in sync by the effects below).
+      uGpuXform: { value: 0 },
+      uPosTex: { value: null },
+      uNAtoms: { value: 0 },
+      uLattice: { value: new Matrix3().fromArray(ZERO_LATTICE) },
+      uHideIncomplete: { value: hide_incomplete_bonds ? 1 : 0 },
+      uMaxBondLength: { value: max_bond_length },
+      uStubMode: { value: incomplete_periodic_edge_mode ? 1 : 0 },
+      uStubScale: { value: incomplete_edge_length_scale },
     },
   }))
+
+  // ── GPU-transform position texture ────────────────────────────────────────
+  // RGBA32F DataTexture, one texel per atom (xyz in rgb). Rewritten in place
+  // + re-uploaded each playback frame (~16·N bytes) — replaces the CPU mat4
+  // compose loop + 64-byte/instance matrix upload. Reallocated only when the
+  // atom count outgrows the current height.
+  let pos_texture: DataTexture | null = null
+
+  function upload_positions(pos: Float32Array): void {
+    const n_atoms = (pos.length / 3) | 0
+    const rows = Math.max(1, Math.ceil(n_atoms / POS_TEX_WIDTH))
+    if (pos_texture === null || (pos_texture.image.height as number) < rows) {
+      pos_texture?.dispose()
+      const data = new Float32Array(POS_TEX_WIDTH * rows * 4)
+      const tex = new DataTexture(data, POS_TEX_WIDTH, rows, RGBAFormat, FloatType)
+      tex.minFilter = NearestFilter
+      tex.magFilter = NearestFilter
+      tex.generateMipmaps = false
+      pos_texture = tex
+      shader_material.uniforms.uPosTex.value = tex
+    }
+    const data = pos_texture.image.data as unknown as Float32Array
+    for (let i = 0; i < n_atoms; i++) {
+      data[i * 4] = pos[i * 3]
+      data[i * 4 + 1] = pos[i * 3 + 1]
+      data[i * 4 + 2] = pos[i * 3 + 2]
+    }
+    pos_texture.needsUpdate = true
+    shader_material.uniforms.uNAtoms.value = n_atoms
+  }
+
+  // Texture is referenced only via a uniform — Threlte's auto-dispose covers
+  // the material/geometry (created through T args) but not this.
+  $effect(() => () => {
+    pos_texture?.dispose()
+    pos_texture = null
+  })
+
+  // DEV-only debug surface: globalThis.__catgo_bond_gpu. Mirrors the shader's
+  // GPU-path math in JS over the exact GPU-bound data (topology attrs +
+  // position texture + uLattice) so a console/e2e check can programmatically
+  // verify geometry consistency (no over-max "spike" bonds, no NaN) without
+  // reading back GPU buffers. Tree-shaken from production builds.
+  $effect(() => {
+    if (!import.meta.env?.DEV) return
+    const surface = {
+      get gpu_active() {
+        return gpu_active
+      },
+      // Eligibility inputs — which v1 gate (if any) is holding the GPU path off.
+      get eligibility() {
+        return {
+          gpu_transform_active,
+          multibond_enabled,
+          n_image_atoms: image_atom_layout?.n_image_atoms ?? 0,
+          hide_incomplete_bonds,
+          has_lattice: lattice_matrix !== null,
+        }
+      },
+      get uGpuXform() {
+        return shader_material.uniforms.uGpuXform.value as number
+      },
+      get mesh_count() {
+        return mesh?.count ?? -1
+      },
+      get n_atoms() {
+        return shader_material.uniforms.uNAtoms.value as number
+      },
+      stats: () => {
+        const geo = mesh?.geometry
+        const site = geo?.getAttribute(`a_site`)?.array as Float32Array | undefined
+        const jimg = geo?.getAttribute(`a_jimage`)?.array as Int8Array | undefined
+        const tex = pos_texture?.image.data as unknown as Float32Array | undefined
+        if (!mesh || !site || !jimg || !tex) return null
+        const n_atoms = shader_material.uniforms.uNAtoms.value as number
+        const hide = (shader_material.uniforms.uHideIncomplete.value as number) > 0.5
+        const max_len = shader_material.uniforms.uMaxBondLength.value as number
+        const lat = (shader_material.uniforms.uLattice.value as Matrix3).elements
+        const n_inst = mesh.count
+        let over_max = 0
+        let non_finite = 0
+        let oob = 0
+        let collapsed_periodic = 0
+        let drawn = 0
+        let min_len = Infinity
+        let max_seen = 0
+        for (let i = 0; i < n_inst; i += 2) { // one check per slot (halves share)
+          const a = site[i * 2]
+          const b = site[i * 2 + 1]
+          if (a >= n_atoms || b >= n_atoms) {
+            oob++
+            continue
+          }
+          const dx = jimg[i * 3]
+          const dy = jimg[i * 3 + 1]
+          const dz = jimg[i * 3 + 2]
+          const periodic = (dx | dy | dz) !== 0
+          if (periodic && hide) {
+            collapsed_periodic++
+            continue
+          }
+          const ax = tex[a * 4], ay = tex[a * 4 + 1], az = tex[a * 4 + 2]
+          // Column-major mat3: col0 = elements[0..2] = lattice vector a, etc.
+          const bx = tex[b * 4] + dx * lat[0] + dy * lat[3] + dz * lat[6]
+          const by = tex[b * 4 + 1] + dx * lat[1] + dy * lat[4] + dz * lat[7]
+          const bz = tex[b * 4 + 2] + dx * lat[2] + dy * lat[5] + dz * lat[8]
+          const len = Math.hypot(bx - ax, by - ay, bz - az)
+          if (!Number.isFinite(len)) {
+            non_finite++
+            continue
+          }
+          if (len > max_len) {
+            over_max++
+            continue
+          }
+          drawn++
+          if (len < min_len) min_len = len
+          if (len > max_seen) max_seen = len
+        }
+        return {
+          slots: n_inst / 2,
+          drawn,
+          over_max,
+          non_finite,
+          oob,
+          collapsed_periodic,
+          min_len,
+          max_drawn_len: max_seen,
+        }
+      },
+    }
+    ;(globalThis as unknown as { __catgo_bond_gpu?: typeof surface })
+      .__catgo_bond_gpu = surface
+    return () => {
+      delete (globalThis as { __catgo_bond_gpu?: unknown }).__catgo_bond_gpu
+    }
+  })
 
   // Update uniforms when props change — no material recreation needed
   $effect(() => {
@@ -342,6 +639,50 @@
     shader_material.uniforms.uSpecStrength.value = highlight_strength
     // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
     mark_dirty()
+  })
+
+  // GPU-path scalar/matrix uniforms. lattice_matrix identity is stable
+  // during playback (the per-frame structure cascade is cut), so this fires
+  // on load / lattice edits, not per frame.
+  $effect(() => {
+    const lat = lattice_matrix
+    const m = shader_material.uniforms.uLattice.value as Matrix3
+    if (lat) m.fromArray(lat as unknown as number[])
+    else m.fromArray(ZERO_LATTICE)
+    shader_material.uniforms.uHideIncomplete.value = hide_incomplete_bonds ? 1 : 0
+    shader_material.uniforms.uMaxBondLength.value = max_bond_length
+    shader_material.uniforms.uStubMode.value = incomplete_periodic_edge_mode ? 1 : 0
+    shader_material.uniforms.uStubScale.value = incomplete_edge_length_scale
+    // mark_dirty: imperative ShaderMaterial uniform write bypasses <T.> prop chain
+    mark_dirty()
+  })
+
+  // GPU-transform mode transitions. Tracks ONLY the eligibility boolean; the
+  // body runs untracked (renderer methods read manager $state — see the
+  // mount-effect discipline note below). Entering: flip the shader to the
+  // texture path, upload current positions, write topology attrs. Exiting:
+  // flip back and force_full_resync — instanceMatrix is stale after any
+  // GPU-mode window and must be rebuilt before the CPU path draws again.
+  let last_gpu_active = false
+  $effect(() => {
+    const active = gpu_active
+    if (!renderer) {
+      // Renderer not up yet — the mount effect applies the current mode when
+      // it constructs the renderer (and records it in last_gpu_active).
+      return
+    }
+    if (active === last_gpu_active) return
+    last_gpu_active = active
+    untrack(() => {
+      shader_material.uniforms.uGpuXform.value = active ? 1 : 0
+      if (active) {
+        upload_positions(atom_positions)
+        renderer!.sync_gpu_topology()
+      } else {
+        renderer!.force_full_resync()
+      }
+      mark_dirty()
+    })
   })
 
   // Geometry rebuilds reactively when bond_radius changes. Threlte's
@@ -386,7 +727,18 @@
       // layout uses the correct per-slot stride.
       r.set_multibond(multibond_enabled, bond_radius)
       renderer = r
-      r.force_full_resync()
+      // Apply the current transform mode: the mode-transition effect only
+      // fires on gpu_active CHANGES and may have already run (renderer was
+      // undefined), so a mesh (re)mount mid-playback must self-serve.
+      const active = gpu_active
+      last_gpu_active = active
+      shader_material.uniforms.uGpuXform.value = active ? 1 : 0
+      if (active) {
+        upload_positions(atom_positions)
+        r.sync_gpu_topology()
+      } else {
+        r.force_full_resync()
+      }
       mark_dirty()
       return () => {
         r.dispose()
@@ -421,9 +773,15 @@
     // Untracked: force_full_resync reads manager $state (version/count);
     // tracked it would subscribe this effect to every per-frame version
     // bump and duplicate the version-sync effect's full pass.
+    // Note: during typed-direct playback with image atoms off,
+    // image_atom_layout re-derives to the EMPTY_LAYOUT singleton (stable
+    // identity), so this effect does NOT fire per frame.
     untrack(() => {
       renderer!.set_multibond(mb, br)
-      renderer!.force_full_resync()
+      // GPU-transform mode owns the mesh: refresh its buffers (colors are
+      // rewritten in the topology loop) instead of composing stale matrices.
+      if (gpu_active) renderer!.sync_gpu_topology()
+      else renderer!.force_full_resync()
       mark_dirty()
     })
   })
@@ -513,12 +871,21 @@
     mgr.set_opacity(slot, op)
   }
 
+  // Topology version sync. In GPU-transform mode the per-frame
+  // replace_auto_bonds bump routes to sync_gpu_topology (topology attrs +
+  // kind/color/opacity — no matrix math); otherwise the classic dirty-slot
+  // matrix sync. gpu_active is read untracked: mode transitions are owned by
+  // the dedicated effect above, which fully rebuilds the incoming mode's
+  // buffers — tracking it here would only duplicate that pass.
   $effect(() => {
     const version = bond_manager.version
     void version
     if (!renderer) return
-    renderer.sync()
-    mark_dirty()
+    untrack(() => {
+      if (gpu_active) renderer!.sync_gpu_topology()
+      else renderer!.sync()
+      mark_dirty()
+    })
   })
 
   $effect(() => {
@@ -529,7 +896,13 @@
     // tracked it would re-fire this effect on every version bump on top of
     // the positions-identity dep above — a duplicate full matrix pass.
     untrack(() => {
-      renderer!.force_full_resync()
+      if (gpu_active) {
+        // GPU-transform mode: per-frame positions land in the per-atom
+        // texture (~16·N bytes) instead of a full per-instance matrix pass.
+        upload_positions(atom_positions)
+      } else {
+        renderer!.force_full_resync()
+      }
       mark_dirty()
     })
   })

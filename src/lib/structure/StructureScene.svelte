@@ -2655,6 +2655,12 @@
   // early-returns via the typed memo (same conn + frame identities).
   function schedule_typed_direct_tail_sync(): void {
     if (typed_direct_tail_timer !== undefined) clearTimeout(typed_direct_tail_timer)
+    // DEV knob: globalThis.__catgo_td_tail_ms stretches the tail window so
+    // e2e / debugging sessions can screenshot the GPU-transform path at a
+    // paused frame before the object-pipeline rebuild flips it off.
+    const tail_ms = (import.meta.env?.DEV &&
+      (globalThis as { __catgo_td_tail_ms?: number }).__catgo_td_tail_ms) ||
+      TYPED_DIRECT_TAIL_MS
     typed_direct_tail_timer = setTimeout(() => {
       typed_direct_tail_timer = undefined
       if (!typed_direct_active) return
@@ -2673,7 +2679,7 @@
         )
       }
       typed_direct_active = false
-    }, TYPED_DIRECT_TAIL_MS)
+    }, tail_ms)
   }
 
   // Drop the tail-sync timer on unmount — the scene lives in {#if} blocks
@@ -5955,6 +5961,8 @@
           {depth_cue_uniforms}
           {light_dir}
           highlight_strength={active_highlight_strength}
+          gpu_transform_active={typed_direct_active}
+          max_bond_length={MAX_BOND_LENGTH}
         />
       {/if}
 

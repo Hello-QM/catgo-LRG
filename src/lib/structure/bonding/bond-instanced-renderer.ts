@@ -142,6 +142,14 @@ export class BondInstancedRenderer {
 
 	#opacity_attr: THREE.InstancedBufferAttribute | null = null;
 
+	// GPU-transform playback path (see sync_gpu_topology): static per-instance
+	// topology attributes consumed by the vertex shader's texture-fetch branch.
+	// Lazy-allocated on first GPU sync so the default (CPU-matrix) path pays
+	// zero memory cost.
+	#site_attr: THREE.InstancedBufferAttribute | null = null; // vec2 (a, b) as f32
+	#gpu_jimage_attr: THREE.InstancedBufferAttribute | null = null; // ivec3 as i8, non-normalized
+	#half_attr: THREE.InstancedBufferAttribute | null = null; // 0 = half A, 1 = half B
+
 	#last_synced_version = -1;
 	#last_synced_count = 0;
 
@@ -390,11 +398,199 @@ export class BondInstancedRenderer {
 		this.#last_synced_count = manager.count;
 	}
 
+	/**
+	 * GPU-transform playback sync. Instead of composing a mat4 per instance on
+	 * the CPU (the `#write_slot` path), write only the STATIC topology of each
+	 * half-bond — endpoint site indices, the bond's jimage, and which half the
+	 * instance is — as small per-instance attributes. The vertex shader
+	 * (BondManagerInstances' `uGpuXform` branch) fetches both endpoint
+	 * positions from a per-atom RGBA32F texture and reconstructs the
+	 * half-cylinder transform in the vertex stage, so per-frame position
+	 * changes need only a texture upload, not a 64-byte-per-instance matrix
+	 * rewrite.
+	 *
+	 * Caller contract (BondManagerInstances gates all of these):
+	 *   - multibond OFF (stride must be 2 — one instance per half);
+	 *   - no decorator pass (image_atom_layout empty) — mesh.count is set to
+	 *     the cell-internal range only;
+	 *   - cross-cell bonds are handled in-shader: collapsed via
+	 *     `uHideIncomplete` (hide_incomplete_bonds ON) or rendered as Phase 6
+	 *     paired stubs (`uStubMode` / `uStubScale`) when OFF;
+	 *   - `instanceMatrix` is NOT written — it is stale while this mode is
+	 *     active, and the caller MUST `force_full_resync()` on mode exit.
+	 *
+	 * Always performs a full rewrite: during playback `replace_auto_bonds`
+	 * promotes to dirty_all anyway (span >= threshold), and the write is a
+	 * memcpy-level loop (~6 numeric stores per instance).
+	 */
+	sync_gpu_topology(): void {
+		const manager = this.#manager;
+
+		if (import.meta.env?.DEV && this.#multibond_enabled) {
+			console.warn(
+				'[BondInstancedRenderer] sync_gpu_topology called with multibond enabled — caller must gate the GPU path off when multibond is on.',
+			);
+		}
+
+		this.#ensure_color_attrs();
+		this.#ensure_opacity_attr();
+		this.#ensure_gpu_attrs();
+
+		const mesh = this.#mesh;
+		const capacity = mesh.instanceMatrix.count;
+		const count = manager.count;
+		const instance_count = count * 2;
+
+		if (instance_count > capacity) {
+			throw new Error(
+				`BondInstancedRenderer: instance count (${instance_count}) exceeds mesh capacity (${capacity}). Caller must reconstruct the mesh at a larger capacity.`,
+			);
+		}
+
+		const site_attr = this.#site_attr!;
+		const jimage_attr = this.#gpu_jimage_attr!;
+		site_attr.clearUpdateRanges();
+		jimage_attr.clearUpdateRanges();
+		this.#kind_attr.clearUpdateRanges();
+		this.#color_start_attr?.clearUpdateRanges();
+		this.#color_end_attr?.clearUpdateRanges();
+		this.#opacity_attr?.clearUpdateRanges();
+
+		const pairs = manager.pairs_buffer;
+		const kinds = manager.kinds_buffer;
+		const jimages = manager.jimages_buffer;
+		const opacity = manager.opacity_buffer;
+		const atom_colors = this.#get_atom_colors ? this.#get_atom_colors() : null;
+
+		const site_buf = site_attr.array as Float32Array;
+		const jimage_buf = jimage_attr.array as Int8Array;
+		const kind_buf = this.#kind_buf;
+		const cb_start = this.#color_start_attr !== null
+			? this.#color_start_attr.array as Float32Array
+			: null;
+		const cb_end = this.#color_end_attr !== null
+			? this.#color_end_attr.array as Float32Array
+			: null;
+		const op_buf = this.#opacity_attr !== null
+			? this.#opacity_attr.array as Float32Array
+			: null;
+		const ac_len = atom_colors !== null ? atom_colors.length : 0;
+
+		for (let slot = 0; slot < count; slot++) {
+			const a = pairs[slot * 2];
+			const b = pairs[slot * 2 + 1];
+			const i0 = slot * 2; // half A instance
+			const i1 = i0 + 1; // half B instance
+
+			site_buf[i0 * 2] = a;
+			site_buf[i0 * 2 + 1] = b;
+			site_buf[i1 * 2] = a;
+			site_buf[i1 * 2 + 1] = b;
+
+			const ji = slot * 3;
+			const dx = jimages[ji];
+			const dy = jimages[ji + 1];
+			const dz = jimages[ji + 2];
+			jimage_buf[i0 * 3] = dx;
+			jimage_buf[i0 * 3 + 1] = dy;
+			jimage_buf[i0 * 3 + 2] = dz;
+			jimage_buf[i1 * 3] = dx;
+			jimage_buf[i1 * 3 + 1] = dy;
+			jimage_buf[i1 * 3 + 2] = dz;
+
+			const kind = kinds[slot];
+			kind_buf[i0] = kind;
+			kind_buf[i1] = kind;
+
+			// Per-half solid color, mirroring #write_slot: half A = atom A's
+			// color, half B = atom B's (start == end → solid).
+			if (atom_colors !== null && cb_start !== null && cb_end !== null) {
+				const a3 = a * 3;
+				const b3 = b * 3;
+				if (a3 + 2 < ac_len && b3 + 2 < ac_len) {
+					const d0 = i0 * 3;
+					const d1 = i1 * 3;
+					const ar = atom_colors[a3], ag = atom_colors[a3 + 1], ab = atom_colors[a3 + 2];
+					const br = atom_colors[b3], bg = atom_colors[b3 + 1], bb = atom_colors[b3 + 2];
+					cb_start[d0] = ar; cb_start[d0 + 1] = ag; cb_start[d0 + 2] = ab;
+					cb_end[d0] = ar; cb_end[d0 + 1] = ag; cb_end[d0 + 2] = ab;
+					cb_start[d1] = br; cb_start[d1 + 1] = bg; cb_start[d1 + 2] = bb;
+					cb_end[d1] = br; cb_end[d1 + 1] = bg; cb_end[d1 + 2] = bb;
+				}
+			}
+
+			if (opacity !== null && op_buf !== null) {
+				const op = opacity[slot];
+				op_buf[i0] = op;
+				op_buf[i1] = op;
+			}
+		}
+
+		if (instance_count > 0) {
+			site_attr.addUpdateRange(0, instance_count * 2);
+			jimage_attr.addUpdateRange(0, instance_count * 3);
+			this.#kind_attr.addUpdateRange(0, instance_count);
+			this.#color_start_attr?.addUpdateRange(0, instance_count * 3);
+			this.#color_end_attr?.addUpdateRange(0, instance_count * 3);
+			this.#opacity_attr?.addUpdateRange(0, instance_count);
+		}
+
+		mesh.count = instance_count;
+		site_attr.needsUpdate = true;
+		jimage_attr.needsUpdate = true;
+		this.#kind_attr.needsUpdate = true;
+		if (this.#color_start_attr !== null) this.#color_start_attr.needsUpdate = true;
+		if (this.#color_end_attr !== null) this.#color_end_attr.needsUpdate = true;
+		if (this.#opacity_attr !== null) this.#opacity_attr.needsUpdate = true;
+
+		// Keep the CPU-sync bookkeeping consistent so an accidental `sync()`
+		// while this mode is active early-returns instead of racing. The mode
+		// exit path unconditionally `force_full_resync()`s, which rewrites
+		// every matrix regardless of this state.
+		manager.clear_dirty();
+		this.#last_synced_version = manager.version;
+		this.#last_synced_count = count;
+	}
+
+	#ensure_gpu_attrs(): void {
+		if (this.#site_attr !== null) return;
+		const cap = this.#mesh.instanceMatrix.count;
+		const geometry = this.#mesh.geometry;
+
+		// f32 holds site indices exactly up to 2^24 — far above any atom count
+		// the viewer handles.
+		const site_buf = new Float32Array(cap * 2);
+		const site_attr = new THREE.InstancedBufferAttribute(site_buf, 2, false);
+		site_attr.setUsage(THREE.DynamicDrawUsage);
+		this.#site_attr = site_attr;
+		geometry.setAttribute('a_site', site_attr);
+
+		// Int8, non-normalized → arrives in the shader as float ±n. jimage
+		// entries are within ±5 in practice (see BondManager doc).
+		const jimage_buf = new Int8Array(cap * 3);
+		const jimage_attr = new THREE.InstancedBufferAttribute(jimage_buf, 3, false);
+		jimage_attr.setUsage(THREE.DynamicDrawUsage);
+		this.#gpu_jimage_attr = jimage_attr;
+		geometry.setAttribute('a_jimage', jimage_attr);
+
+		// Which half of the bond this instance is. Purely a function of the
+		// instance index parity (stride is 2 in GPU mode), so fill once and
+		// never rewrite.
+		const half_buf = new Uint8Array(cap);
+		for (let i = 1; i < cap; i += 2) half_buf[i] = 1;
+		const half_attr = new THREE.InstancedBufferAttribute(half_buf, 1, false);
+		this.#half_attr = half_attr;
+		geometry.setAttribute('a_half', half_attr);
+	}
+
 	dispose(): void {
 		this.#mesh.geometry.deleteAttribute('bond_kind');
 		if (this.#color_start_attr !== null) this.#mesh.geometry.deleteAttribute('instance_color_start');
 		if (this.#color_end_attr !== null) this.#mesh.geometry.deleteAttribute('instance_color_end');
 		if (this.#opacity_attr !== null) this.#mesh.geometry.deleteAttribute('instance_opacity');
+		if (this.#site_attr !== null) this.#mesh.geometry.deleteAttribute('a_site');
+		if (this.#gpu_jimage_attr !== null) this.#mesh.geometry.deleteAttribute('a_jimage');
+		if (this.#half_attr !== null) this.#mesh.geometry.deleteAttribute('a_half');
 	}
 
 	#ensure_color_attrs(): void {
