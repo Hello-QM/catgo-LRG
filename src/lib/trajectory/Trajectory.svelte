@@ -25,7 +25,7 @@
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
   import { full_data_extractor } from './extract'
-  import { create_frame_position_cache } from './frame-positions'
+  import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
   import type {
     ParseProgress,
     TrajectoryDataExtractor,
@@ -734,6 +734,64 @@
         trajectory_frame_positions = null
         trajectory_frame_forces = null
       }
+    }
+  })
+
+  // ═══ Round-3 warmup: pre-convert frame positions during idle time ═══
+  // First visit of a frame pays chunk fetch/parse (loader paths) plus the
+  // 20k-site proxy walk that fills frame_pos_cache (~380 ms/frame at 20k
+  // atoms) — the first playback pass crawled at ~6 fps while later passes
+  // hit 20 fps. Warm the caches in requestIdleCallback slices so the first
+  // pass is as fast as a revisit. Generation-guarded: any new load or
+  // unload invalidates in-flight warmup; active playback naturally starves
+  // idle callbacks, so this never competes for frame budget.
+  let warmup_gen = 0
+  $effect(() => {
+    const traj = trajectory
+    void traj_load_seq
+    if (!traj || !topology_initialized) return
+    // Only the typed-positions playback path consumes frame_pos_cache.
+    if (untrack(() => trajectory_frame_positions) == null) return
+    const total = Math.min(
+      traj.total_frames ?? traj.frames.length,
+      FRAME_POS_CACHE_MAX,
+    )
+    if (total <= 1) return
+    const gen = ++warmup_gen
+    const loader = (traj as PaneTrajectory).frame_loader
+    let idx = 0
+    const step = async (deadline?: IdleDeadline) => {
+      while (idx < total && gen === warmup_gen) {
+        if (deadline && deadline.timeRemaining() < 8) break
+        const i = idx++
+        try {
+          let frame = untrack(() => traj.frames[i])
+          if (!frame?.structure && loader) {
+            frame = (await loader.load_frame(
+              untrack(() => orig_data) ?? ``,
+              i,
+            )) ?? undefined
+          }
+          const sites = frame?.structure?.sites
+          if (gen !== warmup_gen) return
+          if (sites?.length) frame_pos_cache.get(i, sites)
+        } catch {
+          // Unfetchable frame — playback's own path will surface errors.
+        }
+        if (!deadline) break // setTimeout fallback: one frame per tick
+      }
+      if (idx < total && gen === warmup_gen) schedule()
+    }
+    const schedule = () => {
+      if (typeof requestIdleCallback === `function`) {
+        requestIdleCallback((d) => void step(d), { timeout: 1000 })
+      } else {
+        setTimeout(() => void step(), 50)
+      }
+    }
+    schedule()
+    return () => {
+      warmup_gen++
     }
   })
 
