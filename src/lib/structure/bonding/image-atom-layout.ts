@@ -61,6 +61,21 @@ export function build_image_atom_layout(
 	sites_to_draw: ReadonlyMap<ImageSiteKey, ImageSiteEntry>,
 	bond_manager: BondManager,
 ): ImageAtomLayout {
+	// Fast path: no non-home image atoms → EMPTY_LAYOUT, skip the O(bonds)
+	// inverted-index build below. This runs on EVERY bond_manager.version
+	// bump (the image_atom_layout $derived tracks it), i.e. once per frame
+	// during trajectory playback — with image atoms off, the old order paid
+	// a 26k-entry Map build per frame just to discover n === 0.
+	let any_image = false
+	for (const entry of sites_to_draw.values()) {
+		const j = entry.jimage_img
+		if (j[0] !== 0 || j[1] !== 0 || j[2] !== 0) {
+			any_image = true
+			break
+		}
+	}
+	if (!any_image) return EMPTY_LAYOUT
+
 	const count = bond_manager.count
 	const pairs = bond_manager.pairs_buffer
 
