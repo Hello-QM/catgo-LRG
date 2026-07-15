@@ -5320,6 +5320,198 @@ pub fn detect_bonds_solid_angle(
     result.unwrap_or_else(|e| format!("{{\"error\":\"{}\"}}", e))
 }
 
+/// Typed-array bond-detection result. Avoids serde JSON on the WASM boundary:
+/// each getter copies a flat typed array out of WASM memory (~500 KB total for
+/// 26k bonds, sub-millisecond) instead of serializing/parsing a multi-MB JSON
+/// string (~60 ms round trip at 20k atoms).
+#[wasm_bindgen]
+pub struct BondTable {
+    /// Site-index pairs, flat [i0, j0, i1, j1, ...] — 2 per bond.
+    pairs: Vec<u32>,
+    /// Periodic image offsets, flat [x0, y0, z0, x1, ...] — 3 per bond.
+    images: Vec<i8>,
+    /// Bond lengths in Å — 1 per bond.
+    lengths: Vec<f32>,
+    /// Bond strength estimates — 1 per bond.
+    strengths: Vec<f32>,
+}
+
+#[wasm_bindgen]
+impl BondTable {
+    #[wasm_bindgen(getter)]
+    pub fn count(&self) -> u32 {
+        (self.pairs.len() / 2) as u32
+    }
+    #[wasm_bindgen(getter)]
+    pub fn pairs(&self) -> Vec<u32> {
+        self.pairs.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn images(&self) -> Vec<i8> {
+        self.images.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn lengths(&self) -> Vec<f32> {
+        self.lengths.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn strengths(&self) -> Vec<f32> {
+        self.strengths.clone()
+    }
+}
+
+/// Detect bonds (atom_radii strategy) from raw typed arrays — no JSON on
+/// either side of the boundary. Built for per-frame trajectory bonding where
+/// the serde round trip dominates.
+///
+/// * `positions` — Cartesian coordinates, flat `[x0,y0,z0, x1,...]`, length 3N (Å)
+/// * `atomic_numbers` — element Z per site, length N
+/// * `lattice` — row-major 3×3 lattice matrix (9 values), or empty for
+///   non-periodic systems (a bounding-box lattice with pbc=[false;3] is
+///   derived, matching the JSON path's molecule handling)
+/// * `pbc` — per-axis periodicity flags (3 values, 0/1). Ignored when
+///   `lattice` is empty; defaults to fully periodic when empty but a lattice
+///   is given
+/// * `options_json` — optional `AtomRadiiOptions` JSON (same schema as
+///   `detect_bonds_radii`)
+#[wasm_bindgen]
+pub fn detect_bonds_radii_typed(
+    positions: &[f32],
+    atomic_numbers: &[u8],
+    lattice: &[f64],
+    pbc: &[u8],
+    options_json: Option<String>,
+) -> Result<BondTable, JsValue> {
+    let n_sites = atomic_numbers.len();
+    if positions.len() != n_sites * 3 {
+        return Err(JsValue::from_str(&format!(
+            "positions length {} != 3 * atomic_numbers length {}",
+            positions.len(),
+            n_sites
+        )));
+    }
+    if !lattice.is_empty() && lattice.len() != 9 {
+        return Err(JsValue::from_str(&format!(
+            "lattice must have 0 or 9 values, got {}",
+            lattice.len()
+        )));
+    }
+
+    let options: crate::bonding::AtomRadiiOptions = match options_json {
+        Some(ref json) => serde_json::from_str(json)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?,
+        None => crate::bonding::AtomRadiiOptions::default(),
+    };
+
+    let cart: Vec<nalgebra::Vector3<f64>> = (0..n_sites)
+        .map(|i| {
+            nalgebra::Vector3::new(
+                positions[i * 3] as f64,
+                positions[i * 3 + 1] as f64,
+                positions[i * 3 + 2] as f64,
+            )
+        })
+        .collect();
+
+    let (lat, pbc_arr, frac_coords) = if lattice.len() == 9 {
+        let matrix = nalgebra::Matrix3::from_row_slice(lattice);
+        let pbc_arr = if pbc.len() == 3 {
+            [pbc[0] != 0, pbc[1] != 0, pbc[2] != 0]
+        } else {
+            [true, true, true]
+        };
+        let lat = crate::lattice::Lattice::from_matrix_with_pbc(matrix, pbc_arr);
+        let frac = lat.get_fractional_coords(&cart);
+        (lat, pbc_arr, frac)
+    } else {
+        // Non-periodic: bounding-box lattice, mirroring io.rs molecule parsing
+        // (10 Å padding per side, 20 Å minimum box, frac offset from min).
+        let mut min = [f64::MAX; 3];
+        let mut max = [f64::MIN; 3];
+        for c in &cart {
+            for axis in 0..3 {
+                min[axis] = min[axis].min(c[axis]);
+                max[axis] = max[axis].max(c[axis]);
+            }
+        }
+        if cart.is_empty() {
+            min = [0.0; 3];
+            max = [0.0; 3];
+        }
+        let padding = 10.0;
+        let size = [
+            (max[0] - min[0] + 2.0 * padding).max(20.0),
+            (max[1] - min[1] + 2.0 * padding).max(20.0),
+            (max[2] - min[2] + 2.0 * padding).max(20.0),
+        ];
+        let matrix = nalgebra::Matrix3::new(
+            size[0], 0.0, 0.0, 0.0, size[1], 0.0, 0.0, 0.0, size[2],
+        );
+        let lat = crate::lattice::Lattice::from_matrix_with_pbc(
+            matrix,
+            [false, false, false],
+        );
+        let frac: Vec<nalgebra::Vector3<f64>> = cart
+            .iter()
+            .map(|c| {
+                nalgebra::Vector3::new(
+                    (c[0] - min[0] + padding) / size[0],
+                    (c[1] - min[1] + padding) / size[1],
+                    (c[2] - min[2] + padding) / size[2],
+                )
+            })
+            .collect();
+        (lat, [false, false, false], frac)
+    };
+
+    let site_occupancies: Vec<crate::species::SiteOccupancy> = atomic_numbers
+        .iter()
+        .enumerate()
+        .map(|(idx, &z)| {
+            crate::element::Element::from_atomic_number(z)
+                .map(|el| {
+                    crate::species::SiteOccupancy::ordered(
+                        crate::species::Species::neutral(el),
+                    )
+                })
+                .ok_or_else(|| {
+                    JsValue::from_str(&format!(
+                        "site {idx}: unknown atomic number {z}"
+                    ))
+                })
+        })
+        .collect::<Result<_, _>>()?;
+
+    let structure = crate::structure::Structure::try_new_full(
+        lat,
+        site_occupancies,
+        frac_coords,
+        pbc_arr,
+        0.0,
+        std::collections::HashMap::new(),
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let bonds = crate::bonding::detect_bonds_atom_radii(&structure, &options);
+
+    let mut table = BondTable {
+        pairs: Vec::with_capacity(bonds.len() * 2),
+        images: Vec::with_capacity(bonds.len() * 3),
+        lengths: Vec::with_capacity(bonds.len()),
+        strengths: Vec::with_capacity(bonds.len()),
+    };
+    for bond in &bonds {
+        table.pairs.push(bond.site_idx_1 as u32);
+        table.pairs.push(bond.site_idx_2 as u32);
+        table.images.push(bond.image[0] as i8);
+        table.images.push(bond.image[1] as i8);
+        table.images.push(bond.image[2] as i8);
+        table.lengths.push(bond.bond_length as f32);
+        table.strengths.push(bond.strength as f32);
+    }
+    Ok(table)
+}
+
 /// Find adsorption sites on a surface structure using GASCAP-like algorithm.
 /// Returns JSON AdsorptionSiteResult: { sites, n_top, n_bridge, n_hollow }
 #[wasm_bindgen]
