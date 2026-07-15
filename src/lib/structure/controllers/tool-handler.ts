@@ -124,6 +124,12 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
   let last_push_at = 0
   const MIN_PUSH_INTERVAL = 50
   const HEARTBEAT_INTERVAL = 5000
+  // Heartbeat dedupe (trace: ~550 ms of main-thread JSON.stringify per 30 s
+  // of trajectory playback re-pushing an identical frozen structure). Real
+  // edits go through request_push() and always push; the heartbeat only
+  // re-pushes when the structure identity or selection actually changed.
+  let last_pushed_structure: unknown = null
+  let last_pushed_selection = ``
 
   async function do_push_now() {
     const structure = deps.get_structure()
@@ -158,6 +164,8 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
       headers: { 'Content-Type': `application/json` },
       body: JSON.stringify({ indices: deps.get_selected_sites() }),
     })
+    last_pushed_structure = structure
+    last_pushed_selection = JSON.stringify(deps.get_selected_sites())
   }
 
   async function push_loop() {
@@ -166,13 +174,22 @@ export function start_mcp_bridge(deps: McpBridgeDeps): {
       const elapsed = now - last_push_at
       const heartbeat_due = elapsed >= HEARTBEAT_INTERVAL
       if ((push_dirty || heartbeat_due) && elapsed >= MIN_PUSH_INTERVAL) {
-        try {
-          await do_push_now()
-        } catch (err) {
-          console.debug(`[CatGo] push error:`, err)
+        if (
+          !push_dirty &&
+          deps.get_structure() === last_pushed_structure &&
+          JSON.stringify(deps.get_selected_sites()) === last_pushed_selection
+        ) {
+          // Heartbeat with nothing new — skip the 3-POST serialization.
+          last_push_at = now
+        } else {
+          try {
+            await do_push_now()
+          } catch (err) {
+            console.debug(`[CatGo] push error:`, err)
+          }
+          push_dirty = false
+          last_push_at = Date.now()
         }
-        push_dirty = false
-        last_push_at = Date.now()
       }
       await new Promise((r) => setTimeout(r, 50))
     }

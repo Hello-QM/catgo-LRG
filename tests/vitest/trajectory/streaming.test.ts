@@ -259,7 +259,12 @@ describe(`Trajectory Streaming`, () => {
       // Should have streaming metadata even for small file
       expect(result.is_indexed).toBe(true)
       expect(result.indexed_frames).toBeDefined()
-      expect(result.plot_metadata).toBeDefined()
+      // Plot metadata is deferred so first render isn't blocked on the
+      // whole-file scan — the trajectory ships with the in-flight promise
+      // and Trajectory.svelte adopts the result on arrival.
+      expect(result.plot_metadata_promise).toBeDefined()
+      const plot_metadata = await result.plot_metadata_promise
+      expect(plot_metadata).toBeDefined()
     })
   })
 
