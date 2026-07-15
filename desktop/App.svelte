@@ -1384,7 +1384,11 @@
    * (import_many) so the CIF / cube / CHGCAR / trajectory branching lives once.
    */
   async function ingest_one(content: string | ArrayBuffer, filename: string): Promise<IngestOutcome> {
-    const text = typeof content === `string` ? content : new TextDecoder().decode(content)
+    // Binary content (ASE .traj / HDF5) only needs `text` for format
+    // sniffing — decode a head slice, never the whole 48 MB buffer.
+    const text = typeof content === `string`
+      ? content
+      : new TextDecoder().decode(content.slice(0, 65536))
     const ext = filename.replace(/\.(gz|bz2|xz|zst)$/i, ``).split(`.`).pop()?.toLowerCase() || ``
 
     // CHGCAR / CHGDIFF / LOCPOT etc. → convert to Gaussian cube via wasm.
@@ -1455,13 +1459,26 @@
     }
 
     if (is_trajectory_file(filename, text)) {
-      const trajectory = await parse_trajectory_data(content, filename)
+      // parse_trajectory_async routes large .xyz/.extxyz/.traj through the
+      // indexed TrajFrameReader (offset index + 4 eager frames + deferred
+      // plot metadata) instead of the eager whole-file parse — a 48 MB .traj
+      // parsed eagerly blocks the main thread for tens of seconds, which is
+      // the only open path on the static web deploy (no backend to stream).
+      const { parse_trajectory_async } = await import(`$lib/trajectory/parse`)
+      const trajectory = await parse_trajectory_async(content, filename)
       return {
         kind: `entry`,
         entry: {
           filename, source_path: null, format: ext, structure: undefined, trajectory,
           is_trajectory: true, cube_file: null,
-          raw_traj_b64: content_to_base64(content),
+          // Base64 round-trip (HPC push-back) is O(n) string building — for a
+          // 48 MB trajectory that's a ~64 MB string and seconds of main-thread
+          // time. Skip above 8 MB; push-back degrades, open stays fast.
+          raw_traj_b64:
+            (typeof content === `string` ? content.length : content.byteLength) <=
+                8 * 1024 * 1024
+              ? content_to_base64(content)
+              : ``,
           raw_traj_format: filename.split(`.`).pop()?.toLowerCase() || ``,
         },
       }

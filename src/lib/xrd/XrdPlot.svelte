@@ -227,7 +227,11 @@
       if (file) {
         try {
           const { content, filename } = await decompress_file(file)
-          if (content) (on_file_drop || compute_and_add)(content, filename)
+          // XRD inputs are always text; binary structure formats (.traj/.h5)
+          // now arrive as ArrayBuffer and have no meaning here.
+          if (typeof content === `string` && content) {
+            ;(on_file_drop || compute_and_add)(content, filename)
+          }
         } catch (exc) {
           error_msg = `Failed to load file ${file.name}: ${
             exc instanceof Error ? exc.message : String(exc)

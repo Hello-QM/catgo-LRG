@@ -307,7 +307,23 @@ export async function parse_trajectory_async(
 
     const data_size = data instanceof ArrayBuffer ? data.byteLength : data.length
     const is_large_file = data_size > LARGE_FILE_THRESHOLD
-    const should_use_indexing = use_indexing ?? is_large_file
+    // ASE .traj carries a complete frame-offset table in its ulm header, so
+    // the index is free at ANY size — always take the indexed path. The
+    // eager path built every frame's 20k site objects up front; in the
+    // browser (deep $state proxies + per-pane clone) a 48 MB file — under
+    // the 50 MB text threshold — blocked the main thread for >30 s, which
+    // is the only available path on the static web deploy.
+    const ase_binary = data instanceof ArrayBuffer &&
+      filename.toLowerCase().endsWith(`.traj`)
+    // Text trajectories (.xyz/.extxyz) index with one boundary scan and then
+    // load 4 eager frames — strictly cheaper than the eager path (every
+    // frame's site objects up front) for anything beyond a few MB. The old
+    // 50 MB threshold left e.g. a 35 MB extxyz on the eager path, which
+    // blocks the browser main thread for tens of seconds (fatal on the
+    // static web deploy where no backend streaming exists).
+    const TEXT_INDEX_THRESHOLD = 2 * 1024 * 1024
+    const should_use_indexing = use_indexing ??
+      (ase_binary || data_size > TEXT_INDEX_THRESHOLD)
 
     if (is_large_file) {
       update_progress(5, `Large file detected (${Math.round(data_size / 1024 / 1024)}MB)`)

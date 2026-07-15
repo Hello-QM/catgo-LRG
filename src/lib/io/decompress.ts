@@ -45,11 +45,20 @@ export async function decompress_data(
   }
 }
 
+/** Formats that must reach the parsers as raw bytes. Reading these as text
+ *  garbles the binary irreversibly: an ASE .traj picked in a browser (the
+ *  static web deploy has no backend to stream through) hit every text parser
+ *  as mojibake and failed with "Unsupported text format" even though a
+ *  client-side ulm parser exists (`parse_ase_trajectory`). */
+const BINARY_STRUCTURE_EXTS = /\.(traj|h5|hdf5)$/i
+
 export function decompress_file(
   file: File,
-): Promise<{ content: string; filename: string }> {
+): Promise<{ content: string | ArrayBuffer; filename: string }> {
   const format = detect_compression_format(file.name)
   const is_supported = Boolean(format && ![`zip`, `xz`, `bz2`].includes(format))
+  const base_name = file.name.replace(COMPRESSION_EXTENSIONS_REGEX, ``)
+  const wants_binary = BINARY_STRUCTURE_EXTS.test(base_name)
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -60,11 +69,21 @@ export function decompress_file(
         if (!result) throw new Error(`Failed to read file`)
 
         if (is_supported && format) {
-          const content = await decompress_data(result as ArrayBuffer, format)
-          const filename = file.name.replace(COMPRESSION_EXTENSIONS_REGEX, ``)
-          resolve({ content, filename })
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(result as ArrayBuffer))
+              controller.close()
+            },
+          })
+          const unzipped = stream.pipeThrough(
+            new DecompressionStream(format as `gzip` | `deflate` | `deflate-raw`),
+          )
+          const content = wants_binary
+            ? await new Response(unzipped).arrayBuffer()
+            : await new Response(unzipped).text()
+          resolve({ content, filename: base_name })
         } else {
-          resolve({ content: result as string, filename: file.name })
+          resolve({ content: result as string | ArrayBuffer, filename: file.name })
         }
       } catch (error) {
         reject(error)
@@ -73,7 +92,7 @@ export function decompress_file(
 
     reader.onerror = () => reject(new Error(`Failed to read file ${file.name}`))
 
-    if (is_supported) reader.readAsArrayBuffer(file)
+    if (is_supported || wants_binary) reader.readAsArrayBuffer(file)
     else reader.readAsText(file)
   })
 }
