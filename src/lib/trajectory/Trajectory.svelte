@@ -25,6 +25,7 @@
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
   import { full_data_extractor } from './extract'
+  import { create_frame_position_cache } from './frame-positions'
   import type {
     ParseProgress,
     TrajectoryDataExtractor,
@@ -503,6 +504,10 @@
   let position_cache: Float32Array[] | null = null
   // Force cache: flat Float32Array of [fx,fy,fz] per atom per frame (null if no forces)
   let force_cache: Float32Array[] | null = null
+  // Indexed/streaming trajectories get no position_cache; this memoizes a
+  // transient positions array per frame index instead (stable Float32Array
+  // reference = bond frame-connectivity cache key stays valid on revisit).
+  const frame_pos_cache = create_frame_position_cache()
 
   // B3: null caches when the underlying frames array identity changes — i.e. a
   // real trajectory swap (loader assignment OR bind:trajectory parent reassignment
@@ -640,6 +645,9 @@
   $effect(() => {
     trajectory // track
     topology_initialized = false
+    // New trajectory identity (load, swap, or flush_pending_ops spread):
+    // memoized per-frame position arrays are stale — drop them.
+    frame_pos_cache.clear()
   })
 
   $effect(() => {
@@ -690,11 +698,33 @@
       // limitation; acceptable until a non-cascading writeback path exists.
     } else {
       // Indexed/streaming trajectories: no Float32Array cache available.
-      // Fall back to per-frame structure writes (slow path). This is the
-      // pre-Phase-4 behavior and is acceptable for the large-file workflow.
-      current_structure = frame.structure
-      trajectory_frame_positions = null
-      trajectory_frame_forces = null
+      // Constant-topology frames still get Architecture-P-style playback:
+      // materialize a memoized per-frame positions array and keep
+      // current_structure static, so the scene's trajectory bond fast-path
+      // (frame-connectivity cache + latest-wins async + stale-render) keeps
+      // bonds visible every frame. Before this, each frame re-wrote
+      // current_structure and re-entered the static bond pipeline, whose
+      // generation counter dropped almost every in-flight worker result
+      // during playback — bonds flashed only on the few frames where the
+      // worker beat the next frame advance (>1000-atom indexed files).
+      // Topology changes (variable atom count), force_slow_path sources
+      // (element-swap frames), and pending edit ops keep the true
+      // per-frame structure-write path.
+      const frame_sites = frame.structure.sites
+      if (
+        !force_slow_path && topology_initialized &&
+        current_structure?.sites.length === frame_sites.length &&
+        pending_ops.length === 0
+      ) {
+        const entry = frame_pos_cache.get(current_step_idx, frame_sites)
+        trajectory_frame_positions = entry.positions
+        trajectory_frame_forces = entry.forces
+      } else {
+        current_structure = frame.structure
+        topology_initialized = !force_slow_path && pending_ops.length === 0
+        trajectory_frame_positions = null
+        trajectory_frame_forces = null
+      }
     }
   })
 
