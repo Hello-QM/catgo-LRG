@@ -1,0 +1,193 @@
+# Mirror release assets to Cloudflare R2 so users in mainland China (where
+# GitHub is often unreachable) can download CatGo and receive in-app updates.
+#
+# Layout in the bucket (keep-only-latest policy):
+#   <tag>/<asset>   e.g. v1.4.5/CatGo_1.4.5_x64-setup.exe
+#   latest.json     updater manifest with URLs rewritten to the mirror
+#   index.html      minimal bilingual download page listing the current assets
+# Older <tag>/ prefixes are pruned after a successful sync, so storage stays
+# within R2's 10 GB free tier (~2.8 GB per release). Egress from R2 is free.
+#
+# One-time setup (Cloudflare dashboard):
+#   1. R2 → Create bucket `catgo-releases`.
+#   2. Bucket → Settings → Custom Domains → add `dl.catgo-ucsd.org`
+#      (the zone is already on this Cloudflare account).
+#   3. R2 → Manage API Tokens → create a token with Object Read & Write on the
+#      bucket; add its credentials as repo secrets:
+#        R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY
+#      (CLOUDFLARE_ACCOUNT_ID already exists as a secret.)
+#   Optional repo variables (defaults in env below): R2_BUCKET, R2_PUBLIC_BASE_URL.
+#
+# Triggers: `release: published` — but note releases published by workflows
+# using GITHUB_TOKEN do NOT fire this event (same gotcha as pypi-publish.yml),
+# and manual asset uploads (e.g. the iOS .ipa) may land after publication.
+# When in doubt, run the workflow_dispatch form with the tag — the sync is
+# idempotent and safe to re-run any number of times.
+
+name: Mirror release to R2
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to mirror (e.g. v1.4.5); empty = latest release'
+        required: false
+        default: ''
+
+concurrency:
+  group: r2-release-mirror
+  cancel-in-progress: true
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  R2_BUCKET: ${{ vars.R2_BUCKET || 'catgo-releases' }}
+  R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL || 'https://dl.catgo-ucsd.org' }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+  AWS_ENDPOINT_URL: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+  # aws-cli >= 2.23 sends CRC checksums by default, which R2's S3 API rejects.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check R2 credentials configured
+        id: creds
+        run: |
+          if [ -z "${AWS_ACCESS_KEY_ID}" ] || [ -z "${AWS_SECRET_ACCESS_KEY}" ]; then
+            echo "R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY secrets not set — skipping mirror." >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve tag
+        id: tag
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            tag="${{ github.event.release.tag_name }}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Mirroring release: $tag"
+
+      - name: Wait for asset list to stabilize
+        # Build workflows attach assets asynchronously after the release is
+        # published. Poll until the asset count is unchanged for 3 consecutive
+        # minutes (skipped on manual dispatch — by then the release is done).
+        if: steps.creds.outputs.configured == 'true' && github.event_name == 'release'
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          prev=-1; stable=0
+          for i in $(seq 1 30); do
+            count=$(gh api "repos/${{ github.repository }}/releases/tags/$tag" --jq '.assets | length')
+            echo "poll $i: $count assets"
+            if [ "$count" = "$prev" ]; then
+              stable=$((stable + 1))
+              [ "$stable" -ge 3 ] && break
+            else
+              stable=0
+            fi
+            prev=$count
+            sleep 60
+          done
+
+      - name: Download release assets
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          mkdir -p dist
+          gh release download '${{ steps.tag.outputs.tag }}' \
+            --repo '${{ github.repository }}' --dir dist
+          ls -lh dist
+
+      - name: Rewrite latest.json URLs to the mirror
+        # latest.json is the Tauri updater manifest; its asset URLs point at
+        # github.com, which defeats the purpose for users behind the GFW.
+        # Point them at the mirror instead and serve the manifest from the
+        # bucket root (the updater endpoint in tauri.conf.json).
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          if [ -f dist/latest.json ]; then
+            jq --arg base "$R2_PUBLIC_BASE_URL" '
+              .platforms |= map_values(
+                .url |= sub("https://github.com/[^/]+/[^/]+/releases/download/"; $base + "/")
+              )' dist/latest.json > latest.mirror.json
+            jq . latest.mirror.json > /dev/null
+          else
+            echo "no latest.json in this release — skipping manifest rewrite"
+          fi
+
+      - name: Generate index.html download page
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          {
+            echo '<!doctype html><meta charset="utf-8">'
+            echo "<title>CatGo downloads — $tag</title>"
+            echo '<style>body{font-family:system-ui;max-width:720px;margin:3rem auto;padding:0 1rem}td{padding:.3rem .8rem}</style>'
+            echo "<h1>CatGo $tag</h1>"
+            echo '<p>中国大陆下载镜像 / China download mirror.'
+            echo '完整发布说明见 <a href="https://github.com/${{ github.repository }}/releases">GitHub Releases</a>.</p>'
+            echo '<table>'
+            for f in dist/*; do
+              name=$(basename "$f")
+              size=$(du -h "$f" | cut -f1)
+              echo "<tr><td><a href=\"$tag/$name\">$name</a></td><td>$size</td></tr>"
+            done
+            echo '</table>'
+          } > index.html
+
+      - name: Sync to R2
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          aws s3 sync dist/ "s3://$R2_BUCKET/$tag/"
+          if [ -f latest.mirror.json ]; then
+            aws s3 cp latest.mirror.json "s3://$R2_BUCKET/latest.json" \
+              --content-type application/json --cache-control 'public, max-age=300'
+          fi
+          aws s3 cp index.html "s3://$R2_BUCKET/index.html" \
+            --content-type 'text/html; charset=utf-8' --cache-control 'public, max-age=300'
+
+      - name: Prune older releases (keep only the latest)
+        # Only prune when the tag we just synced IS the repo's latest release —
+        # a manual backfill of an old tag must not delete the current one.
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          latest=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          if [ "$tag" != "$latest" ]; then
+            echo "synced $tag but latest is $latest — skipping prune"
+            exit 0
+          fi
+          aws s3api list-objects-v2 --bucket "$R2_BUCKET" --delimiter / \
+            --query 'CommonPrefixes[].Prefix' --output text 2>/dev/null | tr '\t' '\n' | \
+          while read -r prefix; do
+            [ -z "$prefix" ] || [ "$prefix" = "None" ] && continue
+            if [ "$prefix" != "$tag/" ]; then
+              echo "pruning stale prefix: $prefix"
+              aws s3 rm "s3://$R2_BUCKET/$prefix" --recursive
+            fi
+          done
+
+      - name: Summary
+        if: steps.creds.outputs.configured == 'true'
+        run: |
+          tag='${{ steps.tag.outputs.tag }}'
+          {
+            echo "### Mirrored $tag to R2"
+            echo ""
+            echo "- Download page: $R2_PUBLIC_BASE_URL/"
+            echo "- Updater manifest: $R2_PUBLIC_BASE_URL/latest.json"
+            echo "- Assets: $R2_PUBLIC_BASE_URL/$tag/<file>"
+          } >> "$GITHUB_STEP_SUMMARY"

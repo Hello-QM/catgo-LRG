@@ -288,6 +288,8 @@ catgo --help
 
 下表所有链接都指向**最新发布版**，随版本更新自动保持最新 —— 当前版本：[![最新版本](https://img.shields.io/github/v/release/Hello-QM/catgo-LRG?label=latest&sort=semver)](https://github.com/Hello-QM/catgo-LRG/releases/latest)。在发布页选择对应平台的文件（见 **文件** 列）。历史版本与校验和见 [全部 Releases](https://github.com/Hello-QM/catgo-LRG/releases)。
 
+> **中国大陆镜像：** 无法访问 GitHub 时，可从 [dl.catgo-ucsd.org](https://dl.catgo-ucsd.org/) 下载最新版安装包；或通过 PyPI 镜像安装：`pip install catgo -i https://pypi.tuna.tsinghua.edu.cn/simple`，然后运行 `catgo`。
+
 | 系统                       | 获取最新版                                                         | 发布页上的文件                                                   |
 | ------------------------ | ------------------------------------------------------------- | --------------------------------------------------------- |
 | **Windows**              | [⬇ 下载](https://github.com/Hello-QM/catgo-LRG/releases/latest) | `CatGo_<ver>_x64-setup.exe` 或 `CatGo_<ver>_x64_en-US.msi` |
