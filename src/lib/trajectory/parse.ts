@@ -362,7 +362,11 @@ async function parse_with_unified_loader(
   )
 
   on_progress?.({ current: 50, total: 100, stage: `Loading initial frames...` })
-  const initial_frame_count = Math.min(10, total_frames)
+  // First render needs frame 0 (topology) + a couple of lookahead frames; the
+  // loader parses the rest on demand. Each initial frame of a 20k-atom file
+  // costs a full chunk parse + site-object build, so eager-loading 10 was a
+  // visible slice of time-to-first-frame.
+  const initial_frame_count = Math.min(4, total_frames)
   const frame_promises = Array.from(
     { length: initial_frame_count },
     (_, idx) => loader.load_frame(data, idx),
@@ -370,25 +374,18 @@ async function parse_with_unified_loader(
   const loaded_frames = await Promise.all(frame_promises)
   const frames = loaded_frames.filter((frame): frame is TrajectoryFrame => frame !== null)
 
-  let plot_metadata: TrajectoryMetadata[] | undefined
+  // The plot-metadata extraction walks EVERY frame of the file (seconds for a
+  // 48 MB trajectory) — never block first render on it. Ship the trajectory
+  // now with the in-flight scan attached; Trajectory.svelte adopts it on
+  // arrival (same contract as load_remote_trajectory).
+  let plot_metadata_promise: Promise<TrajectoryMetadata[]> | undefined
   if (extract_plot_metadata) {
-    on_progress?.({ current: 70, total: 100, stage: `Extracting plot metadata...` })
-    try {
-      plot_metadata = await loader.extract_plot_metadata(
-        data,
-        { sample_rate: 1 },
-        (progress) => {
-          const adjusted = 70 + (progress.current / 100) * 20
-          on_progress?.({
-            current: adjusted,
-            total: 100,
-            stage: `Extracting: ${progress.stage}`,
-          })
-        },
-      )
-    } catch (error) {
-      console.warn(`Failed to extract plot metadata:`, error)
-    }
+    plot_metadata_promise = loader
+      .extract_plot_metadata(data, { sample_rate: 1 })
+      .catch((error) => {
+        console.warn(`Failed to extract plot metadata:`, error)
+        return [] as TrajectoryMetadata[]
+      })
   }
 
   const stage = `Ready: ${total_frames} frames indexed`
@@ -404,7 +401,7 @@ async function parse_with_unified_loader(
     },
     total_frames,
     indexed_frames: frame_index,
-    plot_metadata,
+    plot_metadata_promise,
     is_indexed: true,
   }
 }
