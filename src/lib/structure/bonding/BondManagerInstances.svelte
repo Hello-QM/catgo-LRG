@@ -414,6 +414,7 @@
 
   let last_overrides_ref: Map<string, number> | ReadonlyMap<string, number> | undefined
   let last_periodic_op = 1
+  let last_defaults_written = false
 
   $effect(() => {
     if (!renderer) return
@@ -425,6 +426,24 @@
 
     const count = mgr.count
     if (count === 0) return
+
+    // Defaults fast path. With no overrides and periodic opacity 1 every
+    // write below is a compare-noop, but each one still allocates a string
+    // bond key — ~26k short-lived strings per version bump, every frame
+    // during typed-direct trajectory playback. The all-1s buffer invariant
+    // holds across topology churn: ensure_opacity() and the capacity grow
+    // both fill(1), replace_auto_bonds never touches opacity, and this
+    // effect is the only set_opacity caller — so once a full default pass
+    // has run, later default passes can skip the loop entirely.
+    const defaults = (overrides === undefined || overrides.size === 0) &&
+      periodic_op === 1
+    if (defaults && last_defaults_written) {
+      last_overrides_ref = overrides
+      last_periodic_op = periodic_op
+      void _version
+      void _size
+      return
+    }
 
     const pairs = mgr.pairs_buffer
     const jimages = mgr.jimages_buffer
@@ -453,6 +472,7 @@
     }
     last_overrides_ref = overrides
     last_periodic_op = periodic_op
+    last_defaults_written = defaults
     void _version
     void _size
   })
