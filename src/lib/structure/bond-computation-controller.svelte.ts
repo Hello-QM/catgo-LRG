@@ -1064,15 +1064,15 @@ const traj_max_dist_cache = new WeakMap<object, {
   tol: number
   max_dists: Float64Array
 }>()
+/** Per-site covalent radii keyed by the sites array identity. Sites are
+ *  Svelte 5 deep proxies at 20k atoms — scanning species per site costs
+ *  ~30ms per pass, so it must run once per trajectory, not once per
+ *  connectivity refresh (connectivity identity changes every frame). */
+const traj_site_radii_cache = new WeakMap<object, Float64Array>()
 
-function get_traj_max_dists(
-  bond_connectivity: ReadonlyArray<{ site_idx_1: number; site_idx_2: number }>,
-  sites: ReadonlyArray<Site>,
-  tol: number,
-): Float64Array {
-  const cached = traj_max_dist_cache.get(bond_connectivity)
-  if (cached && cached.sites === sites && cached.tol === tol) return cached.max_dists
-
+function get_traj_site_radii(sites: ReadonlyArray<Site>): Float64Array {
+  const cached = traj_site_radii_cache.get(sites)
+  if (cached) return cached
   const n_sites = sites.length
   const radii = new Float64Array(n_sites).fill(NaN)
   for (let idx = 0; idx < n_sites; idx++) {
@@ -1090,7 +1090,19 @@ function get_traj_max_dists(
     const pm = entry?.covalent_radius_pm
     if (typeof pm === `number` && pm > 0) radii[idx] = pm / 100 // pm → Å
   }
+  traj_site_radii_cache.set(sites, radii)
+  return radii
+}
 
+function get_traj_max_dists(
+  bond_connectivity: ReadonlyArray<{ site_idx_1: number; site_idx_2: number }>,
+  sites: ReadonlyArray<Site>,
+  tol: number,
+): Float64Array {
+  const cached = traj_max_dist_cache.get(bond_connectivity)
+  if (cached && cached.sites === sites && cached.tol === tol) return cached.max_dists
+
+  const radii = get_traj_site_radii(sites)
   const max_dists = new Float64Array(bond_connectivity.length)
   for (let bond = 0; bond < bond_connectivity.length; bond++) {
     const conn = bond_connectivity[bond]
