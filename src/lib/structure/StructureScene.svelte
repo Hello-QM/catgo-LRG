@@ -2608,6 +2608,38 @@
   let __bbp_prev_traj: unknown = null
   let __bbp_skips = 0
   let __bbp_was_suspended = false
+  // ═══ Hidden/deleted Set-prop bridges ═══
+  // Bridge Set props to local state — $derived.by() doesn't track Set prop
+  // reassignment reliably across component boundaries, but $effect does
+  // (see CLAUDE.md [2026-03-04]). Without the deleted-keys bridge, a bond
+  // undo that only mutates deleted_bond_keys never wakes filtered_bond_pairs
+  // and the shadow sync removes the just-restored bond; without the
+  // prop-vals bridge, toggling property-value visibility silently fails to
+  // refresh derivations.
+  //
+  // DECLARATION ORDER MATTERS: these MUST sit above the build_bond_pairs
+  // $effect.pre below — its typed-direct eligibility check reads all four.
+  // When they were declared later in the file, the production (Rollup)
+  // bundle threw "Cannot access '<minified>' before initialization" the
+  // moment any StructureScene rendered — a TDZ the dev server's module
+  // scheduling never surfaced. Keep every $state a bond-pipeline effect
+  // reads ABOVE that effect.
+  let _hidden_elements = $state(new Set<ElementSymbol>())
+  $effect(() => {
+    _hidden_elements = new Set(hidden_elements ?? [])
+  })
+  let _hidden_sites = $state(new Set<number>())
+  $effect(() => {
+    _hidden_sites = new Set(hidden_sites ?? [])
+  })
+  let _deleted_bond_keys = $state(new Set<string>())
+  $effect(() => {
+    _deleted_bond_keys = new Set(deleted_bond_keys ?? [])
+  })
+  let _hidden_prop_vals = $state(new Set<number | string>())
+  $effect(() => {
+    _hidden_prop_vals = new Set(hidden_prop_vals ?? [])
+  })
   // ═══ Typed-direct playback mode ═══
   // During eligible trajectory playback the frame connectivity is written
   // straight into bond_manager (replace_auto_bonds) and the BondPair object
@@ -3075,31 +3107,8 @@
   let show_bulk_atoms = $derived.by(() => compute_show_bulk_atoms(show_atoms, cutting_active, cutting_preview_mode))
 
   // desaturate_color is imported from ./scene/render-data
-
-  // Bridge hidden_elements prop to local state — $derived doesn't track Set prop changes reliably
-  let _hidden_elements = $state(new Set<ElementSymbol>())
-  $effect(() => {
-    _hidden_elements = new Set(hidden_elements ?? [])
-  })
-  let _hidden_sites = $state(new Set<number>())
-  $effect(() => {
-    _hidden_sites = new Set(hidden_sites ?? [])
-  })
-  // Set-prop bridge (see CLAUDE.md [2026-03-04]): $derived.by() doesn't track
-  // Set prop reassignment reliably across component boundaries, but $effect does.
-  // Without this, a bond undo that only mutates deleted_bond_keys never wakes
-  // filtered_bond_pairs, and the shadow sync removes the just-restored bond.
-  let _deleted_bond_keys = $state(new Set<string>())
-  $effect(() => {
-    _deleted_bond_keys = new Set(deleted_bond_keys ?? [])
-  })
-  // Same pattern for hidden_prop_vals — read inside atom_data and filtered_bond_pairs
-  // $derived.by() blocks. Without this bridge, toggling property-value visibility
-  // (e.g. hide CN=6) silently fails to refresh derivations.
-  let _hidden_prop_vals = $state(new Set<number | string>())
-  $effect(() => {
-    _hidden_prop_vals = new Set(hidden_prop_vals ?? [])
-  })
+  // (The hidden/deleted Set-prop bridges were hoisted above the
+  // build_bond_pairs $effect.pre — see the TDZ note at their declaration.)
 
   // ═══ Hidden-site id set for the Phase X3 atom renderer ═══
   // Only evaluated when USE_NEW_ATOM_SYSTEM is true — the legacy AtomImpostors
