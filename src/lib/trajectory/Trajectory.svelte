@@ -101,7 +101,7 @@
     fullscreen_toggle = DEFAULTS.trajectory.fullscreen_toggle,
     auto_play = false,
     reduced_motion = false,
-    display_mode = $bindable(`structure+scatter`),
+    display_mode = $bindable(`structure`),
     step_labels = 5,
     on_play,
     on_pause,
