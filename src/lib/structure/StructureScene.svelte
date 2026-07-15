@@ -3447,9 +3447,14 @@
     // During trajectory playback `bond_struct.sites[].xyz` are the loaded
     // frame, not the one on screen. Pass the animated frame positions so ruled
     // bonds track the trajectory instead of freezing at frame 0.
+    // Read the positions ONLY when rules exist: with no rules the pass is an
+    // identity and reading `trajectory_frame_positions` here would subscribe
+    // this $derived to every frame tick — during typed-direct playback that
+    // re-filtered the FROZEN bond_pairs each frame and woke the shadow sync
+    // with stale (entry-frame) topology, overwriting the typed writes.
     const ruled_bonds = apply_bond_distance_rules(
       bond_struct, lat_matrix, bond_pairs, bond_distance_rules ?? [],
-      trajectory_frame_positions ?? null,
+      _rules_len > 0 ? trajectory_frame_positions ?? null : null,
     )
 
     const is_site_visible = (site_idx: number) => {
@@ -3665,6 +3670,13 @@
   // update manual_bonds), this effect sees a new entry in filtered_bond_pairs
   // and adds it incrementally — sparse dirty_slots, fast GPU sync.
   $effect(() => {
+    // Typed-direct playback owns bond_manager — the object pipeline is
+    // frozen at the entry frame, so mirroring it here would overwrite the
+    // per-frame typed topology with stale bonds (stretched-bond artifacts).
+    // Reading the gate subscribes this effect: when the pause tail-sync
+    // drops it (right after publishing fresh bond_pairs), this re-fires and
+    // reconciles against the rebuilt pairs — a no-op diff.
+    if (typed_direct_active) return
     const mgr = bond_manager
 
     const pairs_list = filtered_bond_pairs
