@@ -340,13 +340,27 @@ def _atoms_to_frame(n: int, atoms: Any) -> dict[str, Any]:
         props["energy"] = float(atoms.get_potential_energy())
     except Exception:
         pass
-    return {
+    frame: dict[str, Any] = {
         "frame_number": n,
         "elements": list(atoms.get_chemical_symbols()),
         "positions": atoms.get_positions().tolist(),
         "comment": "",
         "properties": props,
     }
+    # Periodic frames must carry their cell. Without it the viewer builds a
+    # lattice-less structure, ferrox-wasm falls back to pbc=[F,F,F] brute-force
+    # neighbor search, and a 20k-atom .traj frame takes ~4s instead of ~0.1s
+    # per bond pass (and cross-cell bonds are wrong). ASE .traj and LAMMPS
+    # dump frames both land here; XDATCAR has its own reader that already
+    # emits `lattice`.
+    try:
+        if getattr(atoms, "pbc", None) is not None and atoms.pbc.any():
+            cell = atoms.get_cell()
+            if cell is not None and abs(float(cell.volume)) > 1e-9:
+                frame["lattice"] = [list(map(float, row)) for row in cell]
+    except Exception:
+        pass
+    return frame
 
 
 def _read_lammps_frame(p: Path, idx: _TrajIndex, n: int) -> dict[str, Any]:
