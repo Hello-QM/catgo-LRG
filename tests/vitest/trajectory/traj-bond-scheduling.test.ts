@@ -18,6 +18,10 @@ vi.mock('$lib/structure/workers/bond-worker-api', () => ({
   compute_bonds_sync: vi.fn(() => null),
   compute_bonds_async: vi.fn(() => Promise.resolve([])),
   compute_hbonds_worker: vi.fn(() => Promise.resolve([])),
+  // Typed worker unavailable → dispatch falls back to the JSON path, keeping
+  // these tests' compute_bonds_async assertions meaningful.
+  compute_bonds_typed_worker: vi.fn(() => Promise.resolve(null)),
+  effective_strategy: vi.fn((strategy: string) => strategy),
 }))
 
 import {
