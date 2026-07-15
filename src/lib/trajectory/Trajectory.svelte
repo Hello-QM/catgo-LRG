@@ -1584,17 +1584,30 @@
     _apply_topology_op({ kind: `replace`, site_indices: event.site_indices, new_element: event.new_element })
   }
 
+  // Memoized on structure identity: the manifest refresh effect re-runs per
+  // frame (it reads current_frame), and this used to walk all sites through
+  // the $state proxy twice per refresh. During fixed-topology playback
+  // current_structure is frozen → O(1) per frame; slow-path trajectories
+  // (doping element swaps) replace current_structure per frame and correctly
+  // recompute.
+  const manifest_formula_cache = new WeakMap<object, string>()
   function manifest_formula(): string {
-    const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+    const structure = current_structure ?? current_frame?.structure ??
+      trajectory?.frames?.[current_step_idx]?.structure
+    if (!structure) return ``
+    const cached = manifest_formula_cache.get(structure as object)
+    if (cached !== undefined) return cached
     const counts = new Map<string, number>()
-    for (const site of structure?.sites ?? []) {
+    for (const site of structure.sites ?? []) {
       const el = site.species?.[0]?.element ?? site.label ?? `?`
       counts.set(el, (counts.get(el) ?? 0) + 1)
     }
-    return [...counts.entries()]
+    const formula = [...counts.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([el, n]) => n === 1 ? el : `${el}${n}`)
       .join(``)
+    manifest_formula_cache.set(structure as object, formula)
+    return formula
   }
 
   function inspect_trajectory_atoms() {

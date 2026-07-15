@@ -167,10 +167,18 @@ export function compute_structure_size(lattice: PymatgenLattice | null): number 
  * it uniformly toward the background. Fog range should use THIS instead.
  * Returns null when there are no atoms.
  */
+// Memoized on structure identity: callers invoke this from the per-render
+// task whenever depth cueing or outlines are on, and the O(N) proxied site
+// walk is constant for a given structure object (during trajectory playback
+// the structure stays frozen while only typed-array positions change).
+const atom_span_cache = new WeakMap<object, number>()
+
 export function compute_atom_span_radius(
   structure: AnyStructure | undefined,
 ): number | null {
   if (!structure?.sites?.length) return null
+  const cached = atom_span_cache.get(structure as object)
+  if (cached !== undefined) return cached
   let min_x = Infinity, max_x = -Infinity
   let min_y = Infinity, max_y = -Infinity
   let min_z = Infinity, max_z = -Infinity
@@ -183,7 +191,9 @@ export function compute_atom_span_radius(
     if (z < min_z) min_z = z
     if (z > max_z) max_z = z
   }
-  return Math.max(max_x - min_x, max_y - min_y, max_z - min_z) / 2
+  const span = Math.max(max_x - min_x, max_y - min_y, max_z - min_z) / 2
+  atom_span_cache.set(structure as object, span)
+  return span
 }
 
 /**

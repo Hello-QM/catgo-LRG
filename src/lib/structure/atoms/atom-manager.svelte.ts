@@ -200,6 +200,12 @@ export class AtomManager {
 	#opacities_batch_changed = false
 	#saturations_batch_depth = 0
 	#saturations_batch_changed = false
+	// Positions batch: trajectory playback writes every atom's position each
+	// frame; without batching that is one reactive `#version` $state write
+	// PER ATOM (20k/frame — the dominant main-thread cost of playback, worse
+	// in dev where each write also captures a stack trace).
+	#positions_batch_depth = 0
+	#positions_batch_changed = false
 
 	constructor(initial_capacity: number = INITIAL_CAPACITY) {
 		const cap = Math.max(1, initial_capacity | 0)
@@ -861,7 +867,20 @@ export class AtomManager {
 		this.#positions[base + 1] = fy
 		this.#positions[base + 2] = fz
 		this.#touch_position(slot)
-		this.#version++
+		if (this.#positions_batch_depth > 0) this.#positions_batch_changed = true
+		else this.#version++
+	}
+
+	begin_positions_batch(): void {
+		this.#positions_batch_depth++
+	}
+	commit_positions_batch(): void {
+		if (this.#positions_batch_depth === 0) return
+		this.#positions_batch_depth--
+		if (this.#positions_batch_depth === 0 && this.#positions_batch_changed) {
+			this.#positions_batch_changed = false
+			this.#version++
+		}
 	}
 
 	set_radius(slot: number, radius: number): void {
