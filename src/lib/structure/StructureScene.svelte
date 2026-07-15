@@ -4838,6 +4838,24 @@
     return { destroy: () => el.remove() }
   }
 
+  // Interactive overlays must NOT go through site_label_portal: threlte.dom
+  // forms its own stacking context that sits under sibling overlays like the
+  // atom legend (z-index 1), so a child's z-index can never lift it above
+  // them — real mouse clicks land on the legend while programmatic .click()
+  // still "works" (no hit test). Mount interactive banners one level up,
+  // as a sibling of those overlays, where their z-index actually applies.
+  function interactive_overlay_portal(el: HTMLDivElement) {
+    // The canvas-area wrapper between threlte.dom and .structure-main has
+    // z-index:0 (its own stacking context), so nothing inside it can ever
+    // stack above the atom legend, which is a DIRECT child of
+    // .structure-main. Mount interactive overlays on .structure-main itself.
+    const target = threlte.dom?.closest(`.structure-main`) ??
+      threlte.dom?.parentElement ?? threlte.dom
+    if (!target) return
+    target.append(el)
+    return { destroy: () => el.remove() }
+  }
+
   // Trigger a frame when label visibility changes, so the site-label
   // useTask can project the overlay DOM positions on its next run.
   $effect(() => {
@@ -6178,7 +6196,7 @@
      overrides the container's pointer-events:none so it stays clickable. -->
 {#if bonds_deferred && show_bonds !== `never`}
   <div
-    use:site_label_portal
+    use:interactive_overlay_portal
     class="bonds-deferred-banner"
     style:position="absolute"
     style:bottom="12px"
@@ -6258,7 +6276,10 @@
     font-size: 0.75em;
     white-space: nowrap;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    z-index: 5;
+    /* Above the atom legend (z-index 1) — the banner is interactive and the
+       two can overlap at narrow widths; the legend must not eat its clicks. */
+    z-index: 10;
+    pointer-events: auto;
   }
   .bonds-deferred-banner button {
     font: inherit;
