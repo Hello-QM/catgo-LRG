@@ -883,6 +883,9 @@
     trajectory_context,
     trajectory_frame_positions = null,
     trajectory_frame_forces = null as Float32Array | null,
+    // Variable-cell trajectory fast-path: displayed frame's lattice matrix
+    // (rows = a,b,c). Identity-stable across frames for fixed cells.
+    trajectory_frame_lattice = null as number[][] | null,
     trajectory_step_idx = -1,
     trajectory_positions_version = { v: 0, all: false },
     get_trajectory_frame_positions = null as ((i: number) => Float32Array | null) | null,
@@ -1058,6 +1061,9 @@
       trajectory_frame_positions?: Float32Array | null
       // Trajectory fast-path: flat Float32Array of forces (fx,fy,fz triples) for current frame
       trajectory_frame_forces?: Float32Array | null
+      // Variable-cell trajectory fast-path: displayed frame's lattice matrix
+      // (rows = a,b,c). Identity-stable across frames when the cell is fixed.
+      trajectory_frame_lattice?: number[][] | null
       // Active trajectory frame index (for per-frame bond cache).
       trajectory_step_idx?: number
       // Bumps when the current trajectory frame's positions change in place
@@ -4402,6 +4408,7 @@
             {webgl_suspended}
             {trajectory_frame_positions}
             {trajectory_frame_forces}
+            {trajectory_frame_lattice}
             {trajectory_step_idx}
             {...scene_props}
             {show_image_atoms}
