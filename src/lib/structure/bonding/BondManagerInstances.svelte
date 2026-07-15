@@ -15,6 +15,7 @@
   } from 'three'
   import { get_bond_key } from '../bonding'
   import { BondInstancedRenderer, type PartnerDrawnLookup } from './bond-instanced-renderer'
+  import { bond_lod_segments } from './bond-lod'
   import type { BondManager } from './bond-manager.svelte'
   import type { ImageAtomLayout } from './image-atom-layout'
 
@@ -685,11 +686,27 @@
     })
   })
 
-  // Geometry rebuilds reactively when bond_radius changes. Threlte's
-  // `args` reconciliation reconstructs the InstancedMesh, which drops the
-  // mesh ref — the renderer effect below then reinitialises and
-  // force_full_resync()s every slot's matrix, preserving bond data.
-  const geometry = $derived(new CylinderGeometry(bond_radius, bond_radius, 1, 16))
+  // Geometry rebuilds reactively when bond_radius OR the LOD segment count
+  // changes. Threlte's `args` reconciliation reconstructs the InstancedMesh,
+  // which drops the mesh ref — the renderer effect below then reinitialises
+  // and force_full_resync()s every slot's matrix, preserving bond data.
+  //
+  // Segment LOD: a large system drops to fewer cylinder segments *while
+  // playing* (gpu_transform_active) and restores full segments on pause —
+  // motion hides the facets, a paused frame does not. The rebuild fires only
+  // on the play/pause EDGE (gpu_transform_active flips), never per frame:
+  // atom_positions gets a fresh identity every frame, so its length is read
+  // UNTRACKED (the count only matters at a play/pause edge, which re-runs this
+  // derived and re-reads it). Tracking it would rebuild the whole mesh every
+  // frame — the exact per-frame churn the trajectory fast-path exists to kill.
+  const geometry = $derived.by(() => {
+    const playing = gpu_transform_active
+    const radius = bond_radius
+    const segments = untrack(() =>
+      bond_lod_segments(atom_positions.length / 3, playing)
+    )
+    return new CylinderGeometry(radius, radius, 1, segments)
+  })
 
   $effect(() => {
     // Tracked deps: ONLY the mesh binding and manager identity — the body
