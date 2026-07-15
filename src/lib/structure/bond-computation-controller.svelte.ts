@@ -1228,6 +1228,107 @@ export function build_trajectory_bond_pairs(
   return out
 }
 
+/** Shared scratch for `conn_to_typed_topology` — grown, never shrunk. The
+ *  returned views alias these buffers, so each result is valid only until
+ *  the next call; `BondManager.replace_auto_bonds` copies synchronously. */
+let typed_topo_scratch: { pairs: Uint32Array; jimages: Int8Array } | null = null
+
+/**
+ * Typed-direct playback path: convert frame connectivity straight into the
+ * flat (pairs, jimages) topology consumed by `BondManager.replace_auto_bonds`,
+ * skipping BondPair object construction entirely.
+ *
+ * Filter parity with the object pipeline (`build_trajectory_bond_pairs` +
+ * `visible_bond_pairs`):
+ *   - stale-distance pre-filter via `get_traj_max_dists` (NaN → skip check)
+ *   - self-image starbursts (a == b with non-zero jimage) dropped
+ *   - `max_bond_length` hard cap (the caller passes MAX_BOND_LENGTH); the
+ *     squared compare also drops non-finite geometry (NaN fails `<=`)
+ *
+ * Returns null when any endpoint index is outside the frame buffer coverage
+ * (supercell-extra atoms live in the AtomManager, not the frame) — callers
+ * must fall back to the object path.
+ */
+export function conn_to_typed_topology(
+  bond_connectivity: ReadonlyArray<
+    {
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage?: [number, number, number]
+    }
+  >,
+  trajectory_frame_positions: Float32Array,
+  lattice_matrix?: number[][] | null,
+  sites?: ReadonlyArray<Site> | null,
+  bond_tolerance?: number,
+  max_bond_length?: number,
+): { pairs: Uint32Array; jimages: Int8Array; count: number } | null {
+  const n = bond_connectivity.length
+  const traj_max_site = Math.floor(trajectory_frame_positions.length / 3)
+  const tol = typeof bond_tolerance === `number` && bond_tolerance > 0
+    ? bond_tolerance
+    : DEFAULT_BOND_TOLERANCE
+  const max_dists = sites
+    ? get_traj_max_dists(bond_connectivity, sites, tol)
+    : null
+  const cap_sq = typeof max_bond_length === `number` && max_bond_length > 0
+    ? max_bond_length * max_bond_length
+    : Infinity
+  const lat = (lattice_matrix && lattice_matrix.length === 3) ? lattice_matrix : null
+
+  if (typed_topo_scratch === null || typed_topo_scratch.pairs.length < n * 2) {
+    typed_topo_scratch = {
+      pairs: new Uint32Array(Math.max(n, 1024) * 2),
+      jimages: new Int8Array(Math.max(n, 1024) * 3),
+    }
+  }
+  const pairs = typed_topo_scratch.pairs
+  const jimages = typed_topo_scratch.jimages
+  const pos = trajectory_frame_positions
+
+  let count = 0
+  for (let idx = 0; idx < n; idx++) {
+    const conn = bond_connectivity[idx]
+    const site_a = conn.site_idx_1
+    const site_b = conn.site_idx_2
+    if (site_a >= traj_max_site || site_b >= traj_max_site) return null
+    const ji = conn.jimage
+    const jx = ji ? ji[0] | 0 : 0
+    const jy = ji ? ji[1] | 0 : 0
+    const jz = ji ? ji[2] | 0 : 0
+    if (site_a === site_b && (jx | jy | jz) !== 0) continue
+    const pa = site_a * 3
+    const pb = site_b * 3
+    let bx = pos[pb]
+    let by = pos[pb + 1]
+    let bz = pos[pb + 2]
+    if ((jx | jy | jz) !== 0 && lat !== null) {
+      bx += jx * lat[0][0] + jy * lat[1][0] + jz * lat[2][0]
+      by += jx * lat[0][1] + jy * lat[1][1] + jz * lat[2][1]
+      bz += jx * lat[0][2] + jy * lat[1][2] + jz * lat[2][2]
+    }
+    const dx = bx - pos[pa]
+    const dy = by - pos[pa + 1]
+    const dz = bz - pos[pa + 2]
+    const len_sq = dx * dx + dy * dy + dz * dz
+    // NaN fails both compares → non-finite geometry is dropped by the cap.
+    if (!(len_sq <= cap_sq)) continue
+    if (max_dists !== null) {
+      const max_d = max_dists[idx]
+      // NaN max_d (radius unavailable) → comparison false → check skipped.
+      if (len_sq > max_d * max_d) continue
+    }
+    pairs[count * 2] = site_a
+    pairs[count * 2 + 1] = site_b
+    jimages[count * 3] = jx
+    jimages[count * 3 + 1] = jy
+    jimages[count * 3 + 2] = jz
+    count++
+  }
+  return { pairs, jimages, count }
+}
+
 /**
  * Create hydrogen bond reactive state.
  * Must be called from component `<script>` context.

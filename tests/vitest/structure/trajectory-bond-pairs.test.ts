@@ -3,6 +3,7 @@
 // radius-precompute optimization can't change observable output.
 import {
   build_trajectory_bond_pairs,
+  conn_to_typed_topology,
   get_traj_atomic_numbers,
   typed_table_to_conn,
 } from '$lib/structure/bond-computation-controller.svelte'
@@ -191,6 +192,105 @@ describe(`build_trajectory_bond_pairs`, () => {
     // unknown element → null (typed path unusable)
     const bad = [carbon_site([0, 0, 0]), unknown_site([1, 0, 0])]
     expect(get_traj_atomic_numbers(bad)).toBeNull()
+  })
+
+  test(`conn_to_typed_topology builds flat topology matching the object path`, () => {
+    const lattice_matrix = [[10, 0, 0], [0, 10, 0], [0, 0, 10]]
+    const positions = new Float32Array([0.7, 0, 0, 9.3, 0, 0, 2.1, 0, 0])
+    const sites = [
+      carbon_site([0.7, 0, 0]),
+      carbon_site([9.3, 0, 0]),
+      carbon_site([2.1, 0, 0]),
+    ]
+    const connectivity = [
+      { site_idx_1: 0, site_idx_2: 2, strength: 1 },
+      {
+        site_idx_1: 0,
+        site_idx_2: 1,
+        strength: 1,
+        jimage: [-1, 0, 0] as [number, number, number],
+      },
+    ]
+    const topo = conn_to_typed_topology(connectivity, positions, lattice_matrix, sites)
+    expect(topo).not.toBeNull()
+    expect(topo!.count).toBe(2)
+    expect([...topo!.pairs.subarray(0, 4)]).toEqual([0, 2, 0, 1])
+    expect([...topo!.jimages.subarray(0, 6)]).toEqual([0, 0, 0, -1, 0, 0])
+  })
+
+  test(`conn_to_typed_topology drops stale bonds like the object path`, () => {
+    const positions = new Float32Array([0, 0, 0, 10, 0, 0, 1.4, 0, 0])
+    const sites = [
+      carbon_site([0, 0, 0]),
+      carbon_site([10, 0, 0]),
+      carbon_site([1.4, 0, 0]),
+    ]
+    const connectivity = conn([[0, 1], [0, 2]])
+    const topo = conn_to_typed_topology(connectivity, positions, null, sites)
+    expect(topo!.count).toBe(1)
+    expect([...topo!.pairs.subarray(0, 2)]).toEqual([0, 2])
+  })
+
+  test(`conn_to_typed_topology keeps unknown-radius bonds but honors the hard cap`, () => {
+    const positions = new Float32Array([0, 0, 0, 3, 0, 0, 10, 0, 0])
+    const sites = [
+      unknown_site([0, 0, 0]),
+      unknown_site([3, 0, 0]),
+      unknown_site([10, 0, 0]),
+    ]
+    // Radius unknown → stale filter skipped for both; the 10 Å bond must
+    // still fall to the caller-supplied hard cap (matches MAX_BOND_LENGTH).
+    const connectivity = conn([[0, 1], [0, 2]])
+    const topo = conn_to_typed_topology(connectivity, positions, null, sites, undefined, 4.0)
+    expect(topo!.count).toBe(1)
+    expect([...topo!.pairs.subarray(0, 2)]).toEqual([0, 1])
+  })
+
+  test(`conn_to_typed_topology skips self-image starbursts and non-finite geometry`, () => {
+    const positions = new Float32Array([0, 0, 0, 1.4, 0, 0, NaN, 0, 0])
+    const sites = [
+      carbon_site([0, 0, 0]),
+      carbon_site([1.4, 0, 0]),
+      carbon_site([0, 0, 0]),
+    ]
+    const connectivity = [
+      { site_idx_1: 0, site_idx_2: 1, strength: 1 },
+      {
+        site_idx_1: 2,
+        site_idx_2: 2,
+        strength: 1,
+        jimage: [1, 0, 0] as [number, number, number],
+      },
+      { site_idx_1: 0, site_idx_2: 2, strength: 1 },
+    ]
+    const topo = conn_to_typed_topology(
+      connectivity,
+      positions,
+      [[10, 0, 0], [0, 10, 0], [0, 0, 10]],
+      sites,
+    )
+    expect(topo!.count).toBe(1)
+    expect([...topo!.pairs.subarray(0, 2)]).toEqual([0, 1])
+  })
+
+  test(`conn_to_typed_topology bails to null on out-of-coverage site indices`, () => {
+    // Supercell-extra atom (index 5 beyond the 2-atom frame buffer) → the
+    // typed path can't resolve its position; caller must fall back.
+    const positions = new Float32Array([0, 0, 0, 1.4, 0, 0])
+    const sites = [carbon_site([0, 0, 0]), carbon_site([1.4, 0, 0])]
+    const connectivity = conn([[0, 5]])
+    expect(conn_to_typed_topology(connectivity, positions, null, sites)).toBeNull()
+  })
+
+  test(`conn_to_typed_topology reuses its scratch buffers across calls`, () => {
+    // Contract: the returned arrays are valid only until the next call —
+    // consumers must copy synchronously (replace_auto_bonds does).
+    const positions = new Float32Array([0, 0, 0, 1.4, 0, 0])
+    const sites = [carbon_site([0, 0, 0]), carbon_site([1.4, 0, 0])]
+    const first = conn_to_typed_topology(conn([[0, 1]]), positions, null, sites)
+    const second = conn_to_typed_topology(conn([[0, 1]]), positions, null, sites)
+    expect(second!.pairs).toBe(first!.pairs)
+    expect(second!.jimages).toBe(first!.jimages)
   })
 
   test(`overrides take precedence over trajectory positions`, () => {

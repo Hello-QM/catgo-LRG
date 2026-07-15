@@ -110,6 +110,7 @@
     clear_trajectory_bond_frame_cache,
     build_bond_pairs,
     build_trajectory_bond_pairs,
+    conn_to_typed_topology,
     create_hbond_state,
     compute_hbond_connectivity,
     build_hbond_pairs,
@@ -2568,6 +2569,84 @@
   let __bbp_prev_traj: unknown = null
   let __bbp_skips = 0
   let __bbp_was_suspended = false
+  // ═══ Typed-direct playback mode ═══
+  // During eligible trajectory playback the frame connectivity is written
+  // straight into bond_manager (replace_auto_bonds) and the BondPair object
+  // chain (bond_pairs → visible → filtered → slot map → shadow-sync diff)
+  // is left frozen — the renderer reads topology + typed atom positions and
+  // needs none of it. `typed_direct_active` gates slot_to_filtered_idx
+  // (which would otherwise rebuild its 26k-entry map on every version bump
+  // against stale filtered pairs). The shadow sync needs no gate: its deps
+  // (filtered_bond_pairs identity) don't change while the chain is frozen.
+  let typed_direct_active = $state(false)
+  let __td_prev_conn:
+    | Array<{
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage?: [number, number, number]
+    }>
+    | null = null
+  let __td_prev_pos: Float32Array | null = null
+  let __td_ctx: {
+    lat: number[][] | null
+    sites: ReadonlyArray<Site> | null
+    tol: number | undefined
+  } | null = null
+  let typed_direct_tail_timer: ReturnType<typeof setTimeout> | undefined
+  const TYPED_DIRECT_TAIL_MS = 500
+  const EMPTY_SLOT_MAP = new Int32Array(0)
+
+  function exit_typed_direct(): void {
+    if (typed_direct_tail_timer !== undefined) {
+      clearTimeout(typed_direct_tail_timer)
+      typed_direct_tail_timer = undefined
+    }
+    __td_prev_conn = null
+    __td_prev_pos = null
+    __td_ctx = null
+    if (typed_direct_active) typed_direct_active = false
+  }
+
+  // Playback pause / end tail: 500ms after the last typed-direct write,
+  // rebuild the object pipeline once for the current frame so picking,
+  // hover and box selection are exact again, then drop the gate. The
+  // shadow sync that follows diffs to a no-op (same topology), so the GPU
+  // buffers don't churn. The $effect.pre re-fires on the gate flip but
+  // early-returns via the typed memo (same conn + frame identities).
+  function schedule_typed_direct_tail_sync(): void {
+    if (typed_direct_tail_timer !== undefined) clearTimeout(typed_direct_tail_timer)
+    typed_direct_tail_timer = setTimeout(() => {
+      typed_direct_tail_timer = undefined
+      if (!typed_direct_active) return
+      const conn = __td_prev_conn
+      const pos = __td_prev_pos
+      const ctx = __td_ctx
+      if (conn !== null && pos !== null) {
+        bond_pairs = build_trajectory_bond_pairs(
+          conn,
+          pos,
+          null,
+          atom_manager,
+          ctx?.lat ?? null,
+          ctx?.sites ?? null,
+          ctx?.tol,
+        )
+      }
+      typed_direct_active = false
+    }, TYPED_DIRECT_TAIL_MS)
+  }
+
+  // Drop the tail-sync timer on unmount — the scene lives in {#if} blocks
+  // and a late firing would write $state on a destroyed component.
+  $effect(() => {
+    return () => {
+      if (typed_direct_tail_timer !== undefined) {
+        clearTimeout(typed_direct_tail_timer)
+        typed_direct_tail_timer = undefined
+      }
+    }
+  })
   $effect.pre(() => {
     // WebGPU overlay active: this WebGL scene is covered and not painting, and
     // the overlay computes its own GPU bonds — so skip the per-frame trajectory
@@ -2609,6 +2688,67 @@
         bond_state, traj_positions, bond_input,
         show_bonds, lattice, bonding_strategy, bonding_options,
       )
+      const __traj_tol_v = (() => {
+        const raw = (bonding_options as Record<string, unknown> | undefined)?.tolerance
+        return typeof raw === `number` && raw > 0 ? raw : undefined
+      })()
+      // Typed-direct eligibility: every feature that consumes the BondPair
+      // object chain per frame must be inactive, otherwise fall through to
+      // the object path. All reads establish reactive subscriptions, so an
+      // eligibility flip re-fires this effect and exits the mode cleanly.
+      const typed_eligible = traj_conn != null &&
+        (bond_distance_rules?.length ?? 0) === 0 &&
+        manual_bonds.length === 0 &&
+        _deleted_bond_keys.size === 0 &&
+        _hidden_elements.size === 0 &&
+        _hidden_sites.size === 0 &&
+        _hidden_prop_vals.size === 0 &&
+        !show_polyhedra &&
+        !clip_active &&
+        !show_hydrogen_bonds &&
+        !bond_order_perception &&
+        overrides_size === 0 &&
+        !drag
+      if (typed_eligible) {
+        if (
+          !__resuming_bbp &&
+          traj_conn === __td_prev_conn &&
+          traj_positions === __td_prev_pos
+        ) return
+        const td_lat =
+          (bond_input as { lattice?: { matrix?: number[][] } } | undefined)
+            ?.lattice?.matrix ?? null
+        const td_sites =
+          (bond_input as { sites?: ReadonlyArray<Site> } | undefined)?.sites ?? null
+        const topo = conn_to_typed_topology(
+          traj_conn,
+          traj_positions,
+          td_lat,
+          td_sites,
+          __traj_tol_v,
+          MAX_BOND_LENGTH,
+        )
+        if (topo !== null) {
+          __td_prev_conn = traj_conn
+          __td_prev_pos = traj_positions
+          __td_ctx = { lat: td_lat, sites: td_sites, tol: __traj_tol_v }
+          if (!typed_direct_active) typed_direct_active = true
+          bond_manager.replace_auto_bonds(topo.pairs, topo.count, topo.jimages)
+          schedule_typed_direct_tail_sync()
+          if (import.meta.env?.DEV) {
+            const __dt = performance.now() - __t0
+            if (__dt > 5) {
+              console.log(
+                `[probe] typed_direct write: ${__dt.toFixed(1)}ms (${topo.count} bonds)`,
+              )
+            }
+          }
+          return
+        }
+      }
+      // Ineligible (or typed conversion bailed): leave typed-direct mode so
+      // the object pipeline resumes ownership of bond_manager.
+      if (__td_prev_conn !== null || typed_direct_active) exit_typed_direct()
       // Skip if no inputs changed since last fire. `drag` and `sel` must be
       // in the memo so drag-filter and selection highlights still update
       // during trajectory playback when conn/lbs/traj are stable.
@@ -2636,10 +2776,6 @@
       __bbp_prev_sel = sel
       __bbp_prev_overrides_size = overrides_size
       __bbp_prev_traj = traj_positions
-      const __traj_tol = (() => {
-        const raw = (bonding_options as Record<string, unknown> | undefined)?.tolerance
-        return typeof raw === `number` && raw > 0 ? raw : undefined
-      })()
       bond_pairs = build_trajectory_bond_pairs(
         traj_conn,
         traj_positions,
@@ -2647,7 +2783,7 @@
         atom_manager,
         (bond_input as { lattice?: { matrix?: number[][] } } | undefined)?.lattice?.matrix ?? null,
         (bond_input as { sites?: ReadonlyArray<Site> } | undefined)?.sites ?? null,
-        __traj_tol,
+        __traj_tol_v,
       )
       if (import.meta.env?.DEV) {
         const __dt = performance.now() - __t0
@@ -2660,6 +2796,7 @@
     // async resolve drops its result instead of leaking into post-trajectory
     // state), and resets throttle slots.
     if (__bbp_prev_traj != null && traj_positions == null) {
+      exit_typed_direct()
       clear_trajectory_bond_frame_cache(bond_state)
     }
     // Re-bind for the non-trajectory path's memo + build below.
@@ -3477,6 +3614,12 @@
   // hits on those return null (degraded but harmless).
   let slot_to_filtered_idx = $derived.by((): Int32Array => {
     void bond_manager.version
+    // Typed-direct playback: filtered_bond_pairs is frozen and slots churn
+    // every frame — a per-frame 26k-entry map against stale pairs is pure
+    // waste. Decorator hits bounds-check the length (gpu-picker-integration
+    // L418), so the shared empty map degrades picks to null. The pause
+    // tail-sync drops the gate and this re-derives with fresh pairs.
+    if (typed_direct_active) return EMPTY_SLOT_MAP
     const count = bond_manager.count
     const out = new Int32Array(count)
     out.fill(-1)
