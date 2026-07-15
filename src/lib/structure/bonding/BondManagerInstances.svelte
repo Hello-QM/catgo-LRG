@@ -351,37 +351,48 @@
   const geometry = $derived(new CylinderGeometry(bond_radius, bond_radius, 1, 16))
 
   $effect(() => {
-    if (!mesh) return
-    const r = new BondInstancedRenderer(
-      mesh,
-      bond_manager,
-      () => atom_positions,
-      () => lattice_matrix ?? null,
-      () => ({
-        mode: incomplete_periodic_edge_mode,
-        scale: incomplete_edge_length_scale,
-        hide_incomplete: hide_incomplete_bonds,
-      }),
-      () => image_atom_layout ?? null,
-      () => partner_drawn_lookup ?? null,
-      // Bond colors are now sourced directly from the per-atom color buffer
-      // inside the renderer's matrix-write loop — same dirty-slot snapshot,
-      // no race between matrix and color writes. The atom_colors-change
-      // $effect below triggers `force_full_resync()` when the per-atom
-      // buffer identity changes (color-only updates don't bump
-      // bond_manager.version).
-      () => atom_colors ?? null,
-    )
-    // Apply the multi-bond flag BEFORE the first resync so the initial mesh
-    // layout uses the correct per-slot stride.
-    r.set_multibond(untrack(() => multibond_enabled), untrack(() => bond_radius))
-    renderer = r
-    r.force_full_resync()
-    mark_dirty()
-    return () => {
-      r.dispose()
-      if (renderer === r) renderer = undefined
-    }
+    // Tracked deps: ONLY the mesh binding and manager identity — the body
+    // runs untracked. The constructor and force_full_resync() read reactive
+    // manager internals (version/count) plus the layout/positions getters;
+    // tracked, those subscribed this effect to per-frame signals and every
+    // trajectory frame disposed + rebuilt the renderer, recreating the
+    // instanced GL attributes (kind/color/opacity — capacity-sized
+    // bufferData reallocations each frame).
+    const mesh_ref = mesh
+    const mgr = bond_manager
+    if (!mesh_ref) return
+    return untrack(() => {
+      const r = new BondInstancedRenderer(
+        mesh_ref,
+        mgr,
+        () => atom_positions,
+        () => lattice_matrix ?? null,
+        () => ({
+          mode: incomplete_periodic_edge_mode,
+          scale: incomplete_edge_length_scale,
+          hide_incomplete: hide_incomplete_bonds,
+        }),
+        () => image_atom_layout ?? null,
+        () => partner_drawn_lookup ?? null,
+        // Bond colors are now sourced directly from the per-atom color buffer
+        // inside the renderer's matrix-write loop — same dirty-slot snapshot,
+        // no race between matrix and color writes. The atom_colors-change
+        // $effect below triggers `force_full_resync()` when the per-atom
+        // buffer identity changes (color-only updates don't bump
+        // bond_manager.version).
+        () => atom_colors ?? null,
+      )
+      // Apply the multi-bond flag BEFORE the first resync so the initial mesh
+      // layout uses the correct per-slot stride.
+      r.set_multibond(multibond_enabled, bond_radius)
+      renderer = r
+      r.force_full_resync()
+      mark_dirty()
+      return () => {
+        r.dispose()
+        if (renderer === r) renderer = undefined
+      }
+    })
   })
 
   // Lattice matrix, incomplete-edge mode, image-atom layout, or per-atom
@@ -407,9 +418,14 @@
     const mb = multibond_enabled
     const br = bond_radius
     if (!renderer) return
-    renderer.set_multibond(mb, br)
-    renderer.force_full_resync()
-    mark_dirty()
+    // Untracked: force_full_resync reads manager $state (version/count);
+    // tracked it would subscribe this effect to every per-frame version
+    // bump and duplicate the version-sync effect's full pass.
+    untrack(() => {
+      renderer!.set_multibond(mb, br)
+      renderer!.force_full_resync()
+      mark_dirty()
+    })
   })
 
   let last_overrides_ref: Map<string, number> | ReadonlyMap<string, number> | undefined
@@ -509,8 +525,13 @@
     positions_version
     atom_positions
     if (!renderer) return
-    renderer.force_full_resync()
-    mark_dirty()
+    // Untracked: force_full_resync reads manager $state (version/count);
+    // tracked it would re-fire this effect on every version bump on top of
+    // the positions-identity dep above — a duplicate full matrix pass.
+    untrack(() => {
+      renderer!.force_full_resync()
+      mark_dirty()
+    })
   })
 </script>
 

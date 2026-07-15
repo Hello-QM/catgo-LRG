@@ -235,7 +235,14 @@ function invert_3x3(m: number[][]): number[][] | null {
  * Must be called from component `<script>` context (Svelte 5 $state).
  */
 export function create_bond_state() {
-  let bond_connectivity = $state<
+  // $state.raw, NOT $state: every write site reassigns the whole array
+  // (verified — no push/splice/index writes anywhere), so reassignment
+  // reactivity is all consumers need. The deep proxy cost real money: at
+  // 26k bonds every conn walk (conn_to_typed_topology, get_traj_max_dists,
+  // build_trajectory_bond_pairs, build_bond_pairs) paid ~5 proxy traps per
+  // bond — ~130k traps per pass, tens of ms per frame in dev — whenever the
+  // array came back through this getter instead of the raw frame cache.
+  let bond_connectivity = $state.raw<
     Array<
       {
         site_idx_1: number

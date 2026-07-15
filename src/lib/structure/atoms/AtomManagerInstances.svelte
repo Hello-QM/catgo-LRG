@@ -480,20 +480,34 @@
   // `untrack` the modulation reads so the mount effect doesn't become a
   // reactive dependent of them — the main sync effect already handles changes.
   $effect(() => {
-    if (!opaque_mesh) return
-    const r = new AtomInstancedRenderer(opaque_mesh, atom_manager, hidden_site_ids ?? null)
-    untrack(() => {
+    // Tracked deps: ONLY the mesh binding and the manager's identity. The
+    // whole body below runs untracked — the renderer constructor and
+    // force_full_resync() read the manager's reactive internals
+    // (version/count are class $state fields), and a tracked read of those
+    // subscribed this mount effect to the per-frame version bump: every
+    // trajectory frame disposed and rebuilt the renderer, recreating all
+    // five instanced GL attributes (~36 MB of bufferData per frame). The
+    // main sync effect below owns per-version updates.
+    const mesh = opaque_mesh
+    const mgr = atom_manager
+    if (!mesh) return
+    if (import.meta.env?.DEV) {
+      const g = globalThis as unknown as { __amr_mount?: number }
+      g.__amr_mount = (g.__amr_mount ?? 0) + 1
+    }
+    return untrack(() => {
+      const r = new AtomInstancedRenderer(mesh, mgr, hidden_site_ids ?? null)
       r.set_cutting(cutting_active, cutting_visibility_map ?? null)
       r.set_atom_opacity_overrides(atom_opacity_overrides ?? null)
       r.set_image_atoms(num_original_sites, image_atom_opacity, image_to_original_map)
+      opaque_renderer = r
+      r.force_full_resync()
+      mark_dirty()
+      return () => {
+        r.dispose()
+        if (opaque_renderer === r) opaque_renderer = undefined
+      }
     })
-    opaque_renderer = r
-    r.force_full_resync()
-    mark_dirty()
-    return () => {
-      r.dispose()
-      if (opaque_renderer === r) opaque_renderer = undefined
-    }
   })
 
   // Track identity/size of each render-side modulation input — the manager
