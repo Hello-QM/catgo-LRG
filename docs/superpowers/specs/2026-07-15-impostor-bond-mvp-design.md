@@ -108,21 +108,22 @@ renderer to have MSAA enabled** (`antialias: true`). Confirm CatGo's WebGL
 renderer config; if MSAA is off, either enable it for this pass or accept
 aliased impostor silhouettes for the MVP measurement (document which).
 
-## Open Decision (resolve in the plan)
+## Resolved Decision — periodic stubs: option (a)
 
 Periodic cross-cell bonds have a stub branch in the #524 shader
-(`uStubMode` / `uStubScale`, VESTA Mode 1) and a paired-stub branch. Two MVP
-options:
-- **(a)** Also build the OBB + ray-cast for the stub geometry (more shader
-  work, full coverage of `gpu_active` frames).
-- **(b)** Fall back to mesh whenever the current frame has any periodic bond
-  (simpler, but a slab/bulk trajectory — the common large case — is mostly
-  periodic, so this could fall back almost always and defeat the measurement).
+(`uStubMode` / `uStubScale`, VESTA Mode 1) and a paired-stub branch.
 
-Recommendation: **(a)** for the side-wall + outward paired stubs (the spike's
-ray-cast already handles finite cylinders with caps; the stub is just a
-shorter half), because (b) risks never exercising the impostor on realistic
-periodic systems. Decide in the plan after reading the #524 stub branch.
+**Decision (user-approved): (a)** — build the OBB + ray-cast for the stub
+geometry too, so `gpu_active` frames are fully covered by the impostor. The
+spike's ray-cast already handles finite cylinders with caps; a stub is just a
+shorter half (anchored at pa toward b_eff, or at pb_base toward -dir, scaled by
+`uStubScale` in VESTA Mode 1). Option (b) — mesh fallback on any periodic bond
+— was rejected: slab/bulk trajectories (the common large case) are mostly
+periodic, so (b) would fall back almost always and defeat the measurement.
+
+The plan must read the #524 vertex-shader periodic branch (collapse under
+`uHideIncomplete`, paired stubs otherwise) and mirror its geometry in the
+impostor OBB + fragment ray-cast, at parity.
 
 ## Verification
 
