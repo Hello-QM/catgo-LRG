@@ -169,8 +169,13 @@ pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions
         .map(|sp| ElementProps::from_element(sp.element))
         .collect();
 
-    // Use neighbor list for efficient spatial queries
-    let cutoff = options.max_bond_dist;
+    // Use neighbor list for efficient spatial queries. The per-pair bond
+    // bound is (r1 + r2) * scale ≤ 2 * r_max * scale, so the search cutoff
+    // tightens below max_bond_dist without changing any result — at the
+    // default 5 Å max on a typical oxide/metal system this trims the
+    // candidate volume (and the distance evaluations) 3-4x.
+    let max_radius = props.iter().map(|p| p.covalent_radius).fold(0.0, f64::max);
+    let cutoff = options.max_bond_dist.min(2.0 * max_radius * options.scale);
     let (center_indices, neighbor_indices, image_offsets, distances) =
         structure.get_neighbor_list(cutoff, 1e-8, true);
 

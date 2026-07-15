@@ -11,6 +11,12 @@
  *
  *   node scripts/build-wasm.mjs              # (re)build all three
  *   node scripts/build-wasm.mjs --if-missing # build only the ones not yet built
+ *   node scripts/build-wasm.mjs --no-simd    # scalar-only ferrox (ancient WebKit)
+ *
+ * ferrox builds with WASM SIMD128 by default (extensions/rust/.cargo/config.toml
+ * sets `-C target-feature=+simd128`; supported by every engine shipped since
+ * 2023). `--no-simd` — or CATGO_WASM_NO_SIMD=1 — clears RUSTFLAGS for that
+ * build, which overrides the config-file flag and yields a scalar-only module.
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -19,6 +25,8 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const IF_MISSING = process.argv.includes('--if-missing')
+const NO_SIMD = process.argv.includes('--no-simd') ||
+  process.env.CATGO_WASM_NO_SIMD === '1'
 const WIN = process.platform === 'win32'
 
 // Per target: the crate dir, the wasm-pack --out-dir (relative to the crate,
@@ -32,6 +40,9 @@ const TARGETS = [
     outDir: '../rust-wasm/pkg',
     extra: ['--features', 'wasm', '--no-default-features'],
     sentinel: join(ROOT, 'extensions', 'rust-wasm', 'pkg', 'ferrox_bg.wasm'),
+    // A set (even empty) RUSTFLAGS overrides .cargo/config.toml target
+    // rustflags — this is the documented no-SIMD escape hatch.
+    env: NO_SIMD ? { ...process.env, RUSTFLAGS: '' } : undefined,
   },
   {
     name: 'chgdiff',
@@ -79,6 +90,7 @@ for (const t of pending) {
     cwd: t.cwd,
     stdio: 'inherit',
     shell: WIN,
+    env: t.env,
   })
   if (r.status !== 0) {
     console.error(`[build-wasm] FAILED: ${t.name} (wasm-pack exited ${r.status})`)

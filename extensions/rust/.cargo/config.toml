@@ -1,0 +1,12 @@
+# WASM SIMD128 is on by default for ferrox wasm builds. Every engine shipped
+# since 2023 supports it (Chrome 91+, Firefox 89+, Safari 16.4+/WebKit,
+# Node 16+), and the bond-detection hot loop has an explicit f64x2 path gated
+# on cfg(target_feature = "simd128") (see neighbors.rs::scan_bin_hits) plus a
+# scalar fallback that keeps no-SIMD builds correct.
+#
+# Escape hatch (ancient WebKitGTK etc.): a set RUSTFLAGS env var overrides
+# this table entirely, so `RUSTFLAGS="" wasm-pack build ...` — or
+# `node scripts/build-wasm.mjs --no-simd` — produces a scalar-only module.
+# Native (non-wasm) builds are unaffected.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

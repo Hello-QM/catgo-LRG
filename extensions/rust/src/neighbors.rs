@@ -124,17 +124,30 @@ impl NeighborList {
 /// - The stencil spans ceil(cutoff / bin_height) bins per axis, so a
 ///   periodic axis thinner than the cutoff naturally yields multi-image
 ///   neighbors (|image| ≥ 2) instead of forcing brute force.
+///
+/// Storage is CSR-style: atoms are bucketed per bin with a stable counting
+/// sort and their wrapped Cartesian coordinates are kept in bin-sorted SoA
+/// arrays (`xs`/`ys`/`zs`), so the inner distance loop streams contiguous
+/// memory — cache-friendly, bounds-check-free, and SIMD-vectorizable (see
+/// `scan_bin_hits` for the wasm simd128 f64x2 path).
 struct CellList {
-    /// Mapping from bin index to list of atom indices in that bin.
-    bins: Vec<Vec<usize>>,
+    /// CSR bin offsets into `bin_atoms`/`xs`/`ys`/`zs`; length total_bins + 1.
+    bin_start: Vec<u32>,
+    /// Atom indices sorted by bin (ascending within each bin — the counting
+    /// sort is stable, matching the previous `Vec<Vec<usize>>` push order).
+    bin_atoms: Vec<u32>,
     /// Number of bins along each axis [nx, ny, nz].
     n_bins: [usize; 3],
-    /// Per-atom 3D bin coordinates.
+    /// Per-atom 3D bin coordinates (original atom order).
     atom_bins: Vec<[usize; 3]>,
     /// Per-atom integer wrap shift on periodic axes (s = floor(frac)).
     wrap_shifts: Vec<[i32; 3]>,
-    /// Cartesian coordinates after wrapping periodic axes — the positions
-    /// distances are evaluated against.
+    /// Wrapped Cartesian coordinates in bin-sorted slot order, SoA layout —
+    /// the positions distances are evaluated against.
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    zs: Vec<f64>,
+    /// Wrapped Cartesian per original atom index (center-side lookups).
     wrapped_cart: Vec<Vector3<f64>>,
     /// Bin-offset stencil covering the cutoff, including [0,0,0].
     stencil: Vec<[i32; 3]>,
@@ -217,10 +230,12 @@ impl CellList {
         }
 
         let total_bins = n_bins[0] * n_bins[1] * n_bins[2];
-        let mut bins: Vec<Vec<usize>> = vec![Vec::new(); total_bins];
         let mut atom_bins = Vec::with_capacity(n_atoms);
         let mut wrap_shifts = Vec::with_capacity(n_atoms);
         let mut wrapped_cart = Vec::with_capacity(n_atoms);
+        let mut atom_linear_bin: Vec<u32> = Vec::with_capacity(n_atoms);
+        // bin_start doubles as the counting-sort histogram (offset by one).
+        let mut bin_start = vec![0u32; total_bins + 1];
 
         for frac in frac_coords {
             let mut wrapped = *frac;
@@ -242,16 +257,41 @@ impl CellList {
             }
             wrapped_cart.push(matrix.transpose() * wrapped);
             let bin_idx = bin[0] + bin[1] * n_bins[0] + bin[2] * n_bins[0] * n_bins[1];
-            bins[bin_idx].push(atom_bins.len());
+            atom_linear_bin.push(bin_idx as u32);
+            bin_start[bin_idx + 1] += 1;
             atom_bins.push(bin);
             wrap_shifts.push(shift);
         }
 
+        // CSR prefix sum, then a stable counting sort placing atom indices and
+        // their wrapped coordinates (SoA) into bin-sorted slots.
+        for b in 0..total_bins {
+            bin_start[b + 1] += bin_start[b];
+        }
+        let mut cursor: Vec<u32> = bin_start[..total_bins].to_vec();
+        let mut bin_atoms = vec![0u32; n_atoms];
+        let mut xs = vec![0.0f64; n_atoms];
+        let mut ys = vec![0.0f64; n_atoms];
+        let mut zs = vec![0.0f64; n_atoms];
+        for (atom_idx, &b) in atom_linear_bin.iter().enumerate() {
+            let slot = cursor[b as usize] as usize;
+            cursor[b as usize] += 1;
+            bin_atoms[slot] = atom_idx as u32;
+            let cart = wrapped_cart[atom_idx];
+            xs[slot] = cart.x;
+            ys[slot] = cart.y;
+            zs[slot] = cart.z;
+        }
+
         Self {
-            bins,
+            bin_start,
+            bin_atoms,
             n_bins,
             atom_bins,
             wrap_shifts,
+            xs,
+            ys,
+            zs,
             wrapped_cart,
             stencil,
             pbc,
@@ -305,27 +345,117 @@ impl CellList {
             let offset_cart = (base_image[0] as f64) * lattice_vecs[0]
                 + (base_image[1] as f64) * lattice_vecs[1]
                 + (base_image[2] as f64) * lattice_vecs[2];
+            // Fold the image shift into the center once:
+            //   |neighbor + offset − center| == |neighbor − (center − offset)|
+            let cx = center_cart.x - offset_cart.x;
+            let cy = center_cart.y - offset_cart.y;
+            let cz = center_cart.z - offset_cart.z;
 
-            for &neighbor_idx in &self.bins[self.bin_index(bin)] {
-                let diff = self.wrapped_cart[neighbor_idx] + offset_cart - center_cart;
-                let dist_sq = diff.norm_squared();
-                if dist_sq > cutoff_sq {
-                    continue;
+            let b = self.bin_index(bin);
+            let start = self.bin_start[b] as usize;
+            let end = self.bin_start[b + 1] as usize;
+            scan_bin_hits(
+                &self.xs[start..end],
+                &self.ys[start..end],
+                &self.zs[start..end],
+                [cx, cy, cz],
+                cutoff_sq,
+                |k, dist_sq| {
+                    let neighbor_idx = self.bin_atoms[start + k] as usize;
+                    // Express the image against the original coordinates:
+                    // wrapped_j + L·m − wrapped_i  ==  orig_j + L·(m − s_j + s_i) − orig_i
+                    let neighbor_shift = self.wrap_shifts[neighbor_idx];
+                    let image = [
+                        base_image[0] - neighbor_shift[0] + center_shift[0],
+                        base_image[1] - neighbor_shift[1] + center_shift[1],
+                        base_image[2] - neighbor_shift[2] + center_shift[2],
+                    ];
+                    let is_self =
+                        center_idx == neighbor_idx && image == [0, 0, 0] && dist_sq < tol_sq;
+                    if !is_self || config.self_interaction {
+                        out.push(center_idx, neighbor_idx, dist_sq.sqrt(), image);
+                    }
+                },
+            );
+        }
+    }
+}
+
+/// Invoke `hit(k, dist_sq)` for every slot `k` whose point lies within
+/// `cutoff_sq` of the (offset-folded) `center`, in ascending `k`.
+///
+/// On wasm32 builds compiled with `+simd128` an explicit `f64x2` path
+/// evaluates two candidates per iteration and fast-rejects misses (the common
+/// case) with a single vector compare; the scalar loop keeps no-SIMD wasm
+/// builds and native builds (where rayon owns the parallelism) working
+/// unchanged.
+#[inline]
+fn scan_bin_hits(
+    xs: &[f64],
+    ys: &[f64],
+    zs: &[f64],
+    center: [f64; 3],
+    cutoff_sq: f64,
+    mut hit: impl FnMut(usize, f64),
+) {
+    let [cx, cy, cz] = center;
+    let n = xs.len();
+    debug_assert!(ys.len() == n && zs.len() == n);
+
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        use core::arch::wasm32::*;
+        let cxv = f64x2_splat(cx);
+        let cyv = f64x2_splat(cy);
+        let czv = f64x2_splat(cz);
+        let cutv = f64x2_splat(cutoff_sq);
+        let mut k = 0usize;
+        while k + 2 <= n {
+            // SAFETY: k + 1 < n bounds both lanes; wasm v128_load supports
+            // unaligned addresses (alignment is only a hint in wasm).
+            let d2 = unsafe {
+                let xv = v128_load(xs.as_ptr().add(k) as *const v128);
+                let yv = v128_load(ys.as_ptr().add(k) as *const v128);
+                let zv = v128_load(zs.as_ptr().add(k) as *const v128);
+                let dx = f64x2_sub(xv, cxv);
+                let dy = f64x2_sub(yv, cyv);
+                let dz = f64x2_sub(zv, czv);
+                f64x2_add(
+                    f64x2_add(f64x2_mul(dx, dx), f64x2_mul(dy, dy)),
+                    f64x2_mul(dz, dz),
+                )
+            };
+            if v128_any_true(f64x2_le(d2, cutv)) {
+                let d2a = f64x2_extract_lane::<0>(d2);
+                if d2a <= cutoff_sq {
+                    hit(k, d2a);
                 }
-                // Express the image against the original coordinates:
-                // wrapped_j + L·m − wrapped_i  ==  orig_j + L·(m − s_j + s_i) − orig_i
-                let neighbor_shift = self.wrap_shifts[neighbor_idx];
-                let image = [
-                    base_image[0] - neighbor_shift[0] + center_shift[0],
-                    base_image[1] - neighbor_shift[1] + center_shift[1],
-                    base_image[2] - neighbor_shift[2] + center_shift[2],
-                ];
-                let is_self =
-                    center_idx == neighbor_idx && image == [0, 0, 0] && dist_sq < tol_sq;
-                if !is_self || config.self_interaction {
-                    out.push(center_idx, neighbor_idx, dist_sq.sqrt(), image);
+                let d2b = f64x2_extract_lane::<1>(d2);
+                if d2b <= cutoff_sq {
+                    hit(k + 1, d2b);
                 }
             }
+            k += 2;
+        }
+        if k < n {
+            let dx = xs[k] - cx;
+            let dy = ys[k] - cy;
+            let dz = zs[k] - cz;
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if d2 <= cutoff_sq {
+                hit(k, d2);
+            }
+        }
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", target_feature = "simd128")))]
+    for (k, ((&x, &y), &z)) in xs.iter().zip(ys).zip(zs).enumerate() {
+        let dx = x - cx;
+        let dy = y - cy;
+        let dz = z - cz;
+        let d2 = dx * dx + dy * dy + dz * dz;
+        if d2 <= cutoff_sq {
+            hit(k, d2);
         }
     }
 }
@@ -407,19 +537,30 @@ fn build_neighbor_list_celllist(
 
     #[cfg(feature = "rayon")]
     let result = {
-        // Parallel processing: each atom computes its neighbors independently
-        let per_atom_results: Vec<NeighborList> = (0..n_atoms)
+        // Chunked parallelism: one contiguous NeighborList per atom-range
+        // chunk (per-atom tasks spent more on 20k tiny 4-Vec allocations than
+        // on the search itself). Chunks are merged in ascending index order,
+        // so the output ordering is identical to the serial path — bond
+        // tables stay deterministic run to run.
+        let n_threads = rayon::current_num_threads().max(1);
+        let chunk_size = n_atoms.div_ceil(n_threads * 4).max(64);
+        let chunk_starts: Vec<usize> = (0..n_atoms).step_by(chunk_size).collect();
+        let per_chunk: Vec<NeighborList> = chunk_starts
             .into_par_iter()
-            .map(|center_idx| {
-                let mut local_nl = NeighborList::with_capacity(20);
-                cell_list.neighbors_of(center_idx, lattice_vecs, config, &mut local_nl);
+            .map(|chunk_start| {
+                let chunk_end = (chunk_start + chunk_size).min(n_atoms);
+                let mut local_nl =
+                    NeighborList::with_capacity((chunk_end - chunk_start) * 14);
+                for center_idx in chunk_start..chunk_end {
+                    cell_list.neighbors_of(center_idx, lattice_vecs, config, &mut local_nl);
+                }
                 local_nl
             })
             .collect();
 
-        // Merge all per-atom results
+        // Merge chunk results in order
         let mut result = NeighborList::with_capacity(estimated_pairs);
-        for nl in per_atom_results {
+        for nl in per_chunk {
             result.extend(nl);
         }
         result
