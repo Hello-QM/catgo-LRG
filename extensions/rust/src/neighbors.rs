@@ -108,174 +108,226 @@ impl NeighborList {
 }
 
 /// Internal cell-list structure for spatial binning.
+///
+/// Generalized over periodicity and cell thickness (OVITO
+/// CutoffNeighborFinder approach) so every large system takes the O(n)
+/// path — the previous implementation refused mixed/non-periodic pbc and
+/// cells thinner than the cutoff, falling back to O(n²) brute force
+/// (1.9s vs 33ms at ~20k atoms):
+///
+/// - Periodic axes bin the wrapped cell [0,1). Atoms are wrapped in and
+///   their integer shift recorded; emitted images are corrected back so
+///   results refer to the ORIGINAL (unwrapped) coordinates, matching the
+///   brute-force path.
+/// - Non-periodic axes bin the atoms' actual fractional extent; stencil
+///   offsets that leave the grid are skipped ("clamp, no ghosts").
+/// - The stencil spans ceil(cutoff / bin_height) bins per axis, so a
+///   periodic axis thinner than the cutoff naturally yields multi-image
+///   neighbors (|image| ≥ 2) instead of forcing brute force.
 struct CellList {
     /// Mapping from bin index to list of atom indices in that bin.
     bins: Vec<Vec<usize>>,
     /// Number of bins along each axis [nx, ny, nz].
     n_bins: [usize; 3],
-    /// Size of each bin along each axis (in fractional coordinates).
-    bin_size_frac: [f64; 3],
+    /// Per-atom 3D bin coordinates.
+    atom_bins: Vec<[usize; 3]>,
+    /// Per-atom integer wrap shift on periodic axes (s = floor(frac)).
+    wrap_shifts: Vec<[i32; 3]>,
+    /// Cartesian coordinates after wrapping periodic axes — the positions
+    /// distances are evaluated against.
+    wrapped_cart: Vec<Vector3<f64>>,
+    /// Bin-offset stencil covering the cutoff, including [0,0,0].
+    stencil: Vec<[i32; 3]>,
+    pbc: [bool; 3],
 }
 
 impl CellList {
     /// Build a cell list from fractional coordinates.
-    ///
-    /// Atoms are assigned to bins based on their fractional coordinates.
-    /// The bin count is chosen so that each bin spans at least `cutoff` distance,
-    /// ensuring we only need to check neighboring bins.
     fn build(frac_coords: &[Vector3<f64>], lattice: &Lattice, cutoff: f64) -> Self {
         let n_atoms = frac_coords.len();
+        let pbc = lattice.pbc;
 
-        // Compute face distances (perpendicular heights) for each axis
-        // This determines how many bins we need along each axis
         let matrix = lattice.matrix();
         let lattice_vecs = [
             matrix.row(0).transpose(),
             matrix.row(1).transpose(),
             matrix.row(2).transpose(),
         ];
-
         let volume = lattice.volume();
 
-        // For each axis, compute the perpendicular distance (height)
-        // height_i = volume / |a_{i+1} × a_{i+2}|
+        // Perpendicular height per axis: height_i = volume / |a_{i+1} × a_{i+2}|.
+        // This is the correct per-axis distance metric for skewed cells.
         let heights: [f64; 3] = std::array::from_fn(|idx| {
             let cross = lattice_vecs[(idx + 1) % 3].cross(&lattice_vecs[(idx + 2) % 3]);
             volume / cross.norm()
         });
 
-        // Number of bins: at least 1, based on height / cutoff
-        // We want bin_size >= cutoff so we only check 3 bins per axis (current + neighbors)
-        let n_bins: [usize; 3] = std::array::from_fn(|idx| {
-            let n = (heights[idx] / cutoff).floor() as usize;
-            n.max(1)
-        });
-
-        // Fractional bin size
-        let bin_size_frac: [f64; 3] = std::array::from_fn(|idx| 1.0 / n_bins[idx] as f64);
-
-        // Total number of bins
-        let total_bins = n_bins[0] * n_bins[1] * n_bins[2];
-
-        // Allocate bins
-        let mut bins: Vec<Vec<usize>> = vec![Vec::new(); total_bins];
-
-        // Assign atoms to bins based on their fractional coordinates
-        for (atom_idx, frac) in frac_coords.iter().enumerate() {
-            // Wrap to [0, 1)
-            let wrapped = wrap_frac_coords(frac);
-
-            // Compute bin indices
-            let bx = ((wrapped.x / bin_size_frac[0]).floor() as usize).min(n_bins[0] - 1);
-            let by = ((wrapped.y / bin_size_frac[1]).floor() as usize).min(n_bins[1] - 1);
-            let bz = ((wrapped.z / bin_size_frac[2]).floor() as usize).min(n_bins[2] - 1);
-
-            let bin_idx = bx + by * n_bins[0] + bz * n_bins[0] * n_bins[1];
-            bins[bin_idx].push(atom_idx);
+        // Axis domains: periodic → the full cell [0,1); non-periodic → the
+        // atoms' fractional extent (a molecule in a huge bounding box only
+        // bins the region that actually contains atoms).
+        let mut origin_frac = [0.0f64; 3];
+        let mut extent_frac = [1.0f64; 3];
+        for axis in 0..3 {
+            if !pbc[axis] {
+                let mut fmin = f64::MAX;
+                let mut fmax = f64::MIN;
+                for frac in frac_coords {
+                    fmin = fmin.min(frac[axis]);
+                    fmax = fmax.max(frac[axis]);
+                }
+                if n_atoms == 0 {
+                    fmin = 0.0;
+                    fmax = 1.0;
+                }
+                origin_frac[axis] = fmin;
+                extent_frac[axis] = (fmax - fmin).max(1e-9);
+            }
         }
 
-        // Pre-allocate capacity estimate for bins (average atoms per bin)
-        let avg_per_bin = n_atoms / total_bins.max(1);
-        if avg_per_bin > 0 {
-            for bin in &mut bins {
-                if bin.capacity() < avg_per_bin {
-                    bin.reserve(avg_per_bin);
+        // Bin counts: bin span ≥ cutoff where the domain allows. Cap the
+        // grid at ~2·∛n per axis so a sparse gas in a huge box doesn't
+        // allocate an absurd number of empty bins (bigger bins stay correct
+        // — the stencil radius shrinks to match).
+        let axis_cap = (((n_atoms as f64).cbrt().ceil() as usize) * 2).max(1);
+        let n_bins: [usize; 3] = std::array::from_fn(|axis| {
+            let domain_cart = heights[axis] * extent_frac[axis];
+            ((domain_cart / cutoff).floor() as usize).clamp(1, axis_cap)
+        });
+        let bin_size_frac: [f64; 3] =
+            std::array::from_fn(|axis| extent_frac[axis] / n_bins[axis] as f64);
+
+        // Stencil radius per axis: how many bin slabs the cutoff can span.
+        // Atoms sit anywhere inside their bins, so bins offset by k contain
+        // candidates whenever (k-1)·bin_height ≤ cutoff → R = ⌊cutoff/bin⌋+1.
+        // Non-periodic axes never need offsets beyond the grid itself.
+        let radius: [i32; 3] = std::array::from_fn(|axis| {
+            let bin_cart = heights[axis] * bin_size_frac[axis];
+            let r = (cutoff / bin_cart).floor() as i32 + 1;
+            if pbc[axis] { r } else { r.min(n_bins[axis] as i32 - 1).max(0) }
+        });
+        let mut stencil = Vec::with_capacity(
+            ((2 * radius[0] + 1) * (2 * radius[1] + 1) * (2 * radius[2] + 1)) as usize,
+        );
+        for dx in -radius[0]..=radius[0] {
+            for dy in -radius[1]..=radius[1] {
+                for dz in -radius[2]..=radius[2] {
+                    stencil.push([dx, dy, dz]);
                 }
             }
+        }
+
+        let total_bins = n_bins[0] * n_bins[1] * n_bins[2];
+        let mut bins: Vec<Vec<usize>> = vec![Vec::new(); total_bins];
+        let mut atom_bins = Vec::with_capacity(n_atoms);
+        let mut wrap_shifts = Vec::with_capacity(n_atoms);
+        let mut wrapped_cart = Vec::with_capacity(n_atoms);
+
+        for frac in frac_coords {
+            let mut wrapped = *frac;
+            let mut shift = [0i32; 3];
+            let mut bin = [0usize; 3];
+            for axis in 0..3 {
+                if pbc[axis] {
+                    let s = frac[axis].floor();
+                    shift[axis] = s as i32;
+                    wrapped[axis] = frac[axis] - s;
+                    bin[axis] = ((wrapped[axis] / bin_size_frac[axis]).floor() as usize)
+                        .min(n_bins[axis] - 1);
+                } else {
+                    // Clamp instead of wrap — outliers land in edge bins.
+                    let rel = frac[axis] - origin_frac[axis];
+                    bin[axis] = ((rel / bin_size_frac[axis]).floor() as isize)
+                        .clamp(0, n_bins[axis] as isize - 1) as usize;
+                }
+            }
+            wrapped_cart.push(matrix.transpose() * wrapped);
+            let bin_idx = bin[0] + bin[1] * n_bins[0] + bin[2] * n_bins[0] * n_bins[1];
+            bins[bin_idx].push(atom_bins.len());
+            atom_bins.push(bin);
+            wrap_shifts.push(shift);
         }
 
         Self {
             bins,
             n_bins,
-            bin_size_frac,
+            atom_bins,
+            wrap_shifts,
+            wrapped_cart,
+            stencil,
+            pbc,
         }
     }
 
     /// Get the linear bin index from 3D bin coordinates.
     #[inline]
-    fn bin_index(&self, bx: usize, by: usize, bz: usize) -> usize {
-        bx + by * self.n_bins[0] + bz * self.n_bins[0] * self.n_bins[1]
+    fn bin_index(&self, bin: [usize; 3]) -> usize {
+        bin[0] + bin[1] * self.n_bins[0] + bin[2] * self.n_bins[0] * self.n_bins[1]
     }
 
-    /// Get 3D bin coordinates from a linear bin index.
-    #[inline]
-    fn bin_coords(&self, idx: usize) -> (usize, usize, usize) {
-        let bz = idx / (self.n_bins[0] * self.n_bins[1]);
-        let remainder = idx % (self.n_bins[0] * self.n_bins[1]);
-        let by = remainder / self.n_bins[0];
-        let bx = remainder % self.n_bins[0];
-        (bx, by, bz)
-    }
+    /// Collect the neighbors of `center_idx` within `cutoff` into `out`.
+    /// Emitted images refer to the original (unwrapped) input coordinates.
+    fn neighbors_of(
+        &self,
+        center_idx: usize,
+        lattice_vecs: &[Vector3<f64>; 3],
+        config: &NeighborListConfig,
+        out: &mut NeighborList,
+    ) {
+        let cutoff_sq = config.cutoff * config.cutoff;
+        let tol_sq = config.numerical_tol * config.numerical_tol;
+        let center_bin = self.atom_bins[center_idx];
+        let center_cart = self.wrapped_cart[center_idx];
+        let center_shift = self.wrap_shifts[center_idx];
 
-    /// Iterate over all neighboring bins for a given bin, including the bin itself.
-    /// Returns (neighbor_bin_idx, image_offset) pairs.
-    fn neighbor_bins(&self, bin_idx: usize, pbc: [bool; 3]) -> Vec<(usize, [i32; 3])> {
-        let (bx, by, bz) = self.bin_coords(bin_idx);
-        let mut neighbors = Vec::with_capacity(27);
-
-        // Range of offsets to check for each axis.
-        //
-        // When n_bins[axis] == 1 (e.g. cell axis shorter than 2× cutoff —
-        // common along the long axis of a primitive perovskite, or any
-        // direction where lattice height < 2·cutoff), the bin's own atoms
-        // are also their PBC neighbors via image=±1. Without explicitly
-        // emitting (self_bin, ±1) we silently drop every cross-cell bond
-        // along that axis. The previous `&& n > 1` guard caused this:
-        // with cutoff=5 Å and lattice_a=8.7 Å, n=1 → `else if` branch
-        // never fired → no jimage=[±1,0,0] bonds emitted.
-        let range = |axis: usize, b: usize| -> Vec<(usize, i32)> {
-            let n = self.n_bins[axis];
-            let mut result = Vec::with_capacity(3);
-
-            // Current bin (image 0)
-            result.push((b, 0));
-
-            // Previous neighbor (or PBC wrap)
-            if b > 0 {
-                result.push((b - 1, 0));
-            } else if pbc[axis] {
-                // n=1: wraps to (0, -1) — same bin, image -1
-                // n>1: wraps to (n-1, -1) — last bin, image -1
-                result.push((n - 1, -1));
+        for offsets in &self.stencil {
+            let mut bin = [0usize; 3];
+            let mut base_image = [0i32; 3];
+            let mut in_range = true;
+            for axis in 0..3 {
+                let target = center_bin[axis] as i32 + offsets[axis];
+                let n = self.n_bins[axis] as i32;
+                if self.pbc[axis] {
+                    // Each stencil offset maps to a unique (bin, image) pair,
+                    // so multi-period stencils never emit duplicates.
+                    base_image[axis] = target.div_euclid(n);
+                    bin[axis] = target.rem_euclid(n) as usize;
+                } else if target < 0 || target >= n {
+                    in_range = false;
+                    break;
+                } else {
+                    bin[axis] = target as usize;
+                }
+            }
+            if !in_range {
+                continue;
             }
 
-            // Next neighbor (or PBC wrap)
-            if b + 1 < n {
-                result.push((b + 1, 0));
-            } else if pbc[axis] {
-                // n=1: wraps to (0, +1) — same bin, image +1
-                // n>1: wraps to (0, +1) — first bin, image +1
-                result.push((0, 1));
-            }
+            let offset_cart = (base_image[0] as f64) * lattice_vecs[0]
+                + (base_image[1] as f64) * lattice_vecs[1]
+                + (base_image[2] as f64) * lattice_vecs[2];
 
-            result
-        };
-
-        let x_range = range(0, bx);
-        let y_range = range(1, by);
-        let z_range = range(2, bz);
-
-        for (nx, ix) in &x_range {
-            for (ny, iy) in &y_range {
-                for (nz, iz) in &z_range {
-                    let neighbor_idx = self.bin_index(*nx, *ny, *nz);
-                    neighbors.push((neighbor_idx, [*ix, *iy, *iz]));
+            for &neighbor_idx in &self.bins[self.bin_index(bin)] {
+                let diff = self.wrapped_cart[neighbor_idx] + offset_cart - center_cart;
+                let dist_sq = diff.norm_squared();
+                if dist_sq > cutoff_sq {
+                    continue;
+                }
+                // Express the image against the original coordinates:
+                // wrapped_j + L·m − wrapped_i  ==  orig_j + L·(m − s_j + s_i) − orig_i
+                let neighbor_shift = self.wrap_shifts[neighbor_idx];
+                let image = [
+                    base_image[0] - neighbor_shift[0] + center_shift[0],
+                    base_image[1] - neighbor_shift[1] + center_shift[1],
+                    base_image[2] - neighbor_shift[2] + center_shift[2],
+                ];
+                let is_self =
+                    center_idx == neighbor_idx && image == [0, 0, 0] && dist_sq < tol_sq;
+                if !is_self || config.self_interaction {
+                    out.push(center_idx, neighbor_idx, dist_sq.sqrt(), image);
                 }
             }
         }
-
-        neighbors
     }
-}
-
-/// Wrap fractional coordinates to [0, 1).
-#[inline]
-fn wrap_frac_coords(coords: &Vector3<f64>) -> Vector3<f64> {
-    Vector3::new(
-        coords.x - coords.x.floor(),
-        coords.y - coords.y.floor(),
-        coords.z - coords.z.floor(),
-    )
 }
 
 /// Build a neighbor list using the cell-list algorithm.
@@ -313,7 +365,7 @@ pub fn build_neighbor_list(structure: &Structure, config: &NeighborListConfig) -
         matrix.row(2).transpose(),
     ];
 
-    // Compute the search range for periodic images
+    // Compute the search range for periodic images (brute-force path only)
     // For each axis, determine how many periodic images we need to consider
     let volume = lattice.volume();
     let max_images: [i32; 3] = std::array::from_fn(|idx| {
@@ -326,14 +378,13 @@ pub fn build_neighbor_list(structure: &Structure, config: &NeighborListConfig) -
         }
     });
 
-    // For small systems or when we need many periodic images, fall back to brute-force
-    // The cell-list approach has overhead that isn't worth it for small systems
-    let use_cell_list = n_atoms > config.cell_list_threshold
-        && max_images.iter().all(|&m| m <= 1)
-        && pbc.iter().all(|&p| p);
+    // The cell list handles every pbc combination and multi-image thin cells;
+    // brute force remains only for small systems where grid setup overhead
+    // isn't worth it.
+    let use_cell_list = n_atoms > config.cell_list_threshold;
 
     if use_cell_list {
-        build_neighbor_list_celllist(frac_coords, &cart_coords, lattice, &lattice_vecs, config)
+        build_neighbor_list_celllist(frac_coords, lattice, &lattice_vecs, config)
     } else {
         build_neighbor_list_bruteforce(&cart_coords, &lattice_vecs, pbc, &max_images, config)
     }
@@ -342,18 +393,14 @@ pub fn build_neighbor_list(structure: &Structure, config: &NeighborListConfig) -
 /// Build neighbor list using cell-list algorithm (O(n) for large systems).
 fn build_neighbor_list_celllist(
     frac_coords: &[Vector3<f64>],
-    cart_coords: &[Vector3<f64>],
     lattice: &Lattice,
     lattice_vecs: &[Vector3<f64>; 3],
     config: &NeighborListConfig,
 ) -> NeighborList {
-    let cutoff = config.cutoff;
-    let cutoff_sq = cutoff * cutoff;
-    let pbc = lattice.pbc;
     let n_atoms = frac_coords.len();
 
-    // Build cell list
-    let cell_list = CellList::build(frac_coords, lattice, cutoff);
+    // Build cell list (wraps periodic axes itself, keeping shift bookkeeping)
+    let cell_list = CellList::build(frac_coords, lattice, config.cutoff);
 
     // Estimate capacity (12 neighbors per atom is typical for close-packed structures)
     let estimated_pairs = n_atoms * 12;
@@ -365,44 +412,7 @@ fn build_neighbor_list_celllist(
             .into_par_iter()
             .map(|center_idx| {
                 let mut local_nl = NeighborList::with_capacity(20);
-                let center_cart = &cart_coords[center_idx];
-                let center_frac = &frac_coords[center_idx];
-                let wrapped_center = wrap_frac_coords(center_frac);
-
-                // Find which bin this atom is in
-                let bx = ((wrapped_center.x / cell_list.bin_size_frac[0]).floor() as usize)
-                    .min(cell_list.n_bins[0] - 1);
-                let by = ((wrapped_center.y / cell_list.bin_size_frac[1]).floor() as usize)
-                    .min(cell_list.n_bins[1] - 1);
-                let bz = ((wrapped_center.z / cell_list.bin_size_frac[2]).floor() as usize)
-                    .min(cell_list.n_bins[2] - 1);
-                let center_bin = cell_list.bin_index(bx, by, bz);
-
-                // Check all neighboring bins
-                for (neighbor_bin, base_image) in cell_list.neighbor_bins(center_bin, pbc) {
-                    for &neighbor_idx in &cell_list.bins[neighbor_bin] {
-                        // Compute distance with periodic image
-                        let offset = (base_image[0] as f64) * lattice_vecs[0]
-                            + (base_image[1] as f64) * lattice_vecs[1]
-                            + (base_image[2] as f64) * lattice_vecs[2];
-
-                        let neighbor_cart = cart_coords[neighbor_idx] + offset;
-                        let diff = neighbor_cart - center_cart;
-                        let dist_sq = diff.norm_squared();
-
-                        if dist_sq <= cutoff_sq {
-                            // Check self-interaction
-                            let is_self = center_idx == neighbor_idx
-                                && base_image == [0, 0, 0]
-                                && dist_sq < config.numerical_tol * config.numerical_tol;
-
-                            if !is_self || config.self_interaction {
-                                local_nl.push(center_idx, neighbor_idx, dist_sq.sqrt(), base_image);
-                            }
-                        }
-                    }
-                }
-
+                cell_list.neighbors_of(center_idx, lattice_vecs, config, &mut local_nl);
                 local_nl
             })
             .collect();
@@ -418,47 +428,9 @@ fn build_neighbor_list_celllist(
     #[cfg(not(feature = "rayon"))]
     let result = {
         let mut result = NeighborList::with_capacity(estimated_pairs);
-
         for center_idx in 0..n_atoms {
-            let center_cart = &cart_coords[center_idx];
-            let center_frac = &frac_coords[center_idx];
-            let wrapped_center = wrap_frac_coords(center_frac);
-
-            // Find which bin this atom is in
-            let bx = ((wrapped_center.x / cell_list.bin_size_frac[0]).floor() as usize)
-                .min(cell_list.n_bins[0] - 1);
-            let by = ((wrapped_center.y / cell_list.bin_size_frac[1]).floor() as usize)
-                .min(cell_list.n_bins[1] - 1);
-            let bz = ((wrapped_center.z / cell_list.bin_size_frac[2]).floor() as usize)
-                .min(cell_list.n_bins[2] - 1);
-            let center_bin = cell_list.bin_index(bx, by, bz);
-
-            // Check all neighboring bins
-            for (neighbor_bin, base_image) in cell_list.neighbor_bins(center_bin, pbc) {
-                for &neighbor_idx in &cell_list.bins[neighbor_bin] {
-                    // Compute distance with periodic image
-                    let offset = (base_image[0] as f64) * lattice_vecs[0]
-                        + (base_image[1] as f64) * lattice_vecs[1]
-                        + (base_image[2] as f64) * lattice_vecs[2];
-
-                    let neighbor_cart = cart_coords[neighbor_idx] + offset;
-                    let diff = neighbor_cart - center_cart;
-                    let dist_sq = diff.norm_squared();
-
-                    if dist_sq <= cutoff_sq {
-                        // Check self-interaction
-                        let is_self = center_idx == neighbor_idx
-                            && base_image == [0, 0, 0]
-                            && dist_sq < config.numerical_tol * config.numerical_tol;
-
-                        if !is_self || config.self_interaction {
-                            result.push(center_idx, neighbor_idx, dist_sq.sqrt(), base_image);
-                        }
-                    }
-                }
-            }
+            cell_list.neighbors_of(center_idx, lattice_vecs, config, &mut result);
         }
-
         result
     };
 
@@ -467,7 +439,11 @@ fn build_neighbor_list_celllist(
 
 /// Build neighbor list using brute-force O(n²) algorithm.
 ///
-/// Used for small systems or when many periodic images are needed.
+/// Used only for small systems where cell-list setup overhead isn't worth
+/// it. Note: assumes coordinates are inside (or near) the unit cell — its
+/// ±max_images window is sized from the cutoff/cell ratio, so far-unwrapped
+/// coordinates can fall outside the searched image range (the cell-list
+/// path wraps and is exact for any input).
 fn build_neighbor_list_bruteforce(
     cart_coords: &[Vector3<f64>],
     lattice_vecs: &[Vector3<f64>; 3],
@@ -2064,5 +2040,214 @@ mod tests {
             result.unwrap_err(),
             crate::error::FerroxError::SingularCell
         ));
+    }
+
+    // === Cell-list vs brute-force parity (generalized cell list) ===
+    //
+    // The cell list now covers every pbc combination, cells thinner than the
+    // cutoff (multi-image stencils), and unwrapped input coordinates. Each
+    // parity test builds a structure large enough to take the cell-list path
+    // and compares the exact (center, neighbor, image, distance) multiset
+    // against the brute-force reference.
+
+    /// Deterministic pseudo-random fraction in [0, 1) — keeps tests seedless.
+    fn hash_frac(seed: usize) -> f64 {
+        let mut x = seed as u64 * 2654435761 + 12345;
+        x ^= x >> 16;
+        x = x.wrapping_mul(2246822519);
+        x ^= x >> 13;
+        (x % 100_000) as f64 / 100_000.0
+    }
+
+    fn make_random_structure(
+        n_atoms: usize,
+        lattice: Lattice,
+        frac_span: f64,
+        frac_offset: f64,
+    ) -> Structure {
+        let species = vec![Species::neutral(Element::C); n_atoms];
+        let frac_coords: Vec<Vector3<f64>> = (0..n_atoms)
+            .map(|idx| {
+                Vector3::new(
+                    frac_offset + frac_span * hash_frac(idx * 3),
+                    frac_offset + frac_span * hash_frac(idx * 3 + 1),
+                    frac_offset + frac_span * hash_frac(idx * 3 + 2),
+                )
+            })
+            .collect();
+        Structure::new(lattice, species, frac_coords)
+    }
+
+    /// Canonical sorted multiset of (center, neighbor, image, quantized dist).
+    fn canonical_pairs(nl: &NeighborList) -> Vec<(usize, usize, [i32; 3], i64)> {
+        let mut pairs: Vec<(usize, usize, [i32; 3], i64)> = (0..nl.len())
+            .map(|idx| {
+                (
+                    nl.center_indices[idx],
+                    nl.neighbor_indices[idx],
+                    nl.images[idx],
+                    (nl.distances[idx] * 1e8).round() as i64,
+                )
+            })
+            .collect();
+        pairs.sort();
+        pairs
+    }
+
+    fn assert_parity(structure: &Structure, cutoff: f64, label: &str) {
+        let config = NeighborListConfig {
+            cutoff,
+            cell_list_threshold: 0, // force cell list
+            ..Default::default()
+        };
+        let cell = build_neighbor_list(structure, &config);
+
+        let config_bf = NeighborListConfig {
+            cutoff,
+            cell_list_threshold: usize::MAX, // force brute force
+            ..Default::default()
+        };
+        let brute = build_neighbor_list(structure, &config_bf);
+
+        let cell_pairs = canonical_pairs(&cell);
+        let brute_pairs = canonical_pairs(&brute);
+        assert_eq!(
+            cell_pairs.len(),
+            brute_pairs.len(),
+            "{label}: pair count mismatch (cell {} vs brute {})",
+            cell_pairs.len(),
+            brute_pairs.len()
+        );
+        assert_eq!(cell_pairs, brute_pairs, "{label}: pair sets differ");
+    }
+
+    #[test]
+    fn test_parity_non_periodic_molecule() {
+        // Fully non-periodic system (the old dispatch fell back to O(n²)).
+        let mut lattice = Lattice::cubic(30.0);
+        lattice.pbc = [false, false, false];
+        let s = make_random_structure(400, lattice, 0.9, 0.05);
+        assert_parity(&s, 4.0, "FFF molecule");
+    }
+
+    #[test]
+    fn test_parity_mixed_pbc_slab() {
+        // Slab: periodic in a/b, open along c with vacuum — atoms occupy a
+        // thin band so the non-periodic axis exercises extent binning.
+        let mut lattice = Lattice::cubic(20.0);
+        lattice.pbc = [true, true, false];
+        let s = make_random_structure(300, lattice, 0.25, 0.4);
+        assert_parity(&s, 4.5, "TTF slab");
+    }
+
+    #[test]
+    fn test_parity_thin_cell_multi_image() {
+        // Cell much thinner than the cutoff along every axis: neighbors need
+        // |image| ≥ 2 — the old dispatch refused this outright.
+        let lattice = Lattice::from_parameters(3.0, 3.5, 4.0, 90.0, 90.0, 90.0);
+        let s = make_random_structure(60, lattice, 1.0, 0.0);
+        assert_parity(&s, 7.5, "thin cell multi-image");
+        // Prove multi-image pairs actually occur.
+        let config = NeighborListConfig {
+            cutoff: 7.5,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let nl = build_neighbor_list(&s, &config);
+        assert!(
+            nl.images.iter().any(|img| img.iter().any(|&v| v.abs() >= 2)),
+            "expected |image| >= 2 pairs in a 3-4 Å cell with 7.5 Å cutoff"
+        );
+    }
+
+    #[test]
+    fn test_parity_unwrapped_coords() {
+        // Fractional coordinates outside [0,1): the cell list wraps atoms in
+        // and must correct emitted images back to the original coordinates.
+        //
+        // The brute-force path can NOT serve as the reference here — its
+        // ±max_images window is sized from the cutoff/cell ratio and assumes
+        // in-cell coordinates, so it misses pairs between atoms sitting
+        // several cells apart (undercounts). Reference = brute force on a
+        // manually wrapped twin structure, with images transformed back to
+        // the unwrapped frame via I = m − s_j + s_i.
+        let lattice = Lattice::cubic(12.0);
+        let s = make_random_structure(200, Lattice::cubic(12.0), 2.4, -1.2);
+
+        let shifts: Vec<[i32; 3]> = s
+            .frac_coords
+            .iter()
+            .map(|f| [f.x.floor() as i32, f.y.floor() as i32, f.z.floor() as i32])
+            .collect();
+        let wrapped_frac: Vec<Vector3<f64>> = s
+            .frac_coords
+            .iter()
+            .map(|f| Vector3::new(f.x - f.x.floor(), f.y - f.y.floor(), f.z - f.z.floor()))
+            .collect();
+        let wrapped_twin = Structure::new(
+            lattice,
+            vec![Species::neutral(Element::C); wrapped_frac.len()],
+            wrapped_frac,
+        );
+
+        let config_cell = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: 0,
+            ..Default::default()
+        };
+        let cell = build_neighbor_list(&s, &config_cell);
+
+        let config_bf = NeighborListConfig {
+            cutoff: 4.0,
+            cell_list_threshold: usize::MAX,
+            ..Default::default()
+        };
+        let brute_wrapped = build_neighbor_list(&wrapped_twin, &config_bf);
+        // Transform wrapped-frame images into the unwrapped frame.
+        let mut expected: Vec<(usize, usize, [i32; 3], i64)> = (0..brute_wrapped.len())
+            .map(|idx| {
+                let center = brute_wrapped.center_indices[idx];
+                let neighbor = brute_wrapped.neighbor_indices[idx];
+                let m = brute_wrapped.images[idx];
+                let image = [
+                    m[0] - shifts[neighbor][0] + shifts[center][0],
+                    m[1] - shifts[neighbor][1] + shifts[center][1],
+                    m[2] - shifts[neighbor][2] + shifts[center][2],
+                ];
+                (
+                    center,
+                    neighbor,
+                    image,
+                    (brute_wrapped.distances[idx] * 1e8).round() as i64,
+                )
+            })
+            .collect();
+        expected.sort();
+
+        let got = canonical_pairs(&cell);
+        assert_eq!(
+            got.len(),
+            expected.len(),
+            "unwrapped coords: pair count mismatch (cell {} vs wrapped-brute {})",
+            got.len(),
+            expected.len()
+        );
+        assert_eq!(got, expected, "unwrapped coords: pair sets differ");
+    }
+
+    #[test]
+    fn test_parity_triclinic_skewed() {
+        let lattice = Lattice::from_parameters(11.0, 12.0, 13.0, 65.0, 75.0, 85.0);
+        let s = make_random_structure(350, lattice, 1.0, 0.0);
+        assert_parity(&s, 4.5, "triclinic");
+    }
+
+    #[test]
+    fn test_parity_sparse_gas_capped_grid() {
+        // Huge box, few atoms: exercises the per-axis bin-count cap.
+        let mut lattice = Lattice::cubic(300.0);
+        lattice.pbc = [false, false, false];
+        let s = make_random_structure(120, lattice, 1.0, 0.0);
+        assert_parity(&s, 6.0, "sparse gas");
     }
 }
