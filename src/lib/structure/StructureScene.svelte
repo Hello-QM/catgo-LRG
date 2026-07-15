@@ -592,7 +592,6 @@
     // Per-frame bond connectivity from the async trajectory bond cache. When
     // null (cache miss), we fall back to `bond_state.bond_connectivity`
     // (frame-0 static).
-    trajectory_bond_connectivity = null as Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> | null,
     webgl_suspended = false,
     on_reset_rotation,
     on_atom_context_menu,
@@ -881,7 +880,6 @@
     // Trajectory fast-path: flat Float32Array of forces (fx,fy,fz) per atom
     trajectory_frame_forces?: Float32Array | null
     // Per-frame bond connectivity (from trajectory bond cache). Null = fall back to static.
-    trajectory_bond_connectivity?: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> | null
     /** WebGPU large-system overlay active. When true the WebGL scene is fully
      *  covered by the overlay and `autoRender` is off, so this scene must do
      *  ZERO per-frame work: the trajectory bond-pair rebuild is skipped. Read
@@ -2388,6 +2386,19 @@
     scale: bond_scale,
   })
   $effect.pre(() => {
+    // Fixed-topology trajectory playback: the trajectory fast-path
+    // (compute_bond_connectivity_for_frame + build_trajectory_bond_pairs in
+    // the bond-pairs effect below) owns bond state while frame positions
+    // stream. On indexed/streaming trajectories the per-frame structure
+    // cascade still reaches this effect (bond_input identity changes each
+    // frame); without this gate the async path clears bond_connectivity and
+    // re-runs a full worker detection per frame — at 20k atoms that's two
+    // redundant ~130ms JSON computes plus three bond-pair rebuilds per frame
+    // fighting the fast path. Read reactively so trajectory teardown
+    // (positions → null) re-fires this effect and recomputes static bonds.
+    // Variable-N trajectories keep trajectory_frame_positions === null and
+    // still take this path per frame — it is their only bond source.
+    if (trajectory_frame_positions != null) return
     // `trajectory_step_idx >= 0` is the trajectory-active signal: variable-N
     // trajectories drive this slow path per frame (no fast-path positions), so
     // it triggers the extension-only solid_angle -> atom_radii downgrade inside

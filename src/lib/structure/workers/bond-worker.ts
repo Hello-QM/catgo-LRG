@@ -12,6 +12,7 @@
 import {
   initSync,
   detect_bonds_radii,
+  detect_bonds_radii_typed,
   detect_bonds_electronegativity,
   detect_bonds_solid_angle,
   detect_hydrogen_bonds,
@@ -41,6 +42,32 @@ self.onmessage = (e: MessageEvent) => {
   const { structure_json, strategy, options_json, covalent_bonds_json } = e.data
 
   try {
+    if (type === `bonds_typed`) {
+      // Typed-array fast path (atom_radii only): Float32Array positions in,
+      // flat typed bond table out. Both directions use transfer lists — no
+      // JSON, no structured-clone of large payloads.
+      const t0 = performance.now()
+      const table = detect_bonds_radii_typed(
+        e.data.positions,
+        e.data.atomic_numbers,
+        e.data.lattice,
+        e.data.pbc,
+        options_json ?? undefined,
+      )
+      const pairs = table.pairs
+      const images = table.images
+      const lengths = table.lengths
+      const strengths = table.strengths
+      table.free()
+      const dt = (performance.now() - t0).toFixed(1)
+      // Worker-scope postMessage(message, transfer) overload — cast because
+      // this file type-checks under the DOM lib where self is a Window.
+      ;(self.postMessage as (msg: unknown, transfer: Transferable[]) => void)(
+        { id, pairs, images, lengths, strengths, dt },
+        [pairs.buffer, images.buffer, lengths.buffer, strengths.buffer],
+      )
+      return
+    }
     if (type === `bonds`) {
       const t0 = performance.now()
       let result: string

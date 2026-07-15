@@ -14,7 +14,6 @@
 
   import { DEFAULTS, type ShowBonds } from '$lib/settings'
   import type { BondingStrategy } from './bonding'
-  import { create_trajectory_bond_cache, wire_trajectory_bond_cache } from './trajectory-bond-cache.svelte'
   import { colors, atom_clipboard } from '$lib/state.svelte'
   import type { PymatgenStructure } from '$lib/structure'
   import {
@@ -1297,10 +1296,6 @@
   // Track if structure has been aligned to prevent re-alignment
   let structure_aligned_id = $state<string | null>(null)
   let trajectory_active = $derived(trajectory_frame_positions != null)
-  // Per-frame bond cache lives below — needs supercell_structure ($derived
-  // declared further down) in its driver effect. Declared placeholder so
-  // template references still resolve before the real binding initializes.
-  let trajectory_bond_connectivity_for_frame: Array<{ site_idx_1: number; site_idx_2: number; strength: number; jimage: [number, number, number] }> | null = $state(null)
 
   // T5 pause writeback (search "T5 pause writeback" in src/lib/trajectory/Trajectory.svelte):
   // a $effect lived here that watched trajectory_active (= trajectory_frame_positions
@@ -1991,28 +1986,15 @@
   let supercell_structure = $derived(transform.supercell_structure)
   let supercell_loading = $derived(transform.supercell_loading)
 
-  // Per-frame bond cache for trajectory playback. Effects (clear / drive /
-  // push) live in trajectory-bond-cache.svelte.ts to keep this file lean.
-  const trajectory_bond_cache = create_trajectory_bond_cache()
-  wire_trajectory_bond_cache(trajectory_bond_cache, {
-    get_structure: () => structure,
-    get_base: () => supercell_structure ?? structure,
-    get_step_idx: () => trajectory_step_idx,
-    get_positions_version: () => trajectory_positions_version.v,
-    get_positions_invalidate_all: () => trajectory_positions_version.all,
-    get_trajectory_active: () => trajectory_active,
-    get_positions: () => get_trajectory_frame_positions,
-    get_strategy: () => (scene_props?.bonding_strategy ?? `atom_radii`) as BondingStrategy,
-    get_show_bonds: () => (scene_props?.show_bonds ?? `always`) as string,
-    get_options: () => (scene_props?.bonding_options ?? {}) as Record<string, number>,
-    set_connectivity: (v) => { trajectory_bond_connectivity_for_frame = v },
-    get_connectivity: () => trajectory_bond_connectivity_for_frame,
-    // WebGPU overlay active ⇒ suspend the per-frame async bond recompute. The
-    // overlay computes its own GPU bonds and does not read
-    // trajectory_bond_connectivity_for_frame. Read reactively inside the driver
-    // effect so toggle-OFF re-primes the current frame's connectivity.
-    get_suspended: () => webgl_suspended,
-  })
+  // The per-frame TrajectoryBondCache pipeline (create_trajectory_bond_cache +
+  // wire_trajectory_bond_cache) was removed here: its only sink was the
+  // `trajectory_bond_connectivity` prop on StructureScene, which nothing in
+  // StructureScene reads — the trajectory fast path in
+  // bond-computation-controller (compute_bond_connectivity_for_frame) owns
+  // per-frame bonds. The wire cost one full worker bond detection per frame
+  // plus a prefetch burst (each with a 20k-site structure clone) at 20k
+  // atoms, all discarded. Module + unit tests remain for the isolated cache;
+  // delete them in a follow-up if no consumer reappears.
 
   // Track selection to restore after atom movement
   let saved_selection: number[] | null = null
@@ -4402,7 +4384,6 @@
             {trajectory_frame_positions}
             {trajectory_frame_forces}
             {trajectory_step_idx}
-            trajectory_bond_connectivity={trajectory_bond_connectivity_for_frame}
             {...scene_props}
             {show_image_atoms}
             {clip_center}
