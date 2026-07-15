@@ -765,7 +765,7 @@
         if (deadline && deadline.timeRemaining() < 8) break
         const i = idx++
         try {
-          let frame = untrack(() => traj.frames[i])
+          let frame: TrajectoryFrame | undefined = untrack(() => traj.frames[i])
           if (!frame?.structure && loader) {
             frame = (await loader.load_frame(
               untrack(() => orig_data) ?? ``,

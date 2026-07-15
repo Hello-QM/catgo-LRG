@@ -3206,8 +3206,12 @@
     }
 
     try {
-      // Read and parse the file
+      // Read and parse the file. Merge only understands text structure
+      // formats — binary trajectories (.traj/.h5) arrive as ArrayBuffer now.
       const { content, filename } = await decompress_file(file)
+      if (typeof content !== `string`) {
+        throw new Error(`Cannot merge binary trajectory file ${filename}`)
+      }
       const imported = parse_any_structure(content, filename)
 
       if (imported && imported.sites && imported.sites.length > 0) {
