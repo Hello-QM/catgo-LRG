@@ -33,7 +33,9 @@ export class TrajFrameReader implements FrameLoader {
   }
 
   fork(): FrameLoader {
-    return new TrajFrameReader(this.filename)
+    const fork = new TrajFrameReader(this.filename)
+    fork.global_numbers = this.global_numbers ? [...this.global_numbers] : undefined
+    return fork
   }
 
   /**

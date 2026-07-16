@@ -79,6 +79,27 @@ describe(`Trajectory Streaming`, () => {
     return buffer
   }
 
+  const strip_ase_numbers_after_first = (
+    buffer: ArrayBuffer,
+    num_frames: number,
+  ): ArrayBuffer => {
+    const view = new DataView(buffer)
+    const offsets_pos = Number(view.getBigInt64(40, true))
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const token = `"numbers":[1,1],`
+    for (let idx = 1; idx < num_frames; idx++) {
+      const frame_offset = Number(view.getBigInt64(offsets_pos + idx * 8, true))
+      const json_length = Number(view.getBigInt64(frame_offset, true))
+      const bytes = new Uint8Array(buffer, frame_offset + 8, json_length)
+      const json = decoder.decode(bytes)
+      const stripped = json.replace(token, ` `.repeat(token.length))
+      expect(stripped).not.toBe(json)
+      bytes.set(encoder.encode(stripped))
+    }
+    return buffer
+  }
+
   describe(`Frame Indexing`, () => {
     it(`should build frame index for XYZ trajectory`, async () => {
       const data = create_synthetic_xyz(10)
@@ -454,6 +475,18 @@ describe(`Trajectory Streaming`, () => {
   })
 
   describe(`Regression Tests`, () => {
+    it(`preserves ASE global numbers when a reader is forked`, async () => {
+      const data = strip_ase_numbers_after_first(create_synthetic_ase(5), 5)
+      const original = new TrajFrameReader(`local.traj`)
+      expect(await original.load_frame(data, 0)).not.toBeNull()
+
+      const fork = original.fork!()
+      const frame_4 = await fork.load_frame(data, 4)
+
+      expect(frame_4?.step).toBe(4)
+      expect(frame_4?.structure.sites).toHaveLength(2)
+    })
+
     it(`keeps the first non-preloaded local ASE frame loadable after pane cloning`, async () => {
       const source = create_synthetic_ase(5)
       const parsed = await parse_trajectory_async(
