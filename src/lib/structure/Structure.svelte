@@ -21,6 +21,8 @@
     get_elem_amounts,
   } from '$lib/structure'
   import { parse_supercell_scaling } from '$lib/structure/supercell'
+  import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
+  import type { RenderPacket } from '$lib/structure/scene/render-packet'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -2241,6 +2243,28 @@
       gpu_supercell_factors[0] * gpu_supercell_factors[1] * gpu_supercell_factors[2] > 1 &&
       !!(structure as { lattice?: unknown } | undefined)?.lattice,
   )
+  // ── Shared render packet (gpu-visual-supercell Task 2) ─────────────────────
+  // ONE packet per effective frame: the BASE scientific structure (owner) +
+  // trajectory positions/lattice/version + visual replica dims. The packet
+  // path never appends PBC image sites — topology stays exactly N sites and
+  // the frame 3N floats; ghosts travel as a sparse ImageInstanceTable
+  // (design §7.2). Lazy $derived: nothing reads it until Tasks 3/4 point the
+  // WebGPU/WebGL adapters at it, so today's hot path pays zero cost.
+  const render_packet_builder = create_render_packet_builder()
+  let render_packet: RenderPacket | null = $derived.by(() => {
+    if (!structure?.sites?.length) return null
+    return render_packet_builder.build({
+      structure,
+      frame_positions: trajectory_frame_positions,
+      frame_lattice: trajectory_frame_lattice,
+      frame_idx: trajectory_step_idx,
+      positions_version: trajectory_positions_version.v,
+      // Mirrors the LargeSystemOverlay `supercell` prop semantics.
+      dims: gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1],
+      boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
+    })
+  })
+  void render_packet // consumed by the render adapters in Tasks 3/4
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
   // covered it) repaints once on the next frame and isn't left on a stale paint.

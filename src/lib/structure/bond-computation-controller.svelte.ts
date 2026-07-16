@@ -810,10 +810,10 @@ export function get_traj_atomic_numbers(
   return result
 }
 
-/** Convert a typed bond table to connectivity objects, applying the same
- *  cross-cell self-image filter as `wasm_bonds_to_pairs` (drop a==b bonds
- *  with a non-zero image — the "starburst" stubs around cell-face atoms).
- *  Exported for tests. */
+/** Convert a typed bond table to connectivity objects 1:1. Periodic
+ *  self-image bonds (a==b with a non-zero image) are VALID and retained,
+ *  matching `wasm_bonds_to_pairs` — rendering policy for cell-boundary
+ *  bonds lives downstream (gpu-impostor design §7.2). Exported for tests. */
 export function typed_table_to_conn(
   table: TypedBondTable,
 ): Array<
@@ -832,7 +832,6 @@ export function typed_table_to_conn(
     const jx = table.images[idx * 3]
     const jy = table.images[idx * 3 + 1]
     const jz = table.images[idx * 3 + 2]
-    if (site_a === site_b && (jx | jy | jz) !== 0) continue
     conn.push({
       site_idx_1: site_a,
       site_idx_2: site_b,
@@ -1295,7 +1294,9 @@ let typed_topo_scratch: { pairs: Uint32Array; jimages: Int8Array } | null = null
  * Filter parity with the object pipeline (`build_trajectory_bond_pairs` +
  * `visible_bond_pairs`):
  *   - stale-distance pre-filter via `get_traj_max_dists` (NaN → skip check)
- *   - self-image starbursts (a == b with non-zero jimage) dropped
+ *   - periodic self-image bonds (a == b with non-zero jimage) are VALID and
+ *     retained (gpu-impostor design §7.2 — single-atom primitive cells have
+ *     only such bonds); geometry filters below still apply to them
  *   - `max_bond_length` hard cap (the caller passes MAX_BOND_LENGTH); the
  *     squared compare also drops non-finite geometry (NaN fails `<=`)
  *
@@ -1351,7 +1352,6 @@ export function conn_to_typed_topology(
     const jx = ji ? ji[0] | 0 : 0
     const jy = ji ? ji[1] | 0 : 0
     const jz = ji ? ji[2] | 0 : 0
-    if (site_a === site_b && (jx | jy | jz) !== 0) continue
     const pa = site_a * 3
     const pb = site_b * 3
     let bx = pos[pb]

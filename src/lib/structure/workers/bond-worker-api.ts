@@ -271,18 +271,11 @@ export function compute_bonds_sync(
  *  Exported for test purposes; not part of the runtime public API. */
 export function wasm_bonds_to_pairs(wasm_bonds: WasmBond[], structure: AnyStructure): BondPair[] {
   const sites = structure.sites
-  // Filter out cross-cell self-image bonds (a==b, jimage != [0,0,0]). These
-  // are the "metal-metal" bonds Rust emits for adjacent cells of the same
-  // atom (e.g. Sr→Sr_image at 4 Å in a perovskite unit cell). Visually they
-  // clutter the scene as a starburst of stubs around every atom that touches
-  // a cell face, so we drop them by default. FCC/BCC primitive metals
-  // (1-atom cells) lose all their bonds with this filter — they should opt
-  // back in once we add a UI toggle.
-  wasm_bonds = wasm_bonds.filter(b => {
-    if (b.site_idx_1 !== b.site_idx_2) return true
-    const img = (b as { image?: [number, number, number] }).image
-    return !img || (img[0] | img[1] | img[2]) === 0
-  })
+  // Periodic self-image bonds (a==b, jimage != [0,0,0]) are VALID and pass
+  // through unfiltered — FCC/BCC primitive metals (1-atom cells) have ONLY
+  // such bonds. Whether/how they render (stub vs hide vs ghost image) is a
+  // boundary-policy decision made downstream, not a detection-time filter
+  // (gpu-impostor design §7.2).
   return wasm_bonds.map(wb => {
     const pos_1 = sites[wb.site_idx_1]?.xyz
     const pos_2 = sites[wb.site_idx_2]?.xyz

@@ -27,6 +27,7 @@
  */
 
 import type { AnyStructure, PymatgenStructure } from './index'
+import type { ImageInstanceTable } from './scene/render-packet'
 
 export type ImageSiteKey = `${number}-${number},${number},${number}`
 
@@ -178,6 +179,63 @@ export function build_sites_to_draw(
 	}
 
 	return out
+}
+
+// Numeric dedup key: 256 values per jimage axis (Int8 range shifted by 128).
+const IMAGE_KEY_SPAN = 256 * 256 * 256
+const IMAGE_KEY_SITE_CAP = Math.floor(Number.MAX_SAFE_INTEGER / IMAGE_KEY_SPAN)
+
+/**
+ * Convert crystaltoolkit-style image-site metadata (the values of a
+ * `build_sites_to_draw` map, or any raw entry list) into the sparse
+ * `ImageInstanceTable` consumed by the render-packet path (design §7.2).
+ *
+ * The packet path never appends image sites to the structure — ghosts are
+ * (base_site, jimage) instances resolved on the GPU against the current
+ * frame lattice. Home-cell entries (`jimage = [0,0,0]`) are excluded (the
+ * replica instancing draws them), and ghosts are deduplicated by
+ * (site_idx, jimage) with a numeric key (no per-entry string allocation,
+ * mirroring `build_image_instance_table` in scene/replica-layout.ts).
+ *
+ * jimage components must fit the table's Int8 storage ([-128, 127]) and
+ * `site_idx` must stay below the numeric-key capacity (~3.5·10⁷ sites) —
+ * violations throw rather than risk key collisions.
+ */
+export function image_sites_to_instance_table(
+	entries: Iterable<ImageSiteEntry>,
+): ImageInstanceTable {
+	const seen = new Set<number>()
+	const sites: number[] = []
+	const images: number[] = []
+	for (const entry of entries) {
+		const [jx, jy, jz] = entry.jimage_img
+		if ((jx | jy | jz) === 0) continue // home cell — not a ghost
+		if (
+			jx < -128 || jx > 127 || jy < -128 || jy > 127 || jz < -128 || jz > 127
+		) {
+			throw new Error(
+				`image_sites_to_instance_table: jimage [${jx}, ${jy}, ${jz}] ` +
+					`exceeds Int8 storage range [-128, 127]`,
+			)
+		}
+		if (entry.site_idx > IMAGE_KEY_SITE_CAP) {
+			throw new Error(
+				`image_sites_to_instance_table: site_idx ${entry.site_idx} exceeds ` +
+					`the numeric dedup key capacity (${IMAGE_KEY_SITE_CAP})`,
+			)
+		}
+		const key = entry.site_idx * IMAGE_KEY_SPAN +
+			((jz + 128) * 256 + (jy + 128)) * 256 + (jx + 128)
+		if (seen.has(key)) continue
+		seen.add(key)
+		sites.push(entry.site_idx)
+		images.push(jx, jy, jz)
+	}
+	return {
+		count: sites.length,
+		base_sites: Uint32Array.from(sites),
+		jimages: Int8Array.from(images),
+	}
 }
 
 /**
