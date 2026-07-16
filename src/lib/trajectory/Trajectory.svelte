@@ -600,6 +600,12 @@
     if (frames_ref !== prev_frames_ref) {
       position_cache = null
       force_cache = null
+      // A replacement trajectory must not inherit the previous file's visual
+      // supercell label (Gate A follow-up). First adoption (prev null) keeps
+      // any parent-preset label.
+      if (prev_frames_ref !== null && supercell_scaling !== `1x1x1`) {
+        supercell_scaling = `1x1x1`
+      }
       prev_frames_ref = frames_ref
     }
   })
