@@ -3,6 +3,7 @@
   import { T, useThrelte } from '@threlte/core'
   import type { InstancedMesh } from 'three'
   import {
+    BoxGeometry,
     Color,
     CylinderGeometry,
     DataTexture,
@@ -15,6 +16,7 @@
   } from 'three'
   import { get_bond_key } from '../bonding'
   import { BondInstancedRenderer, type PartnerDrawnLookup } from './bond-instanced-renderer'
+  import { bond_geometry_mode } from './bond-geometry-mode'
   import { bond_lod_segments } from './bond-lod'
   import type { BondManager } from './bond-manager.svelte'
   import type { ImageAtomLayout } from './image-atom-layout'
@@ -712,11 +714,13 @@
   // UNTRACKED (the count only matters at a play/pause edge, which re-runs this
   // derived and re-reads it). Tracking it would rebuild the whole mesh every
   // frame — the exact per-frame churn the trajectory fast-path exists to kill.
+  const _unit_obb = new BoxGeometry(2, 2, 2) // corners x,y,z in [-1,1]
   const geometry = $derived.by(() => {
-    const playing = gpu_transform_active
+    const active = gpu_active
     const radius = bond_radius
+    if (active) return _unit_obb // impostor maps the box per half-bond in the shader
     const segments = untrack(() =>
-      bond_lod_segments(atom_positions.length / 3, playing)
+      bond_lod_segments(atom_positions.length / 3, gpu_transform_active)
     )
     return new CylinderGeometry(radius, radius, 1, segments)
   })
