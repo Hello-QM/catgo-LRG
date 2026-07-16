@@ -17,6 +17,8 @@
     Vector3,
   } from 'three'
   import { get_bond_key } from '../bonding'
+  import WebGLReplicaLayer from '../gpu/WebGLReplicaLayer.svelte'
+  import type { RenderPacket } from '../scene/render-packet'
   import { BondInstancedRenderer, type PartnerDrawnLookup } from './bond-instanced-renderer'
   import { bond_geometry_mode } from './bond-geometry-mode'
   import { bond_lod_segments } from './bond-lod'
@@ -139,6 +141,16 @@
      * stale-topology / fresh-positions races during async detection.
      */
     max_bond_length?: number
+    /**
+     * gpu-visual-supercell packet path (Task 4). When the packet carries a
+     * `ReplicaLayout` with dims ≠ 1×1×1, the WebGL2 replica impostor layer
+     * (gpu/WebGLReplicaLayer.svelte) draws 2B × cells ray-cylinder half-bond
+     * impostors from the base bond graph and THIS component's legacy
+     * InstancedMesh path is bypassed (mesh hidden + renderer suspended).
+     * `null` / 1×1×1 keeps the legacy path byte-identical. Task 6 plumbs the
+     * packet from the scene.
+     */
+    render_packet?: RenderPacket | null
   }
 
   let {
@@ -166,7 +178,18 @@
     multibond_enabled = false,
     gpu_transform_active = false,
     max_bond_length = 4.0,
+    render_packet = null,
   }: Props = $props()
+
+  // WebGL2 replica fast path: active only when a packet with a non-trivial
+  // visual replica layout is supplied. While active the legacy mesh is
+  // hidden and its renderer suspended (dirty state accumulates; the release
+  // effect below flushes it in one pass).
+  const replica_active = $derived(
+    render_packet !== null &&
+      render_packet.replicas.dims[0] * render_packet.replicas.dims[1] *
+          render_packet.replicas.dims[2] > 1,
+  )
 
   // GPU-transform eligibility. v1 exclusions (all fall back to the CPU
   // instanceMatrix path, zero regression surface):
@@ -1094,6 +1117,9 @@
       // Apply the multi-bond flag BEFORE the first resync so the initial mesh
       // layout uses the correct per-slot stride.
       r.set_multibond(multibond_enabled, bond_radius)
+      // Replica bypass state at (re)mount — the dedicated effect below only
+      // fires on replica_active CHANGES and may have already run.
+      r.set_suspended(replica_active)
       renderer = r
       // Apply the current transform mode: the mode-transition effect only
       // fires on gpu_active CHANGES and may have already run (renderer was
@@ -1111,6 +1137,31 @@
       return () => {
         r.dispose()
         if (renderer === r) renderer = undefined
+      }
+    })
+  })
+
+  // ─── Replica-layer bypass ───
+  // Tracks ONLY replica_active; the body runs untracked (the resync methods
+  // read manager $state — same discipline as the mount effect). Suspending
+  // leaves the renderer's dirty bookkeeping intact; releasing rebuilds the
+  // active mode's buffers in one pass (GPU topology or CPU matrices).
+  let last_replica_active = false
+  $effect(() => {
+    const active = replica_active
+    if (!renderer) return
+    if (active === last_replica_active) return
+    last_replica_active = active
+    untrack(() => {
+      renderer!.set_suspended(active)
+      if (!active) {
+        if (gpu_active) {
+          upload_positions(atom_positions)
+          renderer!.sync_gpu_topology()
+        } else {
+          renderer!.force_full_resync()
+        }
+        mark_dirty()
       }
     })
   })
@@ -1289,9 +1340,25 @@
   })
 </script>
 
+<!-- Hidden while the WebGL2 replica layer owns the bond draw
+     (replica_active) — the replica layer draws cell 0 too. -->
 <T.InstancedMesh
   args={[geometry, active_material, max_capacity]}
   bind:ref={mesh}
+  visible={!replica_active}
   raycast={null}
   frustumCulled={false}
 />
+
+{#if replica_active && render_packet}
+  <WebGLReplicaLayer
+    packet={render_packet}
+    show_atoms={false}
+    {bond_radius}
+    {incomplete_edge_length_scale}
+    ambient_light={0.8}
+    directional_light={0.3}
+    {light_dir}
+    ghost_opacity={periodic_bond_opacity}
+  />
+{/if}

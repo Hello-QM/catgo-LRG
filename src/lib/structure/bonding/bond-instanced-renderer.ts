@@ -165,6 +165,14 @@ export class BondInstancedRenderer {
 	#last_synced_version = -1;
 	#last_synced_count = 0;
 
+	// Replica-layer bypass (gpu/WebGLReplicaLayer.svelte). While suspended,
+	// sync() / force_full_resync() / sync_gpu_topology() early-return WITHOUT
+	// clearing dirty state or advancing #last_synced_version, so the resume
+	// flush (the caller's force_full_resync / sync_gpu_topology after
+	// set_suspended(false)) sees everything that changed. The mesh is hidden
+	// by the caller while suspended.
+	#suspended = false;
+
 	#tmp_matrix = new THREE.Matrix4();
 	#v_dir = new THREE.Vector3();
 	#v_half_mid_a = new THREE.Vector3();
@@ -203,6 +211,13 @@ export class BondInstancedRenderer {
 		this.#bond_radius = bond_radius;
 	}
 
+	/** Replica-layer bypass: while suspended, all sync work is skipped and
+	 *  dirty state accumulates. Caller must `force_full_resync()` (or
+	 *  `sync_gpu_topology()` on the GPU path) after releasing suspension. */
+	set_suspended(suspended: boolean): void {
+		this.#suspended = suspended;
+	}
+
 	constructor(
 		mesh: THREE.InstancedMesh,
 		manager: BondManager,
@@ -231,6 +246,7 @@ export class BondInstancedRenderer {
 	}
 
 	sync(): void {
+		if (this.#suspended) return;
 		const manager = this.#manager;
 		if (manager.version === this.#last_synced_version) return;
 
@@ -338,6 +354,7 @@ export class BondInstancedRenderer {
 	}
 
 	force_full_resync(): void {
+		if (this.#suspended) return;
 		const manager = this.#manager;
 
 		this.#ensure_color_attrs();
@@ -436,6 +453,7 @@ export class BondInstancedRenderer {
 	 * memcpy-level loop (~6 numeric stores per instance).
 	 */
 	sync_gpu_topology(): void {
+		if (this.#suspended) return;
 		const manager = this.#manager;
 
 		if (import.meta.env?.DEV && this.#multibond_enabled) {
