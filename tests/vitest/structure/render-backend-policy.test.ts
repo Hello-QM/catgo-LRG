@@ -256,6 +256,77 @@ describe('WASM benchmark gate', () => {
     expect(loaded).toEqual({ directory: 'pkg', pkg: legacyPkg })
   })
 
+  it('falls back when the named scalar wasm entry is missing', async () => {
+    const calls: string[] = []
+    const missing = Object.assign(
+      new Error(
+        "ENOENT: no such file or directory, open " +
+          "'/tmp/pkg-scalar/ferrox_bg.wasm'",
+      ),
+      {
+        code: 'ENOENT',
+        path: '/tmp/pkg-scalar/ferrox_bg.wasm',
+      },
+    )
+    const legacyPkg = { detect_bonds_radii_typed: () => undefined }
+    const loaded = await initializeScalarArtifact(async (directory: string) => {
+      calls.push(directory)
+      if (directory === 'pkg-scalar') throw missing
+      return legacyPkg
+    })
+
+    expect(calls).toEqual(['pkg-scalar', 'pkg'])
+    expect(loaded).toEqual({ directory: 'pkg', pkg: legacyPkg })
+  })
+
+  it('fails when pkg-scalar has a missing transitive module', async () => {
+    const calls: string[] = []
+    const events: string[] = []
+    const processState = { exitCode: 0 }
+    const transitiveMissing = Object.assign(
+      new Error(
+        "Cannot find module '/tmp/pkg-scalar/snippets/missing.js' imported from " +
+          "'/tmp/pkg-scalar/ferrox.js'",
+      ),
+      {
+        code: 'ERR_MODULE_NOT_FOUND',
+        url: 'file:///tmp/pkg-scalar/snippets/missing.js',
+      },
+    )
+
+    const result = await runBenchmarkCli(
+      () =>
+        runBenchmarkGate({
+          eligibility: eligible,
+          runScalar: () =>
+            initializeScalarArtifact(async (directory: string) => {
+              calls.push(directory)
+              if (directory === 'pkg-scalar') throw transitiveMissing
+              return { detect_bonds_radii_typed: () => undefined }
+            }),
+          initializeThreaded: async () => ({
+            cleanup: async () => events.push('cleanup'),
+          }),
+          runThreaded: async () => events.push('threaded'),
+          log: (message: string) => events.push(message),
+        }),
+      {
+        error: (message: string) => events.push(message),
+        processState,
+      },
+    )
+
+    expect(result.status).toBe('failed')
+    expect(processState.exitCode).toBe(1)
+    expect(calls).toEqual(['pkg-scalar'])
+    expect(events).toEqual([
+      'STATUS: FAILED: Error: Cannot find module ' +
+        "'/tmp/pkg-scalar/snippets/missing.js' imported from " +
+        "'/tmp/pkg-scalar/ferrox.js'",
+    ])
+    expect(events.join('\n')).not.toMatch(/DONE/)
+  })
+
   it(
     'does not hide a broken pkg-scalar initialization behind legacy fallback',
     async () => {

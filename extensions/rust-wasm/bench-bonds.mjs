@@ -75,11 +75,43 @@ async function initializeArtifact(directory) {
   return pkg
 }
 
+function missingArtifactTarget(error) {
+  if (typeof error.url === 'string') return error.url
+  if (typeof error.path === 'string') return error.path
+
+  if (error.code === 'ERR_MODULE_NOT_FOUND') {
+    return error.message.match(/Cannot find module ['"]([^'"]+)['"]/)?.[1]
+  }
+  if (error.code === 'ENOENT') {
+    return error.message.match(/(?:open|stat|access) ['"]([^'"]+)['"]/)?.[1]
+  }
+  return undefined
+}
+
+function isNamedScalarArtifact(target, fileName) {
+  let path = target
+  if (target.startsWith('file:')) {
+    try {
+      path = decodeURIComponent(new URL(target).pathname)
+    } catch {
+      return false
+    }
+  }
+  const segments = path.replaceAll('\\', '/').split('/').filter(Boolean)
+  return segments.at(-2) === 'pkg-scalar' && segments.at(-1) === fileName
+}
+
 function isMissingScalarArtifact(error) {
   if (!(error instanceof Error)) return false
-  const code = error.code
-  const missing = code === 'ERR_MODULE_NOT_FOUND' || code === 'ENOENT'
-  return missing && error.message.includes('pkg-scalar')
+  const target = missingArtifactTarget(error)
+  if (target === undefined) return false
+  if (error.code === 'ERR_MODULE_NOT_FOUND') {
+    return isNamedScalarArtifact(target, 'ferrox.js')
+  }
+  if (error.code === 'ENOENT') {
+    return isNamedScalarArtifact(target, 'ferrox_bg.wasm')
+  }
+  return false
 }
 
 export async function initializeScalarArtifact(loadArtifact = initializeArtifact) {
