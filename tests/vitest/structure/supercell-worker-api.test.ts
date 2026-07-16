@@ -2,15 +2,18 @@ import type { PymatgenStructure } from '$lib'
 import { LatticePane } from '$lib/structure'
 import type {
   IntMatrix3,
+  SupercellExecution,
   SupercellOp,
   SupercellRequestResult,
 } from '$lib/structure/supercell-operation'
 import {
+  create_supercell_request_handler,
   SUPERCELL_SYNC_ATOM_LIMIT,
   SupercellExecutor,
+  type SupercellRequestHandler,
 } from '$lib/structure/workers/supercell-worker-api'
 import { flushSync, mount } from 'svelte'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -116,6 +119,174 @@ describe(`SupercellExecutor.execute`, () => {
   it(`defaults source_frame_id to the structure id`, async () => {
     const { provenance } = await SupercellExecutor.execute(make_cubic(2), op(DIAG_2))
     expect(provenance.source_frame_id).toBe(`cubic-test`)
+  })
+})
+
+// ── create_supercell_request_handler (shared staged publish) ──────────────
+// The one wrapper BOTH call sites consume: LatticePane's bare-pane local path
+// and Structure's §9.1 handler are thin hook wirings over this factory, so
+// these tests pin the Structure-side handler behavior directly.
+
+type HandlerHarness = {
+  handler: SupercellRequestHandler
+  push_undo: ReturnType<typeof vi.fn>
+  publish: ReturnType<typeof vi.fn>
+  get_current: () => PymatgenStructure | undefined
+  set_current: (next: PymatgenStructure | undefined) => void
+}
+
+function make_handler(
+  initial: PymatgenStructure | undefined,
+  extra: { delegate?: () => SupercellRequestHandler | undefined } = {},
+): HandlerHarness {
+  let current = initial
+  const push_undo = vi.fn()
+  const publish = vi.fn((execution: SupercellExecution) => {
+    current = execution.structure
+  })
+  const handler = create_supercell_request_handler({
+    get_structure: () => current,
+    push_undo,
+    publish,
+    history_token: () => `test-supercell-1`,
+    ...extra,
+  })
+  return {
+    handler,
+    push_undo,
+    publish,
+    get_current: () => current,
+    set_current: (next) => {
+      current = next
+    },
+  }
+}
+
+describe(`create_supercell_request_handler`, () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it(`rejects when there is no periodic structure — nothing runs`, async () => {
+    const missing = make_handler(undefined)
+    expect(await missing.handler(op(DIAG_2))).toEqual({
+      status: `rejected`,
+      message: `No periodic structure to transform`,
+    })
+    expect(missing.push_undo).not.toHaveBeenCalled()
+    expect(missing.publish).not.toHaveBeenCalled()
+
+    // A molecule (no lattice key) is rejected the same way.
+    const molecule = {
+      sites: make_cubic(2).sites,
+      charge: 0,
+    } as unknown as PymatgenStructure
+    const mol = make_handler(molecule)
+    const result = await mol.handler(op(DIAG_2))
+    expect(result.status).toBe(`rejected`)
+    expect(mol.publish).not.toHaveBeenCalled()
+  })
+
+  it(`forwards to the delegate untouched and never runs the local path`, async () => {
+    const parent_result: SupercellRequestResult = {
+      status: `applied`,
+      history_token: `traj:7`,
+    }
+    const delegate = vi.fn(() => Promise.resolve(parent_result))
+    const exec_spy = vi.spyOn(SupercellExecutor, `execute`)
+    const harness = make_handler(make_cubic(2), { delegate: () => delegate })
+    const the_op = op(DIAG_2)
+
+    const result = await harness.handler(the_op)
+
+    expect(result).toBe(parent_result) // the parent's result object, untouched
+    expect(delegate).toHaveBeenCalledTimes(1)
+    expect(delegate).toHaveBeenCalledWith(the_op)
+    expect(exec_spy).not.toHaveBeenCalled()
+    expect(harness.push_undo).not.toHaveBeenCalled()
+    expect(harness.publish).not.toHaveBeenCalled()
+  })
+
+  it(`treats a throwing delegate as a rejection — nothing mutated`, async () => {
+    const delegate = vi.fn(() => Promise.reject(new Error(`host handler exploded`)))
+    const structure = make_cubic(2)
+    const before = JSON.stringify(structure)
+    const harness = make_handler(structure, { delegate: () => delegate })
+
+    const result = await harness.handler(op(DIAG_2))
+
+    expect(result).toEqual({ status: `rejected`, message: `host handler exploded` })
+    expect(harness.push_undo).not.toHaveBeenCalled()
+    expect(harness.publish).not.toHaveBeenCalled()
+    expect(JSON.stringify(harness.get_current())).toBe(before)
+  })
+
+  it(`publishes atomically: undo entry immediately before the single publish`, async () => {
+    const harness = make_handler(make_cubic(2))
+
+    const result = await harness.handler(op(DIAG_2))
+
+    expect(result).toEqual({ status: `applied`, history_token: `test-supercell-1` })
+    expect(harness.publish).toHaveBeenCalledTimes(1)
+    const execution = harness.publish.mock.calls[0][0] as SupercellExecution
+    expect(execution.structure.sites.length).toBe(16) // 2 atoms × det 8
+    expect(harness.push_undo).toHaveBeenCalledTimes(1)
+    expect(harness.push_undo.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.publish.mock.invocationCallOrder[0],
+    )
+  })
+
+  it(`reports validation failures with a single un-prefixed message`, async () => {
+    const harness = make_handler(make_cubic(2))
+
+    const result = await harness.handler(op(SINGULAR))
+
+    expect(result.status).toBe(`rejected`)
+    if (result.status === `rejected`) {
+      expect(result.message).toMatch(/singular/i)
+      // Callers prefix "Supercell rejected:" exactly once when logging — the
+      // message itself must not carry the executor's prefix (no
+      // "Supercell rejected: Supercell rejected: …").
+      expect(result.message).not.toMatch(/supercell rejected/i)
+    }
+    expect(harness.push_undo).not.toHaveBeenCalled()
+    expect(harness.publish).not.toHaveBeenCalled()
+  })
+
+  it(`skips publish and returns 'stale' when the structure is replaced mid-flight`, async () => {
+    const harness = make_handler(make_cubic(2))
+
+    const pending = harness.handler(op(DIAG_2))
+    // An intervening edit from another surface (toolbar delete, MCP push)
+    // lands while the executor is in flight.
+    const replacement = make_cubic(3)
+    harness.set_current(replacement)
+
+    const result = await pending
+    expect(result).toEqual({ status: `stale` })
+    expect(harness.push_undo).not.toHaveBeenCalled()
+    expect(harness.publish).not.toHaveBeenCalled()
+    expect(harness.get_current()).toBe(replacement) // the intervening edit wins
+  })
+
+  it(`a superseding request aborts the in-flight one — latest wins`, async () => {
+    // Large enough for the staged (async) path so the first request is
+    // genuinely in flight when the second lands.
+    const base = Math.ceil((SUPERCELL_SYNC_ATOM_LIMIT + 1) / 8)
+    const harness = make_handler(make_cubic(base))
+    const exec_spy = vi.spyOn(SupercellExecutor, `execute`)
+
+    const first = harness.handler(op(DIAG_2))
+    const second = harness.handler(op(DIAG_2))
+    const [r1, r2] = await Promise.all([first, second])
+
+    expect(r1).toEqual({ status: `stale` })
+    expect(r2.status).toBe(`applied`)
+    expect(harness.publish).toHaveBeenCalledTimes(1)
+    // The first executor invocation received the signal the second aborted.
+    expect(exec_spy).toHaveBeenCalledTimes(2)
+    expect(exec_spy.mock.calls[0][2]?.signal?.aborted).toBe(true)
+    expect(exec_spy.mock.calls[1][2]?.signal?.aborted).toBe(false)
   })
 })
 
@@ -263,6 +434,26 @@ describe(`LatticePane supercell delegation`, () => {
     set_matrix_cell(0, `0`) // identity with m00=0 → singular
     click_apply()
 
+    await settle()
+    expect(spies.on_push_undo).not.toHaveBeenCalled()
+    expect(spies.on_structure_change).not.toHaveBeenCalled()
+    expect(JSON.stringify(structure)).toBe(before)
+  })
+
+  it(`survives a host delegation callback that rejects — no mutation, no unhandled rejection`, async () => {
+    const structure = make_cubic(2)
+    const before = JSON.stringify(structure)
+    const on_supercell_request = vi.fn(
+      (): Promise<SupercellRequestResult> =>
+        Promise.reject(new Error(`misbehaving host handler`)),
+    )
+    const spies = mount_pane(structure, { on_supercell_request })
+
+    open_transform_tab()
+    click_preset_2x2x2()
+    click_apply()
+
+    await vi.waitFor(() => expect(on_supercell_request).toHaveBeenCalledTimes(1))
     await settle()
     expect(spies.on_push_undo).not.toHaveBeenCalled()
     expect(spies.on_structure_change).not.toHaveBeenCalled()

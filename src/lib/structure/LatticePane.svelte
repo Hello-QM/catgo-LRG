@@ -12,7 +12,7 @@
   } from './lattice-ops'
   import { wasm_reorient_lattice, is_ok } from './ferrox-wasm'
   import type { SupercellOp, SupercellRequestResult } from './supercell-operation'
-  import { SupercellExecutor } from './workers/supercell-worker-api'
+  import { create_supercell_request_handler } from './workers/supercell-worker-api'
   import type { Crystal } from './index'
   import type { ComponentProps } from 'svelte'
   import type { HTMLAttributes } from 'svelte/elements'
@@ -133,29 +133,24 @@
   // Monotonic token for locally executed supercell history entries.
   let local_supercell_seq = 0
 
-  /** Standalone executor for a bare LatticePane (no host-provided
-   *  on_supercell_request): run the same staged SupercellExecutor and publish
-   *  ATOMICALLY — the undo entry (pre-op state) and the single structure
-   *  replacement happen only after execution succeeded. On rejection nothing
-   *  changes: no mutation, no undo entry. */
-  async function run_local_supercell(op: SupercellOp): Promise<SupercellRequestResult> {
-    try {
-      const source = $state.snapshot(structure) as PymatgenStructure
-      const { structure: new_structure } = await SupercellExecutor.execute(source, op)
-      on_push_undo?.()
+  /** §9.1 handler (shared wrapper, see create_supercell_request_handler):
+   *  delegates to the host when `on_supercell_request` is provided (a throwing
+   *  host counts as rejection — nothing mutated either way); otherwise runs
+   *  the staged executor locally and publishes ATOMICALLY — undo entry
+   *  (pre-op state) + single structure replacement only after success, and
+   *  only if the structure was not replaced mid-flight (stale completions
+   *  publish nothing; a superseding request aborts the in-flight one). */
+  const handle_supercell = create_supercell_request_handler({
+    delegate: () => on_supercell_request,
+    get_structure: () => structure,
+    snapshot: (live) => $state.snapshot(live) as PymatgenStructure,
+    push_undo: () => on_push_undo?.(),
+    publish: ({ structure: new_structure }) => {
       structure = new_structure
       on_structure_change?.(new_structure)
-      return {
-        status: 'applied',
-        history_token: `lattice-pane-supercell-${++local_supercell_seq}`,
-      }
-    } catch (err) {
-      return {
-        status: 'rejected',
-        message: err instanceof Error ? err.message : String(err),
-      }
-    }
-  }
+    },
+    history_token: () => `lattice-pane-supercell-${++local_supercell_seq}`,
+  })
 
   async function apply_transform() {
     if (!structure || !has_lattice) return
@@ -176,12 +171,11 @@
 
       transform_loading = true
       try {
-        // Delegate BEFORE any local mutation, undo push, or renderer-specific
-        // shortcut (§9.1). Without a host callback, run the local executor
-        // through the same operation type.
-        const result = on_supercell_request
-          ? await on_supercell_request(op)
-          : await run_local_supercell(op)
+        // Delegation-first (§9.1) and the staged local path both live in the
+        // shared handler — it never throws (a misbehaving host callback
+        // surfaces as 'rejected'), so no local mutation or undo push can
+        // precede the host's decision.
+        const result = await handle_supercell(op)
         if (result.status === 'applied') {
           on_reset_view?.()
           center_camera_trigger++

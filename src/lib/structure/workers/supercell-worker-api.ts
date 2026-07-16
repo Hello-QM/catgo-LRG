@@ -14,11 +14,12 @@
 // global (vitest/happy-dom, node) run the same executor on the calling
 // thread — behaviour is identical, only the thread differs.
 
-import type { PymatgenStructure } from '../index'
+import type { AnyStructure, PymatgenStructure } from '../index'
 import {
   type SupercellExecution,
   type SupercellOp,
   type SupercellProvenance,
+  type SupercellRequestResult,
   TRUE_SUPERCELL_MAX_ATOMS,
   validate_supercell_op,
   execute_supercell_op_sync,
@@ -242,4 +243,116 @@ export const SupercellExecutor = {
     }
     return execution
   },
+}
+
+// ─── Shared staged publish (§9.1 call-site wrapper) ───
+
+/** Strip the executor's `Supercell rejected: ` prefix so callers that prefix
+ *  their own log/report line exactly once never produce
+ *  "Supercell rejected: Supercell rejected: …". */
+function rejection_message(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  return raw.replace(/^Supercell rejected:\s*/, ``)
+}
+
+export type SupercellRequestHandler = (
+  op: SupercellOp,
+) => Promise<SupercellRequestResult>
+
+export type SupercellRequestHooks = {
+  /**
+   * Read the LIVE structure (Svelte call sites: the current prop/state value).
+   * Called at stage time — the returned reference doubles as the staleness
+   * token — and again at completion: if the reference moved (an intervening
+   * edit from any other surface), the completion is stale and publishes
+   * nothing.
+   */
+  get_structure: () => AnyStructure | undefined
+  /**
+   * Deep plain-object copy of the live structure for the executor (the worker
+   * path structured-clones, and reactive $state proxies are not cloneable).
+   * Svelte call sites pass `$state.snapshot`; plain-data callers may omit it.
+   */
+  snapshot?: (live: PymatgenStructure) => PymatgenStructure
+  /** Record the pre-op state in history — invoked immediately before publish,
+   *  never on rejection/abort/stale. */
+  push_undo?: () => void
+  /** Replace the structure exactly once with the staged result. */
+  publish: (execution: SupercellExecution) => void
+  /** History-correlation token stamped into the 'applied' result. */
+  history_token: () => string
+  /**
+   * §9.1 delegation: read the host callback (if any) at request time. When
+   * present, the op is forwarded there untouched and nothing runs locally; a
+   * throwing host counts as a rejection (nothing mutated either way).
+   */
+  delegate?: () => SupercellRequestHandler | undefined
+  /** Extra executor options for the local path (`signal` is owned here). */
+  executor_options?: Omit<SupercellExecuteOptions, 'signal'>
+}
+
+/**
+ * Create the staged-execute-then-publish handler both supercell call sites
+ * share (LatticePane's bare-pane local path and Structure's §9.1 handler).
+ *
+ * Guarantees:
+ * - Delegation-first: with a host callback, the op is forwarded untouched
+ *   BEFORE any local mutation or undo push; its result passes through as-is,
+ *   and a throwing host surfaces as `{ status: 'rejected' }`.
+ * - Atomic publish: `push_undo` (pre-op state) + one `publish`, only after
+ *   execution succeeded; on rejection nothing changed.
+ * - Staleness guard: the live structure reference is captured at stage time;
+ *   if it moved during the async window (an edit from any other surface won),
+ *   the completion is dropped with `{ status: 'stale' }`.
+ * - Supersede: the handler owns an AbortController — a new request aborts the
+ *   in-flight one (the executor receives the signal), which resolves
+ *   `{ status: 'stale' }`. The latest request wins.
+ */
+export function create_supercell_request_handler(
+  hooks: SupercellRequestHooks,
+): SupercellRequestHandler {
+  let inflight: AbortController | null = null
+
+  return async function handle_supercell_request(op) {
+    const delegate = hooks.delegate?.()
+    if (delegate) {
+      try {
+        return await delegate(op)
+      } catch (err) {
+        return { status: `rejected`, message: rejection_message(err) }
+      }
+    }
+
+    const live = hooks.get_structure()
+    if (!live || !(`lattice` in live)) {
+      return { status: `rejected`, message: `No periodic structure to transform` }
+    }
+
+    // A new request supersedes any in-flight one: abort it so its eventual
+    // completion (computed against an older structure) publishes nothing.
+    inflight?.abort()
+    const controller = new AbortController()
+    inflight = controller
+    try {
+      const source = hooks.snapshot ? hooks.snapshot(live) : live
+      const execution = await SupercellExecutor.execute(source, op, {
+        ...hooks.executor_options,
+        signal: controller.signal,
+      })
+      // Superseded while completing, or the structure was replaced by another
+      // surface during the async window — this completion is stale; the newer
+      // state wins and nothing publishes.
+      if (controller.signal.aborted || hooks.get_structure() !== live) {
+        return { status: `stale` }
+      }
+      hooks.push_undo?.()
+      hooks.publish(execution)
+      return { status: `applied`, history_token: hooks.history_token() }
+    } catch (err) {
+      if (err instanceof Error && err.name === `AbortError`) return { status: `stale` }
+      return { status: `rejected`, message: rejection_message(err) }
+    } finally {
+      if (inflight === controller) inflight = null
+    }
+  }
 }
