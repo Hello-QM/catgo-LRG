@@ -1,7 +1,7 @@
 # Indexed Trajectory Frame-Source Contract — Design
 
 Date: 2026-07-15
-Status: approach approved; written-spec review pending
+Status: approved
 
 ## Problem
 
@@ -123,4 +123,3 @@ The implementation follows red-green TDD.
 - A failed frame leaves the previous structure visible and reports the error.
 - Targeted trajectory tests, project checks, desktop static build, and the
   browser regression all pass.
-
