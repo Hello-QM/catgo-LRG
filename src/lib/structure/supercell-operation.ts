@@ -208,6 +208,11 @@ function reorient_site(site: Site, rot: Matrix3x3): Site {
  * `structure` — when validation fails, so a caller preserves its last complete
  * scene. Each call uses only the passed frame's own lattice, sites, and atom
  * count.
+ *
+ * Handedness: a negative-determinant transform deliberately produces a
+ * left-handed output lattice. §9.4 requires only a non-zero determinant, so no
+ * right-handing (a/b swap) is applied here; consumers exporting to formats
+ * that need right-handed cells (e.g. POSCAR) handle handedness downstream.
  */
 export function execute_supercell_op_sync(
   structure: PymatgenStructure,
@@ -218,9 +223,22 @@ export function execute_supercell_op_sync(
   if (!validation.ok) {
     throw new Error(`Supercell rejected: ${validation.message}`)
   }
+  const det = validation.det
 
   const transform = to_mutable_matrix(op.matrix)
   const build = build_supercell_frame(structure, transform)
+
+  // Defense-in-depth for the §9.4 invariant `output count === N × |det|`: if
+  // cell enumeration ever disagrees with the determinant, reject cleanly (no
+  // mutation, no partial result) instead of silently materializing a supercell
+  // with a wrongly-sized cell_count / physical_site_map.
+  if (build.cells.length !== Math.abs(det)) {
+    throw new Error(
+      `Supercell rejected: enumerated ${build.cells.length} cells but |det(matrix)| = ${
+        Math.abs(det)
+      }`,
+    )
+  }
 
   let new_matrix: Matrix3x3 = build.matrix
   let sites: Site[] = build.sites
@@ -236,7 +254,6 @@ export function execute_supercell_op_sync(
   }
 
   const params = math.calc_lattice_params(new_matrix)
-  const det = validation.det
 
   const provenance: SupercellProvenance = {
     source_frame_id: (structure as { id?: string }).id ?? null,

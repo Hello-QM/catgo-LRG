@@ -695,14 +695,25 @@ export function enumerate_supercell_cells(
   const inv = matrix_inverse_3x3(matrix)
   if (!inv) return []
 
-  // Search a bounded integer box; every valid offset lies within it.
-  const max_range = Math.ceil(Math.max(...matrix.flat().map(Math.abs))) + 1
+  // Sufficient symmetric search bound, per column: every interior offset is
+  // p = f · matrix for some f ∈ [0, 1)³, so per column j
+  //   |p_j| = |Σ_i f_i · matrix[i][j]| ≤ Σ_i |matrix[i][j]| = colsum_j
+  // (strict, since every f_i < 1). Scanning p_j ∈ [-colsum_j, +colsum_j]
+  // therefore covers all |det| offsets for any sign pattern. An asymmetric
+  // box (the previous `-max_range … 2·max_range`) missed valid offsets for
+  // matrices with large negative entries, e.g. [[-3,1,0],[-3,0,1],[-3,1,1]]
+  // whose interior offset (-5,1,1) lay outside it.
+  const colsum = [0, 1, 2].map((col) =>
+    Math.ceil(
+      Math.abs(matrix[0][col]) + Math.abs(matrix[1][col]) + Math.abs(matrix[2][col]),
+    )
+  )
   const cells: Vec3[] = []
   const eps = 1e-8
 
-  for (let i = -max_range; i <= max_range * 2; i++) {
-    for (let j = -max_range; j <= max_range * 2; j++) {
-      for (let k = -max_range; k <= max_range * 2; k++) {
+  for (let i = -colsum[0]; i <= colsum[0]; i++) {
+    for (let j = -colsum[1]; j <= colsum[1]; j++) {
+      for (let k = -colsum[2]; k <= colsum[2]; k++) {
         // frac = [i, j, k] · inv (row vector times matrix inverse)
         const f0 = i * inv[0][0] + j * inv[1][0] + k * inv[2][0]
         const f1 = i * inv[0][1] + j * inv[1][1] + k * inv[2][1]
@@ -777,10 +788,15 @@ export function build_supercell_frame(
 }
 
 /**
- * Apply a transformation matrix to create a supercell.
- * For an integer transform with |det| > 1 this replicates atoms `|det|` times
- * via {@link build_supercell_frame}. For |det| ≤ 1 it is a plain lattice
- * transform (no replication).
+ * Apply an integer transformation matrix to create a supercell, uniformly in
+ * the `new_lattice = matrix · old_lattice` convention for EVERY non-zero
+ * determinant (via {@link build_supercell_frame}). `|det| > 1` replicates
+ * atoms `|det|` times; `det = ±1` is a legal reshaping supercell (e.g. a
+ * shear) that redescribes the same crystal without replication — it takes the
+ * same path deliberately, so the convention never forks on a det threshold.
+ * Negative determinants yield a left-handed lattice on purpose (no silent a/b
+ * swap); exporters that need right-handed cells (e.g. POSCAR) handle
+ * handedness downstream. A singular transform returns the structure unchanged.
  */
 export function apply_transform_matrix_supercell(
   structure: PymatgenStructure,
@@ -792,7 +808,6 @@ export function apply_transform_matrix_supercell(
 ): PymatgenStructure {
   if (!structure.lattice?.matrix) return structure
 
-  // Calculate determinant to know how many lattice points we need.
   const det = Math.round(
     transform[0][0] *
         (transform[1][1] * transform[2][2] - transform[1][2] * transform[2][1]) -
@@ -802,9 +817,13 @@ export function apply_transform_matrix_supercell(
         (transform[1][0] * transform[2][1] - transform[1][1] * transform[2][0]),
   )
 
-  // If determinant is 1 or less, just do a regular transform (no replication).
-  if (Math.abs(det) <= 1) {
-    return apply_transform_matrix(structure, transform)
+  // A singular transform has no valid supercell frame — leave the structure
+  // untouched rather than collapsing its lattice.
+  if (det === 0) {
+    console.warn(
+      `[lattice-ops] apply_transform_matrix_supercell: singular transform ignored`,
+    )
+    return structure
   }
 
   const build = build_supercell_frame(structure, transform)
