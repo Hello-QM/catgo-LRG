@@ -1,7 +1,8 @@
 # Handoff — traj-round4 review closure → Gate A
 
-Date: 2026-07-16
-Status: **PR #531 OPEN — Gate A PASS; production trajectory packet and real Play verified**
+Date: 2026-07-16 (updated evening — post-PR follow-up wave)
+Status: **PR #531 OPEN — Gate A PASS; Docker-build fix + supercell-label reset landed;
+CI green pending GitHub Actions recovery**
 
 This is the current durable handoff. The older Play-crash history remains in
 `docs/superpowers/handoff-impostor-play-crash.md`; use this file for current execution
@@ -276,16 +277,34 @@ Historical crash analysis: `docs/superpowers/handoff-impostor-play-crash.md`.
 Gate A and the reopened Visual T4 production integration are closed. Do not reopen or
 redispatch them without a new runtime regression.
 
-1. This post-PR durable handoff is the only pending local docs change; commit it and push
-   it onto PR #531, then verify worktree clean.
+Follow-up wave landed 2026-07-16 evening (see ledger "Post-PR follow-up wave"):
+
+- `c69f3890` — Docker/production build fixed: `worker.format: 'es'` in
+  `vite.desktop.config.ts` (wasm-bindgen-rayon child worker chunks cannot code-split
+  under the default iife). Local `vite build` PASS in 2m 4s; regression test pins the
+  config.
+- `4025580c` — trajectory replacement now resets the visual supercell label to `1x1x1`
+  on real swaps (frames-identity B3 effect), preserving it across spread refreshes and
+  first parent-bound adoption. RED/GREEN component regression added; trajectory dir
+  492 PASS.
+
+1. Verify PR #531 CI is green on the current head. The post-push CI round failed in
+   8–34 s due to a GitHub Actions partial outage (jobs API 503, githubstatus "minor") —
+   rerun failed checks or push the next commit once GitHub recovers; do not diagnose
+   those instant failures as code.
 2. Isolated port-3457 frontend is already stopped; never manage shared `:8000`.
 3. Await user direction before merging PR #531, continuing remaining Visual/Build/Bonds
    plan tasks, or running broad final review.
-4. Tracked follow-ups for later scopes:
-   - replica-specific picking/request-time codec snapshot;
-   - trajectory replacement supercell-label inheritance/reset behavior;
-   - production Vite threaded-worker `iife`/code-splitting build failure;
-   - remaining plan tasks and Gate B/C.
+4. Remaining open scope:
+   - Bonds T6 (WebGPU routing + device-loss transactional handling);
+   - Visual T5 (unified replica picking + request-time codec snapshot — absorbs the
+     deferred T3 Minor and the transparent base hitboxes);
+   - Visual T6 (view-only semantics + base scientific export);
+   - Build T5 (external history undo/redo);
+   - Integration plan T1–T5, then Gate B, then Gate C;
+   - acceptance blocker: threaded WASM genuine activation needs COOP/COEP verified
+     across Vite dev / Tauri / web deploys (the ES-worker fix supplies the non-inline
+     module chunk; headers remain unverified).
 
 ## New-session recovery prompt
 
