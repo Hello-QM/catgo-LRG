@@ -1043,10 +1043,15 @@
   const _unit_obb = new BoxGeometry(2, 2, 2) // corners x,y,z in [-1,1]
   const geometry = $derived.by(() => {
     const active = gpu_active
+    // Track gpu_transform_active too, not just gpu_active: when multibond or
+    // drawn image atoms hold gpu_active false while gpu_transform_active still
+    // flips on play/pause, the segment-LOD rebuild (#529) must still fire on
+    // that edge. Read it tracked here, use it inside untrack below.
+    const playing = gpu_transform_active
     const radius = bond_radius
     if (active) return _unit_obb // impostor maps the box per half-bond in the shader
     const segments = untrack(() =>
-      bond_lod_segments(atom_positions.length / 3, gpu_transform_active)
+      bond_lod_segments(atom_positions.length / 3, playing)
     )
     return new CylinderGeometry(radius, radius, 1, segments)
   })
@@ -1270,11 +1275,12 @@
         // view ray per pixel from the inverse projection + drawing-buffer size,
         // so both must track the live camera/renderer each frame.
         const cam = threlte.camera.current
-        const size = threlte.renderer?.getDrawingBufferSize(new Vector2())
         if (cam) {
           impostor_material.uniforms.uInvProjection.value.copy(cam.projectionMatrixInverse)
         }
-        if (size) impostor_material.uniforms.uViewport.value.copy(size)
+        // Write drawing-buffer size straight into the uniform's Vector2 — no
+        // per-frame allocation on this hot path.
+        threlte.renderer?.getDrawingBufferSize(impostor_material.uniforms.uViewport.value)
       } else {
         renderer!.force_full_resync()
       }
