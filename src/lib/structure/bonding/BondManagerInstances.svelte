@@ -487,6 +487,12 @@
     flat varying float vImpLen;
     flat varying float vImpCollapse;
 
+    // GLSL3 (glslVersion '300 es' — required for flat varyings + gl_FragDepth
+    // + texelFetch): gl_FragColor does not exist, so declare an explicit
+    // output. The reused #524 lighting writes gl_FragColor; those writes are
+    // redirected to fragColor below.
+    out vec4 fragColor;
+
     vec3 linearTosRGB(vec3 linear) {
       return vec3(
         linear.r <= 0.0031308 ? linear.r * 12.92 : 1.055 * pow(linear.r, 1.0/2.4) - 0.055,
@@ -595,15 +601,15 @@
                        + specColor * specular * directionalIntensity * 0.5 * rim_mask * uSpecStrength
                        + vec3(fresnel * 0.08) * rim_mask;
       final_color = aces_tonemap(final_color);
-      gl_FragColor = vec4(linearTosRGB(final_color), uOpacity * vOpacity * coverage);
+      fragColor = vec4(linearTosRGB(final_color), uOpacity * vOpacity * coverage);
 
       if (uDepthCueing > 0.0) {
         float fade = clamp((-hit.z - uDepthNear) / max(uDepthFar - uDepthNear, 0.01), 0.0, 1.0) * uDepthCueing;
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, linearTosRGB(uDepthCueBgColor), fade);
+        fragColor.rgb = mix(fragColor.rgb, linearTosRGB(uDepthCueBgColor), fade);
       }
       if (uBondOutlineStrength > 0.0) {
         float silhouette = smoothstep(0.0, 0.6, 1.0 - NdotV);
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uBondOutlineStrength * 0.85);
+        fragColor.rgb = mix(fragColor.rgb, vec3(0.0), silhouette * uBondOutlineStrength * 0.85);
       }
     }
   `
