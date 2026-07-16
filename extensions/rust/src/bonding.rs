@@ -13,6 +13,7 @@ use crate::element::Element;
 use crate::structure::Structure;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 /// A detected bond between two atoms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,43 +151,133 @@ impl ElementProps {
     }
 }
 
-/// Detect bonds using covalent radii sum.
-///
-/// A bond is detected if the distance between two atoms is at most
-/// `scale` times the sum of their covalent radii.
-///
-/// This is the fastest algorithm, suitable for quick visualization.
-pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions) -> Vec<Bond> {
-    let num_sites = structure.num_sites();
-    if num_sites < 2 {
-        return Vec::new();
+/// Below this many sites the bond-collection driver stays sequential even
+/// when the `rayon` feature is on: thread-pool scheduling would cost more
+/// than the evaluation itself (design §8.3 — small structures remain scalar).
+#[cfg(feature = "rayon")]
+const BOND_PARALLEL_MIN_SITES: usize = 128;
+
+/// Owned prologue shared by the atom_radii drivers: cached element
+/// properties, the neighbor search, and a CSR index over its centers.
+/// `input()` borrows it as the [`BondEvalInput`] view the drivers consume.
+struct BondEvalData {
+    props: Vec<ElementProps>,
+    center_indices: Vec<usize>,
+    neighbor_indices: Vec<usize>,
+    image_offsets: Vec<[i32; 3]>,
+    distances: Vec<f64>,
+    entry_offsets: Vec<usize>,
+    scale: f64,
+    min_dist_sq: f64,
+}
+
+impl BondEvalData {
+    /// Cache element properties, run the neighbor search, and index it by
+    /// center so drivers can slice deterministic contiguous center ranges.
+    fn prepare(structure: &Structure, options: &AtomRadiiOptions) -> Self {
+        let num_sites = structure.num_sites();
+
+        // Cache element properties from species
+        let species = structure.species();
+        let props: Vec<ElementProps> = species
+            .iter()
+            .map(|sp| ElementProps::from_element(sp.element))
+            .collect();
+
+        // Use neighbor list for efficient spatial queries. The per-pair bond
+        // bound is (r1 + r2) * scale ≤ 2 * r_max * scale, so the search cutoff
+        // tightens below max_bond_dist without changing any result — at the
+        // default 5 Å max on a typical oxide/metal system this trims the
+        // candidate volume (and the distance evaluations) 3-4x.
+        let max_radius = props.iter().map(|p| p.covalent_radius).fold(0.0, f64::max);
+        let cutoff = options.max_bond_dist.min(2.0 * max_radius * options.scale);
+        let (center_indices, neighbor_indices, image_offsets, distances) =
+            structure.get_neighbor_list(cutoff, 1e-8, true);
+        let entry_offsets = center_entry_offsets(&center_indices, num_sites);
+
+        Self {
+            props,
+            center_indices,
+            neighbor_indices,
+            image_offsets,
+            distances,
+            entry_offsets,
+            scale: options.scale,
+            min_dist_sq: options.min_bond_dist * options.min_bond_dist,
+        }
     }
 
-    // Cache element properties from species
-    let species = structure.species();
-    let props: Vec<ElementProps> = species
-        .iter()
-        .map(|sp| ElementProps::from_element(sp.element))
-        .collect();
+    fn input(&self) -> BondEvalInput<'_> {
+        BondEvalInput {
+            props: &self.props,
+            center_indices: &self.center_indices,
+            neighbor_indices: &self.neighbor_indices,
+            image_offsets: &self.image_offsets,
+            distances: &self.distances,
+            entry_offsets: &self.entry_offsets,
+            scale: self.scale,
+            min_dist_sq: self.min_dist_sq,
+        }
+    }
+}
 
-    // Use neighbor list for efficient spatial queries. The per-pair bond
-    // bound is (r1 + r2) * scale ≤ 2 * r_max * scale, so the search cutoff
-    // tightens below max_bond_dist without changing any result — at the
-    // default 5 Å max on a typical oxide/metal system this trims the
-    // candidate volume (and the distance evaluations) 3-4x.
-    let max_radius = props.iter().map(|p| p.covalent_radius).fold(0.0, f64::max);
-    let cutoff = options.max_bond_dist.min(2.0 * max_radius * options.scale);
-    let (center_indices, neighbor_indices, image_offsets, distances) =
-        structure.get_neighbor_list(cutoff, 1e-8, true);
+/// Everything the atom_radii bond predicate reads, borrowed once so the same
+/// evaluation body can be driven sequentially or by Rayon over center ranges
+/// (design §8.3: one predicate, two drivers).
+struct BondEvalInput<'a> {
+    /// Cached per-site element properties.
+    props: &'a [ElementProps],
+    /// Neighbor-list arrays, grouped by ascending center index.
+    center_indices: &'a [usize],
+    neighbor_indices: &'a [usize],
+    image_offsets: &'a [[i32; 3]],
+    distances: &'a [f64],
+    /// CSR offsets into the neighbor arrays: entries whose center is `c`
+    /// live at `entry_offsets[c]..entry_offsets[c + 1]`. Length is
+    /// `num_sites + 1`.
+    entry_offsets: &'a [usize],
+    /// Multiplicative cutoff on the covalent radii sum.
+    scale: f64,
+    /// Squared minimum bond distance.
+    min_dist_sq: f64,
+}
 
-    let mut bonds = Vec::new();
-    let min_dist_sq = options.min_bond_dist * options.min_bond_dist;
+/// CSR offsets over the neighbor list: entries whose center is `c` live at
+/// `offsets[c]..offsets[c + 1]`. `build_neighbor_list` emits entries grouped
+/// by ascending center index on both its serial and Rayon cell-list paths
+/// (chunks merge in index order), which this construction relies on.
+fn center_entry_offsets(center_indices: &[usize], num_sites: usize) -> Vec<usize> {
+    debug_assert!(
+        center_indices.windows(2).all(|pair| pair[0] <= pair[1]),
+        "neighbor list must be grouped by ascending center index"
+    );
+    let mut offsets = vec![0usize; num_sites + 1];
+    for &center in center_indices {
+        offsets[center + 1] += 1;
+    }
+    for site in 0..num_sites {
+        offsets[site + 1] += offsets[site];
+    }
+    offsets
+}
 
-    for idx in 0..center_indices.len() {
-        let center_idx = center_indices[idx];
-        let neighbor_idx = neighbor_indices[idx];
-        let image = image_offsets[idx];
-        let dist = distances[idx];
+/// Evaluate the atom_radii bond predicate over every neighbor-list entry
+/// whose center index lies in `centers`, in ascending entry order.
+///
+/// This is the ONE predicate body shared by the sequential path and the
+/// Rayon driver. Center ranges are contiguous and disjoint, so per-range
+/// outputs flatten to exactly the sequential ordering — bond IDs, selection,
+/// and snapshots stay deterministic across scalar and threaded builds.
+fn evaluate_bond_center_range(input: &BondEvalInput<'_>, centers: Range<usize>) -> Vec<Bond> {
+    let start = input.entry_offsets[centers.start];
+    let end = input.entry_offsets[centers.end];
+    let mut bonds = Vec::with_capacity((end - start) / 2);
+
+    for idx in start..end {
+        let center_idx = input.center_indices[idx];
+        let neighbor_idx = input.neighbor_indices[idx];
+        let image = input.image_offsets[idx];
+        let dist = input.distances[idx];
 
         // Pair-level dedup with PBC awareness. `get_neighbor_list` emits
         // both directions of every neighbor pair — (a,b,image) and the
@@ -209,13 +300,13 @@ pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions
         }
 
         let dist_sq = dist * dist;
-        if dist_sq < min_dist_sq {
+        if dist_sq < input.min_dist_sq {
             continue;
         }
 
-        let r1 = props[center_idx].covalent_radius;
-        let r2 = props[neighbor_idx].covalent_radius;
-        let upper_bound = (r1 + r2) * options.scale;
+        let r1 = input.props[center_idx].covalent_radius;
+        let r2 = input.props[neighbor_idx].covalent_radius;
+        let upper_bound = (r1 + r2) * input.scale;
 
         // Only check upper bound: coordination bonds (M-O, M-N) are often
         // significantly shorter than the covalent radii sum. The lower bound
@@ -232,6 +323,60 @@ pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions
     }
 
     bonds
+}
+
+/// Rayon driver: split center indices into deterministic contiguous ranges,
+/// evaluate each range in parallel, and flatten the ordered chunks in
+/// center-range order. Mirrors the chunking of `build_neighbor_list_celllist`
+/// (neighbors.rs) so the merged output is byte-identical to the sequential
+/// seam (design §8.3).
+#[cfg(feature = "rayon")]
+fn collect_bonds_over_centers_rayon(input: &BondEvalInput<'_>, num_sites: usize) -> Vec<Bond> {
+    use rayon::prelude::*;
+
+    let n_threads = rayon::current_num_threads().max(1);
+    let chunk_size = num_sites.div_ceil(n_threads * 4).max(64);
+    let chunk_starts: Vec<usize> = (0..num_sites).step_by(chunk_size).collect();
+    let per_chunk: Vec<Vec<Bond>> = chunk_starts
+        .into_par_iter()
+        .map(|start| {
+            evaluate_bond_center_range(input, start..(start + chunk_size).min(num_sites))
+        })
+        .collect();
+
+    let mut bonds = Vec::with_capacity(per_chunk.iter().map(Vec::len).sum());
+    for chunk in per_chunk {
+        bonds.extend(chunk);
+    }
+    bonds
+}
+
+/// Bond-collection driver for the atom_radii predicate. Under the `rayon`
+/// feature, large structures split into deterministic contiguous center
+/// ranges evaluated in parallel; small structures stay on the sequential
+/// path because thread scheduling would cost more than the evaluation.
+fn collect_bonds_over_centers(input: &BondEvalInput<'_>, num_sites: usize) -> Vec<Bond> {
+    #[cfg(feature = "rayon")]
+    if num_sites > BOND_PARALLEL_MIN_SITES {
+        return collect_bonds_over_centers_rayon(input, num_sites);
+    }
+    evaluate_bond_center_range(input, 0..num_sites)
+}
+
+/// Detect bonds using covalent radii sum.
+///
+/// A bond is detected if the distance between two atoms is at most
+/// `scale` times the sum of their covalent radii.
+///
+/// This is the fastest algorithm, suitable for quick visualization.
+pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions) -> Vec<Bond> {
+    let num_sites = structure.num_sites();
+    if num_sites < 2 {
+        return Vec::new();
+    }
+
+    let data = BondEvalData::prepare(structure, options);
+    collect_bonds_over_centers(&data.input(), num_sites)
 }
 
 /// Detect bonds using electronegativity-based algorithm.
@@ -1097,5 +1242,144 @@ mod tests {
             1,
             "Li-O at 2.0 Å is a real ionic bond; electroneg must detect it"
         );
+    }
+
+    /// Exact byte serialization of the typed outputs (pairs, jimages,
+    /// lengths, strengths) — bit-pattern identity, no tolerance.
+    fn typed_bond_bytes(bonds: &[Bond]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(bonds.len() * 44);
+        for bond in bonds {
+            out.extend_from_slice(&(bond.site_idx_1 as u64).to_le_bytes());
+            out.extend_from_slice(&(bond.site_idx_2 as u64).to_le_bytes());
+            for component in bond.image {
+                out.extend_from_slice(&component.to_le_bytes());
+            }
+            out.extend_from_slice(&bond.bond_length.to_bits().to_le_bytes());
+            out.extend_from_slice(&bond.strength.to_bits().to_le_bytes());
+        }
+        out
+    }
+
+    /// n×n×n conventional FCC Cu cells (4n³ atoms), fully periodic — hundreds
+    /// of centers so the Rayon driver splits the work across many chunks.
+    fn fcc_cu_supercell(n: usize) -> Structure {
+        let base = [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.5, 0.0],
+            [0.5, 0.0, 0.5],
+            [0.0, 0.5, 0.5],
+        ];
+        let lattice = Lattice::cubic(3.615 * n as f64);
+        let mut species = Vec::new();
+        let mut frac_coords = Vec::new();
+        for i in 0..n {
+            for j in 0..n {
+                for k in 0..n {
+                    for b in &base {
+                        species.push(Species::neutral(Element::Cu));
+                        frac_coords.push(Vector3::new(
+                            (i as f64 + b[0]) / n as f64,
+                            (j as f64 + b[1]) / n as f64,
+                            (k as f64 + b[2]) / n as f64,
+                        ));
+                    }
+                }
+            }
+        }
+        Structure::new(lattice, species, frac_coords)
+    }
+
+    #[test]
+    fn typed_bonds_scalar_and_rayon_are_byte_identical() {
+        // 500 centers → under `--features rayon` the public path takes the
+        // chunked Rayon driver (well above the small-structure floor); the
+        // scalar build takes the sequential driver. Both must be
+        // byte-identical to the single-range sequential seam.
+        let structure = fcc_cu_supercell(5);
+        let options = AtomRadiiOptions::default();
+        let num_sites = structure.num_sites();
+
+        let data = BondEvalData::prepare(&structure, &options);
+        let sequential = evaluate_bond_center_range(&data.input(), 0..num_sites);
+        assert!(!sequential.is_empty(), "FCC Cu must have metallic bonds");
+
+        let driven = detect_bonds_atom_radii(&structure, &options);
+        assert_eq!(
+            typed_bond_bytes(&sequential),
+            typed_bond_bytes(&driven),
+            "public driver output must be byte-identical to the sequential seam"
+        );
+
+        #[cfg(feature = "rayon")]
+        {
+            let parallel = collect_bonds_over_centers_rayon(&data.input(), num_sites);
+            assert_eq!(
+                typed_bond_bytes(&sequential),
+                typed_bond_bytes(&parallel),
+                "Rayon chunked driver must be byte-identical to the sequential seam"
+            );
+        }
+    }
+
+    #[test]
+    fn rayon_bond_order_is_stable_across_runs() {
+        // Non-trivial periodic structure spanning many chunks: repeated
+        // detection must produce identical typed bytes on every run,
+        // regardless of thread scheduling.
+        let structure = fcc_cu_supercell(5);
+        let options = AtomRadiiOptions::default();
+        let reference = typed_bond_bytes(&detect_bonds_atom_radii(&structure, &options));
+        assert!(!reference.is_empty(), "FCC Cu must have metallic bonds");
+        for run in 1..=7 {
+            let bytes = typed_bond_bytes(&detect_bonds_atom_radii(&structure, &options));
+            assert_eq!(reference, bytes, "run {run} deviated from run 0");
+        }
+    }
+
+    #[test]
+    fn thin_cell_self_images_are_preserved() {
+        // 2.5 Å-thin periodic cell: every valid bond is a self-image pair
+        // (a == b, jimage != 0) — each Cu bonds to its own periodic image
+        // along the short axis (2.5 Å < 1.2·Σr ≈ 3.17 Å) while the two atoms
+        // sit ~8.5 Å apart. Pins design §7.2 at the Rust layer: periodic
+        // self-image edges are valid bonds and must survive BOTH drivers.
+        let lattice = Lattice::orthorhombic(2.5, 12.0, 12.0);
+        let species = vec![Species::neutral(Element::Cu); 2];
+        let frac_coords = vec![Vector3::new(0.5, 0.2, 0.2), Vector3::new(0.5, 0.7, 0.7)];
+        let structure = Structure::new(lattice, species, frac_coords);
+        let options = AtomRadiiOptions::default();
+
+        let data = BondEvalData::prepare(&structure, &options);
+        let sequential = evaluate_bond_center_range(&data.input(), 0..2);
+        let driven = detect_bonds_atom_radii(&structure, &options);
+
+        let mut outputs = vec![("sequential seam", &sequential), ("public driver", &driven)];
+        #[cfg(feature = "rayon")]
+        let parallel = collect_bonds_over_centers_rayon(&data.input(), 2);
+        #[cfg(feature = "rayon")]
+        outputs.push(("rayon driver", &parallel));
+
+        for (driver, bonds) in &outputs {
+            assert_eq!(bonds.len(), 2, "{driver}: expected one self-image bond per atom");
+            for bond in bonds.iter() {
+                assert_eq!(
+                    bond.site_idx_1, bond.site_idx_2,
+                    "{driver}: thin-cell bond must be a self-pair"
+                );
+                assert_ne!(bond.image, [0, 0, 0], "{driver}: self-pair jimage must be nonzero");
+                assert!(
+                    (bond.bond_length - 2.5).abs() < 1e-6,
+                    "{driver}: self-image bond must span exactly one cell (2.5 Å), got {}",
+                    bond.bond_length
+                );
+            }
+        }
+        for (driver, bonds) in &outputs[1..] {
+            assert_eq!(
+                typed_bond_bytes(&sequential),
+                typed_bond_bytes(bonds),
+                "{driver} must match the sequential seam byte for byte"
+            );
+        }
     }
 }
