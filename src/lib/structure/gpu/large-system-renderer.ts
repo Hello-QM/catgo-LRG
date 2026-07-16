@@ -1201,6 +1201,18 @@ export type LargeSystemRenderer = {
    *  observed occupancy, raw/capacity pair counts, and overflow/retry state.
    *  Returns a fresh snapshot on every call. */
   debug_bond_state(): BondGpuDiagnostics
+  /** Register a host callback fired when ASYNC bond work transitions state
+   *  and another render() is needed for the pipeline to make progress: a
+   *  validated candidate awaits publication (publish pends), an overflow
+   *  retry re-armed the graph (rerun with grown sizing), or the allocation
+   *  limit was hit (terminal — lets a dirty-gated host run one settling
+   *  frame). Fires ONLY when a candidate's validation readback resolves —
+   *  never per render() — so a published graph with nothing pending cannot
+   *  keep a host loop awake. Dirty-gated hosts (LargeSystemOverlay's
+   *  self-suspending rAF loop) MUST register this and wake on it, or a
+   *  static scene's first bond graph starves until the next camera move.
+   *  One slot; pass null to unregister. Never fires after destroy(). */
+  on_bond_work(cb: (() => void) | null): void
   /** Run one render pass: publish any validated candidate bond graph, (if the
    *  graph is dirty) dispatch the candidate bond compute, (if replica state is
    *  dirty) rebuild the indirect draw args, then (if atoms present) impostor
@@ -1442,6 +1454,11 @@ export function create_large_system_renderer(
   let validation_inflight = false
   // A validated (complete) candidate awaits publication on the next render.
   let publish_pending = false
+  // Host wake signal (see LargeSystemRenderer.on_bond_work): fired from
+  // begin_validation's resolution — the one place async bond state
+  // transitions outside a render() call — so a dirty-gated host schedules
+  // the frame that publishes / reruns / settles. NOT fired per render.
+  let bond_work_cb: (() => void) | null = null
   // The dispatch policy refused the GPU path (periodic thin cell / storage
   // budget): typed state Task 6 consumes to route to the Rust-WASM worker.
   // While set, the ACTIVE graph stays on screen and nothing re-dispatches.
@@ -2017,6 +2034,11 @@ export function create_large_system_renderer(
         // Explicit failure, no clamped graph: the ACTIVE graph stays on screen.
         console.warn(`[large-system] bond compute: ${decision.message}`)
       }
+      // Async state transitioned OUTSIDE any render() — wake the host so its
+      // dirty-gated loop runs the frame that publishes (publish_pending) or
+      // reruns (graph_dirty), or one settling frame (allocation limit).
+      // Exactly one signal per resolved validation ⇒ no callback storms.
+      bond_work_cb?.()
     }).catch(() => {
       // mapAsync rejects when the buffer is destroyed mid-map (overlay teardown
       // — same race as pick()); swallow it, nothing to validate anymore.
@@ -2787,6 +2809,9 @@ export function create_large_system_renderer(
     debug_bond_state(): BondGpuDiagnostics {
       return bond_run.diagnostics()
     },
+    on_bond_work(cb: (() => void) | null): void {
+      bond_work_cb = cb
+    },
     resize(w: number, h: number): void {
       if (destroyed) return
       canvas.width = Math.max(1, Math.floor(w))
@@ -2799,6 +2824,10 @@ export function create_large_system_renderer(
     destroy(): void {
       if (destroyed) return
       destroyed = true
+      // Drop the host wake callback: a validation resolving after teardown
+      // must not wake a host loop (its destroyed-guard also returns early
+      // before observing, so this is belt-and-braces).
+      bond_work_cb = null
       try {
         context.unconfigure()
       } catch {

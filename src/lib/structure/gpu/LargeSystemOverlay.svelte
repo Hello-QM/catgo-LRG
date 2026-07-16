@@ -987,6 +987,20 @@
     }
     renderer = r
     frame_token = token
+    // Bond-work wake: candidate bond graphs validate ASYNC after the render
+    // that dispatched them (publication / overflow rerun happen in a LATER
+    // render). This dirty-gated loop suspends on stable frames, so on a
+    // static scene that later render would never come — the first bond graph
+    // (or a rules edit / overflow retry) would starve until the user moved
+    // the camera. The renderer signals each such transition; run one more
+    // dirty frame so it publishes/reruns. Fires once per resolved validation
+    // (never per render), so an idle published graph still lets the loop
+    // settle through the normal grace period. destroy() (stop_session)
+    // unregisters it.
+    r.on_bond_work(() => {
+      needs_render = true
+      wake()
+    })
     size_to_client(el)
 
     // Resize: repaint the new backing store and wake the loop if it had slept.
