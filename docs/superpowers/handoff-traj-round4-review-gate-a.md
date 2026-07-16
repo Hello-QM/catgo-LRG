@@ -1,7 +1,7 @@
 # Handoff — traj-round4 review closure → Gate A
 
 Date: 2026-07-16
-Status: **IN PROGRESS — T3/T4/Vite fixes CLOSED; Gate A READY, NOT RUN**
+Status: **GATE A PASS — production trajectory packet wired; real interval Play passes**
 
 This is the current durable handoff. The older Play-crash history remains in
 `docs/superpowers/handoff-impostor-play-crash.md`; use this file for current execution
@@ -12,8 +12,8 @@ state and `.superpowers/sdd/progress.md` for the detailed ledger.
 ```text
 Worktree: /home/james0001/project/catgo-LRG/.claude/worktrees/traj-round4
 Branch:   feat/impostor-bond-mvp
-HEAD:     2bd47418 refactor(webgpu): remove decorative ghost packet plumbing
-Divergence from origin/main at handoff: 0 behind / 63 ahead
+HEAD:     49e8546a fix(webgl): wire trajectory replica packets into scene
+Divergence from origin/main at final Gate A: 0 behind / 70 ahead
 ```
 
 Do not work from the repository root checkout. Do not push, open a PR, merge, or manage
@@ -149,7 +149,7 @@ Closure evidence under no-review-loop policy:
 - `pnpm check`: 0 errors / 305 pre-existing warnings. No repeat reviewer launched.
 - Deferred unchanged Minor: async pick request-time layout/image snapshot.
 
-## Closed item: Visual T4 WebGL2 replica impostors
+## Closed item: Visual T4 production integration
 
 Initial commits: `70900add` + `8b7385ba` + `d38baf5c`.
 Primary fix commit: `0b277972 fix(webgl): harden replica pass state and ghost buffers`.
@@ -179,6 +179,14 @@ Closure:
 - Focused atom/bond/manager Vitest: 33/33 PASS; manager viewport regression: 4/4 PASS.
 - `pnpm check`: 0 errors / 305 pre-existing warnings; `git diff --check`: PASS.
 - No repeat reviewer launched. Gate A is runtime acceptance.
+- Real Gate A exposed that these components were not wired into production. Final integration
+  commit `49e8546a fix(webgl): wire trajectory replica packets into scene` activates the
+  packet path from trajectory 1×, keeps scientific structure base-sized, routes visual dims
+  independently of WebGPU mode, constructs one manager-ready packet from current colors/
+  radii/final copied bond-manager graph, and passes it to both managers.
+- Production RED source contract: 11 PASS / 1 expected FAIL; GREEN: 7 files, 152/152 PASS;
+  `pnpm check` 0 errors / 304 warnings. Durable report:
+  `.superpowers/sdd/visual-task-4-production-wiring-report.md`.
 
 ## Build T4 state
 
@@ -193,11 +201,39 @@ Diff package: `.superpowers/sdd/build-task-4-final-review.txt`.
 - Do not restart review. Validate runtime behavior through Gate A, then later Build scope
   acceptance tasks.
 
-## Gate A — NOT RUN
+## Gate A — PASS
 
-Gate A implementation prerequisites are closed: T3, T4, and desktop Vite threaded-import
-resolution have commits and targeted evidence. Only durable documentation changes remain
-before launching the isolated frontend.
+Gate A initially failed because T4 component code was not wired into production; the real
+scene stayed on legacy `InstancedMesh`, froze replica positions, and rendered chaotic bonds.
+That failure is fixed by `49e8546a`, then the complete real-UI matrix was rerun.
+
+Evidence:
+
+- Isolated frontend: `VITE_STATIC_ONLY=true`, port 3457; shared `:8000` untouched.
+- Exact prior failing CatGo example: `vasp-XDATCAR-traj.gz`, 100 frames, 76 base atoms.
+  At 2×2×2 the packet atom draw is 608 instances; the old 608/76 frozen-slot warning is
+  gone and screenshot shows orderly attached bonds.
+- Frames 5→99→5: packet atom count stayed 608; bond half-counts 4160→4112→4160;
+  packet mesh UUIDs stayed stable; `isContextLost=false`, `gl.getError()=0`.
+- Real interval Play at 2×2×2 advanced frames 40→54 and 70→76. Repeated Play/Pause worked;
+  no shader error, `INVALID_OPERATION`, context loss, NaN, blank viewer, or detached bonds.
+- Factor cycle 1×→2×→8×→1× kept packet mesh UUIDs stable. Atom counts
+  76→152→608→76 and sampled bond counts 488→976→3904→488. No visible legacy render
+  `InstancedMesh`; only named transparent picking hitboxes remained.
+- Exact `/home/james0001/Downloads/dump.traj` loaded once through the real trajectory drop
+  handler. At explicit 1×: 19,968 atoms; frame 5/99/5 bond half-counts
+  52,092→51,896→52,092. Real Play sampled frames 57→72 with stable 19,968 atoms,
+  live ~50.8k bond halves, one visible canvas, `isContextLost=false`, `gl.getError()=0`.
+- Console contained only unrelated static-browser noise: WebGPU no-adapter warning, one 404,
+  and desktop-only filesystem error. Threaded ferrox worker initialized with 8 threads.
+- Screenshots archived under `$CLAUDE_JOB_DIR/tmp`:
+  `gate-a-xdatcar-fixed-frame0-8x.png`, `gate-a-xdatcar-fixed-playing-8x.png`,
+  `gate-a-dump-fixed-playing.png`; pre-fix comparison `gate-a-small-8x.png`.
+
+Non-blocking follow-ups: replica-specific picking remains deferred; transparent base picking
+hitboxes remain. In-place trajectory replacement inherited the prior supercell label until
+explicit reset; accepted large-file evidence was collected after explicit 1×. Production
+Vite build still has the separate worker `iife`/code-splitting issue.
 
 Run FE-only on an isolated port. Never run `desktop:serve`; never start/stop shared
 `:8000`. Prefer STATIC_ONLY build or isolated frontend launch so backend noise cannot
@@ -227,21 +263,19 @@ Historical crash analysis: `docs/superpowers/handoff-impostor-play-crash.md`.
 
 ## Exact next steps
 
-1. Wait for Visual T3 and Visual T4 fix notifications.
-2. For each result:
-   - inspect commit exists;
-   - confirm report names targeted tests and exact results;
-   - confirm no failed test/unresolved blocker;
-   - append commit/tests/status to `.superpowers/sdd/progress.md` and this handoff;
-   - do not launch another reviewer.
-3. Check `git status`; worktree must be clean.
-4. Mark review-closure task complete and ledger-update task complete.
-5. Invoke project `run`/`verify` workflow and execute Gate A matrix above.
-6. Append Gate A evidence and verdict to progress ledger and this handoff.
-7. If Gate A fails, use `superpowers:systematic-debugging`; capture exact first red console
-   error before editing. Do not repeat old environment/GPU-pressure guesses.
-8. If Gate A passes, update this handoff status and continue remaining Visual/Build/Bonds
-   plan tasks; do not merge or push without explicit instruction.
+Gate A and the reopened Visual T4 production integration are closed. Do not reopen or
+redispatch them without a new runtime regression.
+
+1. Commit this final durable handoff update; verify worktree clean.
+2. Stop only the controller-owned isolated port-3457 frontend when this session finishes;
+   never manage shared `:8000`.
+3. Await user direction before continuing remaining Visual/Build/Bonds plan tasks, pushing,
+   opening a PR, merging, or running broad final review.
+4. Tracked follow-ups for later scopes:
+   - replica-specific picking/request-time codec snapshot;
+   - trajectory replacement supercell-label inheritance/reset behavior;
+   - production Vite threaded-worker `iife`/code-splitting build failure;
+   - remaining plan tasks and Gate B/C.
 
 ## New-session recovery prompt
 
