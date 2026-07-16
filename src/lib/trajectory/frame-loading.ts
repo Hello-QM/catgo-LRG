@@ -7,6 +7,10 @@ export type FrameRequestOutcome =
 
 export interface FrameRequestLoader {
   invalidate(): void
+  is_current(
+    outcome: FrameRequestOutcome,
+    trajectory: TrajectoryType | undefined,
+  ): boolean
   load(
     trajectory: TrajectoryType,
     frame_idx: number,
@@ -29,10 +33,28 @@ export function select_in_memory_frame(
       }
 }
 
+export function select_displayed_frame_idx(
+  outcome: FrameRequestOutcome,
+  requested_frame_idx: number,
+  previous_frame_idx: number | null,
+): number | null {
+  return outcome.status === `loaded`
+    ? requested_frame_idx
+    : previous_frame_idx
+}
+
 export function create_frame_request_loader(): FrameRequestLoader {
   let latest_request = 0
+  let latest_outcome: FrameRequestOutcome | null = null
+  let latest_trajectory: TrajectoryType | null = null
   return {
-    invalidate: () => { latest_request += 1 },
+    invalidate: () => {
+      latest_request += 1
+      latest_outcome = null
+      latest_trajectory = null
+    },
+    is_current: (outcome, trajectory) =>
+      outcome === latest_outcome && trajectory === latest_trajectory,
     async load(
       trajectory: TrajectoryType,
       frame_idx: number,
@@ -40,26 +62,32 @@ export function create_frame_request_loader(): FrameRequestLoader {
       fallback_source: string | ArrayBuffer | null,
     ): Promise<FrameRequestOutcome> {
       const request = ++latest_request
+      latest_outcome = null
+      latest_trajectory = trajectory
+      const finish = (outcome: FrameRequestOutcome) => {
+        if (request === latest_request) latest_outcome = outcome
+        return outcome
+      }
       const loader = trajectory.frame_loader
       if (!loader) {
-        return { status: `failed`, frame: previous, error: new Error(`No loader for frame ${frame_idx}`) }
+        return finish({ status: `failed`, frame: previous, error: new Error(`No loader for frame ${frame_idx}`) })
       }
       try {
         const source = trajectory.frame_source_data ?? fallback_source ?? ``
         const frame = await loader.load_frame(source, frame_idx)
         if (request !== latest_request) return { status: `stale` }
         if (!frame?.structure) {
-          return { status: `failed`, frame: previous, error: new Error(`Failed to load frame ${frame_idx}`) }
+          return finish({ status: `failed`, frame: previous, error: new Error(`Failed to load frame ${frame_idx}`) })
         }
-        return { status: `loaded`, frame }
+        return finish({ status: `loaded`, frame })
       } catch (cause) {
         if (request !== latest_request) return { status: `stale` }
         const detail = cause instanceof Error ? cause.message : String(cause)
-        return {
+        return finish({
           status: `failed`,
           frame: previous,
           error: new Error(`Failed to load frame ${frame_idx}: ${detail}`),
-        }
+        })
       }
     },
   }

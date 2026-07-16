@@ -27,6 +27,7 @@
   import { full_data_extractor } from './extract'
   import {
     create_frame_request_loader,
+    select_displayed_frame_idx,
     select_in_memory_frame,
     type FrameRequestOutcome,
   } from './frame-loading'
@@ -425,12 +426,14 @@
 
   // Current frame - load on demand for indexed trajectories
   let current_frame = $state<TrajectoryFrame | null>(null)
+  let displayed_frame_idx = $state<number | null>(null)
   const frame_requests = create_frame_request_loader()
 
   // A completion from an earlier trajectory must never replace the current
   // trajectory's frame, even when no newer frame request has started yet.
   $effect(() => {
     trajectory
+    displayed_frame_idx = null
     frame_requests.invalidate()
   })
 
@@ -491,18 +494,21 @@
       }
     } else {
       current_frame = null
+      displayed_frame_idx = null
     }
   })
 
   // Load frame on demand - works for both indexed files and external streaming
   async function load_frame_on_demand(frame_idx: number) {
-    if (!trajectory?.frame_loader) return
+    const requested_trajectory = trajectory
+    if (!requested_trajectory?.frame_loader) return
     const result = await frame_requests.load(
-      trajectory,
+      requested_trajectory,
       frame_idx,
       untrack(() => current_frame),
       untrack(() => orig_data),
     )
+    if (!frame_requests.is_current(result, trajectory)) return
     apply_frame_request_outcome(result, frame_idx)
   }
 
@@ -511,6 +517,11 @@
     frame_idx: number,
   ) {
     if (result.status === `stale`) return
+    displayed_frame_idx = select_displayed_frame_idx(
+      result,
+      frame_idx,
+      untrack(() => displayed_frame_idx),
+    )
     if (result.status === `loaded`) {
       current_frame = result.frame
       return
@@ -695,6 +706,11 @@
       topology_initialized = false
       return
     }
+    if (displayed_frame_idx === null) {
+      trajectory_frame_positions = null
+      trajectory_frame_forces = null
+      return
+    }
     // Variable-cell trajectories (NPT / cell relaxation): publish the frame's
     // lattice so bond detection, cross-cell rendering (CPU + GPU uLattice) and
     // the cell wireframe track the displayed cell. Identity-stable when the
@@ -732,8 +748,8 @@
         current_structure = frame.structure
         topology_initialized = true
       }
-      trajectory_frame_positions = position_cache[current_step_idx] ?? null
-      trajectory_frame_forces = force_cache?.[current_step_idx] ?? null
+      trajectory_frame_positions = position_cache[displayed_frame_idx] ?? null
+      trajectory_frame_forces = force_cache?.[displayed_frame_idx] ?? null
       // NOTE: do NOT call sync_structure_sites_to_frame_positions() here.
       // Architecture P requires `current_structure` to stay static during
       // playback / scrub — writing it per-frame triggers the bond pipeline
@@ -765,7 +781,7 @@
         current_structure?.sites.length === frame_sites.length &&
         pending_ops.length === 0
       ) {
-        const entry = frame_pos_cache.get(current_step_idx, frame_sites)
+        const entry = frame_pos_cache.get(displayed_frame_idx, frame_sites)
         trajectory_frame_positions = entry.positions
         trajectory_frame_forces = entry.forces
       } else {

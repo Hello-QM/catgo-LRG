@@ -5,13 +5,23 @@ import type {
 } from '$lib/trajectory'
 import {
   create_frame_request_loader,
+  select_displayed_frame_idx,
   select_in_memory_frame,
 } from '$lib/trajectory/frame-loading'
+import { create_frame_position_cache } from '$lib/trajectory/frame-positions'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const frame = (step: number): TrajectoryFrame => ({
   step,
   structure: { sites: [] } as TrajectoryFrame['structure'],
+})
+
+const positioned_frame = (step: number): TrajectoryFrame => ({
+  step,
+  structure: {
+    sites: [{ xyz: [step, 0, 0], properties: {} }],
+  } as TrajectoryFrame['structure'],
 })
 
 const trajectory_with_loader = (
@@ -95,6 +105,31 @@ describe(`frame loading`, () => {
     expect((await old_request).status).toBe(`stale`)
   })
 
+  it(`rejects a resolved outcome invalidated before application`, async () => {
+    const trajectory = trajectory_with_loader(
+      async () => frame(1),
+      new ArrayBuffer(1),
+    )
+    const requests = create_frame_request_loader()
+    const result = await requests.load(trajectory, 1, frame(0), null)
+
+    expect(requests.is_current(result, trajectory)).toBe(true)
+    requests.invalidate()
+    expect(requests.is_current(result, trajectory)).toBe(false)
+  })
+
+  it(`rejects a resolved outcome for a replacement trajectory`, async () => {
+    const trajectory = trajectory_with_loader(
+      async () => frame(1),
+      new ArrayBuffer(1),
+    )
+    const replacement = { ...trajectory }
+    const requests = create_frame_request_loader()
+    const result = await requests.load(trajectory, 1, frame(0), null)
+
+    expect(requests.is_current(result, replacement)).toBe(false)
+  })
+
   it(`keeps the previous frame when the loader throws`, async () => {
     const previous = frame(3)
     const requests = create_frame_request_loader()
@@ -120,5 +155,57 @@ describe(`frame loading`, () => {
       expect(result.frame).toBe(previous)
       expect(result.error.message).toContain(`frame 4`)
     }
+  })
+
+  it(`keeps failed-frame positions owned by the displayed index until retry`, () => {
+    const cache = create_frame_position_cache()
+    const previous = positioned_frame(3)
+    const failed = select_in_memory_frame(undefined, previous, 4)
+    let displayed_frame_idx = select_displayed_frame_idx(failed, 4, 3)
+    expect(displayed_frame_idx).toBe(3)
+    if (failed.status === `failed` && failed.frame && displayed_frame_idx !== null) {
+      cache.get(displayed_frame_idx, failed.frame.structure.sites)
+    }
+
+    const retry = select_in_memory_frame(positioned_frame(4), previous, 4)
+    displayed_frame_idx = select_displayed_frame_idx(
+      retry,
+      4,
+      displayed_frame_idx,
+    )
+    expect(displayed_frame_idx).toBe(4)
+    if (retry.status !== `loaded` || displayed_frame_idx === null) {
+      throw new Error(`Expected loaded retry`)
+    }
+    expect(cache.get(displayed_frame_idx, retry.frame.structure.sites).positions[0])
+      .toBe(4)
+  })
+
+  it(`wires displayed frame ownership into trajectory position caches`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(
+      `let displayed_frame_idx = $state<number | null>(null)`,
+    )
+    expect(source).toContain(`select_displayed_frame_idx(`)
+    expect(source).toMatch(/position_cache\[displayed_frame_idx\]/)
+    expect(source).toMatch(
+      /frame_pos_cache\.get\(displayed_frame_idx, frame_sites\)/,
+    )
+  })
+
+  it(`guards outcome application with request and trajectory currentness`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(`const requested_trajectory = trajectory`)
+    expect(source).toMatch(
+      /if \(!frame_requests\.is_current\(result, trajectory\)\) return\s+apply_frame_request_outcome\(result, frame_idx\)/,
+    )
   })
 })
