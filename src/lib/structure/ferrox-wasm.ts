@@ -466,23 +466,43 @@ let init_promise: Promise<FerroxWasmModule> | null = null
  *  See on_ferrox_wasm_ready below. */
 const _ready_listeners = new Set<() => void>()
 
-/** Cached WebAssembly.Module for Worker transfer via postMessage. */
-let cached_wasm_compiled_module: WebAssembly.Module | null = null
+/** Which ferrox wasm artifact to compile: `scalar` is the portable
+ *  single-thread SIMD build (pkg/, the legacy default every existing caller
+ *  gets), `threaded` is the threads+SIMD+Rayon build (pkg-threaded/) that is
+ *  ONLY ever instantiated inside the threaded bond worker. */
+export type FerroxWasmArtifactKind = 'scalar' | 'threaded'
+
+/** Cached WebAssembly.Module per artifact for Worker transfer via postMessage. */
+const cached_wasm_compiled_modules: Record<
+  FerroxWasmArtifactKind,
+  WebAssembly.Module | null
+> = { scalar: null, threaded: null }
 
 /** Get the compiled WebAssembly.Module for Worker transfer.
  *  Fetches the WASM binary and compiles it independently of wasm-bindgen init.
  *
  *  vite-plugin-ferrox-wasm (in vite.desktop.config.ts) replaces the
- *  @catgo/ferrox-wasm/ferrox_bg.wasm?url import with an absolute filesystem path.
- *  fetch() can't use that directly, but Vite dev server serves files via /@fs/ prefix.
- *  We detect this case and prepend /@fs/ to make it a valid dev server URL. */
-export async function compile_wasm_module(): Promise<WebAssembly.Module> {
+ *  @catgo/ferrox-wasm/ferrox_bg.wasm?url and
+ *  @catgo/ferrox-wasm/pkg-threaded/ferrox_bg.wasm?url imports with absolute
+ *  filesystem paths. fetch() can't use those directly, but Vite dev server
+ *  serves files via the /@fs/ prefix. We detect this case and prepend /@fs/
+ *  to make it a valid dev server URL. */
+export async function compile_wasm_module(
+  kind: FerroxWasmArtifactKind = `scalar`,
+): Promise<WebAssembly.Module> {
   if (!browser) throw new Error(`WASM only in browser`)
-  if (cached_wasm_compiled_module) return cached_wasm_compiled_module
+  const cached = cached_wasm_compiled_modules[kind]
+  if (cached) return cached
 
-  const wasm_url_module = await import(
-    /* @vite-ignore */ `@catgo/ferrox-wasm/ferrox_bg.wasm?url`
-  )
+  // The two specifiers are spelled out verbatim (not built from `kind`) so
+  // vite-plugin-ferrox-wasm's per-specifier rewrite keeps matching them.
+  const wasm_url_module = kind === `threaded`
+    ? await import(
+      /* @vite-ignore */ `@catgo/ferrox-wasm/pkg-threaded/ferrox_bg.wasm?url`
+    )
+    : await import(
+      /* @vite-ignore */ `@catgo/ferrox-wasm/ferrox_bg.wasm?url`
+    )
   let url = wasm_url_module.default as string
 
   // Dev only: vite-plugin-ferrox-wasm rewrites the import to an absolute
@@ -493,12 +513,15 @@ export async function compile_wasm_module(): Promise<WebAssembly.Module> {
     url = `/@fs${url}`
   }
 
-  console.log(`[ferrox-wasm] compile_wasm_module: fetching ${url}`)
+  console.log(`[ferrox-wasm] compile_wasm_module(${kind}): fetching ${url}`)
   const response = await fetch(url)
   const bytes = await response.arrayBuffer()
-  cached_wasm_compiled_module = await WebAssembly.compile(bytes)
-  console.log(`[ferrox-wasm] compile_wasm_module: compiled ${(bytes.byteLength / 1024 / 1024).toFixed(1)}MB`)
-  return cached_wasm_compiled_module
+  const compiled = await WebAssembly.compile(bytes)
+  cached_wasm_compiled_modules[kind] = compiled
+  console.log(
+    `[ferrox-wasm] compile_wasm_module(${kind}): compiled ${(bytes.byteLength / 1024 / 1024).toFixed(1)}MB`,
+  )
+  return compiled
 }
 
 // Ensure the WASM module is loaded and initialized.

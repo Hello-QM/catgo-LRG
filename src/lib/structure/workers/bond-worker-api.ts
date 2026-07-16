@@ -1,23 +1,47 @@
 // Bond computation API — delegates to Web Worker (WASM off main thread).
-// Falls back to main-thread WASM/JS only if Worker is unavailable.
 //
 // Architecture:
 //   1. Main thread initializes WASM via ensure_ferrox_wasm_ready, capturing
 //      the WebAssembly.Module via instantiate interception
-//   2. Worker is created via Vite ?worker&inline (bundles deps into the Worker)
-//   3. WebAssembly.Module is sent to Worker via postMessage (structured-cloneable)
-//   4. Worker calls initSync({ module }) — no WASM fetch needed in Worker
+//   2. The bond-worker RUNTIME (bond-worker-runtime.ts) picks the artifact:
+//      threaded (COI + SAB + wasm atomics + ≥2 cores) or scalar, retrying
+//      scalar exactly once after a threaded init failure (design §6.3/§8.3)
+//   3. The worker entry (bond-worker-threaded.ts / bond-worker-scalar.ts) is
+//      created via Vite ?worker&inline (bundles deps into the Worker)
+//   4. The compiled WebAssembly.Module is sent to the Worker via postMessage;
+//      the Worker calls initSync({ module }) — no WASM fetch in the Worker —
+//      and, for the threaded artifact, awaits initThreadPool(thread_count)
+//      before signalling ready
 //   5. Bond detection runs entirely off main thread
 //
-// Priority chain:
-//   1. Web Worker + WASM  (non-blocking, best performance)
-//   2. Main-thread WASM   (blocks briefly, still fast)
-//   3. Main-thread JS     (blocks, O(n²) with spatial grid)
+// Priority chain (small systems, < LARGE_SYSTEM_MIN_ATOMS):
+//   1. Rust worker (threaded or scalar)  (non-blocking, best performance)
+//   2. Main-thread WASM                  (blocks briefly, still fast)
+//   3. Main-thread JS                    (blocks, O(n²) with spatial grid)
+//
+// Large systems (≥ LARGE_SYSTEM_MIN_ATOMS) get the rust workers ONLY: when
+// both fail, bond detection rejects with BondBackendUnavailableError — it
+// never runs synchronous main-thread WASM or the JavaScript fallback
+// (design §8.3).
 
 import type { AnyStructure, BondPair, Crystal } from '$lib'
 import { BONDING_STRATEGIES, type BondingStrategy, compute_bond_transform } from '../bonding'
 import { compile_wasm_module, ensure_ferrox_wasm_ready, get_ferrox_wasm_sync } from '../ferrox-wasm'
 import type { WasmBond } from '../ferrox-wasm-types'
+import {
+  BondBackendUnavailableError,
+  type BondWorkerHandle,
+  type BondWorkerRuntime,
+  type ComputeBondsTypedResult,
+  create_bond_worker_runtime,
+  LARGE_SYSTEM_MIN_ATOMS,
+  type TypedBondInput,
+  type TypedBondTable,
+} from './bond-worker-runtime'
+import { detect_bond_backend_capabilities } from './wasm-thread-capability'
+
+export { BondBackendUnavailableError, LARGE_SYSTEM_MIN_ATOMS }
+export type { ComputeBondsTypedResult, TypedBondInput, TypedBondTable }
 
 /** Threshold below which bonds are computed synchronously via JS.
  *  Spatial grid optimization keeps JS fast (~30-80ms for 1000 atoms).
@@ -30,182 +54,257 @@ const JS_SYNC_FALLBACK_THRESHOLD = 1000
 
 // ─── Web Worker management ───
 
-let worker: Worker | null = null
-let worker_ready = false
-let worker_failed = false
-let worker_init_promise: Promise<void> | null = null
-let pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>()
-let next_id = 0
+/** Init-handshake deadline for ONE worker: script eval + wasm initSync +
+ *  (threaded) Rayon pool spawn. Deliberately a single generous bound — a
+ *  worker that hasn't signalled ready by then is treated as an init FAILURE,
+ *  which the runtime maps to the one-shot scalar retry / disabled state. */
+const WORKER_INIT_TIMEOUT_MS = 15_000
 
-/** Initialize the Worker with the compiled WASM module. */
-async function init_worker(): Promise<void> {
-  if (worker_ready) return
-  if (worker_failed) throw new Error(`Worker permanently failed`)
-  if (worker_init_promise) return worker_init_promise
+/** A live worker: owns the message channel, pending-request map, and
+ *  per-request deadlines. On a request timeout or a worker error the handle
+ *  terminates itself and reports back through `on_dead`, so the runtime can
+ *  drop it and re-initialize on the next request (NOT a permanent failure). */
+class RealBondWorkerHandle implements BondWorkerHandle {
+  private pending = new Map<
+    number,
+    { resolve: (v: unknown) => void; reject: (e: Error) => void }
+  >()
+  private next_id = 0
 
-  worker_init_promise = (async () => {
-    try {
-      // 1. Get compiled WASM Module (captured during ensure_ferrox_wasm_ready init)
-      const wasm_module = await compile_wasm_module()
-
-      // 2. Create Worker via ?worker&inline — Vite bundles bond-worker.ts and all
-      //    its imports (including @catgo/ferrox-wasm JS glue) into an inline blob.
-      //    This bypasses SvelteKit's IIFE worker.format override.
-      const { default: BondWorker } = await import(`./bond-worker.ts?worker&inline`)
-      const w: Worker = new BondWorker()
-
-      // 3. Set up message handler for ongoing communication
-      w.onmessage = (e: MessageEvent) => {
-        const { id, type: msg_type, error } = e.data
-        if (msg_type === `ready`) {
-          return
-        }
-        const p = pending.get(id)
-        if (!p) return
-        pending.delete(id)
-        if (error) {
-          p.reject(new Error(error))
-        } else {
-          // Resolve the whole payload — JSON replies carry {result, dt},
-          // typed replies carry {pairs, images, lengths, strengths, dt}.
-          p.resolve(e.data)
-        }
+  constructor(
+    private worker: Worker,
+    private on_dead: (handle: RealBondWorkerHandle, reason: string) => void,
+  ) {
+    worker.onmessage = (e: MessageEvent) => {
+      const { id, type: msg_type, error } = e.data
+      if (msg_type === `ready`) return
+      const p = this.pending.get(id)
+      if (!p) return
+      this.pending.delete(id)
+      if (error) {
+        p.reject(new Error(error))
+      } else {
+        // Resolve the whole payload — JSON replies carry {result, dt},
+        // typed replies carry {pairs, images, lengths, strengths, dt}.
+        p.resolve(e.data)
       }
-
-      w.onerror = () => {
-        worker_failed = true
-        worker = null
-        worker_ready = false
-        for (const [, p] of pending) p.reject(new Error(`Worker failed`))
-        pending.clear()
-      }
-
-      // 4. Send compiled WebAssembly.Module to Worker for initSync
-      const init_id = next_id++
-      const original_onmessage = w.onmessage
-      const original_onerror = w.onerror
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          clearTimeout(timeout)
-          w.onmessage = original_onmessage
-          w.onerror = original_onerror
-        }
-        const timeout = setTimeout(() => {
-          cleanup()
-          reject(new Error(
-            `Worker init timeout — no 'ready' within 10s. The worker script ` +
-            `loaded but never replied (slow first-time bundle/WASM init, or a ` +
-            `blocked message).`,
-          ))
-        }, 10_000)
-
-        w.onmessage = (e: MessageEvent) => {
-          if (e.data.id === init_id && e.data.type === `ready`) {
-            cleanup()
-            resolve()
-          } else if (e.data.id === init_id && e.data.error) {
-            cleanup()
-            reject(new Error(`Worker init error: ${e.data.error}`))
-          }
-        }
-
-        // A worker that fails to LOAD/eval (import failure, COI-blocked, syntax
-        // error) fires `error` and never processes `init` — surface THAT as the
-        // real cause instead of a generic 10s timeout.
-        w.onerror = (ev: ErrorEvent) => {
-          cleanup()
-          const where = ev?.filename ? ` (${ev.filename}:${ev.lineno}:${ev.colno})` : ``
-          reject(new Error(`Worker load/eval error: ${ev?.message || `unknown`}${where}`))
-        }
-
-        w.postMessage({ type: `init`, id: init_id, module: wasm_module })
-      })
-
-      worker = w
-      worker_ready = true
-      console.log(`[bonds] Worker WASM initialized`)
-    } catch (err) {
-      worker_failed = true
-      worker_init_promise = null
-      console.warn(`[bonds] Worker init failed, falling back to main thread:`, err)
-      throw err
     }
-  })()
+    worker.onerror = () => this.die(`Worker failed`)
+  }
 
-  return worker_init_promise
-}
+  private die(reason: string): void {
+    try {
+      this.worker.terminate()
+    } catch {
+      /* already dead */
+    }
+    for (const [, p] of this.pending) p.reject(new Error(reason))
+    this.pending.clear()
+    this.on_dead(this, reason)
+  }
 
-/** Terminate a wedged worker and reset state so a later request can re-init.
- *  Does NOT set worker_failed — a timeout on one huge request must not
- *  permanently disable the worker for small structures. */
-function reset_worker(reason: string): void {
-  try {
-    worker?.terminate()
-  } catch { /* already dead */ }
-  worker = null
-  worker_ready = false
-  worker_init_promise = null
-  for (const [, p] of pending) p.reject(new Error(reason))
-  pending.clear()
-}
-
-function worker_request<T = { result: string; dt: string }>(
-  data: Record<string, unknown>,
-  timeout_ms = 20_000,
-  transfer?: Transferable[],
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (!worker || !worker_ready) { reject(new Error(`Worker unavailable`)); return }
-    const id = next_id++
-    // Without a deadline, a wedged worker (e.g. solid_angle on 10k+ atoms in
-    // WebKitGTK, whose WASM tier is far slower than Chrome's) hangs this
-    // promise FOREVER — the async chain then never falls back to main-thread
-    // WASM and the structure simply never gets bonds. Kill the worker on
-    // timeout so the caller's fallback chain runs; it re-initializes on the
-    // next request.
-    const timer = setTimeout(() => {
-      if (!pending.has(id)) return
-      pending.delete(id)
-      const msg = `Worker request timed out after ${timeout_ms}ms — terminating worker, falling back`
-      console.warn(`[bonds] ${msg}`)
-      reset_worker(msg)
-      reject(new Error(msg))
-    }, timeout_ms)
-    pending.set(id, {
-      resolve: (v) => {
-        clearTimeout(timer)
-        resolve(v)
-      },
-      reject: (e) => {
-        clearTimeout(timer)
-        reject(e)
-      },
+  request<T>(
+    data: Record<string, unknown>,
+    timeout_ms = 20_000,
+    transfer?: Transferable[],
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const id = this.next_id++
+      // Without a deadline, a wedged worker (e.g. solid_angle on 10k+ atoms in
+      // WebKitGTK, whose WASM tier is far slower than Chrome's) hangs this
+      // promise FOREVER. Kill the worker on timeout so the caller's fallback
+      // chain runs; the runtime re-initializes on the next request.
+      const timer = setTimeout(() => {
+        if (!this.pending.has(id)) return
+        this.pending.delete(id)
+        const msg =
+          `Worker request timed out after ${timeout_ms}ms — terminating worker, falling back`
+        console.warn(`[bonds] ${msg}`)
+        this.die(msg)
+      }, timeout_ms)
+      this.pending.set(id, {
+        resolve: (v) => {
+          clearTimeout(timer)
+          resolve(v as T)
+        },
+        reject: (e) => {
+          clearTimeout(timer)
+          reject(e)
+        },
+      })
+      this.worker.postMessage({ ...data, id }, transfer ?? [])
     })
-    worker.postMessage({ ...data, id }, transfer ?? [])
-  })
+  }
+
+  /** Typed-array hot path (atom_radii): no JSON, transfer lists both ways.
+   *  `positions`/`atomic_numbers` are copied before transfer — the caller
+   *  keeps ownership (frame positions are also the render source). */
+  async compute_typed(input: TypedBondInput): Promise<TypedBondTable> {
+    const pos_copy = input.positions.slice()
+    const z_copy = input.atomic_numbers.slice()
+    const lm = input.lattice_matrix
+    const lattice = lm && lm.length === 3
+      ? new Float64Array([...lm[0], ...lm[1], ...lm[2]])
+      : new Float64Array(0)
+    const pbc_arr = input.pbc
+      ? new Uint8Array([input.pbc[0] ? 1 : 0, input.pbc[1] ? 1 : 0, input.pbc[2] ? 1 : 0])
+      : new Uint8Array(0)
+    const n_sites = input.atomic_numbers.length
+    // Generous size-scaled deadline: big systems are legitimately slower, but
+    // past this the worker is treated as wedged.
+    const timeout_ms = Math.max(20_000, n_sites * 4)
+    const resp = await this.request<TypedBondTable & { dt: string }>(
+      {
+        type: `bonds_typed`,
+        positions: pos_copy,
+        atomic_numbers: z_copy,
+        lattice,
+        pbc: pbc_arr,
+        options_json: JSON.stringify(input.options),
+      },
+      timeout_ms,
+      [pos_copy.buffer, z_copy.buffer, lattice.buffer, pbc_arr.buffer],
+    )
+    if (import.meta.env?.DEV) {
+      console.log(
+        `[bonds] Worker typed | atom_radii | ${n_sites} atoms | ${
+          resp.pairs.length / 2
+        } bonds | wasm ${resp.dt}ms`,
+      )
+    }
+    return {
+      pairs: resp.pairs,
+      images: resp.images,
+      lengths: resp.lengths,
+      strengths: resp.strengths,
+    }
+  }
+
+  request_json(
+    data: Record<string, unknown>,
+    timeout_ms?: number,
+  ): Promise<{ result: string; dt: string }> {
+    return this.request<{ result: string; dt: string }>(data, timeout_ms)
+  }
+
+  terminate(): void {
+    try {
+      this.worker.terminate()
+    } catch {
+      /* already dead */
+    }
+    for (const [, p] of this.pending) p.reject(new Error(`Worker terminated`))
+    this.pending.clear()
+  }
+}
+
+/** Create + fully initialize one rust bond worker: compile the artifact's
+ *  wasm on the main thread, spawn the ?worker&inline entry, then run the init
+ *  handshake ({type:'init', module, thread_count} → 'ready'). Any rejection —
+ *  load/eval error, initSync failure, initThreadPool failure, or the
+ *  WORKER_INIT_TIMEOUT_MS deadline — is an INIT failure for the runtime. */
+async function create_rust_worker(
+  kind: 'scalar' | 'threaded',
+  thread_count: number,
+): Promise<RealBondWorkerHandle> {
+  const wasm_module = await compile_wasm_module(kind)
+
+  const { default: WorkerCtor } = kind === `threaded`
+    ? await import(`./bond-worker-threaded.ts?worker&inline`)
+    : await import(`./bond-worker-scalar.ts?worker&inline`)
+  const w: Worker = new WorkerCtor()
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const init_id = -1
+      const cleanup = () => {
+        clearTimeout(timeout)
+        w.onmessage = null
+        w.onerror = null
+      }
+      const timeout = setTimeout(() => {
+        cleanup()
+        reject(new Error(
+          `Worker init timeout — no 'ready' within ${WORKER_INIT_TIMEOUT_MS}ms. The ` +
+            `worker script loaded but never replied (slow first-time bundle/WASM ` +
+            `init, a failed thread-pool spawn, or a blocked message).`,
+        ))
+      }, WORKER_INIT_TIMEOUT_MS)
+
+      w.onmessage = (e: MessageEvent) => {
+        if (e.data.id === init_id && e.data.type === `ready`) {
+          cleanup()
+          resolve()
+        } else if (e.data.id === init_id && e.data.error) {
+          cleanup()
+          reject(new Error(`Worker init error: ${e.data.error}`))
+        }
+      }
+
+      // A worker that fails to LOAD/eval (import failure, COI-blocked, syntax
+      // error) fires `error` and never processes `init` — surface THAT as the
+      // real cause instead of a generic timeout.
+      w.onerror = (ev: ErrorEvent) => {
+        cleanup()
+        const where = ev?.filename ? ` (${ev.filename}:${ev.lineno}:${ev.colno})` : ``
+        reject(new Error(`Worker load/eval error: ${ev?.message || `unknown`}${where}`))
+      }
+
+      w.postMessage({ type: `init`, id: init_id, module: wasm_module, thread_count })
+    })
+  } catch (err) {
+    try {
+      w.terminate()
+    } catch {
+      /* already dead */
+    }
+    throw err
+  }
+
+  console.log(`[bonds] Worker WASM initialized (${kind}, ${thread_count} thread(s))`)
+  return new RealBondWorkerHandle(w, (handle) => runtime?.reset(handle))
+}
+
+let runtime: BondWorkerRuntime | null = null
+
+function get_runtime(): BondWorkerRuntime {
+  if (!runtime) {
+    runtime = create_bond_worker_runtime({
+      detect_capabilities: () => detect_bond_backend_capabilities(),
+      create_threaded_worker: (thread_count) => create_rust_worker(`threaded`, thread_count),
+      create_scalar_worker: (thread_count) => create_rust_worker(`scalar`, thread_count),
+    })
+  }
+  return runtime
+}
+
+/** Test seam — inject a runtime built on fake worker factories (pass null to
+ *  restore the default lazily-created one). Mirrors the policy/capability
+ *  injection pattern of bond-backend-policy / wasm-thread-capability. */
+export function set_bond_worker_runtime_for_tests(rt: BondWorkerRuntime | null): void {
+  runtime = rt
 }
 
 // ─── Public API ───
 
-/** True when the Worker has finished init and can accept bond requests
- *  immediately (no initialization latency). False until the first
- *  `compute_bonds_async` call kicks off init and it completes. */
+/** True when a rust bond worker is initialized and can accept requests
+ *  immediately (no initialization latency). False until the first bond
+ *  request (or prewarm) kicks off init and it completes. */
 export function is_bond_worker_ready(): boolean {
-  return worker_ready && !worker_failed
+  const backend = runtime?.active_backend() ?? null
+  return backend === `rust-wasm-threads` || backend === `rust-wasm-scalar`
 }
 
 /** Kick off Worker initialization without blocking. Safe to call repeatedly —
- *  it's a no-op once the worker is ready or has permanently failed. Use this
- *  to warm the worker so a later `compute_bonds_async` call has no init
- *  latency. */
+ *  init is memoized and the disabled state short-circuits. Use this to warm
+ *  the worker so a later bond request has no init latency. */
 export function prewarm_bond_worker(): void {
-  if (worker_ready || worker_failed || worker_init_promise) return
-  init_worker().catch(() => { /* logged inside init_worker */ })
+  get_runtime().acquire(0).catch(() => {/* logged inside the runtime */})
   // Also kick off main-thread WASM init so compute_bonds_sync can use the
   // sync WASM path (which emits the `image` field needed for cross-cell
   // bond rendering). Without this, sync calls would fall through to the
   // pure-JS strategies that never produce non-zero jimage values.
-  ensure_ferrox_wasm_ready().catch(() => { /* error already logged inside */ })
+  ensure_ferrox_wasm_ready().catch(() => {/* error already logged inside */})
 }
 
 /** Synchronous bond computation. Used by the bond effect to avoid microtask
@@ -294,24 +393,34 @@ export function wasm_bonds_to_pairs(wasm_bonds: WasmBond[], structure: AnyStruct
   }).filter((b): b is BondPair => b !== null)
 }
 
-/** Try computing bonds via Web Worker (completely off main thread). */
+/** Try computing bonds via the runtime-selected rust worker (completely off
+ *  main thread). Returns null when the worker is unavailable or errors — the
+ *  caller decides whether a fallback is permitted (small systems only). */
 async function try_worker_bonds(
   structure: AnyStructure,
   strategy: BondingStrategy,
   options: Record<string, number>,
 ): Promise<BondPair[] | null> {
-  if (worker_failed) return null
+  const n_sites = structure?.sites?.length ?? 0
+  let handle: BondWorkerHandle
   try {
-    // Ensure Worker is initialized (lazy, first call triggers compilation + init)
-    await init_worker()
-
+    // Lazy: the first call triggers artifact selection + worker init.
+    ;({ handle } = await get_runtime().acquire(n_sites))
+  } catch (err) {
+    console.warn(
+      `[bonds] worker unavailable:`,
+      err instanceof Error ? err.message : err,
+    )
+    return null
+  }
+  if (typeof handle.request_json !== `function`) return null
+  try {
     const structure_json = JSON.stringify(structure)
     const options_json = JSON.stringify(options)
-    const n_sites = structure?.sites?.length ?? 0
     // Generous size-scaled deadline: big systems are legitimately slower, but
     // past this the worker is treated as wedged and the fallback chain runs.
     const timeout_ms = Math.max(20_000, n_sites * 4)
-    const { result, dt } = await worker_request({
+    const { result, dt } = await handle.request_json({
       type: `bonds`,
       structure_json,
       strategy,
@@ -322,7 +431,7 @@ async function try_worker_bonds(
     console.log(`[bonds] Worker WASM | ${strategy} | ${n_sites} atoms | ${pairs.length} bonds | ${dt}ms`)
     return pairs
   } catch (err) {
-    console.warn(`[bonds] worker path failed — falling back to main-thread WASM:`, err instanceof Error ? err.message : err)
+    console.warn(`[bonds] worker path failed:`, err instanceof Error ? err.message : err)
     return null
   }
 }
@@ -365,7 +474,8 @@ async function try_main_thread_wasm(
   }
 }
 
-/** Compute bonds asynchronously. Priority: Worker WASM → Main WASM → JS fallback. */
+/** Compute bonds asynchronously. Priority: rust worker → main WASM → JS
+ *  fallback — the last two for SMALL systems only (see module header). */
 // solid_angle is O(neighborhood³)-ish and grinds for minutes on 10k+ atom
 // systems (worst on WebKitGTK, whose WASM tier is far slower than Chrome) —
 // the user sees "no bonds, ever". Above this size, silently compute with
@@ -395,17 +505,29 @@ export function compute_bonds_async(
   options: Record<string, number>,
 ): Promise<BondPair[]> {
   strategy = effective_strategy(strategy, structure?.sites?.length ?? 0)
-  // 1. Try Web Worker (non-blocking)
+  // 1. Try the rust worker (non-blocking)
   return try_worker_bonds(structure, strategy, options).then(worker_result => {
     if (worker_result) return worker_result
+
+    const n_sites = structure?.sites?.length ?? 0
+    // HARD LINE (design §8.3): at this size the rust workers are the only
+    // permitted backends. When they fail, bond detection is DISABLED with an
+    // actionable error — never synchronous main-thread WASM, never the
+    // main-thread JavaScript fallback. Callers must keep the last complete
+    // graph on rejection.
+    if (n_sites >= LARGE_SYSTEM_MIN_ATOMS) {
+      return Promise.reject(new BondBackendUnavailableError(
+        `bond detection disabled for ${n_sites} atoms — rust wasm bond workers ` +
+          `unavailable, and main-thread fallbacks are forbidden at this size`,
+      ))
+    }
 
     // 2. Try main-thread WASM (blocks briefly)
     return try_main_thread_wasm(structure, strategy, options).then(wasm_result => {
       if (wasm_result) return wasm_result
 
-      // 3. JS fallback (blocks)
+      // 3. JS fallback (blocks) — small systems only
       console.warn(`[bonds] WASM unavailable, falling back to JS | ${strategy}`)
-      const n_sites = structure?.sites?.length ?? 0
 
       // Small structure: compute directly
       if (n_sites <= JS_SYNC_FALLBACK_THRESHOLD) {
@@ -420,7 +542,8 @@ export function compute_bonds_async(
         }
       }
 
-      // Large structure: schedule with requestIdleCallback to avoid blocking interaction
+      // Mid-size structure (< LARGE_SYSTEM_MIN_ATOMS): schedule with
+      // requestIdleCallback to avoid blocking interaction
       return new Promise((resolve, reject) => {
         const compute = () => {
           try {
@@ -443,25 +566,25 @@ export function compute_bonds_async(
   })
 }
 
-/** Flat typed-array bond table returned by the typed worker path. Layouts:
- *  pairs [i0,j0, i1,j1, ...], images [x0,y0,z0, x1,...] (periodic image
- *  offsets), lengths/strengths one per bond. */
-export interface TypedBondTable {
-  pairs: Uint32Array
-  images: Int8Array
-  lengths: Float32Array
-  strengths: Float32Array
+/** Orchestrated typed-array bond computation (atom_radii strategy) — the new
+ *  primary entry. Selection, single scalar retry, and the disabled state live
+ *  in bond-worker-runtime.ts; `backend` reports the artifact that served the
+ *  request so the UI can surface it. Rejects with BondBackendUnavailableError
+ *  once both rust workers have failed. */
+export function compute_bonds_typed(
+  input: TypedBondInput,
+): Promise<ComputeBondsTypedResult> {
+  return get_runtime().compute_bonds_typed(input)
 }
 
-/** Typed-array bond computation via Web Worker (atom_radii strategy only) —
- *  no JSON, no structure objects, transfer lists both directions. Built for
- *  per-frame trajectory bonding at 10k+ atoms where JSON serialization of a
- *  20k-site structure costs more than the detection itself.
+/** Typed-array bond computation via the rust worker (atom_radii strategy
+ *  only) — no JSON, no structure objects, transfer lists both directions.
+ *  Built for per-frame trajectory bonding at 10k+ atoms where JSON
+ *  serialization of a 20k-site structure costs more than the detection.
  *
- *  `positions` and `atomic_numbers` are copied before transfer — the caller
- *  keeps ownership (frame positions are also the render source).
- *  Returns null when the worker is unavailable or errors; callers fall back
- *  to the JSON path. */
+ *  Compatibility wrapper over compute_bonds_typed: returns null when the
+ *  worker is unavailable or errors; callers fall back to the JSON path, whose
+ *  compute_bonds_async enforces the large-system no-main-thread rule. */
 export async function compute_bonds_typed_worker(
   positions: Float32Array,
   atomic_numbers: Uint8Array,
@@ -469,47 +592,24 @@ export async function compute_bonds_typed_worker(
   pbc: [boolean, boolean, boolean] | null,
   options: Record<string, number>,
 ): Promise<TypedBondTable | null> {
-  if (worker_failed) return null
   try {
-    await init_worker()
-
-    const pos_copy = positions.slice()
-    const z_copy = atomic_numbers.slice()
-    const lattice = lattice_matrix && lattice_matrix.length === 3
-      ? new Float64Array([...lattice_matrix[0], ...lattice_matrix[1], ...lattice_matrix[2]])
-      : new Float64Array(0)
-    const pbc_arr = pbc
-      ? new Uint8Array([pbc[0] ? 1 : 0, pbc[1] ? 1 : 0, pbc[2] ? 1 : 0])
-      : new Uint8Array(0)
-    const n_sites = atomic_numbers.length
-    const timeout_ms = Math.max(20_000, n_sites * 4)
     const t0 = performance.now()
-    const resp = await worker_request<TypedBondTable & { dt: string }>(
-      {
-        type: `bonds_typed`,
-        positions: pos_copy,
-        atomic_numbers: z_copy,
-        lattice,
-        pbc: pbc_arr,
-        options_json: JSON.stringify(options),
-      },
-      timeout_ms,
-      [pos_copy.buffer, z_copy.buffer, lattice.buffer, pbc_arr.buffer],
-    )
+    const { table, backend } = await compute_bonds_typed({
+      positions,
+      atomic_numbers,
+      lattice_matrix,
+      pbc,
+      options,
+    })
     if (import.meta.env?.DEV) {
       const total = (performance.now() - t0).toFixed(1)
       console.log(
-        `[bonds] Worker typed | atom_radii | ${n_sites} atoms | ${
-          resp.pairs.length / 2
-        } bonds | wasm ${resp.dt}ms / total ${total}ms`,
+        `[bonds] ${backend} typed | atom_radii | ${atomic_numbers.length} atoms | ${
+          table.pairs.length / 2
+        } bonds | total ${total}ms`,
       )
     }
-    return {
-      pairs: resp.pairs,
-      images: resp.images,
-      lengths: resp.lengths,
-      strengths: resp.strengths,
-    }
+    return table
   } catch (err) {
     console.warn(
       `[bonds] typed worker path failed — falling back to JSON path:`,
@@ -519,16 +619,17 @@ export async function compute_bonds_typed_worker(
   }
 }
 
-/** Compute hydrogen bonds via Web Worker.
+/** Compute hydrogen bonds via the rust worker.
  *  Returns null if worker unavailable. */
 export async function compute_hbonds_worker(
   structure: AnyStructure,
   covalent_bonds: Array<{ site_idx_1: number; site_idx_2: number; bond_length: number; strength: number }>,
   options: Record<string, number>,
 ): Promise<any[] | null> {
-  if (worker_failed) return null
   try {
-    await init_worker()
+    const n_sites = structure?.sites?.length ?? 0
+    const { handle } = await get_runtime().acquire(n_sites)
+    if (typeof handle.request_json !== `function`) return null
 
     const structure_json = JSON.stringify(structure)
     const covalent_bonds_json = JSON.stringify(
@@ -541,13 +642,12 @@ export async function compute_hbonds_worker(
       })),
     )
     const options_json = JSON.stringify(options)
-    const { result, dt } = await worker_request({
+    const { result, dt } = await handle.request_json({
       type: `hbonds`,
       structure_json,
       covalent_bonds_json,
       options_json,
     })
-    const n_sites = structure?.sites?.length ?? 0
     const hbonds = JSON.parse(result)
     console.log(`[h-bonds] Worker WASM | ${n_sites} atoms | ${hbonds.length} h-bonds | ${dt}ms`)
     return hbonds
