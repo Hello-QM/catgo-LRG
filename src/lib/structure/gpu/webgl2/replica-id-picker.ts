@@ -11,6 +11,7 @@ import type {
   ImageInstanceTable,
   ReplicaLayout,
   ReplicaPickResult,
+  ReplicaSemantics,
 } from '$lib/structure/scene/render-packet'
 import {
   decode_replica_instance,
@@ -42,6 +43,7 @@ export type ReplicaIdCodec = Readonly<{
   dim_x: number
   dim_y: number
   dim_z: number
+  semantics: ReplicaSemantics
 }>
 
 function assert_uint32_count(name: string, value: number): void {
@@ -122,6 +124,10 @@ export function create_replica_id_codec(
           `count (${expected})`,
       )
     }
+  } else if (replicas.physical_site_map !== undefined) {
+    throw new RangeError(
+      `replica ID codec: visual-shared-base must not carry a physical_site_map`,
+    )
   }
 
   const total = atom_instance_count + bond_instance_count + ghost_count
@@ -149,6 +155,7 @@ export function create_replica_id_codec(
     dim_x,
     dim_y,
     dim_z,
+    semantics: replicas.semantics,
   })
 }
 
@@ -208,9 +215,19 @@ function miss(): ReplicaPickResult {
 }
 
 function layout_matches(codec: ReplicaIdCodec, replicas: ReplicaLayout): boolean {
-  return replicas.dims[0] === codec.dim_x &&
-    replicas.dims[1] === codec.dim_y &&
-    replicas.dims[2] === codec.dim_z
+  if (
+    replicas.dims[0] !== codec.dim_x ||
+    replicas.dims[1] !== codec.dim_y ||
+    replicas.dims[2] !== codec.dim_z ||
+    replicas.semantics !== codec.semantics
+  ) {
+    return false
+  }
+  if (replicas.semantics === 'physical-distinct-sites') {
+    return replicas.physical_site_map !== undefined &&
+      replicas.physical_site_map.length === codec.atom_instance_count
+  }
+  return replicas.physical_site_map === undefined
 }
 
 function valid_image_table(

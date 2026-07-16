@@ -113,6 +113,149 @@ describe('replica integer pick ID codec', () => {
     )
   })
 
+  test('same-dims malformed physical map returns a safe miss', () => {
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: 'stub',
+      semantics: 'physical-distinct-sites',
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+    const codec = create_replica_id_codec({
+      base_atom_count: 2,
+      base_bond_count: 0,
+      replicas,
+      ghost_count: 0,
+    })
+    const id = encode_replica_atom_id(codec, 3)
+    const malformed: ReplicaLayout = {
+      ...replicas,
+      physical_site_map: Uint32Array.from([30, 31, 40]),
+    }
+
+    expect(decode_replica_pick_id(id, codec, malformed, EMPTY_IMAGES)).toEqual({
+      kind: 'miss',
+      base_site: -1,
+      cell: [0, 0, 0],
+      ghost: false,
+    })
+    expect(logical_site_for_replica_pick_id(id, codec, malformed, EMPTY_IMAGES)).toBe(-1)
+  })
+
+  test('same-dims physical layout missing its map returns a safe miss', () => {
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: 'stub',
+      semantics: 'physical-distinct-sites',
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+    const codec = create_replica_id_codec({
+      base_atom_count: 2,
+      base_bond_count: 0,
+      replicas,
+      ghost_count: 0,
+    })
+    const id = encode_replica_atom_id(codec, 3)
+    const missing: ReplicaLayout = {
+      version: 2,
+      dims: [2, 1, 1],
+      boundary_policy: 'stub',
+      semantics: 'physical-distinct-sites',
+    }
+
+    expect(decode_replica_pick_id(id, codec, missing, EMPTY_IMAGES)).toEqual({
+      kind: 'miss',
+      base_site: -1,
+      cell: [0, 0, 0],
+      ghost: false,
+    })
+    expect(logical_site_for_replica_pick_id(id, codec, missing, EMPTY_IMAGES)).toBe(-1)
+  })
+
+  test('same-dims semantics mismatch returns a safe miss', () => {
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: 'stub',
+      semantics: 'physical-distinct-sites',
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+    const codec = create_replica_id_codec({
+      base_atom_count: 2,
+      base_bond_count: 0,
+      replicas,
+      ghost_count: 0,
+    })
+    const id = encode_replica_atom_id(codec, 3)
+    const visual = visual_layout()
+
+    expect(decode_replica_pick_id(id, codec, visual, EMPTY_IMAGES)).toEqual({
+      kind: 'miss',
+      base_site: -1,
+      cell: [0, 0, 0],
+      ghost: false,
+    })
+    expect(logical_site_for_replica_pick_id(id, codec, visual, EMPTY_IMAGES)).toBe(-1)
+  })
+
+  test('visual-shared layouts reject an incompatible physical map', () => {
+    const replicas = visual_layout()
+    const codec = create_replica_id_codec({
+      base_atom_count: 2,
+      base_bond_count: 0,
+      replicas,
+      ghost_count: 0,
+    })
+    const id = encode_replica_atom_id(codec, 3)
+    const incompatible: ReplicaLayout = {
+      ...replicas,
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+
+    expect(decode_replica_pick_id(id, codec, incompatible, EMPTY_IMAGES)).toEqual({
+      kind: 'miss',
+      base_site: -1,
+      cell: [0, 0, 0],
+      ghost: false,
+    })
+    expect(logical_site_for_replica_pick_id(id, codec, incompatible, EMPTY_IMAGES)).toBe(
+      -1,
+    )
+  })
+
+  test('same-length replacement physical map remains valid', () => {
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: 'stub',
+      semantics: 'physical-distinct-sites',
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+    const codec = create_replica_id_codec({
+      base_atom_count: 2,
+      base_bond_count: 0,
+      replicas,
+      ghost_count: 0,
+    })
+    const id = encode_replica_atom_id(codec, 3)
+    const replacement: ReplicaLayout = {
+      ...replicas,
+      version: 2,
+      physical_site_map: Uint32Array.from([30, 31, 40, 41]),
+    }
+
+    expect(decode_replica_pick_id(id, codec, replacement, EMPTY_IMAGES)).toEqual({
+      kind: 'atom',
+      base_site: 1,
+      cell: [1, 0, 0],
+      ghost: false,
+    })
+    expect(logical_site_for_replica_pick_id(id, codec, replacement, EMPTY_IMAGES)).toBe(
+      41,
+    )
+  })
+
   test('bond IDs preserve the base graph index and cell without atom mapping', () => {
     const replicas: ReplicaLayout = {
       version: 1,
@@ -221,7 +364,8 @@ describe('replica integer pick ID codec', () => {
     expect(codec.atom_instance_count).toBe(160_000)
     expect(codec.bond_instance_count).toBe(400_000)
     expect(codec.max_id).toBe(560_007)
-    expect(Object.values(codec).every((value) => typeof value === 'number')).toBe(true)
+    expect(codec.semantics).toBe('visual-shared-base')
+    expect(Object.values(codec).every((value) => typeof value !== 'object')).toBe(true)
     expect(Object.isFrozen(codec)).toBe(true)
 
     const edge = create_replica_id_codec({
@@ -283,5 +427,16 @@ describe('replica integer pick ID codec', () => {
         ghost_count: 0,
       })
     ).toThrow(/physical_site_map/)
+    expect(() =>
+      create_replica_id_codec({
+        base_atom_count: 2,
+        base_bond_count: 0,
+        replicas: {
+          ...visual_layout(),
+          physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+        },
+        ghost_count: 0,
+      })
+    ).toThrow(/visual-shared-base/)
   })
 })
