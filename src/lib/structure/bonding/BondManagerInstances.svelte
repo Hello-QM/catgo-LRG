@@ -342,6 +342,114 @@
     }
   `
 
+  // Impostor (ray-cylinder) vertex shader for the GPU-transform trajectory
+  // path. It mirrors #524's uGpuXform-branch geometry at parity -- same
+  // endpoint texelFetch, b_eff = pb_base + uLattice*a_jimage, intra-cell mid,
+  // periodic paired-stub (uStubMode / uStubScale), and the same collapse
+  // conditions -- but instead of transforming a cylinder vertex + emitting a
+  // surface normal, it maps a unit OBB box (Task 2's BoxGeometry, corners in
+  // [-1,1]) onto each half-bond and passes the half-cylinder's view-space
+  // frame (base / axis / radius) to the fragment stage (Task 4), which
+  // ray-casts the true cylinder surface. uBondRadius / uInvProjection are
+  // wired as uniforms in Task 5.
+  const impostor_vertex_shader = `
+    attribute vec3 instance_color_start;
+    attribute vec3 instance_color_end;
+    attribute float instance_opacity;
+    attribute vec2 a_site;
+    attribute vec3 a_jimage;
+    attribute float a_half;
+    uniform sampler2D uPosTex;
+    uniform float uNAtoms;
+    uniform mat3 uLattice;
+    uniform float uHideIncomplete;
+    uniform float uMaxBondLength;
+    uniform float uStubMode;
+    uniform float uStubScale;
+    uniform float uBondRadius;
+    uniform mat4 uInvProjection;
+    varying vec3 vColorStart;
+    varying vec3 vColorEnd;
+    varying float vOpacity;
+    flat varying vec3 vImpBase;     // view-space half-cylinder base (anchor)
+    flat varying vec3 vImpAxis;     // view-space axis, length = half-cyl length
+    flat varying float vImpRadiusSq;
+    flat varying float vImpLen;
+    flat varying float vImpCollapse;
+
+    void main() {
+      vColorStart = instance_color_start;
+      vColorEnd = instance_color_end;
+      vOpacity = instance_opacity;
+
+      int ia = int(a_site.x + 0.5);
+      int ib = int(a_site.y + 0.5);
+      ivec2 sa = ivec2(ia & ${1024 - 1}, ia >> 10);
+      ivec2 sb = ivec2(ib & ${1024 - 1}, ib >> 10);
+      vec3 pa = texelFetch(uPosTex, sa, 0).xyz;
+      vec3 pb_base = texelFetch(uPosTex, sb, 0).xyz;
+      bool periodic = dot(abs(a_jimage), vec3(1.0)) > 0.5;
+      vec3 pb = periodic ? pb_base + uLattice * a_jimage : pb_base;
+      vec3 d = pb - pa;
+      float len = length(d);
+
+      // Collapse (zero-scale) under the same conditions as #524: endpoint past
+      // the live buffer, degenerate/over-cap length, or cross-cell under
+      // hide_incomplete.
+      bool collapse = a_site.x >= uNAtoms || a_site.y >= uNAtoms ||
+        !(len > 1e-6) || len > uMaxBondLength ||
+        (periodic && uHideIncomplete > 0.5);
+      vImpCollapse = collapse ? 1.0 : 0.0;
+      if (collapse) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // off-screen (clipped)
+        vImpBase = vec3(0.0); vImpAxis = vec3(0.0, 0.0, 1.0);
+        vImpRadiusSq = 0.0; vImpLen = 0.0;
+        return;
+      }
+
+      vec3 dir = d / len;
+      // Deterministic perp basis (same roll-arbitrary choice as #524).
+      vec3 ref = abs(dir.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 xb = normalize(cross(ref, dir));
+      vec3 zb = cross(xb, dir);
+      float half_len = 0.5 * len;
+
+      // Object-space half-cylinder endpoints (base -> tip along dir).
+      vec3 obj_base;   // the capped/anchored end
+      vec3 obj_tip;    // the mid (or stub) end
+      if (periodic) {
+        // Phase 6 outward paired stubs (hide OFF; hide ON collapsed above).
+        float stub_len = half_len * (uStubMode > 0.5 ? uStubScale : 1.0);
+        if (a_half < 0.5) { obj_base = pa;      obj_tip = pa + dir * stub_len; }
+        else              { obj_base = pb_base; obj_tip = pb_base - dir * stub_len; }
+      } else {
+        // Intra-cell: half A spans pa..mid, half B spans mid..pb.
+        vec3 mid = 0.5 * (pa + pb);
+        if (a_half < 0.5) { obj_base = pa; obj_tip = mid; }
+        else              { obj_base = pb; obj_tip = mid; }
+      }
+
+      float R = uBondRadius * 1.3; // AA padding shell (ray-cast uses true radius)
+      float cyl_len = length(obj_tip - obj_base);
+      vec3 cyl_dir = (obj_tip - obj_base) / max(cyl_len, 1e-6);
+      // OBB corner: base + (+/-R)perp + (0..len)axis. position in [-1,1]^3 -> remap
+      // z from [-1,1] to [0,1] so the box spans base->tip.
+      float za = position.z * 0.5 + 0.5;
+      vec3 corner = obj_base
+        + xb * (position.x * R)
+        + zb * (position.y * R)
+        + cyl_dir * (za * cyl_len);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(corner, 1.0);
+
+      // View-space half-cylinder frame for the fragment ray-cast.
+      vImpBase = (modelViewMatrix * vec4(obj_base, 1.0)).xyz;
+      vImpAxis = (modelViewMatrix * vec4(obj_tip - obj_base, 0.0)).xyz;
+      vImpLen = length(vImpAxis);
+      float vr = uBondRadius * length(modelViewMatrix[0].xyz);
+      vImpRadiusSq = vr * vr;
+    }
+  `
+
   const fragment_shader = `
     uniform float ambientIntensity;
     uniform float directionalIntensity;
