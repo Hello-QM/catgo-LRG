@@ -1,7 +1,7 @@
 # Handoff — traj-round4 review closure → Gate A
 
 Date: 2026-07-16
-Status: **GATE A PASS — production trajectory packet wired; real interval Play passes**
+Status: **PR #531 OPEN — Gate A PASS; production trajectory packet and real Play verified**
 
 This is the current durable handoff. The older Play-crash history remains in
 `docs/superpowers/handoff-impostor-play-crash.md`; use this file for current execution
@@ -15,6 +15,16 @@ Branch:   feat/impostor-bond-mvp
 HEAD:     49e8546a fix(webgl): wire trajectory replica packets into scene
 Divergence from origin/main at final Gate A: 0 behind / 70 ahead
 ```
+
+## Pull request
+
+- PR: [#531 — feat(trajectory): add GPU replica rendering and fast bond backends](https://github.com/Hello-QM/catgo-LRG/pull/531)
+- Base: `main`
+- Head: `feat/impostor-bond-mvp`
+- Branch pushed to `origin`; PR remains open and unmerged.
+- Implementation head at Gate A: `49e8546a`.
+- Pre-PR Gate A handoff commit: `91343d02`.
+- This document update is the post-PR durable resume record.
 
 Do not work from the repository root checkout. Do not push, open a PR, merge, or manage
 the shared `:8000` backend without explicit user instruction.
@@ -266,11 +276,11 @@ Historical crash analysis: `docs/superpowers/handoff-impostor-play-crash.md`.
 Gate A and the reopened Visual T4 production integration are closed. Do not reopen or
 redispatch them without a new runtime regression.
 
-1. Commit this final durable handoff update; verify worktree clean.
-2. Stop only the controller-owned isolated port-3457 frontend when this session finishes;
-   never manage shared `:8000`.
-3. Await user direction before continuing remaining Visual/Build/Bonds plan tasks, pushing,
-   opening a PR, merging, or running broad final review.
+1. This post-PR durable handoff is the only pending local docs change; commit it and push
+   it onto PR #531, then verify worktree clean.
+2. Isolated port-3457 frontend is already stopped; never manage shared `:8000`.
+3. Await user direction before merging PR #531, continuing remaining Visual/Build/Bonds
+   plan tasks, or running broad final review.
 4. Tracked follow-ups for later scopes:
    - replica-specific picking/request-time codec snapshot;
    - trajectory replacement supercell-label inheritance/reset behavior;
