@@ -25,6 +25,11 @@
   import { tooltip } from 'svelte-multiselect/attachments'
   import type { HTMLAttributes } from 'svelte/elements'
   import { full_data_extractor } from './extract'
+  import {
+    create_frame_request_loader,
+    select_in_memory_frame,
+    type FrameRequestOutcome,
+  } from './frame-loading'
   import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
   import type {
     ParseProgress,
@@ -420,6 +425,14 @@
 
   // Current frame - load on demand for indexed trajectories
   let current_frame = $state<TrajectoryFrame | null>(null)
+  const frame_requests = create_frame_request_loader()
+
+  // A completion from an earlier trajectory must never replace the current
+  // trajectory's frame, even when no newer frame request has started yet.
+  $effect(() => {
+    trajectory
+    frame_requests.invalidate()
+  })
 
   // Current frame structure for display — controlled $state instead of $derived
   // so we can freeze it during fast-path playback (moved up to avoid use-before-declaration)
@@ -467,7 +480,14 @@
         // inside `materialize_frame` replaces `trajectory.frames[idx]` with a
         // fresh object, so we re-read after to pick up the new reference.
         materialize_frame(current_step_idx)
-        current_frame = trajectory.frames[current_step_idx] || null
+        apply_frame_request_outcome(
+          select_in_memory_frame(
+            trajectory.frames[current_step_idx],
+            untrack(() => current_frame),
+            current_step_idx,
+          ),
+          current_step_idx,
+        )
       }
     } else {
       current_frame = null
@@ -477,24 +497,34 @@
   // Load frame on demand - works for both indexed files and external streaming
   async function load_frame_on_demand(frame_idx: number) {
     if (!trajectory?.frame_loader) return
+    const result = await frame_requests.load(
+      trajectory,
+      frame_idx,
+      untrack(() => current_frame),
+      untrack(() => orig_data),
+    )
+    apply_frame_request_outcome(result, frame_idx)
+  }
 
-    try {
-      const frame = await trajectory.frame_loader.load_frame(
-        trajectory.frame_source_data ?? orig_data ?? ``,
-        frame_idx,
-      )
-      current_frame = frame
-    } catch (error) {
-      console.error(`Failed to load frame ${frame_idx}:`, error)
-      current_frame = null
-      on_error?.({
-        error_msg: `Failed to load frame ${frame_idx}: ${error}`,
-        filename: current_filename,
-        file_size,
-        step_idx: frame_idx,
-        frame_count: total_frames,
-      })
+  function apply_frame_request_outcome(
+    result: FrameRequestOutcome,
+    frame_idx: number,
+  ) {
+    if (result.status === `stale`) return
+    if (result.status === `loaded`) {
+      current_frame = result.frame
+      return
     }
+
+    current_frame = result.frame
+    if (is_playing) pause_playback()
+    on_error?.({
+      error_msg: result.error.message,
+      filename: current_filename,
+      file_size,
+      step_idx: frame_idx,
+      frame_count: total_frames,
+    })
   }
 
   // --- Trajectory fast-path: position-only GPU updates during playback/scrubbing ---
