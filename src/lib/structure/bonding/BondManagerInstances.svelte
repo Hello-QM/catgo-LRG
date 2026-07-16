@@ -384,8 +384,8 @@
 
       int ia = int(a_site.x + 0.5);
       int ib = int(a_site.y + 0.5);
-      ivec2 sa = ivec2(ia & ${1024 - 1}, ia >> 10);
-      ivec2 sb = ivec2(ib & ${1024 - 1}, ib >> 10);
+      ivec2 sa = ivec2(ia & ${POS_TEX_WIDTH - 1}, ia >> ${POS_TEX_SHIFT});
+      ivec2 sb = ivec2(ib & ${POS_TEX_WIDTH - 1}, ib >> ${POS_TEX_SHIFT});
       vec3 pa = texelFetch(uPosTex, sa, 0).xyz;
       vec3 pb_base = texelFetch(uPosTex, sb, 0).xyz;
       bool periodic = dot(abs(a_jimage), vec3(1.0)) > 0.5;
