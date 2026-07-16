@@ -105,6 +105,40 @@ describe(`effective frame export iterator`, () => {
     expect(loads).toEqual([0, 1, 2])
   })
 
+  it(`preserves mixed all/current operation order in exported effective frames`, async () => {
+    const ledger = new OperationLedger()
+    ledger.append(
+      { kind: `all` },
+      { kind: `add`, element: `H`, position: [1, 0, 0] },
+    )
+    ledger.append({ kind: `frame`, frame_idx: 1 }, scale(2))
+    const resolver = create_effective_frame_resolver(ledger)
+    const { loads, load_base } = make_source([
+      frame(cubic(1, 2), 10),
+      frame(cubic(1, 2), 20),
+    ])
+
+    const exported: { frame_idx: number; frame: TrajectoryFrame | null }[] = []
+    for await (
+      const effective of iterate_effective_frames({
+        resolver,
+        load_base,
+        start_frame: 0,
+        end_frame: 1,
+      })
+    ) exported.push(effective)
+
+    expect(exported.map(({ frame_idx }) => frame_idx)).toEqual([0, 1])
+    expect(exported.map(({ frame: fr }) => fr?.step)).toEqual([10, 20])
+    expect(exported.map(({ frame: fr }) => fr?.structure.sites.length)).toEqual([2, 2])
+    expect(exported.map(({ frame: fr }) => lattice_a(fr))).toEqual([2, 4])
+    expect(exported.map(({ frame: fr }) => fr?.structure.sites[1].xyz)).toEqual([
+      [1, 0, 0],
+      [2, 0, 0],
+    ])
+    expect(loads).toEqual([0, 1])
+  })
+
   it(`exports all-scope variable-N and variable-cell frames from their own bases`, async () => {
     const ledger = new OperationLedger()
     ledger.append(
@@ -135,6 +169,23 @@ describe(`effective frame export iterator`, () => {
     expect(loads).toEqual([0, 1])
   })
 
+  it(`does not load or yield when the signal is already aborted`, async () => {
+    const resolver = create_effective_frame_resolver(new OperationLedger())
+    const { loads, load_base } = make_source([frame(cubic(1, 1), 0)])
+    const controller = new AbortController()
+    controller.abort()
+    const iterator = iterate_effective_frames({
+      resolver,
+      load_base,
+      start_frame: 0,
+      end_frame: 0,
+      signal: controller.signal,
+    })
+
+    expect(await iterator.next()).toEqual({ done: true, value: undefined })
+    expect(loads).toEqual([])
+  })
+
   it(`stops before loading or yielding the next frame after abort`, async () => {
     const resolver = create_effective_frame_resolver(new OperationLedger())
     const { loads, load_base } = make_source([
@@ -152,6 +203,36 @@ describe(`effective frame export iterator`, () => {
 
     expect((await iterator.next()).value?.frame_idx).toBe(0)
     controller.abort()
+    expect(await iterator.next()).toEqual({ done: true, value: undefined })
+    expect(loads).toEqual([0])
+  })
+
+  it(`suppresses a frame resolved after abort and never loads a later index`, async () => {
+    const resolver = create_effective_frame_resolver(new OperationLedger())
+    const loads: number[] = []
+    let release!: (value: TrajectoryFrame) => void
+    let mark_started!: () => void
+    const started = new Promise<void>((resolve) => { mark_started = resolve })
+    const load_base: BaseFrameProvider = (frame_idx) => {
+      loads.push(frame_idx)
+      mark_started()
+      return new Promise<TrajectoryFrame>((resolve) => { release = resolve })
+    }
+    const controller = new AbortController()
+    const iterator = iterate_effective_frames({
+      resolver,
+      load_base,
+      start_frame: 0,
+      end_frame: 1,
+      signal: controller.signal,
+    })
+
+    const pending = iterator.next()
+    await started
+    controller.abort()
+    release(frame(cubic(1, 1), 0))
+
+    expect(await pending).toEqual({ done: true, value: undefined })
     expect(await iterator.next()).toEqual({ done: true, value: undefined })
     expect(loads).toEqual([0])
   })
