@@ -370,7 +370,7 @@
   let pushback_status = $state<`idle` | `saving` | `saved` | `error`>(`idle`)
   let pushback_message = $state(``)
   let pushback_timer: ReturnType<typeof setTimeout> | undefined = undefined
-  let displayed_frame_owner = $state<DisplayedFrameOwner | null>(null)
+  let displayed_frame_owner = $state.raw<DisplayedFrameOwner | null>(null)
 
   // A retained frame from an earlier trajectory must never inherit the active
   // trajectory's remote destination after a replacement load fails.
