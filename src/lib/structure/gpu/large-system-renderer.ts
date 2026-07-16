@@ -29,6 +29,16 @@ import {
   MAX_DIRECT_ATOMS,
   plan_bond_dispatch,
 } from '$lib/structure/workers/bond-backend-policy'
+import { diff_render_packet } from '$lib/structure/scene/render-packet'
+import type {
+  BaseBondGraph,
+  BoundaryPolicy,
+  ImageInstanceTable,
+  RenderPacket,
+  RenderPacketDiff,
+  ReplicaPickResult,
+} from '$lib/structure/scene/render-packet'
+import { decode_replica_instance } from '$lib/structure/scene/replica-layout'
 
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
@@ -332,6 +342,15 @@ struct Supercell {
 // GPU supercell instancing params. Read ONLY in the vertex stage (decode of
 // instance_index into atom + cell offset), so the BGL grants it VERTEX only.
 @group(0) @binding(5) var<uniform> supercell : Supercell;
+// Sparse ghost-image instance table (packet path, boundary policy
+// 'ghost-images'): ghost_sites[i] = the ghost's BASE atom index;
+// ghost_images[i] = its ABSOLUTE image offset packed as
+// (jx+128) | ((jy+128)<<8) | ((jz+128)<<16) (Int8 components biased into u8
+// lanes). Ghost instances draw AFTER the base_count·ncells replica range;
+// when none are uploaded the instance count never reaches that range and both
+// buffers stay 4-byte placeholders. Read ONLY in vs_main ⇒ VERTEX-only BGL.
+@group(0) @binding(6) var<storage, read> ghost_sites : array<u32>;
+@group(0) @binding(7) var<storage, read> ghost_images : array<u32>;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -364,16 +383,35 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // byte-identical to the non-supercell path. Per-atom radii/colors/selected are
   // indexed by atom (NOT inst) so every replica shares the base atom's look.
   let base_count = max(supercell.dims.w, 1u);
-  let atom = inst % base_count;
-  let cell = inst / base_count;
   let nx = max(supercell.dims.x, 1u);
   let ny = max(supercell.dims.y, 1u);
-  let ix = cell % nx;
-  let iy = (cell / nx) % ny;
-  let iz = cell / (nx * ny);
-  let offset = f32(ix) * supercell.lat0.xyz
-             + f32(iy) * supercell.lat1.xyz
-             + f32(iz) * supercell.lat2.xyz;
+  let nz = max(supercell.dims.z, 1u);
+  let real_count = base_count * nx * ny * nz;
+  var atom : u32;
+  var offset : vec3<f32>;
+  if (inst < real_count) {
+    atom = inst % base_count;
+    let cell = inst / base_count;
+    let ix = cell % nx;
+    let iy = (cell / nx) % ny;
+    let iz = cell / (nx * ny);
+    offset = f32(ix) * supercell.lat0.xyz
+           + f32(iy) * supercell.lat1.xyz
+           + f32(iz) * supercell.lat2.xyz;
+  } else {
+    // Ghost image instance: a BASE atom drawn at an ABSOLUTE image offset
+    // (which may lie outside [0, dims)). Radii / colors / selection all index
+    // by the base atom, so every ghost shares its base atom's look + highlight.
+    let gi = inst - real_count;
+    atom = ghost_sites[gi];
+    let packed = ghost_images[gi];
+    let jx = f32(i32(packed & 0xffu) - 128);
+    let jy = f32(i32((packed >> 8u) & 0xffu) - 128);
+    let jz = f32(i32((packed >> 16u) & 0xffu) - 128);
+    offset = jx * supercell.lat0.xyz
+           + jy * supercell.lat1.xyz
+           + jz * supercell.lat2.xyz;
+  }
 
   let center = vec3<f32>(
     positions[atom * 3u + 0u],
@@ -511,6 +549,12 @@ struct Supercell {
 @group(0) @binding(1) var<storage, read> positions : array<f32>;
 @group(0) @binding(2) var<storage, read> radii : array<f32>;
 @group(0) @binding(3) var<uniform> supercell : Supercell;
+// Sparse ghost-image instance table — SAME layout + decode as the atom
+// impostor's bindings 6/7 (see IMPOSTOR_WGSL). Ghost instances draw after the
+// base_count·ncells replica range, so their ids (inst + 1) land past it and
+// pick() maps them back through the CPU-side ImageInstanceTable. VERTEX-only.
+@group(0) @binding(4) var<storage, read> ghost_sites : array<u32>;
+@group(0) @binding(5) var<storage, read> ghost_images : array<u32>;
 
 struct VsOut {
   @builtin(position) clip : vec4<f32>,
@@ -540,16 +584,33 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // (1,1,1) and base_count = the instance count, atom = inst, cell = 0, offset =
   // 0 ⇒ center = positions[inst], byte-identical to the pre-Phase-4 pick.
   let base_count = max(supercell.dims.w, 1u);
-  let atom = inst % base_count;
-  let cell = inst / base_count;
   let nx = max(supercell.dims.x, 1u);
   let ny = max(supercell.dims.y, 1u);
-  let ix = cell % nx;
-  let iy = (cell / nx) % ny;
-  let iz = cell / (nx * ny);
-  let offset = f32(ix) * supercell.lat0.xyz
-             + f32(iy) * supercell.lat1.xyz
-             + f32(iz) * supercell.lat2.xyz;
+  let nz = max(supercell.dims.z, 1u);
+  let real_count = base_count * nx * ny * nz;
+  var atom : u32;
+  var offset : vec3<f32>;
+  if (inst < real_count) {
+    atom = inst % base_count;
+    let cell = inst / base_count;
+    let ix = cell % nx;
+    let iy = (cell / nx) % ny;
+    let iz = cell / (nx * ny);
+    offset = f32(ix) * supercell.lat0.xyz
+           + f32(iy) * supercell.lat1.xyz
+           + f32(iz) * supercell.lat2.xyz;
+  } else {
+    // Ghost image instance (SAME decode as IMPOSTOR_WGSL bindings 6/7).
+    let gi = inst - real_count;
+    atom = ghost_sites[gi];
+    let packed = ghost_images[gi];
+    let jx = f32(i32(packed & 0xffu) - 128);
+    let jy = f32(i32((packed >> 8u) & 0xffu) - 128);
+    let jz = f32(i32((packed >> 16u) & 0xffu) - 128);
+    offset = jx * supercell.lat0.xyz
+           + jy * supercell.lat1.xyz
+           + jz * supercell.lat2.xyz;
+  }
 
   let center = vec3<f32>(
     positions[atom * 3u + 0u],
@@ -1094,6 +1155,34 @@ fn fs_main(in : VsOut) -> FsOut {
 }
 `
 
+/** Deterministic snapshot of the renderer's replica/packet state (design §5 +
+ *  §7): what the packet channel last consumed, how many instances the atom
+ *  draw issues, and the nested GPU bond-pipeline diagnostics. */
+export type ReplicaRendererDiagnostics = {
+  backend: 'webgpu'
+  /** Base-cell atom count (CPU stays at exactly N sites). */
+  base_count: number
+  dims: readonly [number, number, number]
+  ncells: number
+  boundary_policy: BoundaryPolicy
+  /** Sparse ghost table size (drawn only under 'ghost-images'). */
+  ghost_count: number
+  /** Atom-draw instance count: base_count · ncells (+ drawn ghosts). */
+  atom_instances: number
+  /** Versions of the last packet consumed by set_packet; null before any. */
+  packet_versions: {
+    topology: number
+    bond_graph: number | null
+    frame_idx: number
+    positions: number
+    replicas: number
+  } | null
+  /** True while a packet-supplied bond graph drives the draw (GPU bond
+   *  detection suspended — the packet producer owns re-detection). */
+  packet_graph_active: boolean
+  bonds: BondGpuDiagnostics
+}
+
 export type LargeSystemRenderer = {
   /** Upload a packed camera uniform (Float32Array(20), proj*view layout).
    *  Legacy 9.1 entry point; kept for back-compat. Not used by the impostor
@@ -1138,6 +1227,23 @@ export type LargeSystemRenderer = {
    *  the bond render reads the flag from the supercell uniform each frame — the
    *  base bond graph is reused, never re-detected. */
   set_show_images(show: boolean): void
+  /** Packet-versioned upload channel (design §5): the ONE entry point the
+   *  packet flow uses instead of the set_atoms / set_positions / set_supercell
+   *  / set_show_images fan-out. Diffs against the last packet with
+   *  diff_render_packet and uploads ONLY what its version says moved:
+   *  - topology version → base radii/colors (+ buffer realloc, base_count);
+   *  - frame version    → base positions + the CURRENT frame lattice (a
+   *    fixed-cell frame advance is a single 3N-float upload); marks the bond
+   *    graph dirty (GPU-detect path re-runs);
+   *  - replica version  → dims / boundary policy / indirect draw counts —
+   *    REPLICA-only: never invalidates or re-runs base-cell bond detection;
+   *  - bond-graph version → packet-supplied base graph replaces the active
+   *    draw graph 1:1 (periodic self-image edges retained) and SUSPENDS the
+   *    GPU bond-detect compute while present.
+   *  `images` is the sparse ghost ImageInstanceTable (design §7.2) —
+   *  identity-gated, uploaded as `count` entries (never dense), drawn +
+   *  pickable only under the 'ghost-images' boundary policy. */
+  set_packet(packet: RenderPacket, images: ImageInstanceTable): void
   /** Provide bond-detection inputs. `covalent_radii` is the per-atom COVALENT
    *  radius (N entries, from build_atom_radii — distinct from the display radii
    *  used for sphere size). `lattice` is the 9-float row-major matrix (rows
@@ -1192,15 +1298,24 @@ export type LargeSystemRenderer = {
   set_selection(indices: Uint32Array | number[]): void
   /** GPU atom picking. Renders the atoms once into an offscreen R32Uint id buffer
    *  (single-sampled, depth-tested so the front atom wins), then copies the single
-   *  texel at the given DEVICE-pixel (x,y) to a readback buffer and returns the
-   *  atom index under that pixel, or -1 for background. (x,y) are in device pixels
-   *  (CSS px × devicePixelRatio); the caller maps cursor→canvas→device. */
-  pick(x: number, y: number): Promise<number>
+   *  texel at the given DEVICE-pixel (x,y) to a readback buffer and decodes it to
+   *  a ReplicaPickResult: `{kind:'atom', base_site, cell, ghost:false}` for a real
+   *  replica (cell via the Task-1 atom-major decode), `ghost:true` with the
+   *  ABSOLUTE image cell for a sparse ghost instance, and `{kind:'miss',
+   *  base_site:-1}` for background. (x,y) are in device pixels (CSS px ×
+   *  devicePixelRatio); the caller maps cursor→canvas→device and resolves the
+   *  logical/physical site with logical_site_for_pick. */
+  pick(x: number, y: number): Promise<ReplicaPickResult>
   /** Deterministic diagnostics of the GPU bond pipeline (design §8.2): the
    *  published graph version, compute dispatch counters, grid sizing +
    *  observed occupancy, raw/capacity pair counts, and overflow/retry state.
    *  Returns a fresh snapshot on every call. */
   debug_bond_state(): BondGpuDiagnostics
+  /** Deterministic replica/packet diagnostics: the last packet's versions,
+   *  dims / boundary policy / ghost + instance counts, whether a
+   *  packet-supplied bond graph drives the draw, and the nested
+   *  debug_bond_state() snapshot. Fresh object on every call. */
+  get_diagnostics(): ReplicaRendererDiagnostics
   /** Register a host callback fired when ASYNC bond work transitions state
    *  and another render() is needed for the pipeline to make progress: a
    *  validated candidate awaits publication (publish pends), an overflow
@@ -1267,6 +1382,39 @@ export function create_large_system_renderer(
   // ncells==1 cross-cell STUB to a FULL cylinder reaching the displayed image
   // atom. Default false ⇒ stubs ⇒ zero change.
   let show_image_atoms = false
+
+  // ── Packet-versioned upload channel (visual supercell design §5) ──────────
+  // The last packet consumed by set_packet; diff_render_packet against it gates
+  // every upload (topology buffers on topology version, positions+lattice on
+  // frame version, dims/policy/indirect on replica version). null ⇒ everything
+  // uploads on the first packet.
+  let last_packet: RenderPacket | null = null
+  // The last sparse ghost table consumed (identity-gated upload). Kept CPU-side
+  // so pick() can map a ghost instance id back to (base_site, absolute image).
+  let last_images: ImageInstanceTable | null = null
+  // Replica boundary policy from the packet. 'ghost-images' draws the sparse
+  // ghost instances and maps onto the show_image_atoms bond upgrade flag.
+  let boundary_policy: BoundaryPolicy = `stub`
+  // Sparse ghost-image instance buffers (impostor bindings 6/7, pick 4/5).
+  // 4-byte placeholders keep the bind groups complete before any table uploads;
+  // ghost_count === 0 means the draw never reaches the ghost instance range.
+  let ghost_count = 0
+  let ghost_capacity = 1
+  let ghost_sites_buffer: GPUBuffer | null = device.createBuffer({
+    label: `large-system-ghost-sites`,
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  let ghost_images_buffer: GPUBuffer | null = device.createBuffer({
+    label: `large-system-ghost-images`,
+    size: 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  // True while a PACKET-supplied base bond graph is the active draw graph: the
+  // bond draw reads it directly and the GPU bond-detect compute NEVER
+  // dispatches (the packet producer owns re-detection — a new bond-graph
+  // version re-uploads). Cleared when a packet stops carrying a graph.
+  let packet_graph = false
 
   // Atom storage buffers — lazily (re)created when the atom count grows.
   let positions_buffer: GPUBuffer | null = null
@@ -1512,6 +1660,10 @@ export function create_large_system_renderer(
       // VERTEX only. (A spurious FRAGMENT here would not break, but VERTEX is the
       // precise + minimal visibility the binding requires.)
       { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // bindings 6/7: sparse ghost-image instance table (packet path). Read ONLY
+      // in vs_main (instance decode past the replica range) — VERTEX only.
+      { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      { binding: 7, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
   })
 
@@ -1565,6 +1717,10 @@ export function create_large_system_renderer(
       // mismatch the shader and invalidate the pick pipeline (the same bind-group-
       // visibility rule that bit binding 0 above).
       { binding: 3, visibility: GPUShaderStage.VERTEX, buffer: { type: `uniform` } },
+      // bindings 4/5: sparse ghost-image instance table (packet path), read ONLY
+      // in vs_main — VERTEX only, mirroring the atom impostor's bindings 6/7.
+      { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
+      { binding: 5, visibility: GPUShaderStage.VERTEX, buffer: { type: `read-only-storage` } },
     ],
   })
   const pick_pipeline = device.createRenderPipeline({
@@ -1851,6 +2007,13 @@ export function create_large_system_renderer(
     )
   }
 
+  /** Ghost instances appended to the atom + pick draws this frame: the sparse
+   *  table size under the 'ghost-images' boundary policy, else 0 (the table
+   *  stays uploaded but undrawn — flipping the policy back needs no re-upload). */
+  function ghost_draw_count(): number {
+    return boundary_policy === `ghost-images` ? ghost_count : 0
+  }
+
   // (Re)create both MSAA render targets (color + depth) at the canvas backing
   // size. Destroy the old textures first so resize never leaks. Both are
   // multisampled at SAMPLE_COUNT — the color resolves into the swapchain, the
@@ -1932,11 +2095,15 @@ export function create_large_system_renderer(
         { binding: 3, resource: { buffer: colors_buffer } },
         { binding: 4, resource: { buffer: selected_buffer as GPUBuffer } },
         { binding: 5, resource: { buffer: supercell_buffer } },
+        // bindings 6/7: sparse ghost instance table (placeholders when empty).
+        { binding: 6, resource: { buffer: ghost_sites_buffer as GPUBuffer } },
+        { binding: 7, resource: { buffer: ghost_images_buffer as GPUBuffer } },
       ],
     })
     // Pick pass reuses camera + positions + radii (no colors/selected) PLUS the
     // GPU supercell uniform (Phase 4) so the pick vs decodes the cell identically
-    // to the atom draw and clicks hit the right replica.
+    // to the atom draw and clicks hit the right replica, PLUS the ghost table
+    // (bindings 4/5) so ghost instances are pickable in the same id space.
     pick_bind_group = device.createBindGroup({
       label: `large-system-pick-bg`,
       layout: pick_bgl,
@@ -1945,8 +2112,87 @@ export function create_large_system_renderer(
         { binding: 1, resource: { buffer: positions_buffer } },
         { binding: 2, resource: { buffer: radii_buffer } },
         { binding: 3, resource: { buffer: supercell_buffer } },
+        { binding: 4, resource: { buffer: ghost_sites_buffer as GPUBuffer } },
+        { binding: 5, resource: { buffer: ghost_images_buffer as GPUBuffer } },
       ],
     })
+  }
+
+  /** Upload the sparse ghost ImageInstanceTable (design §7.2: ghosts are
+   *  (base_site, absolute jimage) instances — NEVER appended sites). Buffers
+   *  hold exactly `count` entries (grown geometrically, never dense); jimages
+   *  pack 3 biased Int8 lanes into one u32 per ghost. The table reference is
+   *  kept CPU-side so pick() can decode ghost instance ids. */
+  function upload_ghost_table(images: ImageInstanceTable): void {
+    last_images = images
+    const count = Math.max(0, images.count | 0)
+    ghost_count = count
+    if (count === 0) return
+    if (count > ghost_capacity || !ghost_sites_buffer || !ghost_images_buffer) {
+      ghost_sites_buffer?.destroy()
+      ghost_images_buffer?.destroy()
+      ghost_capacity = Math.max(count, Math.ceil(ghost_capacity * 2), 1)
+      ghost_sites_buffer = device.createBuffer({
+        label: `large-system-ghost-sites`,
+        size: ghost_capacity * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+      ghost_images_buffer = device.createBuffer({
+        label: `large-system-ghost-images`,
+        size: ghost_capacity * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+      rebuild_bind_group()
+    }
+    device.queue.writeBuffer(
+      ghost_sites_buffer as GPUBuffer, 0,
+      images.base_sites.buffer, images.base_sites.byteOffset, count * 4,
+    )
+    const packed = new Uint32Array(count)
+    for (let gi = 0; gi < count; gi++) {
+      packed[gi] = (images.jimages[gi * 3] + 128) |
+        ((images.jimages[gi * 3 + 1] + 128) << 8) |
+        ((images.jimages[gi * 3 + 2] + 128) << 16)
+    }
+    device.queue.writeBuffer(
+      ghost_images_buffer as GPUBuffer, 0, packed.buffer, 0, count * 4,
+    )
+  }
+
+  /** (Re)allocate the atom storage buffers (positions/radii/colors + the
+   *  selection flags) to hold at least `n` atoms, growing with headroom.
+   *  Returns true when a reallocation happened — buffer CONTENTS are undefined
+   *  until re-uploaded, and every bind group referencing them was rebuilt. */
+  function ensure_atom_capacity(n: number): boolean {
+    if (n <= atom_capacity) return false
+    const new_cap = Math.max(n, Math.ceil(atom_capacity * 2), 1)
+    positions_buffer?.destroy()
+    radii_buffer?.destroy()
+    colors_buffer?.destroy()
+    positions_buffer = device.createBuffer({
+      label: `large-system-positions`,
+      size: new_cap * 3 * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    radii_buffer = device.createBuffer({
+      label: `large-system-radii`,
+      size: new_cap * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    colors_buffer = device.createBuffer({
+      label: `large-system-colors`,
+      size: new_cap * 3 * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    atom_capacity = new_cap
+    // Grow the selection buffer in lockstep so binding 4 covers every atom.
+    // (Newly-grown slots default to 0 = unselected; set_selection re-uploads.)
+    ensure_selected_capacity(new_cap)
+    rebuild_bind_group()
+    // positions_buffer just reallocated ⇒ rebuild the bond bind groups that
+    // reference it (they may have been null before, that's fine).
+    rebuild_bond_bind_groups()
+    return true
   }
 
   /** Ensure the CANDIDATE pairs buffer holds at least `cap` bonds (the compute
@@ -1972,7 +2218,10 @@ export function create_large_system_renderer(
       active_pairs_buffer = device.createBuffer({
         label: `large-system-bond-pairs-active`,
         size: want * 3 * 4,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        // COPY_DST so a PACKET-supplied base bond graph can be written into the
+        // active buffer directly (upload_packet_bond_graph) — the GPU-detect
+        // path itself never CPU-writes it.
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
       })
       changed = true
     }
@@ -1980,6 +2229,86 @@ export function create_large_system_renderer(
       write_indirect_cfg()
       rebuild_bond_bind_groups()
     }
+  }
+
+  /** Grow the ACTIVE pairs buffer so a packet-supplied bond graph of `cap`
+   *  bonds fits. Distinct from ensure_pair_buffers (which grows the CANDIDATE
+   *  compute target and only ever CREATES the active buffer). */
+  function ensure_active_pairs_capacity(cap: number): void {
+    if (cap <= active_pairs_capacity && active_pairs_buffer) return
+    active_pairs_buffer?.destroy()
+    active_pairs_capacity = Math.max(cap, Math.ceil(active_pairs_capacity * 2), 1024)
+    active_pairs_buffer = device.createBuffer({
+      label: `large-system-bond-pairs-active`,
+      size: active_pairs_capacity * 3 * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+    })
+    write_indirect_cfg()
+    rebuild_bond_bind_groups()
+  }
+
+  /** Upload a PACKET-supplied base bond graph as the ACTIVE draw graph (design
+   *  §7.2): pairs pack 1:1 into the bond-render (a, b, jimage) triplet layout —
+   *  periodic self-image edges (a === b, jimage ≠ 0) are NEVER filtered — and
+   *  the bond count lands in the active count buffer, so the next indirect-args
+   *  build (replica_dirty) sizes the draw from it. While a packet graph is
+   *  active the GPU bond-detect compute never dispatches; `undefined` clears
+   *  that mode and re-arms GPU detection (if configured). */
+  function upload_packet_bond_graph(graph: BaseBondGraph | undefined): void {
+    if (!graph) {
+      if (packet_graph) {
+        packet_graph = false
+        // Clear the drawn count so the stale packet graph vanishes; GPU
+        // detection (if set_bond_data configured it) re-runs from scratch.
+        device.queue.writeBuffer(active_count_buffer, 0, new Uint32Array([0]))
+        replica_dirty = true
+        graph_dirty = true
+        fresh_graph = true
+      }
+      return
+    }
+    const bond_count = graph.pairs.length / 2
+    // Bind-group prerequisites: the packet path may never call set_bond_data,
+    // so the covalent binding gets a placeholder (the compute never runs while
+    // packet_graph is set — only bind-group completeness matters).
+    if (!covalent_buffer) {
+      covalent_capacity = 1
+      covalent_buffer = device.createBuffer({
+        label: `large-system-covalent-radii`,
+        size: 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      })
+    }
+    ensure_pair_buffers(bond_run.pair_capacity())
+    ensure_active_pairs_capacity(Math.max(bond_count, 1))
+    // Pack (a, b, jimage) triplets in the render shader's layout. jimage
+    // components clamp to [-1, 1] — the 2-bit-per-axis encoding; base-cell
+    // bonds never span more than one cell step.
+    const packed = new Uint32Array(Math.max(bond_count * 3, 1))
+    for (let bi = 0; bi < bond_count; bi++) {
+      packed[bi * 3] = graph.pairs[bi * 2]
+      packed[bi * 3 + 1] = graph.pairs[bi * 2 + 1]
+      const jx = Math.max(-1, Math.min(1, graph.jimages[bi * 3]))
+      const jy = Math.max(-1, Math.min(1, graph.jimages[bi * 3 + 1]))
+      const jz = Math.max(-1, Math.min(1, graph.jimages[bi * 3 + 2]))
+      packed[bi * 3 + 2] = (jx + 1) | ((jy + 1) << 2) | ((jz + 1) << 4)
+    }
+    if (bond_count > 0) {
+      device.queue.writeBuffer(
+        active_pairs_buffer as GPUBuffer, 0, packed.buffer, 0, bond_count * 3 * 4,
+      )
+    }
+    device.queue.writeBuffer(
+      active_count_buffer, 0, new Uint32Array([bond_count]),
+    )
+    rebuild_bond_bind_groups()
+    write_indirect_cfg()
+    packet_graph = true
+    // A stale GPU-detect candidate must never publish over this graph, and
+    // no re-detection may dispatch — the packet producer owns the graph.
+    publish_pending = false
+    graph_dirty = false
+    replica_dirty = true
   }
 
   /** Publish a VALIDATED candidate graph: swap the candidate pairs+count in as
@@ -2025,7 +2354,9 @@ export function create_large_system_renderer(
         max_observed_occupancy: occupancy,
       })
       if (decision.action === `publish`) {
-        publish_pending = true
+        // A packet-supplied graph installed while this validation was in
+        // flight is authoritative — drop the stale candidate on the floor.
+        if (!packet_graph) publish_pending = true
       } else if (decision.action === `retry`) {
         // The candidate was incomplete (atoms or pairs dropped) — it is never
         // swapped in. Rerun next render with the controller's grown sizing.
@@ -2312,35 +2643,7 @@ export function create_large_system_renderer(
 
       // (Re)allocate when capacity is insufficient. Storage buffers must be at
       // least the byte length we write; grow with headroom to avoid churn.
-      if (atom_count > atom_capacity) {
-        const new_cap = Math.max(atom_count, Math.ceil(atom_capacity * 2), 1)
-        positions_buffer?.destroy()
-        radii_buffer?.destroy()
-        colors_buffer?.destroy()
-        positions_buffer = device.createBuffer({
-          label: `large-system-positions`,
-          size: new_cap * 3 * 4,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        })
-        radii_buffer = device.createBuffer({
-          label: `large-system-radii`,
-          size: new_cap * 4,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        })
-        colors_buffer = device.createBuffer({
-          label: `large-system-colors`,
-          size: new_cap * 3 * 4,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        })
-        atom_capacity = new_cap
-        // Grow the selection buffer in lockstep so binding 4 covers every atom.
-        // (Newly-grown slots default to 0 = unselected; set_selection re-uploads.)
-        ensure_selected_capacity(new_cap)
-        rebuild_bind_group()
-        // positions_buffer just reallocated ⇒ rebuild the bond bind groups that
-        // reference it (they may have been null before, that's fine).
-        rebuild_bond_bind_groups()
-      }
+      ensure_atom_capacity(atom_count)
 
       device.queue.writeBuffer(
         positions_buffer as GPUBuffer, 0,
@@ -2506,6 +2809,116 @@ export function create_large_system_renderer(
       upload_supercell_uniform()
       mark_bond_dirty(classify_bond_dirty(`image-policy`))
     },
+    set_packet(packet: RenderPacket, images: ImageInstanceTable): void {
+      if (destroyed) return
+      const prev = last_packet
+      const diff: RenderPacketDiff = prev ? diff_render_packet(prev, packet) : {
+        topology_changed: true,
+        bond_graph_changed: packet.topology.bond_graph !== undefined,
+        frame_changed: true,
+        replica_changed: true,
+      }
+      last_packet = packet
+      const topo = packet.topology
+      const n = topo.atom_count
+      let frame_upload = diff.frame_changed
+
+      // ── Topology version: (re)alloc + upload the base attribute buffers. ──
+      if (diff.topology_changed) {
+        // atom_count tracks the packet even at 0 (an emptied structure draws
+        // nothing — same behaviour as the legacy set_atoms(…, 0) path).
+        atom_count = n
+      }
+      if (diff.topology_changed && n > 0) {
+        // A fresh positions buffer holds garbage until the frame branch writes
+        // it — force the positions upload even on a frame-version tie.
+        if (ensure_atom_capacity(n)) frame_upload = true
+        device.queue.writeBuffer(
+          radii_buffer as GPUBuffer, 0,
+          topo.radii.buffer, topo.radii.byteOffset, n * 4,
+        )
+        // The packet contract allows rgba (4N) colors; the shader reads rgb
+        // triplets, so strip alpha on the (rare, topology-versioned) upload.
+        let colors = topo.colors
+        if (colors.length === n * 4) {
+          const rgb = new Float32Array(n * 3)
+          for (let idx = 0; idx < n; idx++) {
+            rgb[idx * 3] = colors[idx * 4]
+            rgb[idx * 3 + 1] = colors[idx * 4 + 1]
+            rgb[idx * 3 + 2] = colors[idx * 4 + 2]
+          }
+          colors = rgb
+        }
+        device.queue.writeBuffer(
+          colors_buffer as GPUBuffer, 0,
+          colors.buffer, colors.byteOffset, n * 3 * 4,
+        )
+        upload_supercell_uniform() // base_count tracks the packet atom count
+        mark_bond_dirty(classify_bond_dirty(`topology`))
+      }
+
+      // ── Frame version: base positions + the CURRENT frame lattice, nothing
+      // else (a fixed-cell frame advance is a single 3N-float upload). ──
+      if (frame_upload && n > 0 && positions_buffer) {
+        atom_count = n
+        const pos = packet.frame.positions
+        const floats = Math.min(n * 3, pos.length)
+        if (floats > 0) {
+          device.queue.writeBuffer(
+            positions_buffer, 0, pos.buffer, pos.byteOffset, floats * 4,
+          )
+        }
+        // Cache positions for the non-periodic AABB grid plan.
+        last_positions = pos
+        // Variable-cell trajectories carry a new lattice each frame: it drives
+        // the replica offsets (supercell uniform) AND the bond compute/render
+        // lattice. A static cell compares equal ⇒ zero lattice churn.
+        let lattice_moved = false
+        for (let idx = 0; idx < 9; idx++) {
+          if (supercell_lattice[idx] !== packet.frame.lattice[idx]) {
+            lattice_moved = true
+            break
+          }
+        }
+        if (lattice_moved) {
+          supercell_lattice = packet.frame.lattice.slice(0, 9)
+          bond_lattice = packet.frame.lattice.slice(0, 9)
+          upload_supercell_uniform()
+          upload_bond_render_uniform()
+        }
+        // Atoms moved ⇒ the base bond graph is stale. On the GPU-detect path
+        // this re-dispatches; while a packet graph is active render() clears
+        // the flag (the packet producer ships the recomputed graph).
+        mark_bond_dirty(classify_bond_dirty(`positions`))
+      }
+
+      // ── Replica version: dims + boundary policy + indirect counts ONLY —
+      // never a bond dispatch (design §5 / §8.2 item 4). ──
+      if (diff.replica_changed) {
+        const dims = packet.replicas.dims
+        supercell_dims = [
+          Math.max(1, Math.floor(dims[0])),
+          Math.max(1, Math.floor(dims[1])),
+          Math.max(1, Math.floor(dims[2])),
+        ]
+        supercell_ncells = supercell_dims[0] * supercell_dims[1] * supercell_dims[2]
+        boundary_policy = packet.replicas.boundary_policy
+        // 'ghost-images' maps onto the existing show-images bond upgrade flag
+        // (lat0.w): ncells==1 cross-cell stubs become full cylinders reaching
+        // the drawn ghost instance.
+        show_image_atoms = boundary_policy === `ghost-images`
+        upload_supercell_uniform()
+        write_indirect_cfg()
+        mark_bond_dirty(classify_bond_dirty(`supercell`))
+      }
+
+      // ── Bond-graph version: a packet-supplied base graph uploads straight
+      // into the active draw buffers (self-image edges retained 1:1). ──
+      if (diff.bond_graph_changed) upload_packet_bond_graph(topo.bond_graph)
+
+      // ── Sparse ghost table (identity-gated). ──
+      if (images !== last_images) upload_ghost_table(images)
+    },
     set_selection(indices: Uint32Array | number[]): void {
       if (destroyed) return
       // Build a dense per-atom flag array (1 = selected) over the current atom
@@ -2527,12 +2940,18 @@ export function create_large_system_renderer(
         device.queue.writeBuffer(selected_buffer, 0, flags.buffer, flags.byteOffset, n * 4)
       }
     },
-    async pick(x: number, y: number): Promise<number> {
-      if (destroyed) return -1
-      if (atom_count <= 0 || !pick_bind_group || !pick_id_view || !pick_depth_view) {
-        return -1
+    async pick(x: number, y: number): Promise<ReplicaPickResult> {
+      const miss: ReplicaPickResult = {
+        kind: `miss`,
+        base_site: -1,
+        cell: [0, 0, 0],
+        ghost: false,
       }
-      if (!pick_id_texture) return -1
+      if (destroyed) return miss
+      if (atom_count <= 0 || !pick_bind_group || !pick_id_view || !pick_depth_view) {
+        return miss
+      }
+      if (!pick_id_texture) return miss
       // Clamp the requested device pixel to the texture bounds.
       const w = pick_id_texture.width
       const h = pick_id_texture.height
@@ -2563,7 +2982,9 @@ export function create_large_system_renderer(
       // GPU supercell (Phase 4): draw atom_count × ncells instances, exactly like
       // the atom render draw, so every replica is pickable. ncells 1 (default /
       // 1×1×1) ⇒ atom_count instances ⇒ inst = atom, byte-identical to before.
-      pass.draw(4, atom_count * Math.max(1, supercell_ncells))
+      // Ghost instances (packet 'ghost-images' policy) append past the replica
+      // range, so their ids land after it and decode via the CPU-side table.
+      pass.draw(4, atom_count * Math.max(1, supercell_ncells) + ghost_draw_count())
       pass.end()
       // Copy the single picked texel into the 256-byte readback buffer.
       encoder.copyTextureToBuffer(
@@ -2583,25 +3004,69 @@ export function create_large_system_renderer(
         // resolved"); swallow it and abort the pick instead of leaking an
         // unhandled rejection. The post-resolve `destroyed` guard below only
         // covers the resolve-then-destroy race, not this reject-on-destroy one.
-        return -1
+        return miss
       }
       if (destroyed) {
         try { pick_readback.unmap() } catch { /* already torn down */ }
-        return -1
+        return miss
       }
       const id = new Uint32Array(pick_readback.getMappedRange(0, 4))[0]
       pick_readback.unmap()
-      // id 0 = background ⇒ -1. Otherwise the raw id is GLOBAL instance + 1; the
-      // global instance is atom + cell·base_count, so the BASE atom index is
-      // (id - 1) % base_count. The CPU holds the BASE cell (displayed_structure IS
-      // the base cell in supercell mode), so base_atom indexes displayed_structure
-      // .sites directly — the caller (handle_overlay_pick) needs no change. With
-      // 1×1×1 (ncells 1) base_count = atom_count and g < atom_count, so base_atom =
-      // g — byte-identical to the pre-Phase-4 `id - 1`.
-      if (id === 0) return -1
+      // id 0 = background ⇒ miss. Otherwise the raw id is GLOBAL instance + 1.
+      // Real replicas decode atom-major via the Task-1 oracle
+      // (decode_replica_instance): base_site = g % base_count, cell = the
+      // replica cell in [0, dims). Ids past base_count·ncells are GHOST
+      // instances: they map through the CPU-side ImageInstanceTable to their
+      // base site + ABSOLUTE image cell (which may lie outside [0, dims) —
+      // logical_site_for_pick wraps it under physical semantics).
+      if (id === 0) return miss
       const g = id - 1
       const base_count = Math.max(1, atom_count)
-      return g % base_count
+      const real_count = base_count * Math.max(1, supercell_ncells)
+      if (g >= real_count) {
+        const gi = g - real_count
+        const table = last_images
+        if (!table || gi >= table.count) return miss
+        return {
+          kind: `atom`,
+          base_site: table.base_sites[gi],
+          cell: [
+            table.jimages[gi * 3],
+            table.jimages[gi * 3 + 1],
+            table.jimages[gi * 3 + 2],
+          ],
+          ghost: true,
+        }
+      }
+      const decoded = decode_replica_instance(g, base_count, supercell_dims)
+      return {
+        kind: `atom`,
+        base_site: decoded.atom_index,
+        cell: [decoded.cell[0], decoded.cell[1], decoded.cell[2]],
+        ghost: false,
+      }
+    },
+    get_diagnostics(): ReplicaRendererDiagnostics {
+      return {
+        backend: `webgpu`,
+        base_count: atom_count,
+        dims: [supercell_dims[0], supercell_dims[1], supercell_dims[2]],
+        ncells: Math.max(1, supercell_ncells),
+        boundary_policy,
+        ghost_count,
+        atom_instances: atom_count * Math.max(1, supercell_ncells) + ghost_draw_count(),
+        packet_versions: last_packet
+          ? {
+            topology: last_packet.topology.version,
+            bond_graph: last_packet.topology.bond_graph?.version ?? null,
+            frame_idx: last_packet.frame.frame_idx,
+            positions: last_packet.frame.positions_version,
+            replicas: last_packet.replicas.version,
+          }
+          : null,
+        packet_graph_active: packet_graph,
+        bonds: bond_run.diagnostics(),
+      }
     },
     render(): void {
       if (destroyed) return
@@ -2610,19 +3075,27 @@ export function create_large_system_renderer(
 
       // Whether bonds are renderable this frame (visible + inputs present +
       // atoms). bonds_enabled gates BOTH the compute passes below AND the bond
-      // draw, so a hidden show_bonds setting skips all bond work entirely.
+      // draw, so a hidden show_bonds setting skips all bond work entirely. A
+      // PACKET-supplied graph is drawable without set_bond_data inputs.
       const bonds_ready =
-        bonds_enabled && bonds_configured && atom_count > 0 && bond_n > 0 &&
+        bonds_enabled && atom_count > 0 &&
+        (packet_graph || (bonds_configured && bond_n > 0)) &&
         !!bond_compute_bg && !!indirect_bg && !!bond_render_bg &&
         !!active_pairs_buffer && !!candidate_pairs_buffer
       let kick_validation = false
+
+      // While a packet-supplied graph is active, graph-dirty marks (frame
+      // positions moved, options touched) never dispatch the GPU detect — the
+      // packet producer owns re-detection and ships a new bond-graph version.
+      if (packet_graph && graph_dirty) graph_dirty = false
 
       // ── Publish a VALIDATED candidate graph ──────────────────────────────
       // The candidate readback confirmed a COMPLETE run (no cell/pair
       // overflow), so it may replace the active graph. The swap re-points the
       // bind groups; the indirect draw args are rebuilt below (replica_dirty)
-      // from the newly active count, in this same submit.
-      if (bonds_ready && publish_pending) {
+      // from the newly active count, in this same submit. Never while a packet
+      // graph is active — a stale candidate must not stomp it.
+      if (bonds_ready && publish_pending && !packet_graph) {
         publish_pending = false
         swap_bond_graphs()
         replica_dirty = true
@@ -2634,7 +3107,7 @@ export function create_large_system_renderer(
       // readback validates it as complete — an overflowed (incomplete) run is
       // never published. While a validation is in flight no new candidate is
       // dispatched; a still-dirty graph reruns on a later render (latest wins).
-      if (bonds_ready && graph_dirty && !validation_inflight) {
+      if (bonds_ready && graph_dirty && !validation_inflight && !packet_graph) {
         // Decide the compute path CPU-side (design §8.2): tiny N ⇒ direct
         // all-pairs; grid-friendly ⇒ uniform grid; periodic thin cell / grid
         // over the storage budget ⇒ REFUSE — those must go to the Rust-WASM
@@ -2773,8 +3246,10 @@ export function create_large_system_renderer(
         pass.setBindGroup(0, bind_group)
         // GPU supercell: atom_count × ncells instances (ncells = nx·ny·nz). The
         // vertex decodes inst → atom (inst % base_count) + cell offset. ncells 1
-        // ⇒ atom_count instances, identical to the non-supercell draw.
-        pass.draw(4, atom_count * Math.max(1, supercell_ncells))
+        // ⇒ atom_count instances, identical to the non-supercell draw. Sparse
+        // ghost instances ('ghost-images' packet policy) append past the
+        // replica range — 0 outside that policy, so nothing else changes.
+        pass.draw(4, atom_count * Math.max(1, supercell_ncells) + ghost_draw_count())
       }
       // Bonds: instanced procedural cylinders, instance count supplied by the
       // indirect buffer the compute wrote (this same submit, or last frame's).
@@ -2851,6 +3326,8 @@ export function create_large_system_renderer(
       candidate_pairs_buffer?.destroy()
       cell_count_buffer?.destroy()
       cell_atoms_buffer?.destroy()
+      ghost_sites_buffer?.destroy()
+      ghost_images_buffer?.destroy()
       grid_meta_buffer.destroy()
       active_count_buffer.destroy()
       candidate_count_buffer.destroy()
@@ -2880,6 +3357,10 @@ export function create_large_system_renderer(
       candidate_pairs_buffer = null
       cell_count_buffer = null
       cell_atoms_buffer = null
+      ghost_sites_buffer = null
+      ghost_images_buffer = null
+      last_packet = null
+      last_images = null
       last_positions = null
       msaa_color_texture = null
       msaa_color_view = null

@@ -217,6 +217,100 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     renderer.destroy()
   })
 
+  it(`packet replica-only version change preserves the published graph + capacity`, async () => {
+    const device = make_mock_device() as unknown as GPUDevice
+    const canvas = make_mock_canvas() as unknown as HTMLCanvasElement
+    const renderer = create_large_system_renderer(device, canvas)
+
+    const n = 8
+    const positions = new Float32Array(n * 3)
+    for (let i = 0; i < n; i++) {
+      positions[i * 3] = (i % 2) * 2.4
+      positions[i * 3 + 1] = (Math.floor(i / 2) % 2) * 2.4
+      positions[i * 3 + 2] = Math.floor(i / 4) * 2.4
+    }
+    const lattice = new Float32Array([20, 0, 0, 0, 20, 0, 0, 0, 20])
+    const topology = {
+      version: 1,
+      atom_count: n,
+      site_ids: Uint32Array.from({ length: n }, (_, i) => i),
+      atomic_numbers: new Uint8Array(n).fill(6),
+      radii: new Float32Array(n).fill(0.5),
+      colors: new Float32Array(n * 3).fill(0.5),
+    }
+    const frame = { owner: { tag: `t` }, frame_idx: 0, positions_version: 0, positions, lattice }
+    const empty_images = {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    }
+
+    // Packet path for atoms/frame; GPU bond DETECTION still owns the graph
+    // (no packet bond_graph) — set_bond_data provides the compute inputs.
+    renderer.set_packet({
+      topology,
+      frame,
+      replicas: {
+        version: 1,
+        dims: [1, 1, 1] as const,
+        boundary_policy: `stub` as const,
+        semantics: `visual-shared-base` as const,
+      },
+    }, empty_images)
+    renderer.set_bond_data(
+      new Float32Array(n).fill(0.76),
+      lattice,
+      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      true,
+    )
+    renderer.render() // dispatches the candidate bond compute
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(1)
+    await flush()
+    renderer.render() // publication frame
+    const published = renderer.debug_bond_state()
+    expect(published.graph_version).toBe(1)
+    const capacity = published.pairs.capacity
+    const stride = published.grid.cell_stride
+
+    // ── 2×2×2 replica-version bump: indirect refresh ONLY. The published
+    // graph, its pair capacity, and the grid stride all survive untouched —
+    // no bond dispatch (design §5 / §8.2 item 4). ──
+    renderer.set_packet({
+      topology,
+      frame,
+      replicas: {
+        version: 2,
+        dims: [2, 2, 2] as const,
+        boundary_policy: `stub` as const,
+        semantics: `visual-shared-base` as const,
+      },
+    }, empty_images)
+    renderer.render()
+    await flush()
+    const after = renderer.debug_bond_state()
+    expect(after.dispatches.detect).toBe(1)
+    expect(after.graph_version).toBe(1)
+    expect(after.pairs.capacity).toBe(capacity)
+    expect(after.grid.cell_stride).toBe(stride)
+    expect(renderer.get_diagnostics().ncells).toBe(8)
+
+    // A genuine frame-version packet still re-detects.
+    renderer.set_packet({
+      topology,
+      frame: { ...frame, frame_idx: 1, positions_version: 1 },
+      replicas: {
+        version: 2,
+        dims: [2, 2, 2] as const,
+        boundary_policy: `stub` as const,
+        semantics: `visual-shared-base` as const,
+      },
+    }, empty_images)
+    renderer.render()
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(2)
+
+    renderer.destroy()
+  })
+
   // ── Host wake signal (on_bond_work): a dirty-gated host suspends its rAF
   // loop on stable frames, but candidate publication / overflow retries
   // resolve ASYNC after the dispatching render — without a notification the
