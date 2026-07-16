@@ -29,6 +29,7 @@
     create_frame_request_loader,
     select_displayed_frame_idx,
     select_in_memory_frame,
+    select_pending_frame_publication,
     type FrameRequestOutcome,
   } from './frame-loading'
   import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
@@ -707,8 +708,15 @@
       return
     }
     if (displayed_frame_idx === null) {
-      trajectory_frame_positions = null
-      trajectory_frame_forces = null
+      const publication = select_pending_frame_publication(
+        displayed_frame_idx,
+        untrack(() => trajectory_frame_positions),
+        untrack(() => trajectory_frame_forces),
+      )
+      if (publication) {
+        trajectory_frame_positions = publication.positions
+        trajectory_frame_forces = publication.forces
+      }
       return
     }
     // Variable-cell trajectories (NPT / cell relaxation): publish the frame's

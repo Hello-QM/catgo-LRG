@@ -7,6 +7,7 @@ import {
   create_frame_request_loader,
   select_displayed_frame_idx,
   select_in_memory_frame,
+  select_pending_frame_publication,
 } from '$lib/trajectory/frame-loading'
 import { create_frame_position_cache } from '$lib/trajectory/frame-positions'
 import { readFileSync } from 'node:fs'
@@ -181,6 +182,37 @@ describe(`frame loading`, () => {
       .toBe(4)
   })
 
+  it.each([
+    [`null`, async () => null],
+    [`throw`, async () => { throw new Error(`replacement failed`) }],
+  ] satisfies [string, FrameLoader['load_frame']][])(
+    `preserves published streamed positions when replacement load returns %s`,
+    async (_kind, load_frame) => {
+      const previous = positioned_frame(3)
+      const positions = new Float32Array([3, 0, 0])
+      const forces = new Float32Array([0.5, 0, 0])
+      const replacement = trajectory_with_loader(load_frame, new ArrayBuffer(1))
+      const result = await create_frame_request_loader().load(
+        replacement,
+        0,
+        previous,
+        null,
+      )
+      expect(result.status).toBe(`failed`)
+      const displayed_frame_idx = select_displayed_frame_idx(result, 0, null)
+
+      const publication = select_pending_frame_publication(
+        displayed_frame_idx,
+        positions,
+        forces,
+      )
+      expect(publication?.positions).toBe(positions)
+      expect(publication?.forces).toBe(forces)
+      expect(Array.from(publication?.positions ?? [])).toEqual([3, 0, 0])
+      expect(Array.from(publication?.forces ?? [])).toEqual([0.5, 0, 0])
+    },
+  )
+
   it(`wires displayed frame ownership into trajectory position caches`, () => {
     const source = readFileSync(
       `src/lib/trajectory/Trajectory.svelte`,
@@ -195,6 +227,7 @@ describe(`frame loading`, () => {
     expect(source).toMatch(
       /frame_pos_cache\.get\(displayed_frame_idx, frame_sites\)/,
     )
+    expect(source).toContain(`select_pending_frame_publication(`)
   })
 
   it(`guards outcome application with request and trajectory currentness`, () => {

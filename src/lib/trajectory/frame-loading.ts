@@ -43,6 +43,14 @@ export function select_displayed_frame_idx(
     : previous_frame_idx
 }
 
+export function select_pending_frame_publication(
+  displayed_frame_idx: number | null,
+  positions: Float32Array | null,
+  forces: Float32Array | null,
+): { positions: Float32Array | null; forces: Float32Array | null } | null {
+  return displayed_frame_idx === null ? { positions, forces } : null
+}
+
 export function create_frame_request_loader(): FrameRequestLoader {
   let latest_request = 0
   let latest_outcome: FrameRequestOutcome | null = null
