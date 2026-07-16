@@ -50,4 +50,9 @@ export {
   replica_translation,
   resolve_periodic_edge,
 } from './replica-layout'
-export type { PeriodicBond, ReplicaInstance, ResolvedEdge } from './replica-layout'
+export type {
+  PeriodicBond,
+  ReplicaInstance,
+  ResolvedEdge,
+  ResolvedEdgeState,
+} from './replica-layout'

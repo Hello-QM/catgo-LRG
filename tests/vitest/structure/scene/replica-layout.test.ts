@@ -2,10 +2,12 @@ import { describe, expect, test } from 'vitest'
 import {
   build_image_instance_table,
   decode_replica_instance,
+  encode_cell_index,
   logical_site_for_pick,
   replica_translation,
   resolve_periodic_edge,
 } from '$lib/structure/scene/replica-layout'
+import type { ResolvedEdgeState } from '$lib/structure/scene/replica-layout'
 import type { BaseBondGraph, ReplicaLayout } from '$lib/structure/scene/render-packet'
 
 // --- decode_replica_instance --------------------------------------------
@@ -55,6 +57,45 @@ describe(`decode_replica_instance (atom-major: inst = atom + base_count·cell)`,
       const cell_index = d.cell[0] + dims[0] * (d.cell[1] + dims[1] * d.cell[2])
       expect(d.atom_index + base_count * cell_index).toBe(inst)
     }
+  })
+
+  test(`writes into a caller-provided out record (allocation-free hot path)`, () => {
+    const dims = [2, 1, 1] as const
+    const out = {
+      atom_index: -1,
+      cell: [9, 9, 9] as [number, number, number],
+      cell_index: -1,
+    }
+    const cell_ref = out.cell
+    const ret = decode_replica_instance(3, 2, dims, out)
+    expect(ret).toBe(out)
+    expect(out.cell).toBe(cell_ref) // inner tuple reused, not replaced
+    expect(out).toEqual({ atom_index: 1, cell: [1, 0, 0], cell_index: 1 })
+    // reuse the same record for a second decode
+    expect(decode_replica_instance(0, 2, dims, out)).toBe(out)
+    expect(out).toEqual({ atom_index: 0, cell: [0, 0, 0], cell_index: 0 })
+  })
+})
+
+// --- encode_cell_index ----------------------------------------------------
+
+describe(`encode_cell_index (range-guarded: -1 for cells outside [0,dims))`, () => {
+  const dims = [3, 2, 1] as const
+
+  test(`encodes in-range cells x-fastest, then y, then z`, () => {
+    expect(encode_cell_index([0, 0, 0], dims)).toBe(0)
+    expect(encode_cell_index([2, 0, 0], dims)).toBe(2)
+    expect(encode_cell_index([0, 1, 0], dims)).toBe(3)
+    expect(encode_cell_index([2, 1, 0], dims)).toBe(5)
+  })
+
+  test(`returns -1 for out-of-range cells instead of aliasing another replica`, () => {
+    // pre-fix these aliased: [-1,1,0] ⇒ 2, [3,0,0] ⇒ 3, [0,0,1] ⇒ 6
+    expect(encode_cell_index([-1, 1, 0], dims)).toBe(-1)
+    expect(encode_cell_index([3, 0, 0], dims)).toBe(-1)
+    expect(encode_cell_index([0, 2, 0], dims)).toBe(-1)
+    expect(encode_cell_index([0, 0, 1], dims)).toBe(-1)
+    expect(encode_cell_index([0, 0, -1], dims)).toBe(-1)
   })
 })
 
@@ -159,6 +200,46 @@ describe(`resolve_periodic_edge — periodic self-image edges are VALID`, () => 
   })
 })
 
+describe(`resolve_periodic_edge — out-param form (allocation-free hot path)`, () => {
+  test(`writes into a caller-provided ResolvedEdgeState and reuses its tuples`, () => {
+    const out: ResolvedEdgeState = {
+      kind: `omit`,
+      a_cell: [0, 0, 0],
+      b_cell: [0, 0, 0],
+      ghost: false,
+    }
+    const a_ref = out.a_cell
+    const b_ref = out.b_cell
+    const bond = { a: 0, b: 1, jimage: [1, 0, 0] as const }
+    const ret = resolve_periodic_edge(bond, [0, 0, 0], [2, 1, 1], `stub`, out)
+    expect(ret).toBe(out)
+    expect(out.kind).toBe(`complete`)
+    expect(out.a_cell).toBe(a_ref)
+    expect(out.b_cell).toBe(b_ref)
+    expect(out.a_cell).toEqual([0, 0, 0])
+    expect(out.b_cell).toEqual([1, 0, 0])
+    expect(out.ghost).toBe(false)
+  })
+
+  test(`reusing the record across omit / ghost outcomes updates every field`, () => {
+    const out: ResolvedEdgeState = {
+      kind: `omit`,
+      a_cell: [0, 0, 0],
+      b_cell: [0, 0, 0],
+      ghost: false,
+    }
+    const bond = { a: 0, b: 1, jimage: [1, 0, 0] as const }
+    expect(resolve_periodic_edge(bond, [1, 0, 0], [2, 1, 1], `hide`, out)).toBe(out)
+    expect(out.kind).toBe(`omit`)
+    expect(resolve_periodic_edge(bond, [1, 0, 0], [2, 1, 1], `ghost-images`, out)).toBe(
+      out,
+    )
+    expect(out.kind).toBe(`ghost`)
+    expect(out.ghost).toBe(true)
+    expect(out.b_cell).toEqual([2, 0, 0])
+  })
+})
+
 // --- build_image_instance_table -----------------------------------------
 
 describe(`build_image_instance_table (sparse, deduplicated ghost table)`, () => {
@@ -206,6 +287,76 @@ describe(`build_image_instance_table (sparse, deduplicated ghost table)`, () => 
     expect(table.count).toBe(1)
     expect(Array.from(table.base_sites)).toEqual([1])
     expect(Array.from(table.jimages)).toEqual([2, 0, 0])
+  })
+
+  test(`single-atom self-image bond (a === b, jimage ≠ 0) produces its ghost`, () => {
+    // The design's flagship case: 1-atom primitive cell, bond 0->0 jimage +x.
+    const bg: BaseBondGraph = {
+      version: 1,
+      pairs: Uint32Array.from([0, 0]),
+      jimages: Int8Array.from([1, 0, 0]),
+      kinds: Uint8Array.from([0]),
+      strengths: Float32Array.from([1]),
+    }
+    // dims 1x1x1: cell [0,0,0] ⇒ target [1,0,0] outside ⇒ ghost of site 0
+    const t1 = build_image_instance_table(bg, [1, 1, 1], `ghost-images`)
+    expect(t1.count).toBe(1)
+    expect(Array.from(t1.base_sites)).toEqual([0])
+    expect(Array.from(t1.jimages)).toEqual([1, 0, 0])
+    // dims 2x1x1: only cell [1,0,0] spills ⇒ single ghost at [2,0,0]
+    const t2 = build_image_instance_table(bg, [2, 1, 1], `ghost-images`)
+    expect(t2.count).toBe(1)
+    expect(Array.from(t2.base_sites)).toEqual([0])
+    expect(Array.from(t2.jimages)).toEqual([2, 0, 0])
+  })
+
+  test(`numeric-key dedup matches the string-key reference (dupes + self-image)`, () => {
+    // Reference implementation of the ORIGINAL string-key dedup, same iteration
+    // order (bond-major, then z,y,x cells). The production numeric-key path
+    // must reproduce it exactly, including insertion order.
+    const reference = (bg: BaseBondGraph, dims: readonly [number, number, number]) => {
+      const [nx, ny, nz] = dims
+      const seen = new Set<string>()
+      const sites: number[] = []
+      const images: number[] = []
+      for (let bi = 0; bi < bg.pairs.length / 2; bi++) {
+        const b = bg.pairs[bi * 2 + 1]
+        const [jx, jy, jz] = [
+          bg.jimages[bi * 3],
+          bg.jimages[bi * 3 + 1],
+          bg.jimages[bi * 3 + 2],
+        ]
+        for (let iz = 0; iz < nz; iz++) {
+          for (let iy = 0; iy < ny; iy++) {
+            for (let ix = 0; ix < nx; ix++) {
+              const [tx, ty, tz] = [ix + jx, iy + jy, iz + jz]
+              if (tx >= 0 && tx < nx && ty >= 0 && ty < ny && tz >= 0 && tz < nz) continue
+              const key = `${b}|${tx},${ty},${tz}`
+              if (seen.has(key)) continue
+              seen.add(key)
+              sites.push(b)
+              images.push(tx, ty, tz)
+            }
+          }
+        }
+      }
+      return { sites, images }
+    }
+    const bg: BaseBondGraph = {
+      version: 1,
+      // bond0: 0->0 self-image +x, bond1: duplicate of bond0,
+      // bond2: 1->0 jimage -x, bond3: 0->1 jimage [1,-1,0]
+      pairs: Uint32Array.from([0, 0, 0, 0, 1, 0, 0, 1]),
+      jimages: Int8Array.from([1, 0, 0, 1, 0, 0, -1, 0, 0, 1, -1, 0]),
+      kinds: Uint8Array.from([0, 0, 0, 0]),
+      strengths: Float32Array.from([1, 1, 1, 1]),
+    }
+    const dims = [2, 2, 1] as const
+    const expected = reference(bg, dims)
+    const table = build_image_instance_table(bg, dims, `ghost-images`)
+    expect(table.count).toBe(expected.sites.length)
+    expect(Array.from(table.base_sites)).toEqual(expected.sites)
+    expect(Array.from(table.jimages)).toEqual(expected.images)
   })
 })
 
@@ -274,5 +425,102 @@ describe(`logical_site_for_pick (logical vs physical resolution)`, () => {
         replicas,
       ),
     ).toBe(-1)
+  })
+
+  test(`bond picks return the bond graph index, never consulting the map`, () => {
+    // base_site carries the BOND GRAPH index for kind 'bond' — feeding it into
+    // physical_site_map would silently return an unrelated atom's site id.
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: `stub`,
+      semantics: `physical-distinct-sites`,
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+    expect(
+      logical_site_for_pick(
+        { kind: `bond`, base_site: 1, cell: [1, 0, 0], ghost: false },
+        replicas,
+      ),
+    ).toBe(1)
+    // also under visual-shared-base
+    const shared: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: `stub`,
+      semantics: `visual-shared-base`,
+    }
+    expect(
+      logical_site_for_pick(
+        { kind: `bond`, base_site: 7, cell: [0, 0, 0], ghost: false },
+        shared,
+      ),
+    ).toBe(7)
+  })
+
+  test(`ghost picks under visual-shared-base fold to base_site even off-grid`, () => {
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: `ghost-images`,
+      semantics: `visual-shared-base`,
+    }
+    expect(
+      logical_site_for_pick(
+        { kind: `atom`, base_site: 3, cell: [-1, 0, 0], ghost: true },
+        replicas,
+      ),
+    ).toBe(3)
+  })
+
+  test(`ghost picks under physical-distinct-sites wrap into the supercell`, () => {
+    // dims [3,2,1], 1 base atom ⇒ 6 physical sites, map inst -> 100+inst.
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [3, 2, 1],
+      boundary_policy: `ghost-images`,
+      semantics: `physical-distinct-sites`,
+      physical_site_map: Uint32Array.from([100, 101, 102, 103, 104, 105]),
+    }
+    // ghost at cell [-1,1,0]: true-modulo wrap ⇒ [2,1,0] ⇒ cell_index 5 ⇒ 105.
+    // (pre-fix, encode aliased [-1,1,0] to cell_index 2 ⇒ WRONG site 102)
+    expect(
+      logical_site_for_pick(
+        { kind: `atom`, base_site: 0, cell: [-1, 1, 0], ghost: true },
+        replicas,
+      ),
+    ).toBe(105)
+    // ghost beyond the upper face: [3,1,0] wraps to [0,1,0] ⇒ cell_index 3 ⇒ 103
+    expect(
+      logical_site_for_pick(
+        { kind: `atom`, base_site: 0, cell: [3, 1, 0], ghost: true },
+        replicas,
+      ),
+    ).toBe(103)
+    // a ghost more than one period out still wraps: [-4,0,0] ⇒ [2,0,0] ⇒ 102
+    expect(
+      logical_site_for_pick(
+        { kind: `atom`, base_site: 0, cell: [-4, 0, 0], ghost: true },
+        replicas,
+      ),
+    ).toBe(102)
+  })
+
+  test(`malformed non-ghost out-of-range cell falls back to base_site`, () => {
+    // encode_cell_index returns -1 for non-ghost off-grid cells; the pick
+    // resolver treats that as malformed input and falls back to the base site.
+    const replicas: ReplicaLayout = {
+      version: 1,
+      dims: [2, 1, 1],
+      boundary_policy: `stub`,
+      semantics: `physical-distinct-sites`,
+      physical_site_map: Uint32Array.from([10, 11, 20, 21]),
+    }
+    expect(
+      logical_site_for_pick(
+        { kind: `atom`, base_site: 1, cell: [2, 0, 0], ghost: false },
+        replicas,
+      ),
+    ).toBe(1)
   })
 })

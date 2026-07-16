@@ -120,6 +120,46 @@ describe(`assert_render_packet`, () => {
     })
     expect(() => assert_render_packet(packet)).not.toThrow()
   })
+
+  test(`rejects physical-distinct-sites without a physical_site_map`, () => {
+    const packet = make_packet({
+      replicas: {
+        version: 1,
+        dims: [2, 1, 1],
+        boundary_policy: `stub`,
+        semantics: `physical-distinct-sites`,
+        // physical_site_map missing — must not pass silently
+      },
+    })
+    expect(() => assert_render_packet(packet)).toThrow(/physical_site_map/)
+  })
+
+  test(`rejects a physical_site_map whose length !== atom_count × ∏dims`, () => {
+    const packet = make_packet({
+      replicas: {
+        version: 1,
+        dims: [2, 1, 1],
+        boundary_policy: `stub`,
+        semantics: `physical-distinct-sites`,
+        // 2 atoms × 2 cells wants 4 entries; give 3
+        physical_site_map: Uint32Array.from([0, 1, 2]),
+      },
+    })
+    expect(() => assert_render_packet(packet)).toThrow(/physical_site_map/)
+  })
+
+  test(`accepts physical-distinct-sites with a correctly sized map`, () => {
+    const packet = make_packet({
+      replicas: {
+        version: 1,
+        dims: [2, 1, 1],
+        boundary_policy: `stub`,
+        semantics: `physical-distinct-sites`,
+        physical_site_map: Uint32Array.from([0, 1, 2, 3]),
+      },
+    })
+    expect(() => assert_render_packet(packet)).not.toThrow()
+  })
 })
 
 // --- diff_render_packet --------------------------------------------------

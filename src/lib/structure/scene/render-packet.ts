@@ -97,8 +97,12 @@ export type ImageInstanceTable = {
 
 /**
  * Result of a GPU pick. For `kind: 'bond'`, `base_site` is the bond graph
- * index. `cell` is the replica cell of the picked instance. `ghost` marks a
- * pick on a ghost image instance (folds back to the base site).
+ * index — bond picks resolve to that index unchanged and NEVER map through
+ * `physical_site_map` (see `logical_site_for_pick`). `cell` is the replica
+ * cell of the picked instance; for a ghost it is the absolute image cell and
+ * may lie outside `[0, dims)`. `ghost` marks a pick on a ghost image instance
+ * (folds back to the base site under `visual-shared-base`; wraps into the
+ * supercell under `physical-distinct-sites`).
  */
 export type ReplicaPickResult = {
   kind: 'atom' | 'bond' | 'miss'
@@ -166,7 +170,13 @@ export function assert_render_packet(packet: RenderPacket): void {
       `RenderPacket: replica dims must be integers ≥ 1, got [${nx}, ${ny}, ${nz}]`,
     )
   }
-  if (r.semantics === 'physical-distinct-sites' && r.physical_site_map) {
+  if (r.semantics === 'physical-distinct-sites') {
+    if (!r.physical_site_map) {
+      throw new Error(
+        `RenderPacket: semantics 'physical-distinct-sites' requires a ` +
+          `physical_site_map`,
+      )
+    }
     const expected = n * nx * ny * nz
     if (r.physical_site_map.length !== expected) {
       throw new Error(
