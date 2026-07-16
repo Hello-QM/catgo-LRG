@@ -118,6 +118,15 @@ pub mod wasm_nanoscroll;
 #[cfg(feature = "wasm")]
 pub mod wasm_types;
 
+// WASM threads (feature `wasm-threaded`): re-export the Rayon thread-pool
+// initializer so the wasm-bindgen JS glue exports `initThreadPool`. Callers
+// MUST await it before any Rayon path runs (design §8.3). Deliberately gated
+// on `wasm` + `rayon` (not on the dep): building that pair WITHOUT
+// wasm-bindgen-rayon is invalid — Rayon with no thread pool deadlocks in the
+// browser — and this line makes such a build fail at compile time.
+#[cfg(all(target_arch = "wasm32", feature = "wasm", feature = "rayon"))]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 /// Python module entry point.
 #[cfg(feature = "python")]
 #[pymodule]

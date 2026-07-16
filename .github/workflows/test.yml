@@ -30,6 +30,15 @@ jobs:
           node-version: 'lts/*'
           cache: 'pnpm'
 
+      # Nightly (with rust-src) builds the THREADED ferrox artifact — std is
+      # rebuilt with atomics via -Z build-std. Installed before stable so
+      # stable stays the default toolchain for everything else.
+      - name: Setup Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -44,8 +53,16 @@ jobs:
       - name: Generate SvelteKit tsconfig + ambient types
         run: pnpm exec svelte-kit sync
 
-      - name: Build ferrox-wasm package
-        run: cd extensions/rust-wasm && pnpm build
+      # Single canonical entry point for ALL wasm builds (design §8.3): it
+      # builds ferrox twice with explicit feature sets (wasm-scalar /
+      # wasm-threaded). Never invoke wasm-pack directly here — `--features
+      # wasm` without --no-default-features compiles default Rayon without a
+      # thread pool, which deadlocks in the browser.
+      - name: Build WASM extensions
+        run: pnpm build:wasm
+
+      - name: Verify WASM artifacts (scalar + threaded ferrox)
+        run: node scripts/verify-wasm-artifacts.mjs
 
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
@@ -88,6 +105,14 @@ jobs:
           node-version: 'lts/*'
           cache: 'pnpm'
 
+      # Nightly (with rust-src) builds the THREADED ferrox artifact; stable
+      # installed second so it stays the default toolchain.
+      - name: Setup Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -107,16 +132,13 @@ jobs:
       - name: Generate SvelteKit tsconfig + ambient types
         run: pnpm exec svelte-kit sync
 
-      - name: Build ferrox-wasm package
-        run: cd extensions/rust-wasm && pnpm build
-
-      # predev.mjs (run by `desktop:dev`) builds chgdiff + catrender WASM on
-      # first start via `build-wasm.mjs --if-missing`. In CI that on-demand
-      # compile takes minutes, so the dev server isn't ready when Playwright
-      # connects (page.goto → ERR_CONNECTION_REFUSED). Prebuild them here —
-      # ferrox above is already built, so --if-missing only does the other two.
-      - name: Prebuild chgdiff + catrender WASM (so the e2e dev server starts immediately)
-        run: node scripts/build-wasm.mjs --if-missing
+      # Canonical wasm entry point (design §8.3): builds ferrox scalar +
+      # threaded plus chgdiff + catrender. Prebuilding everything here also
+      # keeps predev.mjs (`--if-missing`) a no-op, so the e2e dev server
+      # starts before Playwright connects (page.goto → ERR_CONNECTION_REFUSED
+      # otherwise). Never invoke wasm-pack directly here.
+      - name: Build WASM extensions
+        run: pnpm build:wasm
 
       - name: Build documentation chunks
         run: pnpm run build:doc-chunks
