@@ -9,9 +9,11 @@
     DataTexture,
     FloatType,
     Matrix3,
+    Matrix4,
     NearestFilter,
     RGBAFormat,
     ShaderMaterial,
+    Vector2,
     Vector3,
   } from 'three'
   import { get_bond_key } from '../bonding'
@@ -752,6 +754,56 @@
     },
   }))
 
+  // Impostor material (Task 5). Bound to the bond InstancedMesh only while the
+  // GPU-transform trajectory path is active. It SHARES the exact same uniform
+  // OBJECTS as shader_material for every lighting + topology uniform (assigned
+  // by reference, not { value } copies) so the existing sync $effects update
+  // BOTH materials with no extra effects. Only the impostor-only uniforms get
+  // fresh objects: uBondRadius (kept in the radius effect), uInvProjection +
+  // uViewport (kept per-frame in the positions effect). alphaToCoverage drives
+  // the analytic silhouette/cap AA; the ray-cast writes gl_FragDepth so it is
+  // opaque (transparent:false, depthWrite:true).
+  const impostor_material = untrack(() => new ShaderMaterial({
+    vertexShader: impostor_vertex_shader,
+    fragmentShader: impostor_fragment_shader,
+    glslVersion: '300 es',
+    transparent: false,
+    depthWrite: true,
+    alphaToCoverage: true,
+    uniforms: {
+      // SHARE the exact uniform objects so the existing sync effects update both.
+      ambientIntensity: shader_material.uniforms.ambientIntensity,
+      directionalIntensity: shader_material.uniforms.directionalIntensity,
+      saturation: shader_material.uniforms.saturation,
+      brightness: shader_material.uniforms.brightness,
+      uOpacity: shader_material.uniforms.uOpacity,
+      uLightDir: shader_material.uniforms.uLightDir,
+      uSpecStrength: shader_material.uniforms.uSpecStrength,
+      uDepthCueing: shader_material.uniforms.uDepthCueing,
+      uDepthNear: shader_material.uniforms.uDepthNear,
+      uDepthFar: shader_material.uniforms.uDepthFar,
+      uDepthCueBgColor: shader_material.uniforms.uDepthCueBgColor,
+      uBondOutlineStrength: shader_material.uniforms.uBondOutlineStrength,
+      uPosTex: shader_material.uniforms.uPosTex,
+      uNAtoms: shader_material.uniforms.uNAtoms,
+      uLattice: shader_material.uniforms.uLattice,
+      uHideIncomplete: shader_material.uniforms.uHideIncomplete,
+      uMaxBondLength: shader_material.uniforms.uMaxBondLength,
+      uStubMode: shader_material.uniforms.uStubMode,
+      uStubScale: shader_material.uniforms.uStubScale,
+      // impostor-only
+      uBondRadius: { value: bond_radius },
+      uInvProjection: { value: new Matrix4() },
+      uViewport: { value: new Vector2(1, 1) },
+    },
+  }))
+
+  // The InstancedMesh binds this: impostor cylinders while the GPU path runs,
+  // the #524 cylinder-mesh material otherwise. The geometry $derived flips on
+  // the same gpu_active signal (unit OBB vs CylinderGeometry), so a mode change
+  // reconstructs the mesh and the renderer effect reinitialises either way.
+  const active_material = $derived(gpu_active ? impostor_material : shader_material)
+
   // ── GPU-transform position texture ────────────────────────────────────────
   // RGBA32F DataTexture, one texel per atom (xyz in rgb). Rewritten in place
   // + re-uploaded each playback frame (~16·N bytes) — replaces the CPU mat4
@@ -1070,6 +1122,9 @@
     // and geometry, so re-lay-out the whole mesh.
     const mb = multibond_enabled
     const br = bond_radius
+    // Keep the impostor's ray-cast radius in step with the bond radius (shared
+    // topology uniforms already flow through shader_material's objects).
+    impostor_material.uniforms.uBondRadius.value = br
     if (!renderer) return
     // Untracked: force_full_resync reads manager $state (version/count);
     // tracked it would subscribe this effect to every per-frame version
@@ -1201,6 +1256,15 @@
         // GPU-transform mode: per-frame positions land in the per-atom
         // texture (~16·N bytes) instead of a full per-instance matrix pass.
         upload_positions(atom_positions)
+        // Impostor-only camera uniforms — the fragment ray-cast rebuilds the
+        // view ray per pixel from the inverse projection + drawing-buffer size,
+        // so both must track the live camera/renderer each frame.
+        const cam = threlte.camera.current
+        const size = threlte.renderer?.getDrawingBufferSize(new Vector2())
+        if (cam) {
+          impostor_material.uniforms.uInvProjection.value.copy(cam.projectionMatrixInverse)
+        }
+        if (size) impostor_material.uniforms.uViewport.value.copy(size)
       } else {
         renderer!.force_full_resync()
       }
@@ -1210,7 +1274,7 @@
 </script>
 
 <T.InstancedMesh
-  args={[geometry, shader_material, max_capacity]}
+  args={[geometry, active_material, max_capacity]}
   bind:ref={mesh}
   raycast={null}
   frustumCulled={false}
