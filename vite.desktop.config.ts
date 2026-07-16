@@ -831,7 +831,6 @@ export default defineConfig({
         __dirname,
         `extensions/rust-wasm/pkg/ferrox_bg.wasm`,
       ),
-      '@catgo/ferrox-wasm': resolve(__dirname, `extensions/rust-wasm`),
     },
   },
 
