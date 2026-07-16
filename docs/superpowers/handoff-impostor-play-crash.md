@@ -1,5 +1,8 @@
 # Handoff — Impostor Bond PLAY-Crash (2026-07-15)
 
+> Historical crash-analysis handoff. Current execution state moved to
+> `docs/superpowers/handoff-traj-round4-review-gate-a.md`.
+
 Branch: `feat/impostor-bond-mvp` (worktree `.claude/worktrees/traj-round4`).
 Written by the previous session, which made real mistakes — read the "what I got
 wrong" section so you don't repeat the dead ends.
