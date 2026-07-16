@@ -123,19 +123,34 @@ export function rebind_instance_divisors_if_needed(
   if (revision === get_seen()) return
   // resetState() is the public way to force WebGLBindingStates to re-run VAO
   // setup, but it also clears WebGLRenderer's active render-target bookkeeping.
-  // Preserve + restore it so an offscreen/picking/postprocess pass does not
-  // silently continue as a screen pass after the divisor rebind.
+  // Three r181's getViewport/getScissor getters expose canvas defaults, while
+  // ArrayCamera/XR/tiled passes can override the active _current* state after
+  // selecting a render target. Capture that exact pass state before reset, then
+  // restore it through WebGLState (physical pixels) without mutating canvas
+  // defaults or the render target's stored viewport/scissor.
   const target = webgl_renderer.getRenderTarget()
   const cube_face = webgl_renderer.getActiveCubeFace()
   const mip_level = webgl_renderer.getActiveMipmapLevel()
-  const viewport = webgl_renderer.getViewport(new THREE.Vector4())
-  const scissor = webgl_renderer.getScissor(new THREE.Vector4())
-  const scissor_test = webgl_renderer.getScissorTest()
+  const viewport = webgl_renderer.getCurrentViewport(new THREE.Vector4())
+  const gl = webgl_renderer.getContext()
+  const scissor_box = gl.getParameter(gl.SCISSOR_BOX) as Int32Array
+  const scissor = new THREE.Vector4(
+    scissor_box[0],
+    scissor_box[1],
+    scissor_box[2],
+    scissor_box[3],
+  )
+  const scissor_test = gl.isEnabled(gl.SCISSOR_TEST)
   webgl_renderer.resetState()
   webgl_renderer.setRenderTarget(target, cube_face, mip_level)
-  webgl_renderer.setViewport(viewport.x, viewport.y, viewport.z, viewport.w)
-  webgl_renderer.setScissor(scissor.x, scissor.y, scissor.z, scissor.w)
-  webgl_renderer.setScissorTest(scissor_test)
+  const state = webgl_renderer.state as unknown as {
+    viewport: (value: THREE.Vector4) => void
+    scissor: (value: THREE.Vector4) => void
+    setScissorTest: (enabled: boolean) => void
+  }
+  state.viewport(viewport)
+  state.scissor(scissor)
+  state.setScissorTest(scissor_test)
   set_seen(revision)
 }
 
@@ -177,6 +192,43 @@ export function ensure_instanced_attr(
   // Clear only the derived draw clamp; no divisor-revision reset is needed.
   delete (geometry as unknown as { _maxInstanceCount?: number })._maxInstanceCount
   return attr
+}
+
+const SPARSE_GHOST_PAGE_CAPACITY = 256
+
+function sparse_float_attr(
+  item_size: number,
+  dynamic = false,
+): THREE.InstancedBufferAttribute {
+  const attr = new THREE.InstancedBufferAttribute(
+    new Float32Array(SPARSE_GHOST_PAGE_CAPACITY * item_size),
+    item_size,
+    false,
+    1,
+  )
+  if (dynamic) attr.setUsage(THREE.DynamicDrawUsage)
+  // The typed array is fixed-capacity; count is the page's live logical span.
+  ;(attr as unknown as { count: number }).count = 0
+  return attr
+}
+
+function commit_sparse_attr(
+  attr: THREE.InstancedBufferAttribute,
+  count: number,
+): void {
+  ;(attr as unknown as { count: number }).count = count
+  attr.clearUpdateRanges()
+  if (count > 0) attr.addUpdateRange(0, count * attr.itemSize)
+  attr.needsUpdate = true
+}
+
+type AtomGhostPage = {
+  mesh: THREE.Mesh
+  geometry: THREE.InstancedBufferGeometry
+  positions: THREE.InstancedBufferAttribute
+  images: THREE.InstancedBufferAttribute
+  radii: THREE.InstancedBufferAttribute
+  colors: THREE.InstancedBufferAttribute
 }
 
 const EMPTY_TABLE: ImageInstanceTable = {
@@ -367,10 +419,7 @@ export class AtomReplicaRenderer {
   #colors = new Float32Array(0)
 
   #ghost_table: ImageInstanceTable = EMPTY_TABLE
-  #ghost_positions = new Float32Array(0)
-  #ghost_images = new Float32Array(0)
-  #ghost_radii = new Float32Array(0)
-  #ghost_colors = new Float32Array(0)
+  #ghost_pages: AtomGhostPage[] = []
 
   constructor(options: AtomReplicaOptions = {}) {
     this.#quad = new THREE.PlaneGeometry(2, 2, 1, 1)
@@ -417,6 +466,9 @@ export class AtomReplicaRenderer {
 
     this.mesh = new THREE.Mesh(this.#geometry, this.material)
     this.ghost_mesh = new THREE.Mesh(this.#ghost_geometry, this.ghost_material)
+    this.#ghost_pages.push(
+      this.#create_ghost_page(this.#ghost_geometry, this.ghost_mesh),
+    )
     let seen_divisor_revision = divisor_revision(this.#geometry)
     this.mesh.onBeforeRender = (webgl_renderer) => {
       rebind_instance_divisors_if_needed(
@@ -443,16 +495,22 @@ export class AtomReplicaRenderer {
   update(packet: RenderPacket): void {
     const prev = this.#prev
     const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
+    const frame_identity_changed = prev === null || prev.frame !== packet.frame
+    const positions_changed = prev === null || diff.topology_changed ||
+      diff.frame_changed || prev.frame.positions !== packet.frame.positions
+    const lattice_changed = diff.topology_changed || diff.frame_changed ||
+      frame_identity_changed
     this.#prev = packet
 
     if (diff.topology_changed) this.#rebuild_topology(packet)
     if (diff.topology_changed || diff.replica_changed) this.#apply_replicas(packet)
-    if (diff.topology_changed || diff.frame_changed) this.#upload_frame(packet)
+    if (positions_changed) this.#upload_positions(packet)
+    if (lattice_changed) this.#upload_lattice(packet)
 
     const ghosts_changed = diff.topology_changed || diff.bond_graph_changed ||
       diff.replica_changed
     if (ghosts_changed) this.#rebuild_ghosts(packet)
-    if (ghosts_changed || diff.frame_changed) this.#upload_ghost_positions(packet)
+    if (ghosts_changed || positions_changed) this.#upload_ghost_positions(packet)
   }
 
   #rebuild_topology(packet: RenderPacket): void {
@@ -491,13 +549,49 @@ export class AtomReplicaRenderer {
     this.material.uniforms.uCellCount.value = cc
   }
 
-  #upload_frame(packet: RenderPacket): void {
+  #upload_positions(packet: RenderPacket): void {
     this.#positions.set(packet.frame.positions)
     const attr = this.#geometry.getAttribute(`instancePosition`)
     if (attr) attr.needsUpdate = true
-    // CURRENT frame lattice — the only thing a variable-cell frame touches.
+  }
+
+  #upload_lattice(packet: RenderPacket): void {
+    // A same-index variable-cell update can replace only FrameGeometry.lattice.
+    // Keep this independent from positions_version so the CURRENT cell always
+    // reaches both the main and shared-uniform ghost draw.
     const lattice = this.material.uniforms.uLattice.value as THREE.Matrix3
     lattice.fromArray(packet.frame.lattice as unknown as number[])
+  }
+
+  #create_ghost_page(
+    geometry: THREE.InstancedBufferGeometry,
+    mesh: THREE.Mesh,
+  ): AtomGhostPage {
+    const positions = sparse_float_attr(3, true)
+    const images = sparse_float_attr(3)
+    const radii = sparse_float_attr(1)
+    const colors = sparse_float_attr(3)
+    geometry.setAttribute(`ghostPosition`, positions)
+    geometry.setAttribute(`ghostImage`, images)
+    geometry.setAttribute(`ghostRadius`, radii)
+    geometry.setAttribute(`ghostColor`, colors)
+    return { mesh, geometry, positions, images, radii, colors }
+  }
+
+  #ensure_ghost_pages(count: number): void {
+    const needed = Math.max(1, Math.ceil(count / SPARSE_GHOST_PAGE_CAPACITY))
+    while (this.#ghost_pages.length < needed) {
+      const geometry = new THREE.InstancedBufferGeometry()
+      geometry.setIndex(this.#quad.getIndex())
+      geometry.setAttribute(`position`, this.#quad.getAttribute(`position`))
+      geometry.instanceCount = 0
+      const mesh = new THREE.Mesh(geometry, this.ghost_material)
+      mesh.frustumCulled = false
+      mesh.raycast = () => {}
+      mesh.visible = false
+      this.ghost_mesh.add(mesh)
+      this.#ghost_pages.push(this.#create_ghost_page(geometry, mesh))
+    }
   }
 
   #rebuild_ghosts(packet: RenderPacket): void {
@@ -508,54 +602,66 @@ export class AtomReplicaRenderer {
       : EMPTY_TABLE
     this.#ghost_table = table
     const count = table.count
-    if (this.#ghost_radii.length !== count) {
-      this.#ghost_positions = new Float32Array(count * 3)
-      this.#ghost_images = new Float32Array(count * 3)
-      this.#ghost_radii = new Float32Array(count)
-      this.#ghost_colors = new Float32Array(count * 3)
-    }
+    this.#ensure_ghost_pages(count)
     const { radii, colors, atom_count } = packet.topology
     const color_stride = colors.length === atom_count * 4 ? 4 : 3
-    for (let idx = 0; idx < count; idx++) {
-      const site = table.base_sites[idx]
-      this.#ghost_images[idx * 3] = table.jimages[idx * 3]
-      this.#ghost_images[idx * 3 + 1] = table.jimages[idx * 3 + 1]
-      this.#ghost_images[idx * 3 + 2] = table.jimages[idx * 3 + 2]
-      this.#ghost_radii[idx] = radii[site] * VISUAL_RADIUS_SCALE
-      const src = site * color_stride
-      this.#ghost_colors[idx * 3] = colors[src]
-      this.#ghost_colors[idx * 3 + 1] = colors[src + 1]
-      this.#ghost_colors[idx * 3 + 2] = colors[src + 2]
+
+    for (let page_idx = 0; page_idx < this.#ghost_pages.length; page_idx++) {
+      const page = this.#ghost_pages[page_idx]
+      const start = page_idx * SPARSE_GHOST_PAGE_CAPACITY
+      const used = Math.max(0, Math.min(SPARSE_GHOST_PAGE_CAPACITY, count - start))
+      const image = page.images.array as Float32Array
+      const radius = page.radii.array as Float32Array
+      const color = page.colors.array as Float32Array
+      for (let local = 0; local < used; local++) {
+        const idx = start + local
+        const site = table.base_sites[idx]
+        image[local * 3] = table.jimages[idx * 3]
+        image[local * 3 + 1] = table.jimages[idx * 3 + 1]
+        image[local * 3 + 2] = table.jimages[idx * 3 + 2]
+        radius[local] = radii[site] * VISUAL_RADIUS_SCALE
+        const src = site * color_stride
+        color[local * 3] = colors[src]
+        color[local * 3 + 1] = colors[src + 1]
+        color[local * 3 + 2] = colors[src + 2]
+      }
+      for (const attribute of [
+        page.positions,
+        page.images,
+        page.radii,
+        page.colors,
+      ]) commit_sparse_attr(attribute, used)
+      page.geometry.instanceCount = used
+      delete (page.geometry as unknown as { _maxInstanceCount?: number })
+        ._maxInstanceCount
+      page.mesh.visible = used > 0
     }
-    const geometry = this.#ghost_geometry
-    ensure_instanced_attr(geometry, `ghostPosition`, this.#ghost_positions, 3, 1, true)
-    ensure_instanced_attr(geometry, `ghostImage`, this.#ghost_images, 3, 1)
-    ensure_instanced_attr(geometry, `ghostRadius`, this.#ghost_radii, 1, 1)
-    ensure_instanced_attr(geometry, `ghostColor`, this.#ghost_colors, 3, 1)
-    for (const name of [`ghostImage`, `ghostRadius`, `ghostColor`]) {
-      geometry.getAttribute(name).needsUpdate = true
-    }
-    geometry.instanceCount = count
-    this.ghost_mesh.visible = count > 0
   }
 
   #upload_ghost_positions(packet: RenderPacket): void {
     const table = this.#ghost_table
-    if (table.count === 0) return
     const positions = packet.frame.positions
-    for (let idx = 0; idx < table.count; idx++) {
-      const site = table.base_sites[idx] * 3
-      this.#ghost_positions[idx * 3] = positions[site]
-      this.#ghost_positions[idx * 3 + 1] = positions[site + 1]
-      this.#ghost_positions[idx * 3 + 2] = positions[site + 2]
+    for (let page_idx = 0; page_idx < this.#ghost_pages.length; page_idx++) {
+      const page = this.#ghost_pages[page_idx]
+      const start = page_idx * SPARSE_GHOST_PAGE_CAPACITY
+      const used = Math.max(
+        0,
+        Math.min(SPARSE_GHOST_PAGE_CAPACITY, table.count - start),
+      )
+      const out = page.positions.array as Float32Array
+      for (let local = 0; local < used; local++) {
+        const site = table.base_sites[start + local] * 3
+        out[local * 3] = positions[site]
+        out[local * 3 + 1] = positions[site + 1]
+        out[local * 3 + 2] = positions[site + 2]
+      }
+      commit_sparse_attr(page.positions, used)
     }
-    const attr = this.#ghost_geometry.getAttribute(`ghostPosition`)
-    if (attr) attr.needsUpdate = true
   }
 
   dispose(): void {
     this.#geometry.dispose()
-    this.#ghost_geometry.dispose()
+    for (const page of this.#ghost_pages) page.geometry.dispose()
     this.#quad.dispose()
     this.material.dispose()
     this.ghost_material.dispose()

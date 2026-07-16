@@ -9,7 +9,7 @@
 // The legacy `InstancedMesh` path fails every one of these assertions: it
 // allocates a capacity-sized `instanceMatrix` and needs one attribute slot
 // per drawn instance.
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import * as THREE from 'three'
 import {
   AtomReplicaRenderer,
@@ -84,6 +84,15 @@ function geo(mesh: THREE.Mesh): THREE.InstancedBufferGeometry {
 
 function attr(mesh: THREE.Mesh, name: string): THREE.InstancedBufferAttribute {
   return geo(mesh).getAttribute(name) as THREE.InstancedBufferAttribute
+}
+
+function ghost_pages(root: THREE.Mesh): THREE.Mesh[] {
+  return [
+    root,
+    ...root.children.filter((child): child is THREE.Mesh =>
+      (child as THREE.Mesh).isMesh === true
+    ),
+  ]
 }
 
 describe(`AtomReplicaRenderer — mesh shape`, () => {
@@ -221,6 +230,45 @@ describe(`AtomReplicaRenderer — frame updates (play / pause / scrub)`, () => {
     expect(lattice.elements[8]).toBeCloseTo(12, 5)
     renderer.dispose()
   })
+
+  test(`same-frame lattice-only packet refreshes uLattice without uploading positions`, () => {
+    const builder = create_render_packet_builder()
+    const structure = make_structure(3)
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0])
+    const renderer = new AtomReplicaRenderer()
+    const first = builder.build({
+      structure,
+      dims: [2, 2, 2],
+      frame_positions: positions,
+      frame_lattice: [[10, 0, 0], [0, 10, 0], [0, 0, 10]],
+      frame_idx: 7,
+      positions_version: 11,
+    })
+    const second = builder.build({
+      structure,
+      dims: [2, 2, 2],
+      frame_positions: positions,
+      frame_lattice: [[14, 0, 0], [0, 12, 0], [0, 0, 9]],
+      frame_idx: 7,
+      positions_version: 11,
+    })
+    expect(second.frame).not.toBe(first.frame)
+    expect(second.frame.positions).toBe(first.frame.positions)
+    expect(second.frame.frame_idx).toBe(first.frame.frame_idx)
+    expect(second.frame.positions_version).toBe(first.frame.positions_version)
+
+    renderer.update(first)
+    const pos_attr = attr(renderer.mesh, `instancePosition`)
+    const pos_version = pos_attr.version
+    renderer.update(second)
+
+    expect(attr(renderer.mesh, `instancePosition`)).toBe(pos_attr)
+    expect(pos_attr.version).toBe(pos_version)
+    const lattice = renderer.material.uniforms.uLattice.value as THREE.Matrix3
+    expect([lattice.elements[0], lattice.elements[4], lattice.elements[8]])
+      .toEqual([14, 12, 9])
+    renderer.dispose()
+  })
 })
 
 describe(`AtomReplicaRenderer — shader contract`, () => {
@@ -307,6 +355,119 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
       expect(renderer.ghost_mesh.visible).toBe(false)
       renderer.dispose()
     }
+  })
+
+  test(`ghost-images 1×↔2×↔8× keeps main and sparse attribute buffers`, () => {
+    const builder = create_render_packet_builder()
+    const structure = make_structure(3)
+    const renderer = new AtomReplicaRenderer()
+    const packet = (dims: readonly [number, number, number]) => builder.build({
+      structure,
+      bond_connectivity: BONDS,
+      dims,
+      boundary_policy: `ghost-images`,
+    })
+
+    const first = packet([1, 1, 1])
+    renderer.update(first)
+    const main_geometry = geo(renderer.mesh)
+    const ghost_geometry = geo(renderer.ghost_mesh)
+    const main_names = [
+      `instancePosition`,
+      `instanceRadius`,
+      `instanceAtomColor`,
+    ] as const
+    const ghost_names = [
+      `ghostPosition`,
+      `ghostImage`,
+      `ghostRadius`,
+      `ghostColor`,
+    ] as const
+    const main_attrs = main_names.map((name) => attr(renderer.mesh, name))
+    const ghost_attrs = ghost_names.map((name) => attr(renderer.ghost_mesh, name))
+    const main_arrays = main_attrs.map((attribute) => attribute.array)
+    const ghost_arrays = ghost_attrs.map((attribute) => attribute.array)
+
+    for (const dims of [
+      [2, 1, 1],
+      [2, 2, 2],
+      [1, 1, 1],
+    ] as const) {
+      const next = packet(dims)
+      renderer.update(next)
+      const table = build_image_instance_table(
+        next.topology.bond_graph!,
+        next.replicas.dims,
+        `ghost-images`,
+      )
+      expect(geo(renderer.mesh)).toBe(main_geometry)
+      expect(geo(renderer.ghost_mesh)).toBe(ghost_geometry)
+      for (let idx = 0; idx < main_names.length; idx++) {
+        expect(attr(renderer.mesh, main_names[idx])).toBe(main_attrs[idx])
+        expect(main_attrs[idx].array).toBe(main_arrays[idx])
+      }
+      for (let idx = 0; idx < ghost_names.length; idx++) {
+        expect(attr(renderer.ghost_mesh, ghost_names[idx])).toBe(ghost_attrs[idx])
+        expect(ghost_attrs[idx].array).toBe(ghost_arrays[idx])
+        expect(ghost_attrs[idx].count).toBe(table.count)
+      }
+      expect(main_geometry.instanceCount).toBe(3 * cell_count_of(dims))
+      expect(ghost_geometry.instanceCount).toBe(table.count)
+    }
+    renderer.dispose()
+  })
+
+  test(`ghost pages append, shrink, regrow, and dispose without replacing buffers`, () => {
+    const site_count = 129
+    const structure = make_structure(site_count)
+    const bonds: PacketBondConnectivity[] = Array.from(
+      { length: site_count },
+      (_, site_idx) => ({
+        site_idx_1: site_idx,
+        site_idx_2: site_idx,
+        jimage: [1, 0, 0] as [number, number, number],
+      }),
+    )
+    const builder = create_render_packet_builder()
+    const renderer = new AtomReplicaRenderer()
+    const packet = (
+      dims: readonly [number, number, number],
+      boundary_policy: `stub` | `ghost-images` = `ghost-images`,
+    ) => builder.build({ structure, bond_connectivity: bonds, dims, boundary_policy })
+
+    renderer.update(packet([1, 1, 1]))
+    expect(ghost_pages(renderer.ghost_mesh)).toHaveLength(1)
+    renderer.update(packet([2, 2, 2]))
+    const pages = ghost_pages(renderer.ghost_mesh)
+    expect(pages).toHaveLength(3)
+    expect(pages.map((page) => geo(page).instanceCount)).toEqual([256, 256, 4])
+    const attrs = pages.map((page) => attr(page, `ghostPosition`))
+    const arrays = attrs.map((attribute) => attribute.array)
+
+    renderer.update(packet([1, 1, 1]))
+    expect(ghost_pages(renderer.ghost_mesh)).toEqual(pages)
+    expect(pages.map((page) => geo(page).instanceCount)).toEqual([129, 0, 0])
+    expect(pages.map((page) => page.visible)).toEqual([true, false, false])
+    renderer.update(packet([1, 1, 1], `stub`))
+    expect(pages.map((page) => geo(page).instanceCount)).toEqual([0, 0, 0])
+    expect(pages.map((page) => page.visible)).toEqual([false, false, false])
+    renderer.update(packet([2, 2, 2]))
+    expect(ghost_pages(renderer.ghost_mesh)).toEqual(pages)
+    expect(pages.map((page) => geo(page).instanceCount)).toEqual([256, 256, 4])
+    for (let idx = 0; idx < pages.length; idx++) {
+      expect(attr(pages[idx], `ghostPosition`)).toBe(attrs[idx])
+      expect(attrs[idx].array).toBe(arrays[idx])
+    }
+
+    const disposed = pages.map(() => vi.fn())
+    for (let idx = 0; idx < pages.length; idx++) {
+      pages[idx].geometry.addEventListener(`dispose`, disposed[idx])
+    }
+    const material_disposed = vi.fn()
+    renderer.ghost_material.addEventListener(`dispose`, material_disposed)
+    renderer.dispose()
+    for (const spy of disposed) expect(spy).toHaveBeenCalledOnce()
+    expect(material_disposed).toHaveBeenCalledOnce()
   })
 })
 

@@ -97,6 +97,8 @@
         if (cam) {
           bond_renderer.set_view(
             cam.projectionMatrixInverse,
+            0,
+            0,
             viewport_scratch.x,
             viewport_scratch.y,
           )

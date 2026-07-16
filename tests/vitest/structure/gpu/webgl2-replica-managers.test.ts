@@ -64,28 +64,128 @@ function make_packets(): RenderPacket[] {
 }
 
 function make_fake_renderer() {
-  const resetState = vi.fn()
-  const setRenderTarget = vi.fn()
-  const setViewport = vi.fn()
-  const setScissor = vi.fn()
-  const setScissorTest = vi.fn()
+  // Match Three r181's split bookkeeping: getViewport/getScissor/getScissorTest
+  // expose the canvas defaults, while setRenderTarget copies the target's
+  // viewport/scissor/scissorTest into the active _current* pass state.
+  const canvas_viewport = new THREE.Vector4(11, 12, 320, 240)
+  const canvas_scissor = new THREE.Vector4(13, 14, 300, 220)
+  let canvas_scissor_test = false
   const renderTarget = new THREE.WebGLRenderTarget(32, 32)
+  renderTarget.viewport.set(3, 4, 29, 27)
+  renderTarget.scissor.set(5, 6, 23, 21)
+  renderTarget.scissorTest = true
+
+  let active_target: THREE.WebGLRenderTarget | null = renderTarget
+  let active_cube_face = 3
+  let active_mip_level = 2
+  const current_viewport = renderTarget.viewport.clone()
+  const current_scissor = renderTarget.scissor.clone()
+  let current_scissor_test = renderTarget.scissorTest
+  const pass_viewport = new THREE.Vector4(7, 8, 19, 17)
+  const pass_scissor = new THREE.Vector4(9, 10, 13, 11)
+  const pass_scissor_test = true
+
+  const resetState = vi.fn(() => {
+    active_target = null
+    active_cube_face = 0
+    active_mip_level = 0
+  })
+  const setRenderTarget = vi.fn((
+    target: THREE.WebGLRenderTarget | null,
+    cube_face = 0,
+    mip_level = 0,
+  ) => {
+    active_target = target
+    active_cube_face = cube_face
+    active_mip_level = mip_level
+    if (target !== null) {
+      current_viewport.copy(target.viewport)
+      current_scissor.copy(target.scissor)
+      current_scissor_test = target.scissorTest
+    } else {
+      current_viewport.copy(canvas_viewport)
+      current_scissor.copy(canvas_scissor)
+      current_scissor_test = canvas_scissor_test
+    }
+  })
+  const setViewport = vi.fn((x: number, y: number, width: number, height: number) => {
+    canvas_viewport.set(x, y, width, height)
+    current_viewport.copy(canvas_viewport)
+  })
+  const setScissor = vi.fn((x: number, y: number, width: number, height: number) => {
+    canvas_scissor.set(x, y, width, height)
+    current_scissor.copy(canvas_scissor)
+  })
+  const setScissorTest = vi.fn((enabled: boolean) => {
+    canvas_scissor_test = enabled
+    current_scissor_test = enabled
+  })
+  const stateViewport = vi.fn((viewport: THREE.Vector4) => {
+    current_viewport.copy(viewport)
+  })
+  const stateScissor = vi.fn((scissor: THREE.Vector4) => {
+    current_scissor.copy(scissor)
+  })
+  const stateScissorTest = vi.fn((enabled: boolean) => {
+    current_scissor_test = enabled
+  })
+  const activate_render_target = () => {
+    setRenderTarget(renderTarget, 3, 2)
+    // ArrayCamera/XR/tiled passes apply an active override after selecting the
+    // target. It is deliberately distinct from target and canvas defaults.
+    current_viewport.copy(pass_viewport)
+    current_scissor.copy(pass_scissor)
+    current_scissor_test = pass_scissor_test
+  }
+  const current_pass = () => ({
+    target: active_target,
+    cube_face: active_cube_face,
+    mip_level: active_mip_level,
+    viewport: current_viewport.clone(),
+    scissor: current_scissor.clone(),
+    scissor_test: current_scissor_test,
+  })
+  const gl = {
+    SCISSOR_BOX: 0x0c10,
+    SCISSOR_TEST: 0x0c11,
+    getParameter: (parameter: number) => {
+      if (parameter === 0x0c10) {
+        return new Int32Array([
+          current_scissor.x,
+          current_scissor.y,
+          current_scissor.z,
+          current_scissor.w,
+        ])
+      }
+      return null
+    },
+    isEnabled: (capability: number) =>
+      capability === 0x0c11 && current_scissor_test,
+  } as unknown as WebGL2RenderingContext
+
   const renderer = {
     render: vi.fn(),
     setSize: vi.fn(),
     setPixelRatio: vi.fn(),
     getDrawingBufferSize: (target: THREE.Vector2) => target.set(800, 600),
-    getRenderTarget: () => renderTarget,
-    getActiveCubeFace: () => 3,
-    getActiveMipmapLevel: () => 2,
-    getViewport: (target: THREE.Vector4) => target.set(11, 12, 320, 240),
-    getScissor: (target: THREE.Vector4) => target.set(13, 14, 300, 220),
-    getScissorTest: () => true,
+    getContext: () => gl,
+    getRenderTarget: () => active_target,
+    getActiveCubeFace: () => active_cube_face,
+    getActiveMipmapLevel: () => active_mip_level,
+    getCurrentViewport: (target: THREE.Vector4) => target.copy(current_viewport),
+    getViewport: (target: THREE.Vector4) => target.copy(canvas_viewport),
+    getScissor: (target: THREE.Vector4) => target.copy(canvas_scissor),
+    getScissorTest: () => canvas_scissor_test,
     setRenderTarget,
     setViewport,
     setScissor,
     setScissorTest,
     resetState,
+    state: {
+      viewport: stateViewport,
+      scissor: stateScissor,
+      setScissorTest: stateScissorTest,
+    },
     dispose: vi.fn(),
     outputColorSpace: THREE.SRGBColorSpace,
     shadowMap: { enabled: false, type: THREE.PCFSoftShadowMap },
@@ -99,6 +199,13 @@ function make_fake_renderer() {
     setViewport,
     setScissor,
     setScissorTest,
+    activate_render_target,
+    current_pass,
+    expected_pass: {
+      viewport: pass_viewport,
+      scissor: pass_scissor,
+      scissor_test: pass_scissor_test,
+    },
   }
 }
 
@@ -154,6 +261,9 @@ async function mount_manager(mode: 'atom' | 'bond') {
     setViewport,
     setScissor,
     setScissorTest,
+    activate_render_target,
+    current_pass,
+    expected_pass,
   } = make_fake_renderer()
   let scene!: THREE.Scene
   const component = mount(Harness, {
@@ -180,6 +290,9 @@ async function mount_manager(mode: 'atom' | 'bond') {
     setViewport,
     setScissor,
     setScissorTest,
+    activate_render_target,
+    current_pass,
+    expected_pass,
     scene,
   }
 }
@@ -218,6 +331,9 @@ for (const mode of [`atom`, `bond`] as const) {
         setViewport,
         setScissor,
         setScissorTest,
+        activate_render_target,
+        current_pass,
+        expected_pass,
         scene,
       } = await mount_manager(mode)
 
@@ -251,26 +367,34 @@ for (const mode of [`atom`, `bond`] as const) {
 
         // The observable render hook forces Three's cached VAO divisor state
         // to rebind while preserving the attribute/WebGLBuffer resource.
+        // Start an offscreen picking pass whose target owns a custom viewport,
+        // scissor, and scissor-test state distinct from the canvas defaults.
+        activate_render_target()
         const before_resets = resetState.mock.calls.length
         const before_target_restores = setRenderTarget.mock.calls.length
-        const before_viewport_restores = setViewport.mock.calls.length
-        const before_scissor_restores = setScissor.mock.calls.length
-        const before_scissor_test_restores = setScissorTest.mock.calls.length
+        const before_viewport_writes = setViewport.mock.calls.length
+        const before_scissor_writes = setScissor.mock.calls.length
+        const before_scissor_test_writes = setScissorTest.mock.calls.length
         invoke_before_render(main, renderer, scene)
         expect(resetState).toHaveBeenCalledTimes(before_resets + 1)
-        // WebGLRenderer.resetState() clears its active render-target and
-        // viewport/scissor bookkeeping. Restore the exact pass state before
-        // renderBufferDirect continues.
         expect(setRenderTarget).toHaveBeenCalledTimes(before_target_restores + 1)
         expect(setRenderTarget).toHaveBeenLastCalledWith(renderTarget, 3, 2)
-        expect(setViewport).toHaveBeenCalledTimes(before_viewport_restores + 1)
-        expect(setViewport).toHaveBeenLastCalledWith(11, 12, 320, 240)
-        expect(setScissor).toHaveBeenCalledTimes(before_scissor_restores + 1)
-        expect(setScissor).toHaveBeenLastCalledWith(13, 14, 300, 220)
-        expect(setScissorTest).toHaveBeenCalledTimes(
-          before_scissor_test_restores + 1,
-        )
-        expect(setScissorTest).toHaveBeenLastCalledWith(true)
+        // Three r181 setRenderTarget() already restores the target's active
+        // _current* state. Canvas getters must not be written over it.
+        expect(setViewport).toHaveBeenCalledTimes(before_viewport_writes)
+        expect(setScissor).toHaveBeenCalledTimes(before_scissor_writes)
+        expect(setScissorTest).toHaveBeenCalledTimes(before_scissor_test_writes)
+        const pass = current_pass()
+        expect(pass.target).toBe(renderTarget)
+        expect(pass.cube_face).toBe(3)
+        expect(pass.mip_level).toBe(2)
+        expect(pass.viewport).toEqual(expected_pass.viewport)
+        expect(pass.scissor).toEqual(expected_pass.scissor)
+        expect(pass.scissor_test).toBe(expected_pass.scissor_test)
+        if (mode === `bond`) {
+          const uniforms = (main.material as THREE.ShaderMaterial).uniforms
+          expect(uniforms.uViewport.value).toEqual(expected_pass.viewport)
+        }
       }
     })
   })

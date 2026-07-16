@@ -109,6 +109,38 @@ const EMPTY_GHOST_TABLE: GhostHalfTable = {
   cells: new Float32Array(0),
 }
 
+const SPARSE_GHOST_PAGE_CAPACITY = 256
+
+function sparse_float_attr(item_size: number): THREE.InstancedBufferAttribute {
+  const attr = new THREE.InstancedBufferAttribute(
+    new Float32Array(SPARSE_GHOST_PAGE_CAPACITY * item_size),
+    item_size,
+    false,
+    1,
+  )
+  ;(attr as unknown as { count: number }).count = 0
+  return attr
+}
+
+function commit_sparse_attr(
+  attr: THREE.InstancedBufferAttribute,
+  count: number,
+): void {
+  ;(attr as unknown as { count: number }).count = count
+  attr.clearUpdateRanges()
+  if (count > 0) attr.addUpdateRange(0, count * attr.itemSize)
+  attr.needsUpdate = true
+}
+
+type BondGhostPage = {
+  mesh: THREE.Mesh
+  geometry: THREE.InstancedBufferGeometry
+  sites: THREE.InstancedBufferAttribute
+  jimages: THREE.InstancedBufferAttribute
+  cells: THREE.InstancedBufferAttribute
+  colors: THREE.InstancedBufferAttribute
+}
+
 /** Enumerate ghost-side halves through the REAL T1 oracle (allocation-lean
  *  out-record form of `resolve_periodic_edge`). */
 export function build_ghost_half_table(
@@ -304,7 +336,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   uniform float uDirectionalIntensity;
   uniform mat4 projectionMatrix;
   uniform mat4 uInvProjection;
-  uniform vec2 uViewport;
+  uniform vec4 uViewport;
   varying vec3 vColor;
   flat varying vec3 vImpBase;
   flat varying vec3 vImpAxis;
@@ -324,7 +356,7 @@ const FRAGMENT_SHADER = /* glsl */ `
   void main() {
     if (vImpCollapse > 0.5) discard;
 
-    vec2 ndc = (gl_FragCoord.xy / uViewport) * 2.0 - 1.0;
+    vec2 ndc = ((gl_FragCoord.xy - uViewport.xy) / uViewport.zw) * 2.0 - 1.0;
     vec4 near = uInvProjection * vec4(ndc, -1.0, 1.0);
     vec4 far = near + uInvProjection[2];
     vec3 ray_origin = near.xyz / near.w;
@@ -434,8 +466,10 @@ export class BondReplicaRenderer {
   #halves = new Float32Array(0)
   #colors = new Float32Array(0)
 
-  // Sparse ghost-half attributes.
-  #ghost_colors = new Float32Array(0)
+  // Fixed-capacity sparse pages retain every attribute/backing buffer identity;
+  // growth appends pages instead of replacing live VBO resources.
+  #ghost_pages: BondGhostPage[] = []
+  #ghost_before_render!: THREE.Object3D[`onBeforeRender`]
 
   constructor(options: BondReplicaOptions = {}) {
     this.#box = new THREE.BoxGeometry(2, 2, 2)
@@ -453,7 +487,7 @@ export class BondReplicaRenderer {
       uAmbientIntensity: { value: options.ambient_light ?? 0.8 },
       uDirectionalIntensity: { value: options.directional_light ?? 0.3 },
       uInvProjection: { value: new THREE.Matrix4() },
-      uViewport: { value: new THREE.Vector2(1, 1) },
+      uViewport: { value: new THREE.Vector4(0, 0, 1, 1) },
     }
 
     this.material = new THREE.ShaderMaterial({
@@ -488,16 +522,36 @@ export class BondReplicaRenderer {
 
     this.mesh = new THREE.Mesh(this.#geometry, this.material)
     this.ghost_mesh = new THREE.Mesh(this.#ghost_geometry, this.ghost_material)
+    this.#ghost_pages.push(
+      this.#create_ghost_page(this.#ghost_geometry, this.ghost_mesh),
+    )
     // Camera projection can change while the packet stays static (notably
     // orthographic wheel zoom). Refresh the inverse projection + drawing-
     // buffer size at the actual draw boundary, not only on packet updates —
     // otherwise the fragment ray is reconstructed from stale camera data.
-    const viewport = new THREE.Vector2(1, 1)
+    const viewport = new THREE.Vector4(0, 0, 1, 1)
     let seen_divisor_revision = 0
     const refresh_view: THREE.Object3D[`onBeforeRender`] = (
       webgl_renderer,
       _scene,
       camera,
+    ) => {
+      webgl_renderer.getCurrentViewport(viewport)
+      this.set_view(
+        camera.projectionMatrixInverse,
+        viewport.x,
+        viewport.y,
+        viewport.z,
+        viewport.w,
+      )
+    }
+    this.mesh.onBeforeRender = (
+      webgl_renderer,
+      scene,
+      camera,
+      geometry,
+      material,
+      group,
     ) => {
       rebind_instance_divisors_if_needed(
         this.mesh,
@@ -505,12 +559,12 @@ export class BondReplicaRenderer {
         () => seen_divisor_revision,
         (revision) => seen_divisor_revision = revision,
       )
-      webgl_renderer.getDrawingBufferSize(viewport)
-      this.set_view(camera.projectionMatrixInverse, viewport.x, viewport.y)
+      refresh_view(webgl_renderer, scene, camera, geometry, material, group)
     }
+    this.#ghost_before_render = refresh_view
+    this.ghost_mesh.onBeforeRender = refresh_view
     for (const mesh of [this.mesh, this.ghost_mesh]) {
       mesh.frustumCulled = false
-      mesh.onBeforeRender = refresh_view
       // Picking is a GPU ID pass (design §7.3), never a CPU box raycast.
       mesh.raycast = () => {}
     }
@@ -521,21 +575,34 @@ export class BondReplicaRenderer {
   update(packet: RenderPacket): void {
     const prev = this.#prev
     const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
+    const frame_identity_changed = prev === null || prev.frame !== packet.frame
+    const positions_changed = prev === null || diff.topology_changed ||
+      diff.frame_changed || prev.frame.positions !== packet.frame.positions
+    const lattice_changed = diff.topology_changed || diff.frame_changed ||
+      frame_identity_changed
     this.#prev = packet
 
     const graph_changed = diff.topology_changed || diff.bond_graph_changed
     if (graph_changed) this.#rebuild_half_attrs(packet)
     if (graph_changed || diff.replica_changed) this.#apply_replicas(packet)
-    if (diff.topology_changed || diff.frame_changed) this.#upload_frame(packet)
+    if (positions_changed) this.#upload_positions(packet)
+    if (lattice_changed) this.#upload_lattice(packet)
     if (graph_changed || diff.replica_changed) this.#rebuild_ghosts(packet)
   }
 
   /** Per-frame camera state for the fragment ray-cast (inverse projection +
    *  drawing-buffer size). Shared by both draws. */
-  set_view(inv_projection: THREE.Matrix4, width: number, height: number): void {
+  set_view(
+    inv_projection: THREE.Matrix4,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
     ;(this.material.uniforms.uInvProjection.value as THREE.Matrix4)
       .copy(inv_projection)
-    ;(this.material.uniforms.uViewport.value as THREE.Vector2).set(width, height)
+    ;(this.material.uniforms.uViewport.value as THREE.Vector4)
+      .set(x, y, width, height)
   }
 
   set_bond_radius(radius: number): void {
@@ -614,7 +681,7 @@ export class BondReplicaRenderer {
       BOUNDARY_POLICY_CODE[packet.replicas.boundary_policy]
   }
 
-  #upload_frame(packet: RenderPacket): void {
+  #upload_positions(packet: RenderPacket): void {
     const positions = packet.frame.positions
     const n_atoms = (positions.length / 3) | 0
     const rows = Math.max(1, Math.ceil(n_atoms / POS_TEX_WIDTH))
@@ -644,9 +711,46 @@ export class BondReplicaRenderer {
       data[idx * 4 + 2] = positions[idx * 3 + 2]
     }
     this.#pos_texture.needsUpdate = true
-    // CURRENT frame lattice — the only thing a variable-cell frame touches.
+  }
+
+  #upload_lattice(packet: RenderPacket): void {
+    // A same-index variable-cell update can replace only FrameGeometry.lattice.
+    // Keep this independent from positions_version so the CURRENT cell always
+    // reaches both the main and shared-uniform ghost draw.
     const lattice = this.material.uniforms.uLattice.value as THREE.Matrix3
     lattice.fromArray(packet.frame.lattice as unknown as number[])
+  }
+
+  #create_ghost_page(
+    geometry: THREE.InstancedBufferGeometry,
+    mesh: THREE.Mesh,
+  ): BondGhostPage {
+    const sites = sparse_float_attr(2)
+    const jimages = sparse_float_attr(3)
+    const cells = sparse_float_attr(3)
+    const colors = sparse_float_attr(3)
+    geometry.setAttribute(`g_site`, sites)
+    geometry.setAttribute(`g_jimage`, jimages)
+    geometry.setAttribute(`g_cell`, cells)
+    geometry.setAttribute(`g_color`, colors)
+    return { mesh, geometry, sites, jimages, cells, colors }
+  }
+
+  #ensure_ghost_pages(count: number): void {
+    const needed = Math.max(1, Math.ceil(count / SPARSE_GHOST_PAGE_CAPACITY))
+    while (this.#ghost_pages.length < needed) {
+      const geometry = new THREE.InstancedBufferGeometry()
+      geometry.setIndex(this.#box.getIndex())
+      geometry.setAttribute(`position`, this.#box.getAttribute(`position`))
+      geometry.instanceCount = 0
+      const mesh = new THREE.Mesh(geometry, this.ghost_material)
+      mesh.frustumCulled = false
+      mesh.onBeforeRender = this.#ghost_before_render
+      mesh.raycast = () => {}
+      mesh.visible = false
+      this.ghost_mesh.add(mesh)
+      this.#ghost_pages.push(this.#create_ghost_page(geometry, mesh))
+    }
   }
 
   #rebuild_ghosts(packet: RenderPacket): void {
@@ -656,33 +760,48 @@ export class BondReplicaRenderer {
       ? build_ghost_half_table(graph, dims, boundary_policy)
       : EMPTY_GHOST_TABLE
     const count = table.count
-    if (this.#ghost_colors.length !== count * 3) {
-      this.#ghost_colors = new Float32Array(count * 3)
-    }
+    this.#ensure_ghost_pages(count)
     const { colors, atom_count } = packet.topology
     const color_stride = colors.length === atom_count * 4 ? 4 : 3
-    for (let idx = 0; idx < count; idx++) {
-      // Ghost-side half is anchored at endpoint B's image → B's color.
-      const src = table.sites[idx * 2 + 1] * color_stride
-      this.#ghost_colors[idx * 3] = colors[src]
-      this.#ghost_colors[idx * 3 + 1] = colors[src + 1]
-      this.#ghost_colors[idx * 3 + 2] = colors[src + 2]
+
+    for (let page_idx = 0; page_idx < this.#ghost_pages.length; page_idx++) {
+      const page = this.#ghost_pages[page_idx]
+      const start = page_idx * SPARSE_GHOST_PAGE_CAPACITY
+      const used = Math.max(0, Math.min(SPARSE_GHOST_PAGE_CAPACITY, count - start))
+      const sites = page.sites.array as Float32Array
+      const jimages = page.jimages.array as Float32Array
+      const cells = page.cells.array as Float32Array
+      const page_colors = page.colors.array as Float32Array
+      for (let local = 0; local < used; local++) {
+        const idx = start + local
+        sites[local * 2] = table.sites[idx * 2]
+        sites[local * 2 + 1] = table.sites[idx * 2 + 1]
+        for (let axis = 0; axis < 3; axis++) {
+          jimages[local * 3 + axis] = table.jimages[idx * 3 + axis]
+          cells[local * 3 + axis] = table.cells[idx * 3 + axis]
+        }
+        // Ghost-side half is anchored at endpoint B's image → B's color.
+        const src = table.sites[idx * 2 + 1] * color_stride
+        page_colors[local * 3] = colors[src]
+        page_colors[local * 3 + 1] = colors[src + 1]
+        page_colors[local * 3 + 2] = colors[src + 2]
+      }
+      for (const attribute of [
+        page.sites,
+        page.jimages,
+        page.cells,
+        page.colors,
+      ]) commit_sparse_attr(attribute, used)
+      page.geometry.instanceCount = used
+      delete (page.geometry as unknown as { _maxInstanceCount?: number })
+        ._maxInstanceCount
+      page.mesh.visible = used > 0
     }
-    const geometry = this.#ghost_geometry
-    ensure_instanced_attr(geometry, `g_site`, table.sites, 2, 1)
-    ensure_instanced_attr(geometry, `g_jimage`, table.jimages, 3, 1)
-    ensure_instanced_attr(geometry, `g_cell`, table.cells, 3, 1)
-    ensure_instanced_attr(geometry, `g_color`, this.#ghost_colors, 3, 1)
-    for (const name of [`g_site`, `g_jimage`, `g_cell`, `g_color`]) {
-      geometry.getAttribute(name).needsUpdate = true
-    }
-    geometry.instanceCount = count
-    this.ghost_mesh.visible = count > 0
   }
 
   dispose(): void {
     this.#geometry.dispose()
-    this.#ghost_geometry.dispose()
+    for (const page of this.#ghost_pages) page.geometry.dispose()
     this.#box.dispose()
     this.material.dispose()
     this.ghost_material.dispose()
