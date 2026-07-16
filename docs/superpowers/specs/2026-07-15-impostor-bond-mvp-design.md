@@ -1,7 +1,27 @@
-# Impostor-Cylinder Bond Rendering — MVP Design
+# Impostor-Cylinder Bond Rendering — Design
 
 Date: 2026-07-15
-Status: approved (design), pending implementation plan
+Status: approved (design), full-production scope, phased delivery
+
+## Scope revision (user, 2026-07-15)
+
+Target is **full production** — every bond case ends up on the impostor, not
+just the `gpu_active` fast path. Delivered in phases so each is independently
+verifiable and the first phase already measures the absolute fps win:
+
+- **Phase 1 (this plan): core impostor** — `gpu_active` simple bonds + periodic
+  stubs (decision a). First phase that measures real 52k-bond fps vs the 27.8
+  baseline. Everything else still falls back to mesh.
+- **Phase 2: multibond** — order>1 bonds (stride 6, multi-cylinder) as
+  impostors.
+- **Phase 3: image-atom decorators** — the decorator half-bond range as
+  impostors.
+- **Phase 4: always-on + transparent** — impostor for static frames too
+  (perpetually smooth; pathtracer Render Still still rebuilds real mesh), and
+  transparent bonds (opacity<1) via the right alphaToCoverage/blend path.
+
+The architecture below is written for Phase 1; Phases 2-4 extend the same
+second-material + geometry-switch structure and get their own plans.
 
 ## Background
 
