@@ -526,23 +526,24 @@ export class BondReplicaRenderer {
       this.#create_ghost_page(this.#ghost_geometry, this.ghost_mesh),
     )
     // Camera projection can change while the packet stays static (notably
-    // orthographic wheel zoom). Refresh the inverse projection + drawing-
-    // buffer size at the actual draw boundary, not only on packet updates —
-    // otherwise the fragment ray is reconstructed from stale camera data.
-    const viewport = new THREE.Vector4(0, 0, 1, 1)
+    // orthographic wheel zoom). Capture the active pass viewport at the main
+    // draw boundary before a divisor reset can replace Three's bookkeeping
+    // viewport with the render-target default. Ghost pages in the same pass
+    // reuse that captured viewport so every fragment ray matches the raw GL
+    // viewport restored by the reset helper.
+    const pass_viewport = new THREE.Vector4(0, 0, 1, 1)
     let seen_divisor_revision = 0
     const refresh_view: THREE.Object3D[`onBeforeRender`] = (
-      webgl_renderer,
+      _webgl_renderer,
       _scene,
       camera,
     ) => {
-      webgl_renderer.getCurrentViewport(viewport)
       this.set_view(
         camera.projectionMatrixInverse,
-        viewport.x,
-        viewport.y,
-        viewport.z,
-        viewport.w,
+        pass_viewport.x,
+        pass_viewport.y,
+        pass_viewport.z,
+        pass_viewport.w,
       )
     }
     this.mesh.onBeforeRender = (
@@ -553,6 +554,7 @@ export class BondReplicaRenderer {
       material,
       group,
     ) => {
+      webgl_renderer.getCurrentViewport(pass_viewport)
       rebind_instance_divisors_if_needed(
         this.mesh,
         webgl_renderer,

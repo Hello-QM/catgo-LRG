@@ -78,7 +78,8 @@ function make_fake_renderer() {
   let active_target: THREE.WebGLRenderTarget | null = renderTarget
   let active_cube_face = 3
   let active_mip_level = 2
-  const current_viewport = renderTarget.viewport.clone()
+  const bookkeeping_viewport = renderTarget.viewport.clone()
+  const gl_viewport = renderTarget.viewport.clone()
   const current_scissor = renderTarget.scissor.clone()
   let current_scissor_test = renderTarget.scissorTest
   const pass_viewport = new THREE.Vector4(7, 8, 19, 17)
@@ -99,18 +100,21 @@ function make_fake_renderer() {
     active_cube_face = cube_face
     active_mip_level = mip_level
     if (target !== null) {
-      current_viewport.copy(target.viewport)
+      bookkeeping_viewport.copy(target.viewport)
+      gl_viewport.copy(target.viewport)
       current_scissor.copy(target.scissor)
       current_scissor_test = target.scissorTest
     } else {
-      current_viewport.copy(canvas_viewport)
+      bookkeeping_viewport.copy(canvas_viewport)
+      gl_viewport.copy(canvas_viewport)
       current_scissor.copy(canvas_scissor)
       current_scissor_test = canvas_scissor_test
     }
   })
   const setViewport = vi.fn((x: number, y: number, width: number, height: number) => {
     canvas_viewport.set(x, y, width, height)
-    current_viewport.copy(canvas_viewport)
+    bookkeeping_viewport.copy(canvas_viewport)
+    gl_viewport.copy(canvas_viewport)
   })
   const setScissor = vi.fn((x: number, y: number, width: number, height: number) => {
     canvas_scissor.set(x, y, width, height)
@@ -121,7 +125,9 @@ function make_fake_renderer() {
     current_scissor_test = enabled
   })
   const stateViewport = vi.fn((viewport: THREE.Vector4) => {
-    current_viewport.copy(viewport)
+    // WebGLState restores the raw GL viewport but does not update Three's
+    // private WebGLRenderer._currentViewport bookkeeping.
+    gl_viewport.copy(viewport)
   })
   const stateScissor = vi.fn((scissor: THREE.Vector4) => {
     current_scissor.copy(scissor)
@@ -133,7 +139,8 @@ function make_fake_renderer() {
     setRenderTarget(renderTarget, 3, 2)
     // ArrayCamera/XR/tiled passes apply an active override after selecting the
     // target. It is deliberately distinct from target and canvas defaults.
-    current_viewport.copy(pass_viewport)
+    bookkeeping_viewport.copy(pass_viewport)
+    gl_viewport.copy(pass_viewport)
     current_scissor.copy(pass_scissor)
     current_scissor_test = pass_scissor_test
   }
@@ -141,7 +148,8 @@ function make_fake_renderer() {
     target: active_target,
     cube_face: active_cube_face,
     mip_level: active_mip_level,
-    viewport: current_viewport.clone(),
+    viewport: gl_viewport.clone(),
+    bookkeeping_viewport: bookkeeping_viewport.clone(),
     scissor: current_scissor.clone(),
     scissor_test: current_scissor_test,
   })
@@ -172,7 +180,7 @@ function make_fake_renderer() {
     getRenderTarget: () => active_target,
     getActiveCubeFace: () => active_cube_face,
     getActiveMipmapLevel: () => active_mip_level,
-    getCurrentViewport: (target: THREE.Vector4) => target.copy(current_viewport),
+    getCurrentViewport: (target: THREE.Vector4) => target.copy(bookkeeping_viewport),
     getViewport: (target: THREE.Vector4) => target.copy(canvas_viewport),
     getScissor: (target: THREE.Vector4) => target.copy(canvas_scissor),
     getScissorTest: () => canvas_scissor_test,
@@ -389,11 +397,18 @@ for (const mode of [`atom`, `bond`] as const) {
         expect(pass.cube_face).toBe(3)
         expect(pass.mip_level).toBe(2)
         expect(pass.viewport).toEqual(expected_pass.viewport)
+        expect(pass.bookkeeping_viewport).toEqual(renderTarget.viewport)
         expect(pass.scissor).toEqual(expected_pass.scissor)
         expect(pass.scissor_test).toBe(expected_pass.scissor_test)
         if (mode === `bond`) {
           const uniforms = (main.material as THREE.ShaderMaterial).uniforms
           expect(uniforms.uViewport.value).toEqual(expected_pass.viewport)
+          const ghost_draws = meshes(scene).filter((mesh) => mesh !== main)
+          expect(ghost_draws.length).toBeGreaterThan(0)
+          for (const ghost of ghost_draws) {
+            invoke_before_render(ghost, renderer, scene)
+            expect(uniforms.uViewport.value).toEqual(expected_pass.viewport)
+          }
         }
       }
     })
