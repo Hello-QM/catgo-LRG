@@ -526,6 +526,49 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect([...packet.frame.lattice]).toEqual([12, 0, 0, 0, 13, 0, 0, 0, 14])
   })
 
+  it(`wires one manager-ready trajectory packet through the production scene`, () => {
+    const structure_source = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/Structure.svelte`),
+      `utf8`,
+    )
+    const scene_source = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/StructureScene.svelte`),
+      `utf8`,
+    )
+
+    expect(structure_source).not.toContain(`void render_packet`)
+    expect(structure_source).toMatch(
+      /<StructureScene[\s\S]*?\{render_packet\}[\s\S]*?\/>/,
+    )
+    expect(scene_source).toContain(
+      `render_packet = null as RenderPacket | null`,
+    )
+    expect(
+      scene_source.match(/render_packet=\{manager_render_packet\}/g),
+    ).toHaveLength(2)
+
+    expect(structure_source).toContain(`dims: gpu_supercell_factors`)
+    expect(structure_source).not.toContain(
+      `dims: gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]`,
+    )
+    expect(structure_source).toMatch(
+      /show_image_atoms\s*\?\s*`ghost-images`\s*:\s*scene_props\.hide_incomplete_bonds\s*\?\s*`hide`\s*:\s*`stub`/,
+    )
+
+    expect(scene_source).toContain(`colors: atom_colors_buffer`)
+    expect(scene_source).toContain(`radii: manager_display_radii`)
+    expect(scene_source).toContain(`bond_graph: manager_bond_graph`)
+    expect(scene_source).toContain(
+      `pairs: manager.pairs_buffer.slice(0, count * 2)`,
+    )
+    expect(scene_source).toContain(
+      `jimages: manager.jimages_buffer.slice(0, count * 3)`,
+    )
+    expect(scene_source).toContain(
+      `kinds: manager.kinds_buffer.slice(0, count)`,
+    )
+  })
+
   it(`legacy overwrite invalidates packet ownership so the same packet fully restores`, () => {
     const rec = make_recording_device()
     const renderer = create_large_system_renderer(

@@ -27,6 +27,12 @@
   import PencilModeOverlay from './PencilModeOverlay.svelte'
   import AtomImpostors from './AtomImpostors.svelte'
   import SlabPreview from './SlabPreview.svelte'
+  import { build_display_radii } from './gpu/radius-lut'
+  import type {
+    BaseBondGraph,
+    BaseTopology,
+    RenderPacket,
+  } from './scene/render-packet'
   import {
     build_cutting_visibility_map,
     compute_show_bulk_atoms,
@@ -276,6 +282,7 @@
   // system is disabled or the structure has no sites.
   const EMPTY_POSITIONS = new Float32Array(0)
   const EMPTY_COLORS = new Float32Array(0)
+  const EMPTY_RADII = new Float32Array(0)
 
   // Hex → linear RGB conversion (matches Bond.svelte's color pipeline).
   // Cached so repeated lookups of the same hex string avoid re-parsing.
@@ -597,6 +604,9 @@
     // numbers are unchanged), so every consumer below only re-fires per frame
     // when the cell actually varies. null = use the (frozen) structure lattice.
     trajectory_frame_lattice = null as number[][] | null,
+    // Upstream base-frame packet. Non-null only while a trajectory owns the
+    // visual atom/bond replica path (including 1×1×1).
+    render_packet = null as RenderPacket | null,
     // Per-frame bond connectivity from the async trajectory bond cache. When
     // null (cache miss), we fall back to `bond_state.bond_connectivity`
     // (frame-0 static).
@@ -881,6 +891,8 @@
     // Variable-cell trajectory fast-path: displayed frame's lattice matrix
     // (rows = a,b,c). Identity-stable across frames when the cell is fixed.
     trajectory_frame_lattice?: number[][] | null
+    /** Base scientific frame + visual replica ownership from Structure.svelte. */
+    render_packet?: RenderPacket | null
     // Per-frame bond connectivity (from trajectory bond cache). Null = fall back to static.
     /** WebGPU large-system overlay active. When true the WebGL scene is fully
      *  covered by the overlay and `autoRender` is off, so this scene must do
@@ -4548,6 +4560,107 @@
     return out
   })
 
+  // ── Manager-ready trajectory packet ───────────────────────────────────────
+  // The upstream packet owns only scientific/base frame + replica state. The
+  // scene resolves the exact display attributes and the FINAL live bond graph
+  // after typed/object/filter/manual synchronization, then shares one packet
+  // object with both render managers.
+  let manager_display_radii = $derived.by(() => {
+    const sites = structure?.sites
+    if (!sites || sites.length === 0) return EMPTY_RADII
+    // Track both object and SvelteMap-style override mutations.
+    const _element_override_keys = Object.keys(element_radius_overrides ?? {})
+    const _site_override_size = site_radius_overrides?.size ?? 0
+    void _element_override_keys
+    void _site_override_size
+    return build_display_radii(sites, {
+      atom_radius,
+      same_size_atoms,
+      element_radius_overrides,
+      site_radius_overrides,
+    })
+  })
+
+  let manager_graph_owner: BondManager | null = null
+  let manager_graph_source_version = -1
+  let manager_graph_snapshot_version = 0
+  let manager_graph_snapshot: BaseBondGraph | null = null
+  let manager_bond_graph = $derived.by((): BaseBondGraph => {
+    const manager = bond_manager
+    const source_version = manager.version
+    if (
+      manager_graph_snapshot !== null && manager_graph_owner === manager &&
+      manager_graph_source_version === source_version
+    ) return manager_graph_snapshot
+
+    const count = manager.count
+    const strengths = new Float32Array(count)
+    strengths.fill(1)
+    manager_graph_snapshot = {
+      version: ++manager_graph_snapshot_version,
+      // Copy ONLY the live prefixes. Never retain mutable capacity buffers or
+      // subarray views: the next BondManager write must not mutate this packet.
+      pairs: manager.pairs_buffer.slice(0, count * 2),
+      jimages: manager.jimages_buffer.slice(0, count * 3),
+      kinds: manager.kinds_buffer.slice(0, count),
+      strengths,
+    }
+    manager_graph_owner = manager
+    manager_graph_source_version = source_version
+    return manager_graph_snapshot
+  })
+
+  let manager_topology_source: BaseTopology | null = null
+  let manager_topology_colors: Float32Array | null = null
+  let manager_topology_radii: Float32Array | null = null
+  let manager_topology_graph: BaseBondGraph | null = null
+  let manager_topology_version = 0
+  let manager_topology_snapshot: BaseTopology | null = null
+  let manager_packet_topology = $derived.by((): BaseTopology | null => {
+    const upstream = render_packet?.topology ?? null
+    if (upstream === null) return null
+    const colors = atom_colors_buffer
+    const radii = manager_display_radii
+    const bond_graph = manager_bond_graph
+    const attributes_changed = manager_topology_snapshot === null ||
+      manager_topology_source !== upstream ||
+      manager_topology_colors !== colors ||
+      manager_topology_radii !== radii
+    if (attributes_changed || manager_topology_graph !== bond_graph) {
+      if (attributes_changed) manager_topology_version++
+      manager_topology_snapshot = {
+        ...upstream,
+        version: manager_topology_version,
+        colors: atom_colors_buffer,
+        radii: manager_display_radii,
+        bond_graph: manager_bond_graph,
+      }
+      manager_topology_source = upstream
+      manager_topology_colors = colors
+      manager_topology_radii = radii
+      manager_topology_graph = bond_graph
+    }
+    return manager_topology_snapshot
+  })
+
+  let manager_render_packet = $derived.by((): RenderPacket | null => {
+    const upstream = render_packet
+    const topology = manager_packet_topology
+    if (upstream === null || topology === null) return null
+    const atom_count = upstream.topology.atom_count
+    if (
+      topology.colors.length !== atom_count * 3 ||
+      topology.radii.length !== atom_count
+    ) return null
+    return {
+      topology,
+      // Preserve upstream identity/version ownership for per-frame geometry and
+      // factor-only replica changes.
+      frame: upstream.frame,
+      replicas: upstream.replicas,
+    }
+  })
+
   // Build a set for fast selected_bonds lookup
   let selected_bond_keys = $derived.by(() => new Set(selected_bonds.map(b => b.key)))
 
@@ -5796,6 +5909,7 @@
             {matcap_preset}
             {light_dir}
             highlight_strength={active_highlight_strength}
+            render_packet={manager_render_packet}
           />
         {:else}
           <!-- Impostor-based atom rendering: billboard quads with ray-sphere fragment shader -->
@@ -5838,6 +5952,7 @@
         <!-- Uses actual SphereGeometry(0.5) for raycasting, matching old extras.Instance behavior -->
         {#if atom_data.length > 0 && show_bulk_atoms}
           <T.InstancedMesh
+            name="catgo-atom-picking-hitbox"
             args={[atom_interaction_geometry, atom_interaction_material, INITIAL_MESH_CAPACITY]}
             bind:ref={atom_interaction_mesh}
             frustumCulled={false}
@@ -5979,6 +6094,7 @@
           highlight_strength={active_highlight_strength}
           gpu_transform_active={typed_direct_active}
           max_bond_length={MAX_BOND_LENGTH}
+          render_packet={manager_render_packet}
         />
       {/if}
 
@@ -5999,6 +6115,7 @@
       <!-- Batched invisible hitbox for all bonds (single InstancedMesh) -->
       {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
         <T.InstancedMesh
+          name="catgo-bond-picking-hitbox"
           args={[bond_hitbox_geometry, bond_hitbox_material, INITIAL_MESH_CAPACITY]}
           bind:ref={bond_hitbox_mesh}
           frustumCulled={false}

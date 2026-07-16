@@ -1328,15 +1328,13 @@
   // trajectory frame. The X2 shadow sync's positions_only branch already
   // honors realtime_position_overrides via the same precedence rule.
   //
-  // Supercell scope (W6 OQ1): the loop bounds at min(mgr.count, traj/3)
-  // — supercell-extra atoms (slots beyond traj coverage) retain whatever
-  // positions the structure pipeline put there. A dev warning fires once
-  // per trajectory_active edge to surface the limitation.
+  // Packet ownership keeps the scene manager base-sized during trajectory
+  // playback, so min(mgr.count, traj/3) covers the complete live manager. The
+  // bound remains as a defensive guard during mount/teardown transitions.
   //
   // Phase 2 is ADDITIVE — current_structure writes still active.
   // W1 must remain LOUD (Test 5.3 baseline: atom_data_fires > 10). Silence
   // here means an accidental Phase 4 leak into Phase 2.
-  let __traj_write_warned_supercell = false
   $effect(() => {
     // This effect writes the current frame's xyz into the WebGL atom_manager
     // (a plain typed-array scatter — no GPU paint by itself; Threlte 8 is
@@ -1352,26 +1350,11 @@
     // We do NOT early-return on webgl_suspended: the write keeps fallback state
     // current, not because it is a render-packet source.
     const traj = trajectory_frame_positions
-    if (!traj) {
-      __traj_write_warned_supercell = false
-      return
-    }
+    if (!traj) return
     const mgr = scene_atom_manager
     if (!mgr || mgr.count === 0) return
     const overrides = interaction.realtime_position_overrides
     const max_slot = Math.min(mgr.count, Math.floor(traj.length / 3))
-    if (
-      import.meta.env?.DEV
-      && !__traj_write_warned_supercell
-      && mgr.count > max_slot
-    ) {
-      __traj_write_warned_supercell = true
-      console.warn(
-        `[trajectory] Supercell + trajectory: ${mgr.count} atom slots but ` +
-        `position cache covers only ${max_slot} base atoms. ` +
-        `Supercell-extra atoms frozen at topology-load positions.`,
-      )
-    }
     // Batched: one reactive `version` bump for the whole frame instead of
     // one $state write per atom (20k/frame).
     mgr.begin_positions_batch()
@@ -2211,42 +2194,45 @@
       return [1, 1, 1]
     }
   })
-  // GPU-supercell is ACTIVE only when the overlay is on AND a real (>1) supercell
-  // is requested AND the structure carries a lattice (offsets need a,b,c). When
-  // active, the CPU keeps the base cell (transform-controller gate) and the GPU
-  // instances base_count × nx·ny·nz spheres. Off / overlay-off / 1×1×1 ⇒ false ⇒
-  // identical CPU + shader behaviour to today.
-  let gpu_supercell_active = $derived(
-    large_system_mode &&
-      gpu_supercell_factors[0] * gpu_supercell_factors[1] * gpu_supercell_factors[2] > 1 &&
-      !!(structure as { lattice?: unknown } | undefined)?.lattice,
+  // Trajectory packets own the visual base cell from 1× upward. While active,
+  // the transform controller must not CPU-expand either the selected supercell
+  // or PBC image atoms: both are packet replica/ghost concerns. The WebGPU
+  // overlay keeps its existing >1× gate for non-trajectory structures.
+  let trajectory_packet_active = $derived(
+    trajectory_frame_positions != null && !!structure?.sites?.length,
   )
-  // ── Shared render packet (gpu-visual-supercell Task 2) ─────────────────────
-  // ONE packet per effective frame: the BASE scientific structure (owner) +
-  // trajectory positions/lattice/version + visual replica dims. The packet
-  // path never appends PBC image sites — topology stays exactly N sites and
-  // the frame 3N floats. The renderer derives sparse ghosts from its active
-  // BaseBondGraph at graph publication (design §7.2). Lazy $derived: nothing
-  // reads it until Tasks 3/4 point the
-  // WebGPU/WebGL adapters at it, so today's hot path pays zero cost.
+  let gpu_supercell_active = $derived(
+    !!(structure as { lattice?: unknown } | undefined)?.lattice &&
+      (trajectory_packet_active ||
+        (large_system_mode &&
+          gpu_supercell_factors[0] * gpu_supercell_factors[1] *
+              gpu_supercell_factors[2] > 1)),
+  )
+  // ── Shared trajectory render packet ────────────────────────────────────────
+  // ONE packet per effective trajectory frame: the BASE scientific structure
+  // (owner) + exactly 3N current positions + the current frame lattice + visual
+  // replica dims. StructureScene resolves manager-ready colors/radii/final bond
+  // graph while preserving this packet's frame and replica objects.
   const render_packet_builder = create_render_packet_builder()
   let render_packet: RenderPacket | null = $derived.by(() => {
-    if (!structure?.sites?.length) return null
+    if (!trajectory_packet_active || !structure?.sites?.length) return null
     return render_packet_builder.build({
       structure,
-      // PLAN-MANDATED direct base-frame ownership: exactly 3N trajectory
-      // floats + the CURRENT frame lattice. Never read displayed_structure or
-      // a WebGL-resolved position buffer back into the packet.
+      // Direct base-frame ownership: never read displayed_structure or a
+      // WebGL-resolved position buffer back into the packet.
       frame_positions: trajectory_frame_positions,
       frame_lattice: trajectory_frame_lattice,
       frame_idx: trajectory_step_idx,
       positions_version: trajectory_positions_version.v,
-      // Mirrors the LargeSystemOverlay `supercell` prop semantics.
-      dims: gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1],
-      boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
+      // Ordinary WebGL and the WebGPU overlay share the selected visual dims.
+      dims: gpu_supercell_factors,
+      boundary_policy: show_image_atoms
+        ? `ghost-images`
+        : scene_props.hide_incomplete_bonds
+          ? `hide`
+          : `stub`,
     })
   })
-  void render_packet // reserved for the WebGL adapter; overlay resolves visual attrs
 
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
@@ -4444,6 +4430,7 @@
             {trajectory_frame_forces}
             {trajectory_frame_lattice}
             {trajectory_step_idx}
+            {render_packet}
             {...scene_props}
             {show_image_atoms}
             {clip_center}

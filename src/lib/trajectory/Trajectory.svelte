@@ -2150,10 +2150,9 @@
   {:else if trajectory}
     <!-- Trajectory Controls -->
     {#if supercell_scaling !== `1x1x1`}
-      <div class="traj-supercell-warning" data-testid="traj-supercell-warning" role="alert">
-        Supercell + trajectory: positions only cover the base cell. Atoms in
-        supercell replicas display the topology-load positions, not the
-        per-frame trajectory data.
+      <div class="traj-supercell-warning" data-testid="traj-supercell-warning" role="status">
+        Supercell + trajectory: replicas render the current base frame and
+        share its atom and bond topology.
       </div>
     {/if}
     {#if show_controls}
