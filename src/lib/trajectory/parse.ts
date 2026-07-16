@@ -419,6 +419,8 @@ async function parse_with_unified_loader(
     indexed_frames: frame_index,
     plot_metadata_promise,
     is_indexed: true,
+    frame_loader: loader,
+    frame_source_data: data,
   }
 }
 

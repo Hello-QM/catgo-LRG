@@ -81,6 +81,7 @@ describe(`trajectory pane isolation`, () => {
 
   it(`forks streaming loaders`, () => {
     let forks = 0
+    const frame_source_data = new ArrayBuffer(8)
     const loader: FrameLoader = {
       fork: () => {
         forks++
@@ -91,11 +92,17 @@ describe(`trajectory pane isolation`, () => {
       load_frame: async () => null,
       extract_plot_metadata: async () => [],
     }
-    const source = { frames: [{ structure: structure(), step: 0 }], frame_loader: loader } as TrajectoryType & { frame_loader: FrameLoader }
+    const source = {
+      frames: [{ structure: structure(), step: 0 }],
+      frame_loader: loader,
+      frame_source_data,
+    } as TrajectoryType & { frame_loader: FrameLoader; frame_source_data: ArrayBuffer }
     const a = clone_trajectory_for_pane(source) as typeof source
     const b = clone_trajectory_for_pane(source) as typeof source
     expect(forks).toBe(2)
     expect(a.frame_loader).not.toBe(b.frame_loader)
+    expect(a.frame_source_data).toBe(frame_source_data)
+    expect(b.frame_source_data).toBe(frame_source_data)
   })
 
   it(`keeps streamed transformation pipelines pane-local`, async () => {

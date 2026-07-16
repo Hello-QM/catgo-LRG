@@ -7,6 +7,7 @@ import {
   parse_trajectory_async,
   TrajFrameReader,
 } from '$lib/trajectory/parse'
+import { clone_trajectory_for_pane } from '$lib/trajectory/clone'
 import { generate_streaming_plot_series } from '$lib/trajectory/plotting'
 import { describe, expect, it } from 'vitest'
 
@@ -453,6 +454,31 @@ describe(`Trajectory Streaming`, () => {
   })
 
   describe(`Regression Tests`, () => {
+    it(`keeps the first non-preloaded local ASE frame loadable after pane cloning`, async () => {
+      const source = create_synthetic_ase(5)
+      const parsed = await parse_trajectory_async(
+        source,
+        `local.traj`,
+        undefined,
+        { extract_plot_metadata: false },
+      )
+
+      expect(parsed.frames).toHaveLength(4)
+      expect(parsed.total_frames).toBe(5)
+
+      const pane = clone_trajectory_for_pane(parsed)
+      expect(pane.frame_loader).toBeDefined()
+      expect(pane.frame_source_data).toBe(source)
+      expect(pane.frame_loader).not.toBe(parsed.frame_loader)
+
+      const frame_4 = await pane.frame_loader!.load_frame(
+        pane.frame_source_data!,
+        4,
+      )
+      expect(frame_4?.step).toBe(4)
+      expect(frame_4?.structure.sites).toHaveLength(2)
+    })
+
     it(`should maintain compatibility with existing trajectory interface`, async () => {
       const data = create_synthetic_xyz(5)
 

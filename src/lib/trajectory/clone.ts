@@ -6,7 +6,6 @@ export type TrajectoryTransformation =
   | { kind: `scale_geometry`; factor: number }
 
 export type PaneTrajectory = TrajectoryType & {
-  frame_loader?: FrameLoader
   pane_transformations?: TrajectoryTransformation[]
 }
 

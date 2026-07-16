@@ -49,6 +49,10 @@ export interface TrajectoryType {
    *  `Trajectory.svelte` adopts the result into `plot_metadata` on arrival. */
   plot_metadata_promise?: Promise<TrajectoryMetadata[]>
   is_indexed?: boolean
+  /** Runtime loader for indexed/local or remotely streamed frames. */
+  frame_loader?: FrameLoader
+  /** Immutable source consumed by frame_loader; shared by reference across panes. */
+  frame_source_data?: string | ArrayBuffer
 }
 
 // Unified handler data interface

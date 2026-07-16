@@ -36,7 +36,6 @@
   import { TrajectoryError, TrajectoryExportPane, TrajectoryInfoPane } from './index'
   import type { LoadingOptions } from './parse'
   import {
-    create_frame_loader,
     get_unsupported_format_message,
     MAX_BIN_FILE_SIZE,
     MAX_TEXT_FILE_SIZE,
@@ -460,7 +459,6 @@
   // Update current frame when step changes
   $effect(() => {
     if (trajectory && current_step_idx >= 0 && current_step_idx < total_frames) {
-      // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
       if (trajectory.frame_loader) {
         // Load frame on demand (works for both indexed files and external streaming)
         load_frame_on_demand(current_step_idx)
@@ -478,13 +476,11 @@
 
   // Load frame on demand - works for both indexed files and external streaming
   async function load_frame_on_demand(frame_idx: number) {
-    // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
     if (!trajectory?.frame_loader) return
 
     try {
-      // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
       const frame = await trajectory.frame_loader.load_frame(
-        orig_data || ``, // Use original_data for indexed files, empty string for external streaming
+        trajectory.frame_source_data ?? orig_data ?? ``,
         frame_idx,
       )
       current_frame = frame
@@ -532,7 +528,6 @@
   $effect(() => {
     if (!trajectory?.frames?.length) { position_cache = null; return }
     // Only cache for in-memory trajectories with constant atom count
-    // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
     if (trajectory.frame_loader) { position_cache = null; return }
     // Invalidate cache while pending ops exist — ops may change atom counts
     // or positions per-frame. Cache rebuilds automatically after
@@ -791,7 +786,7 @@
           let frame: TrajectoryFrame | undefined = untrack(() => traj.frames[i])
           if (!frame?.structure && loader) {
             frame = (await loader.load_frame(
-              untrack(() => orig_data) ?? ``,
+              traj.frame_source_data ?? untrack(() => orig_data) ?? ``,
               i,
             )) ?? undefined
           }
@@ -1335,13 +1330,8 @@
       const parsed = await parse_trajectory_async(data, filename, (progress) => {
         parsing_progress = progress
       }, { use_indexing: true, ...loading_options })
-      // Attach the frame loader BEFORE publishing: with the trajectory
-      // container exempt from the deep proxy (mark_raw_trajectory), a
-      // post-assignment property write emits no notification of its own —
-      // and consumers must never observe a loader-less indexed trajectory
-      // anyway.
-      // @ts-expect-error - dynamically adding frame_loader for indexed trajectories
-      parsed.frame_loader = create_frame_loader(filename)
+      // Compatibility fallback for older external trajectory objects that
+      // provide a loader without the typed frame_source_data contract.
       orig_data = data
       trajectory = mark_raw_trajectory(parsed)
 
@@ -1560,7 +1550,6 @@
    *  usable). Indexed/streaming trajectories have a frame_loader. */
   function _is_in_memory(): boolean {
     if (!trajectory) return false
-    // @ts-expect-error - frame_loader is added dynamically for indexed/streaming trajectories
     return !trajectory.frame_loader
   }
   /** Gate for cross-frame propagation of add/delete/replace edits: true only
@@ -1752,7 +1741,6 @@
 
   function require_editable_memory_trajectory(): TrajectoryType {
     if (!trajectory) throw new Error(`No trajectory loaded.`)
-    // @ts-expect-error frame_loader is a runtime extension
     if (trajectory.frame_loader) {
       throw new Error(`All-frame edits on streamed trajectories are not available until every frame is materialized.`)
     }
@@ -1882,9 +1870,7 @@
         current_frame: current_step_idx,
         total_frames,
         atom_count: (current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure)?.sites?.length ?? 0,
-        // @ts-expect-error frame_loader is a runtime extension
         streaming: !!trajectory?.frame_loader,
-        // @ts-expect-error frame_loader is a runtime extension
         editable: !!trajectory && !trajectory.frame_loader,
       }),
       get_structure: () => current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure,
