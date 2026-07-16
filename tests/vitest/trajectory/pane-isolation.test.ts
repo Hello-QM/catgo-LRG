@@ -186,6 +186,26 @@ describe(`trajectory pane isolation`, () => {
     expect(a.operation_ledger!.entries).toHaveLength(1) // append stays pane-local
   })
 
+  it(`preserves in-memory ledger cursors across pane duplication`, () => {
+    const source = clone_trajectory_for_pane({
+      frames: [{ structure: structure(), step: 0 }],
+    })!
+    source.operation_ledger!.append(
+      { kind: `all` },
+      { kind: `scale_geometry`, factor: 2 },
+    )
+    source.frames[0].structure.sites[1].xyz[0] = 2
+    source.materialized_ledger_cursors = [source.operation_ledger!.entries.length]
+
+    const copy = clone_trajectory_for_pane(source)!
+
+    expect(copy.materialized_ledger_cursors).toEqual([1])
+    expect(copy.materialized_ledger_cursors).not.toBe(
+      source.materialized_ledger_cursors,
+    )
+    expect(copy.frames[0].structure.sites[1].xyz[0]).toBe(2)
+  })
+
   it(`retains the previous frame when a ledger op fails on a streamed frame`, async () => {
     const molecule = { sites: structure().sites } as AnyStructure // no lattice
     const loader: FrameLoader = {

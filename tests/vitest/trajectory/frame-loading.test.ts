@@ -11,7 +11,9 @@ import {
   select_in_memory_frame,
   select_pending_frame_publication,
 } from '$lib/trajectory/frame-loading'
+import { create_effective_frame_resolver } from '$lib/trajectory/effective-frame-resolver'
 import { create_frame_position_cache } from '$lib/trajectory/frame-positions'
+import { OperationLedger } from '$lib/trajectory/operation-ledger'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
@@ -24,6 +26,30 @@ const positioned_frame = (step: number): TrajectoryFrame => ({
   step,
   structure: {
     sites: [{ xyz: [step, 0, 0], properties: {} }],
+  } as TrajectoryFrame['structure'],
+})
+
+const periodic_frame = (step: number): TrajectoryFrame => ({
+  step,
+  structure: {
+    lattice: {
+      matrix: [[2, 0, 0], [0, 2, 0], [0, 0, 2]],
+      pbc: [true, true, true],
+      volume: 8,
+      a: 2,
+      b: 2,
+      c: 2,
+      alpha: 90,
+      beta: 90,
+      gamma: 90,
+    },
+    sites: [{
+      species: [{ element: `H`, occu: 1, oxidation_state: 0 }],
+      abc: [0, 0, 0],
+      xyz: [step, 0, 0],
+      label: `H`,
+      properties: {},
+    }],
   } as TrajectoryFrame['structure'],
 })
 
@@ -169,6 +195,38 @@ describe(`frame loading`, () => {
     }
   })
 
+  it(`retains the displayed frame when lazy ledger replay fails`, async () => {
+    const previous = positioned_frame(3)
+    const ledger = new OperationLedger()
+    ledger.append(
+      { kind: `all` },
+      {
+        kind: `supercell`,
+        matrix: [[1, 1, 0], [1, 1, 0], [0, 0, 1]],
+        reorient: false,
+      },
+    )
+    const replacement = trajectory_with_loader(
+      async () => periodic_frame(4),
+      new ArrayBuffer(1),
+    )
+    replacement.operation_ledger = ledger
+    replacement.effective_frames = create_effective_frame_resolver(ledger)
+
+    const result = await create_frame_request_loader().load(
+      replacement,
+      1,
+      previous,
+      null,
+    )
+
+    expect(result.status).toBe(`failed`)
+    if (result.status === `failed`) {
+      expect(result.frame).toBe(previous)
+      expect(result.error.message).toContain(`determinant 0`)
+    }
+  })
+
   it(`keeps the previous frame when an in-memory index is missing`, () => {
     const previous = frame(3)
     const result = select_in_memory_frame(undefined, previous, 4)
@@ -307,6 +365,30 @@ describe(`frame loading`, () => {
     expect(source).toContain(`const requested_trajectory = trajectory`)
     expect(source).toMatch(
       /if \(!frame_requests\.is_current\(result, trajectory\)\) return\s+apply_frame_request_outcome\(result, frame_idx, requested_trajectory\)/,
+    )
+  })
+
+  it(`wires Structure supercells and all pending edit replay through the pane ledger`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(
+      `on_supercell_request={handle_trajectory_supercell_request}`,
+    )
+    expect(source).not.toContain(`let pending_ops`)
+    expect(source).not.toContain(`pane_transformations.push`)
+    expect(source).toContain(`apply_trajectory_edit_op_to_frame`)
+    expect(source).toContain(`ledger_cursor_ledger`)
+    expect(source).not.toContain(`ledger_cursor_owner`)
+    expect(source).toContain(`has_frame_scoped_structure_ops`)
+    expect(source).toContain(`traj.effective_frames?.resolve`)
+    expect(source).toMatch(
+      /prepare_current_topology_edit: \(\) => \{\s+if \(is_playing\) pause_playback\(\)\s+\}/,
+    )
+    expect(source).toContain(
+      'if (publication.token.mode === `edit-current`) resume_disabled = true',
     )
   })
 })

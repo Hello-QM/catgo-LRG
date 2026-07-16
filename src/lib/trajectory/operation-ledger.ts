@@ -21,6 +21,35 @@ export type LedgerEntry = {
   active: boolean
 }
 
+function clone_op(op: TrajectoryEditOp): TrajectoryEditOp {
+  switch (op.kind) {
+    case `supercell`:
+      return {
+        ...op,
+        matrix: [
+          [op.matrix[0][0], op.matrix[0][1], op.matrix[0][2]],
+          [op.matrix[1][0], op.matrix[1][1], op.matrix[1][2]],
+          [op.matrix[2][0], op.matrix[2][1], op.matrix[2][2]],
+        ],
+      }
+    case `delete`:
+      return { ...op, site_indices: [...op.site_indices] }
+    case `add`:
+      return { ...op, position: [...op.position] }
+    case `replace`:
+      return { ...op, site_indices: [...op.site_indices] }
+    case `manipulate`:
+      return {
+        ...op,
+        displacements: new Map(
+          [...op.displacements].map(([idx, delta]) => [idx, [...delta]]),
+        ),
+      }
+    case `scale_geometry`:
+      return { ...op }
+  }
+}
+
 /** True when `scope` covers `frame_idx`. */
 export function scope_matches_frame(scope: OpScope, frame_idx: number): boolean {
   return scope.kind === `all` || scope.frame_idx === frame_idx
@@ -84,7 +113,7 @@ export class OperationLedger {
     copy.#entries = this.#entries.map((entry) => ({
       ...entry,
       scope: { ...entry.scope },
-      op: { ...entry.op },
+      op: clone_op(entry.op),
     }))
     copy.#next_seq = this.#next_seq
     copy.#revision = this.#revision

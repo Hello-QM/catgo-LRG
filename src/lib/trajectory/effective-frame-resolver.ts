@@ -19,7 +19,7 @@
 import { clone_frame } from './clone'
 import type { TrajectoryFrame } from './index'
 import type { OperationLedger } from './operation-ledger'
-import { apply_trajectory_edit_op } from './operations'
+import { apply_trajectory_edit_op_to_frame } from './operations'
 
 /** Supplies the immutable decoded base frame for an index (e.g. a forked loader). */
 export type BaseFrameProvider = (
@@ -52,18 +52,25 @@ export function create_effective_frame_resolver(
 ): EffectiveFrameResolver {
   const cache = new Map<number, { revision: number; frame: TrajectoryFrame }>()
   const pending = new Map<string, Promise<TrajectoryFrame | null>>()
+  let clear_generation = 0
+  const frame_generation = new Map<number, number>()
 
   async function compute(
     frame_idx: number,
     load_base: BaseFrameProvider,
     revision: number,
+    captured_clear_generation: number,
+    captured_frame_generation: number,
   ): Promise<TrajectoryFrame | null> {
+    const is_current = () =>
+      clear_generation === captured_clear_generation &&
+      (frame_generation.get(frame_idx) ?? 0) === captured_frame_generation
     // Snapshot matching entries synchronously, at the SAME revision the result
     // is cached under — a mid-flight append must not leak newer ops into an
     // older cache key (its bumped revision recomputes on the next resolve).
     const entries = ledger.active_entries_for_frame(frame_idx)
     const base = await load_base(frame_idx)
-    if (!base?.structure) return null
+    if (!is_current() || !base?.structure) return null
     let frame = base
     if (entries.length > 0) {
       // With-ops path: clone the decoded base ONCE, then apply entries in seq
@@ -72,11 +79,10 @@ export function create_effective_frame_resolver(
       // result is LRU-cached by (frame_idx, revision) to amortize the
       // clone+apply cost (~70 ms for 20k sites) across repeat resolves.
       frame = clone_frame(base)
-      let structure = frame.structure
       for (const entry of entries) {
-        structure = apply_trajectory_edit_op(structure, entry.op)
+        frame = apply_trajectory_edit_op_to_frame(frame, entry.op)
       }
-      frame = { ...frame, structure }
+      if (!is_current()) return null
       cache.delete(frame_idx)
       cache.set(frame_idx, { revision, frame })
       while (cache.size > capacity) {
@@ -102,6 +108,8 @@ export function create_effective_frame_resolver(
     load_base: BaseFrameProvider,
   ): Promise<TrajectoryFrame | null> {
     const revision = ledger.revision
+    const captured_clear_generation = clear_generation
+    const captured_frame_generation = frame_generation.get(frame_idx) ?? 0
     const cached = cache.get(frame_idx)
     if (cached && cached.revision === revision) {
       cache.delete(frame_idx) // refresh LRU recency
@@ -110,11 +118,18 @@ export function create_effective_frame_resolver(
     }
     // Deduplicate concurrent resolves of the same (frame_idx, revision) so a
     // display request and a warmup walk share one decode + transform.
-    const key = `${frame_idx}@${revision}`
+    const key = `${frame_idx}@${revision}@${captured_clear_generation}.${captured_frame_generation}`
     const in_flight = pending.get(key)
     if (in_flight) return in_flight
-    const request = compute(frame_idx, load_base, revision)
-      .finally(() => pending.delete(key))
+    const request = compute(
+      frame_idx,
+      load_base,
+      revision,
+      captured_clear_generation,
+      captured_frame_generation,
+    ).finally(() => {
+      if (pending.get(key) === request) pending.delete(key)
+    })
     pending.set(key, request)
     return request
   }
@@ -126,7 +141,13 @@ export function create_effective_frame_resolver(
         yield { frame_idx, frame: await resolve(frame_idx, load_base) }
       }
     },
-    invalidate: (frame_idx) => void cache.delete(frame_idx),
-    clear: () => cache.clear(),
+    invalidate: (frame_idx) => {
+      cache.delete(frame_idx)
+      frame_generation.set(frame_idx, (frame_generation.get(frame_idx) ?? 0) + 1)
+    },
+    clear: () => {
+      cache.clear()
+      clear_generation += 1
+    },
   }
 }

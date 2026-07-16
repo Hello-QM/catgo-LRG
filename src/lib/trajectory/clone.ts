@@ -203,6 +203,9 @@ export function clone_trajectory_for_pane<T extends TrajectoryType | null | unde
     })),
     operation_ledger: ledger,
     effective_frames: create_effective_frame_resolver(ledger),
+    materialized_ledger_cursors: source.materialized_ledger_cursors
+      ? [...source.materialized_ledger_cursors]
+      : new Array(source.frames.length).fill(0),
     pane_transformations: ledger_backed_transformations(ledger),
   }
   if (source.frame_loader) {

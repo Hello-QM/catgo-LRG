@@ -61,6 +61,9 @@ export interface TrajectoryType {
    *  must resolve through it; never mix raw loader frames with transformed
    *  `frames`, which risks missing or double-applying an operation (§9.3). */
   effective_frames?: EffectiveFrameResolver
+  /** In-memory frame cursors into operation_ledger. Persisted with the pane so
+   *  remount/duplication never replays entries over already-materialized frames. */
+  materialized_ledger_cursors?: number[]
 }
 
 // Unified handler data interface

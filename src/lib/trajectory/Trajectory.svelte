@@ -7,10 +7,8 @@
     Structure,
     toggle_fullscreen,
   } from '$lib'
-  import { add_atom, delete_atoms, replace_atom } from '$lib/structure'
   import type { AtomManipulationEvent } from '$lib/structure'
   import type { AnyStructure, PymatgenStructure } from '$lib/structure'
-  import { type Matrix3x3, matrix_inverse_3x3, transpose_3x3_matrix } from '$lib/math'
   import { writeRemoteFile } from '$lib/api/hpc'
   import { structure_to_poscar_str } from '$lib/structure/export'
   import { handle_url_drop, load_from_url } from '$lib/io'
@@ -68,7 +66,7 @@
     clamp_fps,
     get_keyboard_action,
   } from './trajectory-controls'
-  import { apply_displacements, sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
+  import { sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
   import { build_atom_graph } from '$lib/structure/atom-graph'
   import {
     register_viewer,
@@ -76,9 +74,19 @@
     set_active_viewer,
     type ViewerPosition,
   } from '$lib/structure/viewer-registry.svelte'
-  import { scale_structure_geometry, validate_uniform_topology } from './operations'
+  import {
+    apply_trajectory_edit_op_to_frame,
+    type TrajectoryEditOp,
+    validate_uniform_topology,
+  } from './operations'
   import type { PaneTrajectory } from './clone'
   import { clone_structure } from '$lib/structure/clone'
+  import { create_effective_frame_resolver } from './effective-frame-resolver'
+  import { OperationLedger, scope_matches_frame } from './operation-ledger'
+  import {
+    commit_supercell_transaction,
+    create_trajectory_supercell_request_handler,
+  } from './supercell-transactions'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
@@ -600,22 +608,42 @@
     if (!trajectory?.frames?.length) { position_cache = null; return }
     // Only cache for in-memory trajectories with constant atom count
     if (trajectory.frame_loader) { position_cache = null; return }
-    // Invalidate cache while pending ops exist — ops may change atom counts
-    // or positions per-frame. Cache rebuilds automatically after
-    // `flush_pending_ops()` (which spreads `trajectory`, triggering this effect).
-    if (pending_ops.length > 0) { position_cache = null; force_cache = null; return }
+    // Never rebuild fixed-width caches while any in-memory frame still has
+    // unapplied ledger entries; those entries may change positions or topology.
+    if (trajectory.frames.some((_, idx) => frame_has_unmaterialized_ops(trajectory!, idx))) {
+      position_cache = null
+      force_cache = null
+      return
+    }
 
     const frames = trajectory.frames
+    const has_frame_topology_edit = trajectory.operation_ledger?.entries.some(
+      (entry) => entry.active && entry.scope.kind === `frame` &&
+        [`add`, `delete`, `replace`, `supercell`].includes(entry.op.kind),
+    )
+    if (has_frame_topology_edit) {
+      position_cache = null
+      force_cache = null
+      return
+    }
     const first_count = frames[0].structure.sites.length
-    // Verify constant atom count (sample check)
-    const sample_indices = [
-      0,
-      Math.floor(frames.length / 4),
-      Math.floor(frames.length / 2),
-      Math.floor(frames.length * 3 / 4),
-      frames.length - 1,
-    ]
-    const constant = sample_indices.every(
+    // A topology ledger can make one arbitrary frame differ, so verify every
+    // count in that case. The historical sample check remains for untouched
+    // trajectories where this avoids walking a very long frames array.
+    const has_topology_ledger = trajectory.operation_ledger?.entries.some(
+      (entry) => entry.active &&
+        [`add`, `delete`, `supercell`].includes(entry.op.kind),
+    )
+    const count_check_indices = has_topology_ledger
+      ? frames.map((_, idx) => idx)
+      : [
+        0,
+        Math.floor(frames.length / 4),
+        Math.floor(frames.length / 2),
+        Math.floor(frames.length * 3 / 4),
+        frames.length - 1,
+      ]
+    const constant = count_check_indices.every(
       (i) => (frames[i]?.structure.sites.length ?? first_count) === first_count,
     )
     if (!constant) { position_cache = null; force_cache = null; return }
@@ -817,17 +845,33 @@
       // (element-swap frames), and pending edit ops keep the true
       // per-frame structure-write path.
       const frame_sites = frame.structure.sites
+      const supercell_ledger_active = trajectory?.operation_ledger?.entries.some(
+        (entry) => entry.active && entry.op.kind === `supercell`,
+      )
+      const frame_scoped_structure_ops = trajectory
+        ? has_frame_scoped_structure_ops(trajectory)
+        : false
       if (
-        !force_slow_path && topology_initialized &&
+        supercell_ledger_active && topology_initialized && current_structure &&
+        current_structure.sites.length !== frame_sites.length
+      ) {
+        // An all-scope transform preserves each frame's own N. If the source
+        // trajectory is variable-N, continuous interpolation is invalid: stop
+        // at the first differing frame and keep discrete scrub available.
+        if (is_playing) pause_playback()
+        resume_disabled = true
+      }
+      if (
+        !force_slow_path && !frame_scoped_structure_ops && topology_initialized &&
         current_structure?.sites.length === frame_sites.length &&
-        pending_ops.length === 0
+        (!trajectory || !frame_has_unmaterialized_ops(trajectory, active_displayed_frame_idx))
       ) {
         const entry = frame_pos_cache.get(active_displayed_frame_idx, frame_sites)
         trajectory_frame_positions = entry.positions
         trajectory_frame_forces = entry.forces
       } else {
-        // Streamed loaders no longer deep-clone every fetched frame (see
-        // fork_loader in ./clone.ts), so the loader-cached frame object must
+        // Forked streamed loaders serve immutable base frames (see clone.ts),
+        // so the loader-cached frame object must
         // not become `current_structure` directly — the T5 pause writeback
         // mutates current_structure.sites in place and would corrupt the
         // cached frame for later revisits. Clone once per topology init
@@ -835,7 +879,8 @@
         current_structure = (trajectory as PaneTrajectory | undefined)?.frame_loader
           ? clone_structure(frame.structure)
           : frame.structure
-        topology_initialized = !force_slow_path && pending_ops.length === 0
+        topology_initialized = !force_slow_path && !frame_scoped_structure_ops &&
+          (!trajectory || !frame_has_unmaterialized_ops(trajectory, active_displayed_frame_idx))
         trajectory_frame_positions = null
         trajectory_frame_forces = null
       }
@@ -870,12 +915,15 @@
         if (deadline && deadline.timeRemaining() < 8) break
         const i = idx++
         try {
-          let frame: TrajectoryFrame | undefined = untrack(() => traj.frames[i])
-          if (!frame?.structure && loader) {
-            frame = (await loader.load_frame(
-              traj.frame_source_data ?? untrack(() => orig_data) ?? ``,
+          let frame: TrajectoryFrame | undefined
+          if (loader) {
+            const source = traj.frame_source_data ?? untrack(() => orig_data) ?? ``
+            frame = (await traj.effective_frames?.resolve(
               i,
+              (frame_idx) => loader.load_frame(source, frame_idx),
             )) ?? undefined
+          } else {
+            frame = untrack(() => traj.frames[i])
           }
           const sites = frame?.structure?.sites
           if (gen !== warmup_gen) return
@@ -1368,12 +1416,13 @@
         )
       }
 
-      // New trajectory loaded — synchronously reset the pending-ops queue.
-      // (The length-change $effect also resets, but it runs async; the
-      // synchronous code below reads `trajectory.frames[0].structure` and
-      // must not see ops queued against the PREVIOUS trajectory.)
-      pending_ops = []
-      frame_op_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      // New trajectory loaded — synchronously reset pane-local ledger cursors.
+      // The owner-change effect also resets, but later synchronous reads must
+      // not inherit cursor state from the previous trajectory.
+      if (trajectory) ensure_operation_ledger(trajectory)
+      ledger_cursor_ledger = trajectory?.operation_ledger ?? null
+      frame_ledger_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      if (trajectory) trajectory.materialized_ledger_cursors = frame_ledger_cursor
       position_cache = null
       force_cache = null
       traj_load_seq += 1
@@ -1422,9 +1471,11 @@
       orig_data = data
       trajectory = mark_raw_trajectory(parsed)
 
-      // New trajectory — synchronously reset pending-ops queue.
-      pending_ops = []
-      frame_op_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      // New trajectory — synchronously reset pane-local ledger cursors.
+      if (trajectory) ensure_operation_ledger(trajectory)
+      ledger_cursor_ledger = trajectory?.operation_ledger ?? null
+      frame_ledger_cursor = new Array(trajectory?.frames?.length ?? 0).fill(0)
+      if (trajectory) trajectory.materialized_ledger_cursors = frame_ledger_cursor
       position_cache = null
       force_cache = null
       traj_load_seq += 1
@@ -1502,285 +1553,285 @@
   let trajectory_export_open = $state(false)
   let fullscreen = $state(false)
 
-  // Cross-frame editing: apply atom manipulations to all frames
+  // Cross-frame editing: one ordered ledger covers physical-site edits,
+  // geometry transforms, and true supercells. In-memory frames keep a cursor
+  // into that ledger; streamed frames resolve from their immutable loader base
+  // through effective_frames.
   type EditMode = 'view' | 'edit-current' | 'edit-all'
   let edit_mode = $state<EditMode>('edit-current')
   let cross_frame_busy = $state(false)
+  let frame_ledger_cursor = $state.raw<number[]>([])
+  let ledger_cursor_ledger: OperationLedger | null = null
 
-  // ─── Pending cross-frame ops (lazy materialization) ───
-  //
-  // Replaces the eager "iterate every frame NOW" model with "record an op
-  // once, apply per-frame when that frame is read". Cross-frame edit cost at
-  // the edit site becomes O(1); per-frame cost is paid lazily on access, or
-  // in bulk via `flush_pending_ops()` before save/export.
-  //
-  // Invariants:
-  //   - `pending_ops` grows append-only. Each entry is an immutable op.
-  //   - `frame_op_cursor[idx] === N` means frame `idx` has applied ops[0..N-1].
-  //   - When `cursor[idx] === pending_ops.length`, frame `idx` is up to date.
-  //   - `flush_pending_ops()` materializes every frame, clears the queue, and
-  //     zeroes all cursors.
-  //
-  // Producers (handle_atoms_deleted enqueues at HEAD; add/replace/manipulate remain
-  // eager and call flush_pending_ops first) push ops via enqueue_pending_op. Consumers
-  // (materialize_frame on read, flush_pending_ops on save/export, _chunked_cross_frame_edit's
-  // flush pre-pass, drag's flush pre-pass) drain. Search "enqueue_pending_op" for the
-  // live producer set.
-  type PendingOp =
-    | { kind: 'delete';     site_indices: number[] }
-    | { kind: 'add';        element: ElementSymbol; position: Vec3 }
-    | { kind: 'replace';    site_indices: number[]; new_element: ElementSymbol }
-    | { kind: 'manipulate'; displacements: Map<number, Vec3> }
-
-  let pending_ops     = $state<PendingOp[]>([])
-  let frame_op_cursor = $state<number[]>([])
-
-  // Bumped whenever the CURRENT frame's positions change in place (atom
-  // edit). Passed to <Structure> → bond-cache driver so bonds recompute
-  // even though current_step_idx didn't move (issue #51 bond defect).
-  // `all` = drop every frame's bond cache (edit-all fan-out), else just idx.
+  // Bumped whenever trajectory positions/topology change. `all` selects whole
+  // trajectory versus captured-frame bond-cache invalidation.
   let trajectory_positions_version = $state<{ v: number; all: boolean }>({ v: 0, all: false })
+  let trajectory_topology_version = $state(0)
 
-  // Keep `frame_op_cursor` length in sync with `trajectory.frames.length`.
-  // The only way the frame count changes in steady state is a brand-new
-  // trajectory being loaded — in that case the old queue is stale and we
-  // discard it. `trajectory = { ...trajectory }` refreshes (same frame count)
-  // do NOT trigger this branch, so in-flight ops survive internal refreshes.
+  function ensure_operation_ledger(owner: TrajectoryType): OperationLedger {
+    owner.operation_ledger ??= new OperationLedger()
+    owner.effective_frames ??= create_effective_frame_resolver(
+      owner.operation_ledger,
+    )
+    return owner.operation_ledger
+  }
+
+  function materialized_cursors(owner: TrajectoryType): number[] {
+    const n = owner.frames.length
+    let cursors = owner.materialized_ledger_cursors
+    if (!cursors || cursors.length !== n) {
+      cursors = new Array(n).fill(0)
+      owner.materialized_ledger_cursors = cursors
+    }
+    if (trajectory === owner && frame_ledger_cursor !== cursors) {
+      frame_ledger_cursor = cursors
+    }
+    return cursors
+  }
+
   $effect(() => {
-    const n = trajectory?.frames?.length ?? 0
-    if (frame_op_cursor.length !== n) {
-      pending_ops = []
-      frame_op_cursor = new Array(n).fill(0)
+    const owner = trajectory
+    const ledger = owner ? ensure_operation_ledger(owner) : null
+    const n = owner?.frames?.length ?? 0
+    if (ledger !== ledger_cursor_ledger || frame_ledger_cursor.length !== n) {
+      ledger_cursor_ledger = ledger
+      frame_ledger_cursor = owner ? materialized_cursors(owner) : []
     }
   })
 
-  /** Pure: apply a single op to a structure, return a new structure. */
-  function apply_op(structure: AnyStructure, op: PendingOp): AnyStructure {
-    switch (op.kind) {
-      case 'delete':
-        return delete_atoms(structure, op.site_indices)
-      case 'add':
-        return add_atom(structure, op.element, op.position)
-      case 'replace': {
-        let s = structure
-        for (const idx of op.site_indices) {
-          s = replace_atom(s, idx, op.new_element)
-        }
-        return s
-      }
-      case 'manipulate': {
-        if (!structure?.sites) return structure
-        // Same xyz+abc delta-add primitive as the directly-committed current
-        // frame, so fanned-out frames stay consistent for fractional export.
-        let inv_flat:
-          | [number, number, number, number, number, number, number, number, number]
-          | null = null
-        if (`lattice` in structure && (structure as PymatgenStructure).lattice) {
-          const li = matrix_inverse_3x3(
-            transpose_3x3_matrix((structure as PymatgenStructure).lattice.matrix),
-          )
-          inv_flat = [
-            li[0][0], li[0][1], li[0][2],
-            li[1][0], li[1][1], li[1][2],
-            li[2][0], li[2][1], li[2][2],
-          ]
-        }
-        return {
-          ...structure,
-          sites: apply_displacements(structure.sites, op.displacements, inv_flat),
-        }
-      }
+  function frame_has_unmaterialized_ops(owner: TrajectoryType, idx: number): boolean {
+    if (owner.frame_loader) return false
+    const ledger = owner.operation_ledger
+    if (!ledger) return false
+    const cursor = materialized_cursors(owner)[idx] ?? 0
+    for (let i = cursor; i < ledger.entries.length; i++) {
+      const entry = ledger.entries[i]
+      if (entry.active && scope_matches_frame(entry.scope, idx)) return true
     }
+    return false
   }
 
-  /** Apply any unapplied pending ops to frame[idx], cache the result back on
-   *  the frame, advance the cursor, and return the materialized structure.
-   *  Returns `undefined` if idx is out of range or no trajectory. */
+  function has_frame_scoped_structure_ops(owner: TrajectoryType): boolean {
+    return owner.operation_ledger?.entries.some(
+      (entry) => entry.active && entry.scope.kind === `frame` &&
+        [`add`, `delete`, `replace`, `supercell`].includes(entry.op.kind),
+    ) ?? false
+  }
+
+  /** Apply active ledger entries not yet materialized into an in-memory frame. */
   function materialize_frame(idx: number): AnyStructure | undefined {
-    if (!trajectory) return undefined
-    const frames = trajectory.frames
+    const owner = trajectory
+    if (!owner) return undefined
+    const frames = owner.frames
     if (idx < 0 || idx >= frames.length) return undefined
-    const frame = frames[idx]
+    let frame = frames[idx]
     if (!frame) return undefined
-    const cursor = frame_op_cursor[idx] ?? 0
-    if (cursor >= pending_ops.length) return frame.structure
-    let s: AnyStructure = frame.structure
-    for (let i = cursor; i < pending_ops.length; i++) {
-      s = apply_op(s, pending_ops[i])
+    const ledger = ensure_operation_ledger(owner)
+    const cursors = materialized_cursors(owner)
+    const cursor = cursors[idx] ?? 0
+    if (cursor >= ledger.entries.length) return frame.structure
+    for (let i = cursor; i < ledger.entries.length; i++) {
+      const entry = ledger.entries[i]
+      if (entry.active && scope_matches_frame(entry.scope, idx)) {
+        frame = apply_trajectory_edit_op_to_frame(frame, entry.op)
+      }
     }
-    frames[idx] = { ...frame, structure: s }
-    frame_op_cursor[idx] = pending_ops.length
-    return s
+    frames[idx] = frame
+    cursors[idx] = ledger.entries.length
+    return frame.structure
   }
 
-  /** Force all pending ops to be applied to every frame. Call before any
-   *  consumer that reads all frames at once (save, export, bulk serialize).
-   *  After this returns, the queue is empty and every cursor is at zero. */
+  /** Materialize the pane ledger into every in-memory frame before a bulk
+   * consumer reads `trajectory.frames` directly. Streamed consumers already
+   * resolve through effective_frames and remain lazy. */
   function flush_pending_ops(): void {
-    if (!trajectory || pending_ops.length === 0) return
-    for (let i = 0; i < trajectory.frames.length; i++) {
-      materialize_frame(i)
+    const owner = trajectory
+    if (!owner || owner.frame_loader) return
+    const ledger = ensure_operation_ledger(owner)
+    if (!ledger.entries.length) return
+    for (let i = 0; i < owner.frames.length; i++) materialize_frame(i)
+    trajectory = mark_raw_trajectory({ ...owner })
+  }
+
+  function append_edit_op(
+    owner: TrajectoryType,
+    scope: { kind: `all` } | { kind: `frame`; frame_idx: number },
+    op: TrajectoryEditOp,
+    materialized_frame_idx?: number,
+  ): void {
+    const ledger = ensure_operation_ledger(owner)
+    ledger.append(scope, op)
+    if (materialized_frame_idx !== undefined) {
+      materialized_cursors(owner)[materialized_frame_idx] = ledger.entries.length
     }
-    pending_ops = []
-    frame_op_cursor = new Array(trajectory.frames.length).fill(0)
-    // Notify consumers that a bulk update happened (matches the pattern used
-    // by `_chunked_cross_frame_edit` when it completes).
-    trajectory = mark_raw_trajectory({ ...trajectory })
+    if (scope.kind === `all`) owner.effective_frames?.clear()
+    else owner.effective_frames?.invalidate(scope.frame_idx)
+    frame_pos_cache.clear()
+    warmup_gen += 1
   }
 
-  /** Record a cross-frame op without touching any frames. O(1). */
-  function enqueue_pending_op(op: PendingOp): void {
-    pending_ops = [...pending_ops, op]
+  const request_trajectory_supercell = create_trajectory_supercell_request_handler({
+    capture: () => {
+      const owner = trajectory
+      const frame_idx = displayed_frame_idx
+      const owner_token = displayed_frame_owner
+      const frame = current_frame
+      if (
+        !owner || frame_idx === null || !frame ||
+        owner_token?.trajectory !== owner || owner_token.frame_idx !== frame_idx
+      ) return null
+      return {
+        owner,
+        frame_idx,
+        frame,
+        mode: edit_mode,
+        ledger: ensure_operation_ledger(owner),
+      }
+    },
+    get_active_owner: () => trajectory,
+    get_mode: () => edit_mode,
+    is_captured_frame_current: (token) =>
+      !!token.owner.frame_loader || token.owner.frames[token.frame_idx] === token.frame,
+    snapshot: (structure) => $state.snapshot(structure),
+    prepare_current_topology_edit: () => {
+      if (is_playing) pause_playback()
+    },
+    commit: (publication) => {
+      const { owner } = publication.token
+      return commit_supercell_transaction(publication, {
+        ledger: publication.token.ledger,
+        replace_frame: (frame_idx, frame) => {
+          if (owner.frame_loader) return
+          owner.frames[frame_idx] = frame
+          materialized_cursors(owner)[frame_idx] = publication.token.ledger.entries.length
+        },
+        publish_captured_frame: (frame_idx, frame) => {
+          if (
+            trajectory === owner &&
+            displayed_frame_owner?.trajectory === owner &&
+            displayed_frame_idx === frame_idx
+          ) {
+            current_frame = frame
+            current_structure = frame.structure
+          }
+        },
+        clear_position_cache: () => { position_cache = null },
+        clear_force_cache: () => { force_cache = null },
+        invalidate_effective_frames: (scope) => {
+          if (scope.kind === `all`) owner.effective_frames?.clear()
+          else owner.effective_frames?.invalidate(scope.frame_idx)
+        },
+        clear_typed_frame_buffers: () => {
+          frame_pos_cache.clear()
+          trajectory_frame_positions = null
+          trajectory_frame_forces = null
+          last_frame_lattice = null
+          trajectory_frame_lattice = null
+        },
+        reset_topology: () => {
+          topology_initialized = false
+          supercell_scaling = `1x1x1`
+          if (publication.token.mode === `edit-current`) resume_disabled = true
+        },
+        // Structure's bond cache consumes the version bump below; keeping the
+        // invalidation hook explicit documents that this transaction covers it.
+        invalidate_bond_caches: () => {},
+        invalidate_warmup: () => { warmup_gen += 1 },
+        bump_position_version: (scope) => {
+          trajectory_positions_version = {
+            v: trajectory_positions_version.v + 1,
+            all: scope.kind === `all`,
+          }
+        },
+        bump_topology_version: () => {
+          trajectory_topology_version += 1
+          if (trajectory === owner) {
+            trajectory = mark_raw_trajectory({ ...owner })
+          }
+        },
+        history_token: (entry) => `trajectory-supercell-${entry.id}`,
+      })
+    },
+  })
+  let supercell_busy_request = 0
+  async function handle_trajectory_supercell_request(
+    op: Parameters<typeof request_trajectory_supercell>[0],
+  ) {
+    const request = ++supercell_busy_request
+    cross_frame_busy = true
+    try {
+      return await request_trajectory_supercell(op)
+    } finally {
+      if (request === supercell_busy_request) cross_frame_busy = false
+    }
   }
 
-  /** True when this trajectory is in-memory (frames mutable, position_cache
-   *  usable). Indexed/streaming trajectories have a frame_loader. */
-  function _is_in_memory(): boolean {
-    if (!trajectory) return false
-    return !trajectory.frame_loader
+  function current_edit_frame(owner: TrajectoryType, idx: number): TrajectoryFrame | null {
+    if (!owner.frame_loader) {
+      materialize_frame(idx)
+      return owner.frames[idx] ?? null
+    }
+    if (
+      displayed_frame_owner?.trajectory === owner &&
+      displayed_frame_idx === idx
+    ) return current_frame
+    return null
   }
-  /** Gate for cross-frame propagation of add/delete/replace edits: true only
-   *  in edit-all on an in-memory trajectory. In the default `edit-current`
-   *  mode these edits stay current-frame-scoped (intentional per the 3-state
-   *  model — issue #51). */
-  function _can_cross_frame_edit(): boolean {
-    return edit_mode === 'edit-all' && _is_in_memory()
+
+  function commit_physical_edit(op: TrajectoryEditOp, topology_change: boolean): void {
+    const owner = trajectory
+    if (!owner || edit_mode === `view`) return
+    const idx = current_step_idx
+    const source = current_edit_frame(owner, idx)
+    if (!source?.structure) return
+
+    // apply_trajectory_edit_op_to_frame clears supercell provenance BEFORE an
+    // individual physical-site mutation, then returns the complete new frame.
+    const edited = apply_trajectory_edit_op_to_frame(source, op)
+    const scope = edit_mode === `edit-all`
+      ? { kind: `all` as const }
+      : { kind: `frame` as const, frame_idx: idx }
+    if (!owner.frame_loader) owner.frames[idx] = edited
+    append_edit_op(owner, scope, op, owner.frame_loader ? undefined : idx)
+
+    if (
+      displayed_frame_owner?.trajectory === owner &&
+      displayed_frame_idx === idx
+    ) {
+      current_frame = edited
+      current_structure = edited.structure
+    }
+
+    if (topology_change || edit_mode === `edit-all`) {
+      position_cache = null
+      force_cache = null
+      frame_pos_cache.clear()
+    } else {
+      const slice = position_cache?.[idx]
+      if (slice) write_sites_to_cache_slice(slice, edited.structure.sites)
+    }
+    if (topology_change) {
+      topology_initialized = false
+      trajectory_topology_version += 1
+    }
+    trajectory_positions_version = {
+      v: trajectory_positions_version.v + 1,
+      all: scope.kind === `all`,
+    }
+    trajectory = mark_raw_trajectory({ ...owner })
   }
 
   function handle_atoms_manipulated(event: AtomManipulationEvent) {
-    if (!trajectory) return
-    const { displacements } = event
-    if (displacements.size === 0) return
-
-    // view mode: edits disabled. (Edits shouldn't fire, but guard anyway —
-    // never silently mutate while the user is in inspect mode.)
-    if (edit_mode === `view`) return
-    if (!_is_in_memory()) {
-      // Indexed/streaming: positions live in frame.structure already (slow
-      // path writes current_structure = frame.structure each frame). Just
-      // refresh so the change is observed.
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // Catch every frame (incl. the current one) up to the pending queue
-    // before this eager in-place edit, so we commit on top of the latest
-    // materialized state and a prior lazy op can't be skipped on the
-    // current frame (its cursor is pre-advanced below). No-op when the
-    // queue is empty. Restores the guard the old `_chunked_cross_frame_edit`
-    // ran before every eager edit.
-    flush_pending_ops()
-
-    const frames = trajectory.frames
-    const idx = current_step_idx
-
-    // Build inverse-lattice once (cartesian Δ → fractional Δ for abc).
-    let inv: Matrix3x3 | null = null
-    const ref = frames[idx]?.structure
-    if (ref && `lattice` in ref && (ref as PymatgenStructure).lattice) {
-      const lat = (ref as PymatgenStructure).lattice
-      inv = matrix_inverse_3x3(transpose_3x3_matrix(lat.matrix))
-    }
-    const inv_flat = inv
-      ? [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]] as
-        [number, number, number, number, number, number, number, number, number]
-      : null
-
-    // ── Single write path: always commit the CURRENT frame first ──────────
-    const cur = frames[idx]
-    if (cur?.structure?.sites) {
-      const new_sites = apply_displacements(cur.structure.sites, displacements, inv_flat)
-      frames[idx] = { ...cur, structure: { ...cur.structure, sites: new_sites } }
-      // Mirror straight into the render source so Phase-2 GPU + bond getter
-      // see the edit. The snap-back window is fully closed once Task 6
-      // reorders interaction.svelte.ts to fire this BEFORE clearing
-      // realtime_position_overrides.
-      const slice = position_cache?.[idx]
-      if (slice) write_sites_to_cache_slice(slice, new_sites)
-    }
-
-    if (edit_mode === `edit-current`) {
-      // Signal bond pipeline THIS frame changed (drop only idx's cache).
-      trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: false }
-      // Other frames stay independent (use-case 2).
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // ── edit-all: fan out lazily via the pending-ops machinery ────────────
-    // (use-case 3: many frames, must not freeze). Other frames materialize
-    // their copy of this displacement on next read (scrub / export / flush)
-    // exactly like the proven `delete` path. The current frame is already
-    // committed above, so record the op with its cursor pre-advanced past
-    // the current frame.
-    enqueue_pending_op({ kind: `manipulate`, displacements: new Map(displacements) })
-    frame_op_cursor[idx] = pending_ops.length // current frame already applied
-    // Drop EVERY frame's bond cache (lazy recompute via keyframe/prefetch
-    // scheduler keeps long trajectories smooth).
-    trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
-    trajectory = mark_raw_trajectory({ ...trajectory })
+    if (event.displacements.size === 0) return
+    commit_physical_edit({
+      kind: `manipulate`,
+      displacements: new Map(event.displacements),
+    }, false)
   }
 
-  /**
-   * Unified topology-edit write path (add / delete / replace), mirroring the
-   * #51 manipulate path. Always commits the CURRENT frame (the fast-path
-   * renders position_cache / slow-path renders frames[idx].structure — NOT
-   * the bound current_structure — so the current frame must be committed
-   * here, never skipped). Topology changes atom count → drop position_cache
-   * (slow-path renders the edited frame; bond cache invalidated via the
-   * {all:true} positions-version). edit-current stops; edit-all fans the op
-   * out lazily via the existing pending-ops machinery.
-   */
-  function _apply_topology_op(op: PendingOp) {
-    // W5: a topology-altering edit while paused disables resume (even in the
-    // not-in-memory case the local topology / position_cache is now invalid).
+  function _apply_topology_op(op: TrajectoryEditOp) {
     if (!is_playing) resume_disabled = true
-    if (!trajectory) return
-    if (edit_mode === `view`) return
-    if (!_is_in_memory()) {
-      // Indexed/streaming slow path already renders frame.structure each
-      // frame; the editing UI mutated the current structure via bind. Just
-      // refresh so the change is observed.
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // Catch every frame up to the pending queue before this eager topology
-    // edit, so the current frame is committed on top of the latest
-    // materialized state and a prior lazy op can't be skipped on it (its
-    // cursor is pre-advanced below). No-op when the queue is empty.
-    // Restores the guard the old `_chunked_cross_frame_edit` ran first.
-    flush_pending_ops()
-
-    const frames = trajectory.frames
-    const idx = current_step_idx
-    const cur = frames[idx]
-    if (!cur?.structure) return
-
-    // Commit the CURRENT frame.
-    frames[idx] = { ...cur, structure: apply_op(cur.structure, op) }
-
-    // Topology changed: the Float32 position cache (fixed per-frame length)
-    // is invalid. Dropping it makes the render fall back to the slow path
-    // (current_structure = frames[idx].structure) so the edit is visible on
-    // the current frame; the {all:true} bump invalidates every bond frame.
-    position_cache = null
-    force_cache = null
-    trajectory_positions_version = { v: trajectory_positions_version.v + 1, all: true }
-
-    if (edit_mode === `edit-current`) {
-      // Other frames stay independent (use-case 2).
-      trajectory = mark_raw_trajectory({ ...trajectory })
-      return
-    }
-
-    // edit-all: fan out lazily (use-case 3 — many frames, must not freeze).
-    // Other frames materialize this op on next read (scrub / export / flush)
-    // exactly like the proven delete path. Current frame already applied →
-    // pre-advance its cursor so materialize_frame won't re-apply it.
-    enqueue_pending_op(op)
-    frame_op_cursor[idx] = pending_ops.length
-    trajectory = mark_raw_trajectory({ ...trajectory })
+    commit_physical_edit(op, true)
   }
 
   function handle_atom_added(event: { element: ElementSymbol; position: Vec3 }) {
@@ -1838,21 +1889,24 @@
   }
 
   function scale_all_frames(factor: number): TrajectoryType {
-    if (!trajectory) throw new Error(`No trajectory loaded.`)
+    const owner = trajectory
+    if (!owner) throw new Error(`No trajectory loaded.`)
     if (!Number.isFinite(factor) || factor <= 0) {
       throw new Error(`Scale factor must be positive.`)
     }
-    flush_pending_ops()
-    trajectory.frames = trajectory.frames.map((frame) => ({
-      ...frame,
-      structure: scale_structure_geometry(frame.structure, factor),
-    }))
-    const pane_trajectory = trajectory as PaneTrajectory
-    if (pane_trajectory.frame_loader) {
-      pane_trajectory.pane_transformations ??= []
-      pane_trajectory.pane_transformations.push({ kind: `scale_geometry`, factor })
-    }
-    return trajectory
+    const current = owner.frame_loader
+      ? current_edit_frame(owner, current_step_idx)
+      : null
+    const op: TrajectoryEditOp = { kind: `scale_geometry`, factor }
+    append_edit_op(owner, { kind: `all` }, op)
+    if (owner.frame_loader) {
+      if (current) {
+        const edited = apply_trajectory_edit_op_to_frame(current, op)
+        current_frame = edited
+        current_structure = edited.structure
+      }
+    } else flush_pending_ops()
+    return owner
   }
 
   function refresh_after_external_edit(): void {
@@ -1873,14 +1927,12 @@
       if (!element || position.length !== 3 || !position.every(Number.isFinite)) {
         throw new Error(`element and a 3D Cartesian position are required.`)
       }
-      target.frames = target.frames.map((frame) => ({
-        ...frame,
-        structure: add_atom(
-          frame.structure,
-          element,
-          [position[0], position[1], position[2]],
-        ),
-      }))
+      append_edit_op(target, { kind: `all` }, {
+        kind: `add`,
+        element,
+        position: [position[0], position[1], position[2]],
+      })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1890,9 +1942,11 @@
       const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
         .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
       if (!indices.length) throw new Error(`At least one valid atom index is required.`)
-      for (let i = 0; i < target.frames.length; i++) {
-        target.frames[i] = { ...target.frames[i], structure: delete_atoms(target.frames[i].structure, indices) }
-      }
+      append_edit_op(target, { kind: `all` }, {
+        kind: `delete`,
+        site_indices: indices,
+      })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1905,15 +1959,11 @@
           moves.set(Number(move.index), [d[0], d[1], d[2]])
         }
       }
-      for (let i = 0; i < target.frames.length; i++) {
-        const structure = target.frames[i].structure
-        let inv_flat: [number, number, number, number, number, number, number, number, number] | null = null
-        if (`lattice` in structure && structure.lattice) {
-          const inv = matrix_inverse_3x3(transpose_3x3_matrix(structure.lattice.matrix))
-          inv_flat = [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]]
-        }
-        target.frames[i] = { ...target.frames[i], structure: { ...structure, sites: apply_displacements(structure.sites, moves, inv_flat) } }
-      }
+      append_edit_op(target, { kind: `all` }, {
+        kind: `manipulate`,
+        displacements: moves,
+      })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1924,11 +1974,12 @@
       const indices = [...new Set((Array.isArray(args.indices) ? args.indices : []).map(Number))]
         .filter((index) => Number.isInteger(index) && index >= 0 && index < atom_count)
       if (!element || !indices.length) throw new Error(`element and atom indices are required.`)
-      target.frames = target.frames.map((frame) => {
-        let structure = frame.structure
-        for (const index of indices) structure = replace_atom(structure, index, element)
-        return { ...frame, structure }
+      append_edit_op(target, { kind: `all` }, {
+        kind: `replace`,
+        site_indices: indices,
+        new_element: element,
       })
+      flush_pending_ops()
       refresh_after_external_edit()
       return { scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
     }
@@ -1982,42 +2033,40 @@
       inspect_atoms: inspect_trajectory_atoms,
       add_atom: (element, position) => {
         const target = require_editable_memory_trajectory()
-        target.frames = target.frames.map((frame) => ({
-          ...frame,
-          structure: add_atom(frame.structure, element as ElementSymbol, position),
-        }))
+        append_edit_op(target, { kind: `all` }, {
+          kind: `add`,
+          element: element as ElementSymbol,
+          position,
+        })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
       delete_atoms: (indices) => {
         const target = require_editable_memory_trajectory()
-        for (let i = 0; i < target.frames.length; i++) {
-          target.frames[i] = { ...target.frames[i], structure: delete_atoms(target.frames[i].structure, indices) }
-        }
+        append_edit_op(target, { kind: `all` }, { kind: `delete`, site_indices: indices })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
       replace_atoms: (indices, element) => {
         const target = require_editable_memory_trajectory()
-        target.frames = target.frames.map((frame) => {
-          let structure = frame.structure
-          for (const index of indices) structure = replace_atom(structure, index, element as ElementSymbol)
-          return { ...frame, structure }
+        append_edit_op(target, { kind: `all` }, {
+          kind: `replace`,
+          site_indices: indices,
+          new_element: element as ElementSymbol,
         })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
       move_atoms: (displacements) => {
         const target = require_editable_memory_trajectory()
-        for (let i = 0; i < target.frames.length; i++) {
-          const structure = target.frames[i].structure
-          let inv_flat: [number, number, number, number, number, number, number, number, number] | null = null
-          if (`lattice` in structure && structure.lattice) {
-            const inv = matrix_inverse_3x3(transpose_3x3_matrix(structure.lattice.matrix))
-            inv_flat = [inv[0][0], inv[0][1], inv[0][2], inv[1][0], inv[1][1], inv[1][2], inv[2][0], inv[2][1], inv[2][2]]
-          }
-          target.frames[i] = { ...target.frames[i], structure: { ...structure, sites: apply_displacements(structure.sites, displacements, inv_flat) } }
-        }
+        append_edit_op(target, { kind: `all` }, {
+          kind: `manipulate`,
+          displacements,
+        })
+        flush_pending_ops()
         refresh_after_external_edit()
         return { viewer_id, scope: `all_frames`, atom_count: target.frames[0]?.structure.sites.length ?? 0, total_frames }
       },
@@ -2453,6 +2502,7 @@
           on_atom_added={handle_atom_added}
           on_atoms_deleted={handle_atoms_deleted}
           on_atom_replaced={handle_atom_replaced}
+          on_supercell_request={handle_trajectory_supercell_request}
           hide_extra_tools={structure_props?.hide_extra_tools ?? true}
           trajectory_context={{ total_frames, on_step: (idx: number) => go_to_step(idx) }}
         />

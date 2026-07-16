@@ -67,4 +67,33 @@ describe(`OperationLedger`, () => {
     expect(source.entries[0].active).toBe(true)
     expect(source.active_entries_for_frame(0)).toHaveLength(1)
   })
+
+  it(`deep-clones nested operation payloads for pane isolation`, () => {
+    const source = new OperationLedger()
+    source.append(all, {
+      kind: `manipulate`,
+      displacements: new Map([[0, [1, 2, 3]]]),
+    })
+    source.append(all, {
+      kind: `supercell`,
+      matrix: [[2, 0, 0], [0, 1, 0], [0, 0, 1]],
+      reorient: false,
+    })
+    const copy = source.clone()
+    const copied_move = copy.entries[0].op
+    const copied_supercell = copy.entries[1].op
+    if (copied_move.kind !== `manipulate` || copied_supercell.kind !== `supercell`) {
+      throw new Error(`Unexpected cloned operation kinds`)
+    }
+
+    copied_move.displacements.get(0)![0] = 99
+    ;(copied_supercell.matrix[0] as number[])[0] = 7
+
+    const source_move = source.entries[0].op
+    const source_supercell = source.entries[1].op
+    expect(source_move.kind === `manipulate` && source_move.displacements.get(0)?.[0])
+      .toBe(1)
+    expect(source_supercell.kind === `supercell` && source_supercell.matrix[0][0])
+      .toBe(2)
+  })
 })

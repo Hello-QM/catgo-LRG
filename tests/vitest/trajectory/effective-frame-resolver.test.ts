@@ -218,6 +218,26 @@ describe(`effective-frame resolver`, () => {
     expect(loads).toEqual([0, 1])
   })
 
+  it.each([`invalidate`, `clear`] as const)(
+    `%s drops an already in-flight resolve instead of publishing its stale frame`,
+    async (method) => {
+      const ledger = new OperationLedger()
+      ledger.append({ kind: `all` }, scale(2))
+      const resolver = create_effective_frame_resolver(ledger)
+      let finish!: (value: TrajectoryFrame) => void
+      const pending = resolver.resolve(
+        0,
+        () => new Promise<TrajectoryFrame>((resolve) => { finish = resolve }),
+      )
+
+      if (method === `invalidate`) resolver.invalidate(0)
+      else resolver.clear()
+      finish(frame(cubic(2, 2), 0))
+
+      expect(await pending).toBeNull()
+    },
+  )
+
   it(`propagates executor failures without caching a partial result`, async () => {
     const ledger = new OperationLedger()
     const entry = ledger.append(

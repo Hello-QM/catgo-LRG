@@ -1,8 +1,15 @@
-import type { AnyStructure } from '$lib'
+import type { AnyStructure, ElementSymbol, Vec3 } from '$lib'
+import { add_atom, delete_atoms, replace_atom } from '$lib/structure'
 import type { PymatgenStructure } from '$lib/structure'
+import { matrix_inverse_3x3, transpose_3x3_matrix } from '$lib/math'
 import type { SupercellOp } from '$lib/structure/supercell-operation'
 import { execute_supercell_op_sync } from '$lib/structure/supercell-operation'
-import type { TrajectoryType } from './index'
+import { apply_displacements } from './edit-apply'
+import type { TrajectoryFrame, TrajectoryType } from './index'
+import {
+  break_frame_supercell_provenance,
+  frame_with_supercell_execution,
+} from './supercell-transactions'
 
 /**
  * Discriminated union of pane-ledger operations (design §9.3).
@@ -12,6 +19,10 @@ import type { TrajectoryType } from './index'
  */
 export type TrajectoryEditOp =
   | { kind: `scale_geometry`; factor: number }
+  | { kind: `delete`; site_indices: number[] }
+  | { kind: `add`; element: ElementSymbol; position: Vec3 }
+  | { kind: `replace`; site_indices: number[]; new_element: ElementSymbol }
+  | { kind: `manipulate`; displacements: Map<number, Vec3> }
   | SupercellOp
 
 /**
@@ -23,13 +34,65 @@ export function apply_trajectory_edit_op(
   structure: AnyStructure,
   op: TrajectoryEditOp,
 ): AnyStructure {
-  if (op.kind === `scale_geometry`) {
-    return scale_structure_geometry(structure, op.factor)
+  switch (op.kind) {
+    case `scale_geometry`:
+      return scale_structure_geometry(structure, op.factor)
+    case `delete`:
+      return delete_atoms(structure, op.site_indices)
+    case `add`:
+      return add_atom(structure, op.element, op.position)
+    case `replace`: {
+      let next = structure
+      for (const idx of op.site_indices) {
+        next = replace_atom(next, idx, op.new_element)
+      }
+      return next
+    }
+    case `manipulate`: {
+      let inverse:
+        | [number, number, number, number, number, number, number, number, number]
+        | null = null
+      if (`lattice` in structure && structure.lattice) {
+        const matrix = matrix_inverse_3x3(
+          transpose_3x3_matrix(structure.lattice.matrix),
+        )
+        inverse = [
+          matrix[0][0], matrix[0][1], matrix[0][2],
+          matrix[1][0], matrix[1][1], matrix[1][2],
+          matrix[2][0], matrix[2][1], matrix[2][2],
+        ]
+      }
+      return {
+        ...structure,
+        sites: apply_displacements(structure.sites, op.displacements, inverse),
+      }
+    }
+    case `supercell`:
+      return execute_supercell_op_sync(
+        structure as PymatgenStructure,
+        op,
+      ).structure as AnyStructure
   }
-  return execute_supercell_op_sync(
-    structure as PymatgenStructure,
-    op,
-  ).structure as AnyStructure
+}
+
+export function apply_trajectory_edit_op_to_frame(
+  frame: TrajectoryFrame,
+  op: TrajectoryEditOp,
+): TrajectoryFrame {
+  if (op.kind === `supercell`) {
+    return frame_with_supercell_execution(
+      frame,
+      execute_supercell_op_sync(frame.structure as PymatgenStructure, op),
+    )
+  }
+  const source = op.kind === `add` || op.kind === `delete` ||
+      op.kind === `replace` || op.kind === `manipulate`
+    ? break_frame_supercell_provenance(frame)
+    : frame
+  return {
+    ...source,
+    structure: apply_trajectory_edit_op(source.structure, op),
+  }
 }
 
 export function topology_signature(structure: AnyStructure): string {
