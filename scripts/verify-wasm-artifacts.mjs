@@ -210,23 +210,27 @@ if (!existsSync(bridgeDir)) {
 } else {
   const scalarFiles = listRelativeFiles(scalarDir)
   const bridgeFiles = listRelativeFiles(bridgeDir)
-  const sameFileSet = scalarFiles.length === bridgeFiles.length &&
-    scalarFiles.every((file, index) => file === bridgeFiles[index])
+  const scalarSet = new Set(scalarFiles)
+  const bridgeSet = new Set(bridgeFiles)
+  const missing = scalarFiles.filter((file) => !bridgeSet.has(file))
+  const extra = bridgeFiles.filter((file) => !scalarSet.has(file))
+  const common = scalarFiles.filter((file) => bridgeSet.has(file))
+  const mismatches = common.filter((file) =>
+    !readFileSync(join(scalarDir, file)).equals(readFileSync(join(bridgeDir, file)))
+  )
 
-  if (!sameFileSet) {
+  if (missing.length > 0 || extra.length > 0) {
     fail(
-      'pkg/ bridge file set differs from pkg-scalar/ — rebuild with ' +
-        '`pnpm build:wasm`',
+      'pkg/ bridge file set differs from pkg-scalar/ — ' +
+        `missing: ${missing.join(', ') || '(none)'}; ` +
+        `extra: ${extra.join(', ') || '(none)'}`,
     )
-  } else {
-    const mismatches = scalarFiles.filter((file) =>
-      !readFileSync(join(scalarDir, file)).equals(readFileSync(join(bridgeDir, file)))
-    )
-    if (mismatches.length > 0) {
-      fail(`pkg/ bridge differs byte-for-byte from pkg-scalar/: ${mismatches.join(', ')}`)
-    } else {
-      ok(`pkg/ bridge matches pkg-scalar/ byte-for-byte (${scalarFiles.length} files)`)
-    }
+  }
+  if (mismatches.length > 0) {
+    fail(`pkg/ bridge differs byte-for-byte from pkg-scalar/: ${mismatches.join(', ')}`)
+  }
+  if (missing.length === 0 && extra.length === 0 && mismatches.length === 0) {
+    ok(`pkg/ bridge matches pkg-scalar/ byte-for-byte (${scalarFiles.length} files)`)
   }
 }
 

@@ -14,6 +14,7 @@
  *   node scripts/build-wasm.mjs --if-missing   # build only the ones not yet built
  *   node scripts/build-wasm.mjs --no-simd      # SIMD-less ferrox (ancient WebKit)
  *   node scripts/build-wasm.mjs --only ferrox  # just ferrox (both artifacts)
+ *   node scripts/build-wasm.mjs --only=ferrox  # equivalent equals form
  *
  * ferrox dual artifacts (design §8.3 — fast bond backends):
  *
@@ -44,11 +45,21 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const IF_MISSING = process.argv.includes('--if-missing')
-const NO_SIMD = process.argv.includes('--no-simd') ||
+const ARGS = process.argv.slice(2)
+const IF_MISSING = ARGS.includes('--if-missing')
+const NO_SIMD = ARGS.includes('--no-simd') ||
   process.env.CATGO_WASM_NO_SIMD === '1'
-const ONLY_INDEX = process.argv.indexOf('--only')
-const ONLY = ONLY_INDEX === -1 ? null : process.argv[ONLY_INDEX + 1]
+const ONLY_VALUES = []
+for (let index = 0; index < ARGS.length; index++) {
+  const arg = ARGS[index]
+  if (arg === '--only') {
+    ONLY_VALUES.push(ARGS[index + 1])
+    index++
+  } else if (arg.startsWith('--only=')) {
+    ONLY_VALUES.push(arg.slice('--only='.length))
+  }
+}
+const ONLY = ONLY_VALUES.length === 1 ? ONLY_VALUES[0] : null
 const SKIP_THREADED = process.env.CATGO_WASM_SKIP_THREADED === '1'
 // CI pins this via CATGO_WASM_NIGHTLY_TOOLCHAIN (workflow-level env in
 // .github/workflows/*.yml — nightly churn broke the threaded link flags once
@@ -166,9 +177,11 @@ const TARGETS = [
 ]
 
 const VALID_TARGET_KEYS = [...new Set(TARGETS.map((target) => target.key))]
-if (ONLY_INDEX !== -1 && (!ONLY || !VALID_TARGET_KEYS.includes(ONLY))) {
+const INVALID_ONLY = ONLY_VALUES.length !== 1 || !ONLY || !VALID_TARGET_KEYS.includes(ONLY)
+if (ONLY_VALUES.length > 0 && INVALID_ONLY) {
+  const shownValue = ONLY_VALUES.length > 1 ? '(multiple)' : ONLY || '(missing)'
   console.error(
-    `[build-wasm] invalid value for --only: ${ONLY || '(missing)'}\n` +
+    `[build-wasm] invalid value for --only: ${shownValue}\n` +
       `             valid targets: ${VALID_TARGET_KEYS.join(', ')}`,
   )
   process.exit(2)
