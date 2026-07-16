@@ -175,7 +175,14 @@
   import { PeriodicTable } from '$lib/periodic-table'
   import { element_data } from '$lib/element'
   import { parse_structure_file } from './parse'
-  import { ACESFilmicToneMapping, Euler, Quaternion, Spherical, Vector3 } from 'three'
+  import {
+    ACESFilmicToneMapping,
+    Euler,
+    Matrix4,
+    Quaternion,
+    Spherical,
+    Vector3,
+  } from 'three'
   import { format_value } from '$lib/labels'
   import type { BarHandlerProps } from '$lib/plot'
   import { BarPlot } from '$lib/plot'
@@ -2336,6 +2343,122 @@
     on_camera_reset?.({ structure, camera_has_moved, camera_position: [0, 0, 0] })
   }
 
+  // ── VESTA-style axis views + persistent default view ──────────────────
+  const DEFAULT_VIEW_STORAGE_KEY = `catgo-default-view`
+
+  // Point the camera so `dir` (unit-ish, world frame) goes into the screen,
+  // keeping the current orbit target and distance.
+  function set_view_direction(
+    dir: [number, number, number],
+    up: [number, number, number],
+    mark_moved = true,
+  ) {
+    if (!camera || !orbit_controls?.target) return
+    const target = orbit_controls.target as Vector3
+    const dir_v = new Vector3(...dir)
+    const up_v = new Vector3(...up)
+    if (dir_v.lengthSq() < 1e-12 || up_v.lengthSq() < 1e-12) return
+    dir_v.normalize()
+    const dist = camera.position.distanceTo(target) || 1
+    camera.position.copy(target).addScaledVector(dir_v, -dist)
+    camera.up.copy(up_v.normalize())
+    camera.lookAt(target)
+    camera.updateMatrixWorld?.(true)
+    orbit_controls.update?.()
+    if (mark_moved) camera_has_moved = true
+  }
+
+  // ── Numeric view angles (VESTA-style orientation dialog) ──────────────
+  // The view is expressed as XYZ Euler angles (degrees) of the rotation that
+  // carries the default camera frame (camera on -Y looking +Y, Z up) onto the
+  // current one. Identity (0,0,0) = the default view.
+  const DEFAULT_CAM_BASIS = new Matrix4().makeBasis(
+    new Vector3(1, 0, 0), // camera right
+    new Vector3(0, 0, 1), // camera up
+    new Vector3(0, -1, 0), // camera backward (looks along +Y)
+  )
+
+  function current_camera_basis(): Matrix4 | null {
+    if (!camera || !orbit_controls?.target) return null
+    const backward = camera.position.clone().sub(orbit_controls.target as Vector3)
+    if (backward.lengthSq() < 1e-12) return null
+    backward.normalize()
+    const right = new Vector3().crossVectors(camera.up, backward)
+    if (right.lengthSq() < 1e-10) return null
+    right.normalize()
+    const up = new Vector3().crossVectors(backward, right)
+    return new Matrix4().makeBasis(right, up, backward)
+  }
+
+  function get_view_angles(): [number, number, number] | null {
+    const basis = current_camera_basis()
+    if (!basis) return null
+    const rot = basis.multiply(DEFAULT_CAM_BASIS.clone().invert())
+    const euler = new Euler().setFromRotationMatrix(rot, `XYZ`)
+    const deg = (rad: number) => Math.round(rad * (180 / Math.PI) * 10) / 10
+    return [deg(euler.x), deg(euler.y), deg(euler.z)]
+  }
+
+  function set_view_angles(angles: [number, number, number]) {
+    const rad = (d: number) => (Number(d) || 0) * (Math.PI / 180)
+    const rot = new Matrix4().makeRotationFromEuler(
+      new Euler(rad(angles[0]), rad(angles[1]), rad(angles[2]), `XYZ`),
+    )
+    const backward = new Vector3(0, -1, 0).applyMatrix4(rot)
+    const up = new Vector3(0, 0, 1).applyMatrix4(rot)
+    set_view_direction(
+      [-backward.x, -backward.y, -backward.z],
+      [up.x, up.y, up.z],
+    )
+  }
+
+  function load_default_view(): {
+    dir: [number, number, number]
+    up: [number, number, number]
+  } | null {
+    if (typeof localStorage === `undefined`) return null
+    try {
+      const raw = localStorage.getItem(DEFAULT_VIEW_STORAGE_KEY)
+      if (!raw) return null
+      const parsed = JSON.parse(raw)
+      const is_vec3 = (v: unknown): v is [number, number, number] =>
+        Array.isArray(v) && v.length === 3 && v.every((n) => Number.isFinite(n))
+      if (is_vec3(parsed?.dir) && is_vec3(parsed?.up)) {
+        return { dir: parsed.dir, up: parsed.up }
+      }
+    } catch { /* corrupted entry — treat as absent */ }
+    return null
+  }
+
+  // The saved default view is handed to StructureScene as `initial_view`, so
+  // the scene's own initial camera placement uses it directly — applying it
+  // after the fact raced the load/refit pipeline and got overwritten.
+  let saved_default_view = $state<
+    { dir: [number, number, number]; up: [number, number, number] } | null
+  >(load_default_view())
+  let has_default_view = $derived(!!saved_default_view)
+
+  function save_default_view() {
+    if (!camera || !orbit_controls?.target || typeof localStorage === `undefined`) return
+    const target = orbit_controls.target as Vector3
+    const dir = target.clone().sub(camera.position)
+    if (dir.lengthSq() < 1e-12) return
+    dir.normalize()
+    const up = camera.up.clone().normalize()
+    const view = {
+      dir: [dir.x, dir.y, dir.z] as [number, number, number],
+      up: [up.x, up.y, up.z] as [number, number, number],
+    }
+    localStorage.setItem(DEFAULT_VIEW_STORAGE_KEY, JSON.stringify(view))
+    saved_default_view = view
+  }
+
+  function clear_default_view() {
+    if (typeof localStorage === `undefined`) return
+    localStorage.removeItem(DEFAULT_VIEW_STORAGE_KEY)
+    saved_default_view = null
+  }
+
   // MCP polling bridge dependencies — viewer state accessors used by the
   // catgo MCP server (server-side, called via SDK agents) to round-trip
   // structure / selection / screenshot data to the frontend viewer.
@@ -3492,6 +3615,11 @@
       bind:selected_sites
       bind:current_continuous_measurement_sites={meas_state.current_continuous_measurement_sites}
       {reset_camera}
+      {has_default_view}
+      on_save_default_view={save_default_view}
+      on_clear_default_view={clear_default_view}
+      {get_view_angles}
+      {set_view_angles}
       {delete_measurement}
       delete_selected_atoms={() => gesture_api.delete_selected()}
     >
@@ -4404,6 +4532,7 @@
             {trajectory_step_idx}
             trajectory_bond_connectivity={trajectory_bond_connectivity_for_frame}
             {...scene_props}
+            initial_view={persist_settings ? saved_default_view : null}
             {show_image_atoms}
             {clip_center}
             {mof_clusters}

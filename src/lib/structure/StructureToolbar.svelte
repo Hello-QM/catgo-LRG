@@ -80,6 +80,11 @@
 
     // ── 回调函数 ──
     reset_camera = () => {},
+    has_default_view = false,
+    on_save_default_view = undefined as (() => void) | undefined,
+    on_clear_default_view = undefined as (() => void) | undefined,
+    get_view_angles = undefined as (() => [number, number, number] | null) | undefined,
+    set_view_angles = undefined as ((angles: [number, number, number]) => void) | undefined,
     delete_measurement = (_id: string) => {},
     delete_selected_atoms = () => {},
     on_popout_chat = undefined as (() => void) | undefined,
@@ -136,6 +141,11 @@
 
     // 回调
     reset_camera?: () => void
+    has_default_view?: boolean
+    on_save_default_view?: () => void
+    on_clear_default_view?: () => void
+    get_view_angles?: () => [number, number, number] | null
+    set_view_angles?: (angles: [number, number, number]) => void
     delete_measurement?: (id: string) => void
     delete_selected_atoms?: () => void
     on_popout_chat?: () => void
@@ -166,6 +176,45 @@
     coarse?.addEventListener?.(`change`, update)
     return () => coarse?.removeEventListener?.(`change`, update)
   })
+
+  // View-angle panel: three editable XYZ Euler angles (deg) describing the
+  // current view. While the panel is open the values track the camera live
+  // (dragging the structure updates them); tracking pauses while an input has
+  // focus so typing isn't overwritten.
+  let view_angles_open = $state(false)
+  let view_angles = $state<[number, number, number]>([0, 0, 0])
+  let view_angles_editing = $state(false)
+
+  function toggle_view_angles() {
+    view_angles_open = !view_angles_open
+    if (view_angles_open) view_angles = get_view_angles?.() ?? [0, 0, 0]
+  }
+
+  function apply_view_angles() {
+    set_view_angles?.([
+      Number(view_angles[0]) || 0,
+      Number(view_angles[1]) || 0,
+      Number(view_angles[2]) || 0,
+    ])
+  }
+
+  $effect(() => {
+    if (!view_angles_open || !get_view_angles) return
+    let raf = 0
+    const tick = () => {
+      if (!view_angles_editing) {
+        const cur = get_view_angles?.()
+        if (
+          cur &&
+          (cur[0] !== view_angles[0] || cur[1] !== view_angles[1] ||
+            cur[2] !== view_angles[2])
+        ) view_angles = cur
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  })
 </script>
 
 <section class:visible={visible_buttons} class="control-buttons">
@@ -175,6 +224,57 @@
       <button class="reset-camera" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
         <Icon icon="Reset" />
       </button>
+    {/if}
+    {#if get_view_angles && set_view_angles && !hide_extra_tools}
+      <button
+        class:active={view_angles_open}
+        onclick={toggle_view_angles}
+        title={t('structure.view_angles')}
+        {@attach tooltip()}
+      >
+        <Icon icon="Angle" />
+      </button>
+      {#if view_angles_open}
+        <div class="view-angle-panel">
+          {#each [`X`, `Y`, `Z`] as axis_label, idx}
+            <label class="view-angle-row">
+              <span>{axis_label}</span>
+              <input
+                type="number"
+                step="1"
+                bind:value={view_angles[idx]}
+                onfocus={() => view_angles_editing = true}
+                onblur={() => view_angles_editing = false}
+                onchange={apply_view_angles}
+                onkeydown={(e) => e.key === `Enter` && apply_view_angles()}
+              />
+              <span>°</span>
+            </label>
+          {/each}
+          {#if on_save_default_view}
+            <div class="view-angle-actions">
+              <button
+                type="button"
+                onclick={on_save_default_view}
+                title={t('structure.save_default_view')}
+                {@attach tooltip()}
+              >
+                <Icon icon="Lock" />
+              </button>
+              {#if has_default_view && on_clear_default_view}
+                <button
+                  type="button"
+                  onclick={on_clear_default_view}
+                  title={t('structure.clear_default_view')}
+                  {@attach tooltip()}
+                >
+                  <Icon icon="Unlock" />
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
     {/if}
     {#if fullscreen_toggle}
       <button
@@ -821,6 +921,55 @@
   section.control-buttons .build-tools-toggle:disabled {
     opacity: 0.35;
     cursor: not-allowed;
+  }
+  .view-angle-panel {
+    position: absolute;
+    top: calc(100% + 4pt);
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4pt;
+    padding: 6pt 8pt;
+    background: var(--pane-bg, var(--surface-bg, light-dark(#fff, #1e1e2e)));
+    border: 1px solid var(--pane-border, light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)));
+    border-radius: 4pt;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    z-index: 10;
+  }
+  .view-angle-row {
+    display: flex;
+    align-items: center;
+    gap: 4pt;
+    font-size: 0.85em;
+  }
+  .view-angle-row span:first-child {
+    width: 1em;
+    font-weight: 600;
+  }
+  .view-angle-row input {
+    width: 5.5em;
+    padding: 2pt 4pt;
+    font-size: inherit;
+    border: 1px solid var(--pane-border, light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.15)));
+    border-radius: 3pt;
+    background: transparent;
+    color: inherit;
+  }
+  .view-angle-actions {
+    display: flex;
+    justify-content: center;
+    gap: 6pt;
+    border-top: 1px solid var(--pane-border, light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1)));
+    padding-top: 4pt;
+  }
+  .view-angle-actions button {
+    display: flex;
+    padding: 3pt;
+    border-radius: 3pt;
+    background: transparent;
+  }
+  .view-angle-actions button:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
   }
   section.control-buttons .build-tools-toggle.active,
   section.control-buttons .view-mode-button.active,
