@@ -12,6 +12,10 @@ on:
 env:
   CARGO_NET_RETRY: "10"
   CARGO_HTTP_MULTIPLEXING: "false"
+  # Threaded-ferrox nightly pin (read by the dtolnay step AND build-wasm.mjs).
+  # Bump only after `pnpm build:wasm && pnpm verify:wasm` passes on the new
+  # nightly; keep the pin identical across all workflows that define it.
+  CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
 
 jobs:
   unit:
@@ -32,10 +36,12 @@ jobs:
 
       # Nightly (with rust-src) builds the THREADED ferrox artifact — std is
       # rebuilt with atomics via -Z build-std. Installed before stable so
-      # stable stays the default toolchain for everything else.
+      # stable stays the default toolchain for everything else. Pinned (not
+      # floating @nightly) via CATGO_WASM_NIGHTLY_TOOLCHAIN — see env above.
       - name: Setup Rust nightly (threaded ferrox WASM)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
           components: rust-src
           targets: wasm32-unknown-unknown
 
@@ -106,10 +112,12 @@ jobs:
           cache: 'pnpm'
 
       # Nightly (with rust-src) builds the THREADED ferrox artifact; stable
-      # installed second so it stays the default toolchain.
+      # installed second so it stays the default toolchain. Pinned via
+      # CATGO_WASM_NIGHTLY_TOOLCHAIN — see env above.
       - name: Setup Rust nightly (threaded ferrox WASM)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
           components: rust-src
           targets: wasm32-unknown-unknown
 

@@ -21,6 +21,12 @@ permissions:
   contents: read
   id-token: write   # required for PyPI Trusted Publishing (OIDC)
 
+env:
+  # Threaded-ferrox nightly pin (read by the dtolnay step AND build-wasm.mjs).
+  # Bump only after `pnpm build:wasm && pnpm verify:wasm` passes on the new
+  # nightly; keep the pin identical across all workflows that define it.
+  CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
+
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
@@ -35,6 +41,17 @@ jobs:
         with:
           node-version: 'lts/*'
           cache: 'pnpm'
+
+      # Nightly (with rust-src) builds the THREADED ferrox artifact — std is
+      # rebuilt with atomics via -Z build-std. Installed before stable so
+      # stable stays the default toolchain for everything else. Pinned via
+      # CATGO_WASM_NIGHTLY_TOOLCHAIN — see env at the top of this file.
+      - name: Setup Rust nightly (threaded ferrox WASM)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CATGO_WASM_NIGHTLY_TOOLCHAIN }}
+          components: rust-src
+          targets: wasm32-unknown-unknown
 
       - name: Setup Rust (+ wasm target)
         uses: dtolnay/rust-toolchain@stable
@@ -52,17 +69,22 @@ jobs:
       - name: Install JS deps
         run: pnpm install --no-frozen-lockfile
 
+      # Single canonical entry point for ALL wasm builds (design §8.3): it
+      # builds ferrox twice with explicit feature sets (wasm-scalar →
+      # pkg-scalar/+pkg/, wasm-threaded → pkg-threaded/) plus chgdiff +
+      # catrender. Never invoke wasm-pack directly here — `--features wasm`
+      # without --no-default-features is a compile error by design (lib.rs
+      # guard against default-Rayon wasm with no thread pool).
       - name: Build WASM crates
         run: |
           if ! command -v wasm-pack &> /dev/null; then
             curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
           fi
-          cd extensions/rust
-          wasm-pack build --target web --out-dir ../rust-wasm/pkg --features wasm
-          cd ../chgdiff-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/electronic/chgdiff-wasm-pkg
-          cd ../catrender-wasm
-          wasm-pack build --target web --out-dir ../../src/lib/structure/catrender/catrender-wasm-pkg
+          export PATH=$PATH:$HOME/.cargo/bin
+          pnpm build:wasm
+
+      - name: Verify WASM artifacts (scalar + threaded ferrox)
+        run: node scripts/verify-wasm-artifacts.mjs
 
       - name: Build doc chunks
         run: pnpm run build:doc-chunks

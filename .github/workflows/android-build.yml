@@ -40,6 +40,11 @@ jobs:
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       NDK_VERSION: 26.1.10909125
+      # Threaded-ferrox nightly pin (read by the rustup step AND build-wasm.mjs,
+      # which the Tauri beforeBuildCommand invokes). Bump only after
+      # `pnpm build:wasm && pnpm verify:wasm` passes on the new nightly; keep
+      # the pin identical across all workflows that define it.
+      CATGO_WASM_NIGHTLY_TOOLCHAIN: "nightly-2026-07-16"
     steps:
       - name: Checkout repository
         # Builds the dispatched ref (--ref). `release_tag` is ONLY the upload
@@ -78,6 +83,12 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          rustup target add wasm32-unknown-unknown
+          # Pinned nightly (with rust-src) for the THREADED ferrox WASM
+          # artifact — build-wasm.mjs (via the Tauri beforeBuildCommand)
+          # rebuilds std with atomics on it; stable stays the default.
+          rustup toolchain install "$CATGO_WASM_NIGHTLY_TOOLCHAIN" --profile minimal \
+            --component rust-src --target wasm32-unknown-unknown
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

@@ -51,6 +51,9 @@ const ONLY = process.argv.includes('--only')
   ? process.argv[process.argv.indexOf('--only') + 1]
   : null
 const SKIP_THREADED = process.env.CATGO_WASM_SKIP_THREADED === '1'
+// CI pins this via CATGO_WASM_NIGHTLY_TOOLCHAIN (workflow-level env in
+// .github/workflows/*.yml — nightly churn broke the threaded link flags once
+// already); the floating 'nightly' default is for local dev convenience only.
 const NIGHTLY = process.env.CATGO_WASM_NIGHTLY_TOOLCHAIN || 'nightly'
 const WIN = process.platform === 'win32'
 
