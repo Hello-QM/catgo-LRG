@@ -817,6 +817,12 @@ export default defineConfig({
     target: `esnext`,
   },
 
+  // wasm-bindgen-rayon's threaded glue imports child worker chunks. Vite's
+  // default iife worker output cannot code-split, so emit module workers.
+  worker: {
+    format: `es`,
+  },
+
   resolve: {
     alias: {
       '$lib': resolve(__dirname, `src/lib`),

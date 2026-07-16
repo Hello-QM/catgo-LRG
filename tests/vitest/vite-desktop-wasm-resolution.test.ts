@@ -36,4 +36,8 @@ describe('desktop Vite ferrox WASM resolution', () => {
       realpathSync(resolve(repoRoot, 'extensions/rust-wasm/pkg-threaded/ferrox.js')),
     )
   })
+
+  it('emits ES module workers so threaded dependencies can code split', () => {
+    expect(desktopConfig.worker?.format).toBe('es')
+  })
 })
