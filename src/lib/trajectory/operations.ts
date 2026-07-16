@@ -1,5 +1,36 @@
 import type { AnyStructure } from '$lib'
+import type { PymatgenStructure } from '$lib/structure'
+import type { SupercellOp } from '$lib/structure/supercell-operation'
+import { execute_supercell_op_sync } from '$lib/structure/supercell-operation'
 import type { TrajectoryType } from './index'
+
+/**
+ * Discriminated union of pane-ledger operations (design §9.3).
+ * `scale_geometry` is the pre-existing streamed all-frame edit (formerly
+ * `TrajectoryTransformation` in `clone.ts`); `supercell` is the canonical
+ * Build → Lattice → Supercell op executed by `execute_supercell_op_sync`.
+ */
+export type TrajectoryEditOp =
+  | { kind: `scale_geometry`; factor: number }
+  | SupercellOp
+
+/**
+ * Apply ONE ledger op to a structure, returning a new structure. Pure: never
+ * mutates the input; throws cleanly (no partial result) on invalid ops, so a
+ * caller retains its last complete scene.
+ */
+export function apply_trajectory_edit_op(
+  structure: AnyStructure,
+  op: TrajectoryEditOp,
+): AnyStructure {
+  if (op.kind === `scale_geometry`) {
+    return scale_structure_geometry(structure, op.factor)
+  }
+  return execute_supercell_op_sync(
+    structure as PymatgenStructure,
+    op,
+  ).structure as AnyStructure
+}
 
 export function topology_signature(structure: AnyStructure): string {
   return structure.sites

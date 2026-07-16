@@ -132,7 +132,15 @@ export function create_frame_request_loader(): FrameRequestLoader {
       }
       try {
         const source = trajectory.frame_source_data ?? fallback_source ?? ``
-        const frame = await loader.load_frame(source, frame_idx)
+        // §9.3: all frame consumers use the one effective-frame resolver. The
+        // raw loader supplies the immutable base frame; the pane's active
+        // ledger entries are applied (and cached by ledger revision) inside
+        // the resolver. Trajectories without a resolver (not pane-cloned)
+        // fall back to the raw loader — they cannot carry ledger ops.
+        const resolver = trajectory.effective_frames
+        const frame = resolver
+          ? await resolver.resolve(frame_idx, (idx) => loader.load_frame(source, idx))
+          : await loader.load_frame(source, frame_idx)
         if (request !== latest_request) return { status: `stale` }
         if (!frame?.structure) {
           return finish({ status: `failed`, frame: previous, error: new Error(`Failed to load frame ${frame_idx}`) })

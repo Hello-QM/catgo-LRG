@@ -1,6 +1,8 @@
 // Utility functions for working with trajectory data
 import type { AnyStructure, Trajectory } from '$lib'
 import type { ComponentProps } from 'svelte'
+import type { EffectiveFrameResolver } from './effective-frame-resolver'
+import type { OperationLedger } from './operation-ledger'
 
 export { default as Trajectory } from './Trajectory.svelte'
 export { default as TrajectoryError } from './TrajectoryError.svelte'
@@ -53,6 +55,12 @@ export interface TrajectoryType {
   frame_loader?: FrameLoader
   /** Immutable source consumed by frame_loader; shared by reference across panes. */
   frame_source_data?: string | ArrayBuffer
+  /** Pane-owned ordered operation ledger over the immutable base source (§9.3). */
+  operation_ledger?: OperationLedger
+  /** The pane's ONE effective-frame resolver — every consumer of loader frames
+   *  must resolve through it; never mix raw loader frames with transformed
+   *  `frames`, which risks missing or double-applying an operation (§9.3). */
+  effective_frames?: EffectiveFrameResolver
 }
 
 // Unified handler data interface

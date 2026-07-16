@@ -1,15 +1,18 @@
-import type { FrameLoader, TrajectoryFrame, TrajectoryType } from './index'
 import { clone_structure } from '$lib/structure/clone'
-import { scale_structure_geometry } from './operations'
+import { create_effective_frame_resolver } from './effective-frame-resolver'
+import type { TrajectoryFrame, TrajectoryType } from './index'
+import { OperationLedger } from './operation-ledger'
+import type { TrajectoryEditOp } from './operations'
 
-export type TrajectoryTransformation =
-  | { kind: `scale_geometry`; factor: number }
+/**
+ * @deprecated Legacy alias — pane edits are `TrajectoryEditOp` ledger entries
+ * now (design §9.3). Kept for the `pane_transformations` bridge below.
+ */
+export type TrajectoryTransformation = TrajectoryEditOp
 
 export type PaneTrajectory = TrajectoryType & {
   pane_transformations?: TrajectoryTransformation[]
 }
-
-const loader_bases = new WeakMap<FrameLoader, FrameLoader>()
 
 /**
  * `LibraryEntry` lives inside Svelte `$state`, so selecting an existing entry
@@ -87,7 +90,7 @@ function clone_proxy_safe<T>(
   return copy as T
 }
 
-function clone_frame(frame: TrajectoryFrame): TrajectoryFrame {
+export function clone_frame(frame: TrajectoryFrame): TrajectoryFrame {
   return {
     ...frame,
     structure: clone_structure(frame.structure),
@@ -147,54 +150,46 @@ function lazy_clone_frames(source: readonly TrajectoryFrame[]): TrajectoryFrame[
   })
 }
 
-export function apply_trajectory_transformations(
-  frame: TrajectoryFrame,
-  transformations: TrajectoryTransformation[],
-): TrajectoryFrame {
-  return transformations.reduce((next, transformation) => {
-    if (transformation.kind === `scale_geometry`) {
-      return {
-        ...next,
-        structure: scale_structure_geometry(next.structure, transformation.factor),
-      }
-    }
-    return next
-  }, frame)
+/**
+ * Legacy bridge (superseded once Trajectory.svelte gains ledger transactions):
+ * streamed all-frame scale edits are still recorded via
+ * `pane_transformations.push(...)`. Forked loaders no longer replay this array
+ * — the effective-frame resolver is the ONLY transform path — so pushes are
+ * routed into the pane's ledger as all-scope entries (bumping its revision).
+ */
+function ledger_backed_transformations(
+  ledger: OperationLedger,
+): TrajectoryTransformation[] {
+  const transformations: TrajectoryTransformation[] = []
+  Object.defineProperty(transformations, `push`, {
+    value: (...ops: TrajectoryTransformation[]): number => {
+      for (const op of ops) ledger.append({ kind: `all` }, op)
+      return Array.prototype.push.call(transformations, ...ops)
+    },
+    enumerable: false,
+  })
+  return transformations
 }
 
-function fork_loader(
-  loader: FrameLoader,
-  transformations: TrajectoryTransformation[],
-): FrameLoader {
-  const original = loader_bases.get(loader) ?? loader
-  const base = original.fork?.() ?? original
-  const wrapped: FrameLoader = {
-    get_total_frames: (data) => base.get_total_frames(data),
-    build_frame_index: (data, sample_rate, on_progress) =>
-      base.build_frame_index(data, sample_rate, on_progress),
-    load_frame: async (data, frame_number) => {
-      const frame = await base.load_frame(data, frame_number)
-      if (!frame) return null
-      // With no pane transformations the clone is pure overhead — deep-copying
-      // a 20k-site structure costs ~70 ms + GC pressure per streamed frame.
-      // Loader-cached frames are treated as immutable by the playback path:
-      // edits target `current_structure` (the topology-init clone), never the
-      // fetched frame objects, and per-frame data flows via typed positions.
-      if (transformations.length === 0) return frame
-      return apply_trajectory_transformations(clone_frame(frame), transformations)
-    },
-    extract_plot_metadata: (data, options, on_progress) =>
-      base.extract_plot_metadata(data, options, on_progress),
+/**
+ * The pane's ledger: an independent clone of the source pane's ledger, or a
+ * fresh one seeded from any legacy transformation array (design §9.3 — each
+ * pane owns its ordered ledger; edits never leak across panes).
+ */
+function pane_ledger(source: PaneTrajectory): OperationLedger {
+  if (source.operation_ledger) return source.operation_ledger.clone()
+  const ledger = new OperationLedger()
+  for (const op of clone_data(source.pane_transformations ?? [])) {
+    ledger.append({ kind: `all` }, op)
   }
-  loader_bases.set(wrapped, base)
-  return wrapped
+  return ledger
 }
 
 /** Give every pane its own mutable trajectory/frame graph. */
 export function clone_trajectory_for_pane<T extends TrajectoryType | null | undefined>(trajectory: T): T {
   if (trajectory == null) return trajectory
   const source = trajectory as PaneTrajectory
-  const transformations = clone_data(source.pane_transformations ?? [])
+  const ledger = pane_ledger(source)
   const copy: PaneTrajectory = {
     ...source,
     frames: source.frames.length > LAZY_CLONE_FRAME_THRESHOLD
@@ -206,10 +201,16 @@ export function clone_trajectory_for_pane<T extends TrajectoryType | null | unde
       ...x,
       properties: { ...x.properties },
     })),
-    pane_transformations: transformations,
+    operation_ledger: ledger,
+    effective_frames: create_effective_frame_resolver(ledger),
+    pane_transformations: ledger_backed_transformations(ledger),
   }
   if (source.frame_loader) {
-    copy.frame_loader = fork_loader(source.frame_loader, transformations)
+    // Forked loaders serve immutable base frames only — no transformation
+    // replay (that caused missing/double-applied ops when consumers mixed
+    // loader frames with transformed `frames`). Ledger ops are applied by the
+    // pane's effective-frame resolver, cached by (frame_idx, ledger_revision).
+    copy.frame_loader = source.frame_loader.fork?.() ?? source.frame_loader
   }
   return copy as T
 }
