@@ -42,6 +42,8 @@ import { resolve_periodic_edge } from '../../scene/replica-layout'
 import {
   cell_count_of,
   ensure_instanced_attr,
+  rebind_instance_divisors_if_needed,
+  set_material_opacity,
   type ReplicaDims,
 } from './atom-replica-renderer'
 
@@ -408,6 +410,8 @@ export type BondReplicaOptions = {
   stub_scale?: number
   ambient_light?: number
   directional_light?: number
+  /** Opacity for the main replica bond draw. */
+  opacity?: number
   /** Opacity for ghost-side halves (sparse second draw). */
   ghost_opacity?: number
 }
@@ -468,20 +472,19 @@ export class BondReplicaRenderer {
         uOpacity: { value: 1 },
       },
     })
+    this.set_opacity(options.opacity ?? 1)
 
     this.ghost_material = new THREE.ShaderMaterial({
       vertexShader: GHOST_VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
       glslVersion: THREE.GLSL3,
-      transparent: false,
-      depthWrite: true,
-      alphaToCoverage: true,
       uniforms: {
         // Shared uniform OBJECTS — one write updates both draws.
         ...shared_uniforms,
-        uOpacity: { value: options.ghost_opacity ?? 1 },
+        uOpacity: { value: 1 },
       },
     })
+    this.set_ghost_opacity(options.ghost_opacity ?? 1)
 
     this.mesh = new THREE.Mesh(this.#geometry, this.material)
     this.ghost_mesh = new THREE.Mesh(this.#ghost_geometry, this.ghost_material)
@@ -490,11 +493,18 @@ export class BondReplicaRenderer {
     // buffer size at the actual draw boundary, not only on packet updates —
     // otherwise the fragment ray is reconstructed from stale camera data.
     const viewport = new THREE.Vector2(1, 1)
+    let seen_divisor_revision = 0
     const refresh_view: THREE.Object3D[`onBeforeRender`] = (
       webgl_renderer,
       _scene,
       camera,
     ) => {
+      rebind_instance_divisors_if_needed(
+        this.mesh,
+        webgl_renderer,
+        () => seen_divisor_revision,
+        (revision) => seen_divisor_revision = revision,
+      )
       webgl_renderer.getDrawingBufferSize(viewport)
       this.set_view(camera.projectionMatrixInverse, viewport.x, viewport.y)
     }
@@ -530,6 +540,18 @@ export class BondReplicaRenderer {
 
   set_bond_radius(radius: number): void {
     this.material.uniforms.uBondRadius.value = radius
+  }
+
+  set_stub_scale(scale: number): void {
+    this.material.uniforms.uStubScale.value = scale
+  }
+
+  set_opacity(opacity: number): void {
+    set_material_opacity(this.material, `uOpacity`, opacity)
+  }
+
+  set_ghost_opacity(opacity: number): void {
+    set_material_opacity(this.ghost_material, `uOpacity`, opacity)
   }
 
   #rebuild_half_attrs(packet: RenderPacket): void {
@@ -568,6 +590,10 @@ export class BondReplicaRenderer {
         this.#colors[i0 * 3 + k] = colors[ca + k]
         this.#colors[i1 * 3 + k] = colors[cb + k]
       }
+    }
+    for (const name of [`a_site`, `a_jimage`, `a_half`, `a_color`]) {
+      const attribute = this.#geometry.getAttribute(name)
+      if (attribute) attribute.needsUpdate = true
     }
   }
 
@@ -647,6 +673,9 @@ export class BondReplicaRenderer {
     ensure_instanced_attr(geometry, `g_jimage`, table.jimages, 3, 1)
     ensure_instanced_attr(geometry, `g_cell`, table.cells, 3, 1)
     ensure_instanced_attr(geometry, `g_color`, this.#ghost_colors, 3, 1)
+    for (const name of [`g_site`, `g_jimage`, `g_cell`, `g_color`]) {
+      geometry.getAttribute(name).needsUpdate = true
+    }
     geometry.instanceCount = count
     this.ghost_mesh.visible = count > 0
   }

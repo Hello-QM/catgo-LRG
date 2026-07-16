@@ -156,12 +156,15 @@ describe(`BondReplicaRenderer — replica factor changes`, () => {
     const mesh = renderer.mesh
     const geometry = geo(mesh)
     const material = mesh.material
-    const arrays = {
-      site: attr(mesh, `a_site`).array,
-      jimage: attr(mesh, `a_jimage`).array,
-      half: attr(mesh, `a_half`).array,
-      color: attr(mesh, `a_color`).array,
+    const attributes = {
+      site: attr(mesh, `a_site`),
+      jimage: attr(mesh, `a_jimage`),
+      half: attr(mesh, `a_half`),
+      color: attr(mesh, `a_color`),
     }
+    const versions = Object.fromEntries(
+      Object.entries(attributes).map(([key, value]) => [key, value.version]),
+    )
 
     renderer.update(builder.build({
       structure,
@@ -172,10 +175,17 @@ describe(`BondReplicaRenderer — replica factor changes`, () => {
     expect(renderer.mesh).toBe(mesh)
     expect(geo(renderer.mesh)).toBe(geometry)
     expect(renderer.mesh.material).toBe(material)
-    expect(attr(mesh, `a_site`).array).toBe(arrays.site)
-    expect(attr(mesh, `a_jimage`).array).toBe(arrays.jimage)
-    expect(attr(mesh, `a_half`).array).toBe(arrays.half)
-    expect(attr(mesh, `a_color`).array).toBe(arrays.color)
+    // Same attribute OBJECTS (and therefore same renderer-side WebGLBuffer
+    // resources) — a factor-only change mutates divisors/counts without a
+    // base-data upload (version stays unchanged).
+    expect(attr(mesh, `a_site`)).toBe(attributes.site)
+    expect(attr(mesh, `a_jimage`)).toBe(attributes.jimage)
+    expect(attr(mesh, `a_half`)).toBe(attributes.half)
+    expect(attr(mesh, `a_color`)).toBe(attributes.color)
+    expect(attributes.site.version).toBe(versions.site)
+    expect(attributes.jimage.version).toBe(versions.jimage)
+    expect(attributes.half.version).toBe(versions.half)
+    expect(attributes.color.version).toBe(versions.color)
     expect(attr(mesh, `a_site`).meshPerAttribute).toBe(27)
     expect(geometry.instanceCount).toBe(2 * BOND_COUNT * 27)
 

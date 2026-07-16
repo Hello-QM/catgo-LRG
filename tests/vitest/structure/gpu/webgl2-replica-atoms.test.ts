@@ -136,10 +136,15 @@ describe(`AtomReplicaRenderer — replica factor changes`, () => {
     const mesh = renderer.mesh
     const geometry = geo(mesh)
     const material = mesh.material
-    const arrays = {
-      pos: attr(mesh, `instancePosition`).array,
-      rad: attr(mesh, `instanceRadius`).array,
-      col: attr(mesh, `instanceAtomColor`).array,
+    const attributes = {
+      pos: attr(mesh, `instancePosition`),
+      rad: attr(mesh, `instanceRadius`),
+      col: attr(mesh, `instanceAtomColor`),
+    }
+    const versions = {
+      pos: attributes.pos.version,
+      rad: attributes.rad.version,
+      col: attributes.col.version,
     }
 
     renderer.update(builder.build({ structure, dims: [3, 3, 3] }))
@@ -148,10 +153,15 @@ describe(`AtomReplicaRenderer — replica factor changes`, () => {
     expect(renderer.mesh).toBe(mesh)
     expect(geo(renderer.mesh)).toBe(geometry)
     expect(renderer.mesh.material).toBe(material)
-    // Same typed arrays — only counts / divisors / uniforms move.
-    expect(attr(mesh, `instancePosition`).array).toBe(arrays.pos)
-    expect(attr(mesh, `instanceRadius`).array).toBe(arrays.rad)
-    expect(attr(mesh, `instanceAtomColor`).array).toBe(arrays.col)
+    // Same attribute OBJECTS (and therefore same renderer-side WebGLBuffer
+    // resources) — only counts / divisors / uniforms move. Attribute versions
+    // must not bump: a factor-only change uploads no base data.
+    expect(attr(mesh, `instancePosition`)).toBe(attributes.pos)
+    expect(attr(mesh, `instanceRadius`)).toBe(attributes.rad)
+    expect(attr(mesh, `instanceAtomColor`)).toBe(attributes.col)
+    expect(attributes.pos.version).toBe(versions.pos)
+    expect(attributes.rad.version).toBe(versions.rad)
+    expect(attributes.col.version).toBe(versions.col)
     expect(attr(mesh, `instancePosition`).count).toBe(3)
     expect(attr(mesh, `instancePosition`).meshPerAttribute).toBe(27)
     expect(geometry.instanceCount).toBe(3 * 27)

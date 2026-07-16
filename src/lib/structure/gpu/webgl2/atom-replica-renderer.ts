@@ -91,13 +91,63 @@ export function decode_webgl2_instance(
   return { base_index, cell_index, cell: [ix, iy, iz] }
 }
 
+const DIVISOR_REVISION = `__catgo_instance_divisor_revision`
+
+function divisor_revision(geometry: THREE.InstancedBufferGeometry): number {
+  return (geometry.userData[DIVISOR_REVISION] as number | undefined) ?? 0
+}
+
+function mark_divisor_changed(geometry: THREE.InstancedBufferGeometry): void {
+  geometry.userData[DIVISOR_REVISION] = divisor_revision(geometry) + 1
+  // Three derives this cache from meshPerAttribute during VAO setup.
+  delete (geometry as unknown as { _maxInstanceCount?: number })._maxInstanceCount
+}
+
 /**
- * (Re)bind an instanced attribute on `geometry`. Reuses the existing
- * attribute object when both the backing array identity and the divisor are
- * unchanged; otherwise swaps in a fresh `InstancedBufferAttribute` sharing
- * the given array. The swap on divisor change is deliberate: three's binding
- * state caches the vertex-attrib divisor per attribute OBJECT, so mutating
- * `meshPerAttribute` in place would leave a stale GL divisor.
+ * Apply the divisor rebind if needed. Three's WebGLBindingStates cache does
+ * NOT include `meshPerAttribute` in its `needsUpdate()` identity check (r181,
+ * WebGLBindingStates.js:137-174), but public `WebGLRenderer.resetState()` sets
+ * binding-state `forceUpdate=true`. Calling this from `onBeforeRender` runs
+ * before `renderBufferDirect`, so the existing VAO is rebound with the
+ * mutated divisor while the SAME InstancedBufferAttribute / WebGLBuffer stays
+ * alive. No base-data version bump and no buffer upload occurs.
+ */
+export function rebind_instance_divisors_if_needed(
+  mesh: THREE.Mesh,
+  webgl_renderer: THREE.WebGLRenderer,
+  get_seen: () => number,
+  set_seen: (revision: number) => void,
+): void {
+  const geometry = mesh.geometry as THREE.InstancedBufferGeometry
+  const revision = divisor_revision(geometry)
+  if (revision === get_seen()) return
+  // resetState() is the public way to force WebGLBindingStates to re-run VAO
+  // setup, but it also clears WebGLRenderer's active render-target bookkeeping.
+  // Preserve + restore it so an offscreen/picking/postprocess pass does not
+  // silently continue as a screen pass after the divisor rebind.
+  const target = webgl_renderer.getRenderTarget()
+  const cube_face = webgl_renderer.getActiveCubeFace()
+  const mip_level = webgl_renderer.getActiveMipmapLevel()
+  const viewport = webgl_renderer.getViewport(new THREE.Vector4())
+  const scissor = webgl_renderer.getScissor(new THREE.Vector4())
+  const scissor_test = webgl_renderer.getScissorTest()
+  webgl_renderer.resetState()
+  webgl_renderer.setRenderTarget(target, cube_face, mip_level)
+  webgl_renderer.setViewport(viewport.x, viewport.y, viewport.z, viewport.w)
+  webgl_renderer.setScissor(scissor.x, scissor.y, scissor.z, scissor.w)
+  webgl_renderer.setScissorTest(scissor_test)
+  set_seen(revision)
+}
+
+/**
+ * Bind or update an instanced attribute on `geometry`.
+ *
+ * - Array identity changed → a genuinely new base buffer: install a fresh
+ *   attribute object.
+ * - Divisor-only change → mutate `meshPerAttribute` on the SAME attribute,
+ *   do NOT set `needsUpdate` (that would re-upload the unchanged base data),
+ *   and mark the geometry for the render-boundary rebind above.
+ * - Same array + same divisor → exact no-op.
  */
 export function ensure_instanced_attr(
   geometry: THREE.InstancedBufferGeometry,
@@ -112,16 +162,19 @@ export function ensure_instanced_attr(
     | undefined
   if (
     existing !== undefined && existing.isInstancedBufferAttribute &&
-    existing.array === array && existing.meshPerAttribute === divisor
+    existing.array === array
   ) {
-    existing.needsUpdate = true
+    if (existing.meshPerAttribute !== divisor) {
+      existing.meshPerAttribute = divisor
+      mark_divisor_changed(geometry)
+    }
     return existing
   }
   const attr = new THREE.InstancedBufferAttribute(array, item_size, false, divisor)
   if (dynamic) attr.setUsage(THREE.DynamicDrawUsage)
   geometry.setAttribute(name, attr)
-  // three caches `_maxInstanceCount` from the first instanced attribute it
-  // sees — clear it so a divisor / size change can never clamp the draw.
+  // A fresh attribute identity makes Three rebuild the binding naturally.
+  // Clear only the derived draw clamp; no divisor-revision reset is needed.
   delete (geometry as unknown as { _maxInstanceCount?: number })._maxInstanceCount
   return attr
 }
@@ -280,6 +333,23 @@ export type AtomReplicaOptions = {
   ghost_opacity?: number
 }
 
+/** Configure real transparency for a material whose shader alpha includes an
+ *  opacity uniform. Opaque draws use alpha-to-coverage for analytic edge AA;
+ *  translucent draws use normal blending and disable depth writes/A2C to
+ *  avoid double-applying coverage. */
+export function set_material_opacity(
+  material: THREE.ShaderMaterial,
+  uniform_name: string,
+  opacity: number,
+): void {
+  const value = Math.max(0, Math.min(1, opacity))
+  material.uniforms[uniform_name].value = value
+  const transparent = value < 1
+  material.transparent = transparent
+  material.depthWrite = !transparent
+  material.alphaToCoverage = !transparent
+}
+
 export class AtomReplicaRenderer {
   readonly mesh: THREE.Mesh
   readonly ghost_mesh: THREE.Mesh
@@ -337,23 +407,36 @@ export class AtomReplicaRenderer {
       vertexShader: GHOST_VERTEX_SHADER,
       fragmentShader: FRAGMENT_SHADER,
       glslVersion: THREE.GLSL3,
-      transparent: true,
-      depthWrite: true,
       uniforms: {
         // Shared uniform OBJECTS — one write updates both draws.
         ...shared_uniforms,
-        uOpacityScale: { value: options.ghost_opacity ?? 1 },
+        uOpacityScale: { value: 1 },
       },
     })
+    this.set_ghost_opacity(options.ghost_opacity ?? 1)
 
     this.mesh = new THREE.Mesh(this.#geometry, this.material)
     this.ghost_mesh = new THREE.Mesh(this.#ghost_geometry, this.ghost_material)
+    let seen_divisor_revision = divisor_revision(this.#geometry)
+    this.mesh.onBeforeRender = (webgl_renderer) => {
+      rebind_instance_divisors_if_needed(
+        this.mesh,
+        webgl_renderer,
+        () => seen_divisor_revision,
+        (revision) => seen_divisor_revision = revision,
+      )
+    }
     for (const mesh of [this.mesh, this.ghost_mesh]) {
       mesh.frustumCulled = false
       // Picking is a GPU ID pass (design §7.3), never a CPU quad raycast.
       mesh.raycast = () => {}
     }
     this.ghost_mesh.visible = false
+  }
+
+  /** Live ghost appearance update — no geometry/material reconstruction. */
+  set_ghost_opacity(opacity: number): void {
+    set_material_opacity(this.ghost_material, `uOpacityScale`, opacity)
   }
 
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
@@ -388,6 +471,10 @@ export class AtomReplicaRenderer {
       this.#colors[idx * 3 + 1] = colors[src + 1]
       this.#colors[idx * 3 + 2] = colors[src + 2]
     }
+    const radius_attr = this.#geometry.getAttribute(`instanceRadius`)
+    const color_attr = this.#geometry.getAttribute(`instanceAtomColor`)
+    if (radius_attr) radius_attr.needsUpdate = true
+    if (color_attr) color_attr.needsUpdate = true
   }
 
   #apply_replicas(packet: RenderPacket): void {
@@ -445,6 +532,9 @@ export class AtomReplicaRenderer {
     ensure_instanced_attr(geometry, `ghostImage`, this.#ghost_images, 3, 1)
     ensure_instanced_attr(geometry, `ghostRadius`, this.#ghost_radii, 1, 1)
     ensure_instanced_attr(geometry, `ghostColor`, this.#ghost_colors, 3, 1)
+    for (const name of [`ghostImage`, `ghostRadius`, `ghostColor`]) {
+      geometry.getAttribute(name).needsUpdate = true
+    }
     geometry.instanceCount = count
     this.ghost_mesh.visible = count > 0
   }

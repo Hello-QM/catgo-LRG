@@ -1,8 +1,8 @@
 <script lang="ts">
   /**
    * WebGL2 replica impostor layer — mounts the Task-4 atom/bond replica
-   * renderers (gpu/webgl2/) for a `RenderPacket` whose `ReplicaLayout` has
-   * dims ≠ 1×1×1. One packet drives both draws; a frame advance only rewrites
+   * renderers (gpu/webgl2/) for every packet-path `RenderPacket`, including
+   * 1×1×1. One packet drives both draws; a frame advance only rewrites
    * base-sized buffers + the current-lattice uniform (no mesh reconstruction
    * across play / pause / scrub), and a replica-factor change only touches
    * instance counts, divisors, and uniforms.
@@ -30,6 +30,8 @@
     directional_light?: number
     /** View-space headlamp direction (kept live in both materials). */
     light_dir?: Vector3
+    /** Main bond-draw opacity (ignored by atom-only layers). */
+    opacity?: number
     /** Opacity multiplier for ghost-image instances (sparse second draws). */
     ghost_opacity?: number
   }
@@ -43,6 +45,7 @@
     ambient_light = 0.7,
     directional_light = 0.3,
     light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
+    opacity = 1,
     ghost_opacity = 1,
   }: Props = $props()
 
@@ -63,6 +66,7 @@
         stub_scale: incomplete_edge_length_scale,
         ambient_light,
         directional_light,
+        opacity,
         ghost_opacity,
       })
       : null
@@ -112,7 +116,11 @@
       material.uniforms.uAmbientIntensity.value = ambient_light
       material.uniforms.uDirectionalIntensity.value = directional_light
     }
+    atom_renderer?.set_ghost_opacity(ghost_opacity)
     bond_renderer?.set_bond_radius(bond_radius)
+    bond_renderer?.set_stub_scale(incomplete_edge_length_scale)
+    bond_renderer?.set_opacity(opacity)
+    bond_renderer?.set_ghost_opacity(ghost_opacity)
     mark_dirty()
   })
 

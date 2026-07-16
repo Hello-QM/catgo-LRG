@@ -102,12 +102,11 @@
      *  an effect-ordering race — see git history for details). */
     max_capacity?: number
     /**
-     * gpu-visual-supercell packet path (Task 4). When the packet carries a
-     * `ReplicaLayout` with dims ≠ 1×1×1, the WebGL2 replica impostor layer
-     * (gpu/WebGLReplicaLayer.svelte) draws N × cells atom impostors from
-     * base-sized buffers and THIS component's legacy InstancedMesh path is
-     * bypassed (mesh hidden + renderer suspended). `null` / 1×1×1 keeps the
-     * legacy path byte-identical. Task 6 plumbs the packet from the scene.
+     * gpu-visual-supercell packet path (Task 4). For ANY non-null packet —
+     * including 1×1×1 — the persistent WebGL2 replica impostor layer draws
+     * from base-sized buffers and the legacy InstancedMesh is not mounted at
+     * all (therefore no hidden capacity-sized instanceMatrix). `null` keeps
+     * the legacy path byte-identical. Task 6 plumbs the packet from the scene.
      */
     render_packet?: RenderPacket | null
   }
@@ -132,16 +131,6 @@
     max_capacity = 200_000,
     render_packet = null,
   }: Props = $props()
-
-  // WebGL2 replica fast path: active only when a packet with a non-trivial
-  // visual replica layout is supplied. While active the legacy mesh is
-  // hidden and its renderer suspended (dirty state accumulates; the release
-  // effect below flushes it with one force_full_resync).
-  const replica_active = $derived(
-    render_packet !== null &&
-      render_packet.replicas.dims[0] * render_packet.replicas.dims[1] *
-          render_packet.replicas.dims[2] > 1,
-  )
 
   // glossy = 0, matte = 1, toon = 2 (matches the uRenderStyle branch order).
   function render_style_to_int(
@@ -522,9 +511,6 @@
       r.set_cutting(cutting_active, cutting_visibility_map ?? null)
       r.set_atom_opacity_overrides(atom_opacity_overrides ?? null)
       r.set_image_atoms(num_original_sites, image_atom_opacity, image_to_original_map)
-      // Replica bypass state at (re)mount — the dedicated effect below only
-      // fires on replica_active CHANGES and may have already run.
-      r.set_suspended(replica_active)
       opaque_renderer = r
       r.force_full_resync()
       mark_dirty()
@@ -614,26 +600,6 @@
     mark_dirty()
   })
 
-  // ─── Replica-layer bypass ───
-  // Tracks ONLY replica_active; the body runs untracked (force_full_resync
-  // reads manager $state — same discipline as the mount effect). Suspending
-  // leaves the renderer's dirty bookkeeping intact; releasing flushes it all
-  // with one full resync so the legacy mesh is current the moment it shows.
-  let last_replica_active = false
-  $effect(() => {
-    const active = replica_active
-    if (!opaque_renderer) return
-    if (active === last_replica_active) return
-    last_replica_active = active
-    untrack(() => {
-      opaque_renderer!.set_suspended(active)
-      if (!active) {
-        opaque_renderer!.force_full_resync()
-        mark_dirty()
-      }
-    })
-  })
-
   // ─── Drag fast-path ───
   // `realtime_position_overrides` is a transient map that the parent mutates
   // (often each frame during a drag). Writing to the manager bumps `version`,
@@ -715,20 +681,10 @@
   })
 </script>
 
-<!-- Single mesh, fixed `max_capacity` (default 200k) avoids the remount race
-     between capacity-growth and main-sync $effects. See the "Mesh refs"
-     comment above for why we don't replicate AtomImpostors's opaque /
-     transparent two-mesh split. Hidden while the WebGL2 replica layer owns
-     the atom draw (replica_active) — the replica layer draws cell 0 too. -->
-<T.InstancedMesh
-  args={[opaque_geometry, opaque_material, max_capacity]}
-  bind:ref={opaque_mesh}
-  visible={!replica_active}
-  frustumCulled={false}
-  raycast={null}
-/>
-
-{#if replica_active && render_packet}
+{#if render_packet}
+  <!-- Packet path is persistent from 1× upward. Do not mount a hidden legacy
+       InstancedMesh: its unused capacity-sized instanceMatrix is exactly the
+       allocation this path removes, and 1×↔N× must not remount resources. -->
   <WebGLReplicaLayer
     packet={render_packet}
     show_bonds={false}
@@ -736,5 +692,14 @@
     {directional_light}
     {light_dir}
     ghost_opacity={image_atom_opacity}
+  />
+{:else}
+  <!-- Legacy non-packet path: fixed `max_capacity` avoids the historic
+       capacity-growth/main-sync remount race. -->
+  <T.InstancedMesh
+    args={[opaque_geometry, opaque_material, max_capacity]}
+    bind:ref={opaque_mesh}
+    frustumCulled={false}
+    raycast={null}
   />
 {/if}
