@@ -184,6 +184,24 @@ describe(`effective-frame resolver`, () => {
     expect(recomputed?.structure.sites[1].xyz[0]).toBeCloseTo(6)
   })
 
+  it(`does not retain zero-op frames in the cache`, async () => {
+    const ledger = new OperationLedger()
+    ledger.append({ kind: `frame`, frame_idx: 1 }, scale(2)) // matches only frame 1
+    const resolver = create_effective_frame_resolver(ledger)
+    const { loads, load_base } = make_source([frame(cubic(2, 2), 0), frame(cubic(2, 2), 1)])
+
+    const first = await resolver.resolve(0, load_base) // zero matching entries
+    const again = await resolver.resolve(0, load_base)
+    expect(first?.structure.sites[1].xyz[0]).toBeCloseTo(1) // untransformed base
+    expect(again?.structure.sites[1].xyz[0]).toBeCloseTo(1)
+    expect(loads).toEqual([0, 0]) // base re-loaded — nothing pinned in the LRU
+
+    const with_ops = await resolver.resolve(1, load_base) // with-ops path still caches
+    const cached = await resolver.resolve(1, load_base)
+    expect(cached).toBe(with_ops) // same revision → cached object, no recompute
+    expect(loads).toEqual([0, 0, 1])
+  })
+
   it(`iterate yields effective frames for the requested indices in order`, async () => {
     const ledger = new OperationLedger()
     ledger.append({ kind: `all` }, scale(2))

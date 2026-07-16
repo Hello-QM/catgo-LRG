@@ -9,10 +9,12 @@
  * Decoded base frames are immutable: when the pane ledger has active entries
  * matching a frame, the base is cloned ONCE and the entries are applied to
  * the clone in `seq` order (a current-only op A followed by an all-frame op B
- * yields A→B on the target frame and B alone on every other frame). Results
- * are cached by `(frame_idx, ledger_revision)` with bounded LRU eviction, so
- * re-resolving after undo/redo or a new op always restarts from the pristine
- * base — never from an already transformed frame.
+ * yields A→B on the target frame and B alone on every other frame).
+ * Transformed results are cached by `(frame_idx, ledger_revision)` with
+ * bounded LRU eviction, so re-resolving after undo/redo or a new op always
+ * restarts from the pristine base — never from an already transformed frame.
+ * Zero-op frames are returned straight through and never retained, matching
+ * the historical no-transformation path's memory behavior.
  */
 import { clone_frame } from './clone'
 import type { TrajectoryFrame } from './index'
@@ -64,24 +66,33 @@ export function create_effective_frame_resolver(
     if (!base?.structure) return null
     let frame = base
     if (entries.length > 0) {
-      // Clone the decoded base ONCE, then apply entries in seq order. The base
-      // frame itself is never mutated, so a later re-resolve starts from the
-      // pristine source — no double transform. With zero matching entries the
-      // clone is pure overhead (~70 ms for 20k sites) and the immutable base
-      // is returned as-is, matching the historical no-transformation path.
+      // With-ops path: clone the decoded base ONCE, then apply entries in seq
+      // order. The base frame itself is never mutated, so a later re-resolve
+      // starts from the pristine source — no double transform. The transformed
+      // result is LRU-cached by (frame_idx, revision) to amortize the
+      // clone+apply cost (~70 ms for 20k sites) across repeat resolves.
       frame = clone_frame(base)
       let structure = frame.structure
       for (const entry of entries) {
         structure = apply_trajectory_edit_op(structure, entry.op)
       }
       frame = { ...frame, structure }
-    }
-    cache.delete(frame_idx)
-    cache.set(frame_idx, { revision, frame })
-    while (cache.size > capacity) {
-      const oldest = cache.keys().next().value
-      if (oldest === undefined) break
-      cache.delete(oldest)
+      cache.delete(frame_idx)
+      cache.set(frame_idx, { revision, frame })
+      while (cache.size > capacity) {
+        const oldest = cache.keys().next().value
+        if (oldest === undefined) break
+        cache.delete(oldest)
+      }
+    } else {
+      // Zero-op path: return the immutable base straight through and retain
+      // NOTHING — there is no transform work to amortize (`pending` already
+      // dedupes concurrent resolves), and caching here would pin up to
+      // `capacity` decoded frames per pane that the historical
+      // no-transformation path released after render. Also drop any stale
+      // transformed result from an earlier revision (ops since undone or
+      // deactivated) so the frame frees its LRU slot.
+      cache.delete(frame_idx)
     }
     return frame
   }
