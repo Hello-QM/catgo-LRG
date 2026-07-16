@@ -769,6 +769,10 @@
     glslVersion: '300 es',
     transparent: false,
     depthWrite: true,
+    // MSAA resolves the fragment coverage into a smooth silhouette. Confirmed
+    // available: the main viewer Canvas requests antialias:true
+    // (Structure.svelte, rendererParameters). Without MSAA this degrades to a
+    // hard (aliased) impostor edge but stays correct.
     alphaToCoverage: true,
     uniforms: {
       // SHARE the exact uniform objects so the existing sync effects update both.
