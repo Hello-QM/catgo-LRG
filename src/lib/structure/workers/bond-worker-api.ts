@@ -63,8 +63,10 @@ const WORKER_INIT_TIMEOUT_MS = 15_000
 /** A live worker: owns the message channel, pending-request map, and
  *  per-request deadlines. On a request timeout or a worker error the handle
  *  terminates itself and reports back through `on_dead`, so the runtime can
- *  drop it and re-initialize on the next request (NOT a permanent failure). */
-class RealBondWorkerHandle implements BondWorkerHandle {
+ *  drop it and re-initialize on the next request (NOT a permanent failure).
+ *  Exported for unit tests (fake wedged-Worker injection); production
+ *  construction happens only in create_rust_worker. */
+export class RealBondWorkerHandle implements BondWorkerHandle {
   private pending = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
@@ -74,6 +76,8 @@ class RealBondWorkerHandle implements BondWorkerHandle {
   constructor(
     private worker: Worker,
     private on_dead: (handle: RealBondWorkerHandle, reason: string) => void,
+    /** Artifact kind — names the backend in timeout/error messages. */
+    private kind: 'scalar' | 'threaded',
   ) {
     worker.onmessage = (e: MessageEvent) => {
       const { id, type: msg_type, error } = e.data
@@ -116,10 +120,17 @@ class RealBondWorkerHandle implements BondWorkerHandle {
       // chain runs; the runtime re-initializes on the next request.
       const timer = setTimeout(() => {
         if (!this.pending.has(id)) return
-        this.pending.delete(id)
         const msg =
-          `Worker request timed out after ${timeout_ms}ms — terminating worker, falling back`
+          `rust wasm bond worker (${this.kind}) request timed out after ${timeout_ms}ms — ` +
+          `worker terminated, falling back; the runtime re-initializes on the next request`
         console.warn(`[bonds] ${msg}`)
+        // Do NOT delete this entry before die(): die() rejects every entry
+        // still in `pending` — including this one — which is what settles the
+        // timed-out caller's promise so its fallback chain runs. (Deleting
+        // first orphaned the promise forever — the wedged-worker hang this
+        // deadline exists to prevent.) No double-reject is possible: die()
+        // clears the map right after rejecting, so no later path (worker
+        // reply, terminate(), a second die()) can reach this entry again.
         this.die(msg)
       }, timeout_ms)
       this.pending.set(id, {
@@ -262,7 +273,7 @@ async function create_rust_worker(
   }
 
   console.log(`[bonds] Worker WASM initialized (${kind}, ${thread_count} thread(s))`)
-  return new RealBondWorkerHandle(w, (handle) => runtime?.reset(handle))
+  return new RealBondWorkerHandle(w, (handle) => runtime?.reset(handle), kind)
 }
 
 let runtime: BondWorkerRuntime | null = null

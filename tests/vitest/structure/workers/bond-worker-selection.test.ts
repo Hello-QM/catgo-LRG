@@ -3,6 +3,7 @@ import type { BondBackendCapabilities } from '$lib/structure/workers/bond-backen
 import {
   BondBackendUnavailableError,
   type BondWorkerHandle,
+  type BondWorkerRuntime,
   create_bond_worker_runtime,
   LARGE_SYSTEM_MIN_ATOMS,
   type TypedBondInput,
@@ -10,6 +11,7 @@ import {
 } from '$lib/structure/workers/bond-worker-runtime'
 import {
   compute_bonds_async,
+  RealBondWorkerHandle,
   set_bond_worker_runtime_for_tests,
 } from '$lib/structure/workers/bond-worker-api'
 import { BONDING_STRATEGIES } from '$lib/structure/bonding'
@@ -144,6 +146,76 @@ describe(`bond worker runtime selection`, () => {
       expect(js_spy).toHaveBeenCalledTimes(1)
     } finally {
       ;(BONDING_STRATEGIES as Record<string, unknown>).atom_radii = original
+    }
+  })
+
+  // ─── request timeout (Critical: timed-out callers MUST reject, not hang) ───
+
+  it(`rejects the timed-out caller, terminates the worker, and re-inits fresh`, async () => {
+    vi.useFakeTimers()
+    try {
+      // A worker that swallows every request — the wedged solid_angle /
+      // WebKitGTK failure mode the request deadline exists for.
+      class WedgedFakeWorker {
+        onmessage: ((e: MessageEvent) => void) | null = null
+        onerror: ((e: unknown) => void) | null = null
+        posted: Record<string, unknown>[] = []
+        terminated = false
+        postMessage(data: Record<string, unknown>, _transfer?: Transferable[]): void {
+          this.posted.push(data) // never replies
+        }
+        terminate(): void {
+          this.terminated = true
+        }
+      }
+
+      let runtime: BondWorkerRuntime
+      const workers: WedgedFakeWorker[] = []
+      const scalar = vi.fn((_thread_count: number) => {
+        const fake = new WedgedFakeWorker()
+        workers.push(fake)
+        return Promise.resolve<BondWorkerHandle>(
+          new RealBondWorkerHandle(
+            fake as unknown as Worker,
+            (handle) => runtime.reset(handle),
+            `scalar`,
+          ),
+        )
+      })
+      runtime = create_bond_worker_runtime({
+        detect_capabilities: () => ({ ...full_caps(8), cross_origin_isolated: false }),
+        create_threaded_worker: fail_factory(`threaded must not be attempted`),
+        create_scalar_worker: scalar,
+      })
+
+      const { handle } = await runtime.acquire(64)
+      // Never `await` the request before advancing timers — pre-fix it hangs
+      // FOREVER (the bug), which would hang the test too. Flag pattern instead.
+      let rejection: unknown = null
+      handle.request_json!({ type: `bonds` }, 1_000).catch((err) => {
+        rejection = err
+      })
+      expect(workers).toHaveLength(1)
+      expect(workers[0].posted).toHaveLength(1)
+
+      await vi.advanceTimersByTimeAsync(1_001)
+
+      // The timed-out caller's promise REJECTS with an actionable message
+      // naming the deadline and the backend...
+      expect(rejection).toBeInstanceOf(Error)
+      expect((rejection as Error).message).toContain(`timed out after 1000ms`)
+      expect((rejection as Error).message).toContain(`scalar`)
+      // ...the wedged worker was terminated...
+      expect(workers[0].terminated).toBe(true)
+      // ...and recovery stays intact: timeout is a reset, NOT an init failure,
+      // so the next acquire re-initializes a FRESH worker.
+      const second = await runtime.acquire(64)
+      expect(scalar).toHaveBeenCalledTimes(2)
+      expect(workers).toHaveLength(2)
+      expect(second.handle).not.toBe(handle)
+      expect(runtime.active_backend()).toBe(`rust-wasm-scalar`)
+    } finally {
+      vi.useRealTimers()
     }
   })
 
