@@ -485,8 +485,22 @@ export class BondReplicaRenderer {
 
     this.mesh = new THREE.Mesh(this.#geometry, this.material)
     this.ghost_mesh = new THREE.Mesh(this.#ghost_geometry, this.ghost_material)
+    // Camera projection can change while the packet stays static (notably
+    // orthographic wheel zoom). Refresh the inverse projection + drawing-
+    // buffer size at the actual draw boundary, not only on packet updates —
+    // otherwise the fragment ray is reconstructed from stale camera data.
+    const viewport = new THREE.Vector2(1, 1)
+    const refresh_view: THREE.Object3D[`onBeforeRender`] = (
+      webgl_renderer,
+      _scene,
+      camera,
+    ) => {
+      webgl_renderer.getDrawingBufferSize(viewport)
+      this.set_view(camera.projectionMatrixInverse, viewport.x, viewport.y)
+    }
     for (const mesh of [this.mesh, this.ghost_mesh]) {
       mesh.frustumCulled = false
+      mesh.onBeforeRender = refresh_view
       // Picking is a GPU ID pass (design §7.3), never a CPU box raycast.
       mesh.raycast = () => {}
     }

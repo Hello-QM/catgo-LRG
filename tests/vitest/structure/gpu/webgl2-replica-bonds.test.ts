@@ -274,6 +274,32 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
     renderer.dispose()
   })
 
+  test(`render-time camera hook refreshes inverse projection + viewport`, () => {
+    const renderer = new BondReplicaRenderer()
+    const camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.1, 100)
+    camera.updateProjectionMatrix()
+    const fake_webgl_renderer = {
+      getDrawingBufferSize(target: THREE.Vector2) {
+        return target.set(1600, 900)
+      },
+    } as unknown as THREE.WebGLRenderer
+
+    renderer.mesh.onBeforeRender(
+      fake_webgl_renderer,
+      new THREE.Scene(),
+      camera,
+      geo(renderer.mesh),
+      renderer.material,
+      null,
+    )
+
+    const inv = renderer.material.uniforms.uInvProjection.value as THREE.Matrix4
+    const viewport = renderer.material.uniforms.uViewport.value as THREE.Vector2
+    expect(inv.elements).toEqual(camera.projectionMatrixInverse.elements)
+    expect([viewport.x, viewport.y]).toEqual([1600, 900])
+    renderer.dispose()
+  })
+
   test(`positions travel as a base-sized texture, refreshed per frame`, () => {
     const builder = create_render_packet_builder()
     const structure = make_structure(3)
