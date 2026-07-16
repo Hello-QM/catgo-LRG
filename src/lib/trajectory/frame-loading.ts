@@ -5,8 +5,23 @@ export type FrameRequestOutcome =
   | { status: `failed`; frame: TrajectoryFrame | null; error: Error }
   | { status: `stale` }
 
+export interface DisplayedFrameOwner {
+  trajectory: TrajectoryType
+  frame_idx: number
+}
+
+export interface DisplayedFrameRemoteOrigin {
+  session_id: string
+  dir_path: string
+}
+
 export interface FrameRequestLoader {
   invalidate(): void
+  reject_out_of_bounds(
+    frame_idx: number,
+    frame_count: number,
+    previous: TrajectoryFrame | null,
+  ): Extract<FrameRequestOutcome, { status: `failed` }>
   is_current(
     outcome: FrameRequestOutcome,
     trajectory: TrajectoryType | undefined,
@@ -43,6 +58,29 @@ export function select_displayed_frame_idx(
     : previous_frame_idx
 }
 
+export function select_displayed_frame_owner(
+  outcome: FrameRequestOutcome,
+  requested_trajectory: TrajectoryType,
+  requested_frame_idx: number,
+  previous: DisplayedFrameOwner | null,
+): DisplayedFrameOwner | null {
+  return outcome.status === `loaded`
+    ? { trajectory: requested_trajectory, frame_idx: requested_frame_idx }
+    : previous
+}
+
+export function select_displayed_frame_remote_origin(
+  active_trajectory: TrajectoryType | undefined,
+  displayed_owner: DisplayedFrameOwner | null,
+): DisplayedFrameRemoteOrigin | undefined {
+  if (!active_trajectory || displayed_owner?.trajectory !== active_trajectory) {
+    return undefined
+  }
+  return active_trajectory.metadata?.remote_origin as
+    | DisplayedFrameRemoteOrigin
+    | undefined
+}
+
 export function select_pending_frame_publication(
   displayed_frame_idx: number | null,
   positions: Float32Array | null,
@@ -55,11 +93,23 @@ export function create_frame_request_loader(): FrameRequestLoader {
   let latest_request = 0
   let latest_outcome: FrameRequestOutcome | null = null
   let latest_trajectory: TrajectoryType | null = null
+  const invalidate = () => {
+    latest_request += 1
+    latest_outcome = null
+    latest_trajectory = null
+  }
   return {
-    invalidate: () => {
-      latest_request += 1
-      latest_outcome = null
-      latest_trajectory = null
+    invalidate,
+    reject_out_of_bounds: (frame_idx, frame_count, previous) => {
+      invalidate()
+      const bounds = frame_count > 0 ? `0-${frame_count - 1}` : `empty`
+      return {
+        status: `failed`,
+        frame: previous,
+        error: new Error(
+          `Failed to load frame ${frame_idx}: index outside trajectory bounds ${bounds}`,
+        ),
+      }
     },
     is_current: (outcome, trajectory) =>
       outcome === latest_outcome && trajectory === latest_trajectory,

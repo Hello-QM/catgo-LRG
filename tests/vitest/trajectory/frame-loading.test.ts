@@ -5,6 +5,8 @@ import type {
 } from '$lib/trajectory'
 import {
   create_frame_request_loader,
+  select_displayed_frame_owner,
+  select_displayed_frame_remote_origin,
   select_displayed_frame_idx,
   select_in_memory_frame,
   select_pending_frame_publication,
@@ -131,6 +133,25 @@ describe(`frame loading`, () => {
     expect(requests.is_current(result, replacement)).toBe(false)
   })
 
+  it(`invalidates a pending load when the requested index leaves bounds`, async () => {
+    const pending = deferred_frame_loader()
+    const trajectory = trajectory_with_loader(
+      pending.load_frame,
+      new ArrayBuffer(1),
+    )
+    const previous = frame(3)
+    const requests = create_frame_request_loader()
+    const pending_result = requests.load(trajectory, 4, previous, null)
+
+    const rejected = requests.reject_out_of_bounds(100, 100, previous)
+
+    expect(rejected.status).toBe(`failed`)
+    expect(rejected.frame).toBe(previous)
+    expect(rejected.error.message).toContain(`frame 100`)
+    pending.resolve(4, frame(4))
+    expect((await pending_result).status).toBe(`stale`)
+  })
+
   it(`keeps the previous frame when the loader throws`, async () => {
     const previous = frame(3)
     const requests = create_frame_request_loader()
@@ -213,6 +234,51 @@ describe(`frame loading`, () => {
     },
   )
 
+  it(`keeps remote push-back disabled until a replacement owns the displayed frame`, async () => {
+    const original = {
+      ...trajectory_with_loader(async () => frame(3), new ArrayBuffer(1)),
+      metadata: {
+        remote_origin: { session_id: `old-session`, dir_path: `/old/run` },
+      },
+    }
+    const replacement = {
+      ...trajectory_with_loader(async () => null, new ArrayBuffer(1)),
+      metadata: {
+        remote_origin: { session_id: `new-session`, dir_path: `/new/run` },
+      },
+    }
+    let owner = select_displayed_frame_owner(
+      { status: `loaded`, frame: frame(3) },
+      original,
+      3,
+      null,
+    )
+
+    const failed = await create_frame_request_loader().load(
+      replacement,
+      0,
+      frame(3),
+      null,
+    )
+    owner = select_displayed_frame_owner(failed, replacement, 0, owner)
+
+    expect(owner?.trajectory).toBe(original)
+    expect(owner?.frame_idx).toBe(3)
+    expect(select_displayed_frame_remote_origin(replacement, owner))
+      .toBeUndefined()
+
+    owner = select_displayed_frame_owner(
+      { status: `loaded`, frame: frame(0) },
+      replacement,
+      0,
+      owner,
+    )
+    expect(select_displayed_frame_remote_origin(replacement, owner)).toEqual({
+      session_id: `new-session`,
+      dir_path: `/new/run`,
+    })
+  })
+
   it(`wires displayed frame ownership into trajectory position caches`, () => {
     const source = readFileSync(
       `src/lib/trajectory/Trajectory.svelte`,
@@ -223,11 +289,13 @@ describe(`frame loading`, () => {
       `let displayed_frame_idx = $state<number | null>(null)`,
     )
     expect(source).toContain(`select_displayed_frame_idx(`)
-    expect(source).toMatch(/position_cache\[displayed_frame_idx\]/)
+    expect(source).toMatch(/position_cache\[active_displayed_frame_idx\]/)
     expect(source).toMatch(
-      /frame_pos_cache\.get\(displayed_frame_idx, frame_sites\)/,
+      /frame_pos_cache\.get\(active_displayed_frame_idx, frame_sites\)/,
     )
     expect(source).toContain(`select_pending_frame_publication(`)
+    expect(source).toContain(`select_displayed_frame_owner(`)
+    expect(source).toContain(`select_displayed_frame_remote_origin(`)
   })
 
   it(`guards outcome application with request and trajectory currentness`, () => {
@@ -238,7 +306,7 @@ describe(`frame loading`, () => {
 
     expect(source).toContain(`const requested_trajectory = trajectory`)
     expect(source).toMatch(
-      /if \(!frame_requests\.is_current\(result, trajectory\)\) return\s+apply_frame_request_outcome\(result, frame_idx\)/,
+      /if \(!frame_requests\.is_current\(result, trajectory\)\) return\s+apply_frame_request_outcome\(result, frame_idx, requested_trajectory\)/,
     )
   })
 })

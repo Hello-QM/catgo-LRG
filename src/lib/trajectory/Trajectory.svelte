@@ -27,9 +27,12 @@
   import { full_data_extractor } from './extract'
   import {
     create_frame_request_loader,
+    select_displayed_frame_owner,
+    select_displayed_frame_remote_origin,
     select_displayed_frame_idx,
     select_in_memory_frame,
     select_pending_frame_publication,
+    type DisplayedFrameOwner,
     type FrameRequestOutcome,
   } from './frame-loading'
   import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
@@ -367,10 +370,12 @@
   let pushback_status = $state<`idle` | `saving` | `saved` | `error`>(`idle`)
   let pushback_message = $state(``)
   let pushback_timer: ReturnType<typeof setTimeout> | undefined = undefined
+  let displayed_frame_owner = $state<DisplayedFrameOwner | null>(null)
 
-  // Remote origin from trajectory metadata (for push-back to remote HPC)
+  // A retained frame from an earlier trajectory must never inherit the active
+  // trajectory's remote destination after a replacement load fails.
   let remote_origin = $derived(
-    trajectory?.metadata?.remote_origin as { session_id: string; dir_path: string } | undefined,
+    select_displayed_frame_remote_origin(trajectory, displayed_frame_owner),
   )
   async function push_back_current_frame() {
     // Plan v3 Phase 4 fix: serialize current_frame.structure rather than
@@ -433,9 +438,13 @@
   // A completion from an earlier trajectory must never replace the current
   // trajectory's frame, even when no newer frame request has started yet.
   $effect(() => {
-    trajectory
-    displayed_frame_idx = null
+    const active_trajectory = trajectory
     frame_requests.invalidate()
+    if (!active_trajectory) {
+      current_frame = null
+      displayed_frame_idx = null
+      displayed_frame_owner = null
+    }
   })
 
   // Current frame structure for display — controlled $state instead of $derived
@@ -491,11 +500,24 @@
             current_step_idx,
           ),
           current_step_idx,
+          trajectory,
         )
       }
+    } else if (trajectory) {
+      apply_frame_request_outcome(
+        frame_requests.reject_out_of_bounds(
+          current_step_idx,
+          total_frames,
+          untrack(() => current_frame),
+        ),
+        current_step_idx,
+        trajectory,
+      )
     } else {
+      frame_requests.invalidate()
       current_frame = null
       displayed_frame_idx = null
+      displayed_frame_owner = null
     }
   })
 
@@ -510,18 +532,25 @@
       untrack(() => orig_data),
     )
     if (!frame_requests.is_current(result, trajectory)) return
-    apply_frame_request_outcome(result, frame_idx)
+    apply_frame_request_outcome(result, frame_idx, requested_trajectory)
   }
 
   function apply_frame_request_outcome(
     result: FrameRequestOutcome,
     frame_idx: number,
+    requested_trajectory: TrajectoryType,
   ) {
     if (result.status === `stale`) return
     displayed_frame_idx = select_displayed_frame_idx(
       result,
       frame_idx,
       untrack(() => displayed_frame_idx),
+    )
+    displayed_frame_owner = select_displayed_frame_owner(
+      result,
+      requested_trajectory,
+      frame_idx,
+      untrack(() => displayed_frame_owner),
     )
     if (result.status === `loaded`) {
       current_frame = result.frame
@@ -707,9 +736,13 @@
       topology_initialized = false
       return
     }
-    if (displayed_frame_idx === null) {
+    const active_displayed_frame_idx =
+      displayed_frame_owner?.trajectory === trajectory
+        ? displayed_frame_idx
+        : null
+    if (active_displayed_frame_idx === null) {
       const publication = select_pending_frame_publication(
-        displayed_frame_idx,
+        active_displayed_frame_idx,
         untrack(() => trajectory_frame_positions),
         untrack(() => trajectory_frame_forces),
       )
@@ -756,8 +789,8 @@
         current_structure = frame.structure
         topology_initialized = true
       }
-      trajectory_frame_positions = position_cache[displayed_frame_idx] ?? null
-      trajectory_frame_forces = force_cache?.[displayed_frame_idx] ?? null
+      trajectory_frame_positions = position_cache[active_displayed_frame_idx] ?? null
+      trajectory_frame_forces = force_cache?.[active_displayed_frame_idx] ?? null
       // NOTE: do NOT call sync_structure_sites_to_frame_positions() here.
       // Architecture P requires `current_structure` to stay static during
       // playback / scrub — writing it per-frame triggers the bond pipeline
@@ -789,7 +822,7 @@
         current_structure?.sites.length === frame_sites.length &&
         pending_ops.length === 0
       ) {
-        const entry = frame_pos_cache.get(displayed_frame_idx, frame_sites)
+        const entry = frame_pos_cache.get(active_displayed_frame_idx, frame_sites)
         trajectory_frame_positions = entry.positions
         trajectory_frame_forces = entry.forces
       } else {
