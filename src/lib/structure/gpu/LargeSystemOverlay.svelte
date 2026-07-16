@@ -36,8 +36,10 @@
     background_opacity = 0.1,
     show_cell = false,
     cell_edge_color = `#808080`,
+    frame_positions = undefined,
+    frame_lattice = undefined,
+    images = undefined,
     trajectory_positions_version = undefined,
-    get_displayed_frame_positions = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
     selected_sites = [],
@@ -47,13 +49,9 @@
   }: {
     enabled?: boolean
     camera?: Camera | undefined
-    /** Current displayed structure whose atoms render as impostor spheres.
-     *  During trajectory playback this carries the BASE/displayed topology
-     *  (elements, count, supercell/PBC-image layout, and frame-0 xyz) — the
-     *  per-frame xyz come from get_displayed_frame_positions, NOT from this
-     *  object (whose identity / .sites[i].xyz stay static across frames in the
-     *  fast path). The element/count/layout here MUST match the resolver's
-     *  array index-for-index (both are the displayed-structure site order). */
+    /** BASE scientific structure (never displayed_structure / never appended
+     *  image sites). Exactly N sites define packet topology; visual replicas
+     *  and sparse ghosts are independent GPU instance channels. */
     structure?: AnyStructure | undefined
     /** Per-element hex colors (e.g. state colors.element). */
     element_colors?: Partial<Record<ElementSymbol, string>> | undefined
@@ -105,34 +103,22 @@
      *  (DEFAULTS.structure.cell_edge_color = `#808080` grey). Converted to linear
      *  RGB the SAME way atom colors are. */
     cell_edge_color?: string
+    /** Direct BASE trajectory frame positions (exactly 3N floats). Never
+     *  derived from the WebGL/displayed renderer. null/undefined falls back to
+     *  the base structure's static site xyz. */
+    frame_positions?: Float32Array | null | undefined
+    /** CURRENT frame lattice for variable-cell trajectories (rows a,b,c).
+     *  null/undefined falls back to the base structure lattice. */
+    frame_lattice?: number[][] | null | undefined
+    /** Sparse image-instance table derived by Structure from base image-site
+     *  metadata. Ghosts are independent of the N-site packet topology. */
+    images?: ImageInstanceTable | undefined
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
-     *  it — not the structure ref — is the signal that drives per-frame
-     *  re-upload. `.all` (edit-all fan-out) is not needed here; we always
-     *  re-extract the whole frame. */
+     *  it — not the structure ref — drives the packet frame version. */
     trajectory_positions_version?: { v: number; all: boolean } | undefined
-    /** Authoritative per-DISPLAYED-atom position source. Returns the current
-     *  frame's xyz as a flat Float32Array(3 × n_displayed) indexed identically
-     *  to `structure.sites` (the SAME array the WebGL atoms/bonds are drawn at:
-     *  StructureScene.atom_positions_buffer — displayed-topology base overlaid
-     *  with the manager's per-frame positions via site_ids_buffer). The overlay
-     *  consumes this directly instead of re-deriving from base-only trajectory
-     *  data, so its atoms/bonds match the WebGL view atom-for-atom — including
-     *  the supercell base-block-animates / replica-static behaviour the WebGL
-     *  position-write loop decides. null/undefined ⇒ fall back to the
-     *  structure's own static sites xyz (no trajectory, or pre-mount).
-     *
-     *  TODO(gpu-visual-supercell integration): design §5 says the WebGPU
-     *  overlay must no longer reverse-read this WebGL-derived array. It is a
-     *  temporary bridge until Structure.svelte (LOCKED during this change)
-     *  threads its base trajectory frame source into the packet build below —
-     *  then delete this prop. */
-    get_displayed_frame_positions?: (() => Float32Array) | null | undefined
-    /** Current trajectory frame index. -1 when no trajectory is active. Used
-     *  (with trajectory_positions_version.v) only as the per-frame REFRESH
-     *  TRIGGER — when it changes the overlay re-pulls get_displayed_frame_positions.
-     *  The position values themselves come from that getter, not this index. */
+    /** Current trajectory frame index. -1 when no trajectory is active. */
     trajectory_step_idx?: number
     on_fallback?: (reason: string) => void
     /** App selection state (base site indices, same as the WebGL path's
@@ -151,11 +137,10 @@
      *  offset by ix·a + iy·b + iz·c. Default [1,1,1] ⇒ ncells = 1 ⇒ atom = inst,
      *  zero offset ⇒ byte-identical to the non-supercell draw. */
     supercell?: [number, number, number]
-    /** Whether DISPLAYED PBC image atoms exist (the viewer's `show_image_atoms`).
-     *  When true (non-supercell only), the renderer draws cross-cell bonds as FULL
-     *  cylinders reaching the imaged partner where the displayed image atom sits,
-     *  so image atoms gain bonds (matching the WebGL view). Default false ⇒ stubs
-     *  ⇒ zero change; supercell mode is unaffected (Phase-2 logic is authoritative). */
+    /** Viewer `show_image_atoms` policy. true selects packet boundary policy
+     *  `ghost-images`: sparse ghosts draw beyond the outer boundary and outside
+     *  bonds complete to them for ANY visual-supercell dims. false selects
+     *  `stub` (the existing incomplete edge). */
     show_image_atoms?: boolean
   } = $props()
 
@@ -170,29 +155,17 @@
   let session_token = 0
 
   // ── Render-packet channel (design §5) ──────────────────────────────────────
-  // One packet builder per pane. build(input) memoizes per sub-object: an
-  // unchanged scene returns the IDENTICAL packet object (set_packet skipped via
-  // the identity check below); partial changes bump exactly one version, so the
+  // One packet builder per pane. Structure passes the BASE scientific
+  // structure, direct 3N trajectory positions, CURRENT frame lattice, and an
+  // independent sparse image table — no WebGL/displayed reverse read. build()
+  // memoizes per sub-object: partial changes bump exactly one version, so the
   // renderer uploads topology buffers only on a topology change, positions +
   // current lattice only on a frame change, and dims/policy/indirect counts
   // only on a replica change. This replaces the old set_atoms / set_positions /
   // set_supercell / set_show_images fan-out.
-  //
-  // TODO(gpu-visual-supercell integration — Structure.svelte is LOCKED during
-  // this change): two seams remain for the integration task:
-  // 1. frame positions still come from `get_displayed_frame_positions` (a
-  //    WebGL-derived reverse-read; design §5 forbids it on the packet path).
-  //    Structure.svelte must thread its base trajectory frame source
-  //    (trajectory_frame_positions / frame lattice — the same inputs its own
-  //    `render_packet` derived consumes) into this component, after which the
-  //    getter prop can be deleted.
-  // 2. the sparse ghost ImageInstanceTable is passed EMPTY here — displayed
-  //    PBC image atoms still arrive appended to `structure.sites` (legacy
-  //    bridge, preserved 1:1). The integration task should feed
-  //    `image_sites_to_instance_table(...)` (pbc-image-atoms.ts) and stop
-  //    appending image sites, letting the renderer draw sparse ghosts.
   const packet_builder = create_render_packet_builder()
   let last_pushed_packet: RenderPacket | null = null
+  let last_pushed_images: ImageInstanceTable | null = null
   const EMPTY_IMAGE_TABLE: ImageInstanceTable = {
     count: 0,
     base_sites: new Uint32Array(0),
@@ -385,63 +358,51 @@
   // must re-extract on EITHER signal diverging, mirroring the CPU/WebGL bond
   // cache which keys on both get_step_idx AND get_positions_version.
   let last_step_idx = -1
-  // Current-frame xyz, indexed identically to structure.sites. Reused buffer —
-  // the packet builder keys the frame on (owner, frame_idx, positions_version),
-  // so in-place refills still reach the GPU when either tracker advances.
-  let frame_positions: Float32Array = new Float32Array(0)
+  let last_frame_positions_source: Float32Array | null | undefined = undefined
+  let last_frame_lattice_source: number[][] | null | undefined = undefined
+  // Current BASE-frame xyz (exactly 3N). Direct trajectory arrays are consumed
+  // zero-copy; a static fallback is packed only when the direct input is absent.
+  // In-place edits are keyed by positions_version; identity swaps are visible
+  // directly to the packet builder.
+  let packet_frame_positions: Float32Array = new Float32Array(0)
   // Lattice signature last pushed for bonds; for variable-cell trajectories the
   // lattice changes per frame and the bond compute + bond render need the new
   // one. Compared per frame so a static cell never re-uploads.
   let frame_lattice_sig = ``
 
-  /** Re-extract the current frame's per-DISPLAYED-atom xyz from the shared
-   *  WebGL resolver and mark positions (+ bonds) dirty. Falls back to the
-   *  structure's own static sites xyz when the getter is unavailable (no
-   *  trajectory active, or pre-mount before StructureScene bound the getter —
-   *  in which case structure.sites already holds the static positions and this
-   *  is a harmless re-upload). For variable-cell trajectories also re-checks the
-   *  lattice and re-pushes bond data when it moved. */
+  /** Adopt the directly-owned BASE frame as the packet buffer (zero-copy). The
+   *  input is exactly 3N floats from Structure; no displayed/WebGL reverse
+   *  read exists. A missing or length-mismatched trajectory frame falls back
+   *  to the base structure's static site xyz. For variable-cell trajectories,
+   *  the direct CURRENT frame lattice also updates the bond compute/render
+   *  inputs (the packet builder consumes the same lattice below). */
   function refresh_frame_positions(): void {
     last_pos_version = trajectory_positions_version?.v ?? -1
     last_step_idx = trajectory_step_idx
+    last_frame_positions_source = frame_positions
+    last_frame_lattice_source = frame_lattice
     const sites = structure?.sites
     if (!sites || sites.length === 0) return
-    // SINGLE SOURCE OF TRUTH: get_displayed_frame_positions() returns the exact
-    // per-displayed-atom position array the WebGL atoms/bonds are drawn at
-    // (StructureScene.atom_positions_buffer) — already resolved for supercell /
-    // PBC-image atoms (base atoms carry the current trajectory frame, replicas
-    // stay at their topology positions, exactly as the WebGL view shows). We
-    // consume it as-is: no base→displayed remapping, no partial-apply guess.
-    let pos: Float32Array | null = null
-    if (get_displayed_frame_positions) pos = get_displayed_frame_positions()
-    // Guard against a length mismatch (e.g. the resolver lagging a supercell
-    // change by one tick): if the resolved array doesn't cover the current
-    // displayed atom set, fall back to the structure's own static sites xyz so
-    // we never index out of bounds or upload a short buffer. The topology_dirty
-    // path re-fires once the resolver catches up.
-    if (pos && pos.length === sites.length * 3) {
-      // Copy into a private buffer so a later in-place mutation of the shared
-      // $derived array can't corrupt what we already uploaded.
-      if (frame_positions.length !== pos.length) frame_positions = new Float32Array(pos.length)
-      frame_positions.set(pos)
-    } else {
-      frame_positions = pack_positions(sites)
-    }
+    const expected = sites.length * 3
+    packet_frame_positions = frame_positions?.length === expected
+      ? frame_positions
+      : pack_positions(sites)
 
-    // Variable-cell: if the displayed lattice changed, the bond compute + bond
-    // render must use the new lattice. Re-pack and flag bonds for re-push. (A
-    // static cell leaves frame_lattice_sig unchanged ⇒ no bond-input churn.)
-    // The REPLICA offsets need no push here: the packet builder re-reads the
-    // structure lattice per build, so a moved cell rebuilds the frame object and
-    // the renderer re-uploads the supercell uniform from frame.lattice itself.
-    const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    const packed = pack_lattice(lat)
+    const structure_lattice =
+      (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
+    const packed = frame_lattice && frame_lattice.length === 3
+      ? new Float32Array([
+        frame_lattice[0][0], frame_lattice[0][1], frame_lattice[0][2],
+        frame_lattice[1][0], frame_lattice[1][1], frame_lattice[1][2],
+        frame_lattice[2][0], frame_lattice[2][1], frame_lattice[2][2],
+      ])
+      : pack_lattice(structure_lattice)
     let sig = ``
     for (let i = 0; i < 9; i++) sig += `${packed[i]};`
     if (sig !== frame_lattice_sig) {
       frame_lattice_sig = sig
       bond_lattice = packed
-      bond_periodic = !!lat
+      bond_periodic = !!structure_lattice
       bonds_dirty = true
     }
   }
@@ -479,8 +440,16 @@
     const bond_sites = home_n < sites.length ? sites.slice(0, home_n) : sites
     bond_covalent = build_atom_radii(bond_sites)
     // Periodic only when the structure carries a lattice (molecules don't).
+    // A variable-cell trajectory's DIRECT current-frame lattice overrides the
+    // base structure lattice here too, including the first rendered frame.
     const lat = (structure as { lattice?: import('$lib/structure').PymatgenLattice }).lattice
-    bond_lattice = pack_lattice(lat)
+    bond_lattice = frame_lattice && frame_lattice.length === 3
+      ? new Float32Array([
+        frame_lattice[0][0], frame_lattice[0][1], frame_lattice[0][2],
+        frame_lattice[1][0], frame_lattice[1][1], frame_lattice[1][2],
+        frame_lattice[2][0], frame_lattice[2][1], frame_lattice[2][2],
+      ])
+      : pack_lattice(lat)
     bond_periodic = !!lat
     bond_compute_opts = to_compute_options(bonding_options ?? {})
     // Keep the per-frame lattice signature in lockstep so refresh_frame_positions
@@ -797,7 +766,9 @@
     // OR the current frame's positions changed in place (version bump on edit).
     if (
       trajectory_step_idx !== last_step_idx ||
-      (trajectory_positions_version?.v ?? -1) !== last_pos_version
+      (trajectory_positions_version?.v ?? -1) !== last_pos_version ||
+      frame_positions !== last_frame_positions_source ||
+      frame_lattice !== last_frame_lattice_source
     ) {
       refresh_frame_positions()
     }
@@ -818,7 +789,10 @@
       ]
       const packet = packet_builder.build({
         structure,
-        frame_positions: frame_positions.length > 0 ? frame_positions : null,
+        frame_positions: packet_frame_positions.length > 0
+          ? packet_frame_positions
+          : null,
+        frame_lattice,
         frame_idx: trajectory_step_idx,
         positions_version: trajectory_positions_version?.v ?? 0,
         dims,
@@ -826,9 +800,11 @@
         colors: atom_colors.length > 0 ? atom_colors : null,
         radii: atom_radii.length > 0 ? atom_radii : null,
       })
-      if (packet !== last_pushed_packet) {
-        renderer.set_packet(packet, EMPTY_IMAGE_TABLE)
+      const image_table = images ?? EMPTY_IMAGE_TABLE
+      if (packet !== last_pushed_packet || image_table !== last_pushed_images) {
+        renderer.set_packet(packet, image_table)
         last_pushed_packet = packet
+        last_pushed_images = image_table
         dirty = true
       }
     }
@@ -943,10 +919,13 @@
     // frame, and re-detect the lattice for variable-cell bonds.
     last_pos_version = -1
     last_step_idx = -1
+    last_frame_positions_source = undefined
+    last_frame_lattice_source = undefined
     frame_lattice_sig = ``
     // Fresh renderer ⇒ it has consumed no packet: clear the identity gate so
     // the (possibly memoized-identical) packet is re-pushed and fully uploads.
     last_pushed_packet = null
+    last_pushed_images = null
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
@@ -1061,15 +1040,17 @@
   })
 
   $effect(() => {
-    // Per-frame wake trigger. Track ONLY the position version (and the step
-    // index it indexes) so a trajectory frame change — playback tick, scrub, or
-    // single step — revives a suspended loop and renders that one frame. The
-    // `frame` does the actual re-extract + re-upload via refresh_frame_positions
-    // (gated on .v ≠ last_pos_version). Force the next frame to draw. Reading
-    // these here (not in the session effect) wakes without restarting the GPU
-    // session; when playback stops, .v stops bumping ⇒ no more wakes ⇒ the loop
-    // suspends after its grace period (idle-quiet).
-    void [trajectory_positions_version?.v, trajectory_step_idx]
+    // Per-frame wake trigger. Track the DIRECT base-frame inputs plus their
+    // version/index so playback, scrub, in-place edits, variable-cell changes,
+    // and sparse-image metadata changes revive a suspended loop. No WebGL
+    // resolver participates. The frame identity-gates both packet + image table.
+    void [
+      frame_positions,
+      frame_lattice,
+      images,
+      trajectory_positions_version?.v,
+      trajectory_step_idx,
+    ]
     if (renderer) {
       needs_render = true
       wake()

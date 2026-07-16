@@ -866,23 +866,20 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   // jimage shift IS one cell step — so reuse partnerB as the real adjacent atom.
   let B_real = partnerB;
 
-  // show_images flag (viewer's show_image_atoms) packed into lat0.w by the TS
-  // upload (1=on). When ON and we are in the NON-supercell path (ncells==1), a
-  // cross-cell bond's imaged partner B+jimage·lattice coincides with a DISPLAYED
-  // PBC image atom → upgrade the boundary STUB to a FULL cylinder reaching it, so
-  // image atoms gain bonds (matching the WebGL view). Supercell mode (ncells>1)
-  // is left to the Phase-2 partner-cell-in-range logic untouched.
-  let ncells = nx * ny * nz;
-  let show_images = supercell.lat0.w > 0.5;
-  let image_full = (!inside) && ncells == 1u && show_images;
+  // Complete boundary policy packed into supercell.lat0.w by the TS upload:
+  //   0 = stub          outside edges stay paired half-stubs
+  //   1 = hide          outside edges collapse (no fragments)
+  //   2 = ghost-images  outside edges become ONE full cylinder to partnerB,
+  //                     where the sparse ghost instance is drawn
+  // This applies for ANY visual-supercell dims — no ncells==1 special case.
+  let boundary_policy = u32(round(supercell.lat0.w));
+  let hide_outside = (!inside) && boundary_policy == 1u;
+  let ghost_complete = (!inside) && boundary_policy == 2u;
 
-  // Render as ONE full cylinder when the partner is a real in-range atom (half 0:
-  // A→B_real, half 1 degenerate) — same single-full-cylinder path the Phase-1
-  // single-cell code used for intra-cell (jimage=0) bonds. When ncells=1, only
-  // jimage=0 is ever inside [0,1)³, so this is exactly the old is_intra branch.
-  // image_full upgrades a ncells==1 cross-cell boundary stub to that same full
-  // path (endpoint partnerB = the displayed image atom) when show_images is on.
-  let is_full = inside || image_full;
+  // Render as ONE full cylinder when the partner is a real in-range atom OR a
+  // sparse ghost. half 0 spans A→partnerB; half 1 collapses. Stub policy keeps
+  // the historical two half-cylinders. Hide collapses both halves below.
+  let is_full = inside || ghost_complete;
 
   // FULL: half 0 spans A→B_real; half 1 is collapsed offscreen below.
   // STUB (boundary): half 0 = A→mid(A,partnerB); half 1 = B→mid(B,partnerA) — the
@@ -958,11 +955,11 @@ fn vs_main(@builtin(vertex_index) vi : u32,
   }
   let vpos = anchor + ax_sign * off_axis + p_sign * off_perp;
 
-  // Intra-cell half 1 is redundant (half 0 already draws the full A->B cylinder):
-  // collapse ALL 6 strip vertices to the same offscreen clip position so the
-  // billboard has zero area and rasterizes no fragments (don't rely on fragment
-  // discard alone). Cross-cell halves are untouched.
-  if (is_intra && half == 1u) {
+  // Full-edge half 1 is redundant (half 0 already draws the full cylinder),
+  // and hide policy suppresses BOTH outside halves. Collapse all 6 strip
+  // vertices to one offscreen point so no fragments rasterize (don't rely on a
+  // fragment discard). Stub halves are untouched.
+  if (hide_outside || (is_intra && half == 1u)) {
     var out_deg : VsOut;
     out_deg.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0); // outside the [-w,w] clip cube
     out_deg.v0 = v0;
@@ -1160,6 +1157,8 @@ fn fs_main(in : VsOut) -> FsOut {
  *  draw issues, and the nested GPU bond-pipeline diagnostics. */
 export type ReplicaRendererDiagnostics = {
   backend: 'webgpu'
+  /** Active writer of shared GPU state; legacy writes invalidate packet cache. */
+  ownership: 'legacy' | 'packet'
   /** Base-cell atom count (CPU stays at exactly N sites). */
   base_count: number
   dims: readonly [number, number, number]
@@ -1216,16 +1215,12 @@ export type LargeSystemRenderer = {
    *  REPLICA-only invalidation (design §8.2 item 4): refreshes the indirect
    *  draw args from the ACTIVE bond graph — never reruns bond detection. */
   set_supercell(dims: [number, number, number], base_lattice: Float32Array): void
-  /** Toggle whether DISPLAYED PBC image atoms exist (the viewer's
-   *  `show_image_atoms`, non-supercell only). When true, cross-cell bonds
-   *  (jimage != 0) in the ncells==1 path are drawn as FULL cylinders reaching the
-   *  imaged partner (B + jimage·lattice) — exactly where the displayed image atom
-   *  sits — so image atoms gain bonds (matching the WebGL view). When false (the
-   *  default) those bonds stay HALF-stubs (the "PBC bond too long, show half"
-   *  behaviour). NEVER affects supercell mode (ncells>1) — there the Phase-2
-   *  partner-cell-in-range logic is authoritative. REPLICA-only invalidation:
-   *  the bond render reads the flag from the supercell uniform each frame — the
-   *  base bond graph is reused, never re-detected. */
+  /** Legacy compatibility toggle: maps false → boundary policy `stub` and true
+   *  → `ghost-images`. The latter completes outside bonds to the imaged partner
+   *  for ANY replica dims; callers must also provide/draw the corresponding
+   *  image atoms (packet mode does so through ImageInstanceTable). REPLICA-only:
+   *  the base bond graph is reused, never re-detected. Any call switches shared
+   *  state to legacy ownership and invalidates the packet cache. */
   set_show_images(show: boolean): void
   /** Packet-versioned upload channel (design §5): the ONE entry point the
    *  packet flow uses instead of the set_atoms / set_positions / set_supercell
@@ -1376,11 +1371,8 @@ export function create_large_system_renderer(
   let supercell_ncells = 1
   // Cached base lattice rows (9 floats, rows a,b,c) for the per-cell offset.
   let supercell_lattice = new Float32Array(9)
-  // Whether DISPLAYED PBC image atoms exist (viewer's show_image_atoms). Packed
-  // into the Supercell uniform's lat0.w pad slot (the atom impostor reads only
-  // .xyz, so this never perturbs it). Read in BOND_RENDER_WGSL to upgrade the
-  // ncells==1 cross-cell STUB to a FULL cylinder reaching the displayed image
-  // atom. Default false ⇒ stubs ⇒ zero change.
+  // Legacy show-image setter state. Packet mode owns the full boundary_policy
+  // union below; legacy `true` maps to ghost-images and `false` to stub.
   let show_image_atoms = false
 
   // ── Packet-versioned upload channel (visual supercell design §5) ──────────
@@ -1415,6 +1407,14 @@ export function create_large_system_renderer(
   // dispatches (the packet producer owns re-detection — a new bond-graph
   // version re-uploads). Cleared when a packet stops carrying a graph.
   let packet_graph = false
+  // Explicit ownership prevents legacy setter fan-out and packet-version
+  // caching from silently sharing stale state. Every legacy mutation clears
+  // the packet cache; the next same-version packet is therefore a FULL restore.
+  let ownership: 'legacy' | 'packet' = `legacy`
+  // Generation captured by every async GPU candidate dispatch. Packet-graph
+  // enter/exit and legacy↔packet ownership changes bump it; a validation whose
+  // token no longer matches is discarded before bond_run.observe/publication.
+  let graph_generation = 0
 
   // Atom storage buffers — lazily (re)created when the atom count grows.
   let positions_buffer: GPUBuffer | null = null
@@ -1612,6 +1612,38 @@ export function create_large_system_renderer(
   // While set, the ACTIVE graph stays on screen and nothing re-dispatches.
   let required_backend: 'periodic-thin-cell' | 'grid-storage-limit' | null = null
   let bonds_configured = false // set once set_bond_data has provided inputs
+  let validation_generation = 0
+
+  function bump_graph_generation(): void {
+    graph_generation++
+    // A validated-but-not-yet-published graph belongs to the previous owner /
+    // graph generation and must never swap in after this transition.
+    publish_pending = false
+  }
+
+  /** Switch shared renderer state to the legacy setter channel. Always clear
+   *  packet identity caches so a same-object/same-version packet can fully
+   *  restore after the legacy mutation. */
+  function claim_legacy_ownership(): void {
+    last_packet = null
+    last_images = null
+    ghost_count = 0
+    if (ownership === `legacy`) return
+    ownership = `legacy`
+    boundary_policy = show_image_atoms ? `ghost-images` : `stub`
+    bump_graph_generation()
+    if (packet_graph) upload_packet_bond_graph(undefined)
+    upload_supercell_uniform()
+    mark_bond_dirty(classify_bond_dirty(`image-policy`))
+  }
+
+  /** Switch to packet ownership. The legacy channel already cleared
+   *  last_packet, so the first packet after a legacy mutation diffs as FULL. */
+  function claim_packet_ownership(): void {
+    if (ownership === `packet`) return
+    ownership = `packet`
+    bump_graph_generation()
+  }
 
   /** Route a scene-change kind into the dirty flags. `visual` is a no-op. */
   function mark_bond_dirty(kind: BondDirtyKind): void {
@@ -2257,6 +2289,7 @@ export function create_large_system_renderer(
   function upload_packet_bond_graph(graph: BaseBondGraph | undefined): void {
     if (!graph) {
       if (packet_graph) {
+        bump_graph_generation()
         packet_graph = false
         // Clear the drawn count so the stale packet graph vanishes; GPU
         // detection (if set_bond_data configured it) re-runs from scratch.
@@ -2267,6 +2300,9 @@ export function create_large_system_renderer(
       }
       return
     }
+    // A new packet graph supersedes every in-flight GPU candidate, including a
+    // candidate dispatched before packet ownership was claimed.
+    bump_graph_generation()
     const bond_count = graph.pairs.length / 2
     // Bind-group prerequisites: the packet path may never call set_bond_data,
     // so the covalent binding gets a placeholder (the compute never runs while
@@ -2334,7 +2370,7 @@ export function create_large_system_renderer(
    *  the next render. Overflowed ⇒ the controller grew its sizing; re-mark the
    *  graph dirty so the next render reruns (bounded — see the allocation
    *  limits). Allocation limit ⇒ report and KEEP the active graph. */
-  function begin_validation(): void {
+  function begin_validation(generation: number): void {
     validation_readback.mapAsync(GPUMapMode.READ).then(() => {
       if (destroyed) {
         try {
@@ -2349,6 +2385,15 @@ export function create_large_system_renderer(
       const occupancy = words[1]
       validation_readback.unmap()
       validation_inflight = false
+      if (generation !== graph_generation) {
+        // Ownership / packet-graph state changed after dispatch. The readback
+        // belongs to an obsolete candidate: do NOT observe it (which would
+        // advance graph_version / overflow state) and do NOT publish it. If the
+        // new owner re-armed GPU detection, wake the dirty-gated host exactly
+        // once so it can dispatch a fresh-generation candidate.
+        if (graph_dirty && !packet_graph) bond_work_cb?.()
+        return
+      }
       const decision = bond_run.observe({
         raw_count,
         max_observed_occupancy: occupancy,
@@ -2562,9 +2607,15 @@ export function create_large_system_renderer(
     u32[3] = Math.max(0, atom_count)
     const L = supercell_lattice
     // Row a -> lat0.xyz, row b -> lat1.xyz, row c -> lat2.xyz. The lat0.w pad
-    // slot carries show_image_atoms (1=on) for the bond render's ncells==1 full-
-    // to-image-atom path; the atom impostor reads only .xyz so it is unaffected.
-    f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = show_image_atoms ? 1 : 0
+    // slot carries the complete boundary policy (stub=0, hide=1,
+    // ghost-images=2); atom/pick impostors read only .xyz, so it never perturbs
+    // replica positions.
+    const policy_code = boundary_policy === `hide`
+      ? 1
+      : boundary_policy === `ghost-images`
+      ? 2
+      : 0
+    f32[0] = L[0]; f32[1] = L[1]; f32[2] = L[2]; f32[3] = policy_code
     f32[4] = L[3]; f32[5] = L[4]; f32[6] = L[5]; f32[7] = 0
     f32[8] = L[6]; f32[9] = L[7]; f32[10] = L[8]; f32[11] = 0
     device.queue.writeBuffer(supercell_buffer, 0, buf, 0, SUPERCELL_BYTES)
@@ -2638,6 +2689,7 @@ export function create_large_system_renderer(
       count: number,
     ): void {
       if (destroyed) return
+      claim_legacy_ownership()
       atom_count = Math.max(0, count)
       if (atom_count === 0) return
 
@@ -2667,6 +2719,7 @@ export function create_large_system_renderer(
     },
     set_positions(positions: Float32Array, count: number): void {
       if (destroyed) return
+      claim_legacy_ownership()
       // Per-frame fast path: requires an existing positions buffer (topology
       // already established by set_atoms). If the count somehow grew past
       // capacity, bail — the caller should re-run set_atoms to reallocate.
@@ -2776,6 +2829,7 @@ export function create_large_system_renderer(
     },
     set_supercell(dims: [number, number, number], base_lattice: Float32Array): void {
       if (destroyed) return
+      claim_legacy_ownership()
       supercell_dims = [
         Math.max(1, Math.floor(dims[0])),
         Math.max(1, Math.floor(dims[1])),
@@ -2800,17 +2854,19 @@ export function create_large_system_renderer(
     },
     set_show_images(show: boolean): void {
       if (destroyed) return
+      claim_legacy_ownership()
       const next = !!show
       if (next === show_image_atoms) return
       show_image_atoms = next
-      // Re-pack the Supercell uniform (lat0.w flag) so the ncells==1 cross-cell
-      // halves switch between stub and full-to-image. REPLICA-only: the bond
-      // render reads the flag per-frame — the base graph is never re-detected.
+      boundary_policy = next ? `ghost-images` : `stub`
+      // Re-pack the Supercell uniform's boundary-policy code. REPLICA-only:
+      // the bond render reads it per-frame — the base graph is never re-detected.
       upload_supercell_uniform()
       mark_bond_dirty(classify_bond_dirty(`image-policy`))
     },
     set_packet(packet: RenderPacket, images: ImageInstanceTable): void {
       if (destroyed) return
+      claim_packet_ownership()
       const prev = last_packet
       const diff: RenderPacketDiff = prev ? diff_render_packet(prev, packet) : {
         topology_changed: true,
@@ -3049,6 +3105,7 @@ export function create_large_system_renderer(
     get_diagnostics(): ReplicaRendererDiagnostics {
       return {
         backend: `webgpu`,
+        ownership,
         base_count: atom_count,
         dims: [supercell_dims[0], supercell_dims[1], supercell_dims[2]],
         ncells: Math.max(1, supercell_ncells),
@@ -3202,6 +3259,7 @@ export function create_large_system_renderer(
           encoder.copyBufferToBuffer(grid_meta_buffer, 0, validation_readback, 4, 4)
           graph_dirty = false
           validation_inflight = true
+          validation_generation = graph_generation
           kick_validation = true
         }
       }
@@ -3279,7 +3337,7 @@ export function create_large_system_renderer(
       device.queue.submit([encoder.finish()])
       // Kick off the candidate validation AFTER the submit that encoded its
       // readback copies — mapAsync resolves once the GPU work completes.
-      if (kick_validation) begin_validation()
+      if (kick_validation) begin_validation(validation_generation)
     },
     debug_bond_state(): BondGpuDiagnostics {
       return bond_run.diagnostics()

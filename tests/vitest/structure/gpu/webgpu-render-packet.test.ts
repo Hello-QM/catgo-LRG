@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import type { AnyStructure } from '$lib'
 import { create_large_system_renderer } from '$lib/structure/gpu/large-system-renderer'
+import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
 import type {
   BaseBondGraph,
   ImageInstanceTable,
@@ -32,11 +36,16 @@ const to_bytes = (
   return new Uint8Array(view.buffer.slice(start, start + len))
 }
 
-const make_recording_device = (opts?: { pick_reads?: number[] }) => {
+const make_recording_device = (opts?: {
+  pick_reads?: number[]
+  validation_reads?: [number, number][]
+  validation_maps?: Promise<void>[]
+}) => {
   const writes: Write[] = []
   const passes: Pass[] = []
   const compute_passes: string[] = []
   const created: string[] = []
+  const shader_sources: Record<string, string> = {}
   const device = {
     limits: { maxStorageBufferBindingSize: 1 << 27 },
     createBuffer: (desc: { size: number; label?: string }) => {
@@ -45,12 +54,20 @@ const make_recording_device = (opts?: { pick_reads?: number[] }) => {
         label: desc.label,
         size: desc.size,
         destroy: () => {},
-        mapAsync: () => Promise.resolve(),
+        mapAsync: () => {
+          if (desc.label === `large-system-bond-validation`) {
+            return opts?.validation_maps?.shift() ?? Promise.resolve()
+          }
+          return Promise.resolve()
+        },
         getMappedRange: () => {
           const buf = new ArrayBuffer(Math.max(desc.size, 8))
           if (desc.label === `large-system-pick-readback`) {
             const next = opts?.pick_reads?.shift()
             if (next !== undefined) new Uint32Array(buf)[0] = next
+          } else if (desc.label === `large-system-bond-validation`) {
+            const next = opts?.validation_reads?.shift()
+            if (next) new Uint32Array(buf).set(next)
           }
           return buf
         },
@@ -63,7 +80,10 @@ const make_recording_device = (opts?: { pick_reads?: number[] }) => {
       createView: () => ({}),
       destroy: () => {},
     }),
-    createShaderModule: () => ({}),
+    createShaderModule: (desc: { label?: string; code?: string }) => {
+      if (desc.label && desc.code) shader_sources[desc.label] = desc.code
+      return {}
+    },
     createBindGroupLayout: () => ({}),
     createPipelineLayout: () => ({}),
     createRenderPipeline: () => ({}),
@@ -117,7 +137,7 @@ const make_recording_device = (opts?: { pick_reads?: number[] }) => {
     compute_passes.length = 0
     created.length = 0
   }
-  return { device, writes, passes, compute_passes, created, clear }
+  return { device, writes, passes, compute_passes, created, shader_sources, clear }
 }
 
 const make_mock_canvas = () => ({
@@ -131,6 +151,12 @@ const make_mock_canvas = () => ({
 })
 
 const writes_to = (writes: Write[], label: string) => writes.filter((w) => w.label === label)
+const flush = () => new Promise((resolve_flush) => setTimeout(resolve_flush, 0))
+const deferred = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 // ── Packet fixtures ──────────────────────────────────────────────────────────
 
@@ -157,6 +183,27 @@ const make_topology = (bond_graph?: BaseBondGraph): RenderPacket[`topology`] => 
 })
 
 const OWNER = { tag: `packet-owner` }
+
+const make_base_structure = (n = N, a = 20) => ({
+  sites: Array.from({ length: n }, (_, idx) => ({
+    species: [{ element: `C`, occu: 1, oxidation_state: 0 }],
+    abc: [idx / Math.max(n, 1), 0, 0],
+    xyz: [idx * 1.4, 0, 0],
+    label: `C`,
+    properties: {},
+  })),
+  lattice: {
+    matrix: [[a, 0, 0], [0, a, 0], [0, 0, a]],
+    pbc: [true, true, true],
+    a,
+    b: a,
+    c: a,
+    alpha: 90,
+    beta: 90,
+    gamma: 90,
+    volume: a ** 3,
+  },
+})
 
 const make_frame = (
   over?: Partial<RenderPacket[`frame`]>,
@@ -407,6 +454,241 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
     const frame_pass = rec.passes.find((p) => p.label === `frame`)
     expect(frame_pass?.indirect).toBe(1)
+
+    renderer.destroy()
+  })
+
+  it(`Structure wires the overlay from base frame inputs, never WebGL reverse-read data`, () => {
+    const structure_source = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/Structure.svelte`),
+      `utf8`,
+    )
+    const overlay_source = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/gpu/LargeSystemOverlay.svelte`),
+      `utf8`,
+    )
+    const scene_source = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/StructureScene.svelte`),
+      `utf8`,
+    )
+    expect(structure_source).not.toContain(`scene_get_displayed_frame_positions`)
+    expect(structure_source).toContain(`structure={structure}`)
+    expect(structure_source).toContain(`frame_positions={trajectory_frame_positions}`)
+    expect(structure_source).toContain(`frame_lattice={trajectory_frame_lattice}`)
+    expect(structure_source).toContain(`images={render_image_instances}`)
+    expect(overlay_source).not.toContain(`get_displayed_frame_positions`)
+    expect(scene_source).not.toContain(`get_displayed_frame_positions`)
+
+    // Behavioral lock for the inputs Structure must pass: even if the WebGL
+    // displayed structure has appended images, the packet owner/topology is
+    // the 3-site BASE structure, positions stay 3N under 2×2×2, and the live
+    // variable-cell frame lattice wins over the base/displayed lattice.
+    const base = make_base_structure(3, 10)
+    const displayed_with_images = {
+      ...base,
+      sites: [...base.sites, ...base.sites, ...base.sites],
+    }
+    expect(displayed_with_images.sites).toHaveLength(9) // explicitly NOT consumed
+    const builder = create_render_packet_builder()
+    const frame_positions = new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0])
+    const packet = builder.build({
+      structure: base as unknown as AnyStructure,
+      frame_positions,
+      frame_lattice: [[12, 0, 0], [0, 13, 0], [0, 0, 14]],
+      frame_idx: 4,
+      positions_version: 7,
+      dims: [2, 2, 2],
+    })
+    expect(packet.topology.atom_count).toBe(3)
+    expect(packet.frame.positions).toBe(frame_positions)
+    expect(packet.frame.positions).toHaveLength(9)
+    expect([...packet.frame.lattice]).toEqual([12, 0, 0, 0, 13, 0, 0, 0, 14])
+  })
+
+  it(`legacy overwrite invalidates packet ownership so the same packet fully restores`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const images: ImageInstanceTable = {
+      count: 1,
+      base_sites: new Uint32Array([2]),
+      jimages: new Int8Array([2, 0, 0]),
+    }
+    const packet: RenderPacket = {
+      topology: make_topology(),
+      frame: make_frame(),
+      replicas: make_replicas({
+        version: 3,
+        dims: [2, 1, 1],
+        boundary_policy: `ghost-images`,
+      }),
+    }
+    renderer.set_packet(packet, images)
+
+    // Legacy code overwrites every shared state family. It must invalidate the
+    // packet cache even though packet's version numbers/object are unchanged.
+    renderer.set_atoms(
+      make_positions(9),
+      new Float32Array(N).fill(9),
+      new Float32Array(N * 3).fill(9),
+      N,
+    )
+    renderer.set_supercell([1, 1, 1], make_frame().lattice)
+    renderer.set_show_images(false)
+    expect((renderer.get_diagnostics() as { ownership?: string }).ownership).toBe(`legacy`)
+
+    rec.clear()
+    renderer.set_packet(packet, images) // SAME object + SAME versions
+    expect(writes_to(rec.writes, `large-system-positions`)).toHaveLength(1)
+    expect(writes_to(rec.writes, `large-system-radii`)).toHaveLength(1)
+    expect(writes_to(rec.writes, `large-system-colors`)).toHaveLength(1)
+    expect(writes_to(rec.writes, `large-system-supercell`).length).toBeGreaterThan(0)
+    expect(writes_to(rec.writes, `large-system-ghost-sites`)).toHaveLength(1)
+    const diag = renderer.get_diagnostics() as ReturnType<typeof renderer.get_diagnostics> & {
+      ownership?: string
+    }
+    expect(diag.ownership).toBe(`packet`)
+    expect(diag.dims).toEqual([2, 1, 1])
+    expect(diag.boundary_policy).toBe(`ghost-images`)
+    expect(diag.ghost_count).toBe(1)
+
+    renderer.destroy()
+  })
+
+  it(`encodes hide vs ghost boundary policy and completes multi-cell ghost bonds`, () => {
+    const self_graph: BaseBondGraph = {
+      version: 1,
+      pairs: new Uint32Array([0, 0]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const topology = make_topology(self_graph)
+    const frame = make_frame()
+    const images: ImageInstanceTable = {
+      count: 1,
+      base_sites: new Uint32Array([0]),
+      // +a outer ghost for a 2-cell x supercell is absolute cell x=2.
+      jimages: new Int8Array([2, 0, 0]),
+    }
+
+    renderer.set_packet({
+      topology,
+      frame,
+      replicas: make_replicas({
+        version: 1,
+        dims: [2, 1, 1],
+        boundary_policy: `hide`,
+      }),
+    }, images)
+    let sc = writes_to(rec.writes, `large-system-supercell`).at(-1)
+    expect(sc).toBeDefined()
+    let policy_rows = new Float32Array(sc!.bytes.buffer, 16, 12)
+    expect(policy_rows[3]).toBe(1) // stub=0, hide=1, ghost-images=2
+    renderer.render()
+    let frame_pass = rec.passes.find((p) => p.label === `frame`)
+    expect(frame_pass?.draws[0]).toEqual([4, N * 2]) // hide never draws ghosts
+    expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
+
+    rec.clear()
+    renderer.set_packet({
+      topology,
+      frame,
+      replicas: make_replicas({
+        version: 2,
+        dims: [2, 1, 1],
+        boundary_policy: `ghost-images`,
+      }),
+    }, images)
+    sc = writes_to(rec.writes, `large-system-supercell`).at(-1)
+    expect(sc).toBeDefined()
+    policy_rows = new Float32Array(sc!.bytes.buffer, 16, 12)
+    expect(policy_rows[3]).toBe(2)
+    renderer.render()
+    frame_pass = rec.passes.find((p) => p.label === `frame`)
+    expect(frame_pass?.draws[0]).toEqual([4, N * 2 + 1])
+    expect(frame_pass?.indirect).toBe(1)
+    expect(rec.compute_passes).toContain(`large-system-bond-indirect`)
+    expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
+
+    // Mock devices cannot execute WGSL, so source-lock the policy branches:
+    // hide collapses outside edges; ghost completes them for ANY dims. The old
+    // `ncells == 1u && show_images` limitation must be absent.
+    const bond_shader = rec.shader_sources[`large-system-bond-render`]
+    expect(bond_shader).toContain(`let hide_outside`)
+    expect(bond_shader).toContain(`let ghost_complete`)
+    expect(bond_shader).not.toContain(`ncells == 1u && show_images`)
+
+    renderer.destroy()
+  })
+
+  it(`discards an async candidate across packet graph enter then exit`, async () => {
+    const validation = deferred()
+    const rec = make_recording_device({
+      validation_reads: [[0, 0]],
+      validation_maps: [validation.promise],
+    })
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const on_work = vi.fn()
+    renderer.on_bond_work(on_work)
+
+    // Start a legacy GPU-detect candidate whose validation remains unresolved.
+    renderer.set_atoms(
+      make_positions(),
+      new Float32Array(N).fill(0.5),
+      new Float32Array(N * 3).fill(0.5),
+      N,
+    )
+    renderer.set_bond_data(
+      new Float32Array(N).fill(0.76),
+      make_frame().lattice,
+      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      true,
+    )
+    renderer.render()
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(1)
+
+    // Ownership changes twice while the old candidate is in flight: install a
+    // packet graph, then remove it. Both transitions bump graph generation.
+    const packet_graph: BaseBondGraph = {
+      version: 4,
+      pairs: new Uint32Array([0, 0]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
+    const packet_with_graph: RenderPacket = {
+      topology: make_topology(packet_graph),
+      frame: make_frame(),
+      replicas: make_replicas(),
+    }
+    renderer.set_packet(packet_with_graph, EMPTY_IMAGES)
+    renderer.set_packet({
+      ...packet_with_graph,
+      topology: make_topology(undefined),
+    }, EMPTY_IMAGES)
+
+    validation.resolve()
+    await flush()
+    // The old candidate must not reach bond_run.observe()/publication.
+    expect(renderer.debug_bond_state().graph_version).toBe(0)
+    expect(on_work).toHaveBeenCalledTimes(1) // wake to run the re-armed fresh graph
+
+    rec.clear()
+    renderer.render()
+    expect(renderer.debug_bond_state().graph_version).toBe(0)
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(2)
+    expect(rec.compute_passes).toContain(`large-system-bond-compute`)
 
     renderer.destroy()
   })

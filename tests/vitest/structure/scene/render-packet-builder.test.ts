@@ -105,6 +105,21 @@ describe(`create_render_packet_builder`, () => {
     expect(() => assert_render_packet(packet)).not.toThrow()
   })
 
+  test(`image metadata expands positive ghosts to the outer visual-supercell boundary`, () => {
+    const entries: ImageSiteEntry[] = [
+      { site_idx: 0, jimage_img: [0, 0, 0] },
+      { site_idx: 0, jimage_img: [1, 0, 0] },
+      { site_idx: 1, jimage_img: [-1, 1, 0] },
+    ]
+    const table = image_sites_to_instance_table(entries, [2, 2, 1])
+    // Positive base-image offsets move past the final real replica cell; zero
+    // (transverse) axes span every real cell. [1,0,0] therefore yields the two
+    // x=2 face ghosts at y=0/1; [-1,1,0] is the single (-x,+y) edge ghost.
+    expect(table.count).toBe(3)
+    expect([...table.base_sites]).toEqual([0, 0, 1])
+    expect([...table.jimages]).toEqual([2, 0, 0, 2, 1, 0, -1, 2, 0])
+  })
+
   test(`ghost table deduplicates base_site+jimage`, () => {
     const entries: ImageSiteEntry[] = [
       // Home-cell entry — replica instancing draws it; never a ghost.

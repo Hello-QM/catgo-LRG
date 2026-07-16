@@ -192,10 +192,15 @@ const IMAGE_KEY_SITE_CAP = Math.floor(Number.MAX_SAFE_INTEGER / IMAGE_KEY_SPAN)
  *
  * The packet path never appends image sites to the structure — ghosts are
  * (base_site, jimage) instances resolved on the GPU against the current
- * frame lattice. Home-cell entries (`jimage = [0,0,0]`) are excluded (the
- * replica instancing draws them), and ghosts are deduplicated by
- * (site_idx, jimage) with a numeric key (no per-entry string allocation,
- * mirroring `build_image_instance_table` in scene/replica-layout.ts).
+ * frame lattice. `entries` are base-cell-relative image metadata; optional
+ * visual-supercell `dims` expands positive image offsets to the OUTER boundary
+ * (+1 becomes `dim`, while negative offsets remain -1) and spans every real
+ * replica cell along zero/transverse axes. The returned O(surface) jimages are
+ * therefore absolute image cells for the packet's replica layout. Home-cell
+ * entries (`jimage = [0,0,0]`) are excluded (the replica instancing draws them),
+ * and ghosts are deduplicated by (site_idx, absolute jimage) with a numeric key
+ * (no per-entry string allocation, mirroring `build_image_instance_table` in
+ * scene/replica-layout.ts).
  *
  * jimage components must fit the table's Int8 storage ([-128, 127]) and
  * `site_idx` must stay below the numeric-key capacity (~3.5·10⁷ sites) —
@@ -203,33 +208,55 @@ const IMAGE_KEY_SITE_CAP = Math.floor(Number.MAX_SAFE_INTEGER / IMAGE_KEY_SPAN)
  */
 export function image_sites_to_instance_table(
 	entries: Iterable<ImageSiteEntry>,
+	dims: readonly [number, number, number] = [1, 1, 1],
 ): ImageInstanceTable {
 	const seen = new Set<number>()
 	const sites: number[] = []
 	const images: number[] = []
+	const nx = Math.max(1, Math.floor(dims[0]))
+	const ny = Math.max(1, Math.floor(dims[1]))
+	const nz = Math.max(1, Math.floor(dims[2]))
 	for (const entry of entries) {
-		const [jx, jy, jz] = entry.jimage_img
-		if ((jx | jy | jz) === 0) continue // home cell — not a ghost
-		if (
-			jx < -128 || jx > 127 || jy < -128 || jy > 127 || jz < -128 || jz > 127
-		) {
-			throw new Error(
-				`image_sites_to_instance_table: jimage [${jx}, ${jy}, ${jz}] ` +
-					`exceeds Int8 storage range [-128, 127]`,
-			)
-		}
+		const [rx, ry, rz] = entry.jimage_img
+		if ((rx | ry | rz) === 0) continue // home cell — not a ghost
 		if (entry.site_idx > IMAGE_KEY_SITE_CAP) {
 			throw new Error(
 				`image_sites_to_instance_table: site_idx ${entry.site_idx} exceeds ` +
 					`the numeric dedup key capacity (${IMAGE_KEY_SITE_CAP})`,
 			)
 		}
-		const key = entry.site_idx * IMAGE_KEY_SPAN +
-			((jz + 128) * 256 + (jy + 128)) * 256 + (jx + 128)
-		if (seen.has(key)) continue
-		seen.add(key)
-		sites.push(entry.site_idx)
-		images.push(jx, jy, jz)
+		// build_sites_to_draw metadata is relative to ONE base cell. A non-zero
+		// component identifies the outside face/edge/corner; a zero component is
+		// transverse and must span every real replica cell on that axis. This
+		// produces O(surface) sparse ghosts, e.g. [1,0,0] under 2×3×4 expands to
+		// x=2 with all 3×4 (y,z) cells — exactly the endpoints outer-face bonds use.
+		const x0 = rx === 0 ? 0 : rx > 0 ? nx - 1 + rx : rx
+		const x1 = rx === 0 ? nx - 1 : x0
+		const y0 = ry === 0 ? 0 : ry > 0 ? ny - 1 + ry : ry
+		const y1 = ry === 0 ? ny - 1 : y0
+		const z0 = rz === 0 ? 0 : rz > 0 ? nz - 1 + rz : rz
+		const z1 = rz === 0 ? nz - 1 : z0
+		for (let jz = z0; jz <= z1; jz++) {
+			for (let jy = y0; jy <= y1; jy++) {
+				for (let jx = x0; jx <= x1; jx++) {
+					if (
+						jx < -128 || jx > 127 || jy < -128 || jy > 127 ||
+						jz < -128 || jz > 127
+					) {
+						throw new Error(
+							`image_sites_to_instance_table: jimage [${jx}, ${jy}, ${jz}] ` +
+								`exceeds Int8 storage range [-128, 127]`,
+						)
+					}
+					const key = entry.site_idx * IMAGE_KEY_SPAN +
+						((jz + 128) * 256 + (jy + 128)) * 256 + (jx + 128)
+					if (seen.has(key)) continue
+					seen.add(key)
+					sites.push(entry.site_idx)
+					images.push(jx, jy, jz)
+				}
+			}
+		}
 	}
 	return {
 		count: sites.length,

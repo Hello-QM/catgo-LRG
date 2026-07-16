@@ -24,7 +24,11 @@
   import type { SupercellOp, SupercellRequestResult } from '$lib/structure/supercell-operation'
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
-  import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import type { ImageInstanceTable, RenderPacket } from '$lib/structure/scene/render-packet'
+  import {
+    build_sites_to_draw,
+    image_sites_to_instance_table,
+  } from '$lib/structure/pbc-image-atoms'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -243,14 +247,6 @@
   // default `new AtomManager()` is overwritten by this $state value at mount,
   // so the second allocation is discarded (small one-time cost).
   let scene_atom_manager = $state(new AtomManager())
-
-  // WebGPU overlay bridge: bound from StructureScene. Returns the live
-  // per-displayed-atom current-frame position array (3 × n_displayed) the
-  // WebGL atoms/bonds render at (StructureScene.atom_positions_buffer:
-  // displayed-topology base overlaid with the manager's per-frame positions).
-  // The overlay calls this so its positions match the WebGL view atom-for-atom
-  // instead of re-deriving from base-only trajectory data. Null until mount.
-  let scene_get_displayed_frame_positions = $state<(() => Float32Array) | null>(null)
 
   // ── Extracted state modules (state/*.svelte.ts) ──
   const sel_state = create_selection_state()
@@ -1352,16 +1348,13 @@
     // runs in BOTH modes on purpose:
     //   - WebGL active: drives the WebGL atoms/bonds per frame as before.
     //   - WebGPU overlay active (`webgl_suspended`): the EXPENSIVE WebGL
-    //     pipelines (X2 full diff, bond-pair rebuild, bond worker) stay gated
-    //     in StructureScene, but we still keep the manager's positions current
-    //     so StructureScene's `atom_positions_buffer` resolves the live frame.
-    //     That buffer is the SINGLE SOURCE OF TRUTH the overlay now consumes
-    //     (via get_displayed_frame_positions) so its atoms/bonds match the
-    //     WebGL view atom-for-atom — including the supercell base-block /
-    //     replica-static behaviour, which is decided HERE (max_slot bound) and
-    //     reused rather than re-guessed in the overlay.
-    // We do NOT early-return on webgl_suspended: the cheap manager write is
-    // what makes the overlay's positions identical to the WebGL resolver.
+    //     pipelines (X2 full diff, bond-pair rebuild, bond worker) stay gated.
+    //     The overlay no longer reads this manager back — Structure passes the
+    //     BASE `trajectory_frame_positions` directly into its render packet —
+    //     but keeping the cheap manager write live preserves a warm WebGL state
+    //     for an atomic fallback / mode-off repaint.
+    // We do NOT early-return on webgl_suspended: the write keeps fallback state
+    // current, not because it is a render-packet source.
     const traj = trajectory_frame_positions
     if (!traj) {
       __traj_write_warned_supercell = false
@@ -1887,30 +1880,13 @@
   })
 
   // ── WebGPU overlay selection bridge ────────────────────────────────────────
-  // The overlay renders displayed_structure.sites in order, so its picked index
-  // and its highlight buffer are DISPLAYED-site indices. The app's selection
-  // model (selected_sites) is BASE-site indices (matching the WebGL path). Map
-  // between the two: the overlay highlights every displayed site whose base index
-  // (orig_site_idx) is currently selected, and an overlay pick is mapped back to
-  // its base index before toggling selected_sites (exactly like the WebGL
-  // handle_atom_click → toggle_selection(atom.site_idx) path).
-  let overlay_selected_displayed = $derived.by(() => {
-    const sites = displayed_structure?.sites
-    if (!sites || selected_sites.length === 0) return [] as number[]
-    const sel = new Set(selected_sites)
-    const out: number[] = []
-    for (let i = 0; i < sites.length; i++) {
-      if (sel.has(get_orig_site_idx(sites[i], i))) out.push(i)
-    }
-    return out
-  })
-
-  /** Handle an atom pick from the WebGPU overlay. `displayed_idx` is the picked
-   *  displayed-site index, or -1 for empty space. Maps to the base index and
-   *  toggles selected_sites the same way the WebGL click path does; a background
-   *  click (-1) clears the selection (mirroring clicking empty space). */
-  function handle_overlay_pick(displayed_idx: number): void {
-    if (displayed_idx < 0) {
+  // Packet topology is BASE-only and ReplicaPickResult resolves every visual
+  // replica / sparse ghost to its base site, so selection is already in the
+  // app's base-site id space — no displayed-index mapping or appended-site
+  // expansion remains.
+  /** Handle a BASE site pick from the WebGPU overlay, or -1 for empty space. */
+  function handle_overlay_pick(base_idx: number): void {
+    if (base_idx < 0) {
       // Empty-space pick ⇒ would clear the selection. But the overlay watches
       // window pointerup and classifies click-vs-drag purely by movement
       // distance (it can't see the Cmd/Ctrl box-select modifier). A small/dense
@@ -1925,10 +1901,7 @@
       if (selected_sites.length > 0) selected_sites = []
       return
     }
-    const sites = displayed_structure?.sites
-    const site = sites?.[displayed_idx]
-    if (!site) return
-    const base_idx = get_orig_site_idx(site, displayed_idx)
+    if (!structure?.sites?.[base_idx]) return
     const result = toggle_site_selection(base_idx, selected_sites)
     if (result) selected_sites = result
   }
@@ -2264,6 +2237,9 @@
     if (!structure?.sites?.length) return null
     return render_packet_builder.build({
       structure,
+      // PLAN-MANDATED direct base-frame ownership: exactly 3N trajectory
+      // floats + the CURRENT frame lattice. Never read displayed_structure or
+      // a WebGL-resolved position buffer back into the packet.
       frame_positions: trajectory_frame_positions,
       frame_lattice: trajectory_frame_lattice,
       frame_idx: trajectory_step_idx,
@@ -2273,7 +2249,34 @@
       boundary_policy: show_image_atoms ? `ghost-images` : `stub`,
     })
   })
-  void render_packet // consumed by the render adapters in Tasks 3/4
+  void render_packet // reserved for the WebGL adapter; overlay resolves visual attrs
+
+  // Sparse PBC image instances for the packet path. We consciously use the
+  // image-METADATA seam (`build_sites_to_draw` →
+  // `image_sites_to_instance_table`) because show_image_atoms is a visual
+  // boundary-atom policy and Structure owns the required base fractional
+  // coordinates. The bond-graph-derived `build_image_instance_table` is NOT
+  // mixed in here — doing so would let two independently-derived ghost tables
+  // drift. Positive image metadata is expanded to the outer visual-supercell
+  // boundary by image_sites_to_instance_table(dims); home sites stay in the
+  // packet topology and ghosts never append to it.
+  const EMPTY_RENDER_IMAGES: ImageInstanceTable = {
+    count: 0,
+    base_sites: new Uint32Array(0),
+    jimages: new Int8Array(0),
+  }
+  let render_image_instances: ImageInstanceTable = $derived.by(() => {
+    if (!large_system_mode || !structure || !show_image_atoms || !(`lattice` in structure)) {
+      return EMPTY_RENDER_IMAGES
+    }
+    const dims = gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1] as const
+    const image_sites = build_sites_to_draw(structure, [], {
+      draw_image_atoms: true,
+      bonded_sites_outside_unit_cell: false,
+      edge_tolerance: 0.05,
+    })
+    return image_sites_to_instance_table(image_sites.values(), dims)
+  })
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
   // covered it) repaints once on the next frame and isn't left on a stale paint.
@@ -4571,7 +4574,6 @@
             bond_manager={pencil.bond_manager}
             bind:atom_fast_ops={scene_atom_fast_ops}
             bind:atom_manager={scene_atom_manager}
-            bind:get_displayed_frame_positions={scene_get_displayed_frame_positions}
             deleted_bond_keys={pencil.deleted_bond_keys}
             bind:selected_bonds={pencil.selected_bonds}
             bond_first_atom={pencil.bond_first_atom}
@@ -4640,7 +4642,10 @@
           <LargeSystemOverlay
             enabled={large_system_mode}
             {camera}
-            structure={displayed_structure}
+            structure={structure}
+            frame_positions={trajectory_frame_positions}
+            frame_lattice={trajectory_frame_lattice}
+            images={render_image_instances}
             supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
             element_colors={colors.element}
@@ -4657,8 +4662,7 @@
             cell_edge_color={scene_props.cell_edge_color}
             {trajectory_positions_version}
             {trajectory_step_idx}
-            get_displayed_frame_positions={scene_get_displayed_frame_positions}
-            selected_sites={overlay_selected_displayed}
+            {selected_sites}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {
               large_system_mode = false
