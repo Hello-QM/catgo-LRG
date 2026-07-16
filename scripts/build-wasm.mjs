@@ -47,9 +47,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const IF_MISSING = process.argv.includes('--if-missing')
 const NO_SIMD = process.argv.includes('--no-simd') ||
   process.env.CATGO_WASM_NO_SIMD === '1'
-const ONLY = process.argv.includes('--only')
-  ? process.argv[process.argv.indexOf('--only') + 1]
-  : null
+const ONLY_INDEX = process.argv.indexOf('--only')
+const ONLY = ONLY_INDEX === -1 ? null : process.argv[ONLY_INDEX + 1]
 const SKIP_THREADED = process.env.CATGO_WASM_SKIP_THREADED === '1'
 // CI pins this via CATGO_WASM_NIGHTLY_TOOLCHAIN (workflow-level env in
 // .github/workflows/*.yml — nightly churn broke the threaded link flags once
@@ -165,6 +164,15 @@ const TARGETS = [
     ],
   },
 ]
+
+const VALID_TARGET_KEYS = [...new Set(TARGETS.map((target) => target.key))]
+if (ONLY_INDEX !== -1 && (!ONLY || !VALID_TARGET_KEYS.includes(ONLY))) {
+  console.error(
+    `[build-wasm] invalid value for --only: ${ONLY || '(missing)'}\n` +
+      `             valid targets: ${VALID_TARGET_KEYS.join(', ')}`,
+  )
+  process.exit(2)
+}
 
 let pending = TARGETS
 if (ONLY) pending = pending.filter((t) => t.key === ONLY)

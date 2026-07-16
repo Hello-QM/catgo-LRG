@@ -22,10 +22,11 @@
  *     the --shared-memory/--import-memory link args go missing — the module
  *     still builds and still exports initThreadPool, but its workers can
  *     never share state. This catches that class of regression.
+ *   - every file in the legacy pkg/ bridge is byte-identical to pkg-scalar/.
  *
  * Exit code 0 = all good; 1 = one or more assertions failed.
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -65,6 +66,19 @@ function readMaybe(path) {
   } catch {
     return null
   }
+}
+
+function listRelativeFiles(dir, prefix = '') {
+  const files = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const relativePath = prefix ? join(prefix, entry.name) : entry.name
+    if (entry.isDirectory()) {
+      files.push(...listRelativeFiles(join(dir, entry.name), relativePath))
+    } else if (entry.isFile()) {
+      files.push(relativePath)
+    }
+  }
+  return files.sort()
 }
 
 /**
@@ -186,12 +200,34 @@ if (scalarShared === false) {
   fail('pkg-scalar/ferrox_bg.wasm could not be parsed as a wasm module')
 }
 
-// --- 5. Legacy pkg/ bridge (copy of pkg-scalar) still resolves -------------
-const bridgeWasm = join(WASM_ROOT, 'pkg', 'ferrox_bg.wasm')
-if (existsSync(bridgeWasm)) {
-  ok('pkg/ bridge exists (existing @catgo/ferrox-wasm imports keep working)')
-} else {
+// --- 5. Legacy pkg/ bridge is an exact copy of pkg-scalar/ -----------------
+const scalarDir = join(WASM_ROOT, 'pkg-scalar')
+const bridgeDir = join(WASM_ROOT, 'pkg')
+if (!existsSync(bridgeDir)) {
   fail('pkg/ bridge missing — build-wasm.mjs should copy pkg-scalar/ → pkg/')
+} else if (!existsSync(scalarDir)) {
+  fail('pkg-scalar/ missing — cannot verify the legacy pkg/ bridge')
+} else {
+  const scalarFiles = listRelativeFiles(scalarDir)
+  const bridgeFiles = listRelativeFiles(bridgeDir)
+  const sameFileSet = scalarFiles.length === bridgeFiles.length &&
+    scalarFiles.every((file, index) => file === bridgeFiles[index])
+
+  if (!sameFileSet) {
+    fail(
+      'pkg/ bridge file set differs from pkg-scalar/ — rebuild with ' +
+        '`pnpm build:wasm`',
+    )
+  } else {
+    const mismatches = scalarFiles.filter((file) =>
+      !readFileSync(join(scalarDir, file)).equals(readFileSync(join(bridgeDir, file)))
+    )
+    if (mismatches.length > 0) {
+      fail(`pkg/ bridge differs byte-for-byte from pkg-scalar/: ${mismatches.join(', ')}`)
+    } else {
+      ok(`pkg/ bridge matches pkg-scalar/ byte-for-byte (${scalarFiles.length} files)`)
+    }
+  }
 }
 
 if (failures.length > 0) {
