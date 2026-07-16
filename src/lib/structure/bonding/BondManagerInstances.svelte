@@ -450,6 +450,162 @@
     }
   `
 
+  // Impostor (ray-cylinder) fragment shader for the GPU-transform trajectory
+  // path (Task 4). Ray-casts the true half-cylinder surface inside Task 2's OBB
+  // box using Task 3's view-space frame (base / axis / radius), writes analytic
+  // gl_FragDepth, and applies analytic silhouette + cap coverage AA
+  // (alphaToCoverage). The lit colour is produced by #524's EXACT bond lighting
+  // -- studio_env / aces_tonemap / linearTosRGB copied verbatim from
+  // fragment_shader above, plus the same colour gradient / exposure / rim /
+  // depth-cue / outline math. nrm here is ALREADY view-space (built from the
+  // view-space axis A / base B), so it feeds studio_env / specular / fresnel /
+  // rim directly with no normalMatrix transform.
+  const impostor_fragment_shader = `
+    uniform float ambientIntensity;
+    uniform float directionalIntensity;
+    uniform float saturation;
+    uniform float brightness;
+    uniform float uOpacity;
+    uniform float uDepthCueing;
+    uniform float uDepthNear;
+    uniform float uDepthFar;
+    uniform vec3 uDepthCueBgColor;
+    uniform float uBondOutlineStrength;
+    uniform vec3 uLightDir;
+    uniform float uSpecStrength;
+    uniform mat4 projectionMatrix;
+    uniform mat4 uInvProjection;
+    uniform vec2 uViewport;
+    varying vec3 vColorStart;
+    varying vec3 vColorEnd;
+    varying float vOpacity;
+    flat varying vec3 vImpBase;
+    flat varying vec3 vImpAxis;
+    flat varying float vImpRadiusSq;
+    flat varying float vImpLen;
+    flat varying float vImpCollapse;
+
+    vec3 linearTosRGB(vec3 linear) {
+      return vec3(
+        linear.r <= 0.0031308 ? linear.r * 12.92 : 1.055 * pow(linear.r, 1.0/2.4) - 0.055,
+        linear.g <= 0.0031308 ? linear.g * 12.92 : 1.055 * pow(linear.g, 1.0/2.4) - 0.055,
+        linear.b <= 0.0031308 ? linear.b * 12.92 : 1.055 * pow(linear.b, 1.0/2.4) - 0.055
+      );
+    }
+    vec3 studio_env(vec3 n, vec3 keyDir) {
+      vec3 col = vec3(0.72);
+      float k = max(dot(n, keyDir), 0.0);
+      col += vec3(1.00, 0.97, 0.92) * (k * k) * 0.35;
+      float sky = n.y * 0.5 + 0.5;
+      col += vec3(0.06, 0.06, 0.07) * sky;
+      return col;
+    }
+    vec3 aces_tonemap(vec3 x) {
+      return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    }
+
+    void main() {
+      if (vImpCollapse > 0.5) discard;
+
+      // View-space ray through this pixel.
+      vec2 ndc = (gl_FragCoord.xy / uViewport) * 2.0 - 1.0;
+      vec4 near = uInvProjection * vec4(ndc, -1.0, 1.0);
+      vec4 far  = near + uInvProjection[2];
+      vec3 ray_origin = near.xyz / near.w;
+      vec3 rd = normalize(far.xyz / far.w - ray_origin);
+
+      vec3 A = vImpAxis;
+      vec3 B = vImpBase;
+      float len2 = vImpLen * vImpLen;
+      float r = sqrt(vImpRadiusSq);
+
+      vec3 n = cross(rd, A);
+      float ln = length(n);
+      vec3 RC = ray_origin - B;
+      vec3 hit; vec3 nrm; float coverage = 1.0; float axial = 0.0;
+
+      if (ln < 1e-7 * vImpLen) {
+        float t = dot(RC, rd);
+        float v = dot(RC, RC);
+        if (v - t * t > vImpRadiusSq) discard;
+        hit = ray_origin - t * rd;
+        nrm = -A; axial = 0.0;
+      } else {
+        n /= ln;
+        float dd = dot(RC, n); dd *= dd;
+        float pd = sqrt(dd);
+        coverage = clamp((r - pd) / max(fwidth(pd), 1e-6) + 0.5, 0.0, 1.0);
+        if (coverage <= 0.0) discard;
+        float dc = min(dd, vImpRadiusSq);
+        float t = dot(cross(A, RC), n) / ln;
+        float s = abs(sqrt(vImpRadiusSq - dc) / dot(cross(n, A), rd) * vImpLen);
+        float tnear = t - s;
+        hit = ray_origin + tnear * rd;
+        float anear = dot(hit - B, A) / len2;
+        if (anear >= 0.0 && anear <= 1.0) {
+          nrm = hit - (B + anear * A); axial = anear;
+        } else {
+          float tfar = t + s;
+          vec3 farp = ray_origin + tfar * rd;
+          float afar = dot(farp - B, A) / len2;
+          if (anear < 0.0 && afar > 0.0) {
+            hit = ray_origin + (tnear + (anear / (anear - afar)) * 2.0 * s) * rd;
+            nrm = -A; axial = 0.0;
+          } else if (anear > 1.0 && afar < 1.0) {
+            hit = ray_origin + (tnear + ((anear - 1.0) / (anear - afar)) * 2.0 * s) * rd;
+            nrm = A; axial = 1.0;
+          } else discard;
+        }
+      }
+
+      nrm = normalize(nrm);
+      // Cap coverage from hit radial distance (side wall used ray-to-axis).
+      if (abs(dot(nrm, normalize(A))) > 0.9) {
+        vec3 rad = (hit - B) - A * (dot(hit - B, A) / len2);
+        float pdc = length(rad);
+        coverage = clamp((r - pdc) / max(fwidth(pdc), 1e-6) + 0.5, 0.0, 1.0);
+      }
+
+      // Analytic depth.
+      vec4 proj = projectionMatrix * vec4(hit, 1.0);
+      float dz = (proj.z / proj.w + 1.0) * 0.5;
+      if (dz < 0.0 || dz > 1.0) discard;
+      gl_FragDepth = dz;
+
+      // -- reuse #524 lighting verbatim --
+      // Colour gradient: axial 0..1 over the HALF-cylinder maps to the same
+      // vYPosition+0.5 the mesh used (its cylinder y ran -0.5..0.5).
+      vec3 base_color = mix(vColorStart, vColorEnd, axial);
+      float gray = dot(base_color, vec3(0.299, 0.587, 0.114));
+      base_color = mix(vec3(gray), base_color, saturation) * brightness;
+      vec3 viewDir = normalize(-hit);
+      vec3 keyDir = normalize(uLightDir);
+      vec3 env = studio_env(nrm, keyDir);
+      vec3 halfDir = normalize(keyDir + viewDir);
+      float specular = pow(max(dot(nrm, halfDir), 0.0), 64.0);
+      float NdotV = max(dot(nrm, viewDir), 0.0);
+      float fresnel = pow(1.0 - NdotV, 5.0);
+      float rim_mask = smoothstep(0.0, 0.25, NdotV);
+      float floor_lift = mix(0.18, 1.0, rim_mask);
+      vec3 specColor = mix(vec3(1.0), base_color, 0.55);
+      float exposure = ambientIntensity + directionalIntensity * 0.5;
+      vec3 final_color = base_color * env * exposure * floor_lift
+                       + specColor * specular * directionalIntensity * 0.5 * rim_mask * uSpecStrength
+                       + vec3(fresnel * 0.08) * rim_mask;
+      final_color = aces_tonemap(final_color);
+      gl_FragColor = vec4(linearTosRGB(final_color), uOpacity * vOpacity * coverage);
+
+      if (uDepthCueing > 0.0) {
+        float fade = clamp((-hit.z - uDepthNear) / max(uDepthFar - uDepthNear, 0.01), 0.0, 1.0) * uDepthCueing;
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, linearTosRGB(uDepthCueBgColor), fade);
+      }
+      if (uBondOutlineStrength > 0.0) {
+        float silhouette = smoothstep(0.0, 0.6, 1.0 - NdotV);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0), silhouette * uBondOutlineStrength * 0.85);
+      }
+    }
+  `
+
   const fragment_shader = `
     uniform float ambientIntensity;
     uniform float directionalIntensity;
