@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Full-chain benchmark for the typed WASM bond-detection entry
 // (`detect_bonds_radii_typed`): wasm call + BondTable typed-array getters.
 // Mirrors extensions/rust/examples/bench_bonds.rs (27^3 = 19683 atoms,
@@ -7,8 +6,11 @@
 //   node scripts/build-wasm.mjs          # or: pnpm --dir extensions/rust-wasm build
 //   node extensions/rust-wasm/bench-bonds.mjs
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import * as os from 'node:os'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Worker as NodeWorker } from 'node:worker_threads'
 
 const N_SIDE = 27
@@ -20,7 +22,7 @@ const SAMPLES = 7
 const MAX_THREADS = 8
 const PERFORMANCE_RATIO_LIMIT = 0.75
 const THREAD_INIT_TIMEOUT_MS = 30_000
-const logicalCores = os.availableParallelism?.() ?? os.cpus().length
+const OUTPUT_FIELDS = ['pairs', 'jimages', 'lengths', 'strengths']
 
 function buildSynthetic() {
   const positions = new Float32Array(N * 3)
@@ -44,6 +46,15 @@ function buildSynthetic() {
   return { positions, atomicNumbers }
 }
 
+function errorText(error) {
+  if (error instanceof AggregateError) {
+    const causes = error.errors.map(errorText).join(' | ')
+    return `${error.name}: ${error.message}; causes: ${causes}`
+  }
+  if (error instanceof Error) return `${error.name}: ${error.message}`
+  return String(error)
+}
+
 async function initializeArtifact(directory) {
   const pkg = await import(`./${directory}/ferrox.js`)
   const bytes = await readFile(
@@ -62,6 +73,72 @@ async function initializeArtifact(directory) {
     }
   }
   return pkg
+}
+
+function isMissingScalarArtifact(error) {
+  if (!(error instanceof Error)) return false
+  const code = error.code
+  const missing = code === 'ERR_MODULE_NOT_FOUND' || code === 'ENOENT'
+  return missing && error.message.includes('pkg-scalar')
+}
+
+export async function initializeScalarArtifact(loadArtifact = initializeArtifact) {
+  try {
+    return {
+      directory: 'pkg-scalar',
+      pkg: await loadArtifact('pkg-scalar'),
+    }
+  } catch (error) {
+    if (!isMissingScalarArtifact(error)) throw error
+    return { directory: 'pkg', pkg: await loadArtifact('pkg') }
+  }
+}
+
+function supportsWasmSharedMemory() {
+  if (typeof globalThis.SharedArrayBuffer !== 'function') return false
+  try {
+    const memory = new WebAssembly.Memory({
+      initial: 1,
+      maximum: 1,
+      shared: true,
+    })
+    return memory.buffer instanceof globalThis.SharedArrayBuffer
+  } catch {
+    return false
+  }
+}
+
+function detectHostCapabilities() {
+  return {
+    logicalCores: os.availableParallelism?.() ?? os.cpus().length,
+    sharedArrayBuffer: typeof globalThis.SharedArrayBuffer === 'function',
+    wasmSharedMemory: supportsWasmSharedMemory(),
+    workerThreads: typeof NodeWorker === 'function',
+  }
+}
+
+export function assessHostEligibility(capabilities) {
+  if (capabilities.logicalCores < 4) {
+    return {
+      eligible: false,
+      reason:
+        `host has ${capabilities.logicalCores} logical cores; ` +
+        'at least 4 required',
+    }
+  }
+  if (!capabilities.sharedArrayBuffer) {
+    return { eligible: false, reason: 'SharedArrayBuffer unavailable' }
+  }
+  if (!capabilities.wasmSharedMemory) {
+    return { eligible: false, reason: 'WebAssembly shared memory unavailable' }
+  }
+  if (!capabilities.workerThreads) {
+    return { eligible: false, reason: 'Node worker_threads unavailable' }
+  }
+  return {
+    eligible: true,
+    reason: `eligible shared-memory host with ${capabilities.logicalCores} cores`,
+  }
 }
 
 function readTypedOutput(table) {
@@ -88,6 +165,27 @@ function serializeTypedOutput(output) {
   })
 }
 
+function hashTypedOutput(output) {
+  const hash = createHash('sha256')
+  hash.update(`count:${output.count};`)
+  for (const field of OUTPUT_FIELDS) {
+    hash.update(`${field}:${output[field].byteLength};`)
+    hash.update(output[field])
+  }
+  return hash.digest('hex')
+}
+
+function assertByteParity(label, expected, actual) {
+  assert.equal(actual.count, expected.count, `${label}: bond count differs`)
+  for (const field of OUTPUT_FIELDS) {
+    assert.deepEqual(
+      actual[field],
+      expected[field],
+      `${label}: ${field} bytes differ`,
+    )
+  }
+}
+
 function detectAndRead(pkg, positions, atomicNumbers, lattice, pbc) {
   const table = pkg.detect_bonds_radii_typed(
     positions,
@@ -102,38 +200,49 @@ function detectAndRead(pkg, positions, atomicNumbers, lattice, pbc) {
   }
 }
 
-function benchmark(pkg, positions, atomicNumbers, lattice, pbc) {
+export async function measureDeterministicSamples({
+  label,
+  backend,
+  run,
+  expectedBytes = null,
+  checkHealth = async () => {},
+  warmups = WARMUPS,
+  samples = SAMPLES,
+}) {
+  let canonicalBytes = expectedBytes
   let output
-  const run = () => {
-    output = detectAndRead(pkg, positions, atomicNumbers, lattice, pbc)
+
+  const validate = async (phase, index) => {
+    const bytes = serializeTypedOutput(output)
+    const context = `${label} ${backend} ${phase} ${index}`
+    if (canonicalBytes === null) canonicalBytes = bytes
+    else assertByteParity(context, canonicalBytes, bytes)
+    const hash = hashTypedOutput(bytes)
+    await checkHealth()
+    return hash
   }
 
-  for (let i = 0; i < WARMUPS; i++) run()
+  for (let i = 0; i < warmups; i++) {
+    output = run()
+    await validate('warmup', i + 1)
+  }
 
   const times = []
-  for (let i = 0; i < SAMPLES; i++) {
+  const sampleHashes = []
+  for (let i = 0; i < samples; i++) {
     const t0 = performance.now()
-    run()
+    output = run()
     times.push(performance.now() - t0)
+    sampleHashes.push(await validate('timed sample', i + 1))
   }
   times.sort((a, b) => a - b)
+
   return {
     min: times[0],
     median: times[times.length >> 1],
     output,
-  }
-}
-
-function assertByteParity(label, scalar, threaded) {
-  const scalarBytes = serializeTypedOutput(scalar)
-  const threadedBytes = serializeTypedOutput(threaded)
-  assert.equal(threadedBytes.count, scalarBytes.count, `${label}: bond count differs`)
-  for (const field of ['pairs', 'jimages', 'lengths', 'strengths']) {
-    assert.deepEqual(
-      threadedBytes[field],
-      scalarBytes[field],
-      `${label}: ${field} bytes differ`,
-    )
+    canonicalBytes,
+    sampleHashes,
   }
 }
 
@@ -145,22 +254,20 @@ function printTiming(label, backend, result) {
   )
 }
 
-function errorText(error) {
-  if (error instanceof AggregateError) {
-    const causes = error.errors.map(errorText).join(' | ')
-    return `${error.name}: ${error.message}; causes: ${causes}`
-  }
-  if (error instanceof Error) return `${error.name}: ${error.message}`
-  return String(error)
-}
-
 function installNodeWorkerShim() {
   const activeWorkers = new Set()
-  let rejectWorkerFailure
-  const workerFailure = new Promise((_, reject) => {
-    rejectWorkerFailure = reject
+  const healthErrors = []
+  let rejectHealthFailure
+  let cleaned = false
+  const healthFailure = new Promise((_, reject) => {
+    rejectHealthFailure = reject
   })
   const previous = new Map()
+
+  const recordHealthFailure = (error) => {
+    healthErrors.push(error)
+    if (healthErrors.length === 1) rejectHealthFailure(error)
+  }
 
   for (const key of ['self', 'addEventListener', 'removeEventListener', 'Worker']) {
     previous.set(key, {
@@ -189,14 +296,28 @@ function installNodeWorkerShim() {
   class WebWorkerShim {
     constructor(url) {
       const moduleUrl = new URL('../../../ferrox.js', url).href
+      this.expectedTermination = false
       this.worker = new NodeWorker(bootstrap, {
         eval: true,
         workerData: { moduleUrl },
       })
       this.listeners = new Map()
       activeWorkers.add(this)
-      this.worker.once('error', (error) => rejectWorkerFailure(error))
-      this.worker.once('exit', () => activeWorkers.delete(this))
+      this.worker.once('error', (cause) => {
+        if (!this.expectedTermination) {
+          recordHealthFailure(
+            new Error(`Rayon worker error: ${errorText(cause)}`, { cause }),
+          )
+        }
+      })
+      this.worker.once('exit', (code) => {
+        activeWorkers.delete(this)
+        if (!this.expectedTermination) {
+          recordHealthFailure(
+            new Error(`Rayon worker exited unexpectedly with code ${code}`),
+          )
+        }
+      })
     }
 
     addEventListener(type, listener) {
@@ -218,29 +339,63 @@ function installNodeWorkerShim() {
       else this.worker.postMessage(value, transferList)
     }
 
-    async terminate() {
-      activeWorkers.delete(this)
-      await this.worker.terminate()
+    terminate() {
+      this.expectedTermination = true
+      return this.worker.terminate()
     }
   }
 
   globalThis.Worker = WebWorkerShim
 
-  return {
-    workerFailure,
-    async cleanup() {
-      await Promise.allSettled(
-        [...activeWorkers].map((worker) => worker.terminate()),
+  const restoreGlobals = () => {
+    for (const [key, state] of previous) {
+      if (state.present) globalThis[key] = state.value
+      else delete globalThis[key]
+    }
+  }
+
+  const assertHealthy = () => {
+    if (healthErrors.length > 0) {
+      throw new AggregateError(
+        [...healthErrors],
+        'Rayon worker health failure during benchmark',
       )
-      for (const [key, state] of previous) {
-        if (state.present) globalThis[key] = state.value
-        else delete globalThis[key]
+    }
+  }
+
+  return {
+    healthFailure,
+    async checkHealth() {
+      await new Promise((resolve) => setImmediate(resolve))
+      assertHealthy()
+    },
+    async cleanup() {
+      if (cleaned) return
+      cleaned = true
+      // Flush pending error/exit events before marking any exit as intentional.
+      await new Promise((resolve) => setImmediate(resolve))
+      const workers = [...activeWorkers]
+      const settlements = await Promise.allSettled(
+        workers.map((worker) => worker.terminate()),
+      )
+      await new Promise((resolve) => setImmediate(resolve))
+      restoreGlobals()
+
+      const terminationErrors = settlements
+        .filter((result) => result.status === 'rejected')
+        .map((result) => result.reason)
+      const failures = [...healthErrors, ...terminationErrors]
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          'Rayon worker cleanup or health check failed',
+        )
       }
     },
   }
 }
 
-async function initializeThreadedArtifact() {
+async function initializeThreadedArtifact(logicalCores) {
   const shim = installNodeWorkerShim()
   try {
     const pkg = await initializeArtifact('pkg-threaded')
@@ -259,92 +414,178 @@ async function initializeThreadedArtifact() {
     try {
       await Promise.race([
         pkg.initThreadPool(threadCount),
-        shim.workerFailure,
+        shim.healthFailure,
         timeout,
       ])
     } finally {
       clearTimeout(timeoutId)
     }
-    return { pkg, threadCount, cleanup: shim.cleanup }
+    await shim.checkHealth()
+    return {
+      pkg,
+      threadCount,
+      checkHealth: shim.checkHealth,
+      cleanup: shim.cleanup,
+    }
   } catch (error) {
-    await shim.cleanup()
+    try {
+      await shim.cleanup()
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'threaded initialization and cleanup both failed',
+      )
+    }
     throw error
   }
 }
 
-const { positions, atomicNumbers } = buildSynthetic()
-const lattice = new Float64Array([A, 0, 0, 0, A, 0, 0, 0, A])
-const fixtures = [
-  ['pbc TTT', new Uint8Array([1, 1, 1])],
-  ['pbc FFF', new Uint8Array([0, 0, 0])],
-]
+export async function runBenchmarkGate({
+  eligibility,
+  runScalar,
+  initializeThreaded,
+  runThreaded,
+  log = console.log,
+}) {
+  if (!eligibility.eligible) {
+    log(`STATUS: SKIP: ${eligibility.reason}`)
+    return { status: 'skip', reason: eligibility.reason }
+  }
 
-const scalarPkg = await initializeArtifact('pkg-scalar')
-const scalarResults = new Map()
-for (const [label, pbc] of fixtures) {
-  const result = benchmark(scalarPkg, positions, atomicNumbers, lattice, pbc)
-  scalarResults.set(label, result)
-  printTiming(label, 'scalar', result)
-}
-
-let threaded
-try {
-  threaded = await initializeThreadedArtifact()
-} catch (error) {
-  const reason = errorText(error)
-  console.warn(`threaded benchmark SKIP: ${reason}`)
-  console.warn(`byte parity SKIP: threaded runtime unavailable (${reason})`)
-  console.warn(`performance gate SKIP: threaded runtime unavailable (${reason})`)
-  console.warn('STATUS: DONE_WITH_CONCERNS')
-}
-
-if (threaded) {
-  let performanceGatesRun = 0
+  const scalar = await runScalar()
+  const threaded = await initializeThreaded()
+  let runError
   try {
-    console.log(
-      `threaded runtime: ${threaded.threadCount} workers on ` +
-        `${logicalCores} logical cores (shared-memory isolation confirmed)`,
-    )
-    for (const [label, pbc] of fixtures) {
-      const scalar = scalarResults.get(label)
-      const result = benchmark(
-        threaded.pkg,
-        positions,
-        atomicNumbers,
-        lattice,
-        pbc,
-      )
-      printTiming(label, 'threaded', result)
-      assertByteParity(label, scalar.output, result.output)
-      console.log(`${label} byte parity PASS: pairs/jimages/lengths/strengths`)
+    await runThreaded(threaded, scalar)
+  } catch (error) {
+    runError = error
+  }
 
-      if (logicalCores < 4) {
-        console.warn(
-          `${label} performance gate SKIP: host has ${logicalCores} logical cores; ` +
-            'at least 4 required',
-        )
-        continue
-      }
-
-      const ratio = result.median / scalar.median
-      assert.ok(
-        ratio <= PERFORMANCE_RATIO_LIMIT,
-        `${label}: threaded median ${result.median.toFixed(1)}ms exceeds ` +
-          `${PERFORMANCE_RATIO_LIMIT.toFixed(2)} * scalar median ` +
-          `${scalar.median.toFixed(1)}ms (ratio ${ratio.toFixed(3)})`,
-      )
-      performanceGatesRun += 1
-      console.log(
-        `${label} performance gate PASS: threaded/scalar median ratio ` +
-          `${ratio.toFixed(3)} <= ${PERFORMANCE_RATIO_LIMIT.toFixed(2)}`,
-      )
-    }
-    console.log(
-      performanceGatesRun === fixtures.length
-        ? 'STATUS: DONE'
-        : 'STATUS: DONE_WITH_SKIPS',
-    )
-  } finally {
+  let cleanupError
+  try {
     await threaded.cleanup()
+  } catch (error) {
+    cleanupError = error
+  }
+
+  if (runError && cleanupError) {
+    throw new AggregateError(
+      [runError, cleanupError],
+      'threaded benchmark and worker cleanup both failed',
+    )
+  }
+  if (runError) throw runError
+  if (cleanupError) throw cleanupError
+
+  log('STATUS: DONE')
+  return { status: 'done', scalar }
+}
+
+export async function runBenchmarkCli(
+  run,
+  { error = console.error, processState = process } = {},
+) {
+  try {
+    return await run()
+  } catch (cause) {
+    processState.exitCode = 1
+    error(`STATUS: FAILED: ${errorText(cause)}`)
+    return { status: 'failed', error: cause }
   }
 }
+
+function fixtures() {
+  return [
+    ['pbc TTT', new Uint8Array([1, 1, 1])],
+    ['pbc FFF', new Uint8Array([0, 0, 0])],
+  ]
+}
+
+async function main() {
+  const capabilities = detectHostCapabilities()
+  const eligibility = assessHostEligibility(capabilities)
+  const { positions, atomicNumbers } = buildSynthetic()
+  const lattice = new Float64Array([A, 0, 0, 0, A, 0, 0, 0, A])
+  const benchmarkFixtures = fixtures()
+
+  await runBenchmarkGate({
+    eligibility,
+    runScalar: async () => {
+      const scalarArtifact = await initializeScalarArtifact()
+      if (scalarArtifact.directory === 'pkg') {
+        console.log('scalar artifact: pkg (legacy fallback; pkg-scalar missing)')
+      } else {
+        console.log('scalar artifact: pkg-scalar')
+      }
+
+      const results = new Map()
+      for (const [label, pbc] of benchmarkFixtures) {
+        const result = await measureDeterministicSamples({
+          label,
+          backend: 'scalar',
+          run: () =>
+            detectAndRead(
+              scalarArtifact.pkg,
+              positions,
+              atomicNumbers,
+              lattice,
+              pbc,
+            ),
+        })
+        results.set(label, result)
+        printTiming(label, 'scalar', result)
+        console.log(
+          `${label} scalar determinism verified: ` +
+            `${result.sampleHashes.length}/${SAMPLES} timed samples`,
+        )
+      }
+      return results
+    },
+    initializeThreaded: () =>
+      initializeThreadedArtifact(capabilities.logicalCores),
+    runThreaded: async (threaded, scalarResults) => {
+      console.log(
+        `threaded runtime: ${threaded.threadCount} workers on ` +
+          `${capabilities.logicalCores} logical cores`,
+      )
+      for (const [label, pbc] of benchmarkFixtures) {
+        const scalar = scalarResults.get(label)
+        const result = await measureDeterministicSamples({
+          label,
+          backend: 'threaded',
+          expectedBytes: scalar.canonicalBytes,
+          checkHealth: threaded.checkHealth,
+          run: () =>
+            detectAndRead(
+              threaded.pkg,
+              positions,
+              atomicNumbers,
+              lattice,
+              pbc,
+            ),
+        })
+        printTiming(label, 'threaded', result)
+        console.log(
+          `${label} byte parity PASS: pairs/jimages/lengths/strengths ` +
+            `for ${result.sampleHashes.length}/${SAMPLES} timed samples`,
+        )
+
+        const ratio = result.median / scalar.median
+        assert.ok(
+          ratio <= PERFORMANCE_RATIO_LIMIT,
+          `${label}: threaded median ${result.median.toFixed(1)}ms exceeds ` +
+            `${PERFORMANCE_RATIO_LIMIT.toFixed(2)} * scalar median ` +
+            `${scalar.median.toFixed(1)}ms (ratio ${ratio.toFixed(3)})`,
+        )
+        console.log(
+          `${label} performance gate PASS: threaded/scalar median ratio ` +
+            `${ratio.toFixed(3)} <= ${PERFORMANCE_RATIO_LIMIT.toFixed(2)}`,
+        )
+      }
+    },
+  })
+}
+
+const isMain =
+  process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href
+if (isMain) await runBenchmarkCli(main)
