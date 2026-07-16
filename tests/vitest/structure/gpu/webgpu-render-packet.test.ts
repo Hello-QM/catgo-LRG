@@ -40,6 +40,7 @@ const make_recording_device = (opts?: {
   pick_reads?: number[]
   validation_reads?: [number, number][]
   validation_maps?: Promise<void>[]
+  graph_reads?: number[][]
 }) => {
   const writes: Write[] = []
   const passes: Pass[] = []
@@ -67,6 +68,9 @@ const make_recording_device = (opts?: {
             if (next !== undefined) new Uint32Array(buf)[0] = next
           } else if (desc.label === `large-system-bond-validation`) {
             const next = opts?.validation_reads?.shift()
+            if (next) new Uint32Array(buf).set(next)
+          } else if (desc.label === `large-system-bond-graph-readback`) {
+            const next = opts?.graph_reads?.shift()
             if (next) new Uint32Array(buf).set(next)
           }
           return buf
@@ -232,6 +236,9 @@ const EMPTY_IMAGES: ImageInstanceTable = {
   jimages: new Int8Array(0),
 }
 
+const pack_signed_jimage = (jx: number, jy: number, jz: number) =>
+  (jx + 128) | ((jy + 128) << 8) | ((jz + 128) << 16)
+
 describe(`webgpu renderer consumes render packets (mock device)`, () => {
   beforeAll(() => {
     vi.stubGlobal(`navigator`, {
@@ -378,54 +385,58 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.destroy()
   })
 
-  it(`ghost image instances upload sparsely and extend the atom draw`, () => {
+  it(`derives sparse packet ghosts from the same graph, including a center self-image`, () => {
+    const graph: BaseBondGraph = {
+      version: 1,
+      // Site 4 can sit anywhere in the base cell: the graph, not decorative
+      // boundary metadata, proves its +a self-image endpoint needs a ghost.
+      pairs: new Uint32Array([4, 4]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
+    const decorative_images: ImageInstanceTable = {
+      count: 1,
+      base_sites: new Uint32Array([7]),
+      jimages: new Int8Array([0, 0, 0]),
+    }
     const rec = make_recording_device()
     const renderer = create_large_system_renderer(
       rec.device as unknown as GPUDevice,
       make_mock_canvas() as unknown as HTMLCanvasElement,
     )
-    const images: ImageInstanceTable = {
-      count: 3,
-      base_sites: new Uint32Array([1, 2, 3]),
-      jimages: new Int8Array([-1, 0, 0, 2, 0, 0, 0, 0, 2]),
-    }
     renderer.set_packet({
-      topology: make_topology(),
+      topology: make_topology(graph),
       frame: make_frame(),
-      replicas: make_replicas({ dims: [2, 2, 2], boundary_policy: `ghost-images` }),
-    }, images)
+      replicas: make_replicas({ boundary_policy: `ghost-images` }),
+    }, decorative_images)
 
-    // Sparse: 3 ghosts ⇒ 3 u32 sites + 3 packed images — NOT N×ncells-sized.
     const sites = writes_to(rec.writes, `large-system-ghost-sites`)
     expect(sites).toHaveLength(1)
-    expect(sites[0].bytes.byteLength).toBe(3 * 4)
-    expect([...new Uint32Array(sites[0].bytes.buffer)]).toEqual([1, 2, 3])
+    expect([...new Uint32Array(sites[0].bytes.buffer)]).toEqual([4])
     const imgs = writes_to(rec.writes, `large-system-ghost-images`)
     expect(imgs).toHaveLength(1)
-    expect(imgs[0].bytes.byteLength).toBe(3 * 4)
-    // Packed (j+128) lanes: [-1,0,0] → 127 | 128<<8 | 128<<16.
-    const packed = new Uint32Array(imgs[0].bytes.buffer)
-    expect(packed[0]).toBe(127 | (128 << 8) | (128 << 16))
-    expect(packed[1]).toBe(130 | (128 << 8) | (128 << 16))
-    expect(packed[2]).toBe(128 | (128 << 8) | (130 << 16))
+    expect([...new Uint32Array(imgs[0].bytes.buffer)]).toEqual([
+      pack_signed_jimage(1, 0, 0),
+    ])
 
     renderer.render()
     const frame_pass = rec.passes.find((p) => p.label === `frame`)
-    // 8 atoms × 8 cells + 3 ghost instances.
-    expect(frame_pass?.draws[0]).toEqual([4, N * 8 + 3])
-    expect(renderer.get_diagnostics().ghost_count).toBe(3)
+    expect(frame_pass?.draws[0]).toEqual([4, N + 1])
+    expect(renderer.get_diagnostics().ghost_count).toBe(1)
 
     renderer.destroy()
   })
 
-  it(`periodic self-image edges reach the bond draw`, () => {
+  it(`preserves full signed packet jimages and draws self-image edges`, () => {
     const bond_graph: BaseBondGraph = {
       version: 1,
-      // Self-image edge (0—0 across +a) plus a plain intra-cell bond.
-      pairs: new Uint32Array([0, 0, 0, 1]),
-      jimages: new Int8Array([1, 0, 0, 0, 0, 0]),
-      kinds: new Uint8Array(2),
-      strengths: new Float32Array([1, 1]),
+      // Int8 is the declared graph range. +2 and negative self-images must not
+      // silently collapse to +/-1; the plain bond pins the zero lane too.
+      pairs: new Uint32Array([0, 0, 1, 1, 0, 1]),
+      jimages: new Int8Array([2, -3, 0, -1, 0, 0, 0, 0, 0]),
+      kinds: new Uint8Array(3),
+      strengths: new Float32Array([1, 1, 1]),
     }
     const rec = make_recording_device()
     const renderer = create_large_system_renderer(
@@ -438,18 +449,29 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       replicas: make_replicas(),
     }, EMPTY_IMAGES)
 
-    // The packed active pairs retain the self-edge 1:1 (a === b, jimage ≠ 0
-    // packs to (1+1)|((0+1)<<2)|((0+1)<<4) = 22; jimage 0 packs to 21).
     const pairs = writes_to(rec.writes, `large-system-bond-pairs-active`)
     expect(pairs).toHaveLength(1)
-    expect([...new Uint32Array(pairs[0].bytes.buffer)]).toEqual([0, 0, 22, 0, 1, 21])
+    expect([...new Uint32Array(pairs[0].bytes.buffer)]).toEqual([
+      0,
+      0,
+      pack_signed_jimage(2, -3, 0),
+      1,
+      1,
+      pack_signed_jimage(-1, 0, 0),
+      0,
+      1,
+      pack_signed_jimage(0, 0, 0),
+    ])
     const count = writes_to(rec.writes, `large-system-bond-count-active`).at(-1)
     expect(count).toBeDefined()
-    expect(new Uint32Array(count!.bytes.buffer)[0]).toBe(2)
+    expect(new Uint32Array(count!.bytes.buffer)[0]).toBe(3)
+    const bond_shader = rec.shader_sources[`large-system-bond-render`]
+    expect(bond_shader).toContain(`jp & 255u`)
+    expect(bond_shader).toContain(`jp >> 8u`)
+    expect(bond_shader).toContain(`jp >> 16u`)
+    expect(bond_shader).not.toContain(`jp & 3u`)
 
     renderer.render()
-    // The indirect-args build ran (count → draw args) and the bond draw was
-    // issued — the self-edge is inside the drawn instance range.
     expect(rec.compute_passes).toContain(`large-system-bond-indirect`)
     expect(rec.compute_passes).not.toContain(`large-system-bond-compute`)
     const frame_pass = rec.passes.find((p) => p.label === `frame`)
@@ -475,7 +497,6 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(structure_source).toContain(`structure={structure}`)
     expect(structure_source).toContain(`frame_positions={trajectory_frame_positions}`)
     expect(structure_source).toContain(`frame_lattice={trajectory_frame_lattice}`)
-    expect(structure_source).toContain(`images={render_image_instances}`)
     expect(overlay_source).not.toContain(`get_displayed_frame_positions`)
     expect(scene_source).not.toContain(`get_displayed_frame_positions`)
 
@@ -516,8 +537,15 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       base_sites: new Uint32Array([2]),
       jimages: new Int8Array([2, 0, 0]),
     }
+    const graph: BaseBondGraph = {
+      version: 1,
+      pairs: new Uint32Array([0, 2]),
+      jimages: new Int8Array([1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
     const packet: RenderPacket = {
-      topology: make_topology(),
+      topology: make_topology(graph),
       frame: make_frame(),
       replicas: make_replicas({
         version: 3,
@@ -557,6 +585,39 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     renderer.destroy()
   })
 
+  it(`keeps packet render lattice isolated from detector data across same-packet replay`, () => {
+    const rec = make_recording_device()
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    const packet: RenderPacket = {
+      topology: make_topology(),
+      frame: make_frame(),
+      replicas: make_replicas(),
+    }
+    renderer.set_packet(packet, EMPTY_IMAGES)
+    const packet_uniform = writes_to(rec.writes, `large-system-bond-render-uniform`).at(-1)
+    expect(packet_uniform).toBeDefined()
+    expect(new Float32Array(packet_uniform!.bytes.buffer)[0]).toBe(20)
+
+    rec.clear()
+    renderer.set_bond_data(
+      new Float32Array(N).fill(0.76),
+      new Float32Array([9, 0, 0, 0, 9, 0, 0, 0, 9]),
+      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      true,
+    )
+    renderer.set_packet(packet, EMPTY_IMAGES) // SAME object + versions
+
+    // set_bond_data owns detector inputs only in packet mode. It must never
+    // overwrite the packet-owned bond render lattice and leave split state.
+    expect(writes_to(rec.writes, `large-system-bond-render-uniform`)).toHaveLength(0)
+    expect(renderer.get_diagnostics().ownership).toBe(`packet`)
+
+    renderer.destroy()
+  })
+
   it(`encodes hide vs ghost boundary policy and completes multi-cell ghost bonds`, () => {
     const self_graph: BaseBondGraph = {
       version: 1,
@@ -572,12 +633,6 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
     const topology = make_topology(self_graph)
     const frame = make_frame()
-    const images: ImageInstanceTable = {
-      count: 1,
-      base_sites: new Uint32Array([0]),
-      // +a outer ghost for a 2-cell x supercell is absolute cell x=2.
-      jimages: new Int8Array([2, 0, 0]),
-    }
 
     renderer.set_packet({
       topology,
@@ -587,7 +642,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
         dims: [2, 1, 1],
         boundary_policy: `hide`,
       }),
-    }, images)
+    }, EMPTY_IMAGES)
     let sc = writes_to(rec.writes, `large-system-supercell`).at(-1)
     expect(sc).toBeDefined()
     let policy_rows = new Float32Array(sc!.bytes.buffer, 16, 12)
@@ -606,7 +661,7 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
         dims: [2, 1, 1],
         boundary_policy: `ghost-images`,
       }),
-    }, images)
+    }, EMPTY_IMAGES)
     sc = writes_to(rec.writes, `large-system-supercell`).at(-1)
     expect(sc).toBeDefined()
     policy_rows = new Float32Array(sc!.bytes.buffer, 16, 12)
@@ -625,6 +680,51 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     expect(bond_shader).toContain(`let hide_outside`)
     expect(bond_shader).toContain(`let ghost_complete`)
     expect(bond_shader).not.toContain(`ncells == 1u && show_images`)
+
+    renderer.destroy()
+  })
+
+  it(`publishes GPU-detected multi-cell ghosts from the validated base graph`, async () => {
+    const rec = make_recording_device({
+      validation_reads: [[1, 0]],
+      graph_reads: [[0, 1, pack_signed_jimage(1, 0, 0)]],
+    })
+    const renderer = create_large_system_renderer(
+      rec.device as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    renderer.set_packet({
+      topology: make_topology(),
+      frame: make_frame(),
+      replicas: make_replicas({
+        dims: [2, 2, 1],
+        boundary_policy: `ghost-images`,
+      }),
+    }, EMPTY_IMAGES)
+    renderer.set_bond_data(
+      new Float32Array(N).fill(0.76),
+      make_frame().lattice,
+      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      true,
+    )
+
+    renderer.render() // candidate dispatch + count validation
+    await flush() // graph readback + publication become ready
+    rec.clear()
+    renderer.render() // publish the validated graph and its derived ghost stream
+
+    const sites = writes_to(rec.writes, `large-system-ghost-sites`)
+    expect(sites).toHaveLength(1)
+    expect([...new Uint32Array(sites[0].bytes.buffer)]).toEqual([1, 1])
+    const images = writes_to(rec.writes, `large-system-ghost-images`)
+    expect(images).toHaveLength(1)
+    expect([...new Uint32Array(images[0].bytes.buffer)]).toEqual([
+      pack_signed_jimage(2, 0, 0),
+      pack_signed_jimage(2, 1, 0),
+    ])
+    expect(renderer.get_diagnostics().ghost_count).toBe(2)
+    const frame_pass = rec.passes.find((p) => p.label === `frame`)
+    expect(frame_pass?.draws[0]).toEqual([4, N * 4 + 2])
 
     renderer.destroy()
   })
@@ -703,16 +803,18 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       rec.device as unknown as GPUDevice,
       make_mock_canvas() as unknown as HTMLCanvasElement,
     )
-    const images: ImageInstanceTable = {
-      count: 2,
-      base_sites: new Uint32Array([5, 2]),
-      jimages: new Int8Array([-1, 0, 0, 2, 0, 1]),
+    const graph: BaseBondGraph = {
+      version: 1,
+      pairs: new Uint32Array([0, 5]),
+      jimages: new Int8Array([-1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
     }
     renderer.set_packet({
-      topology: make_topology(),
+      topology: make_topology(graph),
       frame: make_frame(),
       replicas: make_replicas({ dims: [2, 1, 1], boundary_policy: `ghost-images` }),
-    }, images)
+    }, EMPTY_IMAGES)
 
     const replica = await renderer.pick(2, 2)
     expect(replica).toEqual({ kind: `atom`, base_site: 3, cell: [1, 0, 0], ghost: false })
@@ -721,9 +823,9 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     const miss = await renderer.pick(2, 2)
     expect(miss).toEqual({ kind: `miss`, base_site: -1, cell: [0, 0, 0], ghost: false })
 
-    // The pick pass drew every replica AND ghost instance (16 + 2).
+    // The pick pass drew every replica AND the graph-derived ghost (16 + 1).
     const pick_pass = rec.passes.find((p) => p.label === `large-system-pick-pass`)
-    expect(pick_pass?.draws[0]).toEqual([4, 18])
+    expect(pick_pass?.draws[0]).toEqual([4, 17])
 
     renderer.destroy()
   })

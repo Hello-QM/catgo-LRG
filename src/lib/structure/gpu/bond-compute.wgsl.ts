@@ -30,7 +30,9 @@
  *  detected bonds, never add. P.rule_count == 0 ⇒ no filtering (identical to no
  *  rules). The id stored in `rules` is an integer bit-cast to f32; the shader
  *  reads it back exactly via the small-int round-trip (u32(id_f32)).
- *  jimage_packed: (na+1) | ((nb+1)<<2) | ((nc+1)<<4), each in {0,1,2} for {-1,0,1}.
+ *  jimage_packed uses three biased u8 lanes: (na+128) | ((nb+128)<<8) |
+ *  ((nc+128)<<16). GPU detection emits {-1,0,1}, while the shared render format
+ *  preserves the full signed Int8 range accepted by BaseBondGraph.
  *  jimage convention matches bond-detect-reference.ts: offset applied to atom b/j,
  *  displacement = (pos_j - pos_i) + jimage·L. Precondition: max_bond_dist < half the
  *  shortest cell dimension (27-image search only).
@@ -119,7 +121,7 @@ fn rules_keep(ea: u32, eb: u32, d: f32) -> bool {
 }
 
 fn pack_jimage(na: i32, nb: i32, nc: i32) -> u32 {
-  return u32(na+1) | (u32(nb+1) << 2u) | (u32(nc+1) << 4u);
+  return u32(na + 128) | (u32(nb + 128) << 8u) | (u32(nc + 128) << 16u);
 }
 
 // Shared min-image + predicate + emit for a candidate ordered pair (i<j). Runs

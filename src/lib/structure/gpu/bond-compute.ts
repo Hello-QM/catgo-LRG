@@ -126,10 +126,14 @@ export function pack_params(
   return buf
 }
 
-/** Unpack a packed jimage u32 -> [na,nb,nc] in {-1,0,1}.
- *  pack = (na+1) | ((nb+1)<<2) | ((nc+1)<<4). */
+/** Pack the full signed Int8 jimage range into three biased u8 lanes. */
+export function pack_jimage(na: number, nb: number, nc: number): number {
+  return (na + 128) | ((nb + 128) << 8) | ((nc + 128) << 16)
+}
+
+/** Unpack three biased u8 lanes into the declared signed Int8 jimage range. */
 export function unpack_jimage(p: number): [number, number, number] {
-  return [(p & 3) - 1, ((p >> 2) & 3) - 1, ((p >> 4) & 3) - 1]
+  return [(p & 0xff) - 128, ((p >> 8) & 0xff) - 128, ((p >> 16) & 0xff) - 128]
 }
 
 /** One dispatch attempt's readback: the unclamped pair count, the max observed
