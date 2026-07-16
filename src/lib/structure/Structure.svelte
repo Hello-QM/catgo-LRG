@@ -119,6 +119,12 @@
   import { create_charge_labels_state } from './state/charge-labels-state.svelte'
   import { create_measurement_state } from './state/measurement-state.svelte'
   import {
+    clear_default_view as clear_shared_default_view,
+    get_default_view,
+    set_default_view as set_shared_default_view,
+  } from './state/default-view.svelte'
+  import { camera_basis, view_angles_from_basis, view_from_angles } from './view-angles'
+  import {
     is_image_atom as _is_image_atom,
     has_original_atoms as _has_original_atoms,
     get_original_atoms_only as _get_original_atoms_only,
@@ -177,8 +183,6 @@
   import { parse_structure_file } from './parse'
   import {
     ACESFilmicToneMapping,
-    Euler,
-    Matrix4,
     Quaternion,
     Spherical,
     Vector3,
@@ -2304,6 +2308,16 @@
     const mat = (structure as PymatgenStructure | null)?.lattice?.matrix
     if (!mat || mat.length < 3) return
     if (!orbit_controls || !camera) return
+    // A user-saved default view takes precedence over the auto-align: the
+    // align's camera reset (StructureScene lattice_align_trigger effect) lands
+    // 1-2 rAFs AFTER the initial_view placement and would clobber it. Latch
+    // _auto_aligned so a later lock/clear can't re-trigger this effect; the
+    // manual "align to lattice" action still calls align_view_to_lattice()
+    // directly and resets camera/_up0 state itself.
+    if (persist_settings && get_default_view()) {
+      _auto_aligned = true
+      return
+    }
     // Defer to next tick so orbit controls are fully initialized
     let cancelled = false
     const handle = requestAnimationFrame(() => {
@@ -2344,7 +2358,6 @@
   }
 
   // ── VESTA-style axis views + persistent default view ──────────────────
-  const DEFAULT_VIEW_STORAGE_KEY = `catgo-default-view`
 
   // Point the camera so `dir` (unit-ish, world frame) goes into the screen,
   // keeping the current orbit target and distance.
@@ -2364,99 +2377,56 @@
     camera.up.copy(up_v.normalize())
     camera.lookAt(target)
     camera.updateMatrixWorld?.(true)
+    // Clear pending TrackballControls rotation inertia (staticMoving is false,
+    // so update() would re-apply the last drag's _lastAxis/_lastAngle and pull
+    // the pose off-target — same pattern as every other imperative pose path).
+    const ctrl = orbit_controls as any
+    if (ctrl._lastAxis) ctrl._lastAxis.set(0, 0, 0)
+    ctrl._lastAngle = 0
     orbit_controls.update?.()
     if (mark_moved) camera_has_moved = true
   }
 
   // ── Numeric view angles (VESTA-style orientation dialog) ──────────────
-  // The view is expressed as XYZ Euler angles (degrees) of the rotation that
-  // carries the default camera frame (camera on -Y looking +Y, Z up) onto the
-  // current one. Identity (0,0,0) = the default view.
-  const DEFAULT_CAM_BASIS = new Matrix4().makeBasis(
-    new Vector3(1, 0, 0), // camera right
-    new Vector3(0, 0, 1), // camera up
-    new Vector3(0, -1, 0), // camera backward (looks along +Y)
-  )
-
-  function current_camera_basis(): Matrix4 | null {
-    if (!camera || !orbit_controls?.target) return null
-    const backward = camera.position.clone().sub(orbit_controls.target as Vector3)
-    if (backward.lengthSq() < 1e-12) return null
-    backward.normalize()
-    const right = new Vector3().crossVectors(camera.up, backward)
-    if (right.lengthSq() < 1e-10) return null
-    right.normalize()
-    const up = new Vector3().crossVectors(backward, right)
-    return new Matrix4().makeBasis(right, up, backward)
-  }
+  // Euler basis/decompose math lives in view-angles.ts (pure, unit-tested).
 
   function get_view_angles(): [number, number, number] | null {
-    const basis = current_camera_basis()
-    if (!basis) return null
-    const rot = basis.multiply(DEFAULT_CAM_BASIS.clone().invert())
-    const euler = new Euler().setFromRotationMatrix(rot, `XYZ`)
-    const deg = (rad: number) => Math.round(rad * (180 / Math.PI) * 10) / 10
-    return [deg(euler.x), deg(euler.y), deg(euler.z)]
+    if (!camera || !orbit_controls?.target) return null
+    const backward = camera.position.clone().sub(orbit_controls.target as Vector3)
+    const basis = camera_basis(backward, camera.up)
+    return basis ? view_angles_from_basis(basis) : null
   }
 
   function set_view_angles(angles: [number, number, number]) {
-    const rad = (d: number) => (Number(d) || 0) * (Math.PI / 180)
-    const rot = new Matrix4().makeRotationFromEuler(
-      new Euler(rad(angles[0]), rad(angles[1]), rad(angles[2]), `XYZ`),
-    )
-    const backward = new Vector3(0, -1, 0).applyMatrix4(rot)
-    const up = new Vector3(0, 0, 1).applyMatrix4(rot)
-    set_view_direction(
-      [-backward.x, -backward.y, -backward.z],
-      [up.x, up.y, up.z],
-    )
-  }
-
-  function load_default_view(): {
-    dir: [number, number, number]
-    up: [number, number, number]
-  } | null {
-    if (typeof localStorage === `undefined`) return null
-    try {
-      const raw = localStorage.getItem(DEFAULT_VIEW_STORAGE_KEY)
-      if (!raw) return null
-      const parsed = JSON.parse(raw)
-      const is_vec3 = (v: unknown): v is [number, number, number] =>
-        Array.isArray(v) && v.length === 3 && v.every((n) => Number.isFinite(n))
-      if (is_vec3(parsed?.dir) && is_vec3(parsed?.up)) {
-        return { dir: parsed.dir, up: parsed.up }
-      }
-    } catch { /* corrupted entry — treat as absent */ }
-    return null
+    const { dir, up } = view_from_angles(angles)
+    set_view_direction(dir, up)
   }
 
   // The saved default view is handed to StructureScene as `initial_view`, so
   // the scene's own initial camera placement uses it directly — applying it
   // after the fact raced the load/refit pipeline and got overwritten.
-  let saved_default_view = $state<
-    { dir: [number, number, number]; up: [number, number, number] } | null
-  >(load_default_view())
+  // State lives in state/default-view.svelte.ts (module-level, shared across
+  // all panes + synced across windows via the `storage` event).
+  let saved_default_view = $derived(get_default_view())
   let has_default_view = $derived(!!saved_default_view)
 
   function save_default_view() {
-    if (!camera || !orbit_controls?.target || typeof localStorage === `undefined`) return
+    if (!camera || !orbit_controls?.target) return
     const target = orbit_controls.target as Vector3
     const dir = target.clone().sub(camera.position)
     if (dir.lengthSq() < 1e-12) return
     dir.normalize()
-    const up = camera.up.clone().normalize()
-    const view = {
-      dir: [dir.x, dir.y, dir.z] as [number, number, number],
-      up: [up.x, up.y, up.z] as [number, number, number],
-    }
-    localStorage.setItem(DEFAULT_VIEW_STORAGE_KEY, JSON.stringify(view))
-    saved_default_view = view
+    const up = camera.up.clone()
+    if (up.lengthSq() < 1e-12) return // degenerate up — never persist it
+    up.normalize()
+    set_shared_default_view({
+      dir: [dir.x, dir.y, dir.z],
+      up: [up.x, up.y, up.z],
+    })
   }
 
   function clear_default_view() {
-    if (typeof localStorage === `undefined`) return
-    localStorage.removeItem(DEFAULT_VIEW_STORAGE_KEY)
-    saved_default_view = null
+    clear_shared_default_view()
   }
 
   // MCP polling bridge dependencies — viewer state accessors used by the

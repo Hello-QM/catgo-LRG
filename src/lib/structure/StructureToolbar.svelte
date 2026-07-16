@@ -215,6 +215,17 @@
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   })
+
+  // Release the editing latch when the angle inputs unmount without a blur —
+  // the toolbar subtree is inside {#if visible_buttons} (pane-width threshold)
+  // and the panel inside {#if view_angles_open}/{#if !hide_extra_tools}, so a
+  // pane shrink while typing would otherwise leave view_angles_editing stuck
+  // true and the live readout dead for the component lifetime.
+  $effect(() => {
+    if (!view_angles_open || !visible_buttons || hide_extra_tools) {
+      view_angles_editing = false
+    }
+  })
 </script>
 
 <section class:visible={visible_buttons} class="control-buttons">
