@@ -358,6 +358,26 @@ describe(`build_image_instance_table (sparse, deduplicated ghost table)`, () => 
     expect(Array.from(table.base_sites)).toEqual(expected.sites)
     expect(Array.from(table.jimages)).toEqual(expected.images)
   })
+
+  test(`rejects the numeric-key site cap while accepting cap - 1`, () => {
+    const dims = [2, 1, 1] as const
+    const span = (dims[0] + 255) * (dims[1] + 255) * (dims[2] + 255)
+    const siteCap = Math.floor(Number.MAX_SAFE_INTEGER / span)
+    const graphForSite = (site: number): BaseBondGraph => ({
+      version: 1,
+      pairs: Uint32Array.from([0, site]),
+      jimages: Int8Array.from([127, 127, 127]),
+      kinds: Uint8Array.from([0]),
+      strengths: Float32Array.from([1]),
+    })
+
+    expect(
+      build_image_instance_table(graphForSite(siteCap - 1), dims, `ghost-images`).count,
+    ).toBe(2)
+    expect(() =>
+      build_image_instance_table(graphForSite(siteCap), dims, `ghost-images`)
+    ).toThrow(/exceeds the numeric dedup key capacity/)
+  })
 })
 
 // --- logical_site_for_pick ----------------------------------------------

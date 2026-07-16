@@ -235,7 +235,7 @@ export function build_image_instance_table(
   const images: number[] = []
   for (let bi = 0; bi < bond_count; bi++) {
     const b = bond_graph.pairs[bi * 2 + 1]
-    if (b > site_cap) {
+    if (b >= site_cap) {
       throw new Error(
         `build_image_instance_table: base site ${b} exceeds the numeric dedup ` +
           `key capacity (${site_cap}) for dims [${nx}, ${ny}, ${nz}]`,
