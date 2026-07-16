@@ -14,32 +14,32 @@ export type EdgeType = `sequential` | `parallel` | `conditional`
  */
 export const STATUS_COLORS: Record<string, string> = {
   // ── V1 coarse vocabulary (lowercase) ──
-  pending: `#475569`,
-  queued: `#a78bfa`,
-  running: `#3b82f6`,
-  completed: `#22c55e`,
-  not_converged: `#f59e0b`,
-  pending_review: `#f59e0b`,
-  failed: `#ef4444`,
-  skipped: `#64748b`, // neutral slate — dry-run couldn't run this node (NOT a failure)
+  pending: `#57657a`,
+  queued: `#a38deb`,
+  running: `#528ae5`,
+  completed: `#50bc6c`,
+  not_converged: `#e49b3a`,
+  pending_review: `#e49b3a`,
+  failed: `#de615b`,
+  skipped: `#6d7d94`, // neutral slate — dry-run couldn't run this node (NOT a failure)
 
   // ── Full V2 TaskState set (UPPERCASE enum values) ──
   // Palette mirrors WorkflowDAGViewer's local map so the two stay consistent.
-  WAITING: `#475569`,           // parents not yet completed — neutral slate
-  READY: `#3b82f6`,             // all parents done, can be picked up — blue
-  GENERATING: `#a78bfa`,        // creating input files — violet (prep)
-  UPLOADING: `#a78bfa`,         // transferring files to HPC — violet (prep)
-  SUBMITTED: `#8b5cf6`,         // sbatch done, got job_id — purple
-  QUEUED: `#a78bfa`,            // SLURM PENDING — violet
-  RUNNING: `#eab308`,           // SLURM RUNNING — amber (live)
-  COMPLETED_REMOTE: `#84cc16`,  // HPC done, results on remote — lime
-  COLLECTING: `#84cc16`,        // reading output files — lime
-  COMPLETED: `#22c55e`,         // results in DB — green
-  FAILED: `#ef4444`,            // permanent failure — red
-  REMOTE_ERROR: `#f97316`,      // transient/retryable error — orange
-  PENDING_REVIEW: `#f59e0b`,    // local done, awaiting user confirm — amber
-  PAUSED: `#64748b`,            // user paused — muted slate
-  CANCELLED: `#6b7280`,         // user cancelled — gray
+  WAITING: `#57657a`,           // parents not yet completed — neutral slate
+  READY: `#528ae5`,             // all parents done, can be picked up — blue
+  GENERATING: `#a38deb`,        // creating input files — violet (prep)
+  UPLOADING: `#a38deb`,         // transferring files to HPC — violet (prep)
+  SUBMITTED: `#8c71de`,         // sbatch done, got job_id — purple
+  QUEUED: `#a38deb`,            // SLURM PENDING — violet
+  RUNNING: `#daac39`,           // SLURM RUNNING — amber (live)
+  COMPLETED_REMOTE: `#89c04e`,  // HPC done, results on remote — lime
+  COLLECTING: `#89c04e`,        // reading output files — lime
+  COMPLETED: `#50bc6c`,         // results in DB — green
+  FAILED: `#de615b`,            // permanent failure — red
+  REMOTE_ERROR: `#e77d43`,      // transient/retryable error — orange
+  PENDING_REVIEW: `#e49b3a`,    // local done, awaiting user confirm — amber
+  PAUSED: `#6d7d94`,            // user paused — muted slate
+  CANCELLED: `#747b8a`,         // user cancelled — gray
 }
 
 /** A single conditional visibility rule: show when params[key] is in values */

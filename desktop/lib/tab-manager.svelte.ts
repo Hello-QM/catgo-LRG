@@ -20,6 +20,8 @@ import {
   remove_chat_slice,
 } from '$lib/chat/chat-state.svelte'
 import { unregister_workflow_action_handler } from '$lib/chat/workflow-tool-executor'
+import { remove_tab_panels } from '$lib/panel/panel-state.svelte'
+import { remove_tab_toolbars } from '$lib/structure/toolbar-state.svelte'
 
 export function create_tab_manager() {
   // Eagerly register slices for the initial tab so ChatPane / WorkflowEditor
@@ -214,6 +216,8 @@ export function create_tab_manager() {
     tabs = tabs.filter(t => t.id !== id)
     if (tab.type === `structure` || tab.type === `terminal`) {
       delete tab_states_record[id]
+      remove_tab_panels(id) // 清理该 tab 全部 pane 的面板实例
+      remove_tab_toolbars(id)
     }
     // Phase 2: drop the per-tab workflow slice, chat slice, and
     // action-handler entry so they can't be resurrected by stale $effect

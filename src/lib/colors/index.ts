@@ -22,28 +22,28 @@ export type ColorScaleType = (typeof COLOR_SCALE_TYPES)[number]
 // <input type="color"> supports
 // https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input/color#value
 export const default_category_colors: Record<string, string> = {
-  'diatomic-nonmetal': `#ff8c00`, // darkorange
-  'noble-gas': `#9932cc`, // darkorchid
-  'alkali-metal': `#006400`, // darkgreen
-  'alkaline-earth-metal': `#483d8b`, // darkslateblue
-  metalloid: `#b8860b`, // darkgoldenrod
-  'polyatomic-nonmetal': `#a52a2a`, // brown
-  'transition-metal': `#571e6c`,
-  'post-transition-metal': `#938d4a`,
-  lanthanide: `#58748e`,
-  actinide: `#6495ed`, // cornflowerblue
+  'diatomic-nonmetal': `#ec8f3e`, // darkorange
+  'noble-gas': `#9857be`, // darkorchid
+  'alkali-metal': `#2d7429`, // darkgreen
+  'alkaline-earth-metal': `#59529b`, // darkslateblue
+  metalloid: `#b7892b`, // darkgoldenrod
+  'polyatomic-nonmetal': `#ad4641`, // brown
+  'transition-metal': `#6c3a80`,
+  'post-transition-metal': `#969050`,
+  lanthanide: `#627e98`,
+  actinide: `#6a96e4`, // cornflowerblue
 }
 
 export const axis_colors = [
   // [axis name, color, hover color]
-  [`x`, `#d75555`, `#e66666`],
-  [`y`, `#55b855`, `#66c966`],
-  [`z`, `#5555d7`, `#6666e6`],
+  [`x`, `#d26462`, `#dd706e`],
+  [`y`, `#63b361`, `#6fc06e`],
+  [`z`, `#6269cd`, `#7075d9`],
 ] as const
 export const neg_axis_colors = [
-  [`nx`, `#b84444`, `#cc5555`],
-  [`ny`, `#44a044`, `#55b155`],
-  [`nz`, `#4444b8`, `#5555c9`],
+  [`nx`, `#bc5654`, `#ca6361`],
+  [`ny`, `#55a154`, `#61ae60`],
+  [`nz`, `#545bb9`, `#6267c6`],
 ] as const
 
 export type RGBColor = [number, number, number]
@@ -122,16 +122,16 @@ export const is_color = (val: unknown): val is string => {
 }
 
 export const PLOT_COLORS = [ // Color series for e.g. line plots
-  `#63b3ed`,
-  `#68d391`,
-  `#fbd38d`,
-  `#fc8181`,
-  `#d6bcfa`,
-  `#4fd1c7`,
-  `#f687b3`,
-  `#fed7d7`,
-  `#bee3f8`,
-  `#c6f6d5`,
+  `#64aee4`,
+  `#6bc88d`,
+  `#e8c380`,
+  `#ee8382`,
+  `#c9b0eb`,
+  `#50c7be`,
+  `#e987ad`,
+  `#eac4c4`,
+  `#add1e6`,
+  `#b2e1c1`,
 ] as const
 export const plot_colors = PLOT_COLORS // alias for backwards compatibility
 

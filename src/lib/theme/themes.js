@@ -10,7 +10,7 @@ const txt_black = `#f5f5f5` // Off-white
 
 // Page backgrounds
 const page_bg_light = `#f1f3f5` // Light gray
-const page_bg_dark = `#18171c` // Very dark blue
+const page_bg_dark = `#090a0c` // Very dark blue (deepened)
 const page_bg_white = `#ffffff` // Pure white
 const page_bg_black = `#000000` // Pure black
 
@@ -52,7 +52,7 @@ const themes = {
   'text-color': { light: txt_light, dark: txt_dark, white: txt_white, black: txt_black },
   'surface-bg': {
     light: `rgb(237, 238, 239)`,
-    dark: `rgb(33, 36, 43)`,
+    dark: `#111318`,
     white: `rgb(250, 250, 250)`,
     black: `rgb(19, 19, 19)`,
   },
@@ -72,7 +72,7 @@ const themes = {
   // Hover states
   'surface-bg-hover': {
     light: `#e5e7eb`,
-    dark: `#3a3a3a`,
+    dark: `#2a2a2e`,
     white: `#f3f3f3`,
     black: `#1f1f1f`,
   },
@@ -86,7 +86,7 @@ const themes = {
   // Code/pre backgrounds
   'code-bg': {
     light: `rgba(0, 0, 0, 0.05)`,
-    dark: `rgba(255, 255, 255, 0.1)`,
+    dark: `rgba(255, 255, 255, 0.08)`,
     white: `rgba(0, 0, 0, 0.02)`,
     black: `rgba(255, 255, 255, 0.1)`,
   },
@@ -154,7 +154,7 @@ const themes = {
   },
   'dialog-bg': {
     light: `#ffffff`,
-    dark: `#1c1d21`,
+    dark: `#0f1012`,
     white: `#ffffff`,
     black: `#0a0a0a`,
   },
@@ -171,7 +171,7 @@ const themes = {
   'btn-disabled-bg': btn_bg(0.1, 0.05),
 
   // Tooltips
-  'tooltip-bg': tooltip_bg(`243, 244, 246`, `0, 40, 60`),
+  'tooltip-bg': tooltip_bg(`243, 244, 246`, `0, 28, 42`),
   'tooltip-border': {
     light: `1px solid rgba(0, 0, 0, 0.15)`,
     dark: `1px solid rgba(255, 255, 255, 0.15)`,
@@ -182,7 +182,7 @@ const themes = {
   // Structure-specific
   'struct-bg': {
     light: `rgba(0, 0, 0, 0.02)`,
-    dark: `rgba(255, 255, 255, 0.07)`,
+    dark: `rgba(255, 255, 255, 0.045)`,
     white: `rgba(0, 0, 0, 0.01)`,
     black: `rgba(255, 255, 255, 0.1)`,
   },
@@ -208,37 +208,37 @@ const themes = {
   // Pane backgrounds (DraggablePane, etc.)
   'pane-bg': {
     light: `rgb(229, 231, 235)`,
-    dark: `rgb(28 29 33)`,
+    dark: `#0f1012`,
     white: `rgb(248, 250, 252)`,
     black: `rgb(26, 26, 26)`,
   },
   'pane-border': {
     light: `1px solid rgba(0, 0, 0, 0.15)`,
-    dark: `1px solid rgba(255, 255, 255, 0.15)`,
+    dark: `1px solid rgba(255, 255, 255, 0.09)`,
     white: `1px solid rgba(0, 0, 0, 0.075)`,
     black: `1px solid rgba(255, 255, 255, 0.075)`,
   },
   'pane-bg-hover': {
     light: `rgba(0, 0, 0, 0.06)`,
-    dark: `rgba(255, 255, 255, 0.1)`,
+    dark: `rgba(255, 255, 255, 0.07)`,
     white: `rgba(0, 0, 0, 0.03)`,
     black: `rgba(255, 255, 255, 0.1)`,
   },
   'pane-card-bg': {
     light: `rgba(0, 0, 0, 0.03)`,
-    dark: `rgba(255, 255, 255, 0.04)`,
+    dark: `rgba(255, 255, 255, 0.025)`,
     white: `rgba(0, 0, 0, 0.02)`,
     black: `rgba(255, 255, 255, 0.05)`,
   },
   'pane-card-border': {
     light: `rgba(0, 0, 0, 0.08)`,
-    dark: `rgba(255, 255, 255, 0.06)`,
+    dark: `rgba(255, 255, 255, 0.045)`,
     white: `rgba(0, 0, 0, 0.05)`,
     black: `rgba(255, 255, 255, 0.06)`,
   },
   'pane-tabs-bg': {
     light: `rgba(0, 0, 0, 0.06)`,
-    dark: `rgba(255, 255, 255, 0.06)`,
+    dark: `rgba(255, 255, 255, 0.045)`,
     white: `rgba(0, 0, 0, 0.03)`,
     black: `rgba(255, 255, 255, 0.06)`,
   },
@@ -250,19 +250,19 @@ const themes = {
   },
   'pane-btn-bg': {
     light: `rgba(0, 0, 0, 0.05)`,
-    dark: `rgba(255, 255, 255, 0.07)`,
+    dark: `rgba(255, 255, 255, 0.055)`,
     white: `rgba(0, 0, 0, 0.03)`,
     black: `rgba(255, 255, 255, 0.08)`,
   },
   'pane-btn-bg-hover': {
     light: `rgba(0, 0, 0, 0.1)`,
-    dark: `rgba(255, 255, 255, 0.12)`,
+    dark: `rgba(255, 255, 255, 0.085)`,
     white: `rgba(0, 0, 0, 0.06)`,
     black: `rgba(255, 255, 255, 0.14)`,
   },
   'pane-input-bg': {
     light: `rgba(0, 0, 0, 0.03)`,
-    dark: `rgba(255, 255, 255, 0.05)`,
+    dark: `rgba(255, 255, 255, 0.035)`,
     white: `rgba(0, 0, 0, 0.02)`,
     black: `rgba(255, 255, 255, 0.06)`,
   },
@@ -282,7 +282,7 @@ const themes = {
   },
   'dropzone-bg': {
     light: `rgba(0, 0, 0, 0.02)`,
-    dark: `rgba(45, 55, 72, 0.5)`,
+    dark: `rgba(31, 38, 50, 0.55)`,
     white: `rgba(0, 0, 0, 0.01)`,
     black: `rgba(15, 15, 15, 0.7)`,
   },

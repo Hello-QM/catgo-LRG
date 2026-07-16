@@ -24,6 +24,7 @@
   import { chat_position, set_chat_position } from '$lib/chat/chat-state.svelte'
   import { STATIC_ONLY } from '$lib/api/config'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import { pane_toolbar, set_toolbar_collapsed, set_toolbar_dock, toggle_toolbar_tool, toolbar_tool_hidden } from './toolbar-state.svelte'
 
   // Lazy-load structure translations
   load_i18n_module('structure')
@@ -32,6 +33,7 @@
     // ── 只读状态 ──
     camera_has_moved = false,
     visible_buttons = false,
+    pane_key = `default`,
     hide_extra_tools = false,
     enable_measure_mode = false,
     fullscreen_toggle = undefined,
@@ -93,6 +95,8 @@
     // 只读
     camera_has_moved?: boolean
     visible_buttons?: boolean
+    /** 本 pane 的稳定标识 — 工具栏配置按 pane 独立 */
+    pane_key?: string
     hide_extra_tools?: boolean
     enable_measure_mode?: boolean
     fullscreen_toggle?: Snippet<[]> | boolean
@@ -166,24 +170,380 @@
     coarse?.addEventListener?.(`change`, update)
     return () => coarse?.removeEventListener?.(`change`, update)
   })
+
+  // ── 工具栏收起 + 按钮自定义 ──
+  // 状态在 toolbar-state.svelte.ts (localStorage 持久化),与 Structure.svelte 共享 ——
+  // children 里自带 toggle 的面板 (optimize/info/controls) 也受同一列表控制。
+  const TOOL_GROUPS = [
+    { id: `view`, key: `structure.toolbar_group_view` },
+    { id: `editing`, key: `structure.toolbar_group_editing` },
+    { id: `analysis`, key: `structure.toolbar_group_analysis` },
+    { id: `compute`, key: `structure.toolbar_group_compute` },
+    { id: `assistant`, key: `structure.toolbar_group_assistant` },
+  ] as const
+  const TOOL_DEFS: { id: string; key: string; group: string }[] = [
+    { id: `fullscreen`, key: `structure.toolbar_tool_fullscreen`, group: `view` },
+    { id: `info`, key: `structure.toolbar_tool_info`, group: `view` },
+    { id: `controls`, key: `structure.toolbar_tool_controls`, group: `view` },
+    { id: `gauge`, key: `structure.large_system_mode`, group: `view` },
+    { id: `molstar`, key: `structure.bio_open_in_molstar`, group: `view` },
+    { id: `gesture`, key: `structure.toolbar_tool_gesture`, group: `editing` },
+    { id: `pencil`, key: `structure.toolbar_tool_draw`, group: `editing` },
+    { id: `build`, key: `structure.build_tools`, group: `editing` },
+    { id: `optimize`, key: `structure.toolbar_tool_optimize`, group: `editing` },
+    { id: `analysis`, key: `structure.analysis_tools`, group: `analysis` },
+    { id: `measure`, key: `structure.toolbar_tool_measure`, group: `analysis` },
+    { id: `workflow`, key: `common.workflow`, group: `compute` },
+    { id: `server`, key: `structure.server_hpc`, group: `compute` },
+    { id: `upload_hpc`, key: `structure.upload_to_hpc`, group: `compute` },
+    { id: `terminal`, key: `structure.open_terminal`, group: `compute` },
+    { id: `io`, key: `structure.import_export`, group: `compute` },
+    { id: `chat`, key: `structure.ai_assistant`, group: `assistant` },
+    { id: `plugin_hub`, key: `structure.plugin_hub`, group: `assistant` },
+  ]
+  const tb = pane_toolbar(pane_key)
+  let toolbar_edit_open = $state(false)
+  // 当前模式下所有工具都被隐藏/不可用时, 条不再横贯整宽 (只剩右侧元按钮小签)
+  const all_tools_hidden = $derived(
+    TOOL_DEFS.every((d) => !tool_available(d.id) || tool_hidden(d.id)),
+  )
+  let toolbar_edit_btn_el = $state<HTMLButtonElement | null>(null)
+  // 通用自适应浮层引擎 (自定义菜单 / 铅笔宫格 / 测量菜单共用):
+  // fixed 定位, 按 dock 方向锚定 → 空间不足翻向对侧 → 两侧都不够则居中 →
+  // 以 pane 可见矩形 ∩ 窗口为碰撞边界钳位 + 动态 max 尺寸 (内部滚动);
+  // resize / 内容尺寸变化 / 锚点平移 (rAF 对账) 实时重算。
+  // 直接写 DOM, 不回写 $state; 传入 dock 使 attachment 随模式切换重建。
+  function fit_popover(get_anchor: () => HTMLElement | null, _dock?: string) {
+    return (node: HTMLElement) => {
+      const place = () => {
+        const anchor = get_anchor()
+        if (!anchor) return
+        const rect = anchor.getBoundingClientRect()
+        // 间隙/开向基准 = 栏外壳外缘 (按钮在栏内还有 4px padding, 用按钮缘会
+        // 少留空隙甚至压住栏壳); 主轴对齐仍以触发按钮为准
+        const rail_rect = (node.closest(`section.control-buttons`) ?? anchor)
+          .getBoundingClientRect()
+        const gap = 8
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        // 碰撞边界 = pane 可见矩形 ∩ 窗口, 各向内缩 gap。.structure 一路到 body 全是
+        // overflow:hidden, fixed 后代被物理裁切在 pane 内 — "在窗口内"不等于可见,
+        // 越出 pane 的部分会被裁掉或钻进应用顶栏/状态栏底下。
+        const pane_rect = node.closest(`.structure`)?.getBoundingClientRect()
+        const bd = {
+          left: Math.max(0, pane_rect?.left ?? 0) + gap,
+          right: Math.min(vw, pane_rect?.right ?? vw) - gap,
+          top: Math.max(0, pane_rect?.top ?? 0) + gap,
+          bottom: Math.min(vh, pane_rect?.bottom ?? vh) - gap,
+        }
+        const bw = Math.max(0, bd.right - bd.left)
+        const bh = Math.max(0, bd.bottom - bd.top)
+        // .structure 的 container-type 劫持了 fixed 的包含块: style.left/top 是
+        // pane 坐标, 不是视口坐标。置 (0,0) 探测包含块原点, 最后统一换算 —
+        // 包含块是视口时原点恰为 (0,0), 两种情况同一条路径。
+        node.style.left = `0px`
+        node.style.top = `0px`
+        const origin = node.getBoundingClientRect()
+        // 极窄窗口: 不再贴栏浮出, 整体切换为边界内居中模态 (类 Command Palette)
+        const modal_mode = vw < 900
+        node.style.maxWidth = `${modal_mode ? Math.min(520, bw) : bw}px`
+        node.style.maxHeight = `${bh}px` // 先量自然尺寸, 选边后再按可用空间收缩
+        let mh = node.offsetHeight
+        const mw = node.offsetWidth
+        let left: number
+        let top: number
+        let centered = false
+        if (modal_mode) {
+          left = bd.left + (bw - mw) / 2
+          top = bd.top + Math.max(0, (bh - mh) / 2)
+          centered = true
+        } else {
+          if (tb.dock === `left`) {
+            left = rail_rect.right + gap
+            if (left + mw > bd.right) left = rail_rect.left - mw - gap // 翻向左
+          } else if (tb.dock === `top` || tb.dock === `bottom`) {
+            left = rect.right - mw
+          } else {
+            left = rail_rect.left - mw - gap
+            if (left < bd.left) left = rail_rect.right + gap // 翻向右
+          }
+          if (left < bd.left || left + mw > bd.right) {
+            left = bd.left + (bw - mw) / 2 // 两侧都不够: 边界内居中回退
+            centered = true
+          }
+          if (tb.dock === `top` || tb.dock === `bottom`) {
+            // 横排: 开向条的对侧; 首选边放不下且另一边更大才翻转 (flip)。
+            // max-height = 所选边真实可用高度 → 内部滚动; 锚点严格贴 rail 边缘,
+            // mh ≤ avail 保证末段 clamp 不会把面板回推到条上
+            const below_top = rail_rect.bottom + gap
+            const above_bottom = rail_rect.top - gap
+            const below_avail = bd.bottom - below_top
+            const above_avail = above_bottom - bd.top
+            let side: `below` | `above` = tb.dock === `top` ? `below` : `above`
+            const preferred = side === `below` ? below_avail : above_avail
+            if (mh > preferred && (side === `below` ? above_avail : below_avail) > preferred) {
+              side = side === `below` ? `above` : `below`
+            }
+            const avail = Math.max(0, side === `below` ? below_avail : above_avail)
+            node.style.maxHeight = `${avail}px`
+            mh = node.offsetHeight
+            top = side === `below` ? below_top : above_bottom - mh
+          } else {
+            // 侧栏: 面板贴栏侧开, 顶对齐按钮中心 (边界 clamp 兜底)
+            top = rect.top + rect.height / 2
+          }
+        }
+        left = Math.max(bd.left, Math.min(left, bd.right - mw))
+        top = Math.max(bd.top, Math.min(top, bd.bottom - mh))
+        node.style.left = `${left - origin.left}px`
+        node.style.top = `${top - origin.top}px`
+        node.classList.toggle(`popover-modal`, centered)
+      }
+      place()
+      const ro = new ResizeObserver(place) // 宫格数量/内容变化 → 重算列数后重定位
+      ro.observe(node)
+      // 分隔线拖动只改 pane 不触发 window resize — 观察 pane 才能实时跟随
+      const pane = node.closest(`.structure`)
+      if (pane) ro.observe(pane)
+      window.addEventListener(`resize`, place)
+      // 锚点会平移而不改尺寸 (字体加载改 1ex 栏偏移、pane 被推移) — RO/resize 都
+      // 抓不到, 浮层存活期间逐帧对账锚点矩形 (Floating UI autoUpdate 的
+      // animationFrame 策略); 矩形不变时零开销, 变了才重放。
+      let raf = 0
+      let last_anchor = ``
+      const track = () => {
+        const a = get_anchor()
+        if (a) {
+          const r = a.getBoundingClientRect()
+          const key = `${r.left},${r.top},${r.width},${r.height}`
+          if (key !== last_anchor) {
+            last_anchor = key
+            place()
+          }
+        }
+        raf = requestAnimationFrame(track)
+      }
+      raf = requestAnimationFrame(track)
+      return () => {
+        ro.disconnect()
+        window.removeEventListener(`resize`, place)
+        cancelAnimationFrame(raf)
+      }
+    }
+  }
+  let pencil_btn_el = $state<HTMLButtonElement | null>(null)
+  let measure_btn_el = $state<HTMLButtonElement | null>(null)
+  let toolbar_el = $state<HTMLElement | null>(null)
+  let rail_overflowing = $state(false)
+  // Tooltip: 单例 Portal 到 document.body (逃出 .structure 的 containment 堆叠上下文,
+  // 分隔线/邻居面板永远盖不住)。树内 .struct-toolbar-tooltip 仅作 i18n 文案源 (display:none)。
+  // 主体+箭头同一浮层根节点; 右→左→上→下探测, 整窗为界, 钳位后箭头仍指按钮中心。
+  $effect(() => {
+    const root_el = toolbar_el
+    if (!root_el || typeof document === `undefined`) return
+    const tip = document.createElement(`div`)
+    tip.className = `struct-tip-root`
+    const body = document.createElement(`div`)
+    body.className = `struct-tip-body`
+    const arrow = document.createElement(`div`)
+    arrow.className = `struct-tip-arrow`
+    tip.append(body, arrow)
+    document.body.appendChild(tip)
+    let cur: HTMLElement | null = null
+    const hide = () => {
+      cur = null
+      tip.classList.remove(`visible`)
+    }
+    const place = () => {
+      if (!cur || !cur.isConnected) return hide()
+      const src = cur.querySelector<HTMLElement>(`.struct-toolbar-tooltip, .pane-toggle-tooltip`)
+      const btn = cur.querySelector<HTMLElement>(`button`) ?? cur
+      if (!src || !src.textContent?.trim()) return hide()
+      // 按钮激活/展开时不打扰 (原 :has() 规则的 JS 等价)
+      if (cur.querySelector(`.active, [aria-expanded='true'], [aria-pressed='true']`)) {
+        return hide()
+      }
+      body.textContent = src.textContent
+      const r = btn.getBoundingClientRect()
+      const gap = 8
+      const pad = 8
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      tip.classList.add(`visible`)
+      const tw = tip.offsetWidth
+      const th = tip.offsetHeight
+      const fits = {
+        right: r.right + gap + tw <= vw - pad,
+        left: r.left - gap - tw >= pad,
+        top: r.top - gap - th >= pad,
+        bottom: r.bottom + gap + th <= vh - pad,
+      }
+      // 默认方向随停靠位置; 放不下按 对侧→交叉轴 降级 (flip 不覆盖默认)
+      const pref: Record<string, (keyof typeof fits)[]> = {
+        top: [`bottom`, `top`, `right`, `left`],
+        bottom: [`top`, `bottom`, `right`, `left`],
+        left: [`right`, `left`, `top`, `bottom`],
+        right: [`left`, `right`, `top`, `bottom`],
+      }
+      const order = pref[tb.dock] ?? pref.right
+      const side = order.find((s) => fits[s]) ?? order[0]
+      let left: number
+      let top: number
+      if (side === `right`) {
+        left = r.right + gap
+        top = r.top + r.height / 2 - th / 2
+      } else if (side === `left`) {
+        left = r.left - gap - tw
+        top = r.top + r.height / 2 - th / 2
+      } else if (side === `top`) {
+        left = r.left + r.width / 2 - tw / 2
+        top = r.top - gap - th
+      } else {
+        left = r.left + r.width / 2 - tw / 2
+        top = r.bottom + gap
+      }
+      left = Math.max(pad, Math.min(left, vw - tw - pad))
+      top = Math.max(pad, Math.min(top, vh - th - pad))
+      tip.style.left = `${left}px`
+      tip.style.top = `${top}px`
+      tip.dataset.side = side
+      const off = side === `left` || side === `right`
+        ? Math.max(10, Math.min(th - 10, r.top + r.height / 2 - top))
+        : Math.max(10, Math.min(tw - 10, r.left + r.width / 2 - left))
+      if (side === `left`) {
+        arrow.style.left = `${tw}px`
+        arrow.style.top = `${off}px`
+      } else if (side === `right`) {
+        arrow.style.left = `0px`
+        arrow.style.top = `${off}px`
+      } else if (side === `top`) {
+        arrow.style.top = `${th}px`
+        arrow.style.left = `${off}px`
+      } else {
+        arrow.style.top = `0px`
+        arrow.style.left = `${off}px`
+      }
+    }
+    const over = (e: Event) => {
+      const wrap = (e.target as HTMLElement).closest?.(
+        `.struct-toolbar-tooltip-wrap, .pane-toggle-tooltip-wrap`,
+      )
+      if (!wrap || !root_el.contains(wrap)) return
+      cur = wrap as HTMLElement
+      place()
+    }
+    const out = (e: Event) => {
+      if (!cur) return
+      const to = (e as PointerEvent).relatedTarget as HTMLElement | null
+      if (!to || !cur.contains(to)) hide()
+    }
+    root_el.addEventListener(`pointerover`, over)
+    root_el.addEventListener(`pointerout`, out)
+    root_el.addEventListener(`focusin`, over)
+    root_el.addEventListener(`focusout`, out)
+    root_el.addEventListener(`click`, () => requestAnimationFrame(() => place()), true)
+    root_el.addEventListener(`scroll`, place, true)
+    window.addEventListener(`resize`, place)
+    return () => {
+      root_el.removeEventListener(`pointerover`, over)
+      root_el.removeEventListener(`pointerout`, out)
+      root_el.removeEventListener(`focusin`, over)
+      root_el.removeEventListener(`focusout`, out)
+      root_el.removeEventListener(`scroll`, place, true)
+      window.removeEventListener(`resize`, place)
+      tip.remove()
+    }
+  })
+  // 小面板 (多宫格分屏) 里工具比面板高时: 栏内滚动; 放得下时保持 visible,
+  // 侧向 tooltip 不被裁。直接 toggle class, 不回写 $state。
+  $effect(() => {
+    void tb.hidden_by_dock
+    void tb.dock
+    void tb.collapsed
+    const el = toolbar_el
+    if (!el) return
+    const update = () => {
+      // 只测停靠方向的主轴; 交叉轴的绝对定位悬挂物不算溢出
+      const horizontal = tb.dock === `top` || tb.dock === `bottom`
+      rail_overflowing = horizontal
+        ? el.scrollWidth > el.clientWidth + 1
+        : el.scrollHeight > el.clientHeight + 1
+    }
+    requestAnimationFrame(update)
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    const mo = new MutationObserver(update) // 手势/铅笔激活等追加按钮 → 内容变高
+    mo.observe(el, { childList: true, subtree: true })
+    window.addEventListener(`resize`, update)
+    return () => {
+      ro.disconnect()
+      mo.disconnect()
+      window.removeEventListener(`resize`, update)
+    }
+  })
+  // 父组件强制隐藏 (hidden_toolbar_items prop) 优先于用户选择
+  const tool_hidden = (id: string): boolean =>
+    hidden_toolbar_items.includes(id) || toolbar_tool_hidden(pane_key, id)
+  // 该工具在当前实例是否真实存在 —— 不存在的不进自定义菜单
+  const tool_available = (id: string): boolean => {
+    switch (id) {
+      case `fullscreen`:
+        return Boolean(fullscreen_toggle)
+      case `measure`:
+        return enable_measure_mode
+      case `molstar`:
+        return !hide_extra_tools && Boolean(on_open_in_molstar)
+      case `build`:
+      case `io`:
+      case `chat`:
+        return !hide_extra_tools
+      case `analysis`:
+      case `workflow`:
+      case `server`:
+      case `upload_hpc`:
+      case `plugin_hub`:
+      case `terminal`:
+        return !hide_extra_tools && !STATIC_ONLY
+      default:
+        return true
+    }
+  }
 </script>
 
-<section class:visible={visible_buttons} class="control-buttons">
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === `Escape` && toolbar_edit_open) toolbar_edit_open = false
+  }}
+/>
+
+<section
+  bind:this={toolbar_el}
+  data-placement={tb.dock}
+  class:visible={visible_buttons}
+  class:collapsed={tb.collapsed}
+  class:overflowing={rail_overflowing}
+  class:dock-left={tb.dock === `left`}
+  class:dock-top={tb.dock === `top`}
+  class:dock-bottom={tb.dock === `bottom`}
+  class:empty-tools={all_tools_hidden}
+  class="control-buttons"
+>
   {#if visible_buttons}
+    {#if !tb.collapsed}
     <!-- === View / Navigation === -->
     {#if camera_has_moved}
-      <button class="reset-camera" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
+      <button class="reset-camera tb-left" style="--tb-order: 5" onclick={reset_camera} title={reset_text === `Reset camera (or double-click)` ? t('structure.reset_camera') : reset_text}>
         <Icon icon="Reset" />
       </button>
     {/if}
-    {#if fullscreen_toggle}
+    {#if fullscreen_toggle && !tool_hidden(`fullscreen`)}
       <button
         type="button"
         onclick={() => fullscreen_toggle && toggle_fullscreen(wrapper)}
         title={fullscreen ? t('structure.exit_fullscreen') : t('structure.enter_fullscreen')}
         aria-pressed={fullscreen}
-        class="fullscreen-toggle"
-        style="padding: 0"
+        class="fullscreen-toggle tb-left"
+        style="padding: 0; --tb-order: 70"
         {@attach tooltip()}
       >
         {#if typeof fullscreen_toggle === `function`}
@@ -195,8 +555,8 @@
     {/if}
 
     <!-- === Gesture Control === -->
-    {#if !hidden_toolbar_items.includes('gesture')}
-    <span class="struct-toolbar-tooltip-wrap">
+    {#if !tool_hidden(`gesture`)}
+    <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 50">
       <button
         type="button"
         onclick={() => {
@@ -217,7 +577,7 @@
       <span class="struct-toolbar-tooltip" role="tooltip">{gesture_active ? t('structure.disable_gesture') : t('structure.enable_gesture')}</span>
     </span>
     {#if gesture_active}
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 50">
         <button
           type="button"
           onclick={() => { gesture_art_mode = !gesture_art_mode }}
@@ -234,7 +594,7 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{gesture_art_mode ? t('structure.exit_art_mode') : t('structure.enter_art_mode')}</span>
       </span>
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 50">
         <button
           type="button"
           onclick={() => { show_gesture_settings = !show_gesture_settings }}
@@ -253,7 +613,7 @@
 
     <!-- === Touch interaction modes (no modifier keys on touch devices) === -->
     {#if has_touch}
-      <div class="touch-mode-container">
+      <div class="touch-mode-container tb-left" style="--tb-order: 44">
         <span class="struct-toolbar-tooltip-wrap">
           <button
             type="button"
@@ -298,7 +658,8 @@
     {/if}
 
     <!-- === Structure Editing (Pencil Mode) === -->
-    <div class="pencil-mode-container">
+    {#if !tool_hidden(`pencil`)}
+    <div class="pencil-mode-container" style="--tb-order: 10">
       <span class="struct-toolbar-tooltip-wrap">
         <button
           type="button"
@@ -311,6 +672,7 @@
             }
           }}
           class="pencil-toggle"
+          bind:this={pencil_btn_el}
           class:active={pencil.pencil_mode_active}
           aria-pressed={pencil.pencil_mode_active}
         >
@@ -336,7 +698,10 @@
       {/if}
       <!-- Pencil mode selector (atoms vs fragments) — dropdown below button -->
       {#if pencil.pencil_mode_active}
-        <div class="pencil-mode-selector">
+        <div
+          class="pencil-mode-selector"
+          {@attach fit_popover(() => pencil_btn_el, tb.dock)}
+        >
           <div class="mode-toggle">
             <button
               type="button"
@@ -425,9 +790,11 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <!-- === Large-system performance mode (always visible — also in trajectory/large views) === -->
-    <span class="struct-toolbar-tooltip-wrap">
+    {#if !tool_hidden(`gauge`)}
+    <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 68">
       <button
         type="button"
         disabled={!webgpu_available}
@@ -440,10 +807,12 @@
       </button>
       <span class="struct-toolbar-tooltip" role="tooltip">{webgpu_available ? t('structure.large_system_mode') : t('structure.large_system_mode_unavailable')}</span>
     </span>
+    {/if}
 
     {#if !hide_extra_tools}
       <!-- === Build Tools === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      {#if !tool_hidden(`build`)}
+      <span class="struct-toolbar-tooltip-wrap" style="--tb-order: 12">
         <button
           type="button"
           onclick={() => { build_pane_open = !build_pane_open }}
@@ -454,14 +823,15 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.build_tools')}</span>
       </span>
+      {/if}
 
-      {#if !hidden_toolbar_items.includes('analysis') && !STATIC_ONLY}
+      {#if !tool_hidden(`analysis`) && !STATIC_ONLY}
       <!-- === Analysis Tools === -->
       <!-- Gated like workflow/server below: AnalysisPane's DOS/band/COHP/freq/charge
            sub-tabs are backend-only (no WASM fallback), so on STATIC_ONLY (web + the
            iOS build) they'd 503. MobileWorkspace also lists 'analysis' in
            HIDDEN_TOOLBAR — this is the check that actually honours it. -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap" style="--tb-order: 14">
         <button
           type="button"
           onclick={() => { analysis_pane_open = !analysis_pane_open }}
@@ -474,9 +844,9 @@
       </span>
       {/if}
 
-      {#if on_open_in_molstar}
+      {#if on_open_in_molstar && !tool_hidden(`molstar`)}
       <!-- === Open current structure in the Mol* bio viewer === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 64">
         <button
           type="button"
           onclick={() => on_open_in_molstar?.()}
@@ -488,9 +858,9 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('workflow') && !STATIC_ONLY}
+      {#if !tool_hidden(`workflow`) && !STATIC_ONLY}
       <!-- === Workflow === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 52">
         <button
           type="button"
           onclick={() => { workflow_pane_open = !workflow_pane_open }}
@@ -504,7 +874,8 @@
       {/if}
 
       <!-- === IO (Import/Export) === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      {#if !tool_hidden(`io`)}
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 54">
         <button
           type="button"
           onclick={() => { io_pane_open = !io_pane_open }}
@@ -515,10 +886,12 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.import_export')}</span>
       </span>
+      {/if}
 
       {#if !hidden_toolbar_items.includes('server') && !STATIC_ONLY}
       <!-- === Server (HPC) === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      {#if !tool_hidden(`server`)}
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 56">
         <button
           type="button"
           onclick={() => { server_pane_open = !server_pane_open }}
@@ -529,8 +902,10 @@
         </button>
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.server_hpc')}</span>
       </span>
+      {/if}
       <!-- === Upload current structure to HPC === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      {#if !tool_hidden(`upload_hpc`)}
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 58">
         <button
           type="button"
           onclick={() => on_upload_to_hpc?.()}
@@ -541,10 +916,11 @@
         <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.upload_to_hpc')}</span>
       </span>
       {/if}
+      {/if}
 
-      {#if !hidden_toolbar_items.includes('plugin_hub') && !STATIC_ONLY}
+      {#if !tool_hidden(`plugin_hub`) && !STATIC_ONLY}
       <!-- === Plugin Hub === -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 66">
         <button
           type="button"
           onclick={() => { plugin_hub_open = !plugin_hub_open }}
@@ -557,12 +933,12 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('chat')}
+      {#if !tool_hidden(`chat`)}
       <!-- === AI Chat === -->
       <!-- Shown in STATIC_ONLY too: CatBot runs the client-direct tool-calling
            loop in-browser (no backend) under static deploys. See is_client_direct. -->
 
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 62">
         <button
           type="button"
           onclick={() => {
@@ -578,10 +954,10 @@
       </span>
       {/if}
 
-      {#if !hidden_toolbar_items.includes('terminal') && !STATIC_ONLY}
+      {#if !tool_hidden(`terminal`) && !STATIC_ONLY}
       <!-- === Terminal === — opens a terminal pane-tree leaf (no longer a
            side-panel toggle). -->
-      <span class="struct-toolbar-tooltip-wrap">
+      <span class="struct-toolbar-tooltip-wrap tb-left" style="--tb-order: 60">
         <button
           type="button"
           onclick={() => on_open_terminal?.()}
@@ -610,7 +986,7 @@
             }
           }}
           title={t('structure.save_back_to', { path: remote_origin.file_path })}
-          class="build-tools-toggle push-back-btn"
+          class="build-tools-toggle push-back-btn tb-left" style="--tb-order: 72"
           {@attach tooltip()}
         >
           &#x21E7;
@@ -622,13 +998,15 @@
     {/if}
 
     <!-- === Analysis & Computation: Measurement Mode === -->
-    {#if enable_measure_mode}
+    {#if enable_measure_mode && !tool_hidden(`measure`)}
       <div
         class="measure-mode-dropdown"
+        style="--tb-order: 16"
         {@attach click_outside({ callback: () => measure_menu_open = false })}
       >
         <span class="struct-toolbar-tooltip-wrap">
           <button
+            bind:this={measure_btn_el}
             onclick={() => (measure_menu_open = !measure_menu_open)}
             class="view-mode-button"
             class:active={measure_menu_open || measure_mode_active}
@@ -700,7 +1078,10 @@
             { mode: `angle` as const, icon: `Angle` as const, label: t('structure.angle'), scale: 1.3, min_atoms: 3 },
             { mode: `dihedral` as const, icon: `Angle` as const, label: t('structure.dihedral'), scale: 1.3, min_atoms: 4 },
           ]}
-          <div class="view-mode-dropdown">
+          <div
+            class="view-mode-dropdown measure-menu-popover"
+            {@attach fit_popover(() => measure_btn_el, tb.dock)}
+          >
             {#each measure_options as { mode, icon, label, scale, min_atoms } (mode)}
               <button
                 class="view-mode-option"
@@ -772,6 +1153,94 @@
 
     <!-- 面板组件通过 children snippet 从 Structure.svelte 传入 -->
     {@render children?.()}
+
+    <div class="toolbar-flex-spacer" aria-hidden="true"></div>
+
+    <!-- === 工具栏自定义: 勾选哪些按钮显示 (分组) === -->
+    <div
+      class="toolbar-edit-container"
+      style="--tb-order: 90"
+      {@attach click_outside({ callback: () => toolbar_edit_open = false })}
+    >
+      <span class="struct-toolbar-tooltip-wrap">
+        <button
+          type="button"
+          bind:this={toolbar_edit_btn_el}
+          class="toolbar-edit-toggle"
+          class:active={toolbar_edit_open}
+          aria-expanded={toolbar_edit_open}
+          onclick={() => toolbar_edit_open = !toolbar_edit_open}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="4" y1="6" x2="20" y2="6" /><circle cx="9" cy="6" r="2.2" />
+            <line x1="4" y1="12" x2="20" y2="12" /><circle cx="15" cy="12" r="2.2" />
+            <line x1="4" y1="18" x2="20" y2="18" /><circle cx="7" cy="18" r="2.2" />
+          </svg>
+        </button>
+        <span class="struct-toolbar-tooltip" role="tooltip">{t('structure.toolbar_customize')}</span>
+      </span>
+      {#if toolbar_edit_open}
+        <div
+          class="view-mode-dropdown toolbar-edit-menu"
+          {@attach fit_popover(() => toolbar_edit_btn_el, tb.dock)}
+        >
+          <div class="toolbar-edit-group">{t(`structure.toolbar_dock`)}</div>
+          <div class="toolbar-dock-row">
+            {#each [[`top`, `structure.toolbar_dock_top`], [`bottom`, `structure.toolbar_dock_bottom`], [`left`, `structure.toolbar_dock_left`], [`right`, `structure.toolbar_dock_right`]] as const as [dock, key] (dock)}
+              <button
+                type="button"
+                class="toolbar-dock-btn"
+                class:active={tb.dock === dock}
+                onclick={() => set_toolbar_dock(pane_key, dock)}
+              >{t(key)}</button>
+            {/each}
+          </div>
+          {#each TOOL_GROUPS as group (group.id)}
+            {@const items = TOOL_DEFS.filter((d) =>
+              d.group === group.id &&
+              !hidden_toolbar_items.includes(d.id) &&
+              tool_available(d.id)
+            )}
+            {#if items.length > 0}
+              <div class="toolbar-edit-group">{t(group.key)}</div>
+              {#each items as { id, key } (id)}
+                <label class="toolbar-edit-option">
+                  <input
+                    type="checkbox"
+                    checked={!toolbar_tool_hidden(pane_key, id)}
+                    onchange={() => toggle_toolbar_tool(pane_key, id)}
+                  />
+                  <span>{t(key)}</span>
+                </label>
+              {/each}
+            {/if}
+          {/each}
+        </div>
+      {/if}
+    </div>
+    {/if}
+
+    <!-- === 收起 / 展开 === -->
+    <span class="struct-toolbar-tooltip-wrap toolbar-collapse-toggle-wrap" style="--tb-order: 95">
+      <button
+        type="button"
+        class="toolbar-collapse-toggle"
+        aria-expanded={!tb.collapsed}
+        onclick={() => {
+          set_toolbar_collapsed(pane_key, !tb.collapsed)
+          toolbar_edit_open = false
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          {#if tb.collapsed !== (tb.dock === `left`)}
+            <path d="m17 17-5-5 5-5" /><path d="m10 17-5-5 5-5" />
+          {:else}
+            <path d="m7 7 5 5-5 5" /><path d="m14 7 5 5-5 5" />
+          {/if}
+        </svg>
+      </button>
+      <span class="struct-toolbar-tooltip" role="tooltip">{tb.collapsed ? t('structure.toolbar_expand') : t('structure.toolbar_collapse')}</span>
+    </span>
   {/if}
 </section>
 
@@ -780,13 +1249,22 @@
   section.control-buttons {
     position: absolute;
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    flex-wrap: nowrap;
     top: var(--struct-buttons-top, var(--ctrl-btn-top, 1ex));
     right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
-    left: var(--struct-buttons-left, 1ex);
-    gap: clamp(6pt, 1cqmin, 9pt);
-    justify-content: flex-end;
-    align-items: flex-start;
+    max-height: calc(100% - 2 * var(--struct-buttons-top, 1ex));
+    left: auto;
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+    gap: 2px;
+    justify-content: flex-start;
+    align-items: center;
+    padding: 4px 0;
+    background: color-mix(in srgb, var(--pane-bg, #0f1012) 88%, transparent);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 9px;
     /* buttons need higher z-index than StructureLegend to make info/controls panes occlude legend */
     /* we also need crazy high z-index to make info/control pane occlude threlte/extras' <HTML> elements for site labels */
     z-index: var(--struct-buttons-z-index, 100000000);
@@ -797,6 +1275,52 @@
   section.control-buttons.visible {
     opacity: 1;
     pointer-events: auto;
+  }
+  /* === 子视口紧凑档 (@container: 每个宫格独立计算, 拖分隔线实时生效) === */
+  @container (max-height: 560px) {
+    section.control-buttons {
+      gap: 1pt;
+      padding: 3px 2px;
+      border-radius: 7px;
+    }
+    section.control-buttons :global(button) {
+      padding: 2.5pt;
+      font-size: clamp(0.82em, 1.6cqmin, 1.1em);
+    }
+  }
+  @container (max-height: 400px) {
+    section.control-buttons {
+      gap: 0.5pt;
+      padding: 2px 1px;
+      border-radius: 6px;
+    }
+    section.control-buttons :global(button) {
+      padding: 2pt;
+      font-size: 0.8em;
+    }
+  }
+
+  section.control-buttons.overflowing:not(.dock-top):not(.dock-bottom) {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom).overflowing {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  section.control-buttons.collapsed {
+    bottom: auto;
+    padding: 0;
+    background: transparent;
+    border-color: transparent;
+  }
+  /* VSCode-style active indicator on the bar's inner edge */
+  section.control-buttons :global(button.active) {
+    box-shadow: inset -2px 0 0 var(--accent-color, #007acc);
   }
 
   /* === 按钮基础样式 === */
@@ -855,11 +1379,31 @@
     align-items: center;
     flex-shrink: 0;
   }
+  /* 树内 tooltip span = 纯 i18n 文案源; 展示走 body 下的 Portal 单例 (见 $effect) */
   .struct-toolbar-tooltip {
-    position: absolute;
-    left: 50%;
-    top: calc(100% + 8px);
-    transform: translateX(-50%) translateY(-4px);
+    display: none;
+  }
+  /* Portal 浮层: 主体+箭头同一根节点, 同一堆叠上下文, 永不被面板/分隔线盖住 */
+  :global(.struct-tip-root) {
+    position: fixed;
+    left: -9999px;
+    top: -9999px;
+    z-index: 2147483000; /* 全局最顶层 tooltip 档 */
+    pointer-events: none;
+    box-sizing: border-box;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease, visibility 0.12s ease;
+  }
+  :global(.struct-tip-root.visible) {
+    opacity: 1;
+    visibility: visible;
+  }
+  :global(.struct-tip-body) {
+    width: max-content;
+    max-width: min(320px, calc(100vw - 16px));
+    white-space: normal;
+    overflow-wrap: break-word;
     padding: 7px 12px;
     border-radius: 7px;
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -869,43 +1413,33 @@
     font-size: 13px;
     font-weight: 600;
     line-height: 1.25;
-    white-space: nowrap;
-    pointer-events: none;
-    opacity: 0;
-    visibility: hidden;
-    z-index: 100000010;
-    transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
   }
-  .struct-toolbar-tooltip-wrap:hover .struct-toolbar-tooltip,
-  .struct-toolbar-tooltip-wrap:focus-within .struct-toolbar-tooltip {
-    opacity: 1;
-    visibility: visible;
-    transform: translateX(-50%) translateY(0);
-  }
-  .struct-toolbar-tooltip-wrap:has(.active) .struct-toolbar-tooltip,
-  .struct-toolbar-tooltip-wrap:has([aria-expanded='true']) .struct-toolbar-tooltip,
-  .struct-toolbar-tooltip-wrap:has([aria-pressed='true']) .struct-toolbar-tooltip {
-    opacity: 0;
-    visibility: hidden;
-  }
-  .struct-toolbar-tooltip::before {
-    content: '';
+  :global(.struct-tip-arrow) {
     position: absolute;
-    left: 50%;
-    bottom: 100%;
     width: 9px;
     height: 9px;
-    background: inherit;
+    background: rgba(17, 17, 17, 0.96);
+    transform: translate(-50%, -50%) rotate(45deg);
+  }
+  :global(.struct-tip-root[data-side='left'] .struct-tip-arrow) {
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  :global(.struct-tip-root[data-side='right'] .struct-tip-arrow) {
+    border-left: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  :global(.struct-tip-root[data-side='top'] .struct-tip-arrow) {
+    border-right: 1px solid rgba(255, 255, 255, 0.12);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  :global(.struct-tip-root[data-side='bottom'] .struct-tip-arrow) {
     border-left: 1px solid rgba(255, 255, 255, 0.12);
     border-top: 1px solid rgba(255, 255, 255, 0.12);
-    transform: translate(-50%, 50%) rotate(45deg);
   }
 
   /* === 下拉菜单样式 (匹配 Trajectory dropdown UI) === */
   .view-mode-dropdown {
-    position: absolute;
-    top: 115%;
-    right: 0;
     max-width: calc(100vw - 24px);
     overflow-x: auto;
     background: var(--surface-bg);
@@ -945,10 +1479,16 @@
   /* === 测量模式 === */
   .measure-mode-dropdown {
     display: flex;
+    flex-direction: column;
+    align-items: center;
     position: relative;
     gap: 4pt;
   }
   .selected-measurement-indicator {
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 8px;
+    white-space: nowrap;
     display: flex;
     align-items: center;
     gap: 4px;
@@ -983,6 +1523,8 @@
   /* === 铅笔/画模式样式 === */
   .pencil-mode-container {
     display: flex;
+    flex-direction: column;
+    align-items: center;
     position: relative;
     gap: 4pt;
   }
@@ -1003,6 +1545,7 @@
     background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
   }
   .touch-mode-container {
+    flex-direction: column;
     display: flex;
     position: relative;
     gap: 4pt;
@@ -1058,15 +1601,20 @@
     box-shadow: 0 0 8px rgba(255, 0, 255, 0.3);
   }
   .gesture-toggle.settings {
-    border: 1px solid rgba(0, 255, 247, 0.2);
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 247, 0.2);
   }
   .gesture-toggle.settings.active {
-    border-color: rgba(0, 255, 247, 0.5);
+    box-shadow: inset 0 0 0 1px rgba(0, 255, 247, 0.5);
   }
 
   /* === 元素快速选择器 === */
   .element-quick-selector {
-    display: flex;
+    display: grid;
+    /* 列数随可用宽度 4/3/2/1 档滑动; 单格 34-56px, 不拉伸不压瘪 */
+    grid-template-columns: repeat(auto-fit, minmax(34px, 56px));
+    justify-content: center;
+    width: min(300px, calc(100vw - 48px));
+    box-sizing: border-box;
     gap: 2px;
     background: var(--surface-bg, #1e1e1e);
     border: 1px solid var(--border-color, #444);
@@ -1074,7 +1622,8 @@
     padding: 2px 4px;
   }
   .element-btn {
-    width: 28px;
+    width: 100%;
+    min-width: 28px;
     height: 28px;
     padding: 0;
     display: flex;
@@ -1099,11 +1648,9 @@
 
   /* === 铅笔模式选择器 (atoms vs fragments vs bonds) === */
   .pencil-mode-selector {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
+    position: fixed; /* fit_popover 锚定+钳位 */
     z-index: 10;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -1116,6 +1663,7 @@
     max-height: calc(100vh - 96px);
     overflow-x: auto;
     overflow-y: auto;
+    overscroll-behavior: contain;
     box-shadow: 0 8px 16px -4px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.1);
     font-size: 0.9rem;
   }
@@ -1157,13 +1705,18 @@
 
   /* === 片段选择器 === */
   .fragment-selector {
-    max-width: min(400px, calc(100vw - 36px));
+    width: min(400px, calc(100vw - 48px));
+    max-width: 100%;
+    box-sizing: border-box;
   }
   .fragment-categories {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
     gap: 3px;
     align-items: center;
+  }
+  .fragment-categories .category-label {
+    grid-column: 1 / -1; /* 分类标题独占一行 */
   }
   .category-label {
     font-size: 0.65em;
@@ -1180,6 +1733,10 @@
     padding: 3px 8px;
     font-size: 0.75em;
     font-weight: 500;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
     background: transparent;
     border: 1px solid var(--border-color, #444);
     border-radius: 4px;
@@ -1197,17 +1754,379 @@
     border-color: var(--accent-color, #007acc);
   }
 
-  @media (max-width: 560px) {
-    .pencil-mode-selector,
-    .view-mode-dropdown {
-      position: fixed;
-      left: 50%;
-      right: auto;
-      top: 72px;
-      transform: translateX(-50%);
-      width: max-content;
-      max-width: calc(100vw - 24px);
-      z-index: 100000020;
+
+  /* === 竖排: 单列连续, 按使用频率从上到下 (--tb-order 逐工具排位) ===
+     children 里的 pane-toggle (optimize/info/controls) 无内联变量 → 默认 40, 紧随核心工具 */
+  section.control-buttons > :global(*) {
+    order: var(--tb-order, 40);
+  }
+  section.control-buttons > :global(.toolbar-flex-spacer) {
+    display: none; /* 竖排无上下分区; dock-top 里恢复为左右弹性间隔 */
+    pointer-events: none;
+  }
+
+  /* === 工具栏收起 + 自定义 === */
+  .toolbar-edit-container {
+    display: flex;
+    position: relative;
+  }
+  .toolbar-edit-toggle,
+  .toolbar-collapse-toggle {
+    background-color: transparent;
+    display: flex;
+    align-items: center;
+    padding: 4pt;
+    border-radius: 3pt;
+    transition: background-color 0.2s;
+  }
+  .toolbar-edit-toggle:hover,
+  .toolbar-collapse-toggle:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .toolbar-edit-toggle.active {
+    color: var(--accent-color, #007acc);
+    background-color: color-mix(in srgb, var(--accent-color, #007acc) 15%, transparent);
+  }
+  .toolbar-edit-menu {
+    position: fixed; /* JS 按 dock 方向锚定并钳位进边界 */
+    z-index: 10;
+    box-sizing: border-box; /* JS 写入的 max-height 含 padding, 否则实高超出 8px */
+    padding: 4px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+  }
+  .toolbar-edit-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: 0.9em;
+    transition: background-color 0.15s ease;
+  }
+  .toolbar-edit-option:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .toolbar-edit-option input {
+    accent-color: var(--accent-color, #007acc);
+    margin: 0;
+  }
+  .toolbar-edit-group {
+    font-size: 0.62em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text-color-muted, #8c8c8c);
+    padding: 6px 8px 2px;
+    margin-top: 2px;
+    border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  }
+  .toolbar-edit-group:first-child {
+    margin-top: 0;
+    border-top: none;
+    padding-top: 4px;
+  }
+
+  :global(.popover-modal) {
+    box-shadow:
+      0 18px 48px rgba(0, 0, 0, 0.55),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+  }
+
+  .measure-menu-popover {
+    position: fixed; /* fit_popover 锚定+钳位 */
+    box-sizing: border-box;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+  }
+
+  /* === 停靠位置切换 (自定义菜单顶部) === */
+  .toolbar-dock-row {
+    display: flex;
+    gap: 2px;
+    padding: 2px 6px 4px;
+  }
+  .toolbar-dock-btn {
+    flex: 1;
+    padding: 3px 8px;
+    font-size: 0.8em;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    color: var(--text-color-muted, #888);
+  }
+  .toolbar-dock-btn:hover {
+    background: color-mix(in srgb, currentColor 10%, transparent);
+  }
+  .toolbar-dock-btn.active {
+    background: var(--accent-color, #007acc);
+    color: white;
+    border-color: var(--accent-color, #007acc);
+  }
+
+  /* === dock-left: 左缘竖栏 (镜像右缘) === */
+  section.control-buttons.dock-left {
+    left: var(--struct-buttons-left, 1ex);
+    right: auto;
+  }
+  section.control-buttons.dock-left :global(button.active) {
+    box-shadow: inset 2px 0 0 var(--accent-color, #007acc);
+  }
+  /* 浮层已 fixed + JS 定位, dock 变体无需再改锚向 */
+  .dock-left .selected-measurement-indicator {
+    right: auto;
+    left: calc(100% + 8px);
+  }
+
+  /* === dock-top: 顶部横排 (原布局: 低频在左, 常用在右) === */
+  section.control-buttons.dock-top,
+  section.control-buttons.dock-bottom {
+    flex-direction: row;
+    flex-wrap: nowrap; /* 永不折行/变假竖栏; 溢出走横向滚动 */
+    left: var(--struct-buttons-left, 1ex);
+    right: var(--struct-buttons-right, var(--ctrl-btn-right, 1ex));
+    width: auto;
+    min-width: 0;
+    max-width: none; /* 显式解除竖排 36px 约束的继承 */
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    align-items: center;
+    gap: 2px;
+    padding: 4px;
+    box-sizing: border-box;
+  }
+  section.control-buttons.dock-top {
+    top: var(--struct-buttons-top, var(--ctrl-btn-top, 1ex));
+    bottom: auto;
+  }
+  section.control-buttons.dock-bottom {
+    top: auto;
+    bottom: var(--struct-buttons-bottom, 1ex);
+  }
+  section.control-buttons.dock-bottom.collapsed {
+    top: auto;
+    bottom: var(--struct-buttons-bottom, 1ex);
+  }
+  /* 横排按钮与竖排同规格: 32px 定格, 不压缩 */
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) :global(:is(
+    button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+    button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+    button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+  )) {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    flex: 0 0 32px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    border-radius: 5px;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) :global(:is(
+    button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+    button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+    button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+  ) svg) {
+    width: 20px;
+    height: 20px;
+    display: block;
+    flex: 0 0 20px;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(*) {
+    order: 2;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.tb-left) {
+    order: 0;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.toolbar-flex-spacer) {
+    order: 1;
+    display: block; /* 横排保留左右分簇的弹性间隔 */
+    flex: 1 1 0;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.toolbar-edit-container) {
+    order: 3;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) > :global(.toolbar-collapse-toggle-wrap) {
+    order: 4;
+  }
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom) :global(button.active) {
+    box-shadow: inset 0 -2px 0 var(--accent-color, #007acc);
+  }
+  :is(.dock-top, .dock-bottom) .pencil-mode-container,
+  :is(.dock-top, .dock-bottom) .measure-mode-dropdown {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  :is(.dock-top, .dock-bottom) .selected-measurement-indicator {
+    position: static;
+    white-space: nowrap;
+  }
+
+  /* === 栏内按钮几何统一: 同一中心线, 悬停/激活零位移 (popover 内部按钮不在此列) === */
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
+    button.gesture-toggle,
+    button.pencil-toggle,
+    button.build-tools-toggle,
+    button.view-mode-button,
+    button.reset-camera,
+    button.fullscreen-toggle,
+    button.toolbar-edit-toggle,
+    button.toolbar-collapse-toggle,
+    .pane-toggle
+  )) {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    min-height: 32px;
+    flex: 0 0 auto;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px; /* 文字型图标 (如 ⇧) 也走整数尺寸 */
+    border-radius: 5px;
+  }
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
+    button.gesture-toggle,
+    button.pencil-toggle,
+    button.build-tools-toggle,
+    button.view-mode-button,
+    button.reset-camera,
+    button.fullscreen-toggle,
+    button.toolbar-edit-toggle,
+    button.toolbar-collapse-toggle,
+    .pane-toggle
+  ) svg) {
+    width: 20px;
+    height: 20px;
+    display: block;
+    flex: 0 0 20px;
+  }
+  /* wrap 只当按钮的透明壳: 不引入自身盒模型 */
+  section.control-buttons:not(.dock-top):not(.dock-bottom) > :global(.struct-toolbar-tooltip-wrap) {
+    display: flex;
+    justify-content: center;
+    padding: 0;
+    margin: 0;
+    width: 32px;
+  }
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.pencil-mode-container),
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
+    width: 32px;
+    align-items: center;
+  }
+  /* 附属小按钮 (激活态的 ×/清除) 同轨居中 */
+  section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(.pencil-mode-container, .measure-mode-dropdown) > button) {
+    width: 32px;
+    height: 26px;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* 紧凑档整数化覆盖 (32/28/18, 28/24/16) */
+  @container (max-height: 560px) {
+    section.control-buttons:not(.dock-top):not(.dock-bottom) {
+      width: 32px;
+      min-width: 32px;
+      max-width: 32px;
+      gap: 2px;
+      padding: 3px 0;
     }
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    )) {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      font-size: 14px;
+    }
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    ) svg) {
+      width: 18px;
+      height: 18px;
+      flex-basis: 18px;
+    }
+    section.control-buttons:not(.dock-top):not(.dock-bottom) > :global(.struct-toolbar-tooltip-wrap),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.pencil-mode-container),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
+      width: 28px;
+    }
+  }
+  @container (max-height: 400px) {
+    section.control-buttons:not(.dock-top):not(.dock-bottom) {
+      width: 28px;
+      min-width: 28px;
+      max-width: 28px;
+      gap: 1px;
+      padding: 2px 0;
+    }
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    )) {
+      width: 24px;
+      height: 24px;
+      min-width: 24px;
+      min-height: 24px;
+      font-size: 12px;
+    }
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(:is(
+      button.gesture-toggle, button.pencil-toggle, button.build-tools-toggle,
+      button.view-mode-button, button.reset-camera, button.fullscreen-toggle,
+      button.toolbar-edit-toggle, button.toolbar-collapse-toggle, .pane-toggle
+    ) svg) {
+      width: 16px;
+      height: 16px;
+      flex-basis: 16px;
+    }
+    section.control-buttons:not(.dock-top):not(.dock-bottom) > :global(.struct-toolbar-tooltip-wrap),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.pencil-mode-container),
+    section.control-buttons:not(.dock-top):not(.dock-bottom) :global(.measure-mode-dropdown) {
+      width: 24px;
+    }
+  }
+
+  /* 面板开关自带的 CSS tooltip 在栏内一律隐藏 (改走 body Portal 单例),
+     同时消除它们对 scrollHeight/Width 的悬挂充气 */
+  section.control-buttons :global(.pane-toggle-tooltip) {
+    display: none;
+  }
+  /* 收起或全工具隐藏时, 横条收缩为右侧小签: 不再留整宽吃输入的空带 */
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom).collapsed,
+  :is(section.control-buttons.dock-top, section.control-buttons.dock-bottom).empty-tools {
+    left: auto;
+    width: auto;
+    min-width: 0;
   }
 </style>

@@ -213,6 +213,29 @@ const common: Record<string, string> = {
   preview: `Preview`,
   show: `Show`,
   total: `total`,
+
+  // ── Overlay target context (multi-viewport) ─────────────────────────
+  overlay_window_n: `Window {n}`,
+  overlay_document: `Document`,
+  overlay_selected_atoms: `{n} atoms selected`,
+  overlay_no_structure_in_window: `Window {n} has no structure available.`,
+  overlay_target_closed: `The target window was closed — this action can no longer proceed.`,
+  overlay_switch_target: `Switch target`,
+  overlay_pick_target_first: `Choose a target window first`,
+  overlay_capture_last_loaded: `Use last loaded structure (source pane closed)`,
+  overlay_from_window: `From window {n}`,
+
+  // ── Dual-mode panels ──
+  panel_dock_to_sidebar: `Dock to sidebar`,
+  panel_float: `Float panel`,
+  panel_close: `Close panel`,
+  panel_more: `Panel menu`,
+  panel_resize: `Resize panel`,
+  panel_dock_left: `Dock left`,
+  panel_dock_right: `Dock right`,
+  panel_dock_top: `Dock top`,
+  panel_dock_bottom: `Dock bottom`,
+  panel_expand: `Expand panel`,
 }
 
 export default common

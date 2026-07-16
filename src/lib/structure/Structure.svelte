@@ -95,6 +95,7 @@
     set_active_viewer,
     type ViewerPosition,
   } from './viewer-registry.svelte'
+  import { viewport_highlight_state } from '$lib/overlay/overlay-target.svelte'
   import { isMobile } from '$lib/api/transport'
   import { set_current_structure, current_structure_state } from './current-structure.svelte'
   import { molecular_fragments, type MolecularFragment } from './controllers/fragments'
@@ -138,6 +139,7 @@
   } from './controllers/viewer-controller'
   // tool-controller.svelte.ts exists but is not yet wired (template bind: compatibility)
   import StructureToolbar from './StructureToolbar.svelte'
+  import { pane_toolbar, toolbar_tool_hidden } from './toolbar-state.svelte'
   import { MdAnalysisPane, MdPlot } from '$lib/md'
   import SlowGrowthPane from '$lib/structure/SlowGrowthPane.svelte'
   import ScaleBar from '$lib/structure/ScaleBar.svelte'
@@ -786,8 +788,8 @@
     controls_open = $bindable(false),
     info_pane_open = $bindable(false),
     enable_measure_mode = $bindable(true),
-    background_color = $bindable(undefined),
-    background_opacity = $bindable(0.1),
+    background_color = $bindable(DEFAULTS.background_color),
+    background_opacity = $bindable(DEFAULTS.background_opacity),
     show_controls = 0,
     fullscreen = false,
     wrapper = $bindable(undefined),
@@ -1988,6 +1990,22 @@
     meas_state.delete_measurement(id, (sites) => { measured_sites = sites })
   }
 
+  // 工具栏 overlay 安全区: HUD (图例/倍率等) 按本 pane 工具栏停靠边扣除
+  // 占位 — canvas 几何不动 (picking/WebGL/截图无需同步), 每 pane 独立,
+  // 收起/无栏时归零。厚度由工具栏体系统一供给 (rail 36/条 40 + 边距与间隙)。
+  const tbs = pane_toolbar(viewer_id ?? tab_id ?? `default`)
+  const toolbar_safe = $derived.by(() => {
+    if (!visible_buttons || tbs.collapsed) return { l: 0, r: 0, t: 0, b: 0 }
+    const v = 52 // 竖排 rail 36 + 边缘 8 + 间隙 8
+    const h = 56 // 横条 40 + 8 + 8
+    return {
+      l: tbs.dock === `left` ? v : 0,
+      r: tbs.dock === `right` ? v : 0,
+      t: tbs.dock === `top` ? h : 0,
+      b: tbs.dock === `bottom` ? h : 0,
+    }
+  })
+
   let visible_buttons = $derived(
     show_controls === true ||
       (typeof show_controls === `number` && width > show_controls),
@@ -2633,6 +2651,17 @@
     filename
     refresh_viewer_manifest(viewer_id)
     if (is_active) set_active_viewer(viewer_id)
+  })
+
+  // 对象级弹层打开/切换目标时的视口联动高亮 (800ms, 不动相机/选择/焦点)
+  const _overlay_hl = viewport_highlight_state()
+  let overlay_flash = $state(false)
+  $effect(() => {
+    const tick = viewer_id ? _overlay_hl.highlights[viewer_id] : undefined
+    if (!tick) return
+    overlay_flash = true
+    const timer = setTimeout(() => (overlay_flash = false), 800)
+    return () => clearTimeout(timer)
   })
 
   // Push-on-edit: any structure mutation (add/delete/replace/drag/lattice)
@@ -3344,6 +3373,13 @@
   }}
   {...rest}
   class="structure {rest.class ?? ``}"
+  class:overlay-target-flash={overlay_flash}
+  style:--toolbar-safe-left={`${toolbar_safe.l}px`}
+  style:--toolbar-safe-right={`${toolbar_safe.r}px`}
+  style:--toolbar-safe-top={`${toolbar_safe.t}px`}
+  style:--toolbar-safe-bottom={`${toolbar_safe.b}px`}
+  style:--struct-legend-right={`calc(clamp(4pt, 3cqmin, 8pt) + ${toolbar_safe.r}px)`}
+  style:--struct-legend-bottom={`calc(clamp(4pt, 3cqmin, 8pt) + ${toolbar_safe.b}px)`}
   class:pencil-mode-active={pencil.pencil_mode_active}
   class:crop-mode-active={interaction.crop_mode_active}
   class:md-split={show_md_panel}
@@ -3456,6 +3492,7 @@
     </div>
   {:else if (structure?.sites?.length ?? 0) > 0}
     <StructureToolbar
+  pane_key={viewer_id ?? tab_id ?? `default`}
       {camera_has_moved}
       {visible_buttons}
       {hide_extra_tools}
@@ -3705,7 +3742,7 @@
         </BuildPane>
         {/if}
 
-        {#if structure}
+        {#if structure && !toolbar_tool_hidden(viewer_id ?? tab_id ?? `default`, `optimize`)}
           <OptimizationPane
             bind:structure
             bind:pane_open={optimization_pane_open}
@@ -4156,6 +4193,7 @@
           <WorkflowPane
             bind:show={workflow_pane_open}
             structure={saveable_structure ?? structure}
+            {viewer_id}
             {on_open_workflow_editor}
           />
 
@@ -4296,7 +4334,7 @@
         {/if}
 
         <!-- === Info / Export / Settings === -->
-        {#if enable_info_pane && structure}
+        {#if enable_info_pane && structure && !toolbar_tool_hidden(viewer_id ?? tab_id ?? `default`, `info`)}
           <StructureInfoPane
             {structure}
             bind:pane_open={info_pane_open}
@@ -4308,6 +4346,7 @@
 
         <!-- ExportPane is now embedded inside IOPane -->
 
+        {#if !toolbar_tool_hidden(viewer_id ?? tab_id ?? `default`, `controls`)}
         <StructureControls
           bind:controls_open
           bind:scene_props
@@ -4331,6 +4370,7 @@
           {supercell_loading}
           closed_icon="Sliders"
         />
+        {/if}
     </StructureToolbar>
 
     <AtomLegend
@@ -4403,6 +4443,7 @@
             and orphan cross-cell bond stubs render with image atoms off.
           -->
           <StructureScene
+            hud_safe={toolbar_safe}
             structure={displayed_structure}
             bond_input_structure={supercell_structure ?? structure}
             {webgl_suspended}
@@ -5578,7 +5619,17 @@
     color: var(--struct-text-color);
     /* Isolate stacking context to prevent z-index bleed to other panes */
     isolation: isolate;
+  }
+  .structure.overlay-target-flash {
+    outline: 2px solid var(--accent-color, #4a9eff);
+    outline-offset: -2px;
     overflow: hidden;
+  }
+  /* 坐标轴 gizmo 避让停靠工具栏: threlte 的 offset 仅挂载时生效, 用同源
+     CSS 变量覆盖其内联定位 (收起/换向即时生效, 每 pane 独立) */
+  .structure :global(.responsive-gizmo) {
+    left: calc(5px + var(--toolbar-safe-left, 0px)) !important;
+    bottom: calc(5px + var(--toolbar-safe-bottom, 0px)) !important;
   }
 
   /* DOS split-view grid layout (like Trajectory) */

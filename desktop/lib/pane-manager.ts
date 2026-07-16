@@ -16,6 +16,8 @@ import {
 import { save_format_from_path } from '$lib/structure/save-format'
 import { findLeafById, leafCount, leaves, removeLeaf, isTerminalLeaf, structurePane } from '../pane-tree'
 import { exp } from '../state/export-state.svelte'
+import { remove_pane_panels } from '$lib/panel/panel-state.svelte'
+import { remove_pane_toolbar } from '$lib/structure/toolbar-state.svelte'
 import { sidebar } from '../state/sidebar-state.svelte'
 import { list_projects, save_structure_to_db, write_file } from '$lib/api/project'
 import { writeRemoteFile } from '$lib/api/hpc'
@@ -96,6 +98,8 @@ export function close_panel(deps: PaneManagerDeps, tab_id: string, leaf_id: stri
     return
   }
   ts.root = removeLeaf(ts.root, leaf_id)
+  remove_pane_panels(`${tab_id}:${leaf_id}`) // 不留失效 pane_id 的面板状态
+  remove_pane_toolbar(`${tab_id}:${leaf_id}`)
   if (!findLeafById(ts.root, ts.active_leaf_id)) ts.active_leaf_id = leaves(ts.root)[0].id
   if (ts.maximized_leaf_id && !findLeafById(ts.root, ts.maximized_leaf_id)) ts.maximized_leaf_id = null
   commit_pending_library_removal(ts, leaf_id, closed_entry_id)

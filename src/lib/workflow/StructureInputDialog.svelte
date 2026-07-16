@@ -4,6 +4,12 @@
   import { API_BASE } from '$lib/api/config'
   import { parse_structure_file } from '$lib/structure/parse'
   import { get_current_structure } from '$lib/structure/current-structure.svelte'
+  import { list_viewers, resolve_viewer } from '$lib/structure/viewer-registry.svelte'
+  import {
+    flash_viewport,
+    overlay_log,
+    viewport_display_index,
+  } from '$lib/overlay/overlay-target.svelte'
   import { hpc_session_store, refresh_hpc_sessions, LOCAL_SESSION_ID } from '$lib/hpc-sessions.svelte'
   import OptimadeSearchModal from '$lib/structure/OptimadeSearchModal.svelte'
   import OptimadePreviewModal from '$lib/structure/OptimadePreviewModal.svelte'
@@ -108,25 +114,56 @@
   let has_structure = $derived(pending_json !== null)
   let is_view_mode = $derived(mode === `view`)
 
-  // ─── Capture from Viewer ───
+  // ─── Capture from Viewer (显式目标绑定) ───
+  // 多视口时禁止默认第一个/全局兜底: 恰一个可用视口自动绑定, 多个必须手选,
+  // 零视口 (全屏编辑器) 才显式回退到"最近加载的结构"。
   let capture_loading = $state(false)
   let capture_error = $state(``)
+  let capture_target = $state(``)
+  let capture_choices = $state<{ id: string; n: number; name: string }[]>([])
+  let capture_source_label = $state(``)
+
+  $effect(() => {
+    if (!show) return
+    const viewers = list_viewers().filter((m) => m.kind !== `empty`)
+    capture_choices = viewers.map((m) => ({
+      id: m.viewer_id,
+      n: viewport_display_index(m.viewer_id),
+      name: m.filename ?? m.label,
+    }))
+    capture_target = viewers.length === 1 ? viewers[0].viewer_id : ``
+    capture_source_label = ``
+  })
 
   async function capture_from_viewer() {
     capture_loading = true
     capture_error = ``
     try {
       let data: { sites?: unknown[] } | null = null
-      // Prefer the backend viewer state (covers multi-tab / external panes),
-      // but it is wiped when the structure pane closes. Fall back to the
-      // durable client-side store so this still works full-screen on the
-      // Workflow editor with no visible structure pane.
-      try {
-        const resp = await fetch(`${API_BASE}/view/structure/current`)
-        if (resp.ok) data = await resp.json()
-      } catch { /* fall through to client store */ }
-      if (!data || !(data.sites?.length)) {
+      if (capture_target) {
+        // 冻结视口的活结构: 客户端句柄优先, 后端按 panel_id 兜底 (绝不发无 panel_id 请求)
+        data = (resolve_viewer(capture_target).handle?.get_structure() ?? null) as
+          | { sites?: unknown[] }
+          | null
+        if (!data?.sites?.length) {
+          try {
+            const resp = await fetch(
+              `${API_BASE}/view/structure/current?panel_id=${encodeURIComponent(capture_target)}`,
+            )
+            if (resp.ok) data = await resp.json()
+          } catch { /* keep client-side result */ }
+        }
+        const chosen = capture_choices.find((c) => c.id === capture_target)
+        capture_source_label = chosen
+          ? `${t(`common.overlay_from_window`, { n: chosen.n })} · ${chosen.name}`
+          : ``
+        flash_viewport(capture_target)
+        overlay_log(`si_capture`, { scope: `viewport`, viewport_id: capture_target })
+      } else if (capture_choices.length === 0) {
         data = get_current_structure() as { sites?: unknown[] } | null
+        capture_source_label = t(`common.overlay_capture_last_loaded`)
+      } else {
+        throw new Error(t(`common.overlay_pick_target_first`))
       }
       if (!data || !(data.sites?.length)) {
         throw new Error(t('workflow.si_no_struct_viewer'))
@@ -707,9 +744,28 @@
 
       {#if !is_view_mode}
         <div class="capture-row">
-          <button class="capture-btn" onclick={capture_from_viewer} disabled={capture_loading}>
+          {#if capture_choices.length > 1}
+            <select class="capture-target-select" bind:value={capture_target}>
+              <option value="" disabled>{t('common.overlay_pick_target_first')}</option>
+              {#each capture_choices as c (c.id)}
+                <option value={c.id}>{t('common.overlay_window_n', { n: c.n })} · {c.name}</option>
+              {/each}
+            </select>
+          {:else if capture_choices.length === 1}
+            <span class="capture-target-fixed" title={capture_choices[0].name}>
+              {t('common.overlay_window_n', { n: capture_choices[0].n })} · {capture_choices[0].name}
+            </span>
+          {/if}
+          <button
+            class="capture-btn"
+            onclick={capture_from_viewer}
+            disabled={capture_loading || (capture_choices.length > 1 && !capture_target)}
+          >
             {capture_loading ? t('workflow.si_capturing') : t('workflow.si_capture')}
           </button>
+          {#if capture_source_label}
+            <span class="capture-source" title={capture_source_label}>{capture_source_label}</span>
+          {/if}
           {#if capture_error}
             <span class="capture-error">{capture_error}</span>
           {/if}
@@ -1091,6 +1147,24 @@
     gap: 10px;
     padding: 10px 20px 6px;
     flex-shrink: 0;
+  }
+  .capture-target-select {
+    max-width: 15em;
+    padding: 3px 6px;
+    font-size: 0.85em;
+    border-radius: 4px;
+    background: var(--input-bg, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border-color, #444);
+    color: inherit;
+  }
+  .capture-target-fixed,
+  .capture-source {
+    font-size: 0.8em;
+    color: var(--text-color-muted, #999);
+    max-width: 16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .capture-btn {
     padding: 7px 16px;

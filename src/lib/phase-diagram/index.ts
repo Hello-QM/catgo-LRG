@@ -100,9 +100,9 @@ export const default_pd_config: PhaseDiagramConfig = {
   line_width: 2,
   font_size: 12,
   colors: {
-    stable: `#0072B2`,
-    unstable: `#E69F00`,
-    hull_line: `var(--accent-color, #1976D2)`,
+    stable: `#2b7db8`,
+    unstable: `#d99c34`,
+    hull_line: `var(--accent-color, #3a80ce)`,
     background: `transparent`,
     text: `var(--text-color, #212121)`,
     edge: `var(--text-color, #212121)`,

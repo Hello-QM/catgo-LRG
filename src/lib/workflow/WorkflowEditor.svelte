@@ -42,6 +42,8 @@
   import AdsorbatePlacePanel from './AdsorbatePlacePanel.svelte'
   import StructurePreview from '$lib/structure/StructurePreview.svelte'
   import { get_current_structure } from '$lib/structure/current-structure.svelte'
+  import { list_viewers, resolve_viewer } from '$lib/structure/viewer-registry.svelte'
+  import { overlay_log } from '$lib/overlay/overlay-target.svelte'
   import JobScriptWorkplace from './JobScriptWorkplace.svelte'
   import VaspEditorModal from './components/VaspEditorModal.svelte'
   import ImportWorkflowDialog from './components/ImportWorkflowDialog.svelte'
@@ -1806,7 +1808,22 @@
   // Materials Project source to defer to). Persist via schedule_save so the
   // injection survives the next reload instead of being wiped again.
   function fill_empty_structure_inputs(): void {
-    const cur = get_current_structure()
+    // 显式目标解析: 恰一个视口 → 用它; 零视口 → 持久单例 (无歧义对象);
+    // 多视口 → 歧义, 不静默注入任何一个 (用户须经 Structure Input 对话框手选)
+    const viewers = list_viewers().filter((m) => m.kind !== `empty`)
+    let cur: ReturnType<typeof get_current_structure> = null
+    if (viewers.length === 1) {
+      cur = (resolve_viewer(viewers[0].viewer_id).handle?.get_structure() ?? null) as
+        ReturnType<typeof get_current_structure>
+    } else if (viewers.length === 0) {
+      cur = get_current_structure()
+    } else {
+      overlay_log(`fill_empty_structure_inputs_skipped`, null, {
+        reason: `ambiguous`,
+        viewers: viewers.map((m) => m.viewer_id),
+      })
+      return
+    }
     if (!cur) return
     let changed = false
     nodes = nodes.map((n) => {

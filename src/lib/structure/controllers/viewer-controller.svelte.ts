@@ -107,7 +107,7 @@ export function create_viewer_controller(deps: ViewerDeps) {
           const result = analysis.clusters
           // Color atoms by SBU type: Node=blue, Linker=green, Ligand/Cap=orange, POE=gray
           const SBU_COLORS: Record<string, string> = {
-            Node: '#3b82f6', Linker: '#22c55e', Ligand: '#f59e0b', PointOfExtension: '#9ca3af',
+            Node: '#528ae5', Linker: '#50bc6c', Ligand: '#e49b3a', PointOfExtension: '#9ca3af',
           }
           const colors: string[] = []
           const values: (string)[] = []

@@ -1,6 +1,10 @@
 <script lang="ts">
   import { untrack, tick } from 'svelte'
   import { init_i18n, t, load_i18n_module } from '$lib/i18n/index.svelte'
+  import ActivityBar from './components/ActivityBar.svelte'
+  import PanePanelHost from '$lib/panel/PanePanelHost.svelte'
+  import WorkflowPanelContent from '$lib/structure/WorkflowPanelContent.svelte'
+  import type { PanelInstance } from '$lib/panel/panel-state.svelte'
   import LocaleSwitch from '$lib/i18n/LocaleSwitch.svelte'
   import { Structure, Trajectory } from '$lib'
   import MolstarViewer from '$lib/structure/bio/MolstarViewer.svelte'
@@ -837,10 +841,12 @@
   }
 
   // [2025-02] Open workflow editor from sidebar file tree
-  function handle_sidebar_open_workflow(workflow_id: string, compact = false, target_tab_id?: string) {
+  function handle_sidebar_open_workflow(workflow_id: string, compact = false, target_tab_id?: string, target_leaf_id?: string) {
     // Prefer opening into the tab that originated the MCP navigation, not
     // whichever tab happens to be active when the signal arrives. Falls back
     // to the active tab for sidebar clicks and other UI-initiated opens.
+    // target_leaf_id: 发起弹层的 leaf (WorkflowPane 传入) — 编辑器占用发起源
+    // 而不是劫持 active leaf (多视口下两者常常不同)。
     const ts_tab_id = target_tab_id ?? tm.active_tab_id
     const ts = tm.tab_states[ts_tab_id]
     if (!ts) return
@@ -853,7 +859,8 @@
       get_workflow_slice(ts_tab_id).workflow_reload_seq.seq++
       return
     }
-    const target = findFirstEmptyLeaf(ts.root) ?? findLeafById(ts.root, ts.active_leaf_id)
+    const target = findFirstEmptyLeaf(ts.root) ??
+      findLeafById(ts.root, target_leaf_id ?? ts.active_leaf_id)
     const target_pane = target ? structurePane(target) : null
     if (!target || !target_pane) return
     Object.assign(target_pane, { ...create_empty_pane(), mode: `workflow`, workflow_id, workflow_compact: compact })
@@ -2314,8 +2321,13 @@
   hidden
 />
 
-<!-- Workspace: sidebar + divider + views -->
+<!-- Workspace: activity bar + docked panel + sidebar + divider + views -->
 <div class="workspace" class:sidebar-resizing={sidebar.is_resizing}>
+  <ActivityBar
+    active_pane_id={tm.active_tab_type === `structure` && tab_states[tm.active_tab_id]
+      ? `${tm.active_tab_id}:${tab_states[tm.active_tab_id].active_leaf_id}`
+      : null}
+  />
   <Sidebar
     bind:collapsed={sidebar.collapsed}
     bind:width={sidebar.width}
@@ -2551,6 +2563,12 @@
           {@const pane_number = pane_layout.leaves.findIndex((box) => box.leaf.id === leaf.id) + 1}
           {@const viewer_id = `${tab.id}:${leaf.id}`}
           {@const pane_position = pane_box ? position_alias(pane_box.rect, visible_panes.length) : `hidden`}
+          <PanePanelHost
+            pane_id={viewer_id}
+            panel_title={(p: PanelInstance) =>
+              p.panel_type === `workflow` ? t(`common.workflow`) : p.panel_type}
+            panel_content={pane_panel_content}
+          >
           {#if pane}
           {#if pane.mode === `workflow`}
             <WorkflowView
@@ -2576,7 +2594,15 @@
               on_file_load={create_on_file_load(tab.id, leaf.id)}
               fullscreen_toggle={false}
               allow_file_drop={false}
-              structure_props={{ fullscreen_toggle: false, hide_extra_tools: false, initial_traj_b64: pane.raw_traj_b64, initial_traj_format: pane.raw_traj_format }}
+              structure_props={{
+                fullscreen_toggle: false,
+                hide_extra_tools: false,
+                initial_traj_b64: pane.raw_traj_b64,
+                initial_traj_format: pane.raw_traj_format,
+                on_open_terminal: (term?: Partial<TerminalLeafState>) => {
+                  open_terminal_leaf(tab.id, leaf.id, term)
+                },
+              }}
               style="--struct-height: 100%; --struct-width: 100%; border-radius: 0;"
             >
               {#snippet trajectory_controls({ trajectory: traj, current_step_idx: step, on_step_change })}
@@ -2635,7 +2661,8 @@
                 open_terminal_leaf(tab.id, leaf.id, term)
               }}
               on_open_workflow_editor={(workflow_id: string) => {
-                handle_sidebar_open_workflow(workflow_id)
+                // 编辑器开进本 leaf (弹层的冻结目标), 不劫持 active leaf
+                handle_sidebar_open_workflow(workflow_id, false, tab.id, leaf.id)
               }}
               on_open_in_molstar={() => toggle_pane_viewer(pane)}
               on_view_split_request={(struct) => {
@@ -3023,6 +3050,20 @@
               </div>
             </div>
           {/if}
+          {/if}
+          </PanePanelHost>
+        {/snippet}
+
+        {#snippet pane_panel_content(p: PanelInstance)}
+          {#if p.panel_type === `workflow`}
+            <WorkflowPanelContent
+              target={p.target}
+              active={p.is_open}
+              on_open_workflow_editor={(id: string) => {
+                const [wf_tab, wf_leaf] = p.pane_id.split(`:`)
+                handle_sidebar_open_workflow(id, false, wf_tab, wf_leaf)
+              }}
+            />
           {/if}
         {/snippet}
 
