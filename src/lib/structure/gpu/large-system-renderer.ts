@@ -3184,6 +3184,20 @@ export function create_large_system_renderer(
       const px = Math.max(0, Math.min(w - 1, Math.floor(x)))
       const py = Math.max(0, Math.min(h - 1, Math.floor(y)))
 
+      // Visual T5 (T3-review Minor closure): snapshot every decode input AT
+      // REQUEST TIME. `mapAsync` yields to the event loop, and a packet/legacy
+      // update landing mid-flight (new dims, new atom count, replaced ghost
+      // table) must not re-interpret the id rendered by THIS pass.
+      const snap_base_count = Math.max(1, atom_count)
+      const snap_ncells = Math.max(1, supercell_ncells)
+      const snap_dims: [number, number, number] = [
+        supercell_dims[0],
+        supercell_dims[1],
+        supercell_dims[2],
+      ]
+      const snap_images = last_images
+      const snap_ghosts = ghost_draw_count()
+
       const encoder = device.createCommandEncoder({ label: `large-system-pick` })
       const pass = encoder.beginRenderPass({
         label: `large-system-pick-pass`,
@@ -3210,7 +3224,7 @@ export function create_large_system_renderer(
       // 1×1×1) ⇒ atom_count instances ⇒ inst = atom, byte-identical to before.
       // Ghost instances (packet 'ghost-images' policy) append past the replica
       // range, so their ids land after it and decode via the CPU-side table.
-      pass.draw(4, atom_count * Math.max(1, supercell_ncells) + ghost_draw_count())
+      pass.draw(4, atom_count * snap_ncells + snap_ghosts)
       pass.end()
       // Copy the single picked texel into the 256-byte readback buffer.
       encoder.copyTextureToBuffer(
@@ -3244,14 +3258,14 @@ export function create_large_system_renderer(
       // replica cell in [0, dims). Ids past base_count·ncells are GHOST
       // instances: they map through the CPU-side ImageInstanceTable to their
       // base site + ABSOLUTE image cell (which may lie outside [0, dims) —
-      // logical_site_for_pick wraps it under physical semantics).
+      // logical_site_for_pick wraps it under physical semantics). Every input
+      // below is the REQUEST-TIME snapshot, never post-mapAsync state.
       if (id === 0) return miss
       const g = id - 1
-      const base_count = Math.max(1, atom_count)
-      const real_count = base_count * Math.max(1, supercell_ncells)
+      const real_count = snap_base_count * snap_ncells
       if (g >= real_count) {
         const gi = g - real_count
-        const table = last_images
+        const table = snap_images
         if (!table || gi >= table.count) return miss
         return {
           kind: `atom`,
@@ -3264,7 +3278,7 @@ export function create_large_system_renderer(
           ghost: true,
         }
       }
-      const decoded = decode_replica_instance(g, base_count, supercell_dims)
+      const decoded = decode_replica_instance(g, snap_base_count, snap_dims)
       return {
         kind: `atom`,
         base_site: decoded.atom_index,

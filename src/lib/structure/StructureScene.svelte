@@ -102,6 +102,7 @@
   import {
     LARGE_STRUCTURE_THRESHOLD,
     create_gpu_picker,
+    create_replica_picker,
     setup_hover_detection as setup_hover_detection_impl,
     find_hit_atom_from_event as find_hit_atom_impl,
     is_atom_pickable as is_atom_pickable_external,
@@ -191,6 +192,13 @@
   // --- GPU Picker for O(1) hover/click detection ---
   const picker = create_gpu_picker()
 
+  // Visual T5 — packet-path unified picking: hover AND click resolve through
+  // the WebGL2 replica integer-ID pass while a render packet is active (the
+  // invisible CPU hitbox meshes below are gated off in that mode). Lazily
+  // constructed; disposed with the scene.
+  const replica_picker = create_replica_picker()
+  $effect(() => () => replica_picker.dispose())
+
   // Check if an atom is pickable (not hidden by cutting plane)
   function is_atom_pickable(site_idx: number): boolean {
     return is_atom_pickable_external(site_idx, cutting_active, cutting_visibility_map)
@@ -246,10 +254,59 @@
     get_bond_manager: () => bond_manager,
     get_partner_drawn_lookup: () => partner_drawn_lookup,
     get_slot_to_filtered_idx: () => slot_to_filtered_idx,
+    // Visual T5 — packet-path unified picking. When the managers consume a
+    // render packet, hover + click route through the WebGL2 replica ID pass;
+    // every replica pick folds to ONE base selection flag (visual-shared-base
+    // semantics), and bond picks carry the base bond GRAPH index.
+    get_render_packet: () => manager_render_packet,
+    on_packet_atom_click: handle_packet_atom_click,
+    on_packet_bond_click: handle_packet_bond_click,
+    set_hovered_bond_idx: (idx) => {
+      if (idx === null || idx < 0 || idx >= filtered_bond_pairs.length) {
+        if (hovered_bond_key !== null) hovered_bond_key = null
+        return
+      }
+      const bond = filtered_bond_pairs[idx]
+      if (!is_bond_pickable(bond)) {
+        if (hovered_bond_key !== null) hovered_bond_key = null
+        return
+      }
+      hovered_bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
+    },
+  }
+
+  // Packet-path atom click — same mode routing as the Threlte interaction
+  // mesh handler, keyed by BASE site index (one selection flag per base atom
+  // no matter which replica cell was clicked).
+  function handle_packet_atom_click(site_idx: number, event: MouseEvent) {
+    if (!is_atom_pickable(site_idx)) return
+    const position = position_by_site_idx.get(site_idx) ?? ([0, 0, 0] as Vec3)
+    if (bond_mode_active && on_bond_atom_click) {
+      on_bond_atom_click(site_idx)
+      return
+    }
+    if (pencil_mode_active && on_pencil_atom_click) {
+      // Browsers dispatch `click` as a PointerEvent; the DOM lib types it
+      // as MouseEvent, so narrow explicitly for the pencil callback.
+      on_pencil_atom_click(site_idx, position, event as PointerEvent)
+      return
+    }
+    if (measure_mode_active && on_continuous_measure_click) {
+      on_continuous_measure_click(site_idx)
+      return
+    }
+    toggle_selection(site_idx, event)
+  }
+
+  // Packet-path bond click — the replica ID pass already resolved the base
+  // bond graph index to a `filtered_bond_pairs` index.
+  function handle_packet_bond_click(bond_idx: number, event: MouseEvent) {
+    if (bond_drag_active || external_dragging) return
+    select_bond_by_filtered_idx(bond_idx, event)
   }
 
   function setup_hover_detection() {
-    return setup_hover_detection_impl(gpu_picker_deps, picker)
+    return setup_hover_detection_impl(gpu_picker_deps, picker, replica_picker)
   }
 
   // --- Atom interaction mesh: invisible InstancedMesh with custom raycast ---
@@ -323,6 +380,7 @@
   // are approximate anyway. Rebuilds on drag-end when external_dragging becomes false.
   $effect(() => {
     if (!atom_interaction_mesh) return
+    if (packet_picking_active) return // Visual T5: GPU ID pass owns picking
     if (external_dragging || is_rotating_atoms) return // Skip during drag
     const data = atom_data
     const overrides = realtime_position_overrides
@@ -4661,6 +4719,12 @@
     }
   })
 
+  // Visual T5 — while the managers consume a render packet, picking is the
+  // WebGL2 replica integer-ID pass (gpu-picker-integration packet branch).
+  // The invisible CPU sphere/cylinder hitbox meshes are NOT mounted and
+  // their matrix rebuild effects are skipped in this mode.
+  let packet_picking_active = $derived(manager_render_packet !== null)
+
   // Build a set for fast selected_bonds lookup
   let selected_bond_keys = $derived.by(() => new Set(selected_bonds.map(b => b.key)))
 
@@ -4800,6 +4864,7 @@
   let __hitbox_trailing: ReturnType<typeof setTimeout> | null = null
   $effect(() => {
     if (!bond_hitbox_mesh) return
+    if (packet_picking_active) return // Visual T5: GPU ID pass owns picking
     const bonds = filtered_bond_pairs
     const layout = image_atom_layout
     const partner_drawn = partner_drawn_lookup
@@ -5056,20 +5121,13 @@
   // Each logical bond emits 2 hitbox instances (paired stubs / two halves);
   // decode `instanceId >>> 1` to the bond index. Hovering / clicking either
   // half resolves to the same bond.
-  function handle_bond_hitbox_click(event: any) {
-    if (bond_drag_active || external_dragging) return
-    const instance_id = event.instanceId
-    if (instance_id === undefined) return
-    // Phase 7f — per-instance map handles both cell-internal (`>>> 1`-style)
-    // and decorator hits. -1 entries (orphan decorator slots) are no-ops.
-    const map = bond_hitbox_instance_to_filtered_idx
-    const bond_idx = instance_id < map.length
-      ? map[instance_id]
-      : (instance_id >>> 1)
+  // Shared bond-selection body for the legacy hitbox click AND the Visual T5
+  // packet-path click (which arrives with the filtered index pre-resolved).
+  function select_bond_by_filtered_idx(bond_idx: number, event?: Event) {
     if (bond_idx < 0 || bond_idx >= filtered_bond_pairs.length) return
     const bond = filtered_bond_pairs[bond_idx]
     if (!is_bond_pickable(bond)) return // Skip bonds hidden by cutting plane
-    event.stopPropagation()
+    event?.stopPropagation?.()
     const bond_key = get_bond_key(bond.site_idx_1, bond.site_idx_2)
     const bond_type = manual_bond_keys.has(bond_key) ? `manual` as const : `auto` as const
     const bond_info = {
@@ -5087,6 +5145,19 @@
         : [...selected_bonds, bond_info]
     }
     hovered_bond_key = null
+  }
+
+  function handle_bond_hitbox_click(event: any) {
+    if (bond_drag_active || external_dragging) return
+    const instance_id = event.instanceId
+    if (instance_id === undefined) return
+    // Phase 7f — per-instance map handles both cell-internal (`>>> 1`-style)
+    // and decorator hits. -1 entries (orphan decorator slots) are no-ops.
+    const map = bond_hitbox_instance_to_filtered_idx
+    const bond_idx = instance_id < map.length
+      ? map[instance_id]
+      : (instance_id >>> 1)
+    select_bond_by_filtered_idx(bond_idx, event)
   }
 
   function handle_bond_hitbox_pointer_enter(event: any) {
@@ -5948,9 +6019,11 @@
           />
         {/if}
 
-        <!-- Invisible atom interaction mesh: Threlte event system handles click/selection -->
+        <!-- Invisible atom interaction mesh: Threlte event system handles click/selection.
+             Gated OFF while a render packet is active (Visual T5) — the WebGL2
+             replica integer-ID pass owns atom picking on that path. -->
         <!-- Uses actual SphereGeometry(0.5) for raycasting, matching old extras.Instance behavior -->
-        {#if atom_data.length > 0 && show_bulk_atoms}
+        {#if atom_data.length > 0 && show_bulk_atoms && !packet_picking_active}
           <T.InstancedMesh
             name="catgo-atom-picking-hitbox"
             args={[atom_interaction_geometry, atom_interaction_material, INITIAL_MESH_CAPACITY]}
@@ -6112,8 +6185,10 @@
         {/each}
       {/if}
 
-      <!-- Batched invisible hitbox for all bonds (single InstancedMesh) -->
-      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
+      <!-- Batched invisible hitbox for all bonds (single InstancedMesh).
+           Gated OFF while a render packet is active (Visual T5) — bond picks
+           route through the WebGL2 replica integer-ID pass instead. -->
+      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms && !packet_picking_active}
         <T.InstancedMesh
           name="catgo-bond-picking-hitbox"
           args={[bond_hitbox_geometry, bond_hitbox_material, INITIAL_MESH_CAPACITY]}
@@ -6123,6 +6198,8 @@
           onpointerenter={handle_bond_hitbox_pointer_enter}
           onpointerleave={handle_bond_hitbox_pointer_leave}
         />
+      {/if}
+      {#if filtered_bond_pairs.length > 0 && show_bulk_atoms}
         <!-- Bond halo (fresnel silhouette glow) — unified visual language
              with the atom selection halo. Renders for hovered + selected
              bonds; deduped via bond_halo_entries. depthTest:true so atoms

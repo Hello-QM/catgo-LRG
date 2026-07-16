@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import * as THREE from 'three'
 import {
   create_replica_id_codec,
   decode_replica_pick_id,
@@ -8,11 +11,23 @@ import {
   logical_site_for_replica_pick_id,
   REPLICA_PICK_MAX_ID,
   REPLICA_PICK_MISS_ID,
+  ReplicaPickScene,
+  resolve_replica_pick_action,
+  type ScenePickResult,
 } from '$lib/structure/gpu/webgl2/replica-id-picker'
+import type { PickPixelRenderer } from '$lib/structure/gpu-picker'
+import { create_large_system_renderer } from '$lib/structure/gpu/large-system-renderer'
+import {
+  create_render_packet_builder,
+  type PacketBondConnectivity,
+} from '$lib/structure/scene/render-packet-builder'
 import type {
+  BaseBondGraph,
   ImageInstanceTable,
+  RenderPacket,
   ReplicaLayout,
 } from '$lib/structure/scene/render-packet'
+import type { AnyStructure, Site } from '$lib'
 
 const EMPTY_IMAGES: ImageInstanceTable = {
   count: 0,
@@ -438,5 +453,592 @@ describe('replica integer pick ID codec', () => {
         ghost_count: 0,
       })
     ).toThrow(/visual-shared-base/)
+  })
+})
+
+// ── T5 integration: WebGL2 pick scene + action resolution + WebGPU snapshot ──
+
+function carbon_site(xyz: [number, number, number]): Site {
+  return {
+    species: [{ element: 'C', occu: 1, oxidation_state: 0 }],
+    abc: [0, 0, 0],
+    xyz,
+    label: 'C',
+    properties: {},
+  } as unknown as Site
+}
+
+function make_structure(n: number, a = 10): AnyStructure {
+  const sites = Array.from({ length: n }, (_, idx) => carbon_site([1.4 * idx, 0, 0]))
+  return {
+    sites,
+    lattice: {
+      matrix: [[a, 0, 0], [0, a, 0], [0, 0, a]],
+      pbc: [true, true, true],
+      a,
+      b: a,
+      c: a,
+      alpha: 90,
+      beta: 90,
+      gamma: 90,
+      volume: a ** 3,
+    },
+  } as unknown as AnyStructure
+}
+
+function make_packet(input: {
+  n: number
+  dims: readonly [number, number, number]
+  boundary_policy?: 'stub' | 'hide' | 'ghost-images'
+  bonds?: PacketBondConnectivity[]
+}): RenderPacket {
+  const builder = create_render_packet_builder()
+  return builder.build({
+    structure: make_structure(input.n),
+    bond_connectivity: input.bonds ?? null,
+    dims: input.dims,
+    boundary_policy: input.boundary_policy ?? 'stub',
+  })
+}
+
+/** Minimal WebGL-free renderer fake: pick renders no-op, readback pops the
+ *  next injected uint32 ID into the 4-byte RGBA little-endian pixel. */
+function make_fake_pick_renderer(ids: number[]): PickPixelRenderer {
+  return {
+    domElement: { width: 200, height: 100 } as HTMLCanvasElement,
+    getRenderTarget: () => null,
+    setRenderTarget: () => {},
+    getClearColor: (target: THREE.Color) => target,
+    getClearAlpha: () => 1,
+    setClearColor: () => {},
+    clear: () => {},
+    render: () => {},
+    readRenderTargetPixels: (
+      _target: unknown,
+      _x: number,
+      _y: number,
+      _w: number,
+      _h: number,
+      buffer: Uint8Array,
+    ) => {
+      const id = ids.shift() ?? 0
+      buffer[0] = id & 0xff
+      buffer[1] = (id >>> 8) & 0xff
+      buffer[2] = (id >>> 16) & 0xff
+      buffer[3] = (id >>> 24) & 0xff
+    },
+  } as unknown as PickPixelRenderer
+}
+
+describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
+  const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100)
+
+  test('same base atom picked in two replica cells folds to one base site', () => {
+    const packet = make_packet({ n: 2, dims: [2, 1, 1] })
+    const scene = new ReplicaPickScene()
+    scene.sync(packet)
+    const codec = scene.codec
+    if (codec === null) throw new Error('codec missing after sync')
+
+    // atom-major instance indices: atom 1 in cell 0 → 1; atom 1 in cell 1 → 3.
+    const ids = [encode_replica_atom_id(codec, 1), encode_replica_atom_id(codec, 3)]
+    const fake = make_fake_pick_renderer([...ids])
+    const first = scene.pick(fake, camera, 0, 0)
+    const second = scene.pick(fake, camera, 0, 0)
+
+    expect(first.pick).toEqual({
+      kind: 'atom',
+      base_site: 1,
+      cell: [0, 0, 0],
+      ghost: false,
+    })
+    expect(second.pick).toEqual({
+      kind: 'atom',
+      base_site: 1,
+      cell: [1, 0, 0],
+      ghost: false,
+    })
+    // ONE base selection flag: both replica picks resolve to one logical site.
+    expect(new Set([first.logical_site, second.logical_site]).size).toBe(1)
+    expect(first.logical_site).toBe(1)
+    scene.dispose()
+  })
+
+  test('ghost instances map through the sparse table to their base site', () => {
+    const packet = make_packet({
+      n: 3,
+      dims: [1, 1, 1],
+      boundary_policy: 'ghost-images',
+      bonds: [{ site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] }],
+    })
+    const scene = new ReplicaPickScene()
+    scene.sync(packet)
+    const codec = scene.codec
+    if (codec === null) throw new Error('codec missing after sync')
+    expect(codec.ghost_count).toBe(1)
+
+    const fake = make_fake_pick_renderer([encode_replica_ghost_id(codec, 0)])
+    const picked = scene.pick(fake, camera, 0, 0)
+    expect(picked.pick).toEqual({
+      kind: 'atom',
+      base_site: 2,
+      cell: [1, 0, 0],
+      ghost: true,
+    })
+    expect(picked.logical_site).toBe(2)
+    scene.dispose()
+  })
+
+  test('bond picks resolve to the base bond graph index in any replica cell', () => {
+    const packet = make_packet({
+      n: 3,
+      dims: [2, 1, 1],
+      bonds: [
+        { site_idx_1: 0, site_idx_2: 1 },
+        { site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] },
+        { site_idx_1: 0, site_idx_2: 0, jimage: [0, 0, 1] },
+      ],
+    })
+    const scene = new ReplicaPickScene()
+    scene.sync(packet)
+    const codec = scene.codec
+    if (codec === null) throw new Error('codec missing after sync')
+    expect(codec.base_bond_count).toBe(3)
+
+    // bond graph index 2 in replica cell 1 → atom-major bond instance 2 + 3·1.
+    const fake = make_fake_pick_renderer([encode_replica_bond_id(codec, 5)])
+    const picked = scene.pick(fake, camera, 0, 0)
+    expect(picked.pick).toEqual({
+      kind: 'bond',
+      base_site: 2,
+      cell: [1, 0, 0],
+      ghost: false,
+    })
+    expect(picked.logical_site).toBe(2)
+
+    // Both half-bond instances of one bond fold to ONE bond graph index in
+    // the shader-side encode (bond_index = half_index / 2, atom-major fold).
+    expect(scene.bond_material.vertexShader).toContain('half_index / 2')
+    expect(scene.bond_material.vertexShader).toContain('uBondFirstId')
+    expect(scene.bond_material.vertexShader).toContain('uBaseBondCount * cell_index')
+    scene.dispose()
+  })
+
+  test('integer ID encode lives in the shaders — atoms, bonds, ghosts', () => {
+    const scene = new ReplicaPickScene()
+    expect(scene.atom_material.vertexShader).toContain('uAtomFirstId')
+    expect(scene.atom_material.vertexShader).toContain('gl_InstanceID / uCellCount')
+    expect(scene.atom_material.vertexShader).toContain('uBaseCount * cell_index')
+    expect(scene.ghost_material.vertexShader).toContain('uGhostFirstId')
+    for (
+      const material of [scene.atom_material, scene.bond_material, scene.ghost_material]
+    ) {
+      expect(material.fragmentShader).toContain('fragColor = vPickColor')
+    }
+    scene.dispose()
+  })
+
+  test('zero N×C CPU expansion — attributes stay base-sized, positions zero-copy', () => {
+    const n = 50
+    const cell_count = 27
+    const packet = make_packet({
+      n,
+      dims: [3, 3, 3],
+      boundary_policy: 'ghost-images',
+      bonds: [
+        { site_idx_1: 0, site_idx_2: 1 },
+        { site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] },
+        { site_idx_1: 0, site_idx_2: 0, jimage: [0, 0, 1] },
+      ],
+    })
+    const scene = new ReplicaPickScene()
+    scene.sync(packet)
+
+    const atom_geometry = scene.atom_mesh.geometry as THREE.InstancedBufferGeometry
+    const bond_geometry = scene.bond_mesh.geometry as THREE.InstancedBufferGeometry
+    expect(atom_geometry.instanceCount).toBe(n * cell_count)
+    expect(bond_geometry.instanceCount).toBe(3 * 2 * cell_count)
+
+    // Positions bind the packet frame buffer ZERO-COPY (no per-replica copy).
+    const position_attr = atom_geometry.getAttribute(
+      'instancePosition',
+    ) as THREE.InstancedBufferAttribute
+    expect(position_attr.array).toBe(packet.frame.positions)
+    expect(position_attr.meshPerAttribute).toBe(cell_count)
+
+    // No instanceMatrix and no attribute anywhere near N×C instance size.
+    for (const mesh of [scene.atom_mesh, scene.bond_mesh, scene.ghost_mesh]) {
+      expect((mesh as unknown as { instanceMatrix?: unknown }).instanceMatrix)
+        .toBeUndefined()
+      const geometry = mesh.geometry as THREE.InstancedBufferGeometry
+      for (const [name, attribute] of Object.entries(geometry.attributes)) {
+        if (name === 'position') continue // shared unit quad/box corners
+        expect(
+          attribute.array.length,
+          `${name} must stay base-sized`,
+        ).toBeLessThan(n * cell_count)
+      }
+    }
+    scene.dispose()
+  })
+
+  test('miss, stale and out-of-range IDs fail safely', () => {
+    const packet = make_packet({ n: 2, dims: [2, 1, 1] })
+    const scene = new ReplicaPickScene()
+    scene.sync(packet)
+    const codec = scene.codec
+    if (codec === null) throw new Error('codec missing after sync')
+
+    const fake = make_fake_pick_renderer([0, codec.max_id + 1])
+    for (let round = 0; round < 2; round++) {
+      const picked = scene.pick(fake, camera, 0, 0)
+      expect(picked.pick.kind).toBe('miss')
+      expect(picked.logical_site).toBe(-1)
+    }
+    scene.dispose()
+  })
+})
+
+describe('replica pick action resolution (base-site selection)', () => {
+  const site_ids = Uint32Array.from([0, 1, 2])
+
+  function atom_pick(
+    base_site: number,
+    cell: [number, number, number],
+    logical_site = base_site,
+  ): ScenePickResult {
+    return {
+      pick: { kind: 'atom', base_site, cell, ghost: false },
+      logical_site,
+    }
+  }
+
+  test('visual layouts store ONE base selection flag across replica cells', () => {
+    const first = resolve_replica_pick_action(
+      atom_pick(1, [0, 0, 0]),
+      'visual-shared-base',
+      site_ids,
+      null,
+    )
+    const second = resolve_replica_pick_action(
+      atom_pick(1, [1, 0, 0]),
+      'visual-shared-base',
+      site_ids,
+      null,
+    )
+    expect(first).toEqual({ type: 'atom', site_idx: 1 })
+    expect(second).toEqual({ type: 'atom', site_idx: 1 })
+    const selected = new Set<number>()
+    for (const action of [first, second]) {
+      if (action?.type === 'atom') selected.add(action.site_idx)
+    }
+    expect(selected.size).toBe(1)
+  })
+
+  test('physical-distinct provenance keeps distinct physical IDs', () => {
+    const first = resolve_replica_pick_action(
+      atom_pick(1, [0, 0, 0], 11),
+      'physical-distinct-sites',
+      site_ids,
+      null,
+    )
+    const second = resolve_replica_pick_action(
+      atom_pick(1, [1, 0, 0], 21),
+      'physical-distinct-sites',
+      site_ids,
+      null,
+    )
+    expect(first).toEqual({ type: 'atom', site_idx: 11 })
+    expect(second).toEqual({ type: 'atom', site_idx: 21 })
+  })
+
+  test('bond picks route the graph index through slot_to_filtered_idx', () => {
+    const picked: ScenePickResult = {
+      pick: { kind: 'bond', base_site: 2, cell: [1, 0, 0], ghost: false },
+      logical_site: 2,
+    }
+    expect(
+      resolve_replica_pick_action(
+        picked,
+        'visual-shared-base',
+        site_ids,
+        Int32Array.from([10, 11, 12]),
+      ),
+    ).toEqual({ type: 'bond', filtered_idx: 12 })
+    // Orphan (-1), out-of-range, and missing maps degrade to null hits.
+    expect(
+      resolve_replica_pick_action(
+        picked,
+        'visual-shared-base',
+        site_ids,
+        Int32Array.from([10, 11, -1]),
+      ),
+    ).toBeNull()
+    expect(
+      resolve_replica_pick_action(
+        picked,
+        'visual-shared-base',
+        site_ids,
+        Int32Array.from([10]),
+      ),
+    ).toBeNull()
+    expect(
+      resolve_replica_pick_action(picked, 'visual-shared-base', site_ids, null),
+    ).toBeNull()
+  })
+
+  test('miss and out-of-range logical sites resolve to null', () => {
+    expect(
+      resolve_replica_pick_action(
+        {
+          pick: { kind: 'miss', base_site: -1, cell: [0, 0, 0], ghost: false },
+          logical_site: -1,
+        },
+        'visual-shared-base',
+        site_ids,
+        null,
+      ),
+    ).toBeNull()
+    expect(
+      resolve_replica_pick_action(
+        atom_pick(7, [0, 0, 0]),
+        'visual-shared-base',
+        site_ids,
+        null,
+      ),
+    ).toBeNull()
+  })
+})
+
+// ── WebGPU adapter: pick decode must snapshot layout state at REQUEST time ──
+
+type DeferredMap = { promise: Promise<void>; resolve: () => void }
+
+function make_deferred(): DeferredMap {
+  let resolve_map!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve_map = done
+  })
+  return { promise, resolve: resolve_map }
+}
+
+function make_pick_mock_device(opts: {
+  pick_reads: number[]
+  pick_maps: Promise<void>[]
+}) {
+  const device = {
+    limits: { maxStorageBufferBindingSize: 1 << 27 },
+    createBuffer: (desc: { size: number; label?: string }) => ({
+      label: desc.label,
+      size: desc.size,
+      destroy: () => {},
+      mapAsync: () => {
+        if (desc.label === 'large-system-pick-readback') {
+          return opts.pick_maps.shift() ?? Promise.resolve()
+        }
+        return Promise.resolve()
+      },
+      getMappedRange: () => {
+        const buf = new ArrayBuffer(Math.max(desc.size, 8))
+        if (desc.label === 'large-system-pick-readback') {
+          const next = opts.pick_reads.shift()
+          if (next !== undefined) new Uint32Array(buf)[0] = next
+        }
+        return buf
+      },
+      unmap: () => {},
+    }),
+    createTexture: (desc: { size: { width: number; height: number } }) => ({
+      width: desc.size.width,
+      height: desc.size.height,
+      createView: () => ({}),
+      destroy: () => {},
+    }),
+    createShaderModule: () => ({}),
+    createBindGroupLayout: () => ({}),
+    createPipelineLayout: () => ({}),
+    createRenderPipeline: () => ({}),
+    createComputePipeline: () => ({ getBindGroupLayout: () => ({}) }),
+    createBindGroup: () => ({}),
+    createCommandEncoder: () => ({
+      beginComputePass: () => ({
+        setPipeline: () => {},
+        setBindGroup: () => {},
+        dispatchWorkgroups: () => {},
+        end: () => {},
+      }),
+      beginRenderPass: () => ({
+        setPipeline: () => {},
+        setBindGroup: () => {},
+        draw: () => {},
+        drawIndirect: () => {},
+        end: () => {},
+      }),
+      copyBufferToBuffer: () => {},
+      copyTextureToBuffer: () => {},
+      finish: () => ({}),
+    }),
+    queue: { writeBuffer: () => {}, submit: () => {} },
+  }
+  return device
+}
+
+const N_SNAP = 8
+
+function snapshot_topology(bond_graph?: BaseBondGraph): RenderPacket['topology'] {
+  return {
+    version: 1,
+    atom_count: N_SNAP,
+    site_ids: Uint32Array.from({ length: N_SNAP }, (_, idx) => idx),
+    atomic_numbers: new Uint8Array(N_SNAP).fill(6),
+    radii: new Float32Array(N_SNAP).fill(0.5),
+    colors: new Float32Array(N_SNAP * 3).fill(0.5),
+    bond_graph,
+  }
+}
+
+function snapshot_frame(): RenderPacket['frame'] {
+  return {
+    owner: { tag: 'snapshot-owner' },
+    frame_idx: 0,
+    positions_version: 0,
+    positions: new Float32Array(N_SNAP * 3),
+    lattice: new Float32Array([20, 0, 0, 0, 20, 0, 0, 0, 20]),
+  }
+}
+
+describe('WebGPU pick decode — request-time snapshot', () => {
+  beforeAll(() => {
+    vi.stubGlobal('navigator', {
+      gpu: { getPreferredCanvasFormat: () => 'bgra8unorm' },
+    })
+    vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 })
+    vi.stubGlobal('GPUBufferUsage', {
+      MAP_READ: 1,
+      MAP_WRITE: 2,
+      COPY_SRC: 4,
+      COPY_DST: 8,
+      INDEX: 16,
+      VERTEX: 32,
+      UNIFORM: 64,
+      STORAGE: 128,
+      INDIRECT: 256,
+      QUERY_RESOLVE: 512,
+    })
+    vi.stubGlobal('GPUMapMode', { READ: 1, WRITE: 2 })
+    vi.stubGlobal('GPUTextureUsage', {
+      COPY_SRC: 1,
+      COPY_DST: 2,
+      TEXTURE_BINDING: 4,
+      STORAGE_BINDING: 8,
+      RENDER_ATTACHMENT: 16,
+    })
+  })
+  afterAll(() => {
+    vi.unstubAllGlobals()
+  })
+
+  test('layout/image churn during mapAsync cannot re-interpret the picked id', async () => {
+    const deferred = make_deferred()
+    const device = make_pick_mock_device({
+      // id 17 → g = 16 = base_count·ncells under the REQUEST layout [2,1,1]:
+      // ghost 0 → base 5 at absolute image [-1,0,0].
+      pick_reads: [17],
+      pick_maps: [deferred.promise],
+    })
+    const canvas = {
+      width: 8,
+      height: 8,
+      getContext: () => ({
+        configure: () => {},
+        unconfigure: () => {},
+        getCurrentTexture: () => ({ createView: () => ({}) }),
+      }),
+    }
+    const renderer = create_large_system_renderer(
+      device as unknown as GPUDevice,
+      canvas as unknown as HTMLCanvasElement,
+    )
+    const graph: BaseBondGraph = {
+      version: 1,
+      pairs: new Uint32Array([0, 5]),
+      jimages: new Int8Array([-1, 0, 0]),
+      kinds: new Uint8Array(1),
+      strengths: new Float32Array([1]),
+    }
+    renderer.set_packet({
+      topology: snapshot_topology(graph),
+      frame: snapshot_frame(),
+      replicas: {
+        version: 1,
+        dims: [2, 1, 1],
+        boundary_policy: 'ghost-images',
+        semantics: 'visual-shared-base',
+      },
+    }, EMPTY_IMAGES)
+
+    const pending = renderer.pick(2, 2)
+
+    // Mid-flight: replicas grow to [4,1,1] and the ghost table changes (the
+    // new graph has no outside edge). Under POST-submit state, id 17 → g=16
+    // would decode as a REAL replica atom (base 0, cell [2,0,0]) — wrong.
+    renderer.set_packet({
+      topology: snapshot_topology({
+        version: 2,
+        pairs: new Uint32Array([0, 1]),
+        jimages: new Int8Array(3),
+        kinds: new Uint8Array(1),
+        strengths: new Float32Array([1]),
+      }),
+      frame: snapshot_frame(),
+      replicas: {
+        version: 2,
+        dims: [4, 1, 1],
+        boundary_policy: 'ghost-images',
+        semantics: 'visual-shared-base',
+      },
+    }, EMPTY_IMAGES)
+
+    deferred.resolve()
+    const result = await pending
+    expect(result).toEqual({
+      kind: 'atom',
+      base_site: 5,
+      cell: [-1, 0, 0],
+      ghost: true,
+    })
+    renderer.destroy()
+  })
+})
+
+describe('packet path picking wiring (source contract)', () => {
+  test('StructureScene gates the invisible CPU hitboxes off the packet path', () => {
+    const scene_source = readFileSync(
+      resolve(process.cwd(), 'src/lib/structure/StructureScene.svelte'),
+      'utf8',
+    )
+    expect(scene_source).toContain(
+      'let packet_picking_active = $derived(manager_render_packet !== null)',
+    )
+    expect(scene_source).toMatch(
+      /atom_data\.length > 0 && show_bulk_atoms && !packet_picking_active/,
+    )
+    expect(scene_source).toMatch(
+      /filtered_bond_pairs\.length > 0 && show_bulk_atoms && !packet_picking_active/,
+    )
+    // The scene wires the packet + click routing into the picker integration.
+    expect(scene_source).toContain('get_render_packet: () => manager_render_packet')
+    expect(scene_source).toContain('on_packet_atom_click')
+    expect(scene_source).toContain('on_packet_bond_click')
+  })
+
+  test('picker integration owns the packet branch and canvas click routing', () => {
+    const integration_source = readFileSync(
+      resolve(process.cwd(), 'src/lib/structure/gpu-picker-integration.svelte.ts'),
+      'utf8',
+    )
+    expect(integration_source).toContain('get_render_packet')
+    expect(integration_source).toContain('resolve_replica_pick_action')
+    expect(integration_source).toMatch(/addEventListener\(\s*[`'"]click/)
   })
 })
