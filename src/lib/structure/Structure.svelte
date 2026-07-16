@@ -24,11 +24,7 @@
   import type { SupercellOp, SupercellRequestResult } from '$lib/structure/supercell-operation'
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
-  import type { ImageInstanceTable, RenderPacket } from '$lib/structure/scene/render-packet'
-  import {
-    build_sites_to_draw,
-    image_sites_to_instance_table,
-  } from '$lib/structure/pbc-image-atoms'
+  import type { RenderPacket } from '$lib/structure/scene/render-packet'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -2229,8 +2225,9 @@
   // ONE packet per effective frame: the BASE scientific structure (owner) +
   // trajectory positions/lattice/version + visual replica dims. The packet
   // path never appends PBC image sites — topology stays exactly N sites and
-  // the frame 3N floats; ghosts travel as a sparse ImageInstanceTable
-  // (design §7.2). Lazy $derived: nothing reads it until Tasks 3/4 point the
+  // the frame 3N floats. The renderer derives sparse ghosts from its active
+  // BaseBondGraph at graph publication (design §7.2). Lazy $derived: nothing
+  // reads it until Tasks 3/4 point the
   // WebGPU/WebGL adapters at it, so today's hot path pays zero cost.
   const render_packet_builder = create_render_packet_builder()
   let render_packet: RenderPacket | null = $derived.by(() => {
@@ -2251,32 +2248,6 @@
   })
   void render_packet // reserved for the WebGL adapter; overlay resolves visual attrs
 
-  // Sparse PBC image instances for the packet path. We consciously use the
-  // image-METADATA seam (`build_sites_to_draw` →
-  // `image_sites_to_instance_table`) because show_image_atoms is a visual
-  // boundary-atom policy and Structure owns the required base fractional
-  // coordinates. The bond-graph-derived `build_image_instance_table` is NOT
-  // mixed in here — doing so would let two independently-derived ghost tables
-  // drift. Positive image metadata is expanded to the outer visual-supercell
-  // boundary by image_sites_to_instance_table(dims); home sites stay in the
-  // packet topology and ghosts never append to it.
-  const EMPTY_RENDER_IMAGES: ImageInstanceTable = {
-    count: 0,
-    base_sites: new Uint32Array(0),
-    jimages: new Int8Array(0),
-  }
-  let render_image_instances: ImageInstanceTable = $derived.by(() => {
-    if (!large_system_mode || !structure || !show_image_atoms || !(`lattice` in structure)) {
-      return EMPTY_RENDER_IMAGES
-    }
-    const dims = gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1] as const
-    const image_sites = build_sites_to_draw(structure, [], {
-      draw_image_atoms: true,
-      bonded_sites_outside_unit_cell: false,
-      edge_tolerance: 0.05,
-    })
-    return image_sites_to_instance_table(image_sites.values(), dims)
-  })
   // One-shot repaint trigger for StructureScene. Bumped when large_system_mode
   // turns OFF so the WebGL view (whose autoRender was paused while the overlay
   // covered it) repaints once on the next frame and isn't left on a stale paint.
@@ -4645,7 +4616,6 @@
             structure={structure}
             frame_positions={trajectory_frame_positions}
             frame_lattice={trajectory_frame_lattice}
-            images={render_image_instances}
             supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
             element_colors={colors.element}

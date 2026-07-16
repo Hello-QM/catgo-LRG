@@ -38,7 +38,6 @@
     cell_edge_color = `#808080`,
     frame_positions = undefined,
     frame_lattice = undefined,
-    images = undefined,
     trajectory_positions_version = undefined,
     trajectory_step_idx = -1,
     on_fallback = undefined,
@@ -110,9 +109,6 @@
     /** CURRENT frame lattice for variable-cell trajectories (rows a,b,c).
      *  null/undefined falls back to the base structure lattice. */
     frame_lattice?: number[][] | null | undefined
-    /** Sparse image-instance table derived by Structure from base image-site
-     *  metadata. Ghosts are independent of the N-site packet topology. */
-    images?: ImageInstanceTable | undefined
     /** Per-frame position version, mirroring Structure.svelte's bindable prop.
      *  `.v` bumps every time the trajectory frame's positions change (playback,
      *  scrub, or in-place edit) WITHOUT `structure` changing object identity, so
@@ -156,8 +152,9 @@
 
   // ── Render-packet channel (design §5) ──────────────────────────────────────
   // One packet builder per pane. Structure passes the BASE scientific
-  // structure, direct 3N trajectory positions, CURRENT frame lattice, and an
-  // independent sparse image table — no WebGL/displayed reverse read. build()
+  // structure, direct 3N trajectory positions, and CURRENT frame lattice — no
+  // WebGL/displayed reverse read or decorative boundary metadata. The renderer
+  // derives sparse ghosts from the active bond graph at publication. build()
   // memoizes per sub-object: partial changes bump exactly one version, so the
   // renderer uploads topology buffers only on a topology change, positions +
   // current lattice only on a frame change, and dims/policy/indirect counts
@@ -165,7 +162,6 @@
   // set_supercell / set_show_images fan-out.
   const packet_builder = create_render_packet_builder()
   let last_pushed_packet: RenderPacket | null = null
-  let last_pushed_images: ImageInstanceTable | null = null
   const EMPTY_IMAGE_TABLE: ImageInstanceTable = {
     count: 0,
     base_sites: new Uint32Array(0),
@@ -800,11 +796,9 @@
         colors: atom_colors.length > 0 ? atom_colors : null,
         radii: atom_radii.length > 0 ? atom_radii : null,
       })
-      const image_table = images ?? EMPTY_IMAGE_TABLE
-      if (packet !== last_pushed_packet || image_table !== last_pushed_images) {
-        renderer.set_packet(packet, image_table)
+      if (packet !== last_pushed_packet) {
+        renderer.set_packet(packet, EMPTY_IMAGE_TABLE)
         last_pushed_packet = packet
-        last_pushed_images = image_table
         dirty = true
       }
     }
@@ -925,7 +919,6 @@
     // Fresh renderer ⇒ it has consumed no packet: clear the identity gate so
     // the (possibly memoized-identical) packet is re-pushed and fully uploads.
     last_pushed_packet = null
-    last_pushed_images = null
     // Fresh GPU camera buffer ⇒ force a first paint and a re-upload.
     last_camera_uniform = null
     // Fresh renderer ⇒ force the background to re-resolve + re-push.
@@ -1041,13 +1034,11 @@
 
   $effect(() => {
     // Per-frame wake trigger. Track the DIRECT base-frame inputs plus their
-    // version/index so playback, scrub, in-place edits, variable-cell changes,
-    // and sparse-image metadata changes revive a suspended loop. No WebGL
-    // resolver participates. The frame identity-gates both packet + image table.
+    // version/index so playback, scrub, in-place edits, and variable-cell changes
+    // revive a suspended loop. No WebGL resolver participates.
     void [
       frame_positions,
       frame_lattice,
-      images,
       trajectory_positions_version?.v,
       trajectory_step_idx,
     ]
