@@ -371,7 +371,12 @@ fn collect_bonds_over_centers(input: &BondEvalInput<'_>, num_sites: usize) -> Ve
 /// This is the fastest algorithm, suitable for quick visualization.
 pub fn detect_bonds_atom_radii(structure: &Structure, options: &AtomRadiiOptions) -> Vec<Bond> {
     let num_sites = structure.num_sites();
-    if num_sites < 2 {
+    // Only an EMPTY structure short-circuits. A single-site periodic cell
+    // must still run detection: its nearest neighbors are periodic
+    // self-images (a == b, jimage != 0) — valid bonds per design §7.2
+    // (e.g. FCC-primitive Cu). A lone non-periodic atom falls through
+    // harmlessly: the neighbor search yields nothing.
+    if num_sites == 0 {
         return Vec::new();
     }
 
@@ -1381,5 +1386,128 @@ mod tests {
                 "{driver} must match the sequential seam byte for byte"
             );
         }
+    }
+
+    #[test]
+    fn single_atom_primitive_cell_self_images() {
+        // FCC-primitive Cu: ONE atom whose 12 nearest neighbors are all
+        // periodic self-images at a/√2 ≈ 2.556 Å (a = 3.615 Å conventional).
+        // Design §7.2's flagship case: single-atom primitive cells must not
+        // be dropped by a site-count early-out. After ± dedup the 12
+        // neighbors collapse to 6 bonds, all a == b == 0 with nonzero
+        // jimage. The 2nd shell (6 self-images at a = 3.615 Å) exceeds
+        // 1.2·Σr ≈ 3.17 Å and must stay excluded.
+        let h = 3.615 / 2.0;
+        let lattice = Lattice::from_array([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]);
+        let species = vec![Species::neutral(Element::Cu)];
+        let frac_coords = vec![Vector3::new(0.0, 0.0, 0.0)];
+        let structure = Structure::new(lattice, species, frac_coords);
+        let options = AtomRadiiOptions::default();
+        let nn_dist = 3.615 / 2.0_f64.sqrt();
+
+        let data = BondEvalData::prepare(&structure, &options);
+        let sequential = evaluate_bond_center_range(&data.input(), 0..1);
+        let driven = detect_bonds_atom_radii(&structure, &options);
+
+        let mut outputs = vec![("sequential seam", &sequential), ("public driver", &driven)];
+        #[cfg(feature = "rayon")]
+        let parallel = collect_bonds_over_centers_rayon(&data.input(), 1);
+        #[cfg(feature = "rayon")]
+        outputs.push(("rayon driver", &parallel));
+
+        for (driver, bonds) in &outputs {
+            assert_eq!(
+                bonds.len(),
+                6,
+                "{driver}: 12 first-shell self-images must dedup to 6 bonds, got {}",
+                bonds.len()
+            );
+            for bond in bonds.iter() {
+                assert_eq!(bond.site_idx_1, 0, "{driver}: only site 0 exists");
+                assert_eq!(
+                    bond.site_idx_2, 0,
+                    "{driver}: single-atom bond must be a self-pair"
+                );
+                assert_ne!(bond.image, [0, 0, 0], "{driver}: self-pair jimage must be nonzero");
+                assert!(
+                    (bond.bond_length - nn_dist).abs() < 1e-6,
+                    "{driver}: FCC nearest-neighbor distance must be {nn_dist:.4} Å, got {}",
+                    bond.bond_length
+                );
+            }
+            let mut images: Vec<[i32; 3]> = bonds.iter().map(|b| b.image).collect();
+            images.sort_unstable();
+            let mut expected = vec![
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1],
+                [1, -1, 0],
+                [1, 0, -1],
+                [0, 1, -1],
+            ];
+            expected.sort_unstable();
+            assert_eq!(
+                images, expected,
+                "{driver}: kept jimages must be the lexicographically-positive half \
+                 of the 12 first-shell image vectors"
+            );
+        }
+        for (driver, bonds) in &outputs[1..] {
+            assert_eq!(
+                typed_bond_bytes(&sequential),
+                typed_bond_bytes(bonds),
+                "{driver} must match the sequential seam byte for byte"
+            );
+        }
+    }
+
+    #[test]
+    fn single_atom_non_periodic_has_no_bonds() {
+        // A lone atom with pbc off has no partner and no periodic images:
+        // detection must return zero bonds (pins that relaxing the periodic
+        // single-atom early-out does not invent bonds for molecules).
+        let lattice = Lattice::cubic(10.0);
+        let species = vec![Species::neutral(Element::Cu)];
+        let frac_coords = vec![Vector3::new(0.5, 0.5, 0.5)];
+        let mut structure = Structure::new(lattice, species, frac_coords);
+        structure.set_pbc([false, false, false]);
+
+        let bonds = detect_bonds_atom_radii(&structure, &AtomRadiiOptions::default());
+        assert!(
+            bonds.is_empty(),
+            "non-periodic single atom must have zero bonds, got {}",
+            bonds.len()
+        );
+    }
+
+    /// FNV-1a 64-bit — dependency-free stable digest for golden snapshots.
+    fn fnv1a_64(bytes: &[u8]) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+        for &byte in bytes {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
+
+    #[test]
+    fn typed_bond_bytes_golden_fcc_cu_500() {
+        // Golden snapshot of the 500-atom FCC-Cu fixture's typed output,
+        // asserted identically in the scalar AND rayon configs: pins
+        // scalar-build ≡ rayon-build byte equality directly (the in-binary
+        // determinism tests only prove it transitively via the neighbor
+        // list). If this fails after an intentional predicate/ordering
+        // change, re-bake both constants from the new output.
+        let structure = fcc_cu_supercell(5);
+        let bytes = typed_bond_bytes(&detect_bonds_atom_radii(
+            &structure,
+            &AtomRadiiOptions::default(),
+        ));
+        assert_eq!(bytes.len(), 132_000, "golden fixture byte length drifted");
+        assert_eq!(
+            fnv1a_64(&bytes),
+            0x4e4d_a43d_03d2_3672,
+            "golden fixture typed-bytes digest drifted"
+        );
     }
 }
