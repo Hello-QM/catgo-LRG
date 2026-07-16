@@ -387,8 +387,9 @@ describe(`frame loading`, () => {
     expect(source).toMatch(
       /prepare_current_topology_edit: \(\) => \{\s+if \(is_playing\) pause_playback\(\)\s+\}/,
     )
-    expect(source).toContain(
-      'if (publication.token.mode === `edit-current`) resume_disabled = true',
-    )
+    // Build T5 moved the edit-current resume gate into the shared txn-hooks
+    // factory (commit passes disable_resume; the reset_topology hook applies it).
+    expect(source).toContain('disable_resume: mode === `edit-current`')
+    expect(source).toContain(`if (opts.disable_resume) resume_disabled = true`)
   })
 })

@@ -873,6 +873,7 @@
     on_open_in_molstar,
     on_view_split_request,
     on_supercell_request,
+    on_external_history_toggle,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -1049,6 +1050,13 @@
       // When absent (standalone Structure), a local staged executor runs and
       // publishes atomically.
       on_supercell_request?: (op: SupercellOp) => Promise<SupercellRequestResult>
+      // Build T5: undo/redo channel for delegated (external-owner) edits. An
+      // applied on_supercell_request result pushes a `{kind:'external'}` history
+      // entry holding only the returned history_token; Ctrl+Z / Ctrl+Y route the
+      // token back through this callback (`active` false = undo, true = redo).
+      // Returns whether the owner honored the toggle — an orphaned token (e.g.
+      // trajectory replaced) is dropped from history without touching state.
+      on_external_history_toggle?: (history_token: string, active: boolean) => boolean
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -2678,6 +2686,17 @@
     if (!structure) return
     const entry = sel_state.pop_entry()
     if (!entry) return
+    if (entry.kind === `external`) {
+      // External (trajectory-owned) edit: no snapshot held on either stack.
+      // The owner toggles its ledger entry / restores its immutable frame
+      // references and republishes through the transaction machinery. Only a
+      // honored toggle earns a redo token; an orphaned one is dropped so
+      // further Ctrl+Z reaches older entries instead of no-op'ing forever.
+      if (on_external_history_toggle?.(entry.history_token, false)) {
+        sel_state.push_external_redo(entry.history_token)
+      }
+      return
+    }
     // Capture the state we're undoing FROM (the forward state) so redo() can
     // restore it. Snapshot-based redo — see selection-state redo_history.
     sel_state.push_redo(structure)
@@ -2730,12 +2749,21 @@
 
   function redo() {
     if (!structure) return
-    const snap = sel_state.pop_redo()
-    if (!snap) return
+    const entry = sel_state.pop_redo_entry()
+    if (!entry) return
+    if (entry.kind === `external`) {
+      // Mirror of external undo: re-activate the owner's ledger entry, and
+      // (when honored) make the redo itself undoable WITHOUT clearing the
+      // remaining redo branch.
+      if (on_external_history_toggle?.(entry.history_token, true)) {
+        sel_state.push_external_entry(entry.history_token, false)
+      }
+      return
+    }
     // Make the redo itself undoable: push the current state as a structure-kind
     // undo entry, WITHOUT clearing the redo stack (so chained redo still works).
     sel_state.push_structure_entry($state.snapshot(structure) as AnyStructure, false)
-    structure = snap as typeof structure
+    structure = entry.structure as typeof structure
     notify_structure_change()
   }
 
@@ -2790,7 +2818,22 @@
   // changes, so the last complete scene and history are retained.
   let supercell_history_seq = 0
   const handle_supercell_request = create_supercell_request_handler({
-    delegate: () => on_supercell_request,
+    // Build T5: a delegated APPLIED result records a `{kind:'external'}` undo
+    // entry carrying only the owner's history_token — no structure snapshot
+    // (the frames belong to the trajectory owner, which restores them itself
+    // on undo via on_external_history_toggle). Rejected/stale pass through
+    // without touching history, matching the local path.
+    delegate: () => {
+      const delegate = on_supercell_request
+      if (!delegate) return undefined
+      return async (op: SupercellOp) => {
+        const result = await delegate(op)
+        if (result.status === `applied`) {
+          sel_state.push_external_entry(result.history_token)
+        }
+        return result
+      }
+    },
     get_structure: () => structure,
     // Snapshot: the executor's worker path structured-clones the source, and
     // reactive $state proxies are not cloneable. Cost is linear in the BASE

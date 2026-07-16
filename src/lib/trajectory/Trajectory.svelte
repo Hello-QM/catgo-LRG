@@ -82,10 +82,17 @@
   import type { PaneTrajectory } from './clone'
   import { clone_structure } from '$lib/structure/clone'
   import { create_effective_frame_resolver } from './effective-frame-resolver'
-  import { OperationLedger, scope_matches_frame } from './operation-ledger'
+  import {
+    type LedgerEntry,
+    OperationLedger,
+    type OpScope,
+    scope_matches_frame,
+  } from './operation-ledger'
   import {
     commit_supercell_transaction,
     create_trajectory_supercell_request_handler,
+    type SupercellTransactionCommitHooks,
+    toggle_supercell_history_entry,
   } from './supercell-transactions'
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
@@ -1676,6 +1683,142 @@
     warmup_gen += 1
   }
 
+  // ── External history (Build T5) ──
+  // Structure's undo/redo routes `{kind:'external'}` entries back here by
+  // token. A record is captured at commit time: indexed owners need only the
+  // ledger entry id (undo/redo toggles its active flag and the effective-frame
+  // resolver re-resolves), in-memory owners also keep the pre-op immutable
+  // frame REFERENCES plus materialization cursors so undo restores them
+  // without cloning and redo replays the toggled ledger over the same base.
+  type ExternalHistoryRecord = {
+    owner: TrajectoryType
+    entry_id: string
+    scope: OpScope
+    frames_before?: TrajectoryFrame[]
+    cursors_before?: number[]
+  }
+  const external_history = new Map<string, ExternalHistoryRecord>()
+  // Structure trims its undo stack at 50; keep a little headroom, evict oldest.
+  const EXTERNAL_HISTORY_LIMIT = 64
+
+  function record_external_history(token: string, record: ExternalHistoryRecord) {
+    external_history.set(token, record)
+    if (external_history.size > EXTERNAL_HISTORY_LIMIT) {
+      const oldest = external_history.keys().next().value
+      if (oldest !== undefined) external_history.delete(oldest)
+    }
+  }
+
+  /** The one hooks builder both the supercell commit and external undo/redo
+   * toggles share — cache invalidation, republish, and version-bump behavior
+   * must stay identical between the two paths. */
+  function trajectory_supercell_txn_hooks(
+    owner: TrajectoryType,
+    ledger: OperationLedger,
+    opts: {
+      disable_resume?: boolean
+      on_history?: (entry: LedgerEntry) => void
+    } = {},
+  ): SupercellTransactionCommitHooks {
+    return {
+      ledger,
+      replace_frame: (frame_idx, frame) => {
+        if (owner.frame_loader) return
+        owner.frames[frame_idx] = frame
+        materialized_cursors(owner)[frame_idx] = ledger.entries.length
+      },
+      publish_captured_frame: (frame_idx, frame) => {
+        if (
+          trajectory === owner &&
+          displayed_frame_owner?.trajectory === owner &&
+          displayed_frame_idx === frame_idx
+        ) {
+          current_frame = frame
+          current_structure = frame.structure
+        }
+      },
+      clear_position_cache: () => { position_cache = null },
+      clear_force_cache: () => { force_cache = null },
+      invalidate_effective_frames: (scope) => {
+        if (scope.kind === `all`) owner.effective_frames?.clear()
+        else owner.effective_frames?.invalidate(scope.frame_idx)
+      },
+      clear_typed_frame_buffers: () => {
+        frame_pos_cache.clear()
+        trajectory_frame_positions = null
+        trajectory_frame_forces = null
+        last_frame_lattice = null
+        trajectory_frame_lattice = null
+      },
+      reset_topology: () => {
+        topology_initialized = false
+        supercell_scaling = `1x1x1`
+        if (opts.disable_resume) resume_disabled = true
+      },
+      // Structure's bond cache consumes the version bump below; keeping the
+      // invalidation hook explicit documents that this transaction covers it.
+      invalidate_bond_caches: () => {},
+      invalidate_warmup: () => { warmup_gen += 1 },
+      bump_position_version: (scope) => {
+        trajectory_positions_version = {
+          v: trajectory_positions_version.v + 1,
+          all: scope.kind === `all`,
+        }
+      },
+      bump_topology_version: () => {
+        trajectory_topology_version += 1
+        if (trajectory === owner) {
+          trajectory = mark_raw_trajectory({ ...owner })
+        }
+      },
+      history_token: (entry) => {
+        opts.on_history?.(entry)
+        return `trajectory-supercell-${entry.id}`
+      },
+    }
+  }
+
+  /** Undo (`active=false`) / redo (`active=true`) one external history token.
+   * Returns false when the token is unknown or its owner is no longer the
+   * pane's live trajectory (a replacement load orphans old tokens). */
+  function handle_external_history_toggle(
+    history_token: string,
+    active: boolean,
+  ): boolean {
+    const record = external_history.get(history_token)
+    if (!record) return false
+    const { owner, entry_id, scope } = record
+    if (trajectory !== owner) return false
+    const ledger = ensure_operation_ledger(owner)
+    const restore = record.frames_before
+      ? () => {
+        const frames_before = record.frames_before!
+        const cursors_before = record.cursors_before ?? []
+        // Index-assign so the frames ARRAY identity is preserved — the B3
+        // frames-identity effect must not read this restoration as a new
+        // trajectory (that would wrongly reset the supercell label).
+        for (let idx = 0; idx < frames_before.length; idx++) {
+          owner.frames[idx] = frames_before[idx]
+        }
+        const cursors = materialized_cursors(owner)
+        for (let idx = 0; idx < cursors.length; idx++) {
+          cursors[idx] = cursors_before[idx] ?? 0
+        }
+        const idx = current_step_idx
+        if (idx < 0 || idx >= owner.frames.length) return undefined
+        // Re-materialize the displayed frame against the toggled active set
+        // so the republished frame reflects the undone/redone ledger state.
+        materialize_frame(idx)
+        const frame = owner.frames[idx]
+        return frame ? { frame_idx: idx, frame } : undefined
+      }
+      : undefined
+    return toggle_supercell_history_entry(
+      { entry_id, active, scope, restore },
+      trajectory_supercell_txn_hooks(owner, ledger),
+    )
+  }
+
   const request_trajectory_supercell = create_trajectory_supercell_request_handler({
     capture: () => {
       const owner = trajectory
@@ -1703,60 +1846,27 @@
       if (is_playing) pause_playback()
     },
     commit: (publication) => {
-      const { owner } = publication.token
-      return commit_supercell_transaction(publication, {
-        ledger: publication.token.ledger,
-        replace_frame: (frame_idx, frame) => {
-          if (owner.frame_loader) return
-          owner.frames[frame_idx] = frame
-          materialized_cursors(owner)[frame_idx] = publication.token.ledger.entries.length
-        },
-        publish_captured_frame: (frame_idx, frame) => {
-          if (
-            trajectory === owner &&
-            displayed_frame_owner?.trajectory === owner &&
-            displayed_frame_idx === frame_idx
-          ) {
-            current_frame = frame
-            current_structure = frame.structure
-          }
-        },
-        clear_position_cache: () => { position_cache = null },
-        clear_force_cache: () => { force_cache = null },
-        invalidate_effective_frames: (scope) => {
-          if (scope.kind === `all`) owner.effective_frames?.clear()
-          else owner.effective_frames?.invalidate(scope.frame_idx)
-        },
-        clear_typed_frame_buffers: () => {
-          frame_pos_cache.clear()
-          trajectory_frame_positions = null
-          trajectory_frame_forces = null
-          last_frame_lattice = null
-          trajectory_frame_lattice = null
-        },
-        reset_topology: () => {
-          topology_initialized = false
-          supercell_scaling = `1x1x1`
-          if (publication.token.mode === `edit-current`) resume_disabled = true
-        },
-        // Structure's bond cache consumes the version bump below; keeping the
-        // invalidation hook explicit documents that this transaction covers it.
-        invalidate_bond_caches: () => {},
-        invalidate_warmup: () => { warmup_gen += 1 },
-        bump_position_version: (scope) => {
-          trajectory_positions_version = {
-            v: trajectory_positions_version.v + 1,
-            all: scope.kind === `all`,
-          }
-        },
-        bump_topology_version: () => {
-          trajectory_topology_version += 1
-          if (trajectory === owner) {
-            trajectory = mark_raw_trajectory({ ...owner })
-          }
-        },
-        history_token: (entry) => `trajectory-supercell-${entry.id}`,
-      })
+      const { owner, ledger, mode } = publication.token
+      // Capture pre-op immutable frame references + cursors BEFORE the commit
+      // mutates them; undo restores these exact references (in-memory only —
+      // indexed owners resolve through the ledger, nothing to capture).
+      const in_memory = !owner.frame_loader
+      const frames_before = in_memory ? [...owner.frames] : undefined
+      const cursors_before = in_memory ? [...materialized_cursors(owner)] : undefined
+      return commit_supercell_transaction(
+        publication,
+        trajectory_supercell_txn_hooks(owner, ledger, {
+          disable_resume: mode === `edit-current`,
+          on_history: (entry) =>
+            record_external_history(`trajectory-supercell-${entry.id}`, {
+              owner,
+              entry_id: entry.id,
+              scope: entry.scope,
+              frames_before,
+              cursors_before,
+            }),
+        }),
+      )
     },
   })
   let supercell_busy_request = 0
@@ -2508,6 +2618,7 @@
           on_atoms_deleted={handle_atoms_deleted}
           on_atom_replaced={handle_atom_replaced}
           on_supercell_request={handle_trajectory_supercell_request}
+          on_external_history_toggle={handle_external_history_toggle}
           hide_extra_tools={structure_props?.hide_extra_tools ?? true}
           trajectory_context={{ total_frames, on_step: (idx: number) => go_to_step(idx) }}
         />

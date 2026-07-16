@@ -108,6 +108,30 @@ export function break_frame_supercell_provenance(
 }
 
 /**
+ * The transaction's shared derived-cache invalidation + republish + version
+ * cascade. Order matches the original commit sequence exactly; the optional
+ * `publish` republishes a synchronously-available frame (in-memory paths) —
+ * indexed paths omit it and re-resolve through the effective-frame resolver
+ * after the version bumps re-run the display pipeline.
+ */
+function run_supercell_invalidation(
+  scope: OpScope,
+  hooks: SupercellTransactionCommitHooks,
+  publish?: { frame_idx: number; frame: TrajectoryFrame },
+): void {
+  hooks.clear_position_cache()
+  hooks.clear_force_cache()
+  hooks.invalidate_effective_frames(scope)
+  hooks.clear_typed_frame_buffers()
+  hooks.reset_topology()
+  hooks.invalidate_bond_caches(scope)
+  hooks.invalidate_warmup()
+  if (publish) hooks.publish_captured_frame(publish.frame_idx, publish.frame)
+  hooks.bump_position_version(scope)
+  hooks.bump_topology_version()
+}
+
+/**
  * Publish a staged supercell as one synchronous trajectory transaction.
  * Validation and allocation have already completed, so no partial structure is
  * visible before this function starts. The ledger append, captured-frame
@@ -126,18 +150,46 @@ export function commit_supercell_transaction(
   const entry = hooks.ledger.append(scope, op)
 
   hooks.replace_frame(token.frame_idx, staged_frame)
-  hooks.clear_position_cache()
-  hooks.clear_force_cache()
-  hooks.invalidate_effective_frames(scope)
-  hooks.clear_typed_frame_buffers()
-  hooks.reset_topology()
-  hooks.invalidate_bond_caches(scope)
-  hooks.invalidate_warmup()
-  hooks.publish_captured_frame(token.frame_idx, staged_frame)
-  hooks.bump_position_version(scope)
-  hooks.bump_topology_version()
+  run_supercell_invalidation(scope, hooks, {
+    frame_idx: token.frame_idx,
+    frame: staged_frame,
+  })
 
   return hooks.history_token?.(entry) ?? `trajectory-supercell-${entry.id}`
+}
+
+/** One external undo/redo toggle of a committed supercell ledger entry. */
+export type SupercellHistoryToggle = {
+  /** Ledger entry id recorded at commit time. */
+  entry_id: string
+  /** false = undo (deactivate), true = redo (re-activate). */
+  active: boolean
+  /** The entry's scope, driving targeted vs whole-trajectory invalidation. */
+  scope: OpScope
+  /**
+   * In-memory owners: restore the immutable pre-op frame references (and
+   * materialization cursors) captured at commit time, then return the frame
+   * to republish at the displayed index. Runs AFTER the activity flip so any
+   * re-materialization sees the toggled active set. Indexed owners omit it —
+   * the effective-frame resolver re-resolves from the bumped ledger revision.
+   */
+  restore?: () => { frame_idx: number; frame: TrajectoryFrame } | undefined
+}
+
+/**
+ * Undo/redo a committed supercell by flipping its ledger entry's active flag
+ * (design §9.5 — `seq` is never renumbered, so redo restores the entry at its
+ * original position). Runs the SAME invalidation + republish cascade as
+ * `commit_supercell_transaction`, synchronously. Returns false for an unknown
+ * entry id without touching any cache.
+ */
+export function toggle_supercell_history_entry(
+  toggle: SupercellHistoryToggle,
+  hooks: SupercellTransactionCommitHooks,
+): boolean {
+  if (!hooks.ledger.set_active(toggle.entry_id, toggle.active)) return false
+  run_supercell_invalidation(toggle.scope, hooks, toggle.restore?.())
+  return true
 }
 
 /**
