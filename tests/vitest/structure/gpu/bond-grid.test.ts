@@ -122,7 +122,7 @@ describe(`plan_bond_dispatch thin-cell routing`, () => {
         max_storage_bytes: 1 << 30,
       })
 
-    // b-axis dim = floor(2/3) = 1 (< MIN_GRID_DIM).
+    // b-axis dim = floor(2/3) = 0, clamped to 1 by periodic_grid_dims (< MIN_GRID_DIM).
     expect(thin(new Float32Array([30, 0, 0, 0, 2, 0, 0, 0, 30]))).toEqual({
       kind: `rust-wasm`,
       reason: `periodic-thin-cell`,

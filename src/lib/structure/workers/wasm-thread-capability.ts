@@ -30,15 +30,35 @@ export function detect_shared_array_buffer(
   return typeof scope.SharedArrayBuffer === `function`
 }
 
-/** True when this engine supports WebAssembly threads/atomics. We probe for the
- *  `Atomics` global together with `SharedArrayBuffer`; both are prerequisites for
- *  `wasm-bindgen-rayon`. The exact bytecode-feature probe (a `shared` memory
- *  validation) belongs to the artifact loader, not this pure gate. */
+/** Encodes `(module (memory 1 1 shared))` — the smallest wasm module whose
+ *  memory limits flag (0x03 = max-present | shared) requires the threads/atomics
+ *  feature. Engines without wasm threads reject it as malformed, so
+ *  `WebAssembly.validate` on these bytes is the standard synchronous feature
+ *  probe (same approach as wasm-feature-detect's `threads()`). */
+const WASM_SHARED_MEMORY_MODULE = new Uint8Array([
+  0x00, 0x61, 0x73, 0x6d, // `\0asm` magic
+  0x01, 0x00, 0x00, 0x00, // binary format version 1
+  0x05, 0x04, // memory section (id 5), 4 bytes long
+  0x01, // one memory entry
+  0x03, 0x01, 0x01, // limits: flags 0x03 (shared + has max), min 1, max 1
+])
+
+/** True when this engine supports WebAssembly threads/atomics — a prerequisite
+ *  for `wasm-bindgen-rayon`. Probed by validating a tiny shared-memory wasm
+ *  module (see above); the JS `Atomics`/`SharedArrayBuffer` globals are NOT a
+ *  proxy for this, since an engine can expose both while rejecting threaded
+ *  wasm. Pure and synchronous; `false` when `WebAssembly` is absent or
+ *  `validate` is missing/throws. */
 export function detect_wasm_atomics(
-  scope: { Atomics?: unknown; SharedArrayBuffer?: unknown } = globalThis,
+  scope: {
+    WebAssembly?: { validate?: (bytes: BufferSource) => boolean }
+  } = globalThis,
 ): boolean {
-  return typeof scope.Atomics === `object` && scope.Atomics !== null &&
-    typeof scope.SharedArrayBuffer === `function`
+  try {
+    return scope.WebAssembly?.validate?.(WASM_SHARED_MEMORY_MODULE) === true
+  } catch {
+    return false
+  }
 }
 
 /** Logical core count, defaulting to 1 when the browser hides it. */
