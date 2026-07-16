@@ -21,6 +21,8 @@
     get_elem_amounts,
   } from '$lib/structure'
   import { parse_supercell_scaling } from '$lib/structure/supercell'
+  import type { SupercellOp, SupercellRequestResult } from '$lib/structure/supercell-operation'
+  import { SupercellExecutor } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
@@ -878,6 +880,7 @@
     on_open_workflow_editor,
     on_open_in_molstar,
     on_view_split_request,
+    on_supercell_request,
     hide_extra_tools = false,
     persist_settings = true,
     initial_panel,
@@ -1048,6 +1051,12 @@
       // NEW TAB, leaving this tab's viewer untouched. A new tab has its own
       // panel_id; panes within ONE tab share tab.id and would clobber each other.
       on_view_split_request?: (struct: AnyStructure) => void
+      // §9.1 explicit supercell operation channel. When embedded in Trajectory,
+      // the parent supplies this and Build → Supercell requests are forwarded
+      // there untouched (trajectory scope/ledger transactions — Task 4).
+      // When absent (standalone Structure), a local staged executor runs and
+      // publishes atomically.
+      on_supercell_request?: (op: SupercellOp) => Promise<SupercellRequestResult>
       // Hide extra toolbar buttons (Build, Analysis, Workflow, IO, Server) — used in trajectory view
       hide_extra_tools?: boolean
       /** Set false for preview/readonly instances to prevent writing settings to localStorage. */
@@ -2809,6 +2818,44 @@
     sel_state.selection_history = [...sel_state.selection_history, [...selected_sites]]
   }
 
+  // ── True Build supercell — §9.1 explicit operation channel ──
+  // LatticePane delegates its SupercellOp here BEFORE any local mutation or
+  // undo push. In trajectory mode the parent-supplied `on_supercell_request`
+  // receives the request untouched (Task 4 wires trajectory transactions).
+  // Standalone, the staged executor runs (Worker for large transforms) and
+  // the result publishes ATOMICALLY: undo entry (pre-op state) + one structure
+  // replacement only after success; on rejection/abort nothing changes, so
+  // the last complete scene and history are retained.
+  let supercell_history_seq = 0
+  async function handle_supercell_request(
+    op: SupercellOp,
+  ): Promise<SupercellRequestResult> {
+    if (on_supercell_request) return on_supercell_request(op)
+    if (!structure || !(`lattice` in structure)) {
+      return { status: `rejected`, message: `No periodic structure to transform` }
+    }
+    try {
+      // Snapshot: the executor's worker path structured-clones the source, and
+      // reactive $state proxies are not cloneable. Cost is linear in the BASE
+      // (pre-supercell) structure, not the materialized output.
+      const source = $state.snapshot(structure) as PymatgenStructure
+      const { structure: new_structure } = await SupercellExecutor.execute(source, op)
+      push_to_undo()
+      // handle_structure_replace sets the structure and resets the renderer's
+      // visual supercell_scaling to 1x1x1 so factors don't compound.
+      build.handle_structure_replace(new_structure)
+      return {
+        status: `applied`,
+        history_token: `structure-supercell-${++supercell_history_seq}`,
+      }
+    } catch (err) {
+      return {
+        status: `rejected`,
+        message: err instanceof Error ? err.message : String(err),
+      }
+    }
+  }
+
   // Vacuum box modal helpers
   function open_vacuum_box_for_tool(tool: typeof pending_tool_after_wrap) {
     pending_tool_after_wrap = tool
@@ -3547,6 +3594,7 @@
               on_structure_change={(new_struct) => build.handle_structure_replace(new_struct)}
               on_push_undo={push_to_undo}
               on_reset_view={() => align_view_to_lattice()}
+              on_supercell_request={handle_supercell_request}
             />
           {:else if build.active_build_tab === `slab_cutter` && structure && `lattice` in structure}
             <MillerSlabCutterPane
