@@ -50,6 +50,14 @@ vi.mock(`$lib/io/export`, () => ({
   parse_frame_spec: vi.fn(() => []),
 }))
 
+// Visual T6: the worker-expansion module must never be reachable from the
+// export pane — visual replication is view-only. The mock is registered for
+// BOTH phases: pre-fix it intercepts the (forbidden) routing so the RED test
+// can observe it; post-fix the pane no longer imports the module at all.
+vi.mock(`$lib/structure/export/supercell-export-client`, () => ({
+  export_supercell_via_worker: vi.fn().mockResolvedValue(undefined),
+}))
+
 // Helper: click a button by its visible text (case-insensitive trim match).
 function click_text(text: string): boolean {
   const btn = Array.from(document.querySelectorAll<HTMLButtonElement>(`button`)).find(
@@ -158,6 +166,76 @@ describe(`StructureExportPane (Structure tab)`, () => {
       props: { structure: simple_structure },
     })
     expect(document.body.textContent).toContain(`Quick Export`)
+  })
+})
+
+describe(`StructureExportPane — visual dims are view-only (Visual T6)`, () => {
+  beforeEach(() => {
+    document.body.innerHTML = ``
+    vi.clearAllMocks()
+  })
+
+  // Legacy visual-supercell props (pre-T6 API). Post-T6 the pane must ignore
+  // them entirely — scientific export always serializes the base structure.
+  const legacy_visual_props = {
+    gpu_supercell_active: true,
+    gpu_supercell_factors: [2, 2, 2] as [number, number, number],
+    gpu_supercell_base: simple_structure,
+  }
+
+  test.each([
+    { label: `POSCAR`, fn_name: `export_structure_as_poscar` as const },
+    { label: `XYZ`, fn_name: `export_structure_as_xyz` as const },
+    { label: `CIF`, fn_name: `export_structure_as_cif` as const },
+  ])(
+    `$label download exports the BASE scientific structure, never a worker-expanded visual supercell`,
+    async ({ label, fn_name }) => {
+      const { export_supercell_via_worker } = await import(
+        `$lib/structure/export/supercell-export-client`
+      )
+      mount(StructureExportPane, {
+        target: document.body,
+        props: { structure: simple_structure, ...legacy_visual_props },
+      })
+      const download_btn = find_button(label, `download`)
+      expect(download_btn, `download button for ${label}`).toBeTruthy()
+      download_btn?.click()
+      expect(export_funcs[fn_name]).toHaveBeenCalledWith(simple_structure)
+      expect(export_supercell_via_worker).not.toHaveBeenCalled()
+    },
+  )
+
+  test(`image capture targets the ACTIVE render canvas, not the first one`, async () => {
+    const wrapper = document.createElement(`div`)
+    const suspended_webgl = document.createElement(`canvas`)
+    suspended_webgl.setAttribute(`data-render-backend`, `webgl2`)
+    suspended_webgl.setAttribute(`data-render-active`, `false`)
+    const active_overlay = document.createElement(`canvas`)
+    active_overlay.setAttribute(`data-render-backend`, `webgpu`)
+    active_overlay.setAttribute(`data-render-active`, `true`)
+    wrapper.append(suspended_webgl, active_overlay)
+    document.body.appendChild(wrapper)
+
+    mount(StructureExportPane, {
+      target: document.body,
+      props: {
+        structure: simple_structure,
+        scene: {} as Scene,
+        wrapper,
+        camera: { isPerspectiveCamera: true } as unknown as Camera,
+      },
+    })
+    click_text(`Figure`)
+    await tick()
+
+    const select = document.querySelector<HTMLSelectElement>(`select`)
+    const image_item = select?.closest(`.export-item`)
+    const download_btn = image_item?.querySelector<HTMLButtonElement>(`button`)
+    expect(download_btn, `image download button`).toBeTruthy()
+    download_btn?.click()
+    expect(export_canvas_as_image).toHaveBeenCalled()
+    const captured = vi.mocked(export_canvas_as_image).mock.calls[0][0]
+    expect(captured).toBe(active_overlay)
   })
 })
 

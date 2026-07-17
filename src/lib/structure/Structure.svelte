@@ -20,7 +20,6 @@
     align_to_principal_axes,
     get_elem_amounts,
   } from '$lib/structure'
-  import { parse_supercell_scaling } from '$lib/structure/supercell'
   import type { SupercellOp, SupercellRequestResult } from '$lib/structure/supercell-operation'
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
@@ -127,6 +126,8 @@
     get_original_atoms_only as _get_original_atoms_only,
     get_import_position_outside,
     apply_charges,
+    parse_visual_dims,
+    visual_replication_active,
   } from './controllers/transform-controller'
   import {
     prune_measurements,
@@ -1138,12 +1139,12 @@
     get_structure: () => structure,
     get_symmetry_data: () => symmetry_data,
     get_cell_type: () => cell_type,
-    get_supercell_scaling: () => supercell_scaling,
     get_show_image_atoms: () => show_image_atoms,
     get_periodic_repeats: () => periodic_repeats,
-    // Phase 1: when the GPU overlay instances the supercell, the CPU keeps the
-    // base cell (no N× Site objects) — gates the supercell + PBC-image effects.
-    get_gpu_supercell_active: () => gpu_supercell_active,
+    // Visual T6: while the render packet owns visual replication, the CPU
+    // keeps the base cell (no PBC-image Site append) — display routing only;
+    // the scientific structure stays base-sized in either state.
+    get_visual_replicas_active: () => visual_replicas_active,
     set_displayed_structure: (s) => { displayed_structure = s },
     set_saveable_structure: (s) => { saveable_structure = s },
   })
@@ -2192,42 +2193,45 @@
   // WebGL view fully resumes for the current frame. Default OFF ⇒ always false
   // ⇒ zero change to existing WebGL behavior.
   let webgl_suspended = $derived(large_system_mode)
-  // ── GPU supercell instancing (Phase 1) ──────────────────────────────────────
-  // Parsed [nx,ny,nz] from supercell_scaling. parse_supercell_scaling throws on
-  // malformed input, so guard — a bad string falls back to [1,1,1] (no supercell).
-  let gpu_supercell_factors = $derived.by((): Vec3 => {
-    try {
-      return parse_supercell_scaling(supercell_scaling)
-    } catch {
-      return [1, 1, 1]
-    }
-  })
+  // ── Visual replication (view-only, Visual T6) ───────────────────────────────
+  // Parsed [nx,ny,nz] replica dims from the bottom-right visual supercell
+  // control. Malformed input falls back to [1,1,1] (no replication).
+  let gpu_supercell_factors = $derived.by((): Vec3 => parse_visual_dims(supercell_scaling))
   // Trajectory packets own the visual base cell from 1× upward. While active,
-  // the transform controller must not CPU-expand either the selected supercell
-  // or PBC image atoms: both are packet replica/ghost concerns. The WebGPU
-  // overlay keeps its existing >1× gate for non-trajectory structures.
+  // the transform controller must not CPU-append PBC image atoms: replicas
+  // and ghosts are packet instancing concerns.
   let trajectory_packet_active = $derived(
     trajectory_frame_positions != null && !!structure?.sites?.length,
   )
-  let gpu_supercell_active = $derived(
-    !!(structure as { lattice?: unknown } | undefined)?.lattice &&
-      (trajectory_packet_active ||
-        (large_system_mode &&
-          gpu_supercell_factors[0] * gpu_supercell_factors[1] *
-              gpu_supercell_factors[2] > 1)),
+  // Semantic routing is PURE view state: periodicity + requested dims (+
+  // trajectory ownership). The render backend (WebGPU overlay vs WebGL2 vs
+  // legacy) has NO say — dims >1 route into a ReplicaLayout on every backend
+  // and the scientific structure stays at the base effective frame.
+  let visual_replicas_active = $derived(
+    visual_replication_active({
+      has_lattice: !!(structure as { lattice?: unknown } | undefined)?.lattice,
+      dims: gpu_supercell_factors,
+      trajectory_packet_active,
+    }),
   )
-  // ── Shared trajectory render packet ────────────────────────────────────────
-  // ONE packet per effective trajectory frame: the BASE scientific structure
-  // (owner) + exactly 3N current positions + the current frame lattice + visual
-  // replica dims. StructureScene resolves manager-ready colors/radii/final bond
+  // ── Shared render packet ────────────────────────────────────────────────────
+  // ONE packet per effective frame: the BASE scientific structure (owner) +
+  // exactly 3N current positions + the current frame lattice + visual replica
+  // dims. Static structures fall back to their site positions inside the
+  // builder. StructureScene resolves manager-ready colors/radii/final bond
   // graph while preserving this packet's frame and replica objects.
   const render_packet_builder = create_render_packet_builder()
   let render_packet: RenderPacket | null = $derived.by(() => {
-    if (!trajectory_packet_active || !structure?.sites?.length) return null
+    if (!structure?.sites?.length) return null
+    if (!trajectory_packet_active && !visual_replicas_active) return null
     return render_packet_builder.build({
-      structure,
       // Direct base-frame ownership: never read displayed_structure or a
-      // WebGL-resolved position buffer back into the packet.
+      // WebGL-resolved position buffer back into the packet. Trajectories own
+      // the raw frame owner (3N positions match it); static structures use
+      // the cell-type-transformed base effective frame.
+      structure: trajectory_packet_active
+        ? structure
+        : (transform.base_structure ?? structure),
       frame_positions: trajectory_frame_positions,
       frame_lattice: trajectory_frame_lattice,
       frame_idx: trajectory_step_idx,
@@ -4236,9 +4240,6 @@
             bind:crop_mode_active={interaction.crop_mode_active}
             bind:crop_region={interaction.crop_region}
             {trajectory_context}
-            {gpu_supercell_active}
-            {gpu_supercell_factors}
-            gpu_supercell_base={displayed_structure}
           />
 
           <ServerPane
@@ -4646,7 +4647,7 @@
             structure={structure}
             frame_positions={trajectory_frame_positions}
             frame_lattice={trajectory_frame_lattice}
-            supercell={gpu_supercell_active ? gpu_supercell_factors : [1, 1, 1]}
+            supercell={visual_replicas_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
             element_colors={colors.element}
             atom_radius={scene_props.atom_radius}

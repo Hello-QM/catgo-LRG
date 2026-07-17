@@ -33,6 +33,7 @@
     BaseTopology,
     RenderPacket,
   } from './scene/render-packet'
+  import { mark_render_surface } from './scene/render-surface'
   import {
     build_cutting_visibility_map,
     compute_show_bulk_atoms,
@@ -1176,6 +1177,20 @@
         __render_still_source: read_render_still_source,
       })
     }
+  })
+
+  // Visual T6: raster capture must target the ACTIVE canvas. Mark this WebGL
+  // canvas with its backend and whether it is the visible renderer — the
+  // WebGPU overlay suspends it while covering it. The overlay canvas carries
+  // its own static marks (LargeSystemOverlay.svelte), and the two marks flip
+  // in the same synchronous flush as the Bonds-T6 atomic renderer swap
+  // (`webgl_suspended` derives from `large_system_mode`). Backend labeling is
+  // a capture concern only — never semantic-structure routing.
+  $effect(() => {
+    const canvas = threlte.renderer?.domElement
+    if (!canvas) return
+    const is_webgl2 = threlte.renderer.capabilities?.isWebGL2 !== false
+    mark_render_surface(canvas, is_webgl2 ? `webgl2` : `legacy`, !webgl_suspended)
   })
 
   // Explicitly release WebGL context on unmount.

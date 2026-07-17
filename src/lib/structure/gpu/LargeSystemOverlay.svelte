@@ -1155,9 +1155,15 @@
 </script>
 
 {#if enabled}
+  <!-- Visual T6 render-surface marks: while mounted (enabled) this overlay IS
+       the visible renderer — the WebGL canvas below is suspended and marked
+       inactive in the same flush (StructureScene). Raster capture selects by
+       these attributes (scene/render-surface.ts). -->
   <canvas
     bind:this={canvas}
     class="large-system-overlay"
+    data-render-backend="webgpu"
+    data-render-active="true"
     style="position: absolute; inset: 0; width: 100%; height: 100%;"
   ></canvas>
 {/if}
