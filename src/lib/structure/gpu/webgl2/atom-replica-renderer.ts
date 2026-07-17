@@ -91,78 +91,40 @@ export function decode_webgl2_instance(
   return { base_index, cell_index, cell: [ix, iy, iz] }
 }
 
-const DIVISOR_REVISION = `__catgo_instance_divisor_revision`
-
-function divisor_revision(geometry: THREE.InstancedBufferGeometry): number {
-  return (geometry.userData[DIVISOR_REVISION] as number | undefined) ?? 0
-}
-
-function mark_divisor_changed(geometry: THREE.InstancedBufferGeometry): void {
-  geometry.userData[DIVISOR_REVISION] = divisor_revision(geometry) + 1
-  // Three derives this cache from meshPerAttribute during VAO setup.
-  delete (geometry as unknown as { _maxInstanceCount?: number })._maxInstanceCount
-}
-
 /**
- * Apply the divisor rebind if needed. Three's WebGLBindingStates cache does
- * NOT include `meshPerAttribute` in its `needsUpdate()` identity check (r181,
- * WebGLBindingStates.js:137-174), but public `WebGLRenderer.resetState()` sets
- * binding-state `forceUpdate=true`. Calling this from `onBeforeRender` runs
- * before `renderBufferDirect`, so the existing VAO is rebound with the
- * mutated divisor while the SAME InstancedBufferAttribute / WebGLBuffer stays
- * alive. No base-data version bump and no buffer upload occurs.
+ * Compatibility no-op — divisor changes rebind through attribute identity now.
+ *
+ * Three's WebGLBindingStates cache does NOT include `meshPerAttribute` in its
+ * `needsUpdate()` identity check (r181, WebGLBindingStates.js:137-174), so an
+ * in-place divisor mutation left the cached VAO stale. This hook used to force
+ * a rebind with `WebGLRenderer.resetState()` from `onBeforeRender` — a
+ * renderer-GLOBAL reset mid-frame that happened to work on Chrome/ANGLE but
+ * vanished the whole draw on other GL stacks (desktop WebKitGTK: atoms
+ * disappeared on every visual-supercell factor change until a remount).
+ *
+ * `ensure_instanced_attr` now REPLACES the attribute object on any divisor
+ * change (same backing array), which `needsUpdate()` detects naturally — no
+ * render-boundary work is ever required. Retained as an inert export because
+ * BondReplicaRenderer and ReplicaIdPicker still wire it into `onBeforeRender`.
  */
 export function rebind_instance_divisors_if_needed(
-  mesh: THREE.Mesh,
-  webgl_renderer: THREE.WebGLRenderer,
-  get_seen: () => number,
-  set_seen: (revision: number) => void,
-): void {
-  const geometry = mesh.geometry as THREE.InstancedBufferGeometry
-  const revision = divisor_revision(geometry)
-  if (revision === get_seen()) return
-  // resetState() is the public way to force WebGLBindingStates to re-run VAO
-  // setup, but it also clears WebGLRenderer's active render-target bookkeeping.
-  // Three r181's getViewport/getScissor getters expose canvas defaults, while
-  // ArrayCamera/XR/tiled passes can override the active _current* state after
-  // selecting a render target. Capture that exact pass state before reset, then
-  // restore it through WebGLState (physical pixels) without mutating canvas
-  // defaults or the render target's stored viewport/scissor.
-  const target = webgl_renderer.getRenderTarget()
-  const cube_face = webgl_renderer.getActiveCubeFace()
-  const mip_level = webgl_renderer.getActiveMipmapLevel()
-  const viewport = webgl_renderer.getCurrentViewport(new THREE.Vector4())
-  const gl = webgl_renderer.getContext()
-  const scissor_box = gl.getParameter(gl.SCISSOR_BOX) as Int32Array
-  const scissor = new THREE.Vector4(
-    scissor_box[0],
-    scissor_box[1],
-    scissor_box[2],
-    scissor_box[3],
-  )
-  const scissor_test = gl.isEnabled(gl.SCISSOR_TEST)
-  webgl_renderer.resetState()
-  webgl_renderer.setRenderTarget(target, cube_face, mip_level)
-  const state = webgl_renderer.state as unknown as {
-    viewport: (value: THREE.Vector4) => void
-    scissor: (value: THREE.Vector4) => void
-    setScissorTest: (enabled: boolean) => void
-  }
-  state.viewport(viewport)
-  state.scissor(scissor)
-  state.setScissorTest(scissor_test)
-  set_seen(revision)
-}
+  _mesh: THREE.Mesh,
+  _webgl_renderer: THREE.WebGLRenderer,
+  _get_seen: () => number,
+  _set_seen: (revision: number) => void,
+): void {}
 
 /**
  * Bind or update an instanced attribute on `geometry`.
  *
- * - Array identity changed → a genuinely new base buffer: install a fresh
- *   attribute object.
- * - Divisor-only change → mutate `meshPerAttribute` on the SAME attribute,
- *   do NOT set `needsUpdate` (that would re-upload the unchanged base data),
- *   and mark the geometry for the render-boundary rebind above.
- * - Same array + same divisor → exact no-op.
+ * - Same array + same divisor → exact no-op (frame updates stay free).
+ * - Anything else (new base buffer OR a divisor change) → install a FRESH
+ *   attribute object. A fresh identity is the only change Three's
+ *   binding-state cache reliably detects (`needsUpdate()` ignores
+ *   `meshPerAttribute`), so the VAO is rebuilt naturally on the next draw —
+ *   no mid-frame `resetState()` hack. The one-time re-upload this costs on a
+ *   divisor change is base-sized (N floats) and factor changes are rare user
+ *   actions, never per-frame work.
  */
 export function ensure_instanced_attr(
   geometry: THREE.InstancedBufferGeometry,
@@ -177,19 +139,14 @@ export function ensure_instanced_attr(
     | undefined
   if (
     existing !== undefined && existing.isInstancedBufferAttribute &&
-    existing.array === array
-  ) {
-    if (existing.meshPerAttribute !== divisor) {
-      existing.meshPerAttribute = divisor
-      mark_divisor_changed(geometry)
-    }
-    return existing
-  }
+    existing.array === array && existing.meshPerAttribute === divisor
+  ) return existing
   const attr = new THREE.InstancedBufferAttribute(array, item_size, false, divisor)
   if (dynamic) attr.setUsage(THREE.DynamicDrawUsage)
   geometry.setAttribute(name, attr)
   // A fresh attribute identity makes Three rebuild the binding naturally.
-  // Clear only the derived draw clamp; no divisor-revision reset is needed.
+  // Drop the derived draw clamp so the next binding-state setup recomputes it
+  // from the new divisor (it is only computed while undefined).
   delete (geometry as unknown as { _maxInstanceCount?: number })._maxInstanceCount
   return attr
 }
@@ -469,15 +426,6 @@ export class AtomReplicaRenderer {
     this.#ghost_pages.push(
       this.#create_ghost_page(this.#ghost_geometry, this.ghost_mesh),
     )
-    let seen_divisor_revision = divisor_revision(this.#geometry)
-    this.mesh.onBeforeRender = (webgl_renderer) => {
-      rebind_instance_divisors_if_needed(
-        this.mesh,
-        webgl_renderer,
-        () => seen_divisor_revision,
-        (revision) => seen_divisor_revision = revision,
-      )
-    }
     for (const mesh of [this.mesh, this.ghost_mesh]) {
       mesh.frustumCulled = false
       // Picking is a GPU ID pass (design §7.3), never a CPU quad raycast.
@@ -494,7 +442,15 @@ export class AtomReplicaRenderer {
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
   update(packet: RenderPacket): void {
     const prev = this.#prev
-    const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
+    // Capacity is ground truth: ANY atom-count change must take the full
+    // rebuild path, even when packet versions were reused by an upstream
+    // producer. Trusting versions alone let a grown frame `positions.set()`
+    // into an undersized mirror (RangeError) and wedge the renderer with
+    // stale 112-atom buffers — atoms vanished until a remount.
+    const capacity_stale = this.#positions.length !== packet.topology.atom_count * 3
+    const diff = prev === null || capacity_stale
+      ? ALL_CHANGED
+      : diff_render_packet(prev, packet)
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
     const positions_changed = prev === null || diff.topology_changed ||
       diff.frame_changed || prev.frame.positions !== packet.frame.positions

@@ -16,6 +16,8 @@
     dom: HTMLElement
     canvas: HTMLCanvasElement
     onscene: (scene: Scene) => void
+    /** Start with render_packet=null (legacy static path) — atom mode only. */
+    start_null?: boolean
   }
 
   let {
@@ -27,6 +29,7 @@
     dom,
     canvas,
     onscene,
+    start_null = false,
   }: Props = $props()
 
   const threlte = createThrelteContext({
@@ -38,18 +41,21 @@
   })
   onscene(threlte.scene)
 
-  let packet_idx = $state(0)
+  let packet_idx = $state(start_null ? -1 : 0)
   let ghost_opacity = $state(0.2)
   let stub_scale = $state(0.25)
   let bond_opacity = $state(0.8)
   let appearance_alt = $state(false)
 
-  const packet = $derived(packets[packet_idx])
+  // -1 = no packet: AtomManagerInstances falls back to the legacy
+  // InstancedMesh path, mirroring a static structure at 1×1×1.
+  const packet = $derived(packet_idx < 0 ? null : packets[packet_idx])
   const live_ghost_opacity = $derived(appearance_alt ? 0.65 : ghost_opacity)
   const live_stub_scale = $derived(appearance_alt ? 0.75 : stub_scale)
   const live_bond_opacity = $derived(appearance_alt ? 0.4 : bond_opacity)
 </script>
 
+<button data-testid="factor-null" onclick={() => packet_idx = -1}>none</button>
 <button data-testid="factor-1" onclick={() => packet_idx = 0}>1x</button>
 <button data-testid="factor-2" onclick={() => packet_idx = 1}>2x</button>
 <button data-testid="factor-8" onclick={() => packet_idx = 2}>8x</button>
@@ -60,12 +66,13 @@
     {atom_manager}
     render_packet={packet}
     image_atom_opacity={live_ghost_opacity}
+    max_capacity={16}
   />
 {:else}
   <BondManagerInstances
     {bond_manager}
-    atom_positions={packet.frame.positions}
-    atom_colors={packet.topology.colors}
+    atom_positions={(packet ?? packets[0]).frame.positions}
+    atom_colors={(packet ?? packets[0]).topology.colors}
     render_packet={packet}
     incomplete_edge_length_scale={live_stub_scale}
     periodic_bond_opacity={live_ghost_opacity}

@@ -150,11 +150,6 @@ describe(`AtomReplicaRenderer — replica factor changes`, () => {
       rad: attr(mesh, `instanceRadius`),
       col: attr(mesh, `instanceAtomColor`),
     }
-    const versions = {
-      pos: attributes.pos.version,
-      rad: attributes.rad.version,
-      col: attributes.col.version,
-    }
 
     renderer.update(builder.build({ structure, dims: [3, 3, 3] }))
 
@@ -162,15 +157,17 @@ describe(`AtomReplicaRenderer — replica factor changes`, () => {
     expect(renderer.mesh).toBe(mesh)
     expect(geo(renderer.mesh)).toBe(geometry)
     expect(renderer.mesh.material).toBe(material)
-    // Same attribute OBJECTS (and therefore same renderer-side WebGLBuffer
-    // resources) — only counts / divisors / uniforms move. Attribute versions
-    // must not bump: a factor-only change uploads no base data.
-    expect(attr(mesh, `instancePosition`)).toBe(attributes.pos)
-    expect(attr(mesh, `instanceRadius`)).toBe(attributes.rad)
-    expect(attr(mesh, `instanceAtomColor`)).toBe(attributes.col)
-    expect(attributes.pos.version).toBe(versions.pos)
-    expect(attributes.rad.version).toBe(versions.rad)
-    expect(attributes.col.version).toBe(versions.col)
+    // FRESH attribute objects over the SAME base-sized typed arrays. Replacing
+    // the attribute is the only divisor change Three's binding-state cache
+    // detects (`needsUpdate()` ignores meshPerAttribute); in-place mutation
+    // required the mid-frame resetState() hack that vanished atoms on
+    // non-ANGLE GL stacks (see webgl2-replica-atom-resize.test.ts).
+    expect(attr(mesh, `instancePosition`)).not.toBe(attributes.pos)
+    expect(attr(mesh, `instanceRadius`)).not.toBe(attributes.rad)
+    expect(attr(mesh, `instanceAtomColor`)).not.toBe(attributes.col)
+    expect(attr(mesh, `instancePosition`).array).toBe(attributes.pos.array)
+    expect(attr(mesh, `instanceRadius`).array).toBe(attributes.rad.array)
+    expect(attr(mesh, `instanceAtomColor`).array).toBe(attributes.col.array)
     expect(attr(mesh, `instancePosition`).count).toBe(3)
     expect(attr(mesh, `instancePosition`).meshPerAttribute).toBe(27)
     expect(geometry.instanceCount).toBe(3 * 27)
@@ -403,8 +400,9 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
       expect(geo(renderer.mesh)).toBe(main_geometry)
       expect(geo(renderer.ghost_mesh)).toBe(ghost_geometry)
       for (let idx = 0; idx < main_names.length; idx++) {
-        expect(attr(renderer.mesh, main_names[idx])).toBe(main_attrs[idx])
-        expect(main_attrs[idx].array).toBe(main_arrays[idx])
+        // Divisor changes replace the attribute OBJECT (identity-based VAO
+        // rebind) but always reuse the base-sized typed array.
+        expect(attr(renderer.mesh, main_names[idx]).array).toBe(main_arrays[idx])
       }
       for (let idx = 0; idx < ghost_names.length; idx++) {
         expect(attr(renderer.ghost_mesh, ghost_names[idx])).toBe(ghost_attrs[idx])

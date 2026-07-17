@@ -172,9 +172,6 @@ describe(`BondReplicaRenderer — replica factor changes`, () => {
       half: attr(mesh, `a_half`),
       color: attr(mesh, `a_color`),
     }
-    const versions = Object.fromEntries(
-      Object.entries(attributes).map(([key, value]) => [key, value.version]),
-    )
 
     renderer.update(builder.build({
       structure,
@@ -185,17 +182,19 @@ describe(`BondReplicaRenderer — replica factor changes`, () => {
     expect(renderer.mesh).toBe(mesh)
     expect(geo(renderer.mesh)).toBe(geometry)
     expect(renderer.mesh.material).toBe(material)
-    // Same attribute OBJECTS (and therefore same renderer-side WebGLBuffer
-    // resources) — a factor-only change mutates divisors/counts without a
-    // base-data upload (version stays unchanged).
-    expect(attr(mesh, `a_site`)).toBe(attributes.site)
-    expect(attr(mesh, `a_jimage`)).toBe(attributes.jimage)
-    expect(attr(mesh, `a_half`)).toBe(attributes.half)
-    expect(attr(mesh, `a_color`)).toBe(attributes.color)
-    expect(attributes.site.version).toBe(versions.site)
-    expect(attributes.jimage.version).toBe(versions.jimage)
-    expect(attributes.half.version).toBe(versions.half)
-    expect(attributes.color.version).toBe(versions.color)
+    // FRESH attribute objects over the SAME graph-sized typed arrays — the
+    // identity change is what Three's binding-state cache detects for the
+    // divisor rebind (`needsUpdate()` ignores meshPerAttribute; the in-place
+    // mutation needed the mid-frame resetState() hack that vanished draws on
+    // non-ANGLE GL stacks — see webgl2-replica-atom-resize.test.ts).
+    expect(attr(mesh, `a_site`)).not.toBe(attributes.site)
+    expect(attr(mesh, `a_jimage`)).not.toBe(attributes.jimage)
+    expect(attr(mesh, `a_half`)).not.toBe(attributes.half)
+    expect(attr(mesh, `a_color`)).not.toBe(attributes.color)
+    expect(attr(mesh, `a_site`).array).toBe(attributes.site.array)
+    expect(attr(mesh, `a_jimage`).array).toBe(attributes.jimage.array)
+    expect(attr(mesh, `a_half`).array).toBe(attributes.half.array)
+    expect(attr(mesh, `a_color`).array).toBe(attributes.color.array)
     expect(attr(mesh, `a_site`).meshPerAttribute).toBe(27)
     expect(geometry.instanceCount).toBe(2 * BOND_COUNT * 27)
 
@@ -506,8 +505,9 @@ describe(`BondReplicaRenderer — sparse ghost second draw`, () => {
       expect(geo(renderer.mesh)).toBe(main_geometry)
       expect(geo(renderer.ghost_mesh)).toBe(ghost_geometry)
       for (let idx = 0; idx < main_names.length; idx++) {
-        expect(attr(renderer.mesh, main_names[idx])).toBe(main_attrs[idx])
-        expect(main_attrs[idx].array).toBe(main_arrays[idx])
+        // Divisor changes replace the attribute OBJECT (identity-based VAO
+        // rebind) but always reuse the graph-sized typed array.
+        expect(attr(renderer.mesh, main_names[idx]).array).toBe(main_arrays[idx])
       }
       for (let idx = 0; idx < ghost_names.length; idx++) {
         expect(attr(renderer.ghost_mesh, ghost_names[idx])).toBe(ghost_attrs[idx])

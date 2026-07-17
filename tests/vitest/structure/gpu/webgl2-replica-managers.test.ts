@@ -256,7 +256,7 @@ afterEach(async () => {
   document.body.replaceChildren()
 })
 
-async function mount_manager(mode: 'atom' | 'bond') {
+async function mount_manager(mode: 'atom' | 'bond', start_null = false) {
   const dom = document.createElement(`div`)
   const canvas = document.createElement(`canvas`)
   dom.append(canvas)
@@ -285,6 +285,7 @@ async function mount_manager(mode: 'atom' | 'bond') {
       dom,
       canvas,
       onscene: (next: THREE.Scene) => scene = next,
+      start_null,
     },
   })
   mounted.push(component)
@@ -355,8 +356,8 @@ for (const mode of [`atom`, `bond`] as const) {
       const geometry = main.geometry as THREE.InstancedBufferGeometry
       const material = main.material
       const attr_name = mode === `atom` ? `instancePosition` : `a_site`
-      const base_attr = geometry.getAttribute(attr_name) as THREE.InstancedBufferAttribute
-      const attr_version = base_attr.version
+      const base_array = (geometry.getAttribute(attr_name) as
+        THREE.InstancedBufferAttribute).array
 
       for (const [button, expected_cells] of [
         [`factor-2`, 2],
@@ -368,15 +369,19 @@ for (const mode of [`atom`, `bond`] as const) {
         expect(visible_meshes(scene)).toEqual([main])
         expect(main.geometry).toBe(geometry)
         expect(main.material).toBe(material)
-        // Factor changes keep the SAME attribute object and backing array.
-        expect(geometry.getAttribute(attr_name)).toBe(base_attr)
-        expect(base_attr.version).toBe(attr_version)
-        expect(base_attr.meshPerAttribute).toBe(expected_cells)
+        // Factor changes install a FRESH attribute object (identity-based VAO
+        // rebind — the only divisor change Three's binding-state cache
+        // detects) over the SAME base-sized backing array.
+        const live_attr = geometry.getAttribute(attr_name) as
+          THREE.InstancedBufferAttribute
+        expect(live_attr.array).toBe(base_array)
+        expect(live_attr.meshPerAttribute).toBe(expected_cells)
 
-        // The observable render hook forces Three's cached VAO divisor state
-        // to rebind while preserving the attribute/WebGLBuffer resource.
-        // Start an offscreen picking pass whose target owns a custom viewport,
-        // scissor, and scissor-test state distinct from the canvas defaults.
+        // The render boundary must be inert: the retired resetState() VAO
+        // hack reset renderer-global state mid-frame (correct on ANGLE only —
+        // on desktop WebKitGTK it vanished the draw until a remount). Start an
+        // offscreen pass with a custom target/viewport/scissor and prove the
+        // hook leaves ALL of it untouched.
         activate_render_target()
         const before_resets = resetState.mock.calls.length
         const before_target_restores = setRenderTarget.mock.calls.length
@@ -384,11 +389,8 @@ for (const mode of [`atom`, `bond`] as const) {
         const before_scissor_writes = setScissor.mock.calls.length
         const before_scissor_test_writes = setScissorTest.mock.calls.length
         invoke_before_render(main, renderer, scene)
-        expect(resetState).toHaveBeenCalledTimes(before_resets + 1)
-        expect(setRenderTarget).toHaveBeenCalledTimes(before_target_restores + 1)
-        expect(setRenderTarget).toHaveBeenLastCalledWith(renderTarget, 3, 2)
-        // Three r181 setRenderTarget() already restores the target's active
-        // _current* state. Canvas getters must not be written over it.
+        expect(resetState).toHaveBeenCalledTimes(before_resets)
+        expect(setRenderTarget).toHaveBeenCalledTimes(before_target_restores)
         expect(setViewport).toHaveBeenCalledTimes(before_viewport_writes)
         expect(setScissor).toHaveBeenCalledTimes(before_scissor_writes)
         expect(setScissorTest).toHaveBeenCalledTimes(before_scissor_test_writes)
@@ -397,7 +399,7 @@ for (const mode of [`atom`, `bond`] as const) {
         expect(pass.cube_face).toBe(3)
         expect(pass.mip_level).toBe(2)
         expect(pass.viewport).toEqual(expected_pass.viewport)
-        expect(pass.bookkeeping_viewport).toEqual(renderTarget.viewport)
+        expect(pass.bookkeeping_viewport).toEqual(expected_pass.viewport)
         expect(pass.scissor).toEqual(expected_pass.scissor)
         expect(pass.scissor_test).toBe(expected_pass.scissor_test)
         if (mode === `bond`) {
@@ -414,6 +416,48 @@ for (const mode of [`atom`, `bond`] as const) {
     })
   })
 }
+
+describe(`packet-path activation from a previously mounted static state`, () => {
+  test(`legacy 1×1×1 → packet supercell renders atoms without a remount`, async () => {
+    // Field flow (atom-vanish bug): a static structure renders on the legacy
+    // InstancedMesh at 1×1×1; the FIRST visual-supercell factor swaps in the
+    // packet path on the already-mounted component. Atoms must be fully built
+    // immediately — no Visibility→Atoms off/on remount to recover.
+    const { dom, renderer, resetState, scene } = await mount_manager(`atom`, true)
+
+    // Legacy static path: exactly one InstancedMesh, no replica draw.
+    expect(instanced_meshes(scene)).toHaveLength(1)
+
+    await click(dom, `factor-2`)
+    // Packet path owns the draw now — the legacy mesh (and its capacity-sized
+    // instanceMatrix) is gone, and the replica geometry is fully sized.
+    expect(instanced_meshes(scene)).toHaveLength(0)
+    const main = visible_meshes(scene)[0]
+    expect(main).toBeDefined()
+    const geometry = main.geometry as THREE.InstancedBufferGeometry
+    const first = geometry.getAttribute(`instancePosition`) as
+      THREE.InstancedBufferAttribute
+    expect(geometry.instanceCount).toBe(2 * 2)
+    expect(first.count).toBe(2)
+    expect(first.meshPerAttribute).toBe(2)
+
+    await click(dom, `factor-8`)
+    // Live factor change on the mounted renderer: fresh attribute identity
+    // (natural VAO rebind) over the same base array, counts follow.
+    const second = geometry.getAttribute(`instancePosition`) as
+      THREE.InstancedBufferAttribute
+    expect(second).not.toBe(first)
+    expect(second.array).toBe(first.array)
+    expect(second.meshPerAttribute).toBe(8)
+    expect(geometry.instanceCount).toBe(2 * 8)
+    invoke_before_render(main, renderer, scene)
+    expect(resetState).not.toHaveBeenCalled()
+
+    await click(dom, `factor-null`)
+    // Dropping back to 1×1×1 static returns to the legacy path cleanly.
+    expect(instanced_meshes(scene)).toHaveLength(1)
+  })
+})
 
 describe(`replica manager live appearance props`, () => {
   test(`atom ghost opacity updates uniform + transparency without remount`, async () => {
