@@ -47,6 +47,11 @@ import {
   build_image_instance_table,
   decode_replica_instance,
 } from '$lib/structure/scene/replica-layout'
+import type {
+  ComputeBondsTypedResult,
+  TypedBondInput,
+  TypedBondTable,
+} from '$lib/structure/workers/bond-worker-runtime'
 
 /** Camera uniform (legacy 9.1): 20 floats (proj*view + camPos + pad) = 80 bytes. */
 const CAMERA_UNIFORM_BYTES = 80
@@ -1165,6 +1170,18 @@ fn fs_main(in : VsOut) -> FsOut {
  *  draw issues, and the nested GPU bond-pipeline diagnostics. */
 export type ReplicaRendererDiagnostics = {
   backend: 'webgpu'
+  /** True once the GPUDevice reported loss (Bonds T6): every submission is
+   *  stopped, but scene/owner state (ownership, packet versions, active
+   *  graph) is RETAINED so the WebGL2+WASM fallback takes over the SAME
+   *  packet source — nothing is cleared mid-swap. */
+  device_lost: boolean
+  /** Bond count of the ACTIVE draw graph (packet-, GPU-, or wasm-produced). */
+  active_bond_count: number
+  /** Non-null while the dispatch policy refuses the GPU compute path
+   *  (periodic thin cell / grid storage budget). Bonds are then routed
+   *  through the rust-wasm worker (Bonds T6); the reason persists so hosts
+   *  can surface the backend in diagnostics. */
+  required_backend: 'periodic-thin-cell' | 'grid-storage-limit' | null
   /** Active writer of shared GPU state; legacy writes invalidate packet cache. */
   ownership: 'legacy' | 'packet'
   /** Base-cell atom count (CPU stays at exactly N sites). */
@@ -1333,6 +1350,16 @@ export type LargeSystemRenderer = {
    *  static scene's first bond graph starves until the next camera move.
    *  One slot; pass null to unregister. Never fires after destroy(). */
   on_bond_work(cb: (() => void) | null): void
+  /** Register a host callback for DEVICE LOSS (Bonds T6). The renderer holds
+   *  the ONE `device.lost` subscription for its lease; when it resolves the
+   *  renderer first gates every submission channel (render/pick/setters
+   *  become no-ops, in-flight readbacks are discarded) while RETAINING all
+   *  scene/owner state, then notifies this callback EXACTLY ONCE — the host
+   *  swaps to the WebGL2+WASM fallback and invalidates the lease generation.
+   *  One slot; a registration arriving after the loss (host raced the event)
+   *  is notified immediately, still once in total. Pass null to unregister.
+   *  Never fires after destroy(). */
+  on_device_lost(cb: ((info?: GPUDeviceLostInfo) => void) | null): void
   /** Run one render pass: publish any validated candidate bond graph, (if the
    *  graph is dirty) dispatch the candidate bond compute, (if replica state is
    *  dirty) rebuild the indirect draw args, then (if atoms present) impostor
@@ -1349,6 +1376,12 @@ export type LargeSystemRenderer = {
 export function create_large_system_renderer(
   device: GPUDevice,
   canvas: HTMLCanvasElement,
+  /** Test seam (Bonds T6): inject the typed rust-wasm bond entry so unit
+   *  tests never spawn real workers. Production omits it — the renderer
+   *  lazy-imports bond-worker-api's compute_bonds_typed on first use. */
+  deps?: {
+    compute_bonds_typed?: (input: TypedBondInput) => Promise<ComputeBondsTypedResult>
+  },
 ): LargeSystemRenderer {
   const context = canvas.getContext(`webgpu`)
   if (!context) throw new Error(`WebGPU canvas context unavailable`)
@@ -1634,11 +1667,27 @@ export function create_large_system_renderer(
   // the frame that publishes / reruns / settles. NOT fired per render.
   let bond_work_cb: (() => void) | null = null
   // The dispatch policy refused the GPU path (periodic thin cell / storage
-  // budget): typed state Task 6 consumes to route to the Rust-WASM worker.
-  // While set, the ACTIVE graph stays on screen and nothing re-dispatches.
+  // budget): Bonds T6 routes those graphs through the Rust-WASM worker
+  // (compute_bonds_typed). While set, the GPU compute never dispatches; the
+  // ACTIVE graph stays on screen until the typed result uploads over it.
   let required_backend: 'periodic-thin-cell' | 'grid-storage-limit' | null = null
+  // One typed rust-wasm request in flight at a time (latest wins): while set,
+  // a still-dirty graph waits — completion wakes the host, whose next render
+  // re-dispatches against the newest inputs.
+  let wasm_bonds_inflight = false
   let bonds_configured = false // set once set_bond_data has provided inputs
   let validation_generation = 0
+
+  // ── Device-loss transaction (Bonds T6) ─────────────────────────────────
+  // Once the GPUDevice reports loss: `device_lost` gates EVERY submission
+  // channel (render/pick/setters/readbacks) immediately, scene/owner state is
+  // deliberately RETAINED (the WebGL2+WASM fallback takes over the SAME
+  // packet source), and the host is notified EXACTLY ONCE via the one-slot
+  // callback below.
+  let device_lost = false
+  let device_lost_info: GPUDeviceLostInfo | undefined = undefined
+  let device_lost_cb: ((info?: GPUDeviceLostInfo) => void) | null = null
+  let device_loss_notified = false
 
   function bump_graph_generation(): void {
     graph_generation++
@@ -2231,6 +2280,8 @@ export function create_large_system_renderer(
     count: number,
     version: number,
   ): Promise<BaseBondGraph | null> {
+    // Device loss stops ALL submissions — this path encodes a copy + submit.
+    if (device_lost) return null
     if (count === 0) {
       return {
         version,
@@ -2252,7 +2303,7 @@ export function create_large_system_renderer(
     device.queue.submit([encoder.finish()])
     try {
       await readback.mapAsync(GPUMapMode.READ, 0, bytes)
-      if (destroyed) return null
+      if (destroyed || device_lost) return null
       const words = new Uint32Array(readback.getMappedRange(0, bytes))
       const pairs = new Uint32Array(count * 2)
       const jimages = new Int8Array(count * 3)
@@ -2301,7 +2352,8 @@ export function create_large_system_renderer(
     const count = active_bond_count
     void read_gpu_graph(source, count, revision).then((graph) => {
       active_ghost_sync_inflight = false
-      if (destroyed || revision !== active_graph_revision || !graph) return
+      if (destroyed || device_lost) return
+      if (revision !== active_graph_revision || !graph) return
       active_cpu_graph = graph
       upload_ghost_table(derive_ghost_table(graph))
       upload_supercell_uniform()
@@ -2507,7 +2559,7 @@ export function create_large_system_renderer(
     void read_gpu_graph(candidate_pairs_buffer, count, version).then((graph) => {
       candidate_graph_sync_inflight = false
       validation_inflight = false
-      if (destroyed) return
+      if (destroyed || device_lost) return
       if (generation !== graph_generation || !graph) {
         if (graph_dirty && !packet_graph) bond_work_cb?.()
         return
@@ -2525,12 +2577,15 @@ export function create_large_system_renderer(
    *  limits). Allocation limit ⇒ report and KEEP the active graph. */
   function begin_validation(generation: number): void {
     validation_readback.mapAsync(GPUMapMode.READ).then(() => {
-      if (destroyed) {
+      if (destroyed || device_lost) {
+        // Teardown OR device loss mid-map: the candidate belongs to a dead
+        // device — discard it without observing/publishing anything.
         try {
           validation_readback.unmap()
         } catch {
           /* already torn down */
         }
+        validation_inflight = false
         return
       }
       const words = new Uint32Array(validation_readback.getMappedRange())
@@ -2799,6 +2854,157 @@ export function create_large_system_renderer(
 
   let destroyed = false
 
+  /** Flip the device-loss gates EXACTLY ONCE. Ordering is transactional:
+   *  (1) `device_lost` is set FIRST, so every submission path (render, pick,
+   *  setters, async readback continuations) is stopped before anything else
+   *  runs; (2) scene/owner state is NOT touched — the last valid packet/graph
+   *  owner survives for the fallback handoff; (3) the host is notified once. */
+  function mark_device_lost(info?: GPUDeviceLostInfo): void {
+    if (device_lost) return
+    device_lost = true
+    device_lost_info = info
+    notify_device_loss()
+  }
+
+  /** Deliver the one-shot loss notification. Also called by on_device_lost so
+   *  a handler registered AFTER the loss (host raced the event) still hears
+   *  it — exactly once in total, never after destroy(). */
+  function notify_device_loss(): void {
+    if (destroyed || !device_lost || device_loss_notified) return
+    const cb = device_lost_cb
+    if (!cb) return
+    device_loss_notified = true
+    cb(device_lost_info)
+  }
+
+  // The ONE `device.lost` subscription for this renderer's lease (created
+  // once per lease by the host). Mock devices in unit tests provide a
+  // controllable promise; fakes without one simply never report loss.
+  const device_lost_promise = (device as { lost?: Promise<GPUDeviceLostInfo> }).lost
+  if (device_lost_promise && typeof device_lost_promise.then === `function`) {
+    void device_lost_promise.then((info) => mark_device_lost(info))
+  }
+
+  /** Upload a rust-wasm typed bond table as the ACTIVE draw graph (Bonds T6).
+   *  Mirrors upload_packet_bond_graph's buffer path but NEVER flips
+   *  `packet_graph` or `ownership` — the graph owner is unchanged. GPU
+   *  re-detection stays armed for the next graph-dirty render; the policy
+   *  keeps routing here while the cell stays thin / over-budget. */
+  function upload_wasm_bond_graph(table: TypedBondTable): void {
+    if (destroyed || device_lost) return
+    const bond_count = table.pairs.length / 2
+    const graph: BaseBondGraph = {
+      version: active_graph_revision + 1,
+      pairs: table.pairs,
+      jimages: table.images,
+      kinds: new Uint8Array(bond_count),
+      strengths: table.strengths,
+    }
+    ensure_pair_buffers(bond_run.pair_capacity())
+    ensure_active_pairs_capacity(Math.max(bond_count, 1))
+    // Pack (a, b, jimage) triplets in the shared render format — the same
+    // biased-u8-lane packing the packet upload uses (full Int8 range).
+    const packed = new Uint32Array(Math.max(bond_count * 3, 1))
+    for (let bi = 0; bi < bond_count; bi++) {
+      packed[bi * 3] = table.pairs[bi * 2]
+      packed[bi * 3 + 1] = table.pairs[bi * 2 + 1]
+      packed[bi * 3 + 2] = pack_jimage(
+        table.images[bi * 3],
+        table.images[bi * 3 + 1],
+        table.images[bi * 3 + 2],
+      )
+    }
+    if (bond_count > 0) {
+      device.queue.writeBuffer(
+        active_pairs_buffer as GPUBuffer, 0, packed.buffer, 0, bond_count * 3 * 4,
+      )
+    }
+    device.queue.writeBuffer(active_count_buffer, 0, new Uint32Array([bond_count]))
+    rebuild_bond_bind_groups()
+    write_indirect_cfg()
+    active_cpu_graph = graph
+    active_bond_count = bond_count
+    active_graph_revision++
+    sync_active_ghost_table()
+    // A validated-but-unpublished GPU candidate predates this graph — it must
+    // never swap in over it.
+    publish_pending = false
+    pending_cpu_graph = null
+    pending_bond_count = 0
+    replica_dirty = true
+  }
+
+  /** Bonds T6: the dispatch policy refused the GPU compute (periodic thin
+   *  cell / grid storage budget) — route the graph through the Task-5
+   *  rust-wasm worker orchestration instead of any all-pairs GPU fallback.
+   *  Returns true when a request was dispatched (caller clears graph_dirty);
+   *  false when typed inputs are missing (legacy channel without a packet —
+   *  the last complete graph stays on screen, design §8.2). Results are
+   *  transactional: a superseded generation (owner change, packet-graph
+   *  arrival), device loss, or teardown discards the table — the last valid
+   *  graph owner is retained. */
+  function dispatch_wasm_bonds(): boolean {
+    if (wasm_bonds_inflight) return false
+    const numbers = last_packet?.topology.atomic_numbers
+    const positions = last_positions
+    if (!numbers || numbers.length < bond_n || !positions || bond_n <= 0) return false
+    if (positions.length < bond_n * 3) return false
+    wasm_bonds_inflight = true
+    const generation = graph_generation
+    const L = bond_detector_lattice
+    const input: TypedBondInput = {
+      // compute_typed copies before transfer — these views stay owned here.
+      positions: positions.length === bond_n * 3
+        ? positions
+        : positions.subarray(0, bond_n * 3),
+      atomic_numbers: numbers.length === bond_n ? numbers : numbers.subarray(0, bond_n),
+      lattice_matrix: bond_periodic
+        ? [
+          [L[0], L[1], L[2]],
+          [L[3], L[4], L[5]],
+          [L[6], L[7], L[8]],
+        ]
+        : null,
+      pbc: bond_periodic ? [true, true, true] : null,
+      options: { ...bond_options },
+    }
+    // The injected seam is called synchronously (deterministic tests); the
+    // production path lazy-imports the worker orchestration on first use so
+    // this renderer never eagerly pulls worker/wasm modules into its graph.
+    const request: Promise<ComputeBondsTypedResult> = deps?.compute_bonds_typed
+      ? deps.compute_bonds_typed(input)
+      : import(`$lib/structure/workers/bond-worker-api`).then((m) =>
+        m.compute_bonds_typed(input)
+      )
+    void request
+      .then(({ table }) => {
+        wasm_bonds_inflight = false
+        if (destroyed || device_lost) return
+        if (generation !== graph_generation || packet_graph) {
+          // Superseded: a packet graph / ownership change owns the draw now.
+          // If detection was re-armed meanwhile, wake the host once so it can
+          // dispatch against the new generation.
+          if (graph_dirty && !packet_graph) bond_work_cb?.()
+          return
+        }
+        upload_wasm_bond_graph(table)
+        // Async state transitioned outside any render(): wake the host so its
+        // dirty-gated loop runs the frame that refreshes the indirect args.
+        bond_work_cb?.()
+      })
+      .catch((err) => {
+        wasm_bonds_inflight = false
+        if (destroyed || device_lost) return
+        // Keep the last complete graph on screen (§8.2 preserve-on-failure).
+        console.warn(
+          `[large-system] rust-wasm bond backend failed — keeping the last graph:`,
+          err instanceof Error ? err.message : err,
+        )
+        if (graph_dirty && !packet_graph) bond_work_cb?.()
+      })
+    return true
+  }
+
   // Mutable clear color, defaulting to the near-black constant until the caller
   // threads the viewer's background via set_background. Typed as the dict form
   // (not the GPUColor union) so the .r/.g/.b/.a fields are writable.
@@ -2806,7 +3012,7 @@ export function create_large_system_renderer(
 
   return {
     set_background(rgb: [number, number, number]): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       clear_color.r = rgb[0]
       clear_color.g = rgb[1]
       clear_color.b = rgb[2]
@@ -2817,7 +3023,7 @@ export function create_large_system_renderer(
       show: boolean,
       color: [number, number, number],
     ): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       cell_show = show
       cell_color = [color[0], color[1], color[2]]
       // A null lattice (non-periodic structure) ⇒ no box. Otherwise detect a
@@ -2835,14 +3041,14 @@ export function create_large_system_renderer(
       upload_cell_uniform()
     },
     set_camera(uniform: Float32Array): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       // Legacy 80-byte (proj*view) upload into the first bytes; harmless — the
       // impostor draw uses set_camera_full. Guard against short/long arrays.
       const bytes = Math.min(uniform.byteLength, CAMERA_UNIFORM_BYTES)
       device.queue.writeBuffer(camera_buffer, 0, uniform.buffer, uniform.byteOffset, bytes)
     },
     set_camera_full(uniform: Float32Array): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       const bytes = Math.min(uniform.byteLength, CAMERA_FULL_BYTES)
       device.queue.writeBuffer(camera_buffer, 0, uniform.buffer, uniform.byteOffset, bytes)
     },
@@ -2852,7 +3058,7 @@ export function create_large_system_renderer(
       colors: Float32Array,
       count: number,
     ): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       claim_legacy_ownership()
       atom_count = Math.max(0, count)
       if (atom_count === 0) return
@@ -2882,7 +3088,7 @@ export function create_large_system_renderer(
       mark_bond_dirty(classify_bond_dirty(`positions`))
     },
     set_positions(positions: Float32Array, count: number): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       claim_legacy_ownership()
       // Per-frame fast path: requires an existing positions buffer (topology
       // already established by set_atoms). If the count somehow grew past
@@ -2912,7 +3118,7 @@ export function create_large_system_renderer(
       options: { tolerance: number; max_bond_dist: number; min_dist: number },
       periodic: boolean,
     ): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       bonds_configured = true
       bond_n = covalent_radii.length
       bond_detector_lattice = lattice.slice(0, 9)
@@ -2955,7 +3161,7 @@ export function create_large_system_renderer(
       mark_bond_dirty(classify_bond_dirty(`options`))
     },
     set_bond_rules(elem_ids: Uint32Array, rules: Float32Array): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       bond_rules = rules
 
       // Per-atom element ids (binding 5). Grow + upload N entries. When elem_ids
@@ -2988,7 +3194,7 @@ export function create_large_system_renderer(
       mark_bond_dirty(classify_bond_dirty(`rules`))
     },
     set_bonds_enabled(enabled: boolean): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       if (enabled === bonds_enabled) return
       bonds_enabled = enabled
       // Turning bonds back on must re-run the compute against the current atoms
@@ -2996,7 +3202,7 @@ export function create_large_system_renderer(
       if (enabled) mark_bond_dirty(classify_bond_dirty(`options`))
     },
     set_supercell(dims: [number, number, number], base_lattice: Float32Array): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       claim_legacy_ownership()
       supercell_dims = [
         Math.max(1, Math.floor(dims[0])),
@@ -3022,7 +3228,7 @@ export function create_large_system_renderer(
       mark_bond_dirty(classify_bond_dirty(`supercell`))
     },
     set_show_images(show: boolean): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       claim_legacy_ownership()
       const next = !!show
       if (next === show_image_atoms) return
@@ -3035,7 +3241,7 @@ export function create_large_system_renderer(
       mark_bond_dirty(classify_bond_dirty(`image-policy`))
     },
     set_packet(packet: RenderPacket, _images: ImageInstanceTable): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       claim_packet_ownership()
       const prev = last_packet
       const diff: RenderPacketDiff = prev ? diff_render_packet(prev, packet) : {
@@ -3146,7 +3352,7 @@ export function create_large_system_renderer(
       else if (diff.replica_changed) sync_active_ghost_table()
     },
     set_selection(indices: Uint32Array | number[]): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       // Build a dense per-atom flag array (1 = selected) over the current atom
       // capacity, then upload. We always rewrite the whole buffer (clearing old
       // selections), so an empty `indices` clears the highlight. Sized to the
@@ -3173,7 +3379,7 @@ export function create_large_system_renderer(
         cell: [0, 0, 0],
         ghost: false,
       }
-      if (destroyed) return miss
+      if (destroyed || device_lost) return miss
       if (atom_count <= 0 || !pick_bind_group || !pick_id_view || !pick_depth_view) {
         return miss
       }
@@ -3246,7 +3452,7 @@ export function create_large_system_renderer(
         // covers the resolve-then-destroy race, not this reject-on-destroy one.
         return miss
       }
-      if (destroyed) {
+      if (destroyed || device_lost) {
         try { pick_readback.unmap() } catch { /* already torn down */ }
         return miss
       }
@@ -3289,6 +3495,9 @@ export function create_large_system_renderer(
     get_diagnostics(): ReplicaRendererDiagnostics {
       return {
         backend: `webgpu`,
+        device_lost,
+        active_bond_count,
+        required_backend,
         ownership,
         base_count: atom_count,
         dims: [supercell_dims[0], supercell_dims[1], supercell_dims[2]],
@@ -3310,7 +3519,7 @@ export function create_large_system_renderer(
       }
     },
     render(): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       if (!depth_view || !msaa_color_view) ensure_targets(canvas.width || 1, canvas.height || 1)
       const encoder = device.createCommandEncoder({ label: `large-system-frame` })
 
@@ -3377,11 +3586,20 @@ export function create_large_system_renderer(
           if (required_backend !== plan.reason) {
             console.warn(
               `[large-system] bond detection requires the rust-wasm backend ` +
-                `(${plan.reason}); GPU path refused — keeping the last graph`,
+                `(${plan.reason}); GPU path refused — routing through ` +
+                `compute_bonds_typed()`,
             )
           }
           required_backend = plan.reason
-          graph_dirty = false
+          // Bonds T6: route the dispatch through the rust-wasm worker. While
+          // a request is in flight the graph STAYS dirty (latest wins — the
+          // completion wake re-plans against the newest inputs). Missing
+          // typed inputs (legacy channel without a packet) clear the flag
+          // and keep the last complete graph on screen.
+          if (!wasm_bonds_inflight) {
+            dispatch_wasm_bonds()
+            graph_dirty = false
+          }
         } else {
           required_backend = null
           if (fresh_graph) {
@@ -3537,8 +3755,14 @@ export function create_large_system_renderer(
     on_bond_work(cb: (() => void) | null): void {
       bond_work_cb = cb
     },
+    on_device_lost(cb: ((info?: GPUDeviceLostInfo) => void) | null): void {
+      device_lost_cb = cb
+      // Host raced the loss event: deliver the pending notification now —
+      // still exactly once in total (notify_device_loss consumes the slot).
+      notify_device_loss()
+    },
     resize(w: number, h: number): void {
-      if (destroyed) return
+      if (destroyed || device_lost) return
       canvas.width = Math.max(1, Math.floor(w))
       canvas.height = Math.max(1, Math.floor(h))
       ensure_targets(canvas.width, canvas.height)
@@ -3547,12 +3771,17 @@ export function create_large_system_renderer(
       upload_gizmo_uniform()
     },
     destroy(): void {
+      // NOT gated on device_lost — teardown must still release resources
+      // after a loss (buffer.destroy() on a lost device is a safe no-op).
       if (destroyed) return
       destroyed = true
       // Drop the host wake callback: a validation resolving after teardown
       // must not wake a host loop (its destroyed-guard also returns early
       // before observing, so this is belt-and-braces).
       bond_work_cb = null
+      // Drop the loss callback too: a device.lost resolving after teardown
+      // must not notify a host that already tore this session down.
+      device_lost_cb = null
       try {
         context.unconfigure()
       } catch {

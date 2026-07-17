@@ -4665,6 +4665,17 @@
             {selected_sites}
             on_pick={handle_overlay_pick}
             on_fallback={(reason) => {
+              // Atomic renderer swap (Bonds T6). The WebGL2+WASM fallback
+              // CANDIDATE already exists: the Threlte canvas below the overlay
+              // stays mounted (kept warm) and reads the SAME structure/packet
+              // source, which the WebGPU renderer RETAINS on device loss.
+              // Schedule its repaint FIRST, then flip the mode — Svelte
+              // applies both in one synchronous flush, so the overlay unmount,
+              // autoRender resume, and repaint land together: no frame where
+              // neither renderer is visible, none where both fight. The
+              // overlay fires this exactly once per lease (renderer-enforced)
+              // and has already invalidated the lost lease generation.
+              webgl_repaint_trigger++
               large_system_mode = false
               console.warn(`[CatGO] large-system mode: ${reason}`)
             }}

@@ -1,7 +1,10 @@
 <script lang="ts">
   import { Color, type Camera } from 'three'
   import type { AnyStructure, ElementSymbol } from '$lib/structure'
-  import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
+  import {
+    get_webgpu_lease,
+    invalidate_webgpu_lease,
+  } from '$lib/structure/gpu/webgpu-context'
   import { pack_camera_full } from '$lib/structure/gpu/camera-uniform'
   import { pack_positions, pack_lattice } from '$lib/structure/gpu/frame-buffers'
   import { build_display_radii, build_atom_radii } from '$lib/structure/gpu/radius-lut'
@@ -590,7 +593,7 @@
   }
 
   function stop_session(): void {
-    session_token++ // invalidate any in-flight acquire_webgpu_device()
+    session_token++ // invalidate any in-flight get_webgpu_lease()
     if (raf_id) {
       cancelAnimationFrame(raf_id)
       raf_id = 0
@@ -932,22 +935,47 @@
     selection_sig = ``
     needs_render = true
     stable_frames = 0
-    const device = await acquire_webgpu_device()
+    const lease = await get_webgpu_lease()
     // Bail if disabled / unmounted / superseded while awaiting.
     if (token !== session_token) return
-    if (!device) {
+    if (!lease) {
       on_fallback?.(`Large-system performance mode unavailable on this device — using the standard viewer.`)
       return
     }
     let r: LargeSystemRenderer
     try {
-      r = create_large_system_renderer(device, el)
+      r = create_large_system_renderer(lease.device, el)
     } catch (err) {
       on_fallback?.(`Large-system performance mode failed to start — using the standard viewer. (${err instanceof Error ? err.message : String(err)})`)
       return
     }
     renderer = r
     frame_token = token
+    // ── Device-loss transaction (Bonds T6) ─────────────────────────────────
+    // The renderer holds the ONE `device.lost` subscription for this lease
+    // and has already gated every submission (render/pick/setters no-op,
+    // in-flight readbacks discarded) by the time this fires — while RETAINING
+    // the packet/bond-graph owner, so nothing is cleared mid-swap. Here we:
+    //   1. stop this session's rAF loop (no further frame() work);
+    //   2. invalidate exactly THIS lease generation — a stale loss can never
+    //      clobber a newer lease, and a later re-enable acquires fresh;
+    //   3. notify the host EXACTLY ONCE (renderer-enforced). The host's swap
+    //      is atomic: the WebGL2+WASM renderer underneath stays mounted
+    //      (kept-warm canvas, same packet source), so one state flip resumes
+    //      it and unmounts this overlay in a single flush — no frame where
+    //      neither renderer is visible, none where both fight.
+    // Superseded sessions (token mismatch) ignore the stale event entirely.
+    r.on_device_lost(() => {
+      if (token !== session_token) return
+      if (raf_id) {
+        cancelAnimationFrame(raf_id)
+        raf_id = 0
+      }
+      invalidate_webgpu_lease(lease.generation)
+      on_fallback?.(
+        `Large-system WebGPU device was lost — switching to the standard viewer.`,
+      )
+    })
     // Bond-work wake: candidate bond graphs validate ASYNC after the render
     // that dispatched them (publication / overflow rerun happen in a LATER
     // render). This dirty-gated loop suspends on stable frames, so on a

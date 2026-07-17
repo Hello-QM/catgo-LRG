@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { acquire_webgpu_device } from '$lib/structure/gpu/webgpu-context'
 import { create_large_system_renderer } from '$lib/structure/gpu/large-system-renderer'
+import type { TypedBondInput } from '$lib/structure/workers/bond-worker-runtime'
 
 // Device-gated: SKIPS in node (no navigator.gpu). Runs only where a real
 // WebGPU device is available (e.g. a browser test runner with WebGPU enabled).
@@ -37,12 +38,20 @@ describe.skipIf(!globalThis.navigator?.gpu)(`create_large_system_renderer`, () =
 const make_mock_device = (
   opts?: { validation_reads?: [number, number][] },
 ) => {
-  // Observation counter: the renderer (re)builds its bond bind groups when it
-  // SWAPS a published candidate in as the active graph, so a jump across one
-  // render() call proves the publication swap actually ran.
-  const counters = { bind_group: 0 }
+  // Observation counters: bind_group jumps prove a publication swap ran;
+  // submits/writes count EVERY queue command so the device-loss tests can
+  // assert the renderer submits NOTHING after `lost` resolves.
+  const counters = { bind_group: 0, submits: 0, writes: 0 }
+  // Controllable device-loss promise, mirroring GPUDevice.lost. Resolving it
+  // drives the renderer's one-per-lease loss subscription.
+  let resolve_lost: (info: { reason: string }) => void = () => {}
+  const lost = new Promise<{ reason: string }>((resolve) => {
+    resolve_lost = resolve
+  })
   return {
     counters,
+    lost,
+    resolve_lost,
     limits: { maxStorageBufferBindingSize: 1 << 27 },
   createBuffer: (desc: { size: number; label?: string }) => ({
     label: desc.label,
@@ -92,7 +101,14 @@ const make_mock_device = (
     copyTextureToBuffer: () => {},
     finish: () => ({}),
   }),
-  queue: { writeBuffer: () => {}, submit: () => {} },
+  queue: {
+    writeBuffer: () => {
+      counters.writes += 1
+    },
+    submit: () => {
+      counters.submits += 1
+    },
+  },
   }
 }
 
@@ -428,5 +444,288 @@ describe(`large-system renderer bond dirty-kind split (mock device)`, () => {
     expect(renderer.debug_bond_state().dispatches.detect).toBe(1)
 
     renderer.destroy()
+  })
+
+  // ── Bonds T6: transactional device loss + rust-wasm routing ──────────────
+
+  it(`submits no commands after device loss`, async () => {
+    const raw = make_mock_device()
+    const device = raw as unknown as GPUDevice
+    const canvas = make_mock_canvas() as unknown as HTMLCanvasElement
+    const renderer = create_large_system_renderer(device, canvas)
+
+    load_scene(renderer)
+    renderer.render() // dispatch
+    await flush() // validation ⇒ publication pends
+    renderer.render() // publish
+    expect(raw.counters.submits).toBeGreaterThan(0)
+
+    raw.resolve_lost({ reason: `destroyed` })
+    await flush()
+    const submits = raw.counters.submits
+    const writes = raw.counters.writes
+
+    // EVERY channel is gated after loss: draws, per-frame uploads, replica
+    // changes, selection, camera, resize — and picks resolve as a miss without
+    // ever encoding a pass.
+    renderer.render()
+    renderer.set_positions(new Float32Array(24), 8)
+    renderer.set_supercell([2, 2, 2], new Float32Array(9))
+    renderer.set_selection([1, 2])
+    renderer.set_camera_full(new Float32Array(36))
+    renderer.resize(32, 32)
+    const pick = await renderer.pick(1, 1)
+    renderer.render()
+    await flush()
+
+    expect(pick.kind).toBe(`miss`)
+    expect(raw.counters.submits).toBe(submits)
+    expect(raw.counters.writes).toBe(writes)
+    expect(renderer.get_diagnostics().device_lost).toBe(true)
+
+    renderer.destroy()
+  })
+
+  it(`notifies fallback exactly once`, async () => {
+    const raw = make_mock_device()
+    const canvas = make_mock_canvas() as unknown as HTMLCanvasElement
+    const renderer = create_large_system_renderer(
+      raw as unknown as GPUDevice,
+      canvas,
+    )
+    const on_lost = vi.fn()
+    renderer.on_device_lost(on_lost)
+
+    load_scene(renderer)
+    renderer.render()
+    expect(on_lost).not.toHaveBeenCalled() // healthy device — no signal
+
+    raw.resolve_lost({ reason: `destroyed` })
+    await flush()
+    expect(on_lost).toHaveBeenCalledTimes(1)
+
+    // Later renders / flushes never re-notify.
+    renderer.render()
+    renderer.render()
+    await flush()
+    expect(on_lost).toHaveBeenCalledTimes(1)
+
+    // The one notification slot is consumed: a handler registered after the
+    // notification fired must not produce a second fallback.
+    const late = vi.fn()
+    renderer.on_device_lost(late)
+    await flush()
+    expect(late).not.toHaveBeenCalled()
+    renderer.destroy()
+
+    // If NO handler was registered when the device died, the first
+    // registration is notified immediately — still exactly once in total.
+    const raw2 = make_mock_device()
+    const r2 = create_large_system_renderer(
+      raw2 as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+    )
+    raw2.resolve_lost({ reason: `destroyed` })
+    await flush()
+    const cb2 = vi.fn()
+    r2.on_device_lost(cb2)
+    expect(cb2).toHaveBeenCalledTimes(1)
+    r2.on_device_lost(cb2) // re-registration: already consumed, no double-fire
+    await flush()
+    expect(cb2).toHaveBeenCalledTimes(1)
+    r2.destroy()
+  })
+
+  it(`retains the last valid graph owner during fallback`, async () => {
+    const raw = make_mock_device()
+    const canvas = make_mock_canvas() as unknown as HTMLCanvasElement
+    const renderer = create_large_system_renderer(
+      raw as unknown as GPUDevice,
+      canvas,
+    )
+
+    const n = 8
+    const positions = new Float32Array(n * 3)
+    for (let i = 0; i < n; i++) {
+      positions[i * 3] = (i % 2) * 2.4
+      positions[i * 3 + 1] = (Math.floor(i / 2) % 2) * 2.4
+      positions[i * 3 + 2] = Math.floor(i / 4) * 2.4
+    }
+    const lattice = new Float32Array([20, 0, 0, 0, 20, 0, 0, 0, 20])
+    const topology = {
+      version: 1,
+      atom_count: n,
+      site_ids: Uint32Array.from({ length: n }, (_, i) => i),
+      atomic_numbers: new Uint8Array(n).fill(6),
+      radii: new Float32Array(n).fill(0.5),
+      colors: new Float32Array(n * 3).fill(0.5),
+    }
+    const frame = {
+      owner: { tag: `t` },
+      frame_idx: 0,
+      positions_version: 0,
+      positions,
+      lattice,
+    }
+    const replicas = {
+      version: 1,
+      dims: [2, 2, 2] as const,
+      boundary_policy: `stub` as const,
+      semantics: `visual-shared-base` as const,
+    }
+    const empty_images = {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    }
+    // PACKET-supplied bond graph ⇒ the packet producer owns the draw graph.
+    const bond_graph = {
+      version: 3,
+      pairs: Uint32Array.from([0, 1, 2, 3]),
+      jimages: new Int8Array(6),
+      kinds: new Uint8Array(2),
+      strengths: new Float32Array([1, 1]),
+    }
+    renderer.set_packet(
+      { topology: { ...topology, bond_graph }, frame, replicas },
+      empty_images,
+    )
+    renderer.render()
+    await flush()
+    const before = renderer.get_diagnostics()
+    expect(before.ownership).toBe(`packet`)
+    expect(before.packet_graph_active).toBe(true)
+    expect(before.active_bond_count).toBe(2)
+
+    raw.resolve_lost({ reason: `destroyed` })
+    await flush()
+
+    // Loss stops submissions but RETAINS the owner + scene data — the
+    // WebGL2+WASM fallback takes over the SAME packet source; nothing here may
+    // clear it mid-swap.
+    const after = renderer.get_diagnostics()
+    expect(after.device_lost).toBe(true)
+    expect(after.ownership).toBe(`packet`)
+    expect(after.packet_graph_active).toBe(true)
+    expect(after.active_bond_count).toBe(2)
+    expect(after.packet_versions).toEqual(before.packet_versions)
+    expect(after.base_count).toBe(n)
+    expect(after.ncells).toBe(8)
+
+    // Post-loss channel writes must not clear the retained owner either: a
+    // graphless packet (which would normally EXIT packet-graph mode) and a
+    // legacy setter (which would normally claim legacy ownership) are both
+    // gated during fallback.
+    renderer.set_packet(
+      { topology: { ...topology, version: 2 }, frame, replicas },
+      empty_images,
+    )
+    renderer.set_atoms(
+      positions,
+      new Float32Array(n).fill(0.5),
+      new Float32Array(n * 3).fill(0.5),
+      n,
+    )
+    const still = renderer.get_diagnostics()
+    expect(still.ownership).toBe(`packet`)
+    expect(still.packet_graph_active).toBe(true)
+    expect(still.active_bond_count).toBe(2)
+    expect(still.packet_versions).toEqual(before.packet_versions)
+
+    renderer.destroy()
+  })
+
+  it(`routes policy-refused dispatches through compute_bonds_typed without changing the graph owner`, async () => {
+    const warn = vi.spyOn(console, `warn`).mockImplementation(() => {})
+    const raw = make_mock_device()
+    const fake = vi.fn((_input: TypedBondInput) =>
+      Promise.resolve({
+        backend: `rust-wasm-scalar` as const,
+        elapsed_ms: 1,
+        table: {
+          pairs: Uint32Array.from([0, 1]),
+          images: Int8Array.from([0, 0, 1]),
+          lengths: Float32Array.from([2.4]),
+          strengths: Float32Array.from([1]),
+        },
+      })
+    )
+    const renderer = create_large_system_renderer(
+      raw as unknown as GPUDevice,
+      make_mock_canvas() as unknown as HTMLCanvasElement,
+      { compute_bonds_typed: fake },
+    )
+    const on_work = vi.fn()
+    renderer.on_bond_work(on_work)
+
+    // 2000 atoms (> the 1024 direct cap) in a PERIODIC THIN cell (b-axis 2 Å <
+    // max_bond_dist 3 Å ⇒ grid dim 1 < 3 ⇒ plan refuses the GPU grid) — the
+    // Task-1 policy demands the rust-wasm backend for this shape.
+    const n = 2000
+    const positions = new Float32Array(n * 3)
+    const thin = new Float32Array([40, 0, 0, 0, 2, 0, 0, 0, 40])
+    const topology = {
+      version: 1,
+      atom_count: n,
+      site_ids: Uint32Array.from({ length: n }, (_, i) => i),
+      atomic_numbers: new Uint8Array(n).fill(14),
+      radii: new Float32Array(n).fill(0.5),
+      colors: new Float32Array(n * 3).fill(0.5),
+    }
+    renderer.set_packet({
+      topology,
+      frame: {
+        owner: { tag: `t` },
+        frame_idx: 0,
+        positions_version: 0,
+        positions,
+        lattice: thin,
+      },
+      replicas: {
+        version: 1,
+        dims: [1, 1, 1] as const,
+        boundary_policy: `stub` as const,
+        semantics: `visual-shared-base` as const,
+      },
+    }, {
+      count: 0,
+      base_sites: new Uint32Array(0),
+      jimages: new Int8Array(0),
+    })
+    renderer.set_bond_data(
+      new Float32Array(n).fill(0.76),
+      thin,
+      { tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 },
+      true,
+    )
+    renderer.render()
+
+    // The GPU compute never dispatched; the typed worker got the exact inputs.
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(0)
+    expect(renderer.get_diagnostics().required_backend).toBe(`periodic-thin-cell`)
+    expect(fake).toHaveBeenCalledTimes(1)
+    const input = fake.mock.calls[0][0]
+    expect(input.atomic_numbers).toBe(topology.atomic_numbers)
+    expect(input.positions.length).toBe(n * 3)
+    expect(input.pbc).toEqual([true, true, true])
+    expect(input.lattice_matrix).toEqual([[40, 0, 0], [0, 2, 0], [0, 0, 40]])
+    expect(input.options).toEqual({ tolerance: 0.45, max_bond_dist: 3, min_dist: 0.1 })
+
+    await flush() // typed table resolves ⇒ ACTIVE graph upload + host wake
+    expect(on_work).toHaveBeenCalled()
+    const diag = renderer.get_diagnostics()
+    expect(diag.active_bond_count).toBe(1) // typed graph IS the draw graph now
+    expect(diag.ownership).toBe(`packet`) // owner unchanged…
+    expect(diag.packet_graph_active).toBe(false) // …and NOT a packet graph
+
+    // A woken render is an indirect refresh only — still no GPU detect, and no
+    // second worker dispatch for an unchanged graph.
+    renderer.render()
+    await flush()
+    expect(renderer.debug_bond_state().dispatches.detect).toBe(0)
+    expect(fake).toHaveBeenCalledTimes(1)
+
+    renderer.destroy()
+    warn.mockRestore()
   })
 })
