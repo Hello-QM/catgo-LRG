@@ -253,11 +253,12 @@ export class BondInstancedRenderer {
 			);
 		}
 
-		matrix_attr.clearUpdateRanges();
-		this.#kind_attr.clearUpdateRanges();
-		this.#color_start_attr?.clearUpdateRanges();
-		this.#color_end_attr?.clearUpdateRanges();
-		this.#opacity_attr?.clearUpdateRanges();
+		// NOTE: never call clearUpdateRanges() here — three.js consumes and
+		// clears updateRanges at DRAW time (WebGLAttributes.updateBuffer).
+		// Clearing at sync start destroys the previous flush's not-yet-uploaded
+		// ranges when several syncs land between draws (the atom-renderer
+		// supercell vanish bug — same defect class). Ranges accumulate until
+		// the draw; three merges overlaps before uploading.
 
 		// Hoist buffer refs once per sync — avoid per-slot getter + closure overhead.
 		const pairs = manager.pairs_buffer;
@@ -359,11 +360,8 @@ export class BondInstancedRenderer {
 			);
 		}
 
-		matrix_attr.clearUpdateRanges();
-		this.#kind_attr.clearUpdateRanges();
-		this.#color_start_attr?.clearUpdateRanges();
-		this.#color_end_attr?.clearUpdateRanges();
-		this.#opacity_attr?.clearUpdateRanges();
+		// No clearUpdateRanges() — see the note in sync(). The full-extent
+		// ranges added below subsume pending smaller ones after three's merge.
 
 		const pairs = manager.pairs_buffer;
 		const kinds = manager.kinds_buffer;
@@ -463,12 +461,7 @@ export class BondInstancedRenderer {
 
 		const site_attr = this.#site_attr!;
 		const jimage_attr = this.#gpu_jimage_attr!;
-		site_attr.clearUpdateRanges();
-		jimage_attr.clearUpdateRanges();
-		this.#kind_attr.clearUpdateRanges();
-		this.#color_start_attr?.clearUpdateRanges();
-		this.#color_end_attr?.clearUpdateRanges();
-		this.#opacity_attr?.clearUpdateRanges();
+		// No clearUpdateRanges() — see the note in sync().
 
 		const pairs = manager.pairs_buffer;
 		const kinds = manager.kinds_buffer;
