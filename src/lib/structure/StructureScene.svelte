@@ -571,6 +571,7 @@
     center_camera_trigger = $bindable(0), // Increment this to trigger camera centering
     lattice_align_trigger = $bindable(0), // Increment to align camera with lattice a×b normal
     reset_camera_up_trigger = 0, // Increment to reset camera.up to [0,0,1] (Z-up) after slab cut
+    initial_view = null, // User-saved default view: initial camera placement uses this direction/up instead of the built-in -Y/Z-up
     repaint_trigger = 0, // Increment to force ONE WebGL repaint (no side effects) — used when the large-system overlay closes and autoRender resumes
     external_dragging = false,
     is_box_selecting = false,
@@ -856,6 +857,10 @@
     center_camera_trigger?: number // Increment this to trigger camera centering
     lattice_align_trigger?: number // Increment to align camera with lattice a×b normal
     reset_camera_up_trigger?: number // Increment to reset camera.up to [0,0,1] (Z-up) after slab cut
+    initial_view?: {
+      dir: [number, number, number]
+      up: [number, number, number]
+    } | null // user-saved default view applied by the initial camera placement
     repaint_trigger?: number // Increment to force ONE WebGL repaint (no side effects)
     hidden_elements?: Set<ElementSymbol>
     hidden_sites?: Set<number> // Track hidden individual sites (by site index)
@@ -1420,9 +1425,10 @@
   $effect(() => {
     if (_initial_up_set || !camera || !orbit_controls) return
     _initial_up_set = true
-    camera.up.set(0, 0, 1)
+    const [ux, uy, uz] = initial_view?.up ?? [0, 0, 1]
+    camera.up.set(ux, uy, uz).normalize()
     const ctrl = orbit_controls as any
-    if (ctrl._up0) ctrl._up0.set(0, 0, 1)
+    if (ctrl._up0) ctrl._up0.copy(camera.up)
     orbit_controls.update?.()
   })
 
@@ -2400,13 +2406,29 @@
         view_size = Math.min(structure_size, extent * 1.2)
       }
       const distance = Math.max(1, view_size) * (60 / fov)
-      // Camera on -Y axis looking into +Y, so Z is up and Y goes into screen
       const center = get_camera_fit_target()
-      camera_position = [
-        center[0],
-        center[1] - distance,
-        center[2],
-      ]
+      // User-saved default view: place the camera so initial_view.dir goes
+      // into the screen. Fallback: camera on -Y looking into +Y, Z up.
+      const dir_len = initial_view ? Math.hypot(...initial_view.dir) : 0
+      if (initial_view && dir_len > 1e-6) {
+        const [dx, dy, dz] = initial_view.dir.map((v) => v / dir_len)
+        camera_position = [
+          center[0] - dx * distance,
+          center[1] - dy * distance,
+          center[2] - dz * distance,
+        ]
+        if (camera) {
+          camera.up.set(...initial_view.up).normalize()
+          const ctrl = orbit_controls as any
+          if (ctrl?._up0) ctrl._up0.copy(camera.up)
+        }
+      } else {
+        camera_position = [
+          center[0],
+          center[1] - distance,
+          center[2],
+        ]
+      }
     }
   })
   // Bond computation state (extracted to bond-computation-controller.svelte.ts)
