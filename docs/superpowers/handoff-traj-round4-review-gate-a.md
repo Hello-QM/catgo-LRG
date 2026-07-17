@@ -1,8 +1,13 @@
 # Handoff — traj-round4 review closure → Gate A
 
-Date: 2026-07-16 (updated evening — post-PR follow-up wave)
-Status: **PR #531 OPEN — Gate A PASS; Docker-build fix + supercell-label reset landed;
-CI green pending GitHub Actions recovery**
+Date: 2026-07-17 (updated — session close, user offline)
+Status: **PR #531 OPEN at 8a3bed35 — all plan tasks landed (Build T5 / Visual T5 / Bonds T6 /
+Visual T6) + atom-replica fix + main #530-#532 merged in. #530 and #532 MERGED to main.
+Open blockers for #531: issue #534 (dump.traj playback perf regression, fix agent was
+running at close) and issue #533 (trajectory Material selector ignored by packet shaders).
+Read the ledger section "Session close — user boarding flight, 2026-07-17" in
+.superpowers/sdd/progress.md for the full resume state. Do not merge #531 without
+explicit user instruction.**
 
 This is the current durable handoff. The older Play-crash history remains in
 `docs/superpowers/handoff-impostor-play-crash.md`; use this file for current execution
