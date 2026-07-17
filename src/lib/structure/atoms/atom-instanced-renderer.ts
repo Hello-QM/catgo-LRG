@@ -255,11 +255,16 @@ export class AtomInstancedRenderer {
 			)
 		}
 
-		this.#position_attr.clearUpdateRanges()
-		this.#radius_attr.clearUpdateRanges()
-		this.#color_attr.clearUpdateRanges()
-		this.#opacity_attr.clearUpdateRanges()
-		this.#saturation_attr.clearUpdateRanges()
+		// NOTE: never call clearUpdateRanges() here. Three.js consumes (uploads)
+		// an attribute's updateRanges at DRAW time and clears them itself
+		// (WebGLAttributes.updateBuffer). Svelte can flush this sync several
+		// times before the next RAF draw — e.g. a supercell apply grows the
+		// manager in one flush and appends image atoms in the next. Clearing at
+		// sync start destroyed the previous flush's not-yet-uploaded ranges, so
+		// freshly grown slots kept their allocation-time zeros on the GPU
+		// (radius 0 → invisible atoms) while manager.count / mesh.count / the
+		// CPU arrays were all correct. Ranges must accumulate until the draw;
+		// three merges overlapping ranges before uploading.
 
 		const positions = manager.positions_buffer
 		const radii = manager.radii_buffer
@@ -410,11 +415,10 @@ export class AtomInstancedRenderer {
 			)
 		}
 
-		this.#position_attr.clearUpdateRanges()
-		this.#radius_attr.clearUpdateRanges()
-		this.#color_attr.clearUpdateRanges()
-		this.#opacity_attr.clearUpdateRanges()
-		this.#saturation_attr.clearUpdateRanges()
+		// No clearUpdateRanges() — see the note in sync(). The [0, count)
+		// ranges added below subsume any pending smaller ranges after three's
+		// merge pass; stale pending ranges beyond `count` (post-shrink) upload
+		// in-bounds array data for slots the draw never reads — harmless.
 
 		if (count > 0) {
 			const positions = manager.positions_buffer
