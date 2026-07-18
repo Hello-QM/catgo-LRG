@@ -494,3 +494,53 @@ describe(`legacy AtomInstancedRenderer bypass wiring`, () => {
     expect(pos[0]).toBeCloseTo(1, 5)
   })
 })
+
+describe(`Appearance → Material on the packet path (#533)`, () => {
+  test(`fragment shader carries the legacy style branches`, () => {
+    const renderer = new AtomReplicaRenderer()
+    const fragment = renderer.material.fragmentShader
+    // 0 glossy/GGX, 1 matte, 2 toon, 3 matcap — legacy AtomManagerInstances
+    // branch order; the packet path must not silently render one fixed look.
+    expect(fragment).toContain(`uRenderStyle`)
+    expect(fragment).toContain(`uRoughness`)
+    expect(fragment).toContain(`uMetalness`)
+    expect(fragment).toContain(`uSpecStrength`)
+    expect(fragment).toContain(`uMatcap`)
+    expect(fragment).toContain(`uShadowThreshold`)
+    renderer.dispose()
+  })
+
+  test(`set_render_style routes uniforms to BOTH main and ghost draws`, () => {
+    const renderer = new AtomReplicaRenderer()
+    // Shared uniform objects: one write must update the ghost material too.
+    expect(renderer.ghost_material.uniforms.uRenderStyle)
+      .toBe(renderer.material.uniforms.uRenderStyle)
+
+    renderer.set_render_style(2, { roughness: 0.4, metalness: 0.4 })
+    expect(renderer.material.uniforms.uRenderStyle.value).toBe(2)
+    expect(renderer.material.uniforms.uRoughness.value).toBeCloseTo(0.4)
+    expect(renderer.material.uniforms.uMetalness.value).toBeCloseTo(0.4)
+    expect(renderer.ghost_material.uniforms.uRenderStyle.value).toBe(2)
+
+    const matcap = new THREE.Texture()
+    renderer.set_render_style(3, { roughness: 0.2, metalness: 0 }, matcap)
+    expect(renderer.material.uniforms.uMatcap.value).toBe(matcap)
+    expect(renderer.ghost_material.uniforms.uMatcap.value).toBe(matcap)
+
+    renderer.set_highlight_strength(1.7)
+    expect(renderer.material.uniforms.uSpecStrength.value).toBeCloseTo(1.7)
+    renderer.dispose()
+    matcap.dispose()
+  })
+
+  test(`style changes touch uniforms only — no material or geometry swap`, () => {
+    const renderer = new AtomReplicaRenderer()
+    const material = renderer.material
+    const geometry = renderer.mesh.geometry
+    renderer.set_render_style(1, { roughness: 0.2, metalness: 0 })
+    renderer.set_render_style(0, { roughness: 0.2, metalness: 0 })
+    expect(renderer.material).toBe(material)
+    expect(renderer.mesh.geometry).toBe(geometry)
+    renderer.dispose()
+  })
+})

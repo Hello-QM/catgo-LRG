@@ -269,12 +269,25 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
 // gl_FragDepth). The intersection uses the cross-product formulation copied
 // from AtomManagerInstances: the algebraic form loses precision for large
 // view-space centers (periodic replicas!) and shows concentric banding.
+//
+// Material styles (#533): the packet path must honor Appearance → Material
+// exactly like the legacy InstancedMesh path, so the uRenderStyle branches
+// (0 glossy/GGX, 1 matte, 2 toon, 3 matcap) are ported verbatim from
+// AtomManagerInstances' fragment shader — same uniforms, same constants.
 const FRAGMENT_SHADER = /* glsl */ `
   uniform bool uIsOrthographic;
   uniform vec3 uLightDir;
   uniform float uAmbientIntensity;
   uniform float uDirectionalIntensity;
   uniform float uOpacityScale;
+  uniform int uRenderStyle;  // 0 = glossy, 1 = matte, 2 = toon, 3 = matcap
+  uniform float uShadowThreshold;
+  uniform float uHighlightThreshold;
+  uniform float uShadowBrightness;
+  uniform float uSpecStrength;
+  uniform float uRoughness;
+  uniform float uMetalness;
+  uniform sampler2D uMatcap;
   uniform mat4 projectionMatrix;
   varying vec3 vCenter;
   varying float vRadius;
@@ -288,6 +301,12 @@ const FRAGMENT_SHADER = /* glsl */ `
       linear.g <= 0.0031308 ? linear.g * 12.92 : 1.055 * pow(linear.g, 1.0 / 2.4) - 0.055,
       linear.b <= 0.0031308 ? linear.b * 12.92 : 1.055 * pow(linear.b, 1.0 / 2.4) - 0.055
     );
+  }
+
+  // ACES filmic tonemap — rolls off bright specular so glossy highlights read
+  // soft/desaturated instead of hard clipped dots (legacy parity).
+  vec3 aces_tonemap(vec3 x) {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
   }
 
   void main() {
@@ -326,11 +345,52 @@ const FRAGMENT_SHADER = /* glsl */ `
 
     vec3 light_dir = normalize(uLightDir);
     vec3 view_dir = uIsOrthographic ? vec3(0.0, 0.0, 1.0) : normalize(-hit_pos);
-    float diffuse = max(dot(normal, light_dir), 0.0);
-    vec3 half_dir = normalize(light_dir + view_dir);
-    float spec = pow(max(dot(normal, half_dir), 0.0), 48.0);
-    vec3 color = vColor * (uAmbientIntensity + uDirectionalIntensity * diffuse) +
-      vec3(0.5) * spec * uDirectionalIntensity;
+    vec3 base_color = vColor;
+
+    vec3 color;
+    if (uRenderStyle == 2) {
+      // ── Toon: 3-band cel shading (legacy AtomManagerInstances parity) ──
+      float diffuse = dot(normal, light_dir);
+      if (diffuse > uHighlightThreshold) {
+        color = vec3(1.0, 1.0, 1.0);
+      } else if (diffuse > uShadowThreshold) {
+        color = base_color;
+      } else {
+        color = base_color * uShadowBrightness;
+      }
+    } else if (uRenderStyle == 1) {
+      // ── Matte: diffuse-only Lambert, no specular highlight ──
+      float diffuse = max(dot(normal, light_dir), 0.0);
+      color = base_color * (uAmbientIntensity + uDirectionalIntensity * diffuse);
+    } else if (uRenderStyle == 3) {
+      // ── MatCap: sample the baked studio sphere by the view-space normal,
+      //    tinted by the element colour ──
+      vec2 muv = normal.xy * 0.5 + 0.5;
+      color = base_color * texture(uMatcap, muv).rgb;
+    } else {
+      // ── Glossy / Metallic: Cook-Torrance GGX (legacy parity — roughness /
+      //    metalness are per-style, ACES rolls the key light back down) ──
+      float rough = uRoughness;
+      float a = rough * rough;
+      float a2 = a * a;
+      float NdotL = max(dot(normal, light_dir), 0.0);
+      float NdotV = max(dot(normal, view_dir), 1e-4);
+      vec3 half_dir = normalize(light_dir + view_dir);
+      float NdotH = max(dot(normal, half_dir), 0.0);
+      float VdotH = max(dot(view_dir, half_dir), 0.0);
+      float dn = (NdotH * NdotH) * (a2 - 1.0) + 1.0;
+      float D = a2 / (3.14159265 * dn * dn);
+      float k = a * 0.5;
+      float G = (NdotV / (NdotV * (1.0 - k) + k)) * (NdotL / (NdotL * (1.0 - k) + k));
+      vec3 F0 = mix(vec3(0.04), base_color, uMetalness);
+      vec3 F = F0 + (vec3(1.0) - F0) * pow(1.0 - VdotH, 5.0);
+      vec3 specular = (D * G) * F / (4.0 * NdotV * NdotL + 1e-4);
+      vec3 diffuse_color = base_color * (1.0 - uMetalness);
+      vec3 lit = diffuse_color * (uAmbientIntensity + uDirectionalIntensity * NdotL * 0.31831)
+        + specular * uDirectionalIntensity * NdotL * uSpecStrength;
+      lit *= mix(0.6, 1.0, smoothstep(0.0, 0.5, NdotV));
+      color = aces_tonemap(lit);
+    }
     fragColor = vec4(linear_to_srgb(color), uOpacityScale * coverage);
   }
 `
@@ -392,6 +452,18 @@ export class AtomReplicaRenderer {
       uLightDir: { value: new THREE.Vector3(0.4, 0.7, 0.6).normalize() },
       uAmbientIntensity: { value: options.ambient_light ?? 0.7 },
       uDirectionalIntensity: { value: options.directional_light ?? 0.3 },
+      // Material style (#533) — shared uniform OBJECTS so the main and ghost
+      // draws switch styles together. Defaults mirror the legacy material
+      // (glossy GGX at roughness 0.2 / metalness 0, toon thresholds from
+      // AtomCanvas ToonHighlightMaterial).
+      uRenderStyle: { value: 0 },
+      uShadowThreshold: { value: 0.3 },
+      uHighlightThreshold: { value: 0.97 },
+      uShadowBrightness: { value: 0.5 },
+      uSpecStrength: { value: 1 },
+      uRoughness: { value: 0.2 },
+      uMetalness: { value: 0 },
+      uMatcap: { value: null as THREE.Texture | null },
     }
 
     this.material = new THREE.ShaderMaterial({
@@ -437,6 +509,29 @@ export class AtomReplicaRenderer {
   /** Live ghost appearance update — no geometry/material reconstruction. */
   set_ghost_opacity(opacity: number): void {
     set_material_opacity(this.ghost_material, `uOpacityScale`, opacity)
+  }
+
+  /**
+   * Appearance → Material for the packet path (#533). `style` is the shader
+   * branch int (0 glossy/GGX, 1 matte, 2 toon, 3 matcap) with the per-style
+   * GGX params; `matcap` is the baked studio-sphere texture (only sampled by
+   * branch 3). Uniform-only writes on the SHARED objects — main + ghost draws
+   * update together, no recompile, no material swap.
+   */
+  set_render_style(
+    style: number,
+    pbr: { roughness: number; metalness: number },
+    matcap: THREE.Texture | null = null,
+  ): void {
+    this.material.uniforms.uRenderStyle.value = style
+    this.material.uniforms.uRoughness.value = pbr.roughness
+    this.material.uniforms.uMetalness.value = pbr.metalness
+    if (matcap !== null || style === 3) this.material.uniforms.uMatcap.value = matcap
+  }
+
+  /** Glossy specular highlight multiplier (Appearance slider). */
+  set_highlight_strength(strength: number): void {
+    this.material.uniforms.uSpecStrength.value = strength
   }
 
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */

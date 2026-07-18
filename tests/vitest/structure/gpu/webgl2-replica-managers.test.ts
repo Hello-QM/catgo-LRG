@@ -516,3 +516,24 @@ describe(`replica manager live appearance props`, () => {
     expect(ghost_material.alphaToCoverage).toBe(false)
   })
 })
+
+describe(`packet-path material style (#533)`, () => {
+  test(`Appearance → Material reaches the replica impostor uniforms live`, async () => {
+    const { dom, scene } = await mount_manager(`atom`)
+    const main = meshes(scene).find((mesh) => mesh.visible)!
+    const material = main.material as THREE.ShaderMaterial
+    // Default glossy → branch 0 with the dielectric GGX profile.
+    expect(material.uniforms.uRenderStyle.value).toBe(0)
+    expect(material.uniforms.uRoughness.value).toBeCloseTo(0.2)
+    expect(material.uniforms.uMetalness.value).toBeCloseTo(0)
+
+    await click(dom, `style-toon`)
+    expect(main.material).toBe(material) // uniform switch, no material swap
+    expect(material.uniforms.uRenderStyle.value).toBe(2)
+
+    await click(dom, `style-metallic`)
+    expect(material.uniforms.uRenderStyle.value).toBe(0)
+    expect(material.uniforms.uRoughness.value).toBeCloseTo(0.4)
+    expect(material.uniforms.uMetalness.value).toBeCloseTo(0.4)
+  })
+})

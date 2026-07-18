@@ -45,6 +45,9 @@
   import type { AtomManager } from './atom-manager.svelte'
   import { AtomInstancedRenderer, type CuttingVisibilityEntry } from './atom-instanced-renderer'
   import { get_atom_matcap, type MatcapPreset } from './matcap-texture'
+  // Shared style mapping (#533) — the legacy material and the packet/replica
+  // impostor path must agree on what each Appearance → Material style means.
+  import { render_style_to_int, style_pbr } from './render-style'
 
   interface Props {
     atom_manager: AtomManager
@@ -131,31 +134,6 @@
     max_capacity = 200_000,
     render_packet = null,
   }: Props = $props()
-
-  // glossy = 0, matte = 1, toon = 2 (matches the uRenderStyle branch order).
-  function render_style_to_int(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
-  ): number {
-    // Map onto the shader branches (0 glossy/Blinn-Phong, 1 matte diffuse,
-    // 2 toon, 3 matcap). Metallic reuses the specular branch; 2.5D-soft and
-    // 2D-flat reuse the matte branch — their distinct look comes from the
-    // per-style lighting profile, not a new GLSL branch.
-    if (style === `toon`) return 2
-    if (style === `matcap`) return 3
-    if (style === `matte` || style === `soft` || style === `flat`) return 1
-    return 0
-  }
-
-  // Per-render-style PBR (roughness, metalness) for the GGX specular branch,
-  // ported from pretty-lattice's material presets: glossy = crisp dielectric
-  // hot spot, metallic = a bigger/softer, element-colour-tinted highlight.
-  function style_pbr(
-    style: `glossy` | `metallic` | `matte` | `soft` | `flat` | `toon` | `matcap`,
-  ): { roughness: number; metalness: number } {
-    return style === `metallic`
-      ? { roughness: 0.4, metalness: 0.4 }
-      : { roughness: 0.2, metalness: 0.0 }
-  }
 
   const threlte = useThrelte()
 
@@ -691,6 +669,9 @@
     {ambient_light}
     {directional_light}
     {light_dir}
+    {render_style}
+    {matcap_preset}
+    {highlight_strength}
     ghost_opacity={image_atom_opacity}
   />
 {:else}

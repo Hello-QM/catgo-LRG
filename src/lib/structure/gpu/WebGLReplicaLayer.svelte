@@ -14,6 +14,12 @@
   import { untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
   import { Vector2, Vector3 } from 'three'
+  import { get_atom_matcap, type MatcapPreset } from '../atoms/matcap-texture'
+  import {
+    type AtomRenderStyle,
+    render_style_to_int,
+    style_pbr,
+  } from '../atoms/render-style'
   import type { RenderPacket } from '../scene/render-packet'
   import { AtomReplicaRenderer } from './webgl2/atom-replica-renderer'
   import { BondReplicaRenderer } from './webgl2/bond-replica-renderer'
@@ -30,6 +36,10 @@
     directional_light?: number
     /** View-space headlamp direction (kept live in both materials). */
     light_dir?: Vector3
+    /** Appearance → Material style for the atom impostors (#533). */
+    render_style?: AtomRenderStyle
+    matcap_preset?: string
+    highlight_strength?: number
     /** Main bond-draw opacity (ignored by atom-only layers). */
     opacity?: number
     /** Opacity multiplier for ghost-image instances (sparse second draws). */
@@ -45,6 +55,9 @@
     ambient_light = 0.7,
     directional_light = 0.3,
     light_dir = new Vector3(0.4, 0.7, 0.6).normalize(),
+    render_style = `glossy`,
+    matcap_preset = `ceramic`,
+    highlight_strength = 1.0,
     opacity = 1,
     ghost_opacity = 1,
   }: Props = $props()
@@ -123,6 +136,24 @@
     bond_renderer?.set_stub_scale(incomplete_edge_length_scale)
     bond_renderer?.set_opacity(opacity)
     bond_renderer?.set_ghost_opacity(ghost_opacity)
+    mark_dirty()
+  })
+
+  // Appearance → Material (#533): uniform-int branch switch, zero recompile.
+  // The baked matcap texture is built lazily ONLY while MatCap is active
+  // (same gating as the legacy material — non-matcap renders never touch
+  // matcap code; cached per preset).
+  $effect(() => {
+    if (!atom_renderer) return
+    const matcap = render_style === `matcap`
+      ? get_atom_matcap(matcap_preset as MatcapPreset, mark_dirty)
+      : null
+    atom_renderer.set_render_style(
+      render_style_to_int(render_style),
+      style_pbr(render_style),
+      matcap,
+    )
+    atom_renderer.set_highlight_strength(highlight_strength)
     mark_dirty()
   })
 
