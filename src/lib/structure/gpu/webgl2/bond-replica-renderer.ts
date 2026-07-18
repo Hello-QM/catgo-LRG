@@ -460,7 +460,15 @@ export class BondReplicaRenderer {
   #prev: RenderPacket | null = null
   #pos_texture: THREE.DataTexture | null = null
 
-  // Per-half base attributes (2B-sized CPU mirrors).
+  // Per-half base attributes — capacity-sized CPU mirrors, grow-only.
+  // MD playback changes the bond count nearly every frame; reallocating these
+  // per count change re-installed 4 fresh attributes per frame, which cost a
+  // VAO rebuild + 4 new GL buffers (the old ones were never deleted) + full
+  // capacity-size uploads on every played frame (#534). The live span is
+  // `#half_count`; `instanceCount` and update ranges cover only that prefix,
+  // so a bond-count change is an in-place rewrite on stable identities.
+  #half_capacity = 0
+  #half_count = 0
   #sites = new Float32Array(0)
   #jimages = new Int8Array(0)
   #halves = new Float32Array(0)
@@ -627,13 +635,20 @@ export class BondReplicaRenderer {
     const graph = packet.topology.bond_graph
     const bond_count = graph !== undefined ? graph.pairs.length / 2 : 0
     const half_count = bond_count * 2
-    if (this.#halves.length !== half_count) {
-      this.#sites = new Float32Array(half_count * 2)
-      this.#jimages = new Int8Array(half_count * 3)
-      this.#halves = new Float32Array(half_count)
-      this.#colors = new Float32Array(half_count * 3)
+    if (half_count > this.#half_capacity) {
+      // Grow-only ×1.5: a fresh attribute install (and its one-time VAO
+      // rebuild + full upload) happens O(log growth) times, never per frame.
+      this.#half_capacity = Math.max(
+        half_count,
+        Math.ceil(this.#half_capacity * 1.5),
+      )
+      this.#sites = new Float32Array(this.#half_capacity * 2)
+      this.#jimages = new Int8Array(this.#half_capacity * 3)
+      this.#halves = new Float32Array(this.#half_capacity)
+      this.#colors = new Float32Array(this.#half_capacity * 3)
     }
-    if (graph === undefined) return
+    this.#half_count = half_count
+    if (graph === undefined || half_count === 0) return
     const { colors, atom_count } = packet.topology
     const color_stride = colors.length === atom_count * 4 ? 4 : 3
     for (let bi = 0; bi < bond_count; bi++) {
@@ -661,19 +676,26 @@ export class BondReplicaRenderer {
       }
     }
     for (const name of [`a_site`, `a_jimage`, `a_half`, `a_color`]) {
-      const attribute = this.#geometry.getAttribute(name)
-      if (attribute) attribute.needsUpdate = true
+      const attribute = this.#geometry.getAttribute(name) as
+        | THREE.InstancedBufferAttribute
+        | undefined
+      if (!attribute) continue
+      // Upload only the live prefix. Add WITHOUT clearing: three consumes and
+      // clears ranges at draw time and merges overlaps, so multiple syncs
+      // between draws accumulate safely (#532 contract).
+      attribute.addUpdateRange(0, half_count * attribute.itemSize)
+      attribute.needsUpdate = true
     }
   }
 
   #apply_replicas(packet: RenderPacket): void {
     const dims = packet.replicas.dims
     const cc = cell_count_of(dims)
-    ensure_instanced_attr(this.#geometry, `a_site`, this.#sites, 2, cc)
-    ensure_instanced_attr(this.#geometry, `a_jimage`, this.#jimages, 3, cc)
-    ensure_instanced_attr(this.#geometry, `a_half`, this.#halves, 1, cc)
-    ensure_instanced_attr(this.#geometry, `a_color`, this.#colors, 3, cc)
-    this.#geometry.instanceCount = this.#halves.length * cc
+    ensure_instanced_attr(this.#geometry, `a_site`, this.#sites, 2, cc, true)
+    ensure_instanced_attr(this.#geometry, `a_jimage`, this.#jimages, 3, cc, true)
+    ensure_instanced_attr(this.#geometry, `a_half`, this.#halves, 1, cc, true)
+    ensure_instanced_attr(this.#geometry, `a_color`, this.#colors, 3, cc, true)
+    this.#geometry.instanceCount = this.#half_count * cc
     const dims_val = this.material.uniforms.uDims.value as Int32Array
     dims_val[0] = dims[0]
     dims_val[1] = dims[1]

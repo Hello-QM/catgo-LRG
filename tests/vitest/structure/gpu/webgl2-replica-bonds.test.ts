@@ -612,3 +612,93 @@ describe(`legacy BondInstancedRenderer bypass wiring`, () => {
     expect(mesh.count).toBe(2)
   })
 })
+
+describe(`per-frame bond-count churn stays identity-stable (#534)`, () => {
+  // MD playback changes the bond count nearly every frame. The renderer must
+  // absorb that as an in-place rewrite on capacity-stable attributes — a
+  // fresh-attribute install per frame costs a VAO rebuild + a new GL buffer
+  // per attribute per frame (the old ones leak until GC) + full-capacity
+  // uploads, which is the #534 playback regression.
+  const HALF_ATTRS = [`a_site`, `a_jimage`, `a_half`, `a_color`] as const
+
+  function packet_with_bonds(
+    builder: ReturnType<typeof create_render_packet_builder>,
+    n: number,
+  ): RenderPacket {
+    const bonds: PacketBondConnectivity[] = Array.from({ length: n }, (_, idx) => ({
+      site_idx_1: idx % 3,
+      site_idx_2: (idx + 1) % 3,
+    }))
+    return builder.build({
+      structure: make_structure(3),
+      bond_connectivity: bonds,
+      dims: [1, 1, 1],
+      positions_version: n,
+    })
+  }
+
+  test(`shrink + regrow within capacity keep attribute and array identities`, () => {
+    const builder = create_render_packet_builder()
+    const renderer = new BondReplicaRenderer()
+    renderer.update(packet_with_bonds(builder, 4))
+    const attrs0 = HALF_ATTRS.map((name) => attr(renderer.mesh, name))
+    const arrays0 = attrs0.map((attribute) => attribute.array)
+    expect(geo(renderer.mesh).instanceCount).toBe(8)
+
+    // Shrink 4 → 3 bonds: same attributes, same backing arrays, live span 6.
+    renderer.update(packet_with_bonds(builder, 3))
+    HALF_ATTRS.forEach((name, idx) => {
+      const attribute = attr(renderer.mesh, name)
+      expect(attribute).toBe(attrs0[idx])
+      expect(attribute.array).toBe(arrays0[idx])
+    })
+    expect(geo(renderer.mesh).instanceCount).toBe(6)
+
+    // Regrow 3 → 4 bonds (fits capacity): still the same identities.
+    renderer.update(packet_with_bonds(builder, 4))
+    HALF_ATTRS.forEach((name, idx) => {
+      expect(attr(renderer.mesh, name)).toBe(attrs0[idx])
+    })
+    expect(geo(renderer.mesh).instanceCount).toBe(8)
+    renderer.dispose()
+  })
+
+  test(`rewrites cover exactly the live prefix via accumulated update ranges`, () => {
+    const builder = create_render_packet_builder()
+    const renderer = new BondReplicaRenderer()
+    renderer.update(packet_with_bonds(builder, 4))
+    renderer.update(packet_with_bonds(builder, 3))
+    for (const name of HALF_ATTRS) {
+      const attribute = attr(renderer.mesh, name)
+      expect(attribute.needsUpdate || attribute.version > 0).toBe(true)
+      // Ranges accumulate until the draw consumes them (#532 contract); the
+      // latest one must span the full live prefix of 6 halves.
+      const last = attribute.updateRanges.at(-1)!
+      expect(last.start).toBe(0)
+      expect(last.count).toBe(6 * attribute.itemSize)
+    }
+    renderer.dispose()
+  })
+
+  test(`growth beyond capacity installs fresh attributes and drops the draw clamp`, () => {
+    const builder = create_render_packet_builder()
+    const renderer = new BondReplicaRenderer()
+    renderer.update(packet_with_bonds(builder, 2))
+    const before = HALF_ATTRS.map((name) => attr(renderer.mesh, name))
+    ;(geo(renderer.mesh) as unknown as { _maxInstanceCount?: number })
+      ._maxInstanceCount = 4
+
+    renderer.update(packet_with_bonds(builder, 8))
+    HALF_ATTRS.forEach((name, idx) => {
+      const attribute = attr(renderer.mesh, name)
+      expect(attribute).not.toBe(before[idx])
+      expect(attribute.array.length).toBeGreaterThanOrEqual(16 * attribute.itemSize)
+    })
+    expect(geo(renderer.mesh).instanceCount).toBe(16)
+    expect(
+      (geo(renderer.mesh) as unknown as { _maxInstanceCount?: number })
+        ._maxInstanceCount,
+    ).toBeUndefined()
+    renderer.dispose()
+  })
+})
