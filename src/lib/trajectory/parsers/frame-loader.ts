@@ -14,6 +14,7 @@ import {
   create_trajectory_frame,
   MAX_METADATA_SIZE,
   MAX_SAFE_STRING_LENGTH,
+  parse_xyz_lattice,
   read_ndarray_from_view,
 } from './common'
 
@@ -312,11 +313,18 @@ export class TrajFrameReader implements FrameLoader {
     }
 
     const metadata = this.parse_xyz_metadata(comment, frame_number)
+    // Per-frame lattice from the extxyz comment (#536): the indexed path must
+    // agree with the eager parser (parsers/xyz.ts), which attaches the lattice
+    // and pbc [true, true, true] whenever a Lattice field is present. Dropping
+    // it here silently degraded >2 MB extxyz files to non-periodic (no cell
+    // box, non-periodic bonds, supercell controls gone). Variable-cell
+    // trajectories work naturally — each frame parses its own comment.
+    const lattice_matrix = parse_xyz_lattice(comment)
     return create_trajectory_frame(
       positions,
       elements,
-      undefined,
-      undefined,
+      lattice_matrix,
+      lattice_matrix ? [true, true, true] : undefined,
       frame_number,
       metadata.properties,
     )
