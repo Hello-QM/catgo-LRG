@@ -36,11 +36,12 @@
    */
 
   import type { Vec3 } from '$lib'
-  import { untrack } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
   import type { InstancedMesh } from 'three'
   import { Color, PlaneGeometry, ShaderMaterial, Vector3 } from 'three'
   import WebGLReplicaLayer from '../gpu/WebGLReplicaLayer.svelte'
+  import { SharedPositionTexture } from '../gpu/webgl2/shared-position-texture'
   import type { RenderPacket } from '../scene/render-packet'
   import type { AtomManager } from './atom-manager.svelte'
   import { AtomInstancedRenderer, type CuttingVisibilityEntry } from './atom-instanced-renderer'
@@ -112,6 +113,8 @@
      * the legacy path byte-identical. Task 6 plumbs the packet from the scene.
      */
     render_packet?: RenderPacket | null
+    /** The scene-level combined layer owns packet visuals for this manager. */
+    packet_renderer_owned?: boolean
   }
 
   let {
@@ -133,9 +136,12 @@
     highlight_strength = 1.0,
     max_capacity = 200_000,
     render_packet = null,
+    packet_renderer_owned = false,
   }: Props = $props()
 
   const threlte = useThrelte()
+  const packet_position_resource = new SharedPositionTexture()
+  onDestroy(() => packet_position_resource.dispose())
 
   // Render-loop refactor (R4c): all canvas-paint requests in this component
   // route through mark_dirty() — single grep target + DEV counter contribution.
@@ -659,12 +665,15 @@
   })
 </script>
 
-{#if render_packet}
+{#if packet_renderer_owned}
+  <!-- The scene-level combined packet layer owns all atom visuals. -->
+{:else if render_packet}
   <!-- Packet path is persistent from 1× upward. Do not mount a hidden legacy
        InstancedMesh: its unused capacity-sized instanceMatrix is exactly the
        allocation this path removes, and 1×↔N× must not remount resources. -->
   <WebGLReplicaLayer
     packet={render_packet}
+    position_resource={packet_position_resource}
     show_bonds={false}
     {ambient_light}
     {directional_light}

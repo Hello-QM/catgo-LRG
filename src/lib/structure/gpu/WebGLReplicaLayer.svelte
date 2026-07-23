@@ -7,9 +7,9 @@
    * across play / pause / scrub), and a replica-factor change only touches
    * instance counts, divisors, and uniforms.
    *
-   * Hosted by AtomManagerInstances (show_bonds=false) and BondManagerInstances
-   * (show_atoms=false) so each legacy component owns exactly its own replica
-   * bypass. Task 6 integrates the full scene semantics.
+   * StructureScene hosts one combined instance for the packet path. The
+   * manager-local atom-only/bond-only mounts remain compatibility fallbacks
+   * for isolated component consumers.
    */
   import { untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
@@ -23,9 +23,12 @@
   import type { RenderPacket } from '../scene/render-packet'
   import { AtomReplicaRenderer } from './webgl2/atom-replica-renderer'
   import { BondReplicaRenderer } from './webgl2/bond-replica-renderer'
+  import type { SharedPositionTexture } from './webgl2/shared-position-texture'
 
   interface Props {
     packet: RenderPacket
+    gpu_positions_rgba?: Float32Array | null
+    position_resource: SharedPositionTexture
     /** Mount-time flags — which replica draws this layer instance owns. */
     show_atoms?: boolean
     show_bonds?: boolean
@@ -48,6 +51,8 @@
 
   let {
     packet,
+    gpu_positions_rgba = null,
+    position_resource,
     show_atoms = true,
     show_bonds = true,
     bond_radius = 0.15,
@@ -69,12 +74,18 @@
   // options capture initial values, the $effects keep uniforms live.
   const atom_renderer = untrack(() =>
     show_atoms
-      ? new AtomReplicaRenderer({ ambient_light, directional_light, ghost_opacity })
+      ? new AtomReplicaRenderer({
+        positions: position_resource,
+        ambient_light,
+        directional_light,
+        ghost_opacity,
+      })
       : null
   )
   const bond_renderer = untrack(() =>
     show_bonds
       ? new BondReplicaRenderer({
+        positions: position_resource,
         bond_radius,
         stub_scale: incomplete_edge_length_scale,
         ambient_light,
@@ -99,7 +110,9 @@
   const viewport_scratch = new Vector2(1, 1)
   $effect(() => {
     const pkt = packet
+    const rgba = gpu_positions_rgba
     untrack(() => {
+      position_resource.update(pkt.frame, rgba)
       atom_renderer?.update(pkt)
       if (bond_renderer) {
         bond_renderer.update(pkt)

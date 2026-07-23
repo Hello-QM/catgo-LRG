@@ -12,7 +12,7 @@
   import { T, useThrelte, useTask } from '@threlte/core'
   import * as extras from '@threlte/extras'
   import type { ComponentProps } from 'svelte'
-  import { type Snippet, untrack } from 'svelte'
+  import { onDestroy, type Snippet, untrack } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import type { Camera, Scene, InstancedMesh as ThreeInstancedMesh } from 'three'
   import { BufferGeometry, Color, CylinderGeometry, Euler, InstancedBufferAttribute, MeshBasicMaterial, Matrix4, Mesh, MeshStandardMaterial, Quaternion, ShaderMaterial, SphereGeometry, Vector3 } from 'three'
@@ -28,6 +28,11 @@
   import AtomImpostors from './AtomImpostors.svelte'
   import SlabPreview from './SlabPreview.svelte'
   import { build_display_radii } from './gpu/radius-lut'
+  import WebGLReplicaLayer from './gpu/WebGLReplicaLayer.svelte'
+  import {
+    combined_packet_render_eligible,
+  } from './gpu/combined-packet-render-eligible'
+  import { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
   import type {
     BaseBondGraph,
     BaseTopology,
@@ -37,6 +42,7 @@
   import {
     build_cutting_visibility_map,
     compute_show_bulk_atoms,
+    should_show_bonds,
     get_lattice as get_lattice_pure,
     compute_structure_size,
     compute_atom_span_radius,
@@ -1129,6 +1135,8 @@
   })
   let prepared_render_packet = $state.raw<RenderPacket | null>(null)
   let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
+  const shared_position_texture = new SharedPositionTexture()
+  onDestroy(() => shared_position_texture.dispose())
   let prepared_frame_forces = $state.raw<Float32Array | null>(null)
   let prepared_error = $state<string | null>(null)
   let prepared_graph_version = 0
@@ -5061,11 +5069,33 @@
     }
   })
 
+  let combined_packet_renderer_owned = $derived(
+    USE_NEW_ATOM_SYSTEM &&
+      manager_render_packet !== null &&
+      combined_packet_render_eligible({
+        atom_opacity_overrides: merged_atom_opacity_overrides.size,
+        bond_opacity_overrides: bond_opacity_overrides.size,
+        cutting_active,
+        drag_overrides: realtime_position_overrides?.size ?? 0,
+        hidden_atoms: new_atom_hidden_site_ids?.size ?? 0,
+        partial_occupancy: atom_data.some((atom) => atom.has_partial_occupancy),
+        multibond: bond_order_perception,
+      }),
+  )
+  let combined_packet_bonds_visible = $derived(
+    should_show_bonds(show_bonds, lattice) && !bonds_deferred,
+  )
+  let manager_gpu_positions = $derived(
+    manager_render_packet?.frame === prepared_render_packet?.frame
+      ? prepared_gpu_positions
+      : null,
+  )
+
   // Visual T5 — while the managers consume a render packet, picking is the
   // WebGL2 replica integer-ID pass (gpu-picker-integration packet branch).
   // The invisible CPU sphere/cylinder hitbox meshes are NOT mounted and
   // their matrix rebuild effects are skipped in this mode.
-  let packet_picking_active = $derived(manager_render_packet !== null)
+  let packet_picking_active = $derived(combined_packet_renderer_owned)
 
   // Build a set for fast selected_bonds lookup
   let selected_bond_keys = $derived.by(() => new Set(selected_bonds.map(b => b.key)))
@@ -6306,6 +6336,25 @@
     <T.Group position={math.scale(rotation_target, -1)}>
       {#if show_bulk_atoms}
         {#if USE_NEW_ATOM_SYSTEM}
+          {#if manager_render_packet && combined_packet_renderer_owned && !webgl_suspended}
+            <WebGLReplicaLayer
+              packet={manager_render_packet}
+              gpu_positions_rgba={manager_gpu_positions}
+              position_resource={shared_position_texture}
+              show_atoms={show_bulk_atoms}
+              show_bonds={combined_packet_bonds_visible}
+              bond_radius={bond_thickness}
+              {incomplete_edge_length_scale}
+              ambient_light={active_ambient_light}
+              directional_light={active_directional_light}
+              {light_dir}
+              {render_style}
+              {matcap_preset}
+              highlight_strength={active_highlight_strength}
+              opacity={1}
+              ghost_opacity={image_atom_opacity}
+            />
+          {/if}
           <!-- Phase X6b renderer. Mirrors AtomImpostors for cutting / drag /
                image-atom opacity / per-atom overrides. Remaining regressions
                (partial-occupancy wedges; selection highlight overlays) are
@@ -6327,7 +6376,10 @@
             {matcap_preset}
             {light_dir}
             highlight_strength={active_highlight_strength}
-            render_packet={manager_render_packet}
+            render_packet={combined_packet_renderer_owned
+              ? manager_render_packet
+              : null}
+            packet_renderer_owned={combined_packet_renderer_owned}
           />
         {:else}
           <!-- Impostor-based atom rendering: billboard quads with ray-sphere fragment shader -->
@@ -6514,7 +6566,10 @@
           highlight_strength={active_highlight_strength}
           gpu_transform_active={typed_direct_active}
           max_bond_length={MAX_BOND_LENGTH}
-          render_packet={manager_render_packet}
+          render_packet={combined_packet_renderer_owned
+            ? manager_render_packet
+            : null}
+          packet_renderer_owned={combined_packet_renderer_owned}
         />
       {/if}
 

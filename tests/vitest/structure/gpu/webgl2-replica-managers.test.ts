@@ -355,7 +355,7 @@ for (const mode of [`atom`, `bond`] as const) {
       const main = visible_meshes(scene)[0]
       const geometry = main.geometry as THREE.InstancedBufferGeometry
       const material = main.material
-      const attr_name = mode === `atom` ? `instancePosition` : `a_site`
+      const attr_name = mode === `atom` ? `instanceSite` : `a_site`
       const base_array = (geometry.getAttribute(attr_name) as
         THREE.InstancedBufferAttribute).array
 
@@ -435,7 +435,7 @@ describe(`packet-path activation from a previously mounted static state`, () => 
     const main = visible_meshes(scene)[0]
     expect(main).toBeDefined()
     const geometry = main.geometry as THREE.InstancedBufferGeometry
-    const first = geometry.getAttribute(`instancePosition`) as
+    const first = geometry.getAttribute(`instanceSite`) as
       THREE.InstancedBufferAttribute
     expect(geometry.instanceCount).toBe(2 * 2)
     expect(first.count).toBe(2)
@@ -444,7 +444,7 @@ describe(`packet-path activation from a previously mounted static state`, () => 
     await click(dom, `factor-8`)
     // Live factor change on the mounted renderer: fresh attribute identity
     // (natural VAO rebind) over the same base array, counts follow.
-    const second = geometry.getAttribute(`instancePosition`) as
+    const second = geometry.getAttribute(`instanceSite`) as
       THREE.InstancedBufferAttribute
     expect(second).not.toBe(first)
     expect(second.array).toBe(first.array)

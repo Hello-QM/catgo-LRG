@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
   import type { InstancedMesh } from 'three'
   import {
@@ -18,6 +18,7 @@
   } from 'three'
   import { get_bond_key } from '../bonding'
   import WebGLReplicaLayer from '../gpu/WebGLReplicaLayer.svelte'
+  import { SharedPositionTexture } from '../gpu/webgl2/shared-position-texture'
   import type { RenderPacket } from '../scene/render-packet'
   import { BondInstancedRenderer, type PartnerDrawnLookup } from './bond-instanced-renderer'
   import { bond_geometry_mode } from './bond-geometry-mode'
@@ -149,6 +150,8 @@
      * legacy path byte-identical. Task 6 plumbs the packet from the scene.
      */
     render_packet?: RenderPacket | null
+    /** The scene-level combined layer owns packet visuals for this manager. */
+    packet_renderer_owned?: boolean
   }
 
   let {
@@ -177,7 +180,11 @@
     gpu_transform_active = false,
     max_bond_length = 4.0,
     render_packet = null,
+    packet_renderer_owned = false,
   }: Props = $props()
+
+  const packet_position_resource = new SharedPositionTexture()
+  onDestroy(() => packet_position_resource.dispose())
 
   // GPU-transform eligibility. v1 exclusions (all fall back to the CPU
   // instanceMatrix path, zero regression surface):
@@ -1300,12 +1307,15 @@
   })
 </script>
 
-{#if render_packet}
+{#if packet_renderer_owned}
+  <!-- The scene-level combined packet layer owns all bond visuals. -->
+{:else if render_packet}
   <!-- Packet path is persistent from 1× upward. Do not mount a hidden legacy
        InstancedMesh: its unused capacity-sized instanceMatrix is exactly the
        allocation this path removes, and 1×↔N× must not remount resources. -->
   <WebGLReplicaLayer
     packet={render_packet}
+    position_resource={packet_position_resource}
     show_atoms={false}
     {bond_radius}
     {incomplete_edge_length_scale}

@@ -1,14 +1,17 @@
 <script lang="ts">
   import { createThrelteContext } from '@threlte/core'
+  import { onDestroy } from 'svelte'
   import type { Scene, WebGLRenderer } from 'three'
   import AtomManagerInstances from '$lib/structure/atoms/AtomManagerInstances.svelte'
   import type { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
   import BondManagerInstances from '$lib/structure/bonding/BondManagerInstances.svelte'
   import type { BondManager } from '$lib/structure/bonding/bond-manager.svelte'
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import WebGLReplicaLayer from '$lib/structure/gpu/WebGLReplicaLayer.svelte'
+  import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
 
   interface Props {
-    mode: 'atom' | 'bond'
+    mode: 'atom' | 'bond' | 'combined'
     packets: RenderPacket[]
     atom_manager: AtomManager
     bond_manager: BondManager
@@ -18,6 +21,7 @@
     onscene: (scene: Scene) => void
     /** Start with render_packet=null (legacy static path) — atom mode only. */
     start_null?: boolean
+    onpositions?: (positions: SharedPositionTexture) => void
   }
 
   let {
@@ -30,6 +34,7 @@
     canvas,
     onscene,
     start_null = false,
+    onpositions,
   }: Props = $props()
 
   const threlte = createThrelteContext({
@@ -40,6 +45,9 @@
     renderMode: 'manual',
   })
   onscene(threlte.scene)
+  const position_resource = new SharedPositionTexture()
+  onpositions?.(position_resource)
+  onDestroy(() => position_resource.dispose())
 
   let packet_idx = $state(start_null ? -1 : 0)
   let ghost_opacity = $state(0.2)
@@ -73,12 +81,38 @@
     image_atom_opacity={live_ghost_opacity}
     max_capacity={16}
   />
-{:else}
+{:else if mode === 'bond'}
   <BondManagerInstances
     {bond_manager}
     atom_positions={(packet ?? packets[0]).frame.positions}
     atom_colors={(packet ?? packets[0]).topology.colors}
     render_packet={packet}
+    incomplete_edge_length_scale={live_stub_scale}
+    periodic_bond_opacity={live_ghost_opacity}
+    opacity={live_bond_opacity}
+  />
+{:else}
+  {#if packet}
+    <WebGLReplicaLayer
+      {packet}
+      {position_resource}
+      gpu_positions_rgba={null}
+    />
+  {/if}
+  <AtomManagerInstances
+    {atom_manager}
+    render_packet={packet}
+    packet_renderer_owned={packet !== null}
+    {render_style}
+    image_atom_opacity={live_ghost_opacity}
+    max_capacity={16}
+  />
+  <BondManagerInstances
+    {bond_manager}
+    atom_positions={(packet ?? packets[0]).frame.positions}
+    atom_colors={(packet ?? packets[0]).topology.colors}
+    render_packet={packet}
+    packet_renderer_owned={packet !== null}
     incomplete_edge_length_scale={live_stub_scale}
     periodic_bond_opacity={live_ghost_opacity}
     opacity={live_bond_opacity}
