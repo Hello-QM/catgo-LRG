@@ -75,6 +75,16 @@
     type ImageSiteEntry,
     type ImageSiteKey,
   } from './pbc-image-atoms'
+  import {
+    prepare_exact_trajectory_frame,
+    type TrajectoryFrameSource,
+  } from './trajectory-frame-preparer'
+  import {
+    create_prepared_frame_pipeline,
+    same_prepared_frame_key,
+    type PreparedFrameKey,
+  } from './trajectory-prepared-frame'
+  import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
   import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
   import {
     AtomManager,
@@ -115,7 +125,6 @@
     create_bond_state,
     compute_bond_connectivity,
     invalidate_bonds_for_recompute,
-    compute_bond_connectivity_for_frame,
     clear_trajectory_bond_frame_cache,
     build_bond_pairs,
     build_trajectory_bond_pairs,
@@ -146,6 +155,13 @@
   // here; R7 moved that consumer into SelectionHighlights.svelte. No
   // direct callers remain in this file.
   import SelectionHighlights from './SelectionHighlights.svelte'
+
+  if (
+    import.meta.env.DEV && typeof location !== `undefined` &&
+    new URLSearchParams(location.search).get(`trajectory_pipeline`) === `legacy`
+  ) {
+    void import(`./trajectory-bond-legacy-diagnostic`)
+  }
 
   // R6: selection-highlight pulse. The original (pre-c4155f44) opacity
   // pulse animated the wireframe spheres around selected/active atoms.
@@ -664,6 +680,15 @@
     // numbers are unchanged), so every consumer below only re-fires per frame
     // when the cell actually varies. null = use the (frozen) structure lattice.
     trajectory_frame_lattice = null as number[][] | null,
+    trajectory_frame_count = 0,
+    get_trajectory_frame_source = null as
+      | ((frame_idx: number) => TrajectoryFrameSource | null)
+      | null,
+    request_trajectory_frame_source = null as
+      | ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
+      | null,
+    on_trajectory_frame_presented,
+    on_trajectory_buffer_state,
     // Upstream base-frame packet. Non-null only while a trajectory owns the
     // visual atom/bond replica path (including 1×1×1).
     render_packet = null as RenderPacket | null,
@@ -955,6 +980,23 @@
     // Variable-cell trajectory fast-path: displayed frame's lattice matrix
     // (rows = a,b,c). Identity-stable across frames when the cell is fixed.
     trajectory_frame_lattice?: number[][] | null
+    trajectory_frame_count?: number
+    get_trajectory_frame_source?: ((
+      frame_idx: number,
+    ) => TrajectoryFrameSource | null) | null
+    request_trajectory_frame_source?: ((
+      frame_idx: number,
+    ) => Promise<TrajectoryFrameSource | null>) | null
+    on_trajectory_frame_presented?: (
+      frame_idx: number,
+      positions_version: number,
+    ) => void
+    on_trajectory_buffer_state?: (state: {
+      frame_idx: number
+      ready_ahead: number
+      preparing: boolean
+      error: string | null
+    }) => void
     /** Base scientific frame + visual replica ownership from Structure.svelte. */
     render_packet?: RenderPacket | null
     // Per-frame bond connectivity (from trajectory bond cache). Null = fall back to static.
@@ -1079,6 +1121,29 @@
     // Vibration mode animation
     vibration_data?: { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null
   } = $props()
+
+  const prepared_pipeline = create_prepared_frame_pipeline({
+    max_frames: 8,
+    max_bytes: 96 * 1024 * 1024,
+    max_in_flight: 1,
+  })
+  let prepared_render_packet = $state.raw<RenderPacket | null>(null)
+  let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
+  let prepared_frame_forces = $state.raw<Float32Array | null>(null)
+  let prepared_error = $state<string | null>(null)
+  let prepared_graph_version = 0
+  let presented_trajectory_positions = $derived(
+    prepared_render_packet?.frame.positions ?? null,
+  )
+  let presented_trajectory_lattice = $derived.by((): number[][] | null => {
+    const lattice = prepared_render_packet?.frame.lattice
+    if (!lattice) return null
+    return [
+      [lattice[0], lattice[1], lattice[2]],
+      [lattice[3], lattice[4], lattice[5]],
+      [lattice[6], lattice[7], lattice[8]],
+    ]
+  })
 
   // Reduced-motion: honor the explicit user setting OR the OS-level
   // `prefers-reduced-motion: reduce` media query. Gates every continuous rAF
@@ -2034,7 +2099,7 @@
     return compute_charge_label_entries(
       structure, visible_charge_labels, show_charge_labels,
       num_original_sites, image_to_original_map, realtime_position_overrides,
-      trajectory_frame_positions,
+      presented_trajectory_positions,
       atom_manager,
     )
   })
@@ -2529,6 +2594,247 @@
     ...(bonding_options as Record<string, unknown>),
     scale: bond_scale,
   })
+
+  let latest_prepared_request_key: PreparedFrameKey | null = null
+
+  function exact_rules_version(
+    strategy: BondingStrategy,
+    options: Record<string, number>,
+    pbc: [boolean, boolean, boolean] | null,
+    rules: readonly import('./index').BondDistanceRule[],
+  ): string {
+    const sorted_options = Object.fromEntries(
+      Object.entries(options).sort(([left], [right]) => left.localeCompare(right)),
+    )
+    const sorted_rules = [...rules]
+      .map((rule) => ({ ...rule }))
+      .sort((left, right) =>
+        `${left.element_1}|${left.element_2}|${left.min_dist}|${left.max_dist}`
+          .localeCompare(
+            `${right.element_1}|${right.element_2}|${right.min_dist}|${right.max_dist}`,
+          )
+      )
+    return JSON.stringify({ strategy, options: sorted_options, pbc, rules: sorted_rules })
+  }
+
+  function graph_connectivity(graph: BaseBondGraph) {
+    const connectivity = new Array<{
+      site_idx_1: number
+      site_idx_2: number
+      strength: number
+      jimage: [number, number, number]
+    }>(graph.pairs.length / 2)
+    for (let idx = 0; idx < connectivity.length; idx++) {
+      connectivity[idx] = {
+        site_idx_1: graph.pairs[idx * 2],
+        site_idx_2: graph.pairs[idx * 2 + 1],
+        strength: graph.strengths[idx],
+        jimage: [
+          graph.jimages[idx * 3],
+          graph.jimages[idx * 3 + 1],
+          graph.jimages[idx * 3 + 2],
+        ],
+      }
+    }
+    return connectivity
+  }
+
+  $effect(() => {
+    const raw_packet = render_packet
+    const raw_structure = bond_input
+    const raw_positions = trajectory_frame_positions
+    const raw_lattice = trajectory_frame_lattice
+    const raw_forces = trajectory_frame_forces
+    const frame_idx = trajectory_step_idx
+    const frame_count = trajectory_frame_count
+    const getter = get_trajectory_frame_source
+    const requester = request_trajectory_frame_source
+    const options = Object.fromEntries(
+      Object.entries(bonding_options_eff)
+        .filter((entry): entry is [string, number] => typeof entry[1] === `number`),
+    )
+    const crystal = raw_structure as Crystal | undefined
+    const raw_pbc = crystal?.lattice?.pbc
+    const pbc = Array.isArray(raw_pbc) && raw_pbc.length === 3
+      ? [!!raw_pbc[0], !!raw_pbc[1], !!raw_pbc[2]] as [
+        boolean,
+        boolean,
+        boolean,
+      ]
+      : null
+    const rules = bond_distance_rules ?? []
+    const rules_version = exact_rules_version(
+      bonding_strategy,
+      options,
+      pbc,
+      rules,
+    )
+
+    if (
+      !raw_packet || !raw_structure?.sites || !raw_positions ||
+      frame_idx < 0
+    ) {
+      latest_prepared_request_key = null
+      prepared_pipeline.clear()
+      prepared_render_packet = null
+      prepared_gpu_positions = null
+      prepared_frame_forces = null
+      prepared_error = null
+      return
+    }
+
+    const fallback_source: TrajectoryFrameSource = {
+      frame_idx,
+      positions: raw_positions,
+      forces: raw_forces,
+      lattice: raw_lattice,
+      positions_version: raw_packet.frame.positions_version,
+      topology_stable: true,
+    }
+    const current_source = getter?.(frame_idx) ?? fallback_source
+    const current_key: PreparedFrameKey = {
+      owner: raw_packet.frame.owner,
+      frame_idx,
+      positions_version: current_source.positions_version,
+      topology_version: raw_packet.topology.version,
+      rules_version,
+    }
+    latest_prepared_request_key = current_key
+    const generation = prepared_pipeline.begin_request(current_key)
+    const estimated_bytes = Math.max(
+      current_source.positions.byteLength * 3,
+      raw_packet.topology.atom_count * 64,
+    )
+
+    const prepare_source = async (
+      source_idx: number,
+      known_source: TrajectoryFrameSource | null,
+    ) => {
+      const source = known_source ??
+        await requester?.(source_idx) ??
+        getter?.(source_idx) ??
+        null
+      if (!source) {
+        throw new Error(`Trajectory frame ${source_idx} is not decoded`)
+      }
+      return prepare_exact_trajectory_frame({
+        packet: raw_packet,
+        source,
+        structure: raw_structure,
+        strategy: bonding_strategy,
+        options,
+        pbc,
+        distance_rules: rules,
+        rules_version,
+        graph_version: ++prepared_graph_version,
+      })
+    }
+
+    const report_buffer = (preparing: boolean) => {
+      const keys: PreparedFrameKey[] = []
+      const total = Math.max(0, frame_count)
+      for (let offset = 0; offset < Math.min(8, total || 1); offset++) {
+        keys.push({
+          ...current_key,
+          frame_idx: total > 0 ? (frame_idx + offset) % total : frame_idx,
+        })
+      }
+      on_trajectory_buffer_state?.({
+        frame_idx,
+        ready_ahead: Math.max(0, prepared_pipeline.ready_count(keys) - 1),
+        preparing,
+        error: untrack(() => prepared_error),
+      })
+    }
+
+    trajectory_render_diagnostics.record(`requested`, frame_idx)
+    report_buffer(true)
+    void prepared_pipeline.request({
+      key: current_key,
+      priority: `current`,
+      estimated_bytes,
+      prepare: () => prepare_source(frame_idx, current_source),
+    }, generation).then((outcome) => {
+      if (
+        outcome.status === `ready` &&
+        latest_prepared_request_key &&
+        same_prepared_frame_key(outcome.value.key, latest_prepared_request_key)
+      ) {
+        const prepared = outcome.value
+        // One publication turn owns positions, lattice, graph, forces, and the
+        // worker-packed position texture together.
+        prepared_render_packet = prepared.packet
+        prepared_gpu_positions = prepared.gpu_positions_rgba
+        prepared_frame_forces = prepared.forces
+        prepared_error = null
+        bond_manager.replace_auto_bonds(
+          prepared.graph.pairs,
+          prepared.graph.pairs.length / 2,
+          prepared.graph.jimages,
+        )
+        bond_state.bond_connectivity = graph_connectivity(prepared.graph)
+        bond_state.last_bond_structure = raw_structure
+        bond_state.last_bond_strategy = rules_version
+        bond_state.last_elem_fingerprint = `${raw_packet.topology.version}`
+        const manager = atom_manager
+        manager.begin_positions_batch()
+        try {
+          for (
+            let slot = 0;
+            slot < manager.count &&
+            slot < raw_packet.topology.atom_count;
+            slot++
+          ) {
+            const site_idx = manager.site_ids_buffer[slot]
+            const offset = site_idx * 3
+            manager.set_position(
+              slot,
+              prepared.packet.frame.positions[offset],
+              prepared.packet.frame.positions[offset + 1],
+              prepared.packet.frame.positions[offset + 2],
+            )
+          }
+        } finally {
+          manager.commit_positions_batch()
+        }
+        trajectory_render_diagnostics.record(`presented`, prepared.key.frame_idx)
+        on_trajectory_frame_presented?.(
+          prepared.key.frame_idx,
+          prepared.key.positions_version,
+        )
+      } else if (outcome.status === `failed`) {
+        prepared_error = outcome.error.message
+      }
+      report_buffer(false)
+    })
+
+    if (current_source.topology_stable && frame_count > 1) {
+      for (let offset = 1; offset < Math.min(8, frame_count); offset++) {
+        const prefetch_idx = (frame_idx + offset) % frame_count
+        const known = getter?.(prefetch_idx) ?? null
+        if (known && !known.topology_stable) continue
+        const key: PreparedFrameKey = { ...current_key, frame_idx: prefetch_idx }
+        void prepared_pipeline.request({
+          key,
+          priority: `prefetch`,
+          estimated_bytes,
+          prepare: async () => {
+            const source = known ??
+              await requester?.(prefetch_idx) ??
+              getter?.(prefetch_idx) ??
+              null
+            if (!source?.topology_stable) {
+              throw new Error(
+                `Trajectory frame ${prefetch_idx} is not topology-stable`,
+              )
+            }
+            return prepare_source(prefetch_idx, source)
+          },
+        }, generation).then(() => report_buffer(false))
+      }
+    }
+  })
+
   $effect.pre(() => {
     // Fixed-topology trajectory playback: the trajectory fast-path
     // (compute_bond_connectivity_for_frame + build_trajectory_bond_pairs in
@@ -2851,11 +3157,11 @@
     const drag = external_dragging
     const sel = selected_sites
     const overrides_size = overrides?.size ?? 0
-    const traj_positions = trajectory_frame_positions
+    const traj_positions = presented_trajectory_positions
     // Variable-cell: identity changes only when the cell actually varies, and
     // always alongside a traj_positions identity change — so the memo guards
     // below need no extra lattice term.
-    const frame_lat = trajectory_frame_lattice
+    const frame_lat = presented_trajectory_lattice
 
     // Plan v3 Phase 3 trajectory fast-path: when a trajectory is active,
     // bypass the slow build_bond_pairs path and use position-indexed
@@ -2863,17 +3169,10 @@
     // the slow path, so bbp_meaningful drops to 0 during playback (the
     // Phase 3 success criterion).
     if (traj_positions != null) {
-      // Layer 1 stale-bond fix: refresh connectivity for the current frame.
-      // Cache hits return synchronously; cache misses on small structures
-      // run sync detection; large-structure misses dispatch async (latest-wins
-      // throttle) and return the previous frame's connectivity in the
-      // meantime. NEVER reassigns bond_state.bond_connectivity synchronously,
-      // so this does not cause an infinite re-fire of this $effect.pre.
-      const traj_conn = compute_bond_connectivity_for_frame(
-        bond_state, traj_positions, bond_input,
-        show_bonds, lattice, bonding_strategy, bonding_options,
-        frame_lat,
-      )
+      // Connectivity and geometry were prepared together and committed in one
+      // publication turn above. Never ask the cadence-era controller for a
+      // previous frame's graph here.
+      const traj_conn = conn_state
       const __traj_tol_v = (() => {
         const raw = (bonding_options as Record<string, unknown> | undefined)?.tolerance
         return typeof raw === `number` && raw > 0 ? raw : undefined
@@ -3619,7 +3918,7 @@
     // with stale (entry-frame) topology, overwriting the typed writes.
     const ruled_bonds = apply_bond_distance_rules(
       bond_struct, lat_matrix, bond_pairs, bond_distance_rules ?? [],
-      _rules_len > 0 ? trajectory_frame_positions ?? null : null,
+      _rules_len > 0 ? presented_trajectory_positions ?? null : null,
     )
 
     const is_site_visible = (site_idx: number) => {
@@ -4575,7 +4874,7 @@
     // overlay below overwrites every slot — skip the ~N proxied sites[i].xyz
     // reads per frame.
     const buf = new Float32Array(sites.length * 3)
-    const overlay_covers_all = trajectory_frame_positions != null &&
+    const overlay_covers_all = presented_trajectory_positions != null &&
       mgr.count >= sites.length
     if (!overlay_covers_all) {
       for (let i = 0; i < sites.length; i++) {
@@ -4618,7 +4917,7 @@
   // frame lattice identity changes — i.e. per frame ONLY when the cell truly
   // varies (the supplier keeps the reference stable for fixed cells).
   let bond_frame_lattice_matrix = $derived.by((): Float64Array | null => {
-    const m = trajectory_frame_lattice
+    const m = presented_trajectory_lattice
     if (!m || m.length !== 3) return null
     const out = new Float64Array(9)
     out[0] = m[0][0]; out[1] = m[0][1]; out[2] = m[0][2]
@@ -4712,7 +5011,11 @@
   let manager_topology_version = 0
   let manager_topology_snapshot: BaseTopology | null = null
   let manager_packet_topology = $derived.by((): BaseTopology | null => {
-    const upstream = render_packet?.topology ?? null
+    const upstream = (
+      trajectory_frame_positions != null
+        ? prepared_render_packet
+        : render_packet
+    )?.topology ?? null
     if (upstream === null) return null
     const colors = atom_colors_buffer
     const radii = manager_display_radii
@@ -4739,7 +5042,9 @@
   })
 
   let manager_render_packet = $derived.by((): RenderPacket | null => {
-    const upstream = render_packet
+    const upstream = trajectory_frame_positions != null
+      ? prepared_render_packet
+      : render_packet
     const topology = manager_packet_topology
     if (upstream === null || topology === null) return null
     const atom_count = upstream.topology.atom_count
@@ -5263,7 +5568,7 @@
     if (webgl_suspended) return EMPTY_SITE_POSITION_MAP
     if (!live_atom_position_map_needed) return EMPTY_SITE_POSITION_MAP
     void atom_manager.version
-    const traj = trajectory_frame_positions
+    const traj = presented_trajectory_positions
     const traj_max_site = traj ? Math.floor(traj.length / 3) : 0
     const position_map = new Map<number, Vec3>()
     for (const [sid, fallback] of atom_static_maps.base_position_map) {
@@ -5321,7 +5626,7 @@
     if (!show_force_vectors || !structure?.sites) return []
     // Override forces from trajectory Float32Array (positions are already
     // correct in structure.sites since the unified single-path always updates structure)
-    const traj_forces = trajectory_frame_forces
+    const traj_forces = prepared_frame_forces
     if (traj_forces) {
       const override_sites = structure.sites.map((site, i) => ({
         ...site,
@@ -6412,7 +6717,7 @@
              frozen frame-0 lattice. Single wireframe box — per-frame rebuild
              is negligible, and fixed-cell identity stability skips it. -->
         <Lattice
-          matrix={(trajectory_frame_lattice as [Vec3, Vec3, Vec3] | null) ?? lattice.matrix}
+          matrix={(presented_trajectory_lattice as [Vec3, Vec3, Vec3] | null) ?? lattice.matrix}
           {...lattice_props}
         />
       {/if}

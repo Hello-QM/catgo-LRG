@@ -9,6 +9,7 @@
   } from '$lib'
   import type { AtomManipulationEvent } from '$lib/structure'
   import type { AnyStructure, PymatgenStructure } from '$lib/structure'
+  import type { TrajectoryFrameSource } from '$lib/structure/trajectory-frame-preparer'
   import { writeRemoteFile } from '$lib/api/hpc'
   import { structure_to_poscar_str } from '$lib/structure/export'
   import { handle_url_drop, load_from_url } from '$lib/io'
@@ -37,6 +38,7 @@
   import { create_frame_position_cache, FRAME_POS_CACHE_MAX } from './frame-positions'
   import type {
     ParseProgress,
+    FramePositionData,
     TrajectoryDataExtractor,
     TrajectoryFrame,
     TrajectoryType,
@@ -1666,6 +1668,99 @@
     return false
   }
 
+  function get_trajectory_frame_source(
+    frame_idx: number,
+  ): TrajectoryFrameSource | null {
+    const frame = trajectory?.frames?.[frame_idx]
+    const sites = frame?.structure?.sites
+    const cached_frame = sites?.length
+      ? frame_pos_cache.get(frame_idx, sites)
+      : null
+    const positions = position_cache?.[frame_idx] ??
+      frame?.position_data?.positions ??
+      cached_frame?.positions ??
+      null
+    if (!positions) return null
+    const first_frame = trajectory?.frames?.[0]
+    const base_lattice = first_frame?.position_data?.lattice ??
+      (first_frame?.structure as
+        | { lattice?: { matrix?: number[][] } }
+        | undefined)?.lattice?.matrix ??
+      null
+    const lattice = frame?.position_data?.lattice ??
+      (frame?.structure as
+        | { lattice?: { matrix?: number[][] } }
+        | undefined)?.lattice?.matrix ??
+      base_lattice
+    const metadata = trajectory?.metadata as
+      | { source_format?: string; type?: string }
+      | undefined
+    const trajectory_source = metadata?.source_format ?? metadata?.type
+    return {
+      frame_idx,
+      positions,
+      forces: force_cache?.[frame_idx] ??
+        frame?.position_data?.forces ??
+        cached_frame?.forces ??
+        null,
+      lattice: lattice ?? null,
+      positions_version: trajectory_positions_version.v,
+      topology_stable: !frame?.position_data?.topology_changed &&
+        trajectory_source !== `doping_substitution` &&
+        trajectory_source !== `reaction_pathway`,
+    }
+  }
+
+  async function request_trajectory_frame_source(
+    frame_idx: number,
+  ): Promise<TrajectoryFrameSource | null> {
+    const cached = get_trajectory_frame_source(frame_idx)
+    if (cached) return cached
+    const owner = trajectory
+    const loader = (owner as PaneTrajectory | undefined)?.frame_loader
+    if (!owner || !loader || frame_has_unmaterialized_ops(owner, frame_idx)) {
+      return null
+    }
+    const source_data = owner.frame_source_data ?? untrack(() => orig_data) ?? ``
+    const first_frame = owner.frames?.[0]
+    const base_lattice = first_frame?.position_data?.lattice ??
+      (first_frame?.structure as
+        | { lattice?: { matrix?: number[][] } }
+        | undefined)?.lattice?.matrix ??
+      null
+    if (loader.load_frame_positions) {
+      const data: FramePositionData | null =
+        await loader.load_frame_positions(source_data, frame_idx)
+      if (trajectory !== owner || !data?.positions) return null
+      return {
+        frame_idx,
+        positions: data.positions,
+        forces: data.forces ?? null,
+        lattice: data.lattice ?? base_lattice,
+        positions_version: trajectory_positions_version.v,
+        topology_stable: !data.topology_changed,
+      }
+    }
+    const frame = await owner.effective_frames?.resolve(
+      frame_idx,
+      (idx) => loader.load_frame(source_data, idx),
+    )
+    if (trajectory !== owner || !frame?.structure?.sites?.length) return null
+    const cached_frame = frame_pos_cache.get(frame_idx, frame.structure.sites)
+    return {
+      frame_idx,
+      positions: cached_frame.positions,
+      forces: frame.position_data?.forces ?? cached_frame.forces ?? null,
+      lattice: frame.position_data?.lattice ??
+        (frame.structure as
+          | { lattice?: { matrix?: number[][] } }
+          | undefined)?.lattice?.matrix ??
+        base_lattice,
+      positions_version: trajectory_positions_version.v,
+      topology_stable: false,
+    }
+  }
+
   function has_frame_scoped_structure_ops(owner: TrajectoryType): boolean {
     return owner.operation_ledger?.entries.some(
       (entry) => entry.active && entry.scope.kind === `frame` &&
@@ -2633,19 +2728,9 @@
           {trajectory_frame_lattice}
           trajectory_step_idx={current_step_idx}
           trajectory_positions_version={trajectory_positions_version}
-          get_trajectory_frame_positions={(i: number) => {
-            const c = position_cache?.[i]
-            if (c) return c
-            // position_cache transiently null (an edit-all enqueued a
-            // pending op in the same flush that nulled it): fall back to
-            // the already-committed frame sites so the bond pipeline never
-            // reads null mid-edit (issue #60). Indexed/streaming frames
-            // have no in-memory structure → null (slow path handles it).
-            const sites = (
-              trajectory?.frames?.[i]?.structure as { sites?: { xyz: [number, number, number] }[] } | undefined
-            )?.sites
-            return sites ? sites_to_float32(sites) : null
-          }}
+          trajectory_frame_count={total_frames}
+          {get_trajectory_frame_source}
+          {request_trajectory_frame_source}
           allow_file_drop={false}
           style="height: 100%; min-height: 0; z-index: 3; border-radius: 0"
           {...{

@@ -24,6 +24,7 @@
   import { create_supercell_request_handler } from '$lib/structure/workers/supercell-worker-api'
   import { create_render_packet_builder } from '$lib/structure/scene/render-packet-builder'
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
+  import type { TrajectoryFrameSource } from '$lib/structure/trajectory-frame-preparer'
   import { WyckoffTable, wyckoff_positions_from_moyo, spacegroup_to_crystal_sys } from '$lib/symmetry'
   import type { Crystal } from '$lib/structure'
   import type { MoyoDataset } from '@spglib/moyo-wasm'
@@ -899,6 +900,15 @@
     trajectory_step_idx = -1,
     trajectory_positions_version = { v: 0, all: false },
     get_trajectory_frame_positions = null as ((i: number) => Float32Array | null) | null,
+    trajectory_frame_count = 0,
+    get_trajectory_frame_source = null as
+      | ((frame_idx: number) => TrajectoryFrameSource | null)
+      | null,
+    request_trajectory_frame_source = null as
+      | ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
+      | null,
+    on_trajectory_frame_presented,
+    on_trajectory_buffer_state,
     initial_traj_b64 = ``,
     initial_traj_format = ``,
     vibration_data = null as { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null,
@@ -1096,6 +1106,23 @@
       // the bond cache can prefetch ±N neighbour frames and recompute connectivity
       // off the main thread.
       get_trajectory_frame_positions?: ((i: number) => Float32Array | null) | null
+      trajectory_frame_count?: number
+      get_trajectory_frame_source?: ((
+        frame_idx: number,
+      ) => TrajectoryFrameSource | null) | null
+      request_trajectory_frame_source?: ((
+        frame_idx: number,
+      ) => Promise<TrajectoryFrameSource | null>) | null
+      on_trajectory_frame_presented?: (
+        frame_idx: number,
+        positions_version: number,
+      ) => void
+      on_trajectory_buffer_state?: (state: {
+        frame_idx: number
+        ready_ahead: number
+        preparing: boolean
+        error: string | null
+      }) => void
       // External trajectory data (base64) for MD analysis — set when embedded in Trajectory viewer
       initial_traj_b64?: string
       initial_traj_format?: string
@@ -1325,6 +1352,20 @@
   // Track if structure has been aligned to prevent re-alignment
   let structure_aligned_id = $state<string | null>(null)
   let trajectory_active = $derived(trajectory_frame_positions != null)
+  let presented_frame_source = $state.raw<TrajectoryFrameSource | null>(null)
+  function handle_trajectory_frame_presented(
+    frame_idx: number,
+    positions_version: number,
+  ): void {
+    const source = get_trajectory_frame_source?.(frame_idx) ?? null
+    if (source && source.positions_version === positions_version) {
+      presented_frame_source = source
+    }
+    on_trajectory_frame_presented?.(frame_idx, positions_version)
+  }
+  $effect(() => {
+    if (!trajectory_active) presented_frame_source = null
+  })
 
   // T5 pause writeback (search "T5 pause writeback" in src/lib/trajectory/Trajectory.svelte):
   // a $effect lived here that watched trajectory_active (= trajectory_frame_positions
@@ -1356,6 +1397,9 @@
   // W1 must remain LOUD (Test 5.3 baseline: atom_data_fires > 10). Silence
   // here means an accidental Phase 4 leak into Phase 2.
   $effect(() => {
+    // The exact scene pipeline owns manager writes and publishes only after
+    // positions, lattice, and graph are ready together.
+    if (get_trajectory_frame_source) return
     // This effect writes the current frame's xyz into the WebGL atom_manager
     // (a plain typed-array scatter — no GPU paint by itself; Threlte 8 is
     // render-on-demand and autoRender is off while the overlay is active). It
@@ -4572,6 +4616,11 @@
             {trajectory_frame_forces}
             {trajectory_frame_lattice}
             {trajectory_step_idx}
+            {trajectory_frame_count}
+            {get_trajectory_frame_source}
+            {request_trajectory_frame_source}
+            on_trajectory_frame_presented={handle_trajectory_frame_presented}
+            {on_trajectory_buffer_state}
             {render_packet}
             {...scene_props}
             initial_view={persist_settings ? saved_default_view : null}
@@ -4744,8 +4793,12 @@
             enabled={large_system_mode}
             {camera}
             structure={structure}
-            frame_positions={trajectory_frame_positions}
-            frame_lattice={trajectory_frame_lattice}
+            frame_positions={get_trajectory_frame_source
+              ? presented_frame_source?.positions ?? null
+              : trajectory_frame_positions}
+            frame_lattice={get_trajectory_frame_source
+              ? presented_frame_source?.lattice ?? null
+              : trajectory_frame_lattice}
             supercell={visual_replicas_active ? gpu_supercell_factors : [1, 1, 1]}
             {show_image_atoms}
             element_colors={colors.element}

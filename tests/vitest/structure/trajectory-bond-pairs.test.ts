@@ -1,6 +1,6 @@
 // Behavior guard for build_trajectory_bond_pairs — the per-frame trajectory
-// fast path. Locks in stale-bond filtering + jimage semantics so the
-// radius-precompute optimization can't change observable output.
+// fast path. Exact prepared graphs are authoritative: this layer applies
+// geometry and jimages but never silently removes a worker edge.
 import {
   build_trajectory_bond_pairs,
   conn_to_typed_topology,
@@ -51,9 +51,7 @@ describe(`build_trajectory_bond_pairs`, () => {
     expect(pairs[0].pos_2[0]).toBeCloseTo(1.4, 5)
   })
 
-  test(`drops stale bonds beyond (r_a+r_b)*tol*1.5`, () => {
-    // C-C covalent radii sum ~1.5 Å → max_dist ≈ 1.5*1.1*1.5 ≈ 2.5 Å.
-    // A 10 Å separation is unambiguously stale.
+  test(`preserves every edge in the exact prepared graph`, () => {
     const positions = new Float32Array([0, 0, 0, 10, 0, 0])
     const sites = [carbon_site([0, 0, 0]), carbon_site([10, 0, 0])]
     const pairs = build_trajectory_bond_pairs(
@@ -64,7 +62,8 @@ describe(`build_trajectory_bond_pairs`, () => {
       null,
       sites,
     )
-    expect(pairs).toHaveLength(0)
+    expect(pairs).toHaveLength(1)
+    expect(pairs[0].bond_length).toBe(10)
   })
 
   test(`keeps bonds when covalent radius unknown (filter skipped)`, () => {
@@ -81,10 +80,7 @@ describe(`build_trajectory_bond_pairs`, () => {
     expect(pairs).toHaveLength(1)
   })
 
-  test(`tolerance changes re-filter with the same connectivity identity`, () => {
-    // Same conn array reference across calls — memoized radii must not
-    // freeze the tolerance. 3.0 Å C-C: dropped at tol 1.1 (max ~2.5),
-    // kept at tol 2.0 (max ~4.5).
+  test(`bond tolerance cannot alter an exact prepared graph`, () => {
     const shared_conn = conn([[0, 1]])
     const positions = new Float32Array([0, 0, 0, 3, 0, 0])
     const sites = [carbon_site([0, 0, 0]), carbon_site([3, 0, 0])]
@@ -106,11 +102,11 @@ describe(`build_trajectory_bond_pairs`, () => {
       sites,
       2.0,
     )
-    expect(strict).toHaveLength(0)
+    expect(strict).toHaveLength(1)
     expect(loose).toHaveLength(1)
   })
 
-  test(`sites identity change invalidates cached radii`, () => {
+  test(`site metadata identity cannot alter an exact prepared graph`, () => {
     const shared_conn = conn([[0, 1]])
     const positions = new Float32Array([0, 0, 0, 10, 0, 0])
     const carbon_sites = [carbon_site([0, 0, 0]), carbon_site([10, 0, 0])]
@@ -131,7 +127,7 @@ describe(`build_trajectory_bond_pairs`, () => {
       null,
       unknown_sites,
     )
-    expect(filtered).toHaveLength(0)
+    expect(filtered).toHaveLength(1)
     expect(kept).toHaveLength(1)
   })
 
@@ -225,7 +221,7 @@ describe(`build_trajectory_bond_pairs`, () => {
     expect([...topo!.jimages.subarray(0, 6)]).toEqual([0, 0, 0, -1, 0, 0])
   })
 
-  test(`conn_to_typed_topology drops stale bonds like the object path`, () => {
+  test(`conn_to_typed_topology preserves exact graph edges`, () => {
     const positions = new Float32Array([0, 0, 0, 10, 0, 0, 1.4, 0, 0])
     const sites = [
       carbon_site([0, 0, 0]),
@@ -234,8 +230,8 @@ describe(`build_trajectory_bond_pairs`, () => {
     ]
     const connectivity = conn([[0, 1], [0, 2]])
     const topo = conn_to_typed_topology(connectivity, positions, null, sites)
-    expect(topo!.count).toBe(1)
-    expect([...topo!.pairs.subarray(0, 2)]).toEqual([0, 2])
+    expect(topo!.count).toBe(2)
+    expect([...topo!.pairs.subarray(0, 4)]).toEqual([0, 1, 0, 2])
   })
 
   test(`conn_to_typed_topology keeps unknown-radius bonds but honors the hard cap`, () => {

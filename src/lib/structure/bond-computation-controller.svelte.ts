@@ -10,9 +10,7 @@ import { BOND_KIND, type BondManager } from './bonding/bond-manager.svelte'
 import {
   compute_bonds_async,
   compute_bonds_sync,
-  compute_bonds_typed_worker,
   compute_hbonds_worker,
-  effective_strategy,
   type TypedBondTable,
 } from './workers/bond-worker-api'
 import { filter_bonds_during_drag, should_show_bonds } from './scene'
@@ -20,11 +18,6 @@ import { get_element_fingerprint, get_position_hash } from './scene'
 import * as math from '$lib/math'
 import covalent_radii_data from '$lib/element/single_bond_covalent_radii.json'
 import type { Crystal } from './index'
-
-/** JS sync threshold mirrors workers/bond-worker-api.ts. Below this we run the
- *  sync path directly (avoids worker round-trip). Trajectories where the
- *  base atom count fits this budget never need the async path. */
-const TRAJ_SYNC_THRESHOLD = 1000
 
 /**
  * Atom-count threshold above which bond (and polyhedra) connectivity is
@@ -54,29 +47,6 @@ export function should_defer_bonds(
 ): boolean {
   return atom_count > DEFER_BONDS_ABOVE_ATOMS && !user_requested
 }
-
-/** Maximum number of trajectory frames retained in the frame-keyed cache.
- *  LRU-evicted; revisits within the window are O(1). Sized to comfortably
- *  hold a full typical trajectory (e.g. 316 frames) so that after one pass
- *  every loop/scrub is a cache hit and triggers no bond recompute. Larger
- *  trajectories keep their most-recently-used 512 frames. */
-const TRAJ_FRAME_CACHE_MAX = 512
-/** Object connectivity is much heavier than position packets (~26k objects
- * per 20k-atom frame). Keep only about four such frames, while small systems
- * can still use the 512-frame cap. */
-const TRAJ_FRAME_CACHE_BOND_BUDGET = 100_000
-export const TRAJ_BOND_REFRESH_EVERY = 8
-
-/**
- * Per-bond stale-distance pre-filter (Layer 3 of trajectory bond fix).
- * A bond whose current endpoint distance exceeds
- *   (covalent_radius_a + covalent_radius_b) * tolerance * STALE_DISTANCE_FACTOR
- * is almost certainly stale — the atom migrated mid-trajectory faster than
- * async re-detection caught up. Distances at 1.0–1.5x typical bond length may
- * be thermally stretched but real, so the cutoff is placed above that band.
- */
-const STALE_DISTANCE_FACTOR = 1.5
-const DEFAULT_BOND_TOLERANCE = 1.1
 
 /** FIX #E: dev-only one-shot guard so the extension's trajectory
  *  solid_angle -> atom_radii downgrade logs once per session, not per
@@ -113,75 +83,12 @@ type BondConnEntry = {
 }
 const bond_conn_cache = new WeakMap<object, BondConnEntry>()
 
-/**
- * Frame-keyed bond connectivity cache for trajectory playback. Keyed by the
- * per-frame Float32Array reference. For fixed-topology trajectories the
- * structure object stays stable across frames, so the structure-keyed
- * `bond_conn_cache` would otherwise hit forever with frame-0 connectivity.
- * LRU-bounded; cleared on trajectory teardown.
- */
-const frame_conn_cache = new Map<Float32Array, BondConnEntry>()
-let frame_cache_bond_count = 0
-
-/** LRU touch: re-insert the entry so it becomes the newest. */
-function frame_cache_touch(key: Float32Array, entry: BondConnEntry): void {
-  frame_conn_cache.delete(key)
-  frame_conn_cache.set(key, entry)
-}
-
-/** Insert with LRU eviction to keep the cache bounded. */
-function frame_cache_set(key: Float32Array, entry: BondConnEntry): void {
-  const previous = frame_conn_cache.get(key)
-  if (previous) {
-    frame_cache_bond_count -= previous.bond_connectivity.length
-    frame_conn_cache.delete(key)
-  }
-  frame_conn_cache.set(key, entry)
-  frame_cache_bond_count += entry.bond_connectivity.length
-  while (
-    frame_conn_cache.size > TRAJ_FRAME_CACHE_MAX ||
-    frame_cache_bond_count > TRAJ_FRAME_CACHE_BOND_BUDGET
-  ) {
-    const oldest = frame_conn_cache.keys().next().value
-    if (oldest === undefined) break
-    frame_cache_bond_count -=
-      frame_conn_cache.get(oldest)?.bond_connectivity.length ?? 0
-    frame_conn_cache.delete(oldest)
-  }
-}
-
-export function should_refresh_large_trajectory_bonds(
-  frame_seq: number,
-  n_sites: number,
-  compatible_connectivity: boolean,
-): boolean {
-  if (n_sites <= TRAJ_SYNC_THRESHOLD || !compatible_connectivity) return true
-  return frame_seq % TRAJ_BOND_REFRESH_EVERY === 0
-}
-
-/**
- * Atomic trajectory teardown: clears the frame cache, bumps the traj
- * generation counter (so any in-flight async resolve drops its result
- * instead of leaking into post-trajectory state), and resets throttle slots.
- * Call when `trajectory_frame_positions` becomes null.
- *
- * Caveat: keys are Float32Array references. If the trajectory player ever
- * overwrites a buffer's contents in place (Trajectory.svelte:494-517 edit
- * path), the cache returns stale connectivity for that frame until reload.
- */
 export function clear_trajectory_bond_frame_cache(
   bond_state?: ReturnType<typeof create_bond_state>,
 ): void {
-  frame_conn_cache.clear()
-  frame_cache_bond_count = 0
-  if (bond_state) {
-    bond_state.traj_computation_gen++
-    bond_state.traj_in_flight_frame = null
-    bond_state.traj_pending_frame = null
-    bond_state.traj_pending_lattice = null
-    bond_state.traj_last_seen_frame = null
-    bond_state.traj_frame_seq = 0
-  }
+  // Deprecated compatibility hook. PreparedFramePipeline owns exact
+  // trajectory cache invalidation.
+  void bond_state
 }
 
 /** Build a synthetic structure that overlays trajectory_frame_positions
@@ -311,19 +218,7 @@ export function create_bond_state() {
   let last_elem_fingerprint = $state(``)
   let bond_worker_pending = $state(false)
   // Plain `let`, NOT $state — $effect.pre would loop on counter writes.
-  // Two counters: non-traj (compute_bond_connectivity) and traj (dispatch_traj_async).
-  // Split prevents mutual cancellation between the paths.
   let bond_computation_gen = 0
-  let traj_computation_gen = 0
-  // Latest-wins throttle slots for trajectory async dispatches.
-  let traj_in_flight_frame: Float32Array | null = null
-  let traj_pending_frame: Float32Array | null = null
-  // Frame lattice paired with traj_pending_frame (variable-cell trajectories;
-  // null = frozen base lattice). The drain re-dispatch must use the PENDING
-  // frame's cell, not the cell of the dispatch that happens to drain it.
-  let traj_pending_lattice: number[][] | null = null
-  let traj_last_seen_frame: Float32Array | null = null
-  let traj_frame_seq = 0
 
   return {
     get bond_connectivity() {
@@ -367,42 +262,6 @@ export function create_bond_state() {
     },
     set bond_computation_gen(v) {
       bond_computation_gen = v
-    },
-    get traj_computation_gen() {
-      return traj_computation_gen
-    },
-    set traj_computation_gen(v) {
-      traj_computation_gen = v
-    },
-    get traj_in_flight_frame() {
-      return traj_in_flight_frame
-    },
-    set traj_in_flight_frame(v) {
-      traj_in_flight_frame = v
-    },
-    get traj_pending_frame() {
-      return traj_pending_frame
-    },
-    set traj_pending_frame(v) {
-      traj_pending_frame = v
-    },
-    get traj_pending_lattice() {
-      return traj_pending_lattice
-    },
-    set traj_pending_lattice(v) {
-      traj_pending_lattice = v
-    },
-    get traj_last_seen_frame() {
-      return traj_last_seen_frame
-    },
-    set traj_last_seen_frame(v) {
-      traj_last_seen_frame = v
-    },
-    get traj_frame_seq() {
-      return traj_frame_seq
-    },
-    set traj_frame_seq(v) {
-      traj_frame_seq = v
     },
   }
 }
@@ -663,173 +522,6 @@ export function compute_bond_connectivity(
   }
 }
 
-/**
- * Trajectory per-frame connectivity refresh (Layer 1 of stale-bond fix).
- *
- * The trajectory fast-path at StructureScene `$effect.pre` updates bond
- * geometry from new frame positions but never recomputes connectivity. For
- * reactive trajectories (e.g. multi-config extxyz where atoms migrate), the
- * frame-0 bonds become stale: stubs floating in space, half-bonds switching
- * cell-images frame-to-frame. This function gives the fast-path a way to
- * obtain fresh bonds for the current frame without going through the heavy
- * `compute_bond_connectivity` path.
- *
- * Strategy:
- *   1. Frame cache hit (Float32Array reference key + matching strategy +
- *      matching element fingerprint): return the cached connectivity.
- *      O(1) — preserves Phase 6 fixed-topology fast-path performance.
- *   2. Cache miss + small structure (<= TRAJ_SYNC_THRESHOLD): run
- *      `compute_bonds_sync` on a synthetic structure with traj positions
- *      overlaid. Cache and return the result this tick.
- *   3. Cache miss + large structure: dispatch async detection via
- *      `compute_bonds_async`. Latest-wins throttle — only one in-flight
- *      request at a time; later frames overwrite `traj_pending_frame`.
- *      Returns the previous connectivity meanwhile (best-effort render).
- *
- * IMPORTANT: this function NEVER reassigns `bond_state.bond_connectivity`
- * synchronously, to respect the StructureScene `$effect.pre` infinite-loop
- * guard. The caller uses the return value for THIS tick's
- * `build_trajectory_bond_pairs`. Async resolves write to
- * `bond_state.bond_connectivity` in the resolve callback (outside the
- * effect body), which triggers a fresh tick cleanly.
- */
-export function compute_bond_connectivity_for_frame(
-  bond_state: ReturnType<typeof create_bond_state>,
-  traj_positions: Float32Array,
-  structure: AnyStructure | undefined,
-  show_bonds: ShowBonds,
-  lattice: Crystal['lattice'] | null,
-  bonding_strategy: BondingStrategy,
-  bonding_options: Record<string, unknown>,
-  // Variable-cell trajectories: the displayed frame's lattice matrix (rows =
-  // a,b,c). null/undefined = fixed cell, detect in the base structure's cell.
-  frame_lattice?: number[][] | null,
-): typeof bond_state.bond_connectivity {
-  if (!structure?.sites) return bond_state.bond_connectivity
-
-  const bonds_visible = should_show_bonds(show_bonds, lattice)
-  if (!bonds_visible || (show_bonds as string) === `never`) {
-    return bond_state.bond_connectivity
-  }
-
-  // FIX #E (extension-only, trajectory-only): the VS Code webview WASM
-  // runtime runs solid_angle too slowly for smooth playback. Transparently
-  // downgrade trajectory-frame bonding to the cheap atom_radii strategy
-  // (its own defaults via {}). Gated on the build-time token so desktop/web
-  // are byte-identical, and confined to this trajectory-only function so
-  // static-structure bonds still honor the user's saved solid_angle. Only
-  // local params are reassigned; the saved setting is never mutated.
-  if (
-    typeof __CATGO_VSCODE_EXTENSION__ !== `undefined` &&
-    __CATGO_VSCODE_EXTENSION__ &&
-    bonding_strategy === `solid_angle`
-  ) {
-    bonding_strategy = `atom_radii`
-    bonding_options = {}
-    if (import.meta.env?.DEV && !ext_traj_solid_angle_downgrade_logged) {
-      ext_traj_solid_angle_downgrade_logged = true
-      console.log(
-        `[bonds-traj] VS Code extension: solid_angle -> atom_radii for trajectory frames`,
-      )
-    }
-  }
-
-  const sites = structure.sites
-  const strategy_key = `${bonding_strategy}-${JSON.stringify(bonding_options)}`
-  const elem_fp = get_element_fingerprint(sites)
-
-  // 1. Frame cache hit (O(1)).
-  const cached = frame_conn_cache.get(traj_positions)
-  if (
-    cached &&
-    cached.strategy_key === strategy_key &&
-    cached.elem_fingerprint === elem_fp
-  ) {
-    frame_cache_touch(traj_positions, cached)
-    return cached.bond_connectivity
-  }
-
-  const n_sites = sites.length
-  if (bond_state.traj_last_seen_frame !== traj_positions) {
-    bond_state.traj_last_seen_frame = traj_positions
-    bond_state.traj_frame_seq += 1
-  }
-  const compatible_connectivity =
-    bond_state.bond_connectivity.length > 0 &&
-    bond_state.last_bond_strategy === strategy_key &&
-    bond_state.last_elem_fingerprint === elem_fp
-  if (
-    !should_refresh_large_trajectory_bonds(
-      bond_state.traj_frame_seq,
-      n_sites,
-      compatible_connectivity,
-    )
-  ) {
-    return bond_state.bond_connectivity
-  }
-
-  // 2. Sync path for small structures — fastest, no scheduling overhead.
-  if (n_sites <= TRAJ_SYNC_THRESHOLD) {
-    const overlay_structure = build_trajectory_overlay_structure(
-      structure,
-      traj_positions,
-      frame_lattice,
-    )
-    const sync_bonds = compute_bonds_sync(
-      overlay_structure,
-      bonding_strategy,
-      bonding_options as Record<string, number>,
-    )
-    if (sync_bonds) {
-      const new_conn = sync_bonds.map((b) => ({
-        site_idx_1: b.site_idx_1,
-        site_idx_2: b.site_idx_2,
-        strength: b.strength,
-        jimage: (b.jimage ?? [0, 0, 0]) as [number, number, number],
-      }))
-      frame_cache_set(traj_positions, {
-        bond_connectivity: new_conn,
-        fingerprint: `${elem_fp}|frame`,
-        elem_fingerprint: elem_fp,
-        strategy_key,
-      })
-      if (import.meta.env?.DEV) {
-        console.log(
-          `[bonds-traj] sync compute | ${n_sites} sites | ${new_conn.length} bonds`,
-        )
-      }
-      return new_conn
-    }
-    // Sync failed (WASM not ready) — fall through to async dispatch.
-  }
-
-  // 3. Large structure or sync-WASM unavailable: throttled async dispatch.
-  if (bond_state.traj_in_flight_frame === null) {
-    bond_state.traj_in_flight_frame = traj_positions
-    dispatch_traj_async(
-      bond_state,
-      traj_positions,
-      structure,
-      strategy_key,
-      elem_fp,
-      bonding_strategy,
-      bonding_options,
-      frame_lattice ?? null,
-    )
-  } else if (bond_state.traj_in_flight_frame !== traj_positions) {
-    // Latest-wins: just remember which frame the user is currently on
-    // (positions + the cell they live in).
-    bond_state.traj_pending_frame = traj_positions
-    bond_state.traj_pending_lattice = frame_lattice ?? null
-  }
-
-  // While async is in flight, render with previous frame's connectivity.
-  // Geometrically wrong by one frame's atom motion, but better than blank
-  // bonds — and worker latency is much shorter than the visible playback
-  // duration for any non-trivial trajectory.
-  return bond_state.bond_connectivity
-}
-
 /** Per-site atomic numbers for the typed worker path, memoized on the sites
  *  array identity (stable across trajectory frames). `null` (also cached)
  *  means at least one site's majority element has no table entry — the typed
@@ -899,170 +591,6 @@ export function typed_table_to_conn(
     })
   }
   return conn
-}
-
-/** Async bond detection for a trajectory frame. Race-protected via
- *  `traj_computation_gen`. On resolve, caches the result; if the frame is
- *  still current, also writes to `bond_state.bond_connectivity` to trigger
- *  a fresh render. Throttle slots are released on every exit path.
- *
- *  Route selection: when the effective strategy is atom_radii (always the
- *  case for large trajectories — solid_angle downgrades above 8k atoms) and
- *  every element maps to an atomic number, positions go to the worker as a
- *  transferred Float32Array and bonds come back as flat typed arrays — no
- *  overlay-structure build, no JSON. Anything else (exotic species, other
- *  strategies, worker failure) falls back to the JSON path. */
-function dispatch_traj_async(
-  bond_state: ReturnType<typeof create_bond_state>,
-  frame_key: Float32Array,
-  base_structure: AnyStructure,
-  strategy_key: string,
-  elem_fp: string,
-  bonding_strategy: BondingStrategy,
-  bonding_options: Record<string, unknown>,
-  frame_lattice: number[][] | null = null,
-): void {
-  const gen = ++bond_state.traj_computation_gen
-  const n_sites = base_structure.sites.length
-  if (import.meta.env?.DEV) {
-    console.log(
-      `[bonds-traj] dispatch async | ${n_sites} sites | gen=${gen}`,
-    )
-  }
-  // Helper: clear throttle slots that still reference this dispatch's
-  // frame_key. Safe to call from any exit path — only nulls slots we own.
-  const release_slots = () => {
-    if (bond_state.traj_in_flight_frame === frame_key) {
-      bond_state.traj_in_flight_frame = null
-    }
-    if (bond_state.traj_pending_frame === frame_key) {
-      bond_state.traj_pending_frame = null
-    }
-  }
-
-  // Shared resolve flow for both routes. Conversion to connectivity objects
-  // happens before this call; everything after (gen check, frame cache,
-  // latest-wins drain) is route-independent.
-  const handle_conn = (
-    new_conn: Array<
-      {
-        site_idx_1: number
-        site_idx_2: number
-        strength: number
-        jimage: [number, number, number]
-      }
-    >,
-  ) => {
-    // Stale generation — trajectory torn down, strategy changed, or another
-    // traj dispatch superseded this one. Drop the result and release slots
-    // so the next dispatch can proceed.
-    if (gen !== bond_state.traj_computation_gen) {
-      release_slots()
-      return
-    }
-
-    // Always cache — even if the user has moved on, the entry will be
-    // useful on revisit (and bounded by the LRU cap).
-    frame_cache_set(frame_key, {
-      bond_connectivity: new_conn,
-      fingerprint: `${elem_fp}|frame`,
-      elem_fingerprint: elem_fp,
-      strategy_key,
-    })
-
-    // ALWAYS publish the resolved connectivity — it is the freshest result
-    // available. Reassigning bond_connectivity here is safe because we're in
-    // the promise resolve callback, NOT inside the trajectory $effect.pre
-    // body. The previous code published only when no newer frame was queued;
-    // during continuous playback a newer frame is ALWAYS queued, so the
-    // visible connectivity stayed frozen at the pre-playback detection for
-    // the whole run (the stale-bond filter then dropped hundreds of bonds
-    // per frame against moved atoms).
-    bond_state.bond_connectivity = new_conn
-    bond_state.last_bond_structure = base_structure
-    bond_state.last_bond_strategy = strategy_key
-    bond_state.last_elem_fingerprint = elem_fp
-    bond_state.last_bond_fingerprint = `${elem_fp}|frame`
-
-    const pending = bond_state.traj_pending_frame
-    if (pending === null) {
-      bond_state.traj_in_flight_frame = null
-    } else {
-      // User moved on while async was running. Drain the latest-wins queue:
-      // dispatch detection for the pending frame. The resolved frame is
-      // already cached so a future revisit will hit O(1).
-      bond_state.traj_in_flight_frame = pending
-      bond_state.traj_pending_frame = null
-      const pending_lattice = bond_state.traj_pending_lattice
-      bond_state.traj_pending_lattice = null
-      dispatch_traj_async(
-        bond_state,
-        pending,
-        base_structure,
-        strategy_key,
-        elem_fp,
-        bonding_strategy,
-        bonding_options,
-        pending_lattice,
-      )
-    }
-  }
-
-  const run_json = () => {
-    const overlay_structure = build_trajectory_overlay_structure(
-      base_structure,
-      frame_key,
-      frame_lattice,
-    )
-    compute_bonds_async(
-      overlay_structure,
-      bonding_strategy,
-      bonding_options as Record<string, number>,
-    )
-      .then((new_bonds) =>
-        handle_conn(new_bonds.map((b) => ({
-          site_idx_1: b.site_idx_1,
-          site_idx_2: b.site_idx_2,
-          strength: b.strength,
-          jimage: (b.jimage ?? [0, 0, 0]) as [number, number, number],
-        })))
-      )
-      .catch((e) => {
-        console.debug(`[bonds-traj] async failed:`, e)
-        release_slots()
-      })
-  }
-
-  const zs = effective_strategy(bonding_strategy, n_sites) === `atom_radii`
-    ? get_traj_atomic_numbers(base_structure.sites)
-    : null
-  if (zs && frame_key.length === n_sites * 3) {
-    const crystal = base_structure as Crystal
-    const pbc_raw = crystal.lattice?.pbc
-    const pbc = Array.isArray(pbc_raw) && pbc_raw.length === 3
-      ? [!!pbc_raw[0], !!pbc_raw[1], !!pbc_raw[2]] as [boolean, boolean, boolean]
-      : null
-    compute_bonds_typed_worker(
-      frame_key,
-      zs,
-      frame_lattice ?? crystal.lattice?.matrix ?? null,
-      pbc,
-      bonding_options as Record<string, number>,
-    )
-      .then((table) => {
-        if (table === null) {
-          run_json()
-          return
-        }
-        handle_conn(typed_table_to_conn(table))
-      })
-      .catch((e) => {
-        console.debug(`[bonds-traj] typed path failed, falling back:`, e)
-        run_json()
-      })
-  } else {
-    run_json()
-  }
 }
 
 /**
@@ -1164,75 +692,6 @@ export function build_bond_pairs(
   }).filter((b): b is BondPair => b !== null)
 }
 
-/** Per-bond stale-distance thresholds, memoized on connectivity identity.
- *
- * The per-frame fast path used to resolve each endpoint's majority species
- * and covalent radius from the JSON table twice per bond per frame — ~52k
- * dictionary lookups per frame for a 26k-bond trajectory, the dominant cost
- * of `build_trajectory_bond_pairs` (~120ms/frame at 20k atoms). Connectivity
- * and sites are stable across playback frames, so the thresholds are
- * computed once per connectivity refresh and reused every frame.
- *
- * Entries where either radius is unavailable hold NaN — the caller's
- * `bond_length > max_dist` check is then always false, preserving the
- * skip-when-unavailable behavior of the old per-bond lookup. Out-of-range
- * site indices (supercell extras beyond `sites`) also yield NaN. */
-const traj_max_dist_cache = new WeakMap<object, {
-  sites: ReadonlyArray<Site>
-  tol: number
-  max_dists: Float64Array
-}>()
-/** Per-site covalent radii keyed by the sites array identity. Sites are
- *  Svelte 5 deep proxies at 20k atoms — scanning species per site costs
- *  ~30ms per pass, so it must run once per trajectory, not once per
- *  connectivity refresh (connectivity identity changes every frame). */
-const traj_site_radii_cache = new WeakMap<object, Float64Array>()
-
-function get_traj_site_radii(sites: ReadonlyArray<Site>): Float64Array {
-  const cached = traj_site_radii_cache.get(sites)
-  if (cached) return cached
-  const n_sites = sites.length
-  const radii = new Float64Array(n_sites).fill(NaN)
-  for (let idx = 0; idx < n_sites; idx++) {
-    const species = sites[idx]?.species
-    if (!species || species.length === 0) continue
-    let majority = species[0]
-    for (let sp = 1; sp < species.length; sp++) {
-      if (species[sp].occu > majority.occu) majority = species[sp]
-    }
-    if (!majority.element) continue
-    const entry = (covalent_radii_data as Record<
-      string,
-      { covalent_radius_pm?: number } | undefined
-    >)[majority.element]
-    const pm = entry?.covalent_radius_pm
-    if (typeof pm === `number` && pm > 0) radii[idx] = pm / 100 // pm → Å
-  }
-  traj_site_radii_cache.set(sites, radii)
-  return radii
-}
-
-function get_traj_max_dists(
-  bond_connectivity: ReadonlyArray<{ site_idx_1: number; site_idx_2: number }>,
-  sites: ReadonlyArray<Site>,
-  tol: number,
-): Float64Array {
-  const cached = traj_max_dist_cache.get(bond_connectivity)
-  if (cached && cached.sites === sites && cached.tol === tol) return cached.max_dists
-
-  const radii = get_traj_site_radii(sites)
-  const max_dists = new Float64Array(bond_connectivity.length)
-  for (let bond = 0; bond < bond_connectivity.length; bond++) {
-    const conn = bond_connectivity[bond]
-    // Float64Array OOB reads give undefined → NaN after arithmetic, matching
-    // the radius-unavailable skip semantics.
-    max_dists[bond] = (radii[conn.site_idx_1] + radii[conn.site_idx_2]) * tol *
-      STALE_DISTANCE_FACTOR
-  }
-  traj_max_dist_cache.set(bond_connectivity, { sites, tol, max_dists })
-  return max_dists
-}
-
 /**
  * Build bond_pairs from trajectory frame positions (flat Float32Array).
  * Used for trajectory fast-path playback.
@@ -1271,8 +730,8 @@ export function build_trajectory_bond_pairs(
     get_z: (slot: number) => number
   } | null,
   lattice_matrix?: number[][] | null,
-  sites?: ReadonlyArray<Site> | null,
-  bond_tolerance?: number,
+  _sites?: ReadonlyArray<Site> | null,
+  _bond_tolerance?: number,
 ): BondPair[] {
   const traj_max_site = Math.floor(trajectory_frame_positions.length / 3)
   function lookup_pos(site_idx: number): Vec3 | null {
@@ -1298,13 +757,8 @@ export function build_trajectory_bond_pairs(
     }
     return null
   }
-  const tol = typeof bond_tolerance === `number` && bond_tolerance > 0
-    ? bond_tolerance
-    : DEFAULT_BOND_TOLERANCE
-  const max_dists = sites ? get_traj_max_dists(bond_connectivity, sites, tol) : null
   const lat = lattice_matrix ?? undefined
-  let filtered_count = 0
-  const out = bond_connectivity.map((conn, bond_idx) => {
+  return bond_connectivity.map((conn) => {
     const pos_1 = lookup_pos(conn.site_idx_1)
     const pos_2 = lookup_pos(conn.site_idx_2)
     if (pos_1 === null || pos_2 === null) return null
@@ -1314,12 +768,6 @@ export function build_trajectory_bond_pairs(
     const dy = b_eff[1] - pos_1[1]
     const dz = b_eff[2] - pos_1[2]
     const bond_length = Math.hypot(dx, dy, dz)
-    // Stale-distance pre-filter. NaN max_dist (radius unavailable) makes the
-    // comparison false, silently skipping the check for that bond.
-    if (max_dists && bond_length > max_dists[bond_idx]) {
-      filtered_count++
-      return null
-    }
     const pair: BondPair = {
       pos_1,
       pos_2,
@@ -1332,12 +780,6 @@ export function build_trajectory_bond_pairs(
     }
     return pair
   }).filter((b): b is BondPair => b !== null)
-  if (import.meta.env?.DEV && filtered_count > 0) {
-    console.log(
-      `[bond-stale-filter] dropped ${filtered_count} stale bonds out of ${bond_connectivity.length}`,
-    )
-  }
-  return out
 }
 
 /** Shared scratch for `conn_to_typed_topology` — grown, never shrunk. The
@@ -1352,7 +794,6 @@ let typed_topo_scratch: { pairs: Uint32Array; jimages: Int8Array } | null = null
  *
  * Filter parity with the object pipeline (`build_trajectory_bond_pairs` +
  * `visible_bond_pairs`):
- *   - stale-distance pre-filter via `get_traj_max_dists` (NaN → skip check)
  *   - periodic self-image bonds (a == b with non-zero jimage) are VALID and
  *     retained (gpu-impostor design §7.2 — single-atom primitive cells have
  *     only such bonds); geometry filters below still apply to them
@@ -1374,18 +815,12 @@ export function conn_to_typed_topology(
   >,
   trajectory_frame_positions: Float32Array,
   lattice_matrix?: number[][] | null,
-  sites?: ReadonlyArray<Site> | null,
-  bond_tolerance?: number,
+  _sites?: ReadonlyArray<Site> | null,
+  _bond_tolerance?: number,
   max_bond_length?: number,
 ): { pairs: Uint32Array; jimages: Int8Array; count: number } | null {
   const n = bond_connectivity.length
   const traj_max_site = Math.floor(trajectory_frame_positions.length / 3)
-  const tol = typeof bond_tolerance === `number` && bond_tolerance > 0
-    ? bond_tolerance
-    : DEFAULT_BOND_TOLERANCE
-  const max_dists = sites
-    ? get_traj_max_dists(bond_connectivity, sites, tol)
-    : null
   const cap_sq = typeof max_bond_length === `number` && max_bond_length > 0
     ? max_bond_length * max_bond_length
     : Infinity
@@ -1427,11 +862,6 @@ export function conn_to_typed_topology(
     const len_sq = dx * dx + dy * dy + dz * dz
     // NaN fails both compares → non-finite geometry is dropped by the cap.
     if (!(len_sq <= cap_sq)) continue
-    if (max_dists !== null) {
-      const max_d = max_dists[idx]
-      // NaN max_d (radius unavailable) → comparison false → check skipped.
-      if (len_sq > max_d * max_d) continue
-    }
     pairs[count * 2] = site_a
     pairs[count * 2 + 1] = site_b
     jimages[count * 3] = jx
