@@ -460,7 +460,7 @@ describe(`frame loading`, () => {
     )
 
     expect(source).toContain(
-      `const compact_lattice = current_frame?.position_data?.lattice`,
+      `const compact_lattice = presented_frame?.position_data?.lattice`,
     )
     expect(source).toContain(`calc_lattice_params(compact_lattice as Matrix3x3)`)
   })
@@ -473,7 +473,7 @@ describe(`frame loading`, () => {
 
     expect(source).toContain(`MANIFEST_PLAYBACK_FRAME_BUCKET = 10`)
     expect(source).toContain(
-      `is_playing ? Math.floor(current_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)`,
+      `Math.floor(presented_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)`,
     )
     expect(source).toContain(
       `untrack(() => refresh_viewer_manifest(viewer_id))`,

@@ -2741,7 +2741,7 @@
       }
       on_trajectory_buffer_state?.({
         frame_idx,
-        ready_ahead: Math.max(0, prepared_pipeline.ready_count(keys) - 1),
+        ready_ahead: prepared_pipeline.ready_count(keys),
         preparing,
         error: untrack(() => prepared_error),
       })

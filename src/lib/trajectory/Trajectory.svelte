@@ -69,6 +69,12 @@
     clamp_fps,
     get_keyboard_action,
   } from './trajectory-controls'
+  import {
+    acknowledge_playback_frame,
+    may_advance_playback,
+    may_start_prepared_playback,
+    request_playback_frame,
+  } from './prepared-playback-state'
   import { sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
   import { build_atom_graph } from '$lib/structure/atom-graph'
   import {
@@ -341,6 +347,12 @@
     resume_disabled = false
   })
   let play_interval: ReturnType<typeof setInterval> | undefined = $state(undefined)
+  let presented_step_idx = $state(0)
+  let presented_positions_version = $state(0)
+  let playback_generation = $state(0)
+  let prepared_ready_ahead = $state(0)
+  let waiting_for_prepared_warmup = $state(false)
+  let presentation_pending = $derived(current_step_idx !== presented_step_idx)
 
   // Ensure fps is within the allowed range
   $effect(() => {
@@ -405,7 +417,7 @@
     // current_structure. Under Architecture P, current_structure freezes
     // at the first frame's topology; the actual frame to push back is
     // current_frame.structure (which holds the per-frame positions).
-    const frame_structure = current_frame?.structure
+    const frame_structure = trajectory?.frames?.[presented_step_idx]?.structure
     if (!remote_origin || !current_frame_source || !frame_structure) {
       console.warn(`Push-back guard failed:`, { remote_origin, current_frame_source, has_structure: !!frame_structure })
       return
@@ -418,7 +430,7 @@
     try {
       const content = structure_to_poscar_str(frame_structure)
       const full_path = `${remote_origin.dir_path}/${current_frame_source}`
-      console.log(`Push-back: writing frame ${current_step_idx} to ${full_path} (session: ${remote_origin.session_id})`)
+      console.log(`Push-back: writing frame ${presented_step_idx} to ${full_path} (session: ${remote_origin.session_id})`)
       const result = await writeRemoteFile(remote_origin.session_id, full_path, content)
       console.log(`Push-back result:`, result)
       if (result.success) {
@@ -481,7 +493,9 @@
 
   // Remote push-back derived values (depend on current_frame)
   let current_frame_source = $derived(
-    current_frame?.metadata?.source_file as string | undefined,
+    trajectory?.frames?.[presented_step_idx]?.metadata?.source_file as
+      | string
+      | undefined,
   )
   let can_push_back = $derived(
     // Plan v3 Phase 4 fix: read current_frame.structure rather than
@@ -490,7 +504,8 @@
     // displayed frame. Without this, can_push_back stays true after
     // navigating to any frame even when the user can't actually push the
     // current frame's positions.
-    !!remote_origin && !!current_frame_source && !!current_frame?.structure,
+    !!remote_origin && !!current_frame_source &&
+      !!trajectory?.frames?.[presented_step_idx]?.structure,
   )
 
   // Auto-play when trajectory changes (handles both props and file loading).
@@ -1074,6 +1089,13 @@
     }
   }
 
+  function get_presented_frame_data() {
+    return {
+      frame: trajectory?.frames?.[presented_step_idx],
+      frame_count: total_frames,
+    }
+  }
+
   // hide plot if all plotted values are constant (no variation)
   let show_plot = $derived(
     display_mode !== `structure` && !should_hide_plot(trajectory, plot_series),
@@ -1091,7 +1113,7 @@
   // Step navigation functions
   function next_step() {
     if (current_step_idx < total_frames - 1) {
-      current_step_idx++
+      request_step(current_step_idx + 1)
       // Streaming frame loading handled by reactive effect
       if (trajectory) {
         const { frame } = get_current_frame_data()
@@ -1107,7 +1129,7 @@
 
   function prev_step() {
     if (current_step_idx > 0) {
-      current_step_idx--
+      request_step(current_step_idx - 1)
       // Streaming frame loading handled by reactive effect
       if (trajectory) {
         const { frame } = get_current_frame_data()
@@ -1123,7 +1145,7 @@
 
   function go_to_step(idx: number) {
     if (idx >= 0 && idx < total_frames) {
-      current_step_idx = idx
+      request_step(idx)
       // Note: streaming frame loading is handled by reactive effect
       // Handle callbacks for both traditional and streaming modes
       if (trajectory) {
@@ -1159,7 +1181,8 @@
   // overwritten and re-applied by drag-commit. Mirror Structure.svelte's
   // Phase 2 override skip if that semantics ever needs to change.
   function sync_structure_sites_to_frame_positions(): void {
-    const positions = trajectory_frame_positions
+    const positions = get_trajectory_frame_source(presented_step_idx)?.positions ??
+      null
     const cur = current_structure
     if (!positions || !cur?.sites) return
     const sites = cur.sites
@@ -1182,10 +1205,11 @@
     // short-circuit on the identity-stable trajectory_frame_lattice being in
     // sync with the current matrix already.
     const cur_lattice = (cur as { lattice?: { matrix?: number[][] } }).lattice
+    const presented_frame = trajectory?.frames?.[presented_step_idx]
     const materialized_frame_lattice =
-      (current_frame?.structure as { lattice?: { matrix?: number[][] } } | undefined)
+      (presented_frame?.structure as { lattice?: { matrix?: number[][] } } | undefined)
         ?.lattice
-    const compact_lattice = current_frame?.position_data?.lattice
+    const compact_lattice = presented_frame?.position_data?.lattice
     const frame_lattice_obj = compact_lattice
       ? {
           ...(materialized_frame_lattice ?? cur_lattice),
@@ -1210,9 +1234,11 @@
   }
   function start_playback() {
     if (total_frames <= 1) return
+    const show_bonds = trajectory_scene_props?.show_bonds
+    waiting_for_prepared_warmup = show_bonds !== `never`
     is_playing = true
     if (trajectory) {
-      on_play?.({ trajectory, step_idx: current_step_idx, frame_count: total_frames })
+      on_play?.({ trajectory, step_idx: presented_step_idx, frame_count: total_frames })
     }
   }
   function pause_playback() {
@@ -1251,7 +1277,7 @@
     if (trajectory) {
       on_pause?.({
         trajectory: trajectory,
-        step_idx: current_step_idx,
+        step_idx: presented_step_idx,
         frame_count: total_frames,
       })
     }
@@ -1268,12 +1294,23 @@
 
       // Create new interval with current frame rate
       play_interval = setInterval(() => {
+        if (waiting_for_prepared_warmup) {
+          if (!may_start_prepared_playback(prepared_ready_ahead, total_frames)) {
+            return
+          }
+          waiting_for_prepared_warmup = false
+        }
+        if (!may_advance_playback({
+          requested_idx: current_step_idx,
+          presented_idx: presented_step_idx,
+          generation: playback_generation,
+        })) return
         if (current_step_idx >= total_frames - 1) {
-          const { frame } = get_current_frame_data()
+          const { frame } = get_presented_frame_data()
           if (trajectory) {
             on_end?.({
               trajectory,
-              step_idx: current_step_idx,
+              step_idx: presented_step_idx,
               frame_count: total_frames,
               frame,
             })
@@ -1485,6 +1522,10 @@
       traj_load_seq += 1
 
       current_step_idx = 0
+      presented_step_idx = 0
+      presented_positions_version = trajectory_positions_version.v
+      playback_generation++
+      prepared_ready_ahead = 0
       current_filename = filename
 
       const file_size_bytes = data instanceof ArrayBuffer
@@ -1761,6 +1802,58 @@
     }
   }
 
+  function handle_trajectory_frame_presented(
+    frame_idx: number,
+    positions_version: number,
+  ): void {
+    if (
+      frame_idx !== current_step_idx ||
+      positions_version !== trajectory_positions_version.v
+    ) return
+    const next = acknowledge_playback_frame({
+      requested_idx: current_step_idx,
+      presented_idx: presented_step_idx,
+      generation: playback_generation,
+    }, frame_idx)
+    presented_step_idx = next.presented_idx
+    presented_positions_version = positions_version
+  }
+
+  function handle_trajectory_buffer_state(state: {
+    frame_idx: number
+    ready_ahead: number
+    preparing: boolean
+    error: string | null
+  }): void {
+    if (state.frame_idx !== current_step_idx) return
+    prepared_ready_ahead = state.ready_ahead
+    if (state.error) {
+      error_msg = state.error
+      pause_playback()
+    }
+  }
+
+  function request_step(frame_idx: number): void {
+    const next = request_playback_frame({
+      requested_idx: current_step_idx,
+      presented_idx: presented_step_idx,
+      generation: playback_generation,
+    }, frame_idx)
+    current_step_idx = next.requested_idx
+    playback_generation = next.generation
+  }
+
+  $effect(() => {
+    const positions = trajectory_frame_positions
+    const show_bonds = trajectory_scene_props?.show_bonds
+    if (positions && show_bonds === `never`) {
+      handle_trajectory_frame_presented(
+        current_step_idx,
+        trajectory_positions_version.v,
+      )
+    }
+  })
+
   function has_frame_scoped_structure_ops(owner: TrajectoryType): boolean {
     return owner.operation_ledger?.entries.some(
       (entry) => entry.active && entry.scope.kind === `frame` &&
@@ -2010,6 +2103,9 @@
   async function handle_trajectory_supercell_request(
     op: Parameters<typeof request_trajectory_supercell>[0],
   ) {
+    if (presentation_pending) {
+      throw new Error(`Wait for the requested trajectory frame to be presented.`)
+    }
     const request = ++supercell_busy_request
     cross_frame_busy = true
     try {
@@ -2033,8 +2129,8 @@
 
   function commit_physical_edit(op: TrajectoryEditOp, topology_change: boolean): void {
     const owner = trajectory
-    if (!owner || edit_mode === `view`) return
-    const idx = current_step_idx
+    if (!owner || edit_mode === `view` || presentation_pending) return
+    const idx = presented_step_idx
     const source = current_edit_frame(owner, idx)
     if (!source?.structure) return
 
@@ -2107,8 +2203,8 @@
   // recompute.
   const manifest_formula_cache = new WeakMap<object, string>()
   function manifest_formula(): string {
-    const structure = current_structure ?? current_frame?.structure ??
-      trajectory?.frames?.[current_step_idx]?.structure
+    const structure = trajectory?.frames?.[presented_step_idx]?.structure ??
+      current_structure
     if (!structure) return ``
     const cached = manifest_formula_cache.get(structure as object)
     if (cached !== undefined) return cached
@@ -2126,7 +2222,7 @@
   }
 
   function inspect_trajectory_atoms() {
-    const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+    const structure = trajectory?.frames?.[presented_step_idx]?.structure
     return build_atom_graph(structure)
   }
 
@@ -2172,7 +2268,16 @@
   }
 
   function handle_trajectory_command(action: string, args: Record<string, unknown>) {
-    if (action === `inspect`) return { atoms: inspect_trajectory_atoms(), current_frame: current_step_idx, total_frames }
+    if (action === `inspect`) {
+      return {
+        atoms: inspect_trajectory_atoms(),
+        current_frame: presented_step_idx,
+        total_frames,
+      }
+    }
+    if (presentation_pending) {
+      throw new Error(`Wait for the requested trajectory frame to be presented.`)
+    }
     if (action === `add_atom`) {
       const target = require_editable_memory_trajectory()
       const element = String(args.element ?? ``) as ElementSymbol
@@ -2258,16 +2363,20 @@
         formula: manifest_formula(),
         kind: trajectory ? `trajectory` : `empty`,
         active: is_active,
-        current_frame: current_step_idx,
+        current_frame: presented_step_idx,
         total_frames,
-        atom_count: (current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure)?.sites?.length ?? 0,
+        atom_count: trajectory?.frames?.[presented_step_idx]?.structure?.sites
+          ?.length ?? 0,
         streaming: !!trajectory?.frame_loader,
         editable: !!trajectory && !trajectory.frame_loader,
       }),
-      get_structure: () => current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure,
+      get_structure: () => trajectory?.frames?.[presented_step_idx]?.structure,
       set_structure: (next) => {
-        if (!trajectory?.frames?.[current_step_idx]) return
-        trajectory.frames[current_step_idx] = { ...trajectory.frames[current_step_idx], structure: next }
+        if (presentation_pending || !trajectory?.frames?.[presented_step_idx]) return
+        trajectory.frames[presented_step_idx] = {
+          ...trajectory.frames[presented_step_idx],
+          structure: next,
+        }
         refresh_after_external_edit()
       },
       set_scene_prop: (key, value) => {
@@ -2275,7 +2384,7 @@
       },
       set_selection: (indices) => { selected_sites = indices },
       select_by_element: (element) => {
-        const structure = current_frame?.structure ?? trajectory?.frames?.[current_step_idx]?.structure
+        const structure = trajectory?.frames?.[presented_step_idx]?.structure
         const indices = (structure?.sites ?? [])
           .map((site, idx) => site.species?.[0]?.element === element ? idx : -1)
           .filter((idx) => idx >= 0)
@@ -2333,8 +2442,9 @@
   })
 
   const manifest_frame_bucket = $derived(
-    is_playing ? Math.floor(current_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)
-      : current_step_idx,
+    is_playing
+      ? Math.floor(presented_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)
+      : presented_step_idx,
   )
   $effect(() => {
     if (!viewer_id) return
@@ -2416,9 +2526,9 @@
     {#if show_controls}
       <div class="trajectory-controls">
         {#if trajectory_controls}
-          {@render trajectory_controls({
+      {@render trajectory_controls({
         trajectory,
-        current_step_idx,
+        current_step_idx: presented_step_idx,
         total_frames: total_frames,
         on_step_change: go_to_step,
       })}
@@ -2488,7 +2598,9 @@
               type="number"
               min="0"
               max={total_frames - 1}
-              bind:value={current_step_idx}
+              value={presented_step_idx}
+              onchange={(event) =>
+                go_to_step(Number((event.currentTarget as HTMLInputElement).value))}
               class="step-input"
               title="Enter step number to jump to"
               aria-label="Step input"
@@ -2500,7 +2612,10 @@
                 type="range"
                 min="0"
                 max={total_frames - 1}
-                bind:value={current_step_idx}
+                value={current_step_idx}
+                oninput={(event) =>
+                  go_to_step(Number((event.currentTarget as HTMLInputElement).value))}
+                aria-busy={presentation_pending}
                 class="step-slider"
                 title="Drag to navigate steps"
               />
@@ -2559,7 +2674,7 @@
                   ? `Saved to ${remote_origin?.dir_path}/${pushback_message}`
                   : pushback_status === `error`
                     ? `Error: ${pushback_message}`
-                    : `Push frame ${current_step_idx} back to ${remote_origin?.dir_path}/${current_frame_source}`}
+                    : `Push frame ${presented_step_idx} back to ${remote_origin?.dir_path}/${current_frame_source}`}
                 class="push-back-btn"
                 class:saved={pushback_status === `saved`}
                 class:error={pushback_status === `error`}
@@ -2592,7 +2707,7 @@
                 : `Edit all frames (sync) — applies to every frame`}
               class="cross-frame-toggle"
               class:active={edit_mode !== `view`}
-              disabled={cross_frame_busy}
+              disabled={cross_frame_busy || presentation_pending}
             >
               {#if cross_frame_busy}
                 <Spinner style="width: 14px; height: 14px;" />
@@ -2603,7 +2718,7 @@
             {#if trajectory}
               <TrajectoryInfoPane
                 {trajectory}
-                {current_step_idx}
+                current_step_idx={presented_step_idx}
                 {current_filename}
                 {current_file_path}
                 {file_size}
@@ -2721,7 +2836,7 @@
           {tab_id}
           {viewer_id}
           {is_active}
-          bridge_structure={current_frame?.structure}
+          bridge_structure={trajectory?.frames?.[presented_step_idx]?.structure}
           handle_viewer_command={handle_trajectory_command}
           {trajectory_frame_positions}
           {trajectory_frame_forces}
@@ -2731,6 +2846,8 @@
           trajectory_frame_count={total_frames}
           {get_trajectory_frame_source}
           {request_trajectory_frame_source}
+          on_trajectory_frame_presented={handle_trajectory_frame_presented}
+          on_trajectory_buffer_state={handle_trajectory_buffer_state}
           allow_file_drop={false}
           style="height: 100%; min-height: 0; z-index: 3; border-radius: 0"
           {...{
@@ -2764,7 +2881,7 @@
             {y_axis}
             {y2_axis}
             controls={scatter_controls}
-            current_x_value={current_step_idx}
+            current_x_value={presented_step_idx}
             change={plot_skimming ? handle_plot_change : undefined}
             padding={{ t: 20, b: 60, l: 100, r: has_y2_series ? 100 : 20 }}
             range_padding={0}
