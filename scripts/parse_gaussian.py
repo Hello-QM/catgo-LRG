@@ -27,15 +27,138 @@ ATOMIC_SYMBOL = {
 }
 
 
+def _parse_orientation_blocks(lines, orientation):
+    geometries = []
+    for i, line in enumerate(lines):
+        if orientation not in line:
+            continue
+
+        atoms = []
+        j = i + 5
+        while j < len(lines) and "-----" not in lines[j]:
+            parts = lines[j].split()
+            if len(parts) >= 6:
+                anum = int(parts[1])
+                x, y, z = float(parts[3]), float(parts[4]), float(parts[5])
+                sym = ATOMIC_SYMBOL.get(anum, f"X{anum}")
+                atoms.append((sym, x, y, z))
+            j += 1
+        if atoms:
+            geometries.append(atoms)
+
+    return geometries
+
+
+def _parse_checkpoint_geometry(content):
+    match = re.search(
+        r"Redundant internal coordinates[^\r\n]*\r?\n"
+        r"(.*?)Recover connectivity data from disk\.",
+        content,
+        re.DOTALL,
+    )
+    if not match:
+        return None
+
+    atoms = []
+    for line in match.group(1).splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        element_match = re.match(r"^([A-Za-z]{1,2})", parts[0]) if parts else None
+        if not element_match or len(parts) < 5:
+            continue
+        try:
+            x, y, z = map(float, parts[2:5])
+        except ValueError:
+            continue
+        atoms.append((element_match.group(1), x, y, z))
+
+    return atoms or None
+
+
+def _parse_irc(content, lines):
+    path_points = [
+        (int(point), int(path))
+        for point, path in re.findall(
+            r"Point Number:\s*(\d+)\s+Path Number:\s*(\d+)",
+            content,
+        )
+    ]
+    if not path_points:
+        return None
+
+    path_one_count = sum(path == 1 for _, path in path_points)
+    path_two_count = sum(path == 2 for _, path in path_points)
+    if path_one_count + path_two_count != len(path_points):
+        return None
+
+    orientation = (
+        "Input orientation:"
+        if any("Input orientation:" in line for line in lines)
+        else "Standard orientation:"
+    )
+    orientation_geometries = _parse_orientation_blocks(lines, orientation)
+    checkpoint_geometry = _parse_checkpoint_geometry(content)
+    raw_geometries = (
+        [checkpoint_geometry] + orientation_geometries
+        if checkpoint_geometry
+        else orientation_geometries
+    )
+
+    scf_energies = [
+        float(energy.replace("D", "E").replace("d", "E"))
+        for energy in re.findall(
+            r"SCF Done:\s*E\(.+?\)\s*=\s*"
+            r"([-+]?\d+(?:\.\d+)?(?:[DEde][-+]?\d+)?)",
+            content,
+        )
+    ]
+    checkpoint_energy_match = re.search(
+        r"Energy From Chk\s*=\s*"
+        r"([-+]?\d+(?:\.\d+)?(?:[DEde][-+]?\d+)?)",
+        content,
+    )
+    raw_energies = scf_energies
+    if checkpoint_energy_match:
+        checkpoint_energy = float(
+            checkpoint_energy_match.group(1).replace("D", "E").replace("d", "E")
+        )
+        raw_energies = [checkpoint_energy] + raw_energies
+
+    point_count = len(path_points)
+    if len(raw_geometries) < point_count or len(raw_energies) < point_count:
+        return None
+
+    # Gaussian writes Path 1 from TS outward, then Path 2 from TS outward.
+    # Reverse Path 2 so the exported trajectory runs endpoint -> TS -> endpoint.
+    ordered_indices = (
+        list(range(point_count - 1, path_one_count - 1, -1))
+        + list(range(path_one_count))
+    )
+    energies = [raw_energies[idx] for idx in ordered_indices]
+    geometries = [raw_geometries[idx] for idx in ordered_indices]
+    return energies, geometries
+
+
 def parse_gaussian(filename):
+    lines = []
+    is_irc = False
     with open(filename) as f:
-        lines = f.readlines()
+        for line in f:
+            lines.append(line)
+            if not is_irc and "IRC-IRC-IRC-" in line:
+                is_irc = True
+
+    if is_irc:
+        irc_data = _parse_irc("".join(lines), lines)
+        if irc_data:
+            energies, geometries = irc_data
+            return energies, [], [], (None, None), geometries
 
     energies = []
     max_forces = []
     rms_forces = []
     force_thresholds = (None, None)
     geometries = []  # list of list-of-(symbol, x, y, z)
+    has_standard_orientation = any("Standard orientation:" in line for line in lines)
 
     i = 0
     while i < len(lines):
@@ -62,7 +185,12 @@ def parse_gaussian(filename):
                     force_thresholds = (float(m.group(2)), force_thresholds[1])
 
         # --- geometry (prefer Standard orientation, fallback to Input orientation) ---
-        if "Standard orientation:" in line or "Input orientation:" in line:
+        is_geometry_orientation = (
+            "Standard orientation:" in line
+            if has_standard_orientation
+            else "Input orientation:" in line
+        )
+        if is_geometry_orientation:
             # skip header lines (dashes, columns, dashes)
             j = i + 5  # first atom line
             atoms = []
