@@ -14,7 +14,11 @@ import {
   build_ghost_half_table,
   classify_half_draw,
 } from '$lib/structure/gpu/webgl2/bond-replica-renderer'
-import { cell_count_of } from '$lib/structure/gpu/webgl2/atom-replica-renderer'
+import {
+  AtomReplicaRenderer,
+  cell_count_of,
+} from '$lib/structure/gpu/webgl2/atom-replica-renderer'
+import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
 import {
   type PeriodicBond,
   resolve_periodic_edge,
@@ -264,6 +268,34 @@ describe(`classify_half_draw — matches the T1 oracle`, () => {
 })
 
 describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
+  test(`atom and bond draws share one position texture upload`, () => {
+    const positions = new SharedPositionTexture()
+    const atom_renderer = new AtomReplicaRenderer({ positions })
+    const bond_renderer = new BondReplicaRenderer({ positions })
+    const packet = make_packet([2, 2, 2])
+
+    atom_renderer.update(packet)
+    bond_renderer.update(packet)
+
+    expect(atom_renderer.material.uniforms.uPosTex.value).toBe(positions.texture)
+    expect(bond_renderer.material.uniforms.uPosTex.value).toBe(positions.texture)
+    expect(bond_renderer.ghost_material.uniforms.uPosTex.value)
+      .toBe(positions.texture)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 1,
+      bond_consumers: 1,
+    })
+
+    atom_renderer.dispose()
+    bond_renderer.dispose()
+    expect(positions.stats()).toMatchObject({
+      atom_consumers: 0,
+      bond_consumers: 0,
+    })
+    positions.dispose()
+  })
+
   test(`GLSL3, gl_InstanceID decode, per-replica jimage policy, ray-cast depth`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))

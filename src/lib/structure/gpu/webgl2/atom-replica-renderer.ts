@@ -5,7 +5,7 @@
  * One plain `THREE.Mesh` over an `InstancedBufferGeometry` draws
  * `N × nx·ny·nz` billboard sphere impostors:
  *
- * - Base attributes (position / radius / color) stay N-sized and bind with
+ * - Base attributes (site index / radius / color) stay N-sized and bind with
  *   divisor = cell count (`meshPerAttribute`), so each base atom's data feeds
  *   every one of its replicas without an N×cell-count copy. There is NO
  *   `instanceMatrix` — the legacy `InstancedMesh` path allocates one slot per
@@ -17,9 +17,9 @@
  *   never baked into attributes.
  * - `geometry.instanceCount = N × nx·ny·nz`. A replica-factor change updates
  *   the count, the divisor, and two uniforms; it reuses every typed array.
- * - Play / pause / scrub reuse the same geometry and material: a frame update
- *   rewrites the base position buffer in place plus the lattice uniform. No
- *   mesh reconstruction, no impostor/mesh switching.
+ * - Play / pause / scrub reuse the same geometry and material: atom and bond
+ *   shaders fetch positions from one shared RGBA32F texture while the current
+ *   lattice stays in a uniform. No mesh reconstruction or position VBO upload.
  * - The `ghost-images` boundary policy renders the T1 `ImageInstanceTable`
  *   as a sparse second draw (divisor-1 attributes, `table.count` instances).
  *
@@ -41,6 +41,7 @@ import type {
 } from '../../scene/render-packet'
 import { diff_render_packet } from '../../scene/render-packet'
 import { build_image_instance_table } from '../../scene/replica-layout'
+import { SharedPositionTexture } from './shared-position-texture'
 
 export type ReplicaDims = readonly [number, number, number]
 
@@ -182,7 +183,7 @@ function commit_sparse_attr(
 type AtomGhostPage = {
   mesh: THREE.Mesh
   geometry: THREE.InstancedBufferGeometry
-  positions: THREE.InstancedBufferAttribute
+  sites: THREE.InstancedBufferAttribute
   images: THREE.InstancedBufferAttribute
   radii: THREE.InstancedBufferAttribute
   colors: THREE.InstancedBufferAttribute
@@ -213,17 +214,29 @@ const VERTEX_TAIL = /* glsl */ `
   gl_Position = projectionMatrix * vec4(view_pos, 1.0);
 `
 
+const POSITION_TEXTURE_VERTEX = /* glsl */ `
+  uniform sampler2D uPosTex;
+  uniform int uPosTexWidth;
+
+  vec3 fetchBasePosition(float site) {
+    int idx = int(site + 0.5);
+    ivec2 uv = ivec2(idx % uPosTexWidth, idx / uPosTexWidth);
+    return texelFetch(uPosTex, uv, 0).xyz;
+  }
+`
+
 // Main replica draw: base attributes at divisor = cell count, replica cell
 // decoded from gl_InstanceID, translation from the CURRENT lattice uniform
 // (uLattice columns are the lattice rows a, b, c — Matrix3.fromArray of the
 // row-major 9-float frame lattice).
 const REPLICA_VERTEX_SHADER = /* glsl */ `
-  attribute vec3 instancePosition;
+  attribute float instanceSite;
   attribute float instanceRadius;
   attribute vec3 instanceAtomColor;
   uniform mat3 uLattice;
   uniform ivec3 uDims;
   uniform int uCellCount;
+  ${POSITION_TEXTURE_VERTEX}
   varying vec3 vCenter;
   varying float vRadius;
   varying vec3 vColor;
@@ -234,7 +247,7 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
     int ix = cell_index % uDims.x;
     int iy = (cell_index / uDims.x) % uDims.y;
     int iz = cell_index / (uDims.x * uDims.y);
-    vec3 replica_pos = instancePosition +
+    vec3 replica_pos = fetchBasePosition(instanceSite) +
       uLattice * vec3(float(ix), float(iy), float(iz));
     vColor = instanceAtomColor;
     vRadius = instanceRadius;
@@ -247,18 +260,19 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
 // absolute image offset is static and translated by the SAME current-lattice
 // uniform, so variable-cell frames stay correct.
 const GHOST_VERTEX_SHADER = /* glsl */ `
-  attribute vec3 ghostPosition;
+  attribute float ghostBaseSite;
   attribute vec3 ghostImage;
   attribute float ghostRadius;
   attribute vec3 ghostColor;
   uniform mat3 uLattice;
+  ${POSITION_TEXTURE_VERTEX}
   varying vec3 vCenter;
   varying float vRadius;
   varying vec3 vColor;
   varying vec2 vQuadCoord;
 
   void main() {
-    vec3 replica_pos = ghostPosition + uLattice * ghostImage;
+    vec3 replica_pos = fetchBasePosition(ghostBaseSite) + uLattice * ghostImage;
     vColor = ghostColor;
     vRadius = ghostRadius;
     ${VERTEX_TAIL}
@@ -396,6 +410,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 `
 
 export type AtomReplicaOptions = {
+  positions?: SharedPositionTexture
   ambient_light?: number
   directional_light?: number
   /** Opacity multiplier for ghost-image atoms (sparse second draw). */
@@ -429,16 +444,21 @@ export class AtomReplicaRenderer {
   #ghost_geometry = new THREE.InstancedBufferGeometry()
   #quad: THREE.PlaneGeometry
   #prev: RenderPacket | null = null
+  #positions: SharedPositionTexture
+  #release_positions: () => void
+  #owns_positions: boolean
 
-  // Base-sized CPU mirrors of the instanced attributes (N / 3N floats).
-  #positions = new Float32Array(0)
+  // Base-sized CPU mirrors of topology-only instanced attributes.
+  #sites = new Float32Array(0)
   #radii = new Float32Array(0)
   #colors = new Float32Array(0)
 
-  #ghost_table: ImageInstanceTable = EMPTY_TABLE
   #ghost_pages: AtomGhostPage[] = []
 
   constructor(options: AtomReplicaOptions = {}) {
+    this.#owns_positions = options.positions === undefined
+    this.#positions = options.positions ?? new SharedPositionTexture()
+    this.#release_positions = this.#positions.register(`atom`)
     this.#quad = new THREE.PlaneGeometry(2, 2, 1, 1)
     for (const geometry of [this.#geometry, this.#ghost_geometry]) {
       geometry.setIndex(this.#quad.getIndex())
@@ -447,6 +467,8 @@ export class AtomReplicaRenderer {
     }
 
     const shared_uniforms = {
+      uPosTex: { value: this.#positions.texture },
+      uPosTexWidth: { value: this.#positions.texture.image.width },
       uLattice: { value: new THREE.Matrix3() },
       uIsOrthographic: { value: false },
       uLightDir: { value: new THREE.Vector3(0.4, 0.7, 0.6).normalize() },
@@ -537,42 +559,42 @@ export class AtomReplicaRenderer {
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
   update(packet: RenderPacket): void {
     const prev = this.#prev
+    this.#positions.update(packet.frame)
+    this.material.uniforms.uPosTexWidth.value =
+      this.#positions.texture.image.width
     // Capacity is ground truth: ANY atom-count change must take the full
     // rebuild path, even when packet versions were reused by an upstream
     // producer. Trusting versions alone let a grown frame `positions.set()`
     // into an undersized mirror (RangeError) and wedge the renderer with
     // stale 112-atom buffers — atoms vanished until a remount.
-    const capacity_stale = this.#positions.length !== packet.topology.atom_count * 3
+    const capacity_stale = this.#sites.length !== packet.topology.atom_count
     const diff = prev === null || capacity_stale
       ? ALL_CHANGED
       : diff_render_packet(prev, packet)
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
-    const positions_changed = prev === null || diff.topology_changed ||
-      diff.frame_changed || prev.frame.positions !== packet.frame.positions
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
     this.#prev = packet
 
     if (diff.topology_changed) this.#rebuild_topology(packet)
     if (diff.topology_changed || diff.replica_changed) this.#apply_replicas(packet)
-    if (positions_changed) this.#upload_positions(packet)
     if (lattice_changed) this.#upload_lattice(packet)
 
     const ghosts_changed = diff.topology_changed || diff.bond_graph_changed ||
       diff.replica_changed
     if (ghosts_changed) this.#rebuild_ghosts(packet)
-    if (ghosts_changed || positions_changed) this.#upload_ghost_positions(packet)
   }
 
   #rebuild_topology(packet: RenderPacket): void {
     const { atom_count: n, radii, colors } = packet.topology
-    if (this.#positions.length !== n * 3) {
-      this.#positions = new Float32Array(n * 3)
+    if (this.#sites.length !== n) {
+      this.#sites = new Float32Array(n)
       this.#radii = new Float32Array(n)
       this.#colors = new Float32Array(n * 3)
     }
     const color_stride = colors.length === n * 4 ? 4 : 3
     for (let idx = 0; idx < n; idx++) {
+      this.#sites[idx] = idx
       // Same on-screen size as the legacy instanced path (VISUAL_RADIUS_SCALE).
       this.#radii[idx] = radii[idx] * VISUAL_RADIUS_SCALE
       const src = idx * color_stride
@@ -589,7 +611,7 @@ export class AtomReplicaRenderer {
   #apply_replicas(packet: RenderPacket): void {
     const dims = packet.replicas.dims
     const cc = cell_count_of(dims)
-    ensure_instanced_attr(this.#geometry, `instancePosition`, this.#positions, 3, cc, true)
+    ensure_instanced_attr(this.#geometry, `instanceSite`, this.#sites, 1, cc)
     ensure_instanced_attr(this.#geometry, `instanceRadius`, this.#radii, 1, cc)
     ensure_instanced_attr(this.#geometry, `instanceAtomColor`, this.#colors, 3, cc)
     this.#geometry.instanceCount = packet.topology.atom_count * cc
@@ -598,12 +620,6 @@ export class AtomReplicaRenderer {
     dims_val[1] = dims[1]
     dims_val[2] = dims[2]
     this.material.uniforms.uCellCount.value = cc
-  }
-
-  #upload_positions(packet: RenderPacket): void {
-    this.#positions.set(packet.frame.positions)
-    const attr = this.#geometry.getAttribute(`instancePosition`)
-    if (attr) attr.needsUpdate = true
   }
 
   #upload_lattice(packet: RenderPacket): void {
@@ -618,15 +634,15 @@ export class AtomReplicaRenderer {
     geometry: THREE.InstancedBufferGeometry,
     mesh: THREE.Mesh,
   ): AtomGhostPage {
-    const positions = sparse_float_attr(3, true)
+    const sites = sparse_float_attr(1)
     const images = sparse_float_attr(3)
     const radii = sparse_float_attr(1)
     const colors = sparse_float_attr(3)
-    geometry.setAttribute(`ghostPosition`, positions)
+    geometry.setAttribute(`ghostBaseSite`, sites)
     geometry.setAttribute(`ghostImage`, images)
     geometry.setAttribute(`ghostRadius`, radii)
     geometry.setAttribute(`ghostColor`, colors)
-    return { mesh, geometry, positions, images, radii, colors }
+    return { mesh, geometry, sites, images, radii, colors }
   }
 
   #ensure_ghost_pages(count: number): void {
@@ -651,7 +667,6 @@ export class AtomReplicaRenderer {
     const table = graph !== undefined && boundary_policy === `ghost-images`
       ? build_image_instance_table(graph, dims, boundary_policy)
       : EMPTY_TABLE
-    this.#ghost_table = table
     const count = table.count
     this.#ensure_ghost_pages(count)
     const { radii, colors, atom_count } = packet.topology
@@ -662,11 +677,13 @@ export class AtomReplicaRenderer {
       const start = page_idx * SPARSE_GHOST_PAGE_CAPACITY
       const used = Math.max(0, Math.min(SPARSE_GHOST_PAGE_CAPACITY, count - start))
       const image = page.images.array as Float32Array
+      const sites = page.sites.array as Float32Array
       const radius = page.radii.array as Float32Array
       const color = page.colors.array as Float32Array
       for (let local = 0; local < used; local++) {
         const idx = start + local
         const site = table.base_sites[idx]
+        sites[local] = site
         image[local * 3] = table.jimages[idx * 3]
         image[local * 3 + 1] = table.jimages[idx * 3 + 1]
         image[local * 3 + 2] = table.jimages[idx * 3 + 2]
@@ -677,7 +694,7 @@ export class AtomReplicaRenderer {
         color[local * 3 + 2] = colors[src + 2]
       }
       for (const attribute of [
-        page.positions,
+        page.sites,
         page.images,
         page.radii,
         page.colors,
@@ -689,32 +706,13 @@ export class AtomReplicaRenderer {
     }
   }
 
-  #upload_ghost_positions(packet: RenderPacket): void {
-    const table = this.#ghost_table
-    const positions = packet.frame.positions
-    for (let page_idx = 0; page_idx < this.#ghost_pages.length; page_idx++) {
-      const page = this.#ghost_pages[page_idx]
-      const start = page_idx * SPARSE_GHOST_PAGE_CAPACITY
-      const used = Math.max(
-        0,
-        Math.min(SPARSE_GHOST_PAGE_CAPACITY, table.count - start),
-      )
-      const out = page.positions.array as Float32Array
-      for (let local = 0; local < used; local++) {
-        const site = table.base_sites[start + local] * 3
-        out[local * 3] = positions[site]
-        out[local * 3 + 1] = positions[site + 1]
-        out[local * 3 + 2] = positions[site + 2]
-      }
-      commit_sparse_attr(page.positions, used)
-    }
-  }
-
   dispose(): void {
     this.#geometry.dispose()
     for (const page of this.#ghost_pages) page.geometry.dispose()
     this.#quad.dispose()
     this.material.dispose()
     this.ghost_material.dispose()
+    this.#release_positions()
+    if (this.#owns_positions) this.#positions.dispose()
   }
 }

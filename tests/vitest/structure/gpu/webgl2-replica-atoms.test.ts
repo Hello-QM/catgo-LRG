@@ -16,6 +16,7 @@ import {
   cell_count_of,
   decode_webgl2_instance,
 } from '$lib/structure/gpu/webgl2/atom-replica-renderer'
+import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
 import {
   build_image_instance_table,
   decode_replica_instance,
@@ -117,7 +118,7 @@ describe(`AtomReplicaRenderer — mesh shape`, () => {
     renderer.update(make_packet([2, 2, 2]))
 
     expect(geo(renderer.mesh).instanceCount).toBe(3 * 8)
-    for (const name of [`instancePosition`, `instanceRadius`, `instanceAtomColor`]) {
+    for (const name of [`instanceSite`, `instanceRadius`, `instanceAtomColor`]) {
       const a = attr(renderer.mesh, name)
       // Uploaded buffers stay BASE-sized: one slot per base atom, not 8N.
       expect(a.count).toBe(3)
@@ -130,7 +131,7 @@ describe(`AtomReplicaRenderer — mesh shape`, () => {
     const renderer = new AtomReplicaRenderer()
     renderer.update(make_packet([1, 1, 1]))
     expect(geo(renderer.mesh).instanceCount).toBe(3)
-    expect(attr(renderer.mesh, `instancePosition`).meshPerAttribute).toBe(1)
+    expect(attr(renderer.mesh, `instanceSite`).meshPerAttribute).toBe(1)
     renderer.dispose()
   })
 })
@@ -146,7 +147,7 @@ describe(`AtomReplicaRenderer — replica factor changes`, () => {
     const geometry = geo(mesh)
     const material = mesh.material
     const attributes = {
-      pos: attr(mesh, `instancePosition`),
+      site: attr(mesh, `instanceSite`),
       rad: attr(mesh, `instanceRadius`),
       col: attr(mesh, `instanceAtomColor`),
     }
@@ -162,14 +163,14 @@ describe(`AtomReplicaRenderer — replica factor changes`, () => {
     // detects (`needsUpdate()` ignores meshPerAttribute); in-place mutation
     // required the mid-frame resetState() hack that vanished atoms on
     // non-ANGLE GL stacks (see webgl2-replica-atom-resize.test.ts).
-    expect(attr(mesh, `instancePosition`)).not.toBe(attributes.pos)
+    expect(attr(mesh, `instanceSite`)).not.toBe(attributes.site)
     expect(attr(mesh, `instanceRadius`)).not.toBe(attributes.rad)
     expect(attr(mesh, `instanceAtomColor`)).not.toBe(attributes.col)
-    expect(attr(mesh, `instancePosition`).array).toBe(attributes.pos.array)
+    expect(attr(mesh, `instanceSite`).array).toBe(attributes.site.array)
     expect(attr(mesh, `instanceRadius`).array).toBe(attributes.rad.array)
     expect(attr(mesh, `instanceAtomColor`).array).toBe(attributes.col.array)
-    expect(attr(mesh, `instancePosition`).count).toBe(3)
-    expect(attr(mesh, `instancePosition`).meshPerAttribute).toBe(27)
+    expect(attr(mesh, `instanceSite`).count).toBe(3)
+    expect(attr(mesh, `instanceSite`).meshPerAttribute).toBe(27)
     expect(geometry.instanceCount).toBe(3 * 27)
 
     const uniforms = (material as THREE.ShaderMaterial).uniforms
@@ -183,7 +184,8 @@ describe(`AtomReplicaRenderer — frame updates (play / pause / scrub)`, () => {
   test(`frame advance reuses geometry+material and refreshes positions + lattice`, () => {
     const builder = create_render_packet_builder()
     const structure = make_structure(3)
-    const renderer = new AtomReplicaRenderer()
+    const positions = new SharedPositionTexture()
+    const renderer = new AtomReplicaRenderer({ positions })
 
     renderer.update(builder.build({
       structure,
@@ -195,7 +197,7 @@ describe(`AtomReplicaRenderer — frame updates (play / pause / scrub)`, () => {
     const mesh = renderer.mesh
     const geometry = geo(mesh)
     const material = mesh.material
-    const pos_attr = attr(mesh, `instancePosition`)
+    const site_attr = attr(mesh, `instanceSite`)
 
     // Variable-cell scrub: new positions AND a new current-frame lattice.
     renderer.update(builder.build({
@@ -212,10 +214,9 @@ describe(`AtomReplicaRenderer — frame updates (play / pause / scrub)`, () => {
     expect(renderer.mesh).toBe(mesh)
     expect(geo(renderer.mesh)).toBe(geometry)
     expect(renderer.mesh.material).toBe(material)
-    expect(attr(mesh, `instancePosition`)).toBe(pos_attr)
-    // Base positions rewritten in place (still 3N floats).
-    const pos = pos_attr.array as Float32Array
-    expect(pos.length).toBe(9)
+    expect(attr(mesh, `instanceSite`)).toBe(site_attr)
+    expect(Array.from(site_attr.array as Float32Array)).toEqual([0, 1, 2])
+    const pos = positions.texture.image.data as Float32Array
     expect(pos[1]).toBeCloseTo(5, 5)
     // Current frame lattice lands in the uniform, never in attributes:
     // Matrix3.fromArray copies the row-major 9 floats verbatim, so column 0
@@ -232,7 +233,8 @@ describe(`AtomReplicaRenderer — frame updates (play / pause / scrub)`, () => {
     const builder = create_render_packet_builder()
     const structure = make_structure(3)
     const positions = new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0])
-    const renderer = new AtomReplicaRenderer()
+    const position_resource = new SharedPositionTexture()
+    const renderer = new AtomReplicaRenderer({ positions: position_resource })
     const first = builder.build({
       structure,
       dims: [2, 2, 2],
@@ -255,12 +257,10 @@ describe(`AtomReplicaRenderer — frame updates (play / pause / scrub)`, () => {
     expect(second.frame.positions_version).toBe(first.frame.positions_version)
 
     renderer.update(first)
-    const pos_attr = attr(renderer.mesh, `instancePosition`)
-    const pos_version = pos_attr.version
+    const texture_version = position_resource.texture.version
     renderer.update(second)
 
-    expect(attr(renderer.mesh, `instancePosition`)).toBe(pos_attr)
-    expect(pos_attr.version).toBe(pos_version)
+    expect(position_resource.texture.version).toBe(texture_version)
     const lattice = renderer.material.uniforms.uLattice.value as THREE.Matrix3
     expect([lattice.elements[0], lattice.elements[4], lattice.elements[8]])
       .toEqual([14, 12, 9])
@@ -327,7 +327,7 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
     expect(renderer.ghost_mesh.visible).toBe(true)
 
     const image = attr(renderer.ghost_mesh, `ghostImage`)
-    const pos = attr(renderer.ghost_mesh, `ghostPosition`)
+    const base_site = attr(renderer.ghost_mesh, `ghostBaseSite`)
     expect(image.meshPerAttribute).toBe(1)
     expect(image.count).toBe(table.count)
     for (let idx = 0; idx < table.count; idx++) {
@@ -336,10 +336,8 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
       expect((image.array as Float32Array)[idx * 3]).toBe(table.jimages[idx * 3])
       expect((image.array as Float32Array)[idx * 3 + 1]).toBe(table.jimages[idx * 3 + 1])
       expect((image.array as Float32Array)[idx * 3 + 2]).toBe(table.jimages[idx * 3 + 2])
-      // Per-frame base-position copy for the ghost's base site.
-      const site = table.base_sites[idx]
-      expect((pos.array as Float32Array)[idx * 3])
-        .toBeCloseTo(packet.frame.positions[site * 3], 5)
+      expect((base_site.array as Float32Array)[idx])
+        .toBe(table.base_sites[idx])
     }
     renderer.dispose()
   })
@@ -370,12 +368,12 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
     const main_geometry = geo(renderer.mesh)
     const ghost_geometry = geo(renderer.ghost_mesh)
     const main_names = [
-      `instancePosition`,
+      `instanceSite`,
       `instanceRadius`,
       `instanceAtomColor`,
     ] as const
     const ghost_names = [
-      `ghostPosition`,
+      `ghostBaseSite`,
       `ghostImage`,
       `ghostRadius`,
       `ghostColor`,
@@ -439,7 +437,7 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
     const pages = ghost_pages(renderer.ghost_mesh)
     expect(pages).toHaveLength(3)
     expect(pages.map((page) => geo(page).instanceCount)).toEqual([256, 256, 4])
-    const attrs = pages.map((page) => attr(page, `ghostPosition`))
+    const attrs = pages.map((page) => attr(page, `ghostBaseSite`))
     const arrays = attrs.map((attribute) => attribute.array)
 
     renderer.update(packet([1, 1, 1]))
@@ -453,7 +451,7 @@ describe(`AtomReplicaRenderer — sparse ghost second draw`, () => {
     expect(ghost_pages(renderer.ghost_mesh)).toEqual(pages)
     expect(pages.map((page) => geo(page).instanceCount)).toEqual([256, 256, 4])
     for (let idx = 0; idx < pages.length; idx++) {
-      expect(attr(pages[idx], `ghostPosition`)).toBe(attrs[idx])
+      expect(attr(pages[idx], `ghostBaseSite`)).toBe(attrs[idx])
       expect(attrs[idx].array).toBe(arrays[idx])
     }
 

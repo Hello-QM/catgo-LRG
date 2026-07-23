@@ -46,6 +46,7 @@ import {
   set_material_opacity,
   type ReplicaDims,
 } from './atom-replica-renderer'
+import { SharedPositionTexture } from './shared-position-texture'
 
 /** Shader-side boundary-policy codes (uPolicy). */
 export const BOUNDARY_POLICY_CODE: Record<BoundaryPolicy, number> = {
@@ -194,11 +195,6 @@ export function build_ghost_half_table(
   }
 }
 
-// Base-position texture: fixed power-of-two width so the shader's
-// index→texel math is two bit ops (same layout as the trajectory GPU path).
-const POS_TEX_WIDTH = 1024
-const POS_TEX_SHIFT = 10 // log2(POS_TEX_WIDTH)
-
 const ALL_CHANGED: RenderPacketDiff = {
   topology_changed: true,
   bond_graph_changed: true,
@@ -209,6 +205,7 @@ const ALL_CHANGED: RenderPacketDiff = {
 // Shared vertex declarations for both draws.
 const VERTEX_COMMON = /* glsl */ `
   uniform sampler2D uPosTex;
+  uniform int uPosTexWidth;
   uniform mat3 uLattice;
   uniform float uBondRadius;
   varying vec3 vColor;
@@ -217,6 +214,12 @@ const VERTEX_COMMON = /* glsl */ `
   flat varying float vImpRadiusSq;
   flat varying float vImpLen;
   flat varying float vImpCollapse;
+
+  vec3 fetchBasePosition(float site) {
+    int idx = int(site + 0.5);
+    ivec2 uv = ivec2(idx % uPosTexWidth, idx / uPosTexWidth);
+    return texelFetch(uPosTex, uv, 0).xyz;
+  }
 `
 
 // Shared vertex tail: map the unit OBB (position in [-1,1]^3) onto the
@@ -272,10 +275,8 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
       (cell_index / uDims.x) % uDims.y,
       cell_index / (uDims.x * uDims.y)
     );
-    int ia = int(a_site.x + 0.5);
-    int ib = int(a_site.y + 0.5);
-    vec3 pa = texelFetch(uPosTex, ivec2(ia & ${POS_TEX_WIDTH - 1}, ia >> ${POS_TEX_SHIFT}), 0).xyz;
-    vec3 pb = texelFetch(uPosTex, ivec2(ib & ${POS_TEX_WIDTH - 1}, ib >> ${POS_TEX_SHIFT}), 0).xyz;
+    vec3 pa = fetchBasePosition(a_site.x);
+    vec3 pb = fetchBasePosition(a_site.y);
     ivec3 jimage = ivec3(round(a_jimage));
     bool is_b_half = a_half > 0.5;
     // Anchor endpoint lives in THIS replica cell; the partner sits at
@@ -311,11 +312,9 @@ const GHOST_VERTEX_SHADER = /* glsl */ `
   ${VERTEX_COMMON}
 
   void main() {
-    int ia = int(g_site.x + 0.5);
-    int ib = int(g_site.y + 0.5);
-    vec3 pa = texelFetch(uPosTex, ivec2(ia & ${POS_TEX_WIDTH - 1}, ia >> ${POS_TEX_SHIFT}), 0).xyz +
+    vec3 pa = fetchBasePosition(g_site.x) +
       uLattice * g_cell;
-    vec3 pb = texelFetch(uPosTex, ivec2(ib & ${POS_TEX_WIDTH - 1}, ib >> ${POS_TEX_SHIFT}), 0).xyz +
+    vec3 pb = fetchBasePosition(g_site.y) +
       uLattice * (g_cell + g_jimage);
     vec3 anchor = pb;
     vec3 tip = 0.5 * (pa + pb);
@@ -437,6 +436,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 `
 
 export type BondReplicaOptions = {
+  positions?: SharedPositionTexture
   bond_radius?: number
   /** Stub length multiplier for the 'stub' boundary policy (VESTA 0.5). */
   stub_scale?: number
@@ -458,7 +458,9 @@ export class BondReplicaRenderer {
   #ghost_geometry = new THREE.InstancedBufferGeometry()
   #box: THREE.BoxGeometry
   #prev: RenderPacket | null = null
-  #pos_texture: THREE.DataTexture | null = null
+  #positions: SharedPositionTexture
+  #release_positions: () => void
+  #owns_positions: boolean
 
   // Per-half base attributes — capacity-sized CPU mirrors, grow-only.
   // MD playback changes the bond count nearly every frame; reallocating these
@@ -480,6 +482,9 @@ export class BondReplicaRenderer {
   #ghost_before_render!: THREE.Object3D[`onBeforeRender`]
 
   constructor(options: BondReplicaOptions = {}) {
+    this.#owns_positions = options.positions === undefined
+    this.#positions = options.positions ?? new SharedPositionTexture()
+    this.#release_positions = this.#positions.register(`bond`)
     this.#box = new THREE.BoxGeometry(2, 2, 2)
     for (const geometry of [this.#geometry, this.#ghost_geometry]) {
       geometry.setIndex(this.#box.getIndex())
@@ -488,7 +493,8 @@ export class BondReplicaRenderer {
     }
 
     const shared_uniforms = {
-      uPosTex: { value: null as THREE.DataTexture | null },
+      uPosTex: { value: this.#positions.texture },
+      uPosTexWidth: { value: this.#positions.texture.image.width },
       uLattice: { value: new THREE.Matrix3() },
       uBondRadius: { value: options.bond_radius ?? 0.15 },
       uLightDir: { value: new THREE.Vector3(0.4, 0.7, 0.6).normalize() },
@@ -584,10 +590,11 @@ export class BondReplicaRenderer {
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
   update(packet: RenderPacket): void {
     const prev = this.#prev
+    this.#positions.update(packet.frame)
+    this.material.uniforms.uPosTexWidth.value =
+      this.#positions.texture.image.width
     const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
-    const positions_changed = prev === null || diff.topology_changed ||
-      diff.frame_changed || prev.frame.positions !== packet.frame.positions
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
     this.#prev = packet
@@ -595,7 +602,6 @@ export class BondReplicaRenderer {
     const graph_changed = diff.topology_changed || diff.bond_graph_changed
     if (graph_changed) this.#rebuild_half_attrs(packet)
     if (graph_changed || diff.replica_changed) this.#apply_replicas(packet)
-    if (positions_changed) this.#upload_positions(packet)
     if (lattice_changed) this.#upload_lattice(packet)
     if (graph_changed || diff.replica_changed) this.#rebuild_ghosts(packet)
   }
@@ -705,38 +711,6 @@ export class BondReplicaRenderer {
       BOUNDARY_POLICY_CODE[packet.replicas.boundary_policy]
   }
 
-  #upload_positions(packet: RenderPacket): void {
-    const positions = packet.frame.positions
-    const n_atoms = (positions.length / 3) | 0
-    const rows = Math.max(1, Math.ceil(n_atoms / POS_TEX_WIDTH))
-    if (
-      this.#pos_texture === null ||
-      (this.#pos_texture.image.height as number) < rows
-    ) {
-      this.#pos_texture?.dispose()
-      const data = new Float32Array(POS_TEX_WIDTH * rows * 4)
-      const tex = new THREE.DataTexture(
-        data,
-        POS_TEX_WIDTH,
-        rows,
-        THREE.RGBAFormat,
-        THREE.FloatType,
-      )
-      tex.minFilter = THREE.NearestFilter
-      tex.magFilter = THREE.NearestFilter
-      tex.generateMipmaps = false
-      this.#pos_texture = tex
-      this.material.uniforms.uPosTex.value = tex
-    }
-    const data = this.#pos_texture.image.data as unknown as Float32Array
-    for (let idx = 0; idx < n_atoms; idx++) {
-      data[idx * 4] = positions[idx * 3]
-      data[idx * 4 + 1] = positions[idx * 3 + 1]
-      data[idx * 4 + 2] = positions[idx * 3 + 2]
-    }
-    this.#pos_texture.needsUpdate = true
-  }
-
   #upload_lattice(packet: RenderPacket): void {
     // A same-index variable-cell update can replace only FrameGeometry.lattice.
     // Keep this independent from positions_version so the CURRENT cell always
@@ -829,7 +803,7 @@ export class BondReplicaRenderer {
     this.#box.dispose()
     this.material.dispose()
     this.ghost_material.dispose()
-    this.#pos_texture?.dispose()
-    this.#pos_texture = null
+    this.#release_positions()
+    if (this.#owns_positions) this.#positions.dispose()
   }
 }
