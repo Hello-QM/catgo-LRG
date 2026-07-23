@@ -1,5 +1,99 @@
 # Handoff — traj-round4 review closure → Gate A
 
+## Exact smooth trajectory pipeline closure — 2026-07-23
+
+Status: **PASS for the required real-file exactness and performance gates.**
+Branch: `feat/impostor-bond-mvp`.
+Starting point: `a831db46`.
+Task 9 implementation head: `483575dd`.
+Task 10 closure: the commit containing this section.
+
+The ten-task exact prepared-frame pipeline is implemented. Production playback now
+prepares positions and exact bonds together, publishes only complete matching snapshots,
+uses one shared position texture across WebGL2 consumers, bounds and backpressures the
+prepared queue, and exposes bounded diagnostics for the real GPU acceptance test.
+
+Task commits:
+
+1. `7f872067` — define exact prepared trajectory frames.
+2. `5597091b` — prepare trajectory positions in the bond worker.
+3. `3bdf7ff0` — queue exact prepared trajectory frames.
+4. `f029f25b` — publish exact prepared trajectory snapshots.
+5. `4fcdec70` — backpressure trajectory presentation.
+6. `7bd074b8` — share one WebGL2 position texture.
+7. `34aaaacc` — unify WebGL2 replica ownership.
+8. `44ceca5f` — share trajectory positions with the picker.
+9. `483575dd` — harden exact trajectory presentation.
+10. The commit containing this section — gate exact smooth real trajectory playback.
+
+Prerequisite commit `f65af723` exports the ferrox structure matcher required by the exact
+worker path.
+
+### Real-file acceptance evidence
+
+Command:
+
+```bash
+CATGO_GPU_PERF_GATE=1 \
+DUMP_TRAJ=/home/james0001/Downloads/dump.traj \
+pnpm playwright test \
+  tests/playwright/trajectory-exact-smooth-real-file.spec.ts \
+  --project=chromium --workers=1 --reporter=line
+```
+
+Outcome: `1 passed (2.8m)`.
+
+- Input SHA-256:
+  `38d4554e93744b7efc53e2add4f7ef90ed8f72557b78e45f0696347434b3e41c`.
+- Shape: 100 frames × 19,968 atoms.
+- Reference sweep: 1,541.21 ms in an independent browser context.
+- Exact displayed bond graphs: 100/100 hashes and counts matched the reference.
+- First four-second unique presented FPS: 28.49.
+- Steady unique presented FPS: 25.72.
+- Required floor: 24 FPS; requested target: 30 FPS.
+- Cold first complete frame: 2,617.97 ms.
+- Three-frame warmup: 3,492.14 ms.
+- Frame-time p95: 50.66 ms; main-thread long tasks: 7.
+- Exact bond compute median/p95: 11.41 / 41.92 ms.
+- Presentation latency median/p95: 0.55 / 414.30 ms.
+- Position uploads: 322, exactly one per unique presented frame; 105,512,960 bytes.
+- Picker position uploads during passive playback: 0.
+- Renderer-scheduled topology uploads: 322; 449,757,306 live-prefix bytes.
+- Peak prepared cache: 8 frames / 11,209,888 bytes.
+- Peak total retained prepared state: 13,765,264 bytes, below 96 MiB.
+- Maximum random-seek application-state acknowledgement: 0.925 ms, below 100 ms.
+- Prepared playback reported zero stale results and zero failed frames.
+- Chromium used headed hardware WebGL through:
+  `ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 4060 Laptop GPU/PCIe/SSE2,
+  OpenGL 4.5.0)`.
+- Final WebGL state: context intact and `gl.getError() = 0`.
+
+### Final verification
+
+- Focused trajectory/render regression set: 132 passed, 0 failed.
+- Updated WebGPU packet-ownership contract regression: 12 passed, 0 failed.
+- `pnpm test`: 280 files passed, 1 skipped; 5,006 tests passed, 53 skipped,
+  0 failed.
+- `pnpm check`: 0 errors and 304 pre-existing warnings.
+- `git diff --check`: passed.
+- The plan's literal `python -m pytest` command was run. It stopped during collection
+  before project tests because this machine cannot open
+  `libnvrtc-builtins.so.13.0` while importing `scripts/test_eos_surface_energy.py`.
+  The start-of-work Python baseline was already non-green and was explicitly accepted:
+  1,366 passed, 49 skipped, and 85 unrelated failures. No Python source is changed by
+  this task.
+
+Known non-blocking limitations: the 30 FPS target is not reached, although both required
+segments exceed the 24 unique-presented-FPS floor. Cold startup and the seek-inclusive
+presentation-latency p95 remain substantially higher than steady-state latency. The
+repository-wide Python gate remains blocked by the existing local CUDA/NVRTC environment
+and unrelated baseline failures.
+
+The local-only paths `.claude/gate-approvals/`, `.claude/tmp-dump.traj`, and
+`.superpowers/` remain unstaged and unmodified by this closure.
+
+---
+
 Date: 2026-07-17 (updated — session close, user offline)
 Status: **PR #531 OPEN at 8a3bed35 — all plan tasks landed (Build T5 / Visual T5 / Bonds T6 /
 Visual T6) + atom-replica fix + main #530-#532 merged in. #530 and #532 MERGED to main.

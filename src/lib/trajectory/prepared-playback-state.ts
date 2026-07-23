@@ -37,3 +37,15 @@ export function may_start_prepared_playback(
 ): boolean {
   return ready_frames >= Math.min(3, Math.max(1, total_frames))
 }
+
+export function playback_poll_interval_ms(rate_ms: number): number {
+  return Math.min(8, Math.max(1, rate_ms))
+}
+
+export function advance_playback_deadline(
+  previous_deadline_ms: number,
+  now_ms: number,
+  rate_ms: number,
+): number {
+  return Math.max(previous_deadline_ms + rate_ms, now_ms)
+}

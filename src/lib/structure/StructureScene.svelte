@@ -1148,6 +1148,24 @@
     ]
   })
 
+  $effect(() => {
+    if (
+      trajectory_frame_positions === null ||
+      typeof PerformanceObserver === `undefined`
+    ) return
+    const observer = new PerformanceObserver((list) => {
+      for (const _entry of list.getEntries()) {
+        trajectory_render_diagnostics.record_long_task()
+      }
+    })
+    try {
+      observer.observe({ entryTypes: [`longtask`] })
+    } catch {
+      return
+    }
+    return () => observer.disconnect()
+  })
+
   // Reduced-motion: honor the explicit user setting OR the OS-level
   // `prefers-reduced-motion: reduce` media query. Gates every continuous rAF
   // animation below (pulse / vibration / auto-rotate) plus trackball inertia.
@@ -2752,18 +2770,25 @@
       positions_version: raw_packet.frame.positions_version,
       topology_stable: true,
     }
-    const current_source = getter?.(frame_idx) ?? fallback_source
+    // Indexed frames load asynchronously. Until getter(frame_idx) is ready,
+    // raw_positions still belongs to the last displayed frame; relabeling it
+    // with frame_idx would publish a one-frame-shifted exact graph. Only
+    // non-indexed trajectories may use the synchronous displayed fallback.
+    const current_source = getter?.(frame_idx) ??
+      (requester ? null : fallback_source)
     const current_key: PreparedFrameKey = {
       owner: raw_packet.frame.owner,
       frame_idx,
-      positions_version: current_source.positions_version,
+      positions_version: current_source?.positions_version ??
+        raw_packet.frame.positions_version,
       topology_version: raw_packet.topology.version,
       rules_version,
     }
+    trajectory_render_diagnostics.begin_owner(raw_packet.frame.owner)
     latest_prepared_request_key = current_key
-    const generation = prepared_pipeline.begin_request(current_key)
+    const generation = prepared_pipeline.begin_request(current_key, frame_count)
     const estimated_bytes = Math.max(
-      current_source.positions.byteLength * 3,
+      (current_source?.positions ?? raw_positions).byteLength * 3,
       raw_packet.topology.atom_count * 64,
     )
 
@@ -2795,7 +2820,41 @@
       })
     }
 
+    if (import.meta.env.DEV) {
+      globalThis.__catgoTrajectoryExactReference = async () => {
+        prepared_pipeline.clear(raw_packet.frame.owner)
+        while (prepared_pipeline.stats().in_flight > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        const graph_hash_by_frame: Record<number, string> = {}
+        const bond_count_by_frame: Record<number, number> = {}
+        const started = performance.now()
+        for (let reference_idx = 0; reference_idx < frame_count; reference_idx++) {
+          const reference_source = getter?.(reference_idx) ??
+            await requester?.(reference_idx) ??
+            null
+          if (!reference_source) {
+            throw new Error(
+              `Exact reference frame ${reference_idx} is not available`,
+            )
+          }
+          const prepared = await prepare_source(reference_idx, reference_source)
+          graph_hash_by_frame[reference_idx] = prepared.graph_hash
+          bond_count_by_frame[reference_idx] = prepared.graph.pairs.length / 2
+        }
+        return {
+          graph_hash_by_frame,
+          bond_count_by_frame,
+          elapsed_ms: performance.now() - started,
+        }
+      }
+    }
+
     const report_buffer = (preparing: boolean) => {
+      if (
+        !latest_prepared_request_key ||
+        !same_prepared_frame_key(current_key, latest_prepared_request_key)
+      ) return
       const keys: PreparedFrameKey[] = []
       const total = Math.max(0, frame_count)
       for (let offset = 0; offset < Math.min(8, total || 1); offset++) {
@@ -2812,7 +2871,6 @@
       })
     }
 
-    trajectory_render_diagnostics.record(`requested`, frame_idx)
     report_buffer(true)
     void prepared_pipeline.request({
       key: current_key,
@@ -2837,32 +2895,45 @@
           prepared.graph.pairs.length / 2,
           prepared.graph.jimages,
         )
-        bond_state.bond_connectivity = graph_connectivity(prepared.graph)
-        bond_state.last_bond_structure = raw_structure
-        bond_state.last_bond_strategy = rules_version
-        bond_state.last_elem_fingerprint = `${raw_packet.topology.version}`
-        const manager = atom_manager
-        manager.begin_positions_batch()
-        try {
-          for (
-            let slot = 0;
-            slot < manager.count &&
-            slot < raw_packet.topology.atom_count;
-            slot++
-          ) {
-            const site_idx = manager.site_ids_buffer[slot]
-            const offset = site_idx * 3
-            manager.set_position(
-              slot,
-              prepared.packet.frame.positions[offset],
-              prepared.packet.frame.positions[offset + 1],
-              prepared.packet.frame.positions[offset + 2],
-            )
+        const packet_renderer_will_own = packet_render_features_eligible()
+        // The unified packet layer reads the immutable packet and typed bond
+        // manager directly. Publishing legacy object connectivity/structure
+        // here wakes the full legacy consumer graph, while rewriting the
+        // AtomManager costs O(N) reactive writes. Keep that entire snapshot
+        // path together for unsupported visual features only.
+        if (!packet_renderer_will_own) {
+          bond_state.bond_connectivity = graph_connectivity(prepared.graph)
+          bond_state.last_bond_structure = raw_structure
+          bond_state.last_bond_strategy = rules_version
+          bond_state.last_elem_fingerprint = `${raw_packet.topology.version}`
+          const manager = atom_manager
+          manager.begin_positions_batch()
+          try {
+            for (
+              let slot = 0;
+              slot < manager.count &&
+              slot < raw_packet.topology.atom_count;
+              slot++
+            ) {
+              const site_idx = manager.site_ids_buffer[slot]
+              const offset = site_idx * 3
+              manager.set_position(
+                slot,
+                prepared.packet.frame.positions[offset],
+                prepared.packet.frame.positions[offset + 1],
+                prepared.packet.frame.positions[offset + 2],
+              )
+            }
+          } finally {
+            manager.commit_positions_batch()
           }
-        } finally {
-          manager.commit_positions_batch()
         }
-        trajectory_render_diagnostics.record(`presented`, prepared.key.frame_idx)
+        trajectory_render_diagnostics.record_presented(
+          prepared.key.frame_idx,
+          prepared.key.positions_version,
+          prepared.graph_hash,
+          prepared.graph.pairs.length / 2,
+        )
         on_trajectory_frame_presented?.(
           prepared.key.frame_idx,
           prepared.key.positions_version,
@@ -2873,7 +2944,7 @@
       report_buffer(false)
     })
 
-    if (current_source.topology_stable && frame_count > 1) {
+    if ((current_source?.topology_stable ?? true) && frame_count > 1) {
       for (let offset = 1; offset < Math.min(8, frame_count); offset++) {
         const prefetch_idx = (frame_idx + offset) % frame_count
         const known = getter?.(prefetch_idx) ?? null
@@ -3912,6 +3983,11 @@
     }
     return result
   })
+  // Occupancy belongs to the static topology. Evaluate the O(N) predicate
+  // only when atom_data itself changes, never once per trajectory packet.
+  let atom_data_has_partial_occupancy = $derived(
+    atom_data.some((atom) => atom.has_partial_occupancy),
+  )
 
   // Mark GPU picker as dirty when atom data, bonds, or cutting visibility change.
   // Use bond_pairs.length (cheap $state) instead of filtered_bond_pairs.length
@@ -5084,7 +5160,12 @@
     if (upstream === null) return null
     const colors = atom_colors_buffer
     const radii = manager_display_radii
-    const bond_graph = manager_bond_graph
+    const packet_owned_graph = trajectory_frame_positions != null &&
+        prepared_render_packet?.topology === upstream &&
+        packet_render_features_eligible()
+      ? upstream.bond_graph ?? null
+      : null
+    const bond_graph = packet_owned_graph ?? manager_bond_graph
     const attributes_changed = manager_topology_snapshot === null ||
       manager_topology_source !== upstream ||
       manager_topology_colors !== colors ||
@@ -5096,7 +5177,7 @@
         version: manager_topology_version,
         colors: atom_colors_buffer,
         radii: manager_display_radii,
-        bond_graph: manager_bond_graph,
+        bond_graph,
       }
       manager_topology_source = upstream
       manager_topology_colors = colors
@@ -5126,18 +5207,26 @@
     }
   })
 
+  function packet_render_features_eligible(): boolean {
+    const features = {
+      atom_opacity_overrides: merged_atom_opacity_overrides.size,
+      bond_opacity_overrides: bond_opacity_overrides.size,
+      cutting_active,
+      drag_overrides: realtime_position_overrides?.size ?? 0,
+      hidden_atoms: new_atom_hidden_site_ids?.size ?? 0,
+      partial_occupancy: atom_data_has_partial_occupancy,
+      multibond: bond_order_perception,
+    }
+    return USE_NEW_ATOM_SYSTEM &&
+      manual_bonds.length === 0 &&
+      _deleted_bond_keys.size === 0 &&
+      !show_polyhedra &&
+      !clip_active &&
+      !show_hydrogen_bonds &&
+      combined_packet_render_eligible(features)
+  }
   let combined_packet_renderer_owned = $derived(
-    USE_NEW_ATOM_SYSTEM &&
-      manager_render_packet !== null &&
-      combined_packet_render_eligible({
-        atom_opacity_overrides: merged_atom_opacity_overrides.size,
-        bond_opacity_overrides: bond_opacity_overrides.size,
-        cutting_active,
-        drag_overrides: realtime_position_overrides?.size ?? 0,
-        hidden_atoms: new_atom_hidden_site_ids?.size ?? 0,
-        partial_occupancy: atom_data.some((atom) => atom.has_partial_occupancy),
-        multibond: bond_order_perception,
-      }),
+    manager_render_packet !== null && packet_render_features_eligible(),
   )
   let combined_packet_bonds_visible = $derived(
     should_show_bonds(show_bonds, lattice) && !bonds_deferred,

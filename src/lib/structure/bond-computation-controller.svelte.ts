@@ -212,7 +212,10 @@ export function create_bond_state() {
       }
     >
   >([])
-  let last_bond_structure = $state<AnyStructure | null>(null)
+  // Every writer replaces the complete snapshot. Deep-proxying a 20k-site
+  // structure on each exact trajectory commit blocks the main thread for
+  // more than 100 ms and provides no nested-mutation reactivity.
+  let last_bond_structure = $state.raw<AnyStructure | null>(null)
   let last_bond_strategy = $state(``)
   let last_bond_fingerprint = $state(``)
   let last_elem_fingerprint = $state(``)

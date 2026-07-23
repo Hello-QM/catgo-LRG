@@ -1,9 +1,14 @@
 import { describe, expect, test, vi } from 'vitest'
 import * as THREE from 'three'
 import type { AnyStructure, Site } from '$lib'
-import { create_replica_picker } from '$lib/structure/gpu-picker-integration.svelte'
+import {
+  create_replica_picker,
+  update_gpu_picker,
+} from '$lib/structure/gpu-picker-integration.svelte'
+import { GPUPicker } from '$lib/structure/gpu-picker'
 import { ReplicaPickScene } from '$lib/structure/gpu/webgl2/replica-id-picker'
 import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+import { trajectory_render_diagnostics } from '$lib/structure/trajectory-render-diagnostics'
 import {
   create_render_packet_builder,
   type PacketBondConnectivity,
@@ -63,6 +68,27 @@ function fake_renderer() {
 }
 
 describe(`replica picker shared positions`, () => {
+  test(`counts legacy picker-owned position uploads`, () => {
+    trajectory_render_diagnostics.reset()
+    const picker = new GPUPicker()
+
+    update_gpu_picker(
+      picker,
+      [],
+      [],
+      0.1,
+      null,
+      false,
+      new Map(),
+      null,
+      null,
+    )
+
+    expect(trajectory_render_diagnostics.snapshot().picker_position_uploads)
+      .toBe(1)
+    picker.dispose()
+  })
+
   test(`passive playback stays lazy and first sync does not upload positions`, () => {
     const positions = new SharedPositionTexture()
     const picker = create_replica_picker(positions)

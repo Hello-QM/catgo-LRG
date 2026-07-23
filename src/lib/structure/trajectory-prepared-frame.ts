@@ -88,7 +88,7 @@ export type PreparedFramePipelineStats = {
 }
 
 export type PreparedFramePipeline = {
-  begin_request(key: PreparedFrameKey): number
+  begin_request(key: PreparedFrameKey, frame_count?: number): number
   request(
     request: PrepareFrameRequest,
     generation: number,
@@ -132,6 +132,7 @@ export function create_prepared_frame_pipeline(options: {
   let current_key: PreparedFrameKey | null = null
   let displayed_key: PreparedFrameKey | null = null
   let previous_request_key: PreparedFrameKey | null = null
+  let stream_frame_count: number | null = null
   let cache_hits = 0
   let cache_misses = 0
   let evictions = 0
@@ -177,8 +178,16 @@ export function create_prepared_frame_pipeline(options: {
       const candidates = prefetched.length > 0 ? prefetched : available
       const playhead = current_key?.frame_idx ?? 0
       candidates.sort((left, right) => {
-        const left_distance = Math.abs(left.value.key.frame_idx - playhead)
-        const right_distance = Math.abs(right.value.key.frame_idx - playhead)
+        const left_distance = stream_frame_count
+          ? (
+            left.value.key.frame_idx - playhead + stream_frame_count
+          ) % stream_frame_count
+          : Math.abs(left.value.key.frame_idx - playhead)
+        const right_distance = stream_frame_count
+          ? (
+            right.value.key.frame_idx - playhead + stream_frame_count
+          ) % stream_frame_count
+          : Math.abs(right.value.key.frame_idx - playhead)
         if (left_distance !== right_distance) {
           return right_distance - left_distance
         }
@@ -205,7 +214,12 @@ export function create_prepared_frame_pipeline(options: {
 
   function finish_stale(record: QueueRecord): void {
     stale_results++
-    trajectory_render_diagnostics.record(`stale`, record.request.key.frame_idx)
+    trajectory_render_diagnostics.record(
+      `stale`,
+      record.request.key.frame_idx,
+      undefined,
+      record.request.key.positions_version,
+    )
     record.resolve({ status: `stale` })
   }
 
@@ -221,7 +235,18 @@ export function create_prepared_frame_pipeline(options: {
       return
     }
     if (!same_prepared_frame_key(record.request.key, value.key)) {
-      trajectory_render_diagnostics.record(`failed`, record.request.key.frame_idx)
+      if (import.meta.env?.DEV) {
+        console.warn(
+          `[trajectory-prepared] frame ${record.request.key.frame_idx} failed: ` +
+          `prepared key does not match request`,
+        )
+      }
+      trajectory_render_diagnostics.record(
+        `failed`,
+        record.request.key.frame_idx,
+        undefined,
+        record.request.key.positions_version,
+      )
       record.resolve({
         status: `failed`,
         error: new Error(
@@ -240,9 +265,26 @@ export function create_prepared_frame_pipeline(options: {
     cache.push({
       value,
       last_used: ++usage_clock,
-      priority: record.request.priority,
+      priority: current_key !== null &&
+          same_prepared_frame_key(value.key, current_key)
+        ? `current`
+        : record.request.priority,
     })
-    trajectory_render_diagnostics.record(`prepared`, value.key.frame_idx)
+    if (
+      current_key !== null &&
+      same_prepared_frame_key(value.key, current_key)
+    ) {
+      // The visible packet retains its own immutable snapshot. Once the new
+      // current snapshot is complete, cache protection can move forward and
+      // release the former displayed slot for the seventh ahead frame.
+      displayed_key = value.key
+    }
+    trajectory_render_diagnostics.record_prepared(
+      value.key.frame_idx,
+      value.graph_hash,
+      value.graph.pairs.length / 2,
+      value.compute_ms,
+    )
     evict_to_limits()
     record.resolve({ status: `ready`, value, cache_hit: false })
     update_diagnostics()
@@ -254,7 +296,18 @@ export function create_prepared_frame_pipeline(options: {
     if (record.canceled || record.generation !== generation) {
       finish_stale(record)
     } else {
-      trajectory_render_diagnostics.record(`failed`, record.request.key.frame_idx)
+      if (import.meta.env?.DEV) {
+        console.warn(
+          `[trajectory-prepared] frame ${record.request.key.frame_idx} failed:`,
+          error_from_unknown(error).message,
+        )
+      }
+      trajectory_render_diagnostics.record(
+        `failed`,
+        record.request.key.frame_idx,
+        undefined,
+        record.request.key.positions_version,
+      )
       record.resolve({ status: `failed`, error: error_from_unknown(error) })
     }
     update_diagnostics()
@@ -288,15 +341,28 @@ export function create_prepared_frame_pipeline(options: {
     update_diagnostics()
   }
 
-  function begin_request(key: PreparedFrameKey): number {
+  function begin_request(
+    key: PreparedFrameKey,
+    frame_count?: number,
+  ): number {
+    stream_frame_count = frame_count !== undefined && frame_count > 0
+      ? frame_count
+      : stream_frame_count
     const previous = previous_request_key
     const same_stream = previous !== null &&
       previous.owner === key.owner &&
+      previous.positions_version === key.positions_version &&
       previous.topology_version === key.topology_version &&
       previous.rules_version === key.rules_version
     const sequential = previous !== null &&
       (key.frame_idx === previous.frame_idx ||
-        key.frame_idx === previous.frame_idx + 1)
+        key.frame_idx === previous.frame_idx + 1 ||
+        (
+          frame_count !== undefined &&
+          frame_count > 1 &&
+          previous.frame_idx === frame_count - 1 &&
+          key.frame_idx === 0
+        ))
     const owner_changed = previous !== null && previous.owner !== key.owner
     const current_frame_edited = (
       previous !== null &&
@@ -323,7 +389,16 @@ export function create_prepared_frame_pipeline(options: {
       displayed_key = null
     } else {
       displayed_key = current_key
-      if (previous !== null && !same_stream) {
+      if (current_frame_edited) {
+        // A position edit is frame-scoped even though it starts a fresh seek
+        // generation. Preserve other completed frames; only the obsolete
+        // revisions of the edited frame can no longer be presented.
+        cache = cache.filter((record) =>
+          record.value.key.owner !== key.owner ||
+          record.value.key.frame_idx !== key.frame_idx ||
+          record.value.key.positions_version === key.positions_version
+        )
+      } else if (previous !== null && !same_stream) {
         cache = cache.filter((record) =>
           record.value.key.owner !== key.owner ||
           (
@@ -331,22 +406,28 @@ export function create_prepared_frame_pipeline(options: {
             record.value.key.rules_version === key.rules_version
           )
         )
-      } else if (current_frame_edited) {
-        cache = cache.filter((record) =>
-          record.value.key.owner !== key.owner ||
-          record.value.key.frame_idx !== key.frame_idx ||
-          record.value.key.positions_version === key.positions_version
-        )
       }
     }
     current_key = key
     previous_request_key = key
+    // `current` is a property of the present playhead, not a lifetime cache
+    // rank. Without demotion, every frame ever displayed remains current and
+    // a post-seek prefetch evicts itself before those distant old frames.
+    for (const record of cache) {
+      record.priority = same_prepared_frame_key(record.value.key, key)
+        ? `current`
+        : `prefetch`
+    }
     const cached = cache.find((record) =>
       same_prepared_frame_key(record.value.key, key)
     )
     if (cached) {
       cached.priority = `current`
       cached.last_used = ++usage_clock
+      // A cached current request resolves in the same microtask and the old
+      // visible packet is retained outside this cache. Move protection now so
+      // current + seven ahead frames fit without recomputing the tail.
+      displayed_key = cached.value.key
     }
     evict_to_limits()
     update_diagnostics()
@@ -361,10 +442,17 @@ export function create_prepared_frame_pipeline(options: {
     trajectory_render_diagnostics.record(
       `requested`,
       frame_request.key.frame_idx,
+      undefined,
+      frame_request.key.positions_version,
     )
     if (request_generation !== generation) {
       stale_results++
-      trajectory_render_diagnostics.record(`stale`, frame_request.key.frame_idx)
+      trajectory_render_diagnostics.record(
+        `stale`,
+        frame_request.key.frame_idx,
+        undefined,
+        frame_request.key.positions_version,
+      )
       return Promise.resolve({ status: `stale` })
     }
 
@@ -375,7 +463,12 @@ export function create_prepared_frame_pipeline(options: {
       cache_hits++
       cached.last_used = ++usage_clock
       if (frame_request.priority === `current`) cached.priority = `current`
-      trajectory_render_diagnostics.record(`cached`, frame_request.key.frame_idx)
+      trajectory_render_diagnostics.record(
+        `cached`,
+        frame_request.key.frame_idx,
+        undefined,
+        frame_request.key.positions_version,
+      )
       return Promise.resolve({
         status: `ready`,
         value: cached.value,
@@ -395,7 +488,18 @@ export function create_prepared_frame_pipeline(options: {
       const error = new Error(
         `Prepared-frame prefetch exceeds byte budget of ${max_bytes}`,
       )
-      trajectory_render_diagnostics.record(`failed`, frame_request.key.frame_idx)
+      if (import.meta.env?.DEV) {
+        console.warn(
+          `[trajectory-prepared] frame ${frame_request.key.frame_idx} failed:`,
+          error.message,
+        )
+      }
+      trajectory_render_diagnostics.record(
+        `failed`,
+        frame_request.key.frame_idx,
+        undefined,
+        frame_request.key.positions_version,
+      )
       return Promise.resolve({ status: `failed`, error })
     }
 
@@ -478,6 +582,7 @@ export function create_prepared_frame_pipeline(options: {
       current_key = null
       displayed_key = null
       previous_request_key = null
+      stream_frame_count = null
     }
     update_diagnostics()
     pump()

@@ -17,6 +17,7 @@ import {
 } from './gpu/webgl2/replica-id-picker'
 import type { RenderPacket } from './scene/render-packet'
 import type { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
+import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
 
 /** Visibility info for a single site in the cutting plane. */
 export type CuttingVisInfo = { inside: boolean; opacity: number; saturation: number }
@@ -513,7 +514,14 @@ export function update_gpu_picker(
     }
   }
 
-  gpu_picker.update(positions, radii, bond_xforms, bond_thickness, instance_to_filtered_idx)
+  trajectory_render_diagnostics.record_picker_position_upload()
+  gpu_picker.update(
+    positions,
+    radii,
+    bond_xforms,
+    bond_thickness,
+    instance_to_filtered_idx,
+  )
 }
 
 /**

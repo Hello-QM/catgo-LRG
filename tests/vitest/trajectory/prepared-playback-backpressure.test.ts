@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest'
 import {
   acknowledge_playback_frame,
+  advance_playback_deadline,
   may_advance_playback,
   may_start_prepared_playback,
+  playback_poll_interval_ms,
   request_playback_frame,
   type PreparedPlaybackState,
 } from '$lib/trajectory/prepared-playback-state'
@@ -63,5 +65,13 @@ describe(`prepared playback backpressure`, () => {
     expect(may_advance_playback(state)).toBe(true)
     expect(acknowledge_playback_frame(state, 0)).toBe(state)
     expect(request_playback_frame(state, 0)).toBe(state)
+  })
+
+  test(`polls within eight milliseconds and catches up one missed deadline`, () => {
+    expect(playback_poll_interval_ms(1000 / 30)).toBe(8)
+    expect(playback_poll_interval_ms(5)).toBe(5)
+    expect(advance_playback_deadline(100, 104, 1000 / 30))
+      .toBeCloseTo(133.333, 2)
+    expect(advance_playback_deadline(100, 500, 1000 / 30)).toBe(500)
   })
 })

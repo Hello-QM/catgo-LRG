@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const TEST_FRAME_RATE_FPS = 60
+const TEST_FRAME_RATE_FPS = 30
 
 test.describe(`Trajectory Performance Tests`, () => {
   test(`large MOF5 trajectory playback performance`, async ({ page }) => {
@@ -91,22 +91,22 @@ test.describe(`Trajectory Performance Tests`, () => {
 
     const playback_duration = end_time - start_time
 
-    // Performance assertions
-    const expected_duration_ms = (max_step / TEST_FRAME_RATE_FPS) * 1000 // Convert to milliseconds
-    const max_allowed_duration_ms = expected_duration_ms * 3 // Allow 3x overhead for CI/to avoid flakiness
+    const render_diagnostics = await page.evaluate(() =>
+      globalThis.__catgoTrajectoryDiagnostics?.() ?? null
+    )
+    if (!render_diagnostics) {
+      throw new Error(`Unique trajectory-frame diagnostics are unavailable`)
+    }
 
     console.log(`Playback performance results:`)
     console.log(`- FPS: ${TEST_FRAME_RATE_FPS}`)
     console.log(`- Duration: ${(playback_duration / 1000).toFixed(1)}s`)
-    console.log(`- Expected: ~${(expected_duration_ms / 1000).toFixed(1)}s`)
-    console.log(`- Max allowed: ${(max_allowed_duration_ms / 1000).toFixed(1)}s`)
-    console.log(
-      `- Performance ratio: ${
-        (playback_duration / expected_duration_ms).toFixed(2)
-      }x expected time`,
-    )
+    console.log(`- Unique presented FPS: ${render_diagnostics.unique_frame_fps}`)
+    console.log(`- Unique presented frames: ${render_diagnostics.unique_presented_frames}`)
 
-    expect(playback_duration).toBeLessThan(max_allowed_duration_ms)
+    // Compositor/rAF throughput is not the release gate. Count only complete,
+    // atomically published trajectory snapshots with distinct frame identity.
+    expect(render_diagnostics.unique_frame_fps).toBeGreaterThanOrEqual(24)
   })
 
   test(`trajectory loading performance with large file`, async ({ page }) => {

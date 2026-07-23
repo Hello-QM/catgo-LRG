@@ -30,6 +30,7 @@ import {
 } from '$lib/structure/scene/render-packet-builder'
 import { BOND_KIND, BondManager } from '$lib/structure/bonding/bond-manager.svelte'
 import { BondInstancedRenderer } from '$lib/structure/bonding/bond-instanced-renderer'
+import { trajectory_render_diagnostics } from '$lib/structure/trajectory-render-diagnostics'
 import type { AnyStructure, Site } from '$lib'
 
 function carbon_site(xyz: [number, number, number]): Site {
@@ -112,6 +113,26 @@ function sweep_cells(
 }
 
 describe(`BondReplicaRenderer — mesh shape`, () => {
+  test(`records topology bytes only when the renderer schedules GPU attribute uploads`, () => {
+    trajectory_render_diagnostics.reset()
+    const renderer = new BondReplicaRenderer()
+    const packet = make_packet([2, 2, 2])
+
+    renderer.update(packet)
+    expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
+      topology_uploads: 1,
+      // 2 halves per bond × (2f site + 3b image + 1f half + 3f color).
+      topology_upload_bytes: 2 * BOND_COUNT * 27,
+    })
+
+    renderer.update(packet)
+    expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
+      topology_uploads: 1,
+      topology_upload_bytes: 2 * BOND_COUNT * 27,
+    })
+    renderer.dispose()
+  })
+
   test(`plain Mesh over InstancedBufferGeometry — no instanceMatrix anywhere`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))

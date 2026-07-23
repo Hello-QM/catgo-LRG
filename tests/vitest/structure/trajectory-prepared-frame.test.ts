@@ -277,6 +277,31 @@ describe(`create_prepared_frame_pipeline`, () => {
     expect(rules_change).toBeGreaterThan(topology_change)
   })
 
+  test(`keeps the last-to-first playback wrap in the current generation`, () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const first = pipeline.begin_request(make_key({ frame_idx: 98 }), 100)
+    expect(pipeline.begin_request(make_key({ frame_idx: 99 }), 100)).toBe(first)
+    expect(pipeline.begin_request(make_key({ frame_idx: 0 }), 100)).toBe(first)
+    expect(pipeline.begin_request(make_key({ frame_idx: 1 }), 100)).toBe(first)
+
+    const seek = pipeline.begin_request(make_key({ frame_idx: 50 }), 100)
+    expect(seek).toBeGreaterThan(first)
+  })
+
+  test(`starts a new generation when a sequential frame changes position revision`, () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const first = pipeline.begin_request(make_key({
+      frame_idx: 0,
+      positions_version: 1,
+    }), 100)
+    const changed = pipeline.begin_request(make_key({
+      frame_idx: 1,
+      positions_version: 2,
+    }), 100)
+
+    expect(changed).toBeGreaterThan(first)
+  })
+
   test(`resolves queued old-generation work stale immediately and discards in-flight results`, async () => {
     const pipeline = create_prepared_frame_pipeline({ max_in_flight: 1 })
     const first_key = make_key({ frame_idx: 0 })
@@ -428,6 +453,93 @@ describe(`create_prepared_frame_pipeline`, () => {
 
     expect(pipeline.peek(current)).not.toBeNull()
     expect(pipeline.peek(prefetch)).toBeNull()
+  })
+
+  test(`demotes past current frames so a seek can rebuild its contiguous window`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_frames: 8,
+      max_bytes: 10_000,
+    })
+    for (let frame_idx = 6; frame_idx <= 15; frame_idx++) {
+      const key = make_key({ frame_idx })
+      const generation = pipeline.begin_request(key)
+      await pipeline.request({
+        key,
+        priority: `current`,
+        estimated_bytes: 20,
+        prepare: async () => make_prepared(key, 20),
+      }, generation)
+    }
+
+    const current = make_key({ frame_idx: 1 })
+    const generation = pipeline.begin_request(current)
+    await pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 20,
+      prepare: async () => make_prepared(current, 20),
+    }, generation)
+    const window = [current]
+    for (let frame_idx = 2; frame_idx <= 8; frame_idx++) {
+      const key = make_key({ frame_idx })
+      window.push(key)
+      await pipeline.request({
+        key,
+        priority: `prefetch`,
+        estimated_bytes: 20,
+        prepare: async () => make_prepared(key, 20),
+      }, generation)
+    }
+
+    // Once the new current frame completes it owns the displayed protection,
+    // releasing the old displayed cache slot for the seventh ahead frame.
+    expect(pipeline.ready_count(window)).toBe(8)
+  })
+
+  test(`computes only one new ahead frame per cached sequential advance`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_frames: 8,
+      max_bytes: 10_000,
+    })
+    let computes = 0
+    const request = (
+      key: PreparedFrameKey,
+      priority: `current` | `prefetch`,
+      generation: number,
+    ) =>
+      pipeline.request({
+        key,
+        priority,
+        estimated_bytes: 20,
+        prepare: async () => {
+          computes++
+          return make_prepared(key, 20)
+        },
+      }, generation)
+
+    let generation = pipeline.begin_request(make_key({ frame_idx: 0 }), 100)
+    await Promise.all(Array.from({ length: 8 }, (_, frame_idx) =>
+      request(
+        make_key({ frame_idx }),
+        frame_idx === 0 ? `current` : `prefetch`,
+        generation,
+      )
+    ))
+
+    for (let frame_idx = 1; frame_idx <= 5; frame_idx++) {
+      const current = make_key({ frame_idx })
+      generation = pipeline.begin_request(current, 100)
+      await request(current, `current`, generation)
+      await Promise.all(Array.from({ length: 7 }, (_, offset) =>
+        request(
+          make_key({ frame_idx: frame_idx + offset + 1 }),
+          `prefetch`,
+          generation,
+        )
+      ))
+    }
+
+    expect(computes).toBe(13)
   })
 
   test(`counts only the contiguous ready warmup prefix`, async () => {

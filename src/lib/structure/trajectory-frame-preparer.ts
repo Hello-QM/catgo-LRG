@@ -18,6 +18,7 @@ import {
   prepared_frame_byte_size,
   type PreparedTrajectoryFrame,
 } from './trajectory-prepared-frame'
+import { position_texture_shape } from './gpu/position-texture-layout'
 import {
   compute_bonds_exact_async,
   compute_trajectory_frame_typed,
@@ -179,18 +180,41 @@ export function build_exact_trajectory_overlay(
   return { ...structure, sites } as AnyStructure
 }
 
+type TypedSessionIdentity = {
+  atomic_numbers: Uint8Array
+  topology_version: number
+  rules_version: string
+  id: number
+}
+
+const typed_sessions_by_owner = new WeakMap<object, TypedSessionIdentity[]>()
+let next_typed_session_id = 1
+
 function numeric_session_id(input: ExactFramePrepareInput): number {
-  const text = [
-    input.packet.topology.version,
-    input.rules_version,
-    input.pbc?.map(Number).join(``) ?? `none`,
-    JSON.stringify(input.options),
-  ].join(`|`)
-  let hash = 0x811c9dc5
-  for (let idx = 0; idx < text.length; idx++) {
-    hash = Math.imul(hash ^ text.charCodeAt(idx), 0x01000193)
+  const owner = input.packet.frame.owner
+  const topology = input.packet.topology
+  let sessions = typed_sessions_by_owner.get(owner)
+  if (!sessions) {
+    sessions = []
+    typed_sessions_by_owner.set(owner, sessions)
   }
-  return hash >>> 0
+  const existing = sessions.find((session) =>
+    session.atomic_numbers === topology.atomic_numbers &&
+    session.topology_version === topology.version &&
+    session.rules_version === input.rules_version
+  )
+  if (existing) return existing.id
+  if (next_typed_session_id > Number.MAX_SAFE_INTEGER) {
+    throw new Error(`Trajectory bond session ID space exhausted`)
+  }
+  const id = next_typed_session_id++
+  sessions.push({
+    atomic_numbers: topology.atomic_numbers,
+    topology_version: topology.version,
+    rules_version: input.rules_version,
+    id,
+  })
+  return id
 }
 
 function rule_lattice(
@@ -231,7 +255,9 @@ function empty_bond_graph(version: number) {
 
 function pack_positions_exact(positions: Float32Array): Float32Array {
   const atom_count = Math.floor(positions.length / 3)
-  const rgba = new Float32Array(atom_count * 4)
+  const rgba = new Float32Array(
+    position_texture_shape(atom_count).float_count,
+  )
   for (let idx = 0; idx < atom_count; idx++) {
     rgba[idx * 4] = positions[idx * 3]
     rgba[idx * 4 + 1] = positions[idx * 3 + 1]

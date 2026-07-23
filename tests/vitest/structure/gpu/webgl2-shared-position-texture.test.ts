@@ -48,6 +48,17 @@ describe(`SharedPositionTexture`, () => {
     shared.dispose()
   })
 
+  test(`rejects a worker payload shorter than the padded texture allocation`, () => {
+    const shared = new SharedPositionTexture()
+    const atom_count = 2_049
+    const positions = new Float32Array(atom_count * 3)
+    const unpadded = new Float32Array(atom_count * 4)
+
+    expect(() => shared.update(frame(8, 1, positions), unpadded))
+      .toThrow(/RGBA payload length/)
+    shared.dispose()
+  })
+
   test(`compatibility path packs RGB positions into RGBA texels`, () => {
     const shared = new SharedPositionTexture()
 

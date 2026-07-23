@@ -5,6 +5,7 @@ import {
   RGBAFormat,
 } from 'three'
 import type { FrameGeometry } from '../../scene/render-packet'
+import { trajectory_render_diagnostics } from '../../trajectory-render-diagnostics'
 import { position_texture_shape } from '../position-texture-layout'
 
 export type SharedPositionTextureStats = {
@@ -70,6 +71,11 @@ export class SharedPositionTexture {
         data[idx * 4 + 2] = frame.positions[idx * 3 + 2]
         data[idx * 4 + 3] = 1
       }
+    } else if (data.length !== float_count) {
+      throw new RangeError(
+        `Position RGBA payload length ${data.length} does not match ` +
+          `texture allocation ${float_count}`,
+      )
     }
 
     this.texture.image.data = data
@@ -82,6 +88,7 @@ export class SharedPositionTexture {
       positions_version: frame.positions_version,
     }
     this.#stats.uploads += 1
+    trajectory_render_diagnostics.record_position_upload(data.byteLength)
     return true
   }
 
@@ -105,6 +112,9 @@ export class SharedPositionTexture {
     if (this.#disposed || this.#uploaded === null) return false
     this.texture.needsUpdate = true
     this.#stats.uploads += 1
+    trajectory_render_diagnostics.record_position_upload(
+      (this.texture.image.data as ArrayBufferView).byteLength,
+    )
     return true
   }
 

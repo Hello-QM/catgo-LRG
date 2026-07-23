@@ -100,6 +100,24 @@ describe(`Trajectory Streaming`, () => {
     return buffer
   }
 
+  const change_ase_number = (
+    buffer: ArrayBuffer,
+    frame_idx: number,
+  ): ArrayBuffer => {
+    const view = new DataView(buffer)
+    const offsets_pos = Number(view.getBigInt64(40, true))
+    const frame_offset = Number(view.getBigInt64(offsets_pos + frame_idx * 8, true))
+    const json_length = Number(view.getBigInt64(frame_offset, true))
+    const bytes = new Uint8Array(buffer, frame_offset + 8, json_length)
+    const decoder = new TextDecoder()
+    const encoder = new TextEncoder()
+    const json = decoder.decode(bytes)
+    const changed = json.replace(`"numbers":[1,1]`, `"numbers":[1,8]`)
+    expect(changed).not.toBe(json)
+    bytes.set(encoder.encode(changed))
+    return buffer
+  }
+
   describe(`Frame Indexing`, () => {
     it(`should build frame index for XYZ trajectory`, async () => {
       const data = create_synthetic_xyz(10)
@@ -475,6 +493,26 @@ describe(`Trajectory Streaming`, () => {
   })
 
   describe(`Regression Tests`, () => {
+    it(`loads compact ASE positions and truthfully reports topology stability`, async () => {
+      const stable_data = strip_ase_numbers_after_first(create_synthetic_ase(5), 5)
+      const stable_loader = new TrajFrameReader(`stable.traj`)
+
+      expect(stable_loader.load_frame_positions).toBeTypeOf(`function`)
+      const topology = await stable_loader.load_frame_positions?.(stable_data, 0)
+      const compact = await stable_loader.load_frame_positions?.(stable_data, 4)
+
+      expect(topology?.positions).toBeInstanceOf(Float32Array)
+      expect(Array.from(compact?.positions ?? [])).toEqual([0, 0, 0, 1, 0, 0])
+      expect(compact?.topology_changed).toBe(false)
+      expect(compact).not.toHaveProperty(`structure`)
+
+      const changed_data = change_ase_number(create_synthetic_ase(5), 4)
+      const changed_loader = new TrajFrameReader(`changed.traj`)
+      await changed_loader.load_frame_positions?.(changed_data, 0)
+      const changed = await changed_loader.load_frame_positions?.(changed_data, 4)
+      expect(changed?.topology_changed).toBe(true)
+    })
+
     it(`preserves ASE global numbers when a reader is forked`, async () => {
       const data = strip_ase_numbers_after_first(create_synthetic_ase(5), 5)
       const original = new TrajFrameReader(`local.traj`)

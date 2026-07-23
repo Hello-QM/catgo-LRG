@@ -306,6 +306,30 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
     ])
   })
 
+  test(`serializes each session init with its frame across concurrent callers`, async () => {
+    const worker = new ReplyingWorker()
+    const handle = new RealBondWorkerHandle(
+      worker as unknown as Worker,
+      vi.fn(),
+      `scalar`,
+    )
+
+    await Promise.all([
+      handle.compute_trajectory_frame_typed(trajectory_input(1)),
+      handle.compute_trajectory_frame_typed(trajectory_input(2)),
+    ])
+
+    expect(worker.posted.map((entry) => [
+      entry.data.type,
+      entry.data.session_id,
+    ])).toEqual([
+      [`trajectory_session_init`, 1],
+      [`trajectory_frame_typed`, 1],
+      [`trajectory_session_init`, 2],
+      [`trajectory_frame_typed`, 2],
+    ])
+  })
+
   test(`packs positions on the worker without detaching the caller array`, async () => {
     const worker = new ReplyingWorker()
     const handle = new RealBondWorkerHandle(

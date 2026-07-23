@@ -9,6 +9,7 @@ vi.mock('$lib/structure/workers/bond-worker-api', () => ({
 
 import type { AnyStructure, BondPair, Site } from '$lib'
 import type { RenderPacket } from '$lib/structure/scene/render-packet'
+import { position_texture_shape } from '$lib/structure/gpu/position-texture-layout'
 import {
   compute_bonds_exact_async,
   compute_trajectory_frame_typed,
@@ -172,6 +173,31 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(prepared.byte_size).toBeGreaterThan(gpu.byteLength)
   })
 
+  test(`allocates different typed-worker sessions for different trajectory owners`, async () => {
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const first = input()
+    const second = input()
+
+    await prepare_exact_trajectory_frame(first)
+    await prepare_exact_trajectory_frame(second)
+
+    const session_ids = typed_mock.mock.calls.map(
+      ([call]) => call.session.id,
+    )
+    expect(first.packet.frame.owner).not.toBe(second.packet.frame.owner)
+    expect(session_ids[0]).not.toBe(session_ids[1])
+  })
+
   test(`custom rules use object detection, full override, and worker packing`, async () => {
     const request = input({
       distance_rules: [{
@@ -298,5 +324,48 @@ describe(`prepare_exact_trajectory_frame`, () => {
       request.source.positions[0], 0, 0, 1,
       request.source.positions[3], 0, 0, 1,
     ])
+  })
+
+  test(`pads atom-only positions to the complete 2D texture allocation`, async () => {
+    const atom_count = 2_049
+    const request = input()
+    request.packet = {
+      ...request.packet,
+      topology: {
+        ...request.packet.topology,
+        atom_count,
+        site_ids: new Uint32Array(atom_count),
+        atomic_numbers: new Uint8Array(atom_count).fill(6),
+        radii: new Float32Array(atom_count),
+        colors: new Float32Array(atom_count * 3),
+      },
+    }
+    request.source = {
+      ...request.source,
+      positions: new Float32Array(atom_count * 3),
+    }
+    request.features = {
+      strategy: `atom_radii`,
+      atom_count,
+      show_bonds: false,
+      topology_stable: true,
+      atomic_numbers_complete: true,
+      distance_rule_count: 0,
+      site_radius_override_count: 0,
+      manual_bond_count: 0,
+      deleted_bond_count: 0,
+      hidden_bond_features: false,
+      hydrogen_bonds: false,
+      bond_orders: false,
+      clipping: false,
+      polyhedra: false,
+      drag_overrides: false,
+    }
+
+    const prepared = await prepare_exact_trajectory_frame(request)
+
+    expect(prepared.gpu_positions_rgba).toHaveLength(
+      position_texture_shape(atom_count).float_count,
+    )
   })
 })

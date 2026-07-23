@@ -564,7 +564,10 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
 
     expect(scene_source).toContain(`colors: atom_colors_buffer`)
     expect(scene_source).toContain(`radii: manager_display_radii`)
-    expect(scene_source).toContain(`bond_graph: manager_bond_graph`)
+    expect(scene_source).toContain(
+      `const bond_graph = packet_owned_graph ?? manager_bond_graph`,
+    )
+    expect(scene_source).toContain(`bond_graph,`)
     expect(scene_source).toContain(
       `pairs: manager.pairs_buffer.slice(0, count * 2)`,
     )

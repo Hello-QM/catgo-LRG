@@ -47,6 +47,7 @@ import {
   type ReplicaDims,
 } from './atom-replica-renderer'
 import { SharedPositionTexture } from './shared-position-texture'
+import { trajectory_render_diagnostics } from '../../trajectory-render-diagnostics'
 
 /** Shader-side boundary-policy codes (uPolicy). */
 export const BOUNDARY_POLICY_CODE: Record<BoundaryPolicy, number> = {
@@ -600,10 +601,20 @@ export class BondReplicaRenderer {
     this.#prev = packet
 
     const graph_changed = diff.topology_changed || diff.bond_graph_changed
-    if (graph_changed) this.#rebuild_half_attrs(packet)
+    let topology_upload_bytes = 0
+    if (graph_changed) {
+      topology_upload_bytes += this.#rebuild_half_attrs(packet)
+    }
     if (graph_changed || diff.replica_changed) this.#apply_replicas(packet)
     if (lattice_changed) this.#upload_lattice(packet)
-    if (graph_changed || diff.replica_changed) this.#rebuild_ghosts(packet)
+    if (graph_changed || diff.replica_changed) {
+      topology_upload_bytes += this.#rebuild_ghosts(packet)
+    }
+    if (topology_upload_bytes > 0) {
+      trajectory_render_diagnostics.record_topology_upload(
+        topology_upload_bytes,
+      )
+    }
   }
 
   /** Per-frame camera state for the fragment ray-cast (inverse projection +
@@ -637,7 +648,7 @@ export class BondReplicaRenderer {
     set_material_opacity(this.ghost_material, `uOpacity`, opacity)
   }
 
-  #rebuild_half_attrs(packet: RenderPacket): void {
+  #rebuild_half_attrs(packet: RenderPacket): number {
     const graph = packet.topology.bond_graph
     const bond_count = graph !== undefined ? graph.pairs.length / 2 : 0
     const half_count = bond_count * 2
@@ -654,7 +665,7 @@ export class BondReplicaRenderer {
       this.#colors = new Float32Array(this.#half_capacity * 3)
     }
     this.#half_count = half_count
-    if (graph === undefined || half_count === 0) return
+    if (graph === undefined || half_count === 0) return 0
     const { colors, atom_count } = packet.topology
     const color_stride = colors.length === atom_count * 4 ? 4 : 3
     for (let bi = 0; bi < bond_count; bi++) {
@@ -692,6 +703,9 @@ export class BondReplicaRenderer {
       attribute.addUpdateRange(0, half_count * attribute.itemSize)
       attribute.needsUpdate = true
     }
+    // Bytes in the live prefixes scheduled above: two float site indices,
+    // three signed-byte image offsets, one float half selector, and RGB.
+    return half_count * (2 * 4 + 3 + 4 + 3 * 4)
   }
 
   #apply_replicas(packet: RenderPacket): void {
@@ -751,7 +765,7 @@ export class BondReplicaRenderer {
     }
   }
 
-  #rebuild_ghosts(packet: RenderPacket): void {
+  #rebuild_ghosts(packet: RenderPacket): number {
     const graph = packet.topology.bond_graph
     const { dims, boundary_policy } = packet.replicas
     const table = graph !== undefined
@@ -795,6 +809,8 @@ export class BondReplicaRenderer {
         ._maxInstanceCount
       page.mesh.visible = used > 0
     }
+    // Every live ghost prefix updates 11 Float32 values across four buffers.
+    return count * 11 * Float32Array.BYTES_PER_ELEMENT
   }
 
   dispose(): void {

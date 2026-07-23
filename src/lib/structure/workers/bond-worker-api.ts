@@ -82,6 +82,7 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
   >()
   private next_id = 0
   private trajectory_session_id: number | null = null
+  private trajectory_request_tail: Promise<void> = Promise.resolve()
 
   constructor(
     private worker: Worker,
@@ -240,32 +241,43 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
   async compute_trajectory_frame_typed(
     input: TrajectoryTypedBondInput,
   ): Promise<TrajectoryFrameWorkerResult> {
-    await this.ensure_trajectory_session(input.session)
-    const positions = input.positions.slice()
-    const lattice = this.flatten_lattice(input.lattice_matrix)
-    const atom_count = input.session.atomic_numbers.length
-    const timeout_ms = Math.max(20_000, atom_count * 4)
-    const response = await this.request<
-      TypedBondTable & { gpu_positions_rgba: Float32Array; dt: string }
-    >(
-      {
-        type: `trajectory_frame_typed`,
-        session_id: input.session.id,
-        positions,
-        lattice,
-      },
-      timeout_ms,
-      [positions.buffer, lattice.buffer],
-    )
-    return {
-      table: {
-        pairs: response.pairs,
-        images: response.images,
-        lengths: response.lengths,
-        strengths: response.strengths,
-      },
-      gpu_positions_rgba: response.gpu_positions_rgba,
+    const execute = async (): Promise<TrajectoryFrameWorkerResult> => {
+      // The worker owns one mutable trajectory session. Keep init + frame in
+      // one critical section so concurrent viewers cannot replace the session
+      // between those two messages.
+      await this.ensure_trajectory_session(input.session)
+      const positions = input.positions.slice()
+      const lattice = this.flatten_lattice(input.lattice_matrix)
+      const atom_count = input.session.atomic_numbers.length
+      const timeout_ms = Math.max(20_000, atom_count * 4)
+      const response = await this.request<
+        TypedBondTable & { gpu_positions_rgba: Float32Array; dt: string }
+      >(
+        {
+          type: `trajectory_frame_typed`,
+          session_id: input.session.id,
+          positions,
+          lattice,
+        },
+        timeout_ms,
+        [positions.buffer, lattice.buffer],
+      )
+      return {
+        table: {
+          pairs: response.pairs,
+          images: response.images,
+          lengths: response.lengths,
+          strengths: response.strengths,
+        },
+        gpu_positions_rgba: response.gpu_positions_rgba,
+      }
     }
+    const outcome = this.trajectory_request_tail.then(execute, execute)
+    this.trajectory_request_tail = outcome.then(
+      () => undefined,
+      () => undefined,
+    )
+    return outcome
   }
 
   async pack_trajectory_positions(

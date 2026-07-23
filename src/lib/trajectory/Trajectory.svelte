@@ -71,8 +71,10 @@
   } from './trajectory-controls'
   import {
     acknowledge_playback_frame,
+    advance_playback_deadline,
     may_advance_playback,
     may_start_prepared_playback,
+    playback_poll_interval_ms,
     request_playback_frame,
   } from './prepared-playback-state'
   import { sites_to_float32, write_sites_to_cache_slice } from './edit-apply'
@@ -314,6 +316,7 @@
         return trajectory?.frames?.[frame_idx]?.structure?.sites?.[0]?.xyz?.[0] ?? null
       },
       get_current_idx(): number { return current_step_idx },
+      get_prepared_ready_ahead(): number { return prepared_ready_ahead },
       get_frame_natoms(frame_idx: number): number | null {
         return trajectory?.frames?.[frame_idx]?.structure?.sites?.length ?? null
       },
@@ -1292,8 +1295,15 @@
       const current_interval = untrack(() => play_interval)
       if (current_interval !== undefined) clearInterval(current_interval)
 
-      // Create new interval with current frame rate
+      // Poll backpressure more frequently than the requested frame cadence.
+      // A full-rate interval loses an entire 33 ms slot whenever preparation
+      // completes just after its tick. The monotonic deadline still caps
+      // playback at the requested FPS; short polling only recovers a missed
+      // deadline promptly once the exact frame has been acknowledged.
+      let next_playback_deadline_ms = performance.now() + rate_ms
       play_interval = setInterval(() => {
+        const now_ms = performance.now()
+        if (now_ms < next_playback_deadline_ms) return
         if (waiting_for_prepared_warmup) {
           if (!may_start_prepared_playback(prepared_ready_ahead, total_frames)) {
             return
@@ -1305,6 +1315,11 @@
           presented_idx: presented_step_idx,
           generation: playback_generation,
         })) return
+        next_playback_deadline_ms = advance_playback_deadline(
+          next_playback_deadline_ms,
+          now_ms,
+          rate_ms,
+        )
         if (current_step_idx >= total_frames - 1) {
           const { frame } = get_presented_frame_data()
           if (trajectory) {
@@ -1320,7 +1335,7 @@
             on_loop?.({ trajectory, frame_count: total_frames })
           }
         } else next_step()
-      }, rate_ms)
+      }, playback_poll_interval_ms(rate_ms))
     } else {
       // Clear interval when not playing - use untrack to avoid circular dependency
       const current_interval = untrack(() => play_interval)
