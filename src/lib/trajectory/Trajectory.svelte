@@ -14,6 +14,7 @@
   import { handle_url_drop, load_from_url } from '$lib/io'
   import FileSourceDialog from '$lib/electronic/FileSourceDialog.svelte'
   import { format_num, trajectory_property_config } from '$lib/labels'
+  import { calc_lattice_params, type Matrix3x3 } from '$lib/math'
   import type { ControlsConfig, DataSeries, Orientation, Point } from '$lib/plot'
   import { Histogram, ScatterPlot } from '$lib/plot'
   import { DEFAULTS, should_reduce_motion } from '$lib/settings'
@@ -97,6 +98,11 @@
   import { t, load_i18n_module } from '$lib/i18n/index.svelte'
 
   load_i18n_module('structure')
+  // Viewer manifests are bridge metadata, not render data. Publishing every
+  // playback frame adds avoidable fetch/JSON/console work to the hot path.
+  // Ten-frame buckets keep remote consumers within 0.5s at 20 FPS, while
+  // pausing changes the bucket to the exact current frame immediately.
+  const MANIFEST_PLAYBACK_FRAME_BUCKET = 10
 
   type EventHandlers = {
     on_play?: (data: TrajHandlerData) => void
@@ -446,7 +452,12 @@
   )
 
   // Current frame - load on demand for indexed trajectories
-  let current_frame = $state<TrajectoryFrame | null>(null)
+  // Streamed 20k-atom frames are immutable API responses and are always
+  // replaced as a whole. Deep $state would proxy every site/xyz read when
+  // flattening positions, adding hundreds of milliseconds and large transient
+  // heap churn per frame. Raw state still reacts to the assignments below
+  // without recursively wrapping the frame tree.
+  let current_frame = $state.raw<TrajectoryFrame | null>(null)
   let displayed_frame_idx = $state<number | null>(null)
   const frame_requests = create_frame_request_loader()
 
@@ -800,7 +811,8 @@
     // and fires no downstream effects.
     const frame_lat = stable_frame_lattice(
       last_frame_lattice,
-      (frame.structure as { lattice?: { matrix?: number[][] } }).lattice?.matrix,
+      frame.position_data?.lattice ??
+        (frame.structure as { lattice?: { matrix?: number[][] } }).lattice?.matrix,
     )
     if (frame_lat !== last_frame_lattice) {
       last_frame_lattice = frame_lat
@@ -819,6 +831,21 @@
     const traj_source = traj_meta?.source_format ?? traj_meta?.type
     const force_slow_path = traj_source === `doping_substitution` ||
       traj_source === `reaction_pathway`
+    const compact = frame.position_data
+    if (compact && !force_slow_path) {
+      // Remote constant-topology frames arrive as flat coordinates. Keep the
+      // first frame's structure as topology and publish the packet directly;
+      // this avoids allocating a 20k-object site graph on every timer tick.
+      if (!topology_initialized) {
+        current_structure = (trajectory as PaneTrajectory | undefined)?.frame_loader
+          ? clone_structure(frame.structure)
+          : frame.structure
+        topology_initialized = true
+      }
+      trajectory_frame_positions = compact.positions
+      trajectory_frame_forces = compact.forces
+      return
+    }
     if (position_cache && !force_slow_path) {
       // Architecture P fast-path: write current_structure once on trajectory
       // load (or new trajectory). Subsequent frames update only the Float32Array,
@@ -915,13 +942,17 @@
     if (!traj || !topology_initialized) return
     // Only the typed-positions playback path consumes frame_pos_cache.
     if (untrack(() => trajectory_frame_positions) == null) return
+    const loader = (traj as PaneTrajectory).frame_loader
+    // Remote compact packets are already Float32Array-backed. Warming those
+    // through effective_frames would defeat the packet path by materializing
+    // every frame's full 20k-site object graph in the background.
+    if (loader?.load_frame_positions) return
     const total = Math.min(
       traj.total_frames ?? traj.frames.length,
       FRAME_POS_CACHE_MAX,
     )
     if (total <= 1) return
     const gen = ++warmup_gen
-    const loader = (traj as PaneTrajectory).frame_loader
     let idx = 0
     const step = async (deadline?: IdleDeadline) => {
       while (idx < total && gen === warmup_gen) {
@@ -978,7 +1009,10 @@
   // per streamed load.
   $effect(() => {
     const traj = trajectory
-    const pending = traj?.plot_metadata_promise
+    // A hidden plot must not kick off an ASE whole-file scan that starves the
+    // position packet endpoint during playback.
+    if (display_mode === `structure`) return
+    const pending = traj?.plot_metadata_promise ?? traj?.plot_metadata_loader?.()
     if (!traj || !pending || traj.plot_metadata) return
     let cancelled = false
     void pending.then((md) => {
@@ -1146,9 +1180,17 @@
     // short-circuit on the identity-stable trajectory_frame_lattice being in
     // sync with the current matrix already.
     const cur_lattice = (cur as { lattice?: { matrix?: number[][] } }).lattice
-    const frame_lattice_obj =
+    const materialized_frame_lattice =
       (current_frame?.structure as { lattice?: { matrix?: number[][] } } | undefined)
         ?.lattice
+    const compact_lattice = current_frame?.position_data?.lattice
+    const frame_lattice_obj = compact_lattice
+      ? {
+          ...(materialized_frame_lattice ?? cur_lattice),
+          matrix: compact_lattice,
+          ...calc_lattice_params(compact_lattice as Matrix3x3),
+        }
+      : materialized_frame_lattice
     const lattice_changed = cur_lattice && frame_lattice_obj &&
       stable_frame_lattice(cur_lattice.matrix ?? null, frame_lattice_obj.matrix) !==
         (cur_lattice.matrix ?? null)
@@ -2195,15 +2237,20 @@
     return cleanup
   })
 
+  const manifest_frame_bucket = $derived(
+    is_playing ? Math.floor(current_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)
+      : current_step_idx,
+  )
   $effect(() => {
     if (!viewer_id) return
     trajectory
-    current_step_idx
-    current_frame
+    manifest_frame_bucket
     pane_position
     is_active
     filename
-    refresh_viewer_manifest(viewer_id)
+    // get_manifest reads the exact current frame. Keep that read outside this
+    // effect's dependency collection or it defeats the playback bucket above.
+    untrack(() => refresh_viewer_manifest(viewer_id))
     if (is_active) set_active_viewer(viewer_id)
   })
 </script>

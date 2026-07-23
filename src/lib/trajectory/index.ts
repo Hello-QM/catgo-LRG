@@ -23,6 +23,7 @@ export interface TrajectoryFrame {
   structure: AnyStructure
   step: number
   metadata?: Record<string, unknown>
+  position_data?: FramePositionData
 }
 
 export interface FrameIndex {
@@ -35,6 +36,23 @@ export interface TrajectoryMetadata {
   frame_number: number
   step: number
   properties: Record<string, number>
+}
+
+/**
+ * Compact display payload for streamed constant-topology frames.
+ *
+ * Keeping coordinates flat avoids expanding every remote frame into tens of
+ * thousands of temporary site/species/xyz objects. Consumers that need to
+ * edit or export a frame still use `load_frame()` and receive a fully
+ * materialized `TrajectoryFrame`.
+ */
+export interface FramePositionData {
+  step: number
+  positions: Float32Array
+  forces: Float32Array | null
+  lattice: number[][] | null
+  metadata?: Record<string, unknown>
+  topology_changed?: boolean
 }
 
 // Trajectory type with streaming support
@@ -50,6 +68,8 @@ export interface TrajectoryType {
    *  the trajectory immediately and attach the in-flight scan here.
    *  `Trajectory.svelte` adopts the result into `plot_metadata` on arrival. */
   plot_metadata_promise?: Promise<TrajectoryMetadata[]>
+  /** Lazy variant used by remote streams so hidden plots do not compete with playback. */
+  plot_metadata_loader?: () => Promise<TrajectoryMetadata[]>
   is_indexed?: boolean
   /** Runtime loader for indexed/local or remotely streamed frames. */
   frame_loader?: FrameLoader
@@ -89,6 +109,11 @@ export type TrajectoryDataExtractor = (
 
 export interface FrameLoader {
   fork?: () => FrameLoader
+  /** Optional constant-topology display path that skips full site objects. */
+  load_frame_positions?: (
+    data: string | ArrayBuffer,
+    frame_number: number,
+  ) => Promise<FramePositionData | null>
   get_total_frames: (data: string | ArrayBuffer) => Promise<number>
   build_frame_index: (
     data: string | ArrayBuffer,

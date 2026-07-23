@@ -5218,71 +5218,76 @@
     if (!bond_drag_active) hovered_bond_key = null
   }
 
-  // Merged single-pass derivation: radius + position + unique atoms from atom_data.
-  // Uses plain Map (not SvelteMap) since these are rebuilt from scratch each time.
-  //
-  // Plan v3 follow-up: subscribe to atom_manager.version so position_map
-  // re-derives on per-frame trajectory writes. Without this, under Architecture
-  // P (post-Phase-4), atom_data is silenced (re-derives only at topology load)
-  // → position_map freezes at frame-0 positions → selection highlights drift
-  // off the rendered atoms (visually: highlight wireframe sticks to frame-0
-  // while the atom moves with the trajectory). Same fix shape as the I5
-  // charge-label position fix at compute_charge_label_entries.
-  //
-  // Position priority chain (mirrors charge label & build_trajectory_bond_pairs):
-  //   1. realtime_position_overrides.get(site_idx)   — drag wins
-  //   2. trajectory_frame_positions[site_idx*3..]    — live trajectory
-  //   3. atom_manager slot lookup                    — supercell-extra
-  //   4. atom.position from atom_data                — load-time fallback
-  let atom_derived_maps = $derived.by(() => {
-    // WebGPU overlay active: scene not painting → these maps (selection
-    // highlight / label positions) aren't rendered. Skip the per-frame rebuild
-    // (this derived reads trajectory_frame_positions directly, which the parent
-    // still bumps each frame). Read suspend reactively so toggle-OFF re-derives
-    // the full maps for the current frame. Default false ⇒ unchanged.
-    if (webgl_suspended) return { radius_map: new Map<number, number>(), position_map: new Map<number, Vec3>(), unique: [] as typeof atom_data }
-    // R8.7 PROBE — load-cascade timing.
-    const __t0 = (import.meta.env?.DEV) ? performance.now() : 0
-    void atom_manager.version // subscribe to per-slot position writes
-    const traj = trajectory_frame_positions
-    const traj_max_site = traj ? Math.floor(traj.length / 3) : 0
+  // Radius/occupancy metadata changes with topology or visual settings, not
+  // with trajectory positions. Keep it separate from the live position map:
+  // rebuilding all three maps on every manager.version bump allocated 20k
+  // Vec3 arrays plus two Maps per frame even when no selection/edit overlay
+  // needed positions, creating the dominant playback GC pressure.
+  let atom_static_maps = $derived.by(() => {
     const radius_map = new Map<number, number>()
-    const position_map = new Map<number, Vec3>()
+    const base_position_map = new Map<number, Vec3>()
     const unique: typeof atom_data = []
 
     for (const atom of atom_data) {
       if (!radius_map.has(atom.site_idx)) {
         radius_map.set(atom.site_idx, atom.radius)
-        const sid = atom.site_idx
-        let pos = realtime_position_overrides?.get(sid)
-        if (pos === undefined && traj && sid < traj_max_site) {
-          const base = sid * 3
-          pos = [traj[base], traj[base + 1], traj[base + 2]]
-        }
-        if (pos === undefined) {
-          const slot = atom_manager.find_slot_by_site_id(sid)
-          if (slot >= 0) {
-            pos = [
-              atom_manager.get_x(slot),
-              atom_manager.get_y(slot),
-              atom_manager.get_z(slot),
-            ]
-          }
-        }
-        position_map.set(sid, pos ?? atom.position)
+        base_position_map.set(atom.site_idx, atom.position)
         if (!atom.has_partial_occupancy) unique.push(atom)
       }
     }
-
-    if (import.meta.env?.DEV) {
-      const __dt = performance.now() - __t0
-      if (__dt > 5) console.log(`[probe] atom_derived_maps: ${__dt.toFixed(1)}ms (${atom_data.length} atoms)`)
-    }
-    return { radius_map, position_map, unique }
+    return { radius_map, base_position_map, unique }
   })
 
-  let radius_by_site_idx = $derived(atom_derived_maps.radius_map)
-  let position_by_site_idx = $derived(atom_derived_maps.position_map)
+  const EMPTY_SITE_POSITION_MAP = new Map<number, Vec3>()
+  let live_atom_position_map_needed = $derived(
+    pencil_mode_active ||
+      bond_mode_active ||
+      selected_bonds.length > 0 ||
+      hovered_bond_key !== null ||
+      bond_first_atom !== null ||
+      (selected_sites?.length ?? 0) > 0 ||
+      (active_sites?.length ?? 0) > 0 ||
+      hovered_idx !== null,
+  )
+
+  // Live positions are only consumed by active interaction overlays. Normal
+  // playback renders directly from typed buffers, so keep a stable empty Map
+  // and do not subscribe to per-frame manager/trajectory updates while idle.
+  //
+  // Position priority chain (mirrors charge label & bond rendering):
+  //   1. realtime_position_overrides.get(site_idx)   — drag wins
+  //   2. trajectory_frame_positions[site_idx*3..]    — live trajectory
+  //   3. atom_manager slot lookup                    — supercell-extra
+  //   4. atom.position from atom_data                — load-time fallback
+  let position_by_site_idx = $derived.by(() => {
+    if (webgl_suspended) return EMPTY_SITE_POSITION_MAP
+    if (!live_atom_position_map_needed) return EMPTY_SITE_POSITION_MAP
+    void atom_manager.version
+    const traj = trajectory_frame_positions
+    const traj_max_site = traj ? Math.floor(traj.length / 3) : 0
+    const position_map = new Map<number, Vec3>()
+    for (const [sid, fallback] of atom_static_maps.base_position_map) {
+      let pos = realtime_position_overrides?.get(sid)
+      if (pos === undefined && traj && sid < traj_max_site) {
+        const base = sid * 3
+        pos = [traj[base], traj[base + 1], traj[base + 2]]
+      }
+      if (pos === undefined) {
+        const slot = atom_manager.find_slot_by_site_id(sid)
+        if (slot >= 0) {
+          pos = [
+            atom_manager.get_x(slot),
+            atom_manager.get_y(slot),
+            atom_manager.get_z(slot),
+          ]
+        }
+      }
+      position_map.set(sid, pos ?? fallback)
+    }
+    return position_map
+  })
+
+  let radius_by_site_idx = $derived(atom_static_maps.radius_map)
 
   // Radius for ALL sites (including hidden elements) - used for frozen atoms overlay
   let all_radii_by_site_idx = $derived.by(() => {
@@ -5351,7 +5356,7 @@
 
   // Unique instanced atoms: one entry per site_idx (full-occupancy only), for site labels.
   const SITE_LABEL_LIMIT = 2000
-  let unique_instanced_atoms = $derived(atom_derived_maps.unique)
+  let unique_instanced_atoms = $derived(atom_static_maps.unique)
   let site_labels_capped = $derived(unique_instanced_atoms.length > SITE_LABEL_LIMIT)
   let site_label_atoms = $derived(
     site_labels_capped ? unique_instanced_atoms.slice(0, SITE_LABEL_LIMIT) : unique_instanced_atoms

@@ -195,6 +195,78 @@ describe(`frame loading`, () => {
     }
   })
 
+  it(`uses compact streamed positions without materializing full site objects`, async () => {
+    const topology = positioned_frame(0)
+    const positions = new Float32Array([4, 5, 6])
+    let full_frame_loads = 0
+    const trajectory = {
+      ...trajectory_with_loader(async () => {
+        full_frame_loads += 1
+        return positioned_frame(4)
+      }, new ArrayBuffer(1)),
+      frames: [topology],
+    }
+    Object.assign(trajectory.frame_loader!, {
+      load_frame_positions: async () => ({
+        step: 4,
+        positions,
+        forces: null,
+        lattice: null,
+        metadata: { energy: -1.25 },
+        topology_changed: false,
+      }),
+    })
+
+    const result = await create_frame_request_loader().load(
+      trajectory,
+      4,
+      topology,
+      null,
+    )
+
+    expect(result.status).toBe(`loaded`)
+    if (result.status === `loaded`) {
+      expect(result.frame.structure).toBe(topology.structure)
+      expect(result.frame.position_data?.positions).toBe(positions)
+      expect(result.frame.metadata?.energy).toBe(-1.25)
+    }
+    expect(full_frame_loads).toBe(0)
+  })
+
+  it(`materializes a full streamed frame when its topology changed`, async () => {
+    const topology = positioned_frame(0)
+    const changed = positioned_frame(4)
+    let full_frame_loads = 0
+    const trajectory = {
+      ...trajectory_with_loader(async () => {
+        full_frame_loads += 1
+        return changed
+      }, new ArrayBuffer(1)),
+      frames: [topology],
+    }
+    Object.assign(trajectory.frame_loader!, {
+      load_frame_positions: async () => ({
+        step: 4,
+        positions: new Float32Array([4, 0, 0]),
+        forces: null,
+        lattice: null,
+        metadata: {},
+        topology_changed: true,
+      }),
+    })
+
+    const result = await create_frame_request_loader().load(
+      trajectory,
+      4,
+      topology,
+      null,
+    )
+
+    expect(result.status).toBe(`loaded`)
+    if (result.status === `loaded`) expect(result.frame).toBe(changed)
+    expect(full_frame_loads).toBe(1)
+  })
+
   it(`retains the displayed frame when lazy ledger replay fails`, async () => {
     const previous = positioned_frame(3)
     const ledger = new OperationLedger()
@@ -354,6 +426,61 @@ describe(`frame loading`, () => {
     expect(source).toContain(`select_pending_frame_publication(`)
     expect(source).toContain(`select_displayed_frame_owner(`)
     expect(source).toContain(`select_displayed_frame_remote_origin(`)
+  })
+
+  it(`keeps the large streamed current frame out of Svelte deep proxies`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(
+      `let current_frame = $state.raw<TrajectoryFrame | null>(null)`,
+    )
+  })
+
+  it(`publishes compact streamed positions without walking frame sites`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(`const compact = frame.position_data`)
+    expect(source).toContain(`trajectory_frame_positions = compact.positions`)
+    expect(source).toContain(`trajectory_frame_forces = compact.forces`)
+    expect(source).toContain(`if (loader?.load_frame_positions) return`)
+    expect(source).toContain(`display_mode === \`structure\``)
+    expect(source).toContain(`plot_metadata_loader?.()`)
+  })
+
+  it(`writes compact variable-cell lattice data back when playback pauses`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(
+      `const compact_lattice = current_frame?.position_data?.lattice`,
+    )
+    expect(source).toContain(`calc_lattice_params(compact_lattice as Matrix3x3)`)
+  })
+
+  it(`rate-limits remote viewer manifests during playback`, () => {
+    const source = readFileSync(
+      `src/lib/trajectory/Trajectory.svelte`,
+      `utf8`,
+    )
+
+    expect(source).toContain(`MANIFEST_PLAYBACK_FRAME_BUCKET = 10`)
+    expect(source).toContain(
+      `is_playing ? Math.floor(current_step_idx / MANIFEST_PLAYBACK_FRAME_BUCKET)`,
+    )
+    expect(source).toContain(
+      `untrack(() => refresh_viewer_manifest(viewer_id))`,
+    )
+    expect(source).not.toMatch(
+      /trajectory\s+current_step_idx\s+current_frame\s+pane_position/,
+    )
   })
 
   it(`guards outcome application with request and trajectory currentness`, () => {

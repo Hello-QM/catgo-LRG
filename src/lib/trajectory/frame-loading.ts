@@ -132,6 +132,36 @@ export function create_frame_request_loader(): FrameRequestLoader {
       }
       try {
         const source = trajectory.frame_source_data ?? fallback_source ?? ``
+        // Streamed constant-topology playback only needs flat coordinates.
+        // Prefer that compact path while no edit operation targets this frame;
+        // topology-changing packets and edited frames fall through to the
+        // fully materialized resolver path below.
+        const has_matching_ops =
+          (trajectory.operation_ledger?.active_entries_for_frame(frame_idx)
+            .length ?? 0) > 0
+        if (loader.load_frame_positions && !has_matching_ops) {
+          try {
+            const position_data = await loader.load_frame_positions(source, frame_idx)
+            if (request !== latest_request) return { status: `stale` }
+            const topology_frame = trajectory.frames[0] ?? previous
+            if (
+              position_data && !position_data.topology_changed &&
+              topology_frame?.structure
+            ) {
+              return finish({
+                status: `loaded`,
+                frame: {
+                  structure: topology_frame.structure,
+                  step: position_data.step,
+                  metadata: position_data.metadata,
+                  position_data,
+                },
+              })
+            }
+          } catch {
+            // The full-frame path below remains the correctness fallback.
+          }
+        }
         // §9.3: all frame consumers use the one effective-frame resolver. The
         // raw loader supplies the immutable base frame; the pane's active
         // ledger entries are applied (and cached by ledger revision) inside

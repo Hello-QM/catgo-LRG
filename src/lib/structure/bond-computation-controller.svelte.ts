@@ -61,6 +61,11 @@ export function should_defer_bonds(
  *  every loop/scrub is a cache hit and triggers no bond recompute. Larger
  *  trajectories keep their most-recently-used 512 frames. */
 const TRAJ_FRAME_CACHE_MAX = 512
+/** Object connectivity is much heavier than position packets (~26k objects
+ * per 20k-atom frame). Keep only about four such frames, while small systems
+ * can still use the 512-frame cap. */
+const TRAJ_FRAME_CACHE_BOND_BUDGET = 100_000
+export const TRAJ_BOND_REFRESH_EVERY = 8
 
 /**
  * Per-bond stale-distance pre-filter (Layer 3 of trajectory bond fix).
@@ -116,6 +121,7 @@ const bond_conn_cache = new WeakMap<object, BondConnEntry>()
  * LRU-bounded; cleared on trajectory teardown.
  */
 const frame_conn_cache = new Map<Float32Array, BondConnEntry>()
+let frame_cache_bond_count = 0
 
 /** LRU touch: re-insert the entry so it becomes the newest. */
 function frame_cache_touch(key: Float32Array, entry: BondConnEntry): void {
@@ -125,13 +131,32 @@ function frame_cache_touch(key: Float32Array, entry: BondConnEntry): void {
 
 /** Insert with LRU eviction to keep the cache bounded. */
 function frame_cache_set(key: Float32Array, entry: BondConnEntry): void {
-  if (frame_conn_cache.has(key)) frame_conn_cache.delete(key)
+  const previous = frame_conn_cache.get(key)
+  if (previous) {
+    frame_cache_bond_count -= previous.bond_connectivity.length
+    frame_conn_cache.delete(key)
+  }
   frame_conn_cache.set(key, entry)
-  while (frame_conn_cache.size > TRAJ_FRAME_CACHE_MAX) {
+  frame_cache_bond_count += entry.bond_connectivity.length
+  while (
+    frame_conn_cache.size > TRAJ_FRAME_CACHE_MAX ||
+    frame_cache_bond_count > TRAJ_FRAME_CACHE_BOND_BUDGET
+  ) {
     const oldest = frame_conn_cache.keys().next().value
     if (oldest === undefined) break
+    frame_cache_bond_count -=
+      frame_conn_cache.get(oldest)?.bond_connectivity.length ?? 0
     frame_conn_cache.delete(oldest)
   }
+}
+
+export function should_refresh_large_trajectory_bonds(
+  frame_seq: number,
+  n_sites: number,
+  compatible_connectivity: boolean,
+): boolean {
+  if (n_sites <= TRAJ_SYNC_THRESHOLD || !compatible_connectivity) return true
+  return frame_seq % TRAJ_BOND_REFRESH_EVERY === 0
 }
 
 /**
@@ -148,11 +173,14 @@ export function clear_trajectory_bond_frame_cache(
   bond_state?: ReturnType<typeof create_bond_state>,
 ): void {
   frame_conn_cache.clear()
+  frame_cache_bond_count = 0
   if (bond_state) {
     bond_state.traj_computation_gen++
     bond_state.traj_in_flight_frame = null
     bond_state.traj_pending_frame = null
     bond_state.traj_pending_lattice = null
+    bond_state.traj_last_seen_frame = null
+    bond_state.traj_frame_seq = 0
   }
 }
 
@@ -294,6 +322,8 @@ export function create_bond_state() {
   // null = frozen base lattice). The drain re-dispatch must use the PENDING
   // frame's cell, not the cell of the dispatch that happens to drain it.
   let traj_pending_lattice: number[][] | null = null
+  let traj_last_seen_frame: Float32Array | null = null
+  let traj_frame_seq = 0
 
   return {
     get bond_connectivity() {
@@ -361,6 +391,18 @@ export function create_bond_state() {
     },
     set traj_pending_lattice(v) {
       traj_pending_lattice = v
+    },
+    get traj_last_seen_frame() {
+      return traj_last_seen_frame
+    },
+    set traj_last_seen_frame(v) {
+      traj_last_seen_frame = v
+    },
+    get traj_frame_seq() {
+      return traj_frame_seq
+    },
+    set traj_frame_seq(v) {
+      traj_frame_seq = v
     },
   }
 }
@@ -708,6 +750,23 @@ export function compute_bond_connectivity_for_frame(
   }
 
   const n_sites = sites.length
+  if (bond_state.traj_last_seen_frame !== traj_positions) {
+    bond_state.traj_last_seen_frame = traj_positions
+    bond_state.traj_frame_seq += 1
+  }
+  const compatible_connectivity =
+    bond_state.bond_connectivity.length > 0 &&
+    bond_state.last_bond_strategy === strategy_key &&
+    bond_state.last_elem_fingerprint === elem_fp
+  if (
+    !should_refresh_large_trajectory_bonds(
+      bond_state.traj_frame_seq,
+      n_sites,
+      compatible_connectivity,
+    )
+  ) {
+    return bond_state.bond_connectivity
+  }
 
   // 2. Sync path for small structures — fastest, no scheduling overhead.
   if (n_sites <= TRAJ_SYNC_THRESHOLD) {

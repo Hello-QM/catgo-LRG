@@ -60,3 +60,9 @@ each user's own memory, not here.
 **Context**: CatBot Claude/SDK tool permission cards appeared allowed but the stream stayed stuck on Thinking.
 **Discovery**: Passing `onResolve` to SDK PermissionCards short-circuits `/api/agent/permission`; only client-direct entries have `pb.resolve`.
 **Solution/Note**: Pass `onResolve` only when `pb.resolve` exists; SDK permissions must use PermissionCard's backend `resolve_permission()` path.
+
+### [2026-07-22] Large streamed trajectories need typed position packets
+**Category**: performance
+**Context**: Real 100×19,968-atom trajectory playback stayed near 2.85 FPS after WebGL buffer churn was removed.
+**Discovery**: JSON/site expansion, eager metadata scans, per-frame viewer manifests, UI position maps, and a 512-frame object bond cache pushed the hot path above 2 GB.
+**Solution/Note**: Stream Float32 position packets, keep topology static, lazy-load plots, gate UI maps, budget/periodically refresh bonds, and validate real FPS, heap, and WebGL context together.
