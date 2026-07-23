@@ -28,6 +28,7 @@ import type {
   ReplicaLayout,
 } from '$lib/structure/scene/render-packet'
 import type { AnyStructure, Site } from '$lib'
+import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
 
 const EMPTY_IMAGES: ImageInstanceTable = {
   count: 0,
@@ -530,12 +531,27 @@ function make_fake_pick_renderer(ids: number[]): PickPixelRenderer {
   } as unknown as PickPixelRenderer
 }
 
+function make_pick_scene(packet?: RenderPacket): ReplicaPickScene {
+  const positions = new SharedPositionTexture()
+  if (packet) positions.update(packet.frame)
+  const scene = new ReplicaPickScene({
+    renderer: make_fake_pick_renderer([]) as unknown as THREE.WebGLRenderer,
+    positions,
+  })
+  const dispose = scene.dispose.bind(scene)
+  scene.dispose = () => {
+    dispose()
+    positions.dispose()
+  }
+  return scene
+}
+
 describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
   const camera = new THREE.PerspectiveCamera(50, 2, 0.1, 100)
 
   test('same base atom picked in two replica cells folds to one base site', () => {
     const packet = make_packet({ n: 2, dims: [2, 1, 1] })
-    const scene = new ReplicaPickScene()
+    const scene = make_pick_scene(packet)
     scene.sync(packet)
     const codec = scene.codec
     if (codec === null) throw new Error('codec missing after sync')
@@ -571,7 +587,7 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
       boundary_policy: 'ghost-images',
       bonds: [{ site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] }],
     })
-    const scene = new ReplicaPickScene()
+    const scene = make_pick_scene(packet)
     scene.sync(packet)
     const codec = scene.codec
     if (codec === null) throw new Error('codec missing after sync')
@@ -599,7 +615,7 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
         { site_idx_1: 0, site_idx_2: 0, jimage: [0, 0, 1] },
       ],
     })
-    const scene = new ReplicaPickScene()
+    const scene = make_pick_scene(packet)
     scene.sync(packet)
     const codec = scene.codec
     if (codec === null) throw new Error('codec missing after sync')
@@ -625,7 +641,7 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
   })
 
   test('integer ID encode lives in the shaders — atoms, bonds, ghosts', () => {
-    const scene = new ReplicaPickScene()
+    const scene = make_pick_scene()
     expect(scene.atom_material.vertexShader).toContain('uAtomFirstId')
     expect(scene.atom_material.vertexShader).toContain('gl_InstanceID / uCellCount')
     expect(scene.atom_material.vertexShader).toContain('uBaseCount * cell_index')
@@ -638,7 +654,7 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
     scene.dispose()
   })
 
-  test('zero N×C CPU expansion — attributes stay base-sized, positions zero-copy', () => {
+  test('zero N×C CPU expansion — attributes stay base-sized with shared positions', () => {
     const n = 50
     const cell_count = 27
     const packet = make_packet({
@@ -651,7 +667,7 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
         { site_idx_1: 0, site_idx_2: 0, jimage: [0, 0, 1] },
       ],
     })
-    const scene = new ReplicaPickScene()
+    const scene = make_pick_scene(packet)
     scene.sync(packet)
 
     const atom_geometry = scene.atom_mesh.geometry as THREE.InstancedBufferGeometry
@@ -659,12 +675,13 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
     expect(atom_geometry.instanceCount).toBe(n * cell_count)
     expect(bond_geometry.instanceCount).toBe(3 * 2 * cell_count)
 
-    // Positions bind the packet frame buffer ZERO-COPY (no per-replica copy).
-    const position_attr = atom_geometry.getAttribute(
-      'instancePosition',
+    const site_attr = atom_geometry.getAttribute(
+      'instanceSite',
     ) as THREE.InstancedBufferAttribute
-    expect(position_attr.array).toBe(packet.frame.positions)
-    expect(position_attr.meshPerAttribute).toBe(cell_count)
+    expect(site_attr.count).toBe(n)
+    expect(site_attr.meshPerAttribute).toBe(cell_count)
+    expect((scene.atom_material.uniforms.uPosTex.value as THREE.DataTexture).image.data)
+      .not.toBe(packet.frame.positions)
 
     // No instanceMatrix and no attribute anywhere near N×C instance size.
     for (const mesh of [scene.atom_mesh, scene.bond_mesh, scene.ghost_mesh]) {
@@ -684,7 +701,7 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
 
   test('miss, stale and out-of-range IDs fail safely', () => {
     const packet = make_packet({ n: 2, dims: [2, 1, 1] })
-    const scene = new ReplicaPickScene()
+    const scene = make_pick_scene(packet)
     scene.sync(packet)
     const codec = scene.codec
     if (codec === null) throw new Error('codec missing after sync')
@@ -1018,7 +1035,7 @@ describe('packet path picking wiring (source contract)', () => {
       'utf8',
     )
     expect(scene_source).toContain(
-      'let packet_picking_active = $derived(manager_render_packet !== null)',
+      'let packet_picking_active = $derived(combined_packet_renderer_owned)',
     )
     expect(scene_source).toMatch(
       /atom_data\.length > 0 && show_bulk_atoms && !packet_picking_active/,
@@ -1027,7 +1044,9 @@ describe('packet path picking wiring (source contract)', () => {
       /filtered_bond_pairs\.length > 0 && show_bulk_atoms && !packet_picking_active/,
     )
     // The scene wires the packet + click routing into the picker integration.
-    expect(scene_source).toContain('get_render_packet: () => manager_render_packet')
+    expect(scene_source).toContain(
+      'combined_packet_renderer_owned ? manager_render_packet : null',
+    )
     expect(scene_source).toContain('on_packet_atom_click')
     expect(scene_source).toContain('on_packet_bond_click')
   })

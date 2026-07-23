@@ -214,12 +214,14 @@
 
   // --- GPU Picker for O(1) hover/click detection ---
   const picker = create_gpu_picker()
+  const shared_position_texture = new SharedPositionTexture()
+  onDestroy(() => shared_position_texture.dispose())
 
   // Visual T5 — packet-path unified picking: hover AND click resolve through
   // the WebGL2 replica integer-ID pass while a render packet is active (the
   // invisible CPU hitbox meshes below are gated off in that mode). Lazily
   // constructed; disposed with the scene.
-  const replica_picker = create_replica_picker()
+  const replica_picker = create_replica_picker(shared_position_texture)
   $effect(() => () => replica_picker.dispose())
 
   // Check if an atom is pickable (not hidden by cutting plane)
@@ -281,7 +283,8 @@
     // render packet, hover + click route through the WebGL2 replica ID pass;
     // every replica pick folds to ONE base selection flag (visual-shared-base
     // semantics), and bond picks carry the base bond GRAPH index.
-    get_render_packet: () => manager_render_packet,
+    get_render_packet: () =>
+      combined_packet_renderer_owned ? manager_render_packet : null,
     on_packet_atom_click: handle_packet_atom_click,
     on_packet_bond_click: handle_packet_bond_click,
     set_hovered_bond_idx: (idx) => {
@@ -1135,8 +1138,6 @@
   })
   let prepared_render_packet = $state.raw<RenderPacket | null>(null)
   let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
-  const shared_position_texture = new SharedPositionTexture()
-  onDestroy(() => shared_position_texture.dispose())
   let prepared_frame_forces = $state.raw<Float32Array | null>(null)
   let prepared_error = $state<string | null>(null)
   let prepared_graph_version = 0

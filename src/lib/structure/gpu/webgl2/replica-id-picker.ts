@@ -37,6 +37,7 @@ import {
   rebind_instance_divisors_if_needed,
 } from './atom-replica-renderer'
 import { BOUNDARY_POLICY_CODE } from './bond-replica-renderer'
+import { SharedPositionTexture } from './shared-position-texture'
 
 export const REPLICA_PICK_MISS_ID = 0
 export const REPLICA_PICK_MAX_ID = 0xffff_ffff
@@ -392,11 +393,6 @@ export function resolve_replica_pick_action(
   return { type: 'atom', site_idx: logical_site }
 }
 
-// Base-position texture layout — mirrors bond-replica-renderer.ts so endpoint
-// fetches share the same two-bit-op index math.
-const PICK_POS_TEX_WIDTH = 1024
-const PICK_POS_TEX_SHIFT = 10
-
 const ALL_CHANGED = {
   topology_changed: true,
   bond_graph_changed: true,
@@ -434,12 +430,23 @@ const PICK_SPHERE_VERTEX_TAIL = /* glsl */ `
   gl_Position = projectionMatrix * vec4(view_pos, 1.0);
 `
 
+const PICK_POSITION_TEXTURE = /* glsl */ `
+  uniform sampler2D uPosTex;
+  uniform int uPosTexWidth;
+
+  vec3 fetchBasePosition(float site) {
+    int idx = int(site + 0.5);
+    ivec2 uv = ivec2(idx % uPosTexWidth, idx / uPosTexWidth);
+    return texelFetch(uPosTex, uv, 0).xyz;
+  }
+`
+
 // Main atom replica pick draw: base attributes at divisor = cell count. The
 // shader folds the WebGL2 base-outer instance order into the codec's
 // atom-major ID: base = gl_InstanceID / uCellCount, cell = gl_InstanceID %
 // uCellCount, id = uAtomFirstId + base + uBaseCount · cell.
 const ATOM_PICK_VERTEX_SHADER = /* glsl */ `
-  attribute vec3 instancePosition;
+  attribute float instanceSite;
   attribute float instanceRadius;
   uniform mat3 uLattice;
   uniform ivec3 uDims;
@@ -451,6 +458,7 @@ const ATOM_PICK_VERTEX_SHADER = /* glsl */ `
   varying vec2 vQuadCoord;
   flat varying vec4 vPickColor;
   ${ENCODE_PICK_ID}
+  ${PICK_POSITION_TEXTURE}
 
   void main() {
     int cell_index = gl_InstanceID % uCellCount;
@@ -459,7 +467,7 @@ const ATOM_PICK_VERTEX_SHADER = /* glsl */ `
     int ix = cell_index % uDims.x;
     int iy = (cell_index / uDims.x) % uDims.y;
     int iz = cell_index / (uDims.x * uDims.y);
-    vec3 replica_pos = instancePosition +
+    vec3 replica_pos = fetchBasePosition(instanceSite) +
       uLattice * vec3(float(ix), float(iy), float(iz));
     vRadius = instanceRadius;
     ${PICK_SPHERE_VERTEX_TAIL}
@@ -471,7 +479,7 @@ const ATOM_PICK_VERTEX_SHADER = /* glsl */ `
 // visual atom renderer draws — positional index parity is what makes
 // `uGhostFirstId + gl_InstanceID` decode through the codec's ghost range.
 const GHOST_PICK_VERTEX_SHADER = /* glsl */ `
-  attribute vec3 ghostPosition;
+  attribute float ghostBaseSite;
   attribute vec3 ghostImage;
   attribute float ghostRadius;
   uniform mat3 uLattice;
@@ -481,10 +489,11 @@ const GHOST_PICK_VERTEX_SHADER = /* glsl */ `
   varying vec2 vQuadCoord;
   flat varying vec4 vPickColor;
   ${ENCODE_PICK_ID}
+  ${PICK_POSITION_TEXTURE}
 
   void main() {
     vPickColor = encode_pick_id(uGhostFirstId + gl_InstanceID);
-    vec3 replica_pos = ghostPosition + uLattice * ghostImage;
+    vec3 replica_pos = fetchBasePosition(ghostBaseSite) + uLattice * ghostImage;
     vRadius = ghostRadius;
     ${PICK_SPHERE_VERTEX_TAIL}
   }
@@ -533,7 +542,6 @@ const BOND_PICK_VERTEX_SHADER = /* glsl */ `
   attribute vec2 a_site;
   attribute vec3 a_jimage;
   attribute float a_half;
-  uniform sampler2D uPosTex;
   uniform mat3 uLattice;
   uniform ivec3 uDims;
   uniform int uCellCount;
@@ -549,6 +557,7 @@ const BOND_PICK_VERTEX_SHADER = /* glsl */ `
   flat varying float vImpLen;
   flat varying float vImpCollapse;
   ${ENCODE_PICK_ID}
+  ${PICK_POSITION_TEXTURE}
 
   void main() {
     int cell_index = gl_InstanceID % uCellCount;
@@ -560,10 +569,8 @@ const BOND_PICK_VERTEX_SHADER = /* glsl */ `
       (cell_index / uDims.x) % uDims.y,
       cell_index / (uDims.x * uDims.y)
     );
-    int ia = int(a_site.x + 0.5);
-    int ib = int(a_site.y + 0.5);
-    vec3 pa = texelFetch(uPosTex, ivec2(ia & ${PICK_POS_TEX_WIDTH - 1}, ia >> ${PICK_POS_TEX_SHIFT}), 0).xyz;
-    vec3 pb = texelFetch(uPosTex, ivec2(ib & ${PICK_POS_TEX_WIDTH - 1}, ib >> ${PICK_POS_TEX_SHIFT}), 0).xyz;
+    vec3 pa = fetchBasePosition(a_site.x);
+    vec3 pb = fetchBasePosition(a_site.y);
     ivec3 jimage = ivec3(round(a_jimage));
     bool is_b_half = a_half > 0.5;
     ivec3 probe = is_b_half ? cell - jimage : cell + jimage;
@@ -693,10 +700,10 @@ const MISS_PICK: ReplicaPickResult = Object.freeze({
  * replica renderers' instancing (divisor attributes, replica decode in the
  * vertex stage, boundary-policy geometry) with codec-encoded IDs as color.
  *
- * Owns only BASE-sized resources: N positions bind ZERO-COPY from the packet
- * frame, radii are N floats, bond halves are 2B entries, ghosts are the
- * sparse O(surface) table. There is NO instanceMatrix, NO per-replica CPU
- * matrix compose, and NO invisible hitbox mesh anywhere on this path.
+ * Owns only BASE-sized topology resources: site IDs and radii are N floats,
+ * bond halves are 2B entries, and ghosts are the sparse O(surface) table.
+ * Positions come from the visible draw's shared texture. There is NO
+ * instanceMatrix, per-replica CPU compose, or picker position upload.
  *
  * Ghost-side bond halves (the visual renderers' sparse second bond draw) are
  * intentionally not pickable — they overlap the pickable ghost atom at the
@@ -710,6 +717,7 @@ export class ReplicaPickScene {
   readonly atom_material: THREE.ShaderMaterial
   readonly bond_material: THREE.ShaderMaterial
   readonly ghost_material: THREE.ShaderMaterial
+  readonly renderer: THREE.WebGLRenderer
 
   #atom_geometry = new THREE.InstancedBufferGeometry()
   #bond_geometry = new THREE.InstancedBufferGeometry()
@@ -724,15 +732,17 @@ export class ReplicaPickScene {
   #layout: ReplicaLayout | null = null
   #images: ImageInstanceTable = EMPTY_TABLE
 
-  // Base-sized CPU mirrors (positions bind the packet buffer directly).
+  // Base-sized topology-only CPU mirrors.
+  #atom_sites = new Float32Array(0)
   #radii = new Float32Array(0)
   #sites = new Float32Array(0)
   #jimages = new Int8Array(0)
   #halves = new Float32Array(0)
-  #pos_texture: THREE.DataTexture | null = null
+  #positions: SharedPositionTexture
+  #release_positions: () => void
 
   // Sparse ghost attribute arrays (capacity-grown, count = live span).
-  #ghost_positions = new Float32Array(0)
+  #ghost_sites = new Float32Array(0)
   #ghost_images = new Float32Array(0)
   #ghost_radii = new Float32Array(0)
 
@@ -741,7 +751,13 @@ export class ReplicaPickScene {
   #rotation_group = new THREE.Group()
   #offset_group = new THREE.Group()
 
-  constructor() {
+  constructor(options: {
+    renderer: THREE.WebGLRenderer
+    positions: SharedPositionTexture
+  }) {
+    this.renderer = options.renderer
+    this.#positions = options.positions
+    this.#release_positions = options.positions.register(`picker`)
     this.#quad = new THREE.PlaneGeometry(2, 2, 1, 1)
     this.#box = new THREE.BoxGeometry(2, 2, 2)
     for (const geometry of [this.#atom_geometry, this.#ghost_geometry]) {
@@ -758,6 +774,8 @@ export class ReplicaPickScene {
       uLattice: { value: new THREE.Matrix3() },
       uDims: { value: new Int32Array([1, 1, 1]) },
       uCellCount: { value: 1 },
+      uPosTex: { value: this.#positions.texture },
+      uPosTexWidth: { value: this.#positions.texture.image.width },
     }
     this.atom_material = new THREE.ShaderMaterial({
       vertexShader: ATOM_PICK_VERTEX_SHADER,
@@ -770,6 +788,8 @@ export class ReplicaPickScene {
         uLattice: shared.uLattice,
         uDims: shared.uDims,
         uCellCount: shared.uCellCount,
+        uPosTex: shared.uPosTex,
+        uPosTexWidth: shared.uPosTexWidth,
         uBaseCount: { value: 0 },
         uAtomFirstId: { value: 1 },
         uIsOrthographic: { value: false },
@@ -784,6 +804,8 @@ export class ReplicaPickScene {
       depthWrite: true,
       uniforms: {
         uLattice: shared.uLattice,
+        uPosTex: shared.uPosTex,
+        uPosTexWidth: shared.uPosTexWidth,
         uGhostFirstId: { value: 1 },
         uIsOrthographic: this.atom_material.uniforms.uIsOrthographic,
       },
@@ -799,7 +821,8 @@ export class ReplicaPickScene {
         uLattice: shared.uLattice,
         uDims: shared.uDims,
         uCellCount: shared.uCellCount,
-        uPosTex: { value: null },
+        uPosTex: shared.uPosTex,
+        uPosTexWidth: shared.uPosTexWidth,
         uPolicy: { value: BOUNDARY_POLICY_CODE.stub },
         uStubScale: { value: 0.5 },
         uBondRadius: { value: 0.15 },
@@ -855,10 +878,10 @@ export class ReplicaPickScene {
     const prev = this.#prev
     const diff = prev === null ? ALL_CHANGED : diff_render_packet(prev, packet)
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
-    const positions_changed = prev === null || diff.topology_changed ||
-      diff.frame_changed || prev.frame.positions !== packet.frame.positions
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
+    this.atom_material.uniforms.uPosTexWidth.value =
+      this.#positions.texture.image.width
     this.#prev = packet
     this.#layout = packet.replicas
 
@@ -893,7 +916,6 @@ export class ReplicaPickScene {
 
     if (diff.topology_changed) this.#rebuild_radii(packet)
     if (diff.topology_changed || diff.replica_changed) this.#apply_replicas(packet)
-    if (positions_changed) this.#upload_positions(packet)
     if (lattice_changed) {
       ;(this.atom_material.uniforms.uLattice.value as THREE.Matrix3)
         .fromArray(packet.frame.lattice as unknown as number[])
@@ -901,7 +923,6 @@ export class ReplicaPickScene {
     if (graph_changed) this.#rebuild_half_attrs(packet)
     if (graph_changed || diff.replica_changed) this.#apply_bond_replicas(packet)
     if (ghosts_changed) this.#rebuild_ghosts(packet)
-    if (ghosts_changed || positions_changed) this.#upload_ghost_positions(packet)
 
     if (opts.bond_radius !== undefined) {
       this.bond_material.uniforms.uBondRadius.value = opts.bond_radius
@@ -966,8 +987,12 @@ export class ReplicaPickScene {
 
   #rebuild_radii(packet: RenderPacket): void {
     const { atom_count: n, radii } = packet.topology
-    if (this.#radii.length !== n) this.#radii = new Float32Array(n)
+    if (this.#radii.length !== n) {
+      this.#atom_sites = new Float32Array(n)
+      this.#radii = new Float32Array(n)
+    }
     for (let idx = 0; idx < n; idx++) {
+      this.#atom_sites[idx] = idx
       // Same on-screen size as the visual replica impostor.
       this.#radii[idx] = radii[idx] * VISUAL_RADIUS_SCALE
     }
@@ -981,14 +1006,12 @@ export class ReplicaPickScene {
     const ny = dims[1] > 0 ? dims[1] : 1
     const nz = dims[2] > 0 ? dims[2] : 1
     const cc = nx * ny * nz
-    // Positions bind the packet frame buffer ZERO-COPY (base-sized, 3N).
     ensure_instanced_attr(
       this.#atom_geometry,
-      'instancePosition',
-      packet.frame.positions,
-      3,
+      'instanceSite',
+      this.#atom_sites,
+      1,
       cc,
-      true,
     )
     ensure_instanced_attr(this.#atom_geometry, 'instanceRadius', this.#radii, 1, cc)
     this.#atom_geometry.instanceCount = packet.topology.atom_count * cc
@@ -997,57 +1020,6 @@ export class ReplicaPickScene {
     dims_val[1] = ny
     dims_val[2] = nz
     this.atom_material.uniforms.uCellCount.value = cc
-  }
-
-  #upload_positions(packet: RenderPacket): void {
-    // Same-identity in-place rewrites (positions_version bump) re-upload; a
-    // new buffer identity swaps the attribute in #apply_replicas' next run —
-    // cover both by re-binding here too.
-    const dims = packet.replicas.dims
-    const cc = (dims[0] > 0 ? dims[0] : 1) * (dims[1] > 0 ? dims[1] : 1) *
-      (dims[2] > 0 ? dims[2] : 1)
-    const attr = ensure_instanced_attr(
-      this.#atom_geometry,
-      'instancePosition',
-      packet.frame.positions,
-      3,
-      cc,
-      true,
-    )
-    attr.needsUpdate = true
-    this.#upload_bond_texture(packet)
-  }
-
-  #upload_bond_texture(packet: RenderPacket): void {
-    const positions = packet.frame.positions
-    const n_atoms = (positions.length / 3) | 0
-    const rows = Math.max(1, Math.ceil(n_atoms / PICK_POS_TEX_WIDTH))
-    if (
-      this.#pos_texture === null ||
-      (this.#pos_texture.image.height as number) < rows
-    ) {
-      this.#pos_texture?.dispose()
-      const data = new Float32Array(PICK_POS_TEX_WIDTH * rows * 4)
-      const tex = new THREE.DataTexture(
-        data,
-        PICK_POS_TEX_WIDTH,
-        rows,
-        THREE.RGBAFormat,
-        THREE.FloatType,
-      )
-      tex.minFilter = THREE.NearestFilter
-      tex.magFilter = THREE.NearestFilter
-      tex.generateMipmaps = false
-      this.#pos_texture = tex
-      this.bond_material.uniforms.uPosTex.value = tex
-    }
-    const data = this.#pos_texture.image.data as unknown as Float32Array
-    for (let idx = 0; idx < n_atoms; idx++) {
-      data[idx * 4] = positions[idx * 3]
-      data[idx * 4 + 1] = positions[idx * 3 + 1]
-      data[idx * 4 + 2] = positions[idx * 3 + 2]
-    }
-    this.#pos_texture.needsUpdate = true
   }
 
   #rebuild_half_attrs(packet: RenderPacket): void {
@@ -1099,7 +1071,7 @@ export class ReplicaPickScene {
   #rebuild_ghosts(packet: RenderPacket): void {
     const table = this.#images
     const count = table.count
-    if (count === 0 && !this.#ghost_geometry.getAttribute('ghostPosition')) {
+    if (count === 0 && !this.#ghost_geometry.getAttribute('ghostBaseSite')) {
       // No ghosts and no attributes yet — nothing to (re)build or upload.
       this.#ghost_geometry.instanceCount = 0
       this.ghost_mesh.visible = false
@@ -1107,12 +1079,13 @@ export class ReplicaPickScene {
     }
     if (this.#ghost_radii.length < count) {
       const capacity = Math.max(count, this.#ghost_radii.length * 2, 16)
-      this.#ghost_positions = new Float32Array(capacity * 3)
+      this.#ghost_sites = new Float32Array(capacity)
       this.#ghost_images = new Float32Array(capacity * 3)
       this.#ghost_radii = new Float32Array(capacity)
-      const positions = new THREE.InstancedBufferAttribute(this.#ghost_positions, 3, false, 1)
-      positions.setUsage(THREE.DynamicDrawUsage)
-      this.#ghost_geometry.setAttribute('ghostPosition', positions)
+      this.#ghost_geometry.setAttribute(
+        'ghostBaseSite',
+        new THREE.InstancedBufferAttribute(this.#ghost_sites, 1, false, 1),
+      )
       this.#ghost_geometry.setAttribute(
         'ghostImage',
         new THREE.InstancedBufferAttribute(this.#ghost_images, 3, false, 1),
@@ -1125,12 +1098,13 @@ export class ReplicaPickScene {
     const { radii } = packet.topology
     for (let idx = 0; idx < count; idx++) {
       const site = table.base_sites[idx]
+      this.#ghost_sites[idx] = site
       this.#ghost_images[idx * 3] = table.jimages[idx * 3]
       this.#ghost_images[idx * 3 + 1] = table.jimages[idx * 3 + 1]
       this.#ghost_images[idx * 3 + 2] = table.jimages[idx * 3 + 2]
       this.#ghost_radii[idx] = radii[site] * VISUAL_RADIUS_SCALE
     }
-    for (const name of ['ghostImage', 'ghostRadius']) {
+    for (const name of ['ghostBaseSite', 'ghostImage', 'ghostRadius']) {
       const attribute = this.#ghost_geometry.getAttribute(
         name,
       ) as THREE.InstancedBufferAttribute
@@ -1143,24 +1117,6 @@ export class ReplicaPickScene {
     this.ghost_mesh.visible = count > 0
   }
 
-  #upload_ghost_positions(packet: RenderPacket): void {
-    const table = this.#images
-    const positions = packet.frame.positions
-    for (let idx = 0; idx < table.count; idx++) {
-      const site = table.base_sites[idx] * 3
-      this.#ghost_positions[idx * 3] = positions[site]
-      this.#ghost_positions[idx * 3 + 1] = positions[site + 1]
-      this.#ghost_positions[idx * 3 + 2] = positions[site + 2]
-    }
-    const attribute = this.#ghost_geometry.getAttribute(
-      'ghostPosition',
-    ) as THREE.InstancedBufferAttribute | undefined
-    if (attribute) {
-      ;(attribute as unknown as { count: number }).count = table.count
-      attribute.needsUpdate = true
-    }
-  }
-
   dispose(): void {
     this.#atom_geometry.dispose()
     this.#bond_geometry.dispose()
@@ -1170,8 +1126,7 @@ export class ReplicaPickScene {
     this.atom_material.dispose()
     this.bond_material.dispose()
     this.ghost_material.dispose()
-    this.#pos_texture?.dispose()
-    this.#pos_texture = null
+    this.#release_positions()
     this.#target.dispose()
   }
 }

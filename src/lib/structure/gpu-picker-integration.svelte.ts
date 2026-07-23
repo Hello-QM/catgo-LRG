@@ -16,6 +16,7 @@ import {
   type ReplicaPickAction,
 } from './gpu/webgl2/replica-id-picker'
 import type { RenderPacket } from './scene/render-packet'
+import type { SharedPositionTexture } from './gpu/webgl2/shared-position-texture'
 
 /** Visibility info for a single site in the cutting plane. */
 export type CuttingVisInfo = { inside: boolean; opacity: number; saturation: number }
@@ -117,12 +118,33 @@ export function create_gpu_picker() {
  * are only allocated once a packet actually needs a pick; `sync` internally
  * memoizes on packet identity/versions, so calling it per hover is cheap.
  */
-export function create_replica_picker() {
+export function create_replica_picker(positions: SharedPositionTexture) {
   let scene: ReplicaPickScene | null = null
+  let created = 0
+  let syncs = 0
   return {
-    ensure(): ReplicaPickScene {
-      if (scene === null) scene = new ReplicaPickScene()
+    ensure(renderer: PickPixelRenderer): ReplicaPickScene {
+      if (scene === null) {
+        scene = new ReplicaPickScene({
+          renderer: renderer as unknown as WebGLRenderer,
+          positions,
+        })
+        created += 1
+      }
       return scene
+    },
+    sync(
+      renderer: PickPixelRenderer,
+      packet: RenderPacket,
+      opts: Parameters<ReplicaPickScene[`sync`]>[1] = {},
+    ): ReplicaPickScene {
+      const picker = this.ensure(renderer)
+      picker.sync(packet, opts)
+      syncs += 1
+      return picker
+    },
+    stats(): { created: number; syncs: number } {
+      return { created, syncs }
     },
     dispose(): void {
       scene?.dispose()
@@ -144,9 +166,8 @@ function packet_pick_action(
   ndc_x: number,
   ndc_y: number,
 ): ReplicaPickAction | null {
-  const scene = replica_picker.ensure()
   const incomplete_edge = deps.get_incomplete_edge()
-  scene.sync(packet, {
+  const scene = replica_picker.sync(renderer, packet, {
     bond_radius: deps.get_bond_thickness(),
     stub_scale: incomplete_edge?.mode ? incomplete_edge.scale : 0.5,
     rotation: deps.get_rotation(),
