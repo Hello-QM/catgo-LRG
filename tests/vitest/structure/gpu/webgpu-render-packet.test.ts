@@ -495,8 +495,12 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
     )
     expect(structure_source).not.toContain(`scene_get_displayed_frame_positions`)
     expect(structure_source).toContain(`structure={structure}`)
-    expect(structure_source).toContain(`frame_positions={trajectory_frame_positions}`)
-    expect(structure_source).toContain(`frame_lattice={trajectory_frame_lattice}`)
+    expect(structure_source).toContain(
+      `? presented_frame_source?.positions ?? null`,
+    )
+    expect(structure_source).toContain(
+      `? presented_frame_source?.lattice ?? null`,
+    )
     expect(overlay_source).not.toContain(`get_displayed_frame_positions`)
     expect(scene_source).not.toContain(`get_displayed_frame_positions`)
 
@@ -544,7 +548,10 @@ describe(`webgpu renderer consumes render packets (mock device)`, () => {
       `render_packet = null as RenderPacket | null`,
     )
     expect(
-      scene_source.match(/render_packet=\{manager_render_packet\}/g),
+      scene_source.match(/packet=\{manager_render_packet\}/g),
+    ).toHaveLength(1)
+    expect(
+      scene_source.match(/render_packet=\{combined_packet_renderer_owned/g),
     ).toHaveLength(2)
 
     expect(structure_source).toContain(`dims: gpu_supercell_factors`)

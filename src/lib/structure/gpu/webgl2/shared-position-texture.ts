@@ -100,6 +100,14 @@ export class SharedPositionTexture {
     return { ...this.#stats }
   }
 
+  /** Re-upload the retained complete frame after WebGL context restoration. */
+  restore(): boolean {
+    if (this.#disposed || this.#uploaded === null) return false
+    this.texture.needsUpdate = true
+    this.#stats.uploads += 1
+    return true
+  }
+
   dispose(): void {
     if (this.#disposed) return
     this.#disposed = true

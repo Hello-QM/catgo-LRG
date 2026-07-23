@@ -2,14 +2,15 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 vi.mock('$lib/structure/workers/bond-worker-api', () => ({
   compute_trajectory_frame_typed: vi.fn(),
-  compute_bonds_async: vi.fn(),
+  compute_bonds_exact_async: vi.fn(),
   pack_trajectory_positions_worker: vi.fn(),
+  LARGE_SYSTEM_MIN_ATOMS: 4096,
 }))
 
 import type { AnyStructure, BondPair, Site } from '$lib'
 import type { RenderPacket } from '$lib/structure/scene/render-packet'
 import {
-  compute_bonds_async,
+  compute_bonds_exact_async,
   compute_trajectory_frame_typed,
   pack_trajectory_positions_worker,
 } from '$lib/structure/workers/bond-worker-api'
@@ -19,7 +20,7 @@ import {
 } from '$lib/structure/trajectory-frame-preparer'
 
 const typed_mock = vi.mocked(compute_trajectory_frame_typed)
-const object_mock = vi.mocked(compute_bonds_async)
+const object_mock = vi.mocked(compute_bonds_exact_async)
 const pack_mock = vi.mocked(pack_trajectory_positions_worker)
 
 function site(element: string, xyz: [number, number, number]): Site {
@@ -213,5 +214,89 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(typed_mock).not.toHaveBeenCalled()
     expect(object_mock).toHaveBeenCalledTimes(2)
     expect(pack_mock).toHaveBeenCalledTimes(2)
+  })
+
+  test(`small typed-worker failure uses the exact object backend and local packing`, async () => {
+    typed_mock.mockRejectedValue(new Error(`typed worker unavailable`))
+    object_mock.mockResolvedValue([bond(0, 1, [0, 0, 0])])
+    pack_mock.mockRejectedValue(new Error(`packing worker unavailable`))
+    const request = input()
+
+    const prepared = await prepare_exact_trajectory_frame(request)
+
+    expect(typed_mock).toHaveBeenCalledOnce()
+    expect(object_mock).toHaveBeenCalledOnce()
+    expect(pack_mock).toHaveBeenCalledOnce()
+    expect([...prepared.graph.pairs]).toEqual([0, 1])
+    expect([...prepared.gpu_positions_rgba]).toEqual([
+      request.source.positions[0], 0, 0, 1,
+      request.source.positions[3], 0, 0, 1,
+    ])
+  })
+
+  test(`large typed-worker failure rejects without an object or main-thread fallback`, async () => {
+    const request = input()
+    const atom_count = 4096
+    request.packet = {
+      ...request.packet,
+      topology: {
+        ...request.packet.topology,
+        atom_count,
+        site_ids: new Uint32Array(atom_count),
+        atomic_numbers: new Uint8Array(atom_count).fill(6),
+        radii: new Float32Array(atom_count),
+        colors: new Float32Array(atom_count * 3),
+      },
+    }
+    request.structure = {
+      ...request.structure,
+      sites: Array.from(
+        { length: atom_count },
+        (_, idx) => site(`C`, [idx, 0, 0]),
+      ),
+    } as AnyStructure
+    request.source = {
+      ...request.source,
+      positions: new Float32Array(atom_count * 3),
+    }
+    const failure = new Error(`typed worker unavailable`)
+    typed_mock.mockRejectedValue(failure)
+
+    await expect(prepare_exact_trajectory_frame(request)).rejects.toBe(failure)
+    expect(object_mock).not.toHaveBeenCalled()
+    expect(pack_mock).not.toHaveBeenCalled()
+  })
+
+  test(`atom-only frames bypass all bond workers and present packed positions`, async () => {
+    const request = input({
+      features: {
+        strategy: `atom_radii`,
+        atom_count: 2,
+        show_bonds: false,
+        topology_stable: true,
+        atomic_numbers_complete: true,
+        distance_rule_count: 0,
+        site_radius_override_count: 0,
+        manual_bond_count: 0,
+        deleted_bond_count: 0,
+        hidden_bond_features: false,
+        hydrogen_bonds: false,
+        bond_orders: false,
+        clipping: false,
+        polyhedra: false,
+        drag_overrides: false,
+      },
+    })
+
+    const prepared = await prepare_exact_trajectory_frame(request)
+
+    expect(typed_mock).not.toHaveBeenCalled()
+    expect(object_mock).not.toHaveBeenCalled()
+    expect(pack_mock).not.toHaveBeenCalled()
+    expect(prepared.graph.pairs).toHaveLength(0)
+    expect([...prepared.gpu_positions_rgba]).toEqual([
+      request.source.positions[0], 0, 0, 1,
+      request.source.positions[3], 0, 0, 1,
+    ])
   })
 })

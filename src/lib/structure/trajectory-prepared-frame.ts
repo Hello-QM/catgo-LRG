@@ -292,15 +292,24 @@ export function create_prepared_frame_pipeline(options: {
     const previous = previous_request_key
     const same_stream = previous !== null &&
       previous.owner === key.owner &&
-      previous.positions_version === key.positions_version &&
       previous.topology_version === key.topology_version &&
       previous.rules_version === key.rules_version
     const sequential = previous !== null &&
       (key.frame_idx === previous.frame_idx ||
         key.frame_idx === previous.frame_idx + 1)
     const owner_changed = previous !== null && previous.owner !== key.owner
+    const current_frame_edited = (
+      previous !== null &&
+      previous.owner === key.owner &&
+      previous.frame_idx === key.frame_idx &&
+      previous.positions_version !== key.positions_version
+    ) || cache.some((record) =>
+      record.value.key.owner === key.owner &&
+      record.value.key.frame_idx === key.frame_idx &&
+      record.value.key.positions_version !== key.positions_version
+    )
 
-    if (!same_stream || !sequential) {
+    if (!same_stream || !sequential || current_frame_edited) {
       generation++
       const stale_queue = queue.filter((record) =>
         record.generation !== generation
@@ -314,6 +323,21 @@ export function create_prepared_frame_pipeline(options: {
       displayed_key = null
     } else {
       displayed_key = current_key
+      if (previous !== null && !same_stream) {
+        cache = cache.filter((record) =>
+          record.value.key.owner !== key.owner ||
+          (
+            record.value.key.topology_version === key.topology_version &&
+            record.value.key.rules_version === key.rules_version
+          )
+        )
+      } else if (current_frame_edited) {
+        cache = cache.filter((record) =>
+          record.value.key.owner !== key.owner ||
+          record.value.key.frame_idx !== key.frame_idx ||
+          record.value.key.positions_version === key.positions_version
+        )
+      }
     }
     current_key = key
     previous_request_key = key

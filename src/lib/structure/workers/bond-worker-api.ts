@@ -599,12 +599,11 @@ export function effective_strategy(strategy: BondingStrategy, n_sites: number): 
   return strategy
 }
 
-export function compute_bonds_async(
+function compute_bonds_async_with_strategy(
   structure: AnyStructure,
   strategy: BondingStrategy,
   options: Record<string, number>,
 ): Promise<BondPair[]> {
-  strategy = effective_strategy(strategy, structure?.sites?.length ?? 0)
   // 1. Try the rust worker (non-blocking)
   return try_worker_bonds(structure, strategy, options).then(worker_result => {
     if (worker_result) return worker_result
@@ -664,6 +663,28 @@ export function compute_bonds_async(
       })
     })
   })
+}
+
+export function compute_bonds_async(
+  structure: AnyStructure,
+  strategy: BondingStrategy,
+  options: Record<string, number>,
+): Promise<BondPair[]> {
+  return compute_bonds_async_with_strategy(
+    structure,
+    effective_strategy(strategy, structure?.sites?.length ?? 0),
+    options,
+  )
+}
+
+/** Exact prepared-frame entry point. Unlike the interactive legacy path, this
+ * never substitutes atom_radii for the selected strategy on a large system. */
+export function compute_bonds_exact_async(
+  structure: AnyStructure,
+  strategy: BondingStrategy,
+  options: Record<string, number>,
+): Promise<BondPair[]> {
+  return compute_bonds_async_with_strategy(structure, strategy, options)
 }
 
 /** Orchestrated typed-array bond computation (atom_radii strategy) — the new

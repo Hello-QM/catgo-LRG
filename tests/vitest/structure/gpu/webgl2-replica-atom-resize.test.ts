@@ -59,7 +59,7 @@ function attr(mesh: THREE.Mesh, name: string): THREE.InstancedBufferAttribute {
   return geo(mesh).getAttribute(name) as THREE.InstancedBufferAttribute
 }
 
-const ATTR_NAMES = [`instancePosition`, `instanceRadius`, `instanceAtomColor`] as const
+const ATTR_NAMES = [`instanceSite`, `instanceRadius`, `instanceAtomColor`] as const
 
 /** Minimal fake WebGLRenderer that satisfies everything the (old) rebind hack
  *  touched, with spies on every renderer-global reset it performed. */
@@ -125,7 +125,7 @@ describe(`AtomReplicaRenderer — divisor changes rebind via attribute identity`
       expect(live.array).toBe(arrays[idx])
       expect(live.meshPerAttribute).toBe(8)
     }
-    expect(attr(renderer.mesh, `instancePosition`).count).toBe(3)
+    expect(attr(renderer.mesh, `instanceSite`).count).toBe(3)
     expect(geometry.instanceCount).toBe(3 * 8)
     // The stale draw clamp from the previous divisor must be dropped so the
     // next binding-state setup recomputes it (24, not 12).
@@ -172,11 +172,11 @@ describe(`AtomReplicaRenderer — atom-count changes rebuild buffers`, () => {
       expect(live).not.toBe(before[idx])
       expect(live.array).not.toBe(before[idx].array)
     }
-    expect(attr(renderer.mesh, `instancePosition`).count).toBe(448)
-    expect(attr(renderer.mesh, `instancePosition`).array).toHaveLength(448 * 3)
+    expect(attr(renderer.mesh, `instanceSite`).count).toBe(448)
+    expect(attr(renderer.mesh, `instanceSite`).array).toHaveLength(448)
     expect(attr(renderer.mesh, `instanceRadius`).count).toBe(448)
     expect(attr(renderer.mesh, `instanceAtomColor`).count).toBe(448)
-    expect(attr(renderer.mesh, `instancePosition`).meshPerAttribute).toBe(4)
+    expect(attr(renderer.mesh, `instanceSite`).meshPerAttribute).toBe(4)
     renderer.dispose()
   })
 
@@ -209,8 +209,8 @@ describe(`AtomReplicaRenderer — atom-count changes rebuild buffers`, () => {
     // the mesh keeps stale 112-atom state (atoms vanish / renderer wedged).
     expect(() => renderer.update(grown)).not.toThrow()
     expect(geo(renderer.mesh).instanceCount).toBe(448 * 4)
-    expect(attr(renderer.mesh, `instancePosition`).count).toBe(448)
-    expect(attr(renderer.mesh, `instancePosition`).meshPerAttribute).toBe(4)
+    expect(attr(renderer.mesh, `instanceSite`).count).toBe(448)
+    expect(attr(renderer.mesh, `instanceSite`).meshPerAttribute).toBe(4)
     expect(attr(renderer.mesh, `instanceRadius`).count).toBe(448)
     renderer.dispose()
   })

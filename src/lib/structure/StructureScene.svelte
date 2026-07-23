@@ -162,13 +162,6 @@
   // direct callers remain in this file.
   import SelectionHighlights from './SelectionHighlights.svelte'
 
-  if (
-    import.meta.env.DEV && typeof location !== `undefined` &&
-    new URLSearchParams(location.search).get(`trajectory_pipeline`) === `legacy`
-  ) {
-    void import(`./trajectory-bond-legacy-diagnostic`)
-  }
-
   // R6: selection-highlight pulse. The original (pre-c4155f44) opacity
   // pulse animated the wireframe spheres around selected/active atoms.
   // c4155f44 dropped the opacity binding from the highlight materials but
@@ -1136,6 +1129,7 @@
     max_bytes: 96 * 1024 * 1024,
     max_in_flight: 1,
   })
+  onDestroy(() => prepared_pipeline.clear())
   let prepared_render_packet = $state.raw<RenderPacket | null>(null)
   let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
   let prepared_frame_forces = $state.raw<Float32Array | null>(null)
@@ -1270,6 +1264,27 @@
     if (!canvas) return
     const is_webgl2 = threlte.renderer.capabilities?.isWebGL2 !== false
     mark_render_surface(canvas, is_webgl2 ? `webgl2` : `legacy`, !webgl_suspended)
+  })
+
+  // Preserve the last complete CPU snapshot across a WebGL context cycle.
+  // Three.js recreates the draw consumers; the shared texture is marked for
+  // exactly one upload and the on-demand picker is rebuilt on its next use.
+  $effect(() => {
+    const renderer = threlte.renderer
+    const canvas = renderer?.domElement
+    if (!renderer || !canvas) return
+    const handle_context_lost = (event: Event) => event.preventDefault()
+    const handle_context_restored = () => {
+      replica_picker.dispose()
+      shared_position_texture.restore()
+      threlte.invalidate()
+    }
+    canvas.addEventListener(`webglcontextlost`, handle_context_lost)
+    canvas.addEventListener(`webglcontextrestored`, handle_context_restored)
+    return () => {
+      canvas.removeEventListener(`webglcontextlost`, handle_context_lost)
+      canvas.removeEventListener(`webglcontextrestored`, handle_context_restored)
+    }
   })
 
   // Explicitly release WebGL context on unmount.
@@ -2672,12 +2687,49 @@
       ]
       : null
     const rules = bond_distance_rules ?? []
-    const rules_version = exact_rules_version(
+    const bonds_visible = should_show_bonds(
+      show_bonds,
+      crystal?.lattice ?? null,
+    ) && !bonds_deferred
+    const prepared_features = {
+      strategy: bonding_strategy,
+      atom_count: raw_packet?.topology.atom_count ?? raw_structure?.sites?.length ?? 0,
+      show_bonds: bonds_visible,
+      topology_stable: true,
+      atomic_numbers_complete: true,
+      distance_rule_count: rules.length,
+      site_radius_override_count: site_radius_overrides?.size ?? 0,
+      manual_bond_count: manual_bonds.length,
+      deleted_bond_count: deleted_bond_keys?.size ?? 0,
+      hidden_bond_features:
+        (hidden_elements?.size ?? 0) > 0 ||
+        (hidden_sites?.size ?? 0) > 0 ||
+        (hidden_prop_vals?.size ?? 0) > 0,
+      hydrogen_bonds: show_hydrogen_bonds,
+      bond_orders: bond_order_perception,
+      clipping: clip_active,
+      polyhedra: show_polyhedra,
+      drag_overrides:
+        external_dragging || (realtime_position_overrides?.size ?? 0) > 0,
+    }
+    const feature_version = [
+      Number(prepared_features.show_bonds),
+      prepared_features.site_radius_override_count,
+      prepared_features.manual_bond_count,
+      prepared_features.deleted_bond_count,
+      Number(prepared_features.hidden_bond_features),
+      Number(prepared_features.hydrogen_bonds),
+      Number(prepared_features.bond_orders),
+      Number(prepared_features.clipping),
+      Number(prepared_features.polyhedra),
+      Number(prepared_features.drag_overrides),
+    ].join(`,`)
+    const rules_version = `${exact_rules_version(
       bonding_strategy,
       options,
       pbc,
       rules,
-    )
+    )}|features:${feature_version}`
 
     if (
       !raw_packet || !raw_structure?.sites || !raw_positions ||
@@ -2736,6 +2788,10 @@
         distance_rules: rules,
         rules_version,
         graph_version: ++prepared_graph_version,
+        features: {
+          ...prepared_features,
+          topology_stable: source.topology_stable,
+        },
       })
     }
 

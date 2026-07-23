@@ -19,8 +19,9 @@ import {
   type PreparedTrajectoryFrame,
 } from './trajectory-prepared-frame'
 import {
-  compute_bonds_async,
+  compute_bonds_exact_async,
   compute_trajectory_frame_typed,
+  LARGE_SYSTEM_MIN_ATOMS,
   pack_trajectory_positions_worker,
 } from './workers/bond-worker-api'
 
@@ -33,6 +34,54 @@ export type TrajectoryFrameSource = {
   topology_stable: boolean
 }
 
+export type PreparedPathFeatureInput = {
+  strategy: BondingStrategy
+  atom_count: number
+  show_bonds: boolean
+  topology_stable: boolean
+  atomic_numbers_complete: boolean
+  distance_rule_count: number
+  site_radius_override_count: number
+  manual_bond_count: number
+  deleted_bond_count: number
+  hidden_bond_features: boolean
+  hydrogen_bonds: boolean
+  bond_orders: boolean
+  clipping: boolean
+  polyhedra: boolean
+  drag_overrides: boolean
+}
+
+export type PreparedPathEligibility =
+  | { kind: 'typed-fast' }
+  | { kind: 'exact-object'; reasons: string[] }
+  | { kind: 'atom-only' }
+
+export function classify_prepared_path(
+  input: PreparedPathFeatureInput,
+): PreparedPathEligibility {
+  if (!input.show_bonds) return { kind: `atom-only` }
+
+  const reasons: string[] = []
+  if (input.strategy !== `atom_radii`) reasons.push(`bonding-strategy`)
+  if (!input.topology_stable) reasons.push(`topology-changed`)
+  if (!input.atomic_numbers_complete) reasons.push(`atomic-numbers`)
+  if (input.distance_rule_count > 0) reasons.push(`distance-rules`)
+  if (input.site_radius_override_count > 0) reasons.push(`site-radius-overrides`)
+  if (input.manual_bond_count > 0) reasons.push(`manual-bonds`)
+  if (input.deleted_bond_count > 0) reasons.push(`deleted-bonds`)
+  if (input.hidden_bond_features) reasons.push(`hidden-bonds`)
+  if (input.hydrogen_bonds) reasons.push(`hydrogen-bonds`)
+  if (input.bond_orders) reasons.push(`bond-orders`)
+  if (input.clipping) reasons.push(`clipping`)
+  if (input.polyhedra) reasons.push(`polyhedra`)
+  if (input.drag_overrides) reasons.push(`drag-overrides`)
+
+  return reasons.length === 0
+    ? { kind: `typed-fast` }
+    : { kind: `exact-object`, reasons }
+}
+
 export type ExactFramePrepareInput = {
   packet: RenderPacket
   source: TrajectoryFrameSource
@@ -43,6 +92,7 @@ export type ExactFramePrepareInput = {
   distance_rules: readonly BondDistanceRule[]
   rules_version: string
   graph_version: number
+  features?: PreparedPathFeatureInput
 }
 
 function flatten_lattice(
@@ -169,6 +219,28 @@ function exact_object_bonds(
   )
 }
 
+function empty_bond_graph(version: number) {
+  return {
+    version,
+    pairs: new Uint32Array(0),
+    jimages: new Int8Array(0),
+    kinds: new Uint8Array(0),
+    strengths: new Float32Array(0),
+  }
+}
+
+function pack_positions_exact(positions: Float32Array): Float32Array {
+  const atom_count = Math.floor(positions.length / 3)
+  const rgba = new Float32Array(atom_count * 4)
+  for (let idx = 0; idx < atom_count; idx++) {
+    rgba[idx * 4] = positions[idx * 3]
+    rgba[idx * 4 + 1] = positions[idx * 3 + 1]
+    rgba[idx * 4 + 2] = positions[idx * 3 + 2]
+    rgba[idx * 4 + 3] = 1
+  }
+  return rgba
+}
+
 export async function prepare_exact_trajectory_frame(
   input: ExactFramePrepareInput,
 ): Promise<PreparedTrajectoryFrame> {
@@ -183,39 +255,81 @@ export async function prepare_exact_trajectory_frame(
 
   let graph
   let gpu_positions_rgba: Float32Array
-  const typed_fast_path = input.strategy === `atom_radii` &&
-    input.distance_rules.length === 0 &&
-    source.topology_stable &&
+  const features: PreparedPathFeatureInput = {
+    strategy: input.strategy,
+    atom_count: raw.topology.atom_count,
+    show_bonds: true,
+    topology_stable: source.topology_stable,
+    atomic_numbers_complete:
+      raw.topology.atomic_numbers.length === raw.topology.atom_count &&
+      raw.topology.atomic_numbers.every((atomic_number) => atomic_number > 0),
+    distance_rule_count: input.distance_rules.length,
+    site_radius_override_count: 0,
+    manual_bond_count: 0,
+    deleted_bond_count: 0,
+    hidden_bond_features: false,
+    hydrogen_bonds: false,
+    bond_orders: false,
+    clipping: false,
+    polyhedra: false,
+    drag_overrides: false,
+    ...input.features,
+  }
+  features.strategy = input.strategy
+  features.atom_count = raw.topology.atom_count
+  features.topology_stable = source.topology_stable
+  features.atomic_numbers_complete =
     raw.topology.atomic_numbers.length === raw.topology.atom_count &&
     raw.topology.atomic_numbers.every((atomic_number) => atomic_number > 0)
+  features.distance_rule_count = input.distance_rules.length
+  const eligibility = classify_prepared_path(features)
 
-  if (typed_fast_path) {
-    const result = await compute_trajectory_frame_typed({
-      session: {
-        id: numeric_session_id(input),
-        atomic_numbers: raw.topology.atomic_numbers,
-        pbc: input.pbc,
-        options: input.options,
-      },
-      positions: source.positions,
-      lattice_matrix: source.lattice,
-    })
-    graph = typed_table_to_base_bond_graph(result.table, input.graph_version)
-    gpu_positions_rgba = result.gpu_positions_rgba
-  } else {
+  const prepare_object_path = async () => {
     const overlay = build_exact_trajectory_overlay(
       input.structure,
       source.positions,
       source.lattice,
     )
-    const detected = await compute_bonds_async(
+    const detected = await compute_bonds_exact_async(
       overlay,
       input.strategy,
       input.options,
     )
     const bonds = exact_object_bonds(input, detected, overlay)
-    graph = bond_pairs_to_base_bond_graph(bonds, input.graph_version)
-    gpu_positions_rgba = await pack_trajectory_positions_worker(source.positions)
+    const exact_graph = bond_pairs_to_base_bond_graph(bonds, input.graph_version)
+    let packed: Float32Array
+    try {
+      packed = await pack_trajectory_positions_worker(source.positions)
+    } catch (error) {
+      if (raw.topology.atom_count >= LARGE_SYSTEM_MIN_ATOMS) throw error
+      packed = pack_positions_exact(source.positions)
+    }
+    return { graph: exact_graph, gpu_positions_rgba: packed }
+  }
+
+  if (eligibility.kind === `atom-only`) {
+    graph = empty_bond_graph(input.graph_version)
+    gpu_positions_rgba = pack_positions_exact(source.positions)
+  } else if (eligibility.kind === `typed-fast`) {
+    try {
+      const result = await compute_trajectory_frame_typed({
+        session: {
+          id: numeric_session_id(input),
+          atomic_numbers: raw.topology.atomic_numbers,
+          pbc: input.pbc,
+          options: input.options,
+        },
+        positions: source.positions,
+        lattice_matrix: source.lattice,
+      })
+      graph = typed_table_to_base_bond_graph(result.table, input.graph_version)
+      gpu_positions_rgba = result.gpu_positions_rgba
+    } catch (error) {
+      if (raw.topology.atom_count >= LARGE_SYSTEM_MIN_ATOMS) throw error
+      ;({ graph, gpu_positions_rgba } = await prepare_object_path())
+    }
+  } else {
+    ;({ graph, gpu_positions_rgba } = await prepare_object_path())
   }
 
   const packet: RenderPacket = {
