@@ -35,6 +35,13 @@ const fixed_table: TypedBondTable = {
 
 const fake_handle = (): BondWorkerHandle => ({
   compute_typed: vi.fn(() => Promise.resolve(fixed_table)),
+  compute_trajectory_frame_typed: vi.fn(() =>
+    Promise.resolve({
+      table: fixed_table,
+      gpu_positions_rgba: new Float32Array(),
+    })
+  ),
+  pack_trajectory_positions: vi.fn(() => Promise.resolve(new Float32Array())),
   terminate: vi.fn(),
 })
 

@@ -72,11 +72,31 @@ export interface TypedBondInput {
   options: Record<string, number>
 }
 
+export interface TrajectoryTypedBondInput {
+  session: {
+    id: number
+    atomic_numbers: Uint8Array
+    pbc: [boolean, boolean, boolean] | null
+    options: Record<string, number>
+  }
+  positions: Float32Array
+  lattice_matrix: number[][] | null
+}
+
+export interface TrajectoryFrameWorkerResult {
+  table: TypedBondTable
+  gpu_positions_rgba: Float32Array
+}
+
 /** A live, initialized bond worker. `compute_typed` is the hot path both
  *  artifacts share; `request_json` is the legacy JSON message channel the real
  *  worker also serves (optional so test fakes only implement the hot path). */
 export interface BondWorkerHandle {
   compute_typed(input: TypedBondInput): Promise<TypedBondTable>
+  compute_trajectory_frame_typed(
+    input: TrajectoryTypedBondInput,
+  ): Promise<TrajectoryFrameWorkerResult>
+  pack_trajectory_positions(positions: Float32Array): Promise<Float32Array>
   request_json?(
     data: Record<string, unknown>,
     timeout_ms?: number,
@@ -104,8 +124,16 @@ export interface ComputeBondsTypedResult {
   elapsed_ms: number
 }
 
+export interface ComputeTrajectoryFrameTypedResult
+  extends ComputeBondsTypedResult {
+  gpu_positions_rgba: Float32Array
+}
+
 export interface BondWorkerRuntime {
   compute_bonds_typed(input: TypedBondInput): Promise<ComputeBondsTypedResult>
+  compute_trajectory_frame_typed(
+    input: TrajectoryTypedBondInput,
+  ): Promise<ComputeTrajectoryFrameTypedResult>
   /** The initialized worker + which backend it is; init runs at most once at a
    *  time and its outcome is memoized. Throws BondBackendUnavailableError once
    *  disabled. Used by the JSON call path in bond-worker-api. */
@@ -200,6 +228,20 @@ export function create_bond_worker_runtime(
     return { backend: kind, table, elapsed_ms: now() - t0 }
   }
 
+  async function compute_trajectory_frame_typed(
+    input: TrajectoryTypedBondInput,
+  ): Promise<ComputeTrajectoryFrameTypedResult> {
+    const { handle, kind } = await acquire(input.session.atomic_numbers.length)
+    const t0 = now()
+    const result = await handle.compute_trajectory_frame_typed(input)
+    return {
+      backend: kind,
+      table: result.table,
+      gpu_positions_rgba: result.gpu_positions_rgba,
+      elapsed_ms: now() - t0,
+    }
+  }
+
   function reset(handle?: BondWorkerHandle): void {
     if (handle !== undefined && active?.handle !== handle) return
     try {
@@ -215,5 +257,11 @@ export function create_bond_worker_runtime(
     return active?.kind ?? null
   }
 
-  return { compute_bonds_typed, acquire, active_backend, reset }
+  return {
+    compute_bonds_typed,
+    compute_trajectory_frame_typed,
+    acquire,
+    active_backend,
+    reset,
+  }
 }

@@ -33,15 +33,24 @@ import {
   type BondWorkerHandle,
   type BondWorkerRuntime,
   type ComputeBondsTypedResult,
+  type ComputeTrajectoryFrameTypedResult,
   create_bond_worker_runtime,
   LARGE_SYSTEM_MIN_ATOMS,
+  type TrajectoryFrameWorkerResult,
+  type TrajectoryTypedBondInput,
   type TypedBondInput,
   type TypedBondTable,
 } from './bond-worker-runtime'
 import { detect_bond_backend_capabilities } from './wasm-thread-capability'
 
 export { BondBackendUnavailableError, LARGE_SYSTEM_MIN_ATOMS }
-export type { ComputeBondsTypedResult, TypedBondInput, TypedBondTable }
+export type {
+  ComputeBondsTypedResult,
+  ComputeTrajectoryFrameTypedResult,
+  TrajectoryTypedBondInput,
+  TypedBondInput,
+  TypedBondTable,
+}
 
 /** Threshold below which bonds are computed synchronously via JS.
  *  Spatial grid optimization keeps JS fast (~30-80ms for 1000 atoms).
@@ -72,6 +81,7 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >()
   private next_id = 0
+  private trajectory_session_id: number | null = null
 
   constructor(
     private worker: Worker,
@@ -189,6 +199,85 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
       lengths: resp.lengths,
       strengths: resp.strengths,
     }
+  }
+
+  private flatten_lattice(lattice_matrix: number[][] | null): Float64Array {
+    return lattice_matrix?.length === 3
+      ? new Float64Array([
+        ...lattice_matrix[0],
+        ...lattice_matrix[1],
+        ...lattice_matrix[2],
+      ])
+      : new Float64Array(0)
+  }
+
+  private async ensure_trajectory_session(
+    session: TrajectoryTypedBondInput[`session`],
+  ): Promise<void> {
+    if (this.trajectory_session_id === session.id) return
+    const atomic_numbers = session.atomic_numbers.slice()
+    const pbc = session.pbc
+      ? new Uint8Array([
+        session.pbc[0] ? 1 : 0,
+        session.pbc[1] ? 1 : 0,
+        session.pbc[2] ? 1 : 0,
+      ])
+      : new Uint8Array(0)
+    await this.request<{ type: 'trajectory_session_ready' }>(
+      {
+        type: `trajectory_session_init`,
+        session_id: session.id,
+        atomic_numbers,
+        pbc,
+        options_json: JSON.stringify(session.options),
+      },
+      20_000,
+      [atomic_numbers.buffer, pbc.buffer],
+    )
+    this.trajectory_session_id = session.id
+  }
+
+  async compute_trajectory_frame_typed(
+    input: TrajectoryTypedBondInput,
+  ): Promise<TrajectoryFrameWorkerResult> {
+    await this.ensure_trajectory_session(input.session)
+    const positions = input.positions.slice()
+    const lattice = this.flatten_lattice(input.lattice_matrix)
+    const atom_count = input.session.atomic_numbers.length
+    const timeout_ms = Math.max(20_000, atom_count * 4)
+    const response = await this.request<
+      TypedBondTable & { gpu_positions_rgba: Float32Array; dt: string }
+    >(
+      {
+        type: `trajectory_frame_typed`,
+        session_id: input.session.id,
+        positions,
+        lattice,
+      },
+      timeout_ms,
+      [positions.buffer, lattice.buffer],
+    )
+    return {
+      table: {
+        pairs: response.pairs,
+        images: response.images,
+        lengths: response.lengths,
+        strengths: response.strengths,
+      },
+      gpu_positions_rgba: response.gpu_positions_rgba,
+    }
+  }
+
+  async pack_trajectory_positions(
+    input: Float32Array,
+  ): Promise<Float32Array> {
+    const positions = input.slice()
+    const response = await this.request<{ gpu_positions_rgba: Float32Array }>(
+      { type: `trajectory_positions_rgba`, positions },
+      Math.max(20_000, positions.length),
+      [positions.buffer],
+    )
+    return response.gpu_positions_rgba
   }
 
   request_json(
@@ -586,6 +675,19 @@ export function compute_bonds_typed(
   input: TypedBondInput,
 ): Promise<ComputeBondsTypedResult> {
   return get_runtime().compute_bonds_typed(input)
+}
+
+export function compute_trajectory_frame_typed(
+  input: TrajectoryTypedBondInput,
+): Promise<ComputeTrajectoryFrameTypedResult> {
+  return get_runtime().compute_trajectory_frame_typed(input)
+}
+
+export async function pack_trajectory_positions_worker(
+  positions: Float32Array,
+): Promise<Float32Array> {
+  const { handle } = await get_runtime().acquire(positions.length / 3)
+  return handle.pack_trajectory_positions(positions)
 }
 
 /** Typed-array bond computation via the rust worker (atom_radii strategy

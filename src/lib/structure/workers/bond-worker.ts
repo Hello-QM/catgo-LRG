@@ -18,6 +18,8 @@
 // - initSync doesn't fetch the WASM binary (no code-splitting needed)
 // - All wasm-bindgen glue code is statically imported and bundled inline
 
+import { position_texture_shape } from '../gpu/position-texture-layout'
+
 /** The wasm-bindgen glue surface both ferrox artifacts share. `initThreadPool`
  *  only exists on the threaded artifact (wasm-bindgen-rayon). */
 export interface BondWorkerGlue {
@@ -53,8 +55,32 @@ export interface BondWorkerScope {
   postMessage: (msg: unknown, transfer?: Transferable[]) => void
 }
 
+function pack_positions_rgba(positions: Float32Array): Float32Array {
+  if (positions.length % 3 !== 0) {
+    throw new Error(
+      `Trajectory positions length ${positions.length} must be divisible by 3`,
+    )
+  }
+  const atom_count = positions.length / 3
+  const shape = position_texture_shape(atom_count)
+  const gpu_positions_rgba = new Float32Array(shape.float_count)
+  for (let src = 0, dst = 0; src < positions.length; src += 3, dst += 4) {
+    gpu_positions_rgba[dst] = positions[src]
+    gpu_positions_rgba[dst + 1] = positions[src + 1]
+    gpu_positions_rgba[dst + 2] = positions[src + 2]
+    gpu_positions_rgba[dst + 3] = 1
+  }
+  return gpu_positions_rgba
+}
+
 export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue): void {
   let initialized = false
+  let trajectory_session: {
+    id: number
+    atomic_numbers: Uint8Array
+    pbc: Uint8Array
+    options_json: string
+  } | null = null
 
   scope.onmessage = async (e: MessageEvent) => {
     const { id, type } = e.data
@@ -89,6 +115,64 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
     const { structure_json, strategy, options_json, covalent_bonds_json } = e.data
 
     try {
+      if (type === `trajectory_session_init`) {
+        trajectory_session = {
+          id: e.data.session_id,
+          atomic_numbers: e.data.atomic_numbers,
+          pbc: e.data.pbc,
+          options_json: e.data.options_json,
+        }
+        scope.postMessage({ id, type: `trajectory_session_ready` })
+        return
+      }
+      if (type === `trajectory_frame_typed`) {
+        if (!trajectory_session || trajectory_session.id !== e.data.session_id) {
+          throw new Error(`Unknown trajectory bond session ${e.data.session_id}`)
+        }
+        const t0 = performance.now()
+        const positions = e.data.positions as Float32Array
+        const table = glue.detect_bonds_radii_typed(
+          positions,
+          trajectory_session.atomic_numbers,
+          e.data.lattice,
+          trajectory_session.pbc,
+          trajectory_session.options_json,
+        )
+        const gpu_positions_rgba = pack_positions_rgba(positions)
+        const pairs = table.pairs
+        const images = table.images
+        const lengths = table.lengths
+        const strengths = table.strengths
+        table.free()
+        const dt = (performance.now() - t0).toFixed(1)
+        scope.postMessage(
+          {
+            id,
+            pairs,
+            images,
+            lengths,
+            strengths,
+            gpu_positions_rgba,
+            dt,
+          },
+          [
+            pairs.buffer,
+            images.buffer,
+            lengths.buffer,
+            strengths.buffer,
+            gpu_positions_rgba.buffer,
+          ],
+        )
+        return
+      }
+      if (type === `trajectory_positions_rgba`) {
+        const gpu_positions_rgba = pack_positions_rgba(e.data.positions)
+        scope.postMessage(
+          { id, gpu_positions_rgba },
+          [gpu_positions_rgba.buffer],
+        )
+        return
+      }
       if (type === `bonds_typed`) {
         // Typed-array fast path (atom_radii only): Float32Array positions in,
         // flat typed bond table out. Both directions use transfer lists — no
