@@ -4192,11 +4192,17 @@
     // Stub-mode toggles change which half-bond instances are visible.
     const _m = incomplete_periodic_edge_mode
     const _s = incomplete_edge_length_scale
-    // Phase 7e — image-atom decorator scene also rebuilds with the picker.
-    const _ial = image_atom_layout
-    const _pdl = partner_drawn_lookup
-    const _stf = slot_to_filtered_idx
-    void _l; void _m; void _s; void _ial; void _pdl; void _stf
+    // The packet ID picker synchronizes directly from manager_render_packet
+    // at pick time. Do not force the O(B) legacy image-decorator layout while
+    // packet picking owns the scene; resume those dependencies when legacy
+    // picking becomes active again.
+    if (!packet_picking_active) {
+      const _ial = image_atom_layout
+      const _pdl = partner_drawn_lookup
+      const _stf = slot_to_filtered_idx
+      void _ial; void _pdl; void _stf
+    }
+    void _l; void _m; void _s
     picker.picker_dirty = true
   })
 
@@ -6970,8 +6976,12 @@
           {incomplete_periodic_edge_mode}
           {incomplete_edge_length_scale}
           {hide_incomplete_bonds}
-          {image_atom_layout}
-          {partner_drawn_lookup}
+          image_atom_layout={combined_packet_renderer_owned
+            ? empty_image_atom_layout()
+            : image_atom_layout}
+          partner_drawn_lookup={combined_packet_renderer_owned
+            ? null
+            : partner_drawn_lookup}
           multibond_enabled={bond_order_perception}
           {depth_cue_uniforms}
           {light_dir}

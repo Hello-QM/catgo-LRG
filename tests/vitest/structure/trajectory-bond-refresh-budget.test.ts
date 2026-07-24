@@ -216,4 +216,33 @@ describe(`exact prepared trajectory ownership`, () => {
       `trajectory_render_diagnostics.record_prepared_to_renderer_sync(`,
     )
   })
+
+  test(`packet ownership does not force the legacy image-bond layout`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const picker_start = scene.indexOf(
+      `// Mark GPU picker as dirty when atom data, bonds, or cutting visibility change.`,
+    )
+    const picker_end = scene.indexOf(
+      `// Track which bonds are manual`,
+      picker_start,
+    )
+    const picker_effect = scene.slice(picker_start, picker_end)
+    expect(picker_effect).toContain(`if (!packet_picking_active) {`)
+    expect(picker_effect.indexOf(`if (!packet_picking_active) {`))
+      .toBeLessThan(picker_effect.indexOf(`const _ial = image_atom_layout`))
+
+    expect(scene).toContain(
+      `image_atom_layout={combined_packet_renderer_owned\n` +
+      `            ? empty_image_atom_layout()\n` +
+      `            : image_atom_layout}`,
+    )
+    expect(scene).toContain(
+      `partner_drawn_lookup={combined_packet_renderer_owned\n` +
+      `            ? null\n` +
+      `            : partner_drawn_lookup}`,
+    )
+  })
 })
