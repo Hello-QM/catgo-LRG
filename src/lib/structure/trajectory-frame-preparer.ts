@@ -43,6 +43,35 @@ export type TrajectoryFrameSource = {
   stable_site_ids?: Uint32Array | null
 }
 
+export type LoadedTrajectoryFrameSource = {
+  owner: object
+  frame_idx: number
+  source: TrajectoryFrameSource
+}
+
+export function select_current_trajectory_frame_source(input: {
+  owner: object
+  frame_idx: number
+  positions_version: number
+  live_source: TrajectoryFrameSource | null
+  loaded_source: LoadedTrajectoryFrameSource | null
+}): TrajectoryFrameSource | null {
+  const live = input.live_source
+  if (
+    live?.frame_idx === input.frame_idx &&
+    live.positions_version === input.positions_version
+  ) return live
+
+  const loaded = input.loaded_source
+  if (
+    loaded?.owner === input.owner &&
+    loaded.frame_idx === input.frame_idx &&
+    loaded.source.frame_idx === input.frame_idx &&
+    loaded.source.positions_version === input.positions_version
+  ) return loaded.source
+  return null
+}
+
 export async function request_trajectory_frame_source_safely(
   requester: ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
     | null,

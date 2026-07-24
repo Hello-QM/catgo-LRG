@@ -86,6 +86,7 @@
     create_current_trajectory_source_request_guard,
     prepare_exact_trajectory_frame,
     request_trajectory_frame_source_safely,
+    select_current_trajectory_frame_source,
     trajectory_prepared_frame_key,
     type TrajectoryFrameSource,
   } from './trajectory-frame-preparer'
@@ -2858,13 +2859,16 @@
     // with frame_idx would publish a one-frame-shifted exact graph. Only
     // non-indexed trajectories may use the synchronous displayed fallback.
     const loaded_source = asynchronously_loaded_prepared_source
-    const getter = (source_idx: number): TrajectoryFrameSource | null => {
-      if (
-        loaded_source?.owner === raw_packet.frame.owner &&
-        loaded_source.frame_idx === source_idx
-      ) return loaded_source.source
-      return source_getter?.(source_idx) ?? null
-    }
+    const getter = (
+      source_idx: number,
+    ): TrajectoryFrameSource | null =>
+      select_current_trajectory_frame_source({
+        owner: raw_packet.frame.owner,
+        frame_idx: source_idx,
+        positions_version: raw_packet.frame.positions_version,
+        live_source: source_getter?.(source_idx) ?? null,
+        loaded_source,
+      })
     const current_source = getter?.(frame_idx) ??
       (requester ? null : fallback_source)
     if (!current_source) {

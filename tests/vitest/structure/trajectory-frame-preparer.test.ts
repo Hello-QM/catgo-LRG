@@ -18,6 +18,7 @@ import {
 } from '$lib/structure/workers/bond-worker-api'
 import {
   prepare_exact_trajectory_frame,
+  select_current_trajectory_frame_source,
   type ExactFramePrepareInput,
   type TrajectoryFrameSource,
 } from '$lib/structure/trajectory-frame-preparer'
@@ -193,6 +194,41 @@ beforeEach(() => {
 })
 
 describe(`prepare_exact_trajectory_frame`, () => {
+  test(`rejects a stale asynchronously loaded current-frame source`, () => {
+    const owner = {}
+    const stale = input().source
+    stale.frame_idx = 7
+    stale.positions_version = 11
+    const live = {
+      ...input().source,
+      frame_idx: 7,
+      positions_version: 12,
+      positions: Float32Array.from([0.4, 0, 0, 3.6, 0, 0]),
+    }
+
+    expect(select_current_trajectory_frame_source({
+      owner,
+      frame_idx: 7,
+      positions_version: 12,
+      live_source: live,
+      loaded_source: { owner, frame_idx: 7, source: stale },
+    })).toBe(live)
+    expect(select_current_trajectory_frame_source({
+      owner,
+      frame_idx: 7,
+      positions_version: 12,
+      live_source: null,
+      loaded_source: { owner, frame_idx: 7, source: stale },
+    })).toBeNull()
+    expect(select_current_trajectory_frame_source({
+      owner,
+      frame_idx: 7,
+      positions_version: 11,
+      live_source: null,
+      loaded_source: { owner, frame_idx: 7, source: stale },
+    })).toBe(stale)
+  })
+
   test(`atom-radii fast path publishes one exact typed snapshot`, async () => {
     const gpu = new Float32Array([0.2, 0, 0, 1, 3.8, 0, 0, 1])
     const session_diagnostics = {
