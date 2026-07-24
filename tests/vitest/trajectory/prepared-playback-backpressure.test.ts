@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import {
   acknowledge_playback_frame,
+  acknowledgement_releases_due_playback,
   advance_playback_deadline,
   may_advance_playback,
   may_start_prepared_playback,
@@ -73,5 +75,24 @@ describe(`prepared playback backpressure`, () => {
     expect(advance_playback_deadline(100, 104, 1000 / 30))
       .toBeCloseTo(133.333, 2)
     expect(advance_playback_deadline(100, 500, 1000 / 30)).toBe(500)
+  })
+
+  test(`a renderer acknowledgement releases a due deadline without waiting for polling`, () => {
+    expect(acknowledgement_releases_due_playback(true, 100, 100)).toBe(true)
+    expect(acknowledgement_releases_due_playback(true, 101, 100)).toBe(true)
+    expect(acknowledgement_releases_due_playback(true, 99, 100)).toBe(false)
+    expect(acknowledgement_releases_due_playback(false, 101, 100)).toBe(false)
+
+    const source = readFileSync(`src/lib/trajectory/Trajectory.svelte`, `utf8`)
+    const ack_start = source.indexOf(
+      `function handle_trajectory_frame_presented(`,
+    )
+    const ack_end = source.indexOf(
+      `function handle_trajectory_buffer_state(`,
+      ack_start,
+    )
+    const acknowledgement = source.slice(ack_start, ack_end)
+    expect(acknowledgement).toContain(`schedule_acknowledged_playback_pump()`)
+    expect(source).toContain(`clearTimeout(playback_ack_timer)`)
   })
 })

@@ -71,6 +71,7 @@
   } from './trajectory-controls'
   import {
     acknowledge_playback_frame,
+    acknowledgement_releases_due_playback,
     advance_playback_deadline,
     may_advance_playback,
     may_start_prepared_playback,
@@ -350,6 +351,8 @@
     resume_disabled = false
   })
   let play_interval: ReturnType<typeof setInterval> | undefined = $state(undefined)
+  let playback_ack_timer: ReturnType<typeof setTimeout> | undefined
+  let next_playback_deadline_ms = 0
   let presented_step_idx = $state(0)
   let presented_positions_version = $state(0)
   let playback_generation = $state(0)
@@ -1285,6 +1288,61 @@
       })
     }
   }
+
+  function advance_playback_if_due(rate_ms: number): void {
+    if (!is_playing) return
+    const now_ms = performance.now()
+    if (now_ms < next_playback_deadline_ms) return
+    if (waiting_for_prepared_warmup) {
+      if (!may_start_prepared_playback(prepared_ready_ahead, total_frames)) {
+        return
+      }
+      waiting_for_prepared_warmup = false
+    }
+    if (!may_advance_playback({
+      requested_idx: current_step_idx,
+      presented_idx: presented_step_idx,
+      generation: playback_generation,
+    })) return
+    next_playback_deadline_ms = advance_playback_deadline(
+      next_playback_deadline_ms,
+      now_ms,
+      rate_ms,
+    )
+    if (current_step_idx >= total_frames - 1) {
+      const { frame } = get_presented_frame_data()
+      if (trajectory) {
+        on_end?.({
+          trajectory,
+          step_idx: presented_step_idx,
+          frame_count: total_frames,
+          frame,
+        })
+      }
+      go_to_step(0)
+      if (trajectory) {
+        on_loop?.({ trajectory, frame_count: total_frames })
+      }
+    } else next_step()
+  }
+
+  function schedule_acknowledged_playback_pump(): void {
+    const now_ms = performance.now()
+    if (!acknowledgement_releases_due_playback(
+      is_playing,
+      now_ms,
+      next_playback_deadline_ms,
+    )) return
+    if (playback_ack_timer !== undefined) return
+    // Leave the renderer acknowledgement stack before requesting the next
+    // packet. This preserves one complete Svelte publication per exact frame
+    // while avoiding up to one 8 ms polling interval after a late ACK.
+    playback_ack_timer = setTimeout(() => {
+      playback_ack_timer = undefined
+      advance_playback_if_due(1000 / fps)
+    }, 0)
+  }
+
   $effect(() => { // Effect to manage playback interval
     // Only watch is_playing and frame_rate_ms, not play_interval itself
     const playing = is_playing
@@ -1300,41 +1358,9 @@
       // completes just after its tick. The monotonic deadline still caps
       // playback at the requested FPS; short polling only recovers a missed
       // deadline promptly once the exact frame has been acknowledged.
-      let next_playback_deadline_ms = performance.now() + rate_ms
+      next_playback_deadline_ms = performance.now() + rate_ms
       play_interval = setInterval(() => {
-        const now_ms = performance.now()
-        if (now_ms < next_playback_deadline_ms) return
-        if (waiting_for_prepared_warmup) {
-          if (!may_start_prepared_playback(prepared_ready_ahead, total_frames)) {
-            return
-          }
-          waiting_for_prepared_warmup = false
-        }
-        if (!may_advance_playback({
-          requested_idx: current_step_idx,
-          presented_idx: presented_step_idx,
-          generation: playback_generation,
-        })) return
-        next_playback_deadline_ms = advance_playback_deadline(
-          next_playback_deadline_ms,
-          now_ms,
-          rate_ms,
-        )
-        if (current_step_idx >= total_frames - 1) {
-          const { frame } = get_presented_frame_data()
-          if (trajectory) {
-            on_end?.({
-              trajectory,
-              step_idx: presented_step_idx,
-              frame_count: total_frames,
-              frame,
-            })
-          }
-          go_to_step(0) // Loop back to 1st step
-          if (trajectory) {
-            on_loop?.({ trajectory, frame_count: total_frames })
-          }
-        } else next_step()
+        advance_playback_if_due(rate_ms)
       }, playback_poll_interval_ms(rate_ms))
     } else {
       // Clear interval when not playing - use untrack to avoid circular dependency
@@ -1343,12 +1369,18 @@
         clearInterval(current_interval)
         play_interval = undefined
       }
+      if (playback_ack_timer !== undefined) {
+        clearTimeout(playback_ack_timer)
+        playback_ack_timer = undefined
+      }
+      next_playback_deadline_ms = 0
     }
   })
 
   // Cleanup interval on component destroy
   $effect(() => () => {
     if (play_interval !== undefined) clearInterval(play_interval)
+    if (playback_ack_timer !== undefined) clearTimeout(playback_ack_timer)
     if (pushback_timer) clearTimeout(pushback_timer)
   })
 
@@ -1832,6 +1864,7 @@
     }, frame_idx)
     presented_step_idx = next.presented_idx
     presented_positions_version = positions_version
+    schedule_acknowledged_playback_pump()
   }
 
   function handle_trajectory_buffer_state(state: {

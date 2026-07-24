@@ -42,6 +42,14 @@ export function playback_poll_interval_ms(rate_ms: number): number {
   return Math.min(8, Math.max(1, rate_ms))
 }
 
+export function acknowledgement_releases_due_playback(
+  playing: boolean,
+  now_ms: number,
+  deadline_ms: number,
+): boolean {
+  return playing && deadline_ms > 0 && now_ms >= deadline_ms
+}
+
 export function advance_playback_deadline(
   previous_deadline_ms: number,
   now_ms: number,
