@@ -453,6 +453,12 @@ describe(`trajectory frame length validation inside the worker`, () => {
       expect(posted).toHaveLength(1)
       expect(posted[0].msg).toMatchObject({
         id: 1,
+        error_name: `TrajectoryBondFrameLengthError`,
+        session_id: 7,
+        expected_atom_count: 2,
+        expected_float_count: 6,
+        actual_float_count: float_count,
+        frame_idx: 33,
         error: expect.stringContaining(
           `trajectory bond session 7 frame 33`,
         ),
@@ -463,6 +469,85 @@ describe(`trajectory frame length validation inside the worker`, () => {
       expect(posted[0].transfer).toEqual([])
     },
   )
+
+  test(`preserves typed frame-length details through RealBondWorkerHandle`, async () => {
+    const replies: Array<Record<string, unknown>> = []
+    const detect = vi.fn()
+    const glue = {
+      initSync: vi.fn(),
+      detect_bonds_radii_typed: detect,
+      detect_bonds_radii: vi.fn(),
+      detect_bonds_electronegativity: vi.fn(),
+      detect_bonds_solid_angle: vi.fn(),
+      detect_hydrogen_bonds: vi.fn(),
+    } as unknown as BondWorkerGlue
+
+    class LoopbackWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null
+      onerror: ((event: ErrorEvent) => void) | null = null
+      terminated = false
+      scope: BondWorkerScope = {
+        onmessage: null,
+        postMessage: (message) => {
+          replies.push(message as Record<string, unknown>)
+          queueMicrotask(() => {
+            this.onmessage?.({ data: message } as MessageEvent)
+          })
+        },
+      }
+
+      constructor() {
+        install_bond_worker(this.scope, glue)
+      }
+
+      async initialize(): Promise<void> {
+        await this.scope.onmessage!({
+          data: { id: -1, type: `init`, module: {}, thread_count: 1 },
+        } as MessageEvent)
+        await Promise.resolve()
+        replies.length = 0
+      }
+
+      postMessage(data: Record<string, unknown>): void {
+        const delivered = data.type === `trajectory_frame_typed`
+          ? { ...data, positions: new Float32Array(3) }
+          : data
+        void this.scope.onmessage!({ data: delivered } as MessageEvent)
+      }
+
+      terminate(): void {
+        this.terminated = true
+      }
+    }
+
+    const worker = new LoopbackWorker()
+    await worker.initialize()
+    const handle = new RealBondWorkerHandle(
+      worker as unknown as Worker,
+      vi.fn(),
+      `scalar`,
+    )
+
+    let failure: unknown
+    try {
+      await handle.compute_trajectory_frame_typed(trajectory_input())
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(TrajectoryBondFrameLengthError)
+    expect(failure).toMatchObject({
+      name: `TrajectoryBondFrameLengthError`,
+      session_id: 1,
+      expected_atom_count: 2,
+      expected_float_count: 6,
+      actual_float_count: 3,
+      frame_idx: 12,
+    })
+    expect(detect).not.toHaveBeenCalled()
+    expect(replies.at(-1)).not.toHaveProperty(`pairs`)
+    expect(replies.at(-1)).not.toHaveProperty(`gpu_positions_rgba`)
+  })
 })
 
 describe(`trajectory runtime API`, () => {

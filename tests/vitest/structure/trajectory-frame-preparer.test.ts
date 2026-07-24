@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
 vi.mock('$lib/structure/workers/bond-worker-api', () => ({
@@ -18,11 +19,32 @@ import {
 import {
   prepare_exact_trajectory_frame,
   type ExactFramePrepareInput,
+  type TrajectoryFrameSource,
 } from '$lib/structure/trajectory-frame-preparer'
+import * as trajectory_frame_preparer from '$lib/structure/trajectory-frame-preparer'
+import {
+  create_prepared_frame_pipeline,
+  type PreparedFrameKey,
+} from '$lib/structure/trajectory-prepared-frame'
 
 const typed_mock = vi.mocked(compute_trajectory_frame_typed)
 const object_mock = vi.mocked(compute_bonds_exact_async)
 const pack_mock = vi.mocked(pack_trajectory_positions_worker)
+
+type SafeSourceRequest = (
+  requester: ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
+    | null,
+  frame_idx: number,
+  on_error: (error: Error) => void,
+) => Promise<TrajectoryFrameSource | null>
+
+function safe_source_request(): SafeSourceRequest | undefined {
+  return (
+    trajectory_frame_preparer as unknown as {
+      request_trajectory_frame_source_safely?: SafeSourceRequest
+    }
+  ).request_trajectory_frame_source_safely
+}
 
 function site(element: string, xyz: [number, number, number]): Site {
   return {
@@ -282,6 +304,266 @@ describe(`prepare_exact_trajectory_frame`, () => {
     await prepare_exact_trajectory_frame(copied_original)
 
     expect(typed_mock.mock.calls[1][0].session.id).toBe(first_session_id)
+  })
+
+  test(`publishes a cold async source under its loader-derived fingerprint`, async () => {
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const request = input()
+    const loader_source = {
+      ...request.source,
+      stable_site_ids: Uint32Array.from([101, 202]),
+    }
+    const load_source = vi.fn(async () => loader_source)
+    const source = await load_source()
+    request.source = source
+    const key_builder = (
+      trajectory_frame_preparer as unknown as {
+        trajectory_prepared_frame_key?: (
+          input: ExactFramePrepareInput,
+        ) => PreparedFrameKey
+      }
+    ).trajectory_prepared_frame_key
+
+    expect(key_builder).toBeTypeOf(`function`)
+    const key = key_builder!(request)
+    const pipeline = create_prepared_frame_pipeline()
+    const generation = pipeline.begin_request(key)
+    const outcome = await pipeline.request({
+      key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: () => prepare_exact_trajectory_frame(request),
+    }, generation)
+
+    expect(load_source).toHaveBeenCalledOnce()
+    expect(outcome).toMatchObject({
+      status: `ready`,
+      value: { key: { topology_fingerprint: key.topology_fingerprint } },
+    })
+    expect(pipeline.peek(key)?.key.topology_fingerprint).toBe(
+      key.topology_fingerprint,
+    )
+    expect(typed_mock.mock.calls[0][0].session.stable_site_ids).toEqual(
+      loader_source.stable_site_ids,
+    )
+  })
+
+  test(`prefetches a different topology segment under its own source key`, async () => {
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const current = input()
+    current.source.frame_idx = 0
+    current.source.stable_site_ids = Uint32Array.from([7, 9])
+    const prefetched = input()
+    prefetched.packet.frame.owner = current.packet.frame.owner
+    prefetched.source.frame_idx = 1
+    prefetched.source.stable_site_ids = Uint32Array.from([70, 90])
+    const key_builder = (
+      trajectory_frame_preparer as unknown as {
+        trajectory_prepared_frame_key?: (
+          input: ExactFramePrepareInput,
+        ) => PreparedFrameKey
+      }
+    ).trajectory_prepared_frame_key
+
+    expect(key_builder).toBeTypeOf(`function`)
+    const current_key = key_builder!(current)
+    const prefetch_key = key_builder!(prefetched)
+    expect(prefetch_key.topology_fingerprint).not.toBe(
+      current_key.topology_fingerprint,
+    )
+    const pipeline = create_prepared_frame_pipeline()
+    const generation = pipeline.begin_request(current_key, 2)
+    await pipeline.request({
+      key: current_key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: () => prepare_exact_trajectory_frame(current),
+    }, generation)
+    const prefetched_outcome = await pipeline.request({
+      key: prefetch_key,
+      priority: `prefetch`,
+      estimated_bytes: 64,
+      prepare: () => prepare_exact_trajectory_frame(prefetched),
+    }, generation)
+
+    expect(prefetched_outcome).toMatchObject({ status: `ready` })
+    expect(pipeline.peek(prefetch_key)?.key).toEqual(prefetch_key)
+    const transitioned_generation = pipeline.begin_request(prefetch_key, 2)
+    const recompute = vi.fn(() => prepare_exact_trajectory_frame(prefetched))
+    const transitioned = await pipeline.request({
+      key: prefetch_key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: recompute,
+    }, transitioned_generation)
+    expect(transitioned).toMatchObject({ status: `ready`, cache_hit: true })
+    expect(recompute).not.toHaveBeenCalled()
+  })
+
+  test(`reports a cold current loader rejection without losing the last complete frame`, async () => {
+    const request_source = safe_source_request()
+    expect(request_source).toBeTypeOf(`function`)
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const complete = input()
+    complete.source.frame_idx = 0
+    const key_builder = (
+      trajectory_frame_preparer as unknown as {
+        trajectory_prepared_frame_key: (
+          input: ExactFramePrepareInput,
+        ) => PreparedFrameKey
+      }
+    ).trajectory_prepared_frame_key
+    const complete_key = key_builder(complete)
+    const pipeline = create_prepared_frame_pipeline()
+    const generation = pipeline.begin_request(complete_key, 2)
+    const complete_outcome = await pipeline.request({
+      key: complete_key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: () => prepare_exact_trajectory_frame(complete),
+    }, generation)
+    expect(complete_outcome).toMatchObject({ status: `ready` })
+    const last_complete = pipeline.peek(complete_key)
+    const report_error = vi.fn()
+    const requester = vi.fn(async () => {
+      throw new Error(`current source decode failed`)
+    })
+
+    await expect(
+      request_source!(requester, 1, report_error),
+    ).resolves.toBeNull()
+    await Promise.resolve()
+
+    expect(report_error).toHaveBeenCalledOnce()
+    expect(report_error.mock.calls[0][0]).toMatchObject({
+      name: `Error`,
+      message: `current source decode failed`,
+    })
+    expect(pipeline.peek(complete_key)).toBe(last_complete)
+    expect(pipeline.stats()).toMatchObject({
+      cached_frames: 1,
+      queued: 0,
+      in_flight: 0,
+    })
+
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const current_block = scene.slice(
+      scene.indexOf(`if (!current_source) {`),
+      scene.indexOf(`const key_for_source =`),
+    )
+    expect(current_block).toContain(
+      `request_trajectory_frame_source_safely(`,
+    )
+    expect(current_block).toContain(`report_prepared_failure(error)`)
+  })
+
+  test(`reports a prefetch loader rejection without cache or publication mutation`, async () => {
+    const request_source = safe_source_request()
+    expect(request_source).toBeTypeOf(`function`)
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+    const complete = input()
+    complete.source.frame_idx = 0
+    const key_builder = (
+      trajectory_frame_preparer as unknown as {
+        trajectory_prepared_frame_key: (
+          input: ExactFramePrepareInput,
+        ) => PreparedFrameKey
+      }
+    ).trajectory_prepared_frame_key
+    const complete_key = key_builder(complete)
+    const pipeline = create_prepared_frame_pipeline()
+    const generation = pipeline.begin_request(complete_key, 2)
+    await pipeline.request({
+      key: complete_key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: () => prepare_exact_trajectory_frame(complete),
+    }, generation)
+    const before = pipeline.stats()
+    const publication = vi.fn()
+    const report_error = vi.fn()
+    const requester = vi.fn(async () => {
+      throw new Error(`prefetch source decode failed`)
+    })
+
+    const source = await request_source!(requester, 1, report_error)
+    if (source) publication(source)
+    await Promise.resolve()
+
+    expect(report_error).toHaveBeenCalledOnce()
+    expect(report_error.mock.calls[0][0]).toMatchObject({
+      name: `Error`,
+      message: `prefetch source decode failed`,
+    })
+    expect(publication).not.toHaveBeenCalled()
+    expect(pipeline.peek(complete_key)).not.toBeNull()
+    expect(pipeline.stats()).toEqual(before)
+
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const prefetch_block = scene.slice(
+      scene.indexOf(`const prefetch_idx =`),
+      scene.indexOf(`  })\n\n  $effect.pre`),
+    )
+    expect(prefetch_block).toContain(
+      `request_trajectory_frame_source_safely(`,
+    )
+    expect(prefetch_block).toContain(`report_buffer_failure(error)`)
+    const safe_request_start = prefetch_block.indexOf(
+      `request_trajectory_frame_source_safely(`,
+    )
+    const source_guard = prefetch_block.indexOf(
+      `if (!source?.topology_stable)`,
+      safe_request_start,
+    )
+    expect(
+      prefetch_block.slice(safe_request_start, source_guard),
+    ).not.toContain(`getter?.(prefetch_idx)`)
   })
 
   test(`custom rules use object detection, full override, and worker packing`, async () => {

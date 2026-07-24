@@ -84,6 +84,8 @@
   } from './pbc-image-atoms'
   import {
     prepare_exact_trajectory_frame,
+    request_trajectory_frame_source_safely,
+    trajectory_prepared_frame_key,
     type TrajectoryFrameSource,
   } from './trajectory-frame-preparer'
   import {
@@ -92,9 +94,6 @@
     type PreparedFrameKey,
   } from './trajectory-prepared-frame'
   import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
-  import {
-    trajectory_bond_topology_fingerprint,
-  } from './trajectory-bond-session'
   import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
   import {
     AtomManager,
@@ -2645,6 +2644,11 @@
   })
 
   let latest_prepared_request_key: PreparedFrameKey | null = null
+  let asynchronously_loaded_prepared_source = $state.raw<{
+    owner: object
+    frame_idx: number
+    source: TrajectoryFrameSource
+  } | null>(null)
 
   function exact_rules_version(
     strategy: BondingStrategy,
@@ -2696,7 +2700,7 @@
     const raw_forces = trajectory_frame_forces
     const frame_idx = trajectory_step_idx
     const frame_count = trajectory_frame_count
-    const getter = get_trajectory_frame_source
+    const source_getter = get_trajectory_frame_source
     const requester = request_trajectory_frame_source
     const options = Object.fromEntries(
       Object.entries(bonding_options_eff)
@@ -2777,28 +2781,69 @@
       positions_version: raw_packet.frame.positions_version,
       topology_stable: true,
     }
+    const report_prepared_failure = (
+      error: Error,
+      ready_ahead = 0,
+    ) => {
+      if (
+        render_packet?.frame.owner !== raw_packet.frame.owner ||
+        trajectory_step_idx !== frame_idx
+      ) return
+      prepared_error = error.message
+      on_trajectory_buffer_state?.({
+        frame_idx,
+        ready_ahead,
+        preparing: false,
+        error: error.message,
+      })
+    }
     // Indexed frames load asynchronously. Until getter(frame_idx) is ready,
     // raw_positions still belongs to the last displayed frame; relabeling it
     // with frame_idx would publish a one-frame-shifted exact graph. Only
     // non-indexed trajectories may use the synchronous displayed fallback.
+    const loaded_source = asynchronously_loaded_prepared_source
+    const getter = (source_idx: number): TrajectoryFrameSource | null => {
+      if (
+        loaded_source?.owner === raw_packet.frame.owner &&
+        loaded_source.frame_idx === source_idx
+      ) return loaded_source.source
+      return source_getter?.(source_idx) ?? null
+    }
     const current_source = getter?.(frame_idx) ??
       (requester ? null : fallback_source)
-    const topology_fingerprint = trajectory_bond_topology_fingerprint({
-      atomic_numbers: raw_packet.topology.atomic_numbers,
-      site_ids: current_source?.stable_site_ids ?? null,
-      pbc,
-      strategy: `atom_radii`,
+    if (!current_source) {
+      latest_prepared_request_key = null
+      void request_trajectory_frame_source_safely(
+        requester,
+        frame_idx,
+        (error) => report_prepared_failure(error),
+      ).then((source) => {
+        if (
+          !source ||
+          render_packet?.frame.owner !== raw_packet.frame.owner ||
+          trajectory_step_idx !== frame_idx
+        ) return
+        asynchronously_loaded_prepared_source = {
+          owner: raw_packet.frame.owner,
+          frame_idx,
+          source,
+        }
+      })
+      return
+    }
+    const key_for_source = (
+      source: TrajectoryFrameSource,
+    ): PreparedFrameKey => trajectory_prepared_frame_key({
+      packet: raw_packet,
+      source,
       options,
+      pbc,
       rules_version,
     })
     const current_key: PreparedFrameKey = {
-      owner: raw_packet.frame.owner,
-      frame_idx,
+      ...key_for_source(current_source),
       positions_version: current_source?.positions_version ??
         raw_packet.frame.positions_version,
-      topology_version: raw_packet.topology.version,
-      topology_fingerprint,
-      rules_version,
     }
     trajectory_render_diagnostics.begin_owner(raw_packet.frame.owner)
     latest_prepared_request_key = current_key
@@ -2874,10 +2919,14 @@
       const keys: PreparedFrameKey[] = []
       const total = Math.max(0, frame_count)
       for (let offset = 0; offset < Math.min(8, total || 1); offset++) {
-        keys.push({
-          ...current_key,
-          frame_idx: total > 0 ? (frame_idx + offset) % total : frame_idx,
-        })
+        const buffered_idx = total > 0
+          ? (frame_idx + offset) % total
+          : frame_idx
+        const buffered_source = buffered_idx === frame_idx
+          ? current_source
+          : getter?.(buffered_idx) ?? null
+        if (!buffered_source) break
+        keys.push(key_for_source(buffered_source))
       }
       on_trajectory_buffer_state?.({
         frame_idx,
@@ -2885,6 +2934,14 @@
         preparing,
         error: untrack(() => prepared_error),
       })
+    }
+    const report_buffer_failure = (error: Error) => {
+      if (
+        !latest_prepared_request_key ||
+        !same_prepared_frame_key(current_key, latest_prepared_request_key)
+      ) return
+      prepared_error = error.message
+      report_buffer(false)
     }
 
     report_buffer(true)
@@ -2955,7 +3012,8 @@
           prepared.key.positions_version,
         )
       } else if (outcome.status === `failed`) {
-        prepared_error = outcome.error.message
+        report_buffer_failure(outcome.error)
+        return
       }
       report_buffer(false)
     })
@@ -2965,24 +3023,24 @@
         const prefetch_idx = (frame_idx + offset) % frame_count
         const known = getter?.(prefetch_idx) ?? null
         if (known && !known.topology_stable) continue
-        const key: PreparedFrameKey = { ...current_key, frame_idx: prefetch_idx }
-        void prepared_pipeline.request({
-          key,
-          priority: `prefetch`,
-          estimated_bytes,
-          prepare: async () => {
-            const source = known ??
-              await requester?.(prefetch_idx) ??
-              getter?.(prefetch_idx) ??
-              null
-            if (!source?.topology_stable) {
-              throw new Error(
-                `Trajectory frame ${prefetch_idx} is not topology-stable`,
-              )
-            }
-            return prepare_source(prefetch_idx, source)
-          },
-        }, generation).then(() => report_buffer(false))
+        void (async () => {
+          const source = known ??
+            await request_trajectory_frame_source_safely(
+              requester,
+              prefetch_idx,
+              (error) => report_buffer_failure(error),
+            ) ??
+            null
+          if (!source?.topology_stable) return
+          const key = key_for_source(source)
+          await prepared_pipeline.request({
+            key,
+            priority: `prefetch`,
+            estimated_bytes,
+            prepare: () => prepare_source(prefetch_idx, source),
+          }, generation)
+          report_buffer(false)
+        })()
       }
     }
   })

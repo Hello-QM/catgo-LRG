@@ -21,6 +21,7 @@
 import { position_texture_shape } from '../gpu/position-texture-layout'
 import {
   assert_trajectory_bond_frame_length,
+  TrajectoryBondFrameLengthError,
 } from '../trajectory-bond-session'
 
 /** The wasm-bindgen glue surface both ferrox artifacts share. `initThreadPool`
@@ -241,7 +242,20 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
         scope.postMessage({ id, result, dt })
       }
     } catch (err) {
-      scope.postMessage({ id, error: (err as Error).message || String(err) })
+      if (err instanceof TrajectoryBondFrameLengthError) {
+        scope.postMessage({
+          id,
+          error: err.message,
+          error_name: err.name,
+          session_id: err.session_id,
+          expected_atom_count: err.expected_atom_count,
+          expected_float_count: err.expected_float_count,
+          actual_float_count: err.actual_float_count,
+          frame_idx: err.frame_idx,
+        })
+      } else {
+        scope.postMessage({ id, error: (err as Error).message || String(err) })
+      }
     }
   }
 }

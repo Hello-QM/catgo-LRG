@@ -44,6 +44,7 @@ import {
 import { detect_bond_backend_capabilities } from './wasm-thread-capability'
 import {
   assert_trajectory_bond_frame_length,
+  TrajectoryBondFrameLengthError,
 } from '../trajectory-bond-session'
 
 export { BondBackendUnavailableError, LARGE_SYSTEM_MIN_ATOMS }
@@ -101,7 +102,21 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
       if (!p) return
       this.pending.delete(id)
       if (error) {
-        p.reject(new Error(error))
+        if (
+          e.data.error_name === `TrajectoryBondFrameLengthError` &&
+          typeof e.data.session_id === `number` &&
+          typeof e.data.expected_atom_count === `number` &&
+          typeof e.data.actual_float_count === `number`
+        ) {
+          p.reject(new TrajectoryBondFrameLengthError(
+            e.data.session_id,
+            e.data.expected_atom_count,
+            e.data.actual_float_count,
+            typeof e.data.frame_idx === `number` ? e.data.frame_idx : null,
+          ))
+        } else {
+          p.reject(new Error(error))
+        }
       } else {
         // Resolve the whole payload — JSON replies carry {result, dt},
         // typed replies carry {pairs, images, lengths, strengths, dt}.

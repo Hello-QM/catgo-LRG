@@ -16,6 +16,7 @@ import {
 } from './trajectory-bond-graph'
 import {
   prepared_frame_byte_size,
+  type PreparedFrameKey,
   type PreparedTrajectoryFrame,
 } from './trajectory-prepared-frame'
 import {
@@ -39,6 +40,21 @@ export type TrajectoryFrameSource = {
   positions_version: number
   topology_stable: boolean
   stable_site_ids?: Uint32Array | null
+}
+
+export async function request_trajectory_frame_source_safely(
+  requester: ((frame_idx: number) => Promise<TrajectoryFrameSource | null>)
+    | null,
+  frame_idx: number,
+  on_error: (error: Error) => void,
+): Promise<TrajectoryFrameSource | null> {
+  if (!requester) return null
+  try {
+    return await requester(frame_idx)
+  } catch (error) {
+    on_error(error instanceof Error ? error : new Error(String(error)))
+    return null
+  }
 }
 
 export type PreparedPathFeatureInput = {
@@ -101,6 +117,11 @@ export type ExactFramePrepareInput = {
   graph_version: number
   features?: PreparedPathFeatureInput
 }
+
+export type TrajectoryPreparedFrameKeyInput = Pick<
+  ExactFramePrepareInput,
+  'packet' | 'source' | 'options' | 'pbc' | 'rules_version'
+>
 
 function flatten_lattice(
   lattice: number[][] | null,
@@ -196,7 +217,7 @@ const typed_sessions_by_owner = new WeakMap<object, TypedSessionIdentity[]>()
 let next_typed_session_id = 1
 
 function topology_descriptor(
-  input: ExactFramePrepareInput,
+  input: TrajectoryPreparedFrameKeyInput,
 ): TrajectoryBondSessionDescriptor {
   return {
     atomic_numbers: input.packet.topology.atomic_numbers,
@@ -204,6 +225,21 @@ function topology_descriptor(
     pbc: input.pbc,
     strategy: `atom_radii`,
     options: input.options,
+    rules_version: input.rules_version,
+  }
+}
+
+export function trajectory_prepared_frame_key(
+  input: TrajectoryPreparedFrameKeyInput,
+): PreparedFrameKey {
+  return {
+    owner: input.packet.frame.owner,
+    frame_idx: input.source.frame_idx,
+    positions_version: input.source.positions_version,
+    topology_version: input.packet.topology.version,
+    topology_fingerprint: trajectory_bond_topology_fingerprint(
+      topology_descriptor(input),
+    ),
     rules_version: input.rules_version,
   }
 }
@@ -311,8 +347,7 @@ export async function prepare_exact_trajectory_frame(
     )
   }
   const descriptor = topology_descriptor(input)
-  const topology_fingerprint =
-    trajectory_bond_topology_fingerprint(descriptor)
+  const key = trajectory_prepared_frame_key(input)
 
   let graph
   let gpu_positions_rgba: Float32Array
@@ -411,14 +446,7 @@ export async function prepare_exact_trajectory_frame(
     replicas: raw.replicas,
   }
   return {
-    key: {
-      owner: raw.frame.owner,
-      frame_idx: source.frame_idx,
-      positions_version: source.positions_version,
-      topology_version: raw.topology.version,
-      topology_fingerprint,
-      rules_version: input.rules_version,
-    },
+    key,
     packet,
     graph,
     gpu_positions_rgba,
