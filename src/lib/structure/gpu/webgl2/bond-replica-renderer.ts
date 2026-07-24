@@ -281,7 +281,7 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
   void main() {
     int group_size = 2 * uCellCount;
     int within_bond = gl_InstanceID % group_size;
-    int half = within_bond / uCellCount;
+    int half_index = within_bond / uCellCount;
     int cell_index = within_bond % uCellCount;
     ivec3 cell = ivec3(
       cell_index % uDims.x,
@@ -291,7 +291,7 @@ const REPLICA_VERTEX_SHADER = /* glsl */ `
     vec3 pa = fetchBasePosition(a_site.x);
     vec3 pb = fetchBasePosition(a_site.y);
     ivec3 jimage = ivec3(round(a_jimage));
-    bool is_b_half = half == 1;
+    bool is_b_half = half_index == 1;
     // Anchor endpoint lives in THIS replica cell; the partner sits at
     // cell + jimage (half A) / cell - jimage (half B).
     ivec3 probe = is_b_half ? cell - jimage : cell + jimage;

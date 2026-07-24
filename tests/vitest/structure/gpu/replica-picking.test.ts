@@ -637,7 +637,12 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
     // shader-side encode (bond_index = gl_InstanceID / (2 * cell count)).
     expect(scene.bond_material.vertexShader).toContain('2 * uCellCount')
     expect(scene.bond_material.vertexShader).toContain('gl_InstanceID / group_size')
-    expect(scene.bond_material.vertexShader).toContain('half == 1')
+    expect(scene.bond_material.vertexShader).toContain(
+      'int half_index = within_bond / uCellCount',
+    )
+    expect(scene.bond_material.vertexShader).toContain('half_index == 1')
+    expect(scene.bond_material.vertexShader).not.toMatch(/\bint\s+half\b/)
+    expect(scene.bond_material.vertexShader).not.toMatch(/\bhalf\s*==/)
     expect(scene.bond_material.vertexShader).toContain('uBondFirstId')
     expect(scene.bond_material.vertexShader).toContain('uBaseBondCount * cell_index')
     scene.dispose()

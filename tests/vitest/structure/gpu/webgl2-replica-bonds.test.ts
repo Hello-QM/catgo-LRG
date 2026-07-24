@@ -439,8 +439,11 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
       `uColorTex`,
       `uColorTexWidth`,
       `int group_size = 2 * uCellCount`,
-      `int half = within_bond / uCellCount`,
+      `int half_index = within_bond / uCellCount`,
+      `half_index == 1`,
     ]) expect(material.vertexShader).toContain(token)
+    expect(material.vertexShader).not.toMatch(/\bint\s+half\b/)
+    expect(material.vertexShader).not.toMatch(/\bhalf\s*==/)
     expect(material.vertexShader).not.toContain(`a_half`)
     expect(material.vertexShader).not.toContain(`a_color`)
     // Flat (non-interpolated) per-instance cylinder frame + analytic ray-cast.
