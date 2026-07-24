@@ -6,6 +6,7 @@ import type {
 import {
   create_prepared_frame_pipeline,
   prepared_frame_byte_size,
+  prepared_frame_with_replicas,
   same_prepared_frame_key,
   type DeferredFrameAdmission,
   type PreparedFrameKey,
@@ -173,6 +174,52 @@ function deferred<T>(): {
 describe(`create_prepared_frame_pipeline`, () => {
   beforeEach(() => {
     trajectory_render_diagnostics.reset()
+  })
+
+  test(`rebases a cached exact graph onto the current replica layout`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const key = make_key()
+    const generation = pipeline.begin_request(key)
+    const prepared = make_prepared(key)
+    const first = await pipeline.request({
+      key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: async () => prepared,
+    }, generation)
+    expect(first).toMatchObject({ status: `ready`, cache_hit: false })
+
+    const cached = await pipeline.request({
+      key,
+      priority: `current`,
+      estimated_bytes: 64,
+      prepare: async () => {
+        throw new Error(`cache hit must not recompute`)
+      },
+    }, generation)
+    expect(cached).toMatchObject({ status: `ready`, cache_hit: true })
+    if (cached.status !== `ready`) throw new Error(`expected cached frame`)
+    expect(prepared_frame_with_replicas(
+      cached.value,
+      cached.value.packet.replicas,
+    )).toBe(cached.value)
+
+    const replicas: RenderPacket['replicas'] = {
+      version: 9,
+      dims: [2, 3, 1],
+      boundary_policy: `ghost-images`,
+      semantics: `visual-shared-base`,
+    }
+    const rebased = prepared_frame_with_replicas(cached.value, replicas)
+
+    expect(rebased).not.toBe(cached.value)
+    expect(rebased.graph).toBe(cached.value.graph)
+    expect(rebased.packet.topology).toBe(cached.value.packet.topology)
+    expect(rebased.packet.frame).toBe(cached.value.packet.frame)
+    expect(rebased.packet.replicas).toBe(replicas)
+    expect(pipeline.peek(key)?.packet.replicas).toBe(
+      prepared.packet.replicas,
+    )
   })
 
   test(`deduplicates identical queued or in-flight keys onto one promise`, async () => {

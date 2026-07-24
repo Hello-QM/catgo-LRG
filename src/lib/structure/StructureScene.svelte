@@ -84,6 +84,7 @@
   } from './pbc-image-atoms'
   import {
     create_current_trajectory_source_request_guard,
+    prepared_frame_key_for_shared_topology_source,
     prepare_exact_trajectory_frame,
     request_trajectory_frame_source_safely,
     select_current_trajectory_frame_source,
@@ -94,6 +95,7 @@
     create_prepared_frame_pipeline,
     is_prepared_frame_budget_refusal,
     prepared_frame_window_key,
+    prepared_frame_with_replicas,
     same_prepared_frame_key,
     type PreparedFrameKey,
     type PreparedFrameOutcome,
@@ -2900,7 +2902,7 @@
       return
     }
     current_source_request_guard.invalidate()
-    const key_for_source = (
+    const full_key_for_source = (
       source: TrajectoryFrameSource,
     ): PreparedFrameKey => trajectory_prepared_frame_key({
       packet: raw_packet,
@@ -2910,10 +2912,18 @@
       rules_version,
     })
     const current_key: PreparedFrameKey = {
-      ...key_for_source(current_source),
+      ...full_key_for_source(current_source),
       positions_version: current_source?.positions_version ??
         raw_packet.frame.positions_version,
     }
+    const key_for_source = (
+      source: TrajectoryFrameSource,
+    ): PreparedFrameKey =>
+      prepared_frame_key_for_shared_topology_source(
+        current_key,
+        current_source,
+        source,
+      ) ?? full_key_for_source(source)
     trajectory_render_diagnostics.begin_owner(raw_packet.frame.owner)
     latest_prepared_request_key = current_key
     const generation = prepared_pipeline.begin_request(current_key, frame_count)
@@ -3052,7 +3062,13 @@
         latest_prepared_request_key &&
         same_prepared_frame_key(outcome.value.key, latest_prepared_request_key)
       ) {
-        const prepared = outcome.value
+        const live_packet = render_packet
+        const prepared = prepared_frame_with_replicas(
+          outcome.value,
+          live_packet?.frame.owner === outcome.value.key.owner
+            ? live_packet.replicas
+            : raw_packet.replicas,
+        )
         const published_at_ms = performance.now()
         // One publication turn owns positions, lattice, graph, forces, and the
         // worker-packed position texture together.

@@ -191,6 +191,32 @@ describe(`exact prepared trajectory ownership`, () => {
     expect(report).not.toContain(`prepared_frame_window_key(`)
   })
 
+  test(`publishes cached exact graphs with the live replica layout`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const publication_start = scene.indexOf(
+      `if (\n        outcome.status === \`ready\``,
+    )
+    const publication_end = scene.indexOf(
+      `trajectory_presentation_committer.publish(`,
+      publication_start,
+    )
+    const publication = scene.slice(publication_start, publication_end)
+
+    expect(publication).toContain(
+      `const prepared = prepared_frame_with_replicas(`,
+    )
+    expect(publication).toContain(
+      `live_packet?.frame.owner === outcome.value.key.owner`,
+    )
+    expect(publication.indexOf(`prepared_frame_with_replicas(`))
+      .toBeLessThan(publication.indexOf(
+        `prepared_render_packet = prepared.packet`,
+      ))
+  })
+
   test(`the local hardware gate always launches the reviewed source server`, () => {
     const config = readFileSync(`playwright.config.ts`, `utf8`)
     expect(config).toContain(

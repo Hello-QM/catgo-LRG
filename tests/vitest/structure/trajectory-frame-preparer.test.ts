@@ -17,6 +17,7 @@ import {
   pack_trajectory_positions_worker,
 } from '$lib/structure/workers/bond-worker-api'
 import {
+  prepared_frame_key_for_shared_topology_source,
   prepare_exact_trajectory_frame,
   select_current_trajectory_frame_source,
   type ExactFramePrepareInput,
@@ -194,6 +195,62 @@ beforeEach(() => {
 })
 
 describe(`prepare_exact_trajectory_frame`, () => {
+  test(`reuses a prepared topology key only for the same stable-site snapshot`, () => {
+    const request = input()
+    const current_source = request.source
+    const current_key: PreparedFrameKey = {
+      owner: request.packet.frame.owner,
+      frame_idx: current_source.frame_idx,
+      positions_version: current_source.positions_version,
+      topology_version: request.packet.topology.version,
+      topology_fingerprint: `fixed-topology`,
+      rules_version: request.rules_version,
+    }
+    const next_source: TrajectoryFrameSource = {
+      ...current_source,
+      frame_idx: current_source.frame_idx + 1,
+      positions_version: current_source.positions_version + 1,
+    }
+
+    expect(prepared_frame_key_for_shared_topology_source(
+      current_key,
+      current_source,
+      next_source,
+    )).toEqual({
+      ...current_key,
+      frame_idx: next_source.frame_idx,
+      positions_version: next_source.positions_version,
+    })
+
+    expect(prepared_frame_key_for_shared_topology_source(
+      current_key,
+      current_source,
+      {
+        ...next_source,
+        stable_site_ids: current_source.stable_site_ids?.slice() ?? null,
+      },
+    )).toBeNull()
+
+    const current_without_ids = {
+      ...current_source,
+      stable_site_ids: null,
+    }
+    expect(prepared_frame_key_for_shared_topology_source(
+      current_key,
+      current_without_ids,
+      { ...next_source, stable_site_ids: null },
+    )).toEqual({
+      ...current_key,
+      frame_idx: next_source.frame_idx,
+      positions_version: next_source.positions_version,
+    })
+    expect(prepared_frame_key_for_shared_topology_source(
+      current_key,
+      current_without_ids,
+      next_source,
+    )).toBeNull()
+  })
+
   test(`rejects a stale asynchronously loaded current-frame source`, () => {
     const owner = {}
     const stale = input().source

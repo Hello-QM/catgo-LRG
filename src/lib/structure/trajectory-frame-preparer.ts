@@ -303,6 +303,29 @@ export function trajectory_prepared_frame_key(
   }
 }
 
+export function prepared_frame_key_for_shared_topology_source(
+  current_key: PreparedFrameKey,
+  current_source: Pick<TrajectoryFrameSource, 'stable_site_ids'>,
+  source: Pick<
+    TrajectoryFrameSource,
+    'frame_idx' | 'positions_version' | 'stable_site_ids'
+  >,
+): PreparedFrameKey | null {
+  // Within one scheduling snapshot every topology-key input is fixed except
+  // stable_site_ids, which may identify a variable-topology segment. Reuse
+  // only the exact same decoded ID snapshot; copied arrays take the complete
+  // fingerprint path so equal-by-value and changed segment data stay exact.
+  if (
+    (current_source.stable_site_ids ?? null) !==
+      (source.stable_site_ids ?? null)
+  ) return null
+  return {
+    ...current_key,
+    frame_idx: source.frame_idx,
+    positions_version: source.positions_version,
+  }
+}
+
 function snapshot_descriptor(
   descriptor: TrajectoryBondSessionDescriptor,
 ): TrajectoryBondSessionDescriptor {

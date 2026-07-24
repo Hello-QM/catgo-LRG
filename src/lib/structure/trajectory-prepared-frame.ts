@@ -92,6 +92,26 @@ export function prepared_frame_byte_size(
   return bytes
 }
 
+export function prepared_frame_with_replicas(
+  prepared: PreparedTrajectoryFrame,
+  replicas: RenderPacket['replicas'],
+): PreparedTrajectoryFrame {
+  if (prepared.packet.replicas === replicas) return prepared
+  const packet: RenderPacket = {
+    ...prepared.packet,
+    replicas,
+  }
+  return {
+    ...prepared,
+    packet,
+    byte_size: prepared_frame_byte_size(
+      packet,
+      prepared.gpu_positions_rgba,
+      prepared.forces,
+    ),
+  }
+}
+
 export type PrepareFrameRequest = {
   key: PreparedFrameKey
   priority: 'current' | 'prefetch'
