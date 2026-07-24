@@ -36,6 +36,7 @@ import {
   type ComputeTrajectoryFrameTypedResult,
   create_bond_worker_runtime,
   LARGE_SYSTEM_MIN_ATOMS,
+  type TrajectoryBondSessionDiagnostics,
   type TrajectoryFrameWorkerResult,
   type TrajectoryTypedBondInput,
   type TypedBondInput,
@@ -51,6 +52,7 @@ export { BondBackendUnavailableError, LARGE_SYSTEM_MIN_ATOMS }
 export type {
   ComputeBondsTypedResult,
   ComputeTrajectoryFrameTypedResult,
+  TrajectoryBondSessionDiagnostics,
   TrajectoryTypedBondInput,
   TypedBondInput,
   TypedBondTable,
@@ -94,6 +96,7 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
     private on_dead: (handle: RealBondWorkerHandle, reason: string) => void,
     /** Artifact kind — names the backend in timeout/error messages. */
     private kind: 'scalar' | 'threaded',
+    private readonly thread_count = 1,
   ) {
     worker.onmessage = (e: MessageEvent) => {
       const { id, type: msg_type, error } = e.data
@@ -287,7 +290,11 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
       const atom_count = input.session.atomic_numbers.length
       const timeout_ms = Math.max(20_000, atom_count * 4)
       const response = await this.request<
-        TypedBondTable & { gpu_positions_rgba: Float32Array; dt: string }
+        TypedBondTable & {
+          gpu_positions_rgba: Float32Array
+          session_diagnostics: TrajectoryBondSessionDiagnostics
+          dt: string
+        }
       >(
         {
           type: `trajectory_frame_typed`,
@@ -308,6 +315,10 @@ export class RealBondWorkerHandle implements BondWorkerHandle {
           strengths: response.strengths,
         },
         gpu_positions_rgba: response.gpu_positions_rgba,
+        session_diagnostics: {
+          ...response.session_diagnostics,
+          thread_count: this.thread_count,
+        },
       }
     }
     const outcome = this.trajectory_request_tail.then(execute, execute)
@@ -412,7 +423,12 @@ async function create_rust_worker(
   }
 
   console.log(`[bonds] Worker WASM initialized (${kind}, ${thread_count} thread(s))`)
-  return new RealBondWorkerHandle(w, (handle) => runtime?.reset(handle), kind)
+  return new RealBondWorkerHandle(
+    w,
+    (handle) => runtime?.reset(handle),
+    kind,
+    thread_count,
+  )
 }
 
 let runtime: BondWorkerRuntime | null = null

@@ -86,9 +86,19 @@ export interface TrajectoryTypedBondInput {
   lattice_matrix: number[][] | null
 }
 
+export type TrajectoryBondSessionDiagnostics = {
+  thread_count: number
+  session_initializations: number
+  frame_count: number
+  grid_cache_hits: number
+  grid_rebuilds: number
+  capacity_growths: number
+}
+
 export interface TrajectoryFrameWorkerResult {
   table: TypedBondTable
   gpu_positions_rgba: Float32Array
+  session_diagnostics: TrajectoryBondSessionDiagnostics
 }
 
 /** A live, initialized bond worker. `compute_typed` is the hot path both
@@ -130,6 +140,8 @@ export interface ComputeBondsTypedResult {
 export interface ComputeTrajectoryFrameTypedResult
   extends ComputeBondsTypedResult {
   gpu_positions_rgba: Float32Array
+  session_diagnostics: TrajectoryBondSessionDiagnostics
+  threading_expected: boolean
 }
 
 export interface BondWorkerRuntime {
@@ -164,6 +176,7 @@ export function create_bond_worker_runtime(
   // Sticky init outcomes: one threaded attempt ever, one scalar retry ever.
   let threaded_init_failed = false
   let disabled_reason: string | null = null
+  let initial_threading_expected: boolean | null = null
 
   const err_msg = (err: unknown): string =>
     err instanceof Error ? err.message : String(err)
@@ -171,6 +184,9 @@ export function create_bond_worker_runtime(
   async function init_backend(atom_count: number): Promise<Active> {
     const caps = deps.detect_capabilities()
     const selection = select_rust_bond_backend(caps, atom_count)
+    if (initial_threading_expected === null) {
+      initial_threading_expected = selection.kind === `rust-wasm-threads`
+    }
 
     if (selection.kind === `rust-wasm-threads` && !threaded_init_failed) {
       const pool = Math.min(
@@ -241,6 +257,8 @@ export function create_bond_worker_runtime(
       backend: kind,
       table: result.table,
       gpu_positions_rgba: result.gpu_positions_rgba,
+      session_diagnostics: result.session_diagnostics,
+      threading_expected: initial_threading_expected ?? false,
       elapsed_ms: now() - t0,
     }
   }

@@ -18,6 +18,7 @@ import {
   install_bond_worker,
   type BondWorkerGlue,
   type BondWorkerScope,
+  type BondWorkerTrajectorySessionGlue,
 } from '$lib/structure/workers/bond-worker'
 import {
   TrajectoryBondFrameLengthError,
@@ -28,6 +29,44 @@ const capabilities = {
   shared_array_buffer: false,
   wasm_atomics: false,
   hardware_concurrency: 8,
+}
+
+function fake_trajectory_session(
+  overrides: Partial<BondWorkerTrajectorySessionGlue> = {},
+): BondWorkerTrajectorySessionGlue {
+  return {
+    compute_frame: vi.fn(() => ({
+      pairs: Uint32Array.from([0, 1]),
+      images: Int8Array.from([1, 0, 0]),
+      lengths: Float32Array.from([1.5]),
+      strengths: Float32Array.from([0.75]),
+      free: vi.fn(),
+    })),
+    diagnostics_json: vi.fn(() => JSON.stringify({
+      frame_count: 1,
+      grid_cache_hits: 0,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+    })),
+    free: vi.fn(),
+    ...overrides,
+  }
+}
+
+function fake_glue(
+  create_trajectory_bond_session: BondWorkerGlue[
+    `create_trajectory_bond_session`
+  ],
+): BondWorkerGlue {
+  return {
+    initSync: vi.fn(),
+    create_trajectory_bond_session,
+    detect_bonds_radii_typed: vi.fn(),
+    detect_bonds_radii: vi.fn(),
+    detect_bonds_electronegativity: vi.fn(),
+    detect_bonds_solid_angle: vi.fn(),
+    detect_hydrogen_bonds: vi.fn(),
+  }
 }
 
 function trajectory_input(
@@ -73,7 +112,7 @@ describe(`position texture layout`, () => {
 })
 
 describe(`trajectory messages in the worker`, () => {
-  test(`returns an exact typed graph and padded RGBA positions through transfers`, async () => {
+  test(`uses one Rust session for repeated exact frames and publishes diagnostics`, async () => {
     const posted: Array<{ msg: Record<string, unknown>; transfer: Transferable[] }> = []
     const scope: BondWorkerScope = {
       onmessage: null,
@@ -81,22 +120,29 @@ describe(`trajectory messages in the worker`, () => {
         posted.push({ msg: msg as Record<string, unknown>, transfer })
       },
     }
-    const free = vi.fn()
-    const detect = vi.fn(() => ({
-      pairs: Uint32Array.from([0, 1]),
-      images: Int8Array.from([1, 0, 0]),
-      lengths: Float32Array.from([1.5]),
-      strengths: Float32Array.from([0.75]),
-      free,
-    }))
-    const glue = {
-      initSync: vi.fn(),
-      detect_bonds_radii_typed: detect,
-      detect_bonds_radii: vi.fn(),
-      detect_bonds_electronegativity: vi.fn(),
-      detect_bonds_solid_angle: vi.fn(),
-      detect_hydrogen_bonds: vi.fn(),
-    } as unknown as BondWorkerGlue
+    let frame_count = 0
+    const table_free = vi.fn()
+    const compute_frame = vi.fn(() => {
+      frame_count += 1
+      return {
+        pairs: Uint32Array.from([0, 1]),
+        images: Int8Array.from([1, 0, 0]),
+        lengths: Float32Array.from([1.5]),
+        strengths: Float32Array.from([0.75]),
+        free: table_free,
+      }
+    })
+    const rust = fake_trajectory_session({
+      compute_frame,
+      diagnostics_json: vi.fn(() => JSON.stringify({
+        frame_count,
+        grid_cache_hits: frame_count - 1,
+        grid_rebuilds: 1,
+        capacity_growths: 2,
+      })),
+    })
+    const create_session = vi.fn(() => rust)
+    const glue = fake_glue(create_session)
     install_bond_worker(scope, glue)
 
     await scope.onmessage!({
@@ -130,17 +176,35 @@ describe(`trajectory messages in the worker`, () => {
         lattice: new Float64Array(9),
       },
     } as MessageEvent)
+    await scope.onmessage!({
+      data: {
+        id: 2,
+        type: `trajectory_frame_typed`,
+        session_id: 7,
+        topology_fingerprint: `topology:7`,
+        frame_idx: 5,
+        positions,
+        lattice: new Float64Array(9),
+      },
+    } as MessageEvent)
 
     const response = posted.at(-1)!
     const rgba = response.msg.gpu_positions_rgba as Float32Array
     const shape = position_texture_shape(atom_count)
-    expect(detect).toHaveBeenCalledWith(
-      positions,
+    expect(create_session).toHaveBeenCalledTimes(1)
+    expect(create_session).toHaveBeenCalledWith(
+      7,
       atomic_numbers,
-      expect.any(Float64Array),
       expect.any(Uint8Array),
       `{"tolerance":1.1}`,
     )
+    expect(compute_frame).toHaveBeenCalledTimes(2)
+    expect(compute_frame).toHaveBeenLastCalledWith(
+      positions,
+      expect.any(Float64Array),
+      5,
+    )
+    expect(glue.detect_bonds_radii_typed).not.toHaveBeenCalled()
     expect([...rgba.slice(0, 4)]).toEqual([1, 2, 3, 1])
     expect([
       ...rgba.slice((atom_count - 1) * 4, atom_count * 4),
@@ -156,7 +220,149 @@ describe(`trajectory messages in the worker`, () => {
       (response.msg.strengths as Float32Array).buffer,
       rgba.buffer,
     ])
-    expect(free).toHaveBeenCalledTimes(1)
+    expect(response.msg.session_diagnostics).toEqual({
+      frame_count: 2,
+      grid_cache_hits: 1,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+      session_initializations: 1,
+      thread_count: 1,
+    })
+    expect(table_free).toHaveBeenCalledTimes(2)
+  })
+
+  test(`frees the old Rust session before creating its replacement`, async () => {
+    const order: string[] = []
+    const first = fake_trajectory_session({
+      free: vi.fn(() => order.push(`free:1`)),
+    })
+    const second = fake_trajectory_session()
+    const create_session = vi.fn((session_id: number) => {
+      order.push(`create:${session_id}`)
+      return session_id === 1 ? first : second
+    })
+    const scope: BondWorkerScope = {
+      onmessage: null,
+      postMessage: vi.fn(),
+    }
+    install_bond_worker(scope, fake_glue(create_session))
+    await scope.onmessage!({
+      data: { id: -1, type: `init`, module: {}, thread_count: 1 },
+    } as MessageEvent)
+    for (const session_id of [1, 2]) {
+      await scope.onmessage!({
+        data: {
+          id: session_id,
+          type: `trajectory_session_init`,
+          session_id,
+          topology_fingerprint: `topology:${session_id}`,
+          atomic_numbers: Uint8Array.from([6, 8]),
+          stable_site_ids: null,
+          pbc: Uint8Array.from([1, 1, 1]),
+          options_json: `{}`,
+        },
+      } as MessageEvent)
+    }
+
+    expect(order).toEqual([`create:1`, `free:1`, `create:2`])
+    expect(create_session).toHaveBeenCalledTimes(2)
+    expect(first.free).toHaveBeenCalledTimes(1)
+  })
+
+  test(`each replacement worker initializes exactly one new Rust session`, async () => {
+    const create_session = vi.fn(() => fake_trajectory_session())
+    for (let worker_idx = 0; worker_idx < 2; worker_idx++) {
+      const scope: BondWorkerScope = {
+        onmessage: null,
+        postMessage: vi.fn(),
+      }
+      install_bond_worker(scope, fake_glue(create_session))
+      await scope.onmessage!({
+        data: { id: -1, type: `init`, module: {}, thread_count: 1 },
+      } as MessageEvent)
+      await scope.onmessage!({
+        data: {
+          id: worker_idx,
+          type: `trajectory_session_init`,
+          session_id: 7,
+          topology_fingerprint: `topology:7`,
+          atomic_numbers: Uint8Array.from([6, 8]),
+          stable_site_ids: null,
+          pbc: Uint8Array.from([1, 0, 1]),
+          options_json: `{}`,
+        },
+      } as MessageEvent)
+    }
+
+    expect(create_session).toHaveBeenCalledTimes(2)
+  })
+
+  test(`surfaces a typed Rust frame error without publishing frame arrays`, async () => {
+    const rust_error = Object.assign(new Error(
+      `trajectory bond session 7 frame 4: positions length 3 != expected 6`,
+    ), {
+      name: `TrajectoryBondFrameLengthError`,
+      session_id: 7,
+      expected_atom_count: 2,
+      expected_float_count: 6,
+      actual_float_count: 3,
+      frame_idx: 4,
+    })
+    const compute_frame = vi.fn(() => {
+      throw rust_error
+    })
+    const rust = fake_trajectory_session({ compute_frame })
+    const posted: Array<Record<string, unknown>> = []
+    const scope: BondWorkerScope = {
+      onmessage: null,
+      postMessage: (message) => posted.push(
+        message as Record<string, unknown>,
+      ),
+    }
+    install_bond_worker(scope, fake_glue(vi.fn(() => rust)))
+    await scope.onmessage!({
+      data: { id: -1, type: `init`, module: {}, thread_count: 1 },
+    } as MessageEvent)
+    await scope.onmessage!({
+      data: {
+        id: 0,
+        type: `trajectory_session_init`,
+        session_id: 7,
+        topology_fingerprint: `topology:7`,
+        atomic_numbers: Uint8Array.from([6, 8]),
+        stable_site_ids: null,
+        pbc: Uint8Array.from([1, 0, 1]),
+        options_json: `{}`,
+      },
+    } as MessageEvent)
+    posted.length = 0
+    await scope.onmessage!({
+      data: {
+        id: 1,
+        type: `trajectory_frame_typed`,
+        session_id: 7,
+        topology_fingerprint: `topology:7`,
+        frame_idx: 4,
+        // Keep the JavaScript guard valid so this malformed-frame failure is
+        // the Rust session's final defense, not a duplicate JS rejection.
+        positions: new Float32Array(6),
+        lattice: new Float64Array(9),
+      },
+    } as MessageEvent)
+
+    expect(compute_frame).toHaveBeenCalledTimes(1)
+    expect(posted).toHaveLength(1)
+    expect(posted[0]).toMatchObject({
+      id: 1,
+      error_name: `TrajectoryBondFrameLengthError`,
+      session_id: 7,
+      expected_atom_count: 2,
+      expected_float_count: 6,
+      actual_float_count: 3,
+      frame_idx: 4,
+    })
+    expect(posted[0]).not.toHaveProperty(`pairs`)
+    expect(posted[0]).not.toHaveProperty(`gpu_positions_rgba`)
   })
 
   test(`packs exact object-path positions without invoking bond detection`, async () => {
@@ -167,15 +373,7 @@ describe(`trajectory messages in the worker`, () => {
         posted.push({ msg: msg as Record<string, unknown>, transfer })
       },
     }
-    const detect = vi.fn()
-    const glue = {
-      initSync: vi.fn(),
-      detect_bonds_radii_typed: detect,
-      detect_bonds_radii: vi.fn(),
-      detect_bonds_electronegativity: vi.fn(),
-      detect_bonds_solid_angle: vi.fn(),
-      detect_hydrogen_bonds: vi.fn(),
-    } as unknown as BondWorkerGlue
+    const glue = fake_glue(vi.fn(() => fake_trajectory_session()))
     install_bond_worker(scope, glue)
 
     await scope.onmessage!({
@@ -196,7 +394,7 @@ describe(`trajectory messages in the worker`, () => {
     expect(response.transfer).toEqual([
       (response.msg.gpu_positions_rgba as Float32Array).buffer,
     ])
-    expect(detect).not.toHaveBeenCalled()
+    expect(glue.detect_bonds_radii_typed).not.toHaveBeenCalled()
   })
 })
 
@@ -231,6 +429,14 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
               gpu_positions_rgba: Float32Array.from([
                 1, 2, 3, 1, 4, 5, 6, 1,
               ]),
+              session_diagnostics: {
+                thread_count: 99,
+                session_initializations: 1,
+                frame_count: 1,
+                grid_cache_hits: 0,
+                grid_rebuilds: 1,
+                capacity_growths: 2,
+              },
               dt: `4.2`,
             },
           } as MessageEvent)
@@ -257,7 +463,8 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
     const handle = new RealBondWorkerHandle(
       worker as unknown as Worker,
       vi.fn(),
-      `scalar`,
+      `threaded`,
+      4,
     )
     const first = trajectory_input()
     const original_positions_bytes = first.positions.byteLength
@@ -274,6 +481,14 @@ describe(`RealBondWorkerHandle trajectory sessions`, () => {
     expect([...result.gpu_positions_rgba]).toEqual([
       1, 2, 3, 1, 4, 5, 6, 1,
     ])
+    expect(result.session_diagnostics).toEqual({
+      thread_count: 4,
+      session_initializations: 1,
+      frame_count: 1,
+      grid_cache_hits: 0,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+    })
     expect(worker.posted.map((entry) => entry.data.type)).toEqual([
       `trajectory_session_init`,
       `trajectory_frame_typed`,
@@ -410,15 +625,10 @@ describe(`trajectory frame length validation inside the worker`, () => {
           posted.push({ msg: msg as Record<string, unknown>, transfer })
         },
       }
-      const detect = vi.fn()
-      const glue = {
-        initSync: vi.fn(),
-        detect_bonds_radii_typed: detect,
-        detect_bonds_radii: vi.fn(),
-        detect_bonds_electronegativity: vi.fn(),
-        detect_bonds_solid_angle: vi.fn(),
-        detect_hydrogen_bonds: vi.fn(),
-      } as unknown as BondWorkerGlue
+      const compute_frame = vi.fn()
+      const glue = fake_glue(vi.fn(() =>
+        fake_trajectory_session({ compute_frame })
+      ))
       install_bond_worker(scope, glue)
       await scope.onmessage!({
         data: { id: -1, type: `init`, module: {}, thread_count: 1 },
@@ -449,7 +659,7 @@ describe(`trajectory frame length validation inside the worker`, () => {
         },
       } as MessageEvent)
 
-      expect(detect).not.toHaveBeenCalled()
+      expect(compute_frame).not.toHaveBeenCalled()
       expect(posted).toHaveLength(1)
       expect(posted[0].msg).toMatchObject({
         id: 1,
@@ -472,15 +682,10 @@ describe(`trajectory frame length validation inside the worker`, () => {
 
   test(`preserves typed frame-length details through RealBondWorkerHandle`, async () => {
     const replies: Array<Record<string, unknown>> = []
-    const detect = vi.fn()
-    const glue = {
-      initSync: vi.fn(),
-      detect_bonds_radii_typed: detect,
-      detect_bonds_radii: vi.fn(),
-      detect_bonds_electronegativity: vi.fn(),
-      detect_bonds_solid_angle: vi.fn(),
-      detect_hydrogen_bonds: vi.fn(),
-    } as unknown as BondWorkerGlue
+    const compute_frame = vi.fn()
+    const glue = fake_glue(vi.fn(() =>
+      fake_trajectory_session({ compute_frame })
+    ))
 
     class LoopbackWorker {
       onmessage: ((event: MessageEvent) => void) | null = null
@@ -544,7 +749,7 @@ describe(`trajectory frame length validation inside the worker`, () => {
       actual_float_count: 3,
       frame_idx: 12,
     })
-    expect(detect).not.toHaveBeenCalled()
+    expect(compute_frame).not.toHaveBeenCalled()
     expect(replies.at(-1)).not.toHaveProperty(`pairs`)
     expect(replies.at(-1)).not.toHaveProperty(`gpu_positions_rgba`)
   })
@@ -565,6 +770,14 @@ describe(`trajectory runtime API`, () => {
         gpu_positions_rgba: Float32Array.from([
           1, 2, 3, 1, 4, 5, 6, 1,
         ]),
+        session_diagnostics: {
+          thread_count: 1,
+          session_initializations: 1,
+          frame_count: 1,
+          grid_cache_hits: 0,
+          grid_rebuilds: 1,
+          capacity_growths: 2,
+        },
       })),
       pack_trajectory_positions: vi.fn(async () =>
         Float32Array.from([1, 2, 3, 1])
@@ -585,7 +798,16 @@ describe(`trajectory runtime API`, () => {
 
     const result = await compute_trajectory_frame_typed(trajectory_input())
     expect(result.backend).toBe(`rust-wasm-scalar`)
+    expect(result.threading_expected).toBe(false)
     expect(result.elapsed_ms).toBe(5)
+    expect(result.session_diagnostics).toEqual({
+      thread_count: 1,
+      session_initializations: 1,
+      frame_count: 1,
+      grid_cache_hits: 0,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+    })
     expect([...result.gpu_positions_rgba]).toEqual([
       1, 2, 3, 1, 4, 5, 6, 1,
     ])
@@ -599,5 +821,51 @@ describe(`trajectory runtime API`, () => {
     await expect(
       compute_trajectory_frame_typed(trajectory_input()),
     ).rejects.toThrow(`worker rejected`)
+  })
+
+  test(`retains threading-expected evidence after a scalar fallback`, async () => {
+    const handle: BondWorkerHandle = {
+      compute_typed: vi.fn(),
+      compute_trajectory_frame_typed: vi.fn(async () => ({
+        table: {
+          pairs: Uint32Array.from([0, 1]),
+          images: Int8Array.from([0, 0, 0]),
+          lengths: Float32Array.from([1]),
+          strengths: Float32Array.from([0.8]),
+        },
+        gpu_positions_rgba: Float32Array.from([
+          1, 2, 3, 1, 4, 5, 6, 1,
+        ]),
+        session_diagnostics: {
+          thread_count: 1,
+          session_initializations: 1,
+          frame_count: 1,
+          grid_cache_hits: 0,
+          grid_rebuilds: 1,
+          capacity_growths: 2,
+        },
+      })),
+      pack_trajectory_positions: vi.fn(async () => new Float32Array(0)),
+      terminate: vi.fn(),
+    }
+    const runtime = create_bond_worker_runtime({
+      detect_capabilities: () => ({
+        cross_origin_isolated: true,
+        shared_array_buffer: true,
+        wasm_atomics: true,
+        hardware_concurrency: 8,
+      }),
+      create_threaded_worker: vi.fn(async () => {
+        throw new Error(`threaded init failed`)
+      }),
+      create_scalar_worker: vi.fn(async () => handle),
+    })
+
+    const result = await runtime.compute_trajectory_frame_typed(
+      trajectory_input(),
+    )
+    expect(result.backend).toBe(`rust-wasm-scalar`)
+    expect(result.threading_expected).toBe(true)
+    expect(result.session_diagnostics.thread_count).toBe(1)
   })
 })

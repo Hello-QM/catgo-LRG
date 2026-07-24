@@ -24,11 +24,35 @@ import {
   TrajectoryBondFrameLengthError,
 } from '../trajectory-bond-session'
 
+interface BondWorkerBondTableGlue {
+  pairs: Uint32Array
+  images: Int8Array
+  lengths: Float32Array
+  strengths: Float32Array
+  free(): void
+}
+
+export interface BondWorkerTrajectorySessionGlue {
+  compute_frame(
+    positions: Float32Array,
+    lattice: Float64Array,
+    frame_idx: number,
+  ): BondWorkerBondTableGlue
+  diagnostics_json(): string
+  free(): void
+}
+
 /** The wasm-bindgen glue surface both ferrox artifacts share. `initThreadPool`
  *  only exists on the threaded artifact (wasm-bindgen-rayon). */
 export interface BondWorkerGlue {
   initSync: (opts: { module: WebAssembly.Module }) => unknown
   initThreadPool?: (num_threads: number) => Promise<unknown>
+  create_trajectory_bond_session(
+    session_id: number,
+    atomic_numbers: Uint8Array,
+    pbc: Uint8Array,
+    options_json?: string,
+  ): BondWorkerTrajectorySessionGlue
   detect_bonds_radii: (structure_json: string, options_json?: string) => string
   detect_bonds_radii_typed: (
     positions: Float32Array,
@@ -36,13 +60,7 @@ export interface BondWorkerGlue {
     lattice: Float64Array,
     pbc: Uint8Array,
     options_json?: string,
-  ) => {
-    pairs: Uint32Array
-    images: Int8Array
-    lengths: Float32Array
-    strengths: Float32Array
-    free(): void
-  }
+  ) => BondWorkerBondTableGlue
   detect_bonds_electronegativity: (structure_json: string, options_json?: string) => string
   detect_bonds_solid_angle: (structure_json: string, options_json?: string) => string
   detect_hydrogen_bonds: (
@@ -82,11 +100,11 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
   let trajectory_session: {
     id: number
     topology_fingerprint: string
-    atomic_numbers: Uint8Array
-    stable_site_ids: Uint32Array | null
-    pbc: Uint8Array
-    options_json: string
+    atom_count: number
+    rust: BondWorkerTrajectorySessionGlue
   } | null = null
+  let trajectory_session_initializations = 0
+  let active_thread_count = 1
 
   scope.onmessage = async (e: MessageEvent) => {
     const { id, type } = e.data
@@ -105,6 +123,7 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
           }
           await glue.initThreadPool(thread_count)
         }
+        active_thread_count = Math.max(1, thread_count)
         initialized = true
         scope.postMessage({ id, type: `ready` })
       } catch (err) {
@@ -122,14 +141,21 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
 
     try {
       if (type === `trajectory_session_init`) {
+        trajectory_session?.rust.free()
+        trajectory_session = null
+        const rust = glue.create_trajectory_bond_session(
+          e.data.session_id,
+          e.data.atomic_numbers,
+          e.data.pbc,
+          e.data.options_json ?? undefined,
+        )
         trajectory_session = {
           id: e.data.session_id,
           topology_fingerprint: e.data.topology_fingerprint,
-          atomic_numbers: e.data.atomic_numbers,
-          stable_site_ids: e.data.stable_site_ids,
-          pbc: e.data.pbc,
-          options_json: e.data.options_json,
+          atom_count: e.data.atomic_numbers.length,
+          rust,
         }
+        trajectory_session_initializations += 1
         scope.postMessage({ id, type: `trajectory_session_ready` })
         return
       }
@@ -145,17 +171,15 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
         const positions = e.data.positions as Float32Array
         assert_trajectory_bond_frame_length(
           trajectory_session.id,
-          trajectory_session.atomic_numbers.length,
+          trajectory_session.atom_count,
           positions.length,
           e.data.frame_idx,
         )
         const t0 = performance.now()
-        const table = glue.detect_bonds_radii_typed(
+        const table = trajectory_session.rust.compute_frame(
           positions,
-          trajectory_session.atomic_numbers,
           e.data.lattice,
-          trajectory_session.pbc,
-          trajectory_session.options_json,
+          e.data.frame_idx,
         )
         const gpu_positions_rgba = pack_positions_rgba(positions)
         const pairs = table.pairs
@@ -163,6 +187,11 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
         const lengths = table.lengths
         const strengths = table.strengths
         table.free()
+        const session_diagnostics = {
+          ...JSON.parse(trajectory_session.rust.diagnostics_json()),
+          session_initializations: trajectory_session_initializations,
+          thread_count: active_thread_count,
+        }
         const dt = (performance.now() - t0).toFixed(1)
         scope.postMessage(
           {
@@ -172,6 +201,7 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
             lengths,
             strengths,
             gpu_positions_rgba,
+            session_diagnostics,
             dt,
           },
           [
@@ -242,16 +272,25 @@ export function install_bond_worker(scope: BondWorkerScope, glue: BondWorkerGlue
         scope.postMessage({ id, result, dt })
       }
     } catch (err) {
-      if (err instanceof TrajectoryBondFrameLengthError) {
+      if (
+        err instanceof TrajectoryBondFrameLengthError ||
+        (
+          typeof err === `object` &&
+          err !== null &&
+          `name` in err &&
+          err.name === `TrajectoryBondFrameLengthError`
+        )
+      ) {
+        const typed = err as TrajectoryBondFrameLengthError
         scope.postMessage({
           id,
-          error: err.message,
-          error_name: err.name,
-          session_id: err.session_id,
-          expected_atom_count: err.expected_atom_count,
-          expected_float_count: err.expected_float_count,
-          actual_float_count: err.actual_float_count,
-          frame_idx: err.frame_idx,
+          error: typed.message,
+          error_name: typed.name,
+          session_id: typed.session_id,
+          expected_atom_count: typed.expected_atom_count,
+          expected_float_count: typed.expected_float_count,
+          actual_float_count: typed.actual_float_count,
+          frame_idx: typed.frame_idx,
         })
       } else {
         scope.postMessage({ id, error: (err as Error).message || String(err) })
