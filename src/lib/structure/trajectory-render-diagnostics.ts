@@ -1,3 +1,6 @@
+import type { BondBackendKind } from './workers/bond-backend-policy'
+import type { TrajectoryBondSessionDiagnostics } from './workers/bond-worker-api'
+
 export type TrajectoryRenderEvent =
   | 'requested'
   | 'prepared'
@@ -32,6 +35,14 @@ export type TrajectoryRenderDiagnostics = TrajectoryRetainedState & {
   renderer_graph_hash_by_frame: Record<number, string>
   renderer_bond_count_by_frame: Record<number, number>
   bond_compute_ms: number[]
+  bond_backend: BondBackendKind | null
+  bond_threading_expected: boolean
+  bond_thread_count: number
+  bond_session_initializations: number
+  bond_session_frames: number
+  bond_grid_cache_hits: number
+  bond_grid_rebuilds: number
+  bond_capacity_growths: number
   cold_first_frame_ms: number | null
   warmup_ms: number | null
   frame_time_p95_ms: number | null
@@ -61,6 +72,11 @@ export type TrajectoryRenderDiagnosticsRecorder = {
     graph_hash: string,
     bond_count: number,
     compute_ms: number,
+  ): void
+  record_bond_session(
+    backend: BondBackendKind,
+    threading_expected: boolean,
+    diagnostics: TrajectoryBondSessionDiagnostics,
   ): void
   record_presented(
     frame_idx: number,
@@ -157,6 +173,14 @@ function initial_state(): MutableDiagnostics {
     bond_count_by_frame: {},
     renderer_graph_hash_by_frame: {},
     renderer_bond_count_by_frame: {},
+    bond_backend: null,
+    bond_threading_expected: false,
+    bond_thread_count: 0,
+    bond_session_initializations: 0,
+    bond_session_frames: 0,
+    bond_grid_cache_hits: 0,
+    bond_grid_rebuilds: 0,
+    bond_capacity_growths: 0,
     cold_first_frame_ms: null,
     warmup_ms: null,
     main_thread_long_tasks: 0,
@@ -281,6 +305,31 @@ export function create_trajectory_render_diagnostics():
       state.prepared_frames++
       state.last_prepared_frame = frame_idx
       bond_compute.push(compute_ms)
+    },
+    record_bond_session(backend, threading_expected, diagnostics) {
+      state.bond_backend = backend
+      state.bond_threading_expected = threading_expected
+      state.bond_thread_count = diagnostics.thread_count
+      state.bond_session_initializations = Math.max(
+        state.bond_session_initializations,
+        diagnostics.session_initializations,
+      )
+      state.bond_session_frames = Math.max(
+        state.bond_session_frames,
+        diagnostics.frame_count,
+      )
+      state.bond_grid_cache_hits = Math.max(
+        state.bond_grid_cache_hits,
+        diagnostics.grid_cache_hits,
+      )
+      state.bond_grid_rebuilds = Math.max(
+        state.bond_grid_rebuilds,
+        diagnostics.grid_rebuilds,
+      )
+      state.bond_capacity_growths = Math.max(
+        state.bond_capacity_growths,
+        diagnostics.capacity_growths,
+      )
     },
     record_presented(
       frame_idx,

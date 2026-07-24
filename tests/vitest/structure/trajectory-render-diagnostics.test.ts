@@ -54,6 +54,67 @@ describe(`trajectory render diagnostics`, () => {
     ).toBe(false)
   })
 
+  test(`keeps the latest monotonic bond-session evidence as scalar metadata`, () => {
+    const diagnostics = create_trajectory_render_diagnostics()
+    const owner = {}
+    diagnostics.begin_owner(owner, 1_000)
+    diagnostics.record_bond_session(`rust-wasm-threads`, true, {
+      thread_count: 4,
+      session_initializations: 1,
+      frame_count: 3,
+      grid_cache_hits: 2,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+    })
+    diagnostics.record_bond_session(`rust-wasm-threads`, true, {
+      thread_count: 4,
+      session_initializations: 1,
+      frame_count: 5,
+      grid_cache_hits: 4,
+      grid_rebuilds: 1,
+      capacity_growths: 3,
+    })
+    // An out-of-order cumulative snapshot must not reduce or double-count
+    // the latest values for the current trajectory owner.
+    diagnostics.record_bond_session(`rust-wasm-threads`, true, {
+      thread_count: 4,
+      session_initializations: 1,
+      frame_count: 4,
+      grid_cache_hits: 3,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+    })
+
+    const snapshot = diagnostics.snapshot()
+    expect(snapshot).toMatchObject({
+      bond_backend: `rust-wasm-threads`,
+      bond_threading_expected: true,
+      bond_thread_count: 4,
+      bond_session_initializations: 1,
+      bond_session_frames: 5,
+      bond_grid_cache_hits: 4,
+      bond_grid_rebuilds: 1,
+      bond_capacity_growths: 3,
+    })
+    expect(snapshot).not.toHaveProperty(`session`)
+    expect(snapshot).not.toHaveProperty(`session_diagnostics`)
+    expect(
+      Object.values(snapshot).some((value) => ArrayBuffer.isView(value)),
+    ).toBe(false)
+
+    diagnostics.begin_owner({}, 2_000)
+    expect(diagnostics.snapshot()).toMatchObject({
+      bond_backend: null,
+      bond_threading_expected: false,
+      bond_thread_count: 0,
+      bond_session_initializations: 0,
+      bond_session_frames: 0,
+      bond_grid_cache_hits: 0,
+      bond_grid_rebuilds: 0,
+      bond_capacity_growths: 0,
+    })
+  })
+
   test(`records exact graph identities, uploads, latency, and unique presentation FPS`, () => {
     const diagnostics = create_trajectory_render_diagnostics()
     diagnostics.begin_owner({}, 1_000)

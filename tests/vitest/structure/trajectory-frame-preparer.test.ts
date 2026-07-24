@@ -26,6 +26,7 @@ import {
   create_prepared_frame_pipeline,
   type PreparedFrameKey,
 } from '$lib/structure/trajectory-prepared-frame'
+import { trajectory_render_diagnostics } from '$lib/structure/trajectory-render-diagnostics'
 
 const typed_mock = vi.mocked(compute_trajectory_frame_typed)
 const object_mock = vi.mocked(compute_bonds_exact_async)
@@ -166,15 +167,41 @@ function bond(
   }
 }
 
+function scalar_session_diagnostics() {
+  return {
+    thread_count: 1,
+    session_initializations: 1,
+    frame_count: 1,
+    grid_cache_hits: 0,
+    grid_rebuilds: 1,
+    capacity_growths: 2,
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  trajectory_render_diagnostics.reset()
 })
 
 describe(`prepare_exact_trajectory_frame`, () => {
   test(`atom-radii fast path publishes one exact typed snapshot`, async () => {
     const gpu = new Float32Array([0.2, 0, 0, 1, 3.8, 0, 0, 1])
+    const session_diagnostics = {
+      thread_count: 4,
+      session_initializations: 1,
+      frame_count: 7,
+      grid_cache_hits: 6,
+      grid_rebuilds: 1,
+      capacity_growths: 2,
+    }
+    const record_bond_session = vi.spyOn(
+      trajectory_render_diagnostics,
+      `record_bond_session`,
+    )
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-threads`,
+      threading_expected: true,
+      session_diagnostics,
       elapsed_ms: 2,
       table: {
         pairs: new Uint32Array([0, 1, 0, 0]),
@@ -224,11 +251,30 @@ describe(`prepare_exact_trajectory_frame`, () => {
     })
     expect(prepared.graph_hash).toHaveLength(40)
     expect(prepared.byte_size).toBeGreaterThan(gpu.byteLength)
+    expect(record_bond_session).toHaveBeenCalledOnce()
+    expect(record_bond_session).toHaveBeenCalledWith(
+      `rust-wasm-threads`,
+      true,
+      session_diagnostics,
+    )
+    expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
+      bond_backend: `rust-wasm-threads`,
+      bond_threading_expected: true,
+      bond_thread_count: 4,
+      bond_session_initializations: 1,
+      bond_session_frames: 7,
+      bond_grid_cache_hits: 6,
+      bond_grid_rebuilds: 1,
+      bond_capacity_growths: 2,
+    })
+    record_bond_session.mockRestore()
   })
 
   test(`allocates different typed-worker sessions for different trajectory owners`, async () => {
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -254,6 +300,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
   test(`segments sessions by complete topology data and reuses copied equal data`, async () => {
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -310,6 +358,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
   test(`snapshots mutable topology inputs before session reuse`, async () => {
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -337,6 +387,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
   test(`publishes a cold async source under its loader-derived fingerprint`, async () => {
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -389,6 +441,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
   test(`prefetches a different topology segment under its own source key`, async () => {
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -453,6 +507,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(request_source).toBeTypeOf(`function`)
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -525,6 +581,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(request_guard).toBeDefined()
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -642,6 +700,8 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(request_source).toBeTypeOf(`function`)
     typed_mock.mockResolvedValue({
       backend: `rust-wasm-scalar`,
+      threading_expected: false,
+      session_diagnostics: scalar_session_diagnostics(),
       elapsed_ms: 1,
       table: {
         pairs: new Uint32Array(0),
@@ -793,6 +853,10 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect([...prepared.graph.pairs]).toEqual([0, 1])
     expect([...prepared.graph.jimages]).toEqual([-1, 0, 0])
     expect(prepared.gpu_positions_rgba).toBe(packed)
+    expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
+      bond_backend: null,
+      bond_session_frames: 0,
+    })
   })
 
   test(`non-atom-radii and topology-changing sources never use typed fast path`, async () => {
@@ -891,6 +955,10 @@ describe(`prepare_exact_trajectory_frame`, () => {
       request.source.positions[0], 0, 0, 1,
       request.source.positions[3], 0, 0, 1,
     ])
+    expect(trajectory_render_diagnostics.snapshot()).toMatchObject({
+      bond_backend: null,
+      bond_session_frames: 0,
+    })
   })
 
   test(`pads atom-only positions to the complete 2D texture allocation`, async () => {

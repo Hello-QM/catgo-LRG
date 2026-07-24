@@ -19,6 +19,7 @@ import {
   type PreparedFrameKey,
   type PreparedTrajectoryFrame,
 } from './trajectory-prepared-frame'
+import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
 import {
   same_trajectory_bond_topology,
   trajectory_bond_topology_fingerprint,
@@ -453,6 +454,11 @@ export async function prepare_exact_trajectory_frame(
         positions: source.positions,
         lattice_matrix: source.lattice,
       })
+      trajectory_render_diagnostics.record_bond_session(
+        result.backend,
+        result.threading_expected,
+        result.session_diagnostics,
+      )
       graph = typed_table_to_base_bond_graph(result.table, input.graph_version)
       gpu_positions_rgba = result.gpu_positions_rgba
     } catch (error) {
