@@ -852,13 +852,18 @@ describe(`prepare_exact_trajectory_frame`, () => {
       scene.indexOf(`const report_buffer =`),
       scene.indexOf(`report_buffer(true)`),
     )
+    const buffer_key_block = scene.slice(
+      scene.indexOf(`const buffer_keys: PreparedFrameKey[] = []`),
+      scene.indexOf(`const report_buffer =`),
+    )
     const prefetch_block = scene.slice(
       scene.indexOf(`const prefetch_idx =`),
       scene.indexOf(`  })\n\n  $effect.pre`),
     )
 
-    expect(report_block).toContain(`prepared_frame_window_key(`)
-    expect(report_block).not.toContain(`if (!buffered_source) break`)
+    expect(buffer_key_block).toContain(`prepared_frame_window_key(`)
+    expect(buffer_key_block).not.toContain(`if (!buffered_source) break`)
+    expect(report_block).toContain(`prepared_pipeline.ready_count(buffer_keys)`)
     expect(prefetch_block).toContain(`report_prefetch_outcome`)
     expect(prefetch_block.match(/report_prefetch_outcome\(/g)).toHaveLength(2)
     expect(scene).toContain(

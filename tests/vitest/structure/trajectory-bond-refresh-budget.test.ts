@@ -167,6 +167,30 @@ describe(`exact prepared trajectory ownership`, () => {
     )
   })
 
+  test(`computes exact buffer window keys once per scheduling turn`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const keys_start = scene.indexOf(
+      `const buffer_keys: PreparedFrameKey[] = []`,
+    )
+    const report_start = scene.indexOf(
+      `const report_buffer = (preparing: boolean) => {`,
+    )
+    const report_end = scene.indexOf(
+      `const report_buffer_failure`,
+      report_start,
+    )
+    const report = scene.slice(report_start, report_end)
+
+    expect(keys_start).toBeGreaterThan(-1)
+    expect(keys_start).toBeLessThan(report_start)
+    expect(report).toContain(`prepared_pipeline.ready_count(buffer_keys)`)
+    expect(report).not.toContain(`key_for_source(`)
+    expect(report).not.toContain(`prepared_frame_window_key(`)
+  })
+
   test(`the local hardware gate always launches the reviewed source server`, () => {
     const config = readFileSync(`playwright.config.ts`, `utf8`)
     expect(config).toContain(

@@ -2976,32 +2976,39 @@
       }
     }
 
-    const report_buffer = (preparing: boolean) => {
-      if (
-        !latest_prepared_request_key ||
-        !same_prepared_frame_key(current_key, latest_prepared_request_key)
-      ) return
-      const keys: PreparedFrameKey[] = []
-      const total = Math.max(0, frame_count)
-      for (let offset = 0; offset < Math.min(8, total || 1); offset++) {
-        const buffered_idx = total > 0
-          ? (frame_idx + offset) % total
-          : frame_idx
-        const buffered_source = buffered_idx === frame_idx
-          ? current_source
-          : getter?.(buffered_idx) ?? null
-        const buffered_key = prepared_frame_window_key(
+    const buffer_keys: PreparedFrameKey[] = []
+    const buffer_total = Math.max(0, frame_count)
+    for (
+      let offset = 0;
+      offset < Math.min(8, buffer_total || 1);
+      offset++
+    ) {
+      const buffered_idx = buffer_total > 0
+        ? (frame_idx + offset) % buffer_total
+        : frame_idx
+      const buffered_source = buffered_idx === frame_idx
+        ? current_source
+        : getter?.(buffered_idx) ?? null
+      const buffered_key = buffered_idx === frame_idx
+        ? current_key
+        : prepared_frame_window_key(
           current_key,
           buffered_idx,
           buffered_source ? key_for_source(buffered_source) : null,
           current_source.topology_stable,
         )
-        if (!buffered_key) break
-        keys.push(buffered_key)
-      }
+      if (!buffered_key) break
+      buffer_keys.push(buffered_key)
+    }
+
+    const report_buffer = (preparing: boolean) => {
+      if (
+        !latest_prepared_request_key ||
+        !same_prepared_frame_key(current_key, latest_prepared_request_key)
+      ) return
       on_trajectory_buffer_state?.({
         frame_idx,
-        ready_ahead: prepared_pipeline.ready_count(keys),
+        ready_ahead: prepared_pipeline.ready_count(buffer_keys),
         preparing,
         error: untrack(() => prepared_error),
       })
