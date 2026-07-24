@@ -39,7 +39,7 @@ export function may_start_prepared_playback(
 }
 
 export function playback_poll_interval_ms(rate_ms: number): number {
-  return Math.min(8, Math.max(1, rate_ms))
+  return Math.min(4, Math.max(1, rate_ms))
 }
 
 export function acknowledgement_releases_due_playback(

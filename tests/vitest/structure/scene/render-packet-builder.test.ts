@@ -12,6 +12,7 @@ import {
 } from '$lib/structure/scene/render-packet'
 import {
   create_render_packet_builder,
+  manager_topology_attribute_key,
 } from '$lib/structure/scene/render-packet-builder'
 import { image_sites_to_instance_table } from '$lib/structure/pbc-image-atoms'
 import type { ImageSiteEntry } from '$lib/structure/pbc-image-atoms'
@@ -197,5 +198,66 @@ describe(`create_render_packet_builder`, () => {
     expect(diff.frame_changed).toBe(true)
     expect(diff.topology_changed).toBe(false)
     expect(diff.replica_changed).toBe(false)
+  })
+})
+
+describe(`manager_topology_attribute_key`, () => {
+  test(`reuses graph-only topology shells and changes only for atom attributes`, () => {
+    const packet = create_render_packet_builder().build({
+      structure: make_structure(2),
+      bond_connectivity: [{ site_idx_1: 0, site_idx_2: 1 }],
+    })
+    const graph = packet.topology.bond_graph!
+    const graph_only_topology = {
+      ...packet.topology,
+      bond_graph: { ...graph, version: graph.version + 1 },
+    }
+    const colors = packet.topology.colors
+    const radii = packet.topology.radii
+    const first = manager_topology_attribute_key(
+      null,
+      packet.topology,
+      colors,
+      radii,
+    )
+    expect(first).toEqual({
+      upstream_version: packet.topology.version,
+      colors,
+      radii,
+    })
+
+    const graph_only = manager_topology_attribute_key(
+      first,
+      graph_only_topology,
+      colors,
+      radii,
+    )
+    expect(graph_only).toBe(first)
+    expect(diff_render_packet(packet, {
+      ...packet,
+      topology: graph_only_topology,
+    })).toMatchObject({
+      topology_changed: false,
+      bond_graph_changed: true,
+    })
+
+    expect(manager_topology_attribute_key(
+      first,
+      { version: packet.topology.version + 1 },
+      colors,
+      radii,
+    )).not.toBe(first)
+    expect(manager_topology_attribute_key(
+      first,
+      packet.topology,
+      colors.slice(),
+      radii,
+    )).not.toBe(first)
+    expect(manager_topology_attribute_key(
+      first,
+      packet.topology,
+      colors,
+      radii.slice(),
+    )).not.toBe(first)
   })
 })

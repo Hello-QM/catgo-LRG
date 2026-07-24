@@ -39,6 +39,10 @@
     BaseTopology,
     RenderPacket,
   } from './scene/render-packet'
+  import {
+    manager_topology_attribute_key,
+    type ManagerTopologyAttributeKey,
+  } from './scene/render-packet-builder'
   import { mark_render_surface } from './scene/render-surface'
   import {
     build_cutting_visibility_map,
@@ -97,8 +101,10 @@
     prepared_frame_window_key,
     prepared_frame_with_replicas,
     same_prepared_frame_key,
+    same_prepared_frame_schedule,
     type PreparedFrameKey,
     type PreparedFrameOutcome,
+    type PreparedFrameSchedule,
   } from './trajectory-prepared-frame'
   import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
   import {
@@ -2700,6 +2706,7 @@
   })
 
   let latest_prepared_request_key: PreparedFrameKey | null = null
+  let latest_prepared_schedule: PreparedFrameSchedule | null = null
   let asynchronously_loaded_prepared_source = $state.raw<{
     owner: object
     frame_idx: number
@@ -2822,6 +2829,7 @@
     ) {
       current_source_request_guard.invalidate()
       latest_prepared_request_key = null
+      latest_prepared_schedule = null
       prepared_pipeline.clear()
       pending_prepared_presentation = null
       trajectory_presentation_committer.clear()
@@ -2875,6 +2883,7 @@
       (requester ? null : fallback_source)
     if (!current_source) {
       latest_prepared_request_key = null
+      latest_prepared_schedule = null
       const current_source_request = current_source_request_guard.begin(
         raw_packet.frame.owner,
         frame_idx,
@@ -2926,6 +2935,16 @@
       ) ?? full_key_for_source(source)
     trajectory_render_diagnostics.begin_owner(raw_packet.frame.owner)
     latest_prepared_request_key = current_key
+    const schedule = {
+      key: current_key,
+      replicas: raw_packet.replicas,
+      frame_count,
+    }
+    if (
+      latest_prepared_schedule !== null &&
+      same_prepared_frame_schedule(latest_prepared_schedule, schedule)
+    ) return
+    latest_prepared_schedule = schedule
     const generation = prepared_pipeline.begin_request(current_key, frame_count)
     const estimated_bytes = Math.max(
       (current_source?.positions ?? raw_positions).byteLength * 3,
@@ -2962,6 +2981,7 @@
 
     if (import.meta.env.DEV) {
       globalThis.__catgoTrajectoryExactReference = async () => {
+        latest_prepared_schedule = null
         prepared_pipeline.clear(raw_packet.frame.owner)
         while (prepared_pipeline.stats().in_flight > 0) {
           await new Promise((resolve) => setTimeout(resolve, 10))
@@ -5224,6 +5244,10 @@
   // overlay is idempotent.
   let atom_positions_buffer = $derived.by(() => {
     if (import.meta.env?.DEV) __probe_apb_fires++
+    const packet_positions = presented_trajectory_positions
+    if (packet_renderer_active_for_typed_direct && packet_positions !== null) {
+      return packet_positions
+    }
     const mgr = atom_manager
     void mgr.version // subscribe to per-slot position writes
     const sites = structure?.sites
@@ -5366,9 +5390,9 @@
     return manager_graph_snapshot
   })
 
-  let manager_topology_source: BaseTopology | null = null
-  let manager_topology_colors: Float32Array | null = null
-  let manager_topology_radii: Float32Array | null = null
+  let manager_topology_attribute_key_cache:
+    | ManagerTopologyAttributeKey
+    | null = null
   let manager_topology_graph: BaseBondGraph | null = null
   let manager_topology_version = 0
   let manager_topology_snapshot: BaseTopology | null = null
@@ -5387,10 +5411,14 @@
       ? upstream.bond_graph ?? null
       : null
     const bond_graph = packet_owned_graph ?? manager_bond_graph
+    const next_attribute_key = manager_topology_attribute_key(
+      manager_topology_attribute_key_cache,
+      upstream,
+      colors,
+      radii,
+    )
     const attributes_changed = manager_topology_snapshot === null ||
-      manager_topology_source !== upstream ||
-      manager_topology_colors !== colors ||
-      manager_topology_radii !== radii
+      next_attribute_key !== manager_topology_attribute_key_cache
     if (attributes_changed || manager_topology_graph !== bond_graph) {
       if (attributes_changed) manager_topology_version++
       manager_topology_snapshot = {
@@ -5400,9 +5428,7 @@
         radii: manager_display_radii,
         bond_graph,
       }
-      manager_topology_source = upstream
-      manager_topology_colors = colors
-      manager_topology_radii = radii
+      manager_topology_attribute_key_cache = next_attribute_key
       manager_topology_graph = bond_graph
     }
     return manager_topology_snapshot

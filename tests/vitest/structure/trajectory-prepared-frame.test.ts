@@ -8,6 +8,7 @@ import {
   prepared_frame_byte_size,
   prepared_frame_with_replicas,
   same_prepared_frame_key,
+  same_prepared_frame_schedule,
   type DeferredFrameAdmission,
   type PreparedFrameKey,
   type PreparedFrameOutcome,
@@ -83,6 +84,33 @@ describe(`same_prepared_frame_key`, () => {
     for (const changed of changes) {
       expect(same_prepared_frame_key(key, changed)).toBe(false)
     }
+  })
+})
+
+describe(`same_prepared_frame_schedule`, () => {
+  test(`deduplicates one key only while the live replica layout is unchanged`, () => {
+    const replicas = make_packet().replicas
+    const first = { key: make_key(), replicas, frame_count: 100 }
+    expect(same_prepared_frame_schedule(first, {
+      key: make_key(),
+      replicas,
+      frame_count: 100,
+    })).toBe(true)
+    expect(same_prepared_frame_schedule(first, {
+      key: make_key(),
+      replicas: { ...replicas, version: replicas.version + 1 },
+      frame_count: 100,
+    })).toBe(false)
+    expect(same_prepared_frame_schedule(first, {
+      key: make_key({ frame_idx: 8 }),
+      replicas,
+      frame_count: 100,
+    })).toBe(false)
+    expect(same_prepared_frame_schedule(first, {
+      key: make_key(),
+      replicas,
+      frame_count: 101,
+    })).toBe(false)
   })
 })
 

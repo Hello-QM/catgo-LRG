@@ -55,6 +55,27 @@ export function same_prepared_frame_key(
     a.rules_version === b.rules_version
 }
 
+export type PreparedFrameSchedule = {
+  key: PreparedFrameKey
+  replicas: RenderPacket['replicas']
+  frame_count: number
+}
+
+/** One scheduling turn per scientific frame + live replica layout/stream size. Reactive
+ * publication can re-enter its owner effect with an equal freshly allocated
+ * key; those duplicate turns must not re-request current + seven prefetch
+ * frames. Replica identity remains part of the schedule so a visual factor or
+ * boundary-policy change can rebase the cached exact frame immediately;
+ * frame_count keeps wraparound and the ahead window correct after a resize. */
+export function same_prepared_frame_schedule(
+  a: PreparedFrameSchedule,
+  b: PreparedFrameSchedule,
+): boolean {
+  return a.frame_count === b.frame_count &&
+    a.replicas === b.replicas &&
+    same_prepared_frame_key(a.key, b.key)
+}
+
 export function prepared_frame_window_key(
   current_key: PreparedFrameKey,
   frame_idx: number,

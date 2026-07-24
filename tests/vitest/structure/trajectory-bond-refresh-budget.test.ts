@@ -35,6 +35,30 @@ describe(`exact prepared trajectory ownership`, () => {
     )
   })
 
+  test(`equal frame and replica schedules do not enqueue duplicate windows`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const schedule_start = scene.indexOf(
+      `const schedule = {`,
+    )
+    const begin_request = scene.indexOf(
+      `prepared_pipeline.begin_request(current_key, frame_count)`,
+      schedule_start,
+    )
+    expect(schedule_start).toBeGreaterThan(-1)
+    const schedule_block = scene.slice(schedule_start, begin_request)
+    expect(schedule_block).toContain(`key: current_key`)
+    expect(schedule_block).toContain(`replicas: raw_packet.replicas`)
+    expect(schedule_block).toContain(`frame_count`)
+    expect(schedule_block).toContain(
+      `same_prepared_frame_schedule(latest_prepared_schedule, schedule)`,
+    )
+    expect(schedule_block).toContain(`) return`)
+    expect(begin_request).toBeGreaterThan(schedule_start)
+  })
+
   test(`live renderer ownership reconciles exact packets or installs legacy state`, () => {
     const scene = readFileSync(
       `src/lib/structure/StructureScene.svelte`,
@@ -360,6 +384,31 @@ describe(`exact prepared trajectory ownership`, () => {
     expect(scene).toContain(
       `if (typed_direct_active || packet_renderer_active_for_typed_direct) ` +
       `return EMPTY_SLOT_MAP`,
+    )
+  })
+
+  test(`packet-owned positions bypass the legacy manager copy`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const buffer_start = scene.indexOf(
+      `let atom_positions_buffer = $derived.by(() => {`,
+    )
+    const buffer_end = scene.indexOf(
+      `let bond_lattice_matrix = $derived.by(`,
+      buffer_start,
+    )
+    const buffer = scene.slice(buffer_start, buffer_end)
+    const guard = buffer.indexOf(
+      `if (packet_renderer_active_for_typed_direct && ` +
+      `packet_positions !== null)`,
+    )
+    expect(guard).toBeGreaterThan(-1)
+    expect(buffer).toContain(`return packet_positions`)
+    expect(guard).toBeLessThan(buffer.indexOf(`void mgr.version`))
+    expect(guard).toBeLessThan(
+      buffer.indexOf(`__probe_apb_meaningful++`),
     )
   })
 })

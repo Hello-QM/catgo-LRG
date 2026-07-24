@@ -43,6 +43,30 @@ export type PacketBondConnectivity = {
   jimage?: readonly [number, number, number]
 }
 
+export type ManagerTopologyAttributeKey = Readonly<{
+  upstream_version: number
+  colors: Float32Array
+  radii: Float32Array
+}>
+
+/** Intern the atom-attribute identity used by StructureScene's manager packet.
+ * Prepared frames wrap the same scientific topology with a new bond graph
+ * object every frame. The graph has its own version channel, so that wrapper
+ * must not make atom renderers rescan and re-upload unchanged colors/radii. */
+export function manager_topology_attribute_key(
+  previous: ManagerTopologyAttributeKey | null,
+  upstream: Pick<BaseTopology, 'version'>,
+  colors: Float32Array,
+  radii: Float32Array,
+): ManagerTopologyAttributeKey {
+  if (
+    previous?.upstream_version === upstream.version &&
+    previous.colors === colors &&
+    previous.radii === radii
+  ) return previous
+  return { upstream_version: upstream.version, colors, radii }
+}
+
 export type RenderPacketInput = {
   /** Base scientific frame — the packet owner. Sites are NEVER image-expanded. */
   structure: AnyStructure

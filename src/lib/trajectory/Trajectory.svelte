@@ -1336,7 +1336,7 @@
     if (playback_ack_timer !== undefined) return
     // Leave the renderer acknowledgement stack before requesting the next
     // packet. This preserves one complete Svelte publication per exact frame
-    // while avoiding up to one 8 ms polling interval after a late ACK.
+    // while avoiding up to one polling interval after a late ACK.
     playback_ack_timer = setTimeout(() => {
       playback_ack_timer = undefined
       advance_playback_if_due(1000 / fps)

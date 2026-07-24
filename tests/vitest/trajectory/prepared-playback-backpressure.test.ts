@@ -69,9 +69,9 @@ describe(`prepared playback backpressure`, () => {
     expect(request_playback_frame(state, 0)).toBe(state)
   })
 
-  test(`polls within eight milliseconds and catches up one missed deadline`, () => {
-    expect(playback_poll_interval_ms(1000 / 30)).toBe(8)
-    expect(playback_poll_interval_ms(5)).toBe(5)
+  test(`polls within four milliseconds and catches up one missed deadline`, () => {
+    expect(playback_poll_interval_ms(1000 / 30)).toBe(4)
+    expect(playback_poll_interval_ms(5)).toBe(4)
     expect(advance_playback_deadline(100, 104, 1000 / 30))
       .toBeCloseTo(133.333, 2)
     expect(advance_playback_deadline(100, 500, 1000 / 30)).toBe(500)
