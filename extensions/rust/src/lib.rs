@@ -57,6 +57,8 @@ pub mod potentials;
 pub mod rdf;
 pub mod structure_matcher;
 pub mod trajectory;
+/// Persistent exact bond detection for typed trajectory frames.
+pub mod trajectory_bond;
 
 // Local unique modules (CatGO specific)
 pub mod adsorbate;
