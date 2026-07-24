@@ -24,7 +24,15 @@ function carbon_site(xyz: [number, number, number]): Site {
   } as unknown as Site
 }
 
-function make_packet(frame_idx: number, positions_version: number) {
+function make_packet(
+  frame_idx: number,
+  positions_version: number,
+  bonds: PacketBondConnectivity[] = [
+    { site_idx_1: 0, site_idx_2: 1 },
+    { site_idx_1: 1, site_idx_2: 0, jimage: [1, 0, 0] },
+  ],
+  builder = create_render_packet_builder(),
+) {
   const structure = {
     sites: [carbon_site([0, 0, 0]), carbon_site([1.4, 0, 0])],
     lattice: {
@@ -39,11 +47,7 @@ function make_packet(frame_idx: number, positions_version: number) {
       volume: 1000,
     },
   } as unknown as AnyStructure
-  const bonds: PacketBondConnectivity[] = [
-    { site_idx_1: 0, site_idx_2: 1 },
-    { site_idx_1: 1, site_idx_2: 0, jimage: [1, 0, 0] },
-  ]
-  return create_render_packet_builder().build({
+  return builder.build({
     structure,
     bond_connectivity: bonds,
     dims: [2, 1, 1],
@@ -143,6 +147,38 @@ describe(`replica picker shared positions`, () => {
     scene.dispose()
     expect(texture_dispose).not.toHaveBeenCalled()
     expect(positions.stats().picker_consumers).toBe(0)
+    positions.dispose()
+  })
+
+  test(`bond mirrors retain compact attribute identities within capacity`, () => {
+    const positions = new SharedPositionTexture()
+    const builder = create_render_packet_builder()
+    const packet = make_packet(0, 1, undefined, builder)
+    positions.update(packet.frame)
+    const scene = new ReplicaPickScene({
+      renderer: fake_renderer(),
+      positions,
+    })
+    scene.sync(packet)
+
+    const geometry = scene.bond_mesh.geometry as THREE.InstancedBufferGeometry
+    const site = geometry.getAttribute(`a_site`) as THREE.InstancedBufferAttribute
+    const jimage = geometry.getAttribute(`a_jimage`) as THREE.InstancedBufferAttribute
+    const site_array = site.array
+    const jimage_array = jimage.array
+
+    const next = make_packet(1, 2, [{ site_idx_1: 0, site_idx_2: 1 }], builder)
+    positions.update(next.frame)
+    scene.sync(next)
+
+    expect(geometry.getAttribute(`a_site`)).toBe(site)
+    expect(geometry.getAttribute(`a_jimage`)).toBe(jimage)
+    expect((geometry.getAttribute(`a_site`) as THREE.InstancedBufferAttribute).array)
+      .toBe(site_array)
+    expect((geometry.getAttribute(`a_jimage`) as THREE.InstancedBufferAttribute).array)
+      .toBe(jimage_array)
+    expect(geometry.instanceCount).toBe(4)
+    scene.dispose()
     positions.dispose()
   })
 })

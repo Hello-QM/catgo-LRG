@@ -29,6 +29,7 @@ import type {
 } from '$lib/structure/scene/render-packet'
 import type { AnyStructure, Site } from '$lib'
 import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+import { decode_compact_bond_instance } from '$lib/structure/gpu/webgl2/compact-bond-instance-layout'
 
 const EMPTY_IMAGES: ImageInstanceTable = {
   count: 0,
@@ -632,13 +633,58 @@ describe('ReplicaPickScene — WebGL2 integer GPU ID pass', () => {
     })
     expect(picked.logical_site).toBe(2)
 
-    // Both half-bond instances of one bond fold to ONE bond graph index in
-    // the shader-side encode (bond_index = half_index / 2, atom-major fold).
-    expect(scene.bond_material.vertexShader).toContain('half_index / 2')
+    // Both compact half-bond instances fold to ONE bond graph index in the
+    // shader-side encode (bond_index = gl_InstanceID / (2 * cell count)).
+    expect(scene.bond_material.vertexShader).toContain('2 * uCellCount')
+    expect(scene.bond_material.vertexShader).toContain('gl_InstanceID / group_size')
+    expect(scene.bond_material.vertexShader).toContain('half == 1')
     expect(scene.bond_material.vertexShader).toContain('uBondFirstId')
     expect(scene.bond_material.vertexShader).toContain('uBaseBondCount * cell_index')
     scene.dispose()
   })
+
+  test.each([
+    [1, 1, 1],
+    [2, 1, 1],
+    [2, 2, 2],
+  ] as const)(
+    'compact bond instances map both halves in every cell to one logical ID for dims %j',
+    (...dims) => {
+      const bonds: PacketBondConnectivity[] = [
+        { site_idx_1: 0, site_idx_2: 1 },
+        { site_idx_1: 1, site_idx_2: 2, jimage: [1, 0, 0] },
+      ]
+      const packet = make_packet({ n: 3, dims, bonds })
+      const scene = make_pick_scene(packet)
+      scene.sync(packet)
+      const codec = scene.codec
+      if (codec === null) throw new Error('codec missing after sync')
+
+      const geometry = scene.bond_mesh.geometry as THREE.InstancedBufferGeometry
+      const cell_count = dims[0] * dims[1] * dims[2]
+      const site = geometry.getAttribute('a_site') as THREE.InstancedBufferAttribute
+      const jimage = geometry.getAttribute('a_jimage') as THREE.InstancedBufferAttribute
+      expect(site.count).toBe(2)
+      expect(jimage.count).toBe(2)
+      expect(site.meshPerAttribute).toBe(2 * cell_count)
+      expect(jimage.meshPerAttribute).toBe(2 * cell_count)
+      expect(geometry.getAttribute('a_half')).toBeUndefined()
+      expect(geometry.instanceCount).toBe(2 * 2 * cell_count)
+
+      for (let instance_index = 0; instance_index < geometry.instanceCount; instance_index++) {
+        const decoded = decode_compact_bond_instance(instance_index, dims)
+        const id = codec.bond_first_id + decoded.bond_index +
+          codec.base_bond_count * decoded.cell_index
+        expect(decode_replica_pick_id(id, codec, packet.replicas, scene.images)).toEqual({
+          kind: 'bond',
+          base_site: decoded.bond_index,
+          cell: decoded.cell,
+          ghost: false,
+        })
+      }
+      scene.dispose()
+    },
+  )
 
   test('integer ID encode lives in the shaders — atoms, bonds, ghosts', () => {
     const scene = make_pick_scene()

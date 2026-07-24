@@ -533,15 +533,14 @@ const SPHERE_PICK_FRAGMENT_SHADER = /* glsl */ `
   }
 `
 
-// Bond replica pick draw: per-half base attributes at divisor = cell count,
-// the SAME boundary-policy geometry as the visual bond renderer, and BOTH
-// half instances of one bond folding to ONE bond-graph ID:
-// half_index = gl_InstanceID / uCellCount, bond = half_index / 2,
+// Bond replica pick draw: per-bond base attributes at divisor = twice the cell
+// count, the SAME boundary-policy geometry as the visual bond renderer, and
+// BOTH half instances of one bond folding to ONE bond-graph ID:
+// group_size = 2 * uCellCount, bond = gl_InstanceID / group_size,
 // id = uBondFirstId + bond + uBaseBondCount · cell_index.
 const BOND_PICK_VERTEX_SHADER = /* glsl */ `
   attribute vec2 a_site;
   attribute vec3 a_jimage;
-  attribute float a_half;
   uniform mat3 uLattice;
   uniform ivec3 uDims;
   uniform int uCellCount;
@@ -560,9 +559,11 @@ const BOND_PICK_VERTEX_SHADER = /* glsl */ `
   ${PICK_POSITION_TEXTURE}
 
   void main() {
-    int cell_index = gl_InstanceID % uCellCount;
-    int half_index = gl_InstanceID / uCellCount;
-    int bond_index = half_index / 2;
+    int group_size = 2 * uCellCount;
+    int within_bond = gl_InstanceID % group_size;
+    int half = within_bond / uCellCount;
+    int cell_index = within_bond % uCellCount;
+    int bond_index = gl_InstanceID / group_size;
     vPickColor = encode_pick_id(uBondFirstId + bond_index + uBaseBondCount * cell_index);
     ivec3 cell = ivec3(
       cell_index % uDims.x,
@@ -572,7 +573,7 @@ const BOND_PICK_VERTEX_SHADER = /* glsl */ `
     vec3 pa = fetchBasePosition(a_site.x);
     vec3 pb = fetchBasePosition(a_site.y);
     ivec3 jimage = ivec3(round(a_jimage));
-    bool is_b_half = a_half > 0.5;
+    bool is_b_half = half == 1;
     ivec3 probe = is_b_half ? cell - jimage : cell + jimage;
     bool inside = all(greaterThanEqual(probe, ivec3(0))) &&
       all(lessThan(probe, uDims));
@@ -707,7 +708,7 @@ const MISS_PICK: ReplicaPickResult = Object.freeze({
  * vertex stage, boundary-policy geometry) with codec-encoded IDs as color.
  *
  * Owns only BASE-sized topology resources: site IDs and radii are N floats,
- * bond halves are 2B entries, and ghosts are the sparse O(surface) table.
+ * bonds are B entries, and ghosts are the sparse O(surface) table.
  * Positions come from the visible draw's shared texture. There is NO
  * instanceMatrix, per-replica CPU compose, or picker position upload.
  *
@@ -741,9 +742,10 @@ export class ReplicaPickScene {
   // Base-sized topology-only CPU mirrors.
   #atom_sites = new Float32Array(0)
   #radii = new Float32Array(0)
+  #bond_capacity = 0
+  #bond_count = 0
   #sites = new Float32Array(0)
   #jimages = new Int8Array(0)
-  #halves = new Float32Array(0)
   #positions: SharedPositionTexture
   #release_positions: () => void
 
@@ -926,7 +928,7 @@ export class ReplicaPickScene {
       ;(this.atom_material.uniforms.uLattice.value as THREE.Matrix3)
         .fromArray(packet.frame.lattice as unknown as number[])
     }
-    if (graph_changed) this.#rebuild_half_attrs(packet)
+    if (graph_changed) this.#rebuild_bond_attrs(packet)
     if (graph_changed || diff.replica_changed) this.#apply_bond_replicas(packet)
     if (ghosts_changed) this.#rebuild_ghosts(packet)
 
@@ -1028,37 +1030,28 @@ export class ReplicaPickScene {
     this.atom_material.uniforms.uCellCount.value = cc
   }
 
-  #rebuild_half_attrs(packet: RenderPacket): void {
+  #rebuild_bond_attrs(packet: RenderPacket): void {
     const graph = packet.topology.bond_graph
     const bond_count = graph !== undefined ? graph.pairs.length / 2 : 0
-    const half_count = bond_count * 2
-    if (this.#halves.length !== half_count) {
-      this.#sites = new Float32Array(half_count * 2)
-      this.#jimages = new Int8Array(half_count * 3)
-      this.#halves = new Float32Array(half_count)
+    if (bond_count > this.#bond_capacity) {
+      this.#bond_capacity = Math.max(
+        bond_count,
+        Math.ceil(this.#bond_capacity * 1.5),
+      )
+      this.#sites = new Float32Array(this.#bond_capacity * 2)
+      this.#jimages = new Int8Array(this.#bond_capacity * 3)
     }
-    if (graph !== undefined) {
-      for (let bi = 0; bi < bond_count; bi++) {
-        const a = graph.pairs[bi * 2]
-        const b = graph.pairs[bi * 2 + 1]
-        const i0 = bi * 2
-        const i1 = i0 + 1
-        this.#sites[i0 * 2] = a
-        this.#sites[i0 * 2 + 1] = b
-        this.#sites[i1 * 2] = a
-        this.#sites[i1 * 2 + 1] = b
-        const ji = bi * 3
-        for (let k = 0; k < 3; k++) {
-          this.#jimages[i0 * 3 + k] = graph.jimages[ji + k]
-          this.#jimages[i1 * 3 + k] = graph.jimages[ji + k]
-        }
-        this.#halves[i0] = 0
-        this.#halves[i1] = 1
-      }
-    }
-    for (const name of ['a_site', 'a_jimage', 'a_half']) {
-      const attribute = this.#bond_geometry.getAttribute(name)
-      if (attribute) attribute.needsUpdate = true
+    this.#bond_count = bond_count
+    if (graph === undefined || bond_count === 0) return
+    this.#sites.set(graph.pairs, 0)
+    this.#jimages.set(graph.jimages, 0)
+    for (const name of ['a_site', 'a_jimage']) {
+      const attribute = this.#bond_geometry.getAttribute(name) as
+        | THREE.InstancedBufferAttribute
+        | undefined
+      if (!attribute) continue
+      attribute.addUpdateRange(0, bond_count * attribute.itemSize)
+      attribute.needsUpdate = true
     }
   }
 
@@ -1066,10 +1059,24 @@ export class ReplicaPickScene {
     const dims = packet.replicas.dims
     const cc = (dims[0] > 0 ? dims[0] : 1) * (dims[1] > 0 ? dims[1] : 1) *
       (dims[2] > 0 ? dims[2] : 1)
-    ensure_instanced_attr(this.#bond_geometry, 'a_site', this.#sites, 2, cc)
-    ensure_instanced_attr(this.#bond_geometry, 'a_jimage', this.#jimages, 3, cc)
-    ensure_instanced_attr(this.#bond_geometry, 'a_half', this.#halves, 1, cc)
-    this.#bond_geometry.instanceCount = this.#halves.length * cc
+    const group_size = 2 * cc
+    ensure_instanced_attr(
+      this.#bond_geometry,
+      'a_site',
+      this.#sites,
+      2,
+      group_size,
+      true,
+    )
+    ensure_instanced_attr(
+      this.#bond_geometry,
+      'a_jimage',
+      this.#jimages,
+      3,
+      group_size,
+      true,
+    )
+    this.#bond_geometry.instanceCount = this.#bond_count * group_size
     this.bond_material.uniforms.uPolicy.value =
       BOUNDARY_POLICY_CODE[packet.replicas.boundary_policy]
   }
