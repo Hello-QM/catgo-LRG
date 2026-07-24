@@ -5,6 +5,8 @@ import type { AnyStructure, Site } from '$lib'
 import { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
 import { BondManager } from '$lib/structure/bonding/bond-manager.svelte'
 import type { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+import { AtomReplicaRenderer } from '$lib/structure/gpu/webgl2/atom-replica-renderer'
+import { BondReplicaRenderer } from '$lib/structure/gpu/webgl2/bond-replica-renderer'
 import { combined_packet_render_eligible } from '$lib/structure/gpu/combined-packet-render-eligible'
 import {
   create_render_packet_builder,
@@ -88,6 +90,15 @@ function meshes(scene: THREE.Scene): THREE.Mesh[] {
   return found
 }
 
+function renderer_meshes(
+  scene: THREE.Scene,
+  uniform: `uRenderStyle` | `uBondRadius`,
+): THREE.Mesh[] {
+  return meshes(scene).filter((mesh) =>
+    uniform in (mesh.material as THREE.ShaderMaterial).uniforms
+  )
+}
+
 async function settle(): Promise<void> {
   flushSync()
   await tick()
@@ -98,9 +109,189 @@ const mounted: object[] = []
 afterEach(async () => {
   while (mounted.length > 0) await unmount(mounted.pop()!)
   document.body.replaceChildren()
+  vi.restoreAllMocks()
 })
 
 describe(`unified WebGL2 replica layer`, () => {
+  test(`creates and disposes the bond draw reactively without replacing atoms`, async () => {
+    const dom = document.createElement(`div`)
+    const canvas = document.createElement(`canvas`)
+    dom.append(canvas)
+    document.body.append(dom)
+    let scene!: THREE.Scene
+    let positions!: SharedPositionTexture
+    const component = mount(Harness, {
+      target: dom,
+      props: {
+        mode: `combined`,
+        packets: packets(),
+        atom_manager: new AtomManager(16),
+        bond_manager: new BondManager(16),
+        renderer: fake_renderer(),
+        dom,
+        canvas,
+        onscene: (next: THREE.Scene) => scene = next,
+        onpositions: (next: SharedPositionTexture) => positions = next,
+        initial_show_atoms: true,
+        initial_show_bonds: false,
+      },
+    })
+    mounted.push(component)
+    await settle()
+
+    const atom_meshes = renderer_meshes(scene, `uRenderStyle`)
+    expect(atom_meshes).toHaveLength(2)
+    expect(renderer_meshes(scene, `uBondRadius`)).toHaveLength(0)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 1,
+      bond_consumers: 0,
+    })
+
+    dom.querySelector<HTMLButtonElement>(`[data-testid="bonds-on"]`)!.click()
+    await settle()
+    const bond_meshes = renderer_meshes(scene, `uBondRadius`)
+    expect(bond_meshes).toHaveLength(2)
+    expect(renderer_meshes(scene, `uRenderStyle`)).toEqual(atom_meshes)
+    expect(
+      (bond_meshes[0].geometry as THREE.InstancedBufferGeometry).instanceCount,
+    ).toBeGreaterThan(0)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 1,
+      bond_consumers: 1,
+    })
+
+    dom.querySelector<HTMLButtonElement>(`[data-testid="bonds-off"]`)!.click()
+    await settle()
+    expect(renderer_meshes(scene, `uBondRadius`)).toHaveLength(0)
+    expect(renderer_meshes(scene, `uRenderStyle`)).toEqual(atom_meshes)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 1,
+      bond_consumers: 0,
+    })
+  })
+
+  test(`creates and disposes the atom draw reactively without replacing bonds`, async () => {
+    const dom = document.createElement(`div`)
+    const canvas = document.createElement(`canvas`)
+    dom.append(canvas)
+    document.body.append(dom)
+    let scene!: THREE.Scene
+    let positions!: SharedPositionTexture
+    const component = mount(Harness, {
+      target: dom,
+      props: {
+        mode: `combined`,
+        packets: packets(),
+        atom_manager: new AtomManager(16),
+        bond_manager: new BondManager(16),
+        renderer: fake_renderer(),
+        dom,
+        canvas,
+        onscene: (next: THREE.Scene) => scene = next,
+        onpositions: (next: SharedPositionTexture) => positions = next,
+        initial_show_atoms: false,
+        initial_show_bonds: true,
+      },
+    })
+    mounted.push(component)
+    await settle()
+
+    const bond_meshes = renderer_meshes(scene, `uBondRadius`)
+    expect(bond_meshes).toHaveLength(2)
+    expect(renderer_meshes(scene, `uRenderStyle`)).toHaveLength(0)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 0,
+      bond_consumers: 1,
+    })
+
+    dom.querySelector<HTMLButtonElement>(`[data-testid="style-toon"]`)!.click()
+    dom.querySelector<HTMLButtonElement>(`[data-testid="appearance"]`)!.click()
+    dom.querySelector<HTMLButtonElement>(`[data-testid="atoms-on"]`)!.click()
+    await settle()
+    const atom_meshes = renderer_meshes(scene, `uRenderStyle`)
+    expect(atom_meshes).toHaveLength(2)
+    expect(renderer_meshes(scene, `uBondRadius`)).toEqual(bond_meshes)
+    const atom_main = atom_meshes.find((mesh) =>
+      `uCellCount` in (mesh.material as THREE.ShaderMaterial).uniforms
+    )!
+    expect(
+      (atom_main.geometry as THREE.InstancedBufferGeometry).instanceCount,
+    ).toBeGreaterThan(0)
+    expect(
+      (atom_main.material as THREE.ShaderMaterial).uniforms.uRenderStyle.value,
+    ).toBe(2)
+    expect(
+      (bond_meshes[0].material as THREE.ShaderMaterial).uniforms.uOpacity.value,
+    ).toBeCloseTo(0.4)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 1,
+      bond_consumers: 1,
+    })
+
+    dom.querySelector<HTMLButtonElement>(`[data-testid="atoms-off"]`)!.click()
+    await settle()
+    expect(renderer_meshes(scene, `uRenderStyle`)).toHaveLength(0)
+    expect(renderer_meshes(scene, `uBondRadius`)).toEqual(bond_meshes)
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 0,
+      bond_consumers: 1,
+    })
+  })
+
+  test(`disposes each live renderer exactly once across toggles and unmount`, async () => {
+    const atom_dispose = vi.spyOn(AtomReplicaRenderer.prototype, `dispose`)
+    const bond_dispose = vi.spyOn(BondReplicaRenderer.prototype, `dispose`)
+    const dom = document.createElement(`div`)
+    const canvas = document.createElement(`canvas`)
+    dom.append(canvas)
+    document.body.append(dom)
+    let positions!: SharedPositionTexture
+    const component = mount(Harness, {
+      target: dom,
+      props: {
+        mode: `combined`,
+        packets: packets(),
+        atom_manager: new AtomManager(16),
+        bond_manager: new BondManager(16),
+        renderer: fake_renderer(),
+        dom,
+        canvas,
+        onscene: () => {},
+        onpositions: (next: SharedPositionTexture) => positions = next,
+      },
+    })
+    mounted.push(component)
+    await settle()
+
+    dom.querySelector<HTMLButtonElement>(`[data-testid="bonds-off"]`)!.click()
+    await settle()
+    expect(bond_dispose).toHaveBeenCalledTimes(1)
+    expect(positions.stats().bond_consumers).toBe(0)
+
+    dom.querySelector<HTMLButtonElement>(`[data-testid="bonds-on"]`)!.click()
+    await settle()
+    expect(positions.stats()).toMatchObject({
+      uploads: 1,
+      atom_consumers: 1,
+      bond_consumers: 1,
+    })
+
+    mounted.splice(mounted.indexOf(component), 1)
+    await unmount(component)
+    expect(atom_dispose).toHaveBeenCalledTimes(1)
+    expect(bond_dispose).toHaveBeenCalledTimes(2)
+    expect(positions.stats()).toMatchObject({
+      atom_consumers: 0,
+      bond_consumers: 0,
+    })
+  })
+
   test(`owns one atom draw, one bond draw, and one position upload per frame`, async () => {
     const dom = document.createElement(`div`)
     const canvas = document.createElement(`canvas`)

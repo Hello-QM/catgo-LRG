@@ -11,7 +11,7 @@
    * manager-local atom-only/bond-only mounts remain compatibility fallbacks
    * for isolated component consumers.
    */
-  import { untrack } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import { T, useThrelte } from '@threlte/core'
   import { Vector2, Vector3 } from 'three'
   import { get_atom_matcap, type MatcapPreset } from '../atoms/matcap-texture'
@@ -31,7 +31,7 @@
     gpu_positions_rgba?: Float32Array | null
     position_resource: SharedPositionTexture
     color_resource?: SharedAtomColorTexture
-    /** Mount-time flags — which replica draws this layer instance owns. */
+    /** Live flags — which replica draws this layer instance owns. */
     show_atoms?: boolean
     show_bonds?: boolean
     bond_radius?: number
@@ -72,33 +72,49 @@
 
   const threlte = useThrelte()
 
-  // Renderers are created once per layer mount (show_* are mount-time flags);
-  // every packet change flows through update() below. untrack: constructor
-  // options capture initial values, the $effects keep uniforms live.
-  const atom_renderer = untrack(() =>
-    show_atoms
-      ? new AtomReplicaRenderer({
-        positions: position_resource,
-        ambient_light,
-        directional_light,
-        ghost_opacity,
-      })
-      : null
-  )
-  const bond_renderer = untrack(() =>
-    show_bonds
-      ? new BondReplicaRenderer({
-        positions: position_resource,
-        colors: color_resource,
-        bond_radius,
-        stub_scale: incomplete_edge_length_scale,
-        ambient_light,
-        directional_light,
-        opacity,
-        ghost_opacity,
-      })
-      : null
-  )
+  // Visibility owns renderer lifetime. Only the show_* flag is tracked by
+  // each transition effect; constructor options are snapshots, while the
+  // appearance effects below keep uniforms live.
+  let atom_renderer = $state.raw<AtomReplicaRenderer | null>(null)
+  let bond_renderer = $state.raw<BondReplicaRenderer | null>(null)
+
+  $effect(() => {
+    const visible = show_atoms
+    untrack(() => {
+      if (visible && atom_renderer === null) {
+        atom_renderer = new AtomReplicaRenderer({
+          positions: position_resource,
+          ambient_light,
+          directional_light,
+          ghost_opacity,
+        })
+      } else if (!visible && atom_renderer !== null) {
+        atom_renderer.dispose()
+        atom_renderer = null
+      }
+    })
+  })
+
+  $effect(() => {
+    const visible = show_bonds
+    untrack(() => {
+      if (visible && bond_renderer === null) {
+        bond_renderer = new BondReplicaRenderer({
+          positions: position_resource,
+          colors: color_resource,
+          bond_radius,
+          stub_scale: incomplete_edge_length_scale,
+          ambient_light,
+          directional_light,
+          opacity,
+          ghost_opacity,
+        })
+      } else if (!visible && bond_renderer !== null) {
+        bond_renderer.dispose()
+        bond_renderer = null
+      }
+    })
+  })
 
   function mark_dirty(): void {
     threlte.invalidate()
@@ -108,24 +124,27 @@
     }
   }
 
-  // Packet sync — the only per-frame effect. Tracks the packet identity;
-  // update() internally diffs topology / bond-graph / frame / replica
-  // versions and does the minimal buffer + uniform work.
+  // Packet sync tracks both packet and renderer identity, so a newly created
+  // draw receives the already uploaded current packet. update() internally
+  // diffs topology / bond-graph / frame / replica versions and does the
+  // minimal buffer + uniform work.
   const viewport_scratch = new Vector2(1, 1)
   $effect(() => {
     const pkt = packet
     const rgba = gpu_positions_rgba
+    const atoms = atom_renderer
+    const bonds = bond_renderer
     untrack(() => {
       position_resource.update(pkt.frame, rgba)
-      atom_renderer?.update(pkt)
-      if (bond_renderer) {
-        bond_renderer.update(pkt)
+      atoms?.update(pkt)
+      if (bonds) {
+        bonds.update(pkt)
         // Fragment ray-cast rebuilds the view ray per pixel from the inverse
         // projection + drawing-buffer size — refresh alongside every packet.
         threlte.renderer?.getDrawingBufferSize(viewport_scratch)
         const cam = threlte.camera.current
         if (cam) {
-          bond_renderer.set_view(
+          bonds.set_view(
             cam.projectionMatrixInverse,
             0,
             0,
@@ -141,18 +160,20 @@
   // Live appearance uniforms (shared uniform objects update both the main
   // and the ghost draw of each renderer).
   $effect(() => {
-    const materials = [atom_renderer?.material, bond_renderer?.material]
+    const atoms = atom_renderer
+    const bonds = bond_renderer
+    const materials = [atoms?.material, bonds?.material]
     for (const material of materials) {
       if (!material) continue
       material.uniforms.uLightDir.value.copy(light_dir)
       material.uniforms.uAmbientIntensity.value = ambient_light
       material.uniforms.uDirectionalIntensity.value = directional_light
     }
-    atom_renderer?.set_ghost_opacity(ghost_opacity)
-    bond_renderer?.set_bond_radius(bond_radius)
-    bond_renderer?.set_stub_scale(incomplete_edge_length_scale)
-    bond_renderer?.set_opacity(opacity)
-    bond_renderer?.set_ghost_opacity(ghost_opacity)
+    atoms?.set_ghost_opacity(ghost_opacity)
+    bonds?.set_bond_radius(bond_radius)
+    bonds?.set_stub_scale(incomplete_edge_length_scale)
+    bonds?.set_opacity(opacity)
+    bonds?.set_ghost_opacity(ghost_opacity)
     mark_dirty()
   })
 
@@ -161,31 +182,33 @@
   // (same gating as the legacy material — non-matcap renders never touch
   // matcap code; cached per preset).
   $effect(() => {
-    if (!atom_renderer) return
+    const atoms = atom_renderer
+    if (!atoms) return
     const matcap = render_style === `matcap`
       ? get_atom_matcap(matcap_preset as MatcapPreset, mark_dirty)
       : null
-    atom_renderer.set_render_style(
+    atoms.set_render_style(
       render_style_to_int(render_style),
       style_pbr(render_style),
       matcap,
     )
-    atom_renderer.set_highlight_strength(highlight_strength)
+    atoms.set_highlight_strength(highlight_strength)
     mark_dirty()
   })
 
   // Orthographic flag for the atom sphere impostor's ray setup.
   $effect(() => {
-    if (!atom_renderer) return
+    const atoms = atom_renderer
+    if (!atoms) return
     const cam = threlte.camera.current
-    atom_renderer.material.uniforms.uIsOrthographic.value = cam
+    atoms.material.uniforms.uIsOrthographic.value = cam
       ? !!(cam as { isOrthographicCamera?: boolean }).isOrthographicCamera
       : false
     mark_dirty()
   })
 
   // Renderers hold GL resources not owned by <T is={...}> — dispose on unmount.
-  $effect(() => () => {
+  onDestroy(() => {
     atom_renderer?.dispose()
     bond_renderer?.dispose()
   })

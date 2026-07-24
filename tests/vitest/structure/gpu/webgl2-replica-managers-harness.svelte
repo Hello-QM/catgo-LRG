@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createThrelteContext } from '@threlte/core'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, untrack } from 'svelte'
   import type { Scene, WebGLRenderer } from 'three'
   import AtomManagerInstances from '$lib/structure/atoms/AtomManagerInstances.svelte'
   import type { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
@@ -22,6 +22,8 @@
     /** Start with render_packet=null (legacy static path) — atom mode only. */
     start_null?: boolean
     onpositions?: (positions: SharedPositionTexture) => void
+    initial_show_atoms?: boolean
+    initial_show_bonds?: boolean
   }
 
   let {
@@ -35,6 +37,8 @@
     onscene,
     start_null = false,
     onpositions,
+    initial_show_atoms = true,
+    initial_show_bonds = true,
   }: Props = $props()
 
   const threlte = createThrelteContext({
@@ -54,6 +58,8 @@
   let stub_scale = $state(0.25)
   let bond_opacity = $state(0.8)
   let appearance_alt = $state(false)
+  let layer_show_atoms = $state(untrack(() => initial_show_atoms))
+  let layer_show_bonds = $state(untrack(() => initial_show_bonds))
   // #533 — Appearance → Material must reach the packet-path impostor material.
   let render_style = $state<'glossy' | 'toon' | 'metallic'>('glossy')
 
@@ -72,6 +78,10 @@
 <button data-testid="appearance" onclick={() => appearance_alt = true}>appearance</button>
 <button data-testid="style-toon" onclick={() => render_style = 'toon'}>toon</button>
 <button data-testid="style-metallic" onclick={() => render_style = 'metallic'}>metallic</button>
+<button data-testid="atoms-on" onclick={() => layer_show_atoms = true}>atoms on</button>
+<button data-testid="atoms-off" onclick={() => layer_show_atoms = false}>atoms off</button>
+<button data-testid="bonds-on" onclick={() => layer_show_bonds = true}>bonds on</button>
+<button data-testid="bonds-off" onclick={() => layer_show_bonds = false}>bonds off</button>
 
 {#if mode === 'atom'}
   <AtomManagerInstances
@@ -97,6 +107,12 @@
       {packet}
       {position_resource}
       gpu_positions_rgba={null}
+      show_atoms={layer_show_atoms}
+      show_bonds={layer_show_bonds}
+      incomplete_edge_length_scale={live_stub_scale}
+      opacity={live_bond_opacity}
+      ghost_opacity={live_ghost_opacity}
+      {render_style}
     />
   {/if}
   <AtomManagerInstances
