@@ -12,6 +12,7 @@ import {
   type PreparedFrameOutcome,
   type PreparedTrajectoryFrame,
 } from '$lib/structure/trajectory-prepared-frame'
+import * as trajectory_prepared_frame from '$lib/structure/trajectory-prepared-frame'
 import { trajectory_render_diagnostics } from '$lib/structure/trajectory-render-diagnostics'
 
 const owner = { id: `trajectory` }
@@ -490,19 +491,120 @@ describe(`create_prepared_frame_pipeline`, () => {
       prepare: async () => make_prepared(prefetch, 20),
     }))
 
-    await expect(pipeline.request_deferred({
+    const outcome = await pipeline.request_deferred({
       key: prefetch,
       priority: `prefetch`,
       estimated_bytes: 20,
       admit,
-    }, generation)).resolves.toMatchObject({ status: `failed` })
+    }, generation)
 
+    expect(outcome).toMatchObject({
+      status: `failed`,
+      error: { name: `PreparedFrameBudgetRefusalError` },
+    })
+    const is_budget_refusal = (
+      trajectory_prepared_frame as unknown as {
+        is_prepared_frame_budget_refusal: (error: unknown) => boolean
+      }
+    ).is_prepared_frame_budget_refusal
+    const trajectory_buffer_error = vi.fn()
+    if (
+      outcome.status === `failed` &&
+      !is_budget_refusal(outcome.error)
+    ) {
+      trajectory_buffer_error(outcome.error)
+    }
     expect(admit).not.toHaveBeenCalled()
+    expect(trajectory_buffer_error).not.toHaveBeenCalled()
+    expect(trajectory_render_diagnostics.snapshot().failed_frames).toBe(0)
     expect(pipeline.stats()).toMatchObject({
       cached_bytes: 100,
       queued_bytes: 0,
       in_flight_bytes: 0,
       retained_bytes: 100,
+    })
+  })
+
+  test(`evicts a safe old frame before admitting a prospective decode reservation`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_bytes: 100,
+      max_frames: 8,
+    })
+    const current = make_key({ frame_idx: 0 })
+    const old_safe = make_key({ frame_idx: 5 })
+    const incoming = make_key({ frame_idx: 1 })
+    const generation = pipeline.begin_request(current, 10)
+    await pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 40,
+      prepare: async () => make_prepared(current, 40),
+    }, generation)
+    await pipeline.request({
+      key: old_safe,
+      priority: `prefetch`,
+      estimated_bytes: 60,
+      prepare: async () => make_prepared(old_safe, 60),
+    }, generation)
+    const admit = vi.fn(async (): Promise<DeferredFrameAdmission> => ({
+      key: incoming,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(incoming, 20),
+    }))
+
+    await expect(pipeline.request_deferred({
+      key: incoming,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit,
+    }, generation)).resolves.toMatchObject({ status: `ready` })
+
+    expect(admit).toHaveBeenCalledOnce()
+    expect(pipeline.peek(current)).not.toBeNull()
+    expect(pipeline.peek(old_safe)).toBeNull()
+    expect(pipeline.peek(incoming)).not.toBeNull()
+    expect(pipeline.stats()).toMatchObject({
+      cached_bytes: 60,
+      retained_bytes: 60,
+      evictions: 1,
+    })
+  })
+
+  test(`does not evict the protected current frame for an unsafe reservation`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_bytes: 50,
+    })
+    const current = make_key({ frame_idx: 0 })
+    const incoming = make_key({ frame_idx: 1 })
+    const generation = pipeline.begin_request(current)
+    await pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 40,
+      prepare: async () => make_prepared(current, 40),
+    }, generation)
+    const admit = vi.fn(async (): Promise<DeferredFrameAdmission> => ({
+      key: incoming,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(incoming, 20),
+    }))
+
+    await expect(pipeline.request_deferred({
+      key: incoming,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit,
+    }, generation)).resolves.toMatchObject({
+      status: `failed`,
+      error: { name: `PreparedFrameBudgetRefusalError` },
+    })
+
+    expect(admit).not.toHaveBeenCalled()
+    expect(pipeline.peek(current)).not.toBeNull()
+    expect(pipeline.stats()).toMatchObject({
+      cached_frames: 1,
+      cached_bytes: 40,
+      evictions: 0,
     })
   })
 
@@ -856,6 +958,83 @@ describe(`create_prepared_frame_pipeline`, () => {
     await Promise.all([blocked, older_prefetch, promoted])
 
     expect(decode_order).toEqual([9, 1, 2])
+  })
+
+  test(`starts same-key replacement after clear cancels active owner work`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const current_owner = { id: `current` }
+    const cleared_owner = { id: `cleared` }
+    const current = make_key({ owner: current_owner, frame_idx: 0 })
+    const target = make_key({ owner: cleared_owner, frame_idx: 1 })
+    const generation = pipeline.begin_request(current)
+    const obsolete_prepare = deferred<PreparedTrajectoryFrame>()
+    const obsolete = pipeline.request({
+      key: target,
+      priority: `prefetch`,
+      estimated_bytes: 10,
+      prepare: () => obsolete_prepare.promise,
+    }, generation)
+    pipeline.clear(cleared_owner)
+    const replacement_prepare = vi.fn(
+      async () => make_prepared(target, 10),
+    )
+    const replacement = pipeline.request({
+      key: target,
+      priority: `prefetch`,
+      estimated_bytes: 10,
+      prepare: replacement_prepare,
+    }, generation)
+
+    expect(replacement).not.toBe(obsolete)
+    obsolete_prepare.resolve(make_prepared(target, 10))
+    await expect(obsolete).resolves.toEqual({ status: `stale` })
+    await expect(replacement).resolves.toMatchObject({ status: `ready` })
+    expect(replacement_prepare).toHaveBeenCalledOnce()
+  })
+
+  test(`counts deferred prepared frames in warmup when synchronous getters stay empty`, async () => {
+    const window_key = (
+      trajectory_prepared_frame as unknown as {
+        prepared_frame_window_key?: (
+          current_key: PreparedFrameKey,
+          frame_idx: number,
+          decoded_key: PreparedFrameKey | null,
+          fixed_topology: boolean,
+        ) => PreparedFrameKey | null
+      }
+    ).prepared_frame_window_key
+    expect(window_key).toBeTypeOf(`function`)
+
+    const pipeline = create_prepared_frame_pipeline()
+    const current = make_key({ frame_idx: 0 })
+    const generation = pipeline.begin_request(current, 10)
+    const keys = [0, 1, 2].map((frame_idx) => make_key({ frame_idx }))
+    await pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 10,
+      prepare: async () => make_prepared(current, 10),
+    }, generation)
+    await Promise.all(keys.slice(1).map((key) =>
+      pipeline.request_deferred({
+        key,
+        priority: `prefetch`,
+        estimated_bytes: 10,
+        admit: async () => ({
+          key,
+          retained_source_bytes: 4,
+          prepare: async () => make_prepared(key, 10),
+        }),
+      }, generation)
+    ))
+    const getter = vi.fn((_frame_idx: number): PreparedFrameKey | null => null)
+    const warmup_keys = keys.map((key) =>
+      window_key!(current, key.frame_idx, getter(key.frame_idx), true)
+    ).filter((key): key is PreparedFrameKey => key !== null)
+
+    expect(getter).toHaveBeenCalledTimes(3)
+    expect(warmup_keys).toEqual(keys)
+    expect(pipeline.ready_count(warmup_keys)).toBe(3)
   })
 
   test(`protects the requested current frame before evicting prefetch`, async () => {

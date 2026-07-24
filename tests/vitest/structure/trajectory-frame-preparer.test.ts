@@ -741,6 +741,30 @@ describe(`prepare_exact_trajectory_frame`, () => {
     expect(prefetch_block).toContain(`retained_source_bytes:`)
   })
 
+  test(`counts deferred warmup keys and treats budget refusal as buffer refresh`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const report_block = scene.slice(
+      scene.indexOf(`const report_buffer =`),
+      scene.indexOf(`report_buffer(true)`),
+    )
+    const prefetch_block = scene.slice(
+      scene.indexOf(`const prefetch_idx =`),
+      scene.indexOf(`  })\n\n  $effect.pre`),
+    )
+
+    expect(report_block).toContain(`prepared_frame_window_key(`)
+    expect(report_block).not.toContain(`if (!buffered_source) break`)
+    expect(prefetch_block).toContain(`report_prefetch_outcome`)
+    expect(prefetch_block.match(/report_prefetch_outcome\(/g)).toHaveLength(2)
+    expect(scene).toContain(
+      `!is_prepared_frame_budget_refusal(outcome.error)`,
+    )
+    expect(scene).toContain(`report_buffer(false)`)
+  })
+
   test(`custom rules use object detection, full override, and worker packing`, async () => {
     const request = input({
       distance_rules: [{

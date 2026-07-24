@@ -29,6 +29,20 @@ export type PreparedFrameOutcome =
   | { status: 'stale' }
   | { status: 'failed'; error: Error }
 
+export class PreparedFrameBudgetRefusalError extends Error {
+  override readonly name = `PreparedFrameBudgetRefusalError`
+
+  constructor(max_bytes: number) {
+    super(`Prepared-frame prefetch exceeds byte budget of ${max_bytes}`)
+  }
+}
+
+export function is_prepared_frame_budget_refusal(
+  error: unknown,
+): error is PreparedFrameBudgetRefusalError {
+  return error instanceof PreparedFrameBudgetRefusalError
+}
+
 export function same_prepared_frame_key(
   a: PreparedFrameKey,
   b: PreparedFrameKey,
@@ -39,6 +53,17 @@ export function same_prepared_frame_key(
     a.topology_version === b.topology_version &&
     a.topology_fingerprint === b.topology_fingerprint &&
     a.rules_version === b.rules_version
+}
+
+export function prepared_frame_window_key(
+  current_key: PreparedFrameKey,
+  frame_idx: number,
+  decoded_key: PreparedFrameKey | null,
+  fixed_topology: boolean,
+): PreparedFrameKey | null {
+  if (decoded_key) return decoded_key
+  if (!fixed_topology) return null
+  return { ...current_key, frame_idx }
 }
 
 export function prepared_frame_byte_size(
@@ -204,10 +229,11 @@ export function create_prepared_frame_pipeline(options: {
         same_prepared_frame_key(record.value.key, displayed_key))
   }
 
-  function evict_to_limits(): void {
+  function evict_to_limits(prospective_bytes = 0): void {
     while (
       cache.length > max_frames ||
-      cached_bytes() + queued_bytes() + in_flight_bytes() > max_bytes
+      cached_bytes() + queued_bytes() + in_flight_bytes() +
+          prospective_bytes > max_bytes
     ) {
       const available = cache.filter((record) => !is_protected(record))
       if (available.length === 0) break
@@ -249,6 +275,7 @@ export function create_prepared_frame_pipeline(options: {
       ...decode_in_flight,
     ].find((record) =>
       !record.settled &&
+      !record.canceled &&
       record.generation === request_generation &&
       same_prepared_frame_key(record.request.key, key)
     ) ?? null
@@ -648,26 +675,16 @@ export function create_prepared_frame_pipeline(options: {
     }
     cache_misses++
 
+    if (frame_request.priority === `prefetch`) {
+      evict_to_limits(frame_request.estimated_bytes)
+      update_diagnostics()
+    }
     const retained = cached_bytes() + queued_bytes() + in_flight_bytes()
     if (
       frame_request.priority === `prefetch` &&
       retained + frame_request.estimated_bytes > max_bytes
     ) {
-      const error = new Error(
-        `Prepared-frame prefetch exceeds byte budget of ${max_bytes}`,
-      )
-      if (import.meta.env?.DEV) {
-        console.warn(
-          `[trajectory-prepared] frame ${frame_request.key.frame_idx} failed:`,
-          error.message,
-        )
-      }
-      trajectory_render_diagnostics.record(
-        `failed`,
-        frame_request.key.frame_idx,
-        undefined,
-        frame_request.key.positions_version,
-      )
+      const error = new PreparedFrameBudgetRefusalError(max_bytes)
       return Promise.resolve({ status: `failed`, error })
     }
 

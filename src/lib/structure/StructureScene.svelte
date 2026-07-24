@@ -91,8 +91,11 @@
   } from './trajectory-frame-preparer'
   import {
     create_prepared_frame_pipeline,
+    is_prepared_frame_budget_refusal,
+    prepared_frame_window_key,
     same_prepared_frame_key,
     type PreparedFrameKey,
+    type PreparedFrameOutcome,
   } from './trajectory-prepared-frame'
   import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
   import {
@@ -2986,8 +2989,14 @@
         const buffered_source = buffered_idx === frame_idx
           ? current_source
           : getter?.(buffered_idx) ?? null
-        if (!buffered_source) break
-        keys.push(key_for_source(buffered_source))
+        const buffered_key = prepared_frame_window_key(
+          current_key,
+          buffered_idx,
+          buffered_source ? key_for_source(buffered_source) : null,
+          current_source.topology_stable,
+        )
+        if (!buffered_key) break
+        keys.push(buffered_key)
       }
       on_trajectory_buffer_state?.({
         frame_idx,
@@ -3002,6 +3011,20 @@
         !same_prepared_frame_key(current_key, latest_prepared_request_key)
       ) return
       prepared_error = error.message
+      report_buffer(false)
+    }
+    const report_prefetch_outcome = (
+      outcome: PreparedFrameOutcome,
+      already_reported_error: Error | null = null,
+    ) => {
+      if (
+        outcome.status === `failed` &&
+        !is_prepared_frame_budget_refusal(outcome.error) &&
+        outcome.error !== already_reported_error
+      ) {
+        report_buffer_failure(outcome.error)
+        return
+      }
       report_buffer(false)
     }
 
@@ -3061,13 +3084,9 @@
             priority: `prefetch`,
             estimated_bytes,
             prepare: () => prepare_source(prefetch_idx, known),
-          }, generation).then((outcome) => {
-            if (outcome.status === `failed`) {
-              report_buffer_failure(outcome.error)
-            } else {
-              report_buffer(false)
-            }
-          })
+          }, generation).then((outcome) =>
+            report_prefetch_outcome(outcome)
+          )
           continue
         }
 
@@ -3119,16 +3138,9 @@
               prepare: () => prepare_source(prefetch_idx, source),
             }
           },
-        }, generation).then((outcome) => {
-          if (
-            outcome.status === `failed` &&
-            outcome.error !== reported_decode_error
-          ) {
-            report_buffer_failure(outcome.error)
-          } else {
-            report_buffer(false)
-          }
-        })
+        }, generation).then((outcome) =>
+          report_prefetch_outcome(outcome, reported_decode_error)
+        )
       }
     }
   })
