@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import type {
   BaseBondGraph,
   RenderPacket,
@@ -236,6 +236,58 @@ describe(`prepared-path failure and fallback contracts`, () => {
     colors.dispose()
   })
 
+  test(`registered context-restored handler restores both shared textures`, () => {
+    const source = readFileSync(
+      resolve(process.cwd(), `src/lib/structure/StructureScene.svelte`),
+      `utf8`,
+    )
+    const handler_definition = source.match(
+      /const handle_context_restored = \(\) => \{[\s\S]*?^\s*\}/m,
+    )?.[0]
+    const registration = source.match(
+      /canvas\.addEventListener\(`webglcontextrestored`, handle_context_restored\)/,
+    )?.[0]
+    expect(handler_definition).toBeDefined()
+    expect(registration).toBeDefined()
+
+    let restored_listener: (() => void) | undefined
+    const canvas = {
+      addEventListener: vi.fn((event: string, listener: () => void) => {
+        if (event === `webglcontextrestored`) restored_listener = listener
+      }),
+    }
+    const replica_picker = { dispose: vi.fn() }
+    const shared_position_texture = { restore: vi.fn() }
+    const shared_atom_color_texture = { restore: vi.fn() }
+    const threlte = { invalidate: vi.fn() }
+    const register = new Function(
+      `canvas`,
+      `replica_picker`,
+      `shared_position_texture`,
+      `shared_atom_color_texture`,
+      `threlte`,
+      `${handler_definition}\n${registration}`,
+    )
+    register(
+      canvas,
+      replica_picker,
+      shared_position_texture,
+      shared_atom_color_texture,
+      threlte,
+    )
+    expect(canvas.addEventListener).toHaveBeenCalledWith(
+      `webglcontextrestored`,
+      expect.any(Function),
+    )
+
+    restored_listener?.()
+
+    expect(replica_picker.dispose).toHaveBeenCalledOnce()
+    expect(shared_position_texture.restore).toHaveBeenCalledOnce()
+    expect(shared_atom_color_texture.restore).toHaveBeenCalledOnce()
+    expect(threlte.invalidate).toHaveBeenCalledOnce()
+  })
+
   test(`production path never imports the cadence-era diagnostic`, () => {
     const source = readFileSync(
       resolve(process.cwd(), `src/lib/structure/StructureScene.svelte`),
@@ -243,8 +295,6 @@ describe(`prepared-path failure and fallback contracts`, () => {
     )
     expect(source).not.toContain(`trajectory-bond-legacy-diagnostic`)
     expect(source).toContain(`webglcontextrestored`)
-    expect(source).toContain(`shared_position_texture.restore()`)
-    expect(source).toContain(`shared_atom_color_texture.restore()`)
     expect(source).toContain(`prepared_pipeline.clear()`)
   })
 })

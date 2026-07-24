@@ -397,6 +397,29 @@ describe(`BondReplicaRenderer — flat ray-cylinder impostor shader`, () => {
     colors.dispose()
   })
 
+  test(`dispose releases an internally owned atom color texture`, () => {
+    const renderer = new BondReplicaRenderer()
+    const color_texture = renderer.material.uniforms.uColorTex
+      .value as THREE.DataTexture
+    const dispose = vi.spyOn(color_texture, `dispose`)
+
+    renderer.dispose()
+
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  test(`dispose preserves an externally supplied atom color texture`, () => {
+    const colors = new SharedAtomColorTexture()
+    const dispose = vi.spyOn(colors.texture, `dispose`)
+    const renderer = new BondReplicaRenderer({ colors })
+
+    renderer.dispose()
+
+    expect(dispose).not.toHaveBeenCalled()
+    colors.dispose()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
   test(`GLSL3, gl_InstanceID decode, per-replica jimage policy, ray-cast depth`, () => {
     const renderer = new BondReplicaRenderer()
     renderer.update(make_packet([2, 2, 2]))
