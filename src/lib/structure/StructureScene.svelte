@@ -95,6 +95,10 @@
     type PreparedFrameKey,
   } from './trajectory-prepared-frame'
   import { trajectory_render_diagnostics } from './trajectory-render-diagnostics'
+  import {
+    create_trajectory_presentation_committer,
+    type PacketSyncEvidence,
+  } from './trajectory-presentation-commit'
   import type { PartnerDrawnLookup } from './bonding/bond-instanced-renderer'
   import {
     AtomManager,
@@ -1129,6 +1133,34 @@
     // Vibration mode animation
     vibration_data?: { eigenvector: number[][]; base_positions: number[][]; amplitude: number; playing: boolean } | null
   } = $props()
+
+  const trajectory_presentation_committer =
+    create_trajectory_presentation_committer({
+      record_presented: (
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ) => trajectory_render_diagnostics.record_presented(
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ),
+      record_renderer_installed: (
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ) => trajectory_render_diagnostics.record_renderer_installed(
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+      ),
+      acknowledge: (frame_idx, positions_version) =>
+        on_trajectory_frame_presented?.(frame_idx, positions_version),
+    })
 
   const prepared_pipeline = create_prepared_frame_pipeline({
     max_frames: 8,
@@ -2984,7 +3016,8 @@
           prepared.graph.pairs.length / 2,
           prepared.graph.jimages,
         )
-        const packet_renderer_will_own = packet_render_features_eligible()
+        const packet_renderer_will_own = packet_render_features_eligible() &&
+          show_bulk_atoms && !webgl_suspended
         // The unified packet layer reads the immutable packet and typed bond
         // manager directly. Publishing legacy object connectivity/structure
         // here wakes the full legacy consumer graph, while rewriting the
@@ -3017,15 +3050,14 @@
             manager.commit_positions_batch()
           }
         }
-        trajectory_render_diagnostics.record_presented(
-          prepared.key.frame_idx,
-          prepared.key.positions_version,
-          prepared.graph_hash,
-          prepared.graph.pairs.length / 2,
-        )
-        on_trajectory_frame_presented?.(
-          prepared.key.frame_idx,
-          prepared.key.positions_version,
+        trajectory_presentation_committer.publish(
+          {
+            prepared_packet: prepared.packet,
+            key: prepared.key,
+            graph_hash: prepared.graph_hash,
+            bond_count: prepared.graph.pairs.length / 2,
+          },
+          packet_renderer_will_own ? `renderer` : `direct`,
         )
       } else if (outcome.status === `failed`) {
         report_buffer_failure(outcome.error)
@@ -5327,6 +5359,15 @@
       : null,
   )
 
+  function handle_packet_synced(evidence: PacketSyncEvidence): void {
+    trajectory_presentation_committer.renderer_synced(
+      evidence,
+      manager_render_packet,
+      prepared_render_packet,
+      latest_prepared_request_key,
+    )
+  }
+
   // Visual T5 — while the managers consume a render packet, picking is the
   // WebGL2 replica integer-ID pass (gpu-picker-integration packet branch).
   // The invisible CPU sphere/cylinder hitbox meshes are NOT mounted and
@@ -6590,6 +6631,7 @@
               highlight_strength={active_highlight_strength}
               opacity={1}
               ghost_opacity={image_atom_opacity}
+              on_packet_synced={handle_packet_synced}
             />
           {/if}
           <!-- Phase X6b renderer. Mirrors AtomImpostors for cutting / drag /

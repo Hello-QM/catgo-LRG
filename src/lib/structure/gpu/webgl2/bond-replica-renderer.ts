@@ -623,8 +623,6 @@ export class BondReplicaRenderer {
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
-    this.#prev = packet
-
     const graph_changed = prev === null || diff.bond_graph_changed
     let topology_upload_bytes = 0
     if (graph_changed) {
@@ -645,6 +643,13 @@ export class BondReplicaRenderer {
         topology_upload_bytes,
       )
     }
+    // Publish the installed identity only after topology, replicas, current
+    // lattice, and every enabled ghost page have completed.
+    this.#prev = packet
+  }
+
+  installed_packet(): RenderPacket | null {
+    return this.#prev
   }
 
   /** Per-frame camera state for the fragment ray-cast (inverse projection +

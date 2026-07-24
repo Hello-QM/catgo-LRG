@@ -31,6 +31,10 @@ type Diagnostics = {
   failed_frames: number
   graph_hash_by_frame: Record<number, string>
   bond_count_by_frame: Record<number, number>
+  renderer_installed_frames: number
+  last_renderer_installed_frame: number | null
+  renderer_graph_hash_by_frame: Record<number, string>
+  renderer_bond_count_by_frame: Record<number, number>
   bond_compute_ms: number[]
   cold_first_frame_ms: number | null
   warmup_ms: number | null
@@ -111,7 +115,8 @@ async function load_real_trajectory(
         !!snapshot &&
         (
           snapshot.failed_frames > 0 ||
-          Object.values(snapshot.bond_count_by_frame).some((count) => count > 0)
+          Object.values(snapshot.renderer_bond_count_by_frame)
+            .some((count) => count > 0)
         )
     },
     undefined,
@@ -121,11 +126,11 @@ async function load_real_trajectory(
   console.log(
     `[${label}] bonded frame ready: prepared=${bonded.prepared_frames} ` +
     `failed=${bonded.failed_frames} counts=${
-      JSON.stringify(bonded.bond_count_by_frame)
+      JSON.stringify(bonded.renderer_bond_count_by_frame)
     }`,
   )
   expect(bonded.failed_frames).toBe(0)
-  expect(Object.values(bonded.bond_count_by_frame).some(
+  expect(Object.values(bonded.renderer_bond_count_by_frame).some(
     (count) => count > 20_000,
   )).toBe(true)
 }
@@ -194,7 +199,9 @@ function log_segment(label: string, snapshot: Diagnostics): void {
     `stale=${snapshot.stale_results} failed=${snapshot.failed_frames} ` +
     `cache=${snapshot.cache_frames} queued_bytes=${snapshot.queued_bytes} ` +
     `in_flight_bytes=${snapshot.in_flight_bytes} ` +
-    `graph_keys=${Object.keys(snapshot.graph_hash_by_frame).join(`,`)} ` +
+    `graph_keys=${
+      Object.keys(snapshot.renderer_graph_hash_by_frame).join(`,`)
+    } ` +
     `frame_p95_ms=${snapshot.frame_time_p95_ms?.toFixed(2) ?? `n/a`} ` +
     `compute_p95_ms=${
       percentile(snapshot.bond_compute_ms, 0.95)?.toFixed(2) ?? `n/a`
@@ -321,12 +328,12 @@ test(`real dump.traj is exact and presents at least 24 unique FPS`, async ({
   expect(steady_segment.retained_bytes).toBeLessThanOrEqual(MAX_PREPARED_BYTES)
 
   const observed_hashes = merge_records(
-    first_segment.graph_hash_by_frame,
-    steady_segment.graph_hash_by_frame,
+    first_segment.renderer_graph_hash_by_frame,
+    steady_segment.renderer_graph_hash_by_frame,
   )
   const observed_counts = merge_records(
-    first_segment.bond_count_by_frame,
-    steady_segment.bond_count_by_frame,
+    first_segment.renderer_bond_count_by_frame,
+    steady_segment.renderer_bond_count_by_frame,
   )
   expect(Object.keys(observed_hashes)).toHaveLength(EXPECTED_FRAMES)
   expect(Object.keys(observed_counts)).toHaveLength(EXPECTED_FRAMES)
@@ -344,8 +351,8 @@ test(`real dump.traj is exact and presents at least 24 unique FPS`, async ({
           `.trajectory .step-input`,
         )
         return input?.value === String(frame) &&
-          snapshot?.last_presented_frame === frame &&
-          snapshot.graph_hash_by_frame[frame] === hash
+          snapshot?.last_renderer_installed_frame === frame &&
+          snapshot.renderer_graph_hash_by_frame[frame] === hash
       },
       { frame: target, hash: reference.graph_hash_by_frame[target] },
       { timeout: 10_000, polling: 1 },

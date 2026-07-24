@@ -574,8 +574,6 @@ export class AtomReplicaRenderer {
     const frame_identity_changed = prev === null || prev.frame !== packet.frame
     const lattice_changed = diff.topology_changed || diff.frame_changed ||
       frame_identity_changed
-    this.#prev = packet
-
     if (diff.topology_changed) this.#rebuild_topology(packet)
     if (diff.topology_changed || diff.replica_changed) this.#apply_replicas(packet)
     if (lattice_changed) this.#upload_lattice(packet)
@@ -583,6 +581,13 @@ export class AtomReplicaRenderer {
     const ghosts_changed = diff.topology_changed || diff.bond_graph_changed ||
       diff.replica_changed
     if (ghosts_changed) this.#rebuild_ghosts(packet)
+    // Publish the installed identity only after every packet-owned resource,
+    // including the current lattice and ghost topology, has completed.
+    this.#prev = packet
+  }
+
+  installed_packet(): RenderPacket | null {
+    return this.#prev
   }
 
   #rebuild_topology(packet: RenderPacket): void {

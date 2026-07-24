@@ -44,14 +44,15 @@ describe(`exact prepared trajectory ownership`, () => {
       `prepared_render_packet = prepared.packet`,
     )
     const commit_end = scene.indexOf(
-      `on_trajectory_frame_presented?.(`,
+      `trajectory_presentation_committer.publish(`,
       commit_start,
     )
     const commit = scene.slice(commit_start, commit_end)
 
     expect(commit).toContain(
-      `const packet_renderer_will_own = packet_render_features_eligible()`,
+      `const packet_renderer_will_own = packet_render_features_eligible() &&`,
     )
+    expect(commit).toContain(`show_bulk_atoms && !webgl_suspended`)
     expect(commit).toContain(`if (!packet_renderer_will_own)`)
     expect(commit).toContain(`manager.begin_positions_batch()`)
     expect(commit.indexOf(`const packet_renderer_will_own`)).toBeLessThan(
@@ -73,6 +74,36 @@ describe(`exact prepared trajectory ownership`, () => {
     )
     expect(scene.slice(eligibility_start, eligibility_end))
       .not.toContain(`atom_data.some(`)
+  })
+
+  test(`scene acknowledges unified packets only through guarded renderer sync`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const publication_start = scene.indexOf(
+      `prepared_render_packet = prepared.packet`,
+    )
+    const publication_end = scene.indexOf(
+      `report_buffer(false)`,
+      publication_start,
+    )
+    const publication = scene.slice(publication_start, publication_end)
+    expect(publication).toContain(`trajectory_presentation_committer.publish(`)
+    expect(publication).not.toContain(
+      `trajectory_render_diagnostics.record_presented(`,
+    )
+    expect(publication).not.toContain(`on_trajectory_frame_presented?.(`)
+
+    expect(scene).toContain(
+      `create_trajectory_presentation_committer({`,
+    )
+    expect(scene).toContain(
+      `trajectory_presentation_committer.renderer_synced(`,
+    )
+    expect(scene).toContain(
+      `on_packet_synced={handle_packet_synced}`,
+    )
   })
 
   test(`streamed current requests await their indexed source instead of relabeling displayed positions`, () => {

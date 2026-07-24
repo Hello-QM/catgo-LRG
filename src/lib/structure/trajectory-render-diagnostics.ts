@@ -25,8 +25,12 @@ export type TrajectoryRenderDiagnostics = TrajectoryRetainedState & {
   last_requested_frame: number | null
   last_prepared_frame: number | null
   last_presented_frame: number | null
+  renderer_installed_frames: number
+  last_renderer_installed_frame: number | null
   graph_hash_by_frame: Record<number, string>
   bond_count_by_frame: Record<number, number>
+  renderer_graph_hash_by_frame: Record<number, string>
+  renderer_bond_count_by_frame: Record<number, number>
   bond_compute_ms: number[]
   cold_first_frame_ms: number | null
   warmup_ms: number | null
@@ -59,6 +63,13 @@ export type TrajectoryRenderDiagnosticsRecorder = {
     compute_ms: number,
   ): void
   record_presented(
+    frame_idx: number,
+    positions_version: number,
+    graph_hash: string,
+    bond_count: number,
+    timestamp_ms?: number,
+  ): void
+  record_renderer_installed(
     frame_idx: number,
     positions_version: number,
     graph_hash: string,
@@ -140,8 +151,12 @@ function initial_state(): MutableDiagnostics {
     last_requested_frame: null,
     last_prepared_frame: null,
     last_presented_frame: null,
+    renderer_installed_frames: 0,
+    last_renderer_installed_frame: null,
     graph_hash_by_frame: {},
     bond_count_by_frame: {},
+    renderer_graph_hash_by_frame: {},
+    renderer_bond_count_by_frame: {},
     cold_first_frame_ms: null,
     warmup_ms: null,
     main_thread_long_tasks: 0,
@@ -177,6 +192,7 @@ export function create_trajectory_render_diagnostics():
   let owner: object | null = null
   let owner_started_ms: number | null = null
   let last_unique_identity: string | null = null
+  let last_renderer_identity: string | null = null
   let last_unique_timestamp_ms: number | null = null
   let requested_at = new Map<string, number>()
   let bond_compute = new NumberRing()
@@ -188,6 +204,7 @@ export function create_trajectory_render_diagnostics():
     state = initial_state()
     owner_started_ms = null
     last_unique_identity = null
+    last_renderer_identity = null
     last_unique_timestamp_ms = null
     requested_at = new Map()
     bond_compute = new NumberRing()
@@ -275,6 +292,28 @@ export function create_trajectory_render_diagnostics():
         positions_version,
       )
     },
+    record_renderer_installed(
+      frame_idx,
+      positions_version,
+      graph_hash,
+      bond_count,
+      timestamp_ms = performance.now(),
+    ) {
+      const key = event_key(frame_idx, positions_version)
+      if (last_renderer_identity === key) return
+      last_renderer_identity = key
+      state.renderer_installed_frames++
+      state.last_renderer_installed_frame = frame_idx
+      state.renderer_graph_hash_by_frame[frame_idx] = graph_hash
+      state.renderer_bond_count_by_frame[frame_idx] = bond_count
+      recorder.record_presented(
+        frame_idx,
+        positions_version,
+        graph_hash,
+        bond_count,
+        timestamp_ms,
+      )
+    },
     record_position_upload(bytes) {
       state.position_uploads++
       state.position_upload_bytes += Math.max(0, bytes)
@@ -327,6 +366,12 @@ export function create_trajectory_render_diagnostics():
         ...state,
         graph_hash_by_frame: { ...state.graph_hash_by_frame },
         bond_count_by_frame: { ...state.bond_count_by_frame },
+        renderer_graph_hash_by_frame: {
+          ...state.renderer_graph_hash_by_frame,
+        },
+        renderer_bond_count_by_frame: {
+          ...state.renderer_bond_count_by_frame,
+        },
         bond_compute_ms: compute_values,
         frame_time_p95_ms: percentile_95(frame_times.to_array()),
         presentation_latency_ms: latency_values,

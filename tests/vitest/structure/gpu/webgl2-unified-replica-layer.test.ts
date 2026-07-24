@@ -4,7 +4,10 @@ import * as THREE from 'three'
 import type { AnyStructure, Site } from '$lib'
 import { AtomManager } from '$lib/structure/atoms/atom-manager.svelte'
 import { BondManager } from '$lib/structure/bonding/bond-manager.svelte'
-import type { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+import {
+  SharedPositionTexture,
+  type UploadedFrameIdentity,
+} from '$lib/structure/gpu/webgl2/shared-position-texture'
 import { AtomReplicaRenderer } from '$lib/structure/gpu/webgl2/atom-replica-renderer'
 import { BondReplicaRenderer } from '$lib/structure/gpu/webgl2/bond-replica-renderer'
 import { combined_packet_render_eligible } from '$lib/structure/gpu/combined-packet-render-eligible'
@@ -113,6 +116,115 @@ afterEach(async () => {
 })
 
 describe(`unified WebGL2 replica layer`, () => {
+  test(`reports renderer-derived packet evidence only after every enabled resource is synchronized`, async () => {
+    const dom = document.createElement(`div`)
+    const canvas = document.createElement(`canvas`)
+    dom.append(canvas)
+    document.body.append(dom)
+    const expected_packets = packets()
+    let scene!: THREE.Scene
+    let positions!: SharedPositionTexture
+    const atom_updates = vi.spyOn(AtomReplicaRenderer.prototype, `update`)
+    const bond_updates = vi.spyOn(BondReplicaRenderer.prototype, `update`)
+    const synced: Array<UploadedFrameIdentity & {
+      packet: ReturnType<typeof packets>[number]
+      topology_version: number
+      graph_version: number | null
+      bond_count: number
+      atom_renderer_synced: boolean
+      bond_renderer_synced: boolean
+    }> = []
+    const component = mount(Harness, {
+      target: dom,
+      props: {
+        mode: `combined`,
+        packets: expected_packets,
+        atom_manager: new AtomManager(16),
+        bond_manager: new BondManager(16),
+        renderer: fake_renderer(),
+        dom,
+        canvas,
+        onscene: (next: THREE.Scene) => scene = next,
+        onpositions: (next: SharedPositionTexture) => positions = next,
+        on_packet_synced: (evidence) => {
+          expect(atom_updates).toHaveBeenCalled()
+          expect(bond_updates).toHaveBeenCalled()
+          expect(positions.uploaded_frame()).toMatchObject({
+            owner: evidence.owner,
+            frame_idx: evidence.frame_idx,
+            positions_version: evidence.positions_version,
+          })
+          synced.push(evidence)
+        },
+      },
+    })
+    mounted.push(component)
+    await settle()
+
+    expect(synced).toHaveLength(1)
+    expect(synced[0].packet).toBe(expected_packets[0])
+    expect(synced[0]).toMatchObject({
+      owner: expected_packets[0].frame.owner,
+      frame_idx: expected_packets[0].frame.frame_idx,
+      positions_version: expected_packets[0].frame.positions_version,
+      topology_version: expected_packets[0].topology.version,
+      graph_version: expected_packets[0].topology.bond_graph?.version ?? null,
+      bond_count:
+        (expected_packets[0].topology.bond_graph?.pairs.length ?? 0) / 2,
+      atom_renderer_synced: true,
+      bond_renderer_synced: true,
+    })
+    const atom_main = renderer_meshes(scene, `uRenderStyle`).find((mesh) =>
+      `uCellCount` in (mesh.material as THREE.ShaderMaterial).uniforms
+    )!
+    const bond_main = renderer_meshes(scene, `uBondRadius`).find((mesh) =>
+      `uCellCount` in (mesh.material as THREE.ShaderMaterial).uniforms
+    )!
+    expect(
+      (atom_main.material as THREE.ShaderMaterial).uniforms.uLattice.value
+        .toArray(),
+    ).toEqual(Array.from(expected_packets[0].frame.lattice))
+    expect(
+      (bond_main.material as THREE.ShaderMaterial).uniforms.uLattice.value
+        .toArray(),
+    ).toEqual(Array.from(expected_packets[0].frame.lattice))
+    expect(
+      (bond_main.geometry as THREE.InstancedBufferGeometry).instanceCount,
+    ).toBe(synced[0].bond_count * 2)
+  })
+
+  test(`does not report packet sync when the installed frame metadata is stale`, async () => {
+    vi.spyOn(SharedPositionTexture.prototype, `uploaded_frame`)
+      .mockReturnValue({
+        owner: {},
+        frame_idx: 99,
+        positions_version: 99,
+      })
+    const dom = document.createElement(`div`)
+    const canvas = document.createElement(`canvas`)
+    dom.append(canvas)
+    document.body.append(dom)
+    const on_packet_synced = vi.fn()
+    const component = mount(Harness, {
+      target: dom,
+      props: {
+        mode: `combined`,
+        packets: packets(),
+        atom_manager: new AtomManager(16),
+        bond_manager: new BondManager(16),
+        renderer: fake_renderer(),
+        dom,
+        canvas,
+        onscene: () => {},
+        on_packet_synced,
+      },
+    })
+    mounted.push(component)
+    await settle()
+
+    expect(on_packet_synced).not.toHaveBeenCalled()
+  })
+
   test(`creates and disposes the bond draw reactively without replacing atoms`, async () => {
     const dom = document.createElement(`div`)
     const canvas = document.createElement(`canvas`)

@@ -62,33 +62,44 @@ describe(`trajectory render diagnostics`, () => {
     diagnostics.record_position_upload(19_968 * 16)
     diagnostics.record_topology_upload(26_001 * 18)
     diagnostics.record_bond_main_topology_upload(26_001, 26_001 * 11)
-    diagnostics.record_presented(0, 7, `hash-0`, 26_001, 1_050)
-    // A duplicate publication is a presentation event, but not a new
-    // trajectory frame and therefore cannot inflate trajectory FPS.
-    diagnostics.record_presented(0, 7, `hash-0`, 26_001, 1_060)
+    diagnostics.record_renderer_installed(0, 7, `hash-0`, 26_001, 1_050)
+    // Renderer re-sync of the same packet is not a second presentation.
+    diagnostics.record_renderer_installed(0, 7, `hash-0`, 26_001, 1_060)
 
     diagnostics.record(`requested`, 1, 1_070, 8)
     diagnostics.record_prepared(1, `hash-1`, 26_010, 20)
     diagnostics.record_position_upload(19_968 * 16)
     diagnostics.record_topology_upload(26_010 * 18)
     diagnostics.record_bond_main_topology_upload(26_010, 26_010 * 11)
-    diagnostics.record_presented(1, 8, `hash-1`, 26_010, 1_090)
+    diagnostics.record_renderer_installed(1, 8, `hash-1`, 26_010, 1_090)
     diagnostics.record(`requested`, 2, 1_100, 9)
     diagnostics.record_prepared(2, `hash-2`, 25_999, 19)
-    diagnostics.record_presented(2, 9, `hash-2`, 25_999, 1_130)
+    diagnostics.record_renderer_installed(2, 9, `hash-2`, 25_999, 1_130)
     // Prefetch-only work must never be reported as displayed exactness.
     diagnostics.record_prepared(99, `prefetched-only`, 10, 1)
     diagnostics.record_long_task()
 
     expect(diagnostics.snapshot()).toMatchObject({
-      presented_frames: 4,
+      presented_frames: 3,
       unique_presented_frames: 3,
+      renderer_installed_frames: 3,
+      last_renderer_installed_frame: 2,
       graph_hash_by_frame: {
         0: `hash-0`,
         1: `hash-1`,
         2: `hash-2`,
       },
       bond_count_by_frame: {
+        0: 26_001,
+        1: 26_010,
+        2: 25_999,
+      },
+      renderer_graph_hash_by_frame: {
+        0: `hash-0`,
+        1: `hash-1`,
+        2: `hash-2`,
+      },
+      renderer_bond_count_by_frame: {
         0: 26_001,
         1: 26_010,
         2: 25_999,
@@ -111,6 +122,23 @@ describe(`trajectory render diagnostics`, () => {
     })
   })
 
+  test(`keeps direct presentation separate from renderer-installed evidence`, () => {
+    const diagnostics = create_trajectory_render_diagnostics()
+    diagnostics.begin_owner({}, 100)
+    diagnostics.record_presented(4, 14, `direct-hash`, 12, 120)
+
+    expect(diagnostics.snapshot()).toMatchObject({
+      presented_frames: 1,
+      last_presented_frame: 4,
+      graph_hash_by_frame: { 4: `direct-hash` },
+      bond_count_by_frame: { 4: 12 },
+      renderer_installed_frames: 0,
+      last_renderer_installed_frame: null,
+      renderer_graph_hash_by_frame: {},
+      renderer_bond_count_by_frame: {},
+    })
+  })
+
   test(`uses bounded latency rings and resets when trajectory owner changes`, () => {
     const diagnostics = create_trajectory_render_diagnostics()
     const first_owner = {}
@@ -128,8 +156,12 @@ describe(`trajectory render diagnostics`, () => {
       prepared_frames: 0,
       presented_frames: 0,
       unique_presented_frames: 0,
+      renderer_installed_frames: 0,
+      last_renderer_installed_frame: null,
       graph_hash_by_frame: {},
       bond_count_by_frame: {},
+      renderer_graph_hash_by_frame: {},
+      renderer_bond_count_by_frame: {},
       position_uploads: 0,
       bond_main_topology_uploads: 0,
       bond_main_topology_upload_bytes: 0,

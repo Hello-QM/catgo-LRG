@@ -25,6 +25,7 @@
   import { BondReplicaRenderer } from './webgl2/bond-replica-renderer'
   import type { SharedPositionTexture } from './webgl2/shared-position-texture'
   import type { SharedAtomColorTexture } from './webgl2/shared-atom-color-texture'
+  import type { PacketSyncEvidence } from '../trajectory-presentation-commit'
 
   interface Props {
     packet: RenderPacket
@@ -49,6 +50,8 @@
     opacity?: number
     /** Opacity multiplier for ghost-image instances (sparse second draws). */
     ghost_opacity?: number
+    /** Fired only after every enabled packet-owned renderer is synchronized. */
+    on_packet_synced?: (evidence: PacketSyncEvidence) => void
   }
 
   let {
@@ -68,6 +71,7 @@
     highlight_strength = 1.0,
     opacity = 1,
     ghost_opacity = 1,
+    on_packet_synced,
   }: Props = $props()
 
   const threlte = useThrelte()
@@ -154,6 +158,30 @@
         }
       }
       mark_dirty()
+      const installed_frame = position_resource.uploaded_frame()
+      const atom_packet = atoms?.installed_packet() ?? null
+      const bond_packet = bonds?.installed_packet() ?? null
+      if (
+        installed_frame === null ||
+        installed_frame.owner !== pkt.frame.owner ||
+        installed_frame.frame_idx !== pkt.frame.frame_idx ||
+        installed_frame.positions_version !== pkt.frame.positions_version ||
+        (atoms !== null && atom_packet !== pkt) ||
+        (bonds !== null && bond_packet !== pkt) ||
+        (atoms === null && bonds === null)
+      ) return
+      const installed_packet = atom_packet ?? bond_packet
+      if (installed_packet === null) return
+      const graph = installed_packet.topology.bond_graph
+      on_packet_synced?.({
+        packet: installed_packet,
+        ...installed_frame,
+        topology_version: installed_packet.topology.version,
+        graph_version: graph?.version ?? null,
+        bond_count: (graph?.pairs.length ?? 0) / 2,
+        atom_renderer_synced: atom_packet === pkt,
+        bond_renderer_synced: bond_packet === pkt,
+      })
     })
   })
 

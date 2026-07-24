@@ -16,7 +16,7 @@ export type SharedPositionTextureStats = {
   picker_consumers: number
 }
 
-type UploadedFrame = {
+export type UploadedFrameIdentity = {
   owner: object
   frame_idx: number
   positions_version: number
@@ -27,7 +27,7 @@ type Consumer = 'atom' | 'bond' | 'picker'
 export class SharedPositionTexture {
   readonly texture: DataTexture
 
-  #uploaded: UploadedFrame | null = null
+  #uploaded: UploadedFrameIdentity | null = null
   #stats: SharedPositionTextureStats = {
     uploads: 0,
     skipped_same_frame: 0,
@@ -105,6 +105,11 @@ export class SharedPositionTexture {
 
   stats(): SharedPositionTextureStats {
     return { ...this.#stats }
+  }
+
+  /** Metadata-only identity of the complete frame retained by the texture. */
+  uploaded_frame(): UploadedFrameIdentity | null {
+    return this.#uploaded === null ? null : { ...this.#uploaded }
   }
 
   /** Re-upload the retained complete frame after WebGL context restoration. */

@@ -9,6 +9,7 @@
   import type { RenderPacket } from '$lib/structure/scene/render-packet'
   import WebGLReplicaLayer from '$lib/structure/gpu/WebGLReplicaLayer.svelte'
   import { SharedPositionTexture } from '$lib/structure/gpu/webgl2/shared-position-texture'
+  import type { PacketSyncEvidence } from '$lib/structure/trajectory-presentation-commit'
 
   interface Props {
     mode: 'atom' | 'bond' | 'combined'
@@ -22,6 +23,7 @@
     /** Start with render_packet=null (legacy static path) — atom mode only. */
     start_null?: boolean
     onpositions?: (positions: SharedPositionTexture) => void
+    on_packet_synced?: (evidence: PacketSyncEvidence) => void
     initial_show_atoms?: boolean
     initial_show_bonds?: boolean
   }
@@ -37,6 +39,7 @@
     onscene,
     start_null = false,
     onpositions,
+    on_packet_synced,
     initial_show_atoms = true,
     initial_show_bonds = true,
   }: Props = $props()
@@ -113,6 +116,7 @@
       opacity={live_bond_opacity}
       ghost_opacity={live_ghost_opacity}
       {render_style}
+      {on_packet_synced}
     />
   {/if}
   <AtomManagerInstances
