@@ -1183,6 +1183,7 @@
     structure: AnyStructure
     rules_version: string
     topology_version: number
+    published_at_ms: number
   }
   let pending_prepared_presentation = $state.raw<
     PendingPreparedPresentation | null
@@ -3041,16 +3042,21 @@
         same_prepared_frame_key(outcome.value.key, latest_prepared_request_key)
       ) {
         const prepared = outcome.value
+        const published_at_ms = performance.now()
         // One publication turn owns positions, lattice, graph, forces, and the
         // worker-packed position texture together.
         prepared_render_packet = prepared.packet
         prepared_gpu_positions = prepared.gpu_positions_rgba
         prepared_frame_forces = prepared.forces
         prepared_error = null
+        const manager_replace_started_ms = performance.now()
         bond_manager.replace_auto_bonds(
           prepared.graph.pairs,
           prepared.graph.pairs.length / 2,
           prepared.graph.jimages,
+        )
+        trajectory_render_diagnostics.record_bond_manager_replace(
+          performance.now() - manager_replace_started_ms,
         )
         const presentation: PreparedPresentationIdentity = {
           prepared_packet: prepared.packet,
@@ -3064,6 +3070,7 @@
           structure: raw_structure,
           rules_version,
           topology_version: raw_packet.topology.version,
+          published_at_ms,
         }
       } else if (outcome.status === `failed`) {
         report_buffer_failure(outcome.error)
@@ -3458,7 +3465,7 @@
     const __resuming_bbp = __bbp_was_suspended
     __bbp_was_suspended = false
     if (import.meta.env?.DEV) __probe_bbp_fires++
-    const __t0 = (import.meta.env?.DEV) ? performance.now() : 0
+    const __t0 = performance.now()
     // Read all deps up front so Svelte subscribes correctly.
     const conn_state = bond_state.bond_connectivity
     const lbs = bond_state.last_bond_structure
@@ -3528,7 +3535,14 @@
           __td_prev_pos = traj_positions
           __td_ctx = { lat: td_lat, sites: td_sites, tol: __traj_tol_v }
           if (!typed_direct_active) typed_direct_active = true
+          const manager_replace_started_ms = performance.now()
           bond_manager.replace_auto_bonds(topo.pairs, topo.count, topo.jimages)
+          trajectory_render_diagnostics.record_bond_manager_replace(
+            performance.now() - manager_replace_started_ms,
+          )
+          trajectory_render_diagnostics.record_typed_direct_sync(
+            performance.now() - __t0,
+          )
           schedule_typed_direct_tail_sync()
           if (import.meta.env?.DEV) {
             const __dt = performance.now() - __t0
@@ -5473,12 +5487,18 @@
   })
 
   function handle_packet_synced(evidence: PacketSyncEvidence): void {
-    trajectory_presentation_committer.renderer_synced(
+    const pending = pending_prepared_presentation
+    const committed = trajectory_presentation_committer.renderer_synced(
       evidence,
       manager_render_packet,
       prepared_render_packet,
       latest_prepared_request_key,
     )
+    if (committed && pending !== null) {
+      trajectory_render_diagnostics.record_prepared_to_renderer_sync(
+        performance.now() - pending.published_at_ms,
+      )
+    }
   }
 
   // Visual T5 — while the managers consume a render packet, picking is the

@@ -151,6 +151,44 @@ describe(`trajectory render diagnostics`, () => {
     })
   })
 
+  test(`keeps bounded main-thread trajectory phase timings and clears them by owner`, () => {
+    const diagnostics = create_trajectory_render_diagnostics()
+    diagnostics.begin_owner({}, 1_000)
+    for (let idx = 0; idx < 300; idx++) {
+      diagnostics.record_bond_renderer_timings(
+        idx,
+        idx + 0.25,
+        idx + 0.5,
+      )
+      diagnostics.record_bond_manager_replace(idx + 0.75)
+      diagnostics.record_typed_direct_sync(idx + 1)
+      diagnostics.record_prepared_to_renderer_sync(idx + 1.25)
+    }
+
+    const snapshot = diagnostics.snapshot()
+    expect(snapshot.bond_renderer_update_ms).toHaveLength(256)
+    expect(snapshot.bond_renderer_main_attrs_ms).toHaveLength(256)
+    expect(snapshot.bond_renderer_ghosts_ms).toHaveLength(256)
+    expect(snapshot.bond_manager_replace_ms).toHaveLength(256)
+    expect(snapshot.typed_direct_sync_ms).toHaveLength(256)
+    expect(snapshot.prepared_to_renderer_sync_ms).toHaveLength(256)
+    expect(snapshot.bond_renderer_update_ms[0]).toBe(44)
+    expect(snapshot.prepared_to_renderer_sync_ms.at(-1)).toBe(300.25)
+    expect(
+      Object.values(snapshot).some((value) => ArrayBuffer.isView(value)),
+    ).toBe(false)
+
+    diagnostics.begin_owner({}, 2_000)
+    expect(diagnostics.snapshot()).toMatchObject({
+      bond_renderer_update_ms: [],
+      bond_renderer_main_attrs_ms: [],
+      bond_renderer_ghosts_ms: [],
+      bond_manager_replace_ms: [],
+      typed_direct_sync_ms: [],
+      prepared_to_renderer_sync_ms: [],
+    })
+  })
+
   test(`records exact graph identities, uploads, latency, and unique presentation FPS`, () => {
     const diagnostics = create_trajectory_render_diagnostics()
     diagnostics.begin_owner({}, 1_000)

@@ -193,4 +193,27 @@ describe(`exact prepared trajectory ownership`, () => {
     )
     expect(scene).toContain(`bond_graph,`)
   })
+
+  test(`reports renderer and legacy publication spans for the real-file gate`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const renderer = readFileSync(
+      `src/lib/structure/gpu/webgl2/bond-replica-renderer.ts`,
+      `utf8`,
+    )
+    expect(renderer).toContain(
+      `trajectory_render_diagnostics.record_bond_renderer_timings(`,
+    )
+    expect(scene).toContain(
+      `trajectory_render_diagnostics.record_bond_manager_replace(`,
+    )
+    expect(scene).toContain(
+      `trajectory_render_diagnostics.record_typed_direct_sync(`,
+    )
+    expect(scene).toContain(
+      `trajectory_render_diagnostics.record_prepared_to_renderer_sync(`,
+    )
+  })
 })

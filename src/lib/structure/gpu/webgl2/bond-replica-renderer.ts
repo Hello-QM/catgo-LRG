@@ -621,6 +621,7 @@ export class BondReplicaRenderer {
 
   /** Apply a render packet. Minimal work per `diff_render_packet` category. */
   update(packet: RenderPacket): void {
+    const update_started_ms = performance.now()
     const prev = this.#prev
     this.#positions.update(packet.frame)
     this.#colors.update(packet.topology)
@@ -634,8 +635,12 @@ export class BondReplicaRenderer {
       frame_identity_changed
     const graph_changed = prev === null || diff.bond_graph_changed
     let topology_upload_bytes = 0
+    let main_attrs_ms: number | null = null
+    let ghosts_ms: number | null = null
     if (graph_changed) {
+      const main_started_ms = performance.now()
       const main_bytes = this.#rebuild_bond_attrs(packet)
+      main_attrs_ms = performance.now() - main_started_ms
       topology_upload_bytes += main_bytes
       trajectory_render_diagnostics.record_bond_main_topology_upload(
         this.#bond_count,
@@ -645,7 +650,9 @@ export class BondReplicaRenderer {
     if (graph_changed || diff.replica_changed) this.#apply_replicas(packet)
     if (lattice_changed) this.#upload_lattice(packet)
     if (graph_changed || diff.replica_changed) {
+      const ghosts_started_ms = performance.now()
       topology_upload_bytes += this.#rebuild_ghosts(packet)
+      ghosts_ms = performance.now() - ghosts_started_ms
     }
     if (topology_upload_bytes > 0) {
       trajectory_render_diagnostics.record_topology_upload(
@@ -661,6 +668,11 @@ export class BondReplicaRenderer {
       graph_version: packet.topology.bond_graph?.version ?? null,
       bond_count: this.#bond_count,
     }
+    trajectory_render_diagnostics.record_bond_renderer_timings(
+      performance.now() - update_started_ms,
+      main_attrs_ms,
+      ghosts_ms,
+    )
   }
 
   installed_packet(): RenderPacket | null {

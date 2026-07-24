@@ -40,6 +40,12 @@ export type TrajectoryRenderDiagnostics = TrajectoryRetainedState & {
   bond_worker_table_copy_ms: number[]
   bond_worker_total_ms: number[]
   bond_worker_roundtrip_ms: number[]
+  bond_renderer_update_ms: number[]
+  bond_renderer_main_attrs_ms: number[]
+  bond_renderer_ghosts_ms: number[]
+  bond_manager_replace_ms: number[]
+  typed_direct_sync_ms: number[]
+  prepared_to_renderer_sync_ms: number[]
   bond_backend: BondBackendKind | null
   bond_threading_expected: boolean
   bond_thread_count: number
@@ -90,6 +96,14 @@ export type TrajectoryRenderDiagnosticsRecorder = {
     worker_total_ms: number,
     worker_roundtrip_ms: number,
   ): void
+  record_bond_renderer_timings(
+    update_ms: number,
+    main_attrs_ms: number | null,
+    ghosts_ms: number | null,
+  ): void
+  record_bond_manager_replace(duration_ms: number): void
+  record_typed_direct_sync(duration_ms: number): void
+  record_prepared_to_renderer_sync(duration_ms: number): void
   record_presented(
     frame_idx: number,
     positions_version: number,
@@ -167,6 +181,12 @@ type MutableDiagnostics = Omit<
   | 'bond_worker_table_copy_ms'
   | 'bond_worker_total_ms'
   | 'bond_worker_roundtrip_ms'
+  | 'bond_renderer_update_ms'
+  | 'bond_renderer_main_attrs_ms'
+  | 'bond_renderer_ghosts_ms'
+  | 'bond_manager_replace_ms'
+  | 'typed_direct_sync_ms'
+  | 'prepared_to_renderer_sync_ms'
   | 'frame_time_p95_ms'
   | 'presentation_latency_ms'
   | 'unique_frame_fps'
@@ -251,6 +271,12 @@ export function create_trajectory_render_diagnostics():
   let bond_worker_table_copy = new NumberRing()
   let bond_worker_total = new NumberRing()
   let bond_worker_roundtrip = new NumberRing()
+  let bond_renderer_update = new NumberRing()
+  let bond_renderer_main_attrs = new NumberRing()
+  let bond_renderer_ghosts = new NumberRing()
+  let bond_manager_replace = new NumberRing()
+  let typed_direct_sync = new NumberRing()
+  let prepared_to_renderer_sync = new NumberRing()
   let presentation_latency = new NumberRing()
   let unique_timestamps = new NumberRing()
   let frame_times = new NumberRing()
@@ -268,6 +294,12 @@ export function create_trajectory_render_diagnostics():
     bond_worker_table_copy = new NumberRing()
     bond_worker_total = new NumberRing()
     bond_worker_roundtrip = new NumberRing()
+    bond_renderer_update = new NumberRing()
+    bond_renderer_main_attrs = new NumberRing()
+    bond_renderer_ghosts = new NumberRing()
+    bond_manager_replace = new NumberRing()
+    typed_direct_sync = new NumberRing()
+    prepared_to_renderer_sync = new NumberRing()
     presentation_latency = new NumberRing()
     unique_timestamps = new NumberRing()
     frame_times = new NumberRing()
@@ -370,6 +402,24 @@ export function create_trajectory_render_diagnostics():
       bond_worker_table_copy.push(Math.max(0, table_copy_ms))
       bond_worker_total.push(Math.max(0, worker_total_ms))
       bond_worker_roundtrip.push(Math.max(0, worker_roundtrip_ms))
+    },
+    record_bond_renderer_timings(update_ms, main_attrs_ms, ghosts_ms) {
+      bond_renderer_update.push(Math.max(0, update_ms))
+      if (main_attrs_ms !== null) {
+        bond_renderer_main_attrs.push(Math.max(0, main_attrs_ms))
+      }
+      if (ghosts_ms !== null) {
+        bond_renderer_ghosts.push(Math.max(0, ghosts_ms))
+      }
+    },
+    record_bond_manager_replace(duration_ms) {
+      bond_manager_replace.push(Math.max(0, duration_ms))
+    },
+    record_typed_direct_sync(duration_ms) {
+      typed_direct_sync.push(Math.max(0, duration_ms))
+    },
+    record_prepared_to_renderer_sync(duration_ms) {
+      prepared_to_renderer_sync.push(Math.max(0, duration_ms))
     },
     record_presented(
       frame_idx,
@@ -481,6 +531,12 @@ export function create_trajectory_render_diagnostics():
         bond_worker_table_copy_ms: bond_worker_table_copy.to_array(),
         bond_worker_total_ms: bond_worker_total.to_array(),
         bond_worker_roundtrip_ms: bond_worker_roundtrip.to_array(),
+        bond_renderer_update_ms: bond_renderer_update.to_array(),
+        bond_renderer_main_attrs_ms: bond_renderer_main_attrs.to_array(),
+        bond_renderer_ghosts_ms: bond_renderer_ghosts.to_array(),
+        bond_manager_replace_ms: bond_manager_replace.to_array(),
+        typed_direct_sync_ms: typed_direct_sync.to_array(),
+        prepared_to_renderer_sync_ms: prepared_to_renderer_sync.to_array(),
         frame_time_p95_ms: percentile_95(frame_times.to_array()),
         presentation_latency_ms: latency_values,
         unique_frame_fps,

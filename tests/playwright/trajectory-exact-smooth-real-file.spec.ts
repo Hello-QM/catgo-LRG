@@ -41,6 +41,12 @@ type Diagnostics = {
   bond_worker_table_copy_ms: number[]
   bond_worker_total_ms: number[]
   bond_worker_roundtrip_ms: number[]
+  bond_renderer_update_ms: number[]
+  bond_renderer_main_attrs_ms: number[]
+  bond_renderer_ghosts_ms: number[]
+  bond_manager_replace_ms: number[]
+  typed_direct_sync_ms: number[]
+  prepared_to_renderer_sync_ms: number[]
   bond_backend: string | null
   bond_threading_expected: boolean
   bond_thread_count: number
@@ -230,6 +236,20 @@ function log_segment(label: string, snapshot: Diagnostics): void {
       percentile(snapshot.bond_worker_total_ms, 0.95)?.toFixed(2) ?? `n/a`
     } worker_roundtrip_p95_ms=${
       percentile(snapshot.bond_worker_roundtrip_ms, 0.95)?.toFixed(2) ??
+        `n/a`
+    } renderer_update_p95_ms=${
+      percentile(snapshot.bond_renderer_update_ms, 0.95)?.toFixed(2) ?? `n/a`
+    } renderer_attrs_p95_ms=${
+      percentile(snapshot.bond_renderer_main_attrs_ms, 0.95)?.toFixed(2) ??
+        `n/a`
+    } renderer_ghosts_p95_ms=${
+      percentile(snapshot.bond_renderer_ghosts_ms, 0.95)?.toFixed(2) ?? `n/a`
+    } manager_replace_p95_ms=${
+      percentile(snapshot.bond_manager_replace_ms, 0.95)?.toFixed(2) ?? `n/a`
+    } typed_direct_p95_ms=${
+      percentile(snapshot.typed_direct_sync_ms, 0.95)?.toFixed(2) ?? `n/a`
+    } publish_sync_p95_ms=${
+      percentile(snapshot.prepared_to_renderer_sync_ms, 0.95)?.toFixed(2) ??
         `n/a`
     } backend=${snapshot.bond_backend ?? `n/a`} ` +
     `threading_expected=${snapshot.bond_threading_expected} ` +
