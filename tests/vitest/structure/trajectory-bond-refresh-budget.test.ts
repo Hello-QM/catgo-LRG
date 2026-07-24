@@ -245,4 +245,53 @@ describe(`exact prepared trajectory ownership`, () => {
       `            : partner_drawn_lookup}`,
     )
   })
+
+  test(`packet ownership mirrors bonds only through the live legacy fallback`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const publication_start = scene.indexOf(
+      `prepared_render_packet = prepared.packet`,
+    )
+    const publication_end = scene.indexOf(
+      `trajectory_presentation_committer.publish(`,
+      publication_start,
+    )
+    expect(scene.slice(publication_start, publication_end))
+      .not.toContain(`bond_manager.replace_auto_bonds(`)
+
+    const direct_start = scene.indexOf(
+      `function install_direct_prepared_presentation(`,
+    )
+    const direct_end = scene.indexOf(
+      `// Eligibility can change after publication`,
+      direct_start,
+    )
+    expect(scene.slice(direct_start, direct_end)).toContain(
+      `bond_manager.replace_auto_bonds(`,
+    )
+
+    const typed_start = scene.indexOf(
+      `if (traj_positions != null) {`,
+    )
+    const conversion = scene.indexOf(
+      `const topo = conn_to_typed_topology(`,
+      typed_start,
+    )
+    const owned_guard = scene.indexOf(
+      `if (packet_renderer_active_for_typed_direct) {`,
+      typed_start,
+    )
+    expect(owned_guard).toBeGreaterThan(typed_start)
+    expect(owned_guard).toBeLessThan(conversion)
+    expect(scene).toContain(
+      `packet_renderer_active_for_typed_direct =\n` +
+      `      combined_packet_renderer_actually_owned`,
+    )
+    expect(scene).toContain(
+      `if (typed_direct_active || packet_renderer_active_for_typed_direct) ` +
+      `return EMPTY_SLOT_MAP`,
+    )
+  })
 })

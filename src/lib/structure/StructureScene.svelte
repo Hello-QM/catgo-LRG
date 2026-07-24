@@ -3049,15 +3049,6 @@
         prepared_gpu_positions = prepared.gpu_positions_rgba
         prepared_frame_forces = prepared.forces
         prepared_error = null
-        const manager_replace_started_ms = performance.now()
-        bond_manager.replace_auto_bonds(
-          prepared.graph.pairs,
-          prepared.graph.pairs.length / 2,
-          prepared.graph.jimages,
-        )
-        trajectory_render_diagnostics.record_bond_manager_replace(
-          performance.now() - manager_replace_started_ms,
-        )
         const presentation: PreparedPresentationIdentity = {
           prepared_packet: prepared.packet,
           key: prepared.key,
@@ -3377,6 +3368,11 @@
   // against stale filtered pairs). The shadow sync needs no gate: its deps
   // (filtered_bond_pairs identity) don't change while the chain is frozen.
   let typed_direct_active = $state(false)
+  // Set from the later live-ownership reconciliation after every relevant
+  // mount/eligibility change. Kept above the typed-direct $effect.pre to avoid
+  // a production TDZ while allowing packet-owned playback to bypass this
+  // legacy BondManager mirror entirely.
+  let packet_renderer_active_for_typed_direct = $state(false)
   let __td_prev_conn:
     | Array<{
       site_idx_1: number
@@ -3486,6 +3482,10 @@
     // the slow path, so bbp_meaningful drops to 0 during playback (the
     // Phase 3 success criterion).
     if (traj_positions != null) {
+      if (packet_renderer_active_for_typed_direct) {
+        if (__td_prev_conn !== null || typed_direct_active) exit_typed_direct()
+        return
+      }
       // Connectivity and geometry were prepared together and committed in one
       // publication turn above. Never ask the cadence-era controller for a
       // previous frame's graph here.
@@ -4418,12 +4418,12 @@
   // hits on those return null (degraded but harmless).
   let slot_to_filtered_idx = $derived.by((): Int32Array => {
     void bond_manager.version
-    // Typed-direct playback: filtered_bond_pairs is frozen and slots churn
-    // every frame — a per-frame 26k-entry map against stale pairs is pure
-    // waste. Decorator hits bounds-check the length (gpu-picker-integration
-    // L418), so the shared empty map degrades picks to null. The pause
-    // tail-sync drops the gate and this re-derives with fresh pairs.
-    if (typed_direct_active) return EMPTY_SLOT_MAP
+    // Exact packet playback: filtered_bond_pairs stays frozen while the packet
+    // graph can churn every frame. Never map a current packet graph index
+    // through that stale legacy list. The shared empty map degrades packet
+    // bond picks to null; ownership fallback installs the exact manager graph
+    // and drops both gates before legacy picking resumes.
+    if (typed_direct_active || packet_renderer_active_for_typed_direct) return EMPTY_SLOT_MAP
     const count = bond_manager.count
     const out = new Int32Array(count)
     out.fill(-1)
@@ -5427,6 +5427,10 @@
       combined_packet_renderer_owned &&
       show_bulk_atoms && !webgl_suspended,
   )
+  $effect(() => {
+    packet_renderer_active_for_typed_direct =
+      combined_packet_renderer_actually_owned
+  })
   let combined_packet_bonds_visible = $derived(
     should_show_bonds(show_bonds, lattice) && !bonds_deferred,
   )
@@ -5442,6 +5446,19 @@
     const pending = pending_prepared_presentation
     if (pending?.presentation !== presentation) return
     const graph = presentation.prepared_packet.topology.bond_graph
+    const manager_replace_started_ms = performance.now()
+    if (graph) {
+      bond_manager.replace_auto_bonds(
+        graph.pairs,
+        graph.pairs.length / 2,
+        graph.jimages,
+      )
+    } else {
+      bond_manager.replace_auto_bonds([], 0)
+    }
+    trajectory_render_diagnostics.record_bond_manager_replace(
+      performance.now() - manager_replace_started_ms,
+    )
     bond_state.bond_connectivity = graph ? graph_connectivity(graph) : []
     bond_state.last_bond_structure = pending.structure
     bond_state.last_bond_strategy = pending.rules_version
