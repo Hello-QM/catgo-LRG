@@ -196,8 +196,9 @@ export function create_prepared_frame_pipeline(options: {
   let decode_queue: QueueRecord[] = []
   let decode_in_flight: QueueRecord[] = []
 
-  const cached_bytes = (): number =>
-    cache.reduce((sum, record) => sum + record.value.byte_size, 0)
+  const cached_bytes_for = (records: readonly CacheRecord[]): number =>
+    records.reduce((sum, record) => sum + record.value.byte_size, 0)
+  const cached_bytes = (): number => cached_bytes_for(cache)
   const queued_bytes = (): number =>
     [...queue, ...decode_queue].reduce(
       (sum, record) => sum + record.reserved_bytes,
@@ -229,39 +230,63 @@ export function create_prepared_frame_pipeline(options: {
         same_prepared_frame_key(record.value.key, displayed_key))
   }
 
-  function evict_to_limits(prospective_bytes = 0): void {
+  function select_eviction_victim(
+    records: readonly CacheRecord[],
+  ): CacheRecord | null {
+    const available = records.filter((record) => !is_protected(record))
+    if (available.length === 0) return null
+    const prefetched = available.filter((record) =>
+      record.priority === `prefetch`
+    )
+    const candidates = prefetched.length > 0 ? prefetched : available
+    const playhead = current_key?.frame_idx ?? 0
+    candidates.sort((left, right) => {
+      const left_distance = stream_frame_count
+        ? (
+          left.value.key.frame_idx - playhead + stream_frame_count
+        ) % stream_frame_count
+        : Math.abs(left.value.key.frame_idx - playhead)
+      const right_distance = stream_frame_count
+        ? (
+          right.value.key.frame_idx - playhead + stream_frame_count
+        ) % stream_frame_count
+        : Math.abs(right.value.key.frame_idx - playhead)
+      if (left_distance !== right_distance) {
+        return right_distance - left_distance
+      }
+      return left.last_used - right.last_used
+    })
+    return candidates[0]
+  }
+
+  function evict_to_limits(): void {
     while (
       cache.length > max_frames ||
-      cached_bytes() + queued_bytes() + in_flight_bytes() +
-          prospective_bytes > max_bytes
+      cached_bytes() + queued_bytes() + in_flight_bytes() > max_bytes
     ) {
-      const available = cache.filter((record) => !is_protected(record))
-      if (available.length === 0) break
-      const prefetched = available.filter((record) =>
-        record.priority === `prefetch`
-      )
-      const candidates = prefetched.length > 0 ? prefetched : available
-      const playhead = current_key?.frame_idx ?? 0
-      candidates.sort((left, right) => {
-        const left_distance = stream_frame_count
-          ? (
-            left.value.key.frame_idx - playhead + stream_frame_count
-          ) % stream_frame_count
-          : Math.abs(left.value.key.frame_idx - playhead)
-        const right_distance = stream_frame_count
-          ? (
-            right.value.key.frame_idx - playhead + stream_frame_count
-          ) % stream_frame_count
-          : Math.abs(right.value.key.frame_idx - playhead)
-        if (left_distance !== right_distance) {
-          return right_distance - left_distance
-        }
-        return left.last_used - right.last_used
-      })
-      const victim = candidates[0]
+      const victim = select_eviction_victim(cache)
+      if (!victim) break
       cache = cache.filter((record) => record !== victim)
       evictions++
     }
+  }
+
+  function reclaim_for_prefetch_reservation(
+    prospective_bytes: number,
+  ): boolean {
+    const pending_bytes = queued_bytes() + in_flight_bytes()
+    let planned_cache = cache
+    while (
+      cached_bytes_for(planned_cache) + pending_bytes + prospective_bytes >
+        max_bytes
+    ) {
+      const victim = select_eviction_victim(planned_cache)
+      if (!victim) return false
+      planned_cache = planned_cache.filter((record) => record !== victim)
+    }
+    evictions += cache.length - planned_cache.length
+    cache = planned_cache
+    return true
   }
 
   function find_pending(
@@ -675,18 +700,15 @@ export function create_prepared_frame_pipeline(options: {
     }
     cache_misses++
 
-    if (frame_request.priority === `prefetch`) {
-      evict_to_limits(frame_request.estimated_bytes)
-      update_diagnostics()
-    }
-    const retained = cached_bytes() + queued_bytes() + in_flight_bytes()
     if (
       frame_request.priority === `prefetch` &&
-      retained + frame_request.estimated_bytes > max_bytes
+      !reclaim_for_prefetch_reservation(frame_request.estimated_bytes)
     ) {
+      update_diagnostics()
       const error = new PreparedFrameBudgetRefusalError(max_bytes)
       return Promise.resolve({ status: `failed`, error })
     }
+    update_diagnostics()
 
     let resolve!: (outcome: PreparedFrameOutcome) => void
     const promise = new Promise<PreparedFrameOutcome>((done) => {

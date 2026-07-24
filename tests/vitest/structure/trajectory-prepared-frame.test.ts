@@ -608,6 +608,68 @@ describe(`create_prepared_frame_pipeline`, () => {
     })
   })
 
+  test(`keeps useful cache intact when planned evictions cannot make reservation fit`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_bytes: 100,
+    })
+    const current = make_key({ frame_idx: 0 })
+    const warmup = make_key({ frame_idx: 1 })
+    const active_key = make_key({ frame_idx: 2 })
+    const incoming = make_key({ frame_idx: 3 })
+    const generation = pipeline.begin_request(current)
+    await pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 50,
+      prepare: async () => make_prepared(current, 50),
+    }, generation)
+    await pipeline.request({
+      key: warmup,
+      priority: `prefetch`,
+      estimated_bytes: 10,
+      prepare: async () => make_prepared(warmup, 10),
+    }, generation)
+    const active_prepare = deferred<PreparedTrajectoryFrame>()
+    const active = pipeline.request({
+      key: active_key,
+      priority: `prefetch`,
+      estimated_bytes: 40,
+      prepare: () => active_prepare.promise,
+    }, generation)
+    const before = pipeline.stats()
+    const admit = vi.fn(async (): Promise<DeferredFrameAdmission> => ({
+      key: incoming,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(incoming, 20),
+    }))
+
+    await expect(pipeline.request_deferred({
+      key: incoming,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit,
+    }, generation)).resolves.toMatchObject({
+      status: `failed`,
+      error: { name: `PreparedFrameBudgetRefusalError` },
+    })
+
+    expect(admit).not.toHaveBeenCalled()
+    expect(pipeline.peek(current)).not.toBeNull()
+    expect(pipeline.peek(warmup)).not.toBeNull()
+    expect(pipeline.ready_count([current, warmup])).toBe(2)
+    expect(pipeline.stats()).toMatchObject({
+      cached_frames: before.cached_frames,
+      cached_bytes: before.cached_bytes,
+      queued_bytes: before.queued_bytes,
+      in_flight_bytes: before.in_flight_bytes,
+      retained_bytes: before.retained_bytes,
+      evictions: before.evictions,
+    })
+
+    active_prepare.resolve(make_prepared(active_key, 40))
+    await expect(active).resolves.toMatchObject({ status: `ready` })
+  })
+
   test(`overlaps one decoder with one preparation without running two decoders`, async () => {
     const pipeline = create_prepared_frame_pipeline()
     const first_key = make_key({ frame_idx: 0 })
