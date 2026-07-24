@@ -7,6 +7,7 @@ import {
   create_prepared_frame_pipeline,
   prepared_frame_byte_size,
   same_prepared_frame_key,
+  type DeferredFrameAdmission,
   type PreparedFrameKey,
   type PreparedFrameOutcome,
   type PreparedTrajectoryFrame,
@@ -468,6 +469,393 @@ describe(`create_prepared_frame_pipeline`, () => {
       cached_bytes: 50,
       retained_bytes: 50,
     })
+  })
+
+  test(`refuses deferred prefetch before invoking its decoder when the byte budget is full`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_bytes: 100,
+    })
+    const current = make_key({ frame_idx: 0 })
+    const generation = pipeline.begin_request(current)
+    await pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 100,
+      prepare: async () => make_prepared(current, 100),
+    }, generation)
+    const prefetch = make_key({ frame_idx: 1 })
+    const admit = vi.fn(async (): Promise<DeferredFrameAdmission> => ({
+      key: prefetch,
+      retained_source_bytes: 20,
+      prepare: async () => make_prepared(prefetch, 20),
+    }))
+
+    await expect(pipeline.request_deferred({
+      key: prefetch,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit,
+    }, generation)).resolves.toMatchObject({ status: `failed` })
+
+    expect(admit).not.toHaveBeenCalled()
+    expect(pipeline.stats()).toMatchObject({
+      cached_bytes: 100,
+      queued_bytes: 0,
+      in_flight_bytes: 0,
+      retained_bytes: 100,
+    })
+  })
+
+  test(`overlaps one decoder with one preparation without running two decoders`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const first_key = make_key({ frame_idx: 0 })
+    const second_key = make_key({ frame_idx: 1 })
+    const third_key = make_key({ frame_idx: 2 })
+    const generation = pipeline.begin_request(first_key)
+    const first_prepare = deferred<PreparedTrajectoryFrame>()
+    const second_decode = deferred<DeferredFrameAdmission>()
+    const third_decode = deferred<DeferredFrameAdmission>()
+    let active_decoders = 0
+    let maximum_active_decoders = 0
+    const decoder = (
+      admission: Promise<DeferredFrameAdmission>,
+    ) => async (): Promise<DeferredFrameAdmission> => {
+      active_decoders++
+      maximum_active_decoders = Math.max(
+        maximum_active_decoders,
+        active_decoders,
+      )
+      try {
+        return await admission
+      } finally {
+        active_decoders--
+      }
+    }
+    const first_prepare_spy = vi.fn(() => first_prepare.promise)
+    const first = pipeline.request_deferred({
+      key: first_key,
+      priority: `current`,
+      estimated_bytes: 20,
+      admit: decoder(Promise.resolve({
+        key: first_key,
+        retained_source_bytes: 8,
+        prepare: first_prepare_spy,
+      })),
+    }, generation)
+    const second = pipeline.request_deferred({
+      key: second_key,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit: decoder(second_decode.promise),
+    }, generation)
+    const third = pipeline.request_deferred({
+      key: third_key,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit: decoder(third_decode.promise),
+    }, generation)
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(first_prepare_spy).toHaveBeenCalledOnce()
+    expect(active_decoders).toBe(1)
+    expect(maximum_active_decoders).toBe(1)
+
+    second_decode.resolve({
+      key: second_key,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(second_key, 20),
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(active_decoders).toBe(1)
+    expect(maximum_active_decoders).toBe(1)
+
+    third_decode.resolve({
+      key: third_key,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(third_key, 20),
+    })
+    first_prepare.resolve(make_prepared(first_key, 20))
+    await Promise.all([first, second, third])
+    expect(maximum_active_decoders).toBe(1)
+  })
+
+  test(`keeps one full reservation across decode, preparation queue, preparation, and cache`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_bytes: 1_000,
+    })
+    const current = make_key({ frame_idx: 0 })
+    const deferred_key = make_key({ frame_idx: 1 })
+    const generation = pipeline.begin_request(current)
+    const current_prepare = deferred<PreparedTrajectoryFrame>()
+    const current_outcome = pipeline.request({
+      key: current,
+      priority: `current`,
+      estimated_bytes: 10,
+      prepare: () => current_prepare.promise,
+    }, generation)
+    const decode = deferred<DeferredFrameAdmission>()
+    let retained_when_decoder_started = 0
+    let retained_when_prepare_started = 0
+    const deferred_outcome = pipeline.request_deferred({
+      key: deferred_key,
+      priority: `prefetch`,
+      estimated_bytes: 70,
+      admit: () => {
+        retained_when_decoder_started = pipeline.stats().retained_bytes
+        return decode.promise
+      },
+    }, generation)
+
+    expect(retained_when_decoder_started).toBe(80)
+    expect(pipeline.stats()).toMatchObject({
+      queued_bytes: 0,
+      in_flight_bytes: 80,
+      retained_bytes: 80,
+    })
+    decode.resolve({
+      key: deferred_key,
+      retained_source_bytes: 30,
+      prepare: async () => {
+        retained_when_prepare_started = pipeline.stats().retained_bytes
+        return make_prepared(deferred_key, 70)
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(pipeline.stats()).toMatchObject({
+      queued_bytes: 70,
+      in_flight_bytes: 10,
+      retained_bytes: 80,
+    })
+
+    current_prepare.resolve(make_prepared(current, 10))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(retained_when_prepare_started).toBe(80)
+    expect(pipeline.stats().retained_bytes).toBe(80)
+
+    await Promise.all([current_outcome, deferred_outcome])
+    expect(pipeline.stats()).toMatchObject({
+      cached_bytes: 80,
+      queued_bytes: 0,
+      in_flight_bytes: 0,
+      retained_bytes: 80,
+    })
+  })
+
+  test(`invalidates queued deferred decode and discards a late active decode after a seek`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const current = make_key({ frame_idx: 0 })
+    const active_key = make_key({ frame_idx: 1 })
+    const queued_key = make_key({ frame_idx: 2 })
+    const generation = pipeline.begin_request(current)
+    const active_decode = deferred<DeferredFrameAdmission>()
+    const active_prepare = vi.fn(async () => make_prepared(active_key, 20))
+    const queued_admit = vi.fn(async (): Promise<DeferredFrameAdmission> => ({
+      key: queued_key,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(queued_key, 20),
+    }))
+    const active = pipeline.request_deferred({
+      key: active_key,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit: () => active_decode.promise,
+    }, generation)
+    const queued = pipeline.request_deferred({
+      key: queued_key,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit: queued_admit,
+    }, generation)
+
+    pipeline.begin_request(make_key({ frame_idx: 20 }))
+    await expect(queued).resolves.toEqual({ status: `stale` })
+    expect(queued_admit).not.toHaveBeenCalled()
+    active_decode.resolve({
+      key: active_key,
+      retained_source_bytes: 8,
+      prepare: active_prepare,
+    })
+    await expect(active).resolves.toEqual({ status: `stale` })
+
+    expect(active_prepare).not.toHaveBeenCalled()
+    expect(pipeline.peek(active_key)).toBeNull()
+    expect(pipeline.peek(queued_key)).toBeNull()
+    expect(pipeline.stats()).toMatchObject({
+      queued_bytes: 0,
+      in_flight_bytes: 0,
+      retained_bytes: 0,
+      stale_results: 2,
+    })
+  })
+
+  test(`rejects a deferred admission whose decoded full key changed`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const provisional_key = make_key({ frame_idx: 0 })
+    const decoded_key = make_key({
+      frame_idx: 0,
+      positions_version: provisional_key.positions_version + 1,
+    })
+    const generation = pipeline.begin_request(provisional_key)
+    const prepare = vi.fn(async () => make_prepared(decoded_key, 20))
+
+    await expect(pipeline.request_deferred({
+      key: provisional_key,
+      priority: `current`,
+      estimated_bytes: 20,
+      admit: async () => ({
+        key: decoded_key,
+        retained_source_bytes: 8,
+        prepare,
+      }),
+    }, generation)).resolves.toMatchObject({
+      status: `failed`,
+      error: expect.objectContaining({
+        message: expect.stringContaining(`decoded key`),
+      }),
+    })
+
+    expect(prepare).not.toHaveBeenCalled()
+    expect(pipeline.peek(provisional_key)).toBeNull()
+    expect(pipeline.peek(decoded_key)).toBeNull()
+    expect(pipeline.stats().retained_bytes).toBe(0)
+  })
+
+  test(`deduplicates deferred keys and drains the next decoder after failure`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const first_key = make_key({ frame_idx: 0 })
+    const next_key = make_key({ frame_idx: 1 })
+    const generation = pipeline.begin_request(first_key)
+    const first_decode = deferred<DeferredFrameAdmission>()
+    const first_admit = vi.fn(() => first_decode.promise)
+    const first_request = {
+      key: first_key,
+      priority: `current` as const,
+      estimated_bytes: 20,
+      admit: first_admit,
+    }
+    const first = pipeline.request_deferred(first_request, generation)
+    const duplicate = pipeline.request_deferred(first_request, generation)
+    const next_admit = vi.fn(async (): Promise<DeferredFrameAdmission> => ({
+      key: next_key,
+      retained_source_bytes: 8,
+      prepare: async () => make_prepared(next_key, 20),
+    }))
+    const next = pipeline.request_deferred({
+      key: next_key,
+      priority: `prefetch`,
+      estimated_bytes: 20,
+      admit: next_admit,
+    }, generation)
+
+    expect(duplicate).toBe(first)
+    expect(first_admit).toHaveBeenCalledOnce()
+    expect(next_admit).not.toHaveBeenCalled()
+    first_decode.reject(new Error(`decode failed`))
+
+    await expect(first).resolves.toMatchObject({
+      status: `failed`,
+      error: expect.objectContaining({ message: `decode failed` }),
+    })
+    await expect(next).resolves.toMatchObject({ status: `ready` })
+    expect(next_admit).toHaveBeenCalledOnce()
+  })
+
+  test(`expands a current reservation when decoded source bytes exceed its estimate`, async () => {
+    const pipeline = create_prepared_frame_pipeline({
+      max_bytes: 20,
+    })
+    const key = make_key({ frame_idx: 0 })
+    const generation = pipeline.begin_request(key)
+    const prepare = deferred<PreparedTrajectoryFrame>()
+    const outcome = pipeline.request_deferred({
+      key,
+      priority: `current`,
+      estimated_bytes: 10,
+      admit: async () => ({
+        key,
+        retained_source_bytes: 30,
+        prepare: () => prepare.promise,
+      }),
+    }, generation)
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(pipeline.stats()).toMatchObject({
+      in_flight_bytes: 30,
+      retained_bytes: 30,
+    })
+
+    prepare.resolve(make_prepared(key, 30))
+    await expect(outcome).resolves.toMatchObject({ status: `ready` })
+    expect(pipeline.stats().retained_bytes).toBe(30)
+  })
+
+  test(`promotes a duplicate deferred key when it becomes current`, async () => {
+    const pipeline = create_prepared_frame_pipeline()
+    const playhead = make_key({ frame_idx: 0 })
+    const blocker_key = make_key({ frame_idx: 9 })
+    const older_prefetch_key = make_key({ frame_idx: 2 })
+    const promoted_key = make_key({ frame_idx: 1 })
+    const generation = pipeline.begin_request(playhead)
+    const blocker = deferred<DeferredFrameAdmission>()
+    const decode_order: number[] = []
+    const blocked = pipeline.request_deferred({
+      key: blocker_key,
+      priority: `prefetch`,
+      estimated_bytes: 10,
+      admit: () => {
+        decode_order.push(blocker_key.frame_idx)
+        return blocker.promise
+      },
+    }, generation)
+    const older_prefetch = pipeline.request_deferred({
+      key: older_prefetch_key,
+      priority: `prefetch`,
+      estimated_bytes: 10,
+      admit: async () => {
+        decode_order.push(older_prefetch_key.frame_idx)
+        return {
+          key: older_prefetch_key,
+          retained_source_bytes: 4,
+          prepare: async () => make_prepared(older_prefetch_key, 10),
+        }
+      },
+    }, generation)
+    const promoted = pipeline.request_deferred({
+      key: promoted_key,
+      priority: `prefetch`,
+      estimated_bytes: 10,
+      admit: async () => {
+        decode_order.push(promoted_key.frame_idx)
+        return {
+          key: promoted_key,
+          retained_source_bytes: 4,
+          prepare: async () => make_prepared(promoted_key, 10),
+        }
+      },
+    }, generation)
+    const current_duplicate = pipeline.request_deferred({
+      key: promoted_key,
+      priority: `current`,
+      estimated_bytes: 10,
+      admit: async () => {
+        throw new Error(`deduplicated current decoder must not run`)
+      },
+    }, generation)
+
+    expect(current_duplicate).toBe(promoted)
+    blocker.resolve({
+      key: blocker_key,
+      retained_source_bytes: 4,
+      prepare: async () => make_prepared(blocker_key, 10),
+    })
+    await Promise.all([blocked, older_prefetch, promoted])
+
+    expect(decode_order).toEqual([9, 1, 2])
   })
 
   test(`protects the requested current frame before evicting prefetch`, async () => {

@@ -3054,24 +3054,81 @@
         const prefetch_idx = (frame_idx + offset) % frame_count
         const known = getter?.(prefetch_idx) ?? null
         if (known && !known.topology_stable) continue
-        void (async () => {
-          const source = known ??
-            await request_trajectory_frame_source_safely(
-              requester,
-              prefetch_idx,
-              (error) => report_buffer_failure(error),
-            ) ??
-            null
-          if (!source?.topology_stable) return
-          const key = key_for_source(source)
-          await prepared_pipeline.request({
+        if (known) {
+          const key = key_for_source(known)
+          void prepared_pipeline.request({
             key,
             priority: `prefetch`,
             estimated_bytes,
-            prepare: () => prepare_source(prefetch_idx, source),
-          }, generation)
-          report_buffer(false)
-        })()
+            prepare: () => prepare_source(prefetch_idx, known),
+          }, generation).then((outcome) => {
+            if (outcome.status === `failed`) {
+              report_buffer_failure(outcome.error)
+            } else {
+              report_buffer(false)
+            }
+          })
+          continue
+        }
+
+        const provisional_key: PreparedFrameKey = {
+          ...current_key,
+          frame_idx: prefetch_idx,
+        }
+        let reported_decode_error: Error | null = null
+        void prepared_pipeline.request_deferred({
+          key: provisional_key,
+          priority: `prefetch`,
+          estimated_bytes,
+          admit: async () => {
+            const source = await request_trajectory_frame_source_safely(
+              requester,
+              prefetch_idx,
+              (error) => {
+                reported_decode_error = error
+                report_buffer_failure(error)
+              },
+            )
+            if (!source) {
+              throw reported_decode_error ??
+                new Error(`Trajectory frame ${prefetch_idx} is not decoded`)
+            }
+            if (!source.topology_stable) {
+              throw new Error(
+                `Trajectory frame ${prefetch_idx} changed topology`,
+              )
+            }
+            const decoded_key = key_for_source(source)
+            if (!same_prepared_frame_key(decoded_key, provisional_key)) {
+              throw new Error(
+                `Trajectory frame ${prefetch_idx} decoded under an ` +
+                  `unexpected prepared-frame key`,
+              )
+            }
+            const lattice_bytes = source.lattice?.reduce(
+              (bytes, row) =>
+                bytes + row.length * Float64Array.BYTES_PER_ELEMENT,
+              0,
+            ) ?? 0
+            return {
+              key: decoded_key,
+              retained_source_bytes: source.positions.byteLength +
+                (source.forces?.byteLength ?? 0) +
+                (source.stable_site_ids?.byteLength ?? 0) +
+                lattice_bytes,
+              prepare: () => prepare_source(prefetch_idx, source),
+            }
+          },
+        }, generation).then((outcome) => {
+          if (
+            outcome.status === `failed` &&
+            outcome.error !== reported_decode_error
+          ) {
+            report_buffer_failure(outcome.error)
+          } else {
+            report_buffer(false)
+          }
+        })
       }
     }
   })

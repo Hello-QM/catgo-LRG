@@ -713,6 +713,34 @@ describe(`prepare_exact_trajectory_frame`, () => {
     ).not.toContain(`getter?.(prefetch_idx)`)
   })
 
+  test(`admits unknown prefetch decode with a current-key-derived provisional key`, () => {
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const prefetch_block = scene.slice(
+      scene.indexOf(`const prefetch_idx =`),
+      scene.indexOf(`  })\n\n  $effect.pre`),
+    )
+    const deferred_request = prefetch_block.indexOf(
+      `prepared_pipeline.request_deferred({`,
+    )
+    const decoder_request = prefetch_block.indexOf(
+      `request_trajectory_frame_source_safely(`,
+    )
+
+    expect(deferred_request).toBeGreaterThanOrEqual(0)
+    expect(decoder_request).toBeGreaterThan(deferred_request)
+    expect(prefetch_block).toMatch(
+      /const provisional_key: PreparedFrameKey = \{\s*\.\.\.current_key,\s*frame_idx: prefetch_idx,\s*\}/,
+    )
+    expect(prefetch_block).toContain(`key: provisional_key`)
+    expect(prefetch_block).toContain(
+      `if (!same_prepared_frame_key(decoded_key, provisional_key))`,
+    )
+    expect(prefetch_block).toContain(`retained_source_bytes:`)
+  })
+
   test(`custom rules use object detection, full override, and worker packing`, async () => {
     const request = input({
       distance_rules: [{

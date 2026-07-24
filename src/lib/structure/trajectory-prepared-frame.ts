@@ -74,6 +74,19 @@ export type PrepareFrameRequest = {
   prepare: () => Promise<PreparedTrajectoryFrame>
 }
 
+export type DeferredFrameAdmission = {
+  key: PreparedFrameKey
+  retained_source_bytes: number
+  prepare: () => Promise<PreparedTrajectoryFrame>
+}
+
+export type DeferredPrepareFrameRequest = {
+  key: PreparedFrameKey
+  priority: 'current' | 'prefetch'
+  estimated_bytes: number
+  admit: () => Promise<DeferredFrameAdmission>
+}
+
 export type PreparedFramePipelineStats = {
   generation: number
   queued: number
@@ -95,6 +108,10 @@ export type PreparedFramePipeline = {
     request: PrepareFrameRequest,
     generation: number,
   ): Promise<PreparedFrameOutcome>
+  request_deferred(
+    request: DeferredPrepareFrameRequest,
+    generation: number,
+  ): Promise<PreparedFrameOutcome>
   peek(key: PreparedFrameKey): PreparedTrajectoryFrame | null
   ready_count(keys: readonly PreparedFrameKey[]): number
   stats(): PreparedFramePipelineStats
@@ -102,12 +119,16 @@ export type PreparedFramePipeline = {
 }
 
 type QueueRecord = {
-  request: PrepareFrameRequest
+  request: PrepareFrameRequest | DeferredPrepareFrameRequest
+  admission: DeferredFrameAdmission | null
+  priority: 'current' | 'prefetch'
+  reserved_bytes: number
   generation: number
   sequence: number
   promise: Promise<PreparedFrameOutcome>
   resolve: (outcome: PreparedFrameOutcome) => void
   canceled: boolean
+  settled: boolean
 }
 
 type CacheRecord = {
@@ -124,10 +145,15 @@ export function create_prepared_frame_pipeline(options: {
   max_frames?: number
   max_bytes?: number
   max_in_flight?: number
+  max_decode_in_flight?: number
 } = {}): PreparedFramePipeline {
   const max_frames = Math.max(1, options.max_frames ?? 8)
   const max_bytes = Math.max(1, options.max_bytes ?? 96 * 1024 * 1024)
   const max_in_flight = Math.max(1, options.max_in_flight ?? 1)
+  const max_decode_in_flight = Math.max(
+    1,
+    options.max_decode_in_flight ?? 1,
+  )
   let generation = 0
   let sequence = 0
   let usage_clock = 0
@@ -142,13 +168,21 @@ export function create_prepared_frame_pipeline(options: {
   let cache: CacheRecord[] = []
   let queue: QueueRecord[] = []
   let in_flight: QueueRecord[] = []
+  let decode_queue: QueueRecord[] = []
+  let decode_in_flight: QueueRecord[] = []
 
   const cached_bytes = (): number =>
     cache.reduce((sum, record) => sum + record.value.byte_size, 0)
   const queued_bytes = (): number =>
-    queue.reduce((sum, record) => sum + record.request.estimated_bytes, 0)
+    [...queue, ...decode_queue].reduce(
+      (sum, record) => sum + record.reserved_bytes,
+      0,
+    )
   const in_flight_bytes = (): number =>
-    in_flight.reduce((sum, record) => sum + record.request.estimated_bytes, 0)
+    [...in_flight, ...decode_in_flight].reduce(
+      (sum, record) => sum + record.reserved_bytes,
+      0,
+    )
 
   function update_diagnostics(): void {
     const cache_byte_count = cached_bytes()
@@ -171,7 +205,10 @@ export function create_prepared_frame_pipeline(options: {
   }
 
   function evict_to_limits(): void {
-    while (cache.length > max_frames || cached_bytes() > max_bytes) {
+    while (
+      cache.length > max_frames ||
+      cached_bytes() + queued_bytes() + in_flight_bytes() > max_bytes
+    ) {
       const available = cache.filter((record) => !is_protected(record))
       if (available.length === 0) break
       const prefetched = available.filter((record) =>
@@ -205,16 +242,21 @@ export function create_prepared_frame_pipeline(options: {
     key: PreparedFrameKey,
     request_generation: number,
   ): QueueRecord | null {
-    return queue.find((record) =>
-      record.generation === request_generation &&
-      same_prepared_frame_key(record.request.key, key)
-    ) ?? in_flight.find((record) =>
+    return [
+      ...queue,
+      ...in_flight,
+      ...decode_queue,
+      ...decode_in_flight,
+    ].find((record) =>
+      !record.settled &&
       record.generation === request_generation &&
       same_prepared_frame_key(record.request.key, key)
     ) ?? null
   }
 
   function finish_stale(record: QueueRecord): void {
+    if (record.settled) return
+    record.settled = true
     stale_results++
     trajectory_render_diagnostics.record(
       `stale`,
@@ -270,7 +312,7 @@ export function create_prepared_frame_pipeline(options: {
       priority: current_key !== null &&
           same_prepared_frame_key(value.key, current_key)
         ? `current`
-        : record.request.priority,
+        : record.priority,
     })
     if (
       current_key !== null &&
@@ -288,6 +330,7 @@ export function create_prepared_frame_pipeline(options: {
       value.compute_ms,
     )
     evict_to_limits()
+    record.settled = true
     record.resolve({ status: `ready`, value, cache_hit: false })
     update_diagnostics()
     pump()
@@ -295,6 +338,9 @@ export function create_prepared_frame_pipeline(options: {
 
   function fail(record: QueueRecord, error: unknown): void {
     in_flight = in_flight.filter((candidate) => candidate !== record)
+    decode_in_flight = decode_in_flight.filter(
+      (candidate) => candidate !== record,
+    )
     if (record.canceled || record.generation !== generation) {
       finish_stale(record)
     } else {
@@ -310,17 +356,18 @@ export function create_prepared_frame_pipeline(options: {
         undefined,
         record.request.key.positions_version,
       )
+      record.settled = true
       record.resolve({ status: `failed`, error: error_from_unknown(error) })
     }
     update_diagnostics()
     pump()
   }
 
-  function pump(): void {
+  function pump_prepare(): void {
     while (in_flight.length < max_in_flight && queue.length > 0) {
       queue.sort((left, right) => {
-        if (left.request.priority !== right.request.priority) {
-          return left.request.priority === `current` ? -1 : 1
+        if (left.priority !== right.priority) {
+          return left.priority === `current` ? -1 : 1
         }
         return left.sequence - right.sequence
       })
@@ -332,7 +379,14 @@ export function create_prepared_frame_pipeline(options: {
       in_flight.push(record)
       update_diagnostics()
       try {
-        Promise.resolve(record.request.prepare()).then(
+        const prepare = record.admission?.prepare ??
+          (`prepare` in record.request ? record.request.prepare : null)
+        if (!prepare) {
+          throw new Error(
+            `Prepared frame ${record.request.key.frame_idx} has no prepare stage`,
+          )
+        }
+        Promise.resolve(prepare()).then(
           (value) => complete(record, value),
           (error) => fail(record, error),
         )
@@ -340,6 +394,105 @@ export function create_prepared_frame_pipeline(options: {
         fail(record, error)
       }
     }
+  }
+
+  function finish_admission(
+    record: QueueRecord,
+    admission: DeferredFrameAdmission,
+  ): void {
+    decode_in_flight = decode_in_flight.filter(
+      (candidate) => candidate !== record,
+    )
+    if (record.canceled || record.generation !== generation) {
+      finish_stale(record)
+      update_diagnostics()
+      pump()
+      return
+    }
+    if (!same_prepared_frame_key(record.request.key, admission.key)) {
+      fail(
+        record,
+        new Error(
+          `Deferred frame decoded key does not match provisional key for ` +
+            `frame ${record.request.key.frame_idx}`,
+        ),
+      )
+      return
+    }
+    if (
+      !Number.isFinite(admission.retained_source_bytes) ||
+      admission.retained_source_bytes < 0
+    ) {
+      fail(
+        record,
+        new Error(
+          `Deferred frame ${record.request.key.frame_idx} reported invalid ` +
+            `retained source bytes`,
+        ),
+      )
+      return
+    }
+    if (
+      record.priority === `prefetch` &&
+      admission.retained_source_bytes > record.reserved_bytes
+    ) {
+      fail(
+        record,
+        new Error(
+          `Deferred frame ${record.request.key.frame_idx} retained source ` +
+            `exceeds its byte reservation`,
+        ),
+      )
+      return
+    }
+    record.reserved_bytes = Math.max(
+      record.reserved_bytes,
+      admission.retained_source_bytes,
+    )
+    record.admission = admission
+    queue.push(record)
+    update_diagnostics()
+    pump()
+  }
+
+  function pump_decode(): void {
+    while (
+      decode_in_flight.length < max_decode_in_flight &&
+      decode_queue.length > 0
+    ) {
+      decode_queue.sort((left, right) => {
+        if (left.priority !== right.priority) {
+          return left.priority === `current` ? -1 : 1
+        }
+        return left.sequence - right.sequence
+      })
+      const record = decode_queue.shift()!
+      if (record.canceled || record.generation !== generation) {
+        finish_stale(record)
+        continue
+      }
+      decode_in_flight.push(record)
+      // The reservation becomes observable before decoder invocation.
+      update_diagnostics()
+      try {
+        if (!(`admit` in record.request)) {
+          throw new Error(
+            `Prepared frame ${record.request.key.frame_idx} has no decode stage`,
+          )
+        }
+        Promise.resolve(record.request.admit()).then(
+          (admission) => finish_admission(record, admission),
+          (error) => fail(record, error),
+        )
+      } catch (error) {
+        fail(record, error)
+      }
+    }
+  }
+
+  function pump(): void {
+    pump_prepare()
+    pump_decode()
     update_diagnostics()
   }
 
@@ -380,10 +533,13 @@ export function create_prepared_frame_pipeline(options: {
 
     if (!same_stream || !sequential || current_frame_edited) {
       generation++
-      const stale_queue = queue.filter((record) =>
-        record.generation !== generation
+      const stale_queue = [...queue, ...decode_queue].filter(
+        (record) => record.generation !== generation,
       )
       queue = queue.filter((record) => record.generation === generation)
+      decode_queue = decode_queue.filter(
+        (record) => record.generation === generation,
+      )
       for (const record of stale_queue) finish_stale(record)
     }
 
@@ -440,9 +596,10 @@ export function create_prepared_frame_pipeline(options: {
     return generation
   }
 
-  function request(
-    frame_request: PrepareFrameRequest,
+  function request_internal(
+    frame_request: PrepareFrameRequest | DeferredPrepareFrameRequest,
     request_generation: number,
+    deferred: boolean,
   ): Promise<PreparedFrameOutcome> {
     trajectory_render_diagnostics.record(
       `requested`,
@@ -482,7 +639,13 @@ export function create_prepared_frame_pipeline(options: {
     }
 
     const pending = find_pending(frame_request.key, request_generation)
-    if (pending) return pending.promise
+    if (pending) {
+      if (frame_request.priority === `current`) {
+        pending.priority = `current`
+        pump()
+      }
+      return pending.promise
+    }
     cache_misses++
 
     const retained = cached_bytes() + queued_bytes() + in_flight_bytes()
@@ -514,16 +677,38 @@ export function create_prepared_frame_pipeline(options: {
     })
     const record: QueueRecord = {
       request: frame_request,
+      admission: null,
+      priority: frame_request.priority,
+      reserved_bytes: frame_request.estimated_bytes,
       generation: request_generation,
       sequence: sequence++,
       promise,
       resolve,
       canceled: false,
+      settled: false,
     }
-    queue.push(record)
+    if (deferred) {
+      decode_queue.push(record)
+    } else {
+      queue.push(record)
+    }
     update_diagnostics()
     pump()
     return promise
+  }
+
+  function request(
+    frame_request: PrepareFrameRequest,
+    request_generation: number,
+  ): Promise<PreparedFrameOutcome> {
+    return request_internal(frame_request, request_generation, false)
+  }
+
+  function request_deferred(
+    frame_request: DeferredPrepareFrameRequest,
+    request_generation: number,
+  ): Promise<PreparedFrameOutcome> {
+    return request_internal(frame_request, request_generation, true)
   }
 
   function peek(key: PreparedFrameKey): PreparedTrajectoryFrame | null {
@@ -552,8 +737,8 @@ export function create_prepared_frame_pipeline(options: {
     const in_flight_byte_count = in_flight_bytes()
     return {
       generation,
-      queued: queue.length,
-      in_flight: in_flight.length,
+      queued: queue.length + decode_queue.length,
+      in_flight: in_flight.length + decode_in_flight.length,
       cached_frames: cache.length,
       cached_bytes: cache_byte_count,
       queued_bytes: queued_byte_count,
@@ -570,13 +755,18 @@ export function create_prepared_frame_pipeline(options: {
     const matches = (key: PreparedFrameKey): boolean =>
       owner === undefined || key.owner === owner
     cache = cache.filter((record) => !matches(record.value.key))
-    const canceled_queue = queue.filter((record) => matches(record.request.key))
+    const canceled_queue = [...queue, ...decode_queue].filter(
+      (record) => matches(record.request.key),
+    )
     queue = queue.filter((record) => !matches(record.request.key))
+    decode_queue = decode_queue.filter(
+      (record) => !matches(record.request.key),
+    )
     for (const record of canceled_queue) {
       record.canceled = true
       finish_stale(record)
     }
-    for (const record of in_flight) {
+    for (const record of [...in_flight, ...decode_in_flight]) {
       if (matches(record.request.key)) record.canceled = true
     }
     if (
@@ -593,5 +783,13 @@ export function create_prepared_frame_pipeline(options: {
     pump()
   }
 
-  return { begin_request, request, peek, ready_count, stats, clear }
+  return {
+    begin_request,
+    request,
+    request_deferred,
+    peek,
+    ready_count,
+    stats,
+    clear,
+  }
 }
