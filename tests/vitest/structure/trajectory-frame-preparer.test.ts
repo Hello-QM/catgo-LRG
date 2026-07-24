@@ -38,12 +38,40 @@ type SafeSourceRequest = (
   on_error: (error: Error) => void,
 ) => Promise<TrajectoryFrameSource | null>
 
+type CurrentSourceRequestToken = object
+
+type CurrentSourceRequestGuard = {
+  begin: (owner: object, frame_idx: number) => CurrentSourceRequestToken
+  settle: (token: CurrentSourceRequestToken) => boolean
+  invalidate: () => void
+}
+
 function safe_source_request(): SafeSourceRequest | undefined {
   return (
     trajectory_frame_preparer as unknown as {
       request_trajectory_frame_source_safely?: SafeSourceRequest
     }
   ).request_trajectory_frame_source_safely
+}
+
+function current_source_request_guard(): CurrentSourceRequestGuard | undefined {
+  const create_guard = (
+    trajectory_frame_preparer as unknown as {
+      create_current_trajectory_source_request_guard?:
+        () => CurrentSourceRequestGuard
+    }
+  ).create_current_trajectory_source_request_guard
+  return create_guard?.()
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolve_promise, reject_promise) => {
+    resolve = resolve_promise
+    reject = reject_promise
+  })
+  return { promise, resolve, reject }
 }
 
 function site(element: string, xyz: [number, number, number]): Site {
@@ -488,6 +516,125 @@ describe(`prepare_exact_trajectory_frame`, () => {
       `request_trajectory_frame_source_safely(`,
     )
     expect(current_block).toContain(`report_prepared_failure(error)`)
+  })
+
+  test(`keeps the newer same-frame cold load authoritative when the older load rejects`, async () => {
+    const request_source = safe_source_request()
+    const request_guard = current_source_request_guard()
+    expect(request_source).toBeTypeOf(`function`)
+    expect(request_guard).toBeDefined()
+    typed_mock.mockResolvedValue({
+      backend: `rust-wasm-scalar`,
+      elapsed_ms: 1,
+      table: {
+        pairs: new Uint32Array(0),
+        images: new Int8Array(0),
+        lengths: new Float32Array(0),
+        strengths: new Float32Array(0),
+      },
+      gpu_positions_rgba: new Float32Array(8),
+    })
+
+    const owner = {}
+    const frame_idx = 4
+    const request_a = input()
+    request_a.packet.frame.owner = owner
+    request_a.packet.frame.frame_idx = frame_idx
+    request_a.source.frame_idx = frame_idx
+    request_a.source.positions_version = 41
+    const request_b = input()
+    request_b.packet.frame.owner = owner
+    request_b.packet.frame.frame_idx = frame_idx
+    request_b.source.frame_idx = frame_idx
+    request_b.source.positions_version = 42
+    request_b.source.positions = new Float32Array([
+      0.4, 0, 0, 3.6, 0, 0,
+    ])
+    const key_builder = (
+      trajectory_frame_preparer as unknown as {
+        trajectory_prepared_frame_key: (
+          input: ExactFramePrepareInput,
+        ) => PreparedFrameKey
+      }
+    ).trajectory_prepared_frame_key
+    const pipeline = create_prepared_frame_pipeline()
+    const source_a = deferred<TrajectoryFrameSource | null>()
+    const source_b = deferred<TrajectoryFrameSource | null>()
+    const failure_buffer_event = vi.fn()
+    let prepared_error: string | null = null
+    let displayed_packet: RenderPacket | null = null
+
+    const load_current = async (
+      token: CurrentSourceRequestToken,
+      pending: Promise<TrajectoryFrameSource | null>,
+      request: ExactFramePrepareInput,
+    ) => {
+      const source = await request_source!(
+        () => pending,
+        frame_idx,
+        (error) => {
+          if (!request_guard!.settle(token)) return
+          prepared_error = error.message
+          failure_buffer_event(error)
+        },
+      )
+      if (!request_guard!.settle(token) || !source) return
+      request.source = source
+      const key = key_builder(request)
+      const generation = pipeline.begin_request(key, 5)
+      const outcome = await pipeline.request({
+        key,
+        priority: `current`,
+        estimated_bytes: 64,
+        prepare: () => prepare_exact_trajectory_frame(request),
+      }, generation)
+      if (outcome.status !== `ready`) return
+      displayed_packet = outcome.value.packet
+      prepared_error = null
+    }
+
+    const token_a = request_guard!.begin(owner, frame_idx)
+    const load_a = load_current(token_a, source_a.promise, request_a)
+    const token_b = request_guard!.begin(owner, frame_idx)
+    const load_b = load_current(token_b, source_b.promise, request_b)
+
+    source_b.resolve(request_b.source)
+    await load_b
+    const key_b = key_builder(request_b)
+    const displayed_b = displayed_packet
+    expect(displayed_b).toBe(pipeline.peek(key_b)?.packet)
+
+    source_a.reject(new Error(`stale current source decode failed`))
+    await load_a
+
+    expect(displayed_packet).toBe(displayed_b)
+    expect(pipeline.peek(key_b)?.packet).toBe(displayed_b)
+    expect(prepared_error).toBeNull()
+    expect(failure_buffer_event).not.toHaveBeenCalled()
+
+    const stale_success = request_guard!.begin(owner, frame_idx)
+    const newer_success = request_guard!.begin(owner, frame_idx)
+    let published = `B`
+    if (request_guard!.settle(newer_success)) published = `newer`
+    if (request_guard!.settle(stale_success)) published = `stale`
+    expect(published).toBe(`newer`)
+    expect(stale_success).not.toHaveProperty(`source`)
+    expect(newer_success).not.toHaveProperty(`source`)
+
+    const scene = readFileSync(
+      `src/lib/structure/StructureScene.svelte`,
+      `utf8`,
+    )
+    const current_block = scene.slice(
+      scene.indexOf(`if (!current_source) {`),
+      scene.indexOf(`const key_for_source =`),
+    )
+    expect(current_block).toContain(
+      `current_source_request_guard.begin(`,
+    )
+    expect(
+      current_block.match(/current_source_request_guard\.settle\(/g),
+    ).toHaveLength(2)
   })
 
   test(`reports a prefetch loader rejection without cache or publication mutation`, async () => {

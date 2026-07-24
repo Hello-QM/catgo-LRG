@@ -57,6 +57,35 @@ export async function request_trajectory_frame_source_safely(
   }
 }
 
+export type CurrentTrajectorySourceRequestToken = {
+  readonly generation: number
+}
+
+export function create_current_trajectory_source_request_guard() {
+  let generation = 0
+  let current_generation: number | null = null
+
+  return {
+    begin(
+      _owner: object,
+      _frame_idx: number,
+    ): CurrentTrajectorySourceRequestToken {
+      const token = { generation: ++generation }
+      current_generation = token.generation
+      return token
+    },
+    settle(token: CurrentTrajectorySourceRequestToken): boolean {
+      if (current_generation !== token.generation) return false
+      current_generation = null
+      return true
+    },
+    invalidate(): void {
+      generation += 1
+      current_generation = null
+    },
+  }
+}
+
 export type PreparedPathFeatureInput = {
   strategy: BondingStrategy
   atom_count: number

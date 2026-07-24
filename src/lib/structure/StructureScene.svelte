@@ -83,6 +83,7 @@
     type ImageSiteKey,
   } from './pbc-image-atoms'
   import {
+    create_current_trajectory_source_request_guard,
     prepare_exact_trajectory_frame,
     request_trajectory_frame_source_safely,
     trajectory_prepared_frame_key,
@@ -1134,7 +1135,12 @@
     max_bytes: 96 * 1024 * 1024,
     max_in_flight: 1,
   })
-  onDestroy(() => prepared_pipeline.clear())
+  const current_source_request_guard =
+    create_current_trajectory_source_request_guard()
+  onDestroy(() => {
+    current_source_request_guard.invalidate()
+    prepared_pipeline.clear()
+  })
   let prepared_render_packet = $state.raw<RenderPacket | null>(null)
   let prepared_gpu_positions = $state.raw<Float32Array | null>(null)
   let prepared_frame_forces = $state.raw<Float32Array | null>(null)
@@ -2764,6 +2770,7 @@
       !raw_packet || !raw_structure?.sites || !raw_positions ||
       frame_idx < 0
     ) {
+      current_source_request_guard.invalidate()
       latest_prepared_request_key = null
       prepared_pipeline.clear()
       prepared_render_packet = null
@@ -2813,11 +2820,19 @@
       (requester ? null : fallback_source)
     if (!current_source) {
       latest_prepared_request_key = null
+      const current_source_request = current_source_request_guard.begin(
+        raw_packet.frame.owner,
+        frame_idx,
+      )
       void request_trajectory_frame_source_safely(
         requester,
         frame_idx,
-        (error) => report_prepared_failure(error),
+        (error) => {
+          if (!current_source_request_guard.settle(current_source_request)) return
+          report_prepared_failure(error)
+        },
       ).then((source) => {
+        if (!current_source_request_guard.settle(current_source_request)) return
         if (
           !source ||
           render_packet?.frame.owner !== raw_packet.frame.owner ||
@@ -2831,6 +2846,7 @@
       })
       return
     }
+    current_source_request_guard.invalidate()
     const key_for_source = (
       source: TrajectoryFrameSource,
     ): PreparedFrameKey => trajectory_prepared_frame_key({
